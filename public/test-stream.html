@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head><title>Stream Test</title></head>
+<body>
+  <div id="log"></div>
+  <script>
+    const sessionId = '456b29b6-9915-4406-bfd8-d2c873fb5e39';
+    const log = document.getElementById('log');
+    
+    function addLog(msg, color = 'black') {
+      const div = document.createElement('div');
+      div.style.color = color;
+      div.textContent = new Date().toLocaleTimeString() + ' ' + msg;
+      log.appendChild(div);
+    }
+    
+    addLog('Connecting to stream...');
+    
+    const evtSource = new EventSource(`/api/sessions/${sessionId}/stream`);
+    
+    evtSource.onopen = () => addLog('Connected!', 'green');
+    
+    evtSource.addEventListener('turn_end', (e) => {
+      addLog('TURN_END: ' + e.data.slice(0, 100), 'blue');
+    });
+    
+    evtSource.addEventListener('error', (e) => {
+      addLog('ERROR: ' + evtSource.readyState, 'red');
+    });
+    
+    evtSource.onmessage = (e) => {
+      addLog('MSG: ' + e.data, 'gray');
+    };
+    
+    // Send a test message after 2 seconds
+    setTimeout(async () => {
+      addLog('Sending test message...');
+      await fetch(`/api/sessions/${sessionId}/prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'Debug test', mode: 'steer' })
+      });
+      addLog('Message sent, waiting...', 'orange');
+    }, 2000);
+  </script>
+</body>
+</html>
