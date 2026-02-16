@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>pi-dish Debug</title>
+  <style>
+    body { font-family: monospace; padding: 20px; background: #1a1a1a; color: #0f0; }
+    .log { margin: 5px 0; padding: 5px; border-left: 3px solid #0f0; padding-left: 10px; }
+    .error { color: #f00; border-color: #f00; }
+    .warn { color: #ff0; border-color: #ff0; }
+    .info { color: #0ff; border-color: #0ff; }
+    button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+    #log { max-height: 80vh; overflow-y: auto; }
+  </style>
+</head>
+<body>
+  <h1>pi-dish Stream Debug</h1>
+  <div>
+    <button onclick="connect()">Connect Stream</button>
+    <button onclick="sendTest()">Send Test Message</button>
+    <button onclick="clearLog()">Clear</button>
+  </div>
+  <div id="log"></div>
+
+  <script>
+    const sessionId = 'a3daa4b7-cf09-43b2-a674-75620d3103a4';
+    let evtSource = null;
+    const logEl = document.getElementById('log');
+
+    function add(msg, type = 'log') {
+      const div = document.createElement('div');
+      div.className = `log ${type}`;
+      div.textContent = new Date().toLocaleTimeString() + ' ' + msg;
+      logEl.appendChild(div);
+      console.log(msg);
+    }
+
+    function connect() {
+      if (evtSource) {
+        evtSource.close();
+        add('Closed existing connection', 'warn');
+      }
+
+      add('Connecting to ' + sessionId + '...');
+
+      try {
+        evtSource = new EventSource(`/api/sessions/${sessionId}/stream`);
+
+        evtSource.onopen = () => add('CONNECTED!', 'info');
+
+        evtSource.onmessage = (e) => add('MSG: ' + e.data, 'info');
+
+        evtSource.addEventListener('turn_end', (e) => {
+          add('TURN_END received!', 'info');
+          add('Data: ' + e.data.slice(0, 200), 'log');
+          try {
+            const data = JSON.parse(e.data);
+            add('Parsed: ' + data.message.content.slice(0, 100), 'info');
+          } catch (err) {
+            add('Parse error: ' + err.message, 'error');
+          }
+        });
+
+        evtSource.addEventListener('error', (e) => {
+          add('ERROR event - readyState: ' + evtSource.readyState, 'error');
+        });
+
+        evtSource.onerror = (e) => {
+          add('onerror - readyState: ' + evtSource.readyState, 'error');
+        };
+
+      } catch (err) {
+        add('Exception: ' + err.message, 'error');
+      }
+    }
+
+    async function sendTest() {
+      add('Sending message...');
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/prompt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: 'Debug test ' + Date.now(), mode: 'steer' })
+        });
+        const data = await res.json();
+        add('Send result: ' + JSON.stringify(data), 'info');
+      } catch (err) {
+        add('Send failed: ' + err.message, 'error');
+      }
+    }
+
+    function clearLog() {
+      logEl.innerHTML = '';
+    }
+
+    add('Page loaded. Click "Connect Stream" to start.');
+  </script>
+</body>
+</html>
