@@ -688,18 +688,18 @@ function renderMessages(messages) {
   container.scrollTop = container.scrollHeight;
 }
 
-// Render user message
+// Render user message — clean, minimal like TUI
 function renderUserMessage(msg, time) {
   const content = extractTextContent(msg.content);
   
   return `
     <div class="message user">
       <div class="message-header">
-        <span class="message-role user">You</span>
+        <span class="message-role user">❯</span>
         ${time ? `<span class="message-time">${time}</span>` : ''}
       </div>
       <div class="message-content user-content">
-        ${formatMarkdown(content)}
+        <div class="markdown-body">${formatMarkdown(content)}</div>
       </div>
     </div>
   `;
@@ -728,83 +728,95 @@ function renderAssistantMessage(msg, time, opts = {}) {
     textHtml = formatMarkdown(msg.content);
   }
   
+  // Only show model badge if it differs from session model or is first message
+  const showModel = msg.model && (!currentSession || msg.model !== currentSession.model);
+  
   return `
     <div class="message assistant${streamingClass}" data-timestamp="${timestamp}"${streamingAttr}>
       <div class="message-header">
-        <span class="message-role assistant">Assistant</span>
-        ${msg.model ? `<span class="badge">${escapeHtml(msg.model)}</span>` : ''}
-        ${opts.streaming ? '<span class="badge streaming">Streaming</span>' : ''}
+        <span class="message-role assistant">◆</span>
+        ${showModel ? `<span class="badge">${escapeHtml(msg.model)}</span>` : ''}
+        ${opts.streaming ? '<span class="badge streaming">●</span>' : ''}
         ${time ? `<span class="message-time">${time}</span>` : ''}
       </div>
-      <div class="message-content">
-        ${thinkingHtml}
-        ${toolCallsHtml}
-        ${textHtml ? `<div class="assistant-text">${textHtml}</div>` : ''}
-      </div>
+      ${thinkingHtml}
+      ${toolCallsHtml}
+      ${textHtml ? `<div class="message-content"><div class="markdown-body">${textHtml}</div></div>` : ''}
     </div>
   `;
 }
 
-// Render thinking block (collapsible)
+// Render thinking block — collapsed by default like TUI
 function renderThinkingBlock(thinking) {
   const id = 'think-' + Math.random().toString(36).substr(2, 9);
+  const preview = thinking.substring(0, 80).replace(/\n/g, ' ');
   return `
-    <div class="thinking-block">
-      <div class="thinking-header" onclick="toggleThinking('${id}')">
-        <span class="thinking-toggle">▼</span>
+    <details class="thinking-block">
+      <summary class="thinking-header">
         <span class="thinking-label">Thinking</span>
-      </div>
+        <span class="thinking-preview">${escapeHtml(preview)}…</span>
+      </summary>
       <div class="thinking-text" id="${id}">${escapeHtml(thinking)}</div>
-    </div>
+    </details>
   `;
 }
 
-// Toggle thinking visibility
-function toggleThinking(id) {
-  const el = document.getElementById(id);
-  const header = el.previousElementSibling;
-  const toggle = header.querySelector('.thinking-toggle');
-  
-  if (el.style.display === 'none') {
-    el.style.display = 'block';
-    toggle.textContent = '▼';
-  } else {
-    el.style.display = 'none';
-    toggle.textContent = '▶';
-  }
-}
-
-// Render tool call
+// Render tool call — collapsible, shows tool name + summary
 function renderToolCall(block) {
-  const args = JSON.stringify(block.arguments, null, 2);
+  const args = block.arguments || {};
+  // Build a one-line summary based on tool type
+  let summary = '';
+  if (block.name === 'Bash' || block.name === 'bash') {
+    summary = args.command ? truncate(args.command.split('\n')[0], 80) : '';
+  } else if (block.name === 'Read' || block.name === 'read') {
+    summary = args.path || '';
+  } else if (block.name === 'Edit' || block.name === 'edit') {
+    summary = args.path || '';
+  } else if (block.name === 'Write' || block.name === 'write') {
+    summary = args.path || '';
+  } else {
+    const keys = Object.keys(args);
+    if (keys.length > 0) summary = truncate(String(args[keys[0]]), 60);
+  }
+  
+  const argsJson = JSON.stringify(args, null, 2);
   return `
-    <div class="tool-call">
-      <div class="tool-call-header">
+    <details class="tool-call">
+      <summary class="tool-call-header">
+        <span class="tool-call-icon">⚡</span>
         <span class="tool-call-name">${escapeHtml(block.name)}</span>
-      </div>
+        ${summary ? `<span class="tool-call-summary">${escapeHtml(summary)}</span>` : ''}
+      </summary>
       <div class="tool-call-content">
-        <pre><code>${escapeHtml(args)}</code></pre>
+        <pre><code>${escapeHtml(argsJson)}</code></pre>
       </div>
-    </div>
+    </details>
   `;
 }
 
-// Render tool result
+// Render tool result — collapsible, compact
 function renderToolResult(msg, time) {
   const content = extractTextContent(msg.content);
   const isError = msg.isError;
   const timestamp = msg.timestamp || Date.now();
+  const lines = content.split('\n');
+  const lineCount = lines.length;
+  const preview = truncate(lines[0], 80);
   
   return `
     <div class="message tool-result ${isError ? 'error' : ''}" data-timestamp="${timestamp}">
-      <div class="message-header">
-        <span class="message-role toolResult">Tool: ${escapeHtml(msg.toolName || 'unknown')}</span>
-        ${time ? `<span class="message-time">${time}</span>` : ''}
-        ${isError ? '<span class="badge" style="background: rgba(248,81,73,0.2); color: var(--error);">Error</span>' : ''}
-      </div>
-      <div class="message-content tool-content">
-        <pre>${escapeHtml(truncate(content, 2000))}</pre>
-      </div>
+      <details class="tool-result-details" ${lineCount <= 5 ? 'open' : ''}>
+        <summary class="tool-result-header">
+          <span class="tool-result-icon">${isError ? '✗' : '✓'}</span>
+          <span class="tool-result-name">${escapeHtml(msg.toolName || 'result')}</span>
+          ${lineCount > 5 ? `<span class="tool-result-meta">${lineCount} lines</span>` : ''}
+          ${isError ? '<span class="tool-result-meta error-badge">error</span>' : ''}
+          ${lineCount > 5 ? `<span class="tool-result-preview">${escapeHtml(preview)}</span>` : ''}
+        </summary>
+        <div class="tool-result-content">
+          <pre>${escapeHtml(truncate(content, 2000))}</pre>
+        </div>
+      </details>
     </div>
   `;
 }
@@ -1033,25 +1045,37 @@ function truncate(text, maxLen) {
   return text.slice(0, maxLen) + '\n... (truncated)';
 }
 
+// Configure marked for proper markdown rendering
+(function() {
+  if (typeof marked !== 'undefined') {
+    marked.setOptions({
+      highlight: function(code, lang) {
+        if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
+          try { return hljs.highlight(code, { language: lang }).value; } catch(e) {}
+        }
+        if (typeof hljs !== 'undefined') {
+          try { return hljs.highlightAuto(code).value; } catch(e) {}
+        }
+        return code;
+      },
+      breaks: true,
+      gfm: true,
+    });
+  }
+})();
+
 function formatMarkdown(text) {
   if (!text) return '';
-  
+  if (typeof marked !== 'undefined') {
+    try { return marked.parse(text); } catch(e) {}
+  }
+  // Fallback
   let html = escapeHtml(text);
-  
-  // Code blocks
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
-    return `<pre><code class="language-${lang}">${code.trim()}</code></pre>`;
-  });
-  
-  // Inline code
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) =>
+    `<pre><code class="language-${lang}">${code.trim()}</code></pre>`);
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-  
-  // Bold
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  
-  // Line breaks
   html = html.replace(/\n/g, '<br>');
-  
   return html;
 }
 
