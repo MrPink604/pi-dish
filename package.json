@@ -4,9 +4,42 @@
   "description": "A minimal web interface for pi's RPC mode",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "electron:dev": "electron electron/main.js",
+    "electron:build": "electron-builder",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "build": {
+    "appId": "com.pidish.app",
+    "productName": "pi-dish",
+    "files": [
+      "server.js",
+      "lib/**/*",
+      "public/**/*",
+      "electron/**/*",
+      "node_modules/**/*"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Development"
+    },
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.developer-tools"
+    }
+  },
+  "author": {
+    "name": "jyarwood",
+    "email": "pi-dish@localhost"
   },
   "dependencies": {
     "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
   }
 }
