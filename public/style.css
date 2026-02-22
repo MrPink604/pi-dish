@@ -87,17 +87,25 @@ body.sidebar-open {
 .session-item-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
+  gap: 6px;
+  margin-bottom: 4px;
 }
 
 .session-item-name {
   font-weight: 500;
-  font-size: 14px;
+  font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1;
+  min-width: 0;
+}
+
+.session-item-time {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .session-item-status {
@@ -105,7 +113,6 @@ body.sidebar-open {
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
-  margin-left: 8px;
 }
 
 .session-item-status.idle {
@@ -120,14 +127,6 @@ body.sidebar-open {
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
-}
-
-.session-item-id {
-  font-family: 'SF Mono', Monaco, monospace;
-  font-size: 10px;
-  color: var(--text-muted);
-  opacity: 0.6;
-  margin-bottom: 6px;
 }
 
 .session-item-meta {
