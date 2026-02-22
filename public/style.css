@@ -587,6 +587,7 @@ body.sidebar-open {
   position: sticky;
   bottom: 0;
   z-index: 9;
+  position: relative;
 }
 
 .input-area textarea {
@@ -612,6 +613,69 @@ body.sidebar-open {
   justify-content: space-between;
   align-items: center;
   margin-top: 8px;
+}
+
+/* Slash command autocomplete */
+.autocomplete-dropdown {
+  display: none;
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  z-index: 50;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.autocomplete-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.1s;
+}
+
+.autocomplete-item:hover,
+.autocomplete-item.active {
+  background: var(--bg-hover);
+}
+
+.autocomplete-icon {
+  flex-shrink: 0;
+  font-size: 12px;
+  width: 18px;
+  text-align: center;
+}
+
+.autocomplete-name {
+  font-weight: 500;
+  color: var(--accent);
+  white-space: nowrap;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 12px;
+}
+
+.autocomplete-args {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-style: italic;
+}
+
+.autocomplete-desc {
+  flex: 1;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
 }
 
 .status {
