@@ -340,6 +340,32 @@ app.post('/api/sessions/:id/model', async (req, res) => {
   }
 });
 
+// Get session tree for /tree modal
+app.get('/api/sessions/:id/tree', async (req, res) => {
+  try {
+    const sessionPath = await piSDK.findSessionPath(req.params.id);
+    if (!sessionPath) return res.status(404).json({ error: 'Session not found' });
+    const tree = await piSDK.getSessionTree(sessionPath);
+    res.json(tree);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Branch session from a specific entry
+app.post('/api/sessions/:id/branch', async (req, res) => {
+  const { entryId } = req.body;
+  if (!entryId) return res.status(400).json({ error: 'entryId required' });
+  try {
+    const sessionPath = await piSDK.findSessionPath(req.params.id);
+    if (!sessionPath) return res.status(404).json({ error: 'Session not found' });
+    await piSDK.branchSession(sessionPath, entryId);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Get available models from SDK (all providers with API keys)
 let modelsCache = null;
 let modelsCacheTime = 0;

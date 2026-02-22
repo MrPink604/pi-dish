@@ -1262,3 +1262,190 @@ body.sidebar-open {
   background: var(--text-muted);
 }
 
+/* Modal overlay */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(2px);
+}
+
+.modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  max-height: 80vh;
+  width: 90%;
+  max-width: 800px;
+}
+
+/* Tree modal */
+.tree-modal .modal-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tree-modal .modal-header h3 {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tree-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.tree-search {
+  background: var(--bg-darker);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text);
+  font-family: inherit;
+  width: 180px;
+  outline: none;
+}
+
+.tree-search:focus {
+  border-color: var(--accent);
+}
+
+.tree-filter {
+  background: var(--bg-darker);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--text);
+  font-family: inherit;
+  outline: none;
+  cursor: pointer;
+}
+
+.tree-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.tree-node {
+  display: flex;
+  align-items: baseline;
+  padding: 2px 12px 2px 0;
+  cursor: pointer;
+  white-space: nowrap;
+  border-left: 2px solid transparent;
+}
+
+.tree-node:hover {
+  background: var(--bg-hover);
+}
+
+.tree-node.active {
+  border-left-color: var(--accent);
+}
+
+.tree-node.is-leaf {
+  background: rgba(88, 166, 255, 0.06);
+}
+
+.tree-node.is-leaf.active {
+  background: rgba(88, 166, 255, 0.1);
+}
+
+.tree-prefix {
+  color: var(--text-muted);
+  opacity: 0.4;
+  white-space: pre;
+  flex-shrink: 0;
+}
+
+.tree-marker {
+  flex-shrink: 0;
+  margin-right: 4px;
+  font-size: 10px;
+}
+
+.tree-marker.active-marker {
+  color: var(--accent);
+}
+
+.tree-marker.inactive-marker {
+  opacity: 0;
+}
+
+.tree-role {
+  font-weight: 600;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
+.tree-role.user { color: var(--accent); }
+.tree-role.assistant { color: var(--success); }
+.tree-role.tool { color: var(--text-muted); }
+.tree-role.system { color: var(--warning); }
+
+.tree-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+  flex: 1;
+}
+
+.tree-text.muted {
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.tree-text.error-text {
+  color: var(--error);
+}
+
+.tree-label {
+  color: var(--warning);
+  margin-right: 6px;
+  font-weight: 500;
+}
+
+.tree-branch-badge {
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: rgba(88, 166, 255, 0.15);
+  color: var(--accent);
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.tree-hint {
+  opacity: 0.6;
+}
+
