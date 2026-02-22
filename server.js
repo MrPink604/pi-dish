@@ -313,12 +313,15 @@ app.post('/api/sessions/:id/model', async (req, res) => {
   if (!modelId) return res.status(400).json({ error: 'modelId required' });
 
   const { provider, id } = piSDK.parseModelId(modelId);
+  if (!provider || !id) {
+    return res.status(400).json({ error: `Invalid model ID: ${modelId}` });
+  }
 
   // Try RPC session first
   const rpc = getRPCSession(req.params.id);
   if (rpc && rpc.alive) {
     try {
-      await rpc.setModel(modelId);
+      await rpc.setModel(provider, id);
       return res.json({ success: true });
     } catch (e) {
       return res.status(500).json({ error: e.message });
