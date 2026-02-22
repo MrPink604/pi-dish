@@ -306,9 +306,16 @@ body.sidebar-open {
   border-radius: 6px;
   min-width: 260px;
   max-height: 400px;
-  overflow-y: auto;
+  display: none;
+  flex-direction: column;
   z-index: 50;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.model-results {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .model-search {
@@ -322,6 +329,7 @@ body.sidebar-open {
   border-bottom: 1px solid var(--border);
   outline: none;
   box-sizing: border-box;
+  flex-shrink: 0;
 }
 
 .model-search::placeholder {
