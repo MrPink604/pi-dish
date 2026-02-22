@@ -252,6 +252,62 @@ app.post('/api/sessions/:id/prompt', async (req, res) => {
   }
 });
 
+// Rename session via /name command
+app.post('/api/sessions/:id/rename', async (req, res) => {
+  const { name } = req.body;
+  if (!name) return res.status(400).json({ error: 'Name required' });
+
+  const client = new ControlClient(req.params.id);
+  if (!client.isActive()) return res.status(404).json({ error: 'Session not active' });
+
+  try {
+    const result = await client.send('send', { message: `/name ${name}`, mode: 'steer' });
+    res.json({ success: result.success, error: result.error });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Switch model via /model command
+app.post('/api/sessions/:id/model', async (req, res) => {
+  const { modelId } = req.body;
+  if (!modelId) return res.status(400).json({ error: 'modelId required' });
+
+  const client = new ControlClient(req.params.id);
+  if (!client.isActive()) return res.status(404).json({ error: 'Session not active' });
+
+  try {
+    const result = await client.send('send', { message: `/model ${modelId}`, mode: 'steer' });
+    res.json({ success: result.success, error: result.error });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get known models from session history
+app.get('/api/models', (req, res) => {
+  const models = new Set();
+  try {
+    const dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true });
+    for (const dir of dirs) {
+      if (!dir.isDirectory()) continue;
+      const files = fs.readdirSync(path.join(SESSIONS_DIR, dir.name)).filter(f => f.endsWith('.jsonl'));
+      for (const file of files) {
+        const content = fs.readFileSync(path.join(SESSIONS_DIR, dir.name, file), 'utf-8');
+        for (const line of content.split('\n')) {
+          try {
+            const entry = JSON.parse(line);
+            if (entry.type === 'model_change' && entry.modelId) {
+              models.add(entry.modelId);
+            }
+          } catch (e) {}
+        }
+      }
+    }
+  } catch (e) {}
+  res.json([...models].sort());
+});
+
 app.post('/api/sessions/new', (req, res) => {
   res.status(501).json({
     success: false,

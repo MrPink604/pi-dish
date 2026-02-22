@@ -5,6 +5,7 @@ let currentSession = null;
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
   loadSessions();
+  loadModels();
   
   const promptInput = document.getElementById('promptInput');
 
@@ -221,14 +222,44 @@ async function selectSession(id) {
   }
 }
 
+// Known models cache
+let knownModels = [];
+
+// Load known models from server
+async function loadModels() {
+  try {
+    const res = await fetch('/api/models');
+    knownModels = await res.json();
+  } catch (e) {
+    console.error('Failed to load models:', e);
+  }
+}
+
 // Update session header
 function updateSessionHeader() {
   if (!currentSession) return;
   
   document.getElementById('sessionName').textContent = currentSession.name;
-  document.getElementById('sessionModel').textContent = currentSession.model;
+  document.getElementById('sessionModel').textContent = currentSession.model + ' ▾';
   document.getElementById('sessionMsgCount').textContent = `${currentSession.messageCount} msgs`;
   
+  // Only allow rename/model switch on active sessions
+  const nameEl = document.getElementById('sessionName');
+  nameEl.classList.toggle('editable-name', !!currentSession.isActive);
+  nameEl.title = currentSession.isActive ? 'Click to rename' : '';
+  nameEl.onclick = currentSession.isActive ? startRename : null;
+
+  const modelBtn = document.getElementById('sessionModel');
+  if (currentSession.isActive) {
+    modelBtn.textContent = currentSession.model + ' ▾';
+    modelBtn.onclick = toggleModelDropdown;
+    modelBtn.style.cursor = 'pointer';
+  } else {
+    modelBtn.textContent = currentSession.model;
+    modelBtn.onclick = null;
+    modelBtn.style.cursor = 'default';
+  }
+
   const contextEl = document.getElementById('sessionContext');
   const tokenStr = currentSession.contextTokens ? ` (${formatTokens(currentSession.contextTokens)} tok)` : '';
   contextEl.textContent = `${currentSession.contextPercent}%${tokenStr}`;
@@ -237,6 +268,131 @@ function updateSessionHeader() {
     contextEl.classList.add('critical');
   } else if (currentSession.contextPercent > 50) {
     contextEl.classList.add('high');
+  }
+}
+
+// --- Inline rename ---
+function startRename() {
+  if (!currentSession || !currentSession.isActive) return;
+  const nameEl = document.getElementById('sessionName');
+  const inputEl = document.getElementById('sessionNameInput');
+  nameEl.style.display = 'none';
+  inputEl.style.display = '';
+  inputEl.value = currentSession.name;
+  inputEl.focus();
+  inputEl.select();
+}
+
+function handleRenameKey(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    commitRename();
+  } else if (e.key === 'Escape') {
+    cancelRename();
+  }
+}
+
+async function commitRename() {
+  const inputEl = document.getElementById('sessionNameInput');
+  const nameEl = document.getElementById('sessionName');
+  const newName = inputEl.value.trim();
+
+  inputEl.style.display = 'none';
+  nameEl.style.display = '';
+
+  if (!newName || newName === currentSession.name || !currentSession.isActive) return;
+
+  try {
+    const res = await fetch('/api/sessions/' + currentSession.id + '/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName }),
+    });
+    if (res.ok) {
+      currentSession.name = newName;
+      nameEl.textContent = newName;
+      renderSessions();
+    } else {
+      setStatus('Rename failed', 'error');
+    }
+  } catch (e) {
+    setStatus('Rename failed: ' + e.message, 'error');
+  }
+}
+
+function cancelRename() {
+  const inputEl = document.getElementById('sessionNameInput');
+  const nameEl = document.getElementById('sessionName');
+  inputEl.style.display = 'none';
+  nameEl.style.display = '';
+}
+
+// --- Model dropdown ---
+let modelDropdownOpen = false;
+
+function toggleModelDropdown() {
+  if (!currentSession || !currentSession.isActive) return;
+  modelDropdownOpen = !modelDropdownOpen;
+  const dropdown = document.getElementById('modelDropdown');
+
+  if (!modelDropdownOpen) {
+    dropdown.style.display = 'none';
+    return;
+  }
+
+  // Build dropdown items
+  const currentModel = currentSession.model;
+  dropdown.innerHTML = knownModels.map(function(m) {
+    const activeClass = m === currentModel ? 'active' : '';
+    return '<div class="model-option ' + activeClass + '" onclick="selectModel(\'' + escapeHtml(m) + '\')">' + escapeHtml(m) + '</div>';
+  }).join('');
+
+  dropdown.style.display = 'block';
+
+  // Close on outside click
+  setTimeout(function() {
+    document.addEventListener('click', closeModelDropdownOnOutsideClick, { once: true });
+  }, 0);
+}
+
+function closeModelDropdownOnOutsideClick(e) {
+  const selector = document.getElementById('modelSelector');
+  if (!selector.contains(e.target)) {
+    closeModelDropdown();
+  } else {
+    // Re-attach if click was inside
+    setTimeout(function() {
+      document.addEventListener('click', closeModelDropdownOnOutsideClick, { once: true });
+    }, 0);
+  }
+}
+
+function closeModelDropdown() {
+  modelDropdownOpen = false;
+  document.getElementById('modelDropdown').style.display = 'none';
+}
+
+async function selectModel(modelId) {
+  closeModelDropdown();
+  if (!currentSession || modelId === currentSession.model) return;
+
+  setStatus('Switching model...', 'working');
+  try {
+    const res = await fetch('/api/sessions/' + currentSession.id + '/model', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ modelId: modelId }),
+    });
+    if (res.ok) {
+      currentSession.model = modelId;
+      updateSessionHeader();
+      renderSessions();
+      setStatus('');
+    } else {
+      setStatus('Model switch failed', 'error');
+    }
+  } catch (e) {
+    setStatus('Model switch failed: ' + e.message, 'error');
   }
 }
 
