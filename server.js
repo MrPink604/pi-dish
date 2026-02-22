@@ -305,6 +305,16 @@ app.get('/api/models', async (req, res) => {
   }
 });
 
+// Get slash commands for autocomplete
+app.get('/api/commands', async (req, res) => {
+  try {
+    const commands = await piSDK.getCommands();
+    res.json(commands);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/sessions/new', (req, res) => {
   res.status(501).json({
     success: false,
