@@ -550,9 +550,10 @@ function renderModelDropdown(query) {
     groups[provider].forEach(function(m) {
       var fullId = m.provider + '/' + m.id;
       var activeClass = (m.id === currentModel || fullId === currentModel || m.id.startsWith(currentModel) || currentModel.endsWith(m.id)) ? 'active' : '';
-      var label = m.id;
-      if (m.reasoning) label += ' 🧠';
-      html += '<div class="model-option ' + activeClass + '" onclick="selectModel(\'' + escapeHtml(fullId) + '\')" title="' + escapeHtml(fullId) + '">' + escapeHtml(label) + '</div>';
+      var badges = '';
+      if (m.free) badges += '<span class="model-badge free">free</span>';
+      if (m.reasoning) badges += '<span class="model-badge reasoning">🧠</span>';
+      html += '<div class="model-option ' + activeClass + '" onclick="selectModel(\'' + escapeHtml(fullId) + '\')" title="' + escapeHtml(fullId) + '"><span class="model-option-name">' + escapeHtml(m.id) + '</span>' + badges + '</div>';
     });
   });
 

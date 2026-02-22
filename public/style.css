@@ -341,11 +341,17 @@ body.sidebar-open {
 }
 
 .model-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 6px 12px 6px 20px;
   font-size: 12px;
   cursor: pointer;
   color: var(--text);
   white-space: nowrap;
+}
+
+.model-option-name {
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -357,6 +363,26 @@ body.sidebar-open {
 .model-option.active {
   color: var(--accent);
   font-weight: 600;
+}
+
+.model-badge {
+  flex-shrink: 0;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.model-badge.free {
+  background: rgba(46, 204, 113, 0.15);
+  color: #2ecc71;
+  border: 1px solid rgba(46, 204, 113, 0.3);
+}
+
+.model-badge.reasoning {
+  font-size: 11px;
+  padding: 0;
 }
 
 .badge {
