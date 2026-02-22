@@ -1258,6 +1258,21 @@ body.sidebar-open {
   border-radius: 4px;
 }
 
+.btn-stop {
+  background: var(--error);
+  color: #fff;
+  font-weight: 600;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn-stop:hover {
+  background: #d32f2f;
+}
+
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
 }
@@ -1447,5 +1462,18 @@ body.sidebar-open {
 
 .tree-hint {
   opacity: 0.6;
+}
+
+.tree-node.selected {
+  background: rgba(88, 166, 255, 0.15);
+  border-left-color: var(--warning);
+}
+
+.btn-branch {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
 }
 

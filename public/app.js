@@ -56,6 +56,22 @@ document.addEventListener('DOMContentLoaded', () => {
       e.preventDefault();
       sendPrompt();
     }
+    // Esc aborts turn when not in autocomplete
+    if (e.key === 'Escape' && !autocompleteVisible && turnInProgress) {
+      e.preventDefault();
+      abortTurn();
+    }
+  });
+
+  // Global Ctrl+C to abort turn (when not selecting text)
+  document.addEventListener('keydown', function(e) {
+    if (e.ctrlKey && e.key === 'c' && turnInProgress) {
+      var sel = window.getSelection();
+      if (!sel || sel.isCollapsed) {
+        e.preventDefault();
+        abortTurn();
+      }
+    }
   });
 
   // Auto-grow composer + autocomplete
@@ -866,7 +882,12 @@ function startMessageStream(sessionId) {
       setStatus('');
     };
 
+    evtSource.addEventListener('turn_start', () => {
+      setTurnInProgress(true);
+    });
+
     evtSource.addEventListener('turn_end', (e) => {
+      setTurnInProgress(false);
       try {
         const event = JSON.parse(e.data);
         const data = event.data || event;
@@ -897,6 +918,7 @@ function startMessageStream(sessionId) {
 
     // Real-time events for thinking/tool calls (via polling)
     evtSource.addEventListener('thinking', (e) => {
+      if (!turnInProgress) setTurnInProgress(true);
       try {
         const { message } = JSON.parse(e.data);
         updateOrAppendMessage(message);
@@ -906,6 +928,7 @@ function startMessageStream(sessionId) {
     });
 
     evtSource.addEventListener('tool_call', (e) => {
+      if (!turnInProgress) setTurnInProgress(true);
       try {
         const { message } = JSON.parse(e.data);
         updateOrAppendMessage(message);
@@ -973,6 +996,8 @@ async function sendPrompt() {
   container.insertAdjacentHTML('beforeend', userMsgHtml);
   container.scrollTop = container.scrollHeight;
   
+  setTurnInProgress(true);
+  
   try {
     const res = await fetch(`/api/sessions/${currentSession.id}/prompt`, {
       method: 'POST',
@@ -990,6 +1015,39 @@ async function sendPrompt() {
     
   } catch (e) {
     setStatus(`Error: ${e.message}`, 'error');
+    setTurnInProgress(false);
+  }
+}
+
+// Turn state management
+var turnInProgress = false;
+
+function setTurnInProgress(active) {
+  turnInProgress = active;
+  var btnStop = document.getElementById('btnStop');
+  var btnSend = document.getElementById('btnSend');
+  if (btnStop) btnStop.style.display = active ? '' : 'none';
+  if (btnSend) btnSend.style.display = active ? 'none' : '';
+  if (!active) setStatus('');
+}
+
+async function abortTurn() {
+  if (!currentSession || !turnInProgress) return;
+  setStatus('Stopping...', 'working');
+  try {
+    var res = await fetch('/api/sessions/' + currentSession.id + '/abort', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    if (res.ok) {
+      setStatus('Stopped');
+      setTurnInProgress(false);
+    } else {
+      var data = await res.json().catch(function() { return {}; });
+      setStatus('Stop failed: ' + (data.error || 'unknown'), 'error');
+    }
+  } catch (e) {
+    setStatus('Stop failed: ' + e.message, 'error');
   }
 }
 
@@ -1334,7 +1392,9 @@ function renderTreeNodeContent(node) {
   return '<span class="tree-text muted">[' + escapeHtml(node.type) + ']</span>';
 }
 
-async function selectTreeNode(entryId) {
+var pendingBranchId = null;
+
+function selectTreeNode(entryId) {
   if (!currentSession || !treeData) return;
   
   // Don't branch if clicking the current leaf
@@ -1343,8 +1403,32 @@ async function selectTreeNode(entryId) {
     return;
   }
   
-  var confirmed = confirm('Branch from this point? The session will continue from here.');
-  if (!confirmed) return;
+  // Highlight the selected node and show confirm bar
+  document.querySelectorAll('.tree-node.selected').forEach(function(el) {
+    el.classList.remove('selected');
+  });
+  var el = document.querySelector('.tree-node[data-id="' + entryId + '"]');
+  if (el) el.classList.add('selected');
+  
+  pendingBranchId = entryId;
+  document.getElementById('treeStatus').innerHTML = 
+    '<button class="btn-sm btn-branch" onclick="confirmBranch()">Branch from here</button>' +
+    '<button class="btn-sm" onclick="cancelBranch()" style="margin-left:8px">Cancel</button>';
+}
+
+function cancelBranch() {
+  pendingBranchId = null;
+  document.querySelectorAll('.tree-node.selected').forEach(function(el) {
+    el.classList.remove('selected');
+  });
+  document.getElementById('treeStatus').textContent = 
+    document.querySelectorAll('.tree-node').length + ' entries';
+}
+
+async function confirmBranch() {
+  if (!currentSession || !pendingBranchId) return;
+  var entryId = pendingBranchId;
+  pendingBranchId = null;
   
   setStatus('Branching...', 'working');
   try {
@@ -1356,8 +1440,7 @@ async function selectTreeNode(entryId) {
     if (!res.ok) throw new Error((await res.json().catch(function(){return{};})).error || 'Failed');
     
     closeTreeModal();
-    setStatus('Branched successfully — reload to see updated messages');
-    // Reload session messages
+    setStatus('Branched — reloading messages');
     selectSession(currentSession.id);
   } catch (e) {
     setStatus('Branch failed: ' + e.message, 'error');
