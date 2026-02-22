@@ -79,7 +79,8 @@
           <textarea id="promptInput" placeholder="Send a message..." rows="2"></textarea>
           <div class="input-actions">
             <span class="status" id="status"></span>
-            <button class="btn btn-primary" onclick="sendPrompt()">Send</button>
+            <button class="btn btn-stop" id="btnStop" onclick="abortTurn()" style="display:none" title="Stop (Esc)">Stop</button>
+            <button class="btn btn-primary" id="btnSend" onclick="sendPrompt()">Send</button>
           </div>
         </div>
       </div>

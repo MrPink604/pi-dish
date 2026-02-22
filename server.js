@@ -394,6 +394,34 @@ app.get('/api/commands', async (req, res) => {
   }
 });
 
+// Abort/interrupt the current turn
+app.post('/api/sessions/:id/abort', async (req, res) => {
+  const sessionId = req.params.id;
+
+  // Try RPC session first
+  const rpc = getRPCSession(sessionId);
+  if (rpc && rpc.alive) {
+    try {
+      await rpc.abort();
+      return res.json({ success: true });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
+  // Try control socket
+  try {
+    const client = new (require('./lib/control-client').ControlClient)(sessionId);
+    if (client.isActive()) {
+      const resp = await client.send('abort');
+      return res.json({ success: resp.success !== false });
+    }
+    return res.status(404).json({ error: 'Session not active' });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 // Create a new pi session via RPC mode
 app.post('/api/sessions/new', async (req, res) => {
   try {
@@ -423,6 +451,11 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   if (rpc && rpc.alive) {
     // Forward RPC streaming events to SSE
     const unsubs = [];
+
+    // Turn start
+    unsubs.push(rpc.on('turn_start', () => {
+      res.write(`event: turn_start\ndata: {}\n\n`);
+    }));
 
     // User message echoed back
     unsubs.push(rpc.on('message_start', (msg) => {
