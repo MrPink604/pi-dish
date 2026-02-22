@@ -1,5 +1,5 @@
 // State
-let sessions = [];
+let sessions = { active: [], previous: [] };
 let currentSession = null;
 
 // Initialize
@@ -68,56 +68,140 @@ function refreshSessions() {
   loadSessions();
 }
 
-// Render session list
+// Format token count for display
+function formatTokens(tokens) {
+  if (!tokens || tokens === 0) return '0';
+  if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`;
+  return `${tokens}`;
+}
+
+// Group sessions by time period
+function groupByTimePeriod(sessionList) {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfYesterday = new Date(startOfToday); startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+  const startOf2DaysAgo = new Date(startOfToday); startOf2DaysAgo.setDate(startOf2DaysAgo.getDate() - 2);
+  const startOf3DaysAgo = new Date(startOfToday); startOf3DaysAgo.setDate(startOf3DaysAgo.getDate() - 3);
+  const startOfWeek = new Date(startOfToday); startOfWeek.setDate(startOfWeek.getDate() - 7);
+  const startOfMonth = new Date(startOfToday); startOfMonth.setDate(startOfMonth.getDate() - 30);
+
+  const groups = [
+    { label: 'Today', sessions: [] },
+    { label: 'Yesterday', sessions: [] },
+    { label: '2 Days Ago', sessions: [] },
+    { label: '3 Days Ago', sessions: [] },
+    { label: 'Last 7 Days', sessions: [] },
+    { label: 'Last 30 Days', sessions: [] },
+    { label: 'Older', sessions: [] },
+  ];
+
+  for (const s of sessionList) {
+    const d = new Date(s.lastActivity);
+    if (d >= startOfToday) groups[0].sessions.push(s);
+    else if (d >= startOfYesterday) groups[1].sessions.push(s);
+    else if (d >= startOf2DaysAgo) groups[2].sessions.push(s);
+    else if (d >= startOf3DaysAgo) groups[3].sessions.push(s);
+    else if (d >= startOfWeek) groups[4].sessions.push(s);
+    else if (d >= startOfMonth) groups[5].sessions.push(s);
+    else groups[6].sessions.push(s);
+  }
+
+  return groups.filter(g => g.sessions.length > 0);
+}
+
+// Render a single session item
+function renderSessionItem(session) {
+  const contextClass = session.contextPercent > 80 ? 'critical' : session.contextPercent > 50 ? 'high' : '';
+  const statusClass = session.isActive ? 'idle' : 'closed';
+  const activeClass = currentSession?.id === session.id ? 'active' : '';
+  const shortId = session.id.slice(0, 8);
+  const displayName = session.name !== shortId ? session.name : 'Unnamed';
+  const tokenDisplay = session.contextTokens ? `${formatTokens(session.contextTokens)} tok` : '';
+
+  return `
+    <div class="session-item ${activeClass}" onclick="selectSession('${session.id}')">
+      <div class="session-item-header">
+        <span class="session-item-name" title="${session.id}">${escapeHtml(displayName)}</span>
+        <span class="session-item-status ${statusClass}"></span>
+      </div>
+      <div class="session-item-id">${shortId}</div>
+      <div class="session-item-meta">
+        <span class="session-item-model">${escapeHtml(session.model)}</span>
+        <span class="session-item-context ${contextClass}">${session.contextPercent}%</span>
+        ${tokenDisplay ? `<span class="session-item-tokens">${tokenDisplay}</span>` : ''}
+        <span>${session.messageCount} msgs</span>
+      </div>
+    </div>
+  `;
+}
+
+// Render session list with active/previous segments
 function renderSessions() {
   const list = document.getElementById('sessionList');
-  
-  if (sessions.length === 0) {
+  const { active, previous } = sessions;
+
+  if (active.length === 0 && previous.length === 0) {
     list.innerHTML = `
       <div class="empty-session">
         <p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">
-          No active sessions<br>
+          No sessions found<br>
           <span style="font-size: 11px;">Start pi with --session-control</span>
         </p>
       </div>
     `;
     return;
   }
-  
-  list.innerHTML = sessions.map(session => {
-    const contextClass = session.contextPercent > 80 ? 'critical' : session.contextPercent > 50 ? 'high' : '';
-    const statusClass = session.isStreaming ? 'working' : 'idle';
-    const activeClass = currentSession?.id === session.id ? 'active' : '';
-    const shortId = session.id.slice(0, 8);
-    
-    // Show session name prominently (if different from short ID), with ID as secondary
-    const displayName = session.name !== shortId ? session.name : 'Unnamed';
-    
-    return `
-      <div class="session-item ${activeClass}" onclick="selectSession('${session.id}')">
-        <div class="session-item-header">
-          <span class="session-item-name" title="${session.id}">${escapeHtml(displayName)}</span>
-          <span class="session-item-status ${statusClass}"></span>
-        </div>
-        <div class="session-item-id">${shortId}</div>
-        <div class="session-item-meta">
-          <span class="session-item-model">${escapeHtml(session.model)}</span>
-          <span class="session-item-context ${contextClass}">${session.contextPercent}%</span>
-          <span>${session.messageCount} msgs</span>
-        </div>
+
+  let html = '';
+
+  // Active sessions segment
+  if (active.length > 0) {
+    html += `<div class="session-segment">
+      <div class="session-segment-header">
+        <span class="session-segment-label">Active</span>
+        <span class="session-segment-count">${active.length}</span>
       </div>
-    `;
-  }).join('');
+      ${active.map(renderSessionItem).join('')}
+    </div>`;
+  }
+
+  // Previous sessions grouped by time period
+  if (previous.length > 0) {
+    const groups = groupByTimePeriod(previous);
+    for (const group of groups) {
+      html += `<div class="session-segment">
+        <div class="session-segment-header">
+          <span class="session-segment-label">${group.label}</span>
+          <span class="session-segment-count">${group.sessions.length}</span>
+        </div>
+        ${group.sessions.map(renderSessionItem).join('')}
+      </div>`;
+    }
+  }
+
+  list.innerHTML = html;
+}
+
+// Find session by ID across both active and previous lists
+function findSession(id) {
+  return sessions.active.find(s => s.id === id)
+    || sessions.previous.find(s => s.id === id);
 }
 
 // Select a session
 async function selectSession(id) {
-  currentSession = sessions.find(s => s.id === id);
+  currentSession = findSession(id);
   if (!currentSession) return;
   
   // Update UI
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('sessionView').style.display = 'flex';
+  
+  // Show/hide input area and actions based on active state
+  const inputArea = document.querySelector('.input-area');
+  const sessionActions = document.querySelector('.session-actions');
+  if (inputArea) inputArea.style.display = currentSession.isActive ? '' : 'none';
+  if (sessionActions) sessionActions.style.display = currentSession.isActive ? '' : 'none';
   
   renderSessions(); // Update active state
   updateSessionHeader();
@@ -125,8 +209,16 @@ async function selectSession(id) {
   // Load messages
   await loadMessages(id);
   
-  // Start streaming for this session
-  startMessageStream(id);
+  // Only stream for active sessions
+  if (currentSession.isActive) {
+    startMessageStream(id);
+  } else {
+    // Close any existing stream
+    if (messageStream) {
+      messageStream.close();
+      messageStream = null;
+    }
+  }
 }
 
 // Update session header
@@ -138,7 +230,8 @@ function updateSessionHeader() {
   document.getElementById('sessionMsgCount').textContent = `${currentSession.messageCount} msgs`;
   
   const contextEl = document.getElementById('sessionContext');
-  contextEl.textContent = `${currentSession.contextPercent}%`;
+  const tokenStr = currentSession.contextTokens ? ` (${formatTokens(currentSession.contextTokens)} tok)` : '';
+  contextEl.textContent = `${currentSession.contextPercent}%${tokenStr}`;
   contextEl.className = 'badge badge-context';
   if (currentSession.contextPercent > 80) {
     contextEl.classList.add('critical');

@@ -148,12 +148,52 @@ body.sidebar-open {
   font-family: 'SF Mono', Monaco, monospace;
 }
 
+.session-item-tokens {
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 10px;
+  opacity: 0.7;
+}
+
 .session-item-context.high {
   color: var(--warning);
 }
 
 .session-item-context.critical {
   color: var(--error);
+}
+
+/* Session segments */
+.session-segment {
+  margin-bottom: 4px;
+}
+
+.session-segment-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px 4px;
+  user-select: none;
+}
+
+.session-segment-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.session-segment-count {
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.6;
+  font-family: 'SF Mono', Monaco, monospace;
+}
+
+.session-item-status.closed {
+  background: transparent;
+  border: 1.5px solid var(--text-muted);
+  opacity: 0.4;
 }
 
 .sidebar-footer {

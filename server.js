@@ -18,7 +18,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const SESSIONS_DIR = path.join(os.homedir(), '.pi', 'agent', 'sessions');
 
-let sessionsCache = [];
+let sessionsCache = { active: [], previous: [] };
 
 // Helper: Extract text from content
 function extractTextFromContent(content) {
@@ -35,31 +35,70 @@ function truncate(text, maxLen) {
   return text.slice(0, maxLen) + '...';
 }
 
-// Get active sessions
-function getActiveSessions() {
+// Get the set of active session IDs (those with a control socket)
+function getActiveSessionIds() {
   try {
-    if (!fs.existsSync(CONTROL_DIR)) return [];
-
-    const sockets = fs.readdirSync(CONTROL_DIR).filter(f => f.endsWith('.sock'));
-    return sockets.map(f => {
-      const id = f.replace('.sock', '');
-      const info = getSessionInfo(id);
-      return {
-        id,
-        name: info.name || id.slice(0, 8),
-        model: info.model || 'unknown',
-        contextPercent: info.contextPercent || 0,
-        messageCount: info.messageCount || 0,
-        lastActivity: info.lastActivity || fs.statSync(path.join(CONTROL_DIR, f)).mtime
-      };
-    }).sort((a, b) => b.lastActivity - a.lastActivity);
+    if (!fs.existsSync(CONTROL_DIR)) return new Set();
+    return new Set(
+      fs.readdirSync(CONTROL_DIR)
+        .filter(f => f.endsWith('.sock'))
+        .map(f => f.replace('.sock', ''))
+    );
   } catch (e) {
-    console.error('Error getting sessions:', e);
-    return [];
+    return new Set();
   }
 }
 
-// Get session info from file
+// Get all sessions, split into active and previous
+function getAllSessions() {
+  const activeIds = getActiveSessionIds();
+  const active = [];
+  const previous = [];
+
+  // Scan all session files
+  try {
+    const dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true });
+    for (const dir of dirs) {
+      if (!dir.isDirectory()) continue;
+      const dirPath = path.join(SESSIONS_DIR, dir.name);
+      const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl'));
+      for (const file of files) {
+        // Extract session ID from filename: timestamp_uuid.jsonl
+        const match = file.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/);
+        if (!match) continue;
+        const id = match[1];
+        const info = parseSessionFile(path.join(dirPath, file));
+        const session = {
+          id,
+          name: info.name || id.slice(0, 8),
+          model: info.model || 'unknown',
+          contextPercent: info.contextPercent || 0,
+          contextTokens: info.contextTokens || 0,
+          messageCount: info.messageCount || 0,
+          lastActivity: info.lastActivity,
+          isActive: activeIds.has(id),
+          cwd: dir.name,
+        };
+
+        if (activeIds.has(id)) {
+          active.push(session);
+        } else {
+          previous.push(session);
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Error scanning sessions:', e);
+  }
+
+  // Sort both lists by last activity, newest first
+  active.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
+  previous.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
+
+  return { active, previous };
+}
+
+// Get session info from file by ID
 function getSessionInfo(sessionId) {
   try {
     const dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true });
@@ -75,11 +114,39 @@ function getSessionInfo(sessionId) {
   return {};
 }
 
+// Context window sizes for known model families
+const MODEL_CONTEXT_WINDOWS = {
+  'claude-opus-4': 200000,
+  'claude-sonnet-4': 200000,
+  'claude-haiku-4': 200000,
+  'claude-3.5': 200000,
+  'claude-3': 200000,
+  'gpt-4o': 128000,
+  'gpt-4-turbo': 128000,
+  'gpt-4': 8192,
+  'o1': 200000,
+  'o3': 200000,
+  'gemini-2': 1048576,
+  'gemini-1.5': 1048576,
+  'default': 200000,
+};
+
+function getContextWindow(modelId) {
+  if (!modelId) return MODEL_CONTEXT_WINDOWS['default'];
+  for (const [prefix, window] of Object.entries(MODEL_CONTEXT_WINDOWS)) {
+    if (prefix !== 'default' && modelId.startsWith(prefix)) return window;
+  }
+  return MODEL_CONTEXT_WINDOWS['default'];
+}
+
 function parseSessionFile(filePath) {
   const content = fs.readFileSync(filePath, 'utf-8');
   const lines = content.trim().split('\n');
   let model = 'unknown', name = null, firstUserMsg = null, count = 0;
   let lastActivity = fs.statSync(filePath).mtime;
+
+  // Token tracking: reset after compaction events
+  let lastUsageTotalTokens = 0;
 
   for (const line of lines) {
     try {
@@ -94,31 +161,45 @@ function parseSessionFile(filePath) {
       }
       if (entry.type === 'message' && entry.message?.role === 'user') count++;
       if (entry.timestamp) lastActivity = new Date(Math.max(lastActivity, new Date(entry.timestamp)));
+
+      // Track token usage from assistant messages (most accurate source)
+      if (entry.type === 'message' && entry.message?.role === 'assistant' && entry.message?.usage) {
+        lastUsageTotalTokens = entry.message.usage.totalTokens || 0;
+      }
+
+      // On compaction, reset token count — the compaction summary replaces old context
+      if (entry.type === 'compaction') {
+        lastUsageTotalTokens = 0;
+      }
     } catch (e) {}
   }
 
-  const tokens = Math.floor(content.length / 4);
+  const contextWindow = getContextWindow(model);
+  const contextPercent = lastUsageTotalTokens > 0
+    ? Math.min(100, Math.floor(lastUsageTotalTokens / contextWindow * 100))
+    : 0;
+
   return {
     model,
     name: name || (firstUserMsg ? truncate(firstUserMsg, 40) : null),
     messageCount: count,
-    contextPercent: Math.min(100, Math.floor(tokens / 200000 * 100)),
+    contextTokens: lastUsageTotalTokens,
+    contextPercent,
     lastActivity
   };
 }
 
 // API Routes
 app.get('/api/sessions', (req, res) => {
-  sessionsCache = getActiveSessions();
+  sessionsCache = getAllSessions();
   res.json(sessionsCache);
 });
 
 app.get('/api/sessions/:id/messages', (req, res) => {
-  const client = new ControlClient(req.params.id);
-  if (!client.isActive()) return res.status(404).json({ error: 'Session not active' });
-
   const info = getSessionInfo(req.params.id);
   const messages = [];
+  const activeIds = getActiveSessionIds();
+  const isActive = activeIds.has(req.params.id);
 
   // Read from session file
   try {
@@ -153,7 +234,7 @@ app.get('/api/sessions/:id/messages', (req, res) => {
     }
   } catch (e) {}
 
-  res.json({ messages, session: { id: req.params.id, ...info } });
+  res.json({ messages, session: { id: req.params.id, isActive, ...info } });
 });
 
 app.post('/api/sessions/:id/prompt', async (req, res) => {
@@ -257,16 +338,16 @@ app.get('/api/events', (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.write(': connected\n\n');
 
-  sessionsCache = getActiveSessions();
-  res.write(`data: ${JSON.stringify({ type: 'sessions', sessions: sessionsCache })}\n\n`);
+  sessionsCache = getAllSessions();
+  res.write(`data: ${JSON.stringify({ type: 'sessions', ...sessionsCache })}\n\n`);
 
   const interval = setInterval(() => {
-    const newSessions = getActiveSessions();
-    const newIds = newSessions.map(s => s.id).sort().join(',');
-    const oldIds = sessionsCache.map(s => s.id).sort().join(',');
-    if (newIds !== oldIds) {
+    const newSessions = getAllSessions();
+    const newActiveIds = newSessions.active.map(s => s.id).sort().join(',');
+    const oldActiveIds = sessionsCache.active.map(s => s.id).sort().join(',');
+    if (newActiveIds !== oldActiveIds) {
       sessionsCache = newSessions;
-      res.write(`data: ${JSON.stringify({ type: 'sessions', sessions: sessionsCache })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'sessions', ...sessionsCache })}\n\n`);
     }
   }, 3000);
 
