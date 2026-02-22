@@ -1258,6 +1258,51 @@ body.sidebar-open {
   border-radius: 4px;
 }
 
+/* Resume bar */
+.resume-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  gap: 12px;
+}
+
+.resume-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.resume-label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.resume-cwd {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Session item cwd */
+.session-item-cwd {
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.6;
+  font-family: var(--font-mono, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+
 .btn-stop {
   background: var(--error);
   color: #fff;

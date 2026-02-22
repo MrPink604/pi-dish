@@ -74,7 +74,16 @@
           <!-- Messages will be rendered here -->
         </div>
         
-        <!-- Input -->
+        <!-- Resume bar (for inactive/previous sessions) -->
+        <div class="resume-bar" id="resumeBar" style="display:none">
+          <div class="resume-info">
+            <span class="resume-label">Read-only — session is inactive</span>
+            <span class="resume-cwd">~</span>
+          </div>
+          <button class="btn btn-primary" onclick="resumeSession()">Resume Session</button>
+        </div>
+
+        <!-- Input (for active sessions) -->
         <div class="input-area">
           <textarea id="promptInput" placeholder="Send a message..." rows="2"></textarea>
           <div class="input-actions">
