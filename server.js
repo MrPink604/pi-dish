@@ -273,6 +273,8 @@ app.get('/api/events', (req, res) => {
   req.on('close', () => clearInterval(interval));
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`pi-dish running at http://0.0.0.0:${PORT}`);
 });
+
+module.exports = server;

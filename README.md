@@ -11,6 +11,8 @@ A minimal web interface for pi's sessions.
 
 ## Running
 
+### Web (browser)
+
 ```bash
 cd ~/workspace/pi-dish
 npm install
@@ -18,6 +20,22 @@ npm start
 ```
 
 Then open http://localhost:3333 in your browser.
+
+### Desktop (Electron)
+
+```bash
+npm run electron:dev
+```
+
+This starts the Express server and opens the app in a native window.
+
+### Build distributable
+
+```bash
+npm run electron:build
+```
+
+Output goes to `dist/` (AppImage + deb on Linux, dmg on macOS).
 
 ## How It Works
 
