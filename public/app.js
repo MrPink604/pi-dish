@@ -253,6 +253,28 @@ function groupByTimePeriod(sessionList) {
   return groups.filter(g => g.sessions.length > 0);
 }
 
+// Format relative time (e.g. "2m ago", "3h ago", "Yesterday")
+function formatRelativeTime(timestamp) {
+  if (!timestamp) return '';
+  var now = Date.now();
+  var d = new Date(timestamp);
+  var diff = now - d.getTime();
+  if (diff < 0) diff = 0;
+
+  var seconds = Math.floor(diff / 1000);
+  var minutes = Math.floor(seconds / 60);
+  var hours = Math.floor(minutes / 60);
+  var days = Math.floor(hours / 24);
+
+  if (seconds < 60) return 'just now';
+  if (minutes < 60) return minutes + 'm ago';
+  if (hours < 24) return hours + 'h ago';
+  if (days === 1) return 'yesterday';
+  if (days < 7) return days + 'd ago';
+  // Show date for older
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
 // Render a single session item
 function renderSessionItem(session) {
   const contextClass = session.contextPercent > 80 ? 'critical' : session.contextPercent > 50 ? 'high' : '';
@@ -261,14 +283,15 @@ function renderSessionItem(session) {
   const shortId = session.id.slice(0, 8);
   const displayName = session.name !== shortId ? session.name : 'Unnamed';
   const tokenDisplay = session.contextTokens ? `${formatTokens(session.contextTokens)} tok` : '';
+  const timeAgo = formatRelativeTime(session.lastActivity);
 
   return `
     <div class="session-item ${activeClass}" onclick="selectSession('${session.id}')">
       <div class="session-item-header">
         <span class="session-item-name" title="${session.id}">${escapeHtml(displayName)}</span>
+        <span class="session-item-time">${timeAgo}</span>
         <span class="session-item-status ${statusClass}"></span>
       </div>
-      <div class="session-item-id">${shortId}</div>
       <div class="session-item-meta">
         <span class="session-item-model">${escapeHtml(session.model)}</span>
         <span class="session-item-context ${contextClass}">${session.contextPercent}%</span>
@@ -526,7 +549,7 @@ function renderModelDropdown(query) {
     html += '<div class="model-group-header">' + escapeHtml(provider) + '</div>';
     groups[provider].forEach(function(m) {
       var fullId = m.provider + '/' + m.id;
-      var activeClass = m.id === currentModel || fullId === currentModel ? 'active' : '';
+      var activeClass = (m.id === currentModel || fullId === currentModel || m.id.startsWith(currentModel) || currentModel.endsWith(m.id)) ? 'active' : '';
       var label = m.id;
       if (m.reasoning) label += ' 🧠';
       html += '<div class="model-option ' + activeClass + '" onclick="selectModel(\'' + escapeHtml(fullId) + '\')" title="' + escapeHtml(fullId) + '">' + escapeHtml(label) + '</div>';
@@ -563,8 +586,11 @@ function closeModelDropdown() {
   document.getElementById('modelDropdown').style.display = 'none';
 }
 
-async function selectModel(modelId) {
+async function selectModel(fullModelId) {
   closeModelDropdown();
+  // Extract just the model ID (strip provider prefix for comparison and display)
+  var slashIdx = fullModelId.indexOf('/');
+  var modelId = slashIdx > 0 ? fullModelId.slice(slashIdx + 1) : fullModelId;
   if (!currentSession || modelId === currentSession.model) return;
 
   setStatus('Switching model...', 'working');
@@ -572,15 +598,16 @@ async function selectModel(modelId) {
     const res = await fetch('/api/sessions/' + currentSession.id + '/model', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ modelId: modelId }),
+      body: JSON.stringify({ modelId: fullModelId }),
     });
     if (res.ok) {
       currentSession.model = modelId;
       updateSessionHeader();
       renderSessions();
-      setStatus('');
+      setStatus('Model switched to ' + modelId);
     } else {
-      setStatus('Model switch failed', 'error');
+      const data = await res.json().catch(() => ({}));
+      setStatus('Model switch failed: ' + (data.error || 'unknown error'), 'error');
     }
   } catch (e) {
     setStatus('Model switch failed: ' + e.message, 'error');
@@ -929,16 +956,25 @@ async function sendPrompt() {
 // Create new session
 async function createSession() {
   try {
-    const res = await fetch('/api/sessions/new', { method: 'POST' });
+    setStatus('Creating session...', 'working');
+    const res = await fetch('/api/sessions/new', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
     const data = await res.json().catch(() => ({}));
 
-    if (res.ok && data.success) {
+    if (res.ok && data.success && data.id) {
       setStatus('Session created', 'working');
-      setTimeout(loadSessions, 2000);
+      // Wait a moment for the session file to be written, then reload and select
+      setTimeout(async () => {
+        await loadSessions();
+        selectSession(data.id);
+      }, 2000);
       return;
     }
 
-    setStatus(data.error || 'Session creation is not available in pi-dish yet', 'error');
+    setStatus(data.error || 'Failed to create session', 'error');
   } catch (e) {
     setStatus(`Error: ${e.message}`, 'error');
   }

@@ -5,6 +5,7 @@ const os = require('os');
 const { ControlClient, CONTROL_DIR } = require('./lib/control-client');
 const { SessionPoller } = require('./lib/session-poller');
 const piSDK = require('./lib/pi-sdk');
+const { createRPCSession, getRPCSession, getAllRPCSessions } = require('./lib/rpc-session');
 
 const app = express();
 const PORT = process.env.PORT || 3333;
@@ -36,18 +37,21 @@ function truncate(text, maxLen) {
   return text.slice(0, maxLen) + '...';
 }
 
-// Get the set of active session IDs (those with a control socket)
+// Get the set of active session IDs (control sockets + RPC sessions)
 function getActiveSessionIds() {
+  const ids = new Set();
   try {
-    if (!fs.existsSync(CONTROL_DIR)) return new Set();
-    return new Set(
-      fs.readdirSync(CONTROL_DIR)
-        .filter(f => f.endsWith('.sock'))
-        .map(f => f.replace('.sock', ''))
-    );
-  } catch (e) {
-    return new Set();
+    if (fs.existsSync(CONTROL_DIR)) {
+      for (const f of fs.readdirSync(CONTROL_DIR)) {
+        if (f.endsWith('.sock')) ids.add(f.replace('.sock', ''));
+      }
+    }
+  } catch (e) {}
+  // Also include RPC-managed sessions
+  for (const rpc of getAllRPCSessions()) {
+    if (rpc.alive) ids.add(rpc.id);
   }
+  return ids;
 }
 
 // Get all sessions, split into active and previous
@@ -90,6 +94,25 @@ function getAllSessions() {
     }
   } catch (e) {
     console.error('Error scanning sessions:', e);
+  }
+
+  // Include RPC-managed sessions that might not have JSONL files yet
+  const listedIds = new Set([...active, ...previous].map(s => s.id));
+  for (const rpc of getAllRPCSessions()) {
+    if (rpc.alive && !listedIds.has(rpc.id)) {
+      const modelName = rpc.state?.model?.id || rpc.state?.model?.name || 'unknown';
+      active.push({
+        id: rpc.id,
+        name: 'New Session',
+        model: modelName,
+        contextPercent: 0,
+        contextTokens: 0,
+        messageCount: 0,
+        lastActivity: new Date(),
+        isActive: true,
+        cwd: 'rpc',
+      });
+    }
   }
 
   // Sort both lists by last activity, newest first
@@ -243,6 +266,20 @@ app.post('/api/sessions/:id/prompt', async (req, res) => {
   const { message, mode = 'steer' } = req.body;
   if (!message) return res.status(400).json({ error: 'Message required' });
 
+  // Try RPC session first (pi-dish managed)
+  const rpc = getRPCSession(req.params.id);
+  if (rpc && rpc.alive) {
+    try {
+      // For RPC sessions, always use prompt() to trigger the full agent loop
+      // steer() in RPC mode only queues the message without triggering a turn
+      const result = await rpc.prompt(message);
+      return res.json({ success: true, result });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
+  // Fall back to control socket (externally managed)
   const client = new ControlClient(req.params.id);
   if (!client.isActive()) return res.status(404).json({ error: 'Session not active' });
 
@@ -270,18 +307,31 @@ app.post('/api/sessions/:id/rename', async (req, res) => {
   }
 });
 
-// Switch model via control socket prompt (sends /model command)
+// Switch model via SDK (writes model_change entry) or RPC (set_model command)
 app.post('/api/sessions/:id/model', async (req, res) => {
   const { modelId } = req.body;
   if (!modelId) return res.status(400).json({ error: 'modelId required' });
 
-  const client = new ControlClient(req.params.id);
-  if (!client.isActive()) return res.status(404).json({ error: 'Session not active' });
+  const { provider, id } = piSDK.parseModelId(modelId);
 
+  // Try RPC session first
+  const rpc = getRPCSession(req.params.id);
+  if (rpc && rpc.alive) {
+    try {
+      await rpc.setModel(modelId);
+      return res.json({ success: true });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
+  // For control-socket sessions, write model_change directly to JSONL
   try {
-    // Send /model as a prompt — pi's interactive mode handles this command
-    const result = await client.send('send', { message: `/model ${modelId}`, mode: 'steer' });
-    res.json({ success: result.success, error: result.error });
+    const sessionPath = await piSDK.findSessionPath(req.params.id);
+    if (!sessionPath) return res.status(404).json({ error: 'Session not found' });
+
+    await piSDK.switchModel(sessionPath, provider, id);
+    res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -315,23 +365,80 @@ app.get('/api/commands', async (req, res) => {
   }
 });
 
-app.post('/api/sessions/new', (req, res) => {
-  res.status(501).json({
-    success: false,
-    error: 'Session creation is not implemented in pi-dish yet. Start a new pi session with --session-control in a terminal, then refresh.'
-  });
+// Create a new pi session via RPC mode
+app.post('/api/sessions/new', async (req, res) => {
+  try {
+    const { model, cwd } = req.body || {};
+    const { session, ready } = createRPCSession({ model, cwd });
+    const rpc = await ready;
+    res.json({ success: true, id: rpc.id });
+  } catch (e) {
+    console.error('Failed to create session:', e);
+    res.status(500).json({ success: false, error: e.message });
+  }
 });
 
 // SSE streaming - combines turn_end events with polling for real-time updates
 app.get('/api/sessions/:id/stream', async (req, res) => {
   const sessionId = req.params.id;
-  const client = new ControlClient(sessionId);
-  if (!client.isActive()) return res.status(404).json({ error: 'Session not active' });
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.write(': connected\n\n');
+
+  const cleanups = [];
+
+  // Check if this is an RPC-managed session
+  const rpc = getRPCSession(sessionId);
+  if (rpc && rpc.alive) {
+    // Forward RPC streaming events to SSE
+    const unsubs = [];
+
+    // User message echoed back
+    unsubs.push(rpc.on('message_start', (msg) => {
+      if (msg.message?.role === 'user') {
+        res.write(`event: user_message\ndata: ${JSON.stringify({ message: msg.message })}\n\n`);
+      }
+    }));
+
+    // Streaming assistant message updates (thinking, text deltas, tool calls)
+    unsubs.push(rpc.on('message_update', (msg) => {
+      if (msg.message) {
+        const m = msg.message;
+        const hasThinking = Array.isArray(m.content) && m.content.some(c => c.type === 'thinking');
+        const hasToolCalls = Array.isArray(m.content) && m.content.some(c => c.type === 'toolCall');
+
+        if (hasThinking) {
+          res.write(`event: thinking\ndata: ${JSON.stringify({ message: m })}\n\n`);
+        } else if (hasToolCalls) {
+          res.write(`event: tool_call\ndata: ${JSON.stringify({ message: m })}\n\n`);
+        }
+      }
+    }));
+
+    // Turn end — final assistant message
+    unsubs.push(rpc.on('turn_end', (msg) => {
+      if (msg.message) {
+        res.write(`event: turn_end\ndata: ${JSON.stringify({ message: msg.message })}\n\n`);
+      }
+    }));
+
+    unsubs.push(rpc.on('exit', () => {
+      res.write(`event: error\ndata: ${JSON.stringify({ error: 'Session ended' })}\n\n`);
+    }));
+
+    cleanups.push(() => unsubs.forEach(u => u()));
+    req.on('close', () => cleanups.forEach(fn => fn()));
+    return;
+  }
+
+  // For control-socket sessions
+  const client = new ControlClient(sessionId);
+  if (!client.isActive()) {
+    res.write(`event: error\ndata: ${JSON.stringify({ error: 'Session not active' })}\n\n`);
+    return;
+  }
 
   // Track if turn has ended to stop emitting poller events
   let turnEnded = false;
