@@ -235,6 +235,17 @@ async function loadModels() {
   }
 }
 
+// Filter models for dropdown (search/filter support)
+function filterModels(query) {
+  if (!query) return knownModels;
+  const q = query.toLowerCase();
+  return knownModels.filter(function(m) {
+    return m.id.toLowerCase().includes(q) ||
+      m.provider.toLowerCase().includes(q) ||
+      (m.name && m.name.toLowerCase().includes(q));
+  });
+}
+
 // Update session header
 function updateSessionHeader() {
   if (!currentSession) return;
@@ -340,19 +351,56 @@ function toggleModelDropdown() {
     return;
   }
 
-  // Build dropdown items
-  const currentModel = currentSession.model;
-  dropdown.innerHTML = knownModels.map(function(m) {
-    const activeClass = m === currentModel ? 'active' : '';
-    return '<div class="model-option ' + activeClass + '" onclick="selectModel(\'' + escapeHtml(m) + '\')">' + escapeHtml(m) + '</div>';
-  }).join('');
-
+  renderModelDropdown('');
   dropdown.style.display = 'block';
+
+  // Focus the search input
+  var searchInput = dropdown.querySelector('.model-search');
+  if (searchInput) searchInput.focus();
 
   // Close on outside click
   setTimeout(function() {
     document.addEventListener('click', closeModelDropdownOnOutsideClick, { once: true });
   }, 0);
+}
+
+function renderModelDropdown(query) {
+  var dropdown = document.getElementById('modelDropdown');
+  var filtered = filterModels(query);
+  var currentModel = currentSession ? currentSession.model : '';
+
+  // Group by provider
+  var groups = {};
+  filtered.forEach(function(m) {
+    if (!groups[m.provider]) groups[m.provider] = [];
+    groups[m.provider].push(m);
+  });
+
+  var html = '<input type="text" class="model-search" placeholder="Search models..." value="' + escapeHtml(query) + '" oninput="renderModelDropdown(this.value)" onkeydown="handleModelSearchKey(event)">';
+
+  var providers = Object.keys(groups).sort();
+  providers.forEach(function(provider) {
+    html += '<div class="model-group-header">' + escapeHtml(provider) + '</div>';
+    groups[provider].forEach(function(m) {
+      var fullId = m.provider + '/' + m.id;
+      var activeClass = m.id === currentModel || fullId === currentModel ? 'active' : '';
+      var label = m.id;
+      if (m.reasoning) label += ' 🧠';
+      html += '<div class="model-option ' + activeClass + '" onclick="selectModel(\'' + escapeHtml(fullId) + '\')" title="' + escapeHtml(fullId) + '">' + escapeHtml(label) + '</div>';
+    });
+  });
+
+  if (filtered.length === 0) {
+    html += '<div class="model-option" style="color:var(--text-muted);cursor:default">No models found</div>';
+  }
+
+  dropdown.innerHTML = html;
+}
+
+function handleModelSearchKey(e) {
+  if (e.key === 'Escape') {
+    closeModelDropdown();
+  }
 }
 
 function closeModelDropdownOnOutsideClick(e) {

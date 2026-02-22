@@ -305,15 +305,44 @@ body.sidebar-open {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 6px;
-  min-width: 220px;
-  max-height: 300px;
+  min-width: 260px;
+  max-height: 400px;
   overflow-y: auto;
   z-index: 50;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
-.model-option {
+.model-search {
+  width: 100%;
   padding: 8px 12px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg-darker);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.model-search::placeholder {
+  color: var(--text-muted);
+}
+
+.model-group-header {
+  padding: 6px 12px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  position: sticky;
+  top: 0;
+  background: var(--bg-card);
+}
+
+.model-option {
+  padding: 6px 12px 6px 20px;
   font-size: 12px;
   cursor: pointer;
   color: var(--text);

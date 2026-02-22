@@ -4,6 +4,7 @@ const path = require('path');
 const os = require('os');
 const { ControlClient, CONTROL_DIR } = require('./lib/control-client');
 const { SessionPoller } = require('./lib/session-poller');
+const piSDK = require('./lib/pi-sdk');
 
 const app = express();
 const PORT = process.env.PORT || 3333;
@@ -152,6 +153,7 @@ function parseSessionFile(filePath) {
     try {
       const entry = JSON.parse(line);
       if (entry.type === 'model_change') model = entry.modelId || model;
+      if (entry.type === 'session_info' && entry.name) name = entry.name;
       if (entry.sessionName) name = entry.sessionName;
       if (!firstUserMsg && entry.type === 'message' && entry.message?.role === 'user') {
         firstUserMsg = extractTextFromContent(entry.message.content);
@@ -252,23 +254,23 @@ app.post('/api/sessions/:id/prompt', async (req, res) => {
   }
 });
 
-// Rename session via /name command
+// Rename session via SDK (writes session_info entry to JSONL)
 app.post('/api/sessions/:id/rename', async (req, res) => {
   const { name } = req.body;
   if (!name) return res.status(400).json({ error: 'Name required' });
 
-  const client = new ControlClient(req.params.id);
-  if (!client.isActive()) return res.status(404).json({ error: 'Session not active' });
-
   try {
-    const result = await client.send('send', { message: `/name ${name}`, mode: 'steer' });
-    res.json({ success: result.success, error: result.error });
+    const sessionPath = await piSDK.findSessionPath(req.params.id);
+    if (!sessionPath) return res.status(404).json({ error: 'Session not found' });
+
+    await piSDK.renameSession(sessionPath, name);
+    res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// Switch model via /model command
+// Switch model via control socket prompt (sends /model command)
 app.post('/api/sessions/:id/model', async (req, res) => {
   const { modelId } = req.body;
   if (!modelId) return res.status(400).json({ error: 'modelId required' });
@@ -277,6 +279,7 @@ app.post('/api/sessions/:id/model', async (req, res) => {
   if (!client.isActive()) return res.status(404).json({ error: 'Session not active' });
 
   try {
+    // Send /model as a prompt — pi's interactive mode handles this command
     const result = await client.send('send', { message: `/model ${modelId}`, mode: 'steer' });
     res.json({ success: result.success, error: result.error });
   } catch (e) {
@@ -284,28 +287,22 @@ app.post('/api/sessions/:id/model', async (req, res) => {
   }
 });
 
-// Get known models from session history
-app.get('/api/models', (req, res) => {
-  const models = new Set();
+// Get available models from SDK (all providers with API keys)
+let modelsCache = null;
+let modelsCacheTime = 0;
+const MODELS_CACHE_TTL = 60000; // 1 minute
+
+app.get('/api/models', async (req, res) => {
   try {
-    const dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true });
-    for (const dir of dirs) {
-      if (!dir.isDirectory()) continue;
-      const files = fs.readdirSync(path.join(SESSIONS_DIR, dir.name)).filter(f => f.endsWith('.jsonl'));
-      for (const file of files) {
-        const content = fs.readFileSync(path.join(SESSIONS_DIR, dir.name, file), 'utf-8');
-        for (const line of content.split('\n')) {
-          try {
-            const entry = JSON.parse(line);
-            if (entry.type === 'model_change' && entry.modelId) {
-              models.add(entry.modelId);
-            }
-          } catch (e) {}
-        }
-      }
+    const now = Date.now();
+    if (!modelsCache || now - modelsCacheTime > MODELS_CACHE_TTL) {
+      modelsCache = await piSDK.getAvailableModels();
+      modelsCacheTime = now;
     }
-  } catch (e) {}
-  res.json([...models].sort());
+    res.json(modelsCache);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.post('/api/sessions/new', (req, res) => {
