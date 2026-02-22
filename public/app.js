@@ -131,6 +131,10 @@ function acceptAutocompleteByName(name) {
 // Sidebar
 // =========================================================================
 
+let sidebarTab = 'active'; // 'active' or 'browse'
+let filterQuery = '';
+let filterDebounceTimer = null;
+
 function toggleSidebar() {
   const sidebar = document.getElementById('sidebar');
   const overlay = document.getElementById('sidebarOverlay');
@@ -146,9 +150,30 @@ function closeSidebar() {
   document.body.classList.remove('sidebar-open');
 }
 
-async function loadSessions() {
+function switchTab(tab) {
+  sidebarTab = tab;
+  document.getElementById('tabActive').classList.toggle('active', tab === 'active');
+  document.getElementById('tabBrowse').classList.toggle('active', tab === 'browse');
+  document.getElementById('filterInput').placeholder = tab === 'active' ? 'Filter active sessions...' : 'Search all sessions...';
+  renderSessions();
+}
+
+function onFilterInput() {
+  clearTimeout(filterDebounceTimer);
+  const q = document.getElementById('filterInput').value.trim();
+  // Local filter is instant; server search is debounced
+  filterQuery = q;
+  if (sidebarTab === 'browse' && q.length > 0) {
+    filterDebounceTimer = setTimeout(() => loadSessions(q), 300);
+  } else {
+    renderSessions();
+  }
+}
+
+async function loadSessions(query) {
   try {
-    const res = await fetch('/api/sessions');
+    const url = query ? `/api/sessions?q=${encodeURIComponent(query)}` : '/api/sessions';
+    const res = await fetch(url);
     sessions = await res.json();
     renderSessions();
   } catch (e) {
@@ -164,35 +189,6 @@ function formatTokens(tokens) {
   return `${tokens}`;
 }
 
-function groupByTimePeriod(list) {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
-  const d2 = new Date(today); d2.setDate(d2.getDate() - 2);
-  const d3 = new Date(today); d3.setDate(d3.getDate() - 3);
-  const week = new Date(today); week.setDate(week.getDate() - 7);
-  const month = new Date(today); month.setDate(month.getDate() - 30);
-
-  const groups = [
-    { label: 'Today', sessions: [] }, { label: 'Yesterday', sessions: [] },
-    { label: '2 Days Ago', sessions: [] }, { label: '3 Days Ago', sessions: [] },
-    { label: 'Last 7 Days', sessions: [] }, { label: 'Last 30 Days', sessions: [] },
-    { label: 'Older', sessions: [] },
-  ];
-
-  for (const s of list) {
-    const d = new Date(s.lastActivity);
-    if (d >= today) groups[0].sessions.push(s);
-    else if (d >= yesterday) groups[1].sessions.push(s);
-    else if (d >= d2) groups[2].sessions.push(s);
-    else if (d >= d3) groups[3].sessions.push(s);
-    else if (d >= week) groups[4].sessions.push(s);
-    else if (d >= month) groups[5].sessions.push(s);
-    else groups[6].sessions.push(s);
-  }
-  return groups.filter(g => g.sessions.length > 0);
-}
-
 function formatRelativeTime(ts) {
   if (!ts) return '';
   var diff = Math.max(0, Date.now() - new Date(ts).getTime());
@@ -205,21 +201,58 @@ function formatRelativeTime(ts) {
   return new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
+/** Shorten cwd for display */
+function shortCwd(cwd) {
+  if (!cwd) return '';
+  return cwd.replace(/^\/home\/[^/]+\//, '~/').replace(/^\/home\/[^/]+$/, '~');
+}
+
+/** Group sessions by workspace (cwd), sorted by last activity within each group */
+function groupByWorkspace(list) {
+  const groups = new Map(); // cwd -> [sessions]
+  for (const s of list) {
+    const key = s.cwd || '~';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(s);
+  }
+
+  // Sort sessions within each group by last activity
+  for (const [, sessions] of groups) {
+    sessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
+  }
+
+  // Sort groups by most recent session in each
+  const sorted = [...groups.entries()].sort((a, b) => {
+    const aTime = new Date(a[1][0].lastActivity).getTime();
+    const bTime = new Date(b[1][0].lastActivity).getTime();
+    return bTime - aTime;
+  });
+
+  return sorted; // [[cwd, sessions], ...]
+}
+
+/** Apply local filter to session list (matches name, cwd, model) */
+function applyLocalFilter(list) {
+  if (!filterQuery) return list;
+  const tokens = filterQuery.toLowerCase().split(/\s+/).filter(Boolean);
+  return list.filter(s => {
+    const text = [s.name, s.cwd, s.model, s.id].join(' ').toLowerCase();
+    return tokens.every(t => text.includes(t));
+  });
+}
+
 function renderSessionItem(session) {
   const ctxClass = session.contextPercent > 80 ? 'critical' : session.contextPercent > 50 ? 'high' : '';
-  const statusClass = session.isActive ? 'idle' : 'closed';
   const activeClass = currentSession?.id === session.id ? 'active' : '';
   const displayName = session.name || 'Unnamed';
   const tokenDisplay = session.contextTokens ? `${formatTokens(session.contextTokens)} tok` : '';
   const timeAgo = formatRelativeTime(session.lastActivity);
-  const cwdShort = session.cwd ? session.cwd.replace(/^\/home\/[^/]+\//, '~/') : '';
 
   return `
     <div class="session-item ${activeClass}" onclick="selectSession('${session.id}')">
       <div class="session-item-header">
-        <span class="session-item-name" title="${session.id}">${escapeHtml(displayName)}</span>
+        <span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>
         <span class="session-item-time">${timeAgo}</span>
-        <span class="session-item-status ${statusClass}"></span>
       </div>
       <div class="session-item-meta">
         <span class="session-item-model">${escapeHtml(session.model)}</span>
@@ -227,7 +260,6 @@ function renderSessionItem(session) {
         ${tokenDisplay ? `<span class="session-item-tokens">${tokenDisplay}</span>` : ''}
         <span>${session.messageCount} msgs</span>
       </div>
-      ${cwdShort ? `<div class="session-item-cwd" title="${escapeHtml(session.cwd)}">${escapeHtml(cwdShort)}</div>` : ''}
     </div>
   `;
 }
@@ -235,36 +267,32 @@ function renderSessionItem(session) {
 function renderSessions() {
   const list = document.getElementById('sessionList');
   const { active, previous } = sessions;
+  const showing = sidebarTab === 'active' ? active : previous;
 
-  if (active.length === 0 && previous.length === 0) {
-    list.innerHTML = `<div class="empty-session"><p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">
-      No sessions found<br><span style="font-size: 11px;">Click "+ New Session" to start</span></p></div>`;
+  // For active tab, apply local filter; for browse, server already filtered if query
+  const filtered = sidebarTab === 'active' ? applyLocalFilter(showing) : (filterQuery ? showing : applyLocalFilter(showing));
+
+  if (filtered.length === 0) {
+    const msg = sidebarTab === 'active'
+      ? (active.length === 0 ? 'No active sessions<br><span style="font-size:11px">Click "+ New Session" or resume one from Browse</span>' : 'No matches')
+      : (previous.length === 0 ? 'No previous sessions found' : 'No matches');
+    list.innerHTML = `<div class="empty-session"><p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">${msg}</p></div>`;
     return;
   }
 
+  // Group by workspace
+  const groups = groupByWorkspace(filtered);
   let html = '';
 
-  if (active.length > 0) {
+  for (const [cwd, groupSessions] of groups) {
+    const label = shortCwd(cwd);
     html += `<div class="session-segment">
-      <div class="session-segment-header">
-        <span class="session-segment-label">Active</span>
-        <span class="session-segment-count">${active.length}</span>
+      <div class="workspace-group-header">
+        <span class="workspace-group-label" title="${escapeHtml(cwd)}">${escapeHtml(label)}</span>
+        <span class="workspace-group-count">${groupSessions.length}</span>
       </div>
-      ${active.map(renderSessionItem).join('')}
+      ${groupSessions.map(renderSessionItem).join('')}
     </div>`;
-  }
-
-  if (previous.length > 0) {
-    const groups = groupByTimePeriod(previous);
-    for (const group of groups) {
-      html += `<div class="session-segment">
-        <div class="session-segment-header">
-          <span class="session-segment-label">${group.label}</span>
-          <span class="session-segment-count">${group.sessions.length}</span>
-        </div>
-        ${group.sessions.map(renderSessionItem).join('')}
-      </div>`;
-    }
   }
 
   list.innerHTML = html;

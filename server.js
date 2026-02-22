@@ -208,13 +208,90 @@ function getPreviousSessions() {
 }
 
 // =========================================================================
+// Search
+// =========================================================================
+
+// Cache for session search text (avoids re-parsing JSONL on every search)
+const searchTextCache = new Map(); // sessionFile -> { mtime, text }
+
+/**
+ * Get searchable text for a session file (cached).
+ * Includes all user messages, assistant text, tool commands, file paths.
+ */
+function getSessionSearchText(sessionFile) {
+  try {
+    const stats = fs.statSync(sessionFile);
+    const cached = searchTextCache.get(sessionFile);
+    if (cached && cached.mtime >= stats.mtimeMs) return cached.text;
+
+    const content = fs.readFileSync(sessionFile, 'utf-8');
+    const parts = [];
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type === 'message' && entry.message) {
+          const text = extractTextFromContent(entry.message.content);
+          if (text) parts.push(text.substring(0, 500));
+        }
+        if (entry.type === 'custom_message' && entry.content) {
+          parts.push(entry.content.substring(0, 200));
+        }
+      } catch (e) {}
+    }
+    const text = parts.join(' ').toLowerCase();
+    searchTextCache.set(sessionFile, { mtime: stats.mtimeMs, text });
+    return text;
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * Check if a session matches a search query.
+ * Matches against: name, cwd/path, model, and session message history.
+ */
+function sessionMatchesQuery(session, query) {
+  const tokens = query.split(/\s+/).filter(Boolean);
+  if (!tokens.length) return true;
+
+  // Build fast-check string from metadata
+  const meta = [
+    session.name || '',
+    session.cwd || '',
+    session.model || '',
+    session.id || '',
+  ].join(' ').toLowerCase();
+
+  // Check if all tokens match metadata first (fast path)
+  if (tokens.every(t => meta.includes(t))) return true;
+
+  // Expensive path: search session message content
+  if (session.sessionFile) {
+    const historyText = getSessionSearchText(session.sessionFile);
+    const fullText = meta + ' ' + historyText;
+    return tokens.every(t => fullText.includes(t));
+  }
+
+  return false;
+}
+
+// =========================================================================
 // API Routes
 // =========================================================================
 
-// List sessions — active (RPC) + previous (disk)
+// List sessions — active (RPC) + previous (disk), with optional search
 app.get('/api/sessions', (req, res) => {
-  const active = getActiveSessions();
-  const previous = getPreviousSessions();
+  const query = (req.query.q || '').trim().toLowerCase();
+  let active = getActiveSessions();
+  let previous = getPreviousSessions();
+
+  if (query) {
+    const match = (s) => sessionMatchesQuery(s, query);
+    active = active.filter(match);
+    previous = previous.filter(match);
+  }
+
   res.json({ active, previous });
 });
 

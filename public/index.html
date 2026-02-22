@@ -33,12 +33,21 @@
         </button>
       </div>
       
+      <div class="sidebar-tabs">
+        <button class="sidebar-tab active" id="tabActive" onclick="switchTab('active')">Active</button>
+        <button class="sidebar-tab" id="tabBrowse" onclick="switchTab('browse')">Browse</button>
+      </div>
+      
+      <div class="sidebar-filter">
+        <input type="text" class="filter-input" id="filterInput" placeholder="Filter sessions..." oninput="onFilterInput()">
+      </div>
+      
       <div class="session-list" id="sessionList">
         <!-- Sessions will be rendered here -->
       </div>
       
       <div class="sidebar-footer">
-        <button class="btn" onclick="createSession()" title="Start pi with --session-control in a terminal">+ New Session</button>
+        <button class="btn" onclick="createSession()">+ New Session</button>
       </div>
     </aside>
 
