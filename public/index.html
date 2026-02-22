@@ -50,16 +50,20 @@
         <!-- Session Header -->
         <header class="session-header">
           <div class="session-info">
-            <h2 id="sessionName">Session Name</h2>
+            <h2 id="sessionName" class="editable-name" onclick="startRename()" title="Click to rename">Session Name</h2>
+            <input type="text" id="sessionNameInput" class="name-input" style="display:none"
+              onblur="commitRename()" onkeydown="handleRenameKey(event)">
             <div class="session-meta">
-              <span class="badge" id="sessionModel">model</span>
+              <div class="model-selector" id="modelSelector">
+                <button class="badge badge-model" id="sessionModel" onclick="toggleModelDropdown()" title="Change model">model ▾</button>
+                <div class="model-dropdown" id="modelDropdown"></div>
+              </div>
               <span class="badge badge-context" id="sessionContext">0%</span>
               <span class="badge" id="sessionMsgCount">0 msgs</span>
             </div>
           </div>
           <div class="session-actions">
             <button class="btn-sm" onclick="sendPromptWith('/compact')" title="Compact session">Compact</button>
-            <button class="btn-sm" onclick="sendPromptWith('/clear')" title="Clear session">Clear</button>
           </div>
         </header>
         
