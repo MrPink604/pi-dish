@@ -518,7 +518,7 @@ function toggleModelDropdown() {
   }
 
   renderModelDropdown('');
-  dropdown.style.display = 'block';
+  dropdown.style.display = 'flex';
 
   // Focus the search input
   var searchInput = dropdown.querySelector('.model-search');
@@ -535,6 +535,27 @@ function renderModelDropdown(query) {
   var filtered = filterModels(query);
   var currentModel = currentSession ? currentSession.model : '';
 
+  // Ensure the search input exists (create once, don't replace)
+  var searchInput = dropdown.querySelector('.model-search');
+  if (!searchInput) {
+    searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.className = 'model-search';
+    searchInput.placeholder = 'Search models...';
+    searchInput.addEventListener('input', function() { renderModelDropdown(this.value); });
+    searchInput.addEventListener('keydown', handleModelSearchKey);
+    dropdown.appendChild(searchInput);
+  }
+  if (searchInput.value !== query) searchInput.value = query;
+
+  // Get or create the results container
+  var results = dropdown.querySelector('.model-results');
+  if (!results) {
+    results = document.createElement('div');
+    results.className = 'model-results';
+    dropdown.appendChild(results);
+  }
+
   // Group by provider
   var groups = {};
   filtered.forEach(function(m) {
@@ -542,8 +563,7 @@ function renderModelDropdown(query) {
     groups[m.provider].push(m);
   });
 
-  var html = '<input type="text" class="model-search" placeholder="Search models..." value="' + escapeHtml(query) + '" oninput="renderModelDropdown(this.value)" onkeydown="handleModelSearchKey(event)">';
-
+  var html = '';
   var providers = Object.keys(groups).sort();
   providers.forEach(function(provider) {
     html += '<div class="model-group-header">' + escapeHtml(provider) + '</div>';
@@ -561,7 +581,7 @@ function renderModelDropdown(query) {
     html += '<div class="model-option" style="color:var(--text-muted);cursor:default">No models found</div>';
   }
 
-  dropdown.innerHTML = html;
+  results.innerHTML = html;
 }
 
 function handleModelSearchKey(e) {
