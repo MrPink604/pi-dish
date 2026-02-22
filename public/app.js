@@ -947,6 +947,13 @@ async function sendPrompt() {
   
   if (!message || !currentSession) return;
   
+  // Intercept /tree command — open modal instead of sending
+  if (message === '/tree') {
+    input.value = '';
+    openTreeModal();
+    return;
+  }
+  
   input.value = '';
   input.style.height = '';
   setStatus('Sending...', 'working');
@@ -1133,4 +1140,226 @@ function renderToolCalls(content) {
         <pre class="tool-call-args">${escapeHtml(JSON.stringify(c.arguments, null, 2))}</pre>
       </div>
     `).join('');
+}
+
+// =========================================================================
+// Tree Modal
+// =========================================================================
+var treeData = null; // cached tree data
+var treeToolCallMap = new Map(); // toolCallId -> { name, args }
+
+async function openTreeModal() {
+  if (!currentSession) return;
+  setStatus('Loading tree...', 'working');
+  try {
+    const res = await fetch('/api/sessions/' + currentSession.id + '/tree');
+    if (!res.ok) throw new Error(await res.text());
+    treeData = await res.json();
+    
+    // Build tool call map from assistant messages
+    treeToolCallMap.clear();
+    for (var node of treeData.nodes) {
+      if (node.role === 'assistant' && node.toolCalls) {
+        for (var tc of node.toolCalls) {
+          treeToolCallMap.set(tc.id, { name: tc.name, args: tc.args });
+        }
+      }
+    }
+    
+    document.getElementById('treeSearch').value = '';
+    document.getElementById('treeFilter').value = 'default';
+    filterTree('');
+    document.getElementById('treeModal').style.display = 'flex';
+    document.getElementById('treeSearch').focus();
+    setStatus('');
+  } catch (e) {
+    setStatus('Failed to load tree: ' + e.message, 'error');
+  }
+}
+
+function closeTreeModal() {
+  document.getElementById('treeModal').style.display = 'none';
+  treeData = null;
+}
+
+// Keyboard handler for tree modal
+document.addEventListener('keydown', function(e) {
+  var modal = document.getElementById('treeModal');
+  if (modal.style.display === 'none') return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeTreeModal();
+  }
+});
+
+function filterTree(query) {
+  if (!treeData) return;
+  var filterMode = document.getElementById('treeFilter').value;
+  var searchTokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+  
+  var filtered = treeData.nodes.filter(function(node) {
+    // Filter mode
+    if (filterMode === 'user-only' && !(node.type === 'message' && node.role === 'user')) return false;
+    if (filterMode === 'no-tools' && node.type === 'message' && node.role === 'toolResult') return false;
+    if (filterMode === 'default') {
+      // Hide settings entries
+      if (node.type === 'model_change' || node.type === 'thinking_level_change' || 
+          node.type === 'label' || node.type === 'custom') return false;
+      // Hide assistant messages with only tool calls (no text)
+      if (node.type === 'message' && node.role === 'assistant' && !node.text && !node.isLeaf) return false;
+    }
+    
+    // Search filter
+    if (searchTokens.length > 0) {
+      var searchText = getNodeSearchText(node).toLowerCase();
+      return searchTokens.every(function(t) { return searchText.includes(t); });
+    }
+    return true;
+  });
+  
+  renderTree(filtered);
+}
+
+function getNodeSearchText(node) {
+  var parts = [node.text || ''];
+  if (node.role) parts.push(node.role);
+  if (node.label) parts.push(node.label);
+  if (node.toolName) parts.push(node.toolName);
+  if (node.modelId) parts.push(node.modelId);
+  if (node.summary) parts.push(node.summary);
+  return parts.join(' ');
+}
+
+function renderTree(nodes) {
+  var body = document.getElementById('treeBody');
+  if (!treeData) return;
+  
+  var activeSet = new Set(treeData.activePathIds);
+  
+  // Build parent→children map for connector rendering
+  var childrenOf = {};
+  for (var i = 0; i < nodes.length; i++) {
+    var n = nodes[i];
+    var pid = n.parentId || '__root__';
+    if (!childrenOf[pid]) childrenOf[pid] = [];
+    childrenOf[pid].push(n);
+  }
+  
+  var html = '';
+  for (var i = 0; i < nodes.length; i++) {
+    var node = nodes[i];
+    var isActive = activeSet.has(node.id);
+    var isLeaf = node.isLeaf;
+    
+    // Build tree prefix based on depth
+    var indent = '';
+    for (var d = 0; d < node.depth; d++) {
+      indent += '  ';
+    }
+    
+    // Connector — only show at branch points (depth > 0)
+    var siblings = childrenOf[node.parentId || '__root__'] || [];
+    var sibIdx = siblings.indexOf(node);
+    var isLast = sibIdx === siblings.length - 1;
+    var connector = '';
+    if (node.depth > 0 && siblings.length > 1) {
+      connector = isLast ? '└ ' : '├ ';
+    }
+    
+    var marker = isActive ? '•' : ' ';
+    var markerClass = isActive ? 'active-marker' : 'inactive-marker';
+    
+    var classes = 'tree-node';
+    if (isActive) classes += ' active';
+    if (isLeaf) classes += ' is-leaf';
+    
+    var display = renderTreeNodeContent(node);
+    var branchBadge = node.childCount > 1 ? '<span class="tree-branch-badge">' + node.childCount + '</span>' : '';
+    
+    html += '<div class="' + classes + '" data-id="' + node.id + '" onclick="selectTreeNode(\'' + node.id + '\')">';
+    html += '<span class="tree-prefix">' + indent + connector + '</span>';
+    html += '<span class="tree-marker ' + markerClass + '">' + marker + ' </span>';
+    html += display;
+    html += branchBadge;
+    html += '</div>';
+  }
+  
+  body.innerHTML = html;
+  document.getElementById('treeStatus').textContent = nodes.length + ' entries';
+  
+  // Scroll to leaf/active node
+  var leafNode = body.querySelector('.is-leaf');
+  if (leafNode) {
+    leafNode.scrollIntoView({ block: 'center', behavior: 'instant' });
+  }
+}
+
+function renderTreeNodeContent(node) {
+  if (node.type === 'message') {
+    if (node.role === 'user') {
+      return '<span class="tree-role user">user:</span>' +
+        (node.label ? '<span class="tree-label">[' + escapeHtml(node.label) + ']</span>' : '') +
+        '<span class="tree-text">' + escapeHtml(node.text || '(empty)') + '</span>';
+    }
+    if (node.role === 'assistant') {
+      var text = node.text || '';
+      if (!text && node.stopReason === 'aborted') text = '(aborted)';
+      if (!text && node.errorMessage) return '<span class="tree-role assistant">assistant:</span><span class="tree-text error-text">' + escapeHtml(node.errorMessage.substring(0, 80)) + '</span>';
+      if (!text) text = '(tool use)';
+      return '<span class="tree-role assistant">assistant:</span>' +
+        (node.label ? '<span class="tree-label">[' + escapeHtml(node.label) + ']</span>' : '') +
+        '<span class="tree-text">' + escapeHtml(text) + '</span>';
+    }
+    if (node.role === 'toolResult') {
+      var tc = node.toolCallId ? treeToolCallMap.get(node.toolCallId) : null;
+      var display = tc ? '[' + tc.name + ': ' + tc.args + ']' : '[' + (node.toolName || 'tool') + ']';
+      return '<span class="tree-role tool">' + escapeHtml(display) + '</span>' +
+        (node.isError ? '<span class="tree-text error-text"> error</span>' : '');
+    }
+    return '<span class="tree-text muted">[' + (node.role || 'message') + ']</span>';
+  }
+  if (node.type === 'compaction') {
+    var tokens = Math.round((node.tokensBefore || 0) / 1000);
+    return '<span class="tree-role system">[compaction: ' + tokens + 'k tokens]</span>';
+  }
+  if (node.type === 'model_change') {
+    return '<span class="tree-text muted">[model: ' + escapeHtml(node.modelId || '') + ']</span>';
+  }
+  if (node.type === 'branch_summary') {
+    return '<span class="tree-role system">[branch summary]</span> <span class="tree-text muted">' + escapeHtml(node.summary || '') + '</span>';
+  }
+  if (node.type === 'session_info') {
+    return '<span class="tree-text muted">[session info]</span>';
+  }
+  return '<span class="tree-text muted">[' + escapeHtml(node.type) + ']</span>';
+}
+
+async function selectTreeNode(entryId) {
+  if (!currentSession || !treeData) return;
+  
+  // Don't branch if clicking the current leaf
+  if (entryId === treeData.leafId) {
+    closeTreeModal();
+    return;
+  }
+  
+  var confirmed = confirm('Branch from this point? The session will continue from here.');
+  if (!confirmed) return;
+  
+  setStatus('Branching...', 'working');
+  try {
+    var res = await fetch('/api/sessions/' + currentSession.id + '/branch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entryId: entryId })
+    });
+    if (!res.ok) throw new Error((await res.json().catch(function(){return{};})).error || 'Failed');
+    
+    closeTreeModal();
+    setStatus('Branched successfully — reload to see updated messages');
+    // Reload session messages
+    selectSession(currentSession.id);
+  } catch (e) {
+    setStatus('Branch failed: ' + e.message, 'error');
+  }
 }

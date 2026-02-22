@@ -66,7 +66,6 @@
             </div>
           </div>
           <div class="session-actions">
-            <button class="btn-sm" onclick="sendPromptWith('/compact')" title="Compact session">Compact</button>
           </div>
         </header>
         
@@ -85,6 +84,32 @@
         </div>
       </div>
     </main>
+  </div>
+
+  <!-- Tree Modal -->
+  <div class="modal-overlay" id="treeModal" style="display:none" onclick="if(event.target===this)closeTreeModal()">
+    <div class="modal tree-modal">
+      <div class="modal-header">
+        <h3>Session Tree</h3>
+        <div class="tree-controls">
+          <input type="text" class="tree-search" id="treeSearch" placeholder="Search..." oninput="filterTree(this.value)">
+          <select class="tree-filter" id="treeFilter" onchange="filterTree(document.getElementById('treeSearch').value)">
+            <option value="default">Default</option>
+            <option value="no-tools">No Tools</option>
+            <option value="user-only">User Only</option>
+            <option value="all">All</option>
+          </select>
+          <button class="btn-icon" onclick="closeTreeModal()" title="Close (Esc)">✕</button>
+        </div>
+      </div>
+      <div class="tree-body" id="treeBody">
+        <!-- Tree nodes rendered here -->
+      </div>
+      <div class="modal-footer">
+        <span class="tree-status" id="treeStatus"></span>
+        <span class="tree-hint">Click a node to branch from that point</span>
+      </div>
+    </div>
   </div>
 
   <script src="app.js"></script>
