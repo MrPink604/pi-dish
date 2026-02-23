@@ -95,7 +95,12 @@ function parseSessionFile(filePath) {
         firstUserMsg = entry.content;
       }
       if (entry.type === 'message' && entry.message?.role === 'user') count++;
-      if (entry.timestamp) lastActivity = new Date(Math.max(lastActivity, new Date(entry.timestamp)));
+      if (entry.timestamp) {
+        const ts = new Date(entry.timestamp).getTime();
+        if (Number.isFinite(ts)) {
+          lastActivity = new Date(Math.max(lastActivity.getTime(), ts));
+        }
+      }
 
       if (entry.type === 'message' && entry.message?.role === 'assistant' && entry.message?.usage) {
         lastUsageTotalTokens = entry.message.usage.totalTokens || 0;
@@ -580,8 +585,8 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
 
   const rpc = getRPCSession(sessionId);
   if (!rpc || !rpc.alive) {
-    res.write(`event: error\ndata: ${JSON.stringify({ error: 'Session not active' })}\n\n`);
-    return;
+    res.write(`event: stream_error\ndata: ${JSON.stringify({ error: 'Session not active' })}\n\n`);
+    return res.end();
   }
 
   const unsubs = [];
