@@ -868,13 +868,146 @@ async function createSession() {
   } catch (e) { setStatus(`Error: ${e.message}`, 'error'); }
 }
 
-// Restore last-used cwd on load
+// =========================================================================
+// CWD autocomplete
+// =========================================================================
+let knownCwds = []; // [{path, short}]
+let cwdDropdownIdx = -1;
+
+async function loadKnownCwds() {
+  try {
+    const res = await fetch('/api/cwds');
+    if (res.ok) knownCwds = await res.json();
+  } catch {}
+}
+
+/** Simple fuzzy match: all chars of query appear in order in str */
+function fuzzyMatch(query, str) {
+  query = query.toLowerCase();
+  str = str.toLowerCase();
+  let qi = 0;
+  const indices = [];
+  for (let si = 0; si < str.length && qi < query.length; si++) {
+    if (str[si] === query[qi]) { indices.push(si); qi++; }
+  }
+  return qi === query.length ? indices : null;
+}
+
+/** Score fuzzy match — prefer consecutive chars, earlier matches, shorter strings */
+function fuzzyScore(indices, str) {
+  if (!indices) return -Infinity;
+  let score = 0;
+  for (let i = 1; i < indices.length; i++) {
+    if (indices[i] === indices[i - 1] + 1) score += 10; // consecutive bonus
+  }
+  score -= indices[0]; // earlier match = better
+  score -= str.length * 0.1; // shorter = better
+  return score;
+}
+
+function highlightFuzzy(str, indices) {
+  if (!indices || !indices.length) return escapeHtml(str);
+  let result = '';
+  let last = 0;
+  for (const idx of indices) {
+    result += escapeHtml(str.slice(last, idx));
+    result += `<span class="cwd-match">${escapeHtml(str[idx])}</span>`;
+    last = idx + 1;
+  }
+  result += escapeHtml(str.slice(last));
+  return result;
+}
+
+function showCwdDropdown(query) {
+  const dropdown = document.getElementById('cwdDropdown');
+  if (!dropdown) return;
+
+  if (!query && knownCwds.length === 0) { dropdown.style.display = 'none'; return; }
+
+  let results;
+  if (!query) {
+    // Show all, most recent paths could be prioritized but for now just show all
+    results = knownCwds.map(c => ({ ...c, indices: [], score: 0 }));
+  } else {
+    results = knownCwds.map(c => {
+      const indices = fuzzyMatch(query, c.short) || fuzzyMatch(query, c.path);
+      const matchStr = fuzzyMatch(query, c.short) ? c.short : c.path;
+      return { ...c, indices, matchStr, score: fuzzyScore(indices, matchStr) };
+    }).filter(c => c.indices).sort((a, b) => b.score - a.score);
+  }
+
+  if (results.length === 0) { dropdown.style.display = 'none'; return; }
+
+  cwdDropdownIdx = -1;
+  dropdown.innerHTML = results.map((c, i) => {
+    const display = c.indices && c.indices.length
+      ? highlightFuzzy(c.matchStr || c.short, c.indices)
+      : escapeHtml(c.short);
+    return `<div class="cwd-option" data-idx="${i}" data-path="${escapeHtml(c.short)}">${display}</div>`;
+  }).join('');
+  dropdown.style.display = 'block';
+
+  // Click handler
+  dropdown.querySelectorAll('.cwd-option').forEach(el => {
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const input = document.getElementById('newSessionCwd');
+      input.value = el.dataset.path;
+      localStorage.setItem('pi-dish-cwd', el.dataset.path);
+      dropdown.style.display = 'none';
+    });
+  });
+}
+
+function hideCwdDropdown() {
+  const dropdown = document.getElementById('cwdDropdown');
+  if (dropdown) dropdown.style.display = 'none';
+}
+
+// Wire up the cwd input
 (function() {
   const saved = localStorage.getItem('pi-dish-cwd');
-  if (saved) {
-    const cwdInput = document.getElementById('newSessionCwd');
-    if (cwdInput) cwdInput.value = saved;
-  }
+  const cwdInput = document.getElementById('newSessionCwd');
+  if (!cwdInput) return;
+  if (saved) cwdInput.value = saved;
+
+  loadKnownCwds();
+
+  cwdInput.addEventListener('focus', () => showCwdDropdown(cwdInput.value));
+  cwdInput.addEventListener('input', () => showCwdDropdown(cwdInput.value));
+  cwdInput.addEventListener('blur', () => setTimeout(hideCwdDropdown, 150));
+
+  cwdInput.addEventListener('keydown', (e) => {
+    const dropdown = document.getElementById('cwdDropdown');
+    if (!dropdown || dropdown.style.display === 'none') {
+      if (e.key === 'Enter') { e.preventDefault(); createSession(); }
+      return;
+    }
+    const options = dropdown.querySelectorAll('.cwd-option');
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      cwdDropdownIdx = Math.min(cwdDropdownIdx + 1, options.length - 1);
+      options.forEach((o, i) => o.classList.toggle('active', i === cwdDropdownIdx));
+      if (options[cwdDropdownIdx]) options[cwdDropdownIdx].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      cwdDropdownIdx = Math.max(cwdDropdownIdx - 1, 0);
+      options.forEach((o, i) => o.classList.toggle('active', i === cwdDropdownIdx));
+      if (options[cwdDropdownIdx]) options[cwdDropdownIdx].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (cwdDropdownIdx >= 0 && options[cwdDropdownIdx]) {
+        cwdInput.value = options[cwdDropdownIdx].dataset.path;
+        localStorage.setItem('pi-dish-cwd', cwdInput.value);
+        hideCwdDropdown();
+      } else {
+        hideCwdDropdown();
+        createSession();
+      }
+    } else if (e.key === 'Escape') {
+      hideCwdDropdown();
+    }
+  });
 })();
 
 // =========================================================================

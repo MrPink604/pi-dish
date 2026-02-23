@@ -480,6 +480,40 @@ app.post('/api/sessions/:id/abort', async (req, res) => {
   }
 });
 
+// Get unique cwds from all sessions (for autocomplete)
+app.get('/api/cwds', async (req, res) => {
+  try {
+    const sessionsDir = path.join(os.homedir(), '.pi', 'agent', 'sessions');
+    const dirs = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+    const cwdSet = new Set();
+    for (const dir of dirs) {
+      if (!dir.isDirectory()) continue;
+      const dirPath = path.join(sessionsDir, dir.name);
+      // Find any .jsonl file in the directory
+      const files = await fs.promises.readdir(dirPath).catch(() => []);
+      const jsonlFile = files.find(f => f.endsWith('.jsonl'));
+      if (!jsonlFile) continue;
+      try {
+        const fd = await fs.promises.open(path.join(dirPath, jsonlFile), 'r');
+        const buf = Buffer.alloc(2048);
+        await fd.read(buf, 0, 2048, 0);
+        await fd.close();
+        const firstLine = buf.toString('utf8').split('\n')[0];
+        const entry = JSON.parse(firstLine);
+        if (entry.cwd) cwdSet.add(entry.cwd);
+      } catch {}
+    }
+    const home = os.homedir();
+    const cwds = [...cwdSet].sort().map(c => ({
+      path: c,
+      short: c.startsWith(home) ? '~' + c.slice(home.length) : c
+    }));
+    res.json(cwds);
+  } catch (e) {
+    res.status(500).json([]);
+  }
+});
+
 // Create a new session
 app.post('/api/sessions/new', async (req, res) => {
   try {
