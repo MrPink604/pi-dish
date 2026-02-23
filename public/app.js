@@ -163,8 +163,13 @@ function onFilterInput() {
   const q = document.getElementById('filterInput').value.trim();
   // Local filter is instant; server search is debounced
   filterQuery = q;
-  if (sidebarTab === 'browse' && q.length > 0) {
-    filterDebounceTimer = setTimeout(() => loadSessions(q), 300);
+  if (sidebarTab === 'browse') {
+    if (q.length > 0) {
+      filterDebounceTimer = setTimeout(() => loadSessions(q), 300);
+    } else {
+      // Query cleared: reload the full browse list from server
+      loadSessions();
+    }
   } else {
     renderSessions();
   }
@@ -711,6 +716,16 @@ function startMessageStream(sessionId) {
     messageStream = evtSource;
 
     evtSource.onopen = () => setStatus('');
+
+    evtSource.addEventListener('stream_error', (e) => {
+      try {
+        const data = JSON.parse(e.data || '{}');
+        setStatus(data.error || 'Stream error', 'error');
+      } catch {
+        setStatus('Stream error', 'error');
+      }
+      evtSource.close();
+    });
 
     evtSource.addEventListener('turn_start', () => setTurnInProgress(true));
 
