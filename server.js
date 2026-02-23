@@ -483,7 +483,11 @@ app.post('/api/sessions/:id/abort', async (req, res) => {
 // Create a new session
 app.post('/api/sessions/new', async (req, res) => {
   try {
-    const { model, cwd } = req.body || {};
+    let { model, cwd } = req.body || {};
+    // Expand ~ to home directory
+    if (cwd && cwd.startsWith('~')) {
+      cwd = path.join(process.env.HOME, cwd.slice(1).replace(/^\//, ''));
+    }
     const rpc = await createRPCSession({ model, cwd });
     res.json({ success: true, id: rpc.id });
   } catch (e) {

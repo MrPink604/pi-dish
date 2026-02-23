@@ -849,19 +849,33 @@ async function abortTurn() {
 async function createSession() {
   try {
     setStatus('Creating session...', 'working');
+    const cwdInput = document.getElementById('newSessionCwd');
+    const cwd = cwdInput ? cwdInput.value.trim() : '';
+    // Persist last-used cwd
+    if (cwd) localStorage.setItem('pi-dish-cwd', cwd);
     const res = await fetch('/api/sessions/new', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({})
+      body: JSON.stringify({ cwd: cwd || undefined })
     });
     const data = await res.json().catch(() => ({}));
     if (res.ok && data.success && data.id) {
       setStatus('Session created');
+      switchTab('active');
       setTimeout(async () => { await loadSessions(); selectSession(data.id); }, 2000);
       return;
     }
     setStatus(data.error || 'Failed to create session', 'error');
   } catch (e) { setStatus(`Error: ${e.message}`, 'error'); }
 }
+
+// Restore last-used cwd on load
+(function() {
+  const saved = localStorage.getItem('pi-dish-cwd');
+  if (saved) {
+    const cwdInput = document.getElementById('newSessionCwd');
+    if (cwdInput) cwdInput.value = saved;
+  }
+})();
 
 // =========================================================================
 // Utilities
