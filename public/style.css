@@ -754,6 +754,14 @@ body.sidebar-open {
 .message.error .message-content {
   border-left: 3px solid var(--error);
 }
+.message-error {
+  border-left: 3px solid var(--error);
+  color: var(--error);
+  padding: 8px 12px;
+  margin-top: 4px;
+  background: rgba(255, 80, 80, 0.08);
+  border-radius: 4px;
+}
 
 /* Thinking block — collapsed by default, <details> element */
 .thinking-block {

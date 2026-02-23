@@ -322,7 +322,9 @@ app.get('/api/sessions/:id/messages', (req, res) => {
             role: entry.message.role,
             content: entry.message.content || [],
             timestamp: entry.message.timestamp || entry.timestamp,
-            model: entry.message.model
+            model: entry.message.model,
+            errorMessage: entry.message.errorMessage || undefined,
+            stopReason: entry.message.stopReason || undefined,
           });
         } else if (entry.type === 'custom_message' && entry.customType === 'session-message') {
           messages.push({

@@ -640,9 +640,15 @@ function renderAssistantMessage(msg, time, opts = {}) {
     textHtml = formatMarkdown(msg.content);
   }
   
+  // Show error messages from the API (e.g. 402, rate limits, etc.)
+  let errorHtml = '';
+  if (msg.errorMessage) {
+    errorHtml = `<div class="message-content message-error"><div class="markdown-body"><strong>Error:</strong> ${escapeHtml(msg.errorMessage)}</div></div>`;
+  }
+  
   const showModel = msg.model && (!currentSession || msg.model !== currentSession.model);
   
-  return `<div class="message assistant${streamingClass}" data-timestamp="${timestamp}"${streamingAttr}>
+  return `<div class="message assistant${streamingClass}${msg.errorMessage ? ' error' : ''}" data-timestamp="${timestamp}"${streamingAttr}>
     <div class="message-header">
       <span class="message-role assistant">◆</span>
       ${showModel ? `<span class="badge">${escapeHtml(msg.model)}</span>` : ''}
@@ -651,6 +657,7 @@ function renderAssistantMessage(msg, time, opts = {}) {
     </div>
     ${thinkingHtml}${toolCallsHtml}
     ${textHtml ? `<div class="message-content"><div class="markdown-body">${textHtml}</div></div>` : ''}
+    ${errorHtml}
   </div>`;
 }
 
