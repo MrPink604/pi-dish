@@ -318,6 +318,8 @@ async function selectSession(id) {
   const resumeBar = document.getElementById('resumeBar');
   const sessionActions = document.querySelector('.session-actions');
   
+  const inputMeta = document.getElementById('inputMeta');
+  
   if (currentSession.isActive) {
     if (inputArea) inputArea.style.display = '';
     if (resumeBar) resumeBar.style.display = 'none';
@@ -415,12 +417,35 @@ function updateSessionHeader() {
     modelBtn.style.cursor = 'default';
   }
 
-  const contextEl = document.getElementById('sessionContext');
   const tokenStr = currentSession.contextTokens ? ` (${formatTokens(currentSession.contextTokens)} tok)` : '';
-  contextEl.textContent = `${currentSession.contextPercent}%${tokenStr}`;
-  contextEl.className = 'badge badge-context';
-  if (currentSession.contextPercent > 80) contextEl.classList.add('critical');
-  else if (currentSession.contextPercent > 50) contextEl.classList.add('high');
+  const ctxText = `${currentSession.contextPercent}%${tokenStr}`;
+  const ctxClass = currentSession.contextPercent > 80 ? 'critical' : currentSession.contextPercent > 50 ? 'high' : '';
+  
+  // Desktop meta
+  const contextEl = document.getElementById('sessionContext');
+  contextEl.textContent = ctxText;
+  contextEl.className = 'badge badge-context' + (ctxClass ? ' ' + ctxClass : '');
+
+  // Mobile meta (below input)
+  const mobileModel = document.getElementById('sessionModelMobile');
+  const mobileCtx = document.getElementById('sessionContextMobile');
+  const mobileMsgs = document.getElementById('sessionMsgCountMobile');
+  if (mobileModel) {
+    if (currentSession.isActive) {
+      mobileModel.textContent = currentSession.model + ' ▾';
+      mobileModel.onclick = toggleModelDropdown;
+      mobileModel.style.cursor = 'pointer';
+    } else {
+      mobileModel.textContent = currentSession.model;
+      mobileModel.onclick = null;
+      mobileModel.style.cursor = 'default';
+    }
+  }
+  if (mobileCtx) {
+    mobileCtx.textContent = ctxText;
+    mobileCtx.className = 'badge badge-context' + (ctxClass ? ' ' + ctxClass : '');
+  }
+  if (mobileMsgs) mobileMsgs.textContent = `${currentSession.messageCount} msgs`;
 }
 
 // --- Inline rename ---
@@ -477,6 +502,9 @@ function toggleModelDropdown() {
   setTimeout(() => document.addEventListener('click', closeModelDropdownOnOutsideClick, { once: true }), 0);
 }
 
+// Close model dropdown — check both desktop and mobile selectors
+
+
 function renderModelDropdown(query) {
   var dropdown = document.getElementById('modelDropdown');
   var filtered = filterModels(query);
@@ -510,7 +538,10 @@ function renderModelDropdown(query) {
 }
 
 function closeModelDropdownOnOutsideClick(e) {
-  if (!document.getElementById('modelSelector').contains(e.target)) closeModelDropdown();
+  var inside = document.getElementById('modelSelector').contains(e.target) ||
+    document.getElementById('modelSelectorMobile')?.contains(e.target) ||
+    document.getElementById('modelDropdown').contains(e.target);
+  if (!inside) closeModelDropdown();
   else setTimeout(() => document.addEventListener('click', closeModelDropdownOnOutsideClick, { once: true }), 0);
 }
 
