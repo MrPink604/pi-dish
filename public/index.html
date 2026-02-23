@@ -65,7 +65,7 @@
             <h2 id="sessionName" class="editable-name" onclick="startRename()" title="Click to rename">Session Name</h2>
             <input type="text" id="sessionNameInput" class="name-input" style="display:none"
               onblur="commitRename()" onkeydown="handleRenameKey(event)">
-            <div class="session-meta">
+            <div class="session-meta session-meta-desktop">
               <div class="model-selector" id="modelSelector">
                 <button class="badge badge-model" id="sessionModel" onclick="toggleModelDropdown()" title="Change model">model ▾</button>
                 <div class="model-dropdown" id="modelDropdown"></div>
@@ -89,7 +89,7 @@
             <span class="resume-label">Read-only — session is inactive</span>
             <span class="resume-cwd">~</span>
           </div>
-          <button class="btn btn-primary" onclick="resumeSession()">Resume Session</button>
+          <button class="btn btn-primary" onclick="resumeSession()">Resume</button>
         </div>
 
         <!-- Input (for active sessions) -->
@@ -99,6 +99,14 @@
             <span class="status" id="status"></span>
             <button class="btn btn-stop" id="btnStop" onclick="abortTurn()" style="display:none" title="Stop (Esc)">Stop</button>
             <button class="btn btn-primary" id="btnSend" onclick="sendPrompt()">Send</button>
+          </div>
+          <!-- Mobile-only: model/context info below input -->
+          <div class="input-meta" id="inputMeta">
+            <div class="model-selector model-selector-mobile" id="modelSelectorMobile">
+              <button class="badge badge-model" id="sessionModelMobile" onclick="toggleModelDropdown()" title="Change model">model ▾</button>
+            </div>
+            <span class="badge badge-context" id="sessionContextMobile">0%</span>
+            <span class="badge" id="sessionMsgCountMobile">0 msgs</span>
           </div>
         </div>
       </div>
