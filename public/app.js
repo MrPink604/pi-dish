@@ -18,10 +18,17 @@ async function loadCommands() {
 }
 
 // Initialize
-document.addEventListener('DOMContentLoaded', () => {
-  loadSessions();
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadSessions();
   loadModels();
   loadCommands();
+  
+  // Restore previously selected session
+  const savedSessionId = localStorage.getItem('pi-dish-session');
+  if (savedSessionId) {
+    const found = findSession(savedSessionId);
+    if (found) selectSession(savedSessionId);
+  }
   
   const promptInput = document.getElementById('promptInput');
 
@@ -314,6 +321,7 @@ function findSession(id) {
 async function selectSession(id) {
   currentSession = findSession(id);
   if (!currentSession) return;
+  localStorage.setItem('pi-dish-session', id);
   
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('sessionView').style.display = 'flex';
@@ -717,6 +725,22 @@ function startMessageStream(sessionId) {
 
     evtSource.onopen = () => setStatus('');
 
+    // Server sends current state on connect so we can catch up
+    evtSource.addEventListener('init', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.turnInProgress) {
+          setTurnInProgress(true);
+          setStatus('Waiting for response...', 'working');
+        } else {
+          // Turn not in progress — reload messages to ensure we have latest
+          setTurnInProgress(false);
+          setStatus('');
+          loadMessages(sessionId);
+        }
+      } catch {}
+    });
+
     evtSource.addEventListener('stream_error', (e) => {
       try {
         const data = JSON.parse(e.data || '{}');
@@ -731,6 +755,8 @@ function startMessageStream(sessionId) {
 
     evtSource.addEventListener('turn_end', () => {
       setTurnInProgress(false);
+      // Reload messages from JSONL to catch anything missed during SSE gaps
+      loadMessages(sessionId);
       loadSessions();
       setStatus('');
     });
