@@ -616,15 +616,15 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   }));
 
   unsubs.push(rpc.on('message_end', (msg) => {
-    if (msg.message) {
+    // Only emit for assistant messages — user message_end is not needed
+    if (msg.message && msg.message.role === 'assistant') {
       res.write(`event: message_end\ndata: ${JSON.stringify({ message: msg.message })}\n\n`);
     }
   }));
 
   unsubs.push(rpc.on('turn_end', (msg) => {
-    if (msg.message) {
-      res.write(`event: turn_end\ndata: ${JSON.stringify({ message: msg.message })}\n\n`);
-    }
+    // Signal turn completion — don't include message (already sent via message_end)
+    res.write(`event: turn_end\ndata: {}\n\n`);
   }));
 
   unsubs.push(rpc.on('exit', () => {

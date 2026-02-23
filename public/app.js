@@ -714,23 +714,10 @@ function startMessageStream(sessionId) {
 
     evtSource.addEventListener('turn_start', () => setTurnInProgress(true));
 
-    evtSource.addEventListener('turn_end', (e) => {
+    evtSource.addEventListener('turn_end', () => {
       setTurnInProgress(false);
-      try {
-        const event = JSON.parse(e.data);
-        const data = event.data || event;
-        if (!data.message) return;
-        const container = document.getElementById('messages');
-        if (!container) return;
-        container.querySelectorAll('.message.assistant[data-streaming="true"]').forEach(el => el.remove());
-        const ts = data.message.timestamp || Date.now();
-        const msgHtml = renderAssistantMessage(data.message, formatTime(ts));
-        container.insertAdjacentHTML('beforeend', msgHtml);
-        container.scrollTop = container.scrollHeight;
-        // Refresh session info
-        loadSessions();
-        setStatus('');
-      } catch (err) { console.error('turn_end error:', err); }
+      loadSessions();
+      setStatus('');
     });
 
     evtSource.addEventListener('thinking', (e) => {
