@@ -426,10 +426,9 @@ function updateSessionHeader() {
   contextEl.textContent = ctxText;
   contextEl.className = 'badge badge-context' + (ctxClass ? ' ' + ctxClass : '');
 
-  // Mobile meta (below input)
+  // Mobile meta (inline in actions row)
   const mobileModel = document.getElementById('sessionModelMobile');
   const mobileCtx = document.getElementById('sessionContextMobile');
-  const mobileMsgs = document.getElementById('sessionMsgCountMobile');
   if (mobileModel) {
     if (currentSession.isActive) {
       mobileModel.textContent = currentSession.model + ' ▾';
@@ -445,7 +444,6 @@ function updateSessionHeader() {
     mobileCtx.textContent = ctxText;
     mobileCtx.className = 'badge badge-context' + (ctxClass ? ' ' + ctxClass : '');
   }
-  if (mobileMsgs) mobileMsgs.textContent = `${currentSession.messageCount} msgs`;
 }
 
 // --- Inline rename ---
