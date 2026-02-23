@@ -589,6 +589,10 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
     return res.end();
   }
 
+  // Send initial state so reconnecting clients can catch up
+  const turnActive = rpc.alive && rpc.turnInProgress;
+  res.write(`event: init\ndata: ${JSON.stringify({ turnInProgress: turnActive })}\n\n`);
+
   const unsubs = [];
 
   unsubs.push(rpc.on('turn_start', () => {
