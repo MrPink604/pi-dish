@@ -1277,14 +1277,13 @@ body.sidebar-open {
     gap: 6px;
   }
 
-  /* Show model/context below input on mobile */
+  /* Show model/context inline in actions row on mobile */
   .input-meta {
     display: flex;
     align-items: center;
     gap: 6px;
-    margin-top: 4px;
-    padding-top: 4px;
-    border-top: 1px solid var(--border);
+    flex: 1;
+    min-width: 0;
   }
 
   .model-selector-mobile {

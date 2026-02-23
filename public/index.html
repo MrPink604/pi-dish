@@ -97,16 +97,15 @@
           <textarea id="promptInput" placeholder="Send a message..." rows="2"></textarea>
           <div class="input-actions">
             <span class="status" id="status"></span>
+            <!-- Mobile-only: model/context in the actions row -->
+            <div class="input-meta" id="inputMeta">
+              <div class="model-selector model-selector-mobile" id="modelSelectorMobile">
+                <button class="badge badge-model" id="sessionModelMobile" onclick="toggleModelDropdown()" title="Change model">model ▾</button>
+              </div>
+              <span class="badge badge-context" id="sessionContextMobile">0%</span>
+            </div>
             <button class="btn btn-stop" id="btnStop" onclick="abortTurn()" style="display:none" title="Stop (Esc)">Stop</button>
             <button class="btn btn-primary" id="btnSend" onclick="sendPrompt()">Send</button>
-          </div>
-          <!-- Mobile-only: model/context info below input -->
-          <div class="input-meta" id="inputMeta">
-            <div class="model-selector model-selector-mobile" id="modelSelectorMobile">
-              <button class="badge badge-model" id="sessionModelMobile" onclick="toggleModelDropdown()" title="Change model">model ▾</button>
-            </div>
-            <span class="badge badge-context" id="sessionContextMobile">0%</span>
-            <span class="badge" id="sessionMsgCountMobile">0 msgs</span>
           </div>
         </div>
       </div>
