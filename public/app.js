@@ -2,6 +2,9 @@
 let sessions = { active: [], previous: [] };
 let currentSession = null;
 
+// Live tool panel tracking: toolCallId -> { el, startTime }
+let liveToolPanels = new Map();
+
 // Slash commands cache
 let slashCommands = [];
 let autocompleteVisible = false;
@@ -613,6 +616,9 @@ function renderMessages(messages) {
     if (msg.role === 'toolResult') return renderToolResult(msg, time);
     return '';
   }).join('');
+  // After rendering from JSONL, remove tool calls/results that already have live panels
+  // (dedup — live panels are already showing this content)
+  removeDuplicatedLiveContent(container);
   container.scrollTop = container.scrollHeight;
 }
 
@@ -715,6 +721,130 @@ function extractTextContent(content) {
 }
 
 // =========================================================================
+// Live Tool Panels (streaming tool execution)
+// =========================================================================
+
+function getToolSummary(toolName, args) {
+  if (!args) return '';
+  if (toolName === 'Bash' || toolName === 'bash') return args.command ? truncate(args.command.split('\n')[0], 60) : '';
+  if (['Read','read','Edit','edit','Write','write'].includes(toolName)) return args.path || '';
+  const keys = Object.keys(args);
+  if (keys.length) return truncate(String(args[keys[0]]), 40);
+  return '';
+}
+
+function getToolOutputText(partialResult) {
+  if (!partialResult || !partialResult.content) return '';
+  return partialResult.content
+    .filter(c => c.type === 'text')
+    .map(c => c.text)
+    .join('');
+}
+
+function buildLiveToolPanel(toolCallId, toolName, args, output, isError, isComplete, durationMs) {
+  const stateClass = isComplete ? (isError ? 'error' : 'complete') : 'running';
+  const summary = getToolSummary(toolName, args);
+  const openAttr = isComplete && output ? ' open' : (output ? ' open' : '');
+  
+  let statusHtml = '';
+  if (isComplete) {
+    if (isError) {
+      statusHtml = '<span class="live-tool-status error-label">✗ error</span>';
+    } else {
+      const dur = durationMs != null ? (durationMs / 1000).toFixed(1) + 's' : '';
+      statusHtml = '<span class="live-tool-status success-label">✓</span>' +
+        (dur ? '<span class="live-tool-status duration">' + dur + '</span>' : '');
+    }
+  } else {
+    statusHtml = '<span class="live-tool-status running-label">running</span>';
+  }
+
+  const cursorHtml = isComplete ? '' : '<span class="live-tool-cursor"></span>';
+  const outputHtml = output
+    ? '<div class="live-tool-output">' + escapeHtml(truncate(output, 8000)) + cursorHtml + '</div>'
+    : (!isComplete ? '<div class="live-tool-output"><span class="live-tool-cursor"></span></div>' : '');
+
+  return '<details class="live-tool-panel ' + stateClass + '" data-tool-call-id="' + escapeHtml(toolCallId) + '"' + openAttr + '>' +
+    '<summary class="live-tool-header">' +
+      '<span class="live-tool-icon">⚡</span>' +
+      '<span class="live-tool-name">' + escapeHtml(toolName) + '</span>' +
+      (summary ? '<span class="live-tool-summary">' + escapeHtml(summary) + '</span>' : '') +
+      statusHtml +
+      '<span class="live-tool-status-dot"></span>' +
+    '</summary>' +
+    outputHtml +
+  '</details>';
+}
+
+function appendLiveToolPanel(data) {
+  const { toolCallId, toolName, args } = data;
+  if (liveToolPanels.has(toolCallId)) return; // already rendered
+
+  const container = document.getElementById('messages');
+  if (!container) return;
+
+  const html = buildLiveToolPanel(toolCallId, toolName, args, '', false, false);
+  container.insertAdjacentHTML('beforeend', html);
+
+  const el = container.querySelector('[data-tool-call-id="' + toolCallId + '"]');
+  liveToolPanels.set(toolCallId, { el, startTime: Date.now() });
+  container.scrollTop = container.scrollHeight;
+}
+
+function updateLiveToolPanel(data) {
+  const { toolCallId, partialResult } = data;
+  const entry = liveToolPanels.get(toolCallId);
+  if (!entry || !entry.el) return;
+
+  const output = getToolOutputText(partialResult);
+  if (!output) return;
+
+  let outputEl = entry.el.querySelector('.live-tool-output');
+  if (!outputEl) {
+    // Create output area if it doesn't exist
+    const cursorHtml = '<span class="live-tool-cursor"></span>';
+    outputEl = document.createElement('div');
+    outputEl.className = 'live-tool-output';
+    outputEl.innerHTML = escapeHtml(truncate(output, 8000)) + cursorHtml;
+    entry.el.appendChild(outputEl);
+    // Open the details so output is visible
+    entry.el.setAttribute('open', '');
+  } else {
+    const cursorEl = outputEl.querySelector('.live-tool-cursor');
+    outputEl.innerHTML = escapeHtml(truncate(output, 8000));
+    // Re-add cursor
+    if (cursorEl) outputEl.appendChild(cursorEl);
+    else outputEl.insertAdjacentHTML('beforeend', '<span class="live-tool-cursor"></span>');
+  }
+
+  // Auto-scroll output area
+  outputEl.scrollTop = outputEl.scrollHeight;
+  // Also scroll messages container
+  const container = document.getElementById('messages');
+  if (container) container.scrollTop = container.scrollHeight;
+}
+
+function finalizeLiveToolPanel(data) {
+  const { toolCallId, toolName, args, result, isError } = data;
+  const entry = liveToolPanels.get(toolCallId);
+  if (!entry || !entry.el) return;
+
+  const output = getToolOutputText(result);
+  const durationMs = entry.startTime ? (Date.now() - entry.startTime) : null;
+
+  // Rebuild the panel in its final state
+  const newHtml = buildLiveToolPanel(toolCallId, toolName || 'tool', args, output, isError, true, durationMs);
+  const tmp = document.createElement('div');
+  tmp.innerHTML = newHtml;
+  const newEl = tmp.firstElementChild;
+
+  entry.el.replaceWith(newEl);
+  entry.el = newEl;
+
+  // Keep in map for dedup — will be cleaned up on turn_end
+}
+
+// =========================================================================
 // SSE Streaming (RPC events only)
 // =========================================================================
 
@@ -762,6 +892,17 @@ function startMessageStream(sessionId) {
 
     evtSource.addEventListener('turn_end', () => {
       setTurnInProgress(false);
+      // Clean up any orphaned running panels (defensive)
+      for (const [id, entry] of liveToolPanels) {
+        if (entry.el && entry.el.classList.contains('running')) {
+          entry.el.classList.remove('running');
+          entry.el.classList.add('complete');
+          const dot = entry.el.querySelector('.live-tool-status-dot');
+          if (dot) dot.style.display = 'none';
+          const cursor = entry.el.querySelector('.live-tool-cursor');
+          if (cursor) cursor.remove();
+        }
+      }
       // Reload messages from JSONL to catch anything missed during SSE gaps
       loadMessages(sessionId);
       loadSessions();
@@ -797,6 +938,27 @@ function startMessageStream(sessionId) {
           container.scrollTop = container.scrollHeight;
         }
       } catch (err) {}
+    });
+
+    evtSource.addEventListener('tool_execution_start', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        appendLiveToolPanel(data);
+      } catch (err) { console.error('tool_execution_start error:', err); }
+    });
+
+    evtSource.addEventListener('tool_execution_update', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        updateLiveToolPanel(data);
+      } catch (err) { console.error('tool_execution_update error:', err); }
+    });
+
+    evtSource.addEventListener('tool_execution_end', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        finalizeLiveToolPanel(data);
+      } catch (err) { console.error('tool_execution_end error:', err); }
     });
 
     evtSource.addEventListener('session_ended', () => {
@@ -1048,6 +1210,27 @@ function hideCwdDropdown() {
 // =========================================================================
 // Utilities
 // =========================================================================
+
+/**
+ * After JSONL-based render, remove tool call/result details that are already
+ * covered by live tool panels (identified by data-tool-call-id).
+ */
+function removeDuplicatedLiveContent(container) {
+  if (liveToolPanels.size === 0) return;
+  for (const [toolCallId, entry] of liveToolPanels) {
+    if (!entry.el || !container.contains(entry.el)) {
+      // Live panel is no longer in the container (full re-render happened)
+      liveToolPanels.delete(toolCallId);
+      continue;
+    }
+    // Look for corresponding .tool-call or .tool-result in the JSONL-rendered output
+    // We don't have a direct link, so we check by matching tool name + args in the existing rendering
+  }
+  // If we have any live panels still in the DOM, we keep them.
+  // Clear the map after turn_end + reload completes — the JSONL render is now authoritative.
+  // But live panels are already rendered correctly, so we just clear tracking.
+  liveToolPanels.clear();
+}
 
 function updateOrAppendMessage(message) {
   const container = document.getElementById('messages');

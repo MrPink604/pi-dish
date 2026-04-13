@@ -638,6 +638,19 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
     res.write(`event: turn_end\ndata: {}\n\n`);
   }));
 
+  // Tool execution streaming events
+  unsubs.push(rpc.on('tool_execution_start', (data) => {
+    res.write(`event: tool_execution_start\ndata: ${JSON.stringify(data)}\n\n`);
+  }));
+
+  unsubs.push(rpc.on('tool_execution_update', (data) => {
+    res.write(`event: tool_execution_update\ndata: ${JSON.stringify(data)}\n\n`);
+  }));
+
+  unsubs.push(rpc.on('tool_execution_end', (data) => {
+    res.write(`event: tool_execution_end\ndata: ${JSON.stringify(data)}\n\n`);
+  }));
+
   unsubs.push(rpc.on('exit', () => {
     res.write(`event: session_ended\ndata: {}\n\n`);
   }));
