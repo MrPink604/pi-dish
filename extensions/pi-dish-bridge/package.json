@@ -1,0 +1,6 @@
+{
+  "name": "pi-dish-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Exposes a running pi session to pi-dish via a Unix socket + registry file."
+}

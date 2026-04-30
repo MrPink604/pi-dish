@@ -3,7 +3,12 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const piSDK = require('./lib/pi-sdk');
-const { createRPCSession, resumeRPCSession, getRPCSession, getAllRPCSessions } = require('./lib/rpc-session');
+const { createRPCSession, resumeRPCSession } = require('./lib/rpc-session');
+const {
+  listRegisteredSessions,
+  getRegisteredSession,
+  getBridgeSession,
+} = require('./lib/bridge-session');
 
 const app = express();
 const PORT = process.env.PORT || 3333;
@@ -36,7 +41,6 @@ function truncate(text, maxLen) {
   return text.slice(0, maxLen) + '...';
 }
 
-// Context window sizes for known model families
 const MODEL_CONTEXT_WINDOWS = {
   'claude-opus-4': 200000, 'claude-sonnet-4': 200000, 'claude-haiku-4': 200000,
   'claude-3.5': 200000, 'claude-3': 200000,
@@ -54,22 +58,12 @@ function getContextWindow(modelId) {
   return MODEL_CONTEXT_WINDOWS['default'];
 }
 
-/**
- * Decode a session directory name back to the original cwd.
- * Encoding: --<cwd with leading / stripped and all /\: replaced with ->--
- * This is ambiguous for paths with hyphens, so we also check the session file's cwd field.
- */
 function decodeDirToCwd(dirName) {
-  // Strip leading -- and trailing --
   let decoded = dirName.replace(/^--/, '').replace(/--$/, '');
-  // Replace - with / (best effort — ambiguous for real hyphens in paths)
   decoded = '/' + decoded.replace(/-/g, '/');
   return decoded;
 }
 
-/**
- * Parse a session JSONL file and extract metadata.
- */
 function parseSessionFile(filePath) {
   const content = fs.readFileSync(filePath, 'utf-8');
   const lines = content.trim().split('\n');
@@ -81,33 +75,23 @@ function parseSessionFile(filePath) {
   for (const line of lines) {
     try {
       const entry = JSON.parse(line);
-
-      // First entry is always type: "session" with cwd
       if (entry.type === 'session' && entry.cwd) cwd = entry.cwd;
-
       if (entry.type === 'model_change') model = entry.modelId || model;
       if (entry.type === 'session_info' && entry.name) name = entry.name;
       if (entry.sessionName) name = entry.sessionName;
       if (!firstUserMsg && entry.type === 'message' && entry.message?.role === 'user') {
         firstUserMsg = extractTextFromContent(entry.message.content);
       }
-      if (!firstUserMsg && entry.type === 'custom_message') {
-        firstUserMsg = entry.content;
-      }
+      if (!firstUserMsg && entry.type === 'custom_message') firstUserMsg = entry.content;
       if (entry.type === 'message' && entry.message?.role === 'user') count++;
       if (entry.timestamp) {
         const ts = new Date(entry.timestamp).getTime();
-        if (Number.isFinite(ts)) {
-          lastActivity = new Date(Math.max(lastActivity.getTime(), ts));
-        }
+        if (Number.isFinite(ts)) lastActivity = new Date(Math.max(lastActivity.getTime(), ts));
       }
-
       if (entry.type === 'message' && entry.message?.role === 'assistant' && entry.message?.usage) {
         lastUsageTotalTokens = entry.message.usage.totalTokens || 0;
       }
-      if (entry.type === 'compaction') {
-        lastUsageTotalTokens = 0;
-      }
+      if (entry.type === 'compaction') lastUsageTotalTokens = 0;
     } catch (e) {}
   }
 
@@ -132,48 +116,37 @@ function parseSessionFile(filePath) {
 // =========================================================================
 
 /**
- * Get active sessions (RPC-managed by pi-dish).
- * Reads current state from the RPC process + session file metadata.
+ * Active sessions = sessions registered by the pi-dish-bridge extension.
+ * We enrich the registry entry with metadata from the on-disk JSONL.
  */
 function getActiveSessions() {
   const active = [];
-  for (const rpc of getAllRPCSessions()) {
-    if (!rpc.alive) continue;
-
-    // Get info from session file if available
+  for (const reg of listRegisteredSessions()) {
     let info = {};
-    if (rpc.sessionFile && fs.existsSync(rpc.sessionFile)) {
-      info = parseSessionFile(rpc.sessionFile);
+    if (reg.sessionFile && fs.existsSync(reg.sessionFile)) {
+      try { info = parseSessionFile(reg.sessionFile); } catch {}
     }
-
-    // Overlay RPC state (more current than file)
-    const state = rpc.state || {};
-    const modelId = state.model?.id || info.model || 'unknown';
-
     active.push({
-      id: rpc.id,
-      name: info.name || 'New Session',
-      model: modelId,
+      id: reg.sessionId,
+      name: reg.name || info.name || 'New Session',
+      model: reg.model || info.model || 'unknown',
       contextPercent: info.contextPercent || 0,
       contextTokens: info.contextTokens || 0,
-      messageCount: state.messageCount || info.messageCount || 0,
+      messageCount: info.messageCount || 0,
       lastActivity: info.lastActivity || new Date(),
       isActive: true,
-      cwd: rpc.cwd || info.cwd || null,
-      sessionFile: rpc.sessionFile || null,
+      turnInProgress: !!reg.turnInProgress,
+      cwd: reg.cwd || info.cwd || null,
+      sessionFile: reg.sessionFile || null,
+      pid: reg.pid || null,
     });
   }
-
   active.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
   return active;
 }
 
-/**
- * Get all previous (inactive) sessions from disk.
- * Excludes sessions that are currently active via RPC.
- */
 function getPreviousSessions() {
-  const activeIds = new Set(getAllRPCSessions().filter(r => r.alive).map(r => r.id));
+  const activeIds = new Set(listRegisteredSessions().map(r => r.sessionId));
   const previous = [];
 
   try {
@@ -216,13 +189,8 @@ function getPreviousSessions() {
 // Search
 // =========================================================================
 
-// Cache for session search text (avoids re-parsing JSONL on every search)
-const searchTextCache = new Map(); // sessionFile -> { mtime, text }
+const searchTextCache = new Map();
 
-/**
- * Get searchable text for a session file (cached).
- * Includes all user messages, assistant text, tool commands, file paths.
- */
 function getSessionSearchText(sessionFile) {
   try {
     const stats = fs.statSync(sessionFile);
@@ -252,32 +220,21 @@ function getSessionSearchText(sessionFile) {
   }
 }
 
-/**
- * Check if a session matches a search query.
- * Matches against: name, cwd/path, model, and session message history.
- */
 function sessionMatchesQuery(session, query) {
   const tokens = query.split(/\s+/).filter(Boolean);
   if (!tokens.length) return true;
-
-  // Build fast-check string from metadata
   const meta = [
     session.name || '',
     session.cwd || '',
     session.model || '',
     session.id || '',
   ].join(' ').toLowerCase();
-
-  // Check if all tokens match metadata first (fast path)
   if (tokens.every(t => meta.includes(t))) return true;
-
-  // Expensive path: search session message content
   if (session.sessionFile) {
     const historyText = getSessionSearchText(session.sessionFile);
     const fullText = meta + ' ' + historyText;
     return tokens.every(t => fullText.includes(t));
   }
-
   return false;
 }
 
@@ -285,7 +242,6 @@ function sessionMatchesQuery(session, query) {
 // API Routes
 // =========================================================================
 
-// List sessions — active (RPC) + previous (disk), with optional search
 app.get('/api/sessions', (req, res) => {
   const query = (req.query.q || '').trim().toLowerCase();
   let active = getActiveSessions();
@@ -296,20 +252,14 @@ app.get('/api/sessions', (req, res) => {
     active = active.filter(match);
     previous = previous.filter(match);
   }
-
   res.json({ active, previous });
 });
 
-// Get messages for a session
 app.get('/api/sessions/:id/messages', (req, res) => {
   const sessionId = req.params.id;
   const messages = [];
+  const isActive = !!getRegisteredSession(sessionId);
 
-  // For RPC sessions, refresh state first
-  const rpc = getRPCSession(sessionId);
-  const isActive = rpc && rpc.alive;
-
-  // Read messages from JSONL file
   const sessionFile = findSessionFile(sessionId);
   if (sessionFile) {
     const info = parseSessionFile(sessionFile);
@@ -330,52 +280,43 @@ app.get('/api/sessions/:id/messages', (req, res) => {
           messages.push({
             role: 'user',
             content: [{ type: 'text', text: entry.content }],
-            timestamp: entry.timestamp
+            timestamp: entry.timestamp,
           });
         }
       } catch (e) {}
     }
-
     res.json({ messages, session: { id: sessionId, isActive, ...info } });
   } else {
     res.json({ messages: [], session: { id: sessionId, isActive } });
   }
 });
 
-// Send prompt — RPC only
 app.post('/api/sessions/:id/prompt', async (req, res) => {
-  const { message } = req.body;
+  const { message, deliverAs } = req.body;
   if (!message) return res.status(400).json({ error: 'Message required' });
-
-  const rpc = getRPCSession(req.params.id);
-  if (!rpc || !rpc.alive) {
-    return res.status(404).json({ error: 'Session not active. Resume it first.' });
-  }
-
   try {
-    const result = await rpc.prompt(message);
+    const sess = await getBridgeSession(req.params.id);
+    const result = await sess.prompt(message, deliverAs ? { deliverAs } : {});
     res.json({ success: true, result });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// Rename session — via RPC if active, else SDK
 app.post('/api/sessions/:id/rename', async (req, res) => {
   const { name } = req.body;
   if (!name) return res.status(400).json({ error: 'Name required' });
 
-  const rpc = getRPCSession(req.params.id);
-  if (rpc && rpc.alive) {
+  if (getRegisteredSession(req.params.id)) {
     try {
-      await rpc.setName(name);
+      const sess = await getBridgeSession(req.params.id);
+      await sess.setName(name);
       return res.json({ success: true });
     } catch (e) {
       return res.status(500).json({ error: e.message });
     }
   }
 
-  // Fallback to SDK for inactive sessions
   try {
     const sessionPath = findSessionFile(req.params.id);
     if (!sessionPath) return res.status(404).json({ error: 'Session not found' });
@@ -386,29 +327,22 @@ app.post('/api/sessions/:id/rename', async (req, res) => {
   }
 });
 
-// Switch model — RPC if active, else SDK
 app.post('/api/sessions/:id/model', async (req, res) => {
   const { modelId } = req.body;
   if (!modelId) return res.status(400).json({ error: 'modelId required' });
-
   const { provider, id } = piSDK.parseModelId(modelId);
-  if (!provider || !id) {
-    return res.status(400).json({ error: `Invalid model ID: ${modelId}` });
-  }
+  if (!provider || !id) return res.status(400).json({ error: `Invalid model ID: ${modelId}` });
 
-  const rpc = getRPCSession(req.params.id);
-  if (rpc && rpc.alive) {
+  if (getRegisteredSession(req.params.id)) {
     try {
-      await rpc.setModel(provider, id);
-      // Refresh state after model change
-      try { rpc.state = await rpc.getState(); } catch(e) {}
+      const sess = await getBridgeSession(req.params.id);
+      await sess.setModel(`${provider}/${id}`);
       return res.json({ success: true });
     } catch (e) {
       return res.status(500).json({ error: e.message });
     }
   }
 
-  // Fallback to SDK for inactive sessions
   try {
     const sessionPath = findSessionFile(req.params.id);
     if (!sessionPath) return res.status(404).json({ error: 'Session not found' });
@@ -419,7 +353,6 @@ app.post('/api/sessions/:id/model', async (req, res) => {
   }
 });
 
-// Get session tree
 app.get('/api/sessions/:id/tree', async (req, res) => {
   try {
     const sessionPath = findSessionFile(req.params.id);
@@ -431,7 +364,6 @@ app.get('/api/sessions/:id/tree', async (req, res) => {
   }
 });
 
-// Branch session
 app.post('/api/sessions/:id/branch', async (req, res) => {
   const { entryId } = req.body;
   if (!entryId) return res.status(400).json({ error: 'entryId required' });
@@ -445,7 +377,6 @@ app.post('/api/sessions/:id/branch', async (req, res) => {
   }
 });
 
-// Get available models
 let modelsCache = null;
 let modelsCacheTime = 0;
 const MODELS_CACHE_TTL = 60000;
@@ -463,7 +394,6 @@ app.get('/api/models', async (req, res) => {
   }
 });
 
-// Get slash commands
 app.get('/api/commands', async (req, res) => {
   try {
     const commands = await piSDK.getCommands();
@@ -473,21 +403,19 @@ app.get('/api/commands', async (req, res) => {
   }
 });
 
-// Abort/interrupt — RPC only
 app.post('/api/sessions/:id/abort', async (req, res) => {
-  const rpc = getRPCSession(req.params.id);
-  if (!rpc || !rpc.alive) {
+  if (!getRegisteredSession(req.params.id)) {
     return res.status(404).json({ error: 'Session not active' });
   }
   try {
-    await rpc.abort();
+    const sess = await getBridgeSession(req.params.id);
+    await sess.abort();
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// Get unique cwds from all sessions (for autocomplete)
 app.get('/api/cwds', async (req, res) => {
   try {
     const sessionsDir = path.join(os.homedir(), '.pi', 'agent', 'sessions');
@@ -496,7 +424,6 @@ app.get('/api/cwds', async (req, res) => {
     for (const dir of dirs) {
       if (!dir.isDirectory()) continue;
       const dirPath = path.join(sessionsDir, dir.name);
-      // Find any .jsonl file in the directory
       const files = await fs.promises.readdir(dirPath).catch(() => []);
       const jsonlFile = files.find(f => f.endsWith('.jsonl'));
       if (!jsonlFile) continue;
@@ -513,7 +440,7 @@ app.get('/api/cwds', async (req, res) => {
     const home = os.homedir();
     const cwds = [...cwdSet].sort().map(c => ({
       path: c,
-      short: c.startsWith(home) ? '~' + c.slice(home.length) : c
+      short: c.startsWith(home) ? '~' + c.slice(home.length) : c,
     }));
     res.json(cwds);
   } catch (e) {
@@ -521,11 +448,11 @@ app.get('/api/cwds', async (req, res) => {
   }
 });
 
-// Create a new session
+// Spawn a fresh headless session via `pi --mode rpc`. The bridge extension
+// (loaded inside the spawned process) registers it shortly after startup.
 app.post('/api/sessions/new', async (req, res) => {
   try {
     let { model, cwd } = req.body || {};
-    // Expand ~ to home directory
     if (cwd && cwd.startsWith('~')) {
       cwd = path.join(process.env.HOME, cwd.slice(1).replace(/^\//, ''));
     }
@@ -537,23 +464,17 @@ app.post('/api/sessions/new', async (req, res) => {
   }
 });
 
-// Resume a previous session — spawns pi --mode rpc --session <path>
+// Resume an inactive session via `pi --mode rpc --session <path>`.
 app.post('/api/sessions/:id/resume', async (req, res) => {
   const sessionId = req.params.id;
 
-  // Already active?
-  const existing = getRPCSession(sessionId);
-  if (existing && existing.alive) {
+  if (getRegisteredSession(sessionId)) {
     return res.json({ success: true, id: sessionId, alreadyActive: true });
   }
 
-  // Find session file
   const sessionFile = findSessionFile(sessionId);
-  if (!sessionFile) {
-    return res.status(404).json({ error: 'Session file not found' });
-  }
+  if (!sessionFile) return res.status(404).json({ error: 'Session file not found' });
 
-  // Extract cwd from session file
   let cwd = null;
   try {
     const firstLine = fs.readFileSync(sessionFile, 'utf-8').split('\n')[0];
@@ -561,7 +482,6 @@ app.post('/api/sessions/:id/resume', async (req, res) => {
     cwd = entry.cwd || null;
   } catch (e) {}
 
-  // Verify cwd exists, fallback to HOME
   if (cwd && !fs.existsSync(cwd)) {
     console.warn(`Session cwd ${cwd} doesn't exist, using HOME`);
     cwd = process.env.HOME;
@@ -576,7 +496,9 @@ app.post('/api/sessions/:id/resume', async (req, res) => {
   }
 });
 
-// SSE streaming — RPC events only
+// SSE — proxy events from the bridge socket. Frontend listens for the legacy
+// event names (thinking/tool_call/tool_result split out of message_update,
+// plus the explicit tool_execution_* events).
 app.get('/api/sessions/:id/stream', async (req, res) => {
   const sessionId = req.params.id;
 
@@ -585,103 +507,75 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.write(': connected\n\n');
 
-  const rpc = getRPCSession(sessionId);
-  if (!rpc || !rpc.alive) {
+  if (!getRegisteredSession(sessionId)) {
     res.write(`event: stream_error\ndata: ${JSON.stringify({ error: 'Session not active' })}\n\n`);
     return res.end();
   }
 
-  // Send initial state so reconnecting clients can catch up
-  const turnActive = rpc.alive && rpc.turnInProgress;
-  res.write(`event: init\ndata: ${JSON.stringify({ turnInProgress: turnActive })}\n\n`);
+  let sess;
+  try {
+    sess = await getBridgeSession(sessionId);
+  } catch (e) {
+    res.write(`event: stream_error\ndata: ${JSON.stringify({ error: e.message })}\n\n`);
+    return res.end();
+  }
 
-  const unsubs = [];
+  res.write(`event: init\ndata: ${JSON.stringify({ turnInProgress: !!sess.turnInProgress })}\n\n`);
 
-  unsubs.push(rpc.on('turn_start', () => {
-    res.write(`event: turn_start\ndata: {}\n\n`);
-  }));
+  const send = (event, data) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
 
-  unsubs.push(rpc.on('message_start', (msg) => {
-    if (msg.message?.role === 'user') {
-      res.write(`event: user_message\ndata: ${JSON.stringify({ message: msg.message })}\n\n`);
-    }
-  }));
+  const offs = [];
+  const sub = (event, fn) => {
+    sess.on(event, fn);
+    offs.push(() => sess.off(event, fn));
+  };
 
-  unsubs.push(rpc.on('message_update', (msg) => {
-    if (msg.message) {
-      const m = msg.message;
-      const hasThinking = Array.isArray(m.content) && m.content.some(c => c.type === 'thinking');
-      const hasToolCalls = Array.isArray(m.content) && m.content.some(c => c.type === 'toolCall');
-      const hasToolResults = Array.isArray(m.content) && m.content.some(c => c.type === 'toolResult');
+  sub('turn_start', () => send('turn_start', {}));
+  sub('turn_end', () => send('turn_end', {}));
 
-      if (hasThinking) {
-        res.write(`event: thinking\ndata: ${JSON.stringify({ message: m })}\n\n`);
-      }
-      if (hasToolCalls) {
-        res.write(`event: tool_call\ndata: ${JSON.stringify({ message: m })}\n\n`);
-      }
-      if (hasToolResults) {
-        res.write(`event: tool_result\ndata: ${JSON.stringify({ message: m })}\n\n`);
-      }
-    }
-  }));
+  sub('message_update', (data) => {
+    const m = data?.message;
+    if (!m) return;
+    const content = Array.isArray(m.content) ? m.content : [];
+    if (content.some(c => c.type === 'thinking')) send('thinking', { message: m });
+    if (content.some(c => c.type === 'toolCall')) send('tool_call', { message: m });
+    if (content.some(c => c.type === 'toolResult')) send('tool_result', { message: m });
+  });
 
-  unsubs.push(rpc.on('message_end', (msg) => {
-    // Only emit for assistant messages — user message_end is not needed
-    if (msg.message && msg.message.role === 'assistant') {
-      res.write(`event: message_end\ndata: ${JSON.stringify({ message: msg.message })}\n\n`);
-    }
-  }));
+  sub('message_end', (data) => {
+    if (data?.message?.role === 'assistant') send('message_end', { message: data.message });
+  });
 
-  unsubs.push(rpc.on('turn_end', (msg) => {
-    // Signal turn completion — don't include message (already sent via message_end)
-    res.write(`event: turn_end\ndata: {}\n\n`);
-  }));
+  sub('tool_execution_start', (data) => send('tool_execution_start', data));
+  sub('tool_execution_update', (data) => send('tool_execution_update', data));
+  sub('tool_execution_end', (data) => send('tool_execution_end', data));
 
-  // Tool execution streaming events
-  unsubs.push(rpc.on('tool_execution_start', (data) => {
-    res.write(`event: tool_execution_start\ndata: ${JSON.stringify(data)}\n\n`);
-  }));
+  const onClose = () => send('session_ended', {});
+  sess.once('close', onClose);
+  offs.push(() => sess.off('close', onClose));
 
-  unsubs.push(rpc.on('tool_execution_update', (data) => {
-    res.write(`event: tool_execution_update\ndata: ${JSON.stringify(data)}\n\n`);
-  }));
-
-  unsubs.push(rpc.on('tool_execution_end', (data) => {
-    res.write(`event: tool_execution_end\ndata: ${JSON.stringify(data)}\n\n`);
-  }));
-
-  unsubs.push(rpc.on('exit', () => {
-    res.write(`event: session_ended\ndata: {}\n\n`);
-  }));
-
-  req.on('close', () => unsubs.forEach(u => u()));
+  req.on('close', () => {
+    for (const off of offs) { try { off(); } catch {} }
+  });
 });
 
 // =========================================================================
 // Helpers
 // =========================================================================
 
-/**
- * Find the .jsonl file for a session ID, checking RPC sessions first, then disk.
- */
 function findSessionFile(sessionId) {
-  // Check RPC sessions first (they know their file path)
-  const rpc = getRPCSession(sessionId);
-  if (rpc && rpc.sessionFile && fs.existsSync(rpc.sessionFile)) {
-    return rpc.sessionFile;
-  }
+  const reg = getRegisteredSession(sessionId);
+  if (reg && reg.sessionFile && fs.existsSync(reg.sessionFile)) return reg.sessionFile;
 
-  // Search on disk
   try {
     const dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true });
     for (const dir of dirs) {
       if (!dir.isDirectory()) continue;
       const files = fs.readdirSync(path.join(SESSIONS_DIR, dir.name))
         .filter(f => f.includes(sessionId) && f.endsWith('.jsonl'));
-      if (files.length) {
-        return path.join(SESSIONS_DIR, dir.name, files[0]);
-      }
+      if (files.length) return path.join(SESSIONS_DIR, dir.name, files[0]);
     }
   } catch (e) {}
   return null;

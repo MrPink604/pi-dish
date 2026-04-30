@@ -9,6 +9,25 @@ A minimal web interface for pi's sessions.
 - **Message View**: Browse full session history with formatted messages
 - **Prompt Input**: Send prompts to sessions
 
+## Setup
+
+pi-dish discovers running pi sessions through a small extension that registers
+each session and exposes a control socket. Install it once into your global
+pi extensions dir:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+ln -s "$PWD/extensions/pi-dish-bridge" ~/.pi/agent/extensions/pi-dish-bridge
+```
+
+After symlinking, any `pi` you launch (TUI in tmux, headless via pi-dish, etc.)
+will register itself at `~/.pi/dish/sessions/<id>.json` and open a Unix socket
+at `~/.pi/dish/sockets/<id>.sock`. pi-dish reads the registry to list active
+sessions and opens the socket on demand to stream events / send prompts —
+sessions you aren't viewing cost nothing.
+
+Reload existing pi sessions with `/reload` to pick up the extension.
+
 ## Running
 
 ### Web (browser)
@@ -39,15 +58,14 @@ Output goes to `dist/` (AppImage + deb on Linux, dmg on macOS).
 
 ## How It Works
 
-- Scans `~/.pi/agent/sessions/` for session files
-- Parses JSONL session format to extract messages and metadata
-- Uses SSE (Server-Sent Events) for real-time session list updates
-- Supports sending prompts via pi's CLI (spawns a new pi process)
-
-## Future Improvements
-
-- Connect to pi's control socket for true real-time updates
-- Full RPC mode integration for streaming responses
-- Session creation with model selection
-- Better markdown rendering
-- Image support
+- **Active sessions**: discovered via the `pi-dish-bridge` extension's registry
+  files in `~/.pi/dish/sessions/`. The web server connects to each session's
+  Unix socket only when a client opens it — listing the sidebar costs nothing
+  beyond reading registry files.
+- **Inactive sessions**: scanned from `~/.pi/agent/sessions/` (pi's own JSONL
+  store) for the "previous sessions" list and full message history.
+- **Live streaming**: tool execution, message updates, turn lifecycle, and
+  errors are forwarded over SSE from the bridge socket to the browser.
+- **Spawning**: "New session" and "Resume" still spawn `pi --mode rpc`; those
+  processes auto-load the bridge extension and register themselves the same
+  way as sessions you start in tmux.
