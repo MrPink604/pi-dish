@@ -78,6 +78,7 @@
               </div>
               <span class="badge badge-context" id="sessionContext">0%</span>
               <span class="badge" id="sessionMsgCount">0 msgs</span>
+              <span class="badge badge-working" id="sessionWorking"><span class="spinner-dot"></span><span class="spinner-text">Working</span></span>
             </div>
           </div>
           <div class="session-actions">
@@ -109,6 +110,7 @@
                 <button class="badge badge-model" id="sessionModelMobile" onclick="toggleModelDropdown()" title="Change model">model ▾</button>
               </div>
               <span class="badge badge-context" id="sessionContextMobile">0%</span>
+              <span class="badge badge-working" id="sessionWorkingMobile"><span class="spinner-dot"></span></span>
             </div>
             <button class="btn btn-stop" id="btnStop" onclick="abortTurn()" style="display:none" title="Stop (Esc)">Stop</button>
             <button class="btn btn-steer" id="btnSteer" onclick="sendSteer()" style="display:none" title="Steer (Ctrl+Enter)">Steer</button>

@@ -352,6 +352,9 @@ async function selectSession(id) {
   }
   if (sessionActions) sessionActions.style.display = currentSession.isActive ? '' : 'none';
   
+  // Reset working state when switching to an inactive session
+  if (!currentSession.isActive) setTurnInProgress(false);
+  
   renderSessions();
   updateSessionHeader();
   await loadMessages(id);
@@ -1181,6 +1184,13 @@ function setTurnInProgress(active) {
   if (btnStop) btnStop.style.display = active ? '' : 'none';
   if (btnSteer) btnSteer.style.display = active ? '' : 'none';
   if (btnSend) btnSend.style.display = active ? 'none' : '';
+  
+  // Dedicated working indicator — independent of transient status text
+  var workingDesktop = document.getElementById('sessionWorking');
+  var workingMobile = document.getElementById('sessionWorkingMobile');
+  if (workingDesktop) workingDesktop.classList.toggle('active', active);
+  if (workingMobile) workingMobile.classList.toggle('active', active);
+  
   if (!active) setStatus('');
 }
 

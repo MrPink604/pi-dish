@@ -587,6 +587,32 @@ body.sidebar-open {
   color: var(--accent);
 }
 
+.badge-working {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(88, 166, 255, 0.15);
+  color: var(--accent);
+  visibility: hidden;
+}
+
+.badge-working.active {
+  visibility: visible;
+}
+
+.spinner-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.spinner-text {
+  font-size: 10px;
+  font-weight: 600;
+}
+
 .session-actions {
   display: flex;
   gap: 8px;
