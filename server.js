@@ -52,8 +52,14 @@ const MODEL_CONTEXT_WINDOWS = {
 
 function getContextWindow(modelId) {
   if (!modelId) return MODEL_CONTEXT_WINDOWS['default'];
-  for (const [prefix, window] of Object.entries(MODEL_CONTEXT_WINDOWS)) {
-    if (prefix !== 'default' && modelId.startsWith(prefix)) return window;
+  // Prefer live model registry data (populated from pi --list-models)
+  if (modelsCache) {
+    const m = modelsCache.find(m => m.id === modelId)
+      || modelsCache.find(m => modelId.startsWith(m.id));
+    if (m?.contextWindow) return m.contextWindow;
+  }
+  for (const [prefix, size] of Object.entries(MODEL_CONTEXT_WINDOWS)) {
+    if (prefix !== 'default' && modelId.startsWith(prefix)) return size;
   }
   return MODEL_CONTEXT_WINDOWS['default'];
 }
@@ -629,6 +635,12 @@ function findSessionFile(sessionId) {
 // =========================================================================
 // Start server
 // =========================================================================
+
+// Warm the models cache at startup so context window sizes are accurate immediately
+piSDK.getAvailableModels().then(models => {
+  modelsCache = models;
+  modelsCacheTime = Date.now();
+}).catch(() => {});
 
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`pi-dish running at http://0.0.0.0:${PORT}`);
