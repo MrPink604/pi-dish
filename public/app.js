@@ -394,15 +394,19 @@ let knownModels = [];
 async function loadModels() {
   try {
     const res = await fetch('/api/models');
-    knownModels = await res.json();
-  } catch (e) { console.error('Failed to load models:', e); }
+    const data = await res.json();
+    knownModels = Array.isArray(data) ? data : [];
+  } catch (e) { console.error('Failed to load models:', e); knownModels = []; }
 }
 
 function filterModels(query) {
+  if (!Array.isArray(knownModels)) return [];
   if (!query) return knownModels;
   const q = query.toLowerCase();
   return knownModels.filter(m =>
-    m.id.toLowerCase().includes(q) || m.provider.toLowerCase().includes(q) || (m.name && m.name.toLowerCase().includes(q))
+    m && typeof m.id === 'string' && m.id.toLowerCase().includes(q) ||
+    m && typeof m.provider === 'string' && m.provider.toLowerCase().includes(q) ||
+    m && m.name && typeof m.name === 'string' && m.name.toLowerCase().includes(q)
   );
 }
 
@@ -580,7 +584,8 @@ function closeModelDropdown() {
 async function selectModel(fullModelId) {
   closeModelDropdown();
   var modelId = fullModelId.includes('/') ? fullModelId.split('/').slice(1).join('/') : fullModelId;
-  if (!currentSession || modelId === currentSession.model) return;
+  var isSame = (modelId === currentSession?.model || fullModelId === currentSession?.model);
+  if (!currentSession || isSame) return;
   setStatus('Switching model...', 'working');
   try {
     const res = await fetch('/api/sessions/' + currentSession.id + '/model', {
@@ -588,9 +593,9 @@ async function selectModel(fullModelId) {
       body: JSON.stringify({ modelId: fullModelId }),
     });
     if (res.ok) {
-      currentSession.model = modelId;
+      currentSession.model = fullModelId;
       updateSessionHeader(); renderSessions();
-      setStatus('Model switched to ' + modelId);
+      setStatus('Model switched to ' + fullModelId);
     } else {
       const data = await res.json().catch(() => ({}));
       setStatus('Model switch failed: ' + (data.error || 'unknown'), 'error');
@@ -1060,6 +1065,12 @@ function startMessageStream(sessionId) {
       } catch (err) {}
     });
 
+    // Generic message_update streams text, thinking, and tool calls live.
+    evtSource.addEventListener('message_update', (e) => {
+      if (!turnInProgress) setTurnInProgress(true);
+      try { updateOrAppendMessage(JSON.parse(e.data).message); } catch (err) {}
+    });
+
     evtSource.addEventListener('message_end', (e) => {
       try {
         const { message } = JSON.parse(e.data);
@@ -1067,6 +1078,10 @@ function startMessageStream(sessionId) {
           const container = document.getElementById('messages');
           if (!container) return;
           container.querySelectorAll('.message.assistant[data-streaming="true"]').forEach(el => el.remove());
+          // Avoid inserting a duplicate if turn_end already fetched the authoritative JSONL version.
+          const assistantMsgs = container.querySelectorAll('.message.assistant');
+          const lastAssistant = assistantMsgs[assistantMsgs.length - 1];
+          if (lastAssistant && lastAssistant.dataset.msgIndex != null) return;
           const ts = message.timestamp || Date.now();
           container.insertAdjacentHTML('beforeend', renderAssistantMessage(message, formatTime(ts)));
           container.scrollTop = container.scrollHeight;
@@ -1372,8 +1387,31 @@ function updateOrAppendMessage(message) {
   const timestamp = message.timestamp || Date.now();
   const msgHtml = renderAssistantMessage({ ...message, timestamp }, formatTime(timestamp), { streaming: true });
   const streamingEl = container.querySelector('.message.assistant[data-streaming="true"]');
-  if (streamingEl) streamingEl.outerHTML = msgHtml;
-  else container.insertAdjacentHTML('beforeend', msgHtml);
+  if (streamingEl) {
+    // Preserve open state of <details> elements so thinking blocks / tool calls
+    // don't collapse on every streaming delta.
+    const openKeys = new Set();
+    streamingEl.querySelectorAll('details').forEach(el => {
+      if (el.hasAttribute('open')) {
+        const cls = el.className;
+        const siblings = Array.from(streamingEl.querySelectorAll('details.' + cls.replace(/ /g, '.')));
+        const idx = siblings.indexOf(el);
+        openKeys.add(`${cls}:${idx}`);
+      }
+    });
+    streamingEl.outerHTML = msgHtml;
+    const newEl = container.querySelector('.message.assistant[data-streaming="true"]');
+    if (newEl) {
+      newEl.querySelectorAll('details').forEach(el => {
+        const cls = el.className;
+        const siblings = Array.from(newEl.querySelectorAll('details.' + cls.replace(/ /g, '.')));
+        const idx = siblings.indexOf(el);
+        if (openKeys.has(`${cls}:${idx}`)) el.setAttribute('open', '');
+      });
+    }
+  } else {
+    container.insertAdjacentHTML('beforeend', msgHtml);
+  }
   container.scrollTop = container.scrollHeight;
 }
 

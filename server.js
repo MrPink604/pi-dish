@@ -600,6 +600,9 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   sub('message_update', (data) => {
     const m = data?.message;
     if (!m) return;
+    // Forward ALL message updates so text and partial tool calls stream live.
+    send('message_update', { message: m });
+    // Keep legacy split events for backward compatibility.
     const content = Array.isArray(m.content) ? m.content : [];
     if (content.some(c => c.type === 'thinking')) send('thinking', { message: m });
     if (content.some(c => c.type === 'toolCall')) send('tool_call', { message: m });
