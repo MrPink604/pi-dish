@@ -49,7 +49,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
       if (e.key === 'Escape') { e.preventDefault(); hideAutocomplete(); return; }
     }
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.ctrlKey) { e.preventDefault(); sendSteer(); }
+      else { e.preventDefault(); sendPrompt(); }
+    }
     if (e.key === 'Escape' && !autocompleteVisible && turnInProgress) { e.preventDefault(); abortTurn(); }
   });
 
@@ -1173,10 +1176,33 @@ var turnInProgress = false;
 function setTurnInProgress(active) {
   turnInProgress = active;
   var btnStop = document.getElementById('btnStop');
+  var btnSteer = document.getElementById('btnSteer');
   var btnSend = document.getElementById('btnSend');
   if (btnStop) btnStop.style.display = active ? '' : 'none';
+  if (btnSteer) btnSteer.style.display = active ? '' : 'none';
   if (btnSend) btnSend.style.display = active ? 'none' : '';
   if (!active) setStatus('');
+}
+
+async function sendSteer() {
+  const input = document.getElementById('promptInput');
+  const message = input.value.trim();
+  if (!message || !currentSession || !currentSession.isActive) return;
+
+  input.value = '';
+  input.style.height = '';
+  setStatus('Steering...', 'working');
+
+  try {
+    const res = await fetch(`/api/sessions/${currentSession.id}/steer`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message })
+    });
+    if (!res.ok) throw new Error(await res.text());
+    setStatus('Steered');
+  } catch (e) {
+    setStatus(`Steer failed: ${e.message}`, 'error');
+  }
 }
 
 async function abortTurn() {

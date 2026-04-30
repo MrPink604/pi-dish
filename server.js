@@ -365,6 +365,18 @@ app.post('/api/sessions/:id/prompt', async (req, res) => {
   }
 });
 
+app.post('/api/sessions/:id/steer', async (req, res) => {
+  const { message } = req.body;
+  if (!message) return res.status(400).json({ error: 'Message required' });
+  try {
+    const sess = await getBridgeSession(req.params.id);
+    await sess.steer(message);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/sessions/:id/rename', async (req, res) => {
   const { name } = req.body;
   if (!name) return res.status(400).json({ error: 'Name required' });
