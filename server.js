@@ -257,38 +257,83 @@ app.get('/api/sessions', (req, res) => {
 
 app.get('/api/sessions/:id/messages', (req, res) => {
   const sessionId = req.params.id;
-  const messages = [];
   const isActive = !!getRegisteredSession(sessionId);
 
   const sessionFile = findSessionFile(sessionId);
-  if (sessionFile) {
-    const info = parseSessionFile(sessionFile);
-    const content = fs.readFileSync(sessionFile, 'utf-8');
-    for (const line of content.trim().split('\n')) {
-      try {
-        const entry = JSON.parse(line);
-        if (entry.type === 'message' && entry.message) {
-          messages.push({
-            role: entry.message.role,
-            content: entry.message.content || [],
-            timestamp: entry.message.timestamp || entry.timestamp,
-            model: entry.message.model,
-            errorMessage: entry.message.errorMessage || undefined,
-            stopReason: entry.message.stopReason || undefined,
-          });
-        } else if (entry.type === 'custom_message' && entry.customType === 'session-message') {
-          messages.push({
-            role: 'user',
-            content: [{ type: 'text', text: entry.content }],
-            timestamp: entry.timestamp,
-          });
-        }
-      } catch (e) {}
-    }
-    res.json({ messages, session: { id: sessionId, isActive, ...info } });
-  } else {
-    res.json({ messages: [], session: { id: sessionId, isActive } });
+  if (!sessionFile) {
+    return res.json({
+      messages: [], session: { id: sessionId, isActive },
+      totalMessages: 0, firstIndex: null, lastIndex: null, hasMore: false,
+    });
   }
+
+  // Pagination: messages are indexed by their position in the displayable
+  // message stream (0-based). `limit` defaults to 50. With no cursor we
+  // return the tail. `before=<idx>` returns messages with index < idx.
+  // `after=<idx>` returns messages with index > idx (no limit; for
+  // incremental catch-up after a turn ends).
+  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit, 10) || 50));
+  const before = req.query.before != null ? parseInt(req.query.before, 10) : null;
+  const after = req.query.after != null ? parseInt(req.query.after, 10) : null;
+
+  const info = parseSessionFile(sessionFile);
+  const content = fs.readFileSync(sessionFile, 'utf-8');
+
+  const all = [];
+  for (const line of content.trim().split('\n')) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === 'message' && entry.message) {
+        all.push({
+          role: entry.message.role,
+          content: entry.message.content || [],
+          timestamp: entry.message.timestamp || entry.timestamp,
+          model: entry.message.model,
+          errorMessage: entry.message.errorMessage || undefined,
+          stopReason: entry.message.stopReason || undefined,
+        });
+      } else if (entry.type === 'custom_message' && entry.customType === 'session-message') {
+        all.push({
+          role: 'user',
+          content: [{ type: 'text', text: entry.content }],
+          timestamp: entry.timestamp,
+        });
+      }
+    } catch (e) {}
+  }
+
+  const totalMessages = all.length;
+  let startIdx, endIdx; // inclusive
+  if (after != null) {
+    startIdx = after + 1;
+    endIdx = totalMessages - 1;
+  } else if (before != null) {
+    endIdx = before - 1;
+    startIdx = Math.max(0, endIdx - limit + 1);
+  } else {
+    endIdx = totalMessages - 1;
+    startIdx = Math.max(0, endIdx - limit + 1);
+  }
+  if (startIdx > endIdx || totalMessages === 0) {
+    return res.json({
+      messages: [],
+      session: { id: sessionId, isActive, ...info },
+      totalMessages,
+      firstIndex: null,
+      lastIndex: null,
+      hasMore: startIdx > 0 && totalMessages > 0,
+    });
+  }
+
+  const slice = all.slice(startIdx, endIdx + 1).map((m, i) => ({ ...m, index: startIdx + i }));
+  res.json({
+    messages: slice,
+    session: { id: sessionId, isActive, ...info },
+    totalMessages,
+    firstIndex: startIdx,
+    lastIndex: endIdx,
+    hasMore: startIdx > 0,
+  });
 });
 
 app.post('/api/sessions/:id/prompt', async (req, res) => {
