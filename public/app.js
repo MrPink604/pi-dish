@@ -509,6 +509,19 @@ function toggleModelDropdown() {
   modelDropdownOpen = !modelDropdownOpen;
   const dropdown = document.getElementById('modelDropdown');
   if (!modelDropdownOpen) { dropdown.style.display = 'none'; return; }
+  if (window.innerWidth > 768) {
+    const btn = document.getElementById('sessionModel');
+    const rect = btn.getBoundingClientRect();
+    dropdown.style.top = (rect.bottom + 4) + 'px';
+    dropdown.style.left = rect.left + 'px';
+    dropdown.style.bottom = '';
+    dropdown.style.right = '';
+  } else {
+    dropdown.style.top = '';
+    dropdown.style.left = '';
+    dropdown.style.bottom = '';
+    dropdown.style.right = '';
+  }
   renderModelDropdown('');
   dropdown.style.display = 'flex';
   var searchInput = dropdown.querySelector('.model-search');
