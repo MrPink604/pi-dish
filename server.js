@@ -42,11 +42,14 @@ function truncate(text, maxLen) {
 }
 
 const MODEL_CONTEXT_WINDOWS = {
+  // Claude 1M-context models (must come before the 200k family prefixes)
+  'claude-opus-4-6': 1000000, 'claude-opus-4-7': 1000000, 'claude-sonnet-4-6': 1000000,
+  // Claude 200k family
   'claude-opus-4': 200000, 'claude-sonnet-4': 200000, 'claude-haiku-4': 200000,
   'claude-3.5': 200000, 'claude-3': 200000,
   'gpt-4o': 128000, 'gpt-4-turbo': 128000, 'gpt-4': 8192,
   'o1': 200000, 'o3': 200000,
-  'gemini-2': 1048576, 'gemini-1.5': 1048576,
+  'gemini-2': 1000000, 'gemini-1.5': 1000000,
   'default': 200000,
 };
 
@@ -55,11 +58,19 @@ function getContextWindow(modelId) {
   // Prefer live model registry data (populated from pi --list-models)
   if (modelsCache) {
     const m = modelsCache.find(m => m.id === modelId)
-      || modelsCache.find(m => modelId.startsWith(m.id));
+      || modelsCache.find(m => modelId.includes(m.id))
+      || modelsCache.find(m => m.id.includes(modelId));
     if (m?.contextWindow) return m.contextWindow;
   }
-  for (const [prefix, size] of Object.entries(MODEL_CONTEXT_WINDOWS)) {
-    if (prefix !== 'default' && modelId.startsWith(prefix)) return size;
+  // Static fallback: match longest prefix first so specific entries
+  // (e.g. claude-opus-4-7) beat generic ones (e.g. claude-opus-4).
+  // Use includes() so Bedrock cross-region IDs like
+  // "us.anthropic.claude-opus-4-7" match correctly.
+  const entries = Object.entries(MODEL_CONTEXT_WINDOWS)
+    .filter(([p]) => p !== 'default')
+    .sort((a, b) => b[0].length - a[0].length);
+  for (const [prefix, size] of entries) {
+    if (modelId.includes(prefix)) return size;
   }
   return MODEL_CONTEXT_WINDOWS['default'];
 }
