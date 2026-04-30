@@ -602,18 +602,57 @@ async function selectModel(fullModelId) {
 // Messages
 // =========================================================================
 
+const MESSAGE_PAGE_SIZE = 50;
+
+// Pagination cursors for the currently loaded session.
+let oldestLoadedIndex = null;
+let lastLoadedIndex = null;
+let hasMoreOlder = false;
+let totalMessages = 0;
+let loadingOlder = false;
+
+function renderMessageHtml(msg) {
+  const time = msg.timestamp ? formatTime(msg.timestamp) : '';
+  const idxAttr = (msg.index != null) ? ` data-msg-index="${msg.index}"` : '';
+  let inner;
+  if (msg.role === 'user') inner = renderUserMessage(msg, time);
+  else if (msg.role === 'assistant') inner = renderAssistantMessage(msg, time);
+  else if (msg.role === 'toolResult') inner = renderToolResult(msg, time);
+  else return '';
+  // Tag the outermost element with the message index for dedup/incremental updates.
+  if (idxAttr && inner.startsWith('<div ')) inner = inner.replace('<div ', `<div${idxAttr} `);
+  return inner;
+}
+
 async function loadMessages(id) {
   const container = document.getElementById('messages');
   container.innerHTML = '<div class="loading">Loading...</div>';
+  oldestLoadedIndex = null;
+  lastLoadedIndex = null;
+  hasMoreOlder = false;
+  totalMessages = 0;
   try {
-    const res = await fetch(`/api/sessions/${id}/messages`);
-    const { messages, session } = await res.json();
+    const res = await fetch(`/api/sessions/${id}/messages?limit=${MESSAGE_PAGE_SIZE}`);
+    const data = await res.json();
+    const { messages, session, firstIndex, lastIndex, hasMore, totalMessages: total } = data;
     currentSession = { ...currentSession, ...session };
     updateSessionHeader();
+    oldestLoadedIndex = firstIndex;
+    lastLoadedIndex = lastIndex;
+    hasMoreOlder = !!hasMore;
+    totalMessages = total || 0;
     renderMessages(messages);
   } catch (e) {
     container.innerHTML = `<div class="error">Failed to load messages: ${e.message}</div>`;
   }
+}
+
+function renderLoadOlderBar() {
+  if (!hasMoreOlder) return '';
+  const remaining = oldestLoadedIndex != null ? oldestLoadedIndex : 0;
+  return `<div class="load-older-bar" id="loadOlderBar">
+    <button class="load-older-btn" onclick="loadOlderMessages()">Load older messages (${remaining} earlier)</button>
+  </div>`;
 }
 
 function renderMessages(messages) {
@@ -622,17 +661,97 @@ function renderMessages(messages) {
     container.innerHTML = '<div class="empty-state" style="padding: 48px;"><p style="color: var(--text-muted);">No messages yet</p></div>';
     return;
   }
-  container.innerHTML = messages.map(msg => {
-    const time = msg.timestamp ? formatTime(msg.timestamp) : '';
-    if (msg.role === 'user') return renderUserMessage(msg, time);
-    if (msg.role === 'assistant') return renderAssistantMessage(msg, time);
-    if (msg.role === 'toolResult') return renderToolResult(msg, time);
-    return '';
-  }).join('');
+  container.innerHTML = renderLoadOlderBar() + messages.map(renderMessageHtml).join('');
   // After rendering from JSONL, remove tool calls/results that already have live panels
   // (dedup — live panels are already showing this content)
   removeDuplicatedLiveContent(container);
   container.scrollTop = container.scrollHeight;
+}
+
+async function loadOlderMessages() {
+  if (loadingOlder || !hasMoreOlder || !currentSession || oldestLoadedIndex == null) return;
+  loadingOlder = true;
+  const container = document.getElementById('messages');
+  const bar = document.getElementById('loadOlderBar');
+  if (bar) bar.querySelector('.load-older-btn').textContent = 'Loading...';
+
+  // Anchor scroll to the first existing message so the viewport doesn't jump
+  // when we prepend older content.
+  const anchor = container.querySelector('[data-msg-index]');
+  const anchorOffset = anchor ? anchor.getBoundingClientRect().top : 0;
+
+  try {
+    const res = await fetch(`/api/sessions/${currentSession.id}/messages?limit=${MESSAGE_PAGE_SIZE}&before=${oldestLoadedIndex}`);
+    const data = await res.json();
+    const { messages, firstIndex, hasMore } = data;
+    if (messages && messages.length) {
+      const html = messages.map(renderMessageHtml).join('');
+      // Replace the existing bar (if any) with the new bar + prepended messages.
+      const existingBar = container.querySelector('#loadOlderBar');
+      if (existingBar) existingBar.remove();
+      oldestLoadedIndex = firstIndex != null ? firstIndex : oldestLoadedIndex;
+      hasMoreOlder = !!hasMore;
+      container.insertAdjacentHTML('afterbegin', renderLoadOlderBar() + html);
+
+      // Restore scroll so the anchor stays in the same viewport position.
+      if (anchor) {
+        const newOffset = anchor.getBoundingClientRect().top;
+        container.scrollTop += (newOffset - anchorOffset);
+      }
+    } else {
+      hasMoreOlder = false;
+      const existingBar = container.querySelector('#loadOlderBar');
+      if (existingBar) existingBar.remove();
+    }
+  } catch (e) {
+    if (bar) bar.querySelector('.load-older-btn').textContent = `Failed: ${e.message} — retry`;
+  } finally {
+    loadingOlder = false;
+  }
+}
+
+async function fetchNewMessagesSince(sessionId) {
+  // Incremental catch-up after turn_end / init. Avoids the full reload that
+  // stalls long sessions.
+  if (lastLoadedIndex == null) {
+    // No baseline yet — fall back to a full tail load.
+    return loadMessages(sessionId);
+  }
+  try {
+    const res = await fetch(`/api/sessions/${sessionId}/messages?after=${lastLoadedIndex}`);
+    const data = await res.json();
+    const { messages, lastIndex, totalMessages: total, session } = data;
+    if (session) {
+      currentSession = { ...currentSession, ...session };
+      updateSessionHeader();
+    }
+    if (typeof total === 'number') totalMessages = total;
+    if (!messages || messages.length === 0) return;
+
+    const container = document.getElementById('messages');
+    if (!container) return;
+
+    // Skip indices we already rendered (defensive — server uses strict >).
+    const existing = new Set();
+    container.querySelectorAll('[data-msg-index]').forEach(el => existing.add(parseInt(el.dataset.msgIndex, 10)));
+    const fresh = messages.filter(m => !existing.has(m.index));
+    if (fresh.length === 0) {
+      if (lastIndex != null) lastLoadedIndex = lastIndex;
+      return;
+    }
+
+    // Now that we have authoritative JSONL versions, strip optimistic
+    // (non-indexed) message DOM. Streaming placeholders + the optimistic
+    // user echo get replaced by their indexed counterparts.
+    container.querySelectorAll('.message:not([data-msg-index])').forEach(el => el.remove());
+
+    container.insertAdjacentHTML('beforeend', fresh.map(renderMessageHtml).join(''));
+    if (lastIndex != null) lastLoadedIndex = lastIndex;
+    removeDuplicatedLiveContent(container);
+    container.scrollTop = container.scrollHeight;
+  } catch (e) {
+    console.error('fetchNewMessagesSince failed:', e);
+  }
 }
 
 function renderUserMessage(msg, time) {
@@ -883,10 +1002,11 @@ function startMessageStream(sessionId) {
           setTurnInProgress(true);
           setStatus('Waiting for response...', 'working');
         } else {
-          // Turn not in progress — reload messages to ensure we have latest
+          // Turn not in progress — incremental catch-up for any messages
+          // written since our initial load (avoids full reload stall).
           setTurnInProgress(false);
           setStatus('');
-          loadMessages(sessionId);
+          fetchNewMessagesSince(sessionId);
         }
       } catch {}
     });
@@ -916,8 +1036,9 @@ function startMessageStream(sessionId) {
           if (cursor) cursor.remove();
         }
       }
-      // Reload messages from JSONL to catch anything missed during SSE gaps
-      loadMessages(sessionId);
+      // Incrementally pull only new messages from JSONL — full reload
+      // stalls long sessions.
+      fetchNewMessagesSince(sessionId);
       loadSessions();
       setStatus('');
     });

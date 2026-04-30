@@ -600,6 +600,28 @@ body.sidebar-open {
   padding: 16px 24px;
 }
 
+.load-older-bar {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 16px;
+}
+
+.load-older-btn {
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.load-older-btn:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
 .message {
   margin-bottom: 4px;
   max-width: 900px;
