@@ -676,6 +676,7 @@ function renderMessages(messages) {
   // After rendering from JSONL, remove tool calls/results that already have live panels
   // (dedup — live panels are already showing this content)
   removeDuplicatedLiveContent(container);
+  highlightNewCode(container);
   container.scrollTop = container.scrollHeight;
 }
 
@@ -703,6 +704,7 @@ async function loadOlderMessages() {
       oldestLoadedIndex = firstIndex != null ? firstIndex : oldestLoadedIndex;
       hasMoreOlder = !!hasMore;
       container.insertAdjacentHTML('afterbegin', renderLoadOlderBar() + html);
+      highlightNewCode(container);
 
       // Restore scroll so the anchor stays in the same viewport position.
       if (anchor) {
@@ -759,6 +761,7 @@ async function fetchNewMessagesSince(sessionId) {
     container.insertAdjacentHTML('beforeend', fresh.map(renderMessageHtml).join(''));
     if (lastIndex != null) lastLoadedIndex = lastIndex;
     removeDuplicatedLiveContent(container);
+    highlightNewCode(container);
     container.scrollTop = container.scrollHeight;
   } catch (e) {
     console.error('fetchNewMessagesSince failed:', e);
@@ -1089,7 +1092,11 @@ function startMessageStream(sessionId) {
           const lastAssistant = assistantMsgs[assistantMsgs.length - 1];
           if (lastAssistant && lastAssistant.dataset.msgIndex != null) return;
           const ts = message.timestamp || Date.now();
-          container.insertAdjacentHTML('beforeend', renderAssistantMessage(message, formatTime(ts)));
+          // Route through renderMessageHtml (same path as fetchNewMessagesSince) for consistency.
+          const html = renderMessageHtml({ ...message, timestamp: ts });
+          container.insertAdjacentHTML('beforeend', html);
+          const appended = container.lastElementChild;
+          if (appended) highlightNewCode(appended);
           container.scrollTop = container.scrollHeight;
         }
       } catch (err) {}
@@ -1444,9 +1451,12 @@ function updateOrAppendMessage(message) {
         const idx = siblings.indexOf(el);
         if (openKeys.has(`${cls}:${idx}`)) el.setAttribute('open', '');
       });
+      highlightNewCode(newEl);
     }
   } else {
     container.insertAdjacentHTML('beforeend', msgHtml);
+    const appended = container.lastElementChild;
+    if (appended) highlightNewCode(appended);
   }
   container.scrollTop = container.scrollHeight;
 }
@@ -1473,31 +1483,40 @@ function truncate(text, maxLen) {
   return text.slice(0, maxLen) + '\n... (truncated)';
 }
 
-// Markdown config
+// Markdown config — marked v9+ removed the `highlight` option from setOptions/use;
+// pass only valid options and apply hljs after DOM insertion via highlightNewCode().
 (function() {
   if (typeof marked !== 'undefined') {
-    marked.setOptions({
-      highlight: function(code, lang) {
-        if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
-          try { return hljs.highlight(code, { language: lang }).value; } catch(e) {}
-        }
-        if (typeof hljs !== 'undefined') { try { return hljs.highlightAuto(code).value; } catch(e) {} }
-        return code;
-      },
-      breaks: true, gfm: true,
-    });
+    try {
+      marked.use({ breaks: true, gfm: true });
+    } catch(e) {
+      try { marked.setOptions({ breaks: true, gfm: true }); } catch(e2) {}
+    }
   }
 })();
 
 function formatMarkdown(text) {
   if (!text) return '';
-  if (typeof marked !== 'undefined') { try { return marked.parse(text); } catch(e) {} }
+  if (typeof marked !== 'undefined') {
+    try {
+      const result = marked.parse(text);
+      // marked v9+ returns string synchronously by default; guard against Promise
+      if (typeof result === 'string') return result;
+    } catch(e) {}
+  }
   let html = escapeHtml(text);
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => `<pre><code class="language-${lang}">${code.trim()}</code></pre>`);
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\n/g, '<br>');
   return html;
+}
+
+function highlightNewCode(container) {
+  if (typeof hljs === 'undefined') return;
+  container.querySelectorAll('pre code:not(.hljs)').forEach(el => {
+    try { hljs.highlightElement(el); } catch(e) {}
+  });
 }
 
 // =========================================================================
