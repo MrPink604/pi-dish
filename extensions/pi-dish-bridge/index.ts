@@ -26,6 +26,7 @@ const FORWARDED_EVENTS = [
   "auto_retry_end",
   "extension_error",
   "extension_ui_request",
+  "model_select",
 ] as const;
 
 export default function (pi: ExtensionAPI) {
@@ -44,6 +45,30 @@ export default function (pi: ExtensionAPI) {
   let modelId: string | null = null;
   let sessionName: string | null = null;
   let lastCtx: ExtensionContext | null = null;
+
+  function formatModel(model: any): string | null {
+    if (!model) return null;
+    if (typeof model === "string") return model;
+    const provider = model.provider;
+    const id = model.id ?? model.modelId;
+    return provider && id ? `${provider}/${id}` : null;
+  }
+
+  async function resolveModel(ref: string): Promise<any | null> {
+    if (!lastCtx) return null;
+    const slashIdx = ref.indexOf("/");
+    const provider = slashIdx > 0 ? ref.slice(0, slashIdx) : null;
+    const id = slashIdx > 0 ? ref.slice(slashIdx + 1) : ref;
+    const available = await lastCtx.modelRegistry.getAvailable();
+    return available.find((m: any) => provider ? (m.provider === provider && m.id === id) : m.id === id)
+      ?? available.find((m: any) => formatModel(m) === ref)
+      ?? null;
+  }
+
+  function refreshModel(ctx?: ExtensionContext | null) {
+    const model = formatModel(ctx?.model ?? lastCtx?.model);
+    if (model) modelId = model;
+  }
 
   function broadcast(obj: unknown) {
     const line = JSON.stringify(obj) + "\n";
@@ -192,13 +217,16 @@ export default function (pi: ExtensionAPI) {
         }
 
         case "set_model": {
-          if (!cmd.model) return respond(false, undefined, "model required");
-          const ok = await pi.setModel(cmd.model);
+          const requested = cmd.model ?? (cmd.provider && cmd.modelId ? `${cmd.provider}/${cmd.modelId}` : null);
+          if (!requested) return respond(false, undefined, "model required");
+          const model = typeof requested === "string" ? await resolveModel(requested) : requested;
+          if (!model) return respond(false, undefined, `model not found: ${requested}`);
+          const ok = await pi.setModel(model);
           if (ok) {
-            modelId = typeof cmd.model === "string" ? cmd.model : modelId;
+            modelId = formatModel(model) ?? modelId;
             writeRegistry();
           }
-          respond(!!ok);
+          respond(!!ok, { model: modelId });
           return;
         }
 
@@ -221,6 +249,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     lastCtx = ctx;
+    refreshModel(ctx);
     const sf = ctx.sessionManager.getSessionFile();
     if (!sf) return; // ephemeral, skip
     sessionFile = sf;
@@ -253,11 +282,15 @@ export default function (pi: ExtensionAPI) {
   for (const ev of FORWARDED_EVENTS) {
     pi.on(ev as any, (event: any, ctx: ExtensionContext) => {
       lastCtx = ctx ?? lastCtx;
+      refreshModel(ctx);
       if (ev === "turn_start") {
         turnInProgress = true;
         writeRegistry();
       } else if (ev === "turn_end" || ev === "agent_end") {
         turnInProgress = false;
+        writeRegistry();
+      } else if (ev === "model_select") {
+        modelId = formatModel(event?.model) ?? modelId;
         writeRegistry();
       }
       broadcast({ type: "event", event: ev, data: event });

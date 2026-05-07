@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const piSDK = require('./lib/pi-sdk');
-const { createRPCSession, resumeRPCSession } = require('./lib/rpc-session');
+const { createRPCSession, resumeRPCSession, getRPCSession, getAllRPCSessions } = require('./lib/rpc-session');
 const {
   listRegisteredSessions,
   getRegisteredSession,
@@ -52,6 +52,14 @@ const MODEL_CONTEXT_WINDOWS = {
   'gemini-2': 1000000, 'gemini-1.5': 1000000,
   'default': 200000,
 };
+
+function formatModelRef(model) {
+  if (!model) return null;
+  if (typeof model === 'string') return model;
+  const provider = model.provider;
+  const id = model.id || model.modelId;
+  return provider && id ? `${provider}/${id}` : null;
+}
 
 function getContextWindow(modelId) {
   if (!modelId) return MODEL_CONTEXT_WINDOWS['default'];
@@ -138,6 +146,7 @@ function parseSessionFile(filePath) {
  */
 function getActiveSessions() {
   const active = [];
+  const seen = new Set();
   for (const reg of listRegisteredSessions()) {
     let info = {};
     if (reg.sessionFile && fs.existsSync(reg.sessionFile)) {
@@ -157,13 +166,43 @@ function getActiveSessions() {
       sessionFile: reg.sessionFile || null,
       pid: reg.pid || null,
     });
+    seen.add(reg.sessionId);
   }
+
+  // Sessions spawned by pi-dish via RPC may not be visible through the bridge
+  // extension in all pi versions/modes. Include them directly so a freshly
+  // created UI session still shows its resolved default model and remains
+  // model-switchable.
+  for (const rpc of getAllRPCSessions()) {
+    if (!rpc.alive || seen.has(rpc.id)) continue;
+    const state = rpc.state || {};
+    const model = formatModelRef(state.model) || formatModelRef(rpc.model) || 'unknown';
+    active.push({
+      id: rpc.id,
+      name: state.sessionName || state.name || 'New Session',
+      model,
+      contextPercent: 0,
+      contextTokens: 0,
+      messageCount: state.messageCount || 0,
+      lastActivity: new Date(),
+      isActive: true,
+      turnInProgress: !!rpc.turnInProgress,
+      cwd: rpc.cwd || null,
+      sessionFile: rpc.sessionFile || state.sessionFile || null,
+      pid: rpc.proc?.pid || null,
+    });
+    seen.add(rpc.id);
+  }
+
   active.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
   return active;
 }
 
 function getPreviousSessions() {
-  const activeIds = new Set(listRegisteredSessions().map(r => r.sessionId));
+  const activeIds = new Set([
+    ...listRegisteredSessions().map(r => r.sessionId),
+    ...getAllRPCSessions().filter(s => s.alive).map(s => s.id),
+  ]);
   const previous = [];
 
   try {
@@ -274,7 +313,7 @@ app.get('/api/sessions', (req, res) => {
 
 app.get('/api/sessions/:id/messages', (req, res) => {
   const sessionId = req.params.id;
-  const isActive = !!getRegisteredSession(sessionId);
+  const isActive = !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId);
 
   const sessionFile = findSessionFile(sessionId);
   if (!sessionFile) {
@@ -357,8 +396,11 @@ app.post('/api/sessions/:id/prompt', async (req, res) => {
   const { message, deliverAs } = req.body;
   if (!message) return res.status(400).json({ error: 'Message required' });
   try {
-    const sess = await getBridgeSession(req.params.id);
-    const result = await sess.prompt(message, deliverAs ? { deliverAs } : {});
+    const registered = getRegisteredSession(req.params.id);
+    const rpc = getRPCSession(req.params.id);
+    const sess = registered ? await getBridgeSession(req.params.id) : rpc;
+    if (!sess?.alive) return res.status(404).json({ error: 'Session not active' });
+    const result = registered ? await sess.prompt(message, deliverAs ? { deliverAs } : {}) : await sess.prompt(message);
     res.json({ success: true, result });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -369,7 +411,9 @@ app.post('/api/sessions/:id/steer', async (req, res) => {
   const { message } = req.body;
   if (!message) return res.status(400).json({ error: 'Message required' });
   try {
-    const sess = await getBridgeSession(req.params.id);
+    const rpc = getRPCSession(req.params.id);
+    const sess = getRegisteredSession(req.params.id) ? await getBridgeSession(req.params.id) : rpc;
+    if (!sess?.alive) return res.status(404).json({ error: 'Session not active' });
     await sess.steer(message);
     res.json({ success: true });
   } catch (e) {
@@ -385,6 +429,17 @@ app.post('/api/sessions/:id/rename', async (req, res) => {
     try {
       const sess = await getBridgeSession(req.params.id);
       await sess.setName(name);
+      return res.json({ success: true });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
+  const rpc = getRPCSession(req.params.id);
+  if (rpc?.alive) {
+    try {
+      await rpc.setName(name);
+      rpc.state = { ...(rpc.state || {}), sessionName: name, name };
       return res.json({ success: true });
     } catch (e) {
       return res.status(500).json({ error: e.message });
@@ -411,6 +466,17 @@ app.post('/api/sessions/:id/model', async (req, res) => {
     try {
       const sess = await getBridgeSession(req.params.id);
       await sess.setModel(`${provider}/${id}`);
+      return res.json({ success: true });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
+  const rpc = getRPCSession(req.params.id);
+  if (rpc?.alive) {
+    try {
+      const model = await rpc.setModel(provider, id);
+      rpc.state = { ...(rpc.state || {}), model };
       return res.json({ success: true });
     } catch (e) {
       return res.status(500).json({ error: e.message });
@@ -478,11 +544,12 @@ app.get('/api/commands', async (req, res) => {
 });
 
 app.post('/api/sessions/:id/abort', async (req, res) => {
-  if (!getRegisteredSession(req.params.id)) {
+  const rpc = getRPCSession(req.params.id);
+  if (!getRegisteredSession(req.params.id) && !rpc?.alive) {
     return res.status(404).json({ error: 'Session not active' });
   }
   try {
-    const sess = await getBridgeSession(req.params.id);
+    const sess = getRegisteredSession(req.params.id) ? await getBridgeSession(req.params.id) : rpc;
     await sess.abort();
     res.json({ success: true });
   } catch (e) {
@@ -581,14 +648,15 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.write(': connected\n\n');
 
-  if (!getRegisteredSession(sessionId)) {
+  const rpc = getRPCSession(sessionId);
+  if (!getRegisteredSession(sessionId) && !rpc?.alive) {
     res.write(`event: stream_error\ndata: ${JSON.stringify({ error: 'Session not active' })}\n\n`);
     return res.end();
   }
 
   let sess;
   try {
-    sess = await getBridgeSession(sessionId);
+    sess = getRegisteredSession(sessionId) ? await getBridgeSession(sessionId) : rpc;
   } catch (e) {
     res.write(`event: stream_error\ndata: ${JSON.stringify({ error: e.message })}\n\n`);
     return res.end();
@@ -602,8 +670,8 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
 
   const offs = [];
   const sub = (event, fn) => {
-    sess.on(event, fn);
-    offs.push(() => sess.off(event, fn));
+    const unsub = sess.on(event, fn);
+    offs.push(typeof unsub === 'function' ? unsub : () => sess.off(event, fn));
   };
 
   sub('turn_start', () => send('turn_start', {}));
@@ -631,8 +699,12 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   sub('extension_ui_request', (data) => send('extension_ui_request', data));
 
   const onClose = () => send('session_ended', {});
-  sess.once('close', onClose);
-  offs.push(() => sess.off('close', onClose));
+  if (typeof sess.once === 'function') {
+    sess.once('close', onClose);
+    offs.push(() => sess.off('close', onClose));
+  } else {
+    sub('exit', onClose);
+  }
 
   req.on('close', () => {
     for (const off of offs) { try { off(); } catch {} }
@@ -646,6 +718,9 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
 function findSessionFile(sessionId) {
   const reg = getRegisteredSession(sessionId);
   if (reg && reg.sessionFile && fs.existsSync(reg.sessionFile)) return reg.sessionFile;
+  const rpc = getRPCSession(sessionId);
+  const rpcFile = rpc?.sessionFile || rpc?.state?.sessionFile;
+  if (rpcFile && fs.existsSync(rpcFile)) return rpcFile;
 
   try {
     const dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true });
