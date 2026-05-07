@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -40,6 +41,7 @@ export default function (pi: ExtensionAPI) {
   let sessionFile: string | null = null;
   let cwd: string | null = null;
   const clients = new Set<net.Socket>();
+  const wrappedUIs = new WeakSet<object>();
 
   let turnInProgress = false;
   let modelId: string | null = null;
@@ -70,11 +72,103 @@ export default function (pi: ExtensionAPI) {
     if (model) modelId = model;
   }
 
+  const uiState = {
+    widgets: new Map<string, any>(),
+    statuses: new Map<string, any>(),
+    title: null as any,
+    editorText: null as any,
+  };
+
   function broadcast(obj: unknown) {
     const line = JSON.stringify(obj) + "\n";
     for (const c of clients) {
       try { c.write(line); } catch {}
     }
+  }
+
+  function emitTo(sock: net.Socket, obj: unknown) {
+    try { sock.write(JSON.stringify(obj) + "\n"); } catch {}
+  }
+
+  function emitExtensionUIRequest(req: any) {
+    if (!req?.id) req.id = crypto.randomUUID();
+
+    if (req.method === "setWidget") {
+      if (req.widgetLines === undefined || (Array.isArray(req.widgetLines) && req.widgetLines.length === 0)) {
+        uiState.widgets.delete(req.widgetKey || "default");
+      } else {
+        uiState.widgets.set(req.widgetKey || "default", req);
+      }
+    } else if (req.method === "setStatus") {
+      if (!req.statusText) uiState.statuses.delete(req.statusKey || "default");
+      else uiState.statuses.set(req.statusKey || "default", req);
+    } else if (req.method === "setTitle") {
+      uiState.title = req;
+    } else if (req.method === "set_editor_text") {
+      uiState.editorText = req;
+    }
+
+    broadcast({ type: "event", event: "extension_ui_request", data: req });
+  }
+
+  function replayExtensionUI(sock: net.Socket) {
+    for (const req of uiState.widgets.values()) emitTo(sock, { type: "event", event: "extension_ui_request", data: req });
+    for (const req of uiState.statuses.values()) emitTo(sock, { type: "event", event: "extension_ui_request", data: req });
+    if (uiState.title) emitTo(sock, { type: "event", event: "extension_ui_request", data: uiState.title });
+    if (uiState.editorText) emitTo(sock, { type: "event", event: "extension_ui_request", data: uiState.editorText });
+  }
+
+  function wrapExtensionUI(ctx?: ExtensionContext | null) {
+    const ui = ctx?.ui as any;
+    if (!ui || wrappedUIs.has(ui)) return;
+    wrappedUIs.add(ui);
+
+    const wrapFireAndForget = (name: string, makeReq: (...args: any[]) => any) => {
+      const original = ui[name];
+      if (typeof original !== "function") return;
+      ui[name] = function (...args: any[]) {
+        const ret = original.apply(this, args);
+        try { emitExtensionUIRequest(makeReq(...args)); } catch {}
+        return ret;
+      };
+    };
+
+    wrapFireAndForget("notify", (message: string, type?: string) => ({ method: "notify", message, notifyType: type }));
+    wrapFireAndForget("setStatus", (key: string, text?: string) => ({ method: "setStatus", statusKey: key, statusText: text }));
+    wrapFireAndForget("setTitle", (title: string) => ({ method: "setTitle", title }));
+    wrapFireAndForget("setEditorText", (text: string) => ({ method: "set_editor_text", text }));
+    wrapFireAndForget("pasteToEditor", (text: string) => ({ method: "set_editor_text", text }));
+
+    const originalSetWidget = ui.setWidget;
+    if (typeof originalSetWidget === "function") {
+      ui.setWidget = function (key: string, content: any, options?: any) {
+        const ret = originalSetWidget.apply(this, arguments as any);
+        try {
+          if (content === undefined || Array.isArray(content)) {
+            emitExtensionUIRequest({
+              method: "setWidget",
+              widgetKey: key,
+              widgetLines: content,
+              widgetPlacement: options?.placement,
+            });
+          }
+        } catch {}
+        return ret;
+      };
+    }
+
+    const wrapDialog = (name: string, makeReq: (...args: any[]) => any) => {
+      const original = ui[name];
+      if (typeof original !== "function") return;
+      ui[name] = function (...args: any[]) {
+        try { emitExtensionUIRequest(makeReq(...args)); } catch {}
+        return original.apply(this, args);
+      };
+    };
+    wrapDialog("select", (title: string, options: string[], opts?: any) => ({ method: "select", title, options, timeout: opts?.timeout }));
+    wrapDialog("confirm", (title: string, message: string, opts?: any) => ({ method: "confirm", title, message, timeout: opts?.timeout }));
+    wrapDialog("input", (title: string, placeholder?: string, opts?: any) => ({ method: "input", title, placeholder, timeout: opts?.timeout }));
+    wrapDialog("editor", (title: string, prefill?: string) => ({ method: "editor", title, prefill }));
   }
 
   function writeRegistry() {
@@ -109,6 +203,10 @@ export default function (pi: ExtensionAPI) {
     sessionFile = null;
     cwd = null;
     turnInProgress = false;
+    uiState.widgets.clear();
+    uiState.statuses.clear();
+    uiState.title = null;
+    uiState.editorText = null;
   }
 
   function handleClient(sock: net.Socket) {
@@ -140,18 +238,17 @@ export default function (pi: ExtensionAPI) {
       }
     });
 
-    try {
-      sock.write(JSON.stringify({
-        type: "hello",
-        sessionId,
-        sessionFile,
-        cwd,
-        turnInProgress,
-        model: modelId,
-        name: sessionName,
-        pid: process.pid,
-      }) + "\n");
-    } catch {}
+    emitTo(sock, {
+      type: "hello",
+      sessionId,
+      sessionFile,
+      cwd,
+      turnInProgress,
+      model: modelId,
+      name: sessionName,
+      pid: process.pid,
+    });
+    replayExtensionUI(sock);
   }
 
   async function handleCommand(cmd: any, sock: net.Socket) {
@@ -255,6 +352,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async (_event, ctx) => {
+    wrapExtensionUI(ctx);
     lastCtx = ctx;
     refreshModel(ctx);
     const sf = ctx.sessionManager.getSessionFile();
@@ -288,6 +386,7 @@ export default function (pi: ExtensionAPI) {
 
   for (const ev of FORWARDED_EVENTS) {
     pi.on(ev as any, (event: any, ctx: ExtensionContext) => {
+      wrapExtensionUI(ctx);
       lastCtx = ctx ?? lastCtx;
       refreshModel(ctx);
       if (ev === "turn_start") {

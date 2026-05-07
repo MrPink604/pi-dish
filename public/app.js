@@ -1550,8 +1550,8 @@ function showExtToast(message, type) {
 }
 
 function showExtWidget(key, lines, placement) {
-  // placement can be 'aboveEditor' or 'belowEditor'
-  const containerId = placement === 'belowEditor' ? 'inputArea' : 'messages';
+  // Pi's default placement is above the editor. Keep widgets near the prompt
+  // instead of at the top of the scrollback where they are easy to miss.
   let container = document.querySelector(`.ext-ui-widget[data-widget-key="${key}"]`);
 
   if (!lines || !lines.length) {
@@ -1585,13 +1585,14 @@ function showExtWidget(key, lines, placement) {
       extUIState.widgets.set(key, { el: container, collapsed: container.classList.contains('collapsed') });
     });
 
-    const target = document.getElementById(containerId);
-    if (target) {
-      if (placement === 'belowEditor') {
-        target.insertBefore(container, target.firstChild);
-      } else {
-        target.insertBefore(container, target.firstChild);
-      }
+    const inputArea = document.querySelector('.input-area');
+    const textarea = document.getElementById('promptInput');
+    if (placement === 'belowEditor' && inputArea && textarea) {
+      inputArea.insertBefore(container, textarea.nextSibling);
+    } else if (inputArea?.parentNode) {
+      inputArea.parentNode.insertBefore(container, inputArea);
+    } else {
+      document.getElementById('messages')?.insertAdjacentElement('beforebegin', container);
     }
   }
 

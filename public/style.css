@@ -1886,7 +1886,7 @@ body.sidebar-open {
   color: var(--text);
 }
 
-/* Widget panel — sits above messages, collapsible */
+/* Widget panel — rendered near the editor, collapsible */
 .ext-ui-widget {
   margin: 8px 24px 0;
   border-radius: 6px;
