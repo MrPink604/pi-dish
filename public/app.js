@@ -357,6 +357,7 @@ async function selectSession(id) {
   
   renderSessions();
   updateSessionHeader();
+  if (currentSession.isActive) await loadModels(id);
   await loadMessages(id);
   
   if (currentSession.isActive) {
@@ -397,9 +398,10 @@ async function resumeSession() {
 
 let knownModels = [];
 
-async function loadModels() {
+async function loadModels(sessionId) {
   try {
-    const res = await fetch('/api/models');
+    const qs = sessionId ? ('?sessionId=' + encodeURIComponent(sessionId)) : '';
+    const res = await fetch('/api/models' + qs);
     const data = await res.json();
     knownModels = Array.isArray(data) ? data : [];
   } catch (e) { console.error('Failed to load models:', e); knownModels = []; }
@@ -514,8 +516,9 @@ function cancelRename() {
 // --- Model dropdown ---
 let modelDropdownOpen = false;
 
-function toggleModelDropdown() {
+async function toggleModelDropdown() {
   if (!currentSession || !currentSession.isActive) return;
+  await loadModels(currentSession.id);
   modelDropdownOpen = !modelDropdownOpen;
   const dropdown = document.getElementById('modelDropdown');
   if (!modelDropdownOpen) { dropdown.style.display = 'none'; return; }

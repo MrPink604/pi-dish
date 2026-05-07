@@ -61,6 +61,43 @@ function formatModelRef(model) {
   return provider && id ? `${provider}/${id}` : null;
 }
 
+function normalizeModel(model) {
+  if (!model) return null;
+  return {
+    id: model.id || model.modelId,
+    name: model.name || model.id || model.modelId,
+    provider: model.provider,
+    contextWindow: model.contextWindow || 0,
+    reasoning: !!model.reasoning,
+    free: !!(model.free || (model.cost && model.cost.input === 0 && model.cost.output === 0)),
+  };
+}
+
+function normalizeModels(models) {
+  return (Array.isArray(models) ? models : [])
+    .map(normalizeModel)
+    .filter(m => m && m.id && m.provider);
+}
+
+async function getSessionModels(sessionId) {
+  if (!sessionId) return null;
+  try {
+    if (getRegisteredSession(sessionId)) {
+      const sess = await getBridgeSession(sessionId);
+      const data = await sess.send('get_available_models');
+      return normalizeModels(data?.models || data);
+    }
+    const rpc = getRPCSession(sessionId);
+    if (rpc?.alive) {
+      const data = await rpc.getAvailableModels();
+      return normalizeModels(data?.models || data);
+    }
+  } catch (e) {
+    console.warn(`Failed to get session models for ${sessionId}:`, e.message);
+  }
+  return null;
+}
+
 function getContextWindow(modelId) {
   if (!modelId) return MODEL_CONTEXT_WINDOWS['default'];
   // Prefer live model registry data (populated from pi --list-models)
@@ -523,6 +560,12 @@ const MODELS_CACHE_TTL = 60000;
 
 app.get('/api/models', async (req, res) => {
   try {
+    const sessionId = req.query.sessionId;
+    if (sessionId) {
+      const sessionModels = await getSessionModels(sessionId);
+      if (sessionModels) return res.json(sessionModels);
+    }
+
     const now = Date.now();
     if (!modelsCache || now - modelsCacheTime > MODELS_CACHE_TTL) {
       modelsCache = await piSDK.getAvailableModels();

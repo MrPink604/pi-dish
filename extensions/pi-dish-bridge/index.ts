@@ -216,6 +216,13 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
+        case "get_available_models": {
+          if (!lastCtx) return respond(false, undefined, "no active context");
+          const models = await lastCtx.modelRegistry.getAvailable();
+          respond(true, { models });
+          return;
+        }
+
         case "set_model": {
           const requested = cmd.model ?? (cmd.provider && cmd.modelId ? `${cmd.provider}/${cmd.modelId}` : null);
           if (!requested) return respond(false, undefined, "model required");
