@@ -671,6 +671,7 @@ function renderLoadOlderBar() {
 
 function renderMessages(messages) {
   const container = document.getElementById('messages');
+  updateMoodFromMessages(messages, { replace: true });
   if (messages.length === 0) {
     container.innerHTML = '<div class="empty-state" style="padding: 48px;"><p style="color: var(--text-muted);">No messages yet</p></div>';
     return;
@@ -749,6 +750,7 @@ async function fetchNewMessagesSince(sessionId) {
     const existing = new Set();
     container.querySelectorAll('[data-msg-index]').forEach(el => existing.add(parseInt(el.dataset.msgIndex, 10)));
     const fresh = messages.filter(m => !existing.has(m.index));
+    updateMoodFromMessages(fresh);
     if (fresh.length === 0) {
       if (lastIndex != null) lastLoadedIndex = lastIndex;
       return;
@@ -972,6 +974,7 @@ function updateLiveToolPanel(data) {
 
 function finalizeLiveToolPanel(data) {
   const { toolCallId, toolName, args, result, isError } = data;
+  applyMoodFromTool(toolName, args);
   const entry = liveToolPanels.get(toolCallId);
   if (!entry || !entry.el) return;
 
@@ -1462,6 +1465,59 @@ function setStatus(message, type = '') {
   const status = document.getElementById('status');
   status.textContent = message;
   status.className = `status ${type}`;
+}
+
+// =========================================================================
+// Mood indicator — web fallback for the mood extension's custom editor
+// =========================================================================
+
+function normalizeMood(description, face) {
+  description = String(description || '').trim().split(/\s+/)[0]?.toLowerCase() || '';
+  face = String(face || '').trim().replace(/[\r\n\t]/g, ' ').replace(/\s+/g, ' ');
+  if (!description || !face) return null;
+  return { description, face };
+}
+
+function setMoodIndicator(description, face) {
+  const inputArea = document.querySelector('.input-area');
+  if (!inputArea) return;
+
+  let el = document.getElementById('moodIndicator');
+  const mood = normalizeMood(description, face);
+  if (!mood) {
+    el?.remove();
+    return;
+  }
+
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'moodIndicator';
+    el.className = 'mood-indicator';
+    inputArea.insertBefore(el, inputArea.firstChild);
+  }
+
+  el.dataset.moodDescription = mood.description;
+  el.dataset.moodFace = mood.face;
+  el.textContent = `${mood.description} ${mood.face}`;
+}
+
+function applyMoodFromTool(toolName, args) {
+  if (toolName !== 'set_mood') return;
+  setMoodIndicator(args?.description, args?.kaomoji || args?.face || args?.mood);
+}
+
+function updateMoodFromMessages(messages, opts = {}) {
+  let found = false;
+  for (const msg of messages || []) {
+    const content = Array.isArray(msg.content) ? msg.content : [];
+    for (const block of content) {
+      if (block?.type === 'toolCall' && block.name === 'set_mood') {
+        applyMoodFromTool(block.name, block.arguments || {});
+        found = true;
+      }
+    }
+  }
+  if (opts.replace && !found) setMoodIndicator('', '');
 }
 
 // =========================================================================
