@@ -25,6 +25,7 @@ const FORWARDED_EVENTS = [
   "auto_retry_start",
   "auto_retry_end",
   "extension_error",
+  "extension_ui_request",
 ] as const;
 
 export default function (pi: ExtensionAPI) {

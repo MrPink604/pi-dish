@@ -1116,6 +1116,10 @@ function startMessageStream(sessionId) {
       } catch (err) { console.error('tool_execution_end error:', err); }
     });
 
+    evtSource.addEventListener('extension_ui_request', (e) => {
+      try { handleExtensionUI(JSON.parse(e.data)); } catch (err) { console.error('extension_ui_request error:', err); }
+    });
+
     evtSource.addEventListener('session_ended', () => {
       setTurnInProgress(false);
       setStatus('Session ended');
@@ -1455,6 +1459,198 @@ function setStatus(message, type = '') {
   const status = document.getElementById('status');
   status.textContent = message;
   status.className = `status ${type}`;
+}
+
+// =========================================================================
+// Extension UI — unobtrusive hidable cards
+// =========================================================================
+
+const extUIState = {
+  widgets: new Map(),      // key -> { el, collapsed }
+  statuses: new Map(),     // key -> el
+  toasts: [],              // { id, el, timeoutId }
+};
+
+function getToastContainer() {
+  let el = document.getElementById('extUiToasts');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'extUiToasts';
+    el.className = 'ext-ui-toasts';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+function handleExtensionUI(req) {
+  switch (req.method) {
+    case 'notify':
+      showExtToast(req.message || '', req.notifyType || 'info');
+      break;
+    case 'setWidget':
+      showExtWidget(req.widgetKey || 'default', req.widgetLines, req.widgetPlacement);
+      break;
+    case 'setStatus':
+      showExtStatus(req.statusKey || 'default', req.statusText);
+      break;
+    case 'setTitle':
+      document.title = req.title || 'pi-dish';
+      break;
+    case 'set_editor_text':
+      const input = document.getElementById('promptInput');
+      if (input) input.value = req.text || '';
+      break;
+    case 'select':
+    case 'confirm':
+    case 'input':
+    case 'editor':
+      // We can't respond to dialogs, so show them as read-only info cards
+      showExtDialog(req);
+      break;
+    default:
+      // Unknown method — show as a generic toast so it's not silently lost
+      showExtToast(`[${req.method}] ${JSON.stringify(req).slice(0, 200)}`, 'info');
+  }
+}
+
+function showExtToast(message, type) {
+  const container = getToastContainer();
+  const toast = document.createElement('div');
+  toast.className = `ext-ui-toast ${type}`;
+
+  const icons = { info: 'ℹ', warning: '⚠', error: '✖' };
+  toast.innerHTML = `
+    <span class="ext-ui-toast-icon">${icons[type] || icons.info}</span>
+    <span class="ext-ui-toast-body">${escapeHtml(message)}</span>
+    <button class="ext-ui-toast-close" title="Dismiss">×</button>
+  `;
+
+  toast.querySelector('.ext-ui-toast-close').addEventListener('click', () => {
+    toast.classList.add('hiding');
+    setTimeout(() => toast.remove(), 200);
+  });
+
+  container.appendChild(toast);
+
+  // Auto-dismiss info toasts after 6s; warnings/errors stay until manually closed
+  let timeoutId = null;
+  if (type === 'info') {
+    timeoutId = setTimeout(() => {
+      if (toast.parentNode) {
+        toast.classList.add('hiding');
+        setTimeout(() => toast.remove(), 200);
+      }
+    }, 6000);
+  }
+
+  extUIState.toasts.push({ el: toast, timeoutId });
+}
+
+function showExtWidget(key, lines, placement) {
+  // placement can be 'aboveEditor' or 'belowEditor'
+  const containerId = placement === 'belowEditor' ? 'inputArea' : 'messages';
+  let container = document.querySelector(`.ext-ui-widget[data-widget-key="${key}"]`);
+
+  if (!lines || !lines.length) {
+    if (container) {
+      container.classList.add('hidden');
+      setTimeout(() => container.remove(), 200);
+    }
+    extUIState.widgets.delete(key);
+    return;
+  }
+
+  const existing = extUIState.widgets.get(key);
+  const wasCollapsed = existing?.collapsed ?? false;
+
+  if (!container) {
+    container = document.createElement('div');
+    container.className = 'ext-ui-widget';
+    container.dataset.widgetKey = key;
+    if (wasCollapsed) container.classList.add('collapsed');
+
+    container.innerHTML = `
+      <div class="ext-ui-widget-header">
+        <span class="ext-ui-widget-label">${escapeHtml(key)}</span>
+        <span class="ext-ui-widget-toggle">▼</span>
+      </div>
+      <pre class="ext-ui-widget-body"></pre>
+    `;
+
+    container.querySelector('.ext-ui-widget-header').addEventListener('click', () => {
+      container.classList.toggle('collapsed');
+      extUIState.widgets.set(key, { el: container, collapsed: container.classList.contains('collapsed') });
+    });
+
+    const target = document.getElementById(containerId);
+    if (target) {
+      if (placement === 'belowEditor') {
+        target.insertBefore(container, target.firstChild);
+      } else {
+        target.insertBefore(container, target.firstChild);
+      }
+    }
+  }
+
+  container.classList.remove('hidden');
+  container.querySelector('.ext-ui-widget-body').textContent = lines.join('\n');
+  extUIState.widgets.set(key, { el: container, collapsed: container.classList.contains('collapsed') });
+}
+
+function showExtStatus(key, text) {
+  const meta = document.querySelector('.session-meta-desktop');
+  if (!meta) return;
+
+  let badge = document.querySelector(`.ext-ui-status-badge[data-status-key="${key}"]`);
+
+  if (!text) {
+    badge?.remove();
+    extUIState.statuses.delete(key);
+    return;
+  }
+
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'ext-ui-status-badge';
+    badge.dataset.statusKey = key;
+    badge.title = `Status from ${key}`;
+    meta.appendChild(badge);
+  }
+
+  badge.textContent = text;
+  extUIState.statuses.set(key, badge);
+}
+
+function showExtDialog(req) {
+  const container = document.getElementById('messages');
+  if (!container) return;
+
+  const card = document.createElement('div');
+  card.className = 'ext-ui-dialog';
+
+  const hints = {
+    select: 'The extension is waiting for a selection (not supported in web UI)',
+    confirm: 'The extension is waiting for confirmation (not supported in web UI)',
+    input: 'The extension is waiting for text input (not supported in web UI)',
+    editor: 'The extension is waiting for multi-line input (not supported in web UI)',
+  };
+
+  const bodyLines = [];
+  if (req.title) bodyLines.push(`<div class="ext-ui-dialog-title">${escapeHtml(req.title)}</div>`);
+  if (req.message) bodyLines.push(`<div>${escapeHtml(req.message)}</div>`);
+  if (req.options) bodyLines.push(`<div>Options: ${req.options.map(escapeHtml).join(', ')}</div>`);
+  if (req.placeholder) bodyLines.push(`<div>Placeholder: ${escapeHtml(req.placeholder)}</div>`);
+
+  card.innerHTML = `
+    <span class="ext-ui-dialog-icon">🛈</span>
+    <div class="ext-ui-dialog-body">
+      ${bodyLines.join('')}
+      <div class="ext-ui-dialog-hint">${hints[req.method] || ''}</div>
+    </div>
+  `;
+
+  container.appendChild(card);
+  container.scrollTop = container.scrollHeight;
 }
 
 function escapeHtml(text) {

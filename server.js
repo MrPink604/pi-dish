@@ -628,6 +628,7 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   sub('tool_execution_start', (data) => send('tool_execution_start', data));
   sub('tool_execution_update', (data) => send('tool_execution_update', data));
   sub('tool_execution_end', (data) => send('tool_execution_end', data));
+  sub('extension_ui_request', (data) => send('extension_ui_request', data));
 
   const onClose = () => send('session_ended', {});
   sess.once('close', onClose);
