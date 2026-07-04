@@ -399,6 +399,7 @@ body.sidebar-open {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative; /* anchor for .jump-to-bottom */
 }
 
 .session-header {
@@ -2000,6 +2001,140 @@ body.sidebar-open {
   opacity: 0.5;
   margin-top: 4px;
   font-style: italic;
+}
+
+/* Interactive dialog modal (select / confirm / input / editor) */
+.ext-ui-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.ext-ui-dialog-modal {
+  position: relative;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px;
+  width: 100%;
+  max-width: 440px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+
+.ext-ui-dialog-modal .ext-ui-dialog-title {
+  font-size: 14px;
+  padding-right: 24px;
+}
+
+.ext-ui-dialog-message {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 6px 0 10px;
+  white-space: pre-wrap;
+}
+
+.ext-ui-dialog-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.ext-ui-dialog-option {
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-hover);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ext-ui-dialog-option:hover {
+  border-color: var(--accent, #7aa2f7);
+  background: var(--bg-active, var(--bg-hover));
+}
+
+.ext-ui-dialog-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  justify-content: flex-end;
+}
+
+.ext-ui-dialog-btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-hover);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ext-ui-dialog-btn.primary {
+  background: var(--accent, #7aa2f7);
+  border-color: var(--accent, #7aa2f7);
+  color: #fff;
+}
+
+.ext-ui-dialog-input,
+.ext-ui-dialog-editor {
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.ext-ui-dialog-editor {
+  font-family: 'SF Mono', Monaco, monospace;
+  resize: vertical;
+}
+
+.ext-ui-dialog-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+/* Jump-to-bottom button (appears when scrolled away during streaming) */
+.jump-to-bottom {
+  position: absolute;
+  bottom: 96px;
+  right: 24px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 18px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  z-index: 50;
+}
+
+.jump-to-bottom:hover {
+  border-color: var(--accent, #7aa2f7);
 }
 
 /* Extension status badge in session header */

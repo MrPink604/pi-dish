@@ -5,9 +5,27 @@ A minimal web interface for pi's sessions.
 ## Features
 
 - **Session List**: View all active pi sessions in the sidebar
-- **Session Status**: See if sessions are working (green pulse), current context usage %, model, and session name
-- **Message View**: Browse full session history with formatted messages
+- **Session Status**: See if sessions are working (green pulse), current context usage %, model, and session name — context numbers come straight from the running session (`ctx.getContextUsage()`), so 1M-context models report correctly
+- **Message View**: Browse full session history with formatted messages; streaming only auto-scrolls while you're at the bottom (scroll up to read, hit ↓ to jump back)
 - **Prompt Input**: Send prompts to sessions
+- **Slash Commands**: `/`-prefixed input is routed to a command endpoint, never to the model as text
+- **Extension UI**: dialogs (`select`/`confirm`/`input`/`editor`) render as real modals you can answer from the browser; widgets, statuses, and notifications render natively
+
+## Slash command support
+
+| Command type | TUI session (bridge) | pi-dish-spawned session (RPC) |
+|---|---|---|
+| `/compact`, `/model`, `/name`, `/thinking`, `/abort` | ✅ emulated via extension API | ✅ mapped to RPC commands |
+| `/new`, `/export` | ❌ (needs command context) | ✅ |
+| Skills (`/skill:x`) and prompt templates | ✅ expanded by the bridge, sent as user message | ✅ native via RPC `prompt` |
+| Extension commands (`/mood`, `/todos`, …) | ❌ pi's extension API cannot invoke another extension's command — run them in the TUI | ✅ native via RPC `prompt` |
+| Other TUI built-ins (`/settings`, `/tree`*, `/resume`, …) | ❌ TUI-only | ❌ (`/tree` has a web modal) |
+
+Unknown/unsupported commands return a clear error instead of being sent to the model.
+
+**Dialog caveat**: when a TUI session's dialog is answered from the web, the
+terminal keeps showing the (already-resolved) dialog until you press Escape —
+pi has no API to dismiss it programmatically. The late TUI answer is discarded.
 
 ## Setup
 
@@ -27,6 +45,12 @@ sessions and opens the socket on demand to stream events / send prompts —
 sessions you aren't viewing cost nothing.
 
 Reload existing pi sessions with `/reload` to pick up the extension.
+
+### Upgrading
+
+After pulling changes, run `npm install` (the SDK dependency is
+`@earendil-works/pi-coding-agent`, pi's current package name), restart the
+server, and `/reload` each running pi session so it picks up the new bridge.
 
 ## Running
 
@@ -64,8 +88,20 @@ Output goes to `dist/` (AppImage + deb on Linux, dmg on macOS).
   beyond reading registry files.
 - **Inactive sessions**: scanned from `~/.pi/agent/sessions/` (pi's own JSONL
   store) for the "previous sessions" list and full message history.
-- **Live streaming**: tool execution, message updates, turn lifecycle, and
-  errors are forwarded over SSE from the bridge socket to the browser.
+- **Live streaming**: tool execution, message updates, turn lifecycle,
+  compaction/retry status, extension UI, and errors are forwarded over SSE
+  from the bridge socket to the browser.
+- **Slash commands**: the frontend posts `/`-prefixed input to
+  `/api/sessions/:id/command`. Bridge sessions emulate built-ins through the
+  extension API and expand skills/prompt templates; RPC sessions use the
+  native RPC commands. See the support matrix above.
+- **Context usage**: the bridge writes `ctx.getContextUsage()` (tokens,
+  window, percent) into its registry entry on every turn/message/model
+  change, so the UI never guesses window sizes from model listings.
+- **Session ids**: the session-file basename (newer pi prefixes a timestamp
+  to the UUID). The bridge registry and RPC client use the same convention so
+  a session never appears twice.
 - **Spawning**: "New session" and "Resume" still spawn `pi --mode rpc`; those
   processes auto-load the bridge extension and register themselves the same
-  way as sessions you start in tmux.
+  way as sessions you start in tmux. Set `PI_DISH_PI_COMMAND` to customize the
+  launch command (e.g. `"pi-aws --profile work"`).

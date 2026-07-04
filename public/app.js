@@ -10,11 +10,46 @@ let slashCommands = [];
 let autocompleteVisible = false;
 let autocompleteIndex = 0;
 
-// Load slash commands
-async function loadCommands() {
+// =========================================================================
+// Scroll pinning — only follow streaming output while the user is at the
+// bottom. Scrolling up "unpins"; new content then accumulates below without
+// yanking the viewport, and a jump-to-bottom button appears.
+// =========================================================================
+
+function isPinnedToBottom(el) {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+}
+
+function scrollToBottom(el) {
+  el.scrollTop = el.scrollHeight;
+  updateJumpButton(el);
+}
+
+function updateJumpButton(messagesEl) {
+  let btn = document.getElementById('jumpToBottom');
+  const pinned = isPinnedToBottom(messagesEl);
+  if (pinned) { if (btn) btn.style.display = 'none'; return; }
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.id = 'jumpToBottom';
+    btn.className = 'jump-to-bottom';
+    btn.textContent = '↓';
+    btn.title = 'Jump to latest';
+    btn.addEventListener('click', () => scrollToBottom(document.getElementById('messages')));
+    const view = document.getElementById('sessionView') || document.body;
+    view.appendChild(btn);
+  }
+  btn.style.display = '';
+}
+
+// Load slash commands — when a session is given, the server asks the live
+// session so the list matches exactly what that session supports.
+async function loadCommands(sessionId) {
   try {
-    const res = await fetch('/api/commands');
-    slashCommands = await res.json();
+    const qs = sessionId ? ('?sessionId=' + encodeURIComponent(sessionId)) : '';
+    const res = await fetch('/api/commands' + qs);
+    const data = await res.json();
+    if (Array.isArray(data)) slashCommands = data;
   } catch (e) {
     console.error('Failed to load commands:', e);
   }
@@ -77,6 +112,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   promptInput.addEventListener('blur', () => { setTimeout(hideAutocomplete, 200); });
+
+  const messagesEl = document.getElementById('messages');
+  if (messagesEl) {
+    messagesEl.addEventListener('scroll', () => updateJumpButton(messagesEl), { passive: true });
+  }
 });
 
 // =========================================================================
@@ -357,7 +397,10 @@ async function selectSession(id) {
   
   renderSessions();
   updateSessionHeader();
-  if (currentSession.isActive) await loadModels(id);
+  if (currentSession.isActive) {
+    await loadModels(id);
+    loadCommands(id); // refresh autocomplete with this session's commands
+  }
   await loadMessages(id);
   
   if (currentSession.isActive) {
@@ -680,7 +723,7 @@ function renderMessages(messages) {
   // After rendering from JSONL, remove tool calls/results that already have live panels
   // (dedup — live panels are already showing this content)
   removeDuplicatedLiveContent(container);
-  container.scrollTop = container.scrollHeight;
+  scrollToBottom(container); // fresh session load: start at the latest message
 }
 
 async function loadOlderMessages() {
@@ -759,12 +802,13 @@ async function fetchNewMessagesSince(sessionId) {
     // Now that we have authoritative JSONL versions, strip optimistic
     // (non-indexed) message DOM. Streaming placeholders + the optimistic
     // user echo get replaced by their indexed counterparts.
+    const wasPinned = isPinnedToBottom(container);
     container.querySelectorAll('.message:not([data-msg-index])').forEach(el => el.remove());
 
     container.insertAdjacentHTML('beforeend', fresh.map(renderMessageHtml).join(''));
     if (lastIndex != null) lastLoadedIndex = lastIndex;
     removeDuplicatedLiveContent(container);
-    container.scrollTop = container.scrollHeight;
+    if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
   } catch (e) {
     console.error('fetchNewMessagesSince failed:', e);
   }
@@ -931,12 +975,13 @@ function appendLiveToolPanel(data) {
   const container = document.getElementById('messages');
   if (!container) return;
 
+  const wasPinned = isPinnedToBottom(container);
   const html = buildLiveToolPanel(toolCallId, toolName, args, '', false, false);
   container.insertAdjacentHTML('beforeend', html);
 
   const el = container.querySelector('[data-tool-call-id="' + toolCallId + '"]');
   liveToolPanels.set(toolCallId, { el, startTime: Date.now() });
-  container.scrollTop = container.scrollHeight;
+  if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
 }
 
 function updateLiveToolPanel(data) {
@@ -946,6 +991,9 @@ function updateLiveToolPanel(data) {
 
   const output = getToolOutputText(partialResult);
   if (!output) return;
+
+  const container = document.getElementById('messages');
+  const wasPinned = container ? isPinnedToBottom(container) : false;
 
   let outputEl = entry.el.querySelector('.live-tool-output');
   if (!outputEl) {
@@ -965,11 +1013,9 @@ function updateLiveToolPanel(data) {
     else outputEl.insertAdjacentHTML('beforeend', '<span class="live-tool-cursor"></span>');
   }
 
-  // Auto-scroll output area
+  // Follow output only while the user hasn't scrolled away.
   outputEl.scrollTop = outputEl.scrollHeight;
-  // Also scroll messages container
-  const container = document.getElementById('messages');
-  if (container) container.scrollTop = container.scrollHeight;
+  if (container && wasPinned) scrollToBottom(container);
 }
 
 function finalizeLiveToolPanel(data) {
@@ -1095,8 +1141,9 @@ function startMessageStream(sessionId) {
           const lastAssistant = assistantMsgs[assistantMsgs.length - 1];
           if (lastAssistant && lastAssistant.dataset.msgIndex != null) return;
           const ts = message.timestamp || Date.now();
+          const wasPinned = isPinnedToBottom(container);
           container.insertAdjacentHTML('beforeend', renderAssistantMessage(message, formatTime(ts)));
-          container.scrollTop = container.scrollHeight;
+          if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
         }
       } catch (err) {}
     });
@@ -1124,6 +1171,33 @@ function startMessageStream(sessionId) {
 
     evtSource.addEventListener('extension_ui_request', (e) => {
       try { handleExtensionUI(JSON.parse(e.data)); } catch (err) { console.error('extension_ui_request error:', err); }
+    });
+
+    // Dialog answered elsewhere (TUI or another browser) — dismiss ours.
+    evtSource.addEventListener('extension_ui_resolved', (e) => {
+      try { dismissExtDialog(JSON.parse(e.data).id); } catch {}
+    });
+
+    evtSource.addEventListener('compaction_start', () => setStatus('Compacting context...', 'working'));
+    evtSource.addEventListener('compaction_end', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        const r = data.result;
+        setStatus(r ? `Compacted: ${formatTokens(r.tokensBefore)} → ~${formatTokens(r.estimatedTokensAfter)} tokens` : 'Compaction finished');
+        loadSessions();
+      } catch { setStatus(''); }
+    });
+    evtSource.addEventListener('auto_retry_start', (e) => {
+      try {
+        const d = JSON.parse(e.data);
+        setStatus(`Retrying (attempt ${d.attempt}/${d.maxAttempts})...`, 'working');
+      } catch {}
+    });
+    evtSource.addEventListener('auto_retry_end', (e) => {
+      try {
+        const d = JSON.parse(e.data);
+        if (d.success === false) setStatus('Retry failed: ' + (d.finalError || 'unknown'), 'error');
+      } catch {}
     });
 
     evtSource.addEventListener('session_ended', () => {
@@ -1154,23 +1228,46 @@ async function sendPrompt() {
   const input = document.getElementById('promptInput');
   const message = input.value.trim();
   if (!message || !currentSession) return;
-  
+
   if (message === '/tree') { input.value = ''; openTreeModal(); return; }
-  
+  hideAutocomplete();
+
+  // Slash commands go to the command endpoint, never to the model as text.
+  if (message.startsWith('/')) {
+    input.value = '';
+    input.style.height = '';
+    setStatus('Running ' + message.split(' ')[0] + '...', 'working');
+    try {
+      const res = await fetch(`/api/sessions/${currentSession.id}/command`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'command failed');
+      setStatus(data.info || 'Done');
+      loadSessions();
+    } catch (e) {
+      setStatus(`${message.split(' ')[0]}: ${e.message}`, 'error');
+      input.value = message; // let the user fix and retry
+      input.dispatchEvent(new Event('input'));
+    }
+    return;
+  }
+
   input.value = '';
   input.style.height = '';
   setStatus('Sending...', 'working');
-  
+
   const container = document.getElementById('messages');
   const emptyState = container.querySelector('.empty-state');
   if (emptyState) emptyState.remove();
   container.insertAdjacentHTML('beforeend', renderUserMessage({
     role: 'user', content: [{ type: 'text', text: message }], timestamp: Date.now()
   }, formatTime(Date.now())));
-  container.scrollTop = container.scrollHeight;
-  
+  scrollToBottom(container); // own message: always jump down
+
   setTurnInProgress(true);
-  
+
   try {
     const res = await fetch(`/api/sessions/${currentSession.id}/prompt`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1253,7 +1350,14 @@ async function createSession() {
     if (res.ok && data.success && data.id) {
       setStatus('Session created');
       switchTab('active');
-      setTimeout(async () => { await loadSessions(); selectSession(data.id); }, 2000);
+      // Poll until the new session shows up in the list instead of hoping a
+      // fixed delay is enough.
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await loadSessions();
+        if (findSession(data.id)) { selectSession(data.id); return; }
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      setStatus('Session created but not visible yet — try refreshing', 'error');
       return;
     }
     setStatus(data.error || 'Failed to create session', 'error');
@@ -1430,6 +1534,7 @@ function removeDuplicatedLiveContent(container) {
 function updateOrAppendMessage(message) {
   const container = document.getElementById('messages');
   if (!container) return;
+  const wasPinned = isPinnedToBottom(container);
   const timestamp = message.timestamp || Date.now();
   const msgHtml = renderAssistantMessage({ ...message, timestamp }, formatTime(timestamp), { streaming: true });
   const streamingEl = container.querySelector('.message.assistant[data-streaming="true"]');
@@ -1458,7 +1563,7 @@ function updateOrAppendMessage(message) {
   } else {
     container.insertAdjacentHTML('beforeend', msgHtml);
   }
-  container.scrollTop = container.scrollHeight;
+  if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
 }
 
 function setStatus(message, type = '') {
@@ -1681,36 +1786,91 @@ function showExtStatus(key, text) {
   extUIState.statuses.set(key, badge);
 }
 
+// Interactive dialogs: extensions block on select/confirm/input/editor. We
+// render a real modal and POST the answer back; the session unblocks. For TUI
+// sessions the same dialog is also on screen in the terminal — whoever
+// answers first wins (the server tells us via extension_ui_resolved).
+const openExtDialogs = new Map(); // requestId -> overlay element
+
+function sendExtDialogResponse(requestId, response) {
+  if (!currentSession) return;
+  fetch(`/api/sessions/${currentSession.id}/ui-response`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ requestId, ...response }),
+  }).catch(e => setStatus('Dialog response failed: ' + e.message, 'error'));
+  dismissExtDialog(requestId);
+}
+
+function dismissExtDialog(requestId) {
+  const overlay = openExtDialogs.get(requestId);
+  if (overlay) overlay.remove();
+  openExtDialogs.delete(requestId);
+}
+
 function showExtDialog(req) {
-  const container = document.getElementById('messages');
-  if (!container) return;
+  if (!req.id || openExtDialogs.has(req.id)) return;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'ext-ui-dialog-overlay';
 
   const card = document.createElement('div');
-  card.className = 'ext-ui-dialog';
+  card.className = 'ext-ui-dialog-modal';
 
-  const hints = {
-    select: 'The extension is waiting for a selection (not supported in web UI)',
-    confirm: 'The extension is waiting for confirmation (not supported in web UI)',
-    input: 'The extension is waiting for text input (not supported in web UI)',
-    editor: 'The extension is waiting for multi-line input (not supported in web UI)',
-  };
+  let bodyHtml = '';
+  if (req.title) bodyHtml += `<div class="ext-ui-dialog-title">${escapeHtml(req.title)}</div>`;
+  if (req.message) bodyHtml += `<div class="ext-ui-dialog-message">${escapeHtml(req.message)}</div>`;
 
-  const bodyLines = [];
-  if (req.title) bodyLines.push(`<div class="ext-ui-dialog-title">${escapeHtml(req.title)}</div>`);
-  if (req.message) bodyLines.push(`<div>${escapeHtml(req.message)}</div>`);
-  if (req.options) bodyLines.push(`<div>Options: ${req.options.map(escapeHtml).join(', ')}</div>`);
-  if (req.placeholder) bodyLines.push(`<div>Placeholder: ${escapeHtml(req.placeholder)}</div>`);
+  if (req.method === 'select') {
+    bodyHtml += '<div class="ext-ui-dialog-options">' +
+      (req.options || []).map((opt, i) =>
+        `<button class="ext-ui-dialog-option" data-value="${escapeHtml(opt)}">${escapeHtml(opt)}</button>`
+      ).join('') + '</div>';
+  } else if (req.method === 'confirm') {
+    bodyHtml += `<div class="ext-ui-dialog-actions">
+      <button class="ext-ui-dialog-btn primary" data-action="yes">Yes</button>
+      <button class="ext-ui-dialog-btn" data-action="no">No</button>
+    </div>`;
+  } else if (req.method === 'input') {
+    bodyHtml += `<input class="ext-ui-dialog-input" type="text" placeholder="${escapeHtml(req.placeholder || '')}">
+    <div class="ext-ui-dialog-actions">
+      <button class="ext-ui-dialog-btn primary" data-action="submit">Submit</button>
+      <button class="ext-ui-dialog-btn" data-action="cancel">Cancel</button>
+    </div>`;
+  } else if (req.method === 'editor') {
+    bodyHtml += `<textarea class="ext-ui-dialog-editor" rows="8">${escapeHtml(req.prefill || '')}</textarea>
+    <div class="ext-ui-dialog-actions">
+      <button class="ext-ui-dialog-btn primary" data-action="submit">Submit</button>
+      <button class="ext-ui-dialog-btn" data-action="cancel">Cancel</button>
+    </div>`;
+  }
 
-  card.innerHTML = `
-    <span class="ext-ui-dialog-icon">🛈</span>
-    <div class="ext-ui-dialog-body">
-      ${bodyLines.join('')}
-      <div class="ext-ui-dialog-hint">${hints[req.method] || ''}</div>
-    </div>
-  `;
+  bodyHtml += `<button class="ext-ui-dialog-close" title="Dismiss (cancel)">×</button>`;
+  card.innerHTML = bodyHtml;
+  overlay.appendChild(card);
 
-  container.appendChild(card);
-  container.scrollTop = container.scrollHeight;
+  card.querySelectorAll('.ext-ui-dialog-option').forEach(btn => {
+    btn.addEventListener('click', () => sendExtDialogResponse(req.id, { value: btn.dataset.value }));
+  });
+  card.querySelectorAll('.ext-ui-dialog-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const action = btn.dataset.action;
+      if (action === 'yes') sendExtDialogResponse(req.id, { confirmed: true });
+      else if (action === 'no') sendExtDialogResponse(req.id, { confirmed: false });
+      else if (action === 'cancel') sendExtDialogResponse(req.id, { cancelled: true });
+      else if (action === 'submit') {
+        const field = card.querySelector('.ext-ui-dialog-input, .ext-ui-dialog-editor');
+        sendExtDialogResponse(req.id, { value: field ? field.value : '' });
+      }
+    });
+  });
+  card.querySelector('.ext-ui-dialog-close').addEventListener('click', () => {
+    sendExtDialogResponse(req.id, { cancelled: true });
+  });
+
+  document.body.appendChild(overlay);
+  openExtDialogs.set(req.id, overlay);
+  const field = card.querySelector('.ext-ui-dialog-input, .ext-ui-dialog-editor');
+  if (field) field.focus();
 }
 
 function escapeHtml(text) {

@@ -41,6 +41,12 @@ function truncate(text, maxLen) {
   return text.slice(0, maxLen) + '...';
 }
 
+// Pi reports percent as a float (e.g. 0.3121); show one decimal max.
+function roundPercent(p) {
+  if (p == null) return p;
+  return Math.round(p * 10) / 10;
+}
+
 const MODEL_CONTEXT_WINDOWS = {
   // Claude 1M-context models (must come before the 200k family prefixes)
   'claude-opus-4-6': 1000000, 'claude-opus-4-7': 1000000, 'claude-sonnet-4-6': 1000000,
@@ -168,6 +174,7 @@ function parseSessionFile(filePath) {
     messageCount: count,
     contextTokens: lastUsageTotalTokens,
     contextPercent,
+    contextWindow,
     lastActivity,
     cwd,
   };
@@ -189,12 +196,16 @@ function getActiveSessions() {
     if (reg.sessionFile && fs.existsSync(reg.sessionFile)) {
       try { info = parseSessionFile(reg.sessionFile); } catch {}
     }
+    // The bridge reports the session's actual context usage (tokens, window,
+    // percent) straight from pi — always prefer it over JSONL guesswork.
+    const usage = reg.contextUsage || null;
     active.push({
       id: reg.sessionId,
       name: reg.name || info.name || 'New Session',
       model: reg.model || info.model || 'unknown',
-      contextPercent: info.contextPercent || 0,
-      contextTokens: info.contextTokens || 0,
+      contextPercent: roundPercent(usage?.percent ?? info.contextPercent) ?? 0,
+      contextTokens: usage?.tokens ?? info.contextTokens ?? 0,
+      contextWindow: usage?.contextWindow || getContextWindow(reg.model || info.model),
       messageCount: info.messageCount || 0,
       lastActivity: info.lastActivity || new Date(),
       isActive: true,
@@ -214,12 +225,14 @@ function getActiveSessions() {
     if (!rpc.alive || seen.has(rpc.id)) continue;
     const state = rpc.state || {};
     const model = formatModelRef(state.model) || formatModelRef(rpc.model) || 'unknown';
+    const usage = rpc.lastStats?.contextUsage || null;
     active.push({
       id: rpc.id,
       name: state.sessionName || state.name || 'New Session',
       model,
-      contextPercent: 0,
-      contextTokens: 0,
+      contextPercent: roundPercent(usage?.percent) ?? 0,
+      contextTokens: usage?.tokens ?? 0,
+      contextWindow: usage?.contextWindow || state.model?.contextWindow || 0,
       messageCount: state.messageCount || 0,
       lastActivity: new Date(),
       isActive: true,
@@ -250,9 +263,9 @@ function getPreviousSessions() {
       const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl'));
 
       for (const file of files) {
-        const match = file.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/);
-        if (!match) continue;
-        const id = match[1];
+        // Session ids are the file basename (newer pi prefixes a timestamp,
+        // older files are a bare UUID) — matching the bridge registry ids.
+        const id = file.slice(0, -'.jsonl'.length);
         if (activeIds.has(id)) continue;
 
         const info = parseSessionFile(path.join(dirPath, file));
@@ -370,6 +383,15 @@ app.get('/api/sessions/:id/messages', (req, res) => {
   const after = req.query.after != null ? parseInt(req.query.after, 10) : null;
 
   const info = parseSessionFile(sessionFile);
+  // Overlay live context usage when the session can report it.
+  const reg = getRegisteredSession(sessionId);
+  const rpcSess = getRPCSession(sessionId);
+  const liveUsage = reg?.contextUsage || rpcSess?.lastStats?.contextUsage || null;
+  if (liveUsage) {
+    if (liveUsage.tokens != null) info.contextTokens = liveUsage.tokens;
+    if (liveUsage.percent != null) info.contextPercent = roundPercent(liveUsage.percent);
+    if (liveUsage.contextWindow) info.contextWindow = liveUsage.contextWindow;
+  }
   const content = fs.readFileSync(sessionFile, 'utf-8');
 
   const all = [];
@@ -453,6 +475,124 @@ app.post('/api/sessions/:id/steer', async (req, res) => {
     if (!sess?.alive) return res.status(404).json({ error: 'Session not active' });
     await sess.steer(message);
     res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Built-in commands pi-dish can execute on RPC-managed sessions by mapping
+// them to RPC protocol commands.
+const RPC_BUILTIN_COMMANDS = [
+  { name: 'compact', description: 'Manually compact the session context', args: '[instructions]' },
+  { name: 'model', description: 'Switch model (usage: /model provider/model-id)', args: '<model>' },
+  { name: 'name', description: 'Set session display name', args: '<name>' },
+  { name: 'thinking', description: 'Set thinking level', args: '<off|minimal|low|medium|high|xhigh>' },
+  { name: 'abort', description: 'Abort the current agent operation' },
+  { name: 'new', description: 'Start a new session' },
+  { name: 'export', description: 'Export session to HTML', args: '[path]' },
+];
+
+async function runRpcSlashCommand(rpc, message) {
+  const spaceIdx = message.indexOf(' ');
+  const name = (spaceIdx === -1 ? message.slice(1) : message.slice(1, spaceIdx)).trim();
+  const args = spaceIdx === -1 ? '' : message.slice(spaceIdx + 1).trim();
+
+  switch (name) {
+    case 'compact': {
+      const result = await rpc.compact(args || undefined);
+      rpc._refreshStats();
+      const saved = result ? ` (${result.tokensBefore} → ~${result.estimatedTokensAfter} tokens)` : '';
+      return { info: `Compacted${saved}` };
+    }
+    case 'abort':
+      await rpc.abort();
+      return { info: 'Aborted' };
+    case 'name':
+      if (!args) throw new Error('usage: /name <name>');
+      await rpc.setName(args);
+      rpc.state = { ...(rpc.state || {}), sessionName: args, name: args };
+      return { info: 'Session renamed' };
+    case 'thinking':
+      if (!args) throw new Error('usage: /thinking <off|minimal|low|medium|high|xhigh>');
+      await rpc.setThinkingLevel(args);
+      return { info: `Thinking level: ${args}` };
+    case 'model': {
+      if (!args) throw new Error('usage: /model <provider/model-id>');
+      let { provider, id } = piSDK.parseModelId(args);
+      if (!provider) {
+        const data = await rpc.getAvailableModels();
+        const models = data?.models || [];
+        const m = models.find(x => x.id === args) || models.find(x => x.id.includes(args));
+        if (!m) throw new Error(`model not found: ${args}`);
+        provider = m.provider; id = m.id;
+      }
+      const model = await rpc.setModel(provider, id);
+      rpc.state = { ...(rpc.state || {}), model };
+      return { info: `Model set to ${provider}/${id}` };
+    }
+    case 'new':
+      await rpc.newSession();
+      return { info: 'New session started' };
+    case 'export': {
+      const data = await rpc.exportHtml(args || undefined);
+      return { info: `Exported to ${data?.path || 'HTML'}` };
+    }
+    default: {
+      // Extension commands, skills, and prompt templates are handled natively
+      // by RPC prompt. Verify the command exists first so typos (or TUI-only
+      // built-ins) don't get sent to the model as literal text.
+      const data = await rpc.getCommands().catch(() => null);
+      const known = new Set((data?.commands || []).map(c => c.name));
+      if (!known.has(name)) throw new Error(`unknown or unsupported command: /${name}`);
+      await rpc.prompt(message);
+      return {};
+    }
+  }
+}
+
+// Execute a slash command against an active session.
+app.post('/api/sessions/:id/command', async (req, res) => {
+  const { message, deliverAs } = req.body;
+  if (!message || !message.startsWith('/')) {
+    return res.status(400).json({ error: 'message must start with /' });
+  }
+  try {
+    if (getRegisteredSession(req.params.id)) {
+      const sess = await getBridgeSession(req.params.id);
+      const data = await sess.runCommand(message, deliverAs);
+      return res.json({ success: true, info: data?.info });
+    }
+    const rpc = getRPCSession(req.params.id);
+    if (rpc?.alive) {
+      const result = await runRpcSlashCommand(rpc, message);
+      return res.json({ success: true, info: result.info });
+    }
+    res.status(404).json({ error: 'Session not active' });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Answer an extension UI dialog (select/confirm/input/editor).
+app.post('/api/sessions/:id/ui-response', async (req, res) => {
+  const { requestId, value, confirmed, cancelled } = req.body || {};
+  if (!requestId) return res.status(400).json({ error: 'requestId required' });
+  const response = {};
+  if (value !== undefined) response.value = value;
+  if (confirmed !== undefined) response.confirmed = confirmed;
+  if (cancelled !== undefined) response.cancelled = cancelled;
+  try {
+    if (getRegisteredSession(req.params.id)) {
+      const sess = await getBridgeSession(req.params.id);
+      await sess.respondExtensionUI(requestId, response);
+      return res.json({ success: true });
+    }
+    const rpc = getRPCSession(req.params.id);
+    if (rpc?.alive) {
+      rpc.respondExtensionUI(requestId, response);
+      return res.json({ success: true });
+    }
+    res.status(404).json({ error: 'Session not active' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -579,6 +719,29 @@ app.get('/api/models', async (req, res) => {
 
 app.get('/api/commands', async (req, res) => {
   try {
+    const sessionId = req.query.sessionId;
+    if (sessionId) {
+      // Ask the live session — it knows exactly which commands exist there.
+      try {
+        if (getRegisteredSession(sessionId)) {
+          const sess = await getBridgeSession(sessionId);
+          const data = await sess.getCommands();
+          if (data?.commands) return res.json(data.commands);
+        } else {
+          const rpc = getRPCSession(sessionId);
+          if (rpc?.alive) {
+            const data = await rpc.getCommands();
+            const commands = [
+              ...RPC_BUILTIN_COMMANDS.map(c => ({ ...c, source: 'builtin', supported: true })),
+              ...(data?.commands || []).map(c => ({ ...c, supported: true })),
+            ];
+            return res.json(commands);
+          }
+        }
+      } catch (e) {
+        console.warn(`Live command list failed for ${sessionId}:`, e.message);
+      }
+    }
     const commands = await piSDK.getCommands();
     res.json(commands);
   } catch (e) {
@@ -740,6 +903,11 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   sub('tool_execution_update', (data) => send('tool_execution_update', data));
   sub('tool_execution_end', (data) => send('tool_execution_end', data));
   sub('extension_ui_request', (data) => send('extension_ui_request', data));
+  sub('extension_ui_resolved', (data) => send('extension_ui_resolved', data));
+  sub('compaction_start', (data) => send('compaction_start', data));
+  sub('compaction_end', (data) => send('compaction_end', data));
+  sub('auto_retry_start', (data) => send('auto_retry_start', data));
+  sub('auto_retry_end', (data) => send('auto_retry_end', data));
 
   const onClose = () => send('session_ended', {});
   if (typeof sess.once === 'function') {

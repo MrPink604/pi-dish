@@ -2,6 +2,8 @@
 
 Prioritized list of missing functionality compared to pi's TUI, based on audit of the RPC protocol (`docs/rpc.md`), pi-dish's `lib/rpc-session.js`, `server.js`, and `public/app.js`.
 
+**Status update (2026-07-04):** P1 (extension UI dialogs — now interactive modals with response path and TUI/web racing), P2 (fire-and-forget UI), and P3 (compaction/retry status) are done. Slash commands now route to a command endpoint (bridge emulation for TUI sessions, native RPC for spawned ones). Context usage comes live from the session. Remaining gap: invoking *extension* commands on TUI sessions needs an upstream pi API (e.g. a `pi.executeCommand()` / prompt-with-expansion extension hook) — worth a PR to pi.
+
 ---
 
 ## P0 — Tool Execution Streaming

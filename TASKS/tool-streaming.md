@@ -1,7 +1,7 @@
 # Task: Tool Execution Streaming
 
 **Priority:** P0
-**Status:** Not started
+**Status:** Done — live tool panels stream start/update/end over SSE (see `appendLiveToolPanel` / `updateLiveToolPanel` / `finalizeLiveToolPanel` in `public/app.js`)
 **Affects:** `lib/rpc-session.js`, `server.js`, `public/app.js`, `public/style.css`
 
 ## Goal

@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
@@ -28,7 +28,68 @@ const FORWARDED_EVENTS = [
   "extension_error",
   "extension_ui_request",
   "model_select",
+  "thinking_level_select",
 ] as const;
+
+// Built-in TUI commands the bridge can emulate through the extension API.
+// Everything else built-in (e.g. /settings, /tree, /resume) needs the TUI.
+const EMULATED_BUILTINS = [
+  { name: "compact", description: "Manually compact the session context" },
+  { name: "model", description: "Switch model (usage: /model provider/model-id)" },
+  { name: "name", description: "Set session display name" },
+  { name: "thinking", description: "Set thinking level (off|minimal|low|medium|high|xhigh)" },
+  { name: "abort", description: "Abort the current agent operation" },
+];
+
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
+
+// --- Prompt template arg substitution (mirrors pi's prompt-templates.ts) ---
+
+function parseCommandArgs(argsString: string): string[] {
+  const args: string[] = [];
+  let current = "";
+  let inQuote: string | null = null;
+  for (const char of argsString) {
+    if (inQuote) {
+      if (char === inQuote) inQuote = null;
+      else current += char;
+    } else if (char === '"' || char === "'") {
+      inQuote = char;
+    } else if (/\s/.test(char)) {
+      if (current) { args.push(current); current = ""; }
+    } else {
+      current += char;
+    }
+  }
+  if (current) args.push(current);
+  return args;
+}
+
+function substituteArgs(content: string, args: string[]): string {
+  const allArgs = args.join(" ");
+  return content.replace(
+    /\$\{(\d+):-([^}]*)\}|\$\{@:(\d+)(?::(\d+))?\}|\$(ARGUMENTS|@|\d+)/g,
+    (_match, defaultNum, defaultValue, sliceStart, sliceLength, simple) => {
+      if (defaultNum) {
+        const value = args[parseInt(defaultNum, 10) - 1];
+        return value ? value : defaultValue;
+      }
+      if (sliceStart) {
+        let start = parseInt(sliceStart, 10) - 1;
+        if (start < 0) start = 0;
+        if (sliceLength) return args.slice(start, start + parseInt(sliceLength, 10)).join(" ");
+        return args.slice(start).join(" ");
+      }
+      if (simple === "ARGUMENTS" || simple === "@") return allArgs;
+      return args[parseInt(simple, 10) - 1] ?? "";
+    },
+  );
+}
+
+function stripFrontmatter(content: string): string {
+  const match = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  return match ? content.slice(match[0].length) : content;
+}
 
 export default function (pi: ExtensionAPI) {
   fs.mkdirSync(REGISTRY_DIR, { recursive: true });
@@ -45,8 +106,12 @@ export default function (pi: ExtensionAPI) {
 
   let turnInProgress = false;
   let modelId: string | null = null;
+  let contextUsage: { tokens: number | null; contextWindow: number; percent: number | null } | null = null;
   let sessionName: string | null = null;
   let lastCtx: ExtensionContext | null = null;
+
+  // Dialog requests waiting for a remote (web) answer. id -> resolve(raw response)
+  const pendingDialogs = new Map<string, (resp: any) => void>();
 
   function formatModel(model: any): string | null {
     if (!model) return null;
@@ -64,12 +129,23 @@ export default function (pi: ExtensionAPI) {
     const available = await lastCtx.modelRegistry.getAvailable();
     return available.find((m: any) => provider ? (m.provider === provider && m.id === id) : m.id === id)
       ?? available.find((m: any) => formatModel(m) === ref)
+      // Loose fallback so "/model fable" works like the TUI's fuzzy picker.
+      ?? available.find((m: any) => m.id.includes(id))
       ?? null;
   }
 
   function refreshModel(ctx?: ExtensionContext | null) {
     const model = formatModel(ctx?.model ?? lastCtx?.model);
     if (model) modelId = model;
+  }
+
+  function refreshContextUsage(ctx?: ExtensionContext | null) {
+    const c = ctx ?? lastCtx;
+    if (!c) return;
+    try {
+      const usage = c.getContextUsage();
+      if (usage) contextUsage = usage;
+    } catch {}
   }
 
   const uiState = {
@@ -116,7 +192,15 @@ export default function (pi: ExtensionAPI) {
     for (const req of uiState.statuses.values()) emitTo(sock, { type: "event", event: "extension_ui_request", data: req });
     if (uiState.title) emitTo(sock, { type: "event", event: "extension_ui_request", data: uiState.title });
     if (uiState.editorText) emitTo(sock, { type: "event", event: "extension_ui_request", data: uiState.editorText });
+    // Replay any dialogs still waiting so a freshly connected client can answer them.
+    for (const id of pendingDialogs.keys()) {
+      const req = dialogRequests.get(id);
+      if (req) emitTo(sock, { type: "event", event: "extension_ui_request", data: req });
+    }
   }
+
+  // Keep the original request payload for replay to late-joining clients.
+  const dialogRequests = new Map<string, any>();
 
   function wrapExtensionUI(ctx?: ExtensionContext | null) {
     const ui = ctx?.ui as any;
@@ -157,18 +241,47 @@ export default function (pi: ExtensionAPI) {
       };
     }
 
-    const wrapDialog = (name: string, makeReq: (...args: any[]) => any) => {
+    // Dialogs: broadcast the request and race the local TUI dialog against a
+    // remote answer from a connected pi-dish client. Whichever side answers
+    // first wins; the loser's UI is dismissed/ignored. The TUI dialog cannot
+    // be programmatically closed, so after a remote answer it stays visible
+    // until dismissed, but its (late) result is discarded.
+    const wrapDialog = (
+      name: string,
+      makeReq: (...args: any[]) => any,
+      mapResponse: (resp: any) => any,
+    ) => {
       const original = ui[name];
       if (typeof original !== "function") return;
       ui[name] = function (...args: any[]) {
-        try { emitExtensionUIRequest(makeReq(...args)); } catch {}
-        return original.apply(this, args);
+        const req = makeReq(...args);
+        req.id = crypto.randomUUID();
+        let settled = false;
+        const settle = (source: string) => {
+          if (settled) return;
+          settled = true;
+          pendingDialogs.delete(req.id);
+          dialogRequests.delete(req.id);
+          broadcast({ type: "event", event: "extension_ui_resolved", data: { id: req.id, source } });
+        };
+        const remote = new Promise((resolve) => {
+          pendingDialogs.set(req.id, (resp: any) => resolve(mapResponse(resp)));
+        });
+        dialogRequests.set(req.id, req);
+        try { emitExtensionUIRequest(req); } catch {}
+        const local = original.apply(this, args);
+        return Promise.race([
+          Promise.resolve(local).then((v) => { settle("tui"); return v; }),
+          remote.then((v) => { settle("web"); return v; }),
+        ]);
       };
     };
-    wrapDialog("select", (title: string, options: string[], opts?: any) => ({ method: "select", title, options, timeout: opts?.timeout }));
-    wrapDialog("confirm", (title: string, message: string, opts?: any) => ({ method: "confirm", title, message, timeout: opts?.timeout }));
-    wrapDialog("input", (title: string, placeholder?: string, opts?: any) => ({ method: "input", title, placeholder, timeout: opts?.timeout }));
-    wrapDialog("editor", (title: string, prefill?: string) => ({ method: "editor", title, prefill }));
+
+    const valueResponse = (resp: any) => (resp?.cancelled ? undefined : resp?.value);
+    wrapDialog("select", (title: string, options: string[], opts?: any) => ({ method: "select", title, options, timeout: opts?.timeout }), valueResponse);
+    wrapDialog("confirm", (title: string, message: string, opts?: any) => ({ method: "confirm", title, message, timeout: opts?.timeout }), (resp) => (resp?.cancelled ? false : !!resp?.confirmed));
+    wrapDialog("input", (title: string, placeholder?: string, opts?: any) => ({ method: "input", title, placeholder, timeout: opts?.timeout }), valueResponse);
+    wrapDialog("editor", (title: string, prefill?: string) => ({ method: "editor", title, prefill }), valueResponse);
   }
 
   function writeRegistry() {
@@ -181,6 +294,7 @@ export default function (pi: ExtensionAPI) {
       socketPath,
       name: sessionName,
       model: modelId,
+      contextUsage,
       turnInProgress,
       updatedAt: new Date().toISOString(),
     };
@@ -203,10 +317,26 @@ export default function (pi: ExtensionAPI) {
     sessionFile = null;
     cwd = null;
     turnInProgress = false;
+    contextUsage = null;
+    pendingDialogs.clear();
+    dialogRequests.clear();
     uiState.widgets.clear();
     uiState.statuses.clear();
     uiState.title = null;
     uiState.editorText = null;
+  }
+
+  function stateSnapshot() {
+    return {
+      sessionId,
+      sessionFile,
+      cwd,
+      turnInProgress,
+      model: modelId,
+      contextUsage,
+      name: sessionName,
+      pid: process.pid,
+    };
   }
 
   function handleClient(sock: net.Socket) {
@@ -238,17 +368,107 @@ export default function (pi: ExtensionAPI) {
       }
     });
 
-    emitTo(sock, {
-      type: "hello",
-      sessionId,
-      sessionFile,
-      cwd,
-      turnInProgress,
-      model: modelId,
-      name: sessionName,
-      pid: process.pid,
-    });
+    emitTo(sock, { type: "hello", ...stateSnapshot() });
     replayExtensionUI(sock);
+  }
+
+  /**
+   * Execute a slash command remotely. Supports:
+   * - Emulated built-ins: /compact, /model, /name, /thinking, /abort
+   * - Skills (/skill:name args): expanded like pi does, sent as a user message
+   * - Prompt templates: expanded with arg substitution, sent as a user message
+   * - Extension commands: NOT supported (pi's extension API has no way to
+   *   invoke another extension's command handler) — returns a clear error.
+   */
+  async function executeSlashCommand(text: string, deliverAs?: string): Promise<{ ok: boolean; error?: string; info?: string }> {
+    const spaceIdx = text.indexOf(" ");
+    const name = (spaceIdx === -1 ? text.slice(1) : text.slice(1, spaceIdx)).trim();
+    const args = spaceIdx === -1 ? "" : text.slice(spaceIdx + 1).trim();
+
+    // --- Emulated built-ins ---
+    if (name === "compact") {
+      if (!lastCtx) return { ok: false, error: "no active context" };
+      lastCtx.compact(args ? { customInstructions: args } : undefined);
+      return { ok: true, info: "Compaction started" };
+    }
+    if (name === "abort") {
+      if (!lastCtx) return { ok: false, error: "no active context" };
+      lastCtx.abort();
+      return { ok: true, info: "Aborted" };
+    }
+    if (name === "model") {
+      if (!args) return { ok: false, error: "usage: /model <provider/model-id>" };
+      const model = await resolveModel(args);
+      if (!model) return { ok: false, error: `model not found: ${args}` };
+      const ok = await pi.setModel(model);
+      if (ok) {
+        modelId = formatModel(model) ?? modelId;
+        refreshContextUsage();
+        writeRegistry();
+        return { ok: true, info: `Model set to ${modelId}` };
+      }
+      return { ok: false, error: `no API key for ${formatModel(model)}` };
+    }
+    if (name === "name") {
+      if (!args) return { ok: false, error: "usage: /name <session name>" };
+      pi.setSessionName(args);
+      sessionName = args;
+      writeRegistry();
+      return { ok: true, info: `Session renamed` };
+    }
+    if (name === "thinking") {
+      if (!THINKING_LEVELS.includes(args)) return { ok: false, error: `usage: /thinking <${THINKING_LEVELS.join("|")}>` };
+      pi.setThinkingLevel(args as any);
+      return { ok: true, info: `Thinking level: ${args}` };
+    }
+
+    // --- Skills / prompt templates / extension commands via pi.getCommands() ---
+    const commands = pi.getCommands();
+    const skillCmd = commands.find((c) => c.source === "skill" && c.name === name);
+    if (skillCmd) {
+      const filePath = skillCmd.sourceInfo?.path;
+      if (!filePath) return { ok: false, error: `skill file not found for /${name}` };
+      let body: string;
+      try {
+        body = stripFrontmatter(fs.readFileSync(filePath, "utf-8")).trim();
+      } catch (e: any) {
+        return { ok: false, error: `failed to read skill: ${e?.message || e}` };
+      }
+      const baseDir = skillCmd.sourceInfo?.baseDir || path.dirname(filePath);
+      const skillName = name.startsWith("skill:") ? name.slice(6) : name;
+      const skillBlock = `<skill name="${skillName}" location="${filePath}">\nReferences are relative to ${baseDir}.\n\n${body}\n</skill>`;
+      const expanded = args ? `${skillBlock}\n\n${args}` : skillBlock;
+      await pi.sendUserMessage(expanded, deliverAsOptions(deliverAs));
+      return { ok: true };
+    }
+
+    const promptCmd = commands.find((c) => c.source === "prompt" && c.name === name);
+    if (promptCmd) {
+      const filePath = promptCmd.sourceInfo?.path;
+      if (!filePath) return { ok: false, error: `template file not found for /${name}` };
+      let content: string;
+      try {
+        content = stripFrontmatter(fs.readFileSync(filePath, "utf-8"));
+      } catch (e: any) {
+        return { ok: false, error: `failed to read template: ${e?.message || e}` };
+      }
+      const expanded = substituteArgs(content, parseCommandArgs(args));
+      await pi.sendUserMessage(expanded, deliverAsOptions(deliverAs));
+      return { ok: true };
+    }
+
+    const extCmd = commands.find((c) => c.source === "extension" && c.name === name);
+    if (extCmd) {
+      return { ok: false, error: `/${name} is an extension command — pi's extension API can't invoke it remotely. Run it in the TUI.` };
+    }
+
+    return { ok: false, error: `unknown or unsupported command: /${name}` };
+  }
+
+  function deliverAsOptions(deliverAs?: string): any {
+    if (deliverAs === "steer" || deliverAs === "followUp") return { deliverAs };
+    if (turnInProgress) return { deliverAs: "steer" };
+    return {};
   }
 
   async function handleCommand(cmd: any, sock: net.Socket) {
@@ -272,15 +492,8 @@ export default function (pi: ExtensionAPI) {
           return;
 
         case "get_state":
-          respond(true, {
-            sessionId,
-            sessionFile,
-            cwd,
-            turnInProgress,
-            model: modelId,
-            name: sessionName,
-            pid: process.pid,
-          });
+          refreshContextUsage();
+          respond(true, stateSnapshot());
           return;
 
         case "prompt": {
@@ -320,6 +533,41 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
+        case "get_commands": {
+          const commands = pi.getCommands().map((c) => ({
+            name: c.name,
+            description: c.description || "",
+            source: c.source,
+            path: c.sourceInfo?.path,
+            // Extension commands can't be invoked over the bridge.
+            supported: c.source !== "extension",
+          }));
+          for (const b of EMULATED_BUILTINS) {
+            commands.unshift({ name: b.name, description: b.description, source: "builtin" as any, path: undefined, supported: true });
+          }
+          respond(true, { commands });
+          return;
+        }
+
+        case "run_command": {
+          if (!cmd.message || !String(cmd.message).startsWith("/")) {
+            return respond(false, undefined, "message must start with /");
+          }
+          const result = await executeSlashCommand(String(cmd.message), cmd.deliverAs);
+          if (result.ok) respond(true, { info: result.info });
+          else respond(false, undefined, result.error);
+          return;
+        }
+
+        case "extension_ui_response": {
+          const requestId = String(cmd.requestId ?? "");
+          const pending = pendingDialogs.get(requestId);
+          if (!pending) return respond(false, undefined, `no pending dialog with id ${requestId}`);
+          pending(cmd);
+          respond(true);
+          return;
+        }
+
         case "set_model": {
           const requested = cmd.model ?? (cmd.provider && cmd.modelId ? `${cmd.provider}/${cmd.modelId}` : null);
           if (!requested) return respond(false, undefined, "model required");
@@ -328,6 +576,7 @@ export default function (pi: ExtensionAPI) {
           const ok = await pi.setModel(model);
           if (ok) {
             modelId = formatModel(model) ?? modelId;
+            refreshContextUsage();
             writeRegistry();
           }
           respond(!!ok, { model: modelId });
@@ -355,6 +604,7 @@ export default function (pi: ExtensionAPI) {
     wrapExtensionUI(ctx);
     lastCtx = ctx;
     refreshModel(ctx);
+    refreshContextUsage(ctx);
     const sf = ctx.sessionManager.getSessionFile();
     if (!sf) return; // ephemeral, skip
     sessionFile = sf;
@@ -394,9 +644,19 @@ export default function (pi: ExtensionAPI) {
         writeRegistry();
       } else if (ev === "turn_end" || ev === "agent_end") {
         turnInProgress = false;
+        refreshContextUsage(ctx);
+        writeRegistry();
+      } else if (ev === "message_end") {
+        // Usage data lands with the assistant message; keep the registry fresh
+        // so the session list shows accurate context numbers mid-turn too.
+        refreshContextUsage(ctx);
         writeRegistry();
       } else if (ev === "model_select") {
         modelId = formatModel(event?.model) ?? modelId;
+        refreshContextUsage(ctx);
+        writeRegistry();
+      } else if (ev === "compaction_end") {
+        refreshContextUsage(ctx);
         writeRegistry();
       }
       broadcast({ type: "event", event: ev, data: event });
