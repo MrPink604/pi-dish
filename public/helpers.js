@@ -233,11 +233,17 @@ function stripThinkingSuffix(pattern) {
 }
 
 // Glob → RegExp: * and ? don't cross "/" (minimatch semantics), [...] passes through.
+// Returns null for a malformed glob (e.g. an unbalanced '[') rather than
+// throwing — a hand-edited settings pattern must not take down /api/models.
 function globToRegExp(glob) {
   const source = glob.replace(/[.+^${}()|\\]/g, '\\$&')
     .replace(/\*/g, '[^/]*')
     .replace(/\?/g, '[^/]');
-  return new RegExp('^' + source + '$', 'i');
+  try {
+    return new RegExp('^' + source + '$', 'i');
+  } catch {
+    return null;
+  }
 }
 
 function modelMatchesPattern(pattern, model) {
@@ -246,7 +252,7 @@ function modelMatchesPattern(pattern, model) {
   const fullId = (model.provider ? model.provider + '/' : '') + model.id;
   if (/[*?[]/.test(pattern)) {
     const re = globToRegExp(pattern);
-    return re.test(fullId) || re.test(model.id);
+    return !!re && (re.test(fullId) || re.test(model.id));
   }
   const p = pattern.toLowerCase();
   const id = model.id.toLowerCase();

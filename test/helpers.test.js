@@ -235,6 +235,10 @@ test('modelMatchesPattern handles exact ids, aliases, globs, and thinking suffix
   // Dots in glob patterns are literal, not regex wildcards
   assert.equal(H.modelMatchesPattern('glm-5.2*', glm), true);
   assert.equal(H.modelMatchesPattern('glm-5.2*', { provider: 'zai', id: 'glm-5x2' }), false);
+
+  // A malformed glob (unbalanced '[') must not throw — it just doesn't match.
+  assert.doesNotThrow(() => H.modelMatchesPattern('claude-[', glm));
+  assert.equal(H.modelMatchesPattern('claude-[', glm), false);
 });
 
 test('isModelEnabled treats no patterns as everything enabled', () => {
