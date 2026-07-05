@@ -199,7 +199,7 @@ function acceptAutocompleteByName(name) {
 // Sidebar
 // =========================================================================
 
-let sidebarTab = 'active'; // 'active' or 'browse'
+let sidebarTab = 'active'; // 'active' (only live sessions, default) or 'all' (live + historical)
 let filterQuery = '';
 let filterDebounceTimer = null;
 
@@ -221,7 +221,7 @@ function closeSidebar() {
 function switchTab(tab) {
   sidebarTab = tab;
   document.getElementById('tabActive').classList.toggle('active', tab === 'active');
-  document.getElementById('tabBrowse').classList.toggle('active', tab === 'browse');
+  document.getElementById('tabAll').classList.toggle('active', tab === 'all');
   document.getElementById('filterInput').placeholder = tab === 'active' ? 'Filter active sessions...' : 'Search all sessions...';
   renderSessions();
 }
@@ -231,7 +231,7 @@ function onFilterInput() {
   const q = document.getElementById('filterInput').value.trim();
   // Local filter is instant; server search is debounced
   filterQuery = q;
-  if (sidebarTab === 'browse') {
+  if (sidebarTab === 'all') {
     if (q.length > 0) {
       filterDebounceTimer = setTimeout(() => loadSessions(q), 300);
     } else {
@@ -317,14 +317,16 @@ function applyLocalFilter(list) {
 function renderSessionItem(session) {
   const ctxClass = session.contextPercent > 80 ? 'critical' : session.contextPercent > 50 ? 'high' : '';
   const activeClass = currentSession?.id === session.id ? 'active' : '';
+  const inactiveClass = session.isActive ? '' : 'inactive';
+  const liveDot = sidebarTab === 'all' && session.isActive ? '<span class="live-dot" title="Active session"></span>' : '';
   const displayName = session.name || 'Unnamed';
   const tokenDisplay = session.contextTokens ? `${formatTokens(session.contextTokens)} tok` : '';
   const timeAgo = formatRelativeTime(session.lastActivity);
 
   return `
-    <div class="session-item ${activeClass}" onclick="selectSession('${session.id}')">
+    <div class="session-item ${activeClass} ${inactiveClass}" onclick="selectSession('${session.id}')">
       <div class="session-item-header">
-        <span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>
+        ${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>
         <span class="session-item-time">${timeAgo}</span>
       </div>
       <div class="session-item-meta">
@@ -340,15 +342,19 @@ function renderSessionItem(session) {
 function renderSessions() {
   const list = document.getElementById('sessionList');
   const { active, previous } = sessions;
-  const showing = sidebarTab === 'active' ? active : previous;
+  const showing = sidebarTab === 'active' ? active : [...active, ...previous];
 
-  // For active tab, apply local filter; for browse, server already filtered if query
+  const countEl = document.getElementById('countActive');
+  if (countEl) countEl.textContent = active.length || '';
+
+  // For the active tab, apply local filter; for "all" with a query, the
+  // server already filtered (including message content) — don't re-filter.
   const filtered = sidebarTab === 'active' ? applyLocalFilter(showing) : (filterQuery ? showing : applyLocalFilter(showing));
 
   if (filtered.length === 0) {
     const msg = sidebarTab === 'active'
-      ? (active.length === 0 ? 'No active sessions<br><span style="font-size:11px">Click "+ New Session" or resume one from Browse</span>' : 'No matches')
-      : (previous.length === 0 ? 'No previous sessions found' : 'No matches');
+      ? (active.length === 0 ? 'No active sessions<br><span style="font-size:11px">Click "+ New Session" or resume one from All</span>' : 'No matches')
+      : (showing.length === 0 ? 'No sessions found' : 'No matches');
     list.innerHTML = `<div class="empty-session"><p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">${msg}</p></div>`;
     return;
   }
