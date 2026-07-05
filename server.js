@@ -885,7 +885,7 @@ app.post('/api/sessions/new', async (req, res) => {
 app.post('/api/sessions/:id/resume', async (req, res) => {
   const sessionId = req.params.id;
 
-  if (getRegisteredSession(sessionId)) {
+  if (getRegisteredSession(sessionId) || getRPCSession(sessionId)?.alive) {
     return res.json({ success: true, id: sessionId, alreadyActive: true });
   }
 
