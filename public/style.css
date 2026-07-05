@@ -2668,23 +2668,34 @@ img.msg-image {
   border-radius: 6px;
 }
 
-/* Copy button on assistant messages */
-.msg-copy-btn {
-  margin-left: auto;
-  background: none;
-  border: none;
+/* Copy button on fenced code blocks. applyHighlight() wraps each final-render
+   <pre> in .code-block so the button stays pinned while the pre scrolls. The
+   pre's margin moves to the wrapper so the button offset isn't at the mercy
+   of margin collapsing. */
+.code-block { position: relative; margin: 8px 0; }
+.code-block > pre { margin: 0; }
+
+.code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: var(--bg-darker);
+  border: 1px solid var(--border);
+  border-radius: 4px;
   color: var(--text-muted);
   cursor: pointer;
   font-size: 13px;
-  padding: 0 4px;
+  line-height: 1;
+  padding: 4px 6px;
   opacity: 0;
   transition: opacity 0.15s;
 }
 
-.message:hover .msg-copy-btn { opacity: 1; }
+.code-block:hover .code-copy-btn { opacity: 1; }
+.code-copy-btn:hover { color: var(--text); }
 
 @media (hover: none) {
-  .msg-copy-btn { opacity: 0.5; } /* always visible on touch devices */
+  .code-copy-btn { opacity: 0.6; } /* always visible on touch devices */
 }
 
 /* Stats modal */

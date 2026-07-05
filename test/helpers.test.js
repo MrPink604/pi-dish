@@ -24,6 +24,17 @@ test('formatTokens abbreviates thousands', () => {
   assert.equal(H.formatTokens(29889), '29.9k');
 });
 
+test('formatCacheStat flags unreported cache writes', () => {
+  // reads but zero writes ⇒ the provider API has no write metric (you can't
+  // read what was never written) — say so instead of showing a bogus 0
+  assert.equal(H.formatCacheStat(4160, 0), '4.2k / not reported');
+  assert.equal(H.formatCacheStat(4160, null), '4.2k / not reported');
+  assert.equal(H.formatCacheStat(4160, 512), '4.2k / 512');
+  assert.equal(H.formatCacheStat(0, 0), '0 / 0');
+  assert.equal(H.formatCacheStat(null, undefined), '0 / 0');
+  assert.equal(H.formatCacheStat(0, 2048), '0 / 2.0k');
+});
+
 test('formatRelativeTime buckets by age', () => {
   const now = Date.now();
   assert.equal(H.formatRelativeTime(null), '');

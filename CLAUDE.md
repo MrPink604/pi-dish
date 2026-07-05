@@ -31,7 +31,11 @@ UMD build and wraps highlight.js's CJS `lib/common` into a browser bundle
 (the npm package ships no browser build). Re-run it after bumping either
 dependency. Note marked v12 removed the `highlight` option — code blocks are
 highlighted post-render via `applyHighlight()` (final renders only, never
-during streaming).
+during streaming). The same pass wraps each fenced block in `.code-block` and
+injects its copy button; copying goes through `copyTextToClipboard()`, which
+falls back to `execCommand('copy')` because `navigator.clipboard` doesn't
+exist on insecure origins (phones hit the server over plain LAN http — a
+clipboard-only button silently no-ops there).
 
 ## Theme
 

@@ -20,6 +20,17 @@ function formatTokens(tokens) {
   return `${tokens}`;
 }
 
+// Stats-modal "Cache read / write" cell. OpenAI-style completions APIs
+// report cache reads but have no write metric, so pi logs cacheWrite:0 even
+// when writes clearly happened (a later nonzero cacheRead proves it). Say
+// "not reported" in that case instead of a misleading 0.
+function formatCacheStat(cacheRead, cacheWrite) {
+  const read = cacheRead || 0;
+  const write = cacheWrite || 0;
+  if (read > 0 && write === 0) return `${formatTokens(read)} / not reported`;
+  return `${formatTokens(read)} / ${formatTokens(write)}`;
+}
+
 function formatRelativeTime(ts) {
   if (!ts) return '';
   const diff = Math.max(0, Date.now() - new Date(ts).getTime());
@@ -223,7 +234,7 @@ function pushPromptHistory(list, message, cap) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    escapeHtml, formatTokens, formatRelativeTime, formatTime, formatDuration,
+    escapeHtml, formatTokens, formatCacheStat, formatRelativeTime, formatTime, formatDuration,
     shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText,
     groupByWorkspace, applyLocalFilter, fuzzyMatch, fuzzyScore,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,

@@ -177,14 +177,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     messagesEl.addEventListener('wheel', cancelFollow, { passive: true });
     messagesEl.addEventListener('touchmove', cancelFollow, { passive: true });
     messagesEl.addEventListener('mousedown', cancelFollow, { passive: true });
-    // Copy an assistant message's text (delegated — messages re-render often).
+    // Copy a fenced code block's text (delegated — messages re-render often).
     messagesEl.addEventListener('click', (e) => {
-      const btn = e.target.closest('.msg-copy-btn');
+      const btn = e.target.closest('.code-copy-btn');
       if (!btn) return;
-      const msg = btn.closest('.message');
-      const text = [...msg.querySelectorAll('.message-content .markdown-body')]
-        .map(el => el.innerText).join('\n').trim();
-      navigator.clipboard.writeText(text).then(
+      const code = btn.parentElement.querySelector('pre code');
+      copyTextToClipboard(code ? code.textContent : '').then(
         () => { btn.textContent = '✓'; setTimeout(() => { btn.textContent = '⧉'; }, 1200); },
         () => setStatus('Copy failed (clipboard blocked)', 'error'),
       );
@@ -990,7 +988,7 @@ function openStatsModal() {
           (cu.percent != null ? ` (${Math.round(cu.percent * 10) / 10}%)` : '')],
         ['Messages', `${s.userMessages} user · ${s.assistantMessages} assistant · ${s.toolCalls} tool calls`],
         ['Tokens in / out', `${formatTokens(s.tokens?.input)} / ${formatTokens(s.tokens?.output)}`],
-        ['Cache read / write', `${formatTokens(s.tokens?.cacheRead)} / ${formatTokens(s.tokens?.cacheWrite)}`],
+        ['Cache read / write', formatCacheStat(s.tokens?.cacheRead, s.tokens?.cacheWrite)],
         ['Cost', fmtMoney(s.cost)],
         ['cwd', s.cwd || '—'],
         ['Session file', s.sessionFile || '—'],
@@ -1462,7 +1460,6 @@ function renderAssistantMessage(msg, time, opts = {}) {
       ${showModel ? `<span class="badge">${escapeHtml(msg.model)}</span>` : ''}
       ${opts.streaming ? '<span class="badge streaming">●</span>' : ''}
       ${time ? `<span class="message-time">${time}</span>` : ''}
-      ${!opts.streaming && textHtml ? '<button class="msg-copy-btn" title="Copy message text">⧉</button>' : ''}
     </div>
     ${thinkingHtml}${toolCallsHtml}
     ${textHtml ? `<div class="message-content"><div class="markdown-body">${textHtml}</div></div>` : ''}
@@ -2856,15 +2853,52 @@ function formatMarkdown(text) {
   return html;
 }
 
-// Highlight code blocks inside el (or the whole message list). Runs after
-// final renders only — streaming re-renders skip it to stay cheap.
+// Post-render pass over final markdown: syntax-highlight fenced code blocks
+// and give each one a copy button. Runs after final renders only — streaming
+// re-renders skip it to stay cheap — and must stay idempotent (it re-runs on
+// every append/prepend). The wrapper div keeps the button pinned while the
+// <pre> scrolls horizontally (an absolutely positioned child of the <pre>
+// would scroll away with the overflowing content).
 function applyHighlight(el) {
-  if (typeof hljs === 'undefined') return;
   const root = el || document.getElementById('messages');
   if (!root) return;
   root.querySelectorAll('.markdown-body pre code').forEach(code => {
-    if (code.dataset.highlighted) return;
+    const pre = code.closest('pre');
+    if (pre && !pre.parentElement.classList.contains('code-block')) {
+      const wrap = document.createElement('div');
+      wrap.className = 'code-block';
+      const btn = document.createElement('button');
+      btn.className = 'code-copy-btn';
+      btn.title = 'Copy code';
+      btn.textContent = '⧉';
+      pre.replaceWith(wrap);
+      wrap.append(btn, pre);
+    }
+    if (typeof hljs === 'undefined' || code.dataset.highlighted) return;
     try { hljs.highlightElement(code); } catch (e) {}
+  });
+}
+
+// navigator.clipboard only exists in secure contexts — a phone hitting the
+// LAN server over plain http gets undefined, which made the old copy button
+// a silent no-op. Fall back to the legacy execCommand path there.
+function copyTextToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text);
+  }
+  return new Promise((resolve, reject) => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', ''); // no mobile keyboard flash on focus
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    ta.remove();
+    if (ok) resolve(); else reject(new Error('execCommand copy rejected'));
   });
 }
 

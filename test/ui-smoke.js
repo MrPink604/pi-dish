@@ -125,7 +125,7 @@ function streamTurn(userText, images) {
     emit('tool_execution_end', { toolCallId: 'tc1', toolName: 'Bash', args: toolArgs, result: { content: [{ type: 'text', text: 'hi' }] }, isError: false });
     appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'tc1', name: 'Bash', arguments: toolArgs }], timestamp: now() } });
     appendEntry({ type: 'message', message: { role: 'toolResult', toolName: 'Bash', content: [{ type: 'text', text: 'hi' }], timestamp: now() } });
-    const full = 'Streamed reply with **bold** and `code`.';
+    const full = 'Streamed reply with **bold** and `code`.\n\n```js\nconst answer = 42;\n```';
     let i = 0;
     const tick = setInterval(() => {
       i = Math.min(full.length, i + 12);
@@ -190,7 +190,12 @@ function writeRegistry(patch = {}) {
   try {
     // 1. Desktop: list + select + history render
     console.log('desktop:');
-    const desktop = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const desktop = await browser.newPage({
+      viewport: { width: 1280, height: 800 },
+      // for the code-copy round-trip (127.0.0.1 is a secure context, so the
+      // native clipboard path — not the execCommand fallback — is exercised)
+      permissions: ['clipboard-read', 'clipboard-write'],
+    });
     watch(desktop, 'desktop');
     await desktop.goto(base, { waitUntil: 'networkidle' });
     await desktop.waitForSelector('.session-item');
@@ -246,6 +251,16 @@ function writeRegistry(patch = {}) {
       'live tool panel removed once authoritative messages land');
     check(await desktop.locator('details.tool-group').count() === 2,
       'streamed turn tool activity folded into its own group');
+    // The fenced block in the reply gets wrapped + given a copy button by the
+    // highlight post-pass; clicking must land the code text on the clipboard.
+    const codeBlock = desktop.locator('.message.assistant[data-msg-index] .code-block');
+    check(await codeBlock.count() === 1, 'fenced code block got a copy button wrapper');
+    await codeBlock.locator('.code-copy-btn').click();
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('.code-copy-btn')].some(b => b.textContent === '✓'), { timeout: 2000 });
+    check(true, 'copy button acked with ✓');
+    const copied = await desktop.evaluate(() => navigator.clipboard.readText());
+    check(copied.trim() === 'const answer = 42;', `clipboard holds the code text (got ${JSON.stringify(copied)})`);
     await desktop.waitForTimeout(200);
     check(await desktop.locator('.session-item-status.working').count() === 0,
       'working dot cleared after the turn');
