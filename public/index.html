@@ -5,9 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>pi-dish</title>
   <link rel="stylesheet" href="style.css">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.1/marked.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <!-- Vendored (see scripts/build-vendor.js) — no CDN so the UI works on
+       LAN-only clients and markdown rendering never silently degrades. -->
+  <link rel="stylesheet" href="vendor/github-dark.min.css">
+  <script src="vendor/marked.min.js"></script>
+  <script src="vendor/highlight.js"></script>
 </head>
 <body>
   <div class="app">
@@ -83,6 +85,12 @@
             </div>
           </div>
           <div class="session-actions">
+            <button class="btn-icon" id="btnSearch" onclick="toggleSearchBar()" title="Search in session (Ctrl+F)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="7"/>
+                <path d="M21 21l-4.35-4.35"/>
+              </svg>
+            </button>
             <button class="btn-icon" id="btnFocus" onclick="toggleFocusMode()" title="Focus mode: hide tool calls/results">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M4 6h16M7 12h10M10 18h4"/>
@@ -103,7 +111,17 @@
             </button>
           </div>
         </header>
-        
+
+        <!-- In-session search (toggle: 🔍 button or Ctrl+F) -->
+        <div class="search-bar" id="searchBar" style="display:none">
+          <input type="text" class="search-input" id="searchInput" placeholder="Search in session… (Enter = previous match, Shift+Enter = next)"
+            onkeydown="handleSearchKey(event)" spellcheck="false" autocomplete="off">
+          <span class="search-count" id="searchCount"></span>
+          <button class="btn-icon" onclick="searchPrev()" title="Previous match (Enter)">↑</button>
+          <button class="btn-icon" onclick="searchNext()" title="Next match (Shift+Enter)">↓</button>
+          <button class="btn-icon" onclick="closeSearch()" title="Close (Esc)">✕</button>
+        </div>
+
         <!-- Messages -->
         <div class="messages" id="messages">
           <!-- Messages will be rendered here -->
@@ -135,6 +153,10 @@
             <button class="cp-row" onclick="closeControlPanel(); openStatsModal()" title="Session stats">
               <span class="cp-label">Context / stats</span>
               <span class="cp-value badge badge-context" id="sessionContextMobile">0%</span>
+            </button>
+            <button class="cp-row" onclick="closeControlPanel(); openSearch()" title="Search in session">
+              <span class="cp-label">Search in session</span>
+              <span class="cp-value">🔍</span>
             </button>
             <button class="cp-row" id="btnFocusMobile" onclick="toggleFocusMode()" title="Hide tool calls/results">
               <span class="cp-label">Focus mode</span>

@@ -97,6 +97,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       var sel = window.getSelection();
       if (!sel || sel.isCollapsed) { e.preventDefault(); abortTurn(); }
     }
+    // Ctrl+F opens in-session search when a session is showing
+    if (e.ctrlKey && e.key === 'f' && currentSession) {
+      e.preventDefault();
+      openSearch();
+    }
   });
 
   promptInput.addEventListener('input', () => {
@@ -626,6 +631,166 @@ function setFocusMode(on) {
   if (state) state.textContent = focusMode ? 'on' : 'off';
 }
 
+// --- In-session text search ---
+// Server-side match list (whole session, not just loaded pages); the client
+// pages older messages in as needed and jumps between matches. Enter walks
+// backwards (most recent first), Shift+Enter forwards.
+const search = { query: '', matches: [], pos: -1, navigating: false };
+
+function toggleSearchBar() {
+  const bar = document.getElementById('searchBar');
+  if (!bar) return;
+  if (bar.style.display === 'none') openSearch(); else closeSearch();
+}
+
+function openSearch() {
+  if (!currentSession) return;
+  const bar = document.getElementById('searchBar');
+  bar.style.display = '';
+  const input = document.getElementById('searchInput');
+  input.focus();
+  input.select();
+}
+
+function closeSearch() {
+  const bar = document.getElementById('searchBar');
+  if (!bar || bar.style.display === 'none') return;
+  bar.style.display = 'none';
+  search.query = '';
+  search.matches = [];
+  search.pos = -1;
+  clearSearchMarks();
+  updateSearchCount();
+}
+
+function clearSearchMarks() {
+  document.querySelectorAll('.message.search-current').forEach(el => el.classList.remove('search-current'));
+  document.querySelectorAll('mark.search-mark').forEach(mark => {
+    const parent = mark.parentNode;
+    mark.replaceWith(document.createTextNode(mark.textContent));
+    parent.normalize();
+  });
+}
+
+function updateSearchCount(msg) {
+  const el = document.getElementById('searchCount');
+  if (!el) return;
+  if (msg != null) { el.textContent = msg; return; }
+  el.textContent = search.matches.length
+    ? `${search.pos + 1}/${search.matches.length}`
+    : (search.query ? 'no matches' : '');
+}
+
+async function runSessionSearch(query) {
+  if (!currentSession) return;
+  updateSearchCount('searching…');
+  try {
+    const res = await fetch(`/api/sessions/${currentSession.id}/search?q=${encodeURIComponent(query)}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    search.query = query;
+    search.matches = visibleSearchMatchesOf(data.matches || []);
+    search.pos = search.matches.length - 1; // start from the latest match
+    if (search.matches.length) await jumpToSearchResult();
+    updateSearchCount();
+  } catch (e) {
+    updateSearchCount('search failed');
+    console.error('Session search failed:', e);
+  }
+}
+
+// In focus mode tool results are hidden — skip matches we couldn't show.
+function visibleSearchMatchesOf(matches) {
+  return focusMode ? matches.filter(m => m.role !== 'toolResult') : matches;
+}
+
+function searchPrev() { moveSearch(-1); }
+function searchNext() { moveSearch(1); }
+
+async function moveSearch(delta) {
+  if (!search.matches.length) return;
+  search.pos = (search.pos + delta + search.matches.length) % search.matches.length;
+  updateSearchCount();
+  await jumpToSearchResult();
+}
+
+async function jumpToSearchResult() {
+  if (search.navigating) return;
+  const match = search.matches[search.pos];
+  if (!match || !currentSession) return;
+  search.navigating = true;
+  try {
+    const container = document.getElementById('messages');
+    // Page older messages in until the match is loaded.
+    let guard = 0;
+    while (oldestLoadedIndex != null && match.index < oldestLoadedIndex && hasMoreOlder && guard++ < 200) {
+      await loadOlderMessages();
+    }
+    const el = container.querySelector(`[data-msg-index="${match.index}"]`);
+    if (!el) { updateSearchCount('not loaded'); return; }
+    clearSearchMarks();
+    el.classList.add('search-current');
+    markSearchTokens(el, search.query.split(/\s+/).filter(Boolean));
+    el.scrollIntoView({ block: 'center' });
+    updateJumpButton(container);
+    updateSearchCount();
+  } finally {
+    search.navigating = false;
+  }
+}
+
+// Wrap occurrences of each token in <mark> within el's text nodes.
+function markSearchTokens(el, tokens) {
+  if (!tokens.length) return;
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => n.parentElement.closest('mark, script, style')
+      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
+  const textNodes = [];
+  while (walker.nextNode()) textNodes.push(walker.currentNode);
+  for (const node of textNodes) {
+    const text = node.textContent;
+    const lower = text.toLowerCase();
+    const ranges = [];
+    for (const token of tokens) {
+      let from = 0, at;
+      while ((at = lower.indexOf(token, from)) !== -1) {
+        ranges.push([at, at + token.length]);
+        from = at + token.length;
+      }
+    }
+    if (!ranges.length) continue;
+    ranges.sort((a, b) => a[0] - b[0]);
+    const frag = document.createDocumentFragment();
+    let cursor = 0;
+    for (const [start, end] of ranges) {
+      if (start < cursor) continue; // overlapping token match
+      frag.appendChild(document.createTextNode(text.slice(cursor, start)));
+      const mark = document.createElement('mark');
+      mark.className = 'search-mark';
+      mark.textContent = text.slice(start, end);
+      frag.appendChild(mark);
+      cursor = end;
+    }
+    frag.appendChild(document.createTextNode(text.slice(cursor)));
+    node.replaceWith(frag);
+  }
+}
+
+function handleSearchKey(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const q = document.getElementById('searchInput').value.trim().toLowerCase();
+    if (!q) return;
+    if (q !== search.query) runSessionSearch(q);
+    else if (e.shiftKey) searchNext();
+    else searchPrev();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closeSearch();
+  }
+}
+
 // --- Mobile control panel (model/thinking/context/focus/tree/export) ---
 let controlPanelOpen = false;
 
@@ -870,6 +1035,8 @@ function renderMessageHtml(msg) {
 }
 
 async function loadMessages(id) {
+  cancelStreamingRender();
+  closeSearch();
   const container = document.getElementById('messages');
   container.innerHTML = '<div class="loading">Loading...</div>';
   oldestLoadedIndex = null;
@@ -911,6 +1078,7 @@ function renderMessages(messages) {
   // After rendering from JSONL, remove tool calls/results that already have live panels
   // (dedup — live panels are already showing this content)
   removeDuplicatedLiveContent(container);
+  applyHighlight(container);
   scrollToBottom(container); // fresh session load: start at the latest message
 }
 
@@ -938,6 +1106,7 @@ async function loadOlderMessages() {
       oldestLoadedIndex = firstIndex != null ? firstIndex : oldestLoadedIndex;
       hasMoreOlder = !!hasMore;
       container.insertAdjacentHTML('afterbegin', renderLoadOlderBar() + html);
+      applyHighlight(container);
 
       // Restore scroll so the anchor stays in the same viewport position.
       if (anchor) {
@@ -996,6 +1165,7 @@ async function fetchNewMessagesSince(sessionId) {
     container.insertAdjacentHTML('beforeend', fresh.map(renderMessageHtml).join(''));
     if (lastIndex != null) lastLoadedIndex = lastIndex;
     removeDuplicatedLiveContent(container);
+    applyHighlight(container);
     if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
   } catch (e) {
     console.error('fetchNewMessagesSince failed:', e);
@@ -1033,8 +1203,11 @@ function renderAssistantMessage(msg, time, opts = {}) {
   }
   
   const showModel = msg.model && (!currentSession || msg.model !== currentSession.model);
-  
-  return `<div class="message assistant${streamingClass}${msg.errorMessage ? ' error' : ''}" data-timestamp="${timestamp}"${streamingAttr}>
+  // Tool-only messages (no prose, no error) are fully hidden in focus mode —
+  // without this their empty header row lingers as a stray marker.
+  const noTextClass = !textHtml && !errorHtml ? ' no-text' : '';
+
+  return `<div class="message assistant${streamingClass}${noTextClass}${msg.errorMessage ? ' error' : ''}" data-timestamp="${timestamp}"${streamingAttr}>
     <div class="message-header">
       <span class="message-role assistant">◆</span>
       ${showModel ? `<span class="badge">${escapeHtml(msg.model)}</span>` : ''}
@@ -1277,6 +1450,7 @@ function startMessageStream(sessionId) {
 
     evtSource.addEventListener('turn_end', () => {
       setTurnInProgress(false);
+      cancelStreamingRender();
       // Clean up any orphaned running panels (defensive)
       for (const [id, entry] of liveToolPanels) {
         if (entry.el && entry.el.classList.contains('running')) {
@@ -1295,45 +1469,34 @@ function startMessageStream(sessionId) {
       setStatus('');
     });
 
-    evtSource.addEventListener('thinking', (e) => {
-      if (!turnInProgress) setTurnInProgress(true);
-      try { updateOrAppendMessage(JSON.parse(e.data).message); } catch (err) {}
-    });
-
-    evtSource.addEventListener('tool_call', (e) => {
-      if (!turnInProgress) setTurnInProgress(true);
-      try { updateOrAppendMessage(JSON.parse(e.data).message); } catch (err) {}
-    });
-
-    evtSource.addEventListener('tool_result', (e) => {
+    // message_update streams text, thinking, and partial tool calls live —
+    // rendered incrementally through the throttled streaming renderer.
+    evtSource.addEventListener('message_update', (e) => {
       try {
         const { message } = JSON.parse(e.data);
-        if (message) updateOrAppendMessage(message);
+        if (!message || message.role !== 'assistant') return;
+        if (!turnInProgress) setTurnInProgress(true);
+        queueStreamingRender(message);
       } catch (err) {}
-    });
-
-    // Generic message_update streams text, thinking, and tool calls live.
-    evtSource.addEventListener('message_update', (e) => {
-      if (!turnInProgress) setTurnInProgress(true);
-      try { updateOrAppendMessage(JSON.parse(e.data).message); } catch (err) {}
     });
 
     evtSource.addEventListener('message_end', (e) => {
       try {
         const { message } = JSON.parse(e.data);
-        if (message) {
-          const container = document.getElementById('messages');
-          if (!container) return;
-          container.querySelectorAll('.message.assistant[data-streaming="true"]').forEach(el => el.remove());
-          // Avoid inserting a duplicate if turn_end already fetched the authoritative JSONL version.
-          const assistantMsgs = container.querySelectorAll('.message.assistant');
-          const lastAssistant = assistantMsgs[assistantMsgs.length - 1];
-          if (lastAssistant && lastAssistant.dataset.msgIndex != null) return;
-          const ts = message.timestamp || Date.now();
-          const wasPinned = isPinnedToBottom(container);
-          container.insertAdjacentHTML('beforeend', renderAssistantMessage(message, formatTime(ts)));
-          if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
-        }
+        if (!message) return;
+        cancelStreamingRender();
+        const container = document.getElementById('messages');
+        if (!container) return;
+        container.querySelectorAll('.message.assistant[data-streaming="true"]').forEach(el => el.remove());
+        // Avoid inserting a duplicate if turn_end already fetched the authoritative JSONL version.
+        const assistantMsgs = container.querySelectorAll('.message.assistant');
+        const lastAssistant = assistantMsgs[assistantMsgs.length - 1];
+        if (lastAssistant && lastAssistant.dataset.msgIndex != null) return;
+        const ts = message.timestamp || Date.now();
+        const wasPinned = isPinnedToBottom(container);
+        container.insertAdjacentHTML('beforeend', renderAssistantMessage(message, formatTime(ts)));
+        applyHighlight(container.lastElementChild);
+        if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
       } catch (err) {}
     });
 
@@ -1763,38 +1926,119 @@ function removeDuplicatedLiveContent(container) {
   liveToolPanels.clear();
 }
 
-function updateOrAppendMessage(message) {
+// =========================================================================
+// Streaming assistant renderer — incremental, block-level, throttled.
+//
+// Every message_update carries the full message so far, so we keep one
+// streaming DOM element and update only the content blocks that changed
+// (the growing tail block in practice). No outerHTML swaps: <details>
+// open/closed state survives naturally and layout work stays minimal.
+// =========================================================================
+
+const STREAM_RENDER_INTERVAL_MS = 80;
+let streamPendingMessage = null;
+let streamRenderTimer = null;
+
+function queueStreamingRender(message) {
+  streamPendingMessage = message;
+  if (!streamRenderTimer) flushStreamingRender();
+}
+
+function flushStreamingRender() {
+  streamRenderTimer = null;
+  if (!streamPendingMessage) return;
+  const msg = streamPendingMessage;
+  streamPendingMessage = null;
+  try { renderStreamingMessage(msg); } catch (e) { console.error('streaming render failed:', e); }
+  streamRenderTimer = setTimeout(flushStreamingRender, STREAM_RENDER_INTERVAL_MS);
+}
+
+function cancelStreamingRender() {
+  streamPendingMessage = null;
+  if (streamRenderTimer) { clearTimeout(streamRenderTimer); streamRenderTimer = null; }
+}
+
+function ensureStreamingElement(container) {
+  let el = container.querySelector('.message.assistant[data-streaming="true"]');
+  if (el) return el;
+  const ts = Date.now();
+  container.insertAdjacentHTML('beforeend',
+    `<div class="message assistant streaming no-text" data-streaming="true" data-timestamp="${ts}">
+      <div class="message-header">
+        <span class="message-role assistant">◆</span>
+        <span class="badge streaming">●</span>
+        <span class="message-time">${formatTime(ts)}</span>
+      </div>
+    </div>`);
+  return container.querySelector('.message.assistant[data-streaming="true"]');
+}
+
+function renderStreamingMessage(message) {
   const container = document.getElementById('messages');
   if (!container) return;
   const wasPinned = isPinnedToBottom(container);
-  const timestamp = message.timestamp || Date.now();
-  const msgHtml = renderAssistantMessage({ ...message, timestamp }, formatTime(timestamp), { streaming: true });
-  const streamingEl = container.querySelector('.message.assistant[data-streaming="true"]');
-  if (streamingEl) {
-    // Preserve open state of <details> elements so thinking blocks / tool calls
-    // don't collapse on every streaming delta.
-    const openKeys = new Set();
-    streamingEl.querySelectorAll('details').forEach(el => {
-      if (el.hasAttribute('open')) {
-        const cls = el.className;
-        const siblings = Array.from(streamingEl.querySelectorAll('details.' + cls.replace(/ /g, '.')));
-        const idx = siblings.indexOf(el);
-        openKeys.add(`${cls}:${idx}`);
+  const el = ensureStreamingElement(container);
+
+  const blocks = Array.isArray(message.content)
+    ? message.content
+    : (typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : []);
+
+  let hasText = false;
+  blocks.forEach((block, i) => {
+    let blockEl = el.querySelector(`[data-block-index="${i}"]`);
+    if (blockEl && blockEl.dataset.blockType !== block.type) { blockEl.remove(); blockEl = null; }
+
+    if (block.type === 'thinking') {
+      const text = block.thinking || '';
+      if (!blockEl) {
+        el.insertAdjacentHTML('beforeend',
+          `<details class="thinking-block" data-block-index="${i}" data-block-type="thinking">
+            <summary class="thinking-header"><span class="thinking-label">Thinking</span><span class="thinking-preview"></span></summary>
+            <div class="thinking-text"></div>
+          </details>`);
+        blockEl = el.querySelector(`[data-block-index="${i}"]`);
       }
-    });
-    streamingEl.outerHTML = msgHtml;
-    const newEl = container.querySelector('.message.assistant[data-streaming="true"]');
-    if (newEl) {
-      newEl.querySelectorAll('details').forEach(el => {
-        const cls = el.className;
-        const siblings = Array.from(newEl.querySelectorAll('details.' + cls.replace(/ /g, '.')));
-        const idx = siblings.indexOf(el);
-        if (openKeys.has(`${cls}:${idx}`)) el.setAttribute('open', '');
-      });
+      if (blockEl._src !== text) {
+        blockEl._src = text;
+        blockEl.querySelector('.thinking-preview').textContent = text.substring(0, 80).replace(/\n/g, ' ') + '…';
+        blockEl.querySelector('.thinking-text').textContent = text;
+      }
+    } else if (block.type === 'text') {
+      const text = block.text || '';
+      if (text) hasText = true;
+      if (!blockEl) {
+        el.insertAdjacentHTML('beforeend',
+          `<div class="message-content" data-block-index="${i}" data-block-type="text"><div class="markdown-body"></div></div>`);
+        blockEl = el.querySelector(`[data-block-index="${i}"]`);
+      }
+      if (blockEl._src !== text) {
+        blockEl._src = text;
+        blockEl.querySelector('.markdown-body').innerHTML = formatMarkdown(text);
+      }
+    } else if (block.type === 'toolCall') {
+      const args = block.arguments || {};
+      const argsJson = JSON.stringify(args, null, 2);
+      if (!blockEl) {
+        el.insertAdjacentHTML('beforeend',
+          `<details class="tool-call" data-block-index="${i}" data-block-type="toolCall">
+            <summary class="tool-call-header">
+              <span class="tool-call-icon">⚡</span><span class="tool-call-name"></span>
+              <span class="tool-call-summary"></span>
+            </summary>
+            <div class="tool-call-content"><pre><code></code></pre></div>
+          </details>`);
+        blockEl = el.querySelector(`[data-block-index="${i}"]`);
+      }
+      if (blockEl._src !== argsJson) {
+        blockEl._src = argsJson;
+        blockEl.querySelector('.tool-call-name').textContent = block.name || 'tool';
+        blockEl.querySelector('.tool-call-summary').textContent = getToolSummary(block.name, args);
+        blockEl.querySelector('.tool-call-content code').textContent = argsJson;
+      }
     }
-  } else {
-    container.insertAdjacentHTML('beforeend', msgHtml);
-  }
+  });
+
+  el.classList.toggle('no-text', !hasText);
   if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
 }
 
@@ -2121,19 +2365,11 @@ function truncate(text, maxLen) {
   return text.slice(0, maxLen) + '\n... (truncated)';
 }
 
-// Markdown config
+// Markdown config. marked v12 dropped the `highlight` option — syntax
+// highlighting happens post-render via applyHighlight() instead.
 (function() {
   if (typeof marked !== 'undefined') {
-    marked.setOptions({
-      highlight: function(code, lang) {
-        if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
-          try { return hljs.highlight(code, { language: lang }).value; } catch(e) {}
-        }
-        if (typeof hljs !== 'undefined') { try { return hljs.highlightAuto(code).value; } catch(e) {} }
-        return code;
-      },
-      breaks: true, gfm: true,
-    });
+    marked.setOptions({ breaks: true, gfm: true });
   }
 })();
 
@@ -2146,6 +2382,18 @@ function formatMarkdown(text) {
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\n/g, '<br>');
   return html;
+}
+
+// Highlight code blocks inside el (or the whole message list). Runs after
+// final renders only — streaming re-renders skip it to stay cheap.
+function applyHighlight(el) {
+  if (typeof hljs === 'undefined') return;
+  const root = el || document.getElementById('messages');
+  if (!root) return;
+  root.querySelectorAll('.markdown-body pre code').forEach(code => {
+    if (code.dataset.highlighted) return;
+    try { hljs.highlightElement(code); } catch (e) {}
+  });
 }
 
 // =========================================================================

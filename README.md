@@ -14,7 +14,8 @@ A minimal web interface for pi's sessions.
 - **Steer & Follow-up**: while the agent is working, send steering messages (delivered mid-run) or queue follow-ups (delivered after it finishes); pending queues show as chips above the input on pi-dish-spawned sessions (pi doesn't expose queue events to extensions, so TUI sessions can't show them)
 - **Session Stats**: tap the context % badge (Context / stats row on mobile) for tokens in/out, cache usage, cost, message counts, cwd, and session file
 - **Export**: download any session (active or not) as standalone HTML, using pi's own exporter
-- **Focus Mode**: toggle that hides tool calls/results so you can read just the user/assistant conversation (persisted per browser)
+- **Focus Mode**: toggle that hides tool calls/results — including tool-only assistant turns, so no empty markers remain — leaving just the user/assistant conversation (persisted per browser)
+- **In-Session Search**: 🔍 button or Ctrl+F opens a search bar; matches come from the whole session (server-side), Enter walks backwards through matches (Shift+Enter forwards), paging older messages in automatically and highlighting hits
 - **Session Tree**: header button opens the tree to branch from any point; full-screen with touch-sized rows on phones
 - **Copy**: per-message button copies an assistant reply's text (always visible on touch devices)
 - **Mobile Control Panel**: on phones the header badges collapse into a single ⚙ button next to Send, which opens a slide-up panel with model, thinking level, context/stats, focus mode, session tree, and HTML export; the input row itself only shows status text (truncated, never pushing buttons) and a working spinner
@@ -72,6 +73,16 @@ npm start
 
 Then open http://localhost:3333 in your browser.
 
+### Tests
+
+```bash
+npm test
+```
+
+Runs the API tests in `test/` (node:test) against a fixture session under a
+temp `HOME`. UI changes are additionally validated by driving real Chrome over
+CDP — see `CLAUDE.md`.
+
 ### Desktop (Electron)
 
 ```bash
@@ -98,7 +109,12 @@ Output goes to `dist/` (AppImage + deb on Linux, dmg on macOS).
   store) for the "previous sessions" list and full message history.
 - **Live streaming**: tool execution, message updates, turn lifecycle,
   compaction/retry status, extension UI, and errors are forwarded over SSE
-  from the bridge socket to the browser.
+  from the bridge socket to the browser. `message_update` deltas are coalesced
+  server-side (~50ms window; each event carries the full message so far) and
+  rendered client-side by an incremental block-level renderer — markdown
+  renders live during streaming without re-building the message DOM.
+- **No CDN**: `marked` and `highlight.js` are vendored into `public/vendor/`
+  (`npm run build:vendor`), so markdown rendering works on LAN-only clients.
 - **Slash commands**: the frontend posts `/`-prefixed input to
   `/api/sessions/:id/command`. Bridge sessions emulate built-ins through the
   extension API and expand skills/prompt templates; RPC sessions use the

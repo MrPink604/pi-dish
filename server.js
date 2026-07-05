@@ -363,6 +363,35 @@ app.get('/api/sessions', (req, res) => {
   res.json({ active, previous });
 });
 
+// Read the displayable message stream (what /messages paginates over) from a
+// session JSONL. Index in the returned array == the message's stream index.
+function readSessionMessages(sessionFile) {
+  const content = fs.readFileSync(sessionFile, 'utf-8');
+  const all = [];
+  for (const line of content.trim().split('\n')) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === 'message' && entry.message) {
+        all.push({
+          role: entry.message.role,
+          content: entry.message.content || [],
+          timestamp: entry.message.timestamp || entry.timestamp,
+          model: entry.message.model,
+          errorMessage: entry.message.errorMessage || undefined,
+          stopReason: entry.message.stopReason || undefined,
+        });
+      } else if (entry.type === 'custom_message' && entry.customType === 'session-message') {
+        all.push({
+          role: 'user',
+          content: [{ type: 'text', text: entry.content }],
+          timestamp: entry.timestamp,
+        });
+      }
+    } catch (e) {}
+  }
+  return all;
+}
+
 app.get('/api/sessions/:id/messages', (req, res) => {
   const sessionId = req.params.id;
   const isActive = !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId);
@@ -394,31 +423,7 @@ app.get('/api/sessions/:id/messages', (req, res) => {
     if (liveUsage.percent != null) info.contextPercent = roundPercent(liveUsage.percent);
     if (liveUsage.contextWindow) info.contextWindow = liveUsage.contextWindow;
   }
-  const content = fs.readFileSync(sessionFile, 'utf-8');
-
-  const all = [];
-  for (const line of content.trim().split('\n')) {
-    try {
-      const entry = JSON.parse(line);
-      if (entry.type === 'message' && entry.message) {
-        all.push({
-          role: entry.message.role,
-          content: entry.message.content || [],
-          timestamp: entry.message.timestamp || entry.timestamp,
-          model: entry.message.model,
-          errorMessage: entry.message.errorMessage || undefined,
-          stopReason: entry.message.stopReason || undefined,
-        });
-      } else if (entry.type === 'custom_message' && entry.customType === 'session-message') {
-        all.push({
-          role: 'user',
-          content: [{ type: 'text', text: entry.content }],
-          timestamp: entry.timestamp,
-        });
-      }
-    } catch (e) {}
-  }
-
+  const all = readSessionMessages(sessionFile);
   const totalMessages = all.length;
   let startIdx, endIdx; // inclusive
   if (after != null) {
@@ -451,6 +456,25 @@ app.get('/api/sessions/:id/messages', (req, res) => {
     lastIndex: endIdx,
     hasMore: startIdx > 0,
   });
+});
+
+// In-session text search: returns the stream indexes of messages whose text
+// content matches all whitespace-separated tokens (case-insensitive). The
+// frontend uses this to jump backwards/forwards through matches.
+app.get('/api/sessions/:id/search', (req, res) => {
+  const query = (req.query.q || '').trim().toLowerCase();
+  if (!query) return res.json({ matches: [], totalMessages: 0 });
+  const sessionFile = findSessionFile(req.params.id);
+  if (!sessionFile) return res.status(404).json({ error: 'Session not found' });
+
+  const tokens = query.split(/\s+/).filter(Boolean);
+  const all = readSessionMessages(sessionFile);
+  const matches = [];
+  for (let i = 0; i < all.length; i++) {
+    const text = extractTextFromContent(all[i].content).toLowerCase();
+    if (text && tokens.every(t => text.includes(t))) matches.push({ index: i, role: all[i].role });
+  }
+  res.json({ matches, totalMessages: all.length });
 });
 
 app.post('/api/sessions/:id/prompt', async (req, res) => {
@@ -950,9 +974,12 @@ app.post('/api/sessions/:id/resume', async (req, res) => {
   }
 });
 
-// SSE — proxy events from the bridge socket. Frontend listens for the legacy
-// event names (thinking/tool_call/tool_result split out of message_update,
-// plus the explicit tool_execution_* events).
+// SSE — proxy events from the bridge socket. `message_update` fires for every
+// streaming delta with the full message payload; forwarding each one floods
+// slow (phone) connections, so we coalesce per connection: forward immediately
+// when idle, otherwise remember the latest and flush it after the window.
+const MESSAGE_UPDATE_COALESCE_MS = 50;
+
 app.get('/api/sessions/:id/stream', async (req, res) => {
   const sessionId = req.params.id;
 
@@ -990,20 +1017,30 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   sub('turn_start', () => send('turn_start', {}));
   sub('turn_end', () => send('turn_end', {}));
 
+  // Coalesced message_update forwarding — each event carries the *full*
+  // message so far, so dropping intermediates loses nothing.
+  let pendingUpdate = null;
+  let updateTimer = null;
+  const flushUpdate = () => {
+    updateTimer = null;
+    if (!pendingUpdate) return;
+    send('message_update', { message: pendingUpdate });
+    pendingUpdate = null;
+    updateTimer = setTimeout(flushUpdate, MESSAGE_UPDATE_COALESCE_MS);
+  };
   sub('message_update', (data) => {
     const m = data?.message;
     if (!m) return;
-    // Forward ALL message updates so text and partial tool calls stream live.
-    send('message_update', { message: m });
-    // Keep legacy split events for backward compatibility.
-    const content = Array.isArray(m.content) ? m.content : [];
-    if (content.some(c => c.type === 'thinking')) send('thinking', { message: m });
-    if (content.some(c => c.type === 'toolCall')) send('tool_call', { message: m });
-    if (content.some(c => c.type === 'toolResult')) send('tool_result', { message: m });
+    pendingUpdate = m;
+    if (!updateTimer) flushUpdate();
   });
 
   sub('message_end', (data) => {
-    if (data?.message?.role === 'assistant') send('message_end', { message: data.message });
+    if (data?.message?.role !== 'assistant') return;
+    // Don't let a stale coalesced update land after the final message.
+    pendingUpdate = null;
+    if (updateTimer) { clearTimeout(updateTimer); updateTimer = null; }
+    send('message_end', { message: data.message });
   });
 
   sub('tool_execution_start', (data) => send('tool_execution_start', data));
@@ -1026,6 +1063,8 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   }
 
   req.on('close', () => {
+    if (updateTimer) { clearTimeout(updateTimer); updateTimer = null; }
+    pendingUpdate = null;
     for (const off of offs) { try { off(); } catch {} }
   });
 });

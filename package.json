@@ -5,6 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "test": "node --test test/*.test.js",
+    "build:vendor": "node scripts/build-vendor.js",
     "electron:dev": "electron electron/main.js",
     "electron:build": "electron-builder",
     "postinstall": "electron-builder install-app-deps"
@@ -41,7 +43,9 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.3",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "highlight.js": "^11.9.0",
+    "marked": "^12.0.1"
   },
   "devDependencies": {
     "electron": "^33.0.0",

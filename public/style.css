@@ -2246,11 +2246,60 @@ body.sidebar-open {
   border-color: var(--accent, #7aa2f7);
 }
 
-/* Focus mode — hide tool noise so only user/assistant text reads through */
+/* Focus mode — hide tool noise so only user/assistant text reads through.
+   Assistant messages with no prose (.no-text: tool-call-only turns) are hidden
+   entirely so their empty header rows don't linger as stray markers. */
 .messages.focus-mode .message.tool-result,
 .messages.focus-mode details.tool-call,
-.messages.focus-mode details.live-tool-panel {
+.messages.focus-mode details.live-tool-panel,
+.messages.focus-mode .message.assistant.no-text {
   display: none;
+}
+
+/* In-session search */
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--border, #2a2a37);
+  background: var(--bg-secondary, #16161e);
+  flex-shrink: 0;
+}
+
+.search-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg, #1a1b26);
+  border: 1px solid var(--border, #2a2a37);
+  border-radius: 6px;
+  color: var(--text, #c0caf5);
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 10px;
+  outline: none;
+}
+
+.search-input:focus {
+  border-color: var(--accent, #7aa2f7);
+}
+
+.search-count {
+  color: var(--text-muted, #565f89);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+mark.search-mark {
+  background: rgba(224, 175, 104, 0.45);
+  color: inherit;
+  border-radius: 2px;
+}
+
+.message.search-current {
+  outline: 1px solid var(--accent, #7aa2f7);
+  outline-offset: 2px;
+  border-radius: 6px;
 }
 
 .btn-icon.active,
