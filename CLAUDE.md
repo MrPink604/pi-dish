@@ -16,6 +16,12 @@ npm run test:ui    # browser smoke test (needs Chrome + global playwright)
 npm run build:vendor  # regenerate public/vendor/ from node_modules
 ```
 
+## Committing
+
+Once you've verified your changes work (tests pass; UI changes validated via
+the smoke test or CDP), commit and push them — don't leave verified work
+sitting uncommitted.
+
 ## Frontend libraries (public/vendor/)
 
 `marked` and `highlight.js` are vendored — **no CDN scripts**. Phones on the
@@ -162,6 +168,19 @@ so the outside-click closer must treat detached targets as inside.
 
 ## Message view (public/app.js)
 
+- **Desktop reading column**: `.messages` and `.input-area` center content via
+  `padding: 16px max(24px, calc((100% - var(--content-max)) / 2))` — don't put
+  max-widths back on individual `.message` elements.
+- **Tool-activity accordion**: `groupToolActivity()` folds each turn's indexed
+  tool-only assistant messages + tool results into one closed
+  `details.tool-group` ("⚡ N tool uses"). It's a DOM post-pass run after every
+  JSONL render (full, incremental append, older-page prepend); it's idempotent
+  and merges adjacent groups so pagination can't fragment a turn. Streaming
+  elements (no `data-msg-index`) are never grouped; live tool panels are
+  removed once the authoritative JSONL messages land
+  (`removeDuplicatedLiveContent`). Gotchas: the older-messages scroll anchor
+  must be a *top-level* child (elements inside a closed group have no box),
+  and in-session search opens the enclosing group before scrolling to a match.
 - **Focus mode** hides tool results, tool-call details, live tool panels, and
   `.message.assistant.no-text` (tool-only turns — without that class their
   empty header rows linger as stray markers). Both the static renderer and the

@@ -40,6 +40,11 @@ const appendEntry = (e) => fs.appendFileSync(sessionFile, JSON.stringify(e) + '\
 appendEntry({ type: 'session', cwd: CWD, timestamp: '2026-07-05T00:00:00.000Z' });
 appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'existing question' }], timestamp: '2026-07-05T00:00:01.000Z' } });
 appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'existing **answer**' }], timestamp: '2026-07-05T00:00:02.000Z' } });
+// A historical turn with tool activity — must fold into a closed .tool-group.
+appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'check the readme' }], timestamp: '2026-07-05T00:00:03.000Z' } });
+appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'hist1', name: 'Read', arguments: { path: 'README.md' } }], timestamp: '2026-07-05T00:00:04.000Z' } });
+appendEntry({ type: 'message', message: { role: 'toolResult', toolName: 'Read', content: [{ type: 'text', text: '# alpha' }], timestamp: '2026-07-05T00:00:05.000Z' } });
+appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'the readme says alpha' }], timestamp: '2026-07-05T00:00:06.000Z' } });
 // Pad the history so the feed is taller than the viewport — the forced-follow
 // scroll check needs a genuinely scrollable container to mean anything.
 for (let i = 0; i < 8; i++) {
@@ -108,20 +113,29 @@ function streamTurn(userText) {
   const now = () => new Date().toISOString();
   appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: userText }], timestamp: now() } });
   emit('turn_start', {});
-  const full = 'Streamed reply with **bold** and `code`.';
-  let i = 0;
-  const tick = setInterval(() => {
-    i = Math.min(full.length, i + 12);
-    const message = { role: 'assistant', content: [{ type: 'text', text: full.slice(0, i) }] };
-    emit('message_update', { message });
-    if (i >= full.length) {
-      clearInterval(tick);
-      const done = { role: 'assistant', content: [{ type: 'text', text: full }], timestamp: now() };
-      appendEntry({ type: 'message', message: done });
-      emit('message_end', { message: done });
-      emit('turn_end', {});
-    }
-  }, 60);
+  // Tool phase first: live panel appears mid-turn, then the JSONL catch-up
+  // after turn_end must replace it with a collapsed .tool-group.
+  const toolArgs = { command: 'echo hi' };
+  emit('tool_execution_start', { toolCallId: 'tc1', toolName: 'Bash', args: toolArgs });
+  setTimeout(() => {
+    emit('tool_execution_end', { toolCallId: 'tc1', toolName: 'Bash', args: toolArgs, result: { content: [{ type: 'text', text: 'hi' }] }, isError: false });
+    appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'tc1', name: 'Bash', arguments: toolArgs }], timestamp: now() } });
+    appendEntry({ type: 'message', message: { role: 'toolResult', toolName: 'Bash', content: [{ type: 'text', text: 'hi' }], timestamp: now() } });
+    const full = 'Streamed reply with **bold** and `code`.';
+    let i = 0;
+    const tick = setInterval(() => {
+      i = Math.min(full.length, i + 12);
+      const message = { role: 'assistant', content: [{ type: 'text', text: full.slice(0, i) }] };
+      emit('message_update', { message });
+      if (i >= full.length) {
+        clearInterval(tick);
+        const done = { role: 'assistant', content: [{ type: 'text', text: full }], timestamp: now() };
+        appendEntry({ type: 'message', message: done });
+        emit('message_end', { message: done });
+        emit('turn_end', {});
+      }
+    }, 60);
+  }, 150);
 }
 
 // --- assertions ---------------------------------------------------------------
@@ -182,12 +196,23 @@ function writeRegistry(patch = {}) {
     check(await desktop.locator('.message .markdown-body strong').first().textContent() === 'answer',
       'historical markdown rendered');
 
+    // Tool-activity accordion: the historical tool turn folds into one
+    // closed group holding the tool-only assistant message + tool result.
+    const histGroup = desktop.locator('details.tool-group');
+    check(await histGroup.count() === 1, 'historical tool turn folded into one .tool-group');
+    check(!(await histGroup.evaluate(el => el.open)), 'tool-group is collapsed by default');
+    check(await histGroup.locator('.message.tool-result').count() === 1, 'tool result lives inside the group');
+    const histLabel = await histGroup.locator('.tool-group-label').textContent();
+    check(histLabel.includes('1 tool use'), `group label counts tool uses (got ${JSON.stringify(histLabel)})`);
+
     // 2. Prompt round-trip through the fake bridge
     console.log('prompt round-trip:');
     await desktop.fill('#promptInput', 'ping from smoke test');
     await desktop.click('#btnSend');
     await desktop.waitForSelector('.session-item-status.working', { timeout: 2000 });
     check(true, 'sidebar working dot appears during the turn');
+    await desktop.waitForSelector('details.live-tool-panel', { timeout: 5000 });
+    check(true, 'live tool panel appeared mid-turn');
     await desktop.waitForSelector('.message.assistant[data-streaming="true"]', { timeout: 5000 });
     check(true, 'streaming element appeared');
     // Forced follow: a programmatic scroll displacement (stand-in for the
@@ -202,14 +227,39 @@ function writeRegistry(patch = {}) {
         el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     }), 'viewport re-follows the stream after a non-gesture scroll displacement');
     // after turn_end the streamed element is replaced by the JSONL render
-    await desktop.waitForSelector('.message.assistant:not([data-streaming]) code', { timeout: 5000 });
+    // (match on the reply text — historical tool-call blocks also contain
+    // <code>, so a bare `code` selector would fire early)
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('.message.assistant[data-msg-index]')]
+        .some(el => el.textContent.includes('Streamed reply with')), { timeout: 5000 });
     const finals = await desktop.locator('.message.assistant').allTextContents();
     check(finals.some(t => t.includes('Streamed reply with')), 'final assistant message rendered');
     check(await desktop.locator('.message.assistant[data-streaming="true"]').count() === 0,
       'streaming placeholder cleaned up');
+    // The JSONL catch-up supersedes the live panel and folds this turn's
+    // tool activity into a second collapsed group.
+    check(await desktop.locator('details.live-tool-panel').count() === 0,
+      'live tool panel removed once authoritative messages land');
+    check(await desktop.locator('details.tool-group').count() === 2,
+      'streamed turn tool activity folded into its own group');
     await desktop.waitForTimeout(200);
     check(await desktop.locator('.session-item-status.working').count() === 0,
       'working dot cleared after the turn');
+
+    // Wide desktop: the message feed centers a reading column instead of
+    // hugging the left edge.
+    const wide = await browser.newPage({ viewport: { width: 1920, height: 900 } });
+    watch(wide, 'wide');
+    await wide.goto(base, { waitUntil: 'networkidle' });
+    await wide.click('.session-item');
+    await wide.waitForSelector('.message.assistant');
+    const userBox = await wide.locator('.message.user').first().boundingBox();
+    const feedBox = await wide.locator('.messages').boundingBox();
+    const leftGap = userBox.x - feedBox.x;
+    const rightGap = (feedBox.x + feedBox.width) - (userBox.x + userBox.width);
+    check(leftGap > 100 && Math.abs(leftGap - rightGap) < 40,
+      `wide viewport centers the column (gaps ${Math.round(leftGap)}/${Math.round(rightGap)})`);
+    await wide.close();
 
     // 3. @-mention: fuzzy file search under the session cwd (fff-backed)
     console.log('@-mentions:');

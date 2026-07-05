@@ -819,6 +819,9 @@ async function jumpToSearchResult() {
     }
     const el = container.querySelector(`[data-msg-index="${match.index}"]`);
     if (!el) { updateSearchCount('not loaded'); return; }
+    // A match folded into a collapsed tool-group is invisible — open it first.
+    const group = el.closest('details.tool-group');
+    if (group) group.open = true;
     clearSearchMarks();
     el.classList.add('search-current');
     markSearchTokens(el, search.query.split(/\s+/).filter(Boolean));
@@ -1261,9 +1264,8 @@ function renderMessages(messages) {
     return;
   }
   container.innerHTML = renderLoadOlderBar() + messages.map(renderMessageHtml).join('');
-  // After rendering from JSONL, remove tool calls/results that already have live panels
-  // (dedup — live panels are already showing this content)
   removeDuplicatedLiveContent(container);
+  groupToolActivity(container);
   applyHighlight(container);
   scrollToBottom(container); // fresh session load: start at the latest message
 }
@@ -1277,7 +1279,9 @@ async function loadOlderMessages() {
 
   // Anchor scroll to the first existing message so the viewport doesn't jump
   // when we prepend older content.
-  const anchor = container.querySelector('[data-msg-index]');
+  // Top-level children only: a message folded into a closed tool-group has
+  // no box, so its rect can't anchor the scroll restore.
+  const anchor = container.querySelector(':scope > .message, :scope > details.tool-group');
   const anchorOffset = anchor ? anchor.getBoundingClientRect().top : 0;
 
   try {
@@ -1292,6 +1296,7 @@ async function loadOlderMessages() {
       oldestLoadedIndex = firstIndex != null ? firstIndex : oldestLoadedIndex;
       hasMoreOlder = !!hasMore;
       container.insertAdjacentHTML('afterbegin', renderLoadOlderBar() + html);
+      groupToolActivity(container);
       applyHighlight(container);
 
       // Restore scroll so the anchor stays in the same viewport position.
@@ -1351,6 +1356,7 @@ async function fetchNewMessagesSince(sessionId) {
     container.insertAdjacentHTML('beforeend', fresh.map(renderMessageHtml).join(''));
     if (lastIndex != null) lastLoadedIndex = lastIndex;
     removeDuplicatedLiveContent(container);
+    groupToolActivity(container);
     applyHighlight(container);
     if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
   } catch (e) {
@@ -2053,12 +2059,73 @@ function hideCwdDropdown() {
 // =========================================================================
 
 /**
- * After a JSONL-based render the on-disk messages are authoritative; live
- * panels already in the DOM stay (they render the same content), we just
- * stop tracking them so the next turn starts fresh.
+ * After a JSONL-based render the on-disk messages are authoritative: drop
+ * the live tool panels (their content is duplicated by the indexed
+ * tool-call/tool-result messages that just landed) and stop tracking them
+ * so the next turn starts fresh.
  */
 function removeDuplicatedLiveContent(container) {
+  container.querySelectorAll('details.live-tool-panel').forEach(el => el.remove());
   liveToolPanels.clear();
+}
+
+/**
+ * Collapse finished tool activity into one accordion per turn. Runs of
+ * indexed tool-only assistant messages (.no-text) and tool results between
+ * prose messages get wrapped in a closed <details class="tool-group">, so
+ * past turns read prompt → "N tool uses" → answer. Idempotent — safe to
+ * re-run after every append/prepend; adjacent groups merge so pagination
+ * and incremental catch-up don't fragment a turn. Streaming elements
+ * (no data-msg-index) are never grouped.
+ */
+function groupToolActivity(container) {
+  if (!container) return;
+  const isToolNoise = (el) =>
+    el.matches('.message.tool-result[data-msg-index], .message.assistant.no-text[data-msg-index]');
+
+  // Pass 1: wrap each maximal run of ungrouped tool activity.
+  let run = [];
+  const wrapRun = () => {
+    if (!run.length) return;
+    const group = document.createElement('details');
+    group.className = 'tool-group';
+    group.innerHTML = '<summary class="tool-group-header"><span class="tool-group-label"></span><span class="tool-group-preview"></span></summary><div class="tool-group-body"></div>';
+    run[0].before(group);
+    const body = group.querySelector('.tool-group-body');
+    run.forEach(el => body.appendChild(el));
+    run = [];
+  };
+  for (const child of Array.from(container.children)) {
+    if (isToolNoise(child)) run.push(child);
+    else wrapRun();
+  }
+  wrapRun();
+
+  // Pass 2: merge adjacent groups (a turn split across pages/catch-ups).
+  // The later group survives so an element being used as a scroll anchor
+  // (loadOlderMessages) isn't removed from the DOM.
+  container.querySelectorAll(':scope > details.tool-group').forEach(group => {
+    const next = group.nextElementSibling;
+    if (!next || !next.matches('details.tool-group')) return;
+    next.querySelector('.tool-group-body').prepend(...group.querySelector('.tool-group-body').childNodes);
+    if (group.open) next.open = true;
+    group.remove();
+  });
+
+  container.querySelectorAll(':scope > details.tool-group').forEach(updateToolGroupSummary);
+}
+
+function updateToolGroupSummary(group) {
+  const calls = group.querySelectorAll('details.tool-call').length;
+  const results = group.querySelectorAll('.message.tool-result').length;
+  const n = Math.max(calls, results);
+  const names = [...new Set(
+    [...group.querySelectorAll('.tool-call-name')].map(el => el.textContent.trim())
+  )];
+  group.querySelector('.tool-group-label').textContent =
+    n ? `⚡ ${n} tool use${n === 1 ? '' : 's'}` : '🧠 thinking';
+  group.querySelector('.tool-group-preview').textContent =
+    names.slice(0, 4).join(', ') + (names.length > 4 ? '…' : '');
 }
 
 // =========================================================================
