@@ -27,15 +27,13 @@ const entries = [
   { type: 'message', message: { role: 'assistant', content: [
     { type: 'text', text: 'bravo reply with **markdown**' },
     { type: 'toolCall', id: 'tc1', name: 'Bash', arguments: { command: 'ls' } },
-  ], usage: { totalTokens: 1234 }, timestamp: '2026-07-04T10:00:02.000Z' } },
+  ], usage: { input: 100, output: 40, cacheRead: 10, cacheWrite: 5, totalTokens: 1234, cost: { total: 0.03 } }, timestamp: '2026-07-04T10:00:02.000Z' } },
   { type: 'message', message: { role: 'toolResult', content: [{ type: 'text', text: 'charlie output' }], timestamp: '2026-07-04T10:00:03.000Z' } },
   { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'delta question alpha' }], timestamp: '2026-07-04T10:00:04.000Z' } },
-  { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'echo final' }], timestamp: '2026-07-04T10:00:05.000Z' } },
+  { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'echo final' }], usage: { input: 200, output: 60, cacheRead: 0, cacheWrite: 0, totalTokens: 1234, cost: { total: 0.02 } }, timestamp: '2026-07-04T10:00:05.000Z' } },
 ];
-fs.writeFileSync(
-  path.join(sessionDir, `${SESSION_ID}.jsonl`),
-  entries.map(e => JSON.stringify(e)).join('\n') + '\n',
-);
+const SESSION_FILE = path.join(sessionDir, `${SESSION_ID}.jsonl`);
+fs.writeFileSync(SESSION_FILE, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
 
 // Second fixture whose cwd exists on disk — exercises /files fuzzy search.
 const REAL_CWD_ID = '2026-07-04T11-00-00-bbccdd34';
@@ -196,4 +194,71 @@ test('PUT /api/models/enabled persists pi scoped models in settings.json', async
   assert.equal(bad.status, 400);
   const badItems = await put({ enabledIds: ['ok', 42] });
   assert.equal(badItems.status, 400);
+});
+
+test('GET /stats aggregates tokens, cost, and message counts from the JSONL', async () => {
+  const { status, body } = await get(`/api/sessions/${SESSION_ID}/stats`);
+  assert.equal(status, 200);
+  assert.equal(body.userMessages, 2);
+  assert.equal(body.assistantMessages, 2);
+  assert.equal(body.toolCalls, 1);
+  assert.equal(body.toolResults, 1);
+  assert.equal(body.totalMessages, 5);
+  assert.deepEqual(body.tokens, { input: 300, output: 100, cacheRead: 10, cacheWrite: 5, total: 415 });
+  assert.ok(Math.abs(body.cost - 0.05) < 1e-9);
+  assert.equal(body.cwd, '/home/user/proj');
+  assert.equal(body.contextUsage.tokens, 1234);
+  const missing = await get('/api/sessions/nope/stats');
+  assert.equal(missing.status, 404);
+});
+
+test('POST endpoints validate input and reject inactive sessions', async () => {
+  const post = async (p, body) => {
+    const res = await fetch(base + p, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, body: await res.json() };
+  };
+
+  // Bad thinking level is rejected before any session lookup
+  const badLevel = await post(`/api/sessions/${SESSION_ID}/thinking`, { level: 'ultra' });
+  assert.equal(badLevel.status, 400);
+  // Valid level, but the fixture session is not live
+  const inactive = await post(`/api/sessions/${SESSION_ID}/thinking`, { level: 'high' });
+  assert.equal(inactive.status, 404);
+
+  // Prompting needs a message (or images) and a live session
+  const noMsg = await post(`/api/sessions/${SESSION_ID}/prompt`, {});
+  assert.equal(noMsg.status, 400);
+  const deadPrompt = await post(`/api/sessions/${SESSION_ID}/prompt`, { message: 'hi' });
+  assert.equal(deadPrompt.status, 404);
+
+  // Slash-command endpoint requires a leading slash
+  const notSlash = await post(`/api/sessions/${SESSION_ID}/command`, { message: 'hello' });
+  assert.equal(notSlash.status, 400);
+});
+
+// Keep this test last: it appends to the fixture JSONL, changing the
+// counts earlier tests assert on. It proves the parse caches revalidate.
+test('session caches pick up JSONL appends (mtime/size revalidation)', async () => {
+  const before = await get(`/api/sessions/${SESSION_ID}/messages`);
+  assert.equal(before.body.totalMessages, 5);
+
+  fs.appendFileSync(SESSION_FILE, JSON.stringify(
+    { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'zulu addendum' }], timestamp: '2026-07-04T10:00:06.000Z' } },
+  ) + '\n');
+
+  const after = await get(`/api/sessions/${SESSION_ID}/messages`);
+  assert.equal(after.body.totalMessages, 6, '/messages sees the appended message');
+
+  const list = await get('/api/sessions');
+  const sess = list.body.previous.find(s => s.id === SESSION_ID);
+  assert.equal(sess.messageCount, 3, 'session list metadata refreshed');
+
+  const search = await get(`/api/sessions/${SESSION_ID}/search?q=zulu`);
+  assert.deepEqual(search.body.matches, [{ index: 5, role: 'user' }]);
+
+  const listSearch = await get('/api/sessions?q=zulu');
+  assert.ok(listSearch.body.previous.some(s => s.id === SESSION_ID), 'list search text refreshed');
 });

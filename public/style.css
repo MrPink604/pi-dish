@@ -733,6 +733,8 @@ body.sidebar-open {
 .spinner-text {
   font-size: 10px;
   font-weight: 600;
+  /* the elapsed-turn timer ticks every second — keep the digits from jittering */
+  font-variant-numeric: tabular-nums;
 }
 
 .session-actions {

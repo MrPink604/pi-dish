@@ -381,6 +381,26 @@ function writeRegistry(patch = {}) {
     check(await desktop.evaluate(() => document.getElementById('queuePanel').style.display === 'none'),
       'panel hides when the queue drains');
 
+    // 8b. Working indicator: a synthetic turn (fully event-driven, so there
+    // is no timing window) shows the elapsed timer + running tool in the
+    // header badge, ticks, and resets when the turn ends.
+    console.log('working indicator:');
+    emit('turn_start', {});
+    emit('tool_execution_start', { toolCallId: 'wt1', toolName: 'Bash', args: { command: 'sleep 2' } });
+    await desktop.waitForFunction(() =>
+      /Working \d+:\d\d · Bash/.test(document.querySelector('#sessionWorking .spinner-text')?.textContent || ''),
+      { timeout: 3000 });
+    check(true, 'working badge shows elapsed timer and running tool');
+    await desktop.waitForFunction(() =>
+      /Working \d+:0[1-9]/.test(document.querySelector('#sessionWorking .spinner-text')?.textContent || ''),
+      { timeout: 4000 });
+    check(true, 'elapsed timer ticks past 0:00');
+    emit('tool_execution_end', { toolCallId: 'wt1', toolName: 'Bash', args: { command: 'sleep 2' }, result: { content: [{ type: 'text', text: '' }] }, isError: false });
+    emit('turn_end', {});
+    await desktop.waitForFunction(() =>
+      document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Working', { timeout: 3000 });
+    check(true, 'working badge resets after the turn');
+
     // 9. Drafts persist per session; ArrowUp recalls sent prompts
     console.log('drafts & history:');
     await desktop.fill('#promptInput', 'unsent draft');
@@ -448,6 +468,7 @@ function writeRegistry(patch = {}) {
   } catch (e) {
     failures++;
     console.error('  ✘ smoke test crashed:', e.message);
+    if (errors.length) console.error('  collected page errors:', errors.join(' | '));
   } finally {
     await browser.close();
     server.close();

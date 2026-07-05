@@ -36,6 +36,16 @@ test('formatRelativeTime buckets by age', () => {
   assert.equal(H.formatRelativeTime(new Date(now + 60 * 1000)), 'just now');
 });
 
+test('formatDuration renders m:ss below an hour, h:mm:ss above', () => {
+  assert.equal(H.formatDuration(0), '0:00');
+  assert.equal(H.formatDuration(-500), '0:00');
+  assert.equal(H.formatDuration(5000), '0:05');
+  assert.equal(H.formatDuration(65 * 1000), '1:05');
+  assert.equal(H.formatDuration(59 * 60 * 1000 + 59 * 1000), '59:59');
+  assert.equal(H.formatDuration(3600 * 1000), '1:00:00');
+  assert.equal(H.formatDuration(3600 * 1000 + 4 * 60 * 1000 + 9 * 1000), '1:04:09');
+});
+
 test('shortCwd collapses the home directory', () => {
   assert.equal(H.shortCwd('/home/user/proj/sub'), '~/proj/sub');
   assert.equal(H.shortCwd('/home/user'), '~');

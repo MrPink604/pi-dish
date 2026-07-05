@@ -44,6 +44,18 @@ part of the layout (`.header-menu-btn` in the session header,
 `.empty-menu-btn` over the empty state) — don't reintroduce a fixed floating
 button; it clipped over content.
 
+## Session JSONL parsing (lib/session-files.js)
+
+All server-side reads of `~/.pi/agent/sessions/*.jsonl` go through this
+module: `getSessionInfo` (list metadata), `readSessionMessages` (the
+paginated message stream), `getSessionSearchText` (list search). Each caches
+its parse keyed on (mtimeMs, size) — the sidebar polls `/api/sessions` every
+10s, so nothing may re-parse unchanged files per request. `getSessionInfo`
+returns a copy (callers overlay live usage onto it); `readSessionMessages`
+returns the cached array itself — never mutate it. Context window/percent are
+derived in server.js (`withContext`) at read time, not inside the cache — the
+models cache warms asynchronously and would bake in stale windows.
+
 ## File / directory fuzzy search (lib/file-search.js)
 
 Backed by fff (`@ff-labs/fff-node`, ESM-only + native binary, loaded via
@@ -83,8 +95,17 @@ far** — intermediates are droppable. The path is:
    renderer**: one streaming DOM element, one child per content block
    (`data-block-index`), and only changed blocks are touched. No
    outerHTML swaps, so `<details>` open state survives and markdown renders
-   live mid-stream. `message_end`/`turn_end` finalize (cancel pending render,
-   swap in the authoritative render, apply highlighting).
+   live mid-stream. `message_end` swaps the placeholder for the finalized
+   render **in place and un-indexed**; the `turn_end` JSONL catch-up then
+   replaces it with the indexed version (never gate that insert on other
+   messages' indexes — an old check did, and streamed text vanished until
+   catch-up).
+
+Working indicator: `setTurnInProgress` drives an elapsed-turn ticker
+(`updateWorkingIndicator`); the header badge reads "Working 1:42 · Bash"
+(current tool tracked via `tool_execution_start/end` in `runningTools`; the
+mobile badge shows the timer only). Timing is client-side by design — opening
+a session mid-turn counts from connect.
 
 Scroll pinning: streaming only follows while the viewport is near the bottom
 (`isPinnedToBottom`, 80px threshold). Sending a prompt or hitting
@@ -95,14 +116,17 @@ feed) clears it; programmatic or layout-driven scroll shifts must not.
 
 ## Tests (test/)
 
-`npm test` runs two node:test suites:
+`npm test` runs three node:test suites:
 - `test/server.test.js` — boots `server.js` with `HOME` pointed at a temp dir
   containing a fixture JSONL and exercises session listing, message
-  pagination (`limit`/`before`/`after`), and `/api/sessions/:id/search`.
+  pagination (`limit`/`before`/`after`), `/search`, `/stats`, request
+  validation, and cache revalidation after JSONL appends.
 - `test/helpers.test.js` — unit tests for `public/helpers.js`, the pure
   frontend helpers (escaping, formatting, filtering, fuzzy match, mood).
   Helpers are plain script globals in the browser and CommonJS exports in
   node; anything DOM-free that app.js needs belongs there, with a test.
+- `test/session-files.test.js` — unit tests for the JSONL parsers and their
+  mtime/size caches in `lib/session-files.js`.
 
 Server behavior changes should extend these; UI changes need the smoke test
 or manual CDP below.

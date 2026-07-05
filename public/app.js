@@ -155,10 +155,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   // Periodic refresh must preserve an in-flight server search, or the list
   // resets to unfiltered mid-search.
-  setInterval(() => loadSessions(sidebarTab === 'all' && filterQuery ? filterQuery : undefined), 10000);
-  
+  setInterval(refreshSessions, 10000);
+
+  // Session items render without inline handlers; one delegated listener
+  // selects and (on mobile) closes the drawer.
   document.getElementById('sessionList').addEventListener('click', (e) => {
-    if (e.target.closest('.session-item') && window.innerWidth <= 768) closeSidebar();
+    const item = e.target.closest('.session-item');
+    if (!item) return;
+    selectSession(item.dataset.id);
+    if (window.innerWidth <= 768) closeSidebar();
   });
 
   promptInput.addEventListener('blur', () => { setTimeout(hideAutocomplete, 200); });
@@ -192,7 +197,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Coming back to the tab: refresh the list so unread dots resolve against
   // what's now actually on screen.
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) loadSessions(sidebarTab === 'all' && filterQuery ? filterQuery : undefined);
+    if (!document.hidden) refreshSessions();
   });
 });
 
@@ -288,11 +293,14 @@ function showAutocomplete(matches) {
     var icon = cmd.source === 'builtin' ? '⚙️' : cmd.source === 'extension' ? '🧩' : cmd.source === 'skill' ? '📚' : '📝';
     var active = i === 0 ? ' active' : '';
     var args = cmd.args ? ' <span class="autocomplete-args">' + escapeHtml(cmd.args) + '</span>' : '';
-    return '<div class="autocomplete-item' + active + '" data-name="' + escapeHtml(cmd.name) + '" onclick="acceptAutocompleteByName(\'' + escapeHtml(cmd.name) + '\')">'
+    return '<div class="autocomplete-item' + active + '" data-name="' + escapeHtml(cmd.name) + '">'
       + '<span class="autocomplete-icon">' + icon + '</span>'
       + '<span class="autocomplete-name">/' + escapeHtml(cmd.name) + args + '</span>'
       + '<span class="autocomplete-desc">' + escapeHtml(cmd.description) + '</span></div>';
   }).join('');
+  container.querySelectorAll('[data-name]').forEach(el => {
+    el.onclick = () => acceptAutocompleteByName(el.dataset.name);
+  });
   container.style.display = 'block';
 }
 
@@ -432,7 +440,9 @@ async function loadSessions(query) {
   }
 }
 
-function refreshSessions() { loadSessions(); }
+// Refresh the list, preserving an in-flight server-side search (All tab) so
+// a background poll — or the sidebar refresh button — doesn't reset it.
+function refreshSessions() { return loadSessions(sidebarTab === 'all' && filterQuery ? filterQuery : undefined); }
 
 function renderSessionItem(session) {
   const ctxClass = session.contextPercent > 80 ? 'critical' : session.contextPercent > 50 ? 'high' : '';
@@ -448,7 +458,7 @@ function renderSessionItem(session) {
   const timeAgo = formatRelativeTime(session.lastActivity);
 
   return `
-    <div class="session-item ${activeClass} ${inactiveClass}" onclick="selectSession('${session.id}')">
+    <div class="session-item ${activeClass} ${inactiveClass}" data-id="${escapeHtml(session.id)}">
       <div class="session-item-header">
         ${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>
         <span class="session-item-time">${timeAgo}</span>
@@ -463,6 +473,8 @@ function renderSessionItem(session) {
   `;
 }
 
+let lastSessionListHtml = '';
+
 function renderSessions() {
   const list = document.getElementById('sessionList');
   const { active, previous } = sessions;
@@ -475,31 +487,31 @@ function renderSessions() {
   // content) — don't re-filter locally.
   const filtered = (sidebarTab === 'all' && filterQuery) ? showing : applyLocalFilter(showing, filterQuery);
 
+  let html = '';
   if (filtered.length === 0) {
     const msg = sidebarTab === 'active'
       ? (active.length === 0 ? 'No active sessions<br><span style="font-size:11px">Click "+ New Session" or resume one from All</span>' : 'No matches')
       : (showing.length === 0 ? 'No sessions found' : 'No matches');
-    list.innerHTML = `<div class="empty-session"><p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">${msg}</p></div>`;
-    updateUnreadTitle();
-    return;
+    html = `<div class="empty-session"><p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">${msg}</p></div>`;
+  } else {
+    for (const [cwd, groupSessions] of groupByWorkspace(filtered)) {
+      const label = shortCwd(cwd);
+      html += `<div class="session-segment">
+        <div class="workspace-group-header">
+          <span class="workspace-group-label" title="${escapeHtml(cwd)}">${escapeHtml(label)}</span>
+          <span class="workspace-group-count">${groupSessions.length}</span>
+        </div>
+        ${groupSessions.map(renderSessionItem).join('')}
+      </div>`;
+    }
   }
 
-  // Group by workspace
-  const groups = groupByWorkspace(filtered);
-  let html = '';
-
-  for (const [cwd, groupSessions] of groups) {
-    const label = shortCwd(cwd);
-    html += `<div class="session-segment">
-      <div class="workspace-group-header">
-        <span class="workspace-group-label" title="${escapeHtml(cwd)}">${escapeHtml(label)}</span>
-        <span class="workspace-group-count">${groupSessions.length}</span>
-      </div>
-      ${groupSessions.map(renderSessionItem).join('')}
-    </div>`;
+  // The 10s poll usually changes nothing — skip the DOM churn (and touch/hover
+  // state loss) when the rendered HTML would be identical.
+  if (html !== lastSessionListHtml) {
+    list.innerHTML = html;
+    lastSessionListHtml = html;
   }
-
-  list.innerHTML = html;
   updateUnreadTitle();
 }
 
@@ -558,10 +570,12 @@ async function selectSession(id) {
     }
   }
   if (sessionActions) sessionActions.style.display = currentSession.isActive ? '' : 'none';
-  
-  // Reset working state when switching to an inactive session
-  if (!currentSession.isActive) setTurnInProgress(false);
-  
+
+  // Working state and queue chips are per-session — seed from the list data
+  // instead of leaking the previous session's state until the init event.
+  renderQueueStatus(null);
+  setTurnInProgress(currentSession.isActive && !!currentSession.turnInProgress);
+
   renderSessions();
   updateSessionHeader();
   if (currentSession.isActive) {
@@ -631,11 +645,10 @@ function filterModels(query) {
 
 function updateSessionHeader() {
   if (!currentSession) return;
-  
+
   document.getElementById('sessionName').textContent = currentSession.name || 'Unnamed';
-  document.getElementById('sessionModel').textContent = currentSession.model + ' ▾';
   document.getElementById('sessionMsgCount').textContent = `${currentSession.messageCount} msgs`;
-  
+
   const nameEl = document.getElementById('sessionName');
   nameEl.classList.toggle('editable-name', !!currentSession.isActive);
   nameEl.title = currentSession.isActive ? 'Click to rename' : '';
@@ -669,8 +682,7 @@ function updateSessionHeader() {
   updateThinkingBadges();
 }
 
-// --- Thinking level selector ---
-const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+// --- Thinking level selector (levels come from helpers.THINKING_LEVEL_NAMES) ---
 let thinkingDropdownOpen = false;
 
 function updateThinkingBadges() {
@@ -694,7 +706,7 @@ function toggleThinkingDropdown(event) {
   thinkingDropdownOpen = !thinkingDropdownOpen;
   if (!thinkingDropdownOpen) { dropdown.style.display = 'none'; return; }
 
-  dropdown.innerHTML = THINKING_LEVELS.map(l =>
+  dropdown.innerHTML = THINKING_LEVEL_NAMES.map(l =>
     `<div class="thinking-option${l === currentSession.thinkingLevel ? ' active' : ''}" onclick="selectThinkingLevel('${l}')">${l}</div>`
   ).join('');
 
@@ -1468,11 +1480,8 @@ function renderThinkingBlock(thinking) {
 
 function renderToolCall(block) {
   const args = block.arguments || {};
-  let summary = '';
-  if (block.name === 'Bash' || block.name === 'bash') summary = args.command ? truncate(args.command.split('\n')[0], 80) : '';
-  else if (['Read','read','Edit','edit','Write','write'].includes(block.name)) summary = args.path || '';
-  else { const keys = Object.keys(args); if (keys.length) summary = truncate(String(args[keys[0]]), 60); }
-  
+  const summary = getToolSummary(block.name, args);
+
   return `<details class="tool-call">
     <summary class="tool-call-header">
       <span class="tool-call-icon">⚡</span><span class="tool-call-name">${escapeHtml(block.name)}</span>
@@ -1545,6 +1554,8 @@ function buildLiveToolPanel(toolCallId, toolName, args, output, isError, isCompl
 
 function appendLiveToolPanel(data) {
   const { toolCallId, toolName, args } = data;
+  runningTools.set(toolCallId, toolName || 'tool');
+  updateWorkingIndicator();
   if (liveToolPanels.has(toolCallId)) return; // already rendered
 
   const container = document.getElementById('messages');
@@ -1595,6 +1606,8 @@ function updateLiveToolPanel(data) {
 
 function finalizeLiveToolPanel(data) {
   const { toolCallId, toolName, args, result, isError } = data;
+  runningTools.delete(toolCallId);
+  updateWorkingIndicator();
   applyMoodFromTool(toolName, args);
   const entry = liveToolPanels.get(toolCallId);
   if (!entry || !entry.el) return;
@@ -1700,15 +1713,20 @@ function startMessageStream(sessionId) {
         cancelStreamingRender();
         const container = document.getElementById('messages');
         if (!container) return;
-        container.querySelectorAll('.message.assistant[data-streaming="true"]').forEach(el => el.remove());
-        // Avoid inserting a duplicate if turn_end already fetched the authoritative JSONL version.
-        const assistantMsgs = container.querySelectorAll('.message.assistant');
-        const lastAssistant = assistantMsgs[assistantMsgs.length - 1];
-        if (lastAssistant && lastAssistant.dataset.msgIndex != null) return;
-        const ts = message.timestamp || Date.now();
+        // Swap the streaming placeholder for the finalized render in place.
+        // It stays un-indexed, so the turn_end JSONL catch-up replaces it
+        // with the authoritative version (fetchNewMessagesSince strips all
+        // .message:not([data-msg-index]) once indexed messages land) —
+        // meanwhile the text never blinks out of the transcript.
         const wasPinned = isPinnedToBottom(container);
-        container.insertAdjacentHTML('beforeend', renderAssistantMessage(message, formatTime(ts)));
-        applyHighlight(container.lastElementChild);
+        const streaming = container.querySelectorAll('.message.assistant[data-streaming="true"]');
+        const tmp = document.createElement('template');
+        tmp.innerHTML = renderAssistantMessage(message, formatTime(message.timestamp || Date.now()));
+        const finalEl = tmp.content.firstElementChild;
+        if (streaming.length) streaming[streaming.length - 1].before(finalEl);
+        else container.appendChild(finalEl);
+        streaming.forEach(el => el.remove());
+        applyHighlight(finalEl);
         if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
       } catch (err) {}
     });
@@ -2006,8 +2024,42 @@ async function sendPrompt() {
 
 var turnInProgress = false;
 
+// --- Live activity: elapsed turn time + currently running tool -----------
+// The working badge reads "Working 1:42 · Bash" so a glance says what the
+// agent is doing and for how long (mobile badge shows just the timer).
+// Client-side by nature: opening a session mid-turn counts from connect.
+let turnStartedAt = null;
+let workingTicker = null;
+const runningTools = new Map(); // toolCallId -> toolName
+
+function updateWorkingIndicator() {
+  const desktop = document.querySelector('#sessionWorking .spinner-text');
+  const mobile = document.querySelector('#sessionWorkingMobile .spinner-text');
+  if (!turnInProgress || !turnStartedAt) {
+    if (desktop) desktop.textContent = 'Working';
+    if (mobile) mobile.textContent = '';
+    return;
+  }
+  const elapsed = formatDuration(Date.now() - turnStartedAt);
+  let tool = null;
+  for (const name of runningTools.values()) tool = name; // most recently started
+  if (tool && tool.length > 24) tool = tool.slice(0, 24) + '…';
+  if (desktop) desktop.textContent = `Working ${elapsed}` + (tool ? ` · ${tool}` : '');
+  if (mobile) mobile.textContent = elapsed;
+}
+
 function setTurnInProgress(active) {
+  const starting = active && !turnInProgress;
   turnInProgress = active;
+  if (starting) {
+    turnStartedAt = Date.now();
+    if (!workingTicker) workingTicker = setInterval(updateWorkingIndicator, 1000);
+  } else if (!active) {
+    turnStartedAt = null;
+    runningTools.clear();
+    if (workingTicker) { clearInterval(workingTicker); workingTicker = null; }
+  }
+  updateWorkingIndicator();
   // Reflect in the sidebar immediately — the working dot shouldn't wait for
   // the next 10s poll. (turn events only stream for the viewed session.)
   if (currentSession && !!currentSession.turnInProgress !== !!active) {
@@ -2053,6 +2105,8 @@ async function sendSteer() {
     setStatus('Steered');
   } catch (e) {
     setStatus(`Steer failed: ${e.message}`, 'error');
+    // Don't lose the attachments on a failed send.
+    if (images) { pendingImages = images.concat(pendingImages); renderAttachmentStrip(); }
   }
 }
 
@@ -2077,6 +2131,8 @@ async function sendFollowUp() {
     setStatus('Queued for after this turn');
   } catch (e) {
     setStatus(`Follow-up failed: ${e.message}`, 'error');
+    // Don't lose the attachments on a failed send.
+    if (images) { pendingImages = images.concat(pendingImages); renderAttachmentStrip(); }
   }
 }
 
@@ -2563,10 +2619,15 @@ function handleExtensionUI(req) {
     case 'setTitle':
       document.title = req.title || 'pi-dish';
       break;
-    case 'set_editor_text':
+    case 'set_editor_text': {
       const input = document.getElementById('promptInput');
-      if (input) input.value = req.text || '';
+      if (input) {
+        input.value = req.text || '';
+        // Run the normal input pipeline (autosize, draft save, autocomplete).
+        input.dispatchEvent(new Event('input'));
+      }
       break;
+    }
     case 'select':
     case 'confirm':
     case 'input':

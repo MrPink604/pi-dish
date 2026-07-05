@@ -10,7 +10,13 @@ const {
   getBridgeSession,
 } = require('./lib/bridge-session');
 const { searchFiles, searchHomeDirs } = require('./lib/file-search');
-const { isModelEnabled } = require('./public/helpers');
+const {
+  getSessionInfo,
+  readSessionMessages,
+  getSessionSearchText,
+  decodeDirToCwd,
+} = require('./lib/session-files');
+const { isModelEnabled, extractTextContent, THINKING_LEVEL_NAMES } = require('./public/helpers');
 
 const app = express();
 const PORT = process.env.PORT || 3333;
@@ -31,20 +37,6 @@ const PI_SETTINGS_FILE = path.join(os.homedir(), '.pi', 'agent', 'settings.json'
 // =========================================================================
 // Helpers
 // =========================================================================
-
-function extractTextFromContent(content) {
-  if (!content) return '';
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content.map(c => c.type === 'text' ? c.text : '').join(' ');
-  }
-  return '';
-}
-
-function truncate(text, maxLen) {
-  if (!text || text.length <= maxLen) return text;
-  return text.slice(0, maxLen) + '...';
-}
 
 // Pi reports percent as a float (e.g. 0.3121); show one decimal max.
 function roundPercent(p) {
@@ -109,6 +101,13 @@ async function getSessionModels(sessionId) {
   return null;
 }
 
+// Static fallback, longest prefix first so specific entries (claude-opus-4-7)
+// beat generic ones (claude-opus-4). includes() so Bedrock cross-region IDs
+// like "us.anthropic.claude-opus-4-7" match too.
+const CONTEXT_WINDOW_FALLBACKS = Object.entries(MODEL_CONTEXT_WINDOWS)
+  .filter(([p]) => p !== 'default')
+  .sort((a, b) => b[0].length - a[0].length);
+
 function getContextWindow(modelId) {
   if (!modelId) return MODEL_CONTEXT_WINDOWS['default'];
   // Prefer live model registry data (populated from pi --list-models)
@@ -118,71 +117,25 @@ function getContextWindow(modelId) {
       || modelsCache.find(m => m.id.includes(modelId));
     if (m?.contextWindow) return m.contextWindow;
   }
-  // Static fallback: match longest prefix first so specific entries
-  // (e.g. claude-opus-4-7) beat generic ones (e.g. claude-opus-4).
-  // Use includes() so Bedrock cross-region IDs like
-  // "us.anthropic.claude-opus-4-7" match correctly.
-  const entries = Object.entries(MODEL_CONTEXT_WINDOWS)
-    .filter(([p]) => p !== 'default')
-    .sort((a, b) => b[0].length - a[0].length);
-  for (const [prefix, size] of entries) {
+  for (const [prefix, size] of CONTEXT_WINDOW_FALLBACKS) {
     if (modelId.includes(prefix)) return size;
   }
   return MODEL_CONTEXT_WINDOWS['default'];
 }
 
-function decodeDirToCwd(dirName) {
-  let decoded = dirName.replace(/^--/, '').replace(/--$/, '');
-  decoded = '/' + decoded.replace(/-/g, '/');
-  return decoded;
+// Derive window/percent at read time rather than inside the session-info
+// cache — the models cache warms up asynchronously and would otherwise be
+// baked stale into cached entries.
+function withContext(info) {
+  const contextWindow = getContextWindow(info.model);
+  const contextPercent = info.contextTokens > 0
+    ? Math.min(100, Math.floor(info.contextTokens / contextWindow * 100))
+    : 0;
+  return { ...info, contextWindow, contextPercent };
 }
 
 function parseSessionFile(filePath) {
-  const content = fs.readFileSync(filePath, 'utf-8');
-  const lines = content.trim().split('\n');
-  let model = 'unknown', name = null, firstUserMsg = null, count = 0;
-  let lastActivity = fs.statSync(filePath).mtime;
-  let lastUsageTotalTokens = 0;
-  let cwd = null;
-
-  for (const line of lines) {
-    try {
-      const entry = JSON.parse(line);
-      if (entry.type === 'session' && entry.cwd) cwd = entry.cwd;
-      if (entry.type === 'model_change') model = entry.modelId || model;
-      if (entry.type === 'session_info' && entry.name) name = entry.name;
-      if (entry.sessionName) name = entry.sessionName;
-      if (!firstUserMsg && entry.type === 'message' && entry.message?.role === 'user') {
-        firstUserMsg = extractTextFromContent(entry.message.content);
-      }
-      if (!firstUserMsg && entry.type === 'custom_message') firstUserMsg = entry.content;
-      if (entry.type === 'message' && entry.message?.role === 'user') count++;
-      if (entry.timestamp) {
-        const ts = new Date(entry.timestamp).getTime();
-        if (Number.isFinite(ts)) lastActivity = new Date(Math.max(lastActivity.getTime(), ts));
-      }
-      if (entry.type === 'message' && entry.message?.role === 'assistant' && entry.message?.usage) {
-        lastUsageTotalTokens = entry.message.usage.totalTokens || 0;
-      }
-      if (entry.type === 'compaction') lastUsageTotalTokens = 0;
-    } catch (e) {}
-  }
-
-  const contextWindow = getContextWindow(model);
-  const contextPercent = lastUsageTotalTokens > 0
-    ? Math.min(100, Math.floor(lastUsageTotalTokens / contextWindow * 100))
-    : 0;
-
-  return {
-    model,
-    name: name || (firstUserMsg ? truncate(firstUserMsg, 40) : null),
-    messageCount: count,
-    contextTokens: lastUsageTotalTokens,
-    contextPercent,
-    contextWindow,
-    lastActivity,
-    cwd,
-  };
+  return withContext(getSessionInfo(filePath));
 }
 
 // =========================================================================
@@ -275,7 +228,9 @@ function getPreviousSessions() {
         const id = file.slice(0, -'.jsonl'.length);
         if (activeIds.has(id)) continue;
 
-        const info = parseSessionFile(path.join(dirPath, file));
+        // One unreadable file must not take down the whole listing.
+        let info;
+        try { info = parseSessionFile(path.join(dirPath, file)); } catch { continue; }
         previous.push({
           id,
           name: info.name || id.slice(0, 8),
@@ -301,37 +256,6 @@ function getPreviousSessions() {
 // =========================================================================
 // Search
 // =========================================================================
-
-const searchTextCache = new Map();
-
-function getSessionSearchText(sessionFile) {
-  try {
-    const stats = fs.statSync(sessionFile);
-    const cached = searchTextCache.get(sessionFile);
-    if (cached && cached.mtime >= stats.mtimeMs) return cached.text;
-
-    const content = fs.readFileSync(sessionFile, 'utf-8');
-    const parts = [];
-    for (const line of content.split('\n')) {
-      if (!line.trim()) continue;
-      try {
-        const entry = JSON.parse(line);
-        if (entry.type === 'message' && entry.message) {
-          const text = extractTextFromContent(entry.message.content);
-          if (text) parts.push(text.substring(0, 500));
-        }
-        if (entry.type === 'custom_message' && entry.content) {
-          parts.push(entry.content.substring(0, 200));
-        }
-      } catch (e) {}
-    }
-    const text = parts.join(' ').toLowerCase();
-    searchTextCache.set(sessionFile, { mtime: stats.mtimeMs, text });
-    return text;
-  } catch (e) {
-    return '';
-  }
-}
 
 function sessionMatchesQuery(session, query) {
   const tokens = query.split(/\s+/).filter(Boolean);
@@ -367,35 +291,6 @@ app.get('/api/sessions', (req, res) => {
   }
   res.json({ active, previous });
 });
-
-// Read the displayable message stream (what /messages paginates over) from a
-// session JSONL. Index in the returned array == the message's stream index.
-function readSessionMessages(sessionFile) {
-  const content = fs.readFileSync(sessionFile, 'utf-8');
-  const all = [];
-  for (const line of content.trim().split('\n')) {
-    try {
-      const entry = JSON.parse(line);
-      if (entry.type === 'message' && entry.message) {
-        all.push({
-          role: entry.message.role,
-          content: entry.message.content || [],
-          timestamp: entry.message.timestamp || entry.timestamp,
-          model: entry.message.model,
-          errorMessage: entry.message.errorMessage || undefined,
-          stopReason: entry.message.stopReason || undefined,
-        });
-      } else if (entry.type === 'custom_message' && entry.customType === 'session-message') {
-        all.push({
-          role: 'user',
-          content: [{ type: 'text', text: entry.content }],
-          timestamp: entry.timestamp,
-        });
-      }
-    } catch (e) {}
-  }
-  return all;
-}
 
 app.get('/api/sessions/:id/messages', (req, res) => {
   const sessionId = req.params.id;
@@ -476,7 +371,7 @@ app.get('/api/sessions/:id/search', (req, res) => {
   const all = readSessionMessages(sessionFile);
   const matches = [];
   for (let i = 0; i < all.length; i++) {
-    const text = extractTextFromContent(all[i].content).toLowerCase();
+    const text = extractTextContent(all[i].content).toLowerCase();
     if (text && tokens.every(t => text.includes(t))) matches.push({ index: i, role: all[i].role });
   }
   res.json({ matches, totalMessages: all.length });
@@ -601,12 +496,10 @@ async function runRpcSlashCommand(rpc, message) {
   }
 }
 
-const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
-
 app.post('/api/sessions/:id/thinking', async (req, res) => {
   const { level } = req.body || {};
-  if (!THINKING_LEVELS.includes(level)) {
-    return res.status(400).json({ error: `level must be one of: ${THINKING_LEVELS.join(', ')}` });
+  if (!THINKING_LEVEL_NAMES.includes(level)) {
+    return res.status(400).json({ error: `level must be one of: ${THINKING_LEVEL_NAMES.join(', ')}` });
   }
   try {
     if (getRegisteredSession(req.params.id)) {

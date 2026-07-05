@@ -36,6 +36,14 @@ function formatTime(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+/** Compact elapsed time for the working indicator: 0:05, 4:32, 1:04:09. */
+function formatDuration(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
+  const mm = h ? String(m).padStart(2, '0') : String(m);
+  return (h ? `${h}:${mm}` : mm) + ':' + String(s).padStart(2, '0');
+}
+
 /** Shorten cwd for display */
 function shortCwd(cwd) {
   if (!cwd) return '';
@@ -215,10 +223,10 @@ function pushPromptHistory(list, message, cap) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    escapeHtml, formatTokens, formatRelativeTime, formatTime, shortCwd,
-    truncate, extractTextContent, getToolSummary, getToolOutputText,
+    escapeHtml, formatTokens, formatRelativeTime, formatTime, formatDuration,
+    shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText,
     groupByWorkspace, applyLocalFilter, fuzzyMatch, fuzzyScore,
-    highlightFuzzy, normalizeMood, isUnreadSession,
+    highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     modelMatchesPattern, isModelEnabled, pushPromptHistory,
   };
 }
