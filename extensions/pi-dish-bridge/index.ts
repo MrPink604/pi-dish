@@ -425,12 +425,16 @@ export default function (pi: ExtensionAPI) {
     // --- Emulated built-ins ---
     if (name === "compact") {
       if (!lastCtx) return { ok: false, error: "no active context" };
-      lastCtx.compact(args ? { customInstructions: args } : undefined);
+      // Fire-and-forget, but never leave the promise floating: an unhandled
+      // rejection here is fatal to the host pi process on Node >= 15.
+      lastCtx.compact(args ? { customInstructions: args } : undefined)
+        .catch((e: any) => console.error("[pi-dish-bridge] compact failed:", e?.message || e));
       return { ok: true, info: "Compaction started" };
     }
     if (name === "abort") {
       if (!lastCtx) return { ok: false, error: "no active context" };
-      lastCtx.abort();
+      lastCtx.abort()
+        .catch((e: any) => console.error("[pi-dish-bridge] abort failed:", e?.message || e));
       return { ok: true, info: "Aborted" };
     }
     if (name === "model") {
