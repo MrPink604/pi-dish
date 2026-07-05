@@ -4,6 +4,8 @@ Prioritized list of missing functionality compared to pi's TUI, based on audit o
 
 **Status update (2026-07-04):** P1 (extension UI dialogs — now interactive modals with response path and TUI/web racing), P2 (fire-and-forget UI), and P3 (compaction/retry status) are done. Slash commands now route to a command endpoint (bridge emulation for TUI sessions, native RPC for spawned ones). Context usage comes live from the session. Remaining gap: invoking *extension* commands on TUI sessions needs an upstream pi API (e.g. a `pi.executeCommand()` / prompt-with-expansion extension hook) — worth a PR to pi.
 
+**Status update (2026-07-05):** `/reload` now works from the web UI on web-spawned (RPC) sessions: the bridge registers `/dish-reload` (handler calls `ctx.reload()`), and the server maps `/reload` to `rpc.prompt('/dish-reload')` — RPC `prompt` executes extension commands with a full command context. TUI sessions remain blocked by the same gap above: `pi.sendUserMessage` deliberately skips command handling (`agent-session.js` `sendUserMessage` → `prompt(text, { expandPromptTemplates: false })`), so there is no remote path to a command context. Note for the upstream PR: pi's own docs (`extensions.md`, the reload-runtime tool example) claim `pi.sendUserMessage("/reload-runtime", { deliverAs: "followUp" })` triggers the command — verified false on pi 0.80.3; the message goes to the LLM as literal text. That doc bug is worth reporting alongside the API request.
+
 ---
 
 ## P0 — Tool Execution Streaming

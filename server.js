@@ -534,6 +534,7 @@ const RPC_BUILTIN_COMMANDS = [
   { name: 'abort', description: 'Abort the current agent operation' },
   { name: 'new', description: 'Start a new session' },
   { name: 'export', description: 'Export session to HTML', args: '[path]' },
+  { name: 'reload', description: 'Reload extensions, skills, and prompt templates' },
 ];
 
 async function runRpcSlashCommand(rpc, message) {
@@ -577,6 +578,12 @@ async function runRpcSlashCommand(rpc, message) {
     case 'new':
       await rpc.newSession();
       return { info: 'New session started' };
+    case 'reload':
+      // RPC `prompt` executes extension commands with a full command context
+      // (the only remote path to ctx.reload()); the bridge extension registers
+      // /dish-reload for exactly this.
+      await rpc.prompt('/dish-reload');
+      return { info: 'Reloading extensions...' };
     case 'export': {
       const data = await rpc.exportHtml(args || undefined);
       return { info: `Exported to ${data?.path || 'HTML'}` };

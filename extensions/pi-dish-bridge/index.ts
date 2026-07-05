@@ -95,6 +95,18 @@ export default function (pi: ExtensionAPI) {
   fs.mkdirSync(REGISTRY_DIR, { recursive: true });
   fs.mkdirSync(SOCKET_DIR, { recursive: true });
 
+  // Reload entrypoint: ctx.reload() only exists on command contexts, which pi
+  // supplies when it executes an extension command. RPC sessions can invoke
+  // this via a plain `prompt` command ("/dish-reload"); TUI sessions cannot —
+  // pi.sendUserMessage deliberately skips command handling, so there is no
+  // remote path to a command context there (same gap as extension commands).
+  pi.registerCommand("dish-reload", {
+    description: "Reload extensions, skills, and prompt templates (pi-dish)",
+    handler: async (_args: string, ctx: any) => {
+      await ctx.reload();
+    },
+  });
+
   let server: net.Server | null = null;
   let socketPath: string | null = null;
   let registryPath: string | null = null;
@@ -427,6 +439,13 @@ export default function (pi: ExtensionAPI) {
       pi.setThinkingLevel(args as any);
       writeRegistry();
       return { ok: true, info: `Thinking level: ${args}` };
+    }
+
+    if (name === "reload") {
+      return {
+        ok: false,
+        error: "pi's extension API can't trigger /reload on a TUI session remotely — run /reload in the TUI (web-spawned sessions support it).",
+      };
     }
 
     // --- Skills / prompt templates / extension commands via pi.getCommands() ---
