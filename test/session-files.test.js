@@ -86,7 +86,7 @@ test('readSessionMessages returns the displayable stream in order', () => {
     { type: 'session', cwd: '/x' },
     userMsg('q', '2026-07-01T10:00:00.000Z'),
     { type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', id: 't1', name: 'Bash', arguments: { command: 'ls' } }] } },
-    { type: 'message', message: { role: 'toolResult', toolName: 'Bash', content: [{ type: 'text', text: 'out' }] } },
+    { type: 'message', message: { role: 'toolResult', toolName: 'Bash', toolCallId: 't1', isError: true, content: [{ type: 'text', text: 'out' }] } },
     { type: 'custom_message', customType: 'session-message', content: 'injected' },
     { type: 'custom_message', customType: 'other', content: 'not displayable' },
     assistantMsg('done'),
@@ -94,6 +94,15 @@ test('readSessionMessages returns the displayable stream in order', () => {
   const all = SF.readSessionMessages(file);
   assert.deepEqual(all.map(m => m.role), ['user', 'assistant', 'toolResult', 'user', 'assistant']);
   assert.equal(all[3].content[0].text, 'injected', 'session-message custom entries render as user messages');
+
+  // The client renders tool name + error state from these message-level
+  // fields, so the display stream must carry them through.
+  const toolResult = all[2];
+  assert.equal(toolResult.toolName, 'Bash');
+  assert.equal(toolResult.toolCallId, 't1');
+  assert.equal(toolResult.isError, true);
+  // Plain messages don't grow spurious tool fields.
+  assert.equal(all[1].toolName, undefined, 'non-toolResult messages have no toolName');
 });
 
 test('readSessionMessages cache revalidates on append and survives LRU pressure', () => {
