@@ -4,22 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>pi-dish</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23073642'/%3E%3Ctext x='16' y='23' font-size='20' text-anchor='middle' fill='%23268bd2' font-family='Georgia,serif'%3E%CF%80%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
   <!-- Vendored (see scripts/build-vendor.js) — no CDN so the UI works on
        LAN-only clients and markdown rendering never silently degrades. -->
-  <link rel="stylesheet" href="vendor/github-dark.min.css">
+  <link rel="stylesheet" href="vendor/hljs-theme.min.css">
   <script src="vendor/marked.min.js"></script>
   <script src="vendor/highlight.js"></script>
 </head>
 <body>
   <div class="app">
-    <!-- Mobile Menu Toggle -->
-    <button class="menu-toggle" id="menuToggle" onclick="toggleSidebar()" aria-label="Toggle menu">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M3 12h18M3 6h18M3 18h18"/>
-      </svg>
-    </button>
-    
     <!-- Sidebar Overlay -->
     <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
     
@@ -63,6 +57,11 @@
     <!-- Main Content -->
     <main class="main">
       <div class="empty-state" id="emptyState">
+        <button class="menu-btn empty-menu-btn" onclick="toggleSidebar()" aria-label="Open session list">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M3 12h18M3 6h18M3 18h18"/>
+          </svg>
+        </button>
         <div class="empty-icon">π</div>
         <p>Select a session from the sidebar</p>
       </div>
@@ -70,6 +69,11 @@
       <div class="session-view" id="sessionView" style="display: none;">
         <!-- Session Header -->
         <header class="session-header">
+          <button class="menu-btn header-menu-btn" onclick="toggleSidebar()" aria-label="Open session list">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M3 12h18M3 6h18M3 18h18"/>
+            </svg>
+          </button>
           <div class="session-info">
             <h2 id="sessionName" class="editable-name" onclick="startRename()" title="Click to rename">Session Name</h2>
             <input type="text" id="sessionNameInput" class="name-input" style="display:none"
@@ -138,21 +142,12 @@
 
         <!-- Input (for active sessions) -->
         <div class="input-area">
-          <!-- Mobile control panel (opened via ⚙ in the actions row) -->
+          <!-- Mobile control panel (opened via ⚙ in the actions row).
+               Model + context live in the header on mobile now. -->
           <div class="control-panel" id="controlPanel">
-            <div class="model-selector" id="modelSelectorMobile">
-              <button class="cp-row" id="cpModelRow" title="Change model">
-                <span class="cp-label">Model</span>
-                <span class="cp-value" id="sessionModelMobile">—</span>
-              </button>
-            </div>
             <button class="cp-row" id="cpThinkingRow" onclick="toggleThinkingDropdown(event)" title="Thinking level" style="display:none">
               <span class="cp-label">Thinking</span>
               <span class="cp-value" id="sessionThinkingMobile">—</span>
-            </button>
-            <button class="cp-row" onclick="closeControlPanel(); openStatsModal()" title="Session stats">
-              <span class="cp-label">Context / stats</span>
-              <span class="cp-value badge badge-context" id="sessionContextMobile">0%</span>
             </button>
             <button class="cp-row" onclick="closeControlPanel(); openSearch()" title="Search in session">
               <span class="cp-label">Search in session</span>
@@ -174,6 +169,7 @@
           <div class="queue-status" id="queueStatus" style="display:none"></div>
           <textarea id="promptInput" placeholder="Send a message..." rows="2"></textarea>
           <div class="input-actions">
+            <button class="badge badge-context" id="sessionContextBar" onclick="openStatsModal()" title="Session stats">0%</button>
             <span class="status" id="status"></span>
             <span class="badge badge-working" id="sessionWorkingMobile"><span class="spinner-dot"></span></span>
             <button class="badge badge-tool-btn mobile-only" id="btnPanel" onclick="toggleControlPanel()" title="Session controls">⚙</button>
@@ -224,6 +220,7 @@
     </div>
   </div>
 
+  <script src="helpers.js"></script>
   <script src="app.js"></script>
   <div class="model-dropdown" id="modelDropdown"></div>
   <div class="thinking-dropdown" id="thinkingDropdown" style="display:none"></div>

@@ -9,6 +9,7 @@ const {
   getRegisteredSession,
   getBridgeSession,
 } = require('./lib/bridge-session');
+const { searchFiles, searchHomeDirs } = require('./lib/file-search');
 
 const app = express();
 const PORT = process.env.PORT || 3333;
@@ -923,6 +924,34 @@ app.get('/api/cwds', async (req, res) => {
     res.json(cwds);
   } catch (e) {
     res.status(500).json([]);
+  }
+});
+
+// Fuzzy directory search under $HOME for the new-session cwd picker.
+app.get('/api/dirs', (req, res) => {
+  try {
+    res.json(searchHomeDirs(String(req.query.q || ''), 15));
+  } catch (e) {
+    res.status(500).json([]);
+  }
+});
+
+// Fuzzy file search under a session's cwd — powers @-mentions in the prompt.
+app.get('/api/sessions/:id/files', async (req, res) => {
+  try {
+    const reg = getRegisteredSession(req.params.id);
+    let cwd = reg?.cwd;
+    if (!cwd) {
+      const sessionFile = findSessionFile(req.params.id);
+      if (sessionFile) {
+        try { cwd = parseSessionFile(sessionFile).cwd; } catch {}
+      }
+    }
+    if (!cwd) return res.status(404).json({ error: 'Session cwd unknown' });
+    const files = await searchFiles(cwd, String(req.query.q || ''), 20);
+    res.json({ cwd, files });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 

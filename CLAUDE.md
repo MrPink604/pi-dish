@@ -11,7 +11,8 @@ per session), historical sessions by scanning JSONL files under
 
 ```bash
 npm start          # server on http://localhost:3333 (PORT env to override)
-npm test           # API tests (node:test, test/*.test.js, fixture HOME)
+npm test           # API + helper unit tests (node:test, test/*.test.js)
+npm run test:ui    # browser smoke test (needs Chrome + global playwright)
 npm run build:vendor  # regenerate public/vendor/ from node_modules
 ```
 
@@ -25,6 +26,41 @@ UMD build and wraps highlight.js's CJS `lib/common` into a browser bundle
 dependency. Note marked v12 removed the `highlight` option — code blocks are
 highlighted post-render via `applyHighlight()` (final renders only, never
 during streaming).
+
+## Theme
+
+Solarized dark. All colors flow from the `:root` tokens at the top of
+`public/style.css` — no hardcoded hex in rules (use the tokens or an rgba of
+them). The hljs theme is base16 solarized-dark, vendored as
+`vendor/hljs-theme.min.css`; `style.css` overrides its `code.hljs` background
+so code blocks keep the darker `--bg-darker` panel. The mobile hamburger is
+part of the layout (`.header-menu-btn` in the session header,
+`.empty-menu-btn` over the empty state) — don't reintroduce a fixed floating
+button; it clipped over content.
+
+## File / directory fuzzy search (lib/file-search.js)
+
+Backed by fff (`@ff-labs/fff-node`, ESM-only + native binary, loaded via
+lazy dynamic import): one indexed `FileFinder` per project cwd (LRU pool of
+4) powers `GET /api/sessions/:id/files?q=` for @-mentions in the prompt.
+fff refuses to index `$HOME`, so `GET /api/dirs?q=` (the new-session cwd
+picker) uses a cached depth-4 directory walk plus the shared fuzzy scorer
+from `public/helpers.js` instead. Everything degrades to the walker when
+fff is unavailable — never let a missing native binary break the UI.
+
+Client side: `@token` at the caret opens the file autocomplete (accept
+inserts `@relative/path`); the cwd input merges known session cwds
+(starred, score-boosted) with live `/api/dirs` results.
+
+## Client session state (public/app.js)
+
+`currentSession` is a **detached copy** of its entry in the `sessions`
+lists (selectSession/loadMessages spread new objects). Any local mutation
+(rename, model switch, thinking level) must go through `patchSession(id,
+patch)`, which writes to both and re-renders sidebar + header — mutating
+`currentSession` directly leaves the sidebar stale until the next poll
+(the "rename needs F5" bug). `loadSessions()` folds fresh list data back
+into `currentSession` after each poll for the same reason.
 
 ## Streaming pipeline
 
@@ -44,12 +80,19 @@ far** — intermediates are droppable. The path is:
    live mid-stream. `message_end`/`turn_end` finalize (cancel pending render,
    swap in the authoritative render, apply highlighting).
 
-## API tests (test/)
+## Tests (test/)
 
-`npm test` boots `server.js` with `HOME` pointed at a temp dir containing a
-fixture JSONL (see `test/server.test.js`) and exercises session listing,
-message pagination (`limit`/`before`/`after`), and `/api/sessions/:id/search`.
-Server behavior changes should extend these; UI changes still need CDP.
+`npm test` runs two node:test suites:
+- `test/server.test.js` — boots `server.js` with `HOME` pointed at a temp dir
+  containing a fixture JSONL and exercises session listing, message
+  pagination (`limit`/`before`/`after`), and `/api/sessions/:id/search`.
+- `test/helpers.test.js` — unit tests for `public/helpers.js`, the pure
+  frontend helpers (escaping, formatting, filtering, fuzzy match, mood).
+  Helpers are plain script globals in the browser and CommonJS exports in
+  node; anything DOM-free that app.js needs belongs there, with a test.
+
+Server behavior changes should extend these; UI changes need the smoke test
+or manual CDP below.
 
 ## UI testing (browser, CDP)
 
@@ -70,20 +113,26 @@ with the globally installed playwright (`NODE_PATH=/usr/lib/node_modules`):
   and capture screenshots; also watch `pageerror`/console errors. Chrome
   occasionally logs a flaky favicon 404 — ignore it.
 
-Example scripts: fake session registration and a full CDP walkthrough lived in
-the session scratchpad as `fake-session.js` / `cdp-test.js` — recreate that
-pattern for future UI validation. The streaming-work versions had the fake
-socket answer `get_commands`/`get_available_models`/`prompt` and, on `prompt`,
-stream a whole turn (`turn_start`, `message_update` deltas with thinking +
-markdown text, `tool_execution_*`, JSONL append, `message_end`, `turn_end`) so
-the real SSE → renderer path is exercised end-to-end.
+This pattern is codified in `test/ui-smoke.js` (`npm run test:ui`): it boots
+the server against a temp HOME, registers a fake bridge session whose socket
+answers `get_commands`/`get_available_models`/`prompt` and, on `prompt`,
+streams a whole turn (`turn_start`, `message_update` deltas, JSONL append,
+`message_end`, `turn_end`) so the real SSE → streaming-renderer → catch-up
+path is exercised end to end, plus the mobile hamburger/drawer flows. Extend
+it for new UI flows; write one-off CDP scripts in the scratchpad only for
+exploratory debugging.
 
 ## Sidebar behavior (public/app.js)
 
 The session list defaults to the **Active** filter (live sessions only, count
 badge in the tab). The **All** tab merges active + historical sessions, grouped
-by workspace cwd; live sessions get a green `.live-dot` and historical ones the
-`.session-item.inactive` dimming. Search in All mode is server-side
+by workspace cwd; historical ones get the `.session-item.inactive` dimming.
+Each item shows one status dot, best signal first: pulsing green
+(`.session-item-status.working`, turn in progress), accent blue
+(`.session-item-status.unread`, activity since the session was last on
+screen — `isUnreadSession()` in helpers.js against the localStorage
+`pi-dish-seen` map), or the static green `.live-dot` (All tab only). The tab
+title carries the unread count (`(2) pi-dish`). Search in All mode is server-side
 (`/api/sessions?q=` — matches metadata and message content); filtering in
 Active mode is local.
 

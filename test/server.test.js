@@ -37,6 +37,20 @@ fs.writeFileSync(
   entries.map(e => JSON.stringify(e)).join('\n') + '\n',
 );
 
+// Second fixture whose cwd exists on disk — exercises /files fuzzy search.
+const REAL_CWD_ID = '2026-07-04T11-00-00-bbccdd34';
+const realCwd = path.join(tmpHome, 'workspace', 'proj-alpha');
+fs.mkdirSync(path.join(realCwd, 'src'), { recursive: true });
+fs.writeFileSync(path.join(realCwd, 'src', 'main.js'), 'console.log(1);\n');
+fs.writeFileSync(path.join(realCwd, 'README.md'), '# alpha\n');
+fs.writeFileSync(
+  path.join(sessionDir, `${REAL_CWD_ID}.jsonl`),
+  [
+    { type: 'session', cwd: realCwd, timestamp: '2026-07-04T11:00:00.000Z' },
+    { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'hi' }], timestamp: '2026-07-04T11:00:01.000Z' } },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n',
+);
+
 const server = require('../server.js');
 
 let base;
@@ -118,4 +132,29 @@ test('GET /search with empty query or unknown session', async () => {
   assert.deepEqual(empty.body.matches, []);
   const missing = await get('/api/sessions/nope/search?q=x');
   assert.equal(missing.status, 404);
+});
+
+test('GET /api/dirs fuzzy-finds directories under $HOME', async () => {
+  const { status, body } = await get('/api/dirs?q=alpha');
+  assert.equal(status, 200);
+  const hit = body.find(d => d.path === realCwd);
+  assert.ok(hit, 'proj-alpha should match');
+  assert.equal(hit.short, '~/workspace/proj-alpha');
+  // typo tolerance comes from in-order char matching
+  const fuzzy = await get('/api/dirs?q=wkspalpha');
+  assert.ok(fuzzy.body.some(d => d.path === realCwd));
+});
+
+test('GET /files fuzzy-searches the session cwd', async () => {
+  const { status, body } = await get(`/api/sessions/${REAL_CWD_ID}/files?q=main`);
+  assert.equal(status, 200);
+  assert.equal(body.cwd, realCwd);
+  assert.ok(body.files.some(f => f.path === 'src/main.js'));
+});
+
+test('GET /files with a missing cwd degrades to an empty list', async () => {
+  // fixture session's cwd (/home/user/proj) does not exist on disk
+  const { status, body } = await get(`/api/sessions/${SESSION_ID}/files?q=x`);
+  assert.equal(status, 200);
+  assert.deepEqual(body.files, []);
 });

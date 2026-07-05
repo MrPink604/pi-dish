@@ -11,7 +11,8 @@
  *   public/vendor/highlight.js      — highlight.js common-languages bundle,
  *                                      built with a minimal CJS wrapper
  *                                      (the npm package ships no browser build)
- *   public/vendor/github-dark.min.css
+ *   public/vendor/hljs-theme.min.css — highlight.js theme (solarized dark,
+ *                                      matching the app palette)
  */
 const fs = require('fs');
 const path = require('path');
@@ -28,8 +29,8 @@ fs.copyFileSync(
 
 // --- highlight.js theme css ---
 fs.copyFileSync(
-  path.join(root, 'node_modules', 'highlight.js', 'styles', 'github-dark.min.css'),
-  path.join(outDir, 'github-dark.min.css'),
+  path.join(root, 'node_modules', 'highlight.js', 'styles', 'base16', 'solarized-dark.min.css'),
+  path.join(outDir, 'hljs-theme.min.css'),
 );
 
 // --- highlight.js: bundle lib/common.js (CJS, relative requires only) ---
@@ -76,4 +77,4 @@ out += `window.hljs = __req(".", ${id(entry)});\n`;
 out += '})();\n';
 
 fs.writeFileSync(path.join(outDir, 'highlight.js'), out);
-console.log(`vendor bundle written: ${modules.size} hljs modules, marked, github-dark css`);
+console.log(`vendor bundle written: ${modules.size} hljs modules, marked, hljs theme css`);

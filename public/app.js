@@ -110,7 +110,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     handleAutocomplete(promptInput.value);
   });
   
-  setInterval(loadSessions, 10000);
+  // Periodic refresh must preserve an in-flight server search, or the list
+  // resets to unfiltered mid-search.
+  setInterval(() => loadSessions(sidebarTab === 'all' && filterQuery ? filterQuery : undefined), 10000);
   
   document.getElementById('sessionList').addEventListener('click', (e) => {
     if (e.target.closest('.session-item') && window.innerWidth <= 768) closeSidebar();
@@ -137,13 +139,26 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Restore focus mode (hide tool calls/results) preference
   setFocusMode(localStorage.getItem('pi-dish-focus') === '1');
+
+  // Coming back to the tab: refresh the list so unread dots resolve against
+  // what's now actually on screen.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) loadSessions(sidebarTab === 'all' && filterQuery ? filterQuery : undefined);
+  });
 });
 
 // =========================================================================
-// Autocomplete
+// Autocomplete — slash commands at the start of the input, @file mentions
+// anywhere (fuzzy file search under the session cwd, served by fff).
 // =========================================================================
 
 function handleAutocomplete(text) {
+  // @token ending at the caret → file mention
+  const input = document.getElementById('promptInput');
+  const caret = input.selectionStart ?? text.length;
+  const at = text.slice(0, caret).match(/(?:^|\s)@([^\s@]*)$/);
+  if (at && currentSession) { queueFileAutocomplete(at[1]); return; }
+
   if (!text.startsWith('/')) { hideAutocomplete(); return; }
   var spaceIdx = text.indexOf(' ');
   var query = spaceIdx > 0 ? text.slice(1, spaceIdx) : text.slice(1);
@@ -153,7 +168,59 @@ function handleAutocomplete(text) {
   showAutocomplete(matches);
 }
 
-function showAutocomplete(matches) {
+// --- @file mentions ---
+let fileAcTimer = null;
+let fileAcSeq = 0;
+
+function queueFileAutocomplete(token) {
+  clearTimeout(fileAcTimer);
+  fileAcTimer = setTimeout(async () => {
+    const seq = ++fileAcSeq;
+    try {
+      const res = await fetch(`/api/sessions/${currentSession.id}/files?q=${encodeURIComponent(token)}`);
+      const data = await res.json();
+      if (seq !== fileAcSeq) return; // a newer request or hide superseded this one
+      if (!res.ok || !data.files?.length) { hideAutocomplete(); return; }
+      showFileAutocomplete(data.files);
+    } catch {
+      hideAutocomplete();
+    }
+  }, 120);
+}
+
+const GIT_STATUS_LABEL = { modified: '± modified', untracked: '+ new', staged: '● staged' };
+
+function showFileAutocomplete(files) {
+  const container = ensureAutocompleteContainer();
+  autocompleteIndex = 0;
+  autocompleteVisible = true;
+  container.innerHTML = files.map((f, i) =>
+    `<div class="autocomplete-item${i === 0 ? ' active' : ''}" data-file="${escapeHtml(f.path)}">
+      <span class="autocomplete-icon">📄</span>
+      <span class="autocomplete-name">${escapeHtml(f.path)}</span>
+      <span class="autocomplete-desc">${GIT_STATUS_LABEL[f.gitStatus] || ''}</span>
+    </div>`).join('');
+  container.querySelectorAll('[data-file]').forEach(el => {
+    el.onclick = () => acceptFileMention(el.dataset.file);
+  });
+  container.style.display = 'block';
+}
+
+// Replace the @token at the caret with the chosen path.
+function acceptFileMention(relPath) {
+  const input = document.getElementById('promptInput');
+  const caret = input.selectionStart ?? input.value.length;
+  const m = input.value.slice(0, caret).match(/(?:^|\s)@([^\s@]*)$/);
+  hideAutocomplete();
+  if (!m) return;
+  const start = caret - m[1].length - 1; // include the '@'
+  input.value = input.value.slice(0, start) + '@' + relPath + ' ' + input.value.slice(caret);
+  const pos = start + relPath.length + 2;
+  input.focus();
+  input.setSelectionRange(pos, pos);
+}
+
+function ensureAutocompleteContainer() {
   var container = document.getElementById('autocomplete');
   if (!container) {
     container = document.createElement('div');
@@ -161,6 +228,11 @@ function showAutocomplete(matches) {
     container.className = 'autocomplete-dropdown';
     document.querySelector('.input-area').appendChild(container);
   }
+  return container;
+}
+
+function showAutocomplete(matches) {
+  var container = ensureAutocompleteContainer();
   autocompleteIndex = 0;
   autocompleteVisible = true;
   container.innerHTML = matches.map((cmd, i) => {
@@ -177,6 +249,8 @@ function showAutocomplete(matches) {
 
 function hideAutocomplete() {
   autocompleteVisible = false;
+  fileAcSeq++; // invalidate any in-flight file search
+  clearTimeout(fileAcTimer);
   var c = document.getElementById('autocomplete');
   if (c) c.style.display = 'none';
 }
@@ -190,7 +264,11 @@ function moveAutocomplete(delta) {
   items[autocompleteIndex].scrollIntoView({ block: 'nearest' });
 }
 
-function acceptAutocomplete(el) { acceptAutocompleteByName(el.getAttribute('data-name')); }
+function acceptAutocomplete(el) {
+  const file = el.getAttribute('data-file');
+  if (file != null) acceptFileMention(file);
+  else acceptAutocompleteByName(el.getAttribute('data-name'));
+}
 
 function acceptAutocompleteByName(name) {
   var input = document.getElementById('promptInput');
@@ -207,6 +285,27 @@ function acceptAutocompleteByName(name) {
 let sidebarTab = 'active'; // 'active' (only live sessions, default) or 'all' (live + historical)
 let filterQuery = '';
 let filterDebounceTimer = null;
+
+// --- seen tracking: which sessions have new activity since last viewed ---
+let seenActivity = {};
+try { seenActivity = JSON.parse(localStorage.getItem('pi-dish-seen') || '{}'); } catch {}
+
+function markSessionSeen(id, lastActivity) {
+  if (!id || !lastActivity) return;
+  seenActivity[id] = lastActivity;
+  localStorage.setItem('pi-dish-seen', JSON.stringify(seenActivity));
+}
+
+function isUnread(session) {
+  return isUnreadSession(session, seenActivity, currentSession?.id, !document.hidden);
+}
+
+// Unread count in the tab title — the "agent came back" signal when the
+// tab is in the background.
+function updateUnreadTitle() {
+  const unread = sessions.active.filter(isUnread).length;
+  document.title = unread ? `(${unread}) pi-dish` : 'pi-dish';
+}
 
 function toggleSidebar() {
   const sidebar = document.getElementById('sidebar');
@@ -229,6 +328,9 @@ function switchTab(tab) {
   document.getElementById('tabAll').classList.toggle('active', tab === 'all');
   document.getElementById('filterInput').placeholder = tab === 'active' ? 'Filter active sessions...' : 'Search all sessions...';
   renderSessions();
+  // Re-run any pending query under the new tab's semantics: server-side in
+  // All, full list otherwise (a server search may have narrowed `sessions`).
+  loadSessions(tab === 'all' && filterQuery ? filterQuery : undefined);
 }
 
 function onFilterInput() {
@@ -253,7 +355,29 @@ async function loadSessions(query) {
     const url = query ? `/api/sessions?q=${encodeURIComponent(query)}` : '/api/sessions';
     const res = await fetch(url);
     sessions = await res.json();
+    // Viewing a session (with the tab visible) counts as having seen its
+    // latest activity. Prune stale ids while we're at it — but only from an
+    // unfiltered load, a search result is not the full list.
+    if (currentSession && !document.hidden) {
+      const fresh = findSession(currentSession.id);
+      if (fresh) markSessionSeen(fresh.id, fresh.lastActivity);
+    }
+    if (!query) {
+      for (const id of Object.keys(seenActivity)) {
+        if (!sessions.active.some(s => s.id === id)) delete seenActivity[id];
+      }
+    }
     renderSessions();
+    // The header renders from the detached currentSession copy — fold the
+    // fresh list data (name, model, context, thinking) into it so polling
+    // keeps the header honest too, not just the sidebar.
+    if (currentSession) {
+      const fresh = findSession(currentSession.id);
+      if (fresh) {
+        currentSession = { ...currentSession, ...fresh };
+        updateSessionHeader();
+      }
+    }
   } catch (e) {
     console.error('Failed to load sessions:', e);
   }
@@ -261,69 +385,15 @@ async function loadSessions(query) {
 
 function refreshSessions() { loadSessions(); }
 
-function formatTokens(tokens) {
-  if (!tokens || tokens === 0) return '0';
-  if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`;
-  return `${tokens}`;
-}
-
-function formatRelativeTime(ts) {
-  if (!ts) return '';
-  var diff = Math.max(0, Date.now() - new Date(ts).getTime());
-  var s = Math.floor(diff / 1000), m = Math.floor(s / 60), h = Math.floor(m / 60), d = Math.floor(h / 24);
-  if (s < 60) return 'just now';
-  if (m < 60) return m + 'm ago';
-  if (h < 24) return h + 'h ago';
-  if (d === 1) return 'yesterday';
-  if (d < 7) return d + 'd ago';
-  return new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric' });
-}
-
-/** Shorten cwd for display */
-function shortCwd(cwd) {
-  if (!cwd) return '';
-  return cwd.replace(/^\/home\/[^/]+\//, '~/').replace(/^\/home\/[^/]+$/, '~');
-}
-
-/** Group sessions by workspace (cwd), sorted by last activity within each group */
-function groupByWorkspace(list) {
-  const groups = new Map(); // cwd -> [sessions]
-  for (const s of list) {
-    const key = s.cwd || '~';
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(s);
-  }
-
-  // Sort sessions within each group by last activity
-  for (const [, sessions] of groups) {
-    sessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
-  }
-
-  // Sort groups by most recent session in each
-  const sorted = [...groups.entries()].sort((a, b) => {
-    const aTime = new Date(a[1][0].lastActivity).getTime();
-    const bTime = new Date(b[1][0].lastActivity).getTime();
-    return bTime - aTime;
-  });
-
-  return sorted; // [[cwd, sessions], ...]
-}
-
-/** Apply local filter to session list (matches name, cwd, model) */
-function applyLocalFilter(list) {
-  if (!filterQuery) return list;
-  const tokens = filterQuery.toLowerCase().split(/\s+/).filter(Boolean);
-  return list.filter(s => {
-    const text = [s.name, s.cwd, s.model, s.id].join(' ').toLowerCase();
-    return tokens.every(t => text.includes(t));
-  });
-}
-
 function renderSessionItem(session) {
   const ctxClass = session.contextPercent > 80 ? 'critical' : session.contextPercent > 50 ? 'high' : '';
   const activeClass = currentSession?.id === session.id ? 'active' : '';
   const inactiveClass = session.isActive ? '' : 'inactive';
-  const liveDot = sidebarTab === 'all' && session.isActive ? '<span class="live-dot" title="Active session"></span>' : '';
+  // One dot, best signal wins: working (pulsing) > unread (accent) > live-in-All.
+  let liveDot = '';
+  if (session.turnInProgress) liveDot = '<span class="session-item-status working" title="Agent working"></span>';
+  else if (isUnread(session)) liveDot = '<span class="session-item-status unread" title="New activity since you last looked"></span>';
+  else if (sidebarTab === 'all' && session.isActive) liveDot = '<span class="live-dot" title="Active session"></span>';
   const displayName = session.name || 'Unnamed';
   const tokenDisplay = session.contextTokens ? `${formatTokens(session.contextTokens)} tok` : '';
   const timeAgo = formatRelativeTime(session.lastActivity);
@@ -352,15 +422,16 @@ function renderSessions() {
   const countEl = document.getElementById('countActive');
   if (countEl) countEl.textContent = active.length || '';
 
-  // For the active tab, apply local filter; for "all" with a query, the
-  // server already filtered (including message content) — don't re-filter.
-  const filtered = sidebarTab === 'active' ? applyLocalFilter(showing) : (filterQuery ? showing : applyLocalFilter(showing));
+  // In All mode with a query, the server already filtered (including message
+  // content) — don't re-filter locally.
+  const filtered = (sidebarTab === 'all' && filterQuery) ? showing : applyLocalFilter(showing, filterQuery);
 
   if (filtered.length === 0) {
     const msg = sidebarTab === 'active'
       ? (active.length === 0 ? 'No active sessions<br><span style="font-size:11px">Click "+ New Session" or resume one from All</span>' : 'No matches')
       : (showing.length === 0 ? 'No sessions found' : 'No matches');
     list.innerHTML = `<div class="empty-session"><p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">${msg}</p></div>`;
+    updateUnreadTitle();
     return;
   }
 
@@ -380,10 +451,28 @@ function renderSessions() {
   }
 
   list.innerHTML = html;
+  updateUnreadTitle();
 }
 
 function findSession(id) {
   return sessions.active.find(s => s.id === id) || sessions.previous.find(s => s.id === id);
+}
+
+/**
+ * Patch a session everywhere it lives. `currentSession` is a detached copy
+ * of the list entry (selectSession/loadMessages spread new objects), so a
+ * local change (rename, model switch, thinking level) must be written to
+ * both and re-rendered — otherwise the sidebar shows stale data until the
+ * next poll happens to agree.
+ */
+function patchSession(id, patch) {
+  for (const list of [sessions.active, sessions.previous]) {
+    const s = list.find(s => s.id === id);
+    if (s) Object.assign(s, patch);
+  }
+  if (currentSession?.id === id) Object.assign(currentSession, patch);
+  renderSessions();
+  if (currentSession?.id === id) updateSessionHeader();
 }
 
 // =========================================================================
@@ -394,6 +483,7 @@ async function selectSession(id) {
   currentSession = findSession(id);
   if (!currentSession) return;
   localStorage.setItem('pi-dish-session', id);
+  markSessionSeen(id, currentSession.lastActivity);
   
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('sessionView').style.display = 'flex';
@@ -480,11 +570,8 @@ function filterModels(query) {
   if (!Array.isArray(knownModels)) return [];
   if (!query) return knownModels;
   const q = query.toLowerCase();
-  return knownModels.filter(m =>
-    m && typeof m.id === 'string' && m.id.toLowerCase().includes(q) ||
-    m && typeof m.provider === 'string' && m.provider.toLowerCase().includes(q) ||
-    m && m.name && typeof m.name === 'string' && m.name.toLowerCase().includes(q)
-  );
+  return knownModels.filter(m => m &&
+    [m.id, m.provider, m.name].some(f => typeof f === 'string' && f.toLowerCase().includes(q)));
 }
 
 // =========================================================================
@@ -515,28 +602,17 @@ function updateSessionHeader() {
   }
 
   const tokenStr = currentSession.contextTokens ? ` (${formatTokens(currentSession.contextTokens)} tok)` : '';
-  const ctxText = `${currentSession.contextPercent}%${tokenStr}`;
   const ctxClass = currentSession.contextPercent > 80 ? 'critical' : currentSession.contextPercent > 50 ? 'high' : '';
-  
-  // Desktop meta
-  const contextEl = document.getElementById('sessionContext');
-  contextEl.textContent = ctxText;
-  contextEl.className = 'badge badge-context' + (ctxClass ? ' ' + ctxClass : '');
 
-  // Mobile meta (in the control panel)
-  const mobileModel = document.getElementById('sessionModelMobile');
-  const mobileModelRow = document.getElementById('cpModelRow');
-  const mobileCtx = document.getElementById('sessionContextMobile');
-  if (mobileModel) {
-    mobileModel.textContent = currentSession.model + (currentSession.isActive ? ' ▾' : '');
-  }
-  if (mobileModelRow) {
-    mobileModelRow.onclick = currentSession.isActive ? toggleModelDropdown : null;
-    mobileModelRow.disabled = !currentSession.isActive;
-  }
-  if (mobileCtx) {
-    mobileCtx.textContent = ctxText;
-    mobileCtx.className = 'cp-value badge badge-context' + (ctxClass ? ' ' + ctxClass : '');
+  // Desktop header badge shows percent + tokens; the mobile one (bottom-left
+  // of the input row) only has room for the percent.
+  const contextEl = document.getElementById('sessionContext');
+  contextEl.textContent = `${currentSession.contextPercent}%${tokenStr}`;
+  contextEl.className = 'badge badge-context' + (ctxClass ? ' ' + ctxClass : '');
+  const barCtx = document.getElementById('sessionContextBar');
+  if (barCtx) {
+    barCtx.textContent = `${currentSession.contextPercent}%`;
+    barCtx.className = 'badge badge-context' + (ctxClass ? ' ' + ctxClass : '');
   }
 
   updateThinkingBadges();
@@ -607,8 +683,7 @@ async function selectThinkingLevel(level) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'failed');
     // Pi clamps to what the model supports; trust the reported level.
-    currentSession.thinkingLevel = data.level || level;
-    updateThinkingBadges();
+    patchSession(currentSession.id, { thinkingLevel: data.level || level });
     setStatus('Thinking level: ' + currentSession.thinkingLevel);
   } catch (e) {
     setStatus('Thinking level failed: ' + e.message, 'error');
@@ -899,7 +974,7 @@ async function commitRename() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: newName }),
     });
-    if (res.ok) { currentSession.name = newName; nameEl.textContent = newName; renderSessions(); }
+    if (res.ok) patchSession(currentSession.id, { name: newName });
     else setStatus('Rename failed', 'error');
   } catch (e) { setStatus('Rename failed: ' + e.message, 'error'); }
 }
@@ -938,9 +1013,6 @@ async function toggleModelDropdown() {
   setTimeout(() => document.addEventListener('click', closeModelDropdownOnOutsideClick, { once: true }), 0);
 }
 
-// Close model dropdown — check both desktop and mobile selectors
-
-
 function renderModelDropdown(query) {
   var dropdown = document.getElementById('modelDropdown');
   var filtered = filterModels(query);
@@ -975,7 +1047,6 @@ function renderModelDropdown(query) {
 
 function closeModelDropdownOnOutsideClick(e) {
   var inside = document.getElementById('modelSelector').contains(e.target) ||
-    document.getElementById('modelSelectorMobile')?.contains(e.target) ||
     document.getElementById('modelDropdown').contains(e.target);
   if (!inside) closeModelDropdown();
   else setTimeout(() => document.addEventListener('click', closeModelDropdownOnOutsideClick, { once: true }), 0);
@@ -998,8 +1069,7 @@ async function selectModel(fullModelId) {
       body: JSON.stringify({ modelId: fullModelId }),
     });
     if (res.ok) {
-      currentSession.model = fullModelId;
-      updateSessionHeader(); renderSessions();
+      patchSession(currentSession.id, { model: fullModelId });
       setStatus('Model switched to ' + fullModelId);
     } else {
       const data = await res.json().catch(() => ({}));
@@ -1267,33 +1337,9 @@ function renderToolResult(msg, time) {
   </div>`;
 }
 
-function extractTextContent(content) {
-  if (!content) return '';
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) return content.map(c => typeof c === 'string' ? c : c.type === 'text' ? c.text : '').join('\n');
-  return '';
-}
-
 // =========================================================================
 // Live Tool Panels (streaming tool execution)
 // =========================================================================
-
-function getToolSummary(toolName, args) {
-  if (!args) return '';
-  if (toolName === 'Bash' || toolName === 'bash') return args.command ? truncate(args.command.split('\n')[0], 60) : '';
-  if (['Read','read','Edit','edit','Write','write'].includes(toolName)) return args.path || '';
-  const keys = Object.keys(args);
-  if (keys.length) return truncate(String(args[keys[0]]), 40);
-  return '';
-}
-
-function getToolOutputText(partialResult) {
-  if (!partialResult || !partialResult.content) return '';
-  return partialResult.content
-    .filter(c => c.type === 'text')
-    .map(c => c.text)
-    .join('');
-}
 
 function buildLiveToolPanel(toolCallId, toolName, args, output, isError, isComplete, durationMs) {
   const stateClass = isComplete ? (isError ? 'error' : 'complete') : 'running';
@@ -1641,6 +1687,11 @@ var turnInProgress = false;
 
 function setTurnInProgress(active) {
   turnInProgress = active;
+  // Reflect in the sidebar immediately — the working dot shouldn't wait for
+  // the next 10s poll. (turn events only stream for the viewed session.)
+  if (currentSession && !!currentSession.turnInProgress !== !!active) {
+    patchSession(currentSession.id, { turnInProgress: !!active });
+  }
   var btnStop = document.getElementById('btnStop');
   var btnSteer = document.getElementById('btnSteer');
   var btnFollowUp = document.getElementById('btnFollowUp');
@@ -1772,73 +1823,50 @@ async function loadKnownCwds() {
   } catch {}
 }
 
-/** Simple fuzzy match: all chars of query appear in order in str */
-function fuzzyMatch(query, str) {
-  query = query.toLowerCase();
-  str = str.toLowerCase();
-  let qi = 0;
-  const indices = [];
-  for (let si = 0; si < str.length && qi < query.length; si++) {
-    if (str[si] === query[qi]) { indices.push(si); qi++; }
-  }
-  return qi === query.length ? indices : null;
-}
-
-/** Score fuzzy match — prefer consecutive chars, earlier matches, shorter strings */
-function fuzzyScore(indices, str) {
-  if (!indices) return -Infinity;
-  let score = 0;
-  for (let i = 1; i < indices.length; i++) {
-    if (indices[i] === indices[i - 1] + 1) score += 10; // consecutive bonus
-  }
-  score -= indices[0]; // earlier match = better
-  score -= str.length * 0.1; // shorter = better
-  return score;
-}
-
-function highlightFuzzy(str, indices) {
-  if (!indices || !indices.length) return escapeHtml(str);
-  let result = '';
-  let last = 0;
-  for (const idx of indices) {
-    result += escapeHtml(str.slice(last, idx));
-    result += `<span class="cwd-match">${escapeHtml(str[idx])}</span>`;
-    last = idx + 1;
-  }
-  result += escapeHtml(str.slice(last));
-  return result;
-}
+// Fuzzy-find the starting directory: known session cwds (starred, boosted)
+// merged with a live filesystem search under ~ (server-side, /api/dirs).
+let cwdFetchTimer = null;
+let cwdFetchSeq = 0;
 
 function showCwdDropdown(query) {
+  clearTimeout(cwdFetchTimer);
+  cwdFetchTimer = setTimeout(async () => {
+    const seq = ++cwdFetchSeq;
+    let dirs = [];
+    try {
+      const res = await fetch('/api/dirs?q=' + encodeURIComponent(query));
+      if (res.ok) dirs = await res.json();
+    } catch {}
+    if (seq !== cwdFetchSeq) return; // superseded by newer keystroke
+    renderCwdDropdown(query, dirs);
+  }, 120);
+}
+
+function renderCwdDropdown(query, dirs) {
   const dropdown = document.getElementById('cwdDropdown');
   if (!dropdown) return;
 
-  if (!query && knownCwds.length === 0) { dropdown.style.display = 'none'; return; }
-
-  let results;
-  if (!query) {
-    // Show all, most recent paths could be prioritized but for now just show all
-    results = knownCwds.map(c => ({ ...c, indices: [], score: 0 }));
-  } else {
-    results = knownCwds.map(c => {
-      const indices = fuzzyMatch(query, c.short) || fuzzyMatch(query, c.path);
-      const matchStr = fuzzyMatch(query, c.short) ? c.short : c.path;
-      return { ...c, indices, matchStr, score: fuzzyScore(indices, matchStr) };
-    }).filter(c => c.indices).sort((a, b) => b.score - a.score);
+  const seen = new Set();
+  let results = [];
+  for (const c of [...knownCwds.map(c => ({ ...c, known: true })), ...dirs]) {
+    if (seen.has(c.short)) continue;
+    seen.add(c.short);
+    if (!query) { results.push({ ...c, indices: [] }); continue; }
+    const indices = fuzzyMatch(query, c.short);
+    if (!indices) continue;
+    results.push({ ...c, indices, score: fuzzyScore(indices, c.short) + (c.known ? 5 : 0) });
   }
+  if (query) results.sort((a, b) => b.score - a.score);
+  results = results.slice(0, 15);
 
   if (results.length === 0) { dropdown.style.display = 'none'; return; }
 
   cwdDropdownIdx = -1;
-  dropdown.innerHTML = results.map((c, i) => {
-    const display = c.indices && c.indices.length
-      ? highlightFuzzy(c.matchStr || c.short, c.indices)
-      : escapeHtml(c.short);
-    return `<div class="cwd-option" data-idx="${i}" data-path="${escapeHtml(c.short)}">${display}</div>`;
-  }).join('');
+  dropdown.innerHTML = results.map((c) =>
+    `<div class="cwd-option" data-path="${escapeHtml(c.short)}">${c.known ? '<span class="cwd-known">★</span>' : ''}${highlightFuzzy(c.short, c.indices)}</div>`
+  ).join('');
   dropdown.style.display = 'block';
 
-  // Click handler
   dropdown.querySelectorAll('.cwd-option').forEach(el => {
     el.addEventListener('mousedown', (e) => {
       e.preventDefault();
@@ -1851,6 +1879,8 @@ function showCwdDropdown(query) {
 }
 
 function hideCwdDropdown() {
+  cwdFetchSeq++; // invalidate any in-flight dir search
+  clearTimeout(cwdFetchTimer);
   const dropdown = document.getElementById('cwdDropdown');
   if (dropdown) dropdown.style.display = 'none';
 }
@@ -1906,23 +1936,11 @@ function hideCwdDropdown() {
 // =========================================================================
 
 /**
- * After JSONL-based render, remove tool call/result details that are already
- * covered by live tool panels (identified by data-tool-call-id).
+ * After a JSONL-based render the on-disk messages are authoritative; live
+ * panels already in the DOM stay (they render the same content), we just
+ * stop tracking them so the next turn starts fresh.
  */
 function removeDuplicatedLiveContent(container) {
-  if (liveToolPanels.size === 0) return;
-  for (const [toolCallId, entry] of liveToolPanels) {
-    if (!entry.el || !container.contains(entry.el)) {
-      // Live panel is no longer in the container (full re-render happened)
-      liveToolPanels.delete(toolCallId);
-      continue;
-    }
-    // Look for corresponding .tool-call or .tool-result in the JSONL-rendered output
-    // We don't have a direct link, so we check by matching tool name + args in the existing rendering
-  }
-  // If we have any live panels still in the DOM, we keep them.
-  // Clear the map after turn_end + reload completes — the JSONL render is now authoritative.
-  // But live panels are already rendered correctly, so we just clear tracking.
   liveToolPanels.clear();
 }
 
@@ -2051,13 +2069,6 @@ function setStatus(message, type = '') {
 // =========================================================================
 // Mood indicator — web fallback for the mood extension's custom editor
 // =========================================================================
-
-function normalizeMood(description, face) {
-  description = String(description || '').trim().split(/\s+/)[0]?.toLowerCase() || '';
-  face = String(face || '').trim().replace(/[\r\n\t]/g, ' ').replace(/\s+/g, ' ');
-  if (!description || !face) return null;
-  return { description, face };
-}
 
 function setMoodIndicator(description, face) {
   const inputArea = document.querySelector('.input-area');
@@ -2347,22 +2358,6 @@ function showExtDialog(req) {
   openExtDialogs.set(req.id, overlay);
   const field = card.querySelector('.ext-ui-dialog-input, .ext-ui-dialog-editor');
   if (field) field.focus();
-}
-
-function escapeHtml(text) {
-  if (!text) return '';
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
-
-function formatTime(ts) {
-  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-function truncate(text, maxLen) {
-  if (!text || text.length <= maxLen) return text;
-  return text.slice(0, maxLen) + '\n... (truncated)';
 }
 
 // Markdown config. marked v12 dropped the `highlight` option — syntax
