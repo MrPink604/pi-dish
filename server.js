@@ -15,7 +15,9 @@ const { isModelEnabled } = require('./public/helpers');
 const app = express();
 const PORT = process.env.PORT || 3333;
 
-app.use(express.json());
+// Image attachments arrive as base64 in the prompt body — allow well past
+// the default 100kb (a few downscaled phone photos).
+app.use(express.json({ limit: '30mb' }));
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
@@ -480,15 +482,27 @@ app.get('/api/sessions/:id/search', (req, res) => {
   res.json({ matches, totalMessages: all.length });
 });
 
+// Normalize client-sent attachments to pi's ImageContent shape, dropping
+// anything malformed rather than failing the whole prompt.
+function sanitizeImages(images) {
+  if (!Array.isArray(images)) return [];
+  return images
+    .filter((i) => i && typeof i.data === 'string' && i.data && typeof i.mimeType === 'string' && i.mimeType.startsWith('image/'))
+    .map((i) => ({ type: 'image', data: i.data, mimeType: i.mimeType }));
+}
+
 app.post('/api/sessions/:id/prompt', async (req, res) => {
   const { message, deliverAs } = req.body;
-  if (!message) return res.status(400).json({ error: 'Message required' });
+  const images = sanitizeImages(req.body.images);
+  if (!message && !images.length) return res.status(400).json({ error: 'Message required' });
   try {
     const registered = getRegisteredSession(req.params.id);
     const rpc = getRPCSession(req.params.id);
     const sess = registered ? await getBridgeSession(req.params.id) : rpc;
     if (!sess?.alive) return res.status(404).json({ error: 'Session not active' });
-    const result = await sess.prompt(message, deliverAs ? { deliverAs } : {});
+    const opts = deliverAs ? { deliverAs } : {};
+    if (images.length) opts.images = images;
+    const result = await sess.prompt(message || '', opts);
     res.json({ success: true, result });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -497,12 +511,13 @@ app.post('/api/sessions/:id/prompt', async (req, res) => {
 
 app.post('/api/sessions/:id/steer', async (req, res) => {
   const { message } = req.body;
-  if (!message) return res.status(400).json({ error: 'Message required' });
+  const images = sanitizeImages(req.body.images);
+  if (!message && !images.length) return res.status(400).json({ error: 'Message required' });
   try {
     const rpc = getRPCSession(req.params.id);
     const sess = getRegisteredSession(req.params.id) ? await getBridgeSession(req.params.id) : rpc;
     if (!sess?.alive) return res.status(404).json({ error: 'Session not active' });
-    await sess.steer(message);
+    await sess.steer(message || '', images.length ? { images } : {});
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });

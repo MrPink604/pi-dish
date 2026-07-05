@@ -178,3 +178,19 @@ test('isModelEnabled treats no patterns as everything enabled', () => {
   assert.equal(H.isModelEnabled(['zai/glm-5.2'], m), false);
   assert.equal(H.isModelEnabled(['zai/glm-5.2', '*sonnet*'], m), true);
 });
+
+test('pushPromptHistory trims, dedupes repeats, and caps', () => {
+  assert.deepEqual(H.pushPromptHistory([], '  hello  '), ['hello']);
+  assert.deepEqual(H.pushPromptHistory(['a'], ''), ['a']);
+  assert.deepEqual(H.pushPromptHistory(['a'], '   '), ['a']);
+  assert.deepEqual(H.pushPromptHistory(null, 'x'), ['x']);
+  // Immediate repeat is dropped; non-adjacent repeat is kept
+  assert.deepEqual(H.pushPromptHistory(['a', 'b'], 'b'), ['a', 'b']);
+  assert.deepEqual(H.pushPromptHistory(['b', 'a'], 'b'), ['b', 'a', 'b']);
+  // Cap drops oldest
+  assert.deepEqual(H.pushPromptHistory(['1', '2', '3'], '4', 3), ['2', '3', '4']);
+  // Input list is not mutated
+  const list = ['a'];
+  H.pushPromptHistory(list, 'b');
+  assert.deepEqual(list, ['a']);
+});

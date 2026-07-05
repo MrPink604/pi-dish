@@ -97,8 +97,9 @@ function handleCommand(sock, msg) {
     case 'get_commands':
       return respond(sock, msg.id, [{ name: 'help', description: 'show help', source: 'builtin' }]);
     case 'prompt':
+      lastPrompt = msg;
       respond(sock, msg.id, {});
-      return streamTurn(msg.message);
+      return streamTurn(msg.message, msg.images);
     case 'set_session_name':
       // Mirror the real bridge: keep the registry entry fresh so polls
       // don't revert the rename.
@@ -109,9 +110,12 @@ function handleCommand(sock, msg) {
   }
 }
 
-function streamTurn(userText) {
+let lastPrompt = null;
+
+function streamTurn(userText, images) {
   const now = () => new Date().toISOString();
-  appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: userText }], timestamp: now() } });
+  const userContent = [{ type: 'text', text: userText }, ...(images || [])];
+  appendEntry({ type: 'message', message: { role: 'user', content: userContent, timestamp: now() } });
   emit('turn_start', {});
   // Tool phase first: live panel appears mid-turn, then the JSONL catch-up
   // after turn_end must replace it with a collapsed .tool-group.
@@ -329,6 +333,80 @@ function writeRegistry(patch = {}) {
     await desktop.click('.model-dropdown-footer >> text=Done');
     await desktop.click('.messages');
     await desktop.waitForTimeout(200);
+
+    // 7. Image attachment: attach a PNG, send, optimistic + JSONL renders
+    // both carry the image, and the bridge receives the base64 payload.
+    console.log('image attachments:');
+    const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    await desktop.evaluate(async (b64) => {
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      await addImageFiles([new File([bytes], 'shot.png', { type: 'image/png' })]);
+    }, PNG_B64);
+    await desktop.waitForSelector('.attachment-thumb', { timeout: 5000 });
+    check(true, 'attachment thumbnail appears in the strip');
+    await desktop.fill('#promptInput', 'describe the screenshot');
+    await desktop.click('#btnSend');
+    await desktop.waitForSelector('.message.user img.msg-image', { timeout: 5000 });
+    check(true, 'optimistic user message renders the image');
+    check(await desktop.locator('.attachment-thumb').count() === 0, 'attachment strip cleared after send');
+    check(lastPrompt && Array.isArray(lastPrompt.images) && lastPrompt.images.length === 1 &&
+      lastPrompt.images[0].data === PNG_B64 && lastPrompt.images[0].mimeType === 'image/png',
+      'bridge received the image payload intact');
+    // Wait for the turn to finish and the JSONL catch-up to land: the
+    // authoritative user message must still show the image.
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('.message.user[data-msg-index]')]
+        .some((el) => el.textContent.includes('describe the screenshot') && el.querySelector('img.msg-image')),
+      { timeout: 8000 });
+    check(true, 'JSONL user message renders the image after catch-up');
+    // Lightbox: tap the image, overlay appears, tap dismisses
+    await desktop.click('.message.user img.msg-image');
+    await desktop.waitForSelector('.lightbox-overlay img');
+    check(true, 'lightbox opens on image tap');
+    await desktop.click('.lightbox-overlay');
+    check(await desktop.locator('.lightbox-overlay').count() === 0, 'lightbox dismissed on tap');
+
+    // 8. Queue panel: queue_update shows chips; clicking expands the texts
+    console.log('queue panel:');
+    emit('queue_update', { steering: ['do the thing next'], followUp: ['then summarize'] });
+    await desktop.waitForSelector('.queue-chip', { timeout: 5000 });
+    check(await desktop.locator('.queue-chip').count() === 2, 'steering + follow-up chips shown');
+    await desktop.click('.queue-chip');
+    await desktop.waitForSelector('.queue-item');
+    const queueTexts = await desktop.locator('.queue-item-text').allTextContents();
+    check(queueTexts.includes('do the thing next') && queueTexts.includes('then summarize'),
+      `queue panel lists queued texts (got ${JSON.stringify(queueTexts)})`);
+    emit('queue_update', { steering: [], followUp: [] });
+    await desktop.waitForFunction(() => document.getElementById('queueStatus').style.display === 'none');
+    check(await desktop.evaluate(() => document.getElementById('queuePanel').style.display === 'none'),
+      'panel hides when the queue drains');
+
+    // 9. Drafts persist per session; ArrowUp recalls sent prompts
+    console.log('drafts & history:');
+    await desktop.fill('#promptInput', 'unsent draft');
+    await desktop.waitForTimeout(500); // debounced draft save
+    check(await desktop.evaluate((id) => localStorage.getItem('pi-dish-draft-' + id),
+      registryState.sessionId) === 'unsent draft', 'draft saved to localStorage');
+    // Wipe the input without an input event, re-select the session: the
+    // draft must come back.
+    await desktop.evaluate(() => { document.getElementById('promptInput').value = ''; });
+    await desktop.click('.session-item');
+    await desktop.waitForTimeout(300);
+    check(await desktop.inputValue('#promptInput') === 'unsent draft', 'draft restored on session select');
+    // ArrowUp from the start of the box steps into history; ArrowDown
+    // returns to the stashed draft.
+    await desktop.evaluate(() => document.getElementById('promptInput').setSelectionRange(0, 0));
+    await desktop.focus('#promptInput');
+    await desktop.keyboard.press('ArrowUp');
+    check(await desktop.inputValue('#promptInput') === 'describe the screenshot',
+      `ArrowUp recalls the last sent prompt (got ${JSON.stringify(await desktop.inputValue('#promptInput'))})`);
+    await desktop.keyboard.press('ArrowDown');
+    check(await desktop.inputValue('#promptInput') === 'unsent draft', 'ArrowDown restores the draft');
+    // Clean up so later sections start with an empty composer + no draft.
+    await desktop.fill('#promptInput', '');
+    await desktop.waitForTimeout(500);
+    check(await desktop.evaluate((id) => localStorage.getItem('pi-dish-draft-' + id),
+      registryState.sessionId) === null, 'clearing the box clears the draft');
 
     // 3. Mobile: hamburger + drawer from empty state and session header
     console.log('mobile:');

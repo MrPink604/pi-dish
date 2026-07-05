@@ -2551,6 +2551,119 @@ button.badge-context {
   background: var(--bg-hover);
   color: var(--text-muted);
   border: 1px solid var(--border);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.queue-chip:hover { color: var(--text); }
+
+/* Expanded list of queued steering/follow-up messages */
+.queue-panel {
+  margin-top: 4px;
+  padding: 6px 8px;
+  background: var(--bg-darker);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: 140px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.queue-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+}
+
+.queue-item-kind {
+  flex: none;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+}
+
+.queue-item-text {
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Pending image attachments above the prompt box */
+.attachment-strip {
+  display: flex;
+  gap: 8px;
+  padding: 6px 2px 2px;
+  overflow-x: auto;
+}
+
+.attachment-thumb {
+  position: relative;
+  flex: none;
+}
+
+.attachment-thumb img {
+  height: 56px;
+  width: auto;
+  max-width: 120px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  display: block;
+}
+
+.attachment-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-darker);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.attachment-remove:hover { color: var(--error); }
+
+/* Images inside transcript user messages */
+.msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+img.msg-image {
+  max-height: 200px;
+  max-width: min(100%, 320px);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  cursor: zoom-in;
+}
+
+.lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgba(0, 33, 43, 0.9); /* --bg-darker at high opacity */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+}
+
+.lightbox-overlay img {
+  max-width: 94vw;
+  max-height: 94vh;
+  border-radius: 6px;
 }
 
 /* Copy button on assistant messages */

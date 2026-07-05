@@ -93,6 +93,17 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
       if (e.key === 'Escape') { e.preventDefault(); hideAutocomplete(); return; }
     }
+    // History recall: ArrowUp with the caret at the very start (or empty box)
+    // steps back through sent prompts; ArrowDown at the end steps forward and
+    // finally restores whatever was being typed.
+    if (!autocompleteVisible && e.key === 'ArrowUp' &&
+        promptInput.selectionStart === 0 && promptInput.selectionEnd === 0) {
+      if (navigateHistory(-1, promptInput)) { e.preventDefault(); return; }
+    }
+    if (!autocompleteVisible && e.key === 'ArrowDown' && historyIndex !== -1 &&
+        promptInput.selectionStart === promptInput.value.length) {
+      if (navigateHistory(1, promptInput)) { e.preventDefault(); return; }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       if (e.ctrlKey) { e.preventDefault(); sendSteer(); }
       else { e.preventDefault(); sendPrompt(); }
@@ -117,6 +128,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     promptInput.style.height = 'auto';
     promptInput.style.height = `${Math.min(promptInput.scrollHeight, 160)}px`;
     handleAutocomplete(promptInput.value);
+    historyIndex = -1; // typing exits history browsing
+    saveDraftSoon();
+  });
+
+  // Pasted screenshots become attachments instead of getting dropped.
+  promptInput.addEventListener('paste', (e) => {
+    const files = Array.from(e.clipboardData?.items || [])
+      .filter((it) => it.type && it.type.startsWith('image/'))
+      .map((it) => it.getAsFile()).filter(Boolean);
+    if (!files.length) return;
+    e.preventDefault();
+    addImageFiles(files);
+  });
+
+  document.getElementById('imageFileInput').addEventListener('change', (e) => {
+    addImageFiles(e.target.files);
+    e.target.value = ''; // allow re-picking the same file
+  });
+
+  // Tap any transcript image to view it full-size.
+  document.addEventListener('click', (e) => {
+    const img = e.target.closest('img.msg-image');
+    if (img) openImageLightbox(img.src);
   });
   
   // Periodic refresh must preserve an in-flight server search, or the list
@@ -514,6 +548,7 @@ async function selectSession(id) {
   if (currentSession.isActive) {
     if (inputArea) inputArea.style.display = '';
     if (resumeBar) resumeBar.style.display = 'none';
+    restorePromptState();
   } else {
     if (inputArea) inputArea.style.display = 'none';
     if (resumeBar) {
@@ -1365,10 +1400,20 @@ async function fetchNewMessagesSince(sessionId) {
 }
 
 function renderUserMessage(msg, time) {
-  const content = extractTextContent(msg.content);
+  const text = extractTextContent(msg.content);
+  // Attached images render as tappable thumbnails below the text (base64 is
+  // attribute-safe; only the mime type needs escaping).
+  let imagesHtml = '';
+  if (Array.isArray(msg.content)) {
+    for (const block of msg.content) {
+      if (block && block.type === 'image' && block.data) {
+        imagesHtml += `<img class="msg-image" src="data:${escapeHtml(block.mimeType || 'image/png')};base64,${block.data}" alt="attached image">`;
+      }
+    }
+  }
   return `<div class="message user">
     <div class="message-header"><span class="message-role user">❯</span>${time ? `<span class="message-time">${time}</span>` : ''}</div>
-    <div class="message-content user-content"><div class="markdown-body">${formatMarkdown(content)}</div></div>
+    <div class="message-content user-content">${text ? `<div class="markdown-body">${formatMarkdown(text)}</div>` : ''}${imagesHtml ? `<div class="msg-images">${imagesHtml}</div>` : ''}</div>
   </div>`;
 }
 
@@ -1748,10 +1793,153 @@ function startMessageStream(sessionId) {
 // Prompt / Turn / Abort
 // =========================================================================
 
+// --- Image attachments -------------------------------------------------
+
+var pendingImages = []; // { data: base64 (no data: prefix), mimeType }
+
+async function addImageFiles(files) {
+  for (const file of Array.from(files || [])) {
+    if (!file || !file.type || !file.type.startsWith('image/')) continue;
+    try {
+      pendingImages.push(await prepareImageAttachment(file));
+    } catch (e) {
+      setStatus(`Could not attach ${file.name || 'image'}: ${e.message}`, 'error');
+    }
+  }
+  renderAttachmentStrip();
+}
+
+// Phone photos are routinely 10MB+; downscale to a sane long edge and
+// re-encode as JPEG before base64ing. Small images pass through untouched.
+async function prepareImageAttachment(file) {
+  const MAX_EDGE = 1568, PASSTHROUGH_BYTES = 512 * 1024;
+  const bitmap = await createImageBitmap(file).catch(() => null);
+  if (!bitmap) return { data: await fileToBase64(file), mimeType: file.type };
+  const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+  if (scale === 1 && file.size <= PASSTHROUGH_BYTES) {
+    bitmap.close();
+    return { data: await fileToBase64(file), mimeType: file.type };
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+  return { data: dataUrl.slice(dataUrl.indexOf(',') + 1), mimeType: 'image/jpeg' };
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => { const s = String(r.result); resolve(s.slice(s.indexOf(',') + 1)); };
+    r.onerror = () => reject(new Error('read failed'));
+    r.readAsDataURL(file);
+  });
+}
+
+function renderAttachmentStrip() {
+  const strip = document.getElementById('attachmentStrip');
+  if (!strip) return;
+  if (!pendingImages.length) { strip.style.display = 'none'; strip.innerHTML = ''; return; }
+  strip.innerHTML = pendingImages.map((img, i) =>
+    `<span class="attachment-thumb"><img src="data:${escapeHtml(img.mimeType)};base64,${img.data}" alt="">` +
+    `<button class="attachment-remove" onclick="removeAttachment(${i})" title="Remove">✕</button></span>`
+  ).join('');
+  strip.style.display = '';
+}
+
+function removeAttachment(i) { pendingImages.splice(i, 1); renderAttachmentStrip(); }
+
+/** Detach and clear the pending attachments (returns null when empty). */
+function takePendingImages() {
+  if (!pendingImages.length) return null;
+  const imgs = pendingImages;
+  pendingImages = [];
+  renderAttachmentStrip();
+  return imgs;
+}
+
+function openImageLightbox(src) {
+  const overlay = document.createElement('div');
+  overlay.className = 'lightbox-overlay';
+  const img = document.createElement('img');
+  img.src = src;
+  overlay.appendChild(img);
+  overlay.addEventListener('click', () => overlay.remove());
+  document.body.appendChild(overlay);
+}
+
+// --- Prompt drafts & history --------------------------------------------
+
+var promptHistory = [];  // sent prompts for the current session (oldest first)
+var historyIndex = -1;   // -1 = not browsing history
+var historyStash = '';   // in-progress text stashed while browsing
+var draftSaveTimer = null;
+
+function draftKey(id) { return `pi-dish-draft-${id}`; }
+function historyKey(id) { return `pi-dish-history-${id}`; }
+
+function saveDraftSoon() {
+  clearTimeout(draftSaveTimer);
+  draftSaveTimer = setTimeout(() => {
+    if (!currentSession) return;
+    const v = document.getElementById('promptInput').value;
+    try {
+      if (v.trim() && v.length < 50000) localStorage.setItem(draftKey(currentSession.id), v);
+      else localStorage.removeItem(draftKey(currentSession.id));
+    } catch {}
+  }, 300);
+}
+
+function clearDraft() {
+  clearTimeout(draftSaveTimer);
+  if (currentSession) try { localStorage.removeItem(draftKey(currentSession.id)); } catch {}
+}
+
+/** On session switch: load that session's draft + history into the input. */
+function restorePromptState() {
+  const input = document.getElementById('promptInput');
+  let draft = '';
+  try { draft = localStorage.getItem(draftKey(currentSession.id)) || ''; } catch {}
+  input.value = draft;
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+  historyIndex = -1;
+  historyStash = '';
+  try { promptHistory = JSON.parse(localStorage.getItem(historyKey(currentSession.id)) || '[]'); } catch { promptHistory = []; }
+  if (!Array.isArray(promptHistory)) promptHistory = [];
+}
+
+function recordPrompt(message) {
+  if (!currentSession) return;
+  promptHistory = pushPromptHistory(promptHistory, message, 50);
+  historyIndex = -1;
+  try { localStorage.setItem(historyKey(currentSession.id), JSON.stringify(promptHistory)); } catch {}
+}
+
+function navigateHistory(dir, input) {
+  if (!promptHistory.length) return false;
+  if (dir < 0) {
+    if (historyIndex === -1) { historyStash = input.value; historyIndex = promptHistory.length - 1; }
+    else if (historyIndex > 0) historyIndex--;
+    else return true; // already at oldest — swallow the keypress
+  } else {
+    historyIndex++;
+    if (historyIndex >= promptHistory.length) historyIndex = -1; // back to the stashed draft
+  }
+  const val = historyIndex === -1 ? historyStash : promptHistory[historyIndex];
+  input.value = val;
+  input.setSelectionRange(val.length, val.length);
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+  return true;
+}
+
 async function sendPrompt() {
   const input = document.getElementById('promptInput');
   const message = input.value.trim();
-  if (!message || !currentSession) return;
+  if ((!message && !pendingImages.length) || !currentSession) return;
 
   if (message === '/tree') { input.value = ''; openTreeModal(); return; }
   hideAutocomplete();
@@ -1760,6 +1948,8 @@ async function sendPrompt() {
   if (message.startsWith('/')) {
     input.value = '';
     input.style.height = '';
+    recordPrompt(message);
+    clearDraft();
     setStatus('Running ' + message.split(' ')[0] + '...', 'working');
     try {
       const res = await fetch(`/api/sessions/${currentSession.id}/command`, {
@@ -1780,13 +1970,19 @@ async function sendPrompt() {
 
   input.value = '';
   input.style.height = '';
+  recordPrompt(message);
+  clearDraft();
+  const images = takePendingImages();
   setStatus('Sending...', 'working');
 
   const container = document.getElementById('messages');
   const emptyState = container.querySelector('.empty-state');
   if (emptyState) emptyState.remove();
+  const optimisticContent = [];
+  if (message) optimisticContent.push({ type: 'text', text: message });
+  for (const img of images || []) optimisticContent.push({ type: 'image', data: img.data, mimeType: img.mimeType });
   container.insertAdjacentHTML('beforeend', renderUserMessage({
-    role: 'user', content: [{ type: 'text', text: message }], timestamp: Date.now()
+    role: 'user', content: optimisticContent, timestamp: Date.now()
   }, formatTime(Date.now())));
   followStream = true; // sending means: follow the stream from here on
   scrollToBottom(container);
@@ -1796,13 +1992,15 @@ async function sendPrompt() {
   try {
     const res = await fetch(`/api/sessions/${currentSession.id}/prompt`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message })
+      body: JSON.stringify(images ? { message, images } : { message })
     });
     if (!res.ok) throw new Error(await res.text());
     setStatus('Waiting for response...', 'working');
   } catch (e) {
     setStatus(`Error: ${e.message}`, 'error');
     setTurnInProgress(false);
+    // Don't lose the attachments on a failed send.
+    if (images) { pendingImages = images.concat(pendingImages); renderAttachmentStrip(); }
   }
 }
 
@@ -1837,16 +2035,19 @@ function setTurnInProgress(active) {
 async function sendSteer() {
   const input = document.getElementById('promptInput');
   const message = input.value.trim();
-  if (!message || !currentSession || !currentSession.isActive) return;
+  if ((!message && !pendingImages.length) || !currentSession || !currentSession.isActive) return;
 
   input.value = '';
   input.style.height = '';
+  recordPrompt(message);
+  clearDraft();
+  const images = takePendingImages();
   setStatus('Steering...', 'working');
 
   try {
     const res = await fetch(`/api/sessions/${currentSession.id}/steer`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message })
+      body: JSON.stringify(images ? { message, images } : { message })
     });
     if (!res.ok) throw new Error(await res.text());
     setStatus('Steered');
@@ -1858,16 +2059,19 @@ async function sendSteer() {
 async function sendFollowUp() {
   const input = document.getElementById('promptInput');
   const message = input.value.trim();
-  if (!message || !currentSession || !currentSession.isActive) return;
+  if ((!message && !pendingImages.length) || !currentSession || !currentSession.isActive) return;
 
   input.value = '';
   input.style.height = '';
+  recordPrompt(message);
+  clearDraft();
+  const images = takePendingImages();
   setStatus('Queueing follow-up...', 'working');
 
   try {
     const res = await fetch(`/api/sessions/${currentSession.id}/prompt`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, deliverAs: 'followUp' })
+      body: JSON.stringify(images ? { message, images, deliverAs: 'followUp' } : { message, deliverAs: 'followUp' })
     });
     if (!res.ok) throw new Error(await res.text());
     setStatus('Queued for after this turn');
@@ -1877,18 +2081,46 @@ async function sendFollowUp() {
 }
 
 // Pending steering/follow-up queue indicator (from queue_update events).
+// Chips toggle an expandable panel listing the queued message texts.
+// (pi exposes no API to cancel a queued message — view-only for now.)
+var lastQueueData = null;
+
 function renderQueueStatus(data) {
+  lastQueueData = data;
   const el = document.getElementById('queueStatus');
+  const panel = document.getElementById('queuePanel');
   if (!el) return;
   const steering = data?.steering || [];
   const followUp = data?.followUp || [];
-  if (!steering.length && !followUp.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  if (!steering.length && !followUp.length) {
+    el.style.display = 'none'; el.innerHTML = '';
+    if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
+    return;
+  }
   const chip = (label, items) =>
-    `<span class="queue-chip" title="${escapeHtml(items.join('\n'))}">${label}: ${items.length}</span>`;
+    `<button class="queue-chip" onclick="toggleQueuePanel()" title="Show queued messages">${label}: ${items.length}</button>`;
   el.innerHTML =
     (steering.length ? chip('steering', steering) : '') +
     (followUp.length ? chip('follow-up', followUp) : '');
   el.style.display = '';
+  if (panel && panel.style.display !== 'none') renderQueuePanel();
+}
+
+function toggleQueuePanel() {
+  const panel = document.getElementById('queuePanel');
+  if (!panel) return;
+  if (panel.style.display === 'none') { renderQueuePanel(); panel.style.display = ''; }
+  else { panel.style.display = 'none'; }
+}
+
+function renderQueuePanel() {
+  const panel = document.getElementById('queuePanel');
+  if (!panel) return;
+  const row = (kind, text) =>
+    `<div class="queue-item"><span class="queue-item-kind">${kind}</span><span class="queue-item-text">${escapeHtml(text)}</span></div>`;
+  panel.innerHTML =
+    (lastQueueData?.steering || []).map((m) => row('steer', m)).join('') +
+    (lastQueueData?.followUp || []).map((m) => row('follow-up', m)).join('');
 }
 
 async function abortTurn() {

@@ -199,12 +199,26 @@ function normalizeMood(description, face) {
   return { description, face };
 }
 
+/**
+ * Append a sent prompt to a history list: trims, skips empties, dedupes an
+ * immediate repeat, and caps the list (oldest dropped). Returns a new array.
+ */
+function pushPromptHistory(list, message, cap) {
+  const out = Array.isArray(list) ? list.slice() : [];
+  const msg = String(message || '').trim();
+  if (!msg) return out;
+  if (out[out.length - 1] === msg) return out;
+  out.push(msg);
+  const max = cap > 0 ? cap : 50;
+  return out.length > max ? out.slice(out.length - max) : out;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     escapeHtml, formatTokens, formatRelativeTime, formatTime, shortCwd,
     truncate, extractTextContent, getToolSummary, getToolOutputText,
     groupByWorkspace, applyLocalFilter, fuzzyMatch, fuzzyScore,
     highlightFuzzy, normalizeMood, isUnreadSession,
-    modelMatchesPattern, isModelEnabled,
+    modelMatchesPattern, isModelEnabled, pushPromptHistory,
   };
 }

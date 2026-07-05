@@ -166,6 +166,29 @@ sessions pick the new scope up on next launch. Gotcha: edit-mode clicks
 re-render the dropdown's innerHTML before the click bubbles to the document,
 so the outside-click closer must treat detached targets as inside.
 
+## Prompt composer (public/app.js)
+
+- **Image attachments**: paste or 📎-pick images; `prepareImageAttachment()`
+  downscales to a 1568px long edge / JPEG re-encode before base64ing (phone
+  photos are huge). Images ride the `images` field on `/prompt` and `/steer`
+  (pi ImageContent: `{type:'image', data, mimeType}`); the bridge extension
+  builds a content array for `pi.sendUserMessage`. A prompt may be
+  images-only (empty message allowed when images present, server + bridge
+  both handle it). `express.json` limit is raised to 30mb for this. User
+  messages render image blocks as thumbnails with a tap-to-zoom lightbox
+  (`img.msg-image`, delegation on document).
+- **Drafts**: the in-progress prompt persists per session
+  (`pi-dish-draft-<id>` in localStorage, debounced from the input listener),
+  restored by `restorePromptState()` on session select, cleared on send.
+- **History**: sent prompts (incl. slash commands, steer, follow-up) append
+  to `pi-dish-history-<id>` via `pushPromptHistory()` (helpers.js — trims,
+  dedupes consecutive, caps at 50). ArrowUp with the caret at position 0
+  walks back; ArrowDown at the end walks forward and finally restores the
+  stashed draft. Typing exits browsing (`historyIndex = -1` on input).
+- **Queue panel**: `queue_update` chips are buttons toggling `#queuePanel`,
+  which lists queued steering/follow-up texts. View-only — pi has no API to
+  cancel a queued message (upstream PR candidate).
+
 ## Message view (public/app.js)
 
 - **Desktop reading column**: `.messages` and `.input-area` center content via

@@ -472,6 +472,21 @@ export default function (pi: ExtensionAPI) {
     return { ok: false, error: `unknown or unsupported command: /${name}` };
   }
 
+  // Text-only messages stay plain strings; attachments become a content
+  // array in pi-ai's TextContent/ImageContent shape. Returns null when the
+  // command carries neither text nor a usable image.
+  function buildUserContent(cmd: any): string | any[] | null {
+    const text = typeof cmd?.message === "string" ? cmd.message : "";
+    const images = (Array.isArray(cmd?.images) ? cmd.images : []).filter(
+      (i: any) => i && typeof i.data === "string" && i.data && typeof i.mimeType === "string",
+    );
+    if (!images.length) return text || null;
+    const content: any[] = [];
+    if (text) content.push({ type: "text", text });
+    for (const i of images) content.push({ type: "image", data: i.data, mimeType: i.mimeType });
+    return content;
+  }
+
   function deliverAsOptions(deliverAs?: string): any {
     if (deliverAs === "steer" || deliverAs === "followUp") return { deliverAs };
     if (turnInProgress) return { deliverAs: "steer" };
@@ -504,24 +519,27 @@ export default function (pi: ExtensionAPI) {
           return;
 
         case "prompt": {
-          if (!cmd.message) return respond(false, undefined, "message required");
+          const content = buildUserContent(cmd);
+          if (!content) return respond(false, undefined, "message required");
           const opts: any = {};
           if (cmd.deliverAs) opts.deliverAs = cmd.deliverAs;
-          await pi.sendUserMessage(cmd.message, opts);
+          await pi.sendUserMessage(content, opts);
           respond(true);
           return;
         }
 
         case "steer": {
-          if (!cmd.message) return respond(false, undefined, "message required");
-          await pi.sendUserMessage(cmd.message, { deliverAs: "steer" });
+          const content = buildUserContent(cmd);
+          if (!content) return respond(false, undefined, "message required");
+          await pi.sendUserMessage(content, { deliverAs: "steer" });
           respond(true);
           return;
         }
 
         case "follow_up": {
-          if (!cmd.message) return respond(false, undefined, "message required");
-          await pi.sendUserMessage(cmd.message, { deliverAs: "followUp" });
+          const content = buildUserContent(cmd);
+          if (!content) return respond(false, undefined, "message required");
+          await pi.sendUserMessage(content, { deliverAs: "followUp" });
           respond(true);
           return;
         }

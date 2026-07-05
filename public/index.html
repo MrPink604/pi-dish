@@ -167,8 +167,12 @@
             </button>
           </div>
           <div class="queue-status" id="queueStatus" style="display:none"></div>
+          <div class="queue-panel" id="queuePanel" style="display:none"></div>
+          <div class="attachment-strip" id="attachmentStrip" style="display:none"></div>
           <textarea id="promptInput" placeholder="Send a message..." rows="2"></textarea>
+          <input type="file" id="imageFileInput" accept="image/*" multiple style="display:none">
           <div class="input-actions">
+            <button class="badge badge-tool-btn" id="btnAttach" onclick="document.getElementById('imageFileInput').click()" title="Attach images">📎</button>
             <button class="badge badge-context" id="sessionContextBar" onclick="openStatsModal()" title="Session stats">0%</button>
             <span class="status" id="status"></span>
             <span class="badge badge-working" id="sessionWorkingMobile"><span class="spinner-dot"></span></span>
