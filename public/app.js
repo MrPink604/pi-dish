@@ -116,7 +116,22 @@ document.addEventListener('DOMContentLoaded', async () => {
   const messagesEl = document.getElementById('messages');
   if (messagesEl) {
     messagesEl.addEventListener('scroll', () => updateJumpButton(messagesEl), { passive: true });
+    // Copy an assistant message's text (delegated — messages re-render often).
+    messagesEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('.msg-copy-btn');
+      if (!btn) return;
+      const msg = btn.closest('.message');
+      const text = [...msg.querySelectorAll('.message-content .markdown-body')]
+        .map(el => el.innerText).join('\n').trim();
+      navigator.clipboard.writeText(text).then(
+        () => { btn.textContent = '✓'; setTimeout(() => { btn.textContent = '⧉'; }, 1200); },
+        () => setStatus('Copy failed (clipboard blocked)', 'error'),
+      );
+    });
   }
+
+  // Restore focus mode (hide tool calls/results) preference
+  setFocusMode(localStorage.getItem('pi-dish-focus') === '1');
 });
 
 // =========================================================================
@@ -515,6 +530,142 @@ function updateSessionHeader() {
     mobileCtx.textContent = ctxText;
     mobileCtx.className = 'badge badge-context' + (ctxClass ? ' ' + ctxClass : '');
   }
+
+  updateThinkingBadges();
+}
+
+// --- Thinking level selector ---
+const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+let thinkingDropdownOpen = false;
+
+function updateThinkingBadges() {
+  const level = currentSession?.thinkingLevel;
+  const show = !!(currentSession && currentSession.isActive);
+  const label = '🧠 ' + (level || '?') + ' ▾';
+  for (const id of ['sessionThinking', 'sessionThinkingMobile']) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.style.display = show ? '' : 'none';
+    el.textContent = label;
+  }
+}
+
+function toggleThinkingDropdown(event) {
+  if (!currentSession || !currentSession.isActive) return;
+  const dropdown = document.getElementById('thinkingDropdown');
+  thinkingDropdownOpen = !thinkingDropdownOpen;
+  if (!thinkingDropdownOpen) { dropdown.style.display = 'none'; return; }
+
+  dropdown.innerHTML = THINKING_LEVELS.map(l =>
+    `<div class="thinking-option${l === currentSession.thinkingLevel ? ' active' : ''}" onclick="selectThinkingLevel('${l}')">${l}</div>`
+  ).join('');
+
+  const rect = event.currentTarget.getBoundingClientRect();
+  if (window.innerWidth > 768) {
+    dropdown.style.top = (rect.bottom + 4) + 'px';
+    dropdown.style.left = rect.left + 'px';
+    dropdown.style.bottom = '';
+  } else {
+    dropdown.style.top = '';
+    dropdown.style.left = rect.left + 'px';
+    dropdown.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+  }
+  dropdown.style.display = 'block';
+  setTimeout(() => document.addEventListener('click', closeThinkingDropdownOnOutsideClick, { once: true }), 0);
+}
+
+function closeThinkingDropdownOnOutsideClick(e) {
+  const dropdown = document.getElementById('thinkingDropdown');
+  if (!dropdown.contains(e.target)) closeThinkingDropdown();
+  else setTimeout(() => document.addEventListener('click', closeThinkingDropdownOnOutsideClick, { once: true }), 0);
+}
+
+function closeThinkingDropdown() {
+  thinkingDropdownOpen = false;
+  document.getElementById('thinkingDropdown').style.display = 'none';
+}
+
+async function selectThinkingLevel(level) {
+  closeThinkingDropdown();
+  if (!currentSession) return;
+  try {
+    const res = await fetch(`/api/sessions/${currentSession.id}/thinking`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ level }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'failed');
+    // Pi clamps to what the model supports; trust the reported level.
+    currentSession.thinkingLevel = data.level || level;
+    updateThinkingBadges();
+    setStatus('Thinking level: ' + currentSession.thinkingLevel);
+  } catch (e) {
+    setStatus('Thinking level failed: ' + e.message, 'error');
+  }
+}
+
+// --- Focus mode: hide tool calls/results so only user/assistant text shows ---
+let focusMode = false;
+
+function setFocusMode(on) {
+  focusMode = !!on;
+  localStorage.setItem('pi-dish-focus', focusMode ? '1' : '0');
+  const messages = document.getElementById('messages');
+  if (messages) messages.classList.toggle('focus-mode', focusMode);
+  for (const id of ['btnFocus', 'btnFocusMobile']) {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('active', focusMode);
+  }
+}
+
+function toggleFocusMode() {
+  setFocusMode(!focusMode);
+  // Keep the reading position sane when large blocks appear/disappear.
+  const container = document.getElementById('messages');
+  if (container && isPinnedToBottom(container)) scrollToBottom(container);
+}
+
+// --- Session stats modal ---
+function openStatsModal() {
+  if (!currentSession) return;
+  const modal = document.getElementById('statsModal');
+  const body = document.getElementById('statsBody');
+  modal.style.display = 'flex';
+  body.textContent = 'Loading...';
+  fetch(`/api/sessions/${currentSession.id}/stats`)
+    .then(r => r.json())
+    .then(s => {
+      if (s.error) { body.textContent = s.error; return; }
+      const cu = s.contextUsage || {};
+      const fmtMoney = (v) => v == null ? '—' : '$' + v.toFixed(4);
+      const rows = [
+        ['Model', s.model || '—'],
+        ['Thinking', s.thinkingLevel || '—'],
+        ['Context', (cu.tokens != null ? formatTokens(cu.tokens) : '—') +
+          ' / ' + (cu.contextWindow ? formatTokens(cu.contextWindow) : '—') +
+          (cu.percent != null ? ` (${Math.round(cu.percent * 10) / 10}%)` : '')],
+        ['Messages', `${s.userMessages} user · ${s.assistantMessages} assistant · ${s.toolCalls} tool calls`],
+        ['Tokens in / out', `${formatTokens(s.tokens?.input)} / ${formatTokens(s.tokens?.output)}`],
+        ['Cache read / write', `${formatTokens(s.tokens?.cacheRead)} / ${formatTokens(s.tokens?.cacheWrite)}`],
+        ['Cost', fmtMoney(s.cost)],
+        ['cwd', s.cwd || '—'],
+        ['Session file', s.sessionFile || '—'],
+      ];
+      body.innerHTML = '<table class="stats-table">' + rows.map(([k, v]) =>
+        `<tr><td class="stats-key">${escapeHtml(k)}</td><td class="stats-val">${escapeHtml(String(v))}</td></tr>`
+      ).join('') + '</table>';
+    })
+    .catch(e => { body.textContent = 'Failed to load stats: ' + e.message; });
+}
+
+function closeStatsModal() {
+  document.getElementById('statsModal').style.display = 'none';
+}
+
+// --- Export ---
+function exportSession() {
+  if (!currentSession) return;
+  window.open(`/api/sessions/${currentSession.id}/export`, '_blank');
 }
 
 // --- Inline rename ---
@@ -852,6 +1003,7 @@ function renderAssistantMessage(msg, time, opts = {}) {
       ${showModel ? `<span class="badge">${escapeHtml(msg.model)}</span>` : ''}
       ${opts.streaming ? '<span class="badge streaming">●</span>' : ''}
       ${time ? `<span class="message-time">${time}</span>` : ''}
+      ${!opts.streaming && textHtml ? '<button class="msg-copy-btn" title="Copy message text">⧉</button>' : ''}
     </div>
     ${thinkingHtml}${toolCallsHtml}
     ${textHtml ? `<div class="message-content"><div class="markdown-body">${textHtml}</div></div>` : ''}
@@ -1173,6 +1325,10 @@ function startMessageStream(sessionId) {
       try { handleExtensionUI(JSON.parse(e.data)); } catch (err) { console.error('extension_ui_request error:', err); }
     });
 
+    evtSource.addEventListener('queue_update', (e) => {
+      try { renderQueueStatus(JSON.parse(e.data)); } catch {}
+    });
+
     // Dialog answered elsewhere (TUI or another browser) — dismiss ours.
     evtSource.addEventListener('extension_ui_resolved', (e) => {
       try { dismissExtDialog(JSON.parse(e.data).id); } catch {}
@@ -1287,10 +1443,13 @@ function setTurnInProgress(active) {
   turnInProgress = active;
   var btnStop = document.getElementById('btnStop');
   var btnSteer = document.getElementById('btnSteer');
+  var btnFollowUp = document.getElementById('btnFollowUp');
   var btnSend = document.getElementById('btnSend');
   if (btnStop) btnStop.style.display = active ? '' : 'none';
   if (btnSteer) btnSteer.style.display = active ? '' : 'none';
+  if (btnFollowUp) btnFollowUp.style.display = active ? '' : 'none';
   if (btnSend) btnSend.style.display = active ? 'none' : '';
+  if (!active) renderQueueStatus(null);
   
   // Dedicated working indicator — independent of transient status text
   var workingDesktop = document.getElementById('sessionWorking');
@@ -1320,6 +1479,42 @@ async function sendSteer() {
   } catch (e) {
     setStatus(`Steer failed: ${e.message}`, 'error');
   }
+}
+
+async function sendFollowUp() {
+  const input = document.getElementById('promptInput');
+  const message = input.value.trim();
+  if (!message || !currentSession || !currentSession.isActive) return;
+
+  input.value = '';
+  input.style.height = '';
+  setStatus('Queueing follow-up...', 'working');
+
+  try {
+    const res = await fetch(`/api/sessions/${currentSession.id}/prompt`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, deliverAs: 'followUp' })
+    });
+    if (!res.ok) throw new Error(await res.text());
+    setStatus('Queued for after this turn');
+  } catch (e) {
+    setStatus(`Follow-up failed: ${e.message}`, 'error');
+  }
+}
+
+// Pending steering/follow-up queue indicator (from queue_update events).
+function renderQueueStatus(data) {
+  const el = document.getElementById('queueStatus');
+  if (!el) return;
+  const steering = data?.steering || [];
+  const followUp = data?.followUp || [];
+  if (!steering.length && !followUp.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const chip = (label, items) =>
+    `<span class="queue-chip" title="${escapeHtml(items.join('\n'))}">${label}: ${items.length}</span>`;
+  el.innerHTML =
+    (steering.length ? chip('steering', steering) : '') +
+    (followUp.length ? chip('follow-up', followUp) : '');
+  el.style.display = '';
 }
 
 async function abortTurn() {
@@ -1950,8 +2145,11 @@ function closeTreeModal() {
 }
 
 document.addEventListener('keydown', function(e) {
-  if (document.getElementById('treeModal').style.display !== 'none' && e.key === 'Escape') {
+  if (e.key !== 'Escape') return;
+  if (document.getElementById('treeModal').style.display !== 'none') {
     e.preventDefault(); closeTreeModal();
+  } else if (document.getElementById('statsModal').style.display !== 'none') {
+    e.preventDefault(); closeStatsModal();
   }
 });
 
@@ -2003,7 +2201,7 @@ function renderTree(nodes) {
     var classes = 'tree-node' + (isActive ? ' active' : '') + (node.isLeaf ? ' is-leaf' : '');
     var badge = node.childCount > 1 ? '<span class="tree-branch-badge">' + node.childCount + '</span>' : '';
     
-    html += '<div class="' + classes + '" data-id="' + node.id + '" onclick="selectTreeNode(\'' + node.id + '\')">';
+    html += '<div class="' + classes + '" data-id="' + node.id + '" style="--tree-depth:' + node.depth + '" onclick="selectTreeNode(\'' + node.id + '\')">';
     html += '<span class="tree-prefix">' + indent + connector + '</span>';
     html += '<span class="tree-marker ' + (isActive ? 'active-marker' : 'inactive-marker') + '">' + marker + ' </span>';
     html += renderTreeNodeContent(node) + badge + '</div>';

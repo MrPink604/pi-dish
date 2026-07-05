@@ -2137,6 +2137,150 @@ body.sidebar-open {
   border-color: var(--accent, #7aa2f7);
 }
 
+/* Focus mode — hide tool noise so only user/assistant text reads through */
+.messages.focus-mode .message.tool-result,
+.messages.focus-mode details.tool-call,
+.messages.focus-mode details.live-tool-panel {
+  display: none;
+}
+
+.btn-icon.active,
+.badge-tool-btn.active {
+  color: var(--accent, #7aa2f7);
+  border-color: var(--accent, #7aa2f7);
+}
+
+/* Thinking level selector */
+.badge-thinking {
+  cursor: pointer;
+  border: none;
+  font: inherit;
+}
+
+.thinking-dropdown {
+  position: fixed;
+  z-index: 300;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  min-width: 110px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.thinking-option {
+  padding: 8px 12px;
+  border-radius: 5px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.thinking-option:hover { background: var(--bg-hover); }
+.thinking-option.active { color: var(--accent, #7aa2f7); font-weight: 600; }
+
+/* Context badge is now a button (opens stats) */
+button.badge-context {
+  cursor: pointer;
+  border: none;
+  font: inherit;
+}
+
+/* Queue chips above the input */
+.queue-status {
+  display: flex;
+  gap: 6px;
+  padding: 4px 2px 0;
+}
+
+.queue-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+/* Copy button on assistant messages */
+.msg-copy-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.message:hover .msg-copy-btn { opacity: 1; }
+
+@media (hover: none) {
+  .msg-copy-btn { opacity: 0.5; } /* always visible on touch devices */
+}
+
+/* Stats modal */
+.stats-modal { max-width: 560px; width: 100%; }
+
+.stats-body { padding: 16px; overflow-x: auto; }
+
+.stats-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+
+.stats-table td { padding: 6px 8px; vertical-align: top; }
+
+.stats-key { color: var(--text-muted); white-space: nowrap; width: 1%; }
+
+.stats-val { word-break: break-all; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; }
+
+/* Mobile-only inline tool buttons in the input row */
+.badge-tool-btn {
+  display: none;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font: inherit;
+}
+
+@media (max-width: 768px) {
+  .badge-tool-btn.mobile-only { display: inline-flex; align-items: center; }
+
+  /* Tree modal: full screen, touch-friendly rows */
+  .tree-modal {
+    width: 100vw;
+    height: 100dvh;
+    max-width: none;
+    max-height: none;
+    border-radius: 0;
+  }
+
+  .tree-controls { flex-wrap: wrap; gap: 6px; }
+
+  .tree-search { min-width: 0; flex: 1; }
+
+  .tree-body { -webkit-overflow-scrolling: touch; }
+
+  .tree-node {
+    /* Text-art indentation eats width on phones; use real padding instead,
+       so branch depth stays visible without pushing content off-screen. */
+    padding: 10px 8px 10px calc(8px + var(--tree-depth, 0) * 12px);
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  .tree-node .tree-prefix { display: none; }
+
+  .btn-branch { padding: 10px 16px; }
+
+  .stats-modal {
+    width: 100vw;
+    max-width: none;
+    max-height: 90dvh;
+  }
+}
+
 /* Extension status badge in session header */
 .ext-ui-status-badge {
   display: inline-flex;

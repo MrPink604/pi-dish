@@ -10,6 +10,13 @@ A minimal web interface for pi's sessions.
 - **Prompt Input**: Send prompts to sessions
 - **Slash Commands**: `/`-prefixed input is routed to a command endpoint, never to the model as text
 - **Extension UI**: dialogs (`select`/`confirm`/`input`/`editor`) render as real modals you can answer from the browser; widgets, statuses, and notifications render natively
+- **Thinking Level**: 🧠 badge next to the model selector switches thinking/effort (off → xhigh); pi clamps to what the model supports
+- **Steer & Follow-up**: while the agent is working, send steering messages (delivered mid-run) or queue follow-ups (delivered after it finishes); pending queues show as chips above the input on pi-dish-spawned sessions (pi doesn't expose queue events to extensions, so TUI sessions can't show them)
+- **Session Stats**: tap the context % badge for tokens in/out, cache usage, cost, message counts, cwd, and session file
+- **Export**: download any session (active or not) as standalone HTML, using pi's own exporter
+- **Focus Mode**: toggle that hides tool calls/results so you can read just the user/assistant conversation (persisted per browser)
+- **Session Tree**: header button (⑂ on mobile) opens the tree to branch from any point; full-screen with touch-sized rows on phones
+- **Copy**: per-message button copies an assistant reply's text (always visible on touch devices)
 
 ## Slash command support
 

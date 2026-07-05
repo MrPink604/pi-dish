@@ -295,6 +295,7 @@ export default function (pi: ExtensionAPI) {
       name: sessionName,
       model: modelId,
       contextUsage,
+      thinkingLevel: getThinkingLevel(),
       turnInProgress,
       updatedAt: new Date().toISOString(),
     };
@@ -326,6 +327,10 @@ export default function (pi: ExtensionAPI) {
     uiState.editorText = null;
   }
 
+  function getThinkingLevel(): string | null {
+    try { return pi.getThinkingLevel() ?? null; } catch { return null; }
+  }
+
   function stateSnapshot() {
     return {
       sessionId,
@@ -334,6 +339,7 @@ export default function (pi: ExtensionAPI) {
       turnInProgress,
       model: modelId,
       contextUsage,
+      thinkingLevel: getThinkingLevel(),
       name: sessionName,
       pid: process.pid,
     };
@@ -419,6 +425,7 @@ export default function (pi: ExtensionAPI) {
     if (name === "thinking") {
       if (!THINKING_LEVELS.includes(args)) return { ok: false, error: `usage: /thinking <${THINKING_LEVELS.join("|")}>` };
       pi.setThinkingLevel(args as any);
+      writeRegistry();
       return { ok: true, info: `Thinking level: ${args}` };
     }
 
@@ -583,6 +590,16 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
+        case "set_thinking_level": {
+          if (!THINKING_LEVELS.includes(cmd.level)) {
+            return respond(false, undefined, `level must be one of: ${THINKING_LEVELS.join(", ")}`);
+          }
+          pi.setThinkingLevel(cmd.level);
+          writeRegistry();
+          respond(true, { level: getThinkingLevel() });
+          return;
+        }
+
         case "set_session_name": {
           if (!cmd.name) return respond(false, undefined, "name required");
           pi.setSessionName(cmd.name);
@@ -654,6 +671,8 @@ export default function (pi: ExtensionAPI) {
       } else if (ev === "model_select") {
         modelId = formatModel(event?.model) ?? modelId;
         refreshContextUsage(ctx);
+        writeRegistry();
+      } else if (ev === "thinking_level_select") {
         writeRegistry();
       } else if (ev === "compaction_end") {
         refreshContextUsage(ctx);

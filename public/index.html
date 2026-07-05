@@ -76,12 +76,31 @@
               <div class="model-selector" id="modelSelector">
                 <button class="badge badge-model" id="sessionModel" onclick="toggleModelDropdown()" title="Change model">model ▾</button>
               </div>
-              <span class="badge badge-context" id="sessionContext">0%</span>
+              <button class="badge badge-thinking" id="sessionThinking" onclick="toggleThinkingDropdown(event)" title="Thinking level" style="display:none">🧠 ▾</button>
+              <button class="badge badge-context" id="sessionContext" onclick="openStatsModal()" title="Session stats">0%</button>
               <span class="badge" id="sessionMsgCount">0 msgs</span>
               <span class="badge badge-working" id="sessionWorking"><span class="spinner-dot"></span><span class="spinner-text">Working</span></span>
             </div>
           </div>
           <div class="session-actions">
+            <button class="btn-icon" id="btnFocus" onclick="toggleFocusMode()" title="Focus mode: hide tool calls/results">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M4 6h16M7 12h10M10 18h4"/>
+              </svg>
+            </button>
+            <button class="btn-icon" id="btnTree" onclick="openTreeModal()" title="Session tree">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="12" r="2"/>
+                <path d="M6 7v10M6 12h10"/>
+              </svg>
+            </button>
+            <button class="btn-icon" id="btnExport" onclick="exportSession()" title="Export session as HTML">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                <path d="M7 10l5 5 5-5"/>
+                <path d="M12 15V3"/>
+              </svg>
+            </button>
           </div>
         </header>
         
@@ -101,19 +120,24 @@
 
         <!-- Input (for active sessions) -->
         <div class="input-area">
+          <div class="queue-status" id="queueStatus" style="display:none"></div>
           <textarea id="promptInput" placeholder="Send a message..." rows="2"></textarea>
           <div class="input-actions">
             <span class="status" id="status"></span>
             <!-- Mobile-only: model/context in the actions row -->
             <div class="input-meta" id="inputMeta">
+              <button class="badge badge-tool-btn mobile-only" id="btnFocusMobile" onclick="toggleFocusMode()" title="Hide tool calls/results">☰</button>
+              <button class="badge badge-tool-btn mobile-only" id="btnTreeMobile" onclick="openTreeModal()" title="Session tree">⑂</button>
               <div class="model-selector model-selector-mobile" id="modelSelectorMobile">
                 <button class="badge badge-model" id="sessionModelMobile" onclick="toggleModelDropdown()" title="Change model">model ▾</button>
               </div>
-              <span class="badge badge-context" id="sessionContextMobile">0%</span>
+              <button class="badge badge-thinking" id="sessionThinkingMobile" onclick="toggleThinkingDropdown(event)" title="Thinking level" style="display:none">🧠 ▾</button>
+              <button class="badge badge-context" id="sessionContextMobile" onclick="openStatsModal()" title="Session stats">0%</button>
               <span class="badge badge-working" id="sessionWorkingMobile"><span class="spinner-dot"></span></span>
             </div>
             <button class="btn btn-stop" id="btnStop" onclick="abortTurn()" style="display:none" title="Stop (Esc)">Stop</button>
             <button class="btn btn-steer" id="btnSteer" onclick="sendSteer()" style="display:none" title="Steer (Ctrl+Enter)">Steer</button>
+            <button class="btn btn-steer" id="btnFollowUp" onclick="sendFollowUp()" style="display:none" title="Queue after agent finishes">Follow-up</button>
             <button class="btn btn-primary" id="btnSend" onclick="sendPrompt()">Send</button>
           </div>
         </div>
@@ -147,7 +171,19 @@
     </div>
   </div>
 
+  <!-- Stats Modal -->
+  <div class="modal-overlay" id="statsModal" style="display:none" onclick="if(event.target===this)closeStatsModal()">
+    <div class="modal stats-modal">
+      <div class="modal-header">
+        <h3>Session Stats</h3>
+        <button class="btn-icon" onclick="closeStatsModal()" title="Close (Esc)">✕</button>
+      </div>
+      <div class="stats-body" id="statsBody">Loading...</div>
+    </div>
+  </div>
+
   <script src="app.js"></script>
   <div class="model-dropdown" id="modelDropdown"></div>
+  <div class="thinking-dropdown" id="thinkingDropdown" style="display:none"></div>
 </body>
 </html>

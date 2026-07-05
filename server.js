@@ -206,6 +206,7 @@ function getActiveSessions() {
       contextPercent: roundPercent(usage?.percent ?? info.contextPercent) ?? 0,
       contextTokens: usage?.tokens ?? info.contextTokens ?? 0,
       contextWindow: usage?.contextWindow || getContextWindow(reg.model || info.model),
+      thinkingLevel: reg.thinkingLevel || null,
       messageCount: info.messageCount || 0,
       lastActivity: info.lastActivity || new Date(),
       isActive: true,
@@ -233,6 +234,7 @@ function getActiveSessions() {
       contextPercent: roundPercent(usage?.percent) ?? 0,
       contextTokens: usage?.tokens ?? 0,
       contextWindow: usage?.contextWindow || state.model?.contextWindow || 0,
+      thinkingLevel: state.thinkingLevel || null,
       messageCount: state.messageCount || 0,
       lastActivity: new Date(),
       isActive: true,
@@ -459,7 +461,7 @@ app.post('/api/sessions/:id/prompt', async (req, res) => {
     const rpc = getRPCSession(req.params.id);
     const sess = registered ? await getBridgeSession(req.params.id) : rpc;
     if (!sess?.alive) return res.status(404).json({ error: 'Session not active' });
-    const result = registered ? await sess.prompt(message, deliverAs ? { deliverAs } : {}) : await sess.prompt(message);
+    const result = await sess.prompt(message, deliverAs ? { deliverAs } : {});
     res.json({ success: true, result });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -549,6 +551,111 @@ async function runRpcSlashCommand(rpc, message) {
     }
   }
 }
+
+const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+
+app.post('/api/sessions/:id/thinking', async (req, res) => {
+  const { level } = req.body || {};
+  if (!THINKING_LEVELS.includes(level)) {
+    return res.status(400).json({ error: `level must be one of: ${THINKING_LEVELS.join(', ')}` });
+  }
+  try {
+    if (getRegisteredSession(req.params.id)) {
+      const sess = await getBridgeSession(req.params.id);
+      const data = await sess.setThinkingLevel(level);
+      return res.json({ success: true, level: data?.level ?? level });
+    }
+    const rpc = getRPCSession(req.params.id);
+    if (rpc?.alive) {
+      await rpc.setThinkingLevel(level);
+      return res.json({ success: true, level });
+    }
+    res.status(404).json({ error: 'Session not active' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Aggregate token/cost stats. RPC sessions answer authoritatively via
+// get_session_stats; for everything else we sum assistant usage from the
+// JSONL and overlay live context usage when the bridge reports it.
+app.get('/api/sessions/:id/stats', async (req, res) => {
+  const sessionId = req.params.id;
+  try {
+    const rpc = getRPCSession(sessionId);
+    if (!getRegisteredSession(sessionId) && rpc?.alive) {
+      try {
+        const stats = await rpc.getSessionStats();
+        if (stats) return res.json(stats);
+      } catch {}
+    }
+
+    const sessionFile = findSessionFile(sessionId);
+    if (!sessionFile) return res.status(404).json({ error: 'Session not found' });
+
+    const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    let cost = 0, userMessages = 0, assistantMessages = 0, toolCalls = 0, toolResults = 0;
+    for (const line of fs.readFileSync(sessionFile, 'utf-8').split('\n')) {
+      if (!line.trim()) continue;
+      let entry;
+      try { entry = JSON.parse(line); } catch { continue; }
+      if (entry.type !== 'message' || !entry.message) continue;
+      const m = entry.message;
+      if (m.role === 'user') userMessages++;
+      else if (m.role === 'toolResult') toolResults++;
+      else if (m.role === 'assistant') {
+        assistantMessages++;
+        if (Array.isArray(m.content)) toolCalls += m.content.filter(c => c.type === 'toolCall').length;
+        const u = m.usage;
+        if (u) {
+          tokens.input += u.input || 0;
+          tokens.output += u.output || 0;
+          tokens.cacheRead += u.cacheRead || 0;
+          tokens.cacheWrite += u.cacheWrite || 0;
+          cost += u.cost?.total || 0;
+        }
+      }
+    }
+
+    const reg = getRegisteredSession(sessionId);
+    const contextUsage = reg?.contextUsage || null;
+    const info = parseSessionFile(sessionFile);
+    res.json({
+      sessionFile,
+      sessionId,
+      cwd: reg?.cwd || info.cwd || null,
+      model: reg?.model || info.model || null,
+      thinkingLevel: reg?.thinkingLevel || null,
+      userMessages,
+      assistantMessages,
+      toolCalls,
+      toolResults,
+      totalMessages: userMessages + assistantMessages + toolResults,
+      tokens: { ...tokens, total: tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite },
+      cost,
+      contextUsage: contextUsage || {
+        tokens: info.contextTokens || null,
+        contextWindow: info.contextWindow,
+        percent: info.contextPercent ?? null,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Export any session (active or not) to a standalone HTML file.
+app.get('/api/sessions/:id/export', async (req, res) => {
+  try {
+    const sessionFile = findSessionFile(req.params.id);
+    if (!sessionFile) return res.status(404).json({ error: 'Session not found' });
+    const outPath = path.join(os.tmpdir(), `pi-dish-export-${req.params.id.slice(-12)}.html`);
+    const htmlPath = await piSDK.exportSessionHtml(sessionFile, outPath);
+    res.download(htmlPath, path.basename(sessionFile, '.jsonl') + '.html');
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // Execute a slash command against an active session.
 app.post('/api/sessions/:id/command', async (req, res) => {
@@ -904,6 +1011,7 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   sub('tool_execution_end', (data) => send('tool_execution_end', data));
   sub('extension_ui_request', (data) => send('extension_ui_request', data));
   sub('extension_ui_resolved', (data) => send('extension_ui_resolved', data));
+  sub('queue_update', (data) => send('queue_update', data));
   sub('compaction_start', (data) => send('compaction_start', data));
   sub('compaction_end', (data) => send('compaction_end', data));
   sub('auto_retry_start', (data) => send('auto_retry_start', data));
