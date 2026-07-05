@@ -16,7 +16,13 @@ let autocompleteIndex = 0;
 // yanking the viewport, and a jump-to-bottom button appears.
 // =========================================================================
 
+// Set when the user sends a prompt (or hits jump-to-bottom): follow the
+// stream unconditionally, even if a mobile keyboard resize left the viewport
+// short of the 80px pin threshold. Cleared by any deliberate scroll gesture.
+let followStream = false;
+
 function isPinnedToBottom(el) {
+  if (followStream) return true;
   return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
 }
 
@@ -35,7 +41,10 @@ function updateJumpButton(messagesEl) {
     btn.className = 'jump-to-bottom';
     btn.textContent = '↓';
     btn.title = 'Jump to latest';
-    btn.addEventListener('click', () => scrollToBottom(document.getElementById('messages')));
+    btn.addEventListener('click', () => {
+      followStream = true;
+      scrollToBottom(document.getElementById('messages'));
+    });
     const view = document.getElementById('sessionView') || document.body;
     view.appendChild(btn);
   }
@@ -123,6 +132,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   const messagesEl = document.getElementById('messages');
   if (messagesEl) {
     messagesEl.addEventListener('scroll', () => updateJumpButton(messagesEl), { passive: true });
+    // Any deliberate gesture in the feed cancels forced follow. Harmless when
+    // already at the bottom — normal proximity pinning takes over seamlessly.
+    const cancelFollow = () => { followStream = false; };
+    messagesEl.addEventListener('wheel', cancelFollow, { passive: true });
+    messagesEl.addEventListener('touchmove', cancelFollow, { passive: true });
+    messagesEl.addEventListener('mousedown', cancelFollow, { passive: true });
     // Copy an assistant message's text (delegated — messages re-render often).
     messagesEl.addEventListener('click', (e) => {
       const btn = e.target.closest('.msg-copy-btn');
@@ -482,6 +497,7 @@ function patchSession(id, patch) {
 async function selectSession(id) {
   currentSession = findSession(id);
   if (!currentSession) return;
+  followStream = false; // forced follow doesn't carry across sessions
   localStorage.setItem('pi-dish-session', id);
   markSessionSeen(id, currentSession.lastActivity);
   
@@ -806,6 +822,7 @@ async function jumpToSearchResult() {
     clearSearchMarks();
     el.classList.add('search-current');
     markSearchTokens(el, search.query.split(/\s+/).filter(Boolean));
+    followStream = false; // navigating to a match must not get yanked back down
     el.scrollIntoView({ block: 'center' });
     updateJumpButton(container);
     updateSearchCount();
@@ -1666,7 +1683,8 @@ async function sendPrompt() {
   container.insertAdjacentHTML('beforeend', renderUserMessage({
     role: 'user', content: [{ type: 'text', text: message }], timestamp: Date.now()
   }, formatTime(Date.now())));
-  scrollToBottom(container); // own message: always jump down
+  followStream = true; // sending means: follow the stream from here on
+  scrollToBottom(container);
 
   setTurnInProgress(true);
 

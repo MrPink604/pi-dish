@@ -80,6 +80,13 @@ far** — intermediates are droppable. The path is:
    live mid-stream. `message_end`/`turn_end` finalize (cancel pending render,
    swap in the authoritative render, apply highlighting).
 
+Scroll pinning: streaming only follows while the viewport is near the bottom
+(`isPinnedToBottom`, 80px threshold). Sending a prompt or hitting
+jump-to-bottom sets `followStream`, which forces following regardless of
+scroll position — needed on mobile, where the keyboard resizing the container
+silently un-pins. Only a deliberate gesture (wheel/touchmove/mousedown on the
+feed) clears it; programmatic or layout-driven scroll shifts must not.
+
 ## Tests (test/)
 
 `npm test` runs two node:test suites:

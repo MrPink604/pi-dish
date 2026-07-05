@@ -40,6 +40,12 @@ const appendEntry = (e) => fs.appendFileSync(sessionFile, JSON.stringify(e) + '\
 appendEntry({ type: 'session', cwd: CWD, timestamp: '2026-07-05T00:00:00.000Z' });
 appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'existing question' }], timestamp: '2026-07-05T00:00:01.000Z' } });
 appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'existing **answer**' }], timestamp: '2026-07-05T00:00:02.000Z' } });
+// Pad the history so the feed is taller than the viewport — the forced-follow
+// scroll check needs a genuinely scrollable container to mean anything.
+for (let i = 0; i < 8; i++) {
+  appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: `filler question ${i}` }], timestamp: `2026-07-05T00:01:0${i}.000Z` } });
+  appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: `filler answer ${i}\n\nwith a second paragraph of text to take up vertical space in the feed.` }], timestamp: `2026-07-05T00:01:0${i}.500Z` } });
+}
 
 // --- fake bridge socket -------------------------------------------------------
 // Speaks the newline-delimited JSON protocol from lib/bridge-session.js:
@@ -183,6 +189,17 @@ function writeRegistry(patch = {}) {
     check(true, 'sidebar working dot appears during the turn');
     await desktop.waitForSelector('.message.assistant[data-streaming="true"]', { timeout: 5000 });
     check(true, 'streaming element appeared');
+    // Forced follow: a programmatic scroll displacement (stand-in for the
+    // mobile keyboard resizing the container off the pin threshold) must not
+    // break auto-follow mid-stream — only a deliberate gesture unpins.
+    await desktop.evaluate(() => { document.getElementById('messages').scrollTop = 0; });
+    await desktop.waitForTimeout(200); // let a streaming render land
+    check(await desktop.evaluate(() => {
+      const el = document.getElementById('messages');
+      // guard: the feed must actually be scrollable or this check is vacuous
+      return el.scrollHeight > el.clientHeight + 100 &&
+        el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    }), 'viewport re-follows the stream after a non-gesture scroll displacement');
     // after turn_end the streamed element is replaced by the JSONL render
     await desktop.waitForSelector('.message.assistant:not([data-streaming]) code', { timeout: 5000 });
     const finals = await desktop.locator('.message.assistant').allTextContents();
