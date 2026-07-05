@@ -109,6 +109,12 @@ test('GET /messages honors limit / before / after cursors', async () => {
 
   const catchup = await get(`/api/sessions/${SESSION_ID}/messages?after=2`);
   assert.deepEqual(catchup.body.messages.map(m => m.index), [3, 4]);
+
+  // A non-numeric cursor must not defeat the limit and dump the whole session
+  // with null indexes — it falls through to the limited tail.
+  const bogus = await get(`/api/sessions/${SESSION_ID}/messages?after=abc&limit=2`);
+  assert.deepEqual(bogus.body.messages.map(m => m.index), [3, 4]);
+  assert.ok(bogus.body.messages.every(m => Number.isFinite(m.index)), 'indexes stay numeric');
 });
 
 test('GET /search returns match indexes with roles', async () => {

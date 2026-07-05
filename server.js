@@ -335,9 +335,13 @@ app.get('/api/sessions/:id/messages', (req, res) => {
   // return the tail. `before=<idx>` returns messages with index < idx.
   // `after=<idx>` returns messages with index > idx (no limit; for
   // incremental catch-up after a turn ends).
+  // Coerce non-numeric cursors to null so they fall through to the tail
+  // branch. A NaN cursor otherwise slips past the startIdx>endIdx guard
+  // (NaN comparisons are false) and slice(NaN,…) returns the whole session.
+  const cursor = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : null; };
   const limit = Math.max(1, Math.min(500, parseInt(req.query.limit, 10) || 50));
-  const before = req.query.before != null ? parseInt(req.query.before, 10) : null;
-  const after = req.query.after != null ? parseInt(req.query.after, 10) : null;
+  const before = req.query.before != null ? cursor(req.query.before) : null;
+  const after = req.query.after != null ? cursor(req.query.after) : null;
 
   const info = parseSessionFile(sessionFile);
   // Overlay live context usage when the session can report it.
@@ -942,7 +946,6 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   };
 
   sub('turn_start', () => send('turn_start', {}));
-  sub('turn_end', () => send('turn_end', {}));
 
   // Coalesced message_update forwarding — each event carries the *full*
   // message so far, so dropping intermediates loses nothing.
@@ -955,6 +958,14 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
     pendingUpdate = null;
     updateTimer = setTimeout(flushUpdate, MESSAGE_UPDATE_COALESCE_MS);
   };
+  // Drop any coalesced update still pending. Must run at every turn/session
+  // boundary — a delta that flushes *after* turn_end/session_ended re-arms the
+  // client's working indicator and leaves a ghost streaming bubble. The JSONL
+  // catch-up that follows turn_end renders the authoritative final message.
+  const clearPendingUpdate = () => {
+    pendingUpdate = null;
+    if (updateTimer) { clearTimeout(updateTimer); updateTimer = null; }
+  };
   sub('message_update', (data) => {
     const m = data?.message;
     if (!m) return;
@@ -962,11 +973,11 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
     if (!updateTimer) flushUpdate();
   });
 
+  sub('turn_end', () => { clearPendingUpdate(); send('turn_end', {}); });
+
   sub('message_end', (data) => {
     if (data?.message?.role !== 'assistant') return;
-    // Don't let a stale coalesced update land after the final message.
-    pendingUpdate = null;
-    if (updateTimer) { clearTimeout(updateTimer); updateTimer = null; }
+    clearPendingUpdate();
     send('message_end', { message: data.message });
   });
 
@@ -997,7 +1008,7 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   sub('auto_retry_start', (data) => send('auto_retry_start', data));
   sub('auto_retry_end', (data) => send('auto_retry_end', data));
 
-  const onClose = () => send('session_ended', {});
+  const onClose = () => { clearPendingUpdate(); send('session_ended', {}); };
   if (typeof sess.once === 'function') {
     sess.once('close', onClose);
     offs.push(() => sess.off('close', onClose));
@@ -1006,8 +1017,7 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   }
 
   req.on('close', () => {
-    if (updateTimer) { clearTimeout(updateTimer); updateTimer = null; }
-    pendingUpdate = null;
+    clearPendingUpdate();
     for (const off of offs) { try { off(); } catch {} }
   });
 });
