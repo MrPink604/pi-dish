@@ -1036,7 +1036,19 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   sub('tool_execution_start', (data) => send('tool_execution_start', data));
   sub('tool_execution_update', (data) => send('tool_execution_update', data));
   sub('tool_execution_end', (data) => send('tool_execution_end', data));
-  sub('extension_ui_request', (data) => send('extension_ui_request', data));
+  // setWidget/setStatus re-fire with unchanged content on every extension
+  // tick (pi-processes: once per process output line) — skip exact repeats
+  // per connection. Content-keyed: the request id changes on every emission.
+  const lastExtUI = new Map(); // method:key -> content signature
+  sub('extension_ui_request', (data) => {
+    if (data && (data.method === 'setWidget' || data.method === 'setStatus')) {
+      const k = `${data.method}:${data.widgetKey || data.statusKey || 'default'}`;
+      const sig = JSON.stringify([data.widgetLines, data.widgetPlacement, data.statusText]);
+      if (lastExtUI.get(k) === sig) return;
+      lastExtUI.set(k, sig);
+    }
+    send('extension_ui_request', data);
+  });
   sub('extension_ui_resolved', (data) => send('extension_ui_resolved', data));
   sub('queue_update', (data) => send('queue_update', data));
   sub('compaction_start', (data) => send('compaction_start', data));

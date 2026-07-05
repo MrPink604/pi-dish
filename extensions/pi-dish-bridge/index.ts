@@ -182,14 +182,25 @@ export default function (pi: ExtensionAPI) {
     if (!req?.id) req.id = crypto.randomUUID();
 
     if (req.method === "setWidget") {
+      // Extensions re-set widgets on every internal tick (pi-processes does it
+      // per output line) — don't rebroadcast content clients already have.
+      const key = req.widgetKey || "default";
       if (req.widgetLines === undefined || (Array.isArray(req.widgetLines) && req.widgetLines.length === 0)) {
-        uiState.widgets.delete(req.widgetKey || "default");
+        if (!uiState.widgets.delete(key)) return;
       } else {
-        uiState.widgets.set(req.widgetKey || "default", req);
+        const prev = uiState.widgets.get(key);
+        if (prev && prev.widgetPlacement === req.widgetPlacement &&
+            JSON.stringify(prev.widgetLines) === JSON.stringify(req.widgetLines)) return;
+        uiState.widgets.set(key, req);
       }
     } else if (req.method === "setStatus") {
-      if (!req.statusText) uiState.statuses.delete(req.statusKey || "default");
-      else uiState.statuses.set(req.statusKey || "default", req);
+      const key = req.statusKey || "default";
+      if (!req.statusText) {
+        if (!uiState.statuses.delete(key)) return;
+      } else {
+        if (uiState.statuses.get(key)?.statusText === req.statusText) return;
+        uiState.statuses.set(key, req);
+      }
     } else if (req.method === "setTitle") {
       uiState.title = req;
     } else if (req.method === "set_editor_text") {

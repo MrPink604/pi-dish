@@ -14,6 +14,19 @@ function escapeHtml(text) {
     .replace(/'/g, '&#39;');
 }
 
+/**
+ * Remove ANSI escape sequences (CSI colors, OSC titles, stray escapes).
+ * Extension UI strings arrive styled for the terminal via pi's theme.fg();
+ * a browser renders those codes as literal "[38;2;…m" garbage.
+ */
+function stripAnsi(text) {
+  if (text == null || text === '') return '';
+  return String(text)
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, '') // OSC … BEL/ST
+    .replace(/\x1b\[[0-9;:?]*[ -\/]*[@-~]/g, '')        // CSI (colors, cursor)
+    .replace(/\x1b[ -\/]*./g, '');                      // leftover ESC + intermediates + final
+}
+
 function formatTokens(tokens) {
   if (!tokens || tokens === 0) return '0';
   if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(1)}M`;
@@ -241,7 +254,7 @@ function pushPromptHistory(list, message, cap) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    escapeHtml, formatTokens, formatCacheStat, formatRelativeTime, formatTime, formatDuration,
+    escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRelativeTime, formatTime, formatDuration,
     shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText,
     groupByWorkspace, applyLocalFilter, fuzzyMatch, fuzzyScore,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,

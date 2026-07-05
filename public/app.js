@@ -2603,6 +2603,13 @@ function getToastContainer() {
 }
 
 function handleExtensionUI(req) {
+  // Extension strings arrive styled for the terminal (theme.fg ANSI codes) —
+  // strip them everywhere up front instead of per render site.
+  if (Array.isArray(req.widgetLines)) req.widgetLines = req.widgetLines.map(stripAnsi);
+  if (Array.isArray(req.options)) req.options = req.options.map(o => typeof o === 'string' ? stripAnsi(o) : o);
+  for (const f of ['message', 'statusText', 'title', 'text', 'prefill', 'placeholder']) {
+    if (typeof req[f] === 'string') req[f] = stripAnsi(req[f]);
+  }
   switch (req.method) {
     case 'notify':
       showExtToast(req.message || '', req.notifyType || 'info');

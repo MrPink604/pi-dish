@@ -7,6 +7,14 @@
 > Custom components, tool/message renderers, and the terminal-canvas fallback
 > (Milestones 2 and 4) remain unimplemented and would need upstream pi changes.
 > Note this doc predates the pi package rename to `@earendil-works/*`.
+>
+> **2026-07-05:** Milestone 1 hardened after a live test with `@aliou/pi-processes`
+> on glm-5.2: widget/status/dialog strings are ANSI-stripped in the web client
+> (extensions style them with `theme.fg`), and unchanged `setWidget`/`setStatus`
+> re-emissions are deduped (bridge + per SSE connection). Line-array widgets now
+> render and live-update cleanly; component-factory widgets (e.g. the
+> pi-processes log dock) are still TUI-only by design — both the bridge and pi's
+> own RPC mode forward only `string[]` content.
 
 ## Current State
 

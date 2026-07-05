@@ -16,6 +16,19 @@ test('escapeHtml escapes markup and attribute-breaking quotes', () => {
   assert.equal(H.escapeHtml(42), '42');
 });
 
+test('stripAnsi removes CSI colors, OSC sequences, and stray escapes', () => {
+  // Real pi-processes status-widget line (truecolor theme.fg output).
+  assert.equal(
+    H.stripAnsi('\x1b[38;2;102;102;102mprocesses: \x1b[39m\x1b[38;2;138;190;183mticker2\x1b[39m \x1b[38;2;102;102;102mrunning\x1b[39m'),
+    'processes: ticker2 running'
+  );
+  assert.equal(H.stripAnsi('\x1b]0;window title\x07plain'), 'plain');
+  assert.equal(H.stripAnsi('a\x1b(Bb'), 'ab'); // charset-select escape pair
+  assert.equal(H.stripAnsi('no escapes'), 'no escapes');
+  assert.equal(H.stripAnsi(''), '');
+  assert.equal(H.stripAnsi(null), '');
+});
+
 test('formatTokens abbreviates thousands', () => {
   assert.equal(H.formatTokens(0), '0');
   assert.equal(H.formatTokens(null), '0');
