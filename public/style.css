@@ -19,10 +19,14 @@
   --accent: #268bd2;     /* blue */
   --accent-dim: #1c6ba3;
   --success: #859900;    /* green */
+  --success-bright: #a3b900; /* small-text legibility on dark fills */
   --cyan: #2aa198;
   --warning: #b58900;    /* yellow */
   --orange: #cb4b16;
+  --orange-dim: #a63e12;
   --error: #dc322f;      /* red */
+  --error-dim: #b3271f;
+  --text-on-accent: #fff; /* text on solid accent/error/orange fills */
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Monaco, Consolas, monospace;
   --sidebar-width: 280px;
   --content-max: 980px; /* reading column for messages + composer on wide screens */
@@ -120,7 +124,7 @@ body.sidebar-open {
 
 .sidebar-tab.active .tab-count {
   background: var(--accent);
-  color: #fff;
+  color: var(--text-on-accent);
 }
 
 /* Live/inactive markers in the "All" view */
@@ -639,7 +643,7 @@ body.sidebar-open {
 
 .model-badge.free {
   background: rgba(133, 153, 0, 0.15);
-  color: #a3b900;
+  color: var(--success-bright);
   border: 1px solid rgba(133, 153, 0, 0.35);
 }
 
@@ -1352,7 +1356,7 @@ body.sidebar-open {
 .btn-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--text-on-accent);
 }
 
 .btn-primary:hover {
@@ -1852,7 +1856,7 @@ body.sidebar-open {
 
 .btn-stop {
   background: var(--error);
-  color: #fff;
+  color: var(--text-on-accent);
   font-weight: 600;
   border: none;
   border-radius: 6px;
@@ -1862,12 +1866,12 @@ body.sidebar-open {
 }
 
 .btn-stop:hover {
-  background: #b3271f;
+  background: var(--error-dim);
 }
 
 .btn-steer {
   background: var(--orange);
-  color: #fff;
+  color: var(--text-on-accent);
   font-weight: 600;
   border: none;
   border-radius: 6px;
@@ -1877,7 +1881,7 @@ body.sidebar-open {
 }
 
 .btn-steer:hover {
-  background: #a63e12;
+  background: var(--orange-dim);
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -2072,7 +2076,7 @@ body.sidebar-open {
 
 .btn-branch {
   background: var(--accent);
-  color: #fff;
+  color: var(--text-on-accent);
   border: none;
   cursor: pointer;
   font-weight: 600;
@@ -2303,7 +2307,7 @@ body.sidebar-open {
 .ext-ui-dialog-btn.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--text-on-accent);
 }
 
 .ext-ui-dialog-input,

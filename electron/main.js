@@ -14,7 +14,7 @@ function createWindow() {
     minWidth: 600,
     minHeight: 400,
     title: 'π-dish',
-    backgroundColor: '#0d1117',
+    backgroundColor: '#002b36', // --bg-dark in public/style.css — avoids an off-theme flash before the page paints
     autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,

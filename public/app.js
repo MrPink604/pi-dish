@@ -628,8 +628,9 @@ async function resumeSession() {
     
     if (res.ok && data.success) {
       setStatus('Session resumed');
-      // Reload sessions and re-select (it's now active)
-      await loadSessions();
+      // Reload sessions and re-select (it's now active); refreshSessions
+      // keeps an in-flight All-tab search intact.
+      await refreshSessions();
       selectSession(data.id);
     } else {
       setStatus('Resume failed: ' + (data.error || 'unknown'), 'error');
@@ -1248,8 +1249,11 @@ function closeModelDropdown() {
 
 async function selectModel(fullModelId) {
   closeModelDropdown();
-  var modelId = parseModelId(fullModelId).id;
-  var isSame = (modelId === currentSession?.model || fullModelId === currentSession?.model);
+  // Only skip on an exact provider/id match. currentSession.model is often a
+  // bare id, and the same id can exist under two providers (anthropic vs a
+  // Bedrock mirror) — a bare-id comparison silently swallowed those switches.
+  // A redundant set_model for the truly-same model is harmless.
+  var isSame = fullModelId === currentSession?.model;
   if (!currentSession || isSame) return;
   setStatus('Switching model...', 'working');
   try {
@@ -1698,7 +1702,7 @@ function startMessageStream(sessionId) {
 
     evtSource.addEventListener('turn_start', () => setTurnInProgress(true));
 
-    evtSource.addEventListener('turn_end', () => {
+    const handleTurnEnd = () => {
       setTurnInProgress(false);
       cancelStreamingRender();
       // Clean up any orphaned running panels (defensive)
@@ -1715,9 +1719,14 @@ function startMessageStream(sessionId) {
       // Incrementally pull only new messages from JSONL — full reload
       // stalls long sessions.
       fetchNewMessagesSince(sessionId);
-      loadSessions();
+      refreshSessions();
       setStatus('');
-    });
+    };
+    evtSource.addEventListener('turn_end', handleTurnEnd);
+    // An aborted/errored turn can end with agent_end and no paired turn_end;
+    // both server backends treat it as turn-terminating, so we must too. The
+    // guard avoids double catch-up when turn_end already ran.
+    evtSource.addEventListener('agent_end', () => { if (turnInProgress) handleTurnEnd(); });
 
     // message_update streams text, thinking, and partial tool calls live —
     // rendered incrementally through the throttled streaming renderer.
@@ -1795,7 +1804,7 @@ function startMessageStream(sessionId) {
         const data = JSON.parse(e.data);
         const r = data.result;
         setStatus(r ? `Compacted: ${formatTokens(r.tokensBefore)} → ~${formatTokens(r.estimatedTokensAfter)} tokens` : 'Compaction finished');
-        loadSessions();
+        refreshSessions();
       } catch { setStatus(''); }
     });
     evtSource.addEventListener('auto_retry_start', (e) => {
@@ -1814,7 +1823,7 @@ function startMessageStream(sessionId) {
     evtSource.addEventListener('session_ended', () => {
       setTurnInProgress(false);
       setStatus('Session ended');
-      loadSessions();
+      refreshSessions();
     });
 
     evtSource.onerror = () => {
@@ -2006,7 +2015,7 @@ async function sendPrompt() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'command failed');
       setStatus(data.info || 'Done');
-      loadSessions();
+      refreshSessions();
     } catch (e) {
       setStatus(`${message.split(' ')[0]}: ${e.message}`, 'error');
       input.value = message; // let the user fix and retry

@@ -193,7 +193,9 @@ function getActiveSessions(registered = listRegisteredSessions()) {
       contextWindow: usage?.contextWindow || getContextWindow(reg.model || info.model),
       thinkingLevel: reg.thinkingLevel || null,
       messageCount: info.messageCount || 0,
-      lastActivity: info.lastActivity || new Date(),
+      // Stable fallbacks only — a fresh `new Date()` per poll would make
+      // isUnreadSession() flag the session unread forever and churn the sort.
+      lastActivity: info.lastActivity || reg.updatedAt || new Date(0),
       isActive: true,
       turnInProgress: !!reg.turnInProgress,
       cwd: reg.cwd || info.cwd || null,
@@ -221,7 +223,7 @@ function getActiveSessions(registered = listRegisteredSessions()) {
       contextWindow: usage?.contextWindow || state.model?.contextWindow || 0,
       thinkingLevel: state.thinkingLevel || null,
       messageCount: state.messageCount || 0,
-      lastActivity: new Date(),
+      lastActivity: rpc.lastActivityAt,
       isActive: true,
       turnInProgress: !!rpc.turnInProgress,
       cwd: rpc.cwd || null,
@@ -258,6 +260,14 @@ function getPreviousSessions(registered = listRegisteredSessions()) {
         // One unreadable file must not take down the whole listing.
         let info;
         try { info = parseSessionFile(path.join(dirPath, file)); } catch { continue; }
+        // The dir-name decode is lossy (every '-' becomes '/'), so a
+        // hyphenated project dir decodes to a bogus path — only trust it
+        // when the decoded directory actually exists.
+        let cwd = info.cwd;
+        if (!cwd) {
+          const decoded = decodeDirToCwd(dir.name);
+          cwd = fs.existsSync(decoded) ? decoded : null;
+        }
         previous.push({
           id,
           name: info.name || id.slice(0, 8),
@@ -267,7 +277,7 @@ function getPreviousSessions(registered = listRegisteredSessions()) {
           messageCount: info.messageCount || 0,
           lastActivity: info.lastActivity,
           isActive: false,
-          cwd: info.cwd || decodeDirToCwd(dir.name),
+          cwd,
           sessionFile: path.join(dirPath, file),
         });
       }
@@ -535,20 +545,14 @@ app.post('/api/sessions/:id/thinking', async (req, res) => {
   }
 });
 
-// Aggregate token/cost stats. RPC sessions answer authoritatively via
-// get_session_stats; for everything else we sum assistant usage from the
-// JSONL and overlay live context usage when the bridge reports it.
+// Aggregate token/cost stats: sum assistant usage from the JSONL and overlay
+// live context usage when a backend reports it. One path for every backend —
+// an earlier RPC short-circuit returned pi's raw get_session_stats shape,
+// which the stats modal doesn't read (it expects the fields built below), and
+// it re-rolled the bridge-vs-RPC dispatch that belongs in getLiveSession.
 app.get('/api/sessions/:id/stats', async (req, res) => {
   const sessionId = req.params.id;
   try {
-    const rpc = getRPCSession(sessionId);
-    if (!getRegisteredSession(sessionId) && rpc?.alive) {
-      try {
-        const stats = await rpc.getSessionStats();
-        if (stats) return res.json(stats);
-      } catch {}
-    }
-
     const sessionFile = findSessionFile(sessionId);
     if (!sessionFile) return res.status(404).json({ error: 'Session not found' });
 
@@ -975,6 +979,10 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   });
 
   sub('turn_end', () => { clearPendingUpdate(); send('turn_end', {}); });
+  // Both session backends treat agent_end as turn-terminating (an aborted or
+  // errored turn can end without a paired turn_end) — forward it, or the
+  // client's working indicator ticks forever and the JSONL catch-up never runs.
+  sub('agent_end', () => { clearPendingUpdate(); send('agent_end', {}); });
 
   sub('message_end', (data) => {
     if (data?.message?.role !== 'assistant') return;

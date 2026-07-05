@@ -49,6 +49,17 @@ fs.writeFileSync(
   ].map(e => JSON.stringify(e)).join('\n') + '\n',
 );
 
+// Third fixture: no cwd in the session header, in a dir whose name decodes to
+// a nonexistent path — the lossy dir-name decode (every '-' → '/') must not
+// be trusted as the cwd in that case.
+const NO_CWD_ID = '2026-07-04T12-00-00-ccddeeff';
+const bogusDir = path.join(tmpHome, '.pi', 'agent', 'sessions', '--home-user-my-hyphen-proj--');
+fs.mkdirSync(bogusDir, { recursive: true });
+fs.writeFileSync(
+  path.join(bogusDir, `${NO_CWD_ID}.jsonl`),
+  JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'headerless fixture' }], timestamp: '2026-07-04T12:00:01.000Z' } }) + '\n',
+);
+
 const server = require('../server.js');
 
 let base;
@@ -72,6 +83,13 @@ test('GET /api/sessions lists the fixture session with derived metadata', async 
   assert.equal(sess.cwd, '/home/user/proj');
   assert.equal(sess.name, 'hello alpha'); // first user message
   assert.equal(sess.messageCount, 2); // user messages only
+});
+
+test('cwd falls back to the dir-name decode only when the decoded path exists', async () => {
+  const { body } = await get('/api/sessions');
+  const sess = body.previous.find(s => s.id === NO_CWD_ID);
+  assert.ok(sess, 'headerless fixture should still be listed');
+  assert.equal(sess.cwd, null, 'bogus decode (/home/user/my/hyphen/proj) must not be used as cwd');
 });
 
 test('GET /api/sessions?active=1 skips the historical scan', async () => {

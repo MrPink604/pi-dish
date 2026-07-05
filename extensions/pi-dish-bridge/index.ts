@@ -564,9 +564,10 @@ export default function (pi: ExtensionAPI) {
         case "prompt": {
           const content = buildUserContent(cmd);
           if (!content) return respond(false, undefined, "message required");
-          const opts: any = {};
-          if (cmd.deliverAs) opts.deliverAs = cmd.deliverAs;
-          await pi.sendUserMessage(content, opts);
+          // deliverAsOptions applies the mid-turn steer default, matching the
+          // RPC backend and this file's own run_command paths — a plain
+          // prompt sent mid-turn must behave the same on both backends.
+          await pi.sendUserMessage(content, deliverAsOptions(cmd.deliverAs));
           respond(true);
           return;
         }
