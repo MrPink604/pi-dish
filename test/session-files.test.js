@@ -115,6 +115,40 @@ test('getSessionSearchText lowercases message text and tracks appends', () => {
   assert.equal(SF.getSessionSearchText(path.join(tmpDir, 'missing.jsonl')), '', 'missing file degrades to empty');
 });
 
+test('getSessionStats aggregates usage and revalidates on append', () => {
+  const file = writeSession([
+    { type: 'session', cwd: '/x' },
+    userMsg('q'),
+    { type: 'message', message: { role: 'assistant', content: [
+      { type: 'toolCall', id: 't1', name: 'Bash', arguments: {} },
+      { type: 'toolCall', id: 't2', name: 'Read', arguments: {} },
+    ], usage: { input: 100, output: 50, cacheRead: 400, cacheWrite: 20, cost: { total: 0.5 } } } },
+    { type: 'message', message: { role: 'toolResult', toolName: 'Bash', content: [] } },
+    assistantMsg('done', { input: 10, output: 5 }),
+  ]);
+  const stats = SF.getSessionStats(file);
+  assert.deepEqual(stats.tokens, { input: 110, output: 55, cacheRead: 400, cacheWrite: 20 });
+  assert.equal(stats.cost, 0.5);
+  assert.equal(stats.userMessages, 1);
+  assert.equal(stats.assistantMessages, 2);
+  assert.equal(stats.toolCalls, 2);
+  assert.equal(stats.toolResults, 1);
+
+  fs.appendFileSync(file, JSON.stringify(userMsg('another')) + '\n');
+  assert.equal(SF.getSessionStats(file).userMessages, 2, 'size/mtime change invalidates');
+});
+
+test('readSessionCwd reads the header line without loading the file', () => {
+  const file = writeSession([
+    { type: 'session', cwd: '/home/user/proj' },
+    userMsg('x'.repeat(50000)), // bulk that a full read would pay for
+  ]);
+  assert.equal(SF.readSessionCwd(file), '/home/user/proj');
+  assert.equal(SF.readSessionCwd(path.join(tmpDir, 'missing.jsonl')), null);
+  const noCwd = writeSession([userMsg('no header')]);
+  assert.equal(SF.readSessionCwd(noCwd), null);
+});
+
 test('decodeDirToCwd reverses pi session-dir naming', () => {
   assert.equal(SF.decodeDirToCwd('--home-user-proj--'), '/home/user/proj');
   assert.equal(SF.decodeDirToCwd('--home-user--'), '/home/user');

@@ -82,9 +82,9 @@ function shortCwd(cwd) {
 }
 
 // No newline — truncated text also lands in one-line summary spans.
-function truncate(text, maxLen) {
+function truncate(text, maxLen, suffix = ' … (truncated)') {
   if (!text || text.length <= maxLen) return text;
-  return text.slice(0, maxLen) + ' … (truncated)';
+  return text.slice(0, maxLen) + suffix;
 }
 
 function extractTextContent(content) {
@@ -111,6 +111,35 @@ function getToolOutputText(partialResult) {
     .join('');
 }
 
+/** Severity class for a context-usage percentage (session list + header badges). */
+function contextClass(percent) {
+  return percent > 80 ? 'critical' : percent > 50 ? 'high' : '';
+}
+
+/** The searchable metadata text of a session — one definition for local
+ * filtering and the server-side session search. */
+function sessionMetaText(session) {
+  return [session.name, session.cwd, session.model, session.id].join(' ').toLowerCase();
+}
+
+/** "provider/id" → { provider, id } (provider '' when the ref is bare). */
+function parseModelId(fullModelId) {
+  const slashIdx = fullModelId.indexOf('/');
+  if (slashIdx > 0) {
+    return { provider: fullModelId.slice(0, slashIdx), id: fullModelId.slice(slashIdx + 1) };
+  }
+  return { provider: '', id: fullModelId };
+}
+
+/** Model object (or string ref) → "provider/id" string, null when unknown. */
+function formatModelRef(model) {
+  if (!model) return null;
+  if (typeof model === 'string') return model;
+  const provider = model.provider;
+  const id = model.id || model.modelId;
+  return provider && id ? `${provider}/${id}` : null;
+}
+
 /** Group sessions by workspace (cwd); groups and members sorted by last activity */
 function groupByWorkspace(list) {
   const groups = new Map(); // cwd -> [sessions]
@@ -133,7 +162,7 @@ function applyLocalFilter(list, query) {
   if (!query) return list;
   const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
   return list.filter(s => {
-    const text = [s.name, s.cwd, s.model, s.id].join(' ').toLowerCase();
+    const text = sessionMetaText(s);
     return tokens.every(t => text.includes(t));
   });
 }
@@ -256,6 +285,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRelativeTime, formatTime, formatDuration,
     shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText,
+    contextClass, sessionMetaText, parseModelId, formatModelRef,
     groupByWorkspace, applyLocalFilter, fuzzyMatch, fuzzyScore,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     modelMatchesPattern, isModelEnabled, pushPromptHistory,

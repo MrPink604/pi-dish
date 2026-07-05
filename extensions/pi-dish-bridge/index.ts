@@ -307,6 +307,11 @@ export default function (pi: ExtensionAPI) {
     wrapDialog("editor", (title: string, prefill?: string) => ({ method: "editor", title, prefill }), valueResponse);
   }
 
+  // Callers invoke this on every turn/message/model event; skip the disk
+  // write when nothing but the timestamp would change (message_end fires per
+  // assistant message and usually only moves contextUsage).
+  let lastRegistrySig: string | null = null;
+
   function writeRegistry() {
     if (!sessionId || !registryPath || !sessionFile) return;
     const entry = {
@@ -320,10 +325,12 @@ export default function (pi: ExtensionAPI) {
       contextUsage,
       thinkingLevel: getThinkingLevel(),
       turnInProgress,
-      updatedAt: new Date().toISOString(),
     };
+    const sig = JSON.stringify(entry);
+    if (sig === lastRegistrySig) return;
     try {
-      fs.writeFileSync(registryPath, JSON.stringify(entry, null, 2));
+      fs.writeFileSync(registryPath, JSON.stringify({ ...entry, updatedAt: new Date().toISOString() }, null, 2));
+      lastRegistrySig = sig;
     } catch (e) {
       // best effort
     }
@@ -342,6 +349,7 @@ export default function (pi: ExtensionAPI) {
     cwd = null;
     turnInProgress = false;
     contextUsage = null;
+    lastRegistrySig = null;
     pendingDialogs.clear();
     dialogRequests.clear();
     uiState.widgets.clear();

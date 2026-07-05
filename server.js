@@ -8,15 +8,21 @@ const {
   listRegisteredSessions,
   getRegisteredSession,
   getBridgeSession,
+  BridgeSession,
 } = require('./lib/bridge-session');
 const { searchFiles, searchHomeDirs } = require('./lib/file-search');
 const {
   getSessionInfo,
   readSessionMessages,
   getSessionSearchText,
+  getSessionStats,
+  readSessionCwd,
   decodeDirToCwd,
 } = require('./lib/session-files');
-const { isModelEnabled, extractTextContent, THINKING_LEVEL_NAMES } = require('./public/helpers');
+const {
+  isModelEnabled, extractTextContent, THINKING_LEVEL_NAMES,
+  sessionMetaText, parseModelId, formatModelRef,
+} = require('./public/helpers');
 
 const app = express();
 const PORT = process.env.PORT || 3333;
@@ -56,14 +62,6 @@ const MODEL_CONTEXT_WINDOWS = {
   'default': 200000,
 };
 
-function formatModelRef(model) {
-  if (!model) return null;
-  if (typeof model === 'string') return model;
-  const provider = model.provider;
-  const id = model.id || model.modelId;
-  return provider && id ? `${provider}/${id}` : null;
-}
-
 function normalizeModel(model) {
   if (!model) return null;
   return {
@@ -82,17 +80,34 @@ function normalizeModels(models) {
     .filter(m => m && m.id && m.provider);
 }
 
+/**
+ * The one place bridge-vs-RPC resolution lives. Returns the live session
+ * (a connected BridgeSession when the bridge registry knows the id, else an
+ * alive RPCSession) or null when neither backend has it. Both classes share
+ * prompt/steer/abort/setName/setThinkingLevel/getCommands/getAvailableModels/
+ * respondExtensionUI; routes that need a backend-specific call branch on
+ * `instanceof BridgeSession`. A failed bridge connect throws (callers' catch
+ * blocks turn that into a 500, same as before).
+ */
+async function getLiveSession(sessionId) {
+  if (getRegisteredSession(sessionId)) return getBridgeSession(sessionId);
+  const rpc = getRPCSession(sessionId);
+  return rpc?.alive ? rpc : null;
+}
+
+/** Live context usage, whichever backend reports it (registry beats RPC stats). */
+function getLiveContextUsage(sessionId) {
+  const reg = getRegisteredSession(sessionId);
+  if (reg?.contextUsage) return reg.contextUsage;
+  return getRPCSession(sessionId)?.lastStats?.contextUsage || null;
+}
+
 async function getSessionModels(sessionId) {
   if (!sessionId) return null;
   try {
-    if (getRegisteredSession(sessionId)) {
-      const sess = await getBridgeSession(sessionId);
-      const data = await sess.send('get_available_models');
-      return normalizeModels(data?.models || data);
-    }
-    const rpc = getRPCSession(sessionId);
-    if (rpc?.alive) {
-      const data = await rpc.getAvailableModels();
+    const sess = await getLiveSession(sessionId);
+    if (sess) {
+      const data = await sess.getAvailableModels();
       return normalizeModels(data?.models || data);
     }
   } catch (e) {
@@ -108,19 +123,31 @@ const CONTEXT_WINDOW_FALLBACKS = Object.entries(MODEL_CONTEXT_WINDOWS)
   .filter(([p]) => p !== 'default')
   .sort((a, b) => b[0].length - a[0].length);
 
+// Memoized per modelId — the session-list poll calls this for every session
+// and the registry scans are linear. Cleared whenever modelsCache refreshes.
+const contextWindowMemo = new Map();
+
 function getContextWindow(modelId) {
   if (!modelId) return MODEL_CONTEXT_WINDOWS['default'];
+  const memoized = contextWindowMemo.get(modelId);
+  if (memoized != null) return memoized;
+
+  let window;
   // Prefer live model registry data (populated from pi --list-models)
   if (modelsCache) {
     const m = modelsCache.find(m => m.id === modelId)
       || modelsCache.find(m => modelId.includes(m.id))
       || modelsCache.find(m => m.id.includes(modelId));
-    if (m?.contextWindow) return m.contextWindow;
+    if (m?.contextWindow) window = m.contextWindow;
   }
-  for (const [prefix, size] of CONTEXT_WINDOW_FALLBACKS) {
-    if (modelId.includes(prefix)) return size;
+  if (!window) {
+    for (const [prefix, size] of CONTEXT_WINDOW_FALLBACKS) {
+      if (modelId.includes(prefix)) { window = size; break; }
+    }
   }
-  return MODEL_CONTEXT_WINDOWS['default'];
+  window = window || MODEL_CONTEXT_WINDOWS['default'];
+  contextWindowMemo.set(modelId, window);
+  return window;
 }
 
 // Derive window/percent at read time rather than inside the session-info
@@ -146,10 +173,10 @@ function parseSessionFile(filePath) {
  * Active sessions = sessions registered by the pi-dish-bridge extension.
  * We enrich the registry entry with metadata from the on-disk JSONL.
  */
-function getActiveSessions() {
+function getActiveSessions(registered = listRegisteredSessions()) {
   const active = [];
   const seen = new Set();
-  for (const reg of listRegisteredSessions()) {
+  for (const reg of registered) {
     let info = {};
     if (reg.sessionFile && fs.existsSync(reg.sessionFile)) {
       try { info = parseSessionFile(reg.sessionFile); } catch {}
@@ -208,9 +235,9 @@ function getActiveSessions() {
   return active;
 }
 
-function getPreviousSessions() {
+function getPreviousSessions(registered = listRegisteredSessions()) {
   const activeIds = new Set([
-    ...listRegisteredSessions().map(r => r.sessionId),
+    ...registered.map(r => r.sessionId),
     ...getAllRPCSessions().filter(s => s.alive).map(s => s.id),
   ]);
   const previous = [];
@@ -260,12 +287,7 @@ function getPreviousSessions() {
 function sessionMatchesQuery(session, query) {
   const tokens = query.split(/\s+/).filter(Boolean);
   if (!tokens.length) return true;
-  const meta = [
-    session.name || '',
-    session.cwd || '',
-    session.model || '',
-    session.id || '',
-  ].join(' ').toLowerCase();
+  const meta = sessionMetaText(session);
   if (tokens.every(t => meta.includes(t))) return true;
   if (session.sessionFile) {
     const historyText = getSessionSearchText(session.sessionFile);
@@ -279,10 +301,14 @@ function sessionMatchesQuery(session, query) {
 // API Routes
 // =========================================================================
 
+// `active=1` skips the historical-tree scan entirely — the sidebar's Active
+// tab polls every 10s and would otherwise stat every JSONL just to discard
+// the result.
 app.get('/api/sessions', (req, res) => {
   const query = (req.query.q || '').trim().toLowerCase();
-  let active = getActiveSessions();
-  let previous = getPreviousSessions();
+  const registered = listRegisteredSessions();
+  let active = getActiveSessions(registered);
+  let previous = req.query.active === '1' ? [] : getPreviousSessions(registered);
 
   if (query) {
     const match = (s) => sessionMatchesQuery(s, query);
@@ -315,9 +341,7 @@ app.get('/api/sessions/:id/messages', (req, res) => {
 
   const info = parseSessionFile(sessionFile);
   // Overlay live context usage when the session can report it.
-  const reg = getRegisteredSession(sessionId);
-  const rpcSess = getRPCSession(sessionId);
-  const liveUsage = reg?.contextUsage || rpcSess?.lastStats?.contextUsage || null;
+  const liveUsage = getLiveContextUsage(sessionId);
   if (liveUsage) {
     if (liveUsage.tokens != null) info.contextTokens = liveUsage.tokens;
     if (liveUsage.percent != null) info.contextPercent = roundPercent(liveUsage.percent);
@@ -391,10 +415,8 @@ app.post('/api/sessions/:id/prompt', async (req, res) => {
   const images = sanitizeImages(req.body.images);
   if (!message && !images.length) return res.status(400).json({ error: 'Message required' });
   try {
-    const registered = getRegisteredSession(req.params.id);
-    const rpc = getRPCSession(req.params.id);
-    const sess = registered ? await getBridgeSession(req.params.id) : rpc;
-    if (!sess?.alive) return res.status(404).json({ error: 'Session not active' });
+    const sess = await getLiveSession(req.params.id);
+    if (!sess) return res.status(404).json({ error: 'Session not active' });
     const opts = deliverAs ? { deliverAs } : {};
     if (images.length) opts.images = images;
     const result = await sess.prompt(message || '', opts);
@@ -409,9 +431,8 @@ app.post('/api/sessions/:id/steer', async (req, res) => {
   const images = sanitizeImages(req.body.images);
   if (!message && !images.length) return res.status(400).json({ error: 'Message required' });
   try {
-    const rpc = getRPCSession(req.params.id);
-    const sess = getRegisteredSession(req.params.id) ? await getBridgeSession(req.params.id) : rpc;
-    if (!sess?.alive) return res.status(404).json({ error: 'Session not active' });
+    const sess = await getLiveSession(req.params.id);
+    if (!sess) return res.status(404).json({ error: 'Session not active' });
     await sess.steer(message || '', images.length ? { images } : {});
     res.json({ success: true });
   } catch (e) {
@@ -450,7 +471,6 @@ async function runRpcSlashCommand(rpc, message) {
     case 'name':
       if (!args) throw new Error('usage: /name <name>');
       await rpc.setName(args);
-      rpc.state = { ...(rpc.state || {}), sessionName: args, name: args };
       return { info: 'Session renamed' };
     case 'thinking':
       if (!args) throw new Error('usage: /thinking <off|minimal|low|medium|high|xhigh>');
@@ -458,7 +478,7 @@ async function runRpcSlashCommand(rpc, message) {
       return { info: `Thinking level: ${args}` };
     case 'model': {
       if (!args) throw new Error('usage: /model <provider/model-id>');
-      let { provider, id } = piSDK.parseModelId(args);
+      let { provider, id } = parseModelId(args);
       if (!provider) {
         const data = await rpc.getAvailableModels();
         const models = data?.models || [];
@@ -466,8 +486,7 @@ async function runRpcSlashCommand(rpc, message) {
         if (!m) throw new Error(`model not found: ${args}`);
         provider = m.provider; id = m.id;
       }
-      const model = await rpc.setModel(provider, id);
-      rpc.state = { ...(rpc.state || {}), model };
+      await rpc.setModel(provider, id);
       return { info: `Model set to ${provider}/${id}` };
     }
     case 'new':
@@ -502,17 +521,10 @@ app.post('/api/sessions/:id/thinking', async (req, res) => {
     return res.status(400).json({ error: `level must be one of: ${THINKING_LEVEL_NAMES.join(', ')}` });
   }
   try {
-    if (getRegisteredSession(req.params.id)) {
-      const sess = await getBridgeSession(req.params.id);
-      const data = await sess.setThinkingLevel(level);
-      return res.json({ success: true, level: data?.level ?? level });
-    }
-    const rpc = getRPCSession(req.params.id);
-    if (rpc?.alive) {
-      await rpc.setThinkingLevel(level);
-      return res.json({ success: true, level });
-    }
-    res.status(404).json({ error: 'Session not active' });
+    const sess = await getLiveSession(req.params.id);
+    if (!sess) return res.status(404).json({ error: 'Session not active' });
+    const data = await sess.setThinkingLevel(level);
+    res.json({ success: true, level: data?.level ?? level });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -535,32 +547,11 @@ app.get('/api/sessions/:id/stats', async (req, res) => {
     const sessionFile = findSessionFile(sessionId);
     if (!sessionFile) return res.status(404).json({ error: 'Session not found' });
 
-    const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-    let cost = 0, userMessages = 0, assistantMessages = 0, toolCalls = 0, toolResults = 0;
-    for (const line of fs.readFileSync(sessionFile, 'utf-8').split('\n')) {
-      if (!line.trim()) continue;
-      let entry;
-      try { entry = JSON.parse(line); } catch { continue; }
-      if (entry.type !== 'message' || !entry.message) continue;
-      const m = entry.message;
-      if (m.role === 'user') userMessages++;
-      else if (m.role === 'toolResult') toolResults++;
-      else if (m.role === 'assistant') {
-        assistantMessages++;
-        if (Array.isArray(m.content)) toolCalls += m.content.filter(c => c.type === 'toolCall').length;
-        const u = m.usage;
-        if (u) {
-          tokens.input += u.input || 0;
-          tokens.output += u.output || 0;
-          tokens.cacheRead += u.cacheRead || 0;
-          tokens.cacheWrite += u.cacheWrite || 0;
-          cost += u.cost?.total || 0;
-        }
-      }
-    }
+    const { tokens, cost, userMessages, assistantMessages, toolCalls, toolResults } =
+      getSessionStats(sessionFile);
 
     const reg = getRegisteredSession(sessionId);
-    const contextUsage = reg?.contextUsage || null;
+    const contextUsage = getLiveContextUsage(sessionId);
     const info = parseSessionFile(sessionFile);
     res.json({
       sessionFile,
@@ -606,17 +597,14 @@ app.post('/api/sessions/:id/command', async (req, res) => {
     return res.status(400).json({ error: 'message must start with /' });
   }
   try {
-    if (getRegisteredSession(req.params.id)) {
-      const sess = await getBridgeSession(req.params.id);
+    const sess = await getLiveSession(req.params.id);
+    if (!sess) return res.status(404).json({ error: 'Session not active' });
+    if (sess instanceof BridgeSession) {
       const data = await sess.runCommand(message, deliverAs);
       return res.json({ success: true, info: data?.info });
     }
-    const rpc = getRPCSession(req.params.id);
-    if (rpc?.alive) {
-      const result = await runRpcSlashCommand(rpc, message);
-      return res.json({ success: true, info: result.info });
-    }
-    res.status(404).json({ error: 'Session not active' });
+    const result = await runRpcSlashCommand(sess, message);
+    res.json({ success: true, info: result.info });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
@@ -631,17 +619,10 @@ app.post('/api/sessions/:id/ui-response', async (req, res) => {
   if (confirmed !== undefined) response.confirmed = confirmed;
   if (cancelled !== undefined) response.cancelled = cancelled;
   try {
-    if (getRegisteredSession(req.params.id)) {
-      const sess = await getBridgeSession(req.params.id);
-      await sess.respondExtensionUI(requestId, response);
-      return res.json({ success: true });
-    }
-    const rpc = getRPCSession(req.params.id);
-    if (rpc?.alive) {
-      rpc.respondExtensionUI(requestId, response);
-      return res.json({ success: true });
-    }
-    res.status(404).json({ error: 'Session not active' });
+    const sess = await getLiveSession(req.params.id);
+    if (!sess) return res.status(404).json({ error: 'Session not active' });
+    await sess.respondExtensionUI(requestId, response);
+    res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -650,29 +631,13 @@ app.post('/api/sessions/:id/ui-response', async (req, res) => {
 app.post('/api/sessions/:id/rename', async (req, res) => {
   const { name } = req.body;
   if (!name) return res.status(400).json({ error: 'Name required' });
-
-  if (getRegisteredSession(req.params.id)) {
-    try {
-      const sess = await getBridgeSession(req.params.id);
+  try {
+    const sess = await getLiveSession(req.params.id);
+    if (sess) {
       await sess.setName(name);
       return res.json({ success: true });
-    } catch (e) {
-      return res.status(500).json({ error: e.message });
     }
-  }
-
-  const rpc = getRPCSession(req.params.id);
-  if (rpc?.alive) {
-    try {
-      await rpc.setName(name);
-      rpc.state = { ...(rpc.state || {}), sessionName: name, name };
-      return res.json({ success: true });
-    } catch (e) {
-      return res.status(500).json({ error: e.message });
-    }
-  }
-
-  try {
+    // Inactive session: append a session_info entry to the JSONL directly.
     const sessionPath = findSessionFile(req.params.id);
     if (!sessionPath) return res.status(404).json({ error: 'Session not found' });
     await piSDK.renameSession(sessionPath, name);
@@ -685,31 +650,18 @@ app.post('/api/sessions/:id/rename', async (req, res) => {
 app.post('/api/sessions/:id/model', async (req, res) => {
   const { modelId } = req.body;
   if (!modelId) return res.status(400).json({ error: 'modelId required' });
-  const { provider, id } = piSDK.parseModelId(modelId);
+  const { provider, id } = parseModelId(modelId);
   if (!provider || !id) return res.status(400).json({ error: `Invalid model ID: ${modelId}` });
-
-  if (getRegisteredSession(req.params.id)) {
-    try {
-      const sess = await getBridgeSession(req.params.id);
-      await sess.setModel(`${provider}/${id}`);
-      return res.json({ success: true });
-    } catch (e) {
-      return res.status(500).json({ error: e.message });
-    }
-  }
-
-  const rpc = getRPCSession(req.params.id);
-  if (rpc?.alive) {
-    try {
-      const model = await rpc.setModel(provider, id);
-      rpc.state = { ...(rpc.state || {}), model };
-      return res.json({ success: true });
-    } catch (e) {
-      return res.status(500).json({ error: e.message });
-    }
-  }
-
   try {
+    const sess = await getLiveSession(req.params.id);
+    if (sess) {
+      // The two backends take different setModel shapes (bridge: one ref
+      // string, RPC: provider + id on the wire).
+      if (sess instanceof BridgeSession) await sess.setModel(`${provider}/${id}`);
+      else await sess.setModel(provider, id);
+      return res.json({ success: true });
+    }
+    // Inactive session: append a model_change entry to the JSONL directly.
     const sessionPath = findSessionFile(req.params.id);
     if (!sessionPath) return res.status(404).json({ error: 'Session not found' });
     await piSDK.switchModel(sessionPath, provider, id);
@@ -747,6 +699,12 @@ let modelsCache = null;
 let modelsCacheTime = 0;
 const MODELS_CACHE_TTL = 60000;
 
+function setModelsCache(models) {
+  modelsCache = models;
+  modelsCacheTime = Date.now();
+  contextWindowMemo.clear(); // windows may differ under the fresh registry
+}
+
 // pi's scoped models (/scoped-models in the TUI) persist as enabledModels
 // patterns in ~/.pi/agent/settings.json. Read fresh per request — the TUI
 // may rewrite the file at any time.
@@ -774,10 +732,8 @@ app.get('/api/models', async (req, res) => {
       if (sessionModels) return res.json(annotateEnabled(sessionModels));
     }
 
-    const now = Date.now();
-    if (!modelsCache || now - modelsCacheTime > MODELS_CACHE_TTL) {
-      modelsCache = await piSDK.getAvailableModels();
-      modelsCacheTime = now;
+    if (!modelsCache || Date.now() - modelsCacheTime > MODELS_CACHE_TTL) {
+      setModelsCache(await piSDK.getAvailableModels());
     }
     res.json(annotateEnabled(modelsCache));
   } catch (e) {
@@ -816,20 +772,17 @@ app.get('/api/commands', async (req, res) => {
     if (sessionId) {
       // Ask the live session — it knows exactly which commands exist there.
       try {
-        if (getRegisteredSession(sessionId)) {
-          const sess = await getBridgeSession(sessionId);
+        const sess = await getLiveSession(sessionId);
+        if (sess instanceof BridgeSession) {
           const data = await sess.getCommands();
           if (data?.commands) return res.json(data.commands);
-        } else {
-          const rpc = getRPCSession(sessionId);
-          if (rpc?.alive) {
-            const data = await rpc.getCommands();
-            const commands = [
-              ...RPC_BUILTIN_COMMANDS.map(c => ({ ...c, source: 'builtin', supported: true })),
-              ...(data?.commands || []).map(c => ({ ...c, supported: true })),
-            ];
-            return res.json(commands);
-          }
+        } else if (sess) {
+          const data = await sess.getCommands();
+          const commands = [
+            ...RPC_BUILTIN_COMMANDS.map(c => ({ ...c, source: 'builtin', supported: true })),
+            ...(data?.commands || []).map(c => ({ ...c, supported: true })),
+          ];
+          return res.json(commands);
         }
       } catch (e) {
         console.warn(`Live command list failed for ${sessionId}:`, e.message);
@@ -843,12 +796,9 @@ app.get('/api/commands', async (req, res) => {
 });
 
 app.post('/api/sessions/:id/abort', async (req, res) => {
-  const rpc = getRPCSession(req.params.id);
-  if (!getRegisteredSession(req.params.id) && !rpc?.alive) {
-    return res.status(404).json({ error: 'Session not active' });
-  }
   try {
-    const sess = getRegisteredSession(req.params.id) ? await getBridgeSession(req.params.id) : rpc;
+    const sess = await getLiveSession(req.params.id);
+    if (!sess) return res.status(404).json({ error: 'Session not active' });
     await sess.abort();
     res.json({ success: true });
   } catch (e) {
@@ -856,26 +806,20 @@ app.post('/api/sessions/:id/abort', async (req, res) => {
   }
 });
 
-app.get('/api/cwds', async (req, res) => {
+app.get('/api/cwds', (req, res) => {
   try {
-    const sessionsDir = path.join(os.homedir(), '.pi', 'agent', 'sessions');
-    const dirs = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
     const cwdSet = new Set();
+    let dirs = [];
+    try { dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true }); } catch {}
     for (const dir of dirs) {
       if (!dir.isDirectory()) continue;
-      const dirPath = path.join(sessionsDir, dir.name);
-      const files = await fs.promises.readdir(dirPath).catch(() => []);
+      const dirPath = path.join(SESSIONS_DIR, dir.name);
+      let files = [];
+      try { files = fs.readdirSync(dirPath); } catch {}
       const jsonlFile = files.find(f => f.endsWith('.jsonl'));
       if (!jsonlFile) continue;
-      try {
-        const fd = await fs.promises.open(path.join(dirPath, jsonlFile), 'r');
-        const buf = Buffer.alloc(2048);
-        await fd.read(buf, 0, 2048, 0);
-        await fd.close();
-        const firstLine = buf.toString('utf8').split('\n')[0];
-        const entry = JSON.parse(firstLine);
-        if (entry.cwd) cwdSet.add(entry.cwd);
-      } catch {}
+      const cwd = readSessionCwd(path.join(dirPath, jsonlFile));
+      if (cwd) cwdSet.add(cwd);
     }
     const home = os.homedir();
     const cwds = [...cwdSet].sort().map(c => ({
@@ -943,12 +887,7 @@ app.post('/api/sessions/:id/resume', async (req, res) => {
   const sessionFile = findSessionFile(sessionId);
   if (!sessionFile) return res.status(404).json({ error: 'Session file not found' });
 
-  let cwd = null;
-  try {
-    const firstLine = fs.readFileSync(sessionFile, 'utf-8').split('\n')[0];
-    const entry = JSON.parse(firstLine);
-    cwd = entry.cwd || null;
-  } catch (e) {}
+  let cwd = readSessionCwd(sessionFile);
 
   if (cwd && !fs.existsSync(cwd)) {
     console.warn(`Session cwd ${cwd} doesn't exist, using HOME`);
@@ -978,17 +917,15 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.write(': connected\n\n');
 
-  const rpc = getRPCSession(sessionId);
-  if (!getRegisteredSession(sessionId) && !rpc?.alive) {
-    res.write(`event: stream_error\ndata: ${JSON.stringify({ error: 'Session not active' })}\n\n`);
-    return res.end();
-  }
-
   let sess;
   try {
-    sess = getRegisteredSession(sessionId) ? await getBridgeSession(sessionId) : rpc;
+    sess = await getLiveSession(sessionId);
   } catch (e) {
     res.write(`event: stream_error\ndata: ${JSON.stringify({ error: e.message })}\n\n`);
+    return res.end();
+  }
+  if (!sess) {
+    res.write(`event: stream_error\ndata: ${JSON.stringify({ error: 'Session not active' })}\n\n`);
     return res.end();
   }
 
@@ -1039,6 +976,10 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   // setWidget/setStatus re-fire with unchanged content on every extension
   // tick (pi-processes: once per process output line) — skip exact repeats
   // per connection. Content-keyed: the request id changes on every emission.
+  // Ownership note: the bridge extension already dedups live re-emissions at
+  // the source; this per-connection layer exists to absorb the bridge's
+  // full-state replay when the server reconnects its socket (and any bridge
+  // versions without source dedup). Keep both signatures content-equivalent.
   const lastExtUI = new Map(); // method:key -> content signature
   sub('extension_ui_request', (data) => {
     if (data && (data.method === 'setWidget' || data.method === 'setStatus')) {
@@ -1075,6 +1016,12 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
 // Helpers
 // =========================================================================
 
+// id → confirmed path. The full tree walk otherwise re-runs for every
+// pagination/search request against a historical session; the mapping is
+// stable, so a hit only needs an existsSync revalidation. Misses are never
+// cached (the file may appear later).
+const sessionFileCache = new Map();
+
 function findSessionFile(sessionId) {
   const reg = getRegisteredSession(sessionId);
   if (reg && reg.sessionFile && fs.existsSync(reg.sessionFile)) return reg.sessionFile;
@@ -1082,13 +1029,21 @@ function findSessionFile(sessionId) {
   const rpcFile = rpc?.sessionFile || rpc?.state?.sessionFile;
   if (rpcFile && fs.existsSync(rpcFile)) return rpcFile;
 
+  const cached = sessionFileCache.get(sessionId);
+  if (cached && fs.existsSync(cached)) return cached;
+
   try {
     const dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true });
     for (const dir of dirs) {
       if (!dir.isDirectory()) continue;
       const files = fs.readdirSync(path.join(SESSIONS_DIR, dir.name))
         .filter(f => f.includes(sessionId) && f.endsWith('.jsonl'));
-      if (files.length) return path.join(SESSIONS_DIR, dir.name, files[0]);
+      if (files.length) {
+        const found = path.join(SESSIONS_DIR, dir.name, files[0]);
+        if (sessionFileCache.size >= 500) sessionFileCache.clear();
+        sessionFileCache.set(sessionId, found);
+        return found;
+      }
     }
   } catch (e) {}
   return null;
@@ -1099,10 +1054,7 @@ function findSessionFile(sessionId) {
 // =========================================================================
 
 // Warm the models cache at startup so context window sizes are accurate immediately
-piSDK.getAvailableModels().then(models => {
-  modelsCache = models;
-  modelsCacheTime = Date.now();
-}).catch(() => {});
+piSDK.getAvailableModels().then(setModelsCache).catch(() => {});
 
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`pi-dish running at http://0.0.0.0:${PORT}`);

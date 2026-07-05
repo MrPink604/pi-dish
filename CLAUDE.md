@@ -52,13 +52,23 @@ button; it clipped over content.
 
 All server-side reads of `~/.pi/agent/sessions/*.jsonl` go through this
 module: `getSessionInfo` (list metadata), `readSessionMessages` (the
-paginated message stream), `getSessionSearchText` (list search). Each caches
-its parse keyed on (mtimeMs, size) — the sidebar polls `/api/sessions` every
-10s, so nothing may re-parse unchanged files per request. `getSessionInfo`
-returns a copy (callers overlay live usage onto it); `readSessionMessages`
-returns the cached array itself — never mutate it. Context window/percent are
-derived in server.js (`withContext`) at read time, not inside the cache — the
-models cache warms asynchronously and would bake in stale windows.
+paginated message stream), `getSessionSearchText` (list search),
+`getSessionStats` (token/cost aggregates for `/stats`), and `readSessionCwd`
+(bounded first-line read — never load a whole file just for its header). The
+readers share one `statCached` implementation keyed on (mtimeMs, size) — the
+sidebar polls `/api/sessions` every 10s, so nothing may re-parse unchanged
+files per request. `getSessionInfo` returns a copy (callers overlay live
+usage onto it); the other readers return the cached value itself — never
+mutate it. Context window/percent are derived in server.js (`withContext`)
+at read time, not inside the cache — the models cache warms asynchronously
+and would bake in stale windows.
+
+Server-side session dispatch: `getLiveSession(id)` in server.js is the one
+place bridge-vs-RPC resolution lives (bridge registry entry → connected
+BridgeSession, else alive RPCSession, else null). Don't re-roll the
+`getRegisteredSession ? getBridgeSession : getRPCSession` dance in routes;
+branch on `instanceof BridgeSession` only for genuinely backend-specific
+calls (setModel arg shapes, runCommand vs the RPC slash emulation).
 
 ## File / directory fuzzy search (lib/file-search.js)
 
@@ -176,6 +186,10 @@ exploratory debugging.
 The session list defaults to the **Active** filter (live sessions only, count
 badge in the tab). The **All** tab merges active + historical sessions, grouped
 by workspace cwd; historical ones get the `.session-item.inactive` dimming.
+Polls on the Active tab request `?active=1` — the server skips the historical
+session-tree scan and the client keeps its previously fetched `previous` list
+(the initial load always fetches both, so restoring a saved historical session
+still works).
 Each item shows one status dot, best signal first: pulsing green
 (`.session-item-status.working`, turn in progress), accent blue
 (`.session-item-status.unread`, activity since the session was last on

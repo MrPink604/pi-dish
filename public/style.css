@@ -249,10 +249,6 @@ body.sidebar-open {
   flex-shrink: 0;
 }
 
-.session-item-status.idle {
-  background: var(--text-muted);
-}
-
 .session-item-status.working {
   background: var(--success);
   animation: pulse 1.5s infinite;
@@ -304,35 +300,6 @@ body.sidebar-open {
 /* Session segments */
 .session-segment {
   margin-bottom: 4px;
-}
-
-.session-segment-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px 4px;
-  user-select: none;
-}
-
-.session-segment-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.session-segment-count {
-  font-size: 10px;
-  color: var(--text-muted);
-  opacity: 0.6;
-  font-family: var(--font-mono);
-}
-
-.session-item-status.closed {
-  background: transparent;
-  border: 1.5px solid var(--text-muted);
-  opacity: 0.4;
 }
 
 .sidebar-footer {
@@ -1883,18 +1850,6 @@ body.sidebar-open {
   white-space: nowrap;
 }
 
-/* Session item cwd */
-.session-item-cwd {
-  font-size: 10px;
-  color: var(--text-muted);
-  opacity: 0.6;
-  font-family: var(--font-mono);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-top: 2px;
-}
-
 .btn-stop {
   background: var(--error);
   color: #fff;
@@ -2086,12 +2041,6 @@ body.sidebar-open {
   color: var(--error);
 }
 
-.tree-label {
-  color: var(--warning);
-  margin-right: 6px;
-  font-weight: 500;
-}
-
 .tree-branch-badge {
   font-size: 10px;
   padding: 0 5px;
@@ -2268,42 +2217,10 @@ body.sidebar-open {
   display: none;
 }
 
-/* Dialog cards — rendered as read-only info since we can't respond */
-.ext-ui-dialog {
-  margin: 8px 24px;
-  border-radius: 6px;
-  border: 1px dashed var(--border);
-  background: var(--bg-card);
-  padding: 10px 14px;
-  font-size: 12px;
-  color: var(--text-muted);
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.ext-ui-dialog-icon {
-  flex-shrink: 0;
-  font-size: 14px;
-  opacity: 0.6;
-}
-
-.ext-ui-dialog-body {
-  flex: 1;
-  min-width: 0;
-}
-
 .ext-ui-dialog-title {
   font-weight: 600;
   color: var(--text);
   margin-bottom: 4px;
-}
-
-.ext-ui-dialog-hint {
-  font-size: 11px;
-  opacity: 0.5;
-  margin-top: 4px;
-  font-style: italic;
 }
 
 /* Interactive dialog modal (select / confirm / input / editor) */

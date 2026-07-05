@@ -87,6 +87,35 @@ test('truncate stays on one line and passes short text through', () => {
   assert.equal(cut, 'x'.repeat(10) + ' … (truncated)');
   assert.ok(!cut.includes('\n'), 'must not inject newlines — used in one-line summaries');
   assert.equal(H.truncate('', 5), '');
+  // Session names use a compact suffix
+  assert.equal(H.truncate('x'.repeat(20), 10, '...'), 'x'.repeat(10) + '...');
+});
+
+test('contextClass buckets context pressure', () => {
+  assert.equal(H.contextClass(0), '');
+  assert.equal(H.contextClass(50), '');
+  assert.equal(H.contextClass(51), 'high');
+  assert.equal(H.contextClass(80), 'high');
+  assert.equal(H.contextClass(81), 'critical');
+});
+
+test('sessionMetaText joins the searchable fields lowercased', () => {
+  assert.equal(
+    H.sessionMetaText({ name: 'Fix Login', cwd: '/home/U/App', model: 'GPT-5', id: 'S1' }),
+    'fix login /home/u/app gpt-5 s1');
+  // Missing fields must not stringify as "null"
+  assert.equal(H.sessionMetaText({ id: 's2' }).includes('null'), false);
+});
+
+test('parseModelId splits provider/id refs; formatModelRef joins them back', () => {
+  assert.deepEqual(H.parseModelId('anthropic/claude-sonnet-4-5'), { provider: 'anthropic', id: 'claude-sonnet-4-5' });
+  assert.deepEqual(H.parseModelId('openai/gpt-5/preview'), { provider: 'openai', id: 'gpt-5/preview' });
+  assert.deepEqual(H.parseModelId('bare-model'), { provider: '', id: 'bare-model' });
+  assert.equal(H.formatModelRef({ provider: 'zai', id: 'glm-5.2' }), 'zai/glm-5.2');
+  assert.equal(H.formatModelRef({ provider: 'zai', modelId: 'glm-5.2' }), 'zai/glm-5.2');
+  assert.equal(H.formatModelRef('already/a-ref'), 'already/a-ref');
+  assert.equal(H.formatModelRef({ id: 'no-provider' }), null);
+  assert.equal(H.formatModelRef(null), null);
 });
 
 test('extractTextContent handles string, block-array, and junk', () => {

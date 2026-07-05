@@ -21,6 +21,12 @@ let autocompleteIndex = 0;
 // short of the 80px pin threshold. Cleared by any deliberate scroll gesture.
 let followStream = false;
 
+/** Grow the prompt textarea with its content, capped at 160px. */
+function autosizePromptInput(input) {
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+}
+
 function isPinnedToBottom(el) {
   if (followStream) return true;
   return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
@@ -66,7 +72,8 @@ async function loadCommands(sessionId) {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
-  await loadSessions();
+  // Full fetch: restoring the saved session may need the historical list.
+  await loadSessions(undefined, { withPrevious: true });
   loadModels();
   loadCommands();
   
@@ -125,8 +132,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   promptInput.addEventListener('input', () => {
-    promptInput.style.height = 'auto';
-    promptInput.style.height = `${Math.min(promptInput.scrollHeight, 160)}px`;
+    autosizePromptInput(promptInput);
     handleAutocomplete(promptInput.value);
     historyIndex = -1; // typing exits history browsing
     saveDraftSoon();
@@ -405,11 +411,23 @@ function onFilterInput() {
   }
 }
 
-async function loadSessions(query) {
+// On the Active tab the historical list is invisible, so polls request
+// active sessions only (?active=1 — the server then skips its full
+// session-tree scan) and keep the previously fetched `previous` list.
+// `withPrevious: true` forces a full fetch regardless of tab (initial load,
+// which may need to restore a historical session).
+async function loadSessions(query, { withPrevious = sidebarTab === 'all' } = {}) {
   try {
-    const url = query ? `/api/sessions?q=${encodeURIComponent(query)}` : '/api/sessions';
-    const res = await fetch(url);
-    sessions = await res.json();
+    const params = new URLSearchParams();
+    if (query) params.set('q', query);
+    if (!withPrevious) params.set('active', '1');
+    const qs = params.toString();
+    const res = await fetch('/api/sessions' + (qs ? '?' + qs : ''));
+    const data = await res.json();
+    sessions = {
+      active: data.active || [],
+      previous: withPrevious ? (data.previous || []) : sessions.previous,
+    };
     // Viewing a session (with the tab visible) counts as having seen its
     // latest activity. Prune stale ids while we're at it — but only from an
     // unfiltered load, a search result is not the full list.
@@ -443,7 +461,7 @@ async function loadSessions(query) {
 function refreshSessions() { return loadSessions(sidebarTab === 'all' && filterQuery ? filterQuery : undefined); }
 
 function renderSessionItem(session) {
-  const ctxClass = session.contextPercent > 80 ? 'critical' : session.contextPercent > 50 ? 'high' : '';
+  const ctxClass = contextClass(session.contextPercent);
   const activeClass = currentSession?.id === session.id ? 'active' : '';
   const inactiveClass = session.isActive ? '' : 'inactive';
   // One dot, best signal wins: working (pulsing) > unread (accent) > live-in-All.
@@ -577,7 +595,9 @@ async function selectSession(id) {
   renderSessions();
   updateSessionHeader();
   if (currentSession.isActive) {
-    await loadModels(id);
+    // Fire-and-forget: nothing below needs the results, and both can ask the
+    // live session over its socket — don't stall the transcript on them.
+    loadModels(id);
     loadCommands(id); // refresh autocomplete with this session's commands
   }
   await loadMessages(id);
@@ -664,7 +684,7 @@ function updateSessionHeader() {
   }
 
   const tokenStr = currentSession.contextTokens ? ` (${formatTokens(currentSession.contextTokens)} tok)` : '';
-  const ctxClass = currentSession.contextPercent > 80 ? 'critical' : currentSession.contextPercent > 50 ? 'high' : '';
+  const ctxClass = contextClass(currentSession.contextPercent);
 
   // Desktop header badge shows percent + tokens; the mobile one (bottom-left
   // of the input row) only has room for the percent.
@@ -1223,7 +1243,7 @@ function closeModelDropdown() {
 
 async function selectModel(fullModelId) {
   closeModelDropdown();
-  var modelId = fullModelId.includes('/') ? fullModelId.split('/').slice(1).join('/') : fullModelId;
+  var modelId = parseModelId(fullModelId).id;
   var isSame = (modelId === currentSession?.model || fullModelId === currentSession?.model);
   if (!currentSession || isSame) return;
   setStatus('Switching model...', 'working');
@@ -1309,9 +1329,7 @@ function renderMessages(messages) {
     return;
   }
   container.innerHTML = renderLoadOlderBar() + messages.map(renderMessageHtml).join('');
-  removeDuplicatedLiveContent(container);
-  groupToolActivity(container);
-  applyHighlight(container);
+  finalizeRender(container);
   scrollToBottom(container); // fresh session load: start at the latest message
 }
 
@@ -1341,8 +1359,7 @@ async function loadOlderMessages() {
       oldestLoadedIndex = firstIndex != null ? firstIndex : oldestLoadedIndex;
       hasMoreOlder = !!hasMore;
       container.insertAdjacentHTML('afterbegin', renderLoadOlderBar() + html);
-      groupToolActivity(container);
-      applyHighlight(container);
+      finalizeRender(container, { stripLive: false });
 
       // Restore scroll so the anchor stays in the same viewport position.
       if (anchor) {
@@ -1400,9 +1417,7 @@ async function fetchNewMessagesSince(sessionId) {
 
     container.insertAdjacentHTML('beforeend', fresh.map(renderMessageHtml).join(''));
     if (lastIndex != null) lastLoadedIndex = lastIndex;
-    removeDuplicatedLiveContent(container);
-    groupToolActivity(container);
-    applyHighlight(container);
+    finalizeRender(container);
     if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
   } catch (e) {
     console.error('fetchNewMessagesSince failed:', e);
@@ -1517,7 +1532,7 @@ function renderToolResult(msg, time) {
 function buildLiveToolPanel(toolCallId, toolName, args, output, isError, isComplete, durationMs) {
   const stateClass = isComplete ? (isError ? 'error' : 'complete') : 'running';
   const summary = getToolSummary(toolName, args);
-  const openAttr = isComplete && output ? ' open' : (output ? ' open' : '');
+  const openAttr = output ? ' open' : '';
   
   let statusHtml = '';
   if (isComplete) {
@@ -1875,6 +1890,13 @@ function takePendingImages() {
   return imgs;
 }
 
+/** Put detached attachments back after a failed send. */
+function restoreAttachments(images) {
+  if (!images) return;
+  pendingImages = images.concat(pendingImages);
+  renderAttachmentStrip();
+}
+
 function openImageLightbox(src) {
   const overlay = document.createElement('div');
   overlay.className = 'lightbox-overlay';
@@ -1918,8 +1940,7 @@ function restorePromptState() {
   let draft = '';
   try { draft = localStorage.getItem(draftKey(currentSession.id)) || ''; } catch {}
   input.value = draft;
-  input.style.height = 'auto';
-  input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+  autosizePromptInput(input);
   historyIndex = -1;
   historyStash = '';
   try { promptHistory = JSON.parse(localStorage.getItem(historyKey(currentSession.id)) || '[]'); } catch { promptHistory = []; }
@@ -1946,8 +1967,7 @@ function navigateHistory(dir, input) {
   const val = historyIndex === -1 ? historyStash : promptHistory[historyIndex];
   input.value = val;
   input.setSelectionRange(val.length, val.length);
-  input.style.height = 'auto';
-  input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+  autosizePromptInput(input);
   return true;
 }
 
@@ -2014,8 +2034,7 @@ async function sendPrompt() {
   } catch (e) {
     setStatus(`Error: ${e.message}`, 'error');
     setTurnInProgress(false);
-    // Don't lose the attachments on a failed send.
-    if (images) { pendingImages = images.concat(pendingImages); renderAttachmentStrip(); }
+    restoreAttachments(images); // don't lose them on a failed send
   }
 }
 
@@ -2081,7 +2100,9 @@ function setTurnInProgress(active) {
   if (!active) setStatus('');
 }
 
-async function sendSteer() {
+// Steer and follow-up share everything but the endpoint and status strings.
+async function sendQueuedMessage(kind) {
+  const steer = kind === 'steer';
   const input = document.getElementById('promptInput');
   const message = input.value.trim();
   if ((!message && !pendingImages.length) || !currentSession || !currentSession.isActive) return;
@@ -2091,47 +2112,25 @@ async function sendSteer() {
   recordPrompt(message);
   clearDraft();
   const images = takePendingImages();
-  setStatus('Steering...', 'working');
+  setStatus(steer ? 'Steering...' : 'Queueing follow-up...', 'working');
 
+  const body = steer ? { message } : { message, deliverAs: 'followUp' };
+  if (images) body.images = images;
   try {
-    const res = await fetch(`/api/sessions/${currentSession.id}/steer`, {
+    const res = await fetch(`/api/sessions/${currentSession.id}${steer ? '/steer' : '/prompt'}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(images ? { message, images } : { message })
+      body: JSON.stringify(body)
     });
     if (!res.ok) throw new Error(await res.text());
-    setStatus('Steered');
+    setStatus(steer ? 'Steered' : 'Queued for after this turn');
   } catch (e) {
-    setStatus(`Steer failed: ${e.message}`, 'error');
-    // Don't lose the attachments on a failed send.
-    if (images) { pendingImages = images.concat(pendingImages); renderAttachmentStrip(); }
+    setStatus(`${steer ? 'Steer' : 'Follow-up'} failed: ${e.message}`, 'error');
+    restoreAttachments(images); // don't lose them on a failed send
   }
 }
 
-async function sendFollowUp() {
-  const input = document.getElementById('promptInput');
-  const message = input.value.trim();
-  if ((!message && !pendingImages.length) || !currentSession || !currentSession.isActive) return;
-
-  input.value = '';
-  input.style.height = '';
-  recordPrompt(message);
-  clearDraft();
-  const images = takePendingImages();
-  setStatus('Queueing follow-up...', 'working');
-
-  try {
-    const res = await fetch(`/api/sessions/${currentSession.id}/prompt`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(images ? { message, images, deliverAs: 'followUp' } : { message, deliverAs: 'followUp' })
-    });
-    if (!res.ok) throw new Error(await res.text());
-    setStatus('Queued for after this turn');
-  } catch (e) {
-    setStatus(`Follow-up failed: ${e.message}`, 'error');
-    // Don't lose the attachments on a failed send.
-    if (images) { pendingImages = images.concat(pendingImages); renderAttachmentStrip(); }
-  }
-}
+function sendSteer() { return sendQueuedMessage('steer'); }
+function sendFollowUp() { return sendQueuedMessage('followUp'); }
 
 // Pending steering/follow-up queue indicator (from queue_update events).
 // Chips toggle an expandable panel listing the queued message texts.
@@ -2352,6 +2351,20 @@ function hideCwdDropdown() {
 function removeDuplicatedLiveContent(container) {
   container.querySelectorAll('details.live-tool-panel').forEach(el => el.remove());
   liveToolPanels.clear();
+}
+
+/**
+ * The ordered DOM post-pass pipeline every JSONL-backed render runs:
+ * strip superseded live panels, fold tool activity into accordions, then
+ * highlight + decorate code blocks. One owner so a new pass can't be wired
+ * into some render paths and missed in others. `stripLive: false` is for
+ * prepending older pages — the live panels at the bottom belong to the
+ * in-flight turn and must survive.
+ */
+function finalizeRender(container, { stripLive = true } = {}) {
+  if (stripLive) removeDuplicatedLiveContent(container);
+  groupToolActivity(container);
+  applyHighlight(container);
 }
 
 /**
@@ -2588,7 +2601,6 @@ function updateMoodFromMessages(messages, opts = {}) {
 const extUIState = {
   widgets: new Map(),      // key -> { el, collapsed }
   statuses: new Map(),     // key -> el
-  toasts: [],              // { id, el, timeoutId }
 };
 
 function getToastContainer() {
@@ -2665,17 +2677,14 @@ function showExtToast(message, type) {
   container.appendChild(toast);
 
   // Auto-dismiss info toasts after 6s; warnings/errors stay until manually closed
-  let timeoutId = null;
   if (type === 'info') {
-    timeoutId = setTimeout(() => {
+    setTimeout(() => {
       if (toast.parentNode) {
         toast.classList.add('hiding');
         setTimeout(() => toast.remove(), 200);
       }
     }, 6000);
   }
-
-  extUIState.toasts.push({ el: toast, timeoutId });
 }
 
 function showExtWidget(key, lines, placement) {

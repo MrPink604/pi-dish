@@ -74,6 +74,13 @@ test('GET /api/sessions lists the fixture session with derived metadata', async 
   assert.equal(sess.messageCount, 2); // user messages only
 });
 
+test('GET /api/sessions?active=1 skips the historical scan', async () => {
+  const { status, body } = await get('/api/sessions?active=1');
+  assert.equal(status, 200);
+  assert.deepEqual(body.previous, [], 'previous list omitted on active-only polls');
+  assert.ok(Array.isArray(body.active));
+});
+
 test('GET /api/sessions?q= filters on message content', async () => {
   const hit = await get('/api/sessions?q=bravo');
   assert.ok(hit.body.previous.some(s => s.id === SESSION_ID));
@@ -261,4 +268,7 @@ test('session caches pick up JSONL appends (mtime/size revalidation)', async () 
 
   const listSearch = await get('/api/sessions?q=zulu');
   assert.ok(listSearch.body.previous.some(s => s.id === SESSION_ID), 'list search text refreshed');
+
+  const stats = await get(`/api/sessions/${SESSION_ID}/stats`);
+  assert.equal(stats.body.userMessages, 3, '/stats aggregate refreshed');
 });
