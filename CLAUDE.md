@@ -149,6 +149,14 @@ with the globally installed playwright (`NODE_PATH=/usr/lib/node_modules`):
 - Assert against the DOM (`.session-item`, `.workspace-group-header`, tab state)
   and capture screenshots; also watch `pageerror`/console errors. Chrome
   occasionally logs a flaky favicon 404 — ignore it.
+- Gotcha: playwright's rAF-polled waits (`waitForSelector`/`waitForFunction`)
+  on this real-Chrome headless can miss elements that exist only ~200ms if
+  they appear a while *after* the wait starts (bisected: the smoke turn's
+  streaming placeholder is caught with the fake tool phase at 150ms but
+  missed at 450ms, with identical DOM timelines). Don't stretch fake-bridge
+  delays to widen assertion windows; make assertions event-driven instead —
+  emit bridge events and let the *test* decide when the state ends, like the
+  working-indicator section does.
 
 This pattern is codified in `test/ui-smoke.js` (`npm run test:ui`): it boots
 the server against a temp HOME, registers a fake bridge session whose socket
