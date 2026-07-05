@@ -142,3 +142,39 @@ test('normalizeMood needs both parts and flattens whitespace', () => {
   assert.equal(H.normalizeMood('', 'face'), null);
   assert.equal(H.normalizeMood('word', ''), null);
 });
+
+test('modelMatchesPattern handles exact ids, aliases, globs, and thinking suffixes', () => {
+  const sonnet = { provider: 'anthropic', id: 'claude-sonnet-4-5' };
+  const dated = { provider: 'anthropic', id: 'claude-sonnet-4-5-20250929' };
+  const glm = { provider: 'zai', id: 'glm-5.2' };
+
+  // Exact full id / bare id (what the TUI's /scoped-models persists)
+  assert.equal(H.modelMatchesPattern('anthropic/claude-sonnet-4-5', sonnet), true);
+  assert.equal(H.modelMatchesPattern('claude-sonnet-4-5', sonnet), true);
+  assert.equal(H.modelMatchesPattern('anthropic/claude-sonnet-4-5', glm), false);
+  // Alias covers dated versions, not vice versa
+  assert.equal(H.modelMatchesPattern('claude-sonnet-4-5', dated), true);
+  assert.equal(H.modelMatchesPattern('claude-sonnet-4-5-20250929', sonnet), false);
+  // Case-insensitive
+  assert.equal(H.modelMatchesPattern('Anthropic/Claude-Sonnet-4-5', sonnet), true);
+  // Globs match full id or bare id; * doesn't cross "/"
+  assert.equal(H.modelMatchesPattern('*sonnet*', sonnet), true);
+  assert.equal(H.modelMatchesPattern('anthropic/*', glm), false);
+  assert.equal(H.modelMatchesPattern('zai/*', glm), true);
+  assert.equal(H.modelMatchesPattern('*', glm), true, 'bare id has no slash for * to cross');
+  // ":level" suffix stripped only when it is a real thinking level
+  assert.equal(H.modelMatchesPattern('anthropic/claude-sonnet-4-5:high', sonnet), true);
+  assert.equal(H.modelMatchesPattern('zai/glm-5.2:banana', glm), false);
+  // Dots in glob patterns are literal, not regex wildcards
+  assert.equal(H.modelMatchesPattern('glm-5.2*', glm), true);
+  assert.equal(H.modelMatchesPattern('glm-5.2*', { provider: 'zai', id: 'glm-5x2' }), false);
+});
+
+test('isModelEnabled treats no patterns as everything enabled', () => {
+  const m = { provider: 'anthropic', id: 'claude-sonnet-4-5' };
+  assert.equal(H.isModelEnabled(null, m), true);
+  assert.equal(H.isModelEnabled([], m), true);
+  assert.equal(H.isModelEnabled(['anthropic/claude-sonnet-4-5'], m), true);
+  assert.equal(H.isModelEnabled(['zai/glm-5.2'], m), false);
+  assert.equal(H.isModelEnabled(['zai/glm-5.2', '*sonnet*'], m), true);
+});

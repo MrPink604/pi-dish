@@ -143,6 +143,23 @@ title carries the unread count (`(2) pi-dish`). Search in All mode is server-sid
 (`/api/sessions?q=` — matches metadata and message content); filtering in
 Active mode is local.
 
+## Model dropdown / scoped models (public/app.js)
+
+The header model dropdown mirrors pi's scoped-models feature (`/scoped-models`
+in the TUI). pi's extension/RPC APIs expose no way to read or set a live
+session's scoped set, so pi-dish works off the persisted form: `enabledModels`
+patterns in `~/.pi/agent/settings.json`. `GET /api/models` annotates each
+model with `enabled` (matcher `isModelEnabled()` in `public/helpers.js` —
+exact ids, alias→dated-version prefixes, minimatch-style globs, `:level`
+suffixes); the dropdown hides disabled models (the active model always shows)
+with an "N hidden" footer. "⚙ Edit models" enters a checkbox switcher that
+writes explicit `provider/id` ids back via `PUT /api/models/enabled` (all
+enabled → field deleted), like the TUI's Ctrl+S persist. pi merges only its
+own modified fields on save, so the external write is safe; running TUI
+sessions pick the new scope up on next launch. Gotcha: edit-mode clicks
+re-render the dropdown's innerHTML before the click bubbles to the document,
+so the outside-click closer must treat detached targets as inside.
+
 ## Message view (public/app.js)
 
 - **Focus mode** hides tool results, tool-call details, live tool panels, and

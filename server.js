@@ -10,6 +10,7 @@ const {
   getBridgeSession,
 } = require('./lib/bridge-session');
 const { searchFiles, searchHomeDirs } = require('./lib/file-search');
+const { isModelEnabled } = require('./public/helpers');
 
 const app = express();
 const PORT = process.env.PORT || 3333;
@@ -23,6 +24,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname, 'public')));
 
 const SESSIONS_DIR = path.join(os.homedir(), '.pi', 'agent', 'sessions');
+const PI_SETTINGS_FILE = path.join(os.homedir(), '.pi', 'agent', 'settings.json');
 
 // =========================================================================
 // Helpers
@@ -830,12 +832,31 @@ let modelsCache = null;
 let modelsCacheTime = 0;
 const MODELS_CACHE_TTL = 60000;
 
+// pi's scoped models (/scoped-models in the TUI) persist as enabledModels
+// patterns in ~/.pi/agent/settings.json. Read fresh per request — the TUI
+// may rewrite the file at any time.
+function readPiSettings() {
+  try { return JSON.parse(fs.readFileSync(PI_SETTINGS_FILE, 'utf-8')); } catch { return {}; }
+}
+
+function getEnabledModelPatterns() {
+  const patterns = readPiSettings().enabledModels;
+  return Array.isArray(patterns) && patterns.length ? patterns : null;
+}
+
+// Annotate at response time (not in the cache) so a settings change made by
+// the TUI or by PUT /api/models/enabled shows up on the next fetch.
+function annotateEnabled(models) {
+  const patterns = getEnabledModelPatterns();
+  return models.map(m => ({ ...m, enabled: isModelEnabled(patterns, m) }));
+}
+
 app.get('/api/models', async (req, res) => {
   try {
     const sessionId = req.query.sessionId;
     if (sessionId) {
       const sessionModels = await getSessionModels(sessionId);
-      if (sessionModels) return res.json(sessionModels);
+      if (sessionModels) return res.json(annotateEnabled(sessionModels));
     }
 
     const now = Date.now();
@@ -843,7 +864,32 @@ app.get('/api/models', async (req, res) => {
       modelsCache = await piSDK.getAvailableModels();
       modelsCacheTime = now;
     }
-    res.json(modelsCache);
+    res.json(annotateEnabled(modelsCache));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Persist the scoped-models set the same way pi's /scoped-models selector
+// does: explicit "provider/id" strings in settings.enabledModels, absent when
+// everything is enabled. pi only rewrites settings fields it modified itself
+// (merge-on-save under a file lock), so this survives a running TUI unless
+// that session also edits enabledModels; running sessions pick the new scope
+// up on their next launch.
+app.put('/api/models/enabled', (req, res) => {
+  const { enabledIds } = req.body || {};
+  const clearing = enabledIds == null;
+  if (!clearing && (!Array.isArray(enabledIds) ||
+      !enabledIds.every(id => typeof id === 'string' && id.trim()))) {
+    return res.status(400).json({ error: 'enabledIds must be null or an array of model ids' });
+  }
+  try {
+    const settings = readPiSettings();
+    if (clearing || enabledIds.length === 0) delete settings.enabledModels;
+    else settings.enabledModels = enabledIds;
+    fs.mkdirSync(path.dirname(PI_SETTINGS_FILE), { recursive: true });
+    fs.writeFileSync(PI_SETTINGS_FILE, JSON.stringify(settings, null, 2));
+    res.json({ success: true, enabledModels: settings.enabledModels || null });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

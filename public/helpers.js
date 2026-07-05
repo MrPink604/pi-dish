@@ -148,6 +148,50 @@ function isUnreadSession(session, seenMap, currentId, viewingVisible) {
   return !seen || new Date(session.lastActivity) > new Date(seen);
 }
 
+/**
+ * pi "scoped models": settings.enabledModels holds patterns picking which
+ * models are enabled for cycling (the TUI's /scoped-models selector persists
+ * exact "provider/id" strings; hand-edited settings may use minimatch-style
+ * globs and an optional ":level" thinking suffix). Mirror pi's
+ * resolveModelScope matching: try the full "provider/id", then the bare id.
+ */
+const THINKING_LEVEL_NAMES = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+
+function stripThinkingSuffix(pattern) {
+  const idx = pattern.lastIndexOf(':');
+  if (idx === -1) return pattern;
+  const suffix = pattern.slice(idx + 1).toLowerCase();
+  return THINKING_LEVEL_NAMES.includes(suffix) ? pattern.slice(0, idx) : pattern;
+}
+
+// Glob → RegExp: * and ? don't cross "/" (minimatch semantics), [...] passes through.
+function globToRegExp(glob) {
+  const source = glob.replace(/[.+^${}()|\\]/g, '\\$&')
+    .replace(/\*/g, '[^/]*')
+    .replace(/\?/g, '[^/]');
+  return new RegExp('^' + source + '$', 'i');
+}
+
+function modelMatchesPattern(pattern, model) {
+  pattern = stripThinkingSuffix(String(pattern || ''));
+  if (!pattern || !model || !model.id) return false;
+  const fullId = (model.provider ? model.provider + '/' : '') + model.id;
+  if (/[*?[]/.test(pattern)) {
+    const re = globToRegExp(pattern);
+    return re.test(fullId) || re.test(model.id);
+  }
+  const p = pattern.toLowerCase();
+  const id = model.id.toLowerCase();
+  // Exact match, or the pattern is an alias for dated versions (claude-sonnet-4-5 → -20250929).
+  return p === fullId.toLowerCase() || p === id || id.startsWith(p + '-');
+}
+
+/** No/empty patterns = no filter, everything enabled (pi's semantics). */
+function isModelEnabled(patterns, model) {
+  if (!Array.isArray(patterns) || patterns.length === 0) return true;
+  return patterns.some(p => modelMatchesPattern(p, model));
+}
+
 function normalizeMood(description, face) {
   description = String(description || '').trim().split(/\s+/)[0]?.toLowerCase() || '';
   face = String(face || '').trim().replace(/[\r\n\t]/g, ' ').replace(/\s+/g, ' ');
@@ -161,5 +205,6 @@ if (typeof module !== 'undefined' && module.exports) {
     truncate, extractTextContent, getToolSummary, getToolOutputText,
     groupByWorkspace, applyLocalFilter, fuzzyMatch, fuzzyScore,
     highlightFuzzy, normalizeMood, isUnreadSession,
+    modelMatchesPattern, isModelEnabled,
   };
 }

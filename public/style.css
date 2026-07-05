@@ -602,6 +602,64 @@ body.sidebar-open {
   font-weight: 600;
 }
 
+/* Scoped-models switcher (edit mode) */
+.model-option.disabled .model-option-name {
+  color: var(--text-muted);
+}
+
+.model-check {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  line-height: 12px;
+  text-align: center;
+  font-size: 10px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--accent);
+  background: var(--bg-darker);
+}
+
+.model-dropdown-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.model-footer-info {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-right: auto;
+}
+
+.model-footer-btn {
+  font-size: 11px;
+  font-family: inherit;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-darker);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.model-footer-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.model-footer-btn.primary {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.model-footer-btn:first-of-type {
+  margin-left: auto;
+}
+
 .model-badge {
   flex-shrink: 0;
   font-size: 9px;

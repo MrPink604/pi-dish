@@ -158,3 +158,42 @@ test('GET /files with a missing cwd degrades to an empty list', async () => {
   assert.equal(status, 200);
   assert.deepEqual(body.files, []);
 });
+
+test('PUT /api/models/enabled persists pi scoped models in settings.json', async () => {
+  const settingsFile = path.join(tmpHome, '.pi', 'agent', 'settings.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ theme: 'dark' }));
+
+  const put = async (body) => {
+    const res = await fetch(base + '/api/models/enabled', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, body: await res.json() };
+  };
+
+  // Scope down to two models — other settings fields survive
+  const scoped = await put({ enabledIds: ['anthropic/claude-sonnet-4-5', 'zai/glm-5.2'] });
+  assert.equal(scoped.status, 200);
+  let settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
+  assert.deepEqual(settings.enabledModels, ['anthropic/claude-sonnet-4-5', 'zai/glm-5.2']);
+  assert.equal(settings.theme, 'dark');
+
+  // null clears the filter entirely (pi treats absent/empty as all enabled)
+  const cleared = await put({ enabledIds: null });
+  assert.equal(cleared.status, 200);
+  settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
+  assert.equal('enabledModels' in settings, false);
+
+  // Empty array behaves like clearing too
+  await put({ enabledIds: ['x/y'] });
+  await put({ enabledIds: [] });
+  settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
+  assert.equal('enabledModels' in settings, false);
+
+  // Malformed bodies are rejected
+  const bad = await put({ enabledIds: 'not-an-array' });
+  assert.equal(bad.status, 400);
+  const badItems = await put({ enabledIds: ['ok', 42] });
+  assert.equal(badItems.status, 400);
+});

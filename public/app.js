@@ -1003,11 +1003,13 @@ function cancelRename() {
 
 // --- Model dropdown ---
 let modelDropdownOpen = false;
+let modelEditMode = false; // scoped-models switcher: toggle which models are enabled
 
 async function toggleModelDropdown() {
   if (!currentSession || !currentSession.isActive) return;
   await loadModels(currentSession.id);
   modelDropdownOpen = !modelDropdownOpen;
+  modelEditMode = false;
   const dropdown = document.getElementById('modelDropdown');
   if (!modelDropdownOpen) { dropdown.style.display = 'none'; return; }
   if (window.innerWidth > 768) {
@@ -1030,9 +1032,22 @@ async function toggleModelDropdown() {
   setTimeout(() => document.addEventListener('click', closeModelDropdownOnOutsideClick, { once: true }), 0);
 }
 
+function isCurrentModel(m) {
+  var fullId = m.provider + '/' + m.id;
+  return m.id === currentSession?.model || fullId === currentSession?.model;
+}
+
 function renderModelDropdown(query) {
   var dropdown = document.getElementById('modelDropdown');
   var filtered = filterModels(query);
+  var scoped = knownModels.some(m => m && m.enabled === false);
+  var hidden = 0;
+  if (!modelEditMode && scoped) {
+    // Scoped view: only enabled models (the active one always shows).
+    var visible = filtered.filter(m => m.enabled !== false || isCurrentModel(m));
+    hidden = filtered.length - visible.length;
+    filtered = visible;
+  }
   var searchInput = dropdown.querySelector('.model-search');
   if (!searchInput) {
     searchInput = document.createElement('input');
@@ -1051,19 +1066,103 @@ function renderModelDropdown(query) {
     html += '<div class="model-group-header">' + escapeHtml(provider) + '</div>';
     groups[provider].forEach(m => {
       var fullId = m.provider + '/' + m.id;
-      var activeClass = (m.id === currentSession?.model || fullId === currentSession?.model) ? 'active' : '';
+      var activeClass = isCurrentModel(m) ? ' active' : '';
       var badges = '';
       if (m.free) badges += '<span class="model-badge free">free</span>';
       if (m.reasoning) badges += '<span class="model-badge reasoning">🧠</span>';
-      html += '<div class="model-option ' + activeClass + '" onclick="selectModel(\'' + escapeHtml(fullId) + '\')" title="' + escapeHtml(fullId) + '"><span class="model-option-name">' + escapeHtml(m.id) + '</span>' + badges + '</div>';
+      if (modelEditMode) {
+        var on = m.enabled !== false;
+        html += '<div class="model-option' + activeClass + (on ? '' : ' disabled') +
+          '" onclick="toggleModelEnabled(\'' + escapeHtml(fullId) + '\')" title="' + escapeHtml(fullId) +
+          '"><span class="model-check">' + (on ? '✓' : '') + '</span><span class="model-option-name">' +
+          escapeHtml(m.id) + '</span>' + badges + '</div>';
+      } else {
+        html += '<div class="model-option' + activeClass + '" onclick="selectModel(\'' + escapeHtml(fullId) +
+          '\')" title="' + escapeHtml(fullId) + '"><span class="model-option-name">' + escapeHtml(m.id) + '</span>' + badges + '</div>';
+      }
     });
   });
   if (!filtered.length) html += '<div class="model-option" style="color:var(--text-muted);cursor:default">No models found</div>';
+  var scrollTop = results.scrollTop;
   results.innerHTML = html;
+  results.scrollTop = scrollTop;
+  renderModelDropdownFooter(dropdown, hidden);
+}
+
+// Footer: entry point to the scoped-models switcher (pi's /scoped-models) and
+// its All/None/Done actions while editing.
+function renderModelDropdownFooter(dropdown, hidden) {
+  var footer = dropdown.querySelector('.model-dropdown-footer');
+  if (!footer) { footer = document.createElement('div'); footer.className = 'model-dropdown-footer'; dropdown.appendChild(footer); }
+  var html = '';
+  if (modelEditMode) {
+    var enabledCount = knownModels.filter(m => m && m.enabled !== false).length;
+    html += '<span class="model-footer-info">' + enabledCount + ' of ' + knownModels.length + ' enabled</span>';
+    html += '<button class="model-footer-btn" onclick="setAllModelsEnabled(true)">All</button>';
+    html += '<button class="model-footer-btn" onclick="setAllModelsEnabled(false)">None</button>';
+    html += '<button class="model-footer-btn primary" onclick="exitModelEditMode()">Done</button>';
+  } else {
+    if (hidden > 0) html += '<span class="model-footer-info">' + hidden + ' hidden</span>';
+    html += '<button class="model-footer-btn" onclick="enterModelEditMode()" title="Choose which models are enabled (pi scoped models)">⚙ Edit models</button>';
+  }
+  footer.innerHTML = html;
+}
+
+function enterModelEditMode() {
+  modelEditMode = true;
+  renderModelDropdown(currentModelQuery());
+}
+
+function exitModelEditMode() {
+  modelEditMode = false;
+  renderModelDropdown(currentModelQuery());
+}
+
+function currentModelQuery() {
+  var input = document.getElementById('modelDropdown').querySelector('.model-search');
+  return input ? input.value : '';
+}
+
+function toggleModelEnabled(fullId) {
+  var model = knownModels.find(m => m && (m.provider + '/' + m.id) === fullId);
+  if (!model) return;
+  model.enabled = model.enabled === false;
+  renderModelDropdown(currentModelQuery());
+  saveEnabledModels();
+}
+
+function setAllModelsEnabled(enabled) {
+  knownModels.forEach(m => { if (m) m.enabled = enabled; });
+  renderModelDropdown(currentModelQuery());
+  saveEnabledModels();
+}
+
+let saveEnabledTimer = null;
+function saveEnabledModels() {
+  clearTimeout(saveEnabledTimer);
+  saveEnabledTimer = setTimeout(async () => {
+    var enabled = knownModels.filter(m => m && m.enabled !== false);
+    // Everything enabled = no filter; persist as null so pi clears enabledModels.
+    var enabledIds = enabled.length === knownModels.length ? null : enabled.map(m => m.provider + '/' + m.id);
+    try {
+      const res = await fetch('/api/models/enabled', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabledIds }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setStatus('Failed to save model list: ' + (data.error || 'unknown'), 'error');
+      }
+    } catch (e) { setStatus('Failed to save model list: ' + e.message, 'error'); }
+  }, 400);
 }
 
 function closeModelDropdownOnOutsideClick(e) {
-  var inside = document.getElementById('modelSelector').contains(e.target) ||
+  // A detached target means the click hit an element the dropdown just
+  // re-rendered away (edit-mode toggles replace innerHTML mid-click) — that
+  // click was inside.
+  var inside = !document.body.contains(e.target) ||
+    document.getElementById('modelSelector').contains(e.target) ||
     document.getElementById('modelDropdown').contains(e.target);
   if (!inside) closeModelDropdown();
   else setTimeout(() => document.addEventListener('click', closeModelDropdownOnOutsideClick, { once: true }), 0);
