@@ -58,12 +58,17 @@ function updateJumpButton(messagesEl) {
 }
 
 // Load slash commands — when a session is given, the server asks the live
-// session so the list matches exactly what that session supports.
+// session so the list matches exactly what that session supports. The seq
+// guard drops out-of-order responses: switching sessions quickly must not
+// let the previous session's slower reply clobber the new session's list.
+let commandsSeq = 0;
 async function loadCommands(sessionId) {
+  const seq = ++commandsSeq;
   try {
     const qs = sessionId ? ('?sessionId=' + encodeURIComponent(sessionId)) : '';
     const res = await fetch('/api/commands' + qs);
     const data = await res.json();
+    if (seq !== commandsSeq) return; // superseded by a newer session's fetch
     if (Array.isArray(data)) slashCommands = data;
   } catch (e) {
     console.error('Failed to load commands:', e);
@@ -645,14 +650,20 @@ async function resumeSession() {
 // =========================================================================
 
 let knownModels = [];
+let modelsSeq = 0; // drops out-of-order responses on fast session switches
 
 async function loadModels(sessionId) {
+  const seq = ++modelsSeq;
   try {
     const qs = sessionId ? ('?sessionId=' + encodeURIComponent(sessionId)) : '';
     const res = await fetch('/api/models' + qs);
     const data = await res.json();
+    if (seq !== modelsSeq) return; // superseded by a newer session's fetch
     knownModels = Array.isArray(data) ? data : [];
-  } catch (e) { console.error('Failed to load models:', e); knownModels = []; }
+  } catch (e) {
+    console.error('Failed to load models:', e);
+    if (seq === modelsSeq) knownModels = [];
+  }
 }
 
 function filterModels(query) {
@@ -870,7 +881,10 @@ function searchPrev() { moveSearch(-1); }
 function searchNext() { moveSearch(1); }
 
 async function moveSearch(delta) {
-  if (!search.matches.length) return;
+  // While a jump is paging older messages in, advancing pos would move the
+  // counter without moving the highlight (the in-flight jump already captured
+  // its match) — swallow the keypress until navigation settles.
+  if (!search.matches.length || search.navigating) return;
   search.pos = (search.pos + delta + search.matches.length) % search.matches.length;
   updateSearchCount();
   await jumpToSearchResult();
@@ -1306,6 +1320,9 @@ async function loadMessages(id) {
   lastLoadedIndex = null;
   hasMoreOlder = false;
   totalMessages = 0;
+  // Mood is per-session; clear here (not in renderMessages) so a tail page
+  // without a set_mood call doesn't wipe a mood set earlier in the session.
+  setMoodIndicator('', '');
   try {
     const res = await fetch(`/api/sessions/${id}/messages?limit=${MESSAGE_PAGE_SIZE}`);
     const data = await res.json();
@@ -1335,7 +1352,7 @@ function renderLoadOlderBar() {
 
 function renderMessages(messages) {
   const container = document.getElementById('messages');
-  updateMoodFromMessages(messages, { replace: true });
+  updateMoodFromMessages(messages);
   if (messages.length === 0) {
     container.innerHTML = '<div class="empty-state" style="padding: 48px;"><p style="color: var(--text-muted);">No messages yet</p></div>';
     return;
@@ -1372,6 +1389,10 @@ async function loadOlderMessages() {
       hasMoreOlder = !!hasMore;
       container.insertAdjacentHTML('afterbegin', renderLoadOlderBar() + html);
       finalizeRender(container, { stripLive: false });
+      // Paging back can reveal the session's most recent set_mood when the
+      // tail page had none — backfill only, never override a shown mood
+      // (anything in this page is older than what's already displayed).
+      if (!document.getElementById('moodIndicator')) updateMoodFromMessages(messages);
 
       // Restore scroll so the anchor stays in the same viewport position.
       if (anchor) {
@@ -1425,9 +1446,17 @@ async function fetchNewMessagesSince(sessionId) {
 
     // Now that we have authoritative JSONL versions, strip optimistic
     // (non-indexed) message DOM. Streaming placeholders + the optimistic
-    // user echo get replaced by their indexed counterparts.
+    // user echo get replaced by their indexed counterparts. Exception: keep
+    // the finalized assistant render until a batch actually carries an
+    // assistant message — a batch of tool messages only (JSONL flush lagging
+    // turn_end) must not blank the answer, the vanishing-text mode the
+    // streaming pipeline is designed to avoid.
     const wasPinned = isPinnedToBottom(container);
-    container.querySelectorAll('.message:not([data-msg-index])').forEach(el => el.remove());
+    const freshHasAssistant = fresh.some(m => m.role === 'assistant');
+    container.querySelectorAll('.message:not([data-msg-index])').forEach(el => {
+      if (el.classList.contains('assistant') && !freshHasAssistant) return;
+      el.remove();
+    });
 
     container.insertAdjacentHTML('beforeend', fresh.map(renderMessageHtml).join(''));
     if (lastIndex != null) lastLoadedIndex = lastIndex;
@@ -2601,18 +2630,15 @@ function applyMoodFromTool(toolName, args) {
   setMoodIndicator(args?.description, args?.kaomoji || args?.face || args?.mood);
 }
 
-function updateMoodFromMessages(messages, opts = {}) {
-  let found = false;
+function updateMoodFromMessages(messages) {
   for (const msg of messages || []) {
     const content = Array.isArray(msg.content) ? msg.content : [];
     for (const block of content) {
       if (block?.type === 'toolCall' && block.name === 'set_mood') {
         applyMoodFromTool(block.name, block.arguments || {});
-        found = true;
       }
     }
   }
-  if (opts.replace && !found) setMoodIndicator('', '');
 }
 
 // =========================================================================
@@ -2711,7 +2737,11 @@ function showExtToast(message, type) {
 function showExtWidget(key, lines, placement) {
   // Pi's default placement is above the editor. Keep widgets near the prompt
   // instead of at the top of the scrollback where they are easy to miss.
-  let container = document.querySelector(`.ext-ui-widget[data-widget-key="${key}"]`);
+  // Look the element up via state, not a selector built from the raw key —
+  // a key containing a quote made querySelector throw, so the widget
+  // silently never rendered.
+  let container = extUIState.widgets.get(key)?.el;
+  if (container && !container.isConnected) container = null;
 
   if (!lines || !lines.length) {
     if (container) {
@@ -2764,7 +2794,10 @@ function showExtStatus(key, text) {
   const meta = document.querySelector('.session-meta-desktop');
   if (!meta) return;
 
-  let badge = document.querySelector(`.ext-ui-status-badge[data-status-key="${key}"]`);
+  // State-map lookup for the same reason as showExtWidget: the raw key is
+  // not safe to splice into a CSS selector.
+  let badge = extUIState.statuses.get(key);
+  if (badge && !badge.isConnected) badge = null;
 
   if (!text) {
     badge?.remove();

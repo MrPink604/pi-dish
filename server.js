@@ -133,11 +133,18 @@ function getContextWindow(modelId) {
   if (memoized != null) return memoized;
 
   let window;
-  // Prefer live model registry data (populated from pi --list-models)
+  // Prefer live model registry data (populated from pi --list-models).
+  // Exact id first; then the longest registry id embedded in modelId
+  // (Bedrock-style "us.anthropic.claude-x" ids — longest wins so a generic
+  // family entry can't shadow a specific one); then treat modelId as an
+  // alias for dated versions ("claude-x" → "claude-x-20250929"), same
+  // boundary rule as isModelEnabled — a bare substring match here resolved
+  // e.g. "gpt-4" to "gpt-4o" and reported the wrong window.
   if (modelsCache) {
+    const longest = (ms) => ms.reduce((a, b) => (b.id.length > a.id.length ? b : a), ms[0]);
     const m = modelsCache.find(m => m.id === modelId)
-      || modelsCache.find(m => modelId.includes(m.id))
-      || modelsCache.find(m => m.id.includes(modelId));
+      || longest(modelsCache.filter(m => modelId.includes(m.id)))
+      || longest(modelsCache.filter(m => m.id.startsWith(modelId + '-')));
     if (m?.contextWindow) window = m.contextWindow;
   }
   if (!window) {
