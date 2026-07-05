@@ -2864,10 +2864,23 @@ function showExtDialog(req) {
 
 // Markdown config. marked v12 dropped the `highlight` option — syntax
 // highlighting happens post-render via applyHighlight() instead.
+//
+// marked emits raw HTML and untouched link/image URLs, and the parsed result
+// is written straight to innerHTML — so harden the renderer at the one
+// chokepoint every message flows through: escape raw HTML tokens (show, don't
+// execute) and neutralize script-executing URL schemes in links/images.
 (function() {
-  if (typeof marked !== 'undefined') {
-    marked.setOptions({ breaks: true, gfm: true });
-  }
+  if (typeof marked === 'undefined') return;
+  marked.use({
+    breaks: true,
+    gfm: true,
+    renderer: {
+      html(html) { return escapeHtml(typeof html === 'string' ? html : (html && html.text) || ''); },
+    },
+    walkTokens(token) {
+      if (token.type === 'link' || token.type === 'image') token.href = sanitizeMarkdownUrl(token.href);
+    },
+  });
 })();
 
 function formatMarkdown(text) {

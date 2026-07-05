@@ -287,6 +287,20 @@ function pushPromptHistory(list, message, cap) {
   return out.length > max ? out.slice(out.length - max) : out;
 }
 
+/**
+ * Neutralize URL schemes that execute script when a markdown link/image is
+ * rendered into the DOM (the parsed markdown is written to innerHTML). Browsers
+ * ignore whitespace and control characters spliced into a scheme, so strip
+ * those before testing. Returns '#' for a blocked URL, otherwise the trimmed
+ * original. Safe schemes (http/https/mailto), relative paths, and anchors pass.
+ */
+function sanitizeMarkdownUrl(url) {
+  const raw = String(url == null ? '' : url).trim();
+  const scheme = raw.replace(/[\u0000-\u0020]+/g, '').toLowerCase();
+  if (/^(javascript|vbscript|data):/.test(scheme)) return '#';
+  return raw;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRelativeTime, formatTime, formatDuration,
@@ -294,6 +308,6 @@ if (typeof module !== 'undefined' && module.exports) {
     contextClass, sessionMetaText, parseModelId, formatModelRef,
     groupByWorkspace, applyLocalFilter, fuzzyMatch, fuzzyScore,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
-    modelMatchesPattern, isModelEnabled, pushPromptHistory,
+    modelMatchesPattern, isModelEnabled, pushPromptHistory, sanitizeMarkdownUrl,
   };
 }

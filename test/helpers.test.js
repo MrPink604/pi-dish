@@ -250,6 +250,23 @@ test('isModelEnabled treats no patterns as everything enabled', () => {
   assert.equal(H.isModelEnabled(['zai/glm-5.2', '*sonnet*'], m), true);
 });
 
+test('sanitizeMarkdownUrl neutralizes script-executing URL schemes', () => {
+  // Blocked — collapse to a harmless anchor
+  assert.equal(H.sanitizeMarkdownUrl('javascript:alert(1)'), '#');
+  assert.equal(H.sanitizeMarkdownUrl('JAVASCRIPT:alert(1)'), '#', 'case-insensitive');
+  assert.equal(H.sanitizeMarkdownUrl('  javascript:alert(1)'), '#', 'leading whitespace');
+  assert.equal(H.sanitizeMarkdownUrl('java\tscript:alert(1)'), '#', 'control-char obfuscation');
+  assert.equal(H.sanitizeMarkdownUrl('vbscript:msgbox(1)'), '#');
+  assert.equal(H.sanitizeMarkdownUrl('data:text/html,<h1>x</h1>'), '#');
+
+  // Allowed — passed through (trimmed)
+  assert.equal(H.sanitizeMarkdownUrl('https://example.com/x'), 'https://example.com/x');
+  assert.equal(H.sanitizeMarkdownUrl('mailto:a@b.com'), 'mailto:a@b.com');
+  assert.equal(H.sanitizeMarkdownUrl('/relative/path'), '/relative/path');
+  assert.equal(H.sanitizeMarkdownUrl('#anchor'), '#anchor');
+  assert.equal(H.sanitizeMarkdownUrl(null), '');
+});
+
 test('pushPromptHistory trims, dedupes repeats, and caps', () => {
   assert.deepEqual(H.pushPromptHistory([], '  hello  '), ['hello']);
   assert.deepEqual(H.pushPromptHistory(['a'], ''), ['a']);
