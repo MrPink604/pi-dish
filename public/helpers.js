@@ -16,19 +16,26 @@ function escapeHtml(text) {
 
 function formatTokens(tokens) {
   if (!tokens || tokens === 0) return '0';
+  if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(1)}M`;
   if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`;
   return `${tokens}`;
 }
 
-// Stats-modal "Cache read / write" cell. OpenAI-style completions APIs
-// report cache reads but have no write metric, so pi logs cacheWrite:0 even
-// when writes clearly happened (a later nonzero cacheRead proves it). Say
-// "not reported" in that case instead of a misleading 0.
-function formatCacheStat(cacheRead, cacheWrite) {
+// Stats-modal "Cache" cell. OpenAI-style completions APIs report cache reads
+// but have no write metric, so pi logs cacheWrite:0 even when writes clearly
+// happened (a later nonzero cacheRead proves it). Writes therefore only show
+// when actually reported; the hit rate — reads over all prompt tokens — is
+// computable from logged data on every provider and is the number that says
+// whether caching is working.
+function formatCacheStat(cacheRead, cacheWrite, input) {
   const read = cacheRead || 0;
   const write = cacheWrite || 0;
-  if (read > 0 && write === 0) return `${formatTokens(read)} / not reported`;
-  return `${formatTokens(read)} / ${formatTokens(write)}`;
+  const prompt = read + write + (input || 0);
+  if (prompt === 0) return '—';
+  let s = `${formatTokens(read)} read (${Math.round((read / prompt) * 100)}% hit)`;
+  if (write > 0) s += ` · ${formatTokens(write)} written`;
+  else if (read > 0) s += ' · writes not reported';
+  return s;
 }
 
 function formatRelativeTime(ts) {

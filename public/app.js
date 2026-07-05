@@ -988,7 +988,7 @@ function openStatsModal() {
           (cu.percent != null ? ` (${Math.round(cu.percent * 10) / 10}%)` : '')],
         ['Messages', `${s.userMessages} user · ${s.assistantMessages} assistant · ${s.toolCalls} tool calls`],
         ['Tokens in / out', `${formatTokens(s.tokens?.input)} / ${formatTokens(s.tokens?.output)}`],
-        ['Cache read / write', formatCacheStat(s.tokens?.cacheRead, s.tokens?.cacheWrite)],
+        ['Cache', formatCacheStat(s.tokens?.cacheRead, s.tokens?.cacheWrite, s.tokens?.input)],
         ['Cost', fmtMoney(s.cost)],
         ['cwd', s.cwd || '—'],
         ['Session file', s.sessionFile || '—'],

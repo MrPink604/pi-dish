@@ -22,17 +22,21 @@ test('formatTokens abbreviates thousands', () => {
   assert.equal(H.formatTokens(999), '999');
   assert.equal(H.formatTokens(1500), '1.5k');
   assert.equal(H.formatTokens(29889), '29.9k');
+  assert.equal(H.formatTokens(65029568), '65.0M'); // cache reads get huge
 });
 
-test('formatCacheStat flags unreported cache writes', () => {
+test('formatCacheStat shows hit rate and flags unreported writes', () => {
   // reads but zero writes ⇒ the provider API has no write metric (you can't
-  // read what was never written) — say so instead of showing a bogus 0
-  assert.equal(H.formatCacheStat(4160, 0), '4.2k / not reported');
-  assert.equal(H.formatCacheStat(4160, null), '4.2k / not reported');
-  assert.equal(H.formatCacheStat(4160, 512), '4.2k / 512');
-  assert.equal(H.formatCacheStat(0, 0), '0 / 0');
-  assert.equal(H.formatCacheStat(null, undefined), '0 / 0');
-  assert.equal(H.formatCacheStat(0, 2048), '0 / 2.0k');
+  // read what was never written) — hit rate carries the signal instead
+  assert.equal(H.formatCacheStat(9088, 0, 5151), '9.1k read (64% hit) · writes not reported');
+  assert.equal(H.formatCacheStat(9088, null, 5151), '9.1k read (64% hit) · writes not reported');
+  // writes reported (anthropic-messages) — hit rate counts them as misses
+  assert.equal(H.formatCacheStat(38900, 5100, 10000), '38.9k read (72% hit) · 5.1k written');
+  assert.equal(H.formatCacheStat(4160, 512, 788), '4.2k read (76% hit) · 512 written');
+  // no caching at all: plain zeros, no bogus "not reported" claim
+  assert.equal(H.formatCacheStat(0, 0, 500), '0 read (0% hit)');
+  assert.equal(H.formatCacheStat(0, 0, 0), '—');
+  assert.equal(H.formatCacheStat(null, undefined, undefined), '—');
 });
 
 test('formatRelativeTime buckets by age', () => {
