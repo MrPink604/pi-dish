@@ -392,8 +392,8 @@ async function selectSession(id) {
   const resumeBar = document.getElementById('resumeBar');
   const sessionActions = document.querySelector('.session-actions');
   
-  const inputMeta = document.getElementById('inputMeta');
-  
+  closeControlPanel();
+
   if (currentSession.isActive) {
     if (inputArea) inputArea.style.display = '';
     if (resumeBar) resumeBar.style.display = 'none';
@@ -512,23 +512,20 @@ function updateSessionHeader() {
   contextEl.textContent = ctxText;
   contextEl.className = 'badge badge-context' + (ctxClass ? ' ' + ctxClass : '');
 
-  // Mobile meta (inline in actions row)
+  // Mobile meta (in the control panel)
   const mobileModel = document.getElementById('sessionModelMobile');
+  const mobileModelRow = document.getElementById('cpModelRow');
   const mobileCtx = document.getElementById('sessionContextMobile');
   if (mobileModel) {
-    if (currentSession.isActive) {
-      mobileModel.textContent = currentSession.model + ' ▾';
-      mobileModel.onclick = toggleModelDropdown;
-      mobileModel.style.cursor = 'pointer';
-    } else {
-      mobileModel.textContent = currentSession.model;
-      mobileModel.onclick = null;
-      mobileModel.style.cursor = 'default';
-    }
+    mobileModel.textContent = currentSession.model + (currentSession.isActive ? ' ▾' : '');
+  }
+  if (mobileModelRow) {
+    mobileModelRow.onclick = currentSession.isActive ? toggleModelDropdown : null;
+    mobileModelRow.disabled = !currentSession.isActive;
   }
   if (mobileCtx) {
     mobileCtx.textContent = ctxText;
-    mobileCtx.className = 'badge badge-context' + (ctxClass ? ' ' + ctxClass : '');
+    mobileCtx.className = 'cp-value badge badge-context' + (ctxClass ? ' ' + ctxClass : '');
   }
 
   updateThinkingBadges();
@@ -542,12 +539,15 @@ function updateThinkingBadges() {
   const level = currentSession?.thinkingLevel;
   const show = !!(currentSession && currentSession.isActive);
   const label = '🧠 ' + (level || '?') + ' ▾';
-  for (const id of ['sessionThinking', 'sessionThinkingMobile']) {
-    const el = document.getElementById(id);
-    if (!el) continue;
-    el.style.display = show ? '' : 'none';
-    el.textContent = label;
+  const desktop = document.getElementById('sessionThinking');
+  if (desktop) {
+    desktop.style.display = show ? '' : 'none';
+    desktop.textContent = label;
   }
+  const mobileRow = document.getElementById('cpThinkingRow');
+  if (mobileRow) mobileRow.style.display = show ? '' : 'none';
+  const mobileVal = document.getElementById('sessionThinkingMobile');
+  if (mobileVal) mobileVal.textContent = (level || '?') + ' ▾';
 }
 
 function toggleThinkingDropdown(event) {
@@ -616,6 +616,37 @@ function setFocusMode(on) {
     const el = document.getElementById(id);
     if (el) el.classList.toggle('active', focusMode);
   }
+  const state = document.getElementById('focusModeState');
+  if (state) state.textContent = focusMode ? 'on' : 'off';
+}
+
+// --- Mobile control panel (model/thinking/context/focus/tree/export) ---
+let controlPanelOpen = false;
+
+function toggleControlPanel() {
+  controlPanelOpen ? closeControlPanel() : openControlPanel();
+}
+
+function openControlPanel() {
+  controlPanelOpen = true;
+  document.getElementById('controlPanel').classList.add('open');
+  document.getElementById('btnPanel')?.classList.add('active');
+  setTimeout(() => document.addEventListener('click', closeControlPanelOnOutsideClick, { once: true }), 0);
+}
+
+function closeControlPanel() {
+  controlPanelOpen = false;
+  document.getElementById('controlPanel')?.classList.remove('open');
+  document.getElementById('btnPanel')?.classList.remove('active');
+}
+
+function closeControlPanelOnOutsideClick(e) {
+  if (!controlPanelOpen) return;
+  // Dropdowns opened from the panel float above it — clicks there keep it open.
+  const inside = ['controlPanel', 'btnPanel', 'modelDropdown', 'thinkingDropdown']
+    .some(id => document.getElementById(id)?.contains(e.target));
+  if (!inside) closeControlPanel();
+  else setTimeout(() => document.addEventListener('click', closeControlPanelOnOutsideClick, { once: true }), 0);
 }
 
 function toggleFocusMode() {

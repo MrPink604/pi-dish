@@ -120,21 +120,41 @@
 
         <!-- Input (for active sessions) -->
         <div class="input-area">
+          <!-- Mobile control panel (opened via ⚙ in the actions row) -->
+          <div class="control-panel" id="controlPanel">
+            <div class="model-selector" id="modelSelectorMobile">
+              <button class="cp-row" id="cpModelRow" title="Change model">
+                <span class="cp-label">Model</span>
+                <span class="cp-value" id="sessionModelMobile">—</span>
+              </button>
+            </div>
+            <button class="cp-row" id="cpThinkingRow" onclick="toggleThinkingDropdown(event)" title="Thinking level" style="display:none">
+              <span class="cp-label">Thinking</span>
+              <span class="cp-value" id="sessionThinkingMobile">—</span>
+            </button>
+            <button class="cp-row" onclick="closeControlPanel(); openStatsModal()" title="Session stats">
+              <span class="cp-label">Context / stats</span>
+              <span class="cp-value badge badge-context" id="sessionContextMobile">0%</span>
+            </button>
+            <button class="cp-row" id="btnFocusMobile" onclick="toggleFocusMode()" title="Hide tool calls/results">
+              <span class="cp-label">Focus mode</span>
+              <span class="cp-value" id="focusModeState">off</span>
+            </button>
+            <button class="cp-row" onclick="closeControlPanel(); openTreeModal()" title="Session tree">
+              <span class="cp-label">Session tree</span>
+              <span class="cp-value">⑂</span>
+            </button>
+            <button class="cp-row" onclick="closeControlPanel(); exportSession()" title="Export session as HTML">
+              <span class="cp-label">Export HTML</span>
+              <span class="cp-value">↓</span>
+            </button>
+          </div>
           <div class="queue-status" id="queueStatus" style="display:none"></div>
           <textarea id="promptInput" placeholder="Send a message..." rows="2"></textarea>
           <div class="input-actions">
             <span class="status" id="status"></span>
-            <!-- Mobile-only: model/context in the actions row -->
-            <div class="input-meta" id="inputMeta">
-              <button class="badge badge-tool-btn mobile-only" id="btnFocusMobile" onclick="toggleFocusMode()" title="Hide tool calls/results">☰</button>
-              <button class="badge badge-tool-btn mobile-only" id="btnTreeMobile" onclick="openTreeModal()" title="Session tree">⑂</button>
-              <div class="model-selector model-selector-mobile" id="modelSelectorMobile">
-                <button class="badge badge-model" id="sessionModelMobile" onclick="toggleModelDropdown()" title="Change model">model ▾</button>
-              </div>
-              <button class="badge badge-thinking" id="sessionThinkingMobile" onclick="toggleThinkingDropdown(event)" title="Thinking level" style="display:none">🧠 ▾</button>
-              <button class="badge badge-context" id="sessionContextMobile" onclick="openStatsModal()" title="Session stats">0%</button>
-              <span class="badge badge-working" id="sessionWorkingMobile"><span class="spinner-dot"></span></span>
-            </div>
+            <span class="badge badge-working" id="sessionWorkingMobile"><span class="spinner-dot"></span></span>
+            <button class="badge badge-tool-btn mobile-only" id="btnPanel" onclick="toggleControlPanel()" title="Session controls">⚙</button>
             <button class="btn btn-stop" id="btnStop" onclick="abortTurn()" style="display:none" title="Stop (Esc)">Stop</button>
             <button class="btn btn-steer" id="btnSteer" onclick="sendSteer()" style="display:none" title="Steer (Ctrl+Enter)">Steer</button>
             <button class="btn btn-steer" id="btnFollowUp" onclick="sendFollowUp()" style="display:none" title="Queue after agent finishes">Follow-up</button>

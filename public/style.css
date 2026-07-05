@@ -1166,6 +1166,11 @@ body.sidebar-open {
 .status {
   font-size: 12px;
   color: var(--text-muted);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status.working {
@@ -1230,9 +1235,81 @@ body.sidebar-open {
   color: var(--text);
 }
 
-/* Input meta (model/context below prompt) — hidden on desktop, shown on mobile */
-.input-meta {
+/* Mobile control panel — slides up above the input area (⚙ button) */
+.control-panel {
   display: none;
+  position: absolute;
+  bottom: 100%;
+  left: 8px;
+  right: 8px;
+  margin-bottom: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 6px;
+  z-index: 60;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
+  flex-direction: column;
+  gap: 2px;
+}
+
+.control-panel.open {
+  display: flex;
+}
+
+.cp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 10px;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.cp-row:hover,
+.cp-row:active {
+  background: var(--bg-hover);
+}
+
+.cp-row:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.cp-row.active .cp-label {
+  color: var(--accent);
+}
+
+.cp-label {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.cp-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 12px;
+  color: var(--text);
+}
+
+/* Working spinner in the input row: mobile only (desktop has it in the header) */
+.input-actions .badge-working {
+  display: none;
+}
+
+.input-actions .btn {
+  flex-shrink: 0;
 }
 
 /* Mobile Menu Toggle */
@@ -1427,17 +1504,18 @@ body.sidebar-open {
     gap: 6px;
   }
 
-  /* Show model/context inline in actions row on mobile */
-  .input-meta {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex: 1;
-    min-width: 0;
+  /* Working spinner next to the ⚙ button */
+  .input-actions .badge-working {
+    display: inline-flex;
+    flex-shrink: 0;
   }
 
-  .model-selector-mobile {
-    position: relative;
+  .badge-tool-btn.mobile-only {
+    flex-shrink: 0;
+    min-height: 38px;
+    padding: 3px 12px;
+    font-size: 15px;
+    border-radius: 8px;
   }
 
   .btn {
@@ -1449,14 +1527,6 @@ body.sidebar-open {
   .btn-primary {
     min-width: 64px;
     border-radius: 8px;
-  }
-
-  .status {
-    font-size: 12px;
-    max-width: 55%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .empty-state {
