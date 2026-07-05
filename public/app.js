@@ -559,6 +559,11 @@ function patchSession(id, patch) {
 async function selectSession(id) {
   currentSession = findSession(id);
   if (!currentSession) return;
+  // Tear down the previous session's stream up front, before the awaits below.
+  // Left open, its in-flight turn_end/message_update events fire against the
+  // session we're switching to (loadMessages has already reset the cursors).
+  if (streamReconnectTimeout) { clearTimeout(streamReconnectTimeout); streamReconnectTimeout = null; }
+  if (messageStream) { messageStream.close(); messageStream = null; }
   followStream = false; // forced follow doesn't carry across sessions
   localStorage.setItem('pi-dish-session', id);
   markSessionSeen(id, currentSession.lastActivity);
@@ -1300,6 +1305,9 @@ async function loadMessages(id) {
   try {
     const res = await fetch(`/api/sessions/${id}/messages?limit=${MESSAGE_PAGE_SIZE}`);
     const data = await res.json();
+    // A newer selection may have superseded us while the fetch was in flight —
+    // don't clobber its transcript/cursors with this stale response.
+    if (currentSession?.id !== id) return;
     const { messages, session, firstIndex, lastIndex, hasMore, totalMessages: total } = data;
     currentSession = { ...currentSession, ...session };
     updateSessionHeader();
@@ -1388,6 +1396,8 @@ async function fetchNewMessagesSince(sessionId) {
   try {
     const res = await fetch(`/api/sessions/${sessionId}/messages?after=${lastLoadedIndex}`);
     const data = await res.json();
+    // Bail if the user switched sessions while this catch-up was in flight.
+    if (currentSession?.id !== sessionId) return;
     const { messages, lastIndex, totalMessages: total, session } = data;
     if (session) {
       currentSession = { ...currentSession, ...session };
@@ -1426,13 +1436,15 @@ async function fetchNewMessagesSince(sessionId) {
 
 function renderUserMessage(msg, time) {
   const text = extractTextContent(msg.content);
-  // Attached images render as tappable thumbnails below the text (base64 is
-  // attribute-safe; only the mime type needs escaping).
+  // Attached images render as tappable thumbnails below the text. Escape both
+  // the mime type and the data before dropping them into the attribute —
+  // well-formed base64 has no HTML-special chars so escaping is a no-op for it,
+  // but malformed data must not be able to break out of the src attribute.
   let imagesHtml = '';
   if (Array.isArray(msg.content)) {
     for (const block of msg.content) {
       if (block && block.type === 'image' && block.data) {
-        imagesHtml += `<img class="msg-image" src="data:${escapeHtml(block.mimeType || 'image/png')};base64,${block.data}" alt="attached image">`;
+        imagesHtml += `<img class="msg-image" src="data:${escapeHtml(block.mimeType || 'image/png')};base64,${escapeHtml(block.data)}" alt="attached image">`;
       }
     }
   }

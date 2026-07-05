@@ -407,10 +407,11 @@ app.get('/api/sessions/:id/search', (req, res) => {
 
 // Normalize client-sent attachments to pi's ImageContent shape, dropping
 // anything malformed rather than failing the whole prompt.
+const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 function sanitizeImages(images) {
   if (!Array.isArray(images)) return [];
   return images
-    .filter((i) => i && typeof i.data === 'string' && i.data && typeof i.mimeType === 'string' && i.mimeType.startsWith('image/'))
+    .filter((i) => i && typeof i.data === 'string' && BASE64_RE.test(i.data) && typeof i.mimeType === 'string' && i.mimeType.startsWith('image/'))
     .map((i) => ({ type: 'image', data: i.data, mimeType: i.mimeType }));
 }
 

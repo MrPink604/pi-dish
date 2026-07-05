@@ -247,6 +247,16 @@ test('POST endpoints validate input and reject inactive sessions', async () => {
   const deadPrompt = await post(`/api/sessions/${SESSION_ID}/prompt`, { message: 'hi' });
   assert.equal(deadPrompt.status, 404);
 
+  // A non-base64 image is dropped by sanitizeImages, so an images-only prompt
+  // with malformed data has nothing left and is rejected as empty (not stored).
+  const badImage = await post(`/api/sessions/${SESSION_ID}/prompt`,
+    { images: [{ mimeType: 'image/png', data: 'not valid base64!' }] });
+  assert.equal(badImage.status, 400);
+  // Well-formed base64 survives sanitizing and reaches the (dead) session.
+  const okImage = await post(`/api/sessions/${SESSION_ID}/prompt`,
+    { images: [{ mimeType: 'image/png', data: 'aGVsbG8=' }] });
+  assert.equal(okImage.status, 404);
+
   // Slash-command endpoint requires a leading slash
   const notSlash = await post(`/api/sessions/${SESSION_ID}/command`, { message: 'hello' });
   assert.equal(notSlash.status, 400);
