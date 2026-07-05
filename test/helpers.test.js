@@ -282,3 +282,13 @@ test('pushPromptHistory trims, dedupes repeats, and caps', () => {
   H.pushPromptHistory(list, 'b');
   assert.deepEqual(list, ['a']);
 });
+
+test('messageHasVisibleText spots prose and errors, not tool-only content', () => {
+  assert.equal(H.messageHasVisibleText({ content: [{ type: 'text', text: 'hi' }] }), true);
+  assert.equal(H.messageHasVisibleText({ content: 'plain string' }), true);
+  assert.equal(H.messageHasVisibleText({ content: [], errorMessage: 'boom' }), true);
+  assert.equal(H.messageHasVisibleText({ content: [{ type: 'toolCall', name: 'Bash' }] }), false);
+  assert.equal(H.messageHasVisibleText({ content: [{ type: 'text', text: '' }] }), false);
+  assert.equal(H.messageHasVisibleText({ content: [{ type: 'thinking', thinking: 'hm' }] }), false);
+  assert.equal(H.messageHasVisibleText(null), false);
+});

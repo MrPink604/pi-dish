@@ -625,21 +625,12 @@ async function resumeSession() {
   setStatus('Resuming session...', 'working');
   
   try {
-    const res = await fetch(`/api/sessions/${currentSession.id}/resume`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    const data = await res.json();
-    
-    if (res.ok && data.success) {
-      setStatus('Session resumed');
-      // Reload sessions and re-select (it's now active); refreshSessions
-      // keeps an in-flight All-tab search intact.
-      await refreshSessions();
-      selectSession(data.id);
-    } else {
-      setStatus('Resume failed: ' + (data.error || 'unknown'), 'error');
-    }
+    const data = await apiSend(`/api/sessions/${currentSession.id}/resume`);
+    setStatus('Session resumed');
+    // Reload sessions and re-select (it's now active); refreshSessions
+    // keeps an in-flight All-tab search intact.
+    await refreshSessions();
+    selectSession(data.id);
   } catch (e) {
     setStatus('Resume failed: ' + e.message, 'error');
   }
@@ -756,13 +747,7 @@ function toggleThinkingDropdown(event) {
     dropdown.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
   }
   dropdown.style.display = 'block';
-  setTimeout(() => document.addEventListener('click', closeThinkingDropdownOnOutsideClick, { once: true }), 0);
-}
-
-function closeThinkingDropdownOnOutsideClick(e) {
-  const dropdown = document.getElementById('thinkingDropdown');
-  if (!dropdown.contains(e.target)) closeThinkingDropdown();
-  else setTimeout(() => document.addEventListener('click', closeThinkingDropdownOnOutsideClick, { once: true }), 0);
+  armOutsideClickClose(['thinkingDropdown'], closeThinkingDropdown, () => thinkingDropdownOpen);
 }
 
 function closeThinkingDropdown() {
@@ -774,12 +759,7 @@ async function selectThinkingLevel(level) {
   closeThinkingDropdown();
   if (!currentSession) return;
   try {
-    const res = await fetch(`/api/sessions/${currentSession.id}/thinking`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ level }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'failed');
+    const data = await apiSend(`/api/sessions/${currentSession.id}/thinking`, { level });
     // Pi clamps to what the model supports; trust the reported level.
     patchSession(currentSession.id, { thinkingLevel: data.level || level });
     setStatus('Thinking level: ' + currentSession.thinkingLevel);
@@ -982,22 +962,15 @@ function openControlPanel() {
   controlPanelOpen = true;
   document.getElementById('controlPanel').classList.add('open');
   document.getElementById('btnPanel')?.classList.add('active');
-  setTimeout(() => document.addEventListener('click', closeControlPanelOnOutsideClick, { once: true }), 0);
+  // Dropdowns opened from the panel float above it — clicks there keep it open.
+  armOutsideClickClose(['controlPanel', 'btnPanel', 'modelDropdown', 'thinkingDropdown'],
+    closeControlPanel, () => controlPanelOpen);
 }
 
 function closeControlPanel() {
   controlPanelOpen = false;
   document.getElementById('controlPanel')?.classList.remove('open');
   document.getElementById('btnPanel')?.classList.remove('active');
-}
-
-function closeControlPanelOnOutsideClick(e) {
-  if (!controlPanelOpen) return;
-  // Dropdowns opened from the panel float above it — clicks there keep it open.
-  const inside = ['controlPanel', 'btnPanel', 'modelDropdown', 'thinkingDropdown']
-    .some(id => document.getElementById(id)?.contains(e.target));
-  if (!inside) closeControlPanel();
-  else setTimeout(() => document.addEventListener('click', closeControlPanelOnOutsideClick, { once: true }), 0);
 }
 
 function toggleFocusMode() {
@@ -1075,12 +1048,8 @@ async function commitRename() {
   nameEl.style.display = '';
   if (!newName || newName === currentSession.name || !currentSession.isActive) return;
   try {
-    const res = await fetch('/api/sessions/' + currentSession.id + '/rename', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: newName }),
-    });
-    if (res.ok) patchSession(currentSession.id, { name: newName });
-    else setStatus('Rename failed', 'error');
+    await apiSend('/api/sessions/' + currentSession.id + '/rename', { name: newName });
+    patchSession(currentSession.id, { name: newName });
   } catch (e) { setStatus('Rename failed: ' + e.message, 'error'); }
 }
 
@@ -1117,7 +1086,7 @@ async function toggleModelDropdown() {
   dropdown.style.display = 'flex';
   var searchInput = dropdown.querySelector('.model-search');
   if (searchInput) searchInput.focus();
-  setTimeout(() => document.addEventListener('click', closeModelDropdownOnOutsideClick, { once: true }), 0);
+  armOutsideClickClose(['modelSelector', 'modelDropdown'], closeModelDropdown, () => modelDropdownOpen);
 }
 
 function isCurrentModel(m) {
@@ -1153,21 +1122,18 @@ function renderModelDropdown(query) {
   Object.keys(groups).sort().forEach(provider => {
     html += '<div class="model-group-header">' + escapeHtml(provider) + '</div>';
     groups[provider].forEach(m => {
+      // One row template for both modes — edit mode adds the checkbox span,
+      // the disabled dimming, and swaps the click handler.
       var fullId = m.provider + '/' + m.id;
-      var activeClass = isCurrentModel(m) ? ' active' : '';
       var badges = '';
       if (m.free) badges += '<span class="model-badge free">free</span>';
       if (m.reasoning) badges += '<span class="model-badge reasoning">🧠</span>';
-      if (modelEditMode) {
-        var on = m.enabled !== false;
-        html += '<div class="model-option' + activeClass + (on ? '' : ' disabled') +
-          '" onclick="toggleModelEnabled(\'' + escapeHtml(fullId) + '\')" title="' + escapeHtml(fullId) +
-          '"><span class="model-check">' + (on ? '✓' : '') + '</span><span class="model-option-name">' +
-          escapeHtml(m.id) + '</span>' + badges + '</div>';
-      } else {
-        html += '<div class="model-option' + activeClass + '" onclick="selectModel(\'' + escapeHtml(fullId) +
-          '\')" title="' + escapeHtml(fullId) + '"><span class="model-option-name">' + escapeHtml(m.id) + '</span>' + badges + '</div>';
-      }
+      var on = m.enabled !== false;
+      var cls = 'model-option' + (isCurrentModel(m) ? ' active' : '') + (modelEditMode && !on ? ' disabled' : '');
+      var check = modelEditMode ? '<span class="model-check">' + (on ? '✓' : '') + '</span>' : '';
+      var handler = modelEditMode ? 'toggleModelEnabled' : 'selectModel';
+      html += '<div class="' + cls + '" onclick="' + handler + '(\'' + escapeHtml(fullId) + '\')" title="' +
+        escapeHtml(fullId) + '">' + check + '<span class="model-option-name">' + escapeHtml(m.id) + '</span>' + badges + '</div>';
     });
   });
   if (!filtered.length) html += '<div class="model-option" style="color:var(--text-muted);cursor:default">No models found</div>';
@@ -1233,27 +1199,9 @@ function saveEnabledModels() {
     // Everything enabled = no filter; persist as null so pi clears enabledModels.
     var enabledIds = enabled.length === knownModels.length ? null : enabled.map(m => m.provider + '/' + m.id);
     try {
-      const res = await fetch('/api/models/enabled', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabledIds }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setStatus('Failed to save model list: ' + (data.error || 'unknown'), 'error');
-      }
+      await apiSend('/api/models/enabled', { enabledIds }, 'PUT');
     } catch (e) { setStatus('Failed to save model list: ' + e.message, 'error'); }
   }, 400);
-}
-
-function closeModelDropdownOnOutsideClick(e) {
-  // A detached target means the click hit an element the dropdown just
-  // re-rendered away (edit-mode toggles replace innerHTML mid-click) — that
-  // click was inside.
-  var inside = !document.body.contains(e.target) ||
-    document.getElementById('modelSelector').contains(e.target) ||
-    document.getElementById('modelDropdown').contains(e.target);
-  if (!inside) closeModelDropdown();
-  else setTimeout(() => document.addEventListener('click', closeModelDropdownOnOutsideClick, { once: true }), 0);
 }
 
 function closeModelDropdown() {
@@ -1271,17 +1219,9 @@ async function selectModel(fullModelId) {
   if (!currentSession || isSame) return;
   setStatus('Switching model...', 'working');
   try {
-    const res = await fetch('/api/sessions/' + currentSession.id + '/model', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ modelId: fullModelId }),
-    });
-    if (res.ok) {
-      patchSession(currentSession.id, { model: fullModelId });
-      setStatus('Model switched to ' + fullModelId);
-    } else {
-      const data = await res.json().catch(() => ({}));
-      setStatus('Model switch failed: ' + (data.error || 'unknown'), 'error');
-    }
+    await apiSend('/api/sessions/' + currentSession.id + '/model', { modelId: fullModelId });
+    patchSession(currentSession.id, { model: fullModelId });
+    setStatus('Model switched to ' + fullModelId);
   } catch (e) { setStatus('Model switch failed: ' + e.message, 'error'); }
 }
 
@@ -1300,15 +1240,14 @@ let loadingOlder = false;
 
 function renderMessageHtml(msg) {
   const time = msg.timestamp ? formatTime(msg.timestamp) : '';
+  // The stream index rides on the root element — dedup, tool grouping, and
+  // search jumps all key on data-msg-index. Passed into the renderers rather
+  // than string-spliced into their output afterwards.
   const idxAttr = (msg.index != null) ? ` data-msg-index="${msg.index}"` : '';
-  let inner;
-  if (msg.role === 'user') inner = renderUserMessage(msg, time);
-  else if (msg.role === 'assistant') inner = renderAssistantMessage(msg, time);
-  else if (msg.role === 'toolResult') inner = renderToolResult(msg, time);
-  else return '';
-  // Tag the outermost element with the message index for dedup/incremental updates.
-  if (idxAttr && inner.startsWith('<div ')) inner = inner.replace('<div ', `<div${idxAttr} `);
-  return inner;
+  if (msg.role === 'user') return renderUserMessage(msg, time, idxAttr);
+  if (msg.role === 'assistant') return renderAssistantMessage(msg, time, { attrs: idxAttr });
+  if (msg.role === 'toolResult') return renderToolResult(msg, time, idxAttr);
+  return '';
 }
 
 async function loadMessages(id) {
@@ -1467,7 +1406,7 @@ async function fetchNewMessagesSince(sessionId) {
   }
 }
 
-function renderUserMessage(msg, time) {
+function renderUserMessage(msg, time, attrs = '') {
   const text = extractTextContent(msg.content);
   // Attached images render as tappable thumbnails below the text. Escape both
   // the mime type and the data before dropping them into the attribute —
@@ -1481,7 +1420,7 @@ function renderUserMessage(msg, time) {
       }
     }
   }
-  return `<div class="message user">
+  return `<div${attrs} class="message user">
     <div class="message-header"><span class="message-role user">❯</span>${time ? `<span class="message-time">${time}</span>` : ''}</div>
     <div class="message-content user-content">${text ? `<div class="markdown-body">${formatMarkdown(text)}</div>` : ''}${imagesHtml ? `<div class="msg-images">${imagesHtml}</div>` : ''}</div>
   </div>`;
@@ -1512,9 +1451,9 @@ function renderAssistantMessage(msg, time, opts = {}) {
   const showModel = msg.model && (!currentSession || msg.model !== currentSession.model);
   // Tool-only messages (no prose, no error) are fully hidden in focus mode —
   // without this their empty header row lingers as a stray marker.
-  const noTextClass = !textHtml && !errorHtml ? ' no-text' : '';
+  const noTextClass = messageHasVisibleText(msg) ? '' : ' no-text';
 
-  return `<div class="message assistant${streamingClass}${noTextClass}${msg.errorMessage ? ' error' : ''}" data-timestamp="${timestamp}"${streamingAttr}>
+  return `<div${opts.attrs || ''} class="message assistant${streamingClass}${noTextClass}${msg.errorMessage ? ' error' : ''}" data-timestamp="${timestamp}"${streamingAttr}>
     <div class="message-header">
       <span class="message-role assistant">◆</span>
       ${showModel ? `<span class="badge">${escapeHtml(msg.model)}</span>` : ''}
@@ -1548,7 +1487,7 @@ function renderToolCall(block) {
   </details>`;
 }
 
-function renderToolResult(msg, time) {
+function renderToolResult(msg, time, attrs = '') {
   const content = extractTextContent(msg.content);
   const isError = msg.isError;
   const timestamp = msg.timestamp || Date.now();
@@ -1556,7 +1495,7 @@ function renderToolResult(msg, time) {
   const lineCount = lines.length;
   const preview = truncate(lines[0], 80);
   
-  return `<div class="message tool-result ${isError ? 'error' : ''}" data-timestamp="${timestamp}">
+  return `<div${attrs} class="message tool-result ${isError ? 'error' : ''}" data-timestamp="${timestamp}">
     <details class="tool-result-details" ${lineCount <= 5 ? 'open' : ''}>
       <summary class="tool-result-header">
         <span class="tool-result-icon">${isError ? '✗' : '✓'}</span>
@@ -1573,6 +1512,12 @@ function renderToolResult(msg, time) {
 // =========================================================================
 // Live Tool Panels (streaming tool execution)
 // =========================================================================
+
+// One place for the output escaping + truncation — a freshly appended panel
+// and an incrementally updated one must render output identically.
+function liveToolOutputHtml(output) {
+  return escapeHtml(truncate(output, 8000));
+}
 
 function buildLiveToolPanel(toolCallId, toolName, args, output, isError, isComplete, durationMs) {
   const stateClass = isComplete ? (isError ? 'error' : 'complete') : 'running';
@@ -1594,7 +1539,7 @@ function buildLiveToolPanel(toolCallId, toolName, args, output, isError, isCompl
 
   const cursorHtml = isComplete ? '' : '<span class="live-tool-cursor"></span>';
   const outputHtml = output
-    ? '<div class="live-tool-output">' + escapeHtml(truncate(output, 8000)) + cursorHtml + '</div>'
+    ? '<div class="live-tool-output">' + liveToolOutputHtml(output) + cursorHtml + '</div>'
     : (!isComplete ? '<div class="live-tool-output"><span class="live-tool-cursor"></span></div>' : '');
 
   return '<details class="live-tool-panel ' + stateClass + '" data-tool-call-id="' + escapeHtml(toolCallId) + '"' + openAttr + '>' +
@@ -1644,13 +1589,13 @@ function updateLiveToolPanel(data) {
     const cursorHtml = '<span class="live-tool-cursor"></span>';
     outputEl = document.createElement('div');
     outputEl.className = 'live-tool-output';
-    outputEl.innerHTML = escapeHtml(truncate(output, 8000)) + cursorHtml;
+    outputEl.innerHTML = liveToolOutputHtml(output) + cursorHtml;
     entry.el.appendChild(outputEl);
     // Open the details so output is visible
     entry.el.setAttribute('open', '');
   } else {
     const cursorEl = outputEl.querySelector('.live-tool-cursor');
-    outputEl.innerHTML = escapeHtml(truncate(output, 8000));
+    outputEl.innerHTML = liveToolOutputHtml(output);
     // Re-add cursor
     if (cursorEl) outputEl.appendChild(cursorEl);
     else outputEl.insertAdjacentHTML('beforeend', '<span class="live-tool-cursor"></span>');
@@ -2037,12 +1982,7 @@ async function sendPrompt() {
     clearDraft();
     setStatus('Running ' + message.split(' ')[0] + '...', 'working');
     try {
-      const res = await fetch(`/api/sessions/${currentSession.id}/command`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message })
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'command failed');
+      const data = await apiSend(`/api/sessions/${currentSession.id}/command`, { message });
       setStatus(data.info || 'Done');
       refreshSessions();
     } catch (e) {
@@ -2075,11 +2015,7 @@ async function sendPrompt() {
   setTurnInProgress(true);
 
   try {
-    const res = await fetch(`/api/sessions/${currentSession.id}/prompt`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(images ? { message, images } : { message })
-    });
-    if (!res.ok) throw new Error(await res.text());
+    await apiSend(`/api/sessions/${currentSession.id}/prompt`, images ? { message, images } : { message });
     setStatus('Waiting for response...', 'working');
   } catch (e) {
     setStatus(`Error: ${e.message}`, 'error');
@@ -2167,11 +2103,7 @@ async function sendQueuedMessage(kind) {
   const body = steer ? { message } : { message, deliverAs: 'followUp' };
   if (images) body.images = images;
   try {
-    const res = await fetch(`/api/sessions/${currentSession.id}${steer ? '/steer' : '/prompt'}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    if (!res.ok) throw new Error(await res.text());
+    await apiSend(`/api/sessions/${currentSession.id}${steer ? '/steer' : '/prompt'}`, body);
     setStatus(steer ? 'Steered' : 'Queued for after this turn');
   } catch (e) {
     setStatus(`${steer ? 'Steer' : 'Follow-up'} failed: ${e.message}`, 'error');
@@ -2229,11 +2161,9 @@ async function abortTurn() {
   if (!currentSession || !turnInProgress) return;
   setStatus('Stopping...', 'working');
   try {
-    var res = await fetch('/api/sessions/' + currentSession.id + '/abort', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }
-    });
-    if (res.ok) { setStatus('Stopped'); setTurnInProgress(false); }
-    else { var d = await res.json().catch(() => ({})); setStatus('Stop failed: ' + (d.error || 'unknown'), 'error'); }
+    await apiSend('/api/sessions/' + currentSession.id + '/abort');
+    setStatus('Stopped');
+    setTurnInProgress(false);
   } catch (e) { setStatus('Stop failed: ' + e.message, 'error'); }
 }
 
@@ -2245,25 +2175,18 @@ async function createSession() {
     const cwd = cwdInput ? cwdInput.value.trim() : '';
     // Persist last-used cwd
     if (cwd) localStorage.setItem('pi-dish-cwd', cwd);
-    const res = await fetch('/api/sessions/new', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cwd: cwd || undefined })
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok && data.success && data.id) {
-      setStatus('Session created');
-      switchTab('active');
-      // Poll until the new session shows up in the list instead of hoping a
-      // fixed delay is enough.
-      for (let attempt = 0; attempt < 10; attempt++) {
-        await loadSessions();
-        if (findSession(data.id)) { selectSession(data.id); return; }
-        await new Promise(r => setTimeout(r, 1000));
-      }
-      setStatus('Session created but not visible yet — try refreshing', 'error');
-      return;
+    const data = await apiSend('/api/sessions/new', { cwd: cwd || undefined });
+    if (!data.id) { setStatus('Failed to create session', 'error'); return; }
+    setStatus('Session created');
+    switchTab('active');
+    // Poll until the new session shows up in the list instead of hoping a
+    // fixed delay is enough.
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await loadSessions();
+      if (findSession(data.id)) { selectSession(data.id); return; }
+      await new Promise(r => setTimeout(r, 1000));
     }
-    setStatus(data.error || 'Failed to create session', 'error');
+    setStatus('Session created but not visible yet — try refreshing', 'error');
   } catch (e) { setStatus(`Error: ${e.message}`, 'error'); }
 }
 
@@ -2391,6 +2314,44 @@ function hideCwdDropdown() {
 // =========================================================================
 // Utilities
 // =========================================================================
+
+/**
+ * POST/PUT a JSON body and parse the JSON reply. Throws Error(data.error) on
+ * a non-2xx status so callers get the server's message without each
+ * hand-rolling the res.ok / res.json().catch(() => ({})) dance (they used
+ * to, with a slightly different fallback at every site).
+ */
+async function apiSend(path, body, method = 'POST') {
+  const res = await fetch(path, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+  return data;
+}
+
+/**
+ * Arm a document-level "click outside closes this" chain. Clicks inside any
+ * of the `ids` containers re-arm the listener; anything else calls close().
+ * A target detached from the document counts as inside — an inside handler
+ * that re-renders innerHTML before the click bubbles to the document (the
+ * model dropdown's edit-mode toggles) must not read as an outside click.
+ * `isOpen` stops a stale armed listener from acting after the panel was
+ * already closed by other means.
+ */
+function armOutsideClickClose(ids, close, isOpen) {
+  const onClick = (e) => {
+    if (isOpen && !isOpen()) return;
+    const inside = !document.body.contains(e.target) ||
+      ids.some(id => document.getElementById(id)?.contains(e.target));
+    if (inside) arm();
+    else close();
+  };
+  const arm = () => setTimeout(() => document.addEventListener('click', onClick, { once: true }), 0);
+  arm();
+}
 
 /**
  * After a JSONL-based render the on-disk messages are authoritative: drop
@@ -2533,7 +2494,6 @@ function renderStreamingMessage(message) {
     ? message.content
     : (typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : []);
 
-  let hasText = false;
   blocks.forEach((block, i) => {
     let blockEl = el.querySelector(`[data-block-index="${i}"]`);
     if (blockEl && blockEl.dataset.blockType !== block.type) { blockEl.remove(); blockEl = null; }
@@ -2555,7 +2515,6 @@ function renderStreamingMessage(message) {
       }
     } else if (block.type === 'text') {
       const text = block.text || '';
-      if (text) hasText = true;
       if (!blockEl) {
         el.insertAdjacentHTML('beforeend',
           `<div class="message-content" data-block-index="${i}" data-block-type="text"><div class="markdown-body"></div></div>`);
@@ -2588,7 +2547,9 @@ function renderStreamingMessage(message) {
     }
   });
 
-  el.classList.toggle('no-text', !hasText);
+  // Same predicate as the static renderer (helpers.js) — the two maintaining
+  // this independently is how they drifted on errorMessage handling.
+  el.classList.toggle('no-text', !messageHasVisibleText(message));
   if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
 }
 
@@ -2825,10 +2786,8 @@ const openExtDialogs = new Map(); // requestId -> overlay element
 
 function sendExtDialogResponse(requestId, response) {
   if (!currentSession) return;
-  fetch(`/api/sessions/${currentSession.id}/ui-response`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ requestId, ...response }),
-  }).catch(e => setStatus('Dialog response failed: ' + e.message, 'error'));
+  apiSend(`/api/sessions/${currentSession.id}/ui-response`, { requestId, ...response })
+    .catch(e => setStatus('Dialog response failed: ' + e.message, 'error'));
   dismissExtDialog(requestId);
 }
 
@@ -3137,11 +3096,7 @@ async function confirmBranch() {
   pendingBranchId = null;
   setStatus('Branching...', 'working');
   try {
-    var res = await fetch('/api/sessions/' + currentSession.id + '/branch', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ entryId })
-    });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed');
+    await apiSend('/api/sessions/' + currentSession.id + '/branch', { entryId });
     closeTreeModal();
     setStatus('Branched — reloading');
     selectSession(currentSession.id);

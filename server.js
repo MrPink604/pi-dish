@@ -177,6 +177,30 @@ function parseSessionFile(filePath) {
 // =========================================================================
 
 /**
+ * The one session-summary shape both backends produce — a field added here
+ * lands for bridge and RPC sessions alike (the two used to be separate
+ * object literals that could silently drift apart).
+ */
+function activeSessionEntry(v) {
+  return {
+    id: v.id,
+    name: v.name || 'New Session',
+    model: v.model || 'unknown',
+    contextPercent: roundPercent(v.percent) ?? 0,
+    contextTokens: v.tokens ?? 0,
+    contextWindow: v.contextWindow || 0,
+    thinkingLevel: v.thinkingLevel || null,
+    messageCount: v.messageCount || 0,
+    lastActivity: v.lastActivity,
+    isActive: true,
+    turnInProgress: !!v.turnInProgress,
+    cwd: v.cwd || null,
+    sessionFile: v.sessionFile || null,
+    pid: v.pid || null,
+  };
+}
+
+/**
  * Active sessions = sessions registered by the pi-dish-bridge extension.
  * We enrich the registry entry with metadata from the on-disk JSONL.
  */
@@ -191,24 +215,23 @@ function getActiveSessions(registered = listRegisteredSessions()) {
     // The bridge reports the session's actual context usage (tokens, window,
     // percent) straight from pi — always prefer it over JSONL guesswork.
     const usage = reg.contextUsage || null;
-    active.push({
+    active.push(activeSessionEntry({
       id: reg.sessionId,
-      name: reg.name || info.name || 'New Session',
-      model: reg.model || info.model || 'unknown',
-      contextPercent: roundPercent(usage?.percent ?? info.contextPercent) ?? 0,
-      contextTokens: usage?.tokens ?? info.contextTokens ?? 0,
+      name: reg.name || info.name,
+      model: reg.model || info.model,
+      percent: usage?.percent ?? info.contextPercent,
+      tokens: usage?.tokens ?? info.contextTokens,
       contextWindow: usage?.contextWindow || getContextWindow(reg.model || info.model),
-      thinkingLevel: reg.thinkingLevel || null,
-      messageCount: info.messageCount || 0,
+      thinkingLevel: reg.thinkingLevel,
+      messageCount: info.messageCount,
       // Stable fallbacks only — a fresh `new Date()` per poll would make
       // isUnreadSession() flag the session unread forever and churn the sort.
       lastActivity: info.lastActivity || reg.updatedAt || new Date(0),
-      isActive: true,
-      turnInProgress: !!reg.turnInProgress,
-      cwd: reg.cwd || info.cwd || null,
-      sessionFile: reg.sessionFile || null,
-      pid: reg.pid || null,
-    });
+      turnInProgress: reg.turnInProgress,
+      cwd: reg.cwd || info.cwd,
+      sessionFile: reg.sessionFile,
+      pid: reg.pid,
+    }));
     seen.add(reg.sessionId);
   }
 
@@ -219,24 +242,22 @@ function getActiveSessions(registered = listRegisteredSessions()) {
   for (const rpc of getAllRPCSessions()) {
     if (!rpc.alive || seen.has(rpc.id)) continue;
     const state = rpc.state || {};
-    const model = formatModelRef(state.model) || formatModelRef(rpc.model) || 'unknown';
     const usage = rpc.lastStats?.contextUsage || null;
-    active.push({
+    active.push(activeSessionEntry({
       id: rpc.id,
-      name: state.sessionName || state.name || 'New Session',
-      model,
-      contextPercent: roundPercent(usage?.percent) ?? 0,
-      contextTokens: usage?.tokens ?? 0,
-      contextWindow: usage?.contextWindow || state.model?.contextWindow || 0,
-      thinkingLevel: state.thinkingLevel || null,
-      messageCount: state.messageCount || 0,
+      name: state.sessionName || state.name,
+      model: formatModelRef(state.model) || formatModelRef(rpc.model),
+      percent: usage?.percent,
+      tokens: usage?.tokens,
+      contextWindow: usage?.contextWindow || state.model?.contextWindow,
+      thinkingLevel: state.thinkingLevel,
+      messageCount: state.messageCount,
       lastActivity: rpc.lastActivityAt,
-      isActive: true,
-      turnInProgress: !!rpc.turnInProgress,
-      cwd: rpc.cwd || null,
-      sessionFile: rpc.sessionFile || state.sessionFile || null,
-      pid: rpc.proc?.pid || null,
-    });
+      turnInProgress: rpc.turnInProgress,
+      cwd: rpc.cwd,
+      sessionFile: rpc.sessionFile || state.sessionFile,
+      pid: rpc.proc?.pid,
+    }));
     seen.add(rpc.id);
   }
 

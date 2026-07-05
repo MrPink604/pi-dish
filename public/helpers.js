@@ -103,6 +103,19 @@ function getToolSummary(toolName, args) {
   return '';
 }
 
+/**
+ * Whether a message renders any prose (a non-empty text block or an error).
+ * Drives the `.message.no-text` class that focus mode and tool-activity
+ * grouping key on. One definition for the static and streaming renderers —
+ * they used to derive it independently and disagreed about errorMessage.
+ */
+function messageHasVisibleText(msg) {
+  if (!msg) return false;
+  if (msg.errorMessage) return true;
+  if (typeof msg.content === 'string') return !!msg.content;
+  return Array.isArray(msg.content) && msg.content.some(b => b && b.type === 'text' && !!b.text);
+}
+
 function getToolOutputText(partialResult) {
   if (!partialResult || !partialResult.content) return '';
   return partialResult.content
@@ -304,7 +317,7 @@ function sanitizeMarkdownUrl(url) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRelativeTime, formatTime, formatDuration,
-    shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText,
+    shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText, messageHasVisibleText,
     contextClass, sessionMetaText, parseModelId, formatModelRef,
     groupByWorkspace, applyLocalFilter, fuzzyMatch, fuzzyScore,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
