@@ -279,10 +279,11 @@ function isModelEnabled(patterns, model) {
   return patterns.some(p => modelMatchesPattern(p, model));
 }
 
+/** Either half may be missing ({mood,label}-shaped tools send only one). */
 function normalizeMood(description, face) {
   description = String(description || '').trim().split(/\s+/)[0]?.toLowerCase() || '';
   face = String(face || '').trim().replace(/[\r\n\t]/g, ' ').replace(/\s+/g, ' ');
-  if (!description || !face) return null;
+  if (!description && !face) return null;
   return { description, face };
 }
 

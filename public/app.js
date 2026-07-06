@@ -2583,12 +2583,15 @@ function setMoodIndicator(description, face) {
 
   el.dataset.moodDescription = mood.description;
   el.dataset.moodFace = mood.face;
-  el.textContent = `${mood.description} ${mood.face}`;
+  el.textContent = `${mood.description} ${mood.face}`.trim();
 }
 
 function applyMoodFromTool(toolName, args) {
   if (toolName !== 'set_mood') return;
-  setMoodIndicator(args?.description, args?.kaomoji || args?.face || args?.mood);
+  // Known set_mood arg shapes: {description, kaomoji} (the mood extension)
+  // and {mood, label?} (footer-style variants — mood word or kaomoji, plus
+  // an optional label).
+  setMoodIndicator(args?.description ?? args?.label, args?.kaomoji || args?.face || args?.mood);
 }
 
 function updateMoodFromMessages(messages) {

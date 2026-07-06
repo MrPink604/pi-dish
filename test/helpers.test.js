@@ -203,11 +203,14 @@ test('isUnreadSession flags idle live sessions with activity newer than last see
   assert.equal(H.isUnreadSession(sess(), seenOld, 's1', false), true);
 });
 
-test('normalizeMood needs both parts and flattens whitespace', () => {
+test('normalizeMood keeps whichever part is present and flattens whitespace', () => {
   assert.deepEqual(H.normalizeMood('Happy days', '(^_^)'), { description: 'happy', face: '(^_^)' });
   assert.deepEqual(H.normalizeMood('calm', ' ( \n- _ - ) '), { description: 'calm', face: '( - _ - )' });
-  assert.equal(H.normalizeMood('', 'face'), null);
-  assert.equal(H.normalizeMood('word', ''), null);
+  // {mood, label}-shaped set_mood tools may send only one half
+  assert.deepEqual(H.normalizeMood('', 'focused'), { description: '', face: 'focused' });
+  assert.deepEqual(H.normalizeMood('deep work', ''), { description: 'deep', face: '' });
+  assert.equal(H.normalizeMood('', ''), null);
+  assert.equal(H.normalizeMood(undefined, null), null);
 });
 
 test('modelMatchesPattern handles exact ids, aliases, globs, and thinking suffixes', () => {
