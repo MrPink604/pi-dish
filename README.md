@@ -55,6 +55,11 @@ sessions you aren't viewing cost nothing.
 
 Reload existing pi sessions with `/reload` to pick up the extension.
 
+Symlink (don't copy) — a stale copied bridge loaded alongside the current one
+races for the session socket. Writing an extension whose UI should appear in
+pi-dish? See [extensions/pi-dish-bridge/README.md](extensions/pi-dish-bridge/README.md)
+for what crosses the bridge and what stays TUI-only.
+
 ### Upgrading
 
 After pulling changes, run `npm install` (the SDK dependency is

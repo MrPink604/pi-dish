@@ -92,6 +92,21 @@ function stripFrontmatter(content: string): string {
 }
 
 export default function (pi: ExtensionAPI) {
+  // Two bridge copies loaded into one pi process (e.g. a stale copied install
+  // alongside the repo symlink) would each unlink and re-bind the same session
+  // socket — whichever loads last wins, and a stale winner silently downgrades
+  // the protocol. First load claims the process; pi's /reload emits
+  // session_shutdown before re-evaluating extensions, which releases the claim.
+  const LOAD_SENTINEL = Symbol.for("pi-dish-bridge.loaded");
+  const g = globalThis as any;
+  if (g[LOAD_SENTINEL]) {
+    try {
+      process.stderr.write("[pi-dish-bridge] duplicate bridge extension load detected — this copy stays inactive. Remove the extra pi-dish-bridge install.\n");
+    } catch {}
+    return;
+  }
+  g[LOAD_SENTINEL] = true;
+
   fs.mkdirSync(REGISTRY_DIR, { recursive: true });
   fs.mkdirSync(SOCKET_DIR, { recursive: true });
 
@@ -312,8 +327,66 @@ export default function (pi: ExtensionAPI) {
   // assistant message and usually only moves contextUsage).
   let lastRegistrySig: string | null = null;
 
+  // The load sentinel can't stop bridge copies that predate it: an old copy
+  // loading after us unlinks and re-binds our socket path once, at its
+  // session_start. Detect that by probing the path and matching the hello's
+  // instanceId (old bridges send a hello without one, so they're caught too;
+  // an inode check can't work here — listen() completes asynchronously, so
+  // the theft can land before we could ever stat our own socket file). This
+  // runs from writeRegistry, i.e. on every turn/message event, and the old
+  // copy never re-checks, so one reclaim wins durably.
+  const instanceId = crypto.randomUUID();
+  let ownershipProbe = false;
+  let lastOwnershipProbe = 0;
+
+  function bindSocket() {
+    if (!socketPath) return;
+    try { fs.unlinkSync(socketPath); } catch {}
+    server = net.createServer(handleClient);
+    server.on("error", (e) => {
+      // best effort: log to stderr
+      try { process.stderr.write(`[pi-dish-bridge] server error: ${e}\n`); } catch {}
+    });
+    server.listen(socketPath, () => {
+      try { fs.chmodSync(socketPath!, 0o600); } catch {}
+    });
+  }
+
+  function ensureSocketOwnership() {
+    if (!server || !server.listening || !socketPath || ownershipProbe) return;
+    if (Date.now() - lastOwnershipProbe < 5000) return;
+    ownershipProbe = true;
+    lastOwnershipProbe = Date.now();
+    const probePath = socketPath;
+    const probe = net.connect(probePath);
+    let buf = "";
+    let settled = false;
+    const done = (owned: boolean) => {
+      if (settled) return;
+      settled = true;
+      ownershipProbe = false;
+      try { probe.destroy(); } catch {}
+      // Session may have shut down or moved while the probe was in flight.
+      if (owned || !server || socketPath !== probePath) return;
+      try {
+        process.stderr.write("[pi-dish-bridge] session socket was re-bound by another bridge instance — reclaiming. Remove duplicate pi-dish-bridge installs.\n");
+      } catch {}
+      try { server.close(); } catch {}
+      bindSocket();
+    };
+    probe.on("data", (chunk) => {
+      buf += chunk.toString("utf-8");
+      const nl = buf.indexOf("\n");
+      if (nl < 0) return;
+      try { done(JSON.parse(buf.slice(0, nl)).instanceId === instanceId); } catch { done(false); }
+    });
+    probe.on("error", () => done(false)); // path unlinked/dead → rebind
+    probe.setTimeout(2000, () => done(true)); // unresponsive: don't fight it
+  }
+
   function writeRegistry() {
     if (!sessionId || !registryPath || !sessionFile) return;
+    ensureSocketOwnership();
     const entry = {
       sessionId,
       sessionFile,
@@ -340,6 +413,8 @@ export default function (pi: ExtensionAPI) {
     for (const c of clients) { try { c.destroy(); } catch {} }
     clients.clear();
     if (server) { try { server.close(); } catch {} server = null; }
+    ownershipProbe = false;
+    lastOwnershipProbe = 0;
     if (socketPath) { try { fs.unlinkSync(socketPath); } catch {} }
     if (registryPath) { try { fs.unlinkSync(registryPath); } catch {} }
     socketPath = null;
@@ -356,6 +431,8 @@ export default function (pi: ExtensionAPI) {
     uiState.statuses.clear();
     uiState.title = null;
     uiState.editorText = null;
+    // Release the duplicate-load claim so /reload's re-evaluation can bind.
+    g[LOAD_SENTINEL] = false;
   }
 
   function getThinkingLevel(): string | null {
@@ -405,7 +482,7 @@ export default function (pi: ExtensionAPI) {
       }
     });
 
-    emitTo(sock, { type: "hello", ...stateSnapshot() });
+    emitTo(sock, { type: "hello", instanceId, ...stateSnapshot() });
     replayExtensionUI(sock);
   }
 
@@ -692,17 +769,7 @@ export default function (pi: ExtensionAPI) {
     socketPath = path.join(SOCKET_DIR, `${sessionId}.sock`);
     registryPath = path.join(REGISTRY_DIR, `${sessionId}.json`);
 
-    // Stale socket cleanup
-    try { fs.unlinkSync(socketPath); } catch {}
-
-    server = net.createServer(handleClient);
-    server.on("error", (e) => {
-      // best effort: log to stderr
-      try { process.stderr.write(`[pi-dish-bridge] server error: ${e}\n`); } catch {}
-    });
-    server.listen(socketPath, () => {
-      try { fs.chmodSync(socketPath!, 0o600); } catch {}
-    });
+    bindSocket();
 
     writeRegistry();
     broadcast({ type: "event", event: "session_start", data: { sessionId, sessionFile, cwd } });
