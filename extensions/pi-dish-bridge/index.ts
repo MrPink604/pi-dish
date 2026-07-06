@@ -122,6 +122,17 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // Manual recovery/debug: re-broadcast current widget/status state to
+  // connected pi-dish clients (and re-check socket ownership). Usable from
+  // the TUI and from the web composer (run_command → executeSlashCommand).
+  pi.registerCommand("dish-push", {
+    description: "Re-broadcast extension UI state to pi-dish clients (pi-dish)",
+    handler: async (_args: string, ctx: any) => {
+      const r = forcePushExtensionUI();
+      try { ctx.ui.notify(`pi-dish: pushed ${r.widgets} widget(s), ${r.statuses} status(es) to ${r.clients} client(s)`, "info"); } catch {}
+    },
+  });
+
   let server: net.Server | null = null;
   let socketPath: string | null = null;
   let registryPath: string | null = null;
@@ -223,6 +234,31 @@ export default function (pi: ExtensionAPI) {
     }
 
     broadcast({ type: "event", event: "extension_ui_request", data: req });
+    // Widget ticks are the only regular activity on an idle session — probe
+    // (throttled) here too, or a socket stolen by a stale bridge copy stays
+    // stolen until the next agent turn.
+    ensureSocketOwnership();
+  }
+
+  // Re-broadcast current UI state to connected clients on demand. The
+  // `forced` flag tells the pi-dish server to bypass its per-connection
+  // content dedup — without it an unchanged widget would be swallowed.
+  // Deliberately skips editorText: force-replacing what someone is typing
+  // in the web composer is worse than a stale draft.
+  function forcePushExtensionUI(): { widgets: number; statuses: number; clients: number } {
+    ensureSocketOwnership();
+    let widgets = 0;
+    let statuses = 0;
+    for (const req of uiState.widgets.values()) {
+      broadcast({ type: "event", event: "extension_ui_request", data: { ...req, forced: true } });
+      widgets++;
+    }
+    for (const req of uiState.statuses.values()) {
+      broadcast({ type: "event", event: "extension_ui_request", data: { ...req, forced: true } });
+      statuses++;
+    }
+    if (uiState.title) broadcast({ type: "event", event: "extension_ui_request", data: { ...uiState.title, forced: true } });
+    return { widgets, statuses, clients: clients.size };
   }
 
   function replayExtensionUI(sock: net.Socket) {
@@ -509,6 +545,10 @@ export default function (pi: ExtensionAPI) {
         ?.catch?.((e: any) => console.error("[pi-dish-bridge] compact failed:", e?.message || e));
       return { ok: true, info: "Compaction started" };
     }
+    if (name === "dish-push") {
+      const r = forcePushExtensionUI();
+      return { ok: true, info: `Re-broadcast ${r.widgets} widget(s), ${r.statuses} status(es) to ${r.clients} client(s)` };
+    }
     if (name === "abort") {
       if (!lastCtx) return { ok: false, error: "no active context" };
       (lastCtx.abort() as any)
@@ -685,8 +725,9 @@ export default function (pi: ExtensionAPI) {
             description: c.description || "",
             source: c.source,
             path: c.sourceInfo?.path,
-            // Extension commands can't be invoked over the bridge.
-            supported: c.source !== "extension",
+            // Extension commands can't be invoked over the bridge — except
+            // the bridge's own, which executeSlashCommand handles directly.
+            supported: c.source !== "extension" || c.name === "dish-push",
           }));
           for (const b of EMULATED_BUILTINS) {
             commands.unshift({ name: b.name, description: b.description, source: "builtin" as any, path: undefined, supported: true });

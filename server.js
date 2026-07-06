@@ -1030,7 +1030,9 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   // versions without source dedup). Keep both signatures content-equivalent.
   const lastExtUI = new Map(); // method:key -> content signature
   sub('extension_ui_request', (data) => {
-    if (data && (data.method === 'setWidget' || data.method === 'setStatus')) {
+    // data.forced marks a deliberate re-broadcast (/dish-push) — let the
+    // repeat through, or a force push of unchanged content is a no-op.
+    if (data && !data.forced && (data.method === 'setWidget' || data.method === 'setStatus')) {
       const k = `${data.method}:${data.widgetKey || data.statusKey || 'default'}`;
       const sig = JSON.stringify([data.widgetLines, data.widgetPlacement, data.statusText]);
       if (lastExtUI.get(k) === sig) return;

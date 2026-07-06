@@ -58,6 +58,15 @@ Unix socket, and the loser's protocol wins or loses nondeterministically —
 the classic symptom is a socket that answers `hello` but never emits
 `extension_ui_request`. Current bridges guard against this (duplicate loads
 stay inactive; a socket stolen by an older guardless copy is detected and
-reclaimed on the next agent event, with a warning on stderr), but the fix is
-to remove the duplicate: keep a single install, ideally a symlink into the
-pi-dish checkout so it can't go stale.
+reclaimed on the next agent event or widget emission, with a warning on
+stderr), but the fix is to remove the duplicate: keep a single install,
+ideally a symlink into the pi-dish checkout so it can't go stale.
+
+## `/dish-push` — force a UI re-broadcast
+
+If a web client looks stale, `/dish-push` (works in the TUI and in the
+pi-dish composer) re-checks socket ownership and re-broadcasts the current
+widget/status/title state to connected clients, bypassing the
+unchanged-content dedup. It reports how many widgets/statuses went to how
+many clients — a count of 0 widgets on a session whose TUI shows one means
+the emissions never reached the bridge (see the compatibility rules above).
