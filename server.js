@@ -90,9 +90,42 @@ function normalizeModels(models) {
  * blocks turn that into a 500, same as before).
  */
 async function getLiveSession(sessionId) {
-  if (getRegisteredSession(sessionId)) return getBridgeSession(sessionId);
+  if (getRegisteredSession(sessionId)) return trackExtUIState(await getBridgeSession(sessionId));
   const rpc = getRPCSession(sessionId);
-  return rpc?.alive ? rpc : null;
+  return rpc?.alive ? trackExtUIState(rpc) : null;
+}
+
+// Extension UI is per-session state, but SSE connections come and go with
+// every session switch in the client. Remember each live session's current
+// widgets, statuses, and unresolved dialogs here so the stream route can
+// replay them to a client that just (re)connected — the bridge only replays
+// its state when *our* socket connects, which happens once per session.
+// Attached once per session object; the state dies with the connection,
+// matching the bridge-side replay on reconnect.
+const EXT_UI_DIALOG_METHODS = new Set(['select', 'confirm', 'input', 'editor']);
+
+function trackExtUIState(sess) {
+  if (!sess || sess.extUIState) return sess;
+  const state = { widgets: new Map(), statuses: new Map(), dialogs: new Map() };
+  sess.extUIState = state;
+  sess.on('extension_ui_request', (data) => {
+    if (!data || !data.method) return;
+    if (data.method === 'setWidget') {
+      const key = data.widgetKey || 'default';
+      if (Array.isArray(data.widgetLines) && data.widgetLines.length) state.widgets.set(key, data);
+      else state.widgets.delete(key);
+    } else if (data.method === 'setStatus') {
+      const key = data.statusKey || 'default';
+      if (data.statusText) state.statuses.set(key, data);
+      else state.statuses.delete(key);
+    } else if (EXT_UI_DIALOG_METHODS.has(data.method) && data.id) {
+      state.dialogs.set(data.id, data);
+    }
+  });
+  sess.on('extension_ui_resolved', (data) => {
+    if (data?.id) state.dialogs.delete(data.id);
+  });
+  return sess;
 }
 
 /** Live context usage, whichever backend reports it (registry beats RPC stats). */
@@ -659,6 +692,9 @@ app.post('/api/sessions/:id/ui-response', async (req, res) => {
     const sess = await getLiveSession(req.params.id);
     if (!sess) return res.status(404).json({ error: 'Session not active' });
     await sess.respondExtensionUI(requestId, response);
+    // RPC sessions never emit extension_ui_resolved (the bridge does), so
+    // drop the answered dialog from the replay state here.
+    sess.extUIState?.dialogs.delete(requestId);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1029,18 +1065,34 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   // full-state replay when the server reconnects its socket (and any bridge
   // versions without source dedup). Keep both signatures content-equivalent.
   const lastExtUI = new Map(); // method:key -> content signature
+  const extUISig = (data) => JSON.stringify([data.widgetLines, data.widgetPlacement, data.statusText]);
   sub('extension_ui_request', (data) => {
     // data.forced marks a deliberate re-broadcast (/dish-push) — let the
     // repeat through, or a force push of unchanged content is a no-op.
     if (data && !data.forced && (data.method === 'setWidget' || data.method === 'setStatus')) {
       const k = `${data.method}:${data.widgetKey || data.statusKey || 'default'}`;
-      const sig = JSON.stringify([data.widgetLines, data.widgetPlacement, data.statusText]);
+      const sig = extUISig(data);
       if (lastExtUI.get(k) === sig) return;
       lastExtUI.set(k, sig);
     }
     send('extension_ui_request', data);
   });
   sub('extension_ui_resolved', (data) => send('extension_ui_resolved', data));
+
+  // Replay the session's remembered extension UI (see trackExtUIState) so a
+  // client that just connected — typically one that switched sessions — shows
+  // this session's widgets/statuses/pending dialogs instead of waiting for
+  // the next live emission. Seeding the dedupe signatures keeps the bridge's
+  // unchanged re-emissions from double-rendering right after the replay.
+  if (sess.extUIState) {
+    const { widgets, statuses, dialogs } = sess.extUIState;
+    for (const data of [...widgets.values(), ...statuses.values(), ...dialogs.values()]) {
+      if (data.method === 'setWidget' || data.method === 'setStatus') {
+        lastExtUI.set(`${data.method}:${data.widgetKey || data.statusKey || 'default'}`, extUISig(data));
+      }
+      send('extension_ui_request', data);
+    }
+  }
   sub('queue_update', (data) => send('queue_update', data));
   sub('compaction_start', (data) => send('compaction_start', data));
   sub('compaction_end', (data) => send('compaction_end', data));

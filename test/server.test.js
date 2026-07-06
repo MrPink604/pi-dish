@@ -10,6 +10,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -305,4 +306,111 @@ test('session caches pick up JSONL appends (mtime/size revalidation)', async () 
 
   const stats = await get(`/api/sessions/${SESSION_ID}/stats`);
   assert.equal(stats.body.userMessages, 3, '/stats aggregate refreshed');
+});
+
+// Minimal SSE client: collects parsed events, lets tests await one matching
+// a predicate. close() aborts the fetch (the server sees the connection drop).
+function sseReader(url) {
+  const ctrl = new AbortController();
+  const events = [];
+  let notify = () => {};
+  (async () => {
+    try {
+      const res = await fetch(url, { signal: ctrl.signal });
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n\n')) >= 0) {
+          const chunk = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          const ev = { event: null, data: null };
+          for (const line of chunk.split('\n')) {
+            if (line.startsWith('event: ')) ev.event = line.slice(7);
+            else if (line.startsWith('data: ')) { try { ev.data = JSON.parse(line.slice(6)); } catch {} }
+          }
+          if (ev.event) { events.push(ev); notify(); }
+        }
+      }
+    } catch {} // aborted on close()
+  })();
+  const waitFor = async (pred, timeout = 5000) => {
+    const deadline = Date.now() + timeout;
+    for (;;) {
+      const hit = events.find(pred);
+      if (hit) return hit;
+      if (Date.now() > deadline) throw new Error('timed out waiting for SSE event');
+      await new Promise(r => { notify = r; setTimeout(r, 100); });
+    }
+  };
+  return { events, waitFor, close: () => ctrl.abort() };
+}
+
+test('SSE replays remembered extension UI state to new connections', async () => {
+  const BRIDGE_ID = '2026-07-04T13-00-00-eeff0011';
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const socketPath = path.join(tmpHome, 'dish-bridge-test.sock');
+
+  // Fake bridge: accept the server's socket, say hello, let the test emit
+  // events (the real bridge's UI replay to *this* socket is irrelevant here —
+  // we're proving the server's own replay to SSE clients).
+  const bridgeSocks = [];
+  const bridge = net.createServer((sock) => {
+    bridgeSocks.push(sock);
+    sock.write(JSON.stringify({ type: 'hello', turnInProgress: false }) + '\n');
+  });
+  await new Promise(r => bridge.listen(socketPath, r));
+  fs.writeFileSync(path.join(registryDir, `${BRIDGE_ID}.json`), JSON.stringify({
+    sessionId: BRIDGE_ID, socketPath, pid: process.pid, cwd: '/home/user/proj', sessionFile: SESSION_FILE,
+  }));
+  // The registry scan is memoized (~500ms); wait out the TTL so the stream
+  // route sees the fresh entry.
+  await new Promise(r => setTimeout(r, 600));
+  const emit = (event, data) => {
+    for (const s of bridgeSocks) s.write(JSON.stringify({ type: 'event', event, data }) + '\n');
+  };
+
+  try {
+    // First client: receives live emissions (and causes the server to connect).
+    const s1 = sseReader(`${base}/api/sessions/${BRIDGE_ID}/stream`);
+    await s1.waitFor(e => e.event === 'init');
+    emit('extension_ui_request', { method: 'setWidget', widgetKey: 'procs', widgetLines: ['one', 'two'] });
+    emit('extension_ui_request', { method: 'confirm', id: 'dlg1', title: 'Deploy?' });
+    await s1.waitFor(e => e.event === 'extension_ui_request' && e.data?.method === 'confirm');
+    s1.close();
+
+    // Second client connects with the bridge silent: the remembered widget
+    // and the still-pending dialog are replayed.
+    const s2 = sseReader(`${base}/api/sessions/${BRIDGE_ID}/stream`);
+    const widget = await s2.waitFor(e => e.event === 'extension_ui_request' && e.data?.method === 'setWidget');
+    assert.deepEqual(widget.data.widgetLines, ['one', 'two']);
+    assert.equal(widget.data.widgetKey, 'procs');
+    await s2.waitFor(e => e.event === 'extension_ui_request' && e.data?.id === 'dlg1');
+
+    // Clearing the widget and resolving the dialog empties the replay set.
+    // Wait for both on the open connection so the server has seen them.
+    emit('extension_ui_request', { method: 'setWidget', widgetKey: 'procs', widgetLines: [] });
+    emit('extension_ui_resolved', { id: 'dlg1' });
+    await s2.waitFor(e => e.event === 'extension_ui_resolved');
+    s2.close();
+
+    // Third client: nothing replayed. The sentinel notify proves we waited
+    // long enough for a replay to have arrived if there were one.
+    const s3 = sseReader(`${base}/api/sessions/${BRIDGE_ID}/stream`);
+    await s3.waitFor(e => e.event === 'init');
+    emit('extension_ui_request', { method: 'notify', message: 'sentinel' });
+    await s3.waitFor(e => e.event === 'extension_ui_request' && e.data?.method === 'notify');
+    const extEvents = s3.events.filter(e => e.event === 'extension_ui_request');
+    assert.equal(extEvents.length, 1, 'cleared widget / resolved dialog must not be replayed');
+    s3.close();
+  } finally {
+    fs.rmSync(path.join(registryDir, `${BRIDGE_ID}.json`), { force: true });
+    for (const s of bridgeSocks) s.destroy();
+    bridge.close();
+  }
 });

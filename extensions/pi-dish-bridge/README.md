@@ -44,7 +44,11 @@ it and your UI appears in the web/phone client with zero extra work.
 2. **Re-emitting unchanged content is safe and encouraged.** The bridge
    dedupes identical `setWidget`/`setStatus` re-emissions and replays current
    state to late-joining clients, so a 1-second render tick costs nothing on
-   the wire and keeps freshly opened browsers current.
+   the wire and keeps freshly opened browsers current. The pi-dish server
+   additionally remembers each session's widgets/statuses/pending dialogs
+   (`trackExtUIState` in server.js) and replays them to every new SSE
+   connection — switching sessions in the web UI restores this session's
+   elements without the bridge re-emitting.
 3. **ANSI styling is stripped for the web.** `theme.fg(...)` output renders
    as plain text in pi-dish — fine to use for the TUI, but don't let color
    be the only carrier of meaning.

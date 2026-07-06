@@ -121,6 +121,12 @@ Working indicator: `setTurnInProgress` drives an elapsed-turn ticker
 mobile badge shows the timer only). Timing is client-side by design — opening
 a session mid-turn counts from connect.
 
+Extension UI (`extension_ui_request`: widgets, status badges, dialogs) is
+per-session state: the server remembers each live session's current set
+(`trackExtUIState` in server.js) and replays it into every new SSE
+connection; the client wipes the DOM on session switch (`clearExtensionUI`).
+Widget collapse state is remembered per session+key across switches.
+
 Scroll pinning: streaming only follows while the viewport is near the bottom
 (`isPinnedToBottom`, 80px threshold). Sending a prompt or hitting
 jump-to-bottom sets `followStream`, which forces following regardless of

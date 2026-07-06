@@ -142,6 +142,42 @@ function streamTurn(userText, images) {
   }, 150);
 }
 
+// --- second fake bridge (extension-UI scoping section) -------------------------
+// Mirrors the real bridge's replayExtensionUI: pushes its widget on every
+// socket connect. Registered lazily inside section 10 so earlier sections
+// still see exactly one Active session.
+const SESSION2_ID = '2026-07-05T01-00-00-widget22';
+const session2File = path.join(sessionDir, `${SESSION2_ID}.jsonl`);
+fs.writeFileSync(session2File, [
+  { type: 'session', cwd: CWD, timestamp: '2026-07-05T01:00:00.000Z' },
+  { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'second session' }], timestamp: '2026-07-05T01:00:01.000Z' } },
+].map((e) => JSON.stringify(e)).join('\n') + '\n');
+const socket2Path = path.join(tmpHome, 'bridge2.sock');
+const bridge2 = net.createServer((sock) => {
+  sock.on('error', () => {});
+  sock.write(JSON.stringify({ type: 'hello', turnInProgress: false }) + '\n');
+  sock.write(JSON.stringify({ type: 'event', event: 'extension_ui_request', data: { method: 'setWidget', widgetKey: 'deploys', widgetLines: ['deploy #7 running'] } }) + '\n');
+  let buf = '';
+  sock.on('data', (chunk) => {
+    buf += chunk.toString('utf-8');
+    let idx;
+    while ((idx = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, idx); buf = buf.slice(idx + 1);
+      if (!line.trim()) continue;
+      let msg; try { msg = JSON.parse(line); } catch { continue; }
+      const data = msg.command === 'get_available_models'
+        ? { models: [{ id: 'smoke-model', provider: 'test', name: 'Smoke Model' }] }
+        : msg.command === 'get_commands' ? [] : {};
+      sock.write(JSON.stringify({ type: 'response', id: msg.id, success: true, data }) + '\n');
+    }
+  });
+});
+const registerSession2 = () => fs.writeFileSync(path.join(registryDir, `${SESSION2_ID}.json`), JSON.stringify({
+  sessionId: SESSION2_ID, socketPath: socket2Path, sessionFile: session2File,
+  pid: process.pid, cwd: CWD, name: 'widget session', model: 'smoke-model',
+  contextUsage: { tokens: 100, contextWindow: 100000, percent: 0.1 },
+}));
+
 // --- assertions ---------------------------------------------------------------
 let failures = 0;
 function check(cond, label) {
@@ -443,6 +479,43 @@ function writeRegistry(patch = {}) {
     check(await desktop.evaluate((id) => localStorage.getItem('pi-dish-draft-' + id),
       registryState.sessionId) === null, 'clearing the box clears the draft');
 
+    // 10. Extension UI scoping: widgets/statuses are per-session — cleared
+    // on switch, replayed from the server's remembered state on switch-back.
+    console.log('extension UI scoping:');
+    emit('extension_ui_request', { method: 'setWidget', widgetKey: 'procs', widgetLines: ['proc one', 'proc two'] });
+    emit('extension_ui_request', { method: 'setStatus', statusKey: 'procs', statusText: '2 running' });
+    await desktop.waitForSelector('.ext-ui-widget', { timeout: 5000 });
+    check(await desktop.locator('.ext-ui-widget-body').textContent() === 'proc one\nproc two',
+      'live widget rendered for session 1');
+    check(await desktop.locator('.ext-ui-status-badge').textContent() === '2 running', 'status badge rendered');
+    await new Promise((r) => bridge2.listen(socket2Path, r));
+    registerSession2();
+    await desktop.evaluate(() => loadSessions());
+    await desktop.waitForSelector(`.session-item[data-id="${SESSION2_ID}"]`, { timeout: 5000 });
+    await desktop.click(`.session-item[data-id="${SESSION2_ID}"]`);
+    // Session 2's bridge replays its own widget when the server connects;
+    // session 1's widget and badge must not bleed over.
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('.ext-ui-widget-body')].some((el) => el.textContent === 'deploy #7 running'),
+      { timeout: 5000 });
+    check(await desktop.locator('.ext-ui-widget').count() === 1, 'exactly one widget after switching (no bleed)');
+    check(await desktop.locator('.ext-ui-status-badge').count() === 0, 'session 1 status badge cleared on switch');
+    // Back to session 1: its widget + status come back from the server's
+    // per-session state with the bridge silent.
+    await desktop.click(`.session-item[data-id="${registryState.sessionId}"]`);
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('.ext-ui-widget-body')].some((el) => el.textContent === 'proc one\nproc two'),
+      { timeout: 5000 });
+    check(await desktop.locator('.ext-ui-widget').count() === 1, 'switch-back replays only session 1 widget');
+    check(await desktop.locator('.ext-ui-status-badge').textContent() === '2 running',
+      'status badge replayed on switch-back');
+    // Clean up: clear the extension UI and deregister session 2 so the
+    // mobile section still sees a single Active session.
+    emit('extension_ui_request', { method: 'setWidget', widgetKey: 'procs', widgetLines: [] });
+    emit('extension_ui_request', { method: 'setStatus', statusKey: 'procs', statusText: '' });
+    await desktop.waitForFunction(() => !document.querySelector('.ext-ui-widget'), { timeout: 5000 });
+    fs.rmSync(path.join(registryDir, `${SESSION2_ID}.json`), { force: true });
+
     // 3. Mobile: hamburger + drawer from empty state and session header
     console.log('mobile:');
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
@@ -488,6 +561,7 @@ function writeRegistry(patch = {}) {
     await browser.close();
     server.close();
     bridge.close();
+    bridge2.close();
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
 

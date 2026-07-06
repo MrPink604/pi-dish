@@ -570,6 +570,9 @@ async function selectSession(id) {
   if (streamReconnectTimeout) { clearTimeout(streamReconnectTimeout); streamReconnectTimeout = null; }
   if (messageStream) { messageStream.close(); messageStream = null; }
   followStream = false; // forced follow doesn't carry across sessions
+  // Extension widgets/statuses/dialogs are per-session; the new session's
+  // remembered set is replayed by the server when its stream connects.
+  clearExtensionUI();
   localStorage.setItem('pi-dish-session', id);
   markSessionSeen(id, currentSession.lastActivity);
   
@@ -2610,9 +2613,23 @@ function updateMoodFromMessages(messages) {
 // =========================================================================
 
 const extUIState = {
-  widgets: new Map(),      // key -> { el, collapsed }
-  statuses: new Map(),     // key -> el
+  widgets: new Map(),      // key -> { el, collapsed } — current session only
+  statuses: new Map(),     // key -> el — current session only
+  collapsed: new Map(),    // `sessionId|key` -> bool — survives session switches
 };
+
+// Extension UI is per-session: wipe the previous session's widgets, status
+// badges, and dialog overlays when switching. The server replays the new
+// session's remembered state once the stream connects, so elements come back
+// when switching to a session that has them.
+function clearExtensionUI() {
+  for (const { el } of extUIState.widgets.values()) el.remove();
+  extUIState.widgets.clear();
+  for (const badge of extUIState.statuses.values()) badge.remove();
+  extUIState.statuses.clear();
+  for (const overlay of openExtDialogs.values()) overlay.remove();
+  openExtDialogs.clear();
+}
 
 function getToastContainer() {
   let el = document.getElementById('extUiToasts');
@@ -2717,7 +2734,8 @@ function showExtWidget(key, lines, placement) {
   }
 
   const existing = extUIState.widgets.get(key);
-  const wasCollapsed = existing?.collapsed ?? false;
+  const collapsedKey = (currentSession?.id || '') + '|' + key;
+  const wasCollapsed = existing?.collapsed ?? extUIState.collapsed.get(collapsedKey) ?? false;
 
   if (!container) {
     container = document.createElement('div');
@@ -2735,7 +2753,9 @@ function showExtWidget(key, lines, placement) {
 
     container.querySelector('.ext-ui-widget-header').addEventListener('click', () => {
       container.classList.toggle('collapsed');
-      extUIState.widgets.set(key, { el: container, collapsed: container.classList.contains('collapsed') });
+      const collapsed = container.classList.contains('collapsed');
+      extUIState.widgets.set(key, { el: container, collapsed });
+      extUIState.collapsed.set(collapsedKey, collapsed);
     });
 
     const inputArea = document.querySelector('.input-area');
