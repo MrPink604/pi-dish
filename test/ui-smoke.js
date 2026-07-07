@@ -478,6 +478,8 @@ function writeRegistry(patch = {}) {
     await desktop.click('#btnTerminal');
     await desktop.waitForSelector('#terminalPanel .xterm', { timeout: 5000 });
     check(true, 'terminal panel opens with an xterm instance');
+    check(await desktop.evaluate(() => document.fonts.check('12px "Symbols Nerd Font Mono"')),
+      'Nerd Font symbols fallback loaded (p10k prompt glyphs)');
     const termText = () => desktop.evaluate(() => {
       const b = termState.term.buffer.active;
       let out = '';

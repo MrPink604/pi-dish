@@ -3312,16 +3312,27 @@ function toggleTerminal() {
   else openTerminal();
 }
 
-function openTerminal() {
+async function openTerminal() {
   if (!terminalFeatureAvailable() || !currentSession || termState) return;
   const panel = document.getElementById('terminalPanel');
   const container = document.getElementById('terminalContainer');
   panel.style.display = '';
   document.getElementById('terminalCwd').textContent = shortCwd(currentSession.cwd || '~');
 
+  // Have the Nerd Font symbols ready before xterm first paints — otherwise
+  // prompt icons flash as tofu until the lazy font load lands. Never block
+  // the terminal on it (offline cache miss etc. just falls back to squares).
+  try {
+    await Promise.race([
+      document.fonts.load('12px "Symbols Nerd Font Mono"'),
+      new Promise(r => setTimeout(r, 2000)),
+    ]);
+  } catch {}
+  if (termState || !currentSession) return; // double-click / switched away during the await
+
   const css = getComputedStyle(document.documentElement);
   const term = new Terminal({
-    fontFamily: css.getPropertyValue('--font-mono').trim(),
+    fontFamily: css.getPropertyValue('--font-mono').trim() + ", 'Symbols Nerd Font Mono'",
     fontSize: window.innerWidth <= 768 ? 12 : 13,
     theme: terminalTheme(),
     scrollback: 5000,

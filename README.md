@@ -67,8 +67,9 @@ Rules of thumb:
   section first: this hands a raw shell to anyone who can reach the port
   (the prompt API already executes code via the agent, but the terminal
   removes even that indirection).
-- **No CDN dependencies** — `marked`, `highlight.js`, and `xterm` are
-  vendored, so it works on LAN clients with no internet.
+- **No CDN dependencies** — `marked`, `highlight.js`, `xterm`, and a
+  symbols-only Nerd Font (terminal prompt glyphs) are vendored, so it works
+  on LAN clients with no internet.
 
 There's also an Electron shell (`npm run electron:dev`) if you want it as a
 desktop app for some reason.

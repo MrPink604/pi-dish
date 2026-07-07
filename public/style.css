@@ -2975,6 +2975,19 @@ img.msg-image {
    Terminal panel (feature-flagged; see lib/terminal.js). Splits the session
    view: messages shrink, the shell takes the bottom ~45%.
    ========================================================================= */
+
+/* Per-glyph fallback for Nerd Font icons (powerlevel10k prompts, lsd, etc.)
+   — phones have no Nerd Font installed, so without this every prompt
+   segment renders as a tofu square. Symbols-only font, vendored
+   (vendor/nerd-symbols-LICENSE); letters still come from the system mono.
+   Appended to xterm's fontFamily in openTerminal(), not to --font-mono:
+   the terminal is the only place the 1.2MB font is worth downloading. */
+@font-face {
+  font-family: 'Symbols Nerd Font Mono';
+  src: url('vendor/nerd-symbols.woff2') format('woff2');
+  font-display: swap;
+}
+
 .terminal-panel {
   flex: 0 0 45%;
   min-height: 140px;
