@@ -26,6 +26,10 @@ const {
 
 const app = express();
 const PORT = process.env.PORT || 3333;
+// Localhost-only by default; opt in to LAN/VPN exposure explicitly, e.g.
+// HOST=0.0.0.0 (all interfaces) or HOST=<tailscale ip>. There is no auth —
+// anything that can reach the port can drive agents with shell access.
+const HOST = process.env.HOST || '127.0.0.1';
 
 // Image attachments arrive as base64 in the prompt body — allow well past
 // the default 100kb (a few downscaled phone photos).
@@ -1157,8 +1161,11 @@ function findSessionFile(sessionId) {
 // Warm the models cache at startup so context window sizes are accurate immediately
 piSDK.getAvailableModels().then(setModelsCache).catch(() => {});
 
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`pi-dish running at http://0.0.0.0:${PORT}`);
+const server = app.listen(PORT, HOST, () => {
+  console.log(`pi-dish running at http://${HOST}:${PORT}`);
+  if (HOST === '127.0.0.1') {
+    console.log('Bound to localhost only. To reach it from other devices, set HOST (e.g. HOST=0.0.0.0 or your Tailscale IP) or front it with a reverse proxy.');
+  }
 });
 
 module.exports = server;

@@ -10,7 +10,8 @@ per session), historical sessions by scanning JSONL files under
 ## Run
 
 ```bash
-npm start          # server on http://localhost:3333 (PORT env to override)
+npm start          # server on http://127.0.0.1:3333 (PORT/HOST env to override;
+                   # localhost-only by default — HOST=0.0.0.0 to expose on LAN)
 npm test           # API + helper unit tests (node:test, test/*.test.js)
 npm run test:ui    # browser smoke test (needs Chrome + global playwright)
 npm run build:vendor  # regenerate public/vendor/ from node_modules

@@ -32,8 +32,11 @@ Understand what this server is before running it:
 - **The UI drives coding agents.** Sending a prompt to a pi session means an
   agent with shell access executes things on your machine. Reaching this
   server is functionally equivalent to having a shell on the host.
-- **It binds `0.0.0.0:3333`** (all interfaces) so your phone can reach it —
-  which means everything else on the network can too.
+- **It binds `127.0.0.1:3333` by default** — localhost only, nothing else
+  can reach it out of the box. To use it from your phone you must opt in by
+  setting `HOST` (e.g. `HOST=0.0.0.0` for all interfaces, or your Tailscale
+  IP to expose it to your tailnet only) or by putting a reverse proxy in
+  front. Once exposed, everything on that network gets the full UI.
 - **Plain HTTP.** No TLS. Prompts, session transcripts, and everything else
   travel in cleartext.
 
@@ -110,11 +113,15 @@ the extension up after a `/reload`.
 Then start the server:
 
 ```bash
-npm start        # http://localhost:3333 — PORT env to override
+npm start                 # http://127.0.0.1:3333 — localhost only
+PORT=8080 npm start       # different port
+HOST=0.0.0.0 npm start    # expose on all interfaces (LAN)
+HOST=100.x.y.z npm start  # or just your Tailscale IP
 ```
 
-Open it from your phone at `http://<your-machine>:3333` (see the security
-section; you did read the security section?).
+To open it from your phone at `http://<your-machine>:3333` you need one of
+the `HOST` overrides above, or a reverse proxy in front of the localhost
+bind (see the security section; you did read the security section?).
 
 ### Optional: the mood extension
 
