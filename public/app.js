@@ -175,6 +175,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (pinBtn) { toggleSessionPinned(pinBtn.closest('.session-item').dataset.id); return; }
     // A finished drag still emits a click on the handle — never treat it as a select.
     if (e.target.closest('.session-drag-handle')) return;
+    // The header's + spawns a session at the node's path — not a collapse toggle.
+    const newBtn = e.target.closest('.workspace-new-btn');
+    if (newBtn) { createSession(newBtn.dataset.path); return; }
     const header = e.target.closest('.workspace-group-header');
     if (header) { if (header.dataset.cwd) toggleGroupCollapsed(header.dataset.cwd); return; }
     const item = e.target.closest('.session-item');
@@ -655,6 +658,7 @@ function renderWorkspaceNode(node) {
       <span class="workspace-group-chevron">${isCollapsed ? '▸' : '▾'}</span>
       <span class="workspace-group-label" title="${escapeHtml(node.path)}">${escapeHtml(node.label)}</span>
       ${headerDot}<span class="workspace-group-count">${node.count}</span>
+      <button class="workspace-new-btn" data-path="${escapeHtml(node.path)}" title="New session in ${escapeHtml(node.path)}">+</button>
     </div>
     ${body}
   </div>`;
@@ -2294,12 +2298,15 @@ async function abortTurn() {
   } catch (e) { setStatus('Stop failed: ' + e.message, 'error'); }
 }
 
-// New session
-async function createSession() {
+// New session — cwd from the picker input unless a caller (the workspace
+// header's + button) passes one explicitly.
+async function createSession(cwd) {
   try {
     setStatus('Creating session...', 'working');
-    const cwdInput = document.getElementById('newSessionCwd');
-    const cwd = cwdInput ? cwdInput.value.trim() : '';
+    if (cwd === undefined) {
+      const cwdInput = document.getElementById('newSessionCwd');
+      cwd = cwdInput ? cwdInput.value.trim() : '';
+    }
     // Persist last-used cwd
     if (cwd) localStorage.setItem('pi-dish-cwd', cwd);
     const data = await apiSend('/api/sessions/new', { cwd: cwd || undefined });

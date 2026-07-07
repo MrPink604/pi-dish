@@ -299,6 +299,34 @@ body.sidebar-open {
   flex-shrink: 0;
 }
 
+/* Spawn a session at the node's path — quiet until the header is hovered */
+.workspace-new-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.workspace-group-header:hover .workspace-new-btn {
+  opacity: 0.7;
+}
+
+.workspace-new-btn:hover {
+  color: var(--accent);
+  opacity: 1;
+}
+
+/* No hover on touch devices — keep it reachable, just quiet */
+@media (hover: none) {
+  .workspace-new-btn { opacity: 0.35; }
+}
+
 .session-item {
   padding: 12px;
   border-radius: 6px;

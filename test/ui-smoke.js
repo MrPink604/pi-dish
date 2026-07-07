@@ -567,6 +567,18 @@ function writeRegistry(patch = {}) {
       'collapsed prefix node hides all descendant sessions');
     await desktop.click('.session-segment.collapsed .workspace-group-header');
     await desktop.waitForFunction(() => !document.querySelector('.session-segment.collapsed'), null, { timeout: 2000 });
+    // The header + spawns a session at the node's path (stubbed — a real
+    // createSession would launch `pi --mode rpc`), and must not toggle collapse.
+    await desktop.evaluate(() => {
+      window.__newSessionCwd = null;
+      window.createSession = (cwd) => { window.__newSessionCwd = cwd; };
+    });
+    await desktop.hover('.workspace-children .workspace-group-header');
+    await desktop.click('.workspace-children .workspace-group-header .workspace-new-btn');
+    check(await desktop.evaluate(() => window.__newSessionCwd) === CWD,
+      'header + button targets the node cwd');
+    check(await desktop.locator('.session-segment.collapsed').count() === 0,
+      'header + button does not toggle collapse');
 
     const pinToggle = async (id) => {
       await desktop.hover(`.session-item[data-id="${id}"]`);
