@@ -169,6 +169,94 @@ test('groupByWorkspace sinks collapsed groups below expanded ones', () => {
   assert.deepEqual(groups.map(g => g[0]), ['/c', '/a', '/b']);
 });
 
+test('buildWorkspaceTree shows a shared prefix once with distinguishing tails as children', () => {
+  const mk = (cwd, ts) => ({ cwd, lastActivity: ts });
+  const groups = H.groupByWorkspace([
+    mk('/home/u/workspace/beta', '2026-01-03T00:00:00Z'),
+    mk('/home/u/workspace/alpha', '2026-01-02T00:00:00Z'),
+  ]);
+  const tree = H.buildWorkspaceTree(groups);
+  assert.equal(tree.length, 1);
+  assert.equal(tree[0].label, '~/workspace'); // top-level label is shortCwd'd
+  assert.equal(tree[0].path, '/home/u/workspace');
+  assert.equal(tree[0].sessions, null);
+  assert.equal(tree[0].count, 2);
+  // children keep recency order and carry only their distinguishing tail
+  assert.deepEqual(tree[0].children.map(c => [c.label, c.path, c.count]), [
+    ['beta', '/home/u/workspace/beta', 1],
+    ['alpha', '/home/u/workspace/alpha', 1],
+  ]);
+});
+
+test('buildWorkspaceTree flattens multi-segment chains below a divergence point', () => {
+  const mk = (cwd, ts) => ({ cwd, lastActivity: ts });
+  const tree = H.buildWorkspaceTree(H.groupByWorkspace([
+    mk('/srv/deep/nested/proj', '2026-01-02T00:00:00Z'),
+    mk('/srv/other', '2026-01-01T00:00:00Z'),
+  ]));
+  assert.equal(tree[0].label, '/srv');
+  assert.deepEqual(tree[0].children.map(c => c.label), ['deep/nested/proj', 'other']);
+});
+
+test('buildWorkspaceTree keeps unrelated workspaces as flat single nodes', () => {
+  const mk = (cwd, ts) => ({ cwd, lastActivity: ts });
+  const tree = H.buildWorkspaceTree(H.groupByWorkspace([
+    mk('/etc/x', '2026-01-01T00:00:00Z'),
+    mk('/home/u/app', '2026-01-02T00:00:00Z'),
+    mk(null, '2026-01-03T00:00:00Z'),
+  ]));
+  assert.deepEqual(tree.map(n => [n.label, n.path, n.children.length]), [
+    ['~', '~', 0],
+    ['~/app', '/home/u/app', 0],
+    ['/etc/x', '/etc/x', 0],
+  ]);
+  assert.equal(tree[1].sessions.length, 1);
+});
+
+test('buildWorkspaceTree keeps sessions living at a prefix that also has children', () => {
+  const mk = (cwd, ts) => ({ cwd, lastActivity: ts });
+  const tree = H.buildWorkspaceTree(H.groupByWorkspace([
+    mk('/w/app', '2026-01-02T00:00:00Z'),
+    mk('/w/app/sub', '2026-01-01T00:00:00Z'),
+  ]));
+  assert.equal(tree.length, 1);
+  assert.equal(tree[0].path, '/w/app');
+  assert.equal(tree[0].sessions.length, 1);
+  assert.equal(tree[0].count, 2);
+  assert.deepEqual(tree[0].children.map(c => c.label), ['sub']);
+});
+
+test('buildWorkspaceTree sinks collapsed nodes below expanded siblings per level', () => {
+  const mk = (cwd, ts) => ({ cwd, lastActivity: ts });
+  const collapsed = new Set(['/w/newest']);
+  const tree = H.buildWorkspaceTree(H.groupByWorkspace([
+    mk('/w/newest', '2026-01-03T00:00:00Z'),
+    mk('/w/older', '2026-01-02T00:00:00Z'),
+  ], collapsed), collapsed);
+  assert.deepEqual(tree[0].children.map(c => c.label), ['older', 'newest']);
+});
+
+test('buildWorkspaceTree hoists a bare home root — ~/x groups stay top-level', () => {
+  const mk = (cwd, ts) => ({ cwd, lastActivity: ts });
+  const tree = H.buildWorkspaceTree(H.groupByWorkspace([
+    mk('/home/u/workspace/a', '2026-01-03T00:00:00Z'),
+    mk('/home/u/workspace/b', '2026-01-02T00:00:00Z'),
+    mk('/home/u/src/dotfiles', '2026-01-01T00:00:00Z'),
+  ]));
+  assert.deepEqual(tree.map(n => n.label), ['~/workspace', '~/src/dotfiles']);
+  assert.deepEqual(tree[0].children.map(c => c.label), ['a', 'b']);
+});
+
+test('collectTreeSessions gathers all descendant sessions', () => {
+  const mk = (cwd, ts) => ({ cwd, lastActivity: ts });
+  const tree = H.buildWorkspaceTree(H.groupByWorkspace([
+    mk('/w/a', '2026-01-02T00:00:00Z'),
+    mk('/w/b', '2026-01-01T00:00:00Z'),
+    mk('/w/a', '2026-01-03T00:00:00Z'),
+  ]));
+  assert.equal(H.collectTreeSessions(tree[0]).length, 3);
+});
+
 test('partitionPinned splits in pinned order and skips unknown ids', () => {
   const list = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
   const [pinned, rest] = H.partitionPinned(list, ['c', 'gone', 'a']);

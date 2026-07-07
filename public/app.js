@@ -615,25 +615,8 @@ function renderSessions() {
         ${pinned.map(s => renderSessionItem(s, { pinnedRow: true })).join('')}
       </div>`;
     }
-    for (const [cwd, groupSessions] of groupByWorkspace(rest, collapsedGroups)) {
-      const label = shortCwd(cwd);
-      const isCollapsed = collapsedGroups.has(cwd);
-      // A collapsed group must not hide activity: surface the best signal
-      // (working > unread) as a dot on the header itself.
-      let headerDot = '';
-      if (isCollapsed) {
-        if (groupSessions.some(s => s.turnInProgress)) headerDot = '<span class="session-item-status working" title="Agent working"></span>';
-        else if (groupSessions.some(isUnread)) headerDot = '<span class="session-item-status unread" title="New activity"></span>';
-      }
-      html += `<div class="session-segment${isCollapsed ? ' collapsed' : ''}">
-        <div class="workspace-group-header" data-cwd="${escapeHtml(cwd)}">
-          <span class="workspace-group-chevron">${isCollapsed ? '▸' : '▾'}</span>
-          <span class="workspace-group-label" title="${escapeHtml(cwd)}">${escapeHtml(label)}</span>
-          ${headerDot}<span class="workspace-group-count">${groupSessions.length}</span>
-        </div>
-        ${isCollapsed ? '' : groupSessions.map(renderSessionItem).join('')}
-      </div>`;
-    }
+    const tree = buildWorkspaceTree(groupByWorkspace(rest, collapsedGroups), collapsedGroups);
+    html += tree.map(renderWorkspaceNode).join('');
   }
 
   // The 10s poll usually changes nothing — skip the DOM churn (and touch/hover
@@ -643,6 +626,38 @@ function renderSessions() {
     lastSessionListHtml = html;
   }
   updateUnreadTitle();
+}
+
+/**
+ * One workspace-tree node → a .session-segment: header (collapse toggle via
+ * data-cwd, the node's path prefix), this node's own sessions, then child
+ * nodes nested in an indented .workspace-children. Collapsing a node hides
+ * its whole subtree, so the header must not hide activity: surface the best
+ * signal (working > unread) from all descendant sessions as a header dot.
+ */
+function renderWorkspaceNode(node) {
+  const isCollapsed = collapsedGroups.has(node.path);
+  let headerDot = '';
+  if (isCollapsed) {
+    const all = collectTreeSessions(node);
+    if (all.some(s => s.turnInProgress)) headerDot = '<span class="session-item-status working" title="Agent working"></span>';
+    else if (all.some(isUnread)) headerDot = '<span class="session-item-status unread" title="New activity"></span>';
+  }
+  let body = '';
+  if (!isCollapsed) {
+    body = (node.sessions || []).map(s => renderSessionItem(s)).join('');
+    if (node.children.length) {
+      body += `<div class="workspace-children">${node.children.map(renderWorkspaceNode).join('')}</div>`;
+    }
+  }
+  return `<div class="session-segment${isCollapsed ? ' collapsed' : ''}">
+    <div class="workspace-group-header" data-cwd="${escapeHtml(node.path)}">
+      <span class="workspace-group-chevron">${isCollapsed ? '▸' : '▾'}</span>
+      <span class="workspace-group-label" title="${escapeHtml(node.path)}">${escapeHtml(node.label)}</span>
+      ${headerDot}<span class="workspace-group-count">${node.count}</span>
+    </div>
+    ${body}
+  </div>`;
 }
 
 function findSession(id) {

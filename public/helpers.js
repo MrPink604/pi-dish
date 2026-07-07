@@ -177,6 +177,78 @@ function groupByWorkspace(list, collapsedSet) {
 }
 
 /**
+ * Fold groupByWorkspace's flat [cwd, sessions] pairs into a tree of path
+ * nodes with single-child chains flattened (a node exists only where paths
+ * diverge or sessions live). Flat labels in a narrow sidebar all show the
+ * same prefix and ellipsize away the part that differs — the tree shows
+ * the shared prefix once and each workspace by its distinguishing tail.
+ * Returns root nodes { label, path, sessions, children, count }: `path` is
+ * the full prefix (collapse-state key — equals the cwd for leaf nodes),
+ * `sessions` the sessions living exactly at `path` (null if none), `count`
+ * the subtree total. Sibling order follows the input's (recency), with
+ * collapsed nodes sunk below expanded siblings at every level.
+ */
+function buildWorkspaceTree(groups, collapsedSet) {
+  const root = { label: '', path: '', sessions: null, children: new Map(), order: 0 };
+  groups.forEach(([cwd, sessions], order) => {
+    let segs = cwd.split('/').filter(Boolean);
+    if (segs.length === 0) segs = [cwd]; // degenerate cwd ('/') — don't drop it
+    let node = root;
+    for (const seg of segs) {
+      const path = node === root
+        ? (cwd[0] === '/' && seg !== cwd ? '/' + seg : seg)
+        : node.path + '/' + seg;
+      if (!node.children.has(seg)) {
+        node.children.set(seg, { label: seg, path, sessions: null, children: new Map(), order });
+      }
+      node = node.children.get(seg);
+      node.order = Math.min(node.order, order);
+    }
+    node.sessions = sessions;
+  });
+
+  // Flatten chains: a prefix-only node with a single child merges into it.
+  const flatten = (node) => {
+    while (node.children.size === 1 && !node.sessions) {
+      const child = node.children.values().next().value;
+      node.label = node.label ? node.label + '/' + child.label : child.label;
+      node.path = child.path;
+      node.sessions = child.sessions;
+      node.children = child.children;
+    }
+    for (const child of node.children.values()) flatten(child);
+  };
+  for (const top of root.children.values()) flatten(top);
+
+  // The home dir is the shared root of practically everything — a bare "~"
+  // top node is pure noise (and an indent level phones can't spare). Hoist
+  // its children to top level; shortCwd gives them their ~/ labels below.
+  const tops = [...root.children.values()];
+  const homeIdx = tops.findIndex(t => shortCwd(t.path) === '~' && !t.sessions && t.children.size);
+  if (homeIdx !== -1) tops.splice(homeIdx, 1, ...tops[homeIdx].children.values());
+
+  const collapsed = (path) => (collapsedSet?.has(path) ? 1 : 0);
+  const finalize = (node, topLevel) => {
+    const kids = [...node.children.values()];
+    for (const k of kids) finalize(k, false);
+    kids.sort((a, b) => collapsed(a.path) - collapsed(b.path) || a.order - b.order);
+    node.children = kids;
+    node.count = (node.sessions ? node.sessions.length : 0)
+      + kids.reduce((n, k) => n + k.count, 0);
+    if (topLevel) node.label = shortCwd(node.path);
+  };
+  for (const top of tops) finalize(top, true);
+  return tops.sort((a, b) => collapsed(a.path) - collapsed(b.path) || a.order - b.order);
+}
+
+/** All sessions in a workspace-tree subtree (collapsed headers aggregate status). */
+function collectTreeSessions(node, out = []) {
+  if (node.sessions) out.push(...node.sessions);
+  for (const child of node.children) collectTreeSessions(child, out);
+  return out;
+}
+
+/**
  * Split sessions into [pinned, rest]. Pinned sessions come back in
  * `pinnedIds` order (the user's manual arrangement); ids with no matching
  * session are skipped.
@@ -339,7 +411,8 @@ if (typeof module !== 'undefined' && module.exports) {
     escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRelativeTime, formatTime, formatDuration,
     shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText, messageHasVisibleText,
     contextClass, sessionMetaText, parseModelId, formatModelRef,
-    groupByWorkspace, partitionPinned, applyLocalFilter, fuzzyMatch, fuzzyScore,
+    groupByWorkspace, buildWorkspaceTree, collectTreeSessions,
+    partitionPinned, applyLocalFilter, fuzzyMatch, fuzzyScore,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     modelMatchesPattern, isModelEnabled, pushPromptHistory, sanitizeMarkdownUrl,
   };

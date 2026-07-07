@@ -204,6 +204,18 @@ body.sidebar-open {
   opacity: 0.75;
 }
 
+/* Nested workspace nodes — indent with a faint guide line so children read
+   as continuations of the shared path prefix above them */
+.workspace-children {
+  margin-left: 12px;
+  padding-left: 4px;
+  border-left: 1px solid var(--border);
+}
+
+.workspace-children .workspace-group-header {
+  padding-top: 4px;
+}
+
 /* Pinned section — manual order, drag handles to rearrange */
 .pinned-segment {
   border-bottom: 1px solid var(--border);

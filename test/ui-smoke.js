@@ -529,22 +529,27 @@ function writeRegistry(patch = {}) {
     await desktop.waitForFunction(() => !document.querySelector('.ext-ui-widget'), { timeout: 5000 });
     fs.rmSync(path.join(registryDir, `${SESSION2_ID}.json`), { force: true });
 
-    // 11. Sidebar: collapsing a workspace group hides its sessions and sinks
-    // it below the expanded groups; pinning sessions floats them into a
-    // drag-reorderable section at the top.
-    console.log('sidebar collapse & pin:');
+    // 11. Sidebar: both workspaces share the tmp-HOME prefix, so the tree
+    // shows one flattened prefix node with proj-alpha/proj-beta as children.
+    // Collapsing a child hides its sessions and sinks it below its expanded
+    // sibling; collapsing the prefix node hides the whole subtree. Pinning
+    // sessions floats them into a drag-reorderable section at the top.
+    console.log('sidebar tree collapse & pin:');
     await desktop.click('#tabAll');
     const groupLabels = () => desktop.evaluate(() =>
       [...document.querySelectorAll('.session-segment:not(.pinned-segment) .workspace-group-label')]
         .map((el) => el.textContent));
     await desktop.waitForFunction(() =>
-      document.querySelectorAll('.session-segment').length >= 2, null, { timeout: 5000 });
+      document.querySelectorAll('.session-segment').length >= 3, null, { timeout: 5000 });
     const labelsBefore = await groupLabels();
-    check(labelsBefore.length === 2, `two workspace groups on All (got ${JSON.stringify(labelsBefore)})`);
-    await desktop.click('.session-segment .workspace-group-header'); // first (newest) group
+    check(labelsBefore.length === 3, `prefix node + two children on All (got ${JSON.stringify(labelsBefore)})`);
+    check(labelsBefore[0].endsWith('/workspace'), 'prefix node shows the shared path once');
+    check(labelsBefore[1] === 'proj-alpha' && labelsBefore[2] === 'proj-beta',
+      'children show distinguishing tails, newest first');
+    await desktop.click('.workspace-children .workspace-group-header'); // first (newest) child
     await desktop.waitForSelector('.session-segment.collapsed', { timeout: 2000 });
     const labelsAfter = await groupLabels();
-    check(labelsAfter[labelsAfter.length - 1] === labelsBefore[0], 'collapsed group sinks to the bottom');
+    check(labelsAfter[labelsAfter.length - 1] === 'proj-alpha', 'collapsed child sinks below its expanded sibling');
     check(await desktop.locator('.session-segment.collapsed .session-item').count() === 0,
       'collapsed group hides its sessions');
     check(await desktop.evaluate(() =>
@@ -554,6 +559,14 @@ function writeRegistry(patch = {}) {
     await desktop.waitForFunction(() => !document.querySelector('.session-segment.collapsed'), null, { timeout: 2000 });
     check(JSON.stringify(await groupLabels()) === JSON.stringify(labelsBefore),
       'expanding restores the original order');
+    // Collapsing the prefix node takes the whole subtree with it.
+    await desktop.click('.session-segment .workspace-group-header'); // first = prefix node
+    await desktop.waitForSelector('.session-segment.collapsed', { timeout: 2000 });
+    check(await desktop.evaluate(() =>
+      document.querySelectorAll('#sessionList .session-item').length) === 0,
+      'collapsed prefix node hides all descendant sessions');
+    await desktop.click('.session-segment.collapsed .workspace-group-header');
+    await desktop.waitForFunction(() => !document.querySelector('.session-segment.collapsed'), null, { timeout: 2000 });
 
     const pinToggle = async (id) => {
       await desktop.hover(`.session-item[data-id="${id}"]`);
