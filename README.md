@@ -140,8 +140,9 @@ pi has no API to dismiss it programmatically.
   `ctx.getContextUsage()` into its registry entry on every turn/model
   change, so 1M-context models report correctly instead of being guessed.
 - **Spawning**: "New session" and "Resume" spawn `pi --mode rpc`; set
-  `PI_DISH_PI_COMMAND` to customize the launch command (e.g.
-  `"pi-aws --profile work"`).
+  `PI_DISH_PI_COMMAND` to customize the launch command (a wrapper script,
+  env vars, extra flags — it also mirrors a simple `alias pi=...` from your
+  shell rc).
 
 Writing a pi extension whose UI should show up in pi-dish? See
 [extensions/pi-dish-bridge/README.md](extensions/pi-dish-bridge/README.md)
