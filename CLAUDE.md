@@ -196,6 +196,14 @@ Polls on the Active tab request `?active=1` — the server skips the historical
 session-tree scan and the client keeps its previously fetched `previous` list
 (the initial load always fetches both, so restoring a saved historical session
 still works).
+Clicking a workspace group header collapses it — sessions hidden, group sunk
+below all expanded groups (ordering in `groupByWorkspace`, helpers.js). The 📌
+on a session row pins it into a "Pinned" section at the top with a manual
+order: pointer-based drag handles (works on touch), with move/up listeners on
+`document` because reinserting the dragged row releases pointer capture. Both
+persist in localStorage (`pi-dish-collapsed-groups`, `pi-dish-pinned-sessions`);
+`renderSessions` bails while a drag is live so the 10s poll can't rebuild the
+list mid-drag.
 Each item shows one status dot, best signal first: pulsing green
 (`.session-item-status.working`, turn in progress), accent blue
 (`.session-item-status.unread`, activity since the session was last on

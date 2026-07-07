@@ -153,8 +153,12 @@ function formatModelRef(model) {
   return provider && id ? `${provider}/${id}` : null;
 }
 
-/** Group sessions by workspace (cwd); groups and members sorted by last activity */
-function groupByWorkspace(list) {
+/**
+ * Group sessions by workspace (cwd); groups and members sorted by last
+ * activity. Groups whose cwd is in `collapsedSet` sort after all expanded
+ * groups (still by recency among themselves).
+ */
+function groupByWorkspace(list, collapsedSet) {
   const groups = new Map(); // cwd -> [sessions]
   for (const s of list) {
     const key = s.cwd || '~';
@@ -166,8 +170,23 @@ function groupByWorkspace(list) {
     sessions.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
   }
 
+  const collapsed = (cwd) => (collapsedSet?.has(cwd) ? 1 : 0);
   return [...groups.entries()].sort((a, b) =>
-    new Date(b[1][0].lastActivity) - new Date(a[1][0].lastActivity));
+    collapsed(a[0]) - collapsed(b[0])
+    || new Date(b[1][0].lastActivity) - new Date(a[1][0].lastActivity));
+}
+
+/**
+ * Split sessions into [pinned, rest]. Pinned sessions come back in
+ * `pinnedIds` order (the user's manual arrangement); ids with no matching
+ * session are skipped.
+ */
+function partitionPinned(list, pinnedIds) {
+  if (!pinnedIds || pinnedIds.length === 0) return [[], list];
+  const byId = new Map(list.map(s => [s.id, s]));
+  const pinned = pinnedIds.map(id => byId.get(id)).filter(Boolean);
+  const pinnedSet = new Set(pinned.map(s => s.id));
+  return [pinned, list.filter(s => !pinnedSet.has(s.id))];
 }
 
 /** Filter sessions locally: every whitespace-separated token must match name/cwd/model/id */
@@ -320,7 +339,7 @@ if (typeof module !== 'undefined' && module.exports) {
     escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRelativeTime, formatTime, formatDuration,
     shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText, messageHasVisibleText,
     contextClass, sessionMetaText, parseModelId, formatModelRef,
-    groupByWorkspace, applyLocalFilter, fuzzyMatch, fuzzyScore,
+    groupByWorkspace, partitionPinned, applyLocalFilter, fuzzyMatch, fuzzyScore,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     modelMatchesPattern, isModelEnabled, pushPromptHistory, sanitizeMarkdownUrl,
   };

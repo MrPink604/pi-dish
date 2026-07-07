@@ -52,6 +52,19 @@ for (let i = 0; i < 8; i++) {
   appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: `filler answer ${i}\n\nwith a second paragraph of text to take up vertical space in the feed.` }], timestamp: `2026-07-05T00:01:0${i}.500Z` } });
 }
 
+// A second workspace with one (older) historical session — the sidebar
+// collapse/pin section needs two groups on the All tab.
+const BETA_ID = '2026-07-04T00-00-00-uismoke2';
+const CWD_B = path.join(tmpHome, 'workspace', 'proj-beta');
+fs.mkdirSync(CWD_B, { recursive: true });
+const sessionDirB = path.join(tmpHome, '.pi', 'agent', 'sessions', '--home-user-proj-beta--');
+fs.mkdirSync(sessionDirB, { recursive: true });
+fs.writeFileSync(path.join(sessionDirB, `${BETA_ID}.jsonl`), [
+  { type: 'session', cwd: CWD_B, timestamp: '2026-07-04T00:00:00.000Z' },
+  { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'beta question' }], timestamp: '2026-07-04T00:00:01.000Z' } },
+  { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'beta answer' }], timestamp: '2026-07-04T00:00:02.000Z' } },
+].map((e) => JSON.stringify(e)).join('\n') + '\n');
+
 // --- fake bridge socket -------------------------------------------------------
 // Speaks the newline-delimited JSON protocol from lib/bridge-session.js:
 // requests {id, command, ...} -> {type:'response', id, success, data};
@@ -515,6 +528,69 @@ function writeRegistry(patch = {}) {
     emit('extension_ui_request', { method: 'setStatus', statusKey: 'procs', statusText: '' });
     await desktop.waitForFunction(() => !document.querySelector('.ext-ui-widget'), { timeout: 5000 });
     fs.rmSync(path.join(registryDir, `${SESSION2_ID}.json`), { force: true });
+
+    // 11. Sidebar: collapsing a workspace group hides its sessions and sinks
+    // it below the expanded groups; pinning sessions floats them into a
+    // drag-reorderable section at the top.
+    console.log('sidebar collapse & pin:');
+    await desktop.click('#tabAll');
+    const groupLabels = () => desktop.evaluate(() =>
+      [...document.querySelectorAll('.session-segment:not(.pinned-segment) .workspace-group-label')]
+        .map((el) => el.textContent));
+    await desktop.waitForFunction(() =>
+      document.querySelectorAll('.session-segment').length >= 2, null, { timeout: 5000 });
+    const labelsBefore = await groupLabels();
+    check(labelsBefore.length === 2, `two workspace groups on All (got ${JSON.stringify(labelsBefore)})`);
+    await desktop.click('.session-segment .workspace-group-header'); // first (newest) group
+    await desktop.waitForSelector('.session-segment.collapsed', { timeout: 2000 });
+    const labelsAfter = await groupLabels();
+    check(labelsAfter[labelsAfter.length - 1] === labelsBefore[0], 'collapsed group sinks to the bottom');
+    check(await desktop.locator('.session-segment.collapsed .session-item').count() === 0,
+      'collapsed group hides its sessions');
+    check(await desktop.evaluate(() =>
+      JSON.parse(localStorage.getItem('pi-dish-collapsed-groups') || '[]').length) === 1,
+      'collapse persisted to localStorage');
+    await desktop.click('.session-segment.collapsed .workspace-group-header');
+    await desktop.waitForFunction(() => !document.querySelector('.session-segment.collapsed'), null, { timeout: 2000 });
+    check(JSON.stringify(await groupLabels()) === JSON.stringify(labelsBefore),
+      'expanding restores the original order');
+
+    const pinToggle = async (id) => {
+      await desktop.hover(`.session-item[data-id="${id}"]`);
+      await desktop.click(`.session-item[data-id="${id}"] .session-pin-btn`);
+    };
+    await pinToggle(registryState.sessionId);
+    await desktop.waitForSelector('.pinned-segment', { timeout: 2000 });
+    check(await desktop.evaluate(() =>
+      document.querySelector('#sessionList .session-segment')?.classList.contains('pinned-segment')),
+      'pinned section renders at the top');
+    await pinToggle(BETA_ID);
+    await desktop.waitForFunction(() =>
+      document.querySelectorAll('.pinned-segment .session-item').length === 2, null, { timeout: 2000 });
+    check(await desktop.locator('.pinned-segment .session-drag-handle').count() === 2,
+      'pinned rows carry drag handles');
+    check(await desktop.locator('.pinned-segment .session-item-cwd').count() === 2,
+      'pinned rows show their workspace');
+    // Drag beta's handle above the first pinned row: order flips and persists.
+    const handleBox = await desktop.locator(`.pinned-segment .session-item[data-id="${BETA_ID}"] .session-drag-handle`).boundingBox();
+    const firstBox = await desktop.locator(`.pinned-segment .session-item[data-id="${registryState.sessionId}"]`).boundingBox();
+    await desktop.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+    await desktop.mouse.down();
+    await desktop.mouse.move(firstBox.x + 20, firstBox.y + 2, { steps: 5 });
+    await desktop.mouse.up();
+    await desktop.waitForFunction((want) =>
+      JSON.stringify([...document.querySelectorAll('.pinned-segment .session-item')].map((el) => el.dataset.id)) === want,
+      JSON.stringify([BETA_ID, registryState.sessionId]), { timeout: 2000 });
+    check(true, 'drag handle reorders pinned sessions');
+    check(await desktop.evaluate(() => localStorage.getItem('pi-dish-pinned-sessions')) ===
+      JSON.stringify([BETA_ID, registryState.sessionId]), 'manual order persisted to localStorage');
+    // Unpin both; the section disappears and the sessions rejoin their groups.
+    await pinToggle(BETA_ID);
+    await pinToggle(registryState.sessionId);
+    await desktop.waitForFunction(() => !document.querySelector('.pinned-segment'), null, { timeout: 2000 });
+    check(true, 'unpinning removes the pinned section');
+    await desktop.click('#tabActive');
+    await desktop.waitForTimeout(200);
 
     // 3. Mobile: hamburger + drawer from empty state and session header
     console.log('mobile:');

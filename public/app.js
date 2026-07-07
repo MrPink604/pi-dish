@@ -171,11 +171,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Session items render without inline handlers; one delegated listener
   // selects and (on mobile) closes the drawer.
   document.getElementById('sessionList').addEventListener('click', (e) => {
+    const pinBtn = e.target.closest('.session-pin-btn');
+    if (pinBtn) { toggleSessionPinned(pinBtn.closest('.session-item').dataset.id); return; }
+    // A finished drag still emits a click on the handle — never treat it as a select.
+    if (e.target.closest('.session-drag-handle')) return;
+    const header = e.target.closest('.workspace-group-header');
+    if (header) { if (header.dataset.cwd) toggleGroupCollapsed(header.dataset.cwd); return; }
     const item = e.target.closest('.session-item');
     if (!item) return;
     selectSession(item.dataset.id);
     if (window.innerWidth <= 768) closeSidebar();
   });
+
+  initPinnedDrag();
 
   promptInput.addEventListener('blur', () => { setTimeout(hideAutocomplete, 200); });
 
@@ -465,7 +473,7 @@ async function loadSessions(query, { withPrevious = sidebarTab === 'all' } = {})
 // a background poll — or the sidebar refresh button — doesn't reset it.
 function refreshSessions() { return loadSessions(sidebarTab === 'all' && filterQuery ? filterQuery : undefined); }
 
-function renderSessionItem(session) {
+function renderSessionItem(session, opts = {}) {
   const ctxClass = contextClass(session.contextPercent);
   const activeClass = currentSession?.id === session.id ? 'active' : '';
   const inactiveClass = session.isActive ? '' : 'inactive';
@@ -477,14 +485,22 @@ function renderSessionItem(session) {
   const displayName = session.name || 'Unnamed';
   const tokenDisplay = session.contextTokens ? `${formatTokens(session.contextTokens)} tok` : '';
   const timeAgo = formatRelativeTime(session.lastActivity);
+  const isPinned = pinnedSessions.includes(session.id);
+  const pinBtn = `<button class="session-pin-btn${isPinned ? ' pinned' : ''}" title="${isPinned ? 'Unpin' : 'Pin to top'}">📌</button>`;
+  // Rows in the pinned section get a drag handle (reorder) and a cwd hint —
+  // they've left their workspace group, so the group label isn't there.
+  const dragHandle = opts.pinnedRow ? '<span class="session-drag-handle" title="Drag to reorder">⠿</span>' : '';
+  const cwdHint = opts.pinnedRow ? `<span class="session-item-cwd">${escapeHtml(shortCwd(session.cwd || '~'))}</span>` : '';
 
   return `
     <div class="session-item ${activeClass} ${inactiveClass}" data-id="${escapeHtml(session.id)}">
       <div class="session-item-header">
-        ${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>
+        ${dragHandle}${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>
         <span class="session-item-time">${timeAgo}</span>
+        ${pinBtn}
       </div>
       <div class="session-item-meta">
+        ${cwdHint}
         <span class="session-item-model">${escapeHtml(session.model)}</span>
         <span class="session-item-context ${ctxClass}">${session.contextPercent}%</span>
         ${tokenDisplay ? `<span class="session-item-tokens">${tokenDisplay}</span>` : ''}
@@ -494,9 +510,83 @@ function renderSessionItem(session) {
   `;
 }
 
+// Collapsed workspace groups (by cwd) — collapsed groups hide their sessions
+// and sink to the bottom of the list. Persisted across reloads.
+const collapsedGroups = new Set(JSON.parse(localStorage.getItem('pi-dish-collapsed-groups') || '[]'));
+
+function toggleGroupCollapsed(cwd) {
+  if (collapsedGroups.has(cwd)) collapsedGroups.delete(cwd);
+  else collapsedGroups.add(cwd);
+  localStorage.setItem('pi-dish-collapsed-groups', JSON.stringify([...collapsedGroups]));
+  renderSessions();
+}
+
+// Pinned sessions live in a section at the top of the sidebar; the array
+// order is the display order (drag handles rearrange it). Persisted.
+let pinnedSessions = JSON.parse(localStorage.getItem('pi-dish-pinned-sessions') || '[]');
+// Set while a pinned row is being dragged — renderSessions must not rebuild
+// the list out from under the drag (the 10s poll would otherwise do so).
+let pinnedDragActive = false;
+
+function savePinnedSessions() {
+  localStorage.setItem('pi-dish-pinned-sessions', JSON.stringify(pinnedSessions));
+}
+
+function toggleSessionPinned(id) {
+  const idx = pinnedSessions.indexOf(id);
+  if (idx >= 0) pinnedSessions.splice(idx, 1);
+  else pinnedSessions.push(id);
+  savePinnedSessions();
+  renderSessions();
+}
+
+/**
+ * Drag-to-reorder for the pinned section. Pointer events (not HTML5 DnD) so
+ * it works on touch too; the handle has touch-action:none, so grabbing it
+ * doesn't fight the list's scroll. The dragged row is moved live in the DOM;
+ * the drop reads the resulting order back into pinnedSessions.
+ */
+function initPinnedDrag() {
+  document.getElementById('sessionList').addEventListener('pointerdown', (e) => {
+    const handle = e.target.closest('.session-drag-handle');
+    if (!handle) return;
+    const item = handle.closest('.session-item');
+    const segment = item.parentElement;
+    e.preventDefault();
+    pinnedDragActive = true;
+    item.classList.add('dragging');
+
+    // Listeners go on document, not the handle: reordering detaches and
+    // reinserts the row, which silently releases pointer capture on it.
+    const onMove = (ev) => {
+      const siblings = [...segment.querySelectorAll('.session-item:not(.dragging)')];
+      const next = siblings.find(sib => {
+        const r = sib.getBoundingClientRect();
+        return ev.clientY < r.top + r.height / 2;
+      });
+      if (next) segment.insertBefore(item, next);
+      else segment.appendChild(item);
+    };
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
+      item.classList.remove('dragging');
+      pinnedDragActive = false;
+      pinnedSessions = [...segment.querySelectorAll('.session-item')].map(el => el.dataset.id);
+      savePinnedSessions();
+      renderSessions();
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
+  });
+}
+
 let lastSessionListHtml = '';
 
 function renderSessions() {
+  if (pinnedDragActive) return; // don't rebuild mid-drag; the drop re-renders
   const list = document.getElementById('sessionList');
   const { active, previous } = sessions;
   const showing = sidebarTab === 'active' ? active : [...active, ...previous];
@@ -515,14 +605,33 @@ function renderSessions() {
       : (showing.length === 0 ? 'No sessions found' : 'No matches');
     html = `<div class="empty-session"><p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">${msg}</p></div>`;
   } else {
-    for (const [cwd, groupSessions] of groupByWorkspace(filtered)) {
-      const label = shortCwd(cwd);
-      html += `<div class="session-segment">
-        <div class="workspace-group-header">
-          <span class="workspace-group-label" title="${escapeHtml(cwd)}">${escapeHtml(label)}</span>
-          <span class="workspace-group-count">${groupSessions.length}</span>
+    const [pinned, rest] = partitionPinned(filtered, pinnedSessions);
+    if (pinned.length > 0) {
+      html += `<div class="session-segment pinned-segment">
+        <div class="workspace-group-header pinned-header">
+          <span class="workspace-group-label">📌 Pinned</span>
+          <span class="workspace-group-count">${pinned.length}</span>
         </div>
-        ${groupSessions.map(renderSessionItem).join('')}
+        ${pinned.map(s => renderSessionItem(s, { pinnedRow: true })).join('')}
+      </div>`;
+    }
+    for (const [cwd, groupSessions] of groupByWorkspace(rest, collapsedGroups)) {
+      const label = shortCwd(cwd);
+      const isCollapsed = collapsedGroups.has(cwd);
+      // A collapsed group must not hide activity: surface the best signal
+      // (working > unread) as a dot on the header itself.
+      let headerDot = '';
+      if (isCollapsed) {
+        if (groupSessions.some(s => s.turnInProgress)) headerDot = '<span class="session-item-status working" title="Agent working"></span>';
+        else if (groupSessions.some(isUnread)) headerDot = '<span class="session-item-status unread" title="New activity"></span>';
+      }
+      html += `<div class="session-segment${isCollapsed ? ' collapsed' : ''}">
+        <div class="workspace-group-header" data-cwd="${escapeHtml(cwd)}">
+          <span class="workspace-group-chevron">${isCollapsed ? '▸' : '▾'}</span>
+          <span class="workspace-group-label" title="${escapeHtml(cwd)}">${escapeHtml(label)}</span>
+          ${headerDot}<span class="workspace-group-count">${groupSessions.length}</span>
+        </div>
+        ${isCollapsed ? '' : groupSessions.map(renderSessionItem).join('')}
       </div>`;
     }
   }

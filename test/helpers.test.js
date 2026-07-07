@@ -158,6 +158,26 @@ test('groupByWorkspace groups by cwd and sorts by recency', () => {
     ['2026-01-02T00:00:00Z', '2026-01-01T00:00:00Z']);
 });
 
+test('groupByWorkspace sinks collapsed groups below expanded ones', () => {
+  const mk = (cwd, ts) => ({ cwd, lastActivity: ts });
+  const groups = H.groupByWorkspace([
+    mk('/a', '2026-01-01T00:00:00Z'),
+    mk('/b', '2026-01-03T00:00:00Z'),
+    mk('/c', '2026-01-02T00:00:00Z'),
+  ], new Set(['/b']));
+  // /b is newest but collapsed, so it sorts last; the rest stay recency-ordered
+  assert.deepEqual(groups.map(g => g[0]), ['/c', '/a', '/b']);
+});
+
+test('partitionPinned splits in pinned order and skips unknown ids', () => {
+  const list = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  const [pinned, rest] = H.partitionPinned(list, ['c', 'gone', 'a']);
+  assert.deepEqual(pinned.map(s => s.id), ['c', 'a']);
+  assert.deepEqual(rest.map(s => s.id), ['b']);
+  assert.deepEqual(H.partitionPinned(list, []), [[], list]);
+  assert.deepEqual(H.partitionPinned(list, undefined), [[], list]);
+});
+
 test('applyLocalFilter requires every token across name/cwd/model/id', () => {
   const list = [
     { name: 'fix login', cwd: '/home/u/webapp', model: 'gpt-5.5', id: 's1' },

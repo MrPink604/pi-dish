@@ -177,13 +177,95 @@ body.sidebar-open {
   padding: 0 8px 8px;
 }
 
-/* Workspace group header */
+/* Workspace group header — click toggles collapse (collapsed groups sink
+   to the bottom of the list) */
 .workspace-group-header {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 10px 12px 4px;
   user-select: none;
+  cursor: pointer;
+}
+
+.workspace-group-header:hover .workspace-group-label {
+  color: var(--text);
+}
+
+.workspace-group-chevron {
+  font-size: 9px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  width: 10px;
+}
+
+.session-segment.collapsed .workspace-group-header {
+  padding-bottom: 8px;
+  opacity: 0.75;
+}
+
+/* Pinned section — manual order, drag handles to rearrange */
+.pinned-segment {
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+}
+
+.pinned-header {
+  cursor: default;
+}
+
+.session-pin-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  filter: grayscale(1) brightness(1.4);
+  transition: opacity 0.15s;
+}
+
+.session-item:hover .session-pin-btn {
+  opacity: 0.6;
+}
+
+.session-pin-btn.pinned,
+.session-item:hover .session-pin-btn.pinned {
+  opacity: 0.9;
+  filter: none;
+}
+
+/* No hover on touch devices — keep the pin reachable, just quiet */
+@media (hover: none) {
+  .session-pin-btn { opacity: 0.35; }
+}
+
+.session-drag-handle {
+  color: var(--text-muted);
+  font-size: 12px;
+  flex-shrink: 0;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  padding: 0 2px;
+}
+
+.session-item.dragging {
+  opacity: 0.7;
+  background: var(--bg-hover);
+  cursor: grabbing;
+}
+
+.session-item-cwd {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40%;
 }
 
 .workspace-group-label {
