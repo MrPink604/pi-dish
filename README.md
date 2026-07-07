@@ -1,24 +1,112 @@
-# pi-dish
+# pi-dish 📡🍽
 
-A minimal web interface for pi's sessions.
+A web (and phone) remote control for [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
+coding-agent sessions. Start an agent in tmux at your desk, then steer it from
+the couch: watch it stream, answer its dialogs, send follow-ups, switch models,
+and read back through old sessions — all from a browser on your LAN.
 
-## Features
+Full disclosure: this repo is ~100% vibecoded. A human had opinions and a
+coding agent typed. It works well enough that said human uses it every day
+from their phone, but read the next section before you get any ideas about
+exposing it to a network you don't fully trust.
 
-- **Session List**: View all active pi sessions in the sidebar
-- **Session Status**: See if sessions are working (green pulse), current context usage %, model, and session name — context numbers come straight from the running session (`ctx.getContextUsage()`), so 1M-context models report correctly
-- **Message View**: Browse full session history with formatted messages; streaming only auto-scrolls while you're at the bottom (scroll up to read, hit ↓ to jump back)
-- **Prompt Input**: Send prompts to sessions
-- **Slash Commands**: `/`-prefixed input is routed to a command endpoint, never to the model as text
-- **Extension UI**: dialogs (`select`/`confirm`/`input`/`editor`) render as real modals you can answer from the browser; widgets, statuses, and notifications render natively
-- **Thinking Level**: 🧠 badge next to the model selector (a panel row on mobile) switches thinking/effort (off → xhigh); pi clamps to what the model supports
-- **Steer & Follow-up**: while the agent is working, send steering messages (delivered mid-run) or queue follow-ups (delivered after it finishes); pending queues show as chips above the input on pi-dish-spawned sessions (pi doesn't expose queue events to extensions, so TUI sessions can't show them)
-- **Session Stats**: tap the context % badge (Context / stats row on mobile) for tokens in/out, cache usage, cost, message counts, cwd, and session file
-- **Export**: download any session (active or not) as standalone HTML, using pi's own exporter
-- **Focus Mode**: toggle that hides tool calls/results — including tool-only assistant turns, so no empty markers remain — leaving just the user/assistant conversation (persisted per browser)
-- **In-Session Search**: 🔍 button or Ctrl+F opens a search bar; matches come from the whole session (server-side), Enter walks backwards through matches (Shift+Enter forwards), paging older messages in automatically and highlighting hits
-- **Session Tree**: header button opens the tree to branch from any point; full-screen with touch-sized rows on phones
-- **Copy**: per-message button copies an assistant reply's text (always visible on touch devices)
-- **Mobile Control Panel**: on phones the header badges collapse into a single ⚙ button next to Send, which opens a slide-up panel with model, thinking level, context/stats, focus mode, session tree, and HTML export; the input row itself only shows status text (truncated, never pushing buttons) and a working spinner
+## ⚠️ Security: there is none
+
+Understand what this server is before running it:
+
+- **Zero authentication.** No accounts, no passwords, no tokens. Anyone who
+  can reach the port gets the full UI.
+- **The UI drives coding agents.** Sending a prompt to a pi session means an
+  agent with shell access executes things on your machine. Reaching this
+  server is functionally equivalent to having a shell on the host.
+- **It binds `0.0.0.0:3333`** (all interfaces) so your phone can reach it —
+  which means everything else on the network can too.
+- **Plain HTTP.** No TLS. Prompts, session transcripts, and everything else
+  travel in cleartext.
+
+Rules of thumb:
+
+- Never port-forward it to the internet. Not "with a strong hostname" —
+  never.
+- On a home LAN you trust, fine, that's the intended use case.
+- For anything beyond that, put a real front door on it: a VPN like
+  Tailscale or WireGuard, or a reverse proxy that actually does auth
+  (Caddy/nginx with basic auth, oauth2-proxy, Authelia, …) with pi-dish
+  bound behind it. The proxy does authentication and TLS; pi-dish just
+  serves whoever the proxy lets through.
+
+## What it does
+
+- **Session list** — live pi sessions in a sidebar (grouped by workspace,
+  pinnable, collapsible), plus your full session history from pi's JSONL
+  store. Status dots for working / unread activity.
+- **Live streaming** — markdown renders live mid-stream via an incremental
+  block renderer; tool activity folds into per-turn accordions; a working
+  badge shows elapsed time and the currently running tool.
+- **Prompting** — send prompts, steer mid-run, or queue follow-ups. Paste or
+  attach images (downscaled client-side, phone photos are huge). Per-session
+  drafts and prompt history (ArrowUp), `@file` fuzzy autocomplete.
+- **Slash commands** — `/compact`, `/model`, `/name`, skills, prompt
+  templates, and more, routed to the session instead of the model (support
+  matrix below).
+- **Extension UI** — pi extension dialogs (select/confirm/input/editor)
+  render as real modals you can answer from the browser; widgets and status
+  badges render natively.
+- **Session controls** — model switcher (mirrors pi's scoped-models
+  settings), thinking-level toggle, session rename, stats (tokens, cache,
+  cost), HTML export via pi's own exporter, session tree for branching.
+- **Reading tools** — in-session search (Ctrl+F, auto-pages older messages
+  in), focus mode that hides tool noise, per-message copy buttons.
+- **Mobile-first** — the whole point. Slide-out drawer, slide-up control
+  panel, touch-sized everything, solarized-dark only (you're welcome).
+- **No CDN dependencies** — `marked` and `highlight.js` are vendored, so it
+  works on LAN clients with no internet.
+
+There's also an Electron shell (`npm run electron:dev`) if you want it as a
+desktop app for some reason.
+
+## Requirements
+
+- Node.js 20+
+- [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) — the
+  coding agent this whole thing remote-controls
+- A network you trust (see above)
+
+## Setup
+
+pi-dish discovers running pi sessions through a small bridge extension that
+registers each session and exposes a control socket. Symlink it once into
+your global pi extensions dir:
+
+```bash
+git clone https://github.com/MrPink604/pi-dish
+cd pi-dish
+npm install
+mkdir -p ~/.pi/agent/extensions
+ln -s "$PWD/extensions/pi-dish-bridge" ~/.pi/agent/extensions/pi-dish-bridge
+```
+
+Symlink, don't copy — a stale copied bridge loaded alongside the current one
+races for the session socket.
+
+After that, any `pi` you launch (TUI in tmux, headless, spawned from
+pi-dish) registers itself at `~/.pi/dish/sessions/<id>.json` and opens a
+Unix socket at `~/.pi/dish/sockets/<id>.sock`. Already-running sessions pick
+the extension up after a `/reload`.
+
+Then start the server:
+
+```bash
+npm start        # http://localhost:3333 — PORT env to override
+```
+
+Open it from your phone at `http://<your-machine>:3333` (see the security
+section; you did read the security section?).
+
+### Upgrading
+
+After pulling changes: `npm install`, restart the server, and `/reload` any
+running pi sessions so they pick up the new bridge.
 
 ## Slash command support
 
@@ -26,111 +114,53 @@ A minimal web interface for pi's sessions.
 |---|---|---|
 | `/compact`, `/model`, `/name`, `/thinking`, `/abort` | ✅ emulated via extension API | ✅ mapped to RPC commands |
 | `/new`, `/export` | ❌ (needs command context) | ✅ |
-| Skills (`/skill:x`) and prompt templates | ✅ expanded by the bridge, sent as user message | ✅ native via RPC `prompt` |
-| Extension commands (`/mood`, `/todos`, …) | ❌ pi's extension API cannot invoke another extension's command — run them in the TUI | ✅ native via RPC `prompt` |
-| Other TUI built-ins (`/settings`, `/tree`*, `/resume`, …) | ❌ TUI-only | ❌ (`/tree` has a web modal) |
+| Skills (`/skill:x`) and prompt templates | ✅ expanded by the bridge | ✅ native |
+| Extension commands (`/mood`, `/todos`, …) | ❌ pi extensions can't invoke each other's commands | ✅ native |
+| Other TUI built-ins (`/settings`, `/resume`, …) | ❌ TUI-only | ❌ (`/tree` has a web modal) |
 
-Unknown/unsupported commands return a clear error instead of being sent to the model.
+Unknown commands return a clear error instead of being sent to the model.
 
 **Dialog caveat**: when a TUI session's dialog is answered from the web, the
-terminal keeps showing the (already-resolved) dialog until you press Escape —
-pi has no API to dismiss it programmatically. The late TUI answer is discarded.
+terminal keeps showing the already-resolved dialog until you press Escape —
+pi has no API to dismiss it programmatically.
 
-## Setup
+## How it works
 
-pi-dish discovers running pi sessions through a small extension that registers
-each session and exposes a control socket. Install it once into your global
-pi extensions dir:
+- **Active sessions** come from the bridge extension's registry files in
+  `~/.pi/dish/sessions/`. The server only connects to a session's Unix
+  socket while someone is actually viewing it.
+- **Historical sessions** are scanned from `~/.pi/agent/sessions/` (pi's own
+  JSONL store), with mtime/size-keyed caches so the 10s sidebar poll never
+  re-parses unchanged files.
+- **Streaming** is SSE end to end: bridge socket → server (which coalesces
+  `message_update` deltas, ~50ms window, each carries the full message so
+  far) → an incremental block-level renderer that only touches changed
+  blocks, so `<details>` stay open and markdown renders mid-stream.
+- **Context usage** comes from the horse's mouth — the bridge writes
+  `ctx.getContextUsage()` into its registry entry on every turn/model
+  change, so 1M-context models report correctly instead of being guessed.
+- **Spawning**: "New session" and "Resume" spawn `pi --mode rpc`; set
+  `PI_DISH_PI_COMMAND` to customize the launch command (e.g.
+  `"pi-aws --profile work"`).
 
-```bash
-mkdir -p ~/.pi/agent/extensions
-ln -s "$PWD/extensions/pi-dish-bridge" ~/.pi/agent/extensions/pi-dish-bridge
-```
-
-After symlinking, any `pi` you launch (TUI in tmux, headless via pi-dish, etc.)
-will register itself at `~/.pi/dish/sessions/<id>.json` and open a Unix socket
-at `~/.pi/dish/sockets/<id>.sock`. pi-dish reads the registry to list active
-sessions and opens the socket on demand to stream events / send prompts —
-sessions you aren't viewing cost nothing.
-
-Reload existing pi sessions with `/reload` to pick up the extension.
-
-Symlink (don't copy) — a stale copied bridge loaded alongside the current one
-races for the session socket. Writing an extension whose UI should appear in
-pi-dish? See [extensions/pi-dish-bridge/README.md](extensions/pi-dish-bridge/README.md)
+Writing a pi extension whose UI should show up in pi-dish? See
+[extensions/pi-dish-bridge/README.md](extensions/pi-dish-bridge/README.md)
 for what crosses the bridge and what stays TUI-only.
 
-### Upgrading
-
-After pulling changes, run `npm install` (the SDK dependency is
-`@earendil-works/pi-coding-agent`, pi's current package name), restart the
-server, and `/reload` each running pi session so it picks up the new bridge.
-
-## Running
-
-### Web (browser)
+## Development
 
 ```bash
-cd ~/workspace/pi-dish
-npm install
-npm start
+npm test              # API + unit tests (node:test)
+npm run test:ui       # browser smoke test (needs Chrome + global playwright)
+npm run build:vendor  # regenerate public/vendor/ after bumping marked/highlight.js
+npm run electron:dev  # desktop shell
 ```
 
-Then open http://localhost:3333 in your browser.
+`CLAUDE.md` documents the architecture in detail (it's the file the agent
+that wrote this reads, so it's the most honest documentation in the repo).
 
-### Tests
+## License
 
-```bash
-npm test
-```
-
-Runs the API tests in `test/` (node:test) against a fixture session under a
-temp `HOME`. UI changes are additionally validated by driving real Chrome over
-CDP — see `CLAUDE.md`.
-
-### Desktop (Electron)
-
-```bash
-npm run electron:dev
-```
-
-This starts the Express server and opens the app in a native window.
-
-### Build distributable
-
-```bash
-npm run electron:build
-```
-
-Output goes to `dist/` (AppImage + deb on Linux, dmg on macOS).
-
-## How It Works
-
-- **Active sessions**: discovered via the `pi-dish-bridge` extension's registry
-  files in `~/.pi/dish/sessions/`. The web server connects to each session's
-  Unix socket only when a client opens it — listing the sidebar costs nothing
-  beyond reading registry files.
-- **Inactive sessions**: scanned from `~/.pi/agent/sessions/` (pi's own JSONL
-  store) for the "previous sessions" list and full message history.
-- **Live streaming**: tool execution, message updates, turn lifecycle,
-  compaction/retry status, extension UI, and errors are forwarded over SSE
-  from the bridge socket to the browser. `message_update` deltas are coalesced
-  server-side (~50ms window; each event carries the full message so far) and
-  rendered client-side by an incremental block-level renderer — markdown
-  renders live during streaming without re-building the message DOM.
-- **No CDN**: `marked` and `highlight.js` are vendored into `public/vendor/`
-  (`npm run build:vendor`), so markdown rendering works on LAN-only clients.
-- **Slash commands**: the frontend posts `/`-prefixed input to
-  `/api/sessions/:id/command`. Bridge sessions emulate built-ins through the
-  extension API and expand skills/prompt templates; RPC sessions use the
-  native RPC commands. See the support matrix above.
-- **Context usage**: the bridge writes `ctx.getContextUsage()` (tokens,
-  window, percent) into its registry entry on every turn/message/model
-  change, so the UI never guesses window sizes from model listings.
-- **Session ids**: the session-file basename (newer pi prefixes a timestamp
-  to the UUID). The bridge registry and RPC client use the same convention so
-  a session never appears twice.
-- **Spawning**: "New session" and "Resume" still spawn `pi --mode rpc`; those
-  processes auto-load the bridge extension and register themselves the same
-  way as sessions you start in tmux. Set `PI_DISH_PI_COMMAND` to customize the
-  launch command (e.g. `"pi-aws --profile work"`).
+[Vibecoded / 0BSD](LICENSE) — it's mostly agent output, so it's probably
+only barely copyrightable anyway. Do whatever you want with it. Vendored
+third-party code (`public/vendor/`) keeps its own MIT/BSD licenses.

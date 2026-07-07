@@ -1,7 +1,8 @@
 {
   "name": "pi-dish",
   "version": "1.0.0",
-  "description": "A minimal web interface for pi's RPC mode",
+  "description": "Web/phone remote control for pi coding-agent sessions",
+  "license": "0BSD",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

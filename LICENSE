@@ -1,0 +1,36 @@
+The Vibecoded License (functionally 0BSD)
+
+This codebase was vibecoded: a human described what they wanted and a
+coding agent wrote essentially all of it. Depending on your jurisdiction's
+current mood about AI-generated works, much of it may not be copyrightable
+by anyone in the first place. To whatever extent a copyright does exist
+and is ours to give, you get it under the Zero-Clause BSD license below —
+i.e. do literally whatever you want, no attribution required, no warranty
+of any kind (and given how this was written, you REALLY shouldn't assume
+one).
+
+---
+
+Zero-Clause BSD (0BSD)
+
+Copyright (C) 2026 MrPink604
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+---
+
+Third-party code keeps its own licenses (all permissive, none copyleft):
+
+- public/vendor/marked.min.js — marked, MIT (license banner in the file)
+- public/vendor/highlight.js and public/vendor/hljs-theme.min.css —
+  highlight.js, BSD-3-Clause (license banner in the generated bundle)
+- npm dependencies installed under node_modules/ — per their own licenses
