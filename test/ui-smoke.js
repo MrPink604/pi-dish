@@ -495,7 +495,7 @@ function writeRegistry(patch = {}) {
     const cwdLabel = await desktop.locator('#terminalCwd').textContent();
     check(cwdLabel.includes('workspace/proj-alpha'), `panel header shows the cwd (got ${JSON.stringify(cwdLabel)})`);
     // Close (shell keeps running server-side), reopen: scrollback replays.
-    await desktop.click('#terminalPanel .terminal-header .btn-icon');
+    await desktop.click('#termCloseBtn');
     check(await desktop.evaluate(() => document.getElementById('terminalPanel').style.display === 'none'),
       'panel hidden on close');
     await desktop.click('#btnTerminal');
@@ -504,7 +504,22 @@ function writeRegistry(patch = {}) {
       return rows && rows.textContent.includes('term-smoke-42');
     }, { timeout: 5000 });
     check(true, 'reopen reattaches the PTY and replays scrollback');
-    await desktop.click('#terminalPanel .terminal-header .btn-icon');
+    // Restart: confirm dialog, then a fresh shell — old scrollback gone,
+    // new shell answers.
+    desktop.once('dialog', (d) => d.accept());
+    await desktop.click('#termRestartBtn');
+    await desktop.waitForFunction(() => {
+      const rows = document.querySelector('#terminalPanel .xterm');
+      return rows && !rows.textContent.includes('term-smoke-42');
+    }, { timeout: 5000 });
+    check(true, 'restart clears the old scrollback');
+    await desktop.keyboard.type('echo restarted-$((5+5))\r');
+    await desktop.waitForFunction(() => {
+      const rows = document.querySelector('#terminalPanel .xterm');
+      return rows && rows.textContent.includes('restarted-10');
+    }, { timeout: 5000 });
+    check(true, 'fresh shell after restart answers');
+    await desktop.click('#termCloseBtn');
 
     // 9. Drafts persist per session; ArrowUp recalls sent prompts
     console.log('drafts & history:');
@@ -699,7 +714,7 @@ function writeRegistry(patch = {}) {
     await mobile.keyboard.type('c');
     check(await mobile.evaluate(() => !document.getElementById('termKeyCtrl').classList.contains('latched')),
       'latch clears after the next key');
-    await mobile.click('#terminalPanel .terminal-header .btn-icon');
+    await mobile.click('#termCloseBtn');
 
     check(errors.length === 0, errors.length ? `no page errors — got: ${errors.join(' | ')}` : 'no page errors');
   } catch (e) {

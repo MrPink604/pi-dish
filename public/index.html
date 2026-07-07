@@ -150,7 +150,8 @@
             <span class="terminal-title">&gt;_</span>
             <span class="terminal-cwd" id="terminalCwd"></span>
             <span class="terminal-status" id="terminalStatus"></span>
-            <button class="btn-icon" onclick="closeTerminal()" title="Close terminal (shell keeps running)">✕</button>
+            <button class="btn-icon" id="termRestartBtn" onclick="restartTerminalShell()" title="Restart shell (kills anything running in it)">⟳</button>
+            <button class="btn-icon" id="termCloseBtn" onclick="closeTerminal()" title="Close terminal (shell keeps running)">✕</button>
           </div>
           <div class="terminal-container" id="terminalContainer"></div>
           <!-- Soft keyboards can't type these; shown on touch layouts only.

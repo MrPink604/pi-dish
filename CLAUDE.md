@@ -196,7 +196,12 @@ session, spawned at the session cwd, shared by all WebSocket clients on
 `GET /api/config` tells the client). The PTY outlives sockets on purpose —
 phones drop the connection on every screen lock — with a ~200KB ring buffer
 replayed in the `attach` frame (client resets the emulator before writing
-it) and a 15-min idle kill after the last client detaches. Client side:
+it) and a 15-min idle kill that needs *both* no clients and no output for
+the full window (a detached shell still printing is a running build — the
+timer re-arms for the remaining silence). A `restart` WS frame kills and
+respawns the shell carrying attached sockets over (⟳ in the panel header;
+frame handlers look the terminal up per message, never close over it, so
+input follows the new PTY). Client side:
 xterm.js + fit addon (vendored, UMD globals), theme built from the `:root`
 tokens in `terminalTheme()`, mobile extra-keys bar with a ctrl latch that
 rewrites the next key in `term.onData`. Keys typed in the panel must not

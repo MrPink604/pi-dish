@@ -3432,6 +3432,22 @@ function closeTerminal() {
   document.getElementById('terminalPanel').style.display = 'none';
 }
 
+function restartTerminalShell() {
+  if (!termState) return;
+  if (!confirm('Restart shell? Anything running in it will be killed.')) return;
+  termState.exited = false; // a fresh shell supersedes an exited one
+  if (termState.ws?.readyState === WebSocket.OPEN) {
+    termSend({ type: 'restart' });
+  } else {
+    // Shell exited → the server closed the socket; reconnecting spawns a
+    // fresh PTY (the exited one is already out of the pool).
+    clearTimeout(termState.reconnectTimer);
+    termState.attempts = 0;
+    connectTerminalWS();
+  }
+  termState.term.focus();
+}
+
 function setTermCtrlLatch(on) {
   termCtrlLatch = on;
   document.getElementById('termKeyCtrl')?.classList.toggle('latched', on);

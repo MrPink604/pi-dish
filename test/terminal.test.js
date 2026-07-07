@@ -131,6 +131,42 @@ test('reattaching within the idle window cancels the pending kill', async () => 
   terminal.killTerminal('lib-cancel');
 });
 
+test('idle kill defers while a detached shell is still producing output', async () => {
+  const ws = new FakeWS();
+  terminal.attachClient('lib-busy', sessionCwd, ws, { idleKillMs: 300 });
+  // ~1.2s of output, an order of magnitude past idleKillMs.
+  ws.input('for i in $(seq 1 12); do echo busy-$i; sleep 0.1; done\r');
+  await until(() => ws.sent.some(m => m.type === 'output' && m.data.includes('busy-1')));
+  ws.close();
+
+  await new Promise(r => setTimeout(r, 600)); // idleKillMs would have fired twice
+  assert.ok(terminal._terminals.has('lib-busy'), 'still alive while output continues');
+
+  const term = terminal._terminals.get('lib-busy');
+  await until(() => Date.now() - term.lastOutputAt > 350, 5000); // loop finished + silence window
+  await until(() => !terminal._terminals.has('lib-busy'), 3000);
+});
+
+test('restart frame respawns the shell, keeping the attached client', async () => {
+  const ws = new FakeWS();
+  terminal.attachClient('lib-restart', sessionCwd, ws);
+  ws.input('echo before-restart-$((1+1))\r');
+  await until(() => ws.sent.some(m => m.type === 'output' && m.data.includes('before-restart-2')));
+  const oldPid = terminal._terminals.get('lib-restart').proc.pid;
+
+  ws.emit('message', JSON.stringify({ type: 'restart' }));
+  await until(() => ws.messages('attach').length === 2);
+  assert.equal(ws.messages('attach')[1].replay, '', 'fresh shell attaches with an empty buffer');
+  assert.equal(ws.messages('exit').length, 0, 'surviving client gets no exit frame');
+  const term = terminal._terminals.get('lib-restart');
+  assert.notEqual(term.proc.pid, oldPid, 'a new PTY process was spawned');
+  assert.ok(!term.buffer.includes('before-restart-2'), 'old scrollback discarded');
+
+  ws.input('echo after-restart-$((2+2))\r');
+  await until(() => ws.sent.some(m => m.type === 'output' && m.data.includes('after-restart-4')));
+  terminal.killTerminal('lib-restart');
+});
+
 test('client exit frame is sent when the shell exits', async () => {
   const ws = new FakeWS();
   terminal.attachClient('lib-exit', sessionCwd, ws);
