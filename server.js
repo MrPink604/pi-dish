@@ -11,6 +11,7 @@ const {
   BridgeSession,
 } = require('./lib/bridge-session');
 const { searchFiles, searchHomeDirs } = require('./lib/file-search');
+const terminal = require('./lib/terminal');
 const {
   getSessionInfo,
   readSessionMessages,
@@ -905,6 +906,13 @@ app.get('/api/cwds', (req, res) => {
   }
 });
 
+// Feature flags the client needs before rendering chrome. `terminal` is
+// opt-in (PI_DISH_TERMINAL=1) and additionally requires node-pty to have
+// loaded — a missing native binary must hide the button, not break the UI.
+app.get('/api/config', (req, res) => {
+  res.json({ terminal: terminal.isTerminalEnabled() });
+});
+
 // Fuzzy directory search under $HOME for the new-session cwd picker.
 app.get('/api/dirs', (req, res) => {
   try {
@@ -914,17 +922,22 @@ app.get('/api/dirs', (req, res) => {
   }
 });
 
+// Best-known working directory for a session: live registry first, then the
+// JSONL header. Null when neither knows (terminal + file search fall back).
+function resolveSessionCwd(sessionId) {
+  const reg = getRegisteredSession(sessionId);
+  if (reg?.cwd) return reg.cwd;
+  const sessionFile = findSessionFile(sessionId);
+  if (sessionFile) {
+    try { return parseSessionFile(sessionFile).cwd || null; } catch {}
+  }
+  return null;
+}
+
 // Fuzzy file search under a session's cwd — powers @-mentions in the prompt.
 app.get('/api/sessions/:id/files', async (req, res) => {
   try {
-    const reg = getRegisteredSession(req.params.id);
-    let cwd = reg?.cwd;
-    if (!cwd) {
-      const sessionFile = findSessionFile(req.params.id);
-      if (sessionFile) {
-        try { cwd = parseSessionFile(sessionFile).cwd; } catch {}
-      }
-    }
+    const cwd = resolveSessionCwd(req.params.id);
     if (!cwd) return res.status(404).json({ error: 'Session cwd unknown' });
     const files = await searchFiles(cwd, String(req.query.q || ''), 20);
     res.json({ cwd, files });
@@ -1160,5 +1173,37 @@ piSDK.getAvailableModels().then(setModelsCache).catch(() => {});
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`pi-dish running at http://0.0.0.0:${PORT}`);
 });
+
+// WebSocket endpoint for the in-browser terminal (see lib/terminal.js).
+// Registered only when the feature flag is on — with it off, upgrade
+// requests get the default socket destroy, indistinguishable from a server
+// without the feature.
+if (terminal.isTerminalEnabled()) {
+  const { WebSocketServer } = require('ws');
+  const wss = new WebSocketServer({ noServer: true });
+  const TERMINAL_PATH_RE = /^\/api\/sessions\/([^/]+)\/terminal$/;
+
+  server.on('upgrade', (req, socket, head) => {
+    const match = TERMINAL_PATH_RE.exec((req.url || '').split('?')[0]);
+    if (!match) return socket.destroy();
+    const sessionId = decodeURIComponent(match[1]);
+    // Only spawn shells for sessions pi-dish actually knows about.
+    const known = getRegisteredSession(sessionId) || getRPCSession(sessionId) || findSessionFile(sessionId);
+    if (!known) {
+      socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+      return socket.destroy();
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      try {
+        terminal.attachClient(sessionId, resolveSessionCwd(sessionId), ws);
+      } catch (e) {
+        try { ws.send(JSON.stringify({ type: 'error', error: e.message })); } catch {}
+        ws.close(1011, 'terminal failed');
+      }
+    });
+  });
+
+  server.on('close', () => terminal.killAllTerminals());
+}
 
 module.exports = server;
