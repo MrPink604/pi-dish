@@ -126,6 +126,9 @@ npm start                 # http://127.0.0.1:3333 — localhost only
 PORT=8080 npm start       # different port
 HOST=0.0.0.0 npm start    # expose on all interfaces (LAN)
 HOST=100.x.y.z npm start  # or just your Tailscale IP
+PI_DISH_TERMINAL=1 npm start  # enable the in-browser terminal (off by default;
+                              # a raw shell for anyone who can reach the port —
+                              # see the security section)
 ```
 
 To open it from your phone at `http://<your-machine>:3333` you need one of
