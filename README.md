@@ -103,6 +103,21 @@ npm start        # http://localhost:3333 — PORT env to override
 Open it from your phone at `http://<your-machine>:3333` (see the security
 section; you did read the security section?).
 
+### Optional: the mood extension
+
+You may notice the web UI has special-cased support for a `set_mood` tool
+(a little mood indicator above the composer, e.g. `focused (ง'̀-'́)ง`).
+That tool comes from a pi extension that isn't part of pi itself — which
+made shipping the special-casing without the extension kinda weird, so a
+copy lives at [`extensions/mood.ts`](extensions/mood.ts). It gives the
+agent a `set_mood` tool and a `/mood` command, and shows the current mood
+at the top-right of the TUI prompt box; pi-dish mirrors it on the web.
+Entirely optional, entirely unserious. Install the same way:
+
+```bash
+ln -s "$PWD/extensions/mood.ts" ~/.pi/agent/extensions/mood.ts
+```
+
 ### Upgrading
 
 After pulling changes: `npm install`, restart the server, and `/reload` any

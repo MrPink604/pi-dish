@@ -15,7 +15,7 @@ it and your UI appears in the web/phone client with zero extra work.
 | `ctx.ui.setTitle(title)` | browser tab title | |
 | `ctx.ui.setEditorText(text)` / `pasteToEditor(text)` | fills the web composer | |
 | `ctx.ui.select/confirm/input/editor(...)` | real web modal, raced against the TUI dialog | first answer (terminal or browser) wins; the loser's is discarded |
-| a **tool named `set_mood`** | mood indicator above the composer | recognized arg shapes: `{description, kaomoji}` or `{mood, label?}` |
+| a **tool named `set_mood`** | mood indicator above the composer | recognized arg shapes: `{description, kaomoji}` or `{mood, label?}`; a reference implementation ships at [`extensions/mood.ts`](../mood.ts) |
 
 ## What does NOT cross (TUI-only)
 
