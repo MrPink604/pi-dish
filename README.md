@@ -10,6 +10,19 @@ coding agent typed. It works well enough that said human uses it every day
 from their phone, but read the next section before you get any ideas about
 exposing it to a network you don't fully trust.
 
+## What it looks like
+
+![Session view: workspace sidebar, rendered markdown with highlighted code, tool activity folded into an accordion](docs/screenshots/desktop-main.png)
+*A live session: workspace-grouped sidebar, markdown + syntax highlighting, per-turn tool activity folded away, and the mood extension doing its thing above the composer.*
+
+| Mid-turn: elapsed timer + running tool, live tool panel, steer/follow-up | Extension UI: widget cards and status badges render natively |
+|---|---|
+| ![Streaming mid-turn with working badge and live tool panel](docs/screenshots/desktop-streaming.png) | ![Extension widget card above the composer](docs/screenshots/desktop-widget.png) |
+
+<p align="center"><img src="docs/screenshots/mobile-session.png" width="380" alt="The same session on a phone"></p>
+
+(All screenshots are staged fixture data — regenerate with `npm run shots`.)
+
 ## ⚠️ Security: there is none
 
 Understand what this server is before running it:

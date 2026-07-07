@@ -11,7 +11,8 @@
     "electron:dev": "electron electron/main.js",
     "electron:build": "electron-builder",
     "postinstall": "electron-builder install-app-deps",
-    "test:ui": "NODE_PATH=${NODE_PATH:-/usr/lib/node_modules} node test/ui-smoke.js"
+    "test:ui": "NODE_PATH=${NODE_PATH:-/usr/lib/node_modules} node test/ui-smoke.js",
+    "shots": "NODE_PATH=${NODE_PATH:-/usr/lib/node_modules} node scripts/readme-shots.js"
   },
   "build": {
     "appId": "com.pidish.app",
