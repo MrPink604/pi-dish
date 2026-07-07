@@ -9,8 +9,13 @@
   <!-- Vendored (see scripts/build-vendor.js) — no CDN so the UI works on
        LAN-only clients and markdown rendering never silently degrades. -->
   <link rel="stylesheet" href="vendor/hljs-theme.min.css">
+  <link rel="stylesheet" href="vendor/xterm.css">
   <script src="vendor/marked.min.js"></script>
   <script src="vendor/highlight.js"></script>
+  <!-- Terminal (feature-flagged; see /api/config). deferred — only used
+       after DOMContentLoaded, no need to block first paint on 480KB. -->
+  <script src="vendor/xterm.js" defer></script>
+  <script src="vendor/xterm-addon-fit.js" defer></script>
 </head>
 <body>
   <div class="app">
@@ -95,6 +100,12 @@
                 <path d="M21 21l-4.35-4.35"/>
               </svg>
             </button>
+            <button class="btn-icon" id="btnTerminal" onclick="toggleTerminal()" title="Terminal at session cwd" style="display:none">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="16" rx="2"/>
+                <path d="M7 9l3 3-3 3M13 15h4"/>
+              </svg>
+            </button>
             <button class="btn-icon" id="btnFocus" onclick="toggleFocusMode()" title="Focus mode: hide tool calls/results">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M4 6h16M7 12h10M10 18h4"/>
@@ -131,6 +142,32 @@
           <!-- Messages will be rendered here -->
         </div>
         
+        <!-- Terminal panel (feature-flagged: PI_DISH_TERMINAL=1 on the server).
+             A shell at the session's cwd; the PTY lives server-side and
+             survives socket drops, so closing/reopening reattaches. -->
+        <div class="terminal-panel" id="terminalPanel" style="display:none">
+          <div class="terminal-header">
+            <span class="terminal-title">&gt;_</span>
+            <span class="terminal-cwd" id="terminalCwd"></span>
+            <span class="terminal-status" id="terminalStatus"></span>
+            <button class="btn-icon" onclick="closeTerminal()" title="Close terminal (shell keeps running)">✕</button>
+          </div>
+          <div class="terminal-container" id="terminalContainer"></div>
+          <!-- Soft keyboards can't type these; shown on touch layouts only.
+               pointerdown is prevented so taps don't blur the terminal
+               (a blur closes the phone keyboard). -->
+          <div class="terminal-keybar" id="terminalKeybar">
+            <button data-termkey="esc">esc</button>
+            <button data-termkey="tab">tab</button>
+            <button data-termkey="ctrl" id="termKeyCtrl">ctrl</button>
+            <button data-termkey="up">↑</button>
+            <button data-termkey="down">↓</button>
+            <button data-termkey="left">←</button>
+            <button data-termkey="right">→</button>
+            <button data-termkey="ctrl-c">^C</button>
+          </div>
+        </div>
+
         <!-- Resume bar (for inactive/previous sessions) -->
         <div class="resume-bar" id="resumeBar" style="display:none">
           <div class="resume-info">
@@ -152,6 +189,10 @@
             <button class="cp-row" onclick="closeControlPanel(); openSearch()" title="Search in session">
               <span class="cp-label">Search in session</span>
               <span class="cp-value">🔍</span>
+            </button>
+            <button class="cp-row" id="cpTerminalRow" onclick="closeControlPanel(); toggleTerminal()" title="Terminal at session cwd" style="display:none">
+              <span class="cp-label">Terminal</span>
+              <span class="cp-value">&gt;_</span>
             </button>
             <button class="cp-row" id="btnFocusMobile" onclick="toggleFocusMode()" title="Hide tool calls/results">
               <span class="cp-label">Focus mode</span>

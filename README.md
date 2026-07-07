@@ -59,8 +59,16 @@ Rules of thumb:
   in), focus mode that hides tool noise, per-message copy buttons.
 - **Mobile-first** — the whole point. Slide-out drawer, slide-up control
   panel, touch-sized everything, solarized-dark only (you're welcome).
-- **No CDN dependencies** — `marked` and `highlight.js` are vendored, so it
-  works on LAN clients with no internet.
+- **Terminal** (opt-in) — a real shell at the session's cwd, in a panel
+  under the transcript (xterm.js + node-pty). The shell survives phone
+  screen-locks: the PTY lives server-side and reattaches with scrollback.
+  Mobile gets an extra-keys bar (esc/tab/ctrl/arrows/^C). Off by default —
+  start with `PI_DISH_TERMINAL=1` to enable, and reread the security
+  section first: this hands a raw shell to anyone who can reach the port
+  (the prompt API already executes code via the agent, but the terminal
+  removes even that indirection).
+- **No CDN dependencies** — `marked`, `highlight.js`, and `xterm` are
+  vendored, so it works on LAN clients with no internet.
 
 There's also an Electron shell (`npm run electron:dev`) if you want it as a
 desktop app for some reason.

@@ -187,6 +187,25 @@ path is exercised end to end, plus the mobile hamburger/drawer flows. Extend
 it for new UI flows; write one-off CDP scripts in the scratchpad only for
 exploratory debugging.
 
+## Terminal (lib/terminal.js, PI_DISH_TERMINAL=1)
+
+Opt-in feature (flag + node-pty must load — degrade gracefully like fff,
+never let the native module break the server). One persistent PTY per pi
+session, spawned at the session cwd, shared by all WebSocket clients on
+`/api/sessions/:id/terminal` (upgrade handler registered only when enabled;
+`GET /api/config` tells the client). The PTY outlives sockets on purpose —
+phones drop the connection on every screen lock — with a ~200KB ring buffer
+replayed in the `attach` frame (client resets the emulator before writing
+it) and a 15-min idle kill after the last client detaches. Client side:
+xterm.js + fit addon (vendored, UMD globals), theme built from the `:root`
+tokens in `terminalTheme()`, mobile extra-keys bar with a ctrl latch that
+rewrites the next key in `term.onData`. Keys typed in the panel must not
+trigger app-level shortcuts — the document keydown handlers bail on targets
+inside `.terminal-panel`. Test gotcha: a configless `$HOME` makes zsh run
+`zsh-newuser-install` inside the PTY, which eats the first line of input —
+fixtures write an empty `.zshrc`; test markers use arithmetic
+(`$((40+2))`) so the echoed input can't satisfy output assertions.
+
 ## Sidebar behavior (public/app.js)
 
 The session list defaults to the **Active** filter (live sessions only, count

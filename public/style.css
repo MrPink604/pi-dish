@@ -2970,3 +2970,94 @@ img.msg-image {
   }
 }
 
+
+/* =========================================================================
+   Terminal panel (feature-flagged; see lib/terminal.js). Splits the session
+   view: messages shrink, the shell takes the bottom ~45%.
+   ========================================================================= */
+.terminal-panel {
+  flex: 0 0 45%;
+  min-height: 140px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--bg-darker);
+}
+
+.terminal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.terminal-title {
+  font-family: var(--font-mono);
+  color: var(--success);
+  font-weight: 600;
+}
+
+.terminal-cwd {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.terminal-status {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.terminal-status.error { color: var(--error); }
+.terminal-status.reconnecting { color: var(--warning); }
+
+.terminal-container {
+  flex: 1;
+  min-height: 0;
+  padding: 6px 4px 2px 8px;
+}
+
+.terminal-container .xterm { height: 100%; }
+
+/* xterm's own theme is set from the :root tokens in JS (terminalTheme()); this
+   just keeps the panel chrome behind any padding gap. */
+.terminal-container .xterm-viewport { background: var(--bg-darker) !important; }
+
+.terminal-keybar {
+  display: none;
+  gap: 6px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.terminal-keybar button {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.terminal-keybar button:active { background: var(--bg-hover); }
+
+.terminal-keybar button.latched {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-on-accent);
+}
+
+@media (max-width: 768px) {
+  .terminal-panel { flex-basis: 52%; }
+  .terminal-keybar { display: flex; }
+}

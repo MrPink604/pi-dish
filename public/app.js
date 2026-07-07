@@ -77,6 +77,8 @@ async function loadCommands(sessionId) {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
+  loadConfig(); // feature flags (terminal) — fire-and-forget
+  initTerminalKeybar();
   // Full fetch: restoring the saved session may need the historical list.
   await loadSessions(undefined, { withPrevious: true });
   loadModels();
@@ -125,6 +127,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Global Ctrl+C to abort
   document.addEventListener('keydown', function(e) {
+    // Keys typed into the terminal belong to the shell (Ctrl+C = SIGINT,
+    // Ctrl+F = forward), not to the app-level shortcuts.
+    if (e.target.closest && e.target.closest('.terminal-panel')) return;
     if (e.ctrlKey && e.key === 'c' && turnInProgress) {
       var sel = window.getSelection();
       if (!sel || sel.isCollapsed) { e.preventDefault(); abortTurn(); }
@@ -679,6 +684,9 @@ async function selectSession(id) {
   if (streamReconnectTimeout) { clearTimeout(streamReconnectTimeout); streamReconnectTimeout = null; }
   if (messageStream) { messageStream.close(); messageStream = null; }
   followStream = false; // forced follow doesn't carry across sessions
+  // The terminal panel is per-session (its PTY keeps running server-side;
+  // reopening reattaches with scrollback).
+  closeTerminal();
   // Extension widgets/statuses/dialogs are per-session; the new session's
   // remembered set is replayed by the server when its stream connects.
   clearExtensionUI();
@@ -818,6 +826,7 @@ function updateSessionHeader() {
   }
 
   updateThinkingBadges();
+  updateTerminalButtons();
 }
 
 // --- Thinking level selector (levels come from helpers.THINKING_LEVEL_NAMES) ---
@@ -3233,4 +3242,231 @@ async function confirmBranch() {
     setStatus('Branched — reloading');
     selectSession(currentSession.id);
   } catch (e) { setStatus('Branch failed: ' + e.message, 'error'); }
+}
+
+// =========================================================================
+// Terminal (feature-flagged: /api/config .terminal → PI_DISH_TERMINAL=1).
+// One panel, one PTY per session server-side. The PTY survives socket drops
+// (phone screen lock), so reopening reattaches and replays scrollback.
+// =========================================================================
+
+let appConfig = { terminal: false };
+
+async function loadConfig() {
+  try {
+    const res = await fetch('/api/config');
+    appConfig = await res.json();
+  } catch { /* feature stays hidden */ }
+  updateTerminalButtons();
+}
+
+// { term, fitAddon, ws, sessionId, reconnectTimer, attempts, closedByUser, exited }
+let termState = null;
+let termCtrlLatch = false;
+
+function terminalFeatureAvailable() {
+  return !!(appConfig.terminal && typeof Terminal !== 'undefined');
+}
+
+function updateTerminalButtons() {
+  const show = terminalFeatureAvailable() && currentSession?.isActive;
+  const btn = document.getElementById('btnTerminal');
+  if (btn) btn.style.display = show ? '' : 'none';
+  const row = document.getElementById('cpTerminalRow');
+  if (row) row.style.display = show ? '' : 'none';
+}
+
+// xterm theme from the :root Solarized tokens; the handful of ANSI slots the
+// palette has no token for (magenta/violet, bright variants) use canonical
+// Solarized values.
+function terminalTheme() {
+  const css = getComputedStyle(document.documentElement);
+  const v = (name) => css.getPropertyValue(name).trim();
+  return {
+    background: v('--bg-darker'),
+    foreground: v('--text'),
+    cursor: v('--text-bright'),
+    cursorAccent: v('--bg-darker'),
+    selectionBackground: v('--bg-card'),
+    black: v('--bg-card'),
+    red: v('--error'),
+    green: v('--success'),
+    yellow: v('--warning'),
+    blue: v('--accent'),
+    magenta: '#d33682',
+    cyan: v('--cyan'),
+    white: '#eee8d5',
+    brightBlack: v('--text-muted'),
+    brightRed: v('--orange'),
+    brightGreen: '#586e75',
+    brightYellow: '#657b83',
+    brightBlue: '#839496',
+    brightMagenta: '#6c71c4',
+    brightCyan: '#93a1a1',
+    brightWhite: '#fdf6e3',
+  };
+}
+
+function toggleTerminal() {
+  if (termState) closeTerminal();
+  else openTerminal();
+}
+
+function openTerminal() {
+  if (!terminalFeatureAvailable() || !currentSession || termState) return;
+  const panel = document.getElementById('terminalPanel');
+  const container = document.getElementById('terminalContainer');
+  panel.style.display = '';
+  document.getElementById('terminalCwd').textContent = shortCwd(currentSession.cwd || '~');
+
+  const css = getComputedStyle(document.documentElement);
+  const term = new Terminal({
+    fontFamily: css.getPropertyValue('--font-mono').trim(),
+    fontSize: window.innerWidth <= 768 ? 12 : 13,
+    theme: terminalTheme(),
+    scrollback: 5000,
+    cursorBlink: true,
+  });
+  const FitCtor = window.FitAddon && (window.FitAddon.FitAddon || window.FitAddon);
+  const fitAddon = FitCtor ? new FitCtor() : null;
+  if (fitAddon) term.loadAddon(fitAddon);
+
+  termState = {
+    term, fitAddon, ws: null, sessionId: currentSession.id,
+    reconnectTimer: null, attempts: 0, closedByUser: false, exited: false,
+  };
+
+  term.open(container);
+  fitTerminal();
+  term.onData((data) => {
+    // Ctrl latch (mobile key bar): the next printable key is sent as its
+    // control character.
+    if (termCtrlLatch && data.length === 1) {
+      const code = data.toUpperCase().charCodeAt(0);
+      if (code >= 64 && code <= 95) data = String.fromCharCode(code & 31);
+      setTermCtrlLatch(false);
+    }
+    termSend({ type: 'input', data });
+  });
+  term.onResize(({ cols, rows }) => termSend({ type: 'resize', cols, rows }));
+
+  window.addEventListener('resize', fitTerminal);
+  window.visualViewport?.addEventListener('resize', fitTerminal);
+
+  connectTerminalWS();
+  term.focus();
+}
+
+function fitTerminal() {
+  if (!termState?.fitAddon) return;
+  try { termState.fitAddon.fit(); } catch {}
+}
+
+function termSend(msg) {
+  const ws = termState?.ws;
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
+function setTerminalStatus(text, cls) {
+  const el = document.getElementById('terminalStatus');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = 'terminal-status' + (cls ? ' ' + cls : '');
+}
+
+function connectTerminalWS() {
+  if (!termState) return;
+  const state = termState;
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/api/sessions/${encodeURIComponent(state.sessionId)}/terminal`);
+  state.ws = ws;
+  setTerminalStatus(state.attempts ? 'reconnecting…' : 'connecting…', 'reconnecting');
+
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    if (msg.type === 'attach') {
+      state.attempts = 0;
+      setTerminalStatus('');
+      // Reattach: the replay buffer contains everything we may have already
+      // rendered — reset and replay rather than double-print.
+      state.term.reset();
+      if (msg.replay) state.term.write(msg.replay);
+      if (msg.cwd) document.getElementById('terminalCwd').textContent = shortCwd(msg.cwd);
+      fitTerminal();
+      termSend({ type: 'resize', cols: state.term.cols, rows: state.term.rows });
+    } else if (msg.type === 'output') {
+      state.term.write(msg.data);
+    } else if (msg.type === 'exit') {
+      state.exited = true;
+      setTerminalStatus(`shell exited (${msg.code})`);
+    } else if (msg.type === 'error') {
+      state.exited = true;
+      setTerminalStatus(msg.error, 'error');
+    }
+  };
+
+  ws.onclose = () => {
+    if (state !== termState || state.closedByUser || state.exited) return;
+    // Auto-reconnect with backoff while the panel is open — phones drop the
+    // socket on every screen lock; the server-side PTY is still there.
+    const delay = Math.min(8000, 1000 * 2 ** state.attempts);
+    state.attempts++;
+    setTerminalStatus('disconnected — reconnecting…', 'reconnecting');
+    state.reconnectTimer = setTimeout(connectTerminalWS, delay);
+  };
+}
+
+function closeTerminal() {
+  if (!termState) return;
+  const state = termState;
+  termState = null;
+  state.closedByUser = true;
+  clearTimeout(state.reconnectTimer);
+  try { state.ws?.close(); } catch {}
+  state.term.dispose();
+  window.removeEventListener('resize', fitTerminal);
+  window.visualViewport?.removeEventListener('resize', fitTerminal);
+  setTermCtrlLatch(false);
+  setTerminalStatus('');
+  document.getElementById('terminalPanel').style.display = 'none';
+}
+
+function setTermCtrlLatch(on) {
+  termCtrlLatch = on;
+  document.getElementById('termKeyCtrl')?.classList.toggle('latched', on);
+}
+
+const TERM_KEY_SEQUENCES = {
+  esc: '\x1b',
+  tab: '\t',
+  'ctrl-c': '\x03',
+};
+
+function termKeybarPress(key) {
+  if (!termState) return;
+  if (key === 'ctrl') { setTermCtrlLatch(!termCtrlLatch); return; }
+  let seq = TERM_KEY_SEQUENCES[key];
+  if (!seq) {
+    // Arrows honor DECCKM (application cursor keys) so vim/less/etc work.
+    const app = termState.term.modes?.applicationCursorKeysMode;
+    const dir = { up: 'A', down: 'B', right: 'C', left: 'D' }[key];
+    if (!dir) return;
+    seq = (app ? '\x1bO' : '\x1b[') + dir;
+  }
+  termSend({ type: 'input', data: seq });
+  termState.term.focus();
+}
+
+function initTerminalKeybar() {
+  const bar = document.getElementById('terminalKeybar');
+  if (!bar) return;
+  // pointerdown is prevented so key taps never blur the terminal's hidden
+  // textarea — a blur closes the phone keyboard mid-typing.
+  bar.addEventListener('pointerdown', (e) => {
+    const btn = e.target.closest('button[data-termkey]');
+    if (!btn) return;
+    e.preventDefault();
+    termKeybarPress(btn.dataset.termkey);
+  });
 }
