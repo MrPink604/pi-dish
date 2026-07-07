@@ -13,6 +13,9 @@
  *                                      (the npm package ships no browser build)
  *   public/vendor/hljs-theme.min.css — highlight.js theme (solarized dark,
  *                                      matching the app palette)
+ *   public/vendor/xterm.js           — @xterm/xterm UMD build (browser terminal)
+ *   public/vendor/xterm.css          — its stylesheet
+ *   public/vendor/xterm-addon-fit.js — @xterm/addon-fit UMD build
  */
 const fs = require('fs');
 const path = require('path');
@@ -25,6 +28,20 @@ fs.mkdirSync(outDir, { recursive: true });
 fs.copyFileSync(
   path.join(root, 'node_modules', 'marked', 'marked.min.js'),
   path.join(outDir, 'marked.min.js'),
+);
+
+// --- xterm.js: ships browser UMD builds, just copy them ---
+fs.copyFileSync(
+  path.join(root, 'node_modules', '@xterm', 'xterm', 'lib', 'xterm.js'),
+  path.join(outDir, 'xterm.js'),
+);
+fs.copyFileSync(
+  path.join(root, 'node_modules', '@xterm', 'xterm', 'css', 'xterm.css'),
+  path.join(outDir, 'xterm.css'),
+);
+fs.copyFileSync(
+  path.join(root, 'node_modules', '@xterm', 'addon-fit', 'lib', 'addon-fit.js'),
+  path.join(outDir, 'xterm-addon-fit.js'),
 );
 
 // --- highlight.js theme css ---

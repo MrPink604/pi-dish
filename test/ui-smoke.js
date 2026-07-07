@@ -23,6 +23,10 @@ const path = require('node:path');
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-ui-'));
 process.env.HOME = tmpHome;
 process.env.PORT = '0';
+process.env.PI_DISH_TERMINAL = '1'; // exercise the terminal panel
+// A configless HOME makes zsh launch its newuser wizard inside the PTY,
+// which swallows the first line of input — give it an empty rc file.
+fs.writeFileSync(path.join(tmpHome, '.zshrc'), '');
 
 const SESSION_ID = '2026-07-05T00-00-00-uismoke1';
 // Real on-disk cwd so @-mentions and the cwd picker have something to find.
@@ -465,6 +469,60 @@ function writeRegistry(patch = {}) {
       document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Working', { timeout: 3000 });
     check(true, 'working badge resets after the turn');
 
+    // 8c. Terminal: header button opens a shell at the session cwd over the
+    // WS endpoint; output round-trips; close + reopen reattaches the same
+    // PTY and replays scrollback (arithmetic markers so the echo of the
+    // *typed* line can't satisfy the assertions).
+    console.log('terminal:');
+    check(await desktop.locator('#btnTerminal').isVisible(), 'terminal button visible when flag is on');
+    await desktop.click('#btnTerminal');
+    await desktop.waitForSelector('#terminalPanel .xterm', { timeout: 5000 });
+    check(true, 'terminal panel opens with an xterm instance');
+    check(await desktop.evaluate(() => document.fonts.check('12px "Symbols Nerd Font Mono"')),
+      'Nerd Font symbols fallback loaded (p10k prompt glyphs)');
+    const termText = () => desktop.evaluate(() => {
+      const b = termState.term.buffer.active;
+      let out = '';
+      for (let i = 0; i < b.length; i++) out += b.getLine(i)?.translateToString(true) + '\n';
+      return out;
+    });
+    await desktop.waitForFunction(() => document.getElementById('terminalStatus').textContent === '',
+      { timeout: 5000 }); // attach frame landed
+    await desktop.keyboard.type('pwd; echo term-smoke-$((40+2))\r');
+    await desktop.waitForFunction(() => {
+      const rows = document.querySelector('#terminalPanel .xterm');
+      return rows && rows.textContent.includes('term-smoke-42');
+    }, { timeout: 5000 });
+    check((await termText()).includes(CWD), 'shell starts at the session cwd');
+    const cwdLabel = await desktop.locator('#terminalCwd').textContent();
+    check(cwdLabel.includes('workspace/proj-alpha'), `panel header shows the cwd (got ${JSON.stringify(cwdLabel)})`);
+    // Close (shell keeps running server-side), reopen: scrollback replays.
+    await desktop.click('#termCloseBtn');
+    check(await desktop.evaluate(() => document.getElementById('terminalPanel').style.display === 'none'),
+      'panel hidden on close');
+    await desktop.click('#btnTerminal');
+    await desktop.waitForFunction(() => {
+      const rows = document.querySelector('#terminalPanel .xterm');
+      return rows && rows.textContent.includes('term-smoke-42');
+    }, { timeout: 5000 });
+    check(true, 'reopen reattaches the PTY and replays scrollback');
+    // Restart: confirm dialog, then a fresh shell — old scrollback gone,
+    // new shell answers.
+    desktop.once('dialog', (d) => d.accept());
+    await desktop.click('#termRestartBtn');
+    await desktop.waitForFunction(() => {
+      const rows = document.querySelector('#terminalPanel .xterm');
+      return rows && !rows.textContent.includes('term-smoke-42');
+    }, { timeout: 5000 });
+    check(true, 'restart clears the old scrollback');
+    await desktop.keyboard.type('echo restarted-$((5+5))\r');
+    await desktop.waitForFunction(() => {
+      const rows = document.querySelector('#terminalPanel .xterm');
+      return rows && rows.textContent.includes('restarted-10');
+    }, { timeout: 5000 });
+    check(true, 'fresh shell after restart answers');
+    await desktop.click('#termCloseBtn');
+
     // 9. Drafts persist per session; ArrowUp recalls sent prompts
     console.log('drafts & history:');
     await desktop.fill('#promptInput', 'unsent draft');
@@ -652,6 +710,38 @@ function writeRegistry(patch = {}) {
     await mobile.click('.header-menu-btn');
     await mobile.waitForSelector('.sidebar.open');
     check(true, 'drawer opens from session header');
+    await mobile.click('.sidebar-overlay'); // close the drawer again
+
+    // Terminal on mobile: opened from the ⚙ control panel; the extra-keys
+    // bar (esc/tab/ctrl/arrows) is part of the touch layout. ^C must reach
+    // the shell as SIGINT (kills a running sleep), and the ctrl latch turns
+    // the next typed key into a control character.
+    console.log('mobile terminal:');
+    await mobile.click('#btnPanel');
+    await mobile.waitForSelector('#cpTerminalRow', { state: 'visible' });
+    await mobile.click('#cpTerminalRow');
+    await mobile.waitForSelector('#terminalPanel .xterm', { timeout: 5000 });
+    check(await mobile.locator('#terminalKeybar').isVisible(), 'extra-keys bar visible on mobile');
+    await mobile.waitForFunction(() => document.getElementById('terminalStatus').textContent === '',
+      { timeout: 5000 });
+    await mobile.keyboard.type('sleep 100\r');
+    await mobile.waitForTimeout(300);
+    await mobile.tap('#terminalKeybar button[data-termkey="ctrl-c"]');
+    await mobile.keyboard.type('echo after-$((1+1))\r');
+    await mobile.waitForFunction(() => {
+      const rows = document.querySelector('#terminalPanel .xterm');
+      return rows && rows.textContent.includes('after-2');
+    }, { timeout: 5000 });
+    check(true, '^C key interrupts a running command (prompt came back)');
+    // Ctrl latch: tap ctrl, type c → ^C again (nothing running; just assert
+    // the latch visually arms and clears).
+    await mobile.tap('#terminalKeybar button[data-termkey="ctrl"]');
+    check(await mobile.evaluate(() => document.getElementById('termKeyCtrl').classList.contains('latched')),
+      'ctrl key latches');
+    await mobile.keyboard.type('c');
+    check(await mobile.evaluate(() => !document.getElementById('termKeyCtrl').classList.contains('latched')),
+      'latch clears after the next key');
+    await mobile.click('#termCloseBtn');
 
     check(errors.length === 0, errors.length ? `no page errors — got: ${errors.join(' | ')}` : 'no page errors');
   } catch (e) {
