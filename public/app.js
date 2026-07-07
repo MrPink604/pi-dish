@@ -79,6 +79,7 @@ async function loadCommands(sessionId) {
 document.addEventListener('DOMContentLoaded', async () => {
   loadConfig(); // feature flags (terminal) — fire-and-forget
   initTerminalKeybar();
+  initTerminalResize();
   // Full fetch: restoring the saved session may need the historical list.
   await loadSessions(undefined, { withPrevious: true });
   loadModels();
@@ -3338,6 +3339,7 @@ async function openTerminal() {
   if (!terminalFeatureAvailable() || !currentSession || termState) return;
   const panel = document.getElementById('terminalPanel');
   const container = document.getElementById('terminalContainer');
+  applySavedTerminalSize(panel);
   panel.style.display = '';
   document.getElementById('terminalCwd').textContent = shortCwd(currentSession.cwd || '~');
 
@@ -3505,6 +3507,55 @@ function termKeybarPress(key) {
   }
   termSend({ type: 'input', data: seq });
   termState.term.focus();
+}
+
+// Drag the panel's top edge to resize it. Height persists as a percentage of
+// the session view (so it survives window resizes and different screens);
+// the flex-basis override lives in inline style, beating the stylesheet's
+// 45%/52% defaults. Pointer capture keeps the drag on the handle — no
+// document-level listeners needed (the handle is never reinserted mid-drag,
+// unlike the pinned-session rows).
+function initTerminalResize() {
+  const handle = document.getElementById('terminalResizeHandle');
+  const panel = document.getElementById('terminalPanel');
+  if (!handle || !panel) return;
+  handle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = panel.offsetHeight;
+    const parentHeight = panel.parentElement.clientHeight;
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add('dragging');
+    const onMove = (ev) => {
+      const px = clampTerminalHeight(startHeight + (startY - ev.clientY), parentHeight);
+      panel.style.flexBasis = px + 'px';
+      fitTerminal();
+    };
+    const onUp = () => {
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
+      handle.classList.remove('dragging');
+      const pct = (panel.offsetHeight / parentHeight) * 100;
+      localStorage.setItem('pi-dish-terminal-size', pct.toFixed(1));
+      panel.style.flexBasis = pct.toFixed(1) + '%';
+      fitTerminal();
+    };
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  });
+}
+
+function clampTerminalHeight(px, parentHeight) {
+  return Math.min(Math.round(parentHeight * 0.8), Math.max(140, px));
+}
+
+function applySavedTerminalSize(panel) {
+  const saved = parseFloat(localStorage.getItem('pi-dish-terminal-size'));
+  if (Number.isFinite(saved)) {
+    panel.style.flexBasis = Math.min(80, Math.max(10, saved)) + '%';
+  }
 }
 
 function initTerminalKeybar() {

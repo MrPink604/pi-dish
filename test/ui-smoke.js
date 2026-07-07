@@ -521,6 +521,19 @@ function writeRegistry(patch = {}) {
       return rows && rows.textContent.includes('restarted-10');
     }, { timeout: 5000 });
     check(true, 'fresh shell after restart answers');
+    // Drag-resize: pull the top-edge handle up — the panel grows, and the
+    // height persists (as a % of the session view) for the next open.
+    const heightBefore = await desktop.evaluate(() => document.getElementById('terminalPanel').offsetHeight);
+    const termHandleBox = await desktop.locator('#terminalResizeHandle').boundingBox();
+    await desktop.mouse.move(termHandleBox.x + termHandleBox.width / 2, termHandleBox.y + 2);
+    await desktop.mouse.down();
+    await desktop.mouse.move(termHandleBox.x + termHandleBox.width / 2, termHandleBox.y - 118, { steps: 5 });
+    await desktop.mouse.up();
+    const heightAfter = await desktop.evaluate(() => document.getElementById('terminalPanel').offsetHeight);
+    check(heightAfter > heightBefore + 80,
+      `drag handle grows the panel (${heightBefore}px -> ${heightAfter}px)`);
+    check(await desktop.evaluate(() => localStorage.getItem('pi-dish-terminal-size') !== null),
+      'resized height persists to localStorage');
     await desktop.click('#termCloseBtn');
 
     // 9. Drafts persist per session; ArrowUp recalls sent prompts

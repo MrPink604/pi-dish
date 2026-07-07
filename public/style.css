@@ -3037,6 +3037,22 @@ img.msg-image {
   background: var(--bg-darker);
 }
 
+/* Drag-to-resize strip on the panel's top edge (pointer events, so it works
+   on touch too). touch-action: none or the browser claims the gesture for
+   scrolling and pointermove never fires. */
+.terminal-resize-handle {
+  height: 5px;
+  cursor: ns-resize;
+  touch-action: none;
+  flex-shrink: 0;
+}
+
+.terminal-resize-handle:hover,
+.terminal-resize-handle.dragging {
+  background: var(--accent);
+  opacity: 0.5;
+}
+
 .terminal-header {
   display: flex;
   align-items: center;
