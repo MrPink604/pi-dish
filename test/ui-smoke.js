@@ -484,7 +484,27 @@ function writeRegistry(patch = {}) {
       document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Working', { timeout: 3000 });
     check(true, 'working badge resets after the turn');
 
-    // 8c. Terminal: header button opens a shell at the session cwd over the
+    // 8c. Compaction status: compaction_start/compaction_end drive the status
+    // line. The bridge reports tokensBefore only (post-compaction size is
+    // unknown until the next LLM response), and a failed manual compaction
+    // must not leave "Compacting..." stuck.
+    console.log('compaction status:');
+    emit('compaction_start', { reason: 'manual' });
+    await desktop.waitForFunction(() =>
+      document.getElementById('status')?.textContent === 'Compacting context...', { timeout: 3000 });
+    check(true, 'compaction_start shows working status');
+    emit('compaction_end', { reason: 'manual', errorMessage: 'model refused' });
+    await desktop.waitForFunction(() =>
+      (document.getElementById('status')?.textContent || '').startsWith('Compaction failed: model refused'),
+      { timeout: 3000 });
+    check(true, 'failed compaction reports the error');
+    emit('compaction_start', { reason: 'manual' });
+    emit('compaction_end', { reason: 'manual', result: { tokensBefore: 152300 } });
+    await desktop.waitForFunction(() =>
+      document.getElementById('status')?.textContent === 'Compacted (was 152.3k tokens)', { timeout: 3000 });
+    check(true, 'completed compaction reports tokensBefore');
+
+    // 8d. Terminal: header button opens a shell at the session cwd over the
     // WS endpoint; output round-trips; close + reopen reattaches the same
     // PTY and replays scrollback (arithmetic markers so the echo of the
     // *typed* line can't satisfy the assertions).

@@ -21,8 +21,6 @@ const FORWARDED_EVENTS = [
   "tool_execution_update",
   "tool_execution_end",
   "queue_update",
-  "compaction_start",
-  "compaction_end",
   "auto_retry_start",
   "auto_retry_end",
   "extension_error",
@@ -560,10 +558,14 @@ export default function (pi: ExtensionAPI) {
     if (name === "compact") {
       if (!lastCtx) return { ok: false, error: "no active context" };
       // ctx.compact() is fire-and-forget and returns void (pi >= 0.80);
-      // outcome arrives via compaction_start/compaction_end events. Older pi
-      // returned a promise — swallow it either way so a rejection can't float.
+      // outcome arrives via session_before_compact/session_compact (broadcast
+      // as compaction_start/compaction_end below). Older pi returned a
+      // promise — report a rejection so the client isn't stuck on "started".
       (lastCtx.compact(args ? { customInstructions: args } : undefined) as any)
-        ?.catch?.((e: any) => console.error("[pi-dish-bridge] compact failed:", e?.message || e));
+        ?.catch?.((e: any) => {
+          console.error("[pi-dish-bridge] compact failed:", e?.message || e);
+          broadcast({ type: "event", event: "compaction_end", data: { reason: "manual", errorMessage: String(e?.message || e) } });
+        });
       return { ok: true, info: "Compaction started" };
     }
     if (name === "dish-push") {
@@ -916,11 +918,36 @@ export default function (pi: ExtensionAPI) {
         writeRegistry();
       } else if (ev === "thinking_level_select") {
         writeRegistry();
-      } else if (ev === "compaction_end") {
-        refreshContextUsage(ctx);
-        writeRegistry();
       }
       broadcast({ type: "event", event: ev, data: event });
     });
   }
+
+  // pi's extension API has no compaction_start/compaction_end — those are
+  // internal AgentSession events (subscribing to them never fires). The
+  // extension-facing pair is session_before_compact/session_compact;
+  // translate onto the wire names the server and client already speak.
+  pi.on("session_before_compact", (event: any, ctx: ExtensionContext) => {
+    wrapExtensionUI(ctx);
+    lastCtx = ctx ?? lastCtx;
+    // Don't forward the raw event: it carries branchEntries (the whole
+    // pre-compaction transcript) and an AbortSignal.
+    broadcast({ type: "event", event: "compaction_start", data: { reason: event?.reason, willRetry: event?.willRetry } });
+  });
+  pi.on("session_compact", (event: any, ctx: ExtensionContext) => {
+    wrapExtensionUI(ctx);
+    lastCtx = ctx ?? lastCtx;
+    refreshContextUsage(ctx);
+    writeRegistry();
+    const entry = event?.compactionEntry;
+    broadcast({
+      type: "event",
+      event: "compaction_end",
+      data: {
+        reason: event?.reason,
+        willRetry: event?.willRetry,
+        result: entry ? { tokensBefore: entry.tokensBefore } : undefined,
+      },
+    });
+  });
 }

@@ -1961,10 +1961,22 @@ function startMessageStream(sessionId) {
     evtSource.addEventListener('compaction_end', (e) => {
       try {
         const data = JSON.parse(e.data);
+        if (data.errorMessage) {
+          setStatus('Compaction failed: ' + data.errorMessage, 'error');
+          return;
+        }
         const r = data.result;
-        setStatus(r ? `Compacted: ${formatTokens(r.tokensBefore)} → ~${formatTokens(r.estimatedTokensAfter)} tokens` : 'Compaction finished');
+        // The bridge path knows tokensBefore but not the post-compaction size
+        // (context tokens are unknown until the next LLM response).
+        let msg = 'Compaction finished';
+        if (r && r.tokensBefore) {
+          msg = r.estimatedTokensAfter != null
+            ? `Compacted: ${formatTokens(r.tokensBefore)} → ~${formatTokens(r.estimatedTokensAfter)} tokens`
+            : `Compacted (was ${formatTokens(r.tokensBefore)} tokens)`;
+        }
+        setStatus(msg);
         refreshSessions();
-      } catch { setStatus(''); }
+      } catch { setStatus('Compaction finished'); }
     });
     evtSource.addEventListener('auto_retry_start', (e) => {
       try {
