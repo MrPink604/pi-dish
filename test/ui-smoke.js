@@ -318,6 +318,21 @@ function writeRegistry(patch = {}) {
     check(await desktop.locator('.session-item-status.working').count() === 0,
       'working dot cleared after the turn');
 
+    // Stats modal: the session-file / cwd rows are click-to-copy buttons.
+    await desktop.click('#sessionContext');
+    await desktop.waitForSelector('#statsModal .stats-copy', { timeout: 2000 });
+    const fileBtn = desktop.locator('.stats-copy').last();
+    const filePath = await fileBtn.getAttribute('data-copy');
+    check(filePath.endsWith('.jsonl'), `session-file row exposes the path (got ${filePath})`);
+    await fileBtn.click();
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('.stats-copy')].some(b => b.classList.contains('copied')),
+      { timeout: 2000 });
+    const copiedPath = await desktop.evaluate(() => navigator.clipboard.readText());
+    check(copiedPath === filePath, `session-file path landed on the clipboard (got ${JSON.stringify(copiedPath)})`);
+    await desktop.keyboard.press('Escape');
+    await desktop.waitForSelector('#statsModal', { state: 'hidden', timeout: 2000 });
+
     // Wide desktop: the message feed centers a reading column instead of
     // hugging the left edge.
     const wide = await browser.newPage({ viewport: { width: 1920, height: 900 } });

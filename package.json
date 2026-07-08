@@ -58,5 +58,8 @@
   "devDependencies": {
     "electron": "^33.0.0",
     "electron-builder": "^25.1.8"
+  },
+  "allowScripts": {
+    "node-pty@1.1.0": true
   }
 }

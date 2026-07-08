@@ -1128,12 +1128,31 @@ function openStatsModal() {
   const body = document.getElementById('statsBody');
   modal.style.display = 'flex';
   body.textContent = 'Loading...';
+  // Delegated once: click a copyable value (paths) to copy it to the clipboard.
+  if (!body.dataset.copyBound) {
+    body.dataset.copyBound = '1';
+    body.addEventListener('click', (e) => {
+      const btn = e.target.closest('.stats-copy');
+      if (!btn) return;
+      copyTextToClipboard(btn.dataset.copy || '').then(
+        () => {
+          const orig = btn.textContent;
+          btn.classList.add('copied');
+          btn.textContent = 'Copied ✓';
+          setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1200);
+        },
+        () => setStatus('Copy failed (clipboard blocked)', 'error'),
+      );
+    });
+  }
   fetch(`/api/sessions/${currentSession.id}/stats`)
     .then(r => r.json())
     .then(s => {
       if (s.error) { body.textContent = s.error; return; }
       const cu = s.contextUsage || {};
       const fmtMoney = (v) => v == null ? '—' : '$' + v.toFixed(4);
+      // [key, value, copyable?] — copyable rows render the value as a
+      // click-to-copy button (paths, handy for jumping to the file in a shell).
       const rows = [
         ['Model', s.model || '—'],
         ['Thinking', s.thinkingLevel || '—'],
@@ -1144,12 +1163,15 @@ function openStatsModal() {
         ['Tokens in / out', `${formatTokens(s.tokens?.input)} / ${formatTokens(s.tokens?.output)}`],
         ['Cache', formatCacheStat(s.tokens?.cacheRead, s.tokens?.cacheWrite, s.tokens?.input)],
         ['Cost', fmtMoney(s.cost)],
-        ['cwd', s.cwd || '—'],
-        ['Session file', s.sessionFile || '—'],
+        ['cwd', s.cwd || '—', !!s.cwd],
+        ['Session file', s.sessionFile || '—', !!s.sessionFile],
       ];
-      body.innerHTML = '<table class="stats-table">' + rows.map(([k, v]) =>
-        `<tr><td class="stats-key">${escapeHtml(k)}</td><td class="stats-val">${escapeHtml(String(v))}</td></tr>`
-      ).join('') + '</table>';
+      body.innerHTML = '<table class="stats-table">' + rows.map(([k, v, copyable]) => {
+        const val = copyable
+          ? `<button type="button" class="stats-copy" data-copy="${escapeHtml(String(v))}" title="Click to copy">${escapeHtml(String(v))}</button>`
+          : escapeHtml(String(v));
+        return `<tr><td class="stats-key">${escapeHtml(k)}</td><td class="stats-val">${val}</td></tr>`;
+      }).join('') + '</table>';
     })
     .catch(e => { body.textContent = 'Failed to load stats: ' + e.message; });
 }

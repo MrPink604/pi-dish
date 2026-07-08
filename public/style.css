@@ -2754,6 +2754,25 @@ img.msg-image {
 
 .stats-val { word-break: break-all; font-family: var(--font-mono); font-size: 12px; }
 
+/* Click-to-copy path values (cwd, session file). Styled to read as text but
+   hint at interactivity on hover. */
+.stats-copy {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  cursor: pointer;
+  word-break: break-all;
+  border-bottom: 1px dashed rgba(38, 139, 210, 0.4);
+}
+
+.stats-copy:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+.stats-copy.copied { color: var(--success-bright); border-bottom-color: transparent; }
+
 /* Mobile-only inline tool buttons in the input row */
 .badge-tool-btn {
   display: none;
