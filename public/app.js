@@ -1410,6 +1410,7 @@ function renderMessageHtml(msg) {
   if (msg.role === 'user') return renderUserMessage(msg, time, idxAttr);
   if (msg.role === 'assistant') return renderAssistantMessage(msg, time, { attrs: idxAttr });
   if (msg.role === 'toolResult') return renderToolResult(msg, time, idxAttr);
+  if (msg.role === 'branchSummary') return renderBranchSummary(msg, time, idxAttr);
   return '';
 }
 
@@ -1668,6 +1669,27 @@ function renderToolResult(msg, time, attrs = '') {
         ${lineCount > 5 ? `<span class="tool-result-preview">${escapeHtml(preview)}</span>` : ''}
       </summary>
       <div class="tool-result-content"><pre>${escapeHtml(truncate(content, 2000))}</pre></div>
+    </details>
+  </div>`;
+}
+
+// Tree-navigation marker: the summary of an abandoned branch, injected into
+// the model's context at this point. Collapsed by default — summaries run
+// long — but stays visible in focus mode (it's conversation context, not
+// tool noise).
+function renderBranchSummary(msg, time, attrs = '') {
+  const text = extractTextContent(msg.content);
+  const timestamp = msg.timestamp || Date.now();
+  const preview = truncate(text.split('\n')[0], 80);
+  return `<div${attrs} class="message branch-summary" data-timestamp="${timestamp}">
+    <details class="branch-summary-details">
+      <summary class="branch-summary-header">
+        <span class="branch-summary-icon">⎇</span>
+        <span class="branch-summary-label">Branch summary</span>
+        ${time ? `<span class="message-time">${time}</span>` : ''}
+        <span class="branch-summary-preview">${escapeHtml(preview)}</span>
+      </summary>
+      <div class="message-content"><div class="markdown-body">${formatMarkdown(text)}</div></div>
     </details>
   </div>`;
 }
@@ -3265,9 +3287,26 @@ function selectTreeNode(entryId) {
   var el = document.querySelector('.tree-node[data-id="' + entryId + '"]');
   if (el) el.classList.add('selected');
   pendingBranchId = entryId;
+  // Summarize default persists across uses — retrying a prompt wants it off,
+  // the explore-then-return workflow wants it on every time.
+  var summarize = localStorage.getItem('pi-dish-branch-summarize') === '1';
   document.getElementById('treeStatus').innerHTML =
-    '<button class="btn-sm btn-branch" onclick="confirmBranch()">Branch from here</button>' +
-    '<button class="btn-sm" onclick="cancelBranch()" style="margin-left:8px">Cancel</button>';
+    '<div class="branch-confirm">' +
+      '<label class="branch-summarize-label"><input type="checkbox" id="branchSummarize"' + (summarize ? ' checked' : '') +
+        ' onchange="toggleBranchInstructions()"> Summarize abandoned branch</label>' +
+      '<input type="text" id="branchInstructions" class="branch-instructions" placeholder="Summary instructions (optional)"' +
+        (summarize ? '' : ' style="display:none"') + '>' +
+      '<span class="branch-confirm-btns">' +
+        '<button class="btn-sm btn-branch" id="branchGoBtn" onclick="confirmBranch()">Branch from here</button>' +
+        '<button class="btn-sm" onclick="cancelBranch()">Cancel</button>' +
+      '</span>' +
+    '</div>';
+}
+
+function toggleBranchInstructions() {
+  var on = document.getElementById('branchSummarize')?.checked;
+  var input = document.getElementById('branchInstructions');
+  if (input) input.style.display = on ? '' : 'none';
 }
 
 function cancelBranch() {
@@ -3279,14 +3318,33 @@ function cancelBranch() {
 async function confirmBranch() {
   if (!currentSession || !pendingBranchId) return;
   var entryId = pendingBranchId;
-  pendingBranchId = null;
-  setStatus('Branching...', 'working');
+  var summarize = !!document.getElementById('branchSummarize')?.checked;
+  var customInstructions = document.getElementById('branchInstructions')?.value.trim() || undefined;
+  localStorage.setItem('pi-dish-branch-summarize', summarize ? '1' : '0');
+  var btn = document.getElementById('branchGoBtn');
+  if (btn) { btn.disabled = true; btn.textContent = summarize ? 'Summarizing…' : 'Branching…'; }
+  setStatus(summarize ? 'Summarizing abandoned branch…' : 'Branching...', 'working');
   try {
-    await apiSend('/api/sessions/' + currentSession.id + '/branch', { entryId });
+    var data = await apiSend('/api/sessions/' + currentSession.id + '/branch',
+      { entryId, summarize, customInstructions });
+    pendingBranchId = null;
     closeTreeModal();
+    // A user-message target means "re-edit this prompt" (leaf moves to its
+    // parent) — mirror the TUI and prefill the composer, but never clobber
+    // a draft already in progress. Written to the draft store because the
+    // reload below runs restorePromptState, which overwrites the input.
+    if (data.editorText) {
+      try {
+        var key = draftKey(currentSession.id);
+        if (!(localStorage.getItem(key) || '').trim()) localStorage.setItem(key, data.editorText);
+      } catch {}
+    }
     setStatus('Branched — reloading');
     selectSession(currentSession.id);
-  } catch (e) { setStatus('Branch failed: ' + e.message, 'error'); }
+  } catch (e) {
+    setStatus('Branch failed: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Branch from here'; }
+  }
 }
 
 // =========================================================================

@@ -70,7 +70,10 @@ Rules of thumb:
   badges render natively.
 - **Session controls** — model switcher (mirrors pi's scoped-models
   settings), thinking-level toggle, session rename, stats (tokens, cache,
-  cost), HTML export via pi's own exporter, session tree for branching.
+  cost), HTML export via pi's own exporter, session tree for branching —
+  with optional branch summaries (pi's `/tree` summarize flow): jump back
+  to an earlier point and inject an LLM summary of the branch you're
+  abandoning, so explored dead-ends still inform the conversation.
 - **Reading tools** — in-session search (Ctrl+F, auto-pages older messages
   in), focus mode that hides tool noise, per-message copy buttons.
 - **Mobile-first** — the whole point. Slide-out drawer, slide-up control

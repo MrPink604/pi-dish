@@ -1102,6 +1102,55 @@ body.sidebar-open {
   border-top: 1px solid rgba(38, 139, 210, 0.1);
 }
 
+/* Branch summary — tree navigation's record of an abandoned branch */
+.message.branch-summary { padding: 0; }
+
+.branch-summary-details {
+  margin: 8px 0;
+  border-radius: 4px;
+  border: 1px dashed rgba(181, 137, 0, 0.4);
+  background: rgba(181, 137, 0, 0.05);
+  overflow: hidden;
+}
+
+.branch-summary-header {
+  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted);
+  user-select: none;
+  list-style: none;
+}
+
+.branch-summary-header::-webkit-details-marker { display: none; }
+
+.branch-summary-icon { color: var(--warning); }
+
+.branch-summary-label {
+  font-weight: 500;
+  color: var(--warning);
+  white-space: nowrap;
+}
+
+.branch-summary-preview {
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.branch-summary-details[open] .branch-summary-preview { display: none; }
+
+.branch-summary-details > .message-content {
+  border-top: 1px solid rgba(181, 137, 0, 0.15);
+}
+
 /* Tool call — collapsible <details> with icon + summary */
 .tool-call {
   margin: 4px 0;
@@ -2202,6 +2251,49 @@ body.sidebar-open {
   border: none;
   cursor: pointer;
   font-weight: 600;
+}
+
+.btn-branch:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Branch confirm bar (replaces the entry count once a node is selected). */
+.tree-status { flex: 1; min-width: 0; }
+.tree-status:has(.branch-confirm) + .tree-hint { display: none; }
+
+.branch-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.branch-summarize-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.branch-instructions {
+  background: var(--bg-darker);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text);
+  font-family: inherit;
+  flex: 1;
+  min-width: 140px;
+}
+
+.branch-confirm-btns {
+  display: inline-flex;
+  gap: 8px;
+  margin-left: auto;
 }
 
 /* Extension UI — unobtrusive hidable cards */

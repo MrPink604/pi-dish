@@ -315,3 +315,38 @@ so the outside-click closer must treat detached targets as inside.
   match index is in the DOM, then marks hits (`mark.search-mark`) and outlines
   the message (`.search-current`). In focus mode, `toolResult` matches are
   skipped.
+
+## Tree navigation / branch summaries (tree modal, POST /branch)
+
+`POST /api/sessions/:id/branch` drives pi's `/tree` remotely: move the leaf
+to `entryId`, optionally (`summarize: true`) generating an LLM summary of the
+abandoned branch that pi injects as context at the return point. Selecting a
+user message means *re-edit*: the leaf moves to its parent and the message
+text comes back as `editorText`, which the client stows in the per-session
+draft (the composer is hidden on inactive sessions; the draft surfaces on
+select/resume). Two backends:
+
+- **Live sessions** must navigate *inside* the pi process (an external
+  SessionManager write diverges from the agent's in-memory messages): bridge
+  `navigate_tree` → `ctx.navigateTree`. Gotcha: only pi **command contexts**
+  carry session-control methods, and events get plain contexts — so the
+  bridge stashes the ctx from every `/dish-*` command it executes
+  (`commandCtx` in the bridge; contexts stay valid until reload/session
+  switch). RPC-backed sessions are primed automatically: the server sends
+  `/dish-prime` through `rpc.prompt()` (pi's command executor) on the first
+  "no command context" error and retries. TUI-only sessions have no remote
+  path to a command context — the route 409s with a "run /dish-push once in
+  the TUI" hint.
+- **Inactive sessions** go through the SDK (`branchSession` in pi-sdk.js).
+  The summary bills to the session's own model (last `model_change`, else
+  the last assistant message's provider/model) with auth from
+  `ModelRegistry.getApiKeyAndHeaders`. Persistence gotcha: `sm.branch()`
+  only moves an in-memory pointer and a reopened JSONL re-derives its leaf
+  from the *last entry* — `branchWithSummary` persists by appending, and the
+  summary-less path appends a no-op `label` entry purely to anchor the leaf
+  (the pre-2026-07 `/branch` endpoint persisted nothing, silently).
+
+`branch_summary` entries render in the feed as collapsed
+`.message.branch-summary` blocks (`role: 'branchSummary'` from
+`parseMessages`) and stay visible in focus mode — they're conversation
+context, not tool noise.

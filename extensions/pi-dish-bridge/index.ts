@@ -110,11 +110,30 @@ export default function (pi: ExtensionAPI) {
   fs.mkdirSync(REGISTRY_DIR, { recursive: true });
   fs.mkdirSync(SOCKET_DIR, { recursive: true });
 
-  // Reload entrypoint: ctx.reload() only exists on command contexts, which pi
-  // supplies when it executes an extension command. RPC sessions can invoke
-  // this via a plain `prompt` command ("/dish-reload"); TUI sessions cannot —
-  // pi.sendUserMessage deliberately skips command handling, so there is no
-  // remote path to a command context there (same gap as extension commands).
+  // Session-control methods (ctx.navigateTree, ctx.reload, …) exist only on
+  // command contexts, which pi supplies when it executes an extension
+  // command — events get a plain ctx without them. A command context stays
+  // valid until the extension runner is replaced (reload / session switch),
+  // so every bridge command stashes its ctx for the socket handlers to
+  // reuse. RPC sessions can be primed remotely (`prompt` with "/dish-prime"
+  // goes through pi's command executor — the server does this on demand);
+  // TUI sessions have no remote path to a command context (pi.sendUserMessage
+  // deliberately skips command handling), so they need any /dish-* command
+  // run once in the TUI to enable remote tree navigation.
+  let commandCtx: any = null;
+  function stashCommandCtx(ctx: any) {
+    if (ctx && typeof ctx.navigateTree === "function") commandCtx = ctx;
+  }
+
+  pi.registerCommand("dish-prime", {
+    description: "Enable pi-dish remote session control (tree navigation)",
+    handler: async (_args: string, ctx: any) => {
+      stashCommandCtx(ctx);
+    },
+  });
+
+  // Reload entrypoint: RPC sessions can invoke this via a plain `prompt`
+  // command ("/dish-reload"); TUI sessions cannot (see commandCtx above).
   pi.registerCommand("dish-reload", {
     description: "Reload extensions, skills, and prompt templates (pi-dish)",
     handler: async (_args: string, ctx: any) => {
@@ -128,6 +147,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("dish-push", {
     description: "Re-broadcast extension UI state to pi-dish clients (pi-dish)",
     handler: async (_args: string, ctx: any) => {
+      stashCommandCtx(ctx);
       const r = forcePushExtensionUI();
       try { ctx.ui.notify(`pi-dish: pushed ${r.widgets} widget(s), ${r.statuses} status(es) to ${r.clients} client(s)`, "info"); } catch {}
     },
@@ -458,6 +478,7 @@ export default function (pi: ExtensionAPI) {
     sessionId = null;
     sessionFile = null;
     cwd = null;
+    commandCtx = null;
     turnInProgress = false;
     contextUsage = null;
     lastRegistrySig = null;
@@ -780,6 +801,56 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
+        case "navigate_tree": {
+          // pi's /tree, remotely: move the session leaf to targetId,
+          // optionally appending an LLM summary of the abandoned branch.
+          // ctx.navigateTree does the heavy lifting in-process (summary via
+          // the session's own model/auth, agent state update, TUI re-render)
+          // but only command contexts carry it — see commandCtx above. Its
+          // mode handlers also strip editorText from the result, so the
+          // user-message re-edit text is computed here for the web composer.
+          if (!lastCtx) return respond(false, undefined, "no active context");
+          if (turnInProgress) return respond(false, undefined, "cannot navigate the tree while a turn is in progress");
+          if (!commandCtx) return respond(false, undefined, "no command context");
+          const targetId = typeof cmd.targetId === "string" ? cmd.targetId : "";
+          if (!targetId) return respond(false, undefined, "targetId required");
+          const target = lastCtx.sessionManager.getEntry(targetId);
+          if (!target) return respond(false, undefined, `entry not found: ${targetId}`);
+          let editorText: string | undefined;
+          const textOf = (content: any): string =>
+            typeof content === "string"
+              ? content
+              : Array.isArray(content)
+                ? content.filter((c: any) => c?.type === "text").map((c: any) => c.text).join("")
+                : "";
+          if (target.type === "message" && (target as any).message?.role === "user") {
+            editorText = textOf((target as any).message.content) || undefined;
+          } else if (target.type === "custom_message") {
+            editorText = textOf((target as any).content) || undefined;
+          }
+          let result;
+          try {
+            result = await commandCtx.navigateTree(targetId, {
+              summarize: !!cmd.summarize,
+              customInstructions: typeof cmd.customInstructions === "string" && cmd.customInstructions.trim() ? cmd.customInstructions : undefined,
+              label: typeof cmd.label === "string" && cmd.label.trim() ? cmd.label : undefined,
+            });
+          } catch (e: any) {
+            const msg = String(e?.message || e);
+            if (/stale/i.test(msg)) {
+              // Captured before a reload/session switch — force a re-prime.
+              commandCtx = null;
+              return respond(false, undefined, "no command context");
+            }
+            return respond(false, undefined, msg);
+          }
+          refreshContextUsage();
+          writeRegistry();
+          if (result?.cancelled) return respond(false, undefined, "tree navigation was cancelled");
+          respond(true, { editorText });
+          return;
+        }
+
         case "set_session_name": {
           if (!cmd.name) return respond(false, undefined, "name required");
           pi.setSessionName(cmd.name);
@@ -800,6 +871,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     wrapExtensionUI(ctx);
     lastCtx = ctx;
+    commandCtx = null; // any stashed command ctx predates this runner/session
     refreshModel(ctx);
     refreshContextUsage(ctx);
     const sf = ctx.sessionManager.getSessionFile();

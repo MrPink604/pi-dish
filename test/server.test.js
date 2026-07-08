@@ -61,6 +61,19 @@ fs.writeFileSync(
   JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'headerless fixture' }], timestamp: '2026-07-04T12:00:01.000Z' } }) + '\n',
 );
 
+// Fourth fixture: a *valid pi v3 session* (header id + entry ids) — the tree
+// branch endpoints open it through pi's own SessionManager, which rejects
+// the id-less shorthand the other fixtures use.
+const TREE_ID = '2026-07-04T14-00-00-treefix1';
+const TREE_FILE = path.join(sessionDir, `${TREE_ID}.jsonl`);
+fs.writeFileSync(TREE_FILE, [
+  { type: 'session', version: 3, id: 'aaaabbbb-cccc-dddd-eeee-ffff00001111', cwd: '/home/user/proj', timestamp: '2026-07-04T14:00:00.000Z' },
+  { type: 'message', id: 'e1', parentId: null, timestamp: '2026-07-04T14:00:01.000Z', message: { role: 'user', content: [{ type: 'text', text: 'first prompt' }], timestamp: '2026-07-04T14:00:01.000Z' } },
+  { type: 'message', id: 'e2', parentId: 'e1', timestamp: '2026-07-04T14:00:02.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'first answer' }], timestamp: '2026-07-04T14:00:02.000Z' } },
+  { type: 'message', id: 'e3', parentId: 'e2', timestamp: '2026-07-04T14:00:03.000Z', message: { role: 'user', content: [{ type: 'text', text: 'second prompt' }], timestamp: '2026-07-04T14:00:03.000Z' } },
+  { type: 'message', id: 'e4', parentId: 'e3', timestamp: '2026-07-04T14:00:04.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'second answer' }], timestamp: '2026-07-04T14:00:04.000Z' } },
+].map(e => JSON.stringify(e)).join('\n') + '\n');
+
 const server = require('../server.js');
 
 let base;
@@ -72,6 +85,14 @@ test.after(() => server.close());
 
 const get = async (p) => {
   const res = await fetch(base + p);
+  return { status: res.status, body: await res.json() };
+};
+
+const post = async (p, body) => {
+  const res = await fetch(base + p, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
   return { status: res.status, body: await res.json() };
 };
 
@@ -245,14 +266,6 @@ test('GET /stats aggregates tokens, cost, and message counts from the JSONL', as
 });
 
 test('POST endpoints validate input and reject inactive sessions', async () => {
-  const post = async (p, body) => {
-    const res = await fetch(base + p, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    return { status: res.status, body: await res.json() };
-  };
-
   // Bad thinking level is rejected before any session lookup
   const badLevel = await post(`/api/sessions/${SESSION_ID}/thinking`, { level: 'ultra' });
   assert.equal(badLevel.status, 400);
@@ -279,6 +292,99 @@ test('POST endpoints validate input and reject inactive sessions', async () => {
   // Slash-command endpoint requires a leading slash
   const notSlash = await post(`/api/sessions/${SESSION_ID}/command`, { message: 'hello' });
   assert.equal(notSlash.status, 400);
+});
+
+// --- Tree branching (inactive sessions go through pi's SDK) ---------------
+// These mutate TREE_FILE (branching appends entries by design) and so run
+// in this order.
+
+test('POST /branch on a user message returns its text and persists the leaf move', async () => {
+  const { status, body } = await post(`/api/sessions/${TREE_ID}/branch`, { entryId: 'e3' });
+  assert.equal(status, 200);
+  assert.equal(body.editorText, 'second prompt', 'user-message target means re-edit: text comes back for the composer');
+
+  // A reopened SessionManager derives its leaf from the last entry — the
+  // branch must survive that (this is what plain sm.branch() got wrong).
+  const tree = await get(`/api/sessions/${TREE_ID}/tree`);
+  assert.equal(tree.status, 200);
+  const active = new Set(tree.body.activePathIds);
+  assert.ok(active.has('e1') && active.has('e2'), 'path up to the target parent stays active');
+  assert.ok(!active.has('e3') && !active.has('e4'), 'the abandoned branch is no longer the active path');
+});
+
+test('POST /branch with an unknown entry id fails without touching the file', async () => {
+  const size = fs.statSync(TREE_FILE).size;
+  const { status } = await post(`/api/sessions/${TREE_ID}/branch`, { entryId: 'nope' });
+  assert.equal(status, 500);
+  assert.equal(fs.statSync(TREE_FILE).size, size);
+});
+
+test('branch_summary entries surface in /messages as branchSummary role', async () => {
+  fs.appendFileSync(TREE_FILE, JSON.stringify({
+    type: 'branch_summary', id: 'bs1', parentId: 'e2', fromId: 'e2',
+    timestamp: '2026-07-04T14:00:05.000Z', summary: 'Explored **X**; conclusion Y.',
+  }) + '\n');
+  const { status, body } = await get(`/api/sessions/${TREE_ID}/messages`);
+  assert.equal(status, 200);
+  const bs = body.messages.find(m => m.role === 'branchSummary');
+  assert.ok(bs, 'branch summary appears in the message stream');
+  assert.equal(bs.content[0].text, 'Explored **X**; conclusion Y.');
+});
+
+test('POST /branch on a live bridge session forwards navigate_tree', async () => {
+  const BRIDGE_ID = '2026-07-04T15-00-00-treelive';
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const socketPath = path.join(tmpHome, 'dish-tree-test.sock');
+
+  // Fake bridge that answers navigate_tree; records what it was asked.
+  const received = [];
+  let reply = { success: true, data: { editorText: 'from bridge' } };
+  const socks = [];
+  const bridge = net.createServer((sock) => {
+    socks.push(sock);
+    sock.write(JSON.stringify({ type: 'hello', turnInProgress: false }) + '\n');
+    let buf = '';
+    sock.on('data', (chunk) => {
+      buf += chunk.toString();
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1);
+        if (!line.trim()) continue;
+        const cmd = JSON.parse(line);
+        received.push(cmd);
+        sock.write(JSON.stringify({ type: 'response', id: cmd.id, command: cmd.command, ...reply }) + '\n');
+      }
+    });
+  });
+  await new Promise(r => bridge.listen(socketPath, r));
+  fs.writeFileSync(path.join(registryDir, `${BRIDGE_ID}.json`), JSON.stringify({
+    sessionId: BRIDGE_ID, socketPath, pid: process.pid, cwd: '/home/user/proj', sessionFile: TREE_FILE,
+  }));
+  await new Promise(r => setTimeout(r, 600)); // registry scan memo TTL
+
+  try {
+    const ok = await post(`/api/sessions/${BRIDGE_ID}/branch`,
+      { entryId: 'e2', summarize: true, customInstructions: 'focus on files' });
+    assert.equal(ok.status, 200);
+    assert.equal(ok.body.editorText, 'from bridge');
+    const nav = received.find(c => c.command === 'navigate_tree');
+    assert.ok(nav, 'bridge received navigate_tree');
+    assert.equal(nav.targetId, 'e2');
+    assert.equal(nav.summarize, true);
+    assert.equal(nav.customInstructions, 'focus on files');
+
+    // A bridge without a stashed command context (and no RPC backing to
+    // prime it with) is a user-actionable condition, not a plain 500.
+    reply = { success: false, error: 'no command context' };
+    const blocked = await post(`/api/sessions/${BRIDGE_ID}/branch`, { entryId: 'e2' });
+    assert.equal(blocked.status, 409);
+    assert.match(blocked.body.error, /dish-push/);
+  } finally {
+    fs.rmSync(path.join(registryDir, `${BRIDGE_ID}.json`), { force: true });
+    for (const s of socks) s.destroy();
+    bridge.close();
+  }
 });
 
 // Keep this test last: it appends to the fixture JSONL, changing the

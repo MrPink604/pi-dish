@@ -760,14 +760,58 @@ app.get('/api/sessions/:id/tree', async (req, res) => {
   }
 });
 
-app.post('/api/sessions/:id/branch', async (req, res) => {
-  const { entryId } = req.body;
-  if (!entryId) return res.status(400).json({ error: 'entryId required' });
+// Bridge navigate_tree needs a stashed pi command context (the only
+// extension-API surface carrying ctx.navigateTree). RPC-backed sessions can
+// acquire one remotely: an RPC prompt of "/dish-prime" goes through pi's
+// command executor, which hands the bridge a command context to stash — so
+// on "no command context", prime and retry once. TUI-only sessions have no
+// remote path; the route surfaces the /dish-push hint instead.
+async function navigateLiveTree(sessionId, sess, entryId, opts) {
   try {
+    return await sess.navigateTree(entryId, opts);
+  } catch (e) {
+    const rpc = getRPCSession(sessionId);
+    if (!/no command context/i.test(e.message || '') || !rpc?.alive) throw e;
+    await rpc.prompt('/dish-prime');
+    return sess.navigateTree(entryId, opts);
+  }
+}
+
+// Move the session leaf (pi's /tree), optionally summarizing the abandoned
+// branch. Live sessions must navigate inside the pi process — an external
+// SessionManager write would diverge from the agent's in-memory state — so
+// this goes through the bridge; only inactive sessions take the SDK path.
+app.post('/api/sessions/:id/branch', async (req, res) => {
+  const { entryId, summarize, customInstructions } = req.body;
+  if (!entryId) return res.status(400).json({ error: 'entryId required' });
+  const opts = {
+    summarize: !!summarize,
+    customInstructions: typeof customInstructions === 'string' && customInstructions.trim()
+      ? customInstructions.trim() : undefined,
+  };
+  try {
+    const sess = await getLiveSession(req.params.id);
+    if (sess) {
+      if (!(sess instanceof BridgeSession)) {
+        return res.status(409).json({ error: 'This live session has no bridge connection — install the pi-dish-bridge extension to navigate its tree.' });
+      }
+      try {
+        const data = await navigateLiveTree(req.params.id, sess, entryId, opts);
+        return res.json({ success: true, editorText: data?.editorText });
+      } catch (e) {
+        if (/unknown command/i.test(e.message || '')) {
+          return res.status(409).json({ error: 'The pi session is running an older pi-dish-bridge — run /reload in it (or restart it) to enable tree navigation.' });
+        }
+        if (/no command context/i.test(e.message || '')) {
+          return res.status(409).json({ error: "pi's extension API only hands out session control inside command handlers — run /dish-push once in this session's TUI, then retry. (Web-spawned sessions are primed automatically.)" });
+        }
+        throw e;
+      }
+    }
     const sessionPath = findSessionFile(req.params.id);
     if (!sessionPath) return res.status(404).json({ error: 'Session not found' });
-    await piSDK.branchSession(sessionPath, entryId);
-    res.json({ success: true });
+    const result = await piSDK.branchSession(sessionPath, entryId, opts);
+    res.json({ success: true, editorText: result.editorText });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
