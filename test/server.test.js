@@ -96,6 +96,11 @@ const post = async (p, body) => {
   return { status: res.status, body: await res.json() };
 };
 
+const del = async (p) => {
+  const res = await fetch(base + p, { method: 'DELETE' });
+  return { status: res.status, body: await res.json() };
+};
+
 test('GET /api/sessions lists the fixture session with derived metadata', async () => {
   const { status, body } = await get('/api/sessions');
   assert.equal(status, 200);
@@ -384,6 +389,93 @@ test('POST /branch on a live bridge session forwards navigate_tree', async () =>
     fs.rmSync(path.join(registryDir, `${BRIDGE_ID}.json`), { force: true });
     for (const s of socks) s.destroy();
     bridge.close();
+  }
+});
+
+// --- Public share links --------------------------------------------------
+// TREE_ID is a valid pi v3 session; the HTML exporter (and thus GET
+// /share/:token) rejects the id-less shorthand fixtures.
+
+test('POST /share is idempotent and 404s for an unknown session', async () => {
+  const first = await post(`/api/sessions/${TREE_ID}/share`, {});
+  assert.equal(first.status, 200);
+  assert.ok(first.body.token, 'a token is returned');
+  assert.equal(first.body.path, `/share/${first.body.token}`);
+  assert.equal(first.body.url, null, 'url is null without PI_DISH_SHARE_BASE_URL');
+
+  const again = await post(`/api/sessions/${TREE_ID}/share`, {});
+  assert.equal(again.body.token, first.body.token, 'same session reuses its token');
+
+  const missing = await post('/api/sessions/does-not-exist/share', {});
+  assert.equal(missing.status, 404);
+});
+
+test('GET /share/:token renders the exported HTML inline; unknown token 404s', async () => {
+  const { body } = await post(`/api/sessions/${TREE_ID}/share`, {});
+  const res = await fetch(`${base}/share/${body.token}`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type') || '', /text\/html/);
+  const html = await res.text();
+  assert.ok(html.includes('<html'), 'body is the standalone export');
+
+  const unknown = await fetch(`${base}/share/nonexistent-token`);
+  assert.equal(unknown.status, 404);
+});
+
+test('GET/DELETE /share reflect and revoke the current share state', async () => {
+  const created = await post(`/api/sessions/${TREE_ID}/share`, {});
+  const state = await get(`/api/sessions/${TREE_ID}/share`);
+  assert.equal(state.status, 200);
+  assert.equal(state.body.token, created.body.token);
+
+  const revoked = await del(`/api/sessions/${TREE_ID}/share`);
+  assert.deepEqual(revoked.body, { revoked: true });
+
+  const gone = await fetch(`${base}/share/${created.body.token}`);
+  assert.equal(gone.status, 404, 'the token no longer resolves');
+  const stateGone = await get(`/api/sessions/${TREE_ID}/share`);
+  assert.equal(stateGone.status, 404, 'no share state after revoke');
+  const revokedAgain = await del(`/api/sessions/${TREE_ID}/share`);
+  assert.deepEqual(revokedAgain.body, { revoked: false });
+});
+
+test('dedicated share listener serves only /share/:token', async () => {
+  const { spawn } = require('node:child_process');
+  // Create a share on the main server (writes shares.json under tmpHome; the
+  // child reads the same HOME).
+  const created = await post(`/api/sessions/${TREE_ID}/share`, {});
+
+  // Grab a free port for the share listener.
+  const sharePort = await new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.listen(0, '127.0.0.1', () => {
+      const p = srv.address().port;
+      srv.close(() => resolve(p));
+    });
+  });
+
+  const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
+    env: { ...process.env, HOME: tmpHome, PORT: '0', PI_DISH_SHARE_PORT: String(sharePort), PI_DISH_SHARE_HOST: '127.0.0.1' },
+    stdio: 'ignore',
+  });
+  try {
+    // Wait for the share listener to accept connections.
+    const shareBase = `http://127.0.0.1:${sharePort}`;
+    let ready = false;
+    for (let i = 0; i < 100 && !ready; i++) {
+      try {
+        const r = await fetch(`${shareBase}/share/${created.body.token}`);
+        if (r.status === 200) ready = true;
+        await r.text();
+      } catch { await new Promise(r => setTimeout(r, 100)); }
+    }
+    assert.ok(ready, 'share listener came up and served the token');
+
+    const notFound = await fetch(`${shareBase}/api/sessions`);
+    assert.equal(notFound.status, 404, 'the share listener exposes nothing but /share');
+  } finally {
+    child.kill();
+    await new Promise(r => child.on('exit', r));
   }
 });
 

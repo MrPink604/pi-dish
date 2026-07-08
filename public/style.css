@@ -2865,6 +2865,55 @@ img.msg-image {
 
 .stats-copy.copied { color: var(--success-bright); border-bottom-color: transparent; }
 
+/* Public share link section of the stats modal. */
+.stats-share {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.stats-share-title {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.stats-share-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.stats-share-link { font-size: 12px; }
+
+.stats-share-hint {
+  flex-basis: 100%;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.btn-small {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: 4px;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.btn-small:hover { filter: brightness(1.08); }
+
+.btn-small.btn-danger {
+  background: none;
+  color: var(--error);
+  border: 1px solid var(--error-dim);
+}
+
+.btn-small.btn-danger:hover { background: rgba(220, 50, 47, 0.12); filter: none; }
+
 /* Mobile-only inline tool buttons in the input row */
 .badge-tool-btn {
   display: none;

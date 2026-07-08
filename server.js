@@ -12,6 +12,7 @@ const {
 } = require('./lib/bridge-session');
 const { searchFiles, searchHomeDirs } = require('./lib/file-search');
 const terminal = require('./lib/terminal');
+const shares = require('./lib/shares');
 const {
   getSessionInfo,
   readSessionMessages,
@@ -665,6 +666,75 @@ app.get('/api/sessions/:id/export', async (req, res) => {
   }
 });
 
+// =========================================================================
+// Public read-only share links
+// =========================================================================
+//
+// A share is a random token mapping to a sessionId (lib/shares.js). The
+// management API below is authed (main app only); the public GET /share/:token
+// renders the standalone HTML export inline and is mounted on both the main app
+// and the optional share listener (see startup). The route reveals nothing
+// about unknown/missing sessions — every miss is a bare 404.
+
+// { path, url } for a token. url is set only when PI_DISH_SHARE_BASE_URL is,
+// so operators behind a proxy can hand out an absolute link.
+function sharePayload(token) {
+  const sharePath = `/share/${token}`;
+  const base = process.env.PI_DISH_SHARE_BASE_URL;
+  const url = base ? base.replace(/\/+$/, '') + sharePath : null;
+  return { token, path: sharePath, url };
+}
+
+// Per-token export cache keyed on the JSONL's (mtimeMs, size), so repeated
+// hits on an unchanged session don't re-run the exporter.
+const shareExportCache = new Map();
+
+async function serveSharedSession(req, res) {
+  const share = shares.getShare(req.params.token);
+  if (!share) return res.status(404).type('text/plain').send('Not found');
+  const sessionFile = findSessionFile(share.sessionId);
+  if (!sessionFile) return res.status(404).type('text/plain').send('Not found');
+  try {
+    const st = fs.statSync(sessionFile);
+    const cached = shareExportCache.get(req.params.token);
+    let htmlPath;
+    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size && fs.existsSync(cached.htmlPath)) {
+      htmlPath = cached.htmlPath;
+    } else {
+      // Token is base64url (A-Za-z0-9_-), so it's already a safe basename.
+      const outPath = path.join(os.tmpdir(), `pi-dish-share-${req.params.token}.html`);
+      htmlPath = await piSDK.exportSessionHtml(sessionFile, outPath);
+      shareExportCache.set(req.params.token, { mtimeMs: st.mtimeMs, size: st.size, htmlPath });
+    }
+    res.type('html');
+    res.sendFile(htmlPath);
+  } catch (e) {
+    res.status(500).type('text/plain').send('Export failed');
+  }
+}
+
+app.post('/api/sessions/:id/share', (req, res) => {
+  if (!findSessionFile(req.params.id)) return res.status(404).json({ error: 'Session not found' });
+  const token = shares.createShare(req.params.id);
+  res.json(sharePayload(token));
+});
+
+app.delete('/api/sessions/:id/share', (req, res) => {
+  const existing = shares.getShareForSession(req.params.id);
+  const revoked = shares.revokeShare(req.params.id);
+  if (existing) shareExportCache.delete(existing.token);
+  res.json({ revoked });
+});
+
+app.get('/api/sessions/:id/share', (req, res) => {
+  const existing = shares.getShareForSession(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'No share' });
+  res.json(sharePayload(existing.token));
+});
+
+// Public route — always available on the main app (the share listener is opt-in).
+app.get('/share/:token', serveSharedSession);
+
 // Execute a slash command against an active session.
 app.post('/api/sessions/:id/command', async (req, res) => {
   const { message, deliverAs } = req.body;
@@ -1224,6 +1294,21 @@ const server = app.listen(PORT, HOST, () => {
     console.log('Bound to localhost only. To reach it from other devices, set HOST (e.g. HOST=0.0.0.0 or your Tailscale IP) or front it with a reverse proxy.');
   }
 });
+
+// Optional dedicated share listener: a second minimal app that serves ONLY
+// GET /share/:token (everything else 404s), so operators can expose public
+// session traces on their own port/host without opening the rest of the API.
+// The share route stays available on the main app regardless.
+if (process.env.PI_DISH_SHARE_PORT) {
+  const shareApp = express();
+  shareApp.get('/share/:token', serveSharedSession);
+  shareApp.use((req, res) => res.status(404).type('text/plain').send('Not found'));
+  const shareHost = process.env.PI_DISH_SHARE_HOST || HOST;
+  const shareServer = shareApp.listen(process.env.PI_DISH_SHARE_PORT, shareHost, () => {
+    console.log(`pi-dish share listener at http://${shareHost}:${shareServer.address().port}`);
+  });
+  server.on('close', () => { try { shareServer.close(); } catch {} });
+}
 
 // WebSocket endpoint for the in-browser terminal (see lib/terminal.js).
 // Registered only when the feature flag is on — with it off, upgrade

@@ -71,6 +71,24 @@ BridgeSession, else alive RPCSession, else null). Don't re-roll the
 branch on `instanceof BridgeSession` only for genuinely backend-specific
 calls (setModel arg shapes, runCommand vs the RPC slash emulation).
 
+## Share links (lib/shares.js, /share/:token)
+
+Public read-only session traces. `lib/shares.js` persists
+`{ token: { sessionId, createdAt } }` in `~/.pi/dish/shares.json` (base64url
+tokens, temp-file + rename write, HOME resolved per call so tests' temp HOME
+works). Authed management API on the main app: `POST/GET/DELETE
+/api/sessions/:id/share` (POST is idempotent per session; GET 404s when none).
+Public `GET /share/:token` → `piSDK.exportSessionHtml` served **inline**
+(not a download); one shared handler (`serveSharedSession`), export cached per
+token on the JSONL's (mtimeMs, size). An unknown token is a bare 404 — never
+reveal whether a session exists. The route is always on the main app;
+`PI_DISH_SHARE_PORT` additionally mounts a second app that serves *only*
+`/share/:token` (host `PI_DISH_SHARE_HOST`, else the main HOST default), closed
+with the main server. `PI_DISH_SHARE_BASE_URL` (trailing slash trimmed) makes
+the API return an absolute `url`; else `url` is null and the client builds it
+from `location.origin`. UI is a section in the stats modal (create / copy /
+revoke; copy goes through `copyTextToClipboard`).
+
 ## File / directory fuzzy search (lib/file-search.js)
 
 Backed by fff (`@ff-labs/fff-node`, ESM-only + native binary, loaded via

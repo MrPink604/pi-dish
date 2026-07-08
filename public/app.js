@@ -1171,9 +1171,53 @@ function openStatsModal() {
           ? `<button type="button" class="stats-copy" data-copy="${escapeHtml(String(v))}" title="Click to copy">${escapeHtml(String(v))}</button>`
           : escapeHtml(String(v));
         return `<tr><td class="stats-key">${escapeHtml(k)}</td><td class="stats-val">${val}</td></tr>`;
-      }).join('') + '</table>';
+      }).join('') + '</table>' +
+        '<div class="stats-share" id="statsShare"></div>';
+      loadShareSection(currentSession.id);
     })
     .catch(e => { body.textContent = 'Failed to load stats: ' + e.message; });
+}
+
+// Public share link section of the stats modal. Fetches current state (404 =
+// no share) and renders either a "Create share link" button or the existing
+// link as a click-to-copy row plus a Revoke button.
+function loadShareSection(sessionId) {
+  const el = document.getElementById('statsShare');
+  if (!el) return;
+  el.innerHTML = '<div class="stats-share-title">Public share link</div>' +
+    '<div class="stats-share-body">Loading…</div>';
+  fetch(`/api/sessions/${sessionId}/share`)
+    .then(r => (r.status === 404 ? null : r.json()))
+    .then(share => renderShareSection(sessionId, share))
+    .catch(() => renderShareSection(sessionId, null));
+}
+
+function renderShareSection(sessionId, share) {
+  const el = document.getElementById('statsShare');
+  if (!el) return;
+  const bodyEl = el.querySelector('.stats-share-body') || el;
+  if (!share) {
+    bodyEl.innerHTML =
+      '<button type="button" class="btn-small" id="shareCreateBtn">Create share link</button>' +
+      '<div class="stats-share-hint">Anyone with the link can view this session read-only.</div>';
+    bodyEl.querySelector('#shareCreateBtn').addEventListener('click', () => {
+      fetch(`/api/sessions/${sessionId}/share`, { method: 'POST' })
+        .then(r => r.json())
+        .then(s => renderShareSection(sessionId, s))
+        .catch(e => setStatus('Failed to create share: ' + e.message, 'error'));
+    });
+    return;
+  }
+  const link = share.url || (location.origin + share.path);
+  bodyEl.innerHTML =
+    `<button type="button" class="stats-copy stats-share-link" data-copy="${escapeHtml(link)}" title="Click to copy">${escapeHtml(link)}</button>` +
+    '<button type="button" class="btn-small btn-danger" id="shareRevokeBtn">Revoke</button>';
+  bodyEl.querySelector('#shareRevokeBtn').addEventListener('click', () => {
+    fetch(`/api/sessions/${sessionId}/share`, { method: 'DELETE' })
+      .then(r => r.json())
+      .then(() => renderShareSection(sessionId, null))
+      .catch(e => setStatus('Failed to revoke share: ' + e.message, 'error'));
+  });
 }
 
 function closeStatsModal() {

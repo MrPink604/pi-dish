@@ -158,6 +158,31 @@ ln -s "$PWD/extensions/mood.ts" ~/.pi/agent/extensions/mood.ts
 After pulling changes: `npm install`, restart the server, and `/reload` any
 running pi sessions so they pick up the new bridge.
 
+### Public share links
+
+The stats modal (📊 in the session header) has a **Create share link** button.
+A share link points at a stable token that renders a **read-only HTML export**
+of that one session — pi's own exporter, the same output as `/export`. It
+exposes nothing else: no API, no other sessions, no way to drive the agent.
+Handy for handing a specific trace to someone without opening the whole
+(unauthenticated) UI to them. **Revoke** in the same modal invalidates the
+token immediately.
+
+The share route (`GET /share/<token>`) is always served by the main server.
+Three env vars tune how links are exposed:
+
+```bash
+PI_DISH_SHARE_PORT=4444 npm start   # also serve /share/<token> on a second,
+                                    # share-only port (nothing else answers there)
+PI_DISH_SHARE_HOST=0.0.0.0          # bind host for that share port (default: same as HOST)
+PI_DISH_SHARE_BASE_URL=https://share.example.com  # absolute base for the link shown in the UI
+```
+
+`PI_DISH_SHARE_PORT` lets you put the public share port behind its own reverse
+proxy while keeping the main API on localhost. `PI_DISH_SHARE_BASE_URL` just
+sets the URL the UI copies out; when unset the link is built from the current
+origin.
+
 ## Slash command support
 
 | Command type | TUI session (bridge) | pi-dish-spawned session (RPC) |
