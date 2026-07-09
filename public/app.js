@@ -1883,11 +1883,17 @@ function startMessageStream(sessionId) {
         if (data.turnInProgress) {
           setTurnInProgress(true);
           setStatus('Waiting for response...', 'working');
+        } else if (data.compacting) {
+          // Connected mid-compaction (e.g. a TUI /compact) — show the indicator
+          // straight away instead of waiting for the next compaction event.
+          setTurnInProgress(false);
+          setCompacting(true);
+          setStatus('Compacting context...', 'working');
+          fetchNewMessagesSince(sessionId);
         } else {
           // Turn not in progress — incremental catch-up for any messages
           // written since our initial load (avoids full reload stall).
           setTurnInProgress(false);
-          setStatus('');
           fetchNewMessagesSince(sessionId);
         }
       } catch {}
@@ -2001,8 +2007,12 @@ function startMessageStream(sessionId) {
       try { dismissExtDialog(JSON.parse(e.data).id); } catch {}
     });
 
-    evtSource.addEventListener('compaction_start', () => setStatus('Compacting context...', 'working'));
+    evtSource.addEventListener('compaction_start', () => {
+      setStatus('Compacting context...', 'working');
+      setCompacting(true);
+    });
     evtSource.addEventListener('compaction_end', (e) => {
+      setCompacting(false);
       try {
         const data = JSON.parse(e.data);
         if (data.errorMessage) {
@@ -2256,8 +2266,16 @@ async function sendPrompt() {
   setTurnInProgress(true);
 
   try {
-    await apiSend(`/api/sessions/${currentSession.id}/prompt`, images ? { message, images } : { message });
-    setStatus('Waiting for response...', 'working');
+    const resp = await apiSend(`/api/sessions/${currentSession.id}/prompt`, images ? { message, images } : { message });
+    if (resp?.result?.queued) {
+      // Held by the bridge until compaction finishes; no turn is running yet.
+      // Undo the optimistic "Working" badge and restore the compacting one.
+      setTurnInProgress(false);
+      setCompacting(true);
+      setStatus('Queued — will send when compaction finishes', 'working');
+    } else {
+      setStatus('Waiting for response...', 'working');
+    }
   } catch (e) {
     setStatus(`Error: ${e.message}`, 'error');
     setTurnInProgress(false);
@@ -2327,6 +2345,24 @@ function setTurnInProgress(active) {
   if (!active) setStatus('');
 }
 
+// Compaction has no turn, so setTurnInProgress doesn't cover it. Drive the same
+// working badge so a TUI-started /compact is visible in the webapp, and so the
+// user knows a send right now will be held until compaction finishes. During
+// auto-compaction a turn is already active — its "Working" badge covers it, so
+// only take over the badge when no turn is running.
+function setCompacting(active) {
+  if (turnInProgress) return; // the turn badge already owns the indicator
+  const on = !!active;
+  const workingDesktop = document.getElementById('sessionWorking');
+  const workingMobile = document.getElementById('sessionWorkingMobile');
+  const desktopText = document.querySelector('#sessionWorking .spinner-text');
+  const mobileText = document.querySelector('#sessionWorkingMobile .spinner-text');
+  if (workingDesktop) workingDesktop.classList.toggle('active', on);
+  if (workingMobile) workingMobile.classList.toggle('active', on);
+  if (desktopText) desktopText.textContent = on ? 'Compacting context…' : 'Working';
+  if (mobileText) mobileText.textContent = on ? 'Compacting…' : '';
+}
+
 // Steer and follow-up share everything but the endpoint and status strings.
 async function sendQueuedMessage(kind) {
   const steer = kind === 'steer';
@@ -2344,8 +2380,9 @@ async function sendQueuedMessage(kind) {
   const body = steer ? { message } : { message, deliverAs: 'followUp' };
   if (images) body.images = images;
   try {
-    await apiSend(`/api/sessions/${currentSession.id}${steer ? '/steer' : '/prompt'}`, body);
-    setStatus(steer ? 'Steered' : 'Queued for after this turn');
+    const resp = await apiSend(`/api/sessions/${currentSession.id}${steer ? '/steer' : '/prompt'}`, body);
+    if (resp?.result?.queued) setStatus('Queued — will send when compaction finishes');
+    else setStatus(steer ? 'Steered' : 'Queued for after this turn');
   } catch (e) {
     setStatus(`${steer ? 'Steer' : 'Follow-up'} failed: ${e.message}`, 'error');
     restoreAttachments(images); // don't lose them on a failed send

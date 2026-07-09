@@ -115,6 +115,9 @@ function handleCommand(sock, msg) {
       return respond(sock, msg.id, [{ name: 'help', description: 'show help', source: 'builtin' }]);
     case 'prompt':
       lastPrompt = msg;
+      // Mirror the real bridge: a prompt sent mid-compaction is buffered and
+      // acked as queued, then flushed as a turn once compaction ends.
+      if (fakeCompacting) { bufferedPrompt = msg; return respond(sock, msg.id, { queued: true }); }
       respond(sock, msg.id, {});
       return streamTurn(msg.message, msg.images);
     case 'set_session_name':
@@ -128,6 +131,13 @@ function handleCommand(sock, msg) {
 }
 
 let lastPrompt = null;
+let fakeCompacting = false;
+let bufferedPrompt = null;
+function flushBufferedPrompt() {
+  if (!bufferedPrompt) return;
+  const p = bufferedPrompt; bufferedPrompt = null;
+  streamTurn(p.message, p.images);
+}
 
 function streamTurn(userText, images) {
   const now = () => new Date().toISOString();
@@ -504,6 +514,37 @@ function writeRegistry(patch = {}) {
       document.getElementById('status')?.textContent === 'Compacted (was 152.3k tokens)', { timeout: 3000 });
     check(true, 'completed compaction reports tokensBefore');
 
+    // 8c-2. Compaction gates sends: while compacting there's no turn, but a
+    // prompt sent now must be held (bridge buffers, acks queued) and delivered
+    // as a turn once compaction ends — not raced against pi's message rewrite.
+    // The working badge (not just the transient status line) shows compaction.
+    console.log('compaction queuing:');
+    fakeCompacting = true;
+    emit('compaction_start', { reason: 'manual' });
+    await desktop.waitForFunction(() =>
+      document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Compacting context…', { timeout: 3000 });
+    check(true, 'compaction drives the working badge');
+
+    const repliesBefore = await desktop.evaluate(() =>
+      [...document.querySelectorAll('.message.assistant')].filter((m) => /Streamed reply/.test(m.textContent)).length);
+    await desktop.fill('#promptInput', '');
+    await desktop.type('#promptInput', 'send after compaction');
+    await desktop.click('#btnSend');
+    await desktop.waitForFunction(() =>
+      /Queued — will send when compaction finishes/.test(document.getElementById('status')?.textContent || ''), { timeout: 3000 });
+    check(true, 'prompt sent mid-compaction is reported as queued');
+
+    fakeCompacting = false;
+    emit('compaction_end', { reason: 'manual', result: { tokensBefore: 90000 } });
+    flushBufferedPrompt();
+    await desktop.waitForFunction((n) =>
+      [...document.querySelectorAll('.message.assistant')].filter((m) => /Streamed reply/.test(m.textContent)).length > n,
+      repliesBefore, { timeout: 6000 });
+    check(true, 'queued prompt is delivered as a turn after compaction ends');
+    await desktop.waitForFunction(() =>
+      document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Working', { timeout: 6000 });
+    check(true, 'working badge resets after the flushed turn');
+
     // 8d. Terminal: header button opens a shell at the session cwd over the
     // WS endpoint; output round-trips; close + reopen reattaches the same
     // PTY and replays scrollback (arithmetic markers so the echo of the
@@ -588,7 +629,7 @@ function writeRegistry(patch = {}) {
     await desktop.evaluate(() => document.getElementById('promptInput').setSelectionRange(0, 0));
     await desktop.focus('#promptInput');
     await desktop.keyboard.press('ArrowUp');
-    check(await desktop.inputValue('#promptInput') === 'describe the screenshot',
+    check(await desktop.inputValue('#promptInput') === 'send after compaction',
       `ArrowUp recalls the last sent prompt (got ${JSON.stringify(await desktop.inputValue('#promptInput'))})`);
     await desktop.keyboard.press('ArrowDown');
     check(await desktop.inputValue('#promptInput') === 'unsent draft', 'ArrowDown restores the draft');
@@ -609,6 +650,11 @@ function writeRegistry(patch = {}) {
     check(await desktop.locator('.ext-ui-status-badge').textContent() === '2 running', 'status badge rendered');
     await new Promise((r) => bridge2.listen(socket2Path, r));
     registerSession2();
+    // The server caches the registry scan for 500ms (REGISTRY_CACHE_MS) — a
+    // loadSessions() right after registering can read a warm cache that predates
+    // session 2 and file it under "previous", so it never shows on the Active
+    // tab. Let the cache lapse before forcing the fetch.
+    await desktop.waitForTimeout(600);
     await desktop.evaluate(() => loadSessions());
     await desktop.waitForSelector(`.session-item[data-id="${SESSION2_ID}"]`, { timeout: 5000 });
     await desktop.click(`.session-item[data-id="${SESSION2_ID}"]`);

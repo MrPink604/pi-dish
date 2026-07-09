@@ -161,6 +161,16 @@ export default function (pi: ExtensionAPI) {
   const wrappedUIs = new WeakSet<object>();
 
   let turnInProgress = false;
+  // Compaction has no active turn (turn_start never fires), yet pi has aborted
+  // the agent and is rewriting its message list — a prompt sent now would start
+  // a concurrent turn and race that rewrite. Gate sends while compacting and
+  // replay them once it finishes. pi emits an extension event only on success
+  // (session_compact), never on failure/cancel, so a stuck timer is the net
+  // that keeps a failed compaction from swallowing every later prompt.
+  let compacting = false;
+  let compactionStuckTimer: ReturnType<typeof setTimeout> | null = null;
+  const compactionQueue: Array<string | any[]> = [];
+  const COMPACTION_STUCK_MS = 6 * 60 * 1000;
   let modelId: string | null = null;
   let contextUsage: { tokens: number | null; contextWindow: number; percent: number | null } | null = null;
   let sessionName: string | null = null;
@@ -452,6 +462,7 @@ export default function (pi: ExtensionAPI) {
       contextUsage,
       thinkingLevel: getThinkingLevel(),
       turnInProgress,
+      compacting,
     };
     const sig = JSON.stringify(entry);
     if (sig === lastRegistrySig) return;
@@ -478,6 +489,9 @@ export default function (pi: ExtensionAPI) {
     cwd = null;
     commandCtx = null;
     turnInProgress = false;
+    if (compactionStuckTimer) { clearTimeout(compactionStuckTimer); compactionStuckTimer = null; }
+    compacting = false;
+    compactionQueue.length = 0;
     contextUsage = null;
     lastRegistrySig = null;
     pendingDialogs.clear();
@@ -500,6 +514,7 @@ export default function (pi: ExtensionAPI) {
       sessionFile,
       cwd,
       turnInProgress,
+      compacting,
       model: modelId,
       contextUsage,
       thinkingLevel: getThinkingLevel(),
@@ -565,6 +580,7 @@ export default function (pi: ExtensionAPI) {
         ?.catch?.((e: any) => {
           console.error("[pi-dish-bridge] compact failed:", e?.message || e);
           broadcast({ type: "event", event: "compaction_end", data: { reason: "manual", errorMessage: String(e?.message || e) } });
+          endCompaction();
         });
       return { ok: true, info: "Compaction started" };
     }
@@ -628,8 +644,8 @@ export default function (pi: ExtensionAPI) {
       const skillName = name.startsWith("skill:") ? name.slice(6) : name;
       const skillBlock = `<skill name="${skillName}" location="${filePath}">\nReferences are relative to ${baseDir}.\n\n${body}\n</skill>`;
       const expanded = args ? `${skillBlock}\n\n${args}` : skillBlock;
-      await pi.sendUserMessage(expanded, deliverAsOptions(deliverAs));
-      return { ok: true };
+      const { queued } = await deliverUserMessage(expanded, deliverAs);
+      return { ok: true, info: queued ? "Queued until compaction finishes" : undefined };
     }
 
     const promptCmd = commands.find((c) => c.source === "prompt" && c.name === name);
@@ -643,8 +659,8 @@ export default function (pi: ExtensionAPI) {
         return { ok: false, error: `failed to read template: ${e?.message || e}` };
       }
       const expanded = substituteArgs(content, parseCommandArgs(args));
-      await pi.sendUserMessage(expanded, deliverAsOptions(deliverAs));
-      return { ok: true };
+      const { queued } = await deliverUserMessage(expanded, deliverAs);
+      return { ok: true, info: queued ? "Queued until compaction finishes" : undefined };
     }
 
     const extCmd = commands.find((c) => c.source === "extension" && c.name === name);
@@ -676,6 +692,47 @@ export default function (pi: ExtensionAPI) {
     return {};
   }
 
+  // Single chokepoint for user-message sends: buffer while compacting, else
+  // hand off to pi with the usual mid-turn steer default. Returns whether the
+  // message was queued so callers can tell the client.
+  async function deliverUserMessage(content: string | any[], deliverAs?: string): Promise<{ queued: boolean }> {
+    if (compacting) {
+      compactionQueue.push(content);
+      return { queued: true };
+    }
+    await pi.sendUserMessage(content, deliverAsOptions(deliverAs));
+    return { queued: false };
+  }
+
+  // Drain messages buffered during compaction. Compaction just ended and no
+  // turn is running, so the first message starts a fresh turn and any extras
+  // ride as follow-ups (delivered after that turn) rather than racing a second
+  // one. The original deliverAs is intentionally dropped — a steer aimed at a
+  // now-finished compaction just resumes the conversation.
+  function flushCompactionQueue(): void {
+    const pending = compactionQueue.splice(0);
+    if (!pending.length) return;
+    (async () => {
+      for (let i = 0; i < pending.length; i++) {
+        try {
+          await pi.sendUserMessage(pending[i], i === 0 ? {} : { deliverAs: "followUp" });
+        } catch (e: any) {
+          console.error("[pi-dish-bridge] queued send failed:", e?.message || e);
+        }
+      }
+    })();
+  }
+
+  // Clear the compaction gate and flush. Idempotent: the success path
+  // (session_compact) and the stuck-timer net can both call it.
+  function endCompaction(): void {
+    if (compactionStuckTimer) { clearTimeout(compactionStuckTimer); compactionStuckTimer = null; }
+    if (!compacting) return;
+    compacting = false;
+    writeRegistry();
+    flushCompactionQueue();
+  }
+
   async function handleCommand(cmd: any, sock: net.Socket) {
     const respond = (success: boolean, data?: any, error?: string) => {
       try {
@@ -704,27 +761,27 @@ export default function (pi: ExtensionAPI) {
         case "prompt": {
           const content = buildUserContent(cmd);
           if (!content) return respond(false, undefined, "message required");
-          // deliverAsOptions applies the mid-turn steer default, matching the
-          // RPC backend and this file's own run_command paths — a plain
-          // prompt sent mid-turn must behave the same on both backends.
-          await pi.sendUserMessage(content, deliverAsOptions(cmd.deliverAs));
-          respond(true);
+          // deliverUserMessage applies the mid-turn steer default (matching the
+          // RPC backend and this file's own run_command paths) and buffers the
+          // send while compacting instead of racing pi's message rewrite.
+          const { queued } = await deliverUserMessage(content, cmd.deliverAs);
+          respond(true, { queued });
           return;
         }
 
         case "steer": {
           const content = buildUserContent(cmd);
           if (!content) return respond(false, undefined, "message required");
-          await pi.sendUserMessage(content, { deliverAs: "steer" });
-          respond(true);
+          const { queued } = await deliverUserMessage(content, "steer");
+          respond(true, { queued });
           return;
         }
 
         case "follow_up": {
           const content = buildUserContent(cmd);
           if (!content) return respond(false, undefined, "message required");
-          await pi.sendUserMessage(content, { deliverAs: "followUp" });
-          respond(true);
+          const { queued } = await deliverUserMessage(content, "followUp");
+          respond(true, { queued });
           return;
         }
 
@@ -930,6 +987,16 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_before_compact", (event: any, ctx: ExtensionContext) => {
     wrapExtensionUI(ctx);
     lastCtx = ctx ?? lastCtx;
+    compacting = true;
+    if (compactionStuckTimer) clearTimeout(compactionStuckTimer);
+    // pi emits no event when compaction fails or is cancelled — only on success
+    // (session_compact). Arm a net so a failed compaction can't leave the gate
+    // stuck on and swallow every later prompt.
+    compactionStuckTimer = setTimeout(() => {
+      console.error("[pi-dish-bridge] compaction end never observed; releasing queue gate");
+      endCompaction();
+    }, COMPACTION_STUCK_MS);
+    writeRegistry();
     // Don't forward the raw event: it carries branchEntries (the whole
     // pre-compaction transcript) and an AbortSignal.
     broadcast({ type: "event", event: "compaction_start", data: { reason: event?.reason, willRetry: event?.willRetry } });
@@ -949,5 +1016,9 @@ export default function (pi: ExtensionAPI) {
         result: entry ? { tokensBefore: entry.tokensBefore } : undefined,
       },
     });
+    // This event fires synchronously inside pi's compact(), before its finally
+    // reconnects the agent. Defer the gate release + queue flush a tick so the
+    // replayed prompts don't start a turn mid-reconnect.
+    setTimeout(endCompaction, 0);
   });
 }

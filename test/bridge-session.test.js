@@ -44,3 +44,31 @@ test('send() resolves matched responses and times out on unanswered commands', a
   sess.close();
   await new Promise((r) => server.close(r));
 });
+
+test('tracks compacting state from the hello and compaction events', async () => {
+  const socketPath = path.join(tmpDir, 'bridge-compact.sock');
+  let clientSock = null;
+  const server = net.createServer((sock) => {
+    clientSock = sock;
+    sock.on('error', () => {});
+    // Connect mid-compaction: the hello snapshot must seed sess.compacting.
+    sock.write(JSON.stringify({ type: 'hello', turnInProgress: false, compacting: true }) + '\n');
+  });
+  await new Promise((r) => server.listen(socketPath, r));
+
+  const sess = new BridgeSession({ sessionId: 'compact-session', socketPath, pid: process.pid, cwd: tmpDir });
+  await sess.connect();
+  await new Promise((r) => setTimeout(r, 20)); // let the hello land
+  assert.equal(sess.compacting, true, 'hello with compacting seeds the flag');
+
+  clientSock.write(JSON.stringify({ type: 'event', event: 'compaction_end', data: {} }) + '\n');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(sess.compacting, false, 'compaction_end clears the flag');
+
+  clientSock.write(JSON.stringify({ type: 'event', event: 'compaction_start', data: {} }) + '\n');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(sess.compacting, true, 'compaction_start sets the flag');
+
+  sess.close();
+  await new Promise((r) => server.close(r));
+});

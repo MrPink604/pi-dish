@@ -515,8 +515,8 @@ app.post('/api/sessions/:id/steer', async (req, res) => {
   try {
     const sess = await getLiveSession(req.params.id);
     if (!sess) return res.status(404).json({ error: 'Session not active' });
-    await sess.steer(message || '', images.length ? { images } : {});
-    res.json({ success: true });
+    const result = await sess.steer(message || '', images.length ? { images } : {});
+    res.json({ success: true, result });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1133,7 +1133,7 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
     return res.end();
   }
 
-  res.write(`event: init\ndata: ${JSON.stringify({ turnInProgress: !!sess.turnInProgress })}\n\n`);
+  res.write(`event: init\ndata: ${JSON.stringify({ turnInProgress: !!sess.turnInProgress, compacting: !!sess.compacting })}\n\n`);
 
   const send = (event, data) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
