@@ -92,9 +92,9 @@ RPC), then polls `REGISTRY_DIR` directly for the entry carrying the token (up
 to 30s, `PI_DISH_SPAWN_TIMEOUT_MS` override for tests). On timeout the window is
 left open (don't kill it) and the error hints the bridge must be installed.
 
-`isSocketAllowed()` rejects any socket not directly under the tmux tmpdir or in
-`listServers()` — the server can be on 0.0.0.0, so an arbitrary `-S` path from
-the LAN must not get through. Placements persist in
+`isSocketAllowed()` rejects any socket not directly under the tmux tmpdir (the
+same directory `listServers()` enumerates) — the server can be on 0.0.0.0, so
+an arbitrary `-S` path from the LAN must not get through. Placements persist in
 `~/.pi/dish/tmux-spawns.json` (`{ [sessionId]: { socket, paneId, createdAt } }`,
 temp-file+rename, HOME per call like shares.js). After registration the server
 records the placement and send-keys `/dish-prime` to prime the command context;

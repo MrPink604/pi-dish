@@ -1059,7 +1059,7 @@ app.get('/api/tmux/targets', async (req, res) => {
       await tmux.pruneSpawns(registered);
     } catch {}
     res.json({ available: true, servers });
-  } catch (e) {
+  } catch {
     res.json({ available: true, servers: [] });
   }
 });
@@ -1128,7 +1128,7 @@ async function spawnPiInTmux({ target, args, cwd }) {
     const err = new Error('tmux is not available on this host'); err.status = 400; throw err;
   }
   const socket = target.socket;
-  if (!(await tmux.isSocketAllowed(socket))) {
+  if (!tmux.isSocketAllowed(socket)) {
     const err = new Error('Invalid tmux socket'); err.status = 400; throw err;
   }
   if (!target.tmuxSession && !target.newTmuxSession) {
@@ -1146,7 +1146,7 @@ async function spawnPiInTmux({ target, args, cwd }) {
       socket,
       tmuxSession: target.tmuxSession,
       newTmuxSessionName: target.newTmuxSession,
-      cwd,
+      cwd: cwd || process.env.HOME,
       command,
       env,
     }));
@@ -1167,7 +1167,7 @@ async function spawnPiInTmux({ target, args, cwd }) {
     }
     await new Promise((r) => setTimeout(r, 300));
   }
-  const err = new Error('pi did not register within 30s — the tmux window was left open for inspection. Ensure the pi-dish-bridge extension is installed in pi\'s global extensions.');
+  const err = new Error(`pi did not register within ${Math.round(timeoutMs / 1000)}s — the tmux window was left open for inspection. Ensure the pi-dish-bridge extension is installed in pi's global extensions.`);
   err.status = 500;
   throw err;
 }
@@ -1183,7 +1183,7 @@ app.post('/api/sessions/new', async (req, res) => {
     }
     if (target && target.type === 'tmux') {
       const args = model ? ['--model', model] : [];
-      const id = await spawnPiInTmux({ target, args, cwd: cwd || process.env.HOME });
+      const id = await spawnPiInTmux({ target, args, cwd });
       return res.json({ success: true, id });
     }
     const rpc = await createRPCSession({ model, cwd });
@@ -1216,7 +1216,7 @@ app.post('/api/sessions/:id/resume', async (req, res) => {
   const target = req.body?.target;
   try {
     if (target && target.type === 'tmux') {
-      const id = await spawnPiInTmux({ target, args: ['--session', sessionFile], cwd: cwd || process.env.HOME });
+      const id = await spawnPiInTmux({ target, args: ['--session', sessionFile], cwd });
       return res.json({ success: true, id });
     }
     const rpc = await resumeRPCSession(sessionFile, cwd || process.env.HOME);
