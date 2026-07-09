@@ -1397,6 +1397,12 @@ body.sidebar-open {
   border-top: 1px solid var(--border);
 }
 
+/* Tool-result images (e.g. a `read` on a PNG) align with the pre's padding
+   instead of sitting flush against the content box edge. */
+.tool-result-content .msg-images {
+  padding: 0 12px 10px;
+}
+
 .tool-result-content pre {
   margin: 0;
   padding: 10px 12px;

@@ -124,6 +124,25 @@ function getToolOutputText(partialResult) {
     .join('');
 }
 
+/**
+ * Image content blocks — { data, mimeType } — from a message or tool-result
+ * content array (e.g. a `read` on an image yields a text block plus an
+ * {type:'image'} block). Non-array content and blocks without base64 data
+ * yield nothing; mimeType defaults to image/png. Rendering is done by the
+ * caller (this stays DOM-free); the browser data URI is
+ * `data:${mimeType};base64,${data}`.
+ */
+function extractImageBlocks(content) {
+  if (!Array.isArray(content)) return [];
+  const out = [];
+  for (const block of content) {
+    if (block && block.type === 'image' && block.data) {
+      out.push({ data: block.data, mimeType: block.mimeType || 'image/png' });
+    }
+  }
+  return out;
+}
+
 /** Severity class for a context-usage percentage (session list + header badges). */
 function contextClass(percent) {
   return percent > 80 ? 'critical' : percent > 50 ? 'high' : '';
@@ -409,7 +428,7 @@ function sanitizeMarkdownUrl(url) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRelativeTime, formatTime, formatDuration,
-    shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText, messageHasVisibleText,
+    shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText, extractImageBlocks, messageHasVisibleText,
     contextClass, sessionMetaText, parseModelId, formatModelRef,
     groupByWorkspace, buildWorkspaceTree, collectTreeSessions,
     partitionPinned, applyLocalFilter, fuzzyMatch, fuzzyScore,

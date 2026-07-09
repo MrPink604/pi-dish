@@ -1616,23 +1616,27 @@ async function fetchNewMessagesSince(sessionId) {
   }
 }
 
+// Image content blocks → a `.msg-images` thumbnail row (empty string when
+// none), shared by user messages, tool results, and live tool panels so the
+// tap-to-zoom lightbox delegation works everywhere. Escape both the mime type
+// and the data before dropping them into the attribute — well-formed base64
+// has no HTML-special chars so escaping is a no-op for it, but malformed data
+// must not be able to break out of the src attribute.
+function imageBlocksHtml(content, alt = 'image') {
+  const images = extractImageBlocks(content);
+  if (!images.length) return '';
+  const imgs = images.map(img =>
+    `<img class="msg-image" src="data:${escapeHtml(img.mimeType)};base64,${escapeHtml(img.data)}" alt="${escapeHtml(alt)}">`
+  ).join('');
+  return `<div class="msg-images">${imgs}</div>`;
+}
+
 function renderUserMessage(msg, time, attrs = '') {
   const text = extractTextContent(msg.content);
-  // Attached images render as tappable thumbnails below the text. Escape both
-  // the mime type and the data before dropping them into the attribute —
-  // well-formed base64 has no HTML-special chars so escaping is a no-op for it,
-  // but malformed data must not be able to break out of the src attribute.
-  let imagesHtml = '';
-  if (Array.isArray(msg.content)) {
-    for (const block of msg.content) {
-      if (block && block.type === 'image' && block.data) {
-        imagesHtml += `<img class="msg-image" src="data:${escapeHtml(block.mimeType || 'image/png')};base64,${escapeHtml(block.data)}" alt="attached image">`;
-      }
-    }
-  }
+  const imagesHtml = imageBlocksHtml(msg.content, 'attached image');
   return `<div${attrs} class="message user">
     <div class="message-header"><span class="message-role user">❯</span>${time ? `<span class="message-time">${time}</span>` : ''}</div>
-    <div class="message-content user-content">${text ? `<div class="markdown-body">${formatMarkdown(text)}</div>` : ''}${imagesHtml ? `<div class="msg-images">${imagesHtml}</div>` : ''}</div>
+    <div class="message-content user-content">${text ? `<div class="markdown-body">${formatMarkdown(text)}</div>` : ''}${imagesHtml}</div>
   </div>`;
 }
 
@@ -1704,17 +1708,24 @@ function renderToolResult(msg, time, attrs = '') {
   const lines = content.split('\n');
   const lineCount = lines.length;
   const preview = truncate(lines[0], 80);
-  
+  // A tool result carrying an image (e.g. a `read` on a PNG) opens by default
+  // regardless of line count — seeing the image is the point — and flags it in
+  // the header meta so it's discoverable when collapsed.
+  const images = extractImageBlocks(msg.content);
+  const imageCount = images.length;
+  const imagesHtml = imageBlocksHtml(msg.content, 'tool result image');
+
   return `<div${attrs} class="message tool-result ${isError ? 'error' : ''}" data-timestamp="${timestamp}">
-    <details class="tool-result-details" ${lineCount <= 5 ? 'open' : ''}>
+    <details class="tool-result-details" ${(lineCount <= 5 || imageCount) ? 'open' : ''}>
       <summary class="tool-result-header">
         <span class="tool-result-icon">${isError ? '✗' : '✓'}</span>
         <span class="tool-result-name">${escapeHtml(msg.toolName || 'result')}</span>
         ${lineCount > 5 ? `<span class="tool-result-meta">${lineCount} lines</span>` : ''}
+        ${imageCount ? `<span class="tool-result-meta">${imageCount === 1 ? 'image' : imageCount + ' images'}</span>` : ''}
         ${isError ? '<span class="tool-result-meta error-badge">error</span>' : ''}
         ${lineCount > 5 ? `<span class="tool-result-preview">${escapeHtml(preview)}</span>` : ''}
       </summary>
-      <div class="tool-result-content"><pre>${escapeHtml(truncate(content, 2000))}</pre></div>
+      <div class="tool-result-content"><pre>${escapeHtml(truncate(content, 2000))}</pre>${imagesHtml}</div>
     </details>
   </div>`;
 }
@@ -1750,11 +1761,11 @@ function liveToolOutputHtml(output) {
   return escapeHtml(truncate(output, 8000));
 }
 
-function buildLiveToolPanel(toolCallId, toolName, args, output, isError, isComplete, durationMs) {
+function buildLiveToolPanel(toolCallId, toolName, args, output, isError, isComplete, durationMs, imagesHtml = '') {
   const stateClass = isComplete ? (isError ? 'error' : 'complete') : 'running';
   const summary = getToolSummary(toolName, args);
-  const openAttr = output ? ' open' : '';
-  
+  const openAttr = (output || imagesHtml) ? ' open' : '';
+
   let statusHtml = '';
   if (isComplete) {
     if (isError) {
@@ -1782,6 +1793,7 @@ function buildLiveToolPanel(toolCallId, toolName, args, output, isError, isCompl
       '<span class="live-tool-status-dot"></span>' +
     '</summary>' +
     outputHtml +
+    imagesHtml +
   '</details>';
 }
 
@@ -1809,13 +1821,16 @@ function updateLiveToolPanel(data) {
   if (!entry || !entry.el) return;
 
   const output = getToolOutputText(partialResult);
-  if (!output) return;
+  // Images derive idempotently from the latest partial result — the whole
+  // `.msg-images` row is replaced each update so images never accumulate.
+  const imagesHtml = imageBlocksHtml(partialResult && partialResult.content, 'tool result image');
+  if (!output && !imagesHtml) return;
 
   const container = document.getElementById('messages');
   const wasPinned = container ? isPinnedToBottom(container) : false;
 
   let outputEl = entry.el.querySelector('.live-tool-output');
-  if (!outputEl) {
+  if (output && !outputEl) {
     // Create output area if it doesn't exist
     const cursorHtml = '<span class="live-tool-cursor"></span>';
     outputEl = document.createElement('div');
@@ -1824,7 +1839,7 @@ function updateLiveToolPanel(data) {
     entry.el.appendChild(outputEl);
     // Open the details so output is visible
     entry.el.setAttribute('open', '');
-  } else {
+  } else if (output) {
     const cursorEl = outputEl.querySelector('.live-tool-cursor');
     outputEl.innerHTML = liveToolOutputHtml(output);
     // Re-add cursor
@@ -1832,8 +1847,15 @@ function updateLiveToolPanel(data) {
     else outputEl.insertAdjacentHTML('beforeend', '<span class="live-tool-cursor"></span>');
   }
 
+  if (imagesHtml) {
+    const existing = entry.el.querySelector('.msg-images');
+    if (existing) existing.outerHTML = imagesHtml;
+    else entry.el.insertAdjacentHTML('beforeend', imagesHtml);
+    entry.el.setAttribute('open', '');
+  }
+
   // Follow output only while the user hasn't scrolled away.
-  outputEl.scrollTop = outputEl.scrollHeight;
+  if (outputEl) outputEl.scrollTop = outputEl.scrollHeight;
   if (container && wasPinned) scrollToBottom(container);
 }
 
@@ -1846,10 +1868,11 @@ function finalizeLiveToolPanel(data) {
   if (!entry || !entry.el) return;
 
   const output = getToolOutputText(result);
+  const imagesHtml = imageBlocksHtml(result && result.content, 'tool result image');
   const durationMs = entry.startTime ? (Date.now() - entry.startTime) : null;
 
   // Rebuild the panel in its final state
-  const newHtml = buildLiveToolPanel(toolCallId, toolName || 'tool', args, output, isError, true, durationMs);
+  const newHtml = buildLiveToolPanel(toolCallId, toolName || 'tool', args, output, isError, true, durationMs, imagesHtml);
   const tmp = document.createElement('div');
   tmp.innerHTML = newHtml;
   const newEl = tmp.firstElementChild;

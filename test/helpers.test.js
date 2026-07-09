@@ -144,6 +144,21 @@ test('getToolOutputText concatenates text blocks only', () => {
   assert.equal(H.getToolOutputText(null), '');
 });
 
+test('extractImageBlocks pulls image blocks and defaults the mime type', () => {
+  assert.deepEqual(H.extractImageBlocks([
+    { type: 'text', text: 'Read image file [image/png]' },
+    { type: 'image', data: 'AAA', mimeType: 'image/png' },
+    { type: 'image', data: 'BBB' }, // mimeType absent → default
+    { type: 'image' },              // no data → skipped
+  ]), [
+    { data: 'AAA', mimeType: 'image/png' },
+    { data: 'BBB', mimeType: 'image/png' },
+  ]);
+  // Non-array content (plain string, null) yields nothing.
+  assert.deepEqual(H.extractImageBlocks('Read image file'), []);
+  assert.deepEqual(H.extractImageBlocks(null), []);
+});
+
 test('groupByWorkspace groups by cwd and sorts by recency', () => {
   const mk = (cwd, ts) => ({ cwd, lastActivity: ts });
   const groups = H.groupByWorkspace([

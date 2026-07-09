@@ -39,6 +39,10 @@ const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
 fs.mkdirSync(sessionDir, { recursive: true });
 fs.mkdirSync(registryDir, { recursive: true });
 
+// A valid 1x1 transparent PNG — a `read` on an image yields a text block plus
+// this {type:'image'} block; the transcript must render it as an img.msg-image.
+const TINY_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
 const sessionFile = path.join(sessionDir, `${SESSION_ID}.jsonl`);
 const appendEntry = (e) => fs.appendFileSync(sessionFile, JSON.stringify(e) + '\n');
 appendEntry({ type: 'session', cwd: CWD, timestamp: '2026-07-05T00:00:00.000Z' });
@@ -47,7 +51,7 @@ appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: '
 // A historical turn with tool activity — must fold into a closed .tool-group.
 appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'check the readme' }], timestamp: '2026-07-05T00:00:03.000Z' } });
 appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'hist1', name: 'Read', arguments: { path: 'README.md' } }], timestamp: '2026-07-05T00:00:04.000Z' } });
-appendEntry({ type: 'message', message: { role: 'toolResult', toolName: 'Read', content: [{ type: 'text', text: '# alpha' }], timestamp: '2026-07-05T00:00:05.000Z' } });
+appendEntry({ type: 'message', message: { role: 'toolResult', toolName: 'Read', content: [{ type: 'text', text: 'Read image file [image/png]' }, { type: 'image', data: TINY_PNG, mimeType: 'image/png' }], timestamp: '2026-07-05T00:00:05.000Z' } });
 appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'the readme says alpha' }], timestamp: '2026-07-05T00:00:06.000Z' } });
 // Pad the history so the feed is taller than the viewport — the forced-follow
 // scroll check needs a genuinely scrollable container to mean anything.
@@ -276,6 +280,22 @@ function writeRegistry(patch = {}) {
     check(await histGroup.locator('.message.tool-result').count() === 1, 'tool result lives inside the group');
     const histLabel = await histGroup.locator('.tool-group-label').textContent();
     check(histLabel.includes('1 tool use'), `group label counts tool uses (got ${JSON.stringify(histLabel)})`);
+
+    // Image tool result: the Read of an image renders its {type:'image'} block
+    // as an img.msg-image inside the (image-open) tool-result details, and the
+    // header meta flags it. Open the group so the image is actually visible.
+    const imgResult = histGroup.locator('.message.tool-result');
+    check((await imgResult.locator('.tool-result-meta').allTextContents()).some(t => t.trim() === 'image'),
+      'tool-result header meta flags the image');
+    check(await imgResult.locator('details.tool-result-details').evaluate(el => el.open),
+      'image tool result is open by default');
+    await histGroup.evaluate(el => { el.open = true; });
+    await desktop.waitForSelector('.message.tool-result .tool-result-details img.msg-image', { timeout: 3000 });
+    check(await imgResult.locator('.tool-result-details img.msg-image').count() === 1,
+      'image tool result renders one img.msg-image inside the details');
+    const imgSrc = await imgResult.locator('img.msg-image').getAttribute('src');
+    check(imgSrc.startsWith('data:image/png;base64,'), `image src is a png data URI (got ${imgSrc.slice(0, 30)}…)`);
+    await histGroup.evaluate(el => { el.open = false; });
 
     // 2. Prompt round-trip through the fake bridge
     console.log('prompt round-trip:');
