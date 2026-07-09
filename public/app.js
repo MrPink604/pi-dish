@@ -78,6 +78,7 @@ async function loadCommands(sessionId) {
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
   loadConfig(); // feature flags (terminal) — fire-and-forget
+  loadSpawnTargets(); // populate the "Run in" tmux selector (hidden if no tmux)
   initTerminalKeybar();
   initTerminalResize();
   // Full fetch: restoring the saved session may need the historical list.
@@ -762,10 +763,11 @@ async function selectSession(id) {
 // Resume a previous session
 async function resumeSession() {
   if (!currentSession) return;
-  setStatus('Resuming session...', 'working');
-  
+  const target = savedResumeTarget();
+  setStatus(target ? 'Resuming in tmux…' : 'Resuming session...', 'working');
+
   try {
-    const data = await apiSend(`/api/sessions/${currentSession.id}/resume`);
+    const data = await apiSend(`/api/sessions/${currentSession.id}/resume`, target ? { target } : undefined);
     setStatus('Session resumed');
     // Reload sessions and re-select (it's now active); refreshSessions
     // keeps an in-flight All-tab search intact.
@@ -2448,15 +2450,19 @@ async function abortTurn() {
 // New session — cwd from the picker input unless a caller (the workspace
 // header's + button) passes one explicitly.
 async function createSession(cwd) {
+  let target;
   try {
-    setStatus('Creating session...', 'working');
+    target = selectedSpawnTarget();
+  } catch (e) { setStatus(e.message, 'error'); return; }
+  try {
+    setStatus(target ? 'Spawning in tmux…' : 'Creating session...', 'working');
     if (cwd === undefined) {
       const cwdInput = document.getElementById('newSessionCwd');
       cwd = cwdInput ? cwdInput.value.trim() : '';
     }
     // Persist last-used cwd
     if (cwd) localStorage.setItem('pi-dish-cwd', cwd);
-    const data = await apiSend('/api/sessions/new', { cwd: cwd || undefined });
+    const data = await apiSend('/api/sessions/new', { cwd: cwd || undefined, target: target || undefined });
     if (!data.id) { setStatus('Failed to create session', 'error'); return; }
     setStatus('Session created');
     switchTab('active');
@@ -2591,6 +2597,101 @@ function hideCwdDropdown() {
     }
   });
 })();
+
+// =========================================================================
+// Spawn target ("Run in") — headless RPC child (default) or a tmux window
+// =========================================================================
+// Each entry: { label, target, needsName }. target === null means headless.
+let spawnTargets = [{ label: 'pi-dish (headless)', target: null }];
+
+// Stable key so a saved choice survives target re-fetches/reorders.
+function spawnTargetKey(t) {
+  if (!t || !t.target) return 'headless';
+  if (t.needsName) return `${t.target.socket}::new`;
+  return `${t.target.socket}::${t.target.tmuxSession}`;
+}
+
+async function loadSpawnTargets() {
+  const wrap = document.getElementById('newSessionTargetWrap');
+  const sel = document.getElementById('newSessionTarget');
+  if (!wrap || !sel) return;
+  let data;
+  try {
+    const res = await fetch('/api/tmux/targets');
+    data = await res.json();
+  } catch { data = { available: false }; }
+
+  // Hide the control when tmux is missing or no tmux servers are running —
+  // headless is the only option anyway.
+  if (!data || !data.available || !data.servers?.length) {
+    wrap.style.display = 'none';
+    return;
+  }
+
+  spawnTargets = [{ label: 'pi-dish (headless)', target: null }];
+  for (const srv of data.servers) {
+    for (const s of srv.sessions || []) {
+      spawnTargets.push({
+        label: `tmux:${srv.name} — ${s.name}`,
+        target: { type: 'tmux', socket: srv.socket, tmuxSession: s.name },
+      });
+    }
+    spawnTargets.push({
+      label: `tmux:${srv.name} — new session…`,
+      target: { type: 'tmux', socket: srv.socket },
+      needsName: true,
+    });
+  }
+
+  sel.innerHTML = spawnTargets
+    .map((t, i) => `<option value="${i}">${escapeHtml(t.label)}</option>`)
+    .join('');
+
+  // Restore last choice if its server/session still exists; else headless.
+  const saved = localStorage.getItem('pi-dish-spawn-target');
+  const idx = saved ? spawnTargets.findIndex(t => spawnTargetKey(t) === saved) : -1;
+  sel.value = String(idx >= 0 ? idx : 0);
+
+  wrap.style.display = '';
+  onSpawnTargetChange();
+}
+
+// Reveal the tmux-session-name input for "new session…" choices; persist the
+// selection.
+function onSpawnTargetChange() {
+  const sel = document.getElementById('newSessionTarget');
+  const nameInput = document.getElementById('newSessionTmuxName');
+  if (!sel) return;
+  const t = spawnTargets[Number(sel.value)];
+  if (nameInput) nameInput.style.display = t && t.needsName ? '' : 'none';
+  localStorage.setItem('pi-dish-spawn-target', spawnTargetKey(t));
+}
+
+// The target descriptor to send with /new. Throws if a new-tmux-session choice
+// is missing its name. Returns null (headless) when the control is hidden.
+function selectedSpawnTarget() {
+  const wrap = document.getElementById('newSessionTargetWrap');
+  const sel = document.getElementById('newSessionTarget');
+  if (!wrap || wrap.style.display === 'none' || !sel) return null;
+  const t = spawnTargets[Number(sel.value)];
+  if (!t || !t.target) return null;
+  if (t.needsName) {
+    const name = (document.getElementById('newSessionTmuxName')?.value || '').trim();
+    if (!name) throw new Error('Enter a name for the new tmux session');
+    return { type: 'tmux', socket: t.target.socket, newTmuxSession: name };
+  }
+  return { type: 'tmux', socket: t.target.socket, tmuxSession: t.target.tmuxSession };
+}
+
+// For resume: the saved target if it still resolves to a concrete tmux
+// session (a pending "new session…" choice has no name here → headless).
+function savedResumeTarget() {
+  const saved = localStorage.getItem('pi-dish-spawn-target');
+  if (!saved || saved === 'headless') return null;
+  const t = spawnTargets.find(x => spawnTargetKey(x) === saved);
+  if (!t || !t.target || t.needsName) return null;
+  return { type: 'tmux', socket: t.target.socket, tmuxSession: t.target.tmuxSession };
+}
 
 // =========================================================================
 // Utilities

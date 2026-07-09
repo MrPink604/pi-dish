@@ -463,6 +463,34 @@ body.sidebar-open {
   outline: none;
 }
 
+.new-session-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.target-select {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+  cursor: pointer;
+}
+
+.target-select:focus {
+  border-color: var(--accent);
+}
+
+.target-name-input {
+  width: 100%;
+}
+
 .cwd-input-wrap {
   flex: 1;
   min-width: 0;

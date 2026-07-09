@@ -178,7 +178,8 @@ test('client exit frame is sent when the shell exits', async () => {
 
 test('GET /api/config reports the terminal feature enabled', async () => {
   const res = await fetch(base + '/api/config');
-  assert.deepEqual(await res.json(), { terminal: true });
+  const cfg = await res.json();
+  assert.equal(cfg.terminal, true);
 });
 
 test('WS endpoint: end-to-end echo through a real WebSocket', async () => {

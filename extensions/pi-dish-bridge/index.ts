@@ -9,6 +9,11 @@ const ROOT = path.join(os.homedir(), ".pi", "dish");
 const REGISTRY_DIR = path.join(ROOT, "sessions");
 const SOCKET_DIR = path.join(ROOT, "sockets");
 
+// Set by pi-dish when it spawns this pi inside a tmux window (see lib/tmux.js).
+// Written into the registry entry so the server can correlate the tmux spawn
+// with the session it registers. Harmless (and undefined) otherwise.
+const SPAWN_TOKEN = process.env.PI_DISH_SPAWN_TOKEN || null;
+
 const FORWARDED_EVENTS = [
   "agent_start",
   "agent_end",
@@ -463,6 +468,7 @@ export default function (pi: ExtensionAPI) {
       thinkingLevel: getThinkingLevel(),
       turnInProgress,
       compacting,
+      spawnToken: SPAWN_TOKEN,
     };
     const sig = JSON.stringify(entry);
     if (sig === lastRegistrySig) return;

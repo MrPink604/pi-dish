@@ -2,16 +2,19 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const piSDK = require('./lib/pi-sdk');
-const { createRPCSession, resumeRPCSession, getRPCSession, getAllRPCSessions } = require('./lib/rpc-session');
+const { createRPCSession, resumeRPCSession, getRPCSession, getAllRPCSessions, getPiLaunchSpec } = require('./lib/rpc-session');
 const {
   listRegisteredSessions,
   getRegisteredSession,
   getBridgeSession,
   BridgeSession,
+  REGISTRY_DIR,
 } = require('./lib/bridge-session');
 const { searchFiles, searchHomeDirs } = require('./lib/file-search');
 const terminal = require('./lib/terminal');
+const tmux = require('./lib/tmux');
 const shares = require('./lib/shares');
 const {
   getSessionInfo,
@@ -840,10 +843,22 @@ async function navigateLiveTree(sessionId, sess, entryId, opts) {
   try {
     return await sess.navigateTree(entryId, opts);
   } catch (e) {
+    if (!/no command context/i.test(e.message || '')) throw e;
+    // RPC-backed sessions prime remotely via pi's command executor.
     const rpc = getRPCSession(sessionId);
-    if (!/no command context/i.test(e.message || '') || !rpc?.alive) throw e;
-    await rpc.prompt('/dish-prime');
-    return sess.navigateTree(entryId, opts);
+    if (rpc?.alive) {
+      await rpc.prompt('/dish-prime');
+      return sess.navigateTree(entryId, opts);
+    }
+    // tmux-spawned TUI sessions have a pane we can type into: send /dish-prime
+    // through send-keys, give the command a moment to run, and retry once.
+    const spawn = tmux.getSpawn(sessionId);
+    if (spawn && await tmux.paneExists(spawn.socket, spawn.paneId)) {
+      await tmux.sendKeys(spawn.socket, spawn.paneId, '/dish-prime');
+      await new Promise((r) => setTimeout(r, 1500));
+      return sess.navigateTree(entryId, opts);
+    }
+    throw e;
   }
 }
 
@@ -1028,7 +1043,25 @@ app.get('/api/cwds', (req, res) => {
 // opt-in (PI_DISH_TERMINAL=1) and additionally requires node-pty to have
 // loaded — a missing native binary must hide the button, not break the UI.
 app.get('/api/config', (req, res) => {
-  res.json({ terminal: terminal.isTerminalEnabled() });
+  res.json({ terminal: terminal.isTerminalEnabled(), tmux: tmux.isTmuxAvailable() });
+});
+
+// tmux spawn targets: the running tmux servers and their sessions. 200 with
+// available:false when tmux is missing (the client hides the control).
+app.get('/api/tmux/targets', async (req, res) => {
+  if (!tmux.isTmuxAvailable()) return res.json({ available: false, servers: [] });
+  try {
+    const servers = await tmux.listServers();
+    // Opportunistically drop spawn placements whose pane and session are both
+    // gone, so tmux-spawns.json doesn't grow without bound.
+    try {
+      const registered = new Set(listRegisteredSessions().map((r) => r.sessionId));
+      await tmux.pruneSpawns(registered);
+    } catch {}
+    res.json({ available: true, servers });
+  } catch (e) {
+    res.json({ available: true, servers: [] });
+  }
 });
 
 // Fuzzy directory search under $HOME for the new-session cwd picker.
@@ -1064,23 +1097,105 @@ app.get('/api/sessions/:id/files', async (req, res) => {
   }
 });
 
-// Spawn a fresh headless session via `pi --mode rpc`. The bridge extension
-// (loaded inside the spawned process) registers it shortly after startup.
+// tmux spawning: instead of a `pi --mode rpc` child (which dies with this
+// server), open a real pi TUI as a tmux window. The pi-dish-bridge extension
+// inside it registers the session and stamps our correlation token onto the
+// registry entry; we poll for that entry, then persist the placement and prime
+// the command context so remote tree navigation works. See lib/tmux.js.
+
+// Poll the bridge registry directly (not through the memoized listing) for the
+// entry carrying our spawn token.
+function findSessionBySpawnToken(token) {
+  let files;
+  try { files = fs.readdirSync(REGISTRY_DIR); } catch { return null; }
+  for (const name of files) {
+    if (!name.endsWith('.json')) continue;
+    try {
+      const entry = JSON.parse(fs.readFileSync(path.join(REGISTRY_DIR, name), 'utf8'));
+      if (entry && entry.spawnToken === token && entry.sessionId) return entry;
+    } catch {}
+  }
+  return null;
+}
+
+// Build the tmux child argv+env from the same launch spec RPC uses (so a
+// PI_DISH_PI_COMMAND wrapper or a simple `pi` alias's env carries over), open
+// the window, and wait up to 30s for the session to register. The window is
+// left open on timeout for the user to inspect. `args` are pi's CLI args
+// (a TUI launch — never --mode rpc). Returns the registered session id.
+async function spawnPiInTmux({ target, args, cwd }) {
+  if (!tmux.isTmuxAvailable()) {
+    const err = new Error('tmux is not available on this host'); err.status = 400; throw err;
+  }
+  const socket = target.socket;
+  if (!(await tmux.isSocketAllowed(socket))) {
+    const err = new Error('Invalid tmux socket'); err.status = 400; throw err;
+  }
+  if (!target.tmuxSession && !target.newTmuxSession) {
+    const err = new Error('target needs tmuxSession or newTmuxSession'); err.status = 400; throw err;
+  }
+
+  const spec = getPiLaunchSpec();
+  const token = crypto.randomBytes(16).toString('hex');
+  const env = { ...spec.env, PI_DISH_SPAWN_TOKEN: token };
+  const command = [...spec.argv, ...args];
+
+  let paneId;
+  try {
+    ({ paneId } = await tmux.spawnInTmux({
+      socket,
+      tmuxSession: target.tmuxSession,
+      newTmuxSessionName: target.newTmuxSession,
+      cwd,
+      command,
+      env,
+    }));
+  } catch (e) {
+    const err = new Error(`Failed to open tmux window: ${e.message}`); err.status = 500; throw err;
+  }
+
+  const timeoutMs = Number(process.env.PI_DISH_SPAWN_TIMEOUT_MS) || 30000;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const entry = findSessionBySpawnToken(token);
+    if (entry) {
+      tmux.recordSpawn(entry.sessionId, { socket, paneId });
+      // Prime the command context so POST /branch can navigate the tree
+      // remotely (TUI sessions otherwise 409 — see the branch route).
+      tmux.sendKeys(socket, paneId, '/dish-prime').catch(() => {});
+      return entry.sessionId;
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  const err = new Error('pi did not register within 30s — the tmux window was left open for inspection. Ensure the pi-dish-bridge extension is installed in pi\'s global extensions.');
+  err.status = 500;
+  throw err;
+}
+
+// Spawn a fresh session. Default: a headless `pi --mode rpc` child (dies with
+// this server). Optional `target: { type: 'tmux', socket, tmuxSession }` or
+// `{ ..., newTmuxSession }` opens a persistent pi TUI in tmux instead.
 app.post('/api/sessions/new', async (req, res) => {
   try {
-    let { model, cwd } = req.body || {};
+    let { model, cwd, target } = req.body || {};
     if (cwd && cwd.startsWith('~')) {
       cwd = path.join(process.env.HOME, cwd.slice(1).replace(/^\//, ''));
+    }
+    if (target && target.type === 'tmux') {
+      const args = model ? ['--model', model] : [];
+      const id = await spawnPiInTmux({ target, args, cwd: cwd || process.env.HOME });
+      return res.json({ success: true, id });
     }
     const rpc = await createRPCSession({ model, cwd });
     res.json({ success: true, id: rpc.id });
   } catch (e) {
     console.error('Failed to create session:', e);
-    res.status(500).json({ success: false, error: e.message });
+    res.status(e.status || 500).json({ success: false, error: e.message });
   }
 });
 
-// Resume an inactive session via `pi --mode rpc --session <path>`.
+// Resume an inactive session. Default: `pi --mode rpc --session <path>` child;
+// with a tmux `target`, `pi --session <path>` in a tmux window instead.
 app.post('/api/sessions/:id/resume', async (req, res) => {
   const sessionId = req.params.id;
 
@@ -1098,12 +1213,17 @@ app.post('/api/sessions/:id/resume', async (req, res) => {
     cwd = process.env.HOME;
   }
 
+  const target = req.body?.target;
   try {
+    if (target && target.type === 'tmux') {
+      const id = await spawnPiInTmux({ target, args: ['--session', sessionFile], cwd: cwd || process.env.HOME });
+      return res.json({ success: true, id });
+    }
     const rpc = await resumeRPCSession(sessionFile, cwd || process.env.HOME);
     res.json({ success: true, id: rpc.id });
   } catch (e) {
     console.error('Failed to resume session:', e);
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json({ error: e.message });
   }
 });
 

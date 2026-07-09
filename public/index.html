@@ -55,6 +55,11 @@
             <div class="cwd-dropdown" id="cwdDropdown"></div>
           </div>
         </div>
+        <div class="new-session-target" id="newSessionTargetWrap" style="display:none">
+          <label class="cwd-label" for="newSessionTarget">run in</label>
+          <select id="newSessionTarget" class="target-select" onchange="onSpawnTargetChange()"></select>
+        </div>
+        <input type="text" id="newSessionTmuxName" class="cwd-input target-name-input" placeholder="new tmux session name" spellcheck="false" autocomplete="off" style="display:none">
         <button class="btn" onclick="createSession()">+ New Session</button>
       </div>
     </aside>

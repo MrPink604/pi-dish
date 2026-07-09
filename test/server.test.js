@@ -616,5 +616,5 @@ test('SSE replays remembered extension UI state to new connections', async () =>
 test('GET /api/config reports terminal disabled without PI_DISH_TERMINAL=1', async () => {
   const { status, body } = await get('/api/config');
   assert.equal(status, 200);
-  assert.deepEqual(body, { terminal: false });
+  assert.equal(body.terminal, false);
 });

@@ -71,6 +71,43 @@ BridgeSession, else alive RPCSession, else null). Don't re-roll the
 branch on `instanceof BridgeSession` only for genuinely backend-specific
 calls (setModel arg shapes, runCommand vs the RPC slash emulation).
 
+## tmux spawning (lib/tmux.js)
+
+`POST /api/sessions/new` and `/resume` default to a `pi --mode rpc` child of
+the server (dies on restart). An optional `target: { type:'tmux', socket,
+tmuxSession }` (or `{ ..., newTmuxSession }`) instead opens a real pi **TUI** as
+a tmux window — no `--mode rpc` — that survives restarts; the pi-dish-bridge
+extension registers it and pi-dish drives it over the normal BridgeSession
+path. `lib/tmux.js` wraps tmux via execFile (argv arrays, short timeouts, never
+a shell string): `listServers()` scans sockets under `$TMUX_TMPDIR ||
+/tmp/tmux-$UID/` (`:` field separator in `-F`, since tmux sanitizes a tab to
+`_` and forbids `:` in session names), `spawnInTmux()` new-window/new-session
+with `-e KEY=VALUE` env and `-P -F '#{pane_id}'`, plus `sendKeys`/`paneExists`.
+
+Correlation: the server generates a token, passes `PI_DISH_SPAWN_TOKEN` into
+the spawned pi's env (via tmux `-e`), and the bridge stamps it as `spawnToken`
+on its registry entry. `spawnPiInTmux` (server.js) builds the child from
+`getPiLaunchSpec()` (exported from rpc-session.js — same wrapper/alias env as
+RPC), then polls `REGISTRY_DIR` directly for the entry carrying the token (up
+to 30s, `PI_DISH_SPAWN_TIMEOUT_MS` override for tests). On timeout the window is
+left open (don't kill it) and the error hints the bridge must be installed.
+
+`isSocketAllowed()` rejects any socket not directly under the tmux tmpdir or in
+`listServers()` — the server can be on 0.0.0.0, so an arbitrary `-S` path from
+the LAN must not get through. Placements persist in
+`~/.pi/dish/tmux-spawns.json` (`{ [sessionId]: { socket, paneId, createdAt } }`,
+temp-file+rename, HOME per call like shares.js). After registration the server
+records the placement and send-keys `/dish-prime` to prime the command context;
+the `/branch` route's "no command context" handling adds a middle path between
+RPC-prime and the 409: if the session has a live spawn pane, send-keys
+`/dish-prime`, wait ~1.5s, retry. `pruneSpawns()` drops entries whose pane is
+gone and session isn't registered (called opportunistically from `GET
+/api/tmux/targets`). Client: the "Run in" `<select>` in the sidebar footer
+(hidden when `/api/config` reports `tmux:false`) lists headless + one option per
+tmux session + a "new session…" per server (reveals a name input); the choice
+persists in `localStorage['pi-dish-spawn-target']` and is reused for resume when
+still valid.
+
 ## Share links (lib/shares.js, /share/:token)
 
 Public read-only session traces. `lib/shares.js` persists
