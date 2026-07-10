@@ -210,17 +210,31 @@ feed) clears it; programmatic or layout-driven scroll shifts must not.
 
 ## Tests (test/)
 
-`npm test` runs three node:test suites:
+`npm test` runs the node:test suites (`test/*.test.js`):
 - `test/server.test.js` — boots `server.js` with `HOME` pointed at a temp dir
   containing a fixture JSONL and exercises session listing, message
   pagination (`limit`/`before`/`after`), `/search`, `/stats`, request
-  validation, and cache revalidation after JSONL appends.
+  validation, cache revalidation after JSONL appends, share links, and SSE
+  extension-UI replay (fake bridge socket).
+- `test/rpc-session.test.js` — the headless RPC backend end to end:
+  `PI_DISH_PI_COMMAND` points at `test/fixtures/fake-rpc-pi.js`, which speaks
+  pi's real `--mode rpc` stdio protocol and logs every command it receives,
+  so tests assert both HTTP outcomes and what pi was asked (spawn/resume,
+  prompt→SSE→JSONL round-trip, mid-turn auto-steer, abort via `agent_end`,
+  slash-command emulation, dead-child pruning). Teardown must kill spawned
+  RPC children or the test process never exits.
+- `test/tmux.test.js` — real tmux on a throwaway socket; `fake-pi.js`
+  performs the registry handshake. `test/terminal.test.js` — real PTY + WS.
+  `test/bridge-session.test.js` — socket protocol guards.
 - `test/helpers.test.js` — unit tests for `public/helpers.js`, the pure
   frontend helpers (escaping, formatting, filtering, fuzzy match, mood).
   Helpers are plain script globals in the browser and CommonJS exports in
   node; anything DOM-free that app.js needs belongs there, with a test.
 - `test/session-files.test.js` — unit tests for the JSONL parsers and their
   mtime/size caches in `lib/session-files.js`.
+
+Shared test helpers that aren't suites (e.g. `test/sse-reader.js`) live
+outside the `*.test.js` glob.
 
 Server behavior changes should extend these; UI changes need the smoke test
 or manual CDP below.
