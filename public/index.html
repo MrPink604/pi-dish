@@ -276,6 +276,21 @@
     </div>
   </div>
 
+  <!-- File viewer modal (clickable file mentions in the transcript) -->
+  <div class="modal-overlay" id="fileModal" style="display:none" onclick="if(event.target===this)closeFileModal()">
+    <div class="modal file-modal">
+      <div class="modal-header file-modal-header">
+        <h3 id="fileModalTitle">File</h3>
+        <div class="file-modal-controls">
+          <button class="btn-icon" onclick="copyFileModalContent(this)" title="Copy contents">⧉</button>
+          <button class="btn-icon" onclick="closeFileModal()" title="Close (Esc)">✕</button>
+        </div>
+      </div>
+      <div class="file-modal-path" id="fileModalPath"></div>
+      <div class="file-modal-body" id="fileModalBody"></div>
+    </div>
+  </div>
+
   <script src="helpers.js"></script>
   <script src="app.js"></script>
   <div class="model-dropdown" id="modelDropdown"></div>

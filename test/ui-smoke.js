@@ -60,6 +60,17 @@ for (let i = 0; i < 8; i++) {
   appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: `filler answer ${i}\n\nwith a second paragraph of text to take up vertical space in the feed.` }], timestamp: `2026-07-05T00:01:0${i}.500Z` } });
 }
 
+// A file-mention turn for the file viewer: the write toolCall gives the
+// resolver the deep path; the prose mentions it by bare basename (backticked)
+// and README.md in plain text. The message carries text, so it doesn't fold
+// into a tool-group (the accordion counts above stay stable).
+fs.mkdirSync(path.join(CWD, 'deep', 'nest'), { recursive: true });
+fs.writeFileSync(path.join(CWD, 'deep', 'nest', 'findings.md'), '# deep findings\n\nhello from deep\n');
+appendEntry({ type: 'message', message: { role: 'assistant', content: [
+  { type: 'text', text: 'Wrote my notes to `findings.md` — compare with README.md at the root.' },
+  { type: 'toolCall', id: 'fm1', name: 'write', arguments: { path: path.join(CWD, 'deep', 'nest', 'findings.md'), content: '# deep findings\n' } },
+], timestamp: '2026-07-05T00:02:00.000Z' } });
+
 // A second workspace with one (older) historical session — the sidebar
 // collapse/pin section needs two groups on the All tab.
 const BETA_ID = '2026-07-04T00-00-00-uismoke2';
@@ -393,6 +404,28 @@ function writeRegistry(patch = {}) {
     check(copiedPath === filePath, `session-file path landed on the clipboard (got ${JSON.stringify(copiedPath)})`);
     await desktop.keyboard.press('Escape');
     await desktop.waitForSelector('#statsModal', { state: 'hidden', timeout: 2000 });
+
+    // File viewer: the assistant's `findings.md` mention is linkified;
+    // clicking resolves through the session's write toolCall to the deep
+    // file and renders its markdown. Plain-prose README.md linkifies too.
+    console.log('file viewer:');
+    const findingsLink = desktop.locator('.message.assistant .markdown-body code.file-link',
+      { hasText: 'findings.md' });
+    check(await findingsLink.count() === 1, 'backticked mention linkified');
+    check(await desktop.locator('.message.assistant .markdown-body span.file-link',
+      { hasText: 'README.md' }).count() === 1, 'plain-prose mention linkified');
+    await findingsLink.click();
+    await desktop.waitForSelector('#fileModal .markdown-body h1', { timeout: 5000 });
+    check(await desktop.locator('#fileModalTitle').textContent() === 'findings.md',
+      'viewer titled by filename');
+    const shownPath = await desktop.locator('#fileModalPath').textContent();
+    check(shownPath.includes('deep/nest/findings.md'),
+      `bare mention resolved to the deep tool-written path (got ${JSON.stringify(shownPath)})`);
+    check(await desktop.locator('#fileModal .markdown-body h1').textContent() === 'deep findings',
+      'markdown file renders rendered');
+    await desktop.keyboard.press('Escape');
+    await desktop.waitForSelector('#fileModal', { state: 'hidden', timeout: 2000 });
+    check(true, 'Escape closes the viewer');
 
     // Wide desktop: the message feed centers a reading column instead of
     // hugging the left edge.

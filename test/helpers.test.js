@@ -453,3 +453,28 @@ test('highlightTokens escapes HTML and merges overlapping marks', () => {
   // Token text that looks like HTML is escaped inside the mark too.
   assert.equal(H.highlightTokens('x <s> y', ['<s>']), 'x <mark>&lt;s&gt;</mark> y');
 });
+
+test('looksLikeFilePath accepts path-shaped mentions and rejects prose', () => {
+  // Accepted: bare names with a real extension, qualified/rooted paths, :line suffixes.
+  for (const s of ['findings.md', 'lib/tmux.js', 'lib/tmux.js:42', 'lib/tmux.js:42:7',
+                   '/etc/hosts', '~/notes/plan.md', './run.sh', '../up/one.txt',
+                   'package.json', '.zshrc.local', 'src/components']) {
+    assert.ok(H.looksLikeFilePath(s), `${s} should look like a path`);
+  }
+  // Rejected: prose, versions, URLs, flags, whitespace.
+  for (const s of ['hello', 'v1.2.3', '1.2.3', 'https://example.com/a.md', '--mode',
+                   'two words.md', '', null, 'a'.repeat(300) + '.md', 'Makefile']) {
+    assert.ok(!H.looksLikeFilePath(s), `${JSON.stringify(s)} should not look like a path`);
+  }
+});
+
+test('findPathTokens picks file mentions out of prose, skipping URLs and word pairs', () => {
+  const text = 'Wrote findings.md and /tmp/out/report.txt (see also lib/tmux.js:42). ' +
+    'Not these: and/or input/output example.com https://x.io/a.md v1.2.3.';
+  const tokens = H.findPathTokens(text).map(t => t.token);
+  assert.deepEqual(tokens, ['findings.md', '/tmp/out/report.txt', 'lib/tmux.js:42']);
+  // Offsets point at the token itself (sentence punctuation trimmed).
+  const t0 = H.findPathTokens(text)[0];
+  assert.equal(text.slice(t0.start, t0.end), 'findings.md');
+  assert.deepEqual(H.findPathTokens('no paths here at all'), []);
+});

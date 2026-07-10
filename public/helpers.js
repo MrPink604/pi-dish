@@ -426,6 +426,58 @@ function sanitizeMarkdownUrl(url) {
 }
 
 /**
+ * Whether a chat-mentioned token plausibly names a file the viewer could
+ * open: one path-safe token (optionally ~/, ./, ../ or / rooted, optional
+ * trailing :line[:col]) that carries a '/' or a letter-led extension. The
+ * extension rule keeps versions ("1.2.3") and prose out while accepting
+ * "findings.md"; false positives are cheap (the server 404s), false
+ * negatives are a dead filename the user can't tap.
+ */
+var FILE_MENTION_RE = /^(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?$/;
+var FILE_EXT_RE = /\.[A-Za-z][A-Za-z0-9]{0,7}$/;
+
+function looksLikeFilePath(text) {
+  const s = String(text == null ? '' : text).trim();
+  if (!s || s.length > 260) return false;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return false; // URLs
+  if (!FILE_MENTION_RE.test(s)) return false;
+  const stripped = s.replace(/:\d+(?::\d+)?$/, '');
+  return stripped.includes('/') || FILE_EXT_RE.test(stripped);
+}
+
+/**
+ * Path-looking tokens in plain prose (inline code is handled separately and
+ * more permissively). Stricter than looksLikeFilePath: a bare word only
+ * counts with a rooted prefix or a real extension — "and/or" and
+ * "input/output" must not linkify — and domain-ish extensions are dropped
+ * ("example.com" is prose, not a file). Returns [{ start, end, token }].
+ */
+var PATH_TOKEN_RE = /(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?/g;
+var BARE_EXT_STOPLIST = new Set(['com', 'org', 'net', 'io', 'ai', 'dev', 'co', 'app']);
+
+function findPathTokens(text) {
+  const s = String(text == null ? '' : text);
+  const out = [];
+  PATH_TOKEN_RE.lastIndex = 0;
+  let m;
+  while ((m = PATH_TOKEN_RE.exec(s))) {
+    // '.' is a path char, so a sentence period rides along — trim it.
+    const token = m[0].replace(/[.,;:!?]+$/, '');
+    if (!token) continue;
+    const prev = s[m.index - 1];
+    if (prev && /[\w.@:/+-]/.test(prev)) continue; // mid-URL / mid-word
+    if (!looksLikeFilePath(token)) continue;
+    const stripped = token.replace(/:\d+(?::\d+)?$/, '');
+    const rooted = /^(?:~\/|\.{1,2}\/|\/)/.test(stripped);
+    const ext = (stripped.match(FILE_EXT_RE) || [''])[0].slice(1);
+    if (!rooted && !ext) continue;
+    if (!rooted && !stripped.includes('/') && BARE_EXT_STOPLIST.has(ext.toLowerCase())) continue;
+    out.push({ start: m.index, end: m.index + token.length, token });
+  }
+  return out;
+}
+
+/**
  * A short plain-text excerpt of `text` around the first occurrence of any of
  * `tokens` (both already lowercased — this runs against the search corpus),
  * for showing *why* a content search matched. Trims to word boundaries and
@@ -493,6 +545,6 @@ if (typeof module !== 'undefined' && module.exports) {
     partitionPinned, applyLocalFilter, fuzzyMatch, fuzzyScore,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     modelMatchesPattern, isModelEnabled, pushPromptHistory, sanitizeMarkdownUrl,
-    buildSnippet, highlightTokens,
+    buildSnippet, highlightTokens, looksLikeFilePath, findPathTokens,
   };
 }

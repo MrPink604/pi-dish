@@ -13,6 +13,7 @@ const {
   REGISTRY_DIR,
 } = require('./lib/bridge-session');
 const { searchFiles, searchHomeDirs } = require('./lib/file-search');
+const { resolveFileMention, readFileForViewer } = require('./lib/file-mention');
 const terminal = require('./lib/terminal');
 const tmux = require('./lib/tmux');
 const shares = require('./lib/shares');
@@ -1143,6 +1144,36 @@ app.get('/api/sessions/:id/files', async (req, res) => {
     if (!cwd) return res.status(404).json({ error: 'Session cwd unknown' });
     const files = await searchFiles(cwd, String(req.query.q || ''), 20);
     res.json({ cwd, files });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Read a file mentioned in the chat (clickable filenames in the transcript).
+// "findings.md" written deep in the tree resolves through the session's own
+// tool calls; reads are gated to the cwd subtree + tool-touched paths. See
+// lib/file-mention.js.
+app.get('/api/sessions/:id/file', async (req, res) => {
+  try {
+    const mention = String(req.query.path || '');
+    if (!mention || mention.length > 1024) return res.status(400).json({ error: 'path required' });
+    const cwd = resolveSessionCwd(req.params.id);
+    const sessionFile = findSessionFile(req.params.id);
+    if (!cwd && !sessionFile) return res.status(404).json({ error: 'Unknown session' });
+    let messages = [];
+    if (sessionFile) { try { messages = readSessionMessages(sessionFile); } catch {} }
+    const resolved = await resolveFileMention(mention, { cwd, messages });
+    if (!resolved) {
+      return res.status(404).json({ error: `Couldn't find "${mention}" among this session's files` });
+    }
+    const file = readFileForViewer(resolved.absPath);
+    if (file.error) return res.status(file.status || 415).json({ error: file.error, path: resolved.absPath });
+    res.json({
+      path: resolved.absPath,
+      relPath: cwd && resolved.absPath.startsWith(cwd + '/') ? resolved.absPath.slice(cwd.length + 1) : null,
+      line: resolved.line ?? null,
+      ...file,
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

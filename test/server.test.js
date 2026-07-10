@@ -36,17 +36,30 @@ const entries = [
 const SESSION_FILE = path.join(sessionDir, `${SESSION_ID}.jsonl`);
 fs.writeFileSync(SESSION_FILE, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
 
-// Second fixture whose cwd exists on disk — exercises /files fuzzy search.
+// Second fixture whose cwd exists on disk — exercises /files fuzzy search
+// and the /file mention viewer (tool calls referencing a deep file plus a
+// scratch file outside the cwd; secret.txt sits outside the session's reach).
 const REAL_CWD_ID = '2026-07-04T11-00-00-bbccdd34';
 const realCwd = path.join(tmpHome, 'workspace', 'proj-alpha');
+const deepDir = path.join(realCwd, 'deep', 'nest');
+const scratchDir = path.join(tmpHome, 'scratch');
 fs.mkdirSync(path.join(realCwd, 'src'), { recursive: true });
+fs.mkdirSync(deepDir, { recursive: true });
+fs.mkdirSync(scratchDir, { recursive: true });
 fs.writeFileSync(path.join(realCwd, 'src', 'main.js'), 'console.log(1);\n');
 fs.writeFileSync(path.join(realCwd, 'README.md'), '# alpha\n');
+fs.writeFileSync(path.join(deepDir, 'findings.md'), '# deep findings\n');
+fs.writeFileSync(path.join(scratchDir, 'notes.md'), 'scratch notes\n');
+fs.writeFileSync(path.join(tmpHome, 'secret.txt'), 'outside the session reach\n');
 fs.writeFileSync(
   path.join(sessionDir, `${REAL_CWD_ID}.jsonl`),
   [
     { type: 'session', cwd: realCwd, timestamp: '2026-07-04T11:00:00.000Z' },
     { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'hi' }], timestamp: '2026-07-04T11:00:01.000Z' } },
+    { type: 'message', message: { role: 'assistant', content: [
+      { type: 'toolCall', id: 'tw1', name: 'write', arguments: { path: path.join(deepDir, 'findings.md'), content: '# deep findings\n' } },
+      { type: 'toolCall', id: 'tr1', name: 'read', arguments: { path: path.join(scratchDir, 'notes.md') } },
+    ], timestamp: '2026-07-04T11:00:02.000Z' } },
   ].map(e => JSON.stringify(e)).join('\n') + '\n',
 );
 
@@ -227,6 +240,40 @@ test('GET /files with a missing cwd degrades to an empty list', async () => {
   const { status, body } = await get(`/api/sessions/${SESSION_ID}/files?q=x`);
   assert.equal(status, 200);
   assert.deepEqual(body.files, []);
+});
+
+test('GET /file resolves a bare filename through the session tool calls', async () => {
+  const { status, body } = await get(`/api/sessions/${REAL_CWD_ID}/file?path=findings.md`);
+  assert.equal(status, 200);
+  assert.equal(body.path, path.join(deepDir, 'findings.md'), 'the deep tool-written file, not a cwd guess');
+  assert.equal(body.relPath, 'deep/nest/findings.md');
+  assert.equal(body.content, '# deep findings\n');
+  assert.equal(body.truncated, false);
+});
+
+test('GET /file reaches tool-touched files outside the cwd', async () => {
+  const { status, body } = await get(`/api/sessions/${REAL_CWD_ID}/file?path=notes.md`);
+  assert.equal(status, 200);
+  assert.equal(body.path, path.join(scratchDir, 'notes.md'));
+  assert.equal(body.relPath, null, 'outside the cwd there is no relative form');
+});
+
+test('GET /file serves cwd-relative paths and strips :line suffixes', async () => {
+  const { status, body } = await get(`/api/sessions/${REAL_CWD_ID}/file?path=${encodeURIComponent('src/main.js:1')}`);
+  assert.equal(status, 200);
+  assert.equal(body.content, 'console.log(1);\n');
+  assert.equal(body.line, 1);
+});
+
+test('GET /file rejects traversal and unreachable absolute paths', async () => {
+  const dotdot = await get(`/api/sessions/${REAL_CWD_ID}/file?path=${encodeURIComponent('../../secret.txt')}`);
+  assert.equal(dotdot.status, 404, 'lexical traversal out of the cwd must not read');
+  const abs = await get(`/api/sessions/${REAL_CWD_ID}/file?path=${encodeURIComponent(path.join(tmpHome, 'secret.txt'))}`);
+  assert.equal(abs.status, 404, 'absolute path outside cwd + tool trail must not read');
+  const missing = await get(`/api/sessions/${REAL_CWD_ID}/file?path=never-written.md`);
+  assert.equal(missing.status, 404);
+  const empty = await get(`/api/sessions/${REAL_CWD_ID}/file?path=`);
+  assert.equal(empty.status, 400);
 });
 
 test('PUT /api/models/enabled persists pi scoped models in settings.json', async () => {

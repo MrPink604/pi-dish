@@ -273,6 +273,8 @@ feed) clears it; programmatic or layout-driven scroll shifts must not.
   node; anything DOM-free that app.js needs belongs there, with a test.
 - `test/session-files.test.js` — unit tests for the JSONL parsers and their
   mtime/size caches in `lib/session-files.js`.
+- `test/file-mention.test.js` — unit tests for `lib/file-mention.js`
+  (mention → path resolution through tool calls, containment, viewer reads).
 
 Shared test helpers that aren't suites (e.g. `test/sse-reader.js`) live
 outside the `*.test.js` glob.
@@ -446,6 +448,21 @@ so the outside-click closer must treat detached targets as inside.
   `.message.assistant.no-text` (tool-only turns — without that class their
   empty header rows linger as stray markers). Both the static renderer and the
   streaming renderer maintain `no-text`.
+- **Clickable file mentions / viewer** (`lib/file-mention.js`, `GET
+  /api/sessions/:id/file?path=`): agents write findings.md deep in the tree
+  and refer to it by bare filename — `linkifyFilePaths()` (runs inside
+  `applyHighlight`) marks path-looking inline code, tool-call summaries, and
+  plain-prose tokens (`looksLikeFilePath`/`findPathTokens` in helpers.js) as
+  `.file-link`; a delegated click opens `#fileModal` (markdown rendered, code
+  highlighted, images inline, copy button; the viewer body goes through
+  `applyHighlight` too, so a markdown file's own mentions are clickable in
+  turn). The server resolves the mention against the session: qualified
+  mentions prefer the exact cwd-relative file, bare basenames prefer the
+  paths mined from the session's tool calls (read/write/edit `path`/`cwd`
+  args + absolute tokens in bash commands — most recent reference wins), then
+  fff fuzzy search under the cwd. Reads are gated to the cwd subtree +
+  tool-touched paths (lexical containment — `..` normalizes away before the
+  check; a LAN client must not read arbitrary files).
 - **In-session search**: 🔍 header button / Ctrl+F. `GET
   /api/sessions/:id/search?q=` returns `{ matches: [{index, role}] }` over the
   whole session; the client walks matches (Enter = backwards, Shift+Enter =

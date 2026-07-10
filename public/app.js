@@ -176,6 +176,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     const img = e.target.closest('img.msg-image');
     if (img) openImageLightbox(img.src);
   });
+
+  // Tap a linkified file mention to open it in the viewer. preventDefault
+  // keeps a link inside a <summary> (tool-call headers) from toggling the
+  // enclosing <details>.
+  document.addEventListener('click', (e) => {
+    const link = e.target.closest('.file-link');
+    if (!link || !currentSession) return;
+    e.preventDefault();
+    openFileViewer(link.textContent.trim());
+  });
   
   // Periodic refresh must preserve an in-flight server search, or the list
   // resets to unfiltered mid-search.
@@ -1286,6 +1296,68 @@ function renderShareSection(sessionId, share) {
 
 function closeStatsModal() {
   document.getElementById('statsModal').style.display = 'none';
+}
+
+// --- File viewer modal ---
+// Opens a file mentioned in the chat (clickable .file-link spans). The
+// server resolves the mention against the session's tool calls — see
+// GET /api/sessions/:id/file. Markdown renders rendered; code highlights;
+// images display inline. The raw text is kept for the copy button.
+let fileModalRaw = null;
+
+async function openFileViewer(mention) {
+  if (!currentSession) return;
+  const body = document.getElementById('fileModalBody');
+  const title = document.getElementById('fileModalTitle');
+  const pathEl = document.getElementById('fileModalPath');
+  fileModalRaw = null;
+  title.textContent = mention.replace(/:\d+(?::\d+)?$/, '').split('/').pop();
+  pathEl.textContent = '';
+  body.innerHTML = '<div class="loading">Loading…</div>';
+  document.getElementById('fileModal').style.display = 'flex';
+  try {
+    const res = await fetch(`/api/sessions/${currentSession.id}/file?path=${encodeURIComponent(mention)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    title.textContent = data.path.split('/').pop();
+    const kb = data.size >= 10240 ? `${Math.round(data.size / 1024)} KB` : `${data.size} B`;
+    pathEl.textContent = `${shortCwd(data.path)} · ${kb}${data.truncated ? ' · truncated preview' : ''}`;
+    pathEl.title = data.path;
+    if (data.image) {
+      body.innerHTML = `<img class="file-modal-img" src="data:${escapeHtml(data.image.mimeType)};base64,${escapeHtml(data.image.data)}" alt="">`;
+      return;
+    }
+    fileModalRaw = data.content;
+    const ext = (data.path.match(/\.([A-Za-z0-9]+)$/) || [])[1]?.toLowerCase();
+    if (ext === 'md' || ext === 'markdown') {
+      body.innerHTML = `<div class="markdown-body">${formatMarkdown(data.content)}</div>`;
+    } else {
+      // Skip hljs on huge files (data-highlighted makes applyHighlight leave
+      // it alone) — highlighting half a megabyte janks phones.
+      const skipHl = data.content.length > 80000 ? ' data-highlighted="skip"' : '';
+      const lang = ext ? ` class="language-${escapeHtml(ext)}"` : '';
+      body.innerHTML = `<div class="markdown-body"><pre><code${lang}${skipHl}>${escapeHtml(data.content)}</code></pre></div>`;
+    }
+    // Same post-pass as the transcript: copy buttons, highlighting — and a
+    // markdown file's own file references become clickable in turn.
+    applyHighlight(body);
+  } catch (e) {
+    body.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function closeFileModal() {
+  document.getElementById('fileModal').style.display = 'none';
+  document.getElementById('fileModalBody').innerHTML = '';
+  fileModalRaw = null;
+}
+
+function copyFileModalContent(btn) {
+  if (fileModalRaw == null) return;
+  copyTextToClipboard(fileModalRaw).then(
+    () => { btn.textContent = '✓'; setTimeout(() => { btn.textContent = '⧉'; }, 1200); },
+    () => setStatus('Copy failed (clipboard blocked)', 'error'),
+  );
 }
 
 // --- Export ---
@@ -3491,6 +3563,52 @@ function applyHighlight(el) {
     if (typeof hljs === 'undefined' || code.dataset.highlighted) return;
     try { hljs.highlightElement(code); } catch (e) {}
   });
+  linkifyFilePaths(root);
+}
+
+// Mark file mentions clickable: inline code spans and tool-call summaries
+// whose whole text looks like a path, plus path tokens inside plain prose
+// (findPathTokens in helpers.js). Runs inside applyHighlight so every final
+// render gets it; idempotent — linked elements are skipped and each
+// .markdown-body's prose is walked once (data-linkified). Clicks are
+// delegated on document → openFileViewer.
+function linkifyFilePaths(root) {
+  root.querySelectorAll('.markdown-body code, .tool-call-summary, .live-tool-summary').forEach(el => {
+    if (el.closest('pre') || el.classList.contains('file-link') || el.children.length) return;
+    if (looksLikeFilePath(el.textContent.trim())) {
+      el.classList.add('file-link');
+      el.title = 'Open file';
+    }
+  });
+
+  root.querySelectorAll('.markdown-body:not([data-linkified])').forEach(body => {
+    body.dataset.linkified = '1';
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
+      acceptNode(n) {
+        return n.parentElement && !n.parentElement.closest('code, a, pre, .file-link')
+          ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      },
+    });
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (const node of nodes) {
+      const tokens = findPathTokens(node.textContent);
+      if (!tokens.length) continue;
+      const frag = document.createDocumentFragment();
+      let pos = 0;
+      for (const t of tokens) {
+        frag.append(node.textContent.slice(pos, t.start));
+        const span = document.createElement('span');
+        span.className = 'file-link';
+        span.title = 'Open file';
+        span.textContent = t.token;
+        frag.append(span);
+        pos = t.end;
+      }
+      frag.append(node.textContent.slice(pos));
+      node.replaceWith(frag);
+    }
+  });
 }
 
 // navigator.clipboard only exists in secure contexts — a phone hitting the
@@ -3551,7 +3669,9 @@ function closeTreeModal() {
 
 document.addEventListener('keydown', function(e) {
   if (e.key !== 'Escape') return;
-  if (document.getElementById('treeModal').style.display !== 'none') {
+  if (document.getElementById('fileModal').style.display !== 'none') {
+    e.preventDefault(); closeFileModal();
+  } else if (document.getElementById('treeModal').style.display !== 'none') {
     e.preventDefault(); closeTreeModal();
   } else if (document.getElementById('statsModal').style.display !== 'none') {
     e.preventDefault(); closeStatsModal();
