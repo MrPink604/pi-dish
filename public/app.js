@@ -250,41 +250,25 @@ function handleAutocomplete(text) {
 }
 
 // --- @file mentions ---
-let fileAcTimer = null;
-let fileAcSeq = 0;
+const fileAcFetcher = debouncedFetcher(120,
+  async (token) => {
+    const res = await fetch(`/api/sessions/${currentSession.id}/files?q=${encodeURIComponent(token)}`);
+    const data = await res.json();
+    return res.ok ? data.files : null;
+  },
+  (files) => { files?.length ? showFileAutocomplete(files) : hideAutocomplete(); });
 
-function queueFileAutocomplete(token) {
-  clearTimeout(fileAcTimer);
-  fileAcTimer = setTimeout(async () => {
-    const seq = ++fileAcSeq;
-    try {
-      const res = await fetch(`/api/sessions/${currentSession.id}/files?q=${encodeURIComponent(token)}`);
-      const data = await res.json();
-      if (seq !== fileAcSeq) return; // a newer request or hide superseded this one
-      if (!res.ok || !data.files?.length) { hideAutocomplete(); return; }
-      showFileAutocomplete(data.files);
-    } catch {
-      hideAutocomplete();
-    }
-  }, 120);
-}
+function queueFileAutocomplete(token) { fileAcFetcher.fire(token); }
 
 const GIT_STATUS_LABEL = { modified: '± modified', untracked: '+ new', staged: '● staged' };
 
 function showFileAutocomplete(files) {
-  const container = ensureAutocompleteContainer();
-  autocompleteIndex = 0;
-  autocompleteVisible = true;
-  container.innerHTML = files.map((f, i) =>
+  showAutocompleteList(files.map((f, i) =>
     `<div class="autocomplete-item${i === 0 ? ' active' : ''}" data-file="${escapeHtml(f.path)}">
       <span class="autocomplete-icon">📄</span>
       <span class="autocomplete-name">${escapeHtml(f.path)}</span>
       <span class="autocomplete-desc">${GIT_STATUS_LABEL[f.gitStatus] || ''}</span>
-    </div>`).join('');
-  container.querySelectorAll('[data-file]').forEach(el => {
-    el.onclick = () => acceptFileMention(el.dataset.file);
-  });
-  container.style.display = 'block';
+    </div>`).join(''));
 }
 
 // Replace the @token at the caret with the chosen path.
@@ -313,10 +297,7 @@ function ensureAutocompleteContainer() {
 }
 
 function showAutocomplete(matches) {
-  var container = ensureAutocompleteContainer();
-  autocompleteIndex = 0;
-  autocompleteVisible = true;
-  container.innerHTML = matches.map((cmd, i) => {
+  showAutocompleteList(matches.map((cmd, i) => {
     var icon = cmd.source === 'builtin' ? '⚙️' : cmd.source === 'extension' ? '🧩' : cmd.source === 'skill' ? '📚' : '📝';
     var active = i === 0 ? ' active' : '';
     var args = cmd.args ? ' <span class="autocomplete-args">' + escapeHtml(cmd.args) + '</span>' : '';
@@ -324,28 +305,32 @@ function showAutocomplete(matches) {
       + '<span class="autocomplete-icon">' + icon + '</span>'
       + '<span class="autocomplete-name">/' + escapeHtml(cmd.name) + args + '</span>'
       + '<span class="autocomplete-desc">' + escapeHtml(cmd.description) + '</span></div>';
-  }).join('');
-  container.querySelectorAll('[data-name]').forEach(el => {
-    el.onclick = () => acceptAutocompleteByName(el.dataset.name);
+  }).join(''));
+}
+
+// Shared tail of both composer autocompletes (slash commands, @files): fill
+// the container, bind clicks through the one accept path, show it.
+function showAutocompleteList(html) {
+  const container = ensureAutocompleteContainer();
+  autocompleteIndex = 0;
+  autocompleteVisible = true;
+  container.innerHTML = html;
+  container.querySelectorAll('.autocomplete-item').forEach(el => {
+    el.onclick = () => acceptAutocomplete(el);
   });
   container.style.display = 'block';
 }
 
 function hideAutocomplete() {
   autocompleteVisible = false;
-  fileAcSeq++; // invalidate any in-flight file search
-  clearTimeout(fileAcTimer);
+  fileAcFetcher.cancel(); // invalidate any in-flight file search
   var c = document.getElementById('autocomplete');
   if (c) c.style.display = 'none';
 }
 
 function moveAutocomplete(delta) {
   var items = document.querySelectorAll('.autocomplete-item');
-  if (!items.length) return;
-  items[autocompleteIndex].classList.remove('active');
-  autocompleteIndex = (autocompleteIndex + delta + items.length) % items.length;
-  items[autocompleteIndex].classList.add('active');
-  items[autocompleteIndex].scrollIntoView({ block: 'nearest' });
+  autocompleteIndex = moveActiveItem(items, autocompleteIndex, delta, { wrap: true });
 }
 
 function acceptAutocomplete(el) {
@@ -372,7 +357,7 @@ let filterDebounceTimer = null;
 
 // --- seen tracking: which sessions have new activity since last viewed ---
 let seenActivity = {};
-try { seenActivity = JSON.parse(localStorage.getItem('pi-dish-seen') || '{}'); } catch {}
+seenActivity = readJSONPref('pi-dish-seen', {});
 
 function markSessionSeen(id, lastActivity) {
   if (!id || !lastActivity) return;
@@ -522,7 +507,7 @@ function renderSessionItem(session, opts = {}) {
 
 // Collapsed workspace groups (by cwd) — collapsed groups hide their sessions
 // and sink to the bottom of the list. Persisted across reloads.
-const collapsedGroups = new Set(JSON.parse(localStorage.getItem('pi-dish-collapsed-groups') || '[]'));
+const collapsedGroups = new Set(readJSONPref('pi-dish-collapsed-groups', []));
 
 function toggleGroupCollapsed(cwd) {
   if (collapsedGroups.has(cwd)) collapsedGroups.delete(cwd);
@@ -533,7 +518,7 @@ function toggleGroupCollapsed(cwd) {
 
 // Pinned sessions live in a section at the top of the sidebar; the array
 // order is the display order (drag handles rearrange it). Persisted.
-let pinnedSessions = JSON.parse(localStorage.getItem('pi-dish-pinned-sessions') || '[]');
+let pinnedSessions = readJSONPref('pi-dish-pinned-sessions', []);
 // Set while a pinned row is being dragged — renderSessions must not rebuild
 // the list out from under the drag (the 10s poll would otherwise do so).
 let pinnedDragActive = false;
@@ -880,16 +865,8 @@ function toggleThinkingDropdown(event) {
     `<div class="thinking-option${l === currentSession.thinkingLevel ? ' active' : ''}" onclick="selectThinkingLevel('${l}')">${l}</div>`
   ).join('');
 
-  const rect = event.currentTarget.getBoundingClientRect();
-  if (window.innerWidth > 768) {
-    dropdown.style.top = (rect.bottom + 4) + 'px';
-    dropdown.style.left = rect.left + 'px';
-    dropdown.style.bottom = '';
-  } else {
-    dropdown.style.top = '';
-    dropdown.style.left = rect.left + 'px';
-    dropdown.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
-  }
+  // On mobile the trigger sits above the keyboard/composer — open upward.
+  anchorDropdown(dropdown, event.currentTarget.getBoundingClientRect(), { above: window.innerWidth <= 768 });
   dropdown.style.display = 'block';
   armOutsideClickClose(['thinkingDropdown'], closeThinkingDropdown, () => thinkingDropdownOpen);
 }
@@ -1279,18 +1256,12 @@ async function toggleModelDropdown() {
   modelEditMode = false;
   const dropdown = document.getElementById('modelDropdown');
   if (!modelDropdownOpen) { dropdown.style.display = 'none'; return; }
+  // Desktop: anchored under the header button. Mobile: the stylesheet
+  // positions it (full-width sheet), so just clear any desktop inline pos.
   if (window.innerWidth > 768) {
-    const btn = document.getElementById('sessionModel');
-    const rect = btn.getBoundingClientRect();
-    dropdown.style.top = (rect.bottom + 4) + 'px';
-    dropdown.style.left = rect.left + 'px';
-    dropdown.style.bottom = '';
-    dropdown.style.right = '';
+    anchorDropdown(dropdown, document.getElementById('sessionModel').getBoundingClientRect());
   } else {
-    dropdown.style.top = '';
-    dropdown.style.left = '';
-    dropdown.style.bottom = '';
-    dropdown.style.right = '';
+    clearDropdownPos(dropdown);
   }
   renderModelDropdown('');
   dropdown.style.display = 'flex';
@@ -2239,7 +2210,7 @@ function restorePromptState() {
   autosizePromptInput(input);
   historyIndex = -1;
   historyStash = '';
-  try { promptHistory = JSON.parse(localStorage.getItem(historyKey(currentSession.id)) || '[]'); } catch { promptHistory = []; }
+  promptHistory = readJSONPref(historyKey(currentSession.id), []);
   if (!Array.isArray(promptHistory)) promptHistory = [];
 }
 
@@ -2562,22 +2533,14 @@ async function loadKnownCwds() {
 
 // Fuzzy-find the starting directory: known session cwds (starred, boosted)
 // merged with a live filesystem search under ~ (server-side, /api/dirs).
-let cwdFetchTimer = null;
-let cwdFetchSeq = 0;
+const cwdFetcher = debouncedFetcher(120,
+  async (query) => {
+    const res = await fetch('/api/dirs?q=' + encodeURIComponent(query));
+    return res.ok ? await res.json() : [];
+  },
+  (dirs, query) => renderCwdDropdown(query, dirs || []));
 
-function showCwdDropdown(query) {
-  clearTimeout(cwdFetchTimer);
-  cwdFetchTimer = setTimeout(async () => {
-    const seq = ++cwdFetchSeq;
-    let dirs = [];
-    try {
-      const res = await fetch('/api/dirs?q=' + encodeURIComponent(query));
-      if (res.ok) dirs = await res.json();
-    } catch {}
-    if (seq !== cwdFetchSeq) return; // superseded by newer keystroke
-    renderCwdDropdown(query, dirs);
-  }, 120);
-}
+function showCwdDropdown(query) { cwdFetcher.fire(query); }
 
 function renderCwdDropdown(query, dirs) {
   const dropdown = document.getElementById('cwdDropdown');
@@ -2616,8 +2579,7 @@ function renderCwdDropdown(query, dirs) {
 }
 
 function hideCwdDropdown() {
-  cwdFetchSeq++; // invalidate any in-flight dir search
-  clearTimeout(cwdFetchTimer);
+  cwdFetcher.cancel(); // invalidate any in-flight dir search
   const dropdown = document.getElementById('cwdDropdown');
   if (dropdown) dropdown.style.display = 'none';
 }
@@ -2642,16 +2604,9 @@ function hideCwdDropdown() {
       return;
     }
     const options = dropdown.querySelectorAll('.cwd-option');
-    if (e.key === 'ArrowDown') {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
-      cwdDropdownIdx = Math.min(cwdDropdownIdx + 1, options.length - 1);
-      options.forEach((o, i) => o.classList.toggle('active', i === cwdDropdownIdx));
-      if (options[cwdDropdownIdx]) options[cwdDropdownIdx].scrollIntoView({ block: 'nearest' });
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      cwdDropdownIdx = Math.max(cwdDropdownIdx - 1, 0);
-      options.forEach((o, i) => o.classList.toggle('active', i === cwdDropdownIdx));
-      if (options[cwdDropdownIdx]) options[cwdDropdownIdx].scrollIntoView({ block: 'nearest' });
+      cwdDropdownIdx = moveActiveItem(options, cwdDropdownIdx, e.key === 'ArrowDown' ? 1 : -1);
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (cwdDropdownIdx >= 0 && options[cwdDropdownIdx]) {
@@ -2803,6 +2758,71 @@ function armOutsideClickClose(ids, close, isOpen) {
   };
   const arm = () => setTimeout(() => document.addEventListener('click', onClick, { once: true }), 0);
   arm();
+}
+
+/**
+ * Debounced, sequence-guarded async lookup for type-ahead dropdowns:
+ * fire(args) runs fetchFn after `ms` of quiet and hands the result to
+ * applyFn only if no newer fire()/cancel() superseded it — a slow response
+ * can never render over a newer keystroke. cancel() also invalidates any
+ * in-flight result (call it from the dropdown's hide path).
+ */
+function debouncedFetcher(ms, fetchFn, applyFn) {
+  let timer = null;
+  let seq = 0;
+  return {
+    fire(...args) {
+      clearTimeout(timer);
+      timer = setTimeout(async () => {
+        const mySeq = ++seq;
+        let result = null;
+        try { result = await fetchFn(...args); } catch {}
+        if (mySeq !== seq) return;
+        applyFn(result, ...args);
+      }, ms);
+    },
+    cancel() {
+      seq++;
+      clearTimeout(timer);
+    },
+  };
+}
+
+/**
+ * Shared listbox keyboard nav: move the .active class by delta and scroll
+ * the new item into view. Returns the new index. `wrap` cycles past the
+ * ends (composer autocomplete); without it the index clamps (cwd picker).
+ */
+function moveActiveItem(items, currentIdx, delta, { wrap = false } = {}) {
+  if (!items.length) return -1;
+  let idx = currentIdx + delta;
+  if (wrap) idx = (idx + items.length) % items.length;
+  else idx = Math.max(0, Math.min(idx, items.length - 1));
+  items.forEach((el, i) => el.classList.toggle('active', i === idx));
+  items[idx].scrollIntoView({ block: 'nearest' });
+  return idx;
+}
+
+/** Reset a fixed dropdown's inline position so the stylesheet takes over. */
+function clearDropdownPos(el) {
+  el.style.top = ''; el.style.left = ''; el.style.bottom = ''; el.style.right = '';
+}
+
+/**
+ * Anchor a position:fixed dropdown to its trigger's rect — below it, or
+ * above it (`above`) when the bottom of the screen belongs to the mobile
+ * keyboard/composer.
+ */
+function anchorDropdown(el, rect, { above = false } = {}) {
+  clearDropdownPos(el);
+  el.style.left = rect.left + 'px';
+  if (above) el.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+  else el.style.top = (rect.bottom + 4) + 'px';
+}
+
+/** localStorage JSON read that can't throw on a corrupt/missing value. */
+function readJSONPref(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
 }
 
 /**
