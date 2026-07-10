@@ -128,9 +128,23 @@ test('GET /api/sessions?active=1 skips the historical scan', async () => {
 
 test('GET /api/sessions?q= filters on message content', async () => {
   const hit = await get('/api/sessions?q=bravo');
-  assert.ok(hit.body.previous.some(s => s.id === SESSION_ID));
+  const sess = hit.body.previous.find(s => s.id === SESSION_ID);
+  assert.ok(sess);
+  // Content matches carry a snippet showing why the row is in the results…
+  assert.ok(sess.searchSnippet.includes('bravo'), `snippet shows the hit: ${sess.searchSnippet}`);
   const miss = await get('/api/sessions?q=zzz-not-there');
   assert.ok(!miss.body.previous.some(s => s.id === SESSION_ID));
+
+  // …metadata matches (name/cwd/model/id) don't need one.
+  const byName = await get('/api/sessions?q=hello');
+  const metaMatch = byName.body.previous.find(s => s.id === SESSION_ID);
+  assert.ok(metaMatch, 'name match');
+  assert.equal(metaMatch.searchSnippet, undefined);
+});
+
+test('GET /api/sessions reports indexing:false once the corpus is indexed', async () => {
+  const { body } = await get('/api/sessions');
+  assert.equal(body.indexing, false);
 });
 
 test('GET /messages returns the tail with indexes', async () => {

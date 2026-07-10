@@ -116,12 +116,18 @@ test('readSessionMessages cache revalidates on append and survives LRU pressure'
   assert.equal(SF.readSessionMessages(file).length, 2, 'evicted entries re-parse correctly');
 });
 
-test('getSessionSearchText lowercases message text and tracks appends', () => {
-  const file = writeSession([userMsg('Find The NEEDLE here')]);
-  assert.ok(SF.getSessionSearchText(file).includes('the needle'));
-  fs.appendFileSync(file, JSON.stringify(assistantMsg('HAYSTACK reply')) + '\n');
-  assert.ok(SF.getSessionSearchText(file).includes('haystack'));
-  assert.equal(SF.getSessionSearchText(path.join(tmpDir, 'missing.jsonl')), '', 'missing file degrades to empty');
+test('buildSearchTextFromContent lowercases and caps message text', () => {
+  const content = [
+    userMsg('Find The NEEDLE here'),
+    assistantMsg('HAYSTACK reply ' + 'x'.repeat(600)),
+    { type: 'custom_message', content: 'Injected NOTE' },
+    'not json',
+  ].map(e => typeof e === 'string' ? e : JSON.stringify(e)).join('\n') + '\n';
+  const text = SF.buildSearchTextFromContent(content);
+  assert.ok(text.includes('the needle'));
+  assert.ok(text.includes('haystack'));
+  assert.ok(text.includes('injected note'));
+  assert.ok(!text.includes('x'.repeat(501)), 'per-message text capped at 500 chars');
 });
 
 test('getSessionStats aggregates usage and revalidates on append', () => {

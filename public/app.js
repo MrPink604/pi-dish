@@ -415,6 +415,10 @@ function onFilterInput() {
   filterQuery = q;
   if (sidebarTab === 'all') {
     if (q.length > 0) {
+      // Busy from the first keystroke — the debounce window is part of the
+      // latency the user sees, and a search box that shows nothing for
+      // 300ms+ reads as "not filtering".
+      setSearchBusy(true);
       filterDebounceTimer = setTimeout(() => loadSessions(q), 300);
     } else {
       // Query cleared: reload the full browse list from server
@@ -425,12 +429,21 @@ function onFilterInput() {
   }
 }
 
+function setSearchBusy(busy) {
+  document.querySelector('.sidebar-filter')?.classList.toggle('searching', busy);
+}
+
 // On the Active tab the historical list is invisible, so polls request
 // active sessions only (?active=1 — the server then skips its full
 // session-tree scan) and keep the previously fetched `previous` list.
 // `withPrevious: true` forces a full fetch regardless of tab (initial load,
 // which may need to restore a historical session).
+let loadSessionsSeq = 0; // drops out-of-order responses (cf. modelsSeq)
+let sessionIndexing = false; // server is still backfilling its session index
+let indexingRefreshTimer = null;
+
 async function loadSessions(query, { withPrevious = sidebarTab === 'all' } = {}) {
+  const seq = ++loadSessionsSeq;
   try {
     const params = new URLSearchParams();
     if (query) params.set('q', query);
@@ -438,6 +451,21 @@ async function loadSessions(query, { withPrevious = sidebarTab === 'all' } = {})
     const qs = params.toString();
     const res = await fetch('/api/sessions' + (qs ? '?' + qs : ''));
     const data = await res.json();
+    // A slower earlier request must not clobber a newer one's results (a
+    // cold search can land after the warm search that superseded it).
+    if (seq !== loadSessionsSeq) return;
+    if (withPrevious) {
+      sessionIndexing = !!data.indexing;
+      // While the index backfills the list is partial — re-poll quickly
+      // until it settles instead of leaving the user a sparse list for the
+      // next 10s poll to fix.
+      if (sessionIndexing && !indexingRefreshTimer) {
+        indexingRefreshTimer = setTimeout(() => {
+          indexingRefreshTimer = null;
+          refreshSessions();
+        }, 1000);
+      }
+    }
     const next = {
       active: data.active || [],
       previous: withPrevious ? (data.previous || []) : sessions.previous,
@@ -459,6 +487,8 @@ async function loadSessions(query, { withPrevious = sidebarTab === 'all' } = {})
     setSessionLists(next);
   } catch (e) {
     console.error('Failed to load sessions:', e);
+  } finally {
+    if (seq === loadSessionsSeq) setSearchBusy(false);
   }
 }
 
@@ -484,6 +514,13 @@ function renderSessionItem(session, opts = {}) {
   // they've left their workspace group, so the group label isn't there.
   const dragHandle = opts.pinnedRow ? '<span class="session-drag-handle" title="Drag to reorder">⠿</span>' : '';
   const cwdHint = opts.pinnedRow ? `<span class="session-item-cwd">${escapeHtml(shortCwd(session.cwd || '~'))}</span>` : '';
+  // Server search attaches a snippet when a session matched on message
+  // content the row's metadata doesn't show — render it so the match
+  // doesn't look arbitrary.
+  const snippetLine = session.searchSnippet
+    ? `<div class="session-item-snippet">${highlightTokens(session.searchSnippet,
+        filterQuery.toLowerCase().split(/\s+/).filter(Boolean))}</div>`
+    : '';
 
   return `
     <div class="session-item ${activeClass} ${inactiveClass}" data-id="${escapeHtml(session.id)}">
@@ -499,6 +536,7 @@ function renderSessionItem(session, opts = {}) {
         ${tokenDisplay ? `<span class="session-item-tokens">${tokenDisplay}</span>` : ''}
         <span>${session.messageCount} msgs</span>
       </div>
+      ${snippetLine}
     </div>
   `;
 }
@@ -592,11 +630,16 @@ function renderSessions() {
   const filtered = (sidebarTab === 'all' && filterQuery) ? showing : applyLocalFilter(showing, filterQuery);
 
   let html = '';
+  // First boot over a big corpus: the server is still indexing and the list
+  // below is partial — say so (loadSessions re-polls until it settles).
+  if (sidebarTab === 'all' && sessionIndexing) {
+    html += '<div class="indexing-note">Indexing sessions…</div>';
+  }
   if (filtered.length === 0) {
     const msg = sidebarTab === 'active'
       ? (active.length === 0 ? 'No active sessions<br><span style="font-size:11px">Click "+ New Session" or resume one from All</span>' : 'No matches')
       : (showing.length === 0 ? 'No sessions found' : 'No matches');
-    html = `<div class="empty-session"><p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">${msg}</p></div>`;
+    html += `<div class="empty-session"><p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">${msg}</p></div>`;
   } else {
     const [pinned, rest] = partitionPinned(filtered, pinnedSessions);
     if (pinned.length > 0) {

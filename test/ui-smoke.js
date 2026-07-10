@@ -853,6 +853,32 @@ function writeRegistry(patch = {}) {
     await pinToggle(registryState.sessionId);
     await desktop.waitForFunction(() => !document.querySelector('.pinned-segment'), null, { timeout: 2000 });
     check(true, 'unpinning removes the pinned section');
+
+    // 12. All-tab server search: busy indicator while in flight, content
+    // matches carry a highlighted snippet, clearing restores the full list.
+    console.log('sidebar search:');
+    await desktop.fill('#filterInput', 'beta answer');
+    // The busy class is set synchronously on input and can't clear before
+    // the 300ms debounce fires — safe to assert without racing the response.
+    check(await desktop.evaluate(() =>
+      document.querySelector('.sidebar-filter').classList.contains('searching')),
+      'search shows busy indicator from the first keystroke');
+    await desktop.waitForSelector('.session-item-snippet', { timeout: 5000 });
+    const snippet = await desktop.locator(`.session-item[data-id="${BETA_ID}"] .session-item-snippet`);
+    check((await snippet.locator('mark').count()) >= 2,
+      'content match shows a snippet with the tokens highlighted');
+    await desktop.waitForFunction(() =>
+      !document.querySelector('.sidebar-filter').classList.contains('searching'), null, { timeout: 5000 });
+    check(true, 'busy indicator clears once results land');
+    check(await desktop.evaluate(() =>
+      document.querySelectorAll('#sessionList .session-item').length) === 1,
+      'non-matching sessions filtered out');
+    await desktop.fill('#filterInput', '');
+    await desktop.waitForFunction(() =>
+      document.querySelectorAll('#sessionList .session-item').length >= 3, null, { timeout: 5000 });
+    check(await desktop.locator('.session-item-snippet').count() === 0,
+      'clearing the query drops snippets and restores the list');
+
     await desktop.click('#tabActive');
     await desktop.waitForTimeout(200);
 

@@ -418,3 +418,38 @@ test('messageHasVisibleText spots prose and errors, not tool-only content', () =
   assert.equal(H.messageHasVisibleText({ content: [{ type: 'thinking', thinking: 'hm' }] }), false);
   assert.equal(H.messageHasVisibleText(null), false);
 });
+
+test('buildSnippet excerpts around the earliest token match', () => {
+  const text = 'the quick brown fox jumps over the lazy dog and keeps on running through the field';
+  const snip = H.buildSnippet(text, ['lazy'], 15);
+  assert.ok(snip.includes('lazy'));
+  assert.ok(snip.startsWith('…'), 'elided start marked');
+  assert.ok(snip.endsWith('…'), 'elided end marked');
+  assert.ok(!/…\S*?\s…/.test(snip));
+
+  // Earliest token wins when several match; no ellipsis at true string edges.
+  const both = H.buildSnippet('alpha then bravo', ['bravo', 'alpha']);
+  assert.ok(both.startsWith('alpha'));
+  assert.equal(H.buildSnippet('no match here', ['zzz']), '');
+});
+
+test('buildSnippet trims to word boundaries', () => {
+  const text = 'aaaaaaaaaa needle bbbbbbbbbb cccccccccc';
+  const snip = H.buildSnippet(text, ['needle'], 5);
+  // Window edges shrink to whitespace: no partially-cut words around the hit.
+  assert.ok(snip.includes('needle'));
+  for (const word of snip.replace(/…/g, '').trim().split(/\s+/)) {
+    assert.ok(text.split(/\s+/).includes(word), `"${word}" is a whole word from the source`);
+  }
+});
+
+test('highlightTokens escapes HTML and merges overlapping marks', () => {
+  assert.equal(H.highlightTokens('a <b> c', ['zzz']), 'a &lt;b&gt; c', 'no match: plain escape');
+  assert.equal(H.highlightTokens('the Needle here', ['needle']),
+    'the <mark>Needle</mark> here', 'case-insensitive, original casing kept');
+  // Overlapping tokens produce one merged mark, never nested tags.
+  const merged = H.highlightTokens('abcde', ['abc', 'cde']);
+  assert.equal(merged, '<mark>abcde</mark>');
+  // Token text that looks like HTML is escaped inside the mark too.
+  assert.equal(H.highlightTokens('x <s> y', ['<s>']), 'x <mark>&lt;s&gt;</mark> y');
+});

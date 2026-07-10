@@ -52,17 +52,45 @@ button; it clipped over content.
 ## Session JSONL parsing (lib/session-files.js)
 
 All server-side reads of `~/.pi/agent/sessions/*.jsonl` go through this
-module: `getSessionInfo` (list metadata), `readSessionMessages` (the
-paginated message stream), `getSessionSearchText` (list search),
-`getSessionStats` (token/cost aggregates for `/stats`), and `readSessionCwd`
-(bounded first-line read — never load a whole file just for its header). The
-readers share one `statCached` implementation keyed on (mtimeMs, size) — the
-sidebar polls `/api/sessions` every 10s, so nothing may re-parse unchanged
-files per request. `getSessionInfo` returns a copy (callers overlay live
-usage onto it); the other readers return the cached value itself — never
-mutate it. Context window/percent are derived in server.js (`withContext`)
-at read time, not inside the cache — the models cache warms asynchronously
-and would bake in stale windows.
+module: `getSessionInfo` (single-file list metadata), `readSessionMessages`
+(the paginated message stream), `getSessionStats` (token/cost aggregates for
+`/stats`), and `readSessionCwd` (bounded first-line read — never load a whole
+file just for its header). The readers share one `statCached` implementation
+keyed on (mtimeMs, size). These in-memory LRUs are sized for the *viewed*
+sessions only — anything that iterates the whole corpus (the sidebar scan,
+list search) must go through `lib/session-index.js` instead, or thousands of
+sessions turn a capped LRU into a 0%-hit-rate full re-parse per request. The
+content-based cores (`parseSessionContent`, `buildSearchTextFromContent`) are
+exported so the index derives both from one read. `getSessionInfo` returns a
+copy (callers overlay live usage onto it); the other readers return the
+cached value itself — never mutate it. Context window/percent are derived in
+server.js (`withContext`) at read time, not inside the cache — the models
+cache warms asynchronously and would bake in stale windows.
+
+## Session index (lib/session-index.js)
+
+Persistent (mtimeMs, size)-keyed index of list metadata + lowercased search
+text for **every** session JSONL, backing the historical scan
+(`getPreviousSessions`) and list search — built because the user's work
+machine has thousands of sessions (GBs of JSONL), where per-request re-parsing
+means multi-second event-loop stalls per sidebar poll/search keystroke.
+Storage is `~/.pi/dish/session-index/{meta,text}.ndjson`: append-only NDJSON
+(later lines win, `del:1` tombstones, torn tails skipped on load), buffered
+appends (~500ms, unref'd timer), compacted temp-file+rename when dead bytes
+exceed live. Deliberately no node:sqlite / native modules — must run on a
+hand-built Node 22 on old glibc (see work-machine memory). `scanSessions`
+re-indexes at most `PI_DISH_INDEX_SYNC_BUDGET` (default 20) stale files
+synchronously and drains the rest via a setImmediate builder, reporting
+`indexing: true` while the served list is partial (`/api/sessions` forwards
+the flag; the client shows "Indexing sessions…" and re-polls at 1s until it
+settles). `getSearchText` extends a grown file's text from the appended byte
+range only (in memory, not logged — streaming sessions churn too fast to
+persist per delta), so searching while a turn streams never re-reads a
+multi-MB file. Search results matched on content (not name/cwd/model/id)
+carry a `searchSnippet` (`buildSnippet`/`highlightTokens` in helpers.js) so
+the client can show *why* a row matched. Tests prove persistence structurally:
+scans with `PI_DISH_INDEX_SYNC_BUDGET=0` can't parse, so whatever they serve
+came from disk.
 
 Server-side session dispatch: `getLiveSession(id)` in server.js is the one
 place bridge-vs-RPC resolution lives (bridge registry entry → connected
@@ -346,8 +374,12 @@ Each item shows one status dot, best signal first: pulsing green
 screen — `isUnreadSession()` in helpers.js against the localStorage
 `pi-dish-seen` map), or the static green `.live-dot` (All tab only). The tab
 title carries the unread count (`(2) pi-dish`). Search in All mode is server-side
-(`/api/sessions?q=` — matches metadata and message content); filtering in
-Active mode is local.
+(`/api/sessions?q=` — matches metadata and message content via the session
+index; content matches render their `searchSnippet` under the row with the
+tokens marked); filtering in Active mode is local and metadata-only. The
+filter row shows a spinner from first keystroke until results land
+(`setSearchBusy`), and `loadSessions` carries a sequence guard so a slow
+stale response can't clobber a newer one.
 
 ## Model dropdown / scoped models (public/app.js)
 

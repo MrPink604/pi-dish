@@ -19,14 +19,14 @@ const shares = require('./lib/shares');
 const {
   getSessionInfo,
   readSessionMessages,
-  getSessionSearchText,
   getSessionStats,
   readSessionCwd,
   decodeDirToCwd,
 } = require('./lib/session-files');
+const sessionIndex = require('./lib/session-index');
 const {
   isModelEnabled, extractTextContent, THINKING_LEVEL_NAMES,
-  sessionMetaText, parseModelId, formatModelRef,
+  sessionMetaText, parseModelId, formatModelRef, buildSnippet,
 } = require('./public/helpers');
 
 const app = express();
@@ -307,74 +307,99 @@ function getActiveSessions(registered = listRegisteredSessions()) {
   return active;
 }
 
+// Returns { previous, indexing } — with `indexing` true the session index is
+// still backfilling (first boot over a large corpus) and `previous` holds
+// only the sessions indexed so far; callers surface the flag so the client
+// can re-poll instead of mistaking the partial list for the whole one.
 function getPreviousSessions(registered = listRegisteredSessions()) {
   const activeIds = new Set([
     ...registered.map(r => r.sessionId),
     ...getAllRPCSessions().filter(s => s.alive).map(s => s.id),
   ]);
+  const candidates = []; // { file, id, dirName }
   const previous = [];
+  let indexing = false;
 
   try {
     const dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true });
     for (const dir of dirs) {
       if (!dir.isDirectory()) continue;
       const dirPath = path.join(SESSIONS_DIR, dir.name);
-      const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl'));
-
-      for (const file of files) {
+      for (const file of fs.readdirSync(dirPath)) {
+        if (!file.endsWith('.jsonl')) continue;
         // Session ids are the file basename (newer pi prefixes a timestamp,
         // older files are a bare UUID) — matching the bridge registry ids.
         const id = file.slice(0, -'.jsonl'.length);
         if (activeIds.has(id)) continue;
-
-        // One unreadable file must not take down the whole listing.
-        let info;
-        try { info = parseSessionFile(path.join(dirPath, file)); } catch { continue; }
-        // The dir-name decode is lossy (every '-' becomes '/'), so a
-        // hyphenated project dir decodes to a bogus path — only trust it
-        // when the decoded directory actually exists.
-        let cwd = info.cwd;
-        if (!cwd) {
-          const decoded = decodeDirToCwd(dir.name);
-          cwd = fs.existsSync(decoded) ? decoded : null;
-        }
-        previous.push({
-          id,
-          name: info.name || id.slice(0, 8),
-          model: info.model || 'unknown',
-          contextPercent: info.contextPercent || 0,
-          contextTokens: info.contextTokens || 0,
-          messageCount: info.messageCount || 0,
-          lastActivity: info.lastActivity,
-          isActive: false,
-          cwd,
-          sessionFile: path.join(dirPath, file),
-        });
+        candidates.push({ file: path.join(dirPath, file), id, dirName: dir.name });
       }
+    }
+
+    const scan = sessionIndex.scanSessions(candidates.map(c => c.file));
+    indexing = scan.indexing;
+    for (const { file, id, dirName } of candidates) {
+      const raw = scan.infos.get(file);
+      if (!raw) continue; // unreadable, or still queued for background indexing
+      const info = withContext(raw);
+      // The dir-name decode is lossy (every '-' becomes '/'), so a
+      // hyphenated project dir decodes to a bogus path — only trust it
+      // when the decoded directory actually exists.
+      let cwd = info.cwd;
+      if (!cwd) {
+        const decoded = decodeDirToCwd(dirName);
+        cwd = fs.existsSync(decoded) ? decoded : null;
+      }
+      previous.push({
+        id,
+        name: info.name || id.slice(0, 8),
+        model: info.model || 'unknown',
+        contextPercent: info.contextPercent || 0,
+        contextTokens: info.contextTokens || 0,
+        messageCount: info.messageCount || 0,
+        lastActivity: info.lastActivity,
+        isActive: false,
+        cwd,
+        sessionFile: file,
+      });
     }
   } catch (e) {
     console.error('Error scanning sessions:', e);
   }
 
   previous.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
-  return previous;
+  return { previous, indexing };
 }
 
 // =========================================================================
 // Search
 // =========================================================================
 
-function sessionMatchesQuery(session, query) {
+// null when the session doesn't match; { snippet } when it does. `snippet`
+// is set only for matches the metadata alone doesn't explain — the client
+// shows it under the row so a content match doesn't look arbitrary.
+function matchSessionQuery(session, query) {
   const tokens = query.split(/\s+/).filter(Boolean);
-  if (!tokens.length) return true;
+  if (!tokens.length) return {};
   const meta = sessionMetaText(session);
-  if (tokens.every(t => meta.includes(t))) return true;
+  if (tokens.every(t => meta.includes(t))) return {};
   if (session.sessionFile) {
-    const historyText = getSessionSearchText(session.sessionFile);
+    const historyText = sessionIndex.getSearchText(session.sessionFile);
     const fullText = meta + ' ' + historyText;
-    return tokens.every(t => fullText.includes(t));
+    if (tokens.every(t => fullText.includes(t))) {
+      return { snippet: buildSnippet(historyText, tokens) };
+    }
   }
-  return false;
+  return null;
+}
+
+function filterSessionsByQuery(list, query) {
+  const out = [];
+  for (const session of list) {
+    const m = matchSessionQuery(session, query);
+    if (!m) continue;
+    out.push(m.snippet ? { ...session, searchSnippet: m.snippet } : session);
+  }
+  return out;
 }
 
 // =========================================================================
@@ -388,14 +413,16 @@ app.get('/api/sessions', (req, res) => {
   const query = (req.query.q || '').trim().toLowerCase();
   const registered = listRegisteredSessions();
   let active = getActiveSessions(registered);
-  let previous = req.query.active === '1' ? [] : getPreviousSessions(registered);
+  let previous = [], indexing = false;
+  if (req.query.active !== '1') {
+    ({ previous, indexing } = getPreviousSessions(registered));
+  }
 
   if (query) {
-    const match = (s) => sessionMatchesQuery(s, query);
-    active = active.filter(match);
-    previous = previous.filter(match);
+    active = filterSessionsByQuery(active, query);
+    previous = filterSessionsByQuery(previous, query);
   }
-  res.json({ active, previous });
+  res.json({ active, previous, indexing });
 });
 
 app.get('/api/sessions/:id/messages', (req, res) => {

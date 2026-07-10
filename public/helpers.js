@@ -425,6 +425,65 @@ function sanitizeMarkdownUrl(url) {
   return raw;
 }
 
+/**
+ * A short plain-text excerpt of `text` around the first occurrence of any of
+ * `tokens` (both already lowercased — this runs against the search corpus),
+ * for showing *why* a content search matched. Trims to word boundaries and
+ * marks elided ends with an ellipsis. '' when no token occurs.
+ */
+function buildSnippet(text, tokens, radius = 60) {
+  let at = -1, tokenLen = 0;
+  for (const t of tokens) {
+    const i = text.indexOf(t);
+    if (i !== -1 && (at === -1 || i < at)) { at = i; tokenLen = t.length; }
+  }
+  if (at === -1) return '';
+  let start = Math.max(0, at - radius);
+  let end = Math.min(text.length, at + tokenLen + radius);
+  // Don't cut words: pull the window edges in to the whitespace inside it.
+  if (start > 0) {
+    const ws = text.indexOf(' ', start);
+    if (ws !== -1 && ws < at) start = ws + 1;
+  }
+  if (end < text.length) {
+    const ws = text.lastIndexOf(' ', end);
+    if (ws >= at + tokenLen) end = ws;
+  }
+  return (start > 0 ? '…' : '') + text.slice(start, end).trim() + (end < text.length ? '…' : '');
+}
+
+/**
+ * Escape `text` for HTML with every (case-insensitive) occurrence of the
+ * given tokens wrapped in <mark>. Overlapping token ranges are merged so the
+ * output never nests marks.
+ */
+function highlightTokens(text, tokens) {
+  const str = String(text);
+  const lower = str.toLowerCase();
+  const ranges = [];
+  for (const t of tokens) {
+    if (!t) continue;
+    const needle = String(t).toLowerCase();
+    for (let i = lower.indexOf(needle); i !== -1; i = lower.indexOf(needle, i + 1)) {
+      ranges.push([i, i + needle.length]);
+    }
+  }
+  if (!ranges.length) return escapeHtml(str);
+  ranges.sort((a, b) => a[0] - b[0]);
+  const merged = [ranges[0]];
+  for (const [s, e] of ranges.slice(1)) {
+    const last = merged[merged.length - 1];
+    if (s <= last[1]) last[1] = Math.max(last[1], e);
+    else merged.push([s, e]);
+  }
+  let out = '', pos = 0;
+  for (const [s, e] of merged) {
+    out += escapeHtml(str.slice(pos, s)) + '<mark>' + escapeHtml(str.slice(s, e)) + '</mark>';
+    pos = e;
+  }
+  return out + escapeHtml(str.slice(pos));
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRelativeTime, formatTime, formatDuration,
@@ -434,5 +493,6 @@ if (typeof module !== 'undefined' && module.exports) {
     partitionPinned, applyLocalFilter, fuzzyMatch, fuzzyScore,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     modelMatchesPattern, isModelEnabled, pushPromptHistory, sanitizeMarkdownUrl,
+    buildSnippet, highlightTokens,
   };
 }
