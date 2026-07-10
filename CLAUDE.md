@@ -142,13 +142,16 @@ inserts `@relative/path`); the cwd input merges known session cwds
 
 ## Client session state (public/app.js)
 
-`currentSession` is a **detached copy** of its entry in the `sessions`
-lists (selectSession/loadMessages spread new objects). Any local mutation
-(rename, model switch, thinking level) must go through `patchSession(id,
-patch)`, which writes to both and re-renders sidebar + header — mutating
-`currentSession` directly leaves the sidebar stale until the next poll
-(the "rename needs F5" bug). `loadSessions()` folds fresh list data back
-into `currentSession` after each poll for the same reason.
+`sessions` (sidebar lists) and `currentSession` (a **detached copy** of the
+selected entry) are written only by the four functions in the "Session state
+writes" section: `setSessionLists` (poll/search results; folds the fresh
+entry into `currentSession`), `setCurrentSession` (selection),
+`patchSession` (local mutations — rename, model switch, thinking level), and
+`mergeCurrentSession` (the `session` payload on /messages responses —
+current-session/header only, never the lists, whose name/model come from the
+registry-aware poll). Each write re-renders the views it affects, so a
+mutation can't leave sidebar and header disagreeing (the old "rename needs
+F5" bug class). Never assign to `sessions`/`currentSession` elsewhere.
 
 ## Streaming pipeline
 

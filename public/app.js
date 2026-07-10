@@ -1,4 +1,10 @@
-// State
+// Session state — `sessions` (the sidebar lists) and `currentSession` (a
+// detached copy of the selected entry) are only ever written by the state
+// functions in the "Session state writes" section: setSessionLists /
+// setCurrentSession / patchSession / mergeCurrentSession. Each one rebuilds
+// the derived state and re-renders the views that show it, so a mutation
+// can't leave the sidebar and header disagreeing (the old "rename needs F5"
+// bug class). Read these freely; never assign to them anywhere else.
 let sessions = { active: [], previous: [] };
 let currentSession = null;
 
@@ -432,33 +438,25 @@ async function loadSessions(query, { withPrevious = sidebarTab === 'all' } = {})
     const qs = params.toString();
     const res = await fetch('/api/sessions' + (qs ? '?' + qs : ''));
     const data = await res.json();
-    sessions = {
+    const next = {
       active: data.active || [],
       previous: withPrevious ? (data.previous || []) : sessions.previous,
     };
     // Viewing a session (with the tab visible) counts as having seen its
-    // latest activity. Prune stale ids while we're at it — but only from an
-    // unfiltered load, a search result is not the full list.
+    // latest activity — bookkeep against the fresh data *before*
+    // setSessionLists renders the unread dots. Prune stale ids too, but
+    // only from an unfiltered load: a search result is not the full list.
     if (currentSession && !document.hidden) {
-      const fresh = findSession(currentSession.id);
+      const fresh = next.active.find(s => s.id === currentSession.id)
+        || next.previous.find(s => s.id === currentSession.id);
       if (fresh) markSessionSeen(fresh.id, fresh.lastActivity);
     }
     if (!query) {
       for (const id of Object.keys(seenActivity)) {
-        if (!sessions.active.some(s => s.id === id)) delete seenActivity[id];
+        if (!next.active.some(s => s.id === id)) delete seenActivity[id];
       }
     }
-    renderSessions();
-    // The header renders from the detached currentSession copy — fold the
-    // fresh list data (name, model, context, thinking) into it so polling
-    // keeps the header honest too, not just the sidebar.
-    if (currentSession) {
-      const fresh = findSession(currentSession.id);
-      if (fresh) {
-        currentSession = { ...currentSession, ...fresh };
-        updateSessionHeader();
-      }
-    }
+    setSessionLists(next);
   } catch (e) {
     console.error('Failed to load sessions:', e);
   }
@@ -660,12 +658,43 @@ function findSession(id) {
   return sessions.active.find(s => s.id === id) || sessions.previous.find(s => s.id === id);
 }
 
+// =========================================================================
+// Session state writes — the ONLY functions that assign to `sessions` or
+// `currentSession` (see the declaration comment at the top of the file).
+// Every write re-renders the affected views itself, so callers can't forget.
+// =========================================================================
+
 /**
- * Patch a session everywhere it lives. `currentSession` is a detached copy
- * of the list entry (selectSession/loadMessages spread new objects), so a
- * local change (rename, model switch, thinking level) must be written to
- * both and re-rendered — otherwise the sidebar shows stale data until the
- * next poll happens to agree.
+ * Replace the sidebar lists (poll / search result / explicit refresh) and
+ * fold the fresh entry into `currentSession` so the header stays honest too
+ * — polling used to update only the sidebar, leaving the header stale.
+ */
+function setSessionLists(next) {
+  sessions = next;
+  if (currentSession) {
+    const fresh = findSession(currentSession.id);
+    if (fresh) currentSession = { ...currentSession, ...fresh };
+  }
+  renderSessions();
+  updateSessionHeader();
+}
+
+/**
+ * Point `currentSession` at a list entry — always a detached copy, so later
+ * list replacements can't mutate it behind the views' back. Returns it
+ * (null when the id isn't in either list). Rendering is the caller's job:
+ * selectSession re-renders everything it touches anyway.
+ */
+function setCurrentSession(id) {
+  const entry = findSession(id);
+  currentSession = entry ? { ...entry } : null;
+  return currentSession;
+}
+
+/**
+ * Patch a session everywhere it lives: both lists and (when selected) the
+ * detached `currentSession` copy, then re-render sidebar + header. This is
+ * the write path for local mutations — rename, model switch, thinking level.
  */
 function patchSession(id, patch) {
   for (const list of [sessions.active, sessions.previous]) {
@@ -677,13 +706,25 @@ function patchSession(id, patch) {
   if (currentSession?.id === id) updateSessionHeader();
 }
 
+/**
+ * Merge fresher metadata for the *current* session only (the `session`
+ * payload riding on /messages responses) and re-render the header.
+ * Deliberately does not touch the list entries: their name/model come from
+ * the registry-aware poll, which can be more current than JSONL-derived
+ * fields — the sidebar keeps its own source of truth.
+ */
+function mergeCurrentSession(id, fields) {
+  if (!fields || currentSession?.id !== id) return;
+  Object.assign(currentSession, fields);
+  updateSessionHeader();
+}
+
 // =========================================================================
 // Session Selection
 // =========================================================================
 
 async function selectSession(id) {
-  currentSession = findSession(id);
-  if (!currentSession) return;
+  if (!setCurrentSession(id)) return;
   // Tear down the previous session's stream up front, before the awaits below.
   // Left open, its in-flight turn_end/message_update events fire against the
   // session we're switching to (loadMessages has already reset the cursors).
@@ -1451,8 +1492,7 @@ async function loadMessages(id) {
     // don't clobber its transcript/cursors with this stale response.
     if (currentSession?.id !== id) return;
     const { messages, session, firstIndex, lastIndex, hasMore, totalMessages: total } = data;
-    currentSession = { ...currentSession, ...session };
-    updateSessionHeader();
+    mergeCurrentSession(id, session);
     oldestLoadedIndex = firstIndex;
     lastLoadedIndex = lastIndex;
     hasMoreOlder = !!hasMore;
@@ -1545,10 +1585,7 @@ async function fetchNewMessagesSince(sessionId) {
     // Bail if the user switched sessions while this catch-up was in flight.
     if (currentSession?.id !== sessionId) return;
     const { messages, lastIndex, totalMessages: total, session } = data;
-    if (session) {
-      currentSession = { ...currentSession, ...session };
-      updateSessionHeader();
-    }
+    mergeCurrentSession(sessionId, session);
     if (typeof total === 'number') totalMessages = total;
     if (!messages || messages.length === 0) return;
 
