@@ -297,6 +297,17 @@ test('POST endpoints validate input and reject inactive sessions', async () => {
   // Slash-command endpoint requires a leading slash
   const notSlash = await post(`/api/sessions/${SESSION_ID}/command`, { message: 'hello' });
   assert.equal(notSlash.status, 400);
+
+  // Queue-cancel validates kind + non-empty text before any session lookup
+  const badKind = await post(`/api/sessions/${SESSION_ID}/queue/cancel`, { kind: 'nope', text: 'x' });
+  assert.equal(badKind.status, 400);
+  const noText = await post(`/api/sessions/${SESSION_ID}/queue/cancel`, { kind: 'steering' });
+  assert.equal(noText.status, 400);
+  const badIndex = await post(`/api/sessions/${SESSION_ID}/queue/cancel`, { kind: 'steering', text: 'x', index: 'first' });
+  assert.equal(badIndex.status, 400);
+  // Valid body, but the fixture session is not live
+  const deadCancel = await post(`/api/sessions/${SESSION_ID}/queue/cancel`, { kind: 'followUp', text: 'x' });
+  assert.equal(deadCancel.status, 404);
 });
 
 // --- Tree branching (inactive sessions go through pi's SDK) ---------------

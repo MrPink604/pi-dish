@@ -2709,44 +2709,28 @@ button.badge-context {
 }
 
 /* Queue chips above the input */
-.queue-status {
-  display: flex;
-  gap: 6px;
-  padding: 4px 2px 0;
-}
-
-.queue-chip {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: var(--bg-hover);
-  color: var(--text-muted);
-  border: 1px solid var(--border);
-  font-family: inherit;
-  cursor: pointer;
-}
-
-.queue-chip:hover { color: var(--text); }
-
-/* Expanded list of queued steering/follow-up messages */
+/* Pending steering/follow-up messages — an always-visible strip above the
+   composer while the queue is non-empty. Each row is editable (pull back to
+   the composer). */
 .queue-panel {
   margin-top: 4px;
-  padding: 6px 8px;
+  padding: 4px 6px;
   background: var(--bg-darker);
   border: 1px solid var(--border);
   border-radius: 6px;
-  max-height: 140px;
+  max-height: 160px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .queue-item {
   display: flex;
   gap: 8px;
-  align-items: baseline;
+  align-items: center;
   font-size: 12px;
+  padding: 2px 0;
 }
 
 .queue-item-kind {
@@ -2755,13 +2739,37 @@ button.badge-context {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--accent);
+  min-width: 58px;
 }
 
 .queue-item-text {
+  flex: 1;
+  min-width: 0;
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.queue-item-text.expanded {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+.queue-item-edit {
+  flex: none;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.queue-item-edit:hover { color: var(--text); border-color: var(--accent); }
 
 /* Pending image attachments above the prompt box */
 .attachment-strip {

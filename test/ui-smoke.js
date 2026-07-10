@@ -90,6 +90,9 @@ const bridge = net.createServer((sock) => {
   clients.add(sock);
   sock.on('close', () => clients.delete(sock));
   sock.on('error', () => clients.delete(sock));
+  // Mirror the real bridge hello: carries the current queue so the server can
+  // replay it into a client that just (re)connected.
+  sock.write(JSON.stringify({ type: 'hello', turnInProgress: false, queue: liveQueue }) + '\n');
   let buf = '';
   sock.on('data', (chunk) => {
     buf += chunk.toString('utf-8');
@@ -106,6 +109,10 @@ const bridge = net.createServer((sock) => {
 function respond(sock, id, data) {
   sock.write(JSON.stringify({ type: 'response', id, success: true, data }) + '\n');
 }
+
+// The bridge's steering/follow-up queue, mirrored to clients via queue_update.
+let liveQueue = { steering: [], followUp: [] };
+function setQueue(q) { liveQueue = q; emit('queue_update', liveQueue); }
 
 function handleCommand(sock, msg) {
   switch (msg.command) {
@@ -124,6 +131,19 @@ function handleCommand(sock, msg) {
       if (fakeCompacting) { bufferedPrompt = msg; return respond(sock, msg.id, { queued: true }); }
       respond(sock, msg.id, {});
       return streamTurn(msg.message, msg.images);
+    case 'steer':
+      // Mirror the real bridge: ack, then surface the message in the queue.
+      respond(sock, msg.id, { queued: false });
+      setQueue({ steering: [...liveQueue.steering, msg.message], followUp: liveQueue.followUp });
+      return;
+    case 'cancel_queued':
+      // Remove the matching entry and re-broadcast the (now empty) queue.
+      respond(sock, msg.id, { text: msg.text });
+      setQueue({
+        steering: liveQueue.steering.filter((t) => t !== msg.text),
+        followUp: liveQueue.followUp.filter((t) => t !== msg.text),
+      });
+      return;
     case 'set_session_name':
       // Mirror the real bridge: keep the registry entry fresh so polls
       // don't revert the rename.
@@ -148,6 +168,11 @@ function streamTurn(userText, images) {
   const userContent = [{ type: 'text', text: userText }, ...(images || [])];
   appendEntry({ type: 'message', message: { role: 'user', content: userContent, timestamp: now() } });
   emit('turn_start', {});
+  // Real pi echoes the prompt as a user message_start/message_end right after
+  // turn_start (agent-core runAgentLoop). The client must suppress this echo —
+  // it already rendered the prompt optimistically on send.
+  emit('message_start', { message: { role: 'user', content: userContent, timestamp: now() } });
+  emit('message_end', { message: { role: 'user', content: userContent, timestamp: now() } });
   // Tool phase first: live panel appears mid-turn, then the JSONL catch-up
   // after turn_end must replace it with a collapsed .tool-group.
   const toolArgs = { command: 'echo hi' };
@@ -307,6 +332,12 @@ function writeRegistry(patch = {}) {
     check(true, 'live tool panel appeared mid-turn');
     await desktop.waitForSelector('.message.assistant[data-streaming="true"]', { timeout: 5000 });
     check(true, 'streaming element appeared');
+    // The bridge echoed the prompt back as a user message_end (like real pi);
+    // the optimistic render from send must suppress it — exactly one copy.
+    check(await desktop.evaluate(() =>
+      [...document.querySelectorAll('.message.user')]
+        .filter(el => el.textContent.includes('ping from smoke test')).length === 1),
+      'prompt echo suppressed (single user bubble mid-turn)');
     // Forced follow: a programmatic scroll displacement (stand-in for the
     // mobile keyboard resizing the container off the pin threshold) must not
     // break auto-follow mid-stream — only a deliberate gesture unpins.
@@ -479,20 +510,56 @@ function writeRegistry(patch = {}) {
     await desktop.click('.lightbox-overlay');
     check(await desktop.locator('.lightbox-overlay').count() === 0, 'lightbox dismissed on tap');
 
-    // 8. Queue panel: queue_update shows chips; clicking expands the texts
-    console.log('queue panel:');
-    emit('queue_update', { steering: ['do the thing next'], followUp: ['then summarize'] });
-    await desktop.waitForSelector('.queue-chip', { timeout: 5000 });
-    check(await desktop.locator('.queue-chip').count() === 2, 'steering + follow-up chips shown');
-    await desktop.click('.queue-chip');
-    await desktop.waitForSelector('.queue-item');
-    const queueTexts = await desktop.locator('.queue-item-text').allTextContents();
-    check(queueTexts.includes('do the thing next') && queueTexts.includes('then summarize'),
-      `queue panel lists queued texts (got ${JSON.stringify(queueTexts)})`);
-    emit('queue_update', { steering: [], followUp: [] });
-    await desktop.waitForFunction(() => document.getElementById('queueStatus').style.display === 'none');
-    check(await desktop.evaluate(() => document.getElementById('queuePanel').style.display === 'none'),
-      'panel hides when the queue drains');
+    // 8. Queue strip: steering a message during a turn surfaces it in the
+    // always-visible strip; Edit pulls it back out of pi's queue and into the
+    // composer, emptying the strip.
+    console.log('queue strip (steer + edit):');
+    emit('turn_start', {}); // reveal #btnSteer (only shown mid-turn)
+    await desktop.waitForSelector('#btnSteer', { state: 'visible', timeout: 3000 });
+    await desktop.fill('#promptInput', 'steer me now');
+    await desktop.click('#btnSteer');
+    await desktop.waitForSelector('.queue-item', { timeout: 5000 });
+    check(await desktop.locator('.queue-item-text').first().textContent() === 'steer me now',
+      'steered message appears as a strip row');
+    check(await desktop.locator('.queue-item[data-kind="steering"]').count() === 1, 'row tagged as steering');
+    await desktop.click('.queue-item-edit');
+    await desktop.waitForFunction(() =>
+      document.getElementById('promptInput').value.includes('steer me now'), { timeout: 5000 });
+    check(true, 'Edit returns the queued text to the composer');
+    await desktop.waitForFunction(() => document.getElementById('queuePanel').style.display === 'none', { timeout: 5000 });
+    check(true, 'strip empties after the message is edited out of the queue');
+    await desktop.fill('#promptInput', ''); // don't leave it in the draft
+
+    // 8a. Mid-turn steer delivery: pi delivers a queued user message during the
+    // turn (message_start/message_end, role user). It must render in the
+    // transcript immediately, before turn_end's JSONL catch-up.
+    console.log('mid-turn steer delivery:');
+    const deliveredText = 'delivered steer mid-turn';
+    emit('message_start', { message: { role: 'user', content: [{ type: 'text', text: deliveredText }] } });
+    emit('message_end', { message: { role: 'user', content: [{ type: 'text', text: deliveredText }], timestamp: new Date().toISOString() } });
+    await desktop.waitForFunction((t) =>
+      [...document.querySelectorAll('.message.user')].some((el) => el.textContent.includes(t)),
+      deliveredText, { timeout: 5000 });
+    check(true, 'delivered user message renders mid-turn (before turn_end)');
+    emit('turn_end', {});
+
+    // 8b. SSE queue replay: a queue with content must repopulate the strip on a
+    // fresh stream connection (switch away and back), from the hello/replay
+    // path — not just from the live event the current client already saw.
+    console.log('queue SSE replay:');
+    setQueue({ steering: [], followUp: ['replay me later'] });
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('.queue-item-text')].some((el) => el.textContent === 'replay me later'),
+      { timeout: 5000 });
+    await desktop.click('.session-item'); // re-select → fresh SSE connection
+    // selectSession clears the strip; only the server-side replay can refill it.
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('.queue-item-text')].some((el) => el.textContent === 'replay me later'),
+      { timeout: 5000 });
+    check(true, 'queue strip repopulates from the SSE replay after reconnect');
+    setQueue({ steering: [], followUp: [] });
+    await desktop.waitForFunction(() => document.getElementById('queuePanel').style.display === 'none', { timeout: 5000 });
+    check(true, 'strip hides when the queue drains');
 
     // 8b. Working indicator: a synthetic turn (fully event-driven, so there
     // is no timing window) shows the elapsed timer + running tool in the

@@ -525,6 +525,30 @@ app.post('/api/sessions/:id/steer', async (req, res) => {
   }
 });
 
+// Remove a not-yet-delivered queued steer/follow-up so its text can go back to
+// the composer. Bridge-only (pi's queue arrays live inside the process); RPC
+// sessions have no remote queue-editing path.
+app.post('/api/sessions/:id/queue/cancel', async (req, res) => {
+  const { kind, index, text } = req.body || {};
+  if ((kind !== 'steering' && kind !== 'followUp') || typeof text !== 'string' || !text) {
+    return res.status(400).json({ error: 'kind (steering|followUp) and non-empty text required' });
+  }
+  if (index !== undefined && !Number.isInteger(index)) {
+    return res.status(400).json({ error: 'index must be an integer' });
+  }
+  try {
+    const sess = await getLiveSession(req.params.id);
+    if (!sess) return res.status(404).json({ error: 'Session not active' });
+    if (!(sess instanceof BridgeSession)) {
+      return res.status(501).json({ error: 'queue editing requires the pi-dish-bridge extension' });
+    }
+    const result = await sess.cancelQueued(kind, index, text);
+    res.json({ success: true, result });
+  } catch (e) {
+    res.status(409).json({ error: e.message });
+  }
+});
+
 // Built-in commands pi-dish can execute on RPC-managed sessions by mapping
 // them to RPC protocol commands.
 const RPC_BUILTIN_COMMANDS = [
@@ -1300,9 +1324,17 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   sub('agent_end', () => { clearPendingUpdate(); send('agent_end', {}); });
 
   sub('message_end', (data) => {
-    if (data?.message?.role !== 'assistant') return;
-    clearPendingUpdate();
-    send('message_end', { message: data.message });
+    const role = data?.message?.role;
+    if (role === 'assistant') {
+      clearPendingUpdate();
+      send('message_end', { message: data.message });
+    } else if (role === 'user') {
+      // A steer/follow-up pi just delivered mid-turn — forward it so the client
+      // can show it now instead of waiting for the turn_end JSONL catch-up.
+      // Don't touch the coalescer: a user message doesn't invalidate a pending
+      // assistant delta.
+      send('message_end', { message: data.message });
+    }
   });
 
   sub('tool_execution_start', (data) => send('tool_execution_start', data));
@@ -1344,6 +1376,10 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
       send('extension_ui_request', data);
     }
   }
+  // Replay the last-known queue so a client that just (re)connected — e.g. one
+  // that switched sessions — shows pending steers/follow-ups without waiting
+  // for the next queue_update. RPCSessions have no queueState (fine).
+  if (sess.queueState) send('queue_update', sess.queueState);
   sub('queue_update', (data) => send('queue_update', data));
   sub('compaction_start', (data) => send('compaction_start', data));
   sub('compaction_end', (data) => send('compaction_end', data));

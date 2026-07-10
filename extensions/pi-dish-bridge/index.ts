@@ -1,4 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+// Runtime value import: pi's extension loader aliases this specifier to the
+// host's own module instance, so `AgentSession` here is the exact class of the
+// live session (see the queue-capture note below).
+import { AgentSession } from "@earendil-works/pi-coding-agent";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
@@ -25,7 +29,10 @@ const FORWARDED_EVENTS = [
   "tool_execution_start",
   "tool_execution_update",
   "tool_execution_end",
-  "queue_update",
+  // queue_update is deliberately NOT here: pi never routes it through the
+  // extension runner (verified pi 0.80.3), so pi.on("queue_update") never
+  // fires. The real source is the AgentSession.subscribe() listener installed
+  // in ensureQueueSubscription() — see the capture patch at module scope.
   "auto_retry_start",
   "auto_retry_end",
   "extension_error",
@@ -92,6 +99,51 @@ function substituteArgs(content: string, args: string[]): string {
 function stripFrontmatter(content: string): string {
   const match = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
   return match ? content.slice(match[0].length) : content;
+}
+
+// --- Live AgentSession capture (for the steering/follow-up queue) ------------
+//
+// pi never routes its `queue_update` event through the extension runner
+// (verified pi 0.80.3) — it reaches only AgentSession.subscribe() listeners.
+// To observe (and edit) the queue we need the live AgentSession instance. Both
+// `subscribe` and `prompt` run with `this` bound to that instance, so a
+// one-time prototype patch wrapping them stashes `this` into a *global* holder.
+// The holder is global (not a module local) on purpose: pi's /reload
+// re-evaluates this extension but keeps the same AgentSession instance — a
+// fresh bridge load must still find the previously captured one. Everything
+// downstream feature-detects, so a patch failure only loses queue editing.
+const AGENT_SESSION_HOLDER = Symbol.for("pi-dish-bridge.agentSession");
+const SESSION_PATCH_FLAG = Symbol.for("pi-dish-bridge.sessionPatch");
+try {
+  const proto: any = (AgentSession as any)?.prototype;
+  if (proto && !proto[SESSION_PATCH_FLAG]) {
+    proto[SESSION_PATCH_FLAG] = true;
+    const stash = (instance: any) => {
+      try { (globalThis as any)[AGENT_SESSION_HOLDER] = { current: instance }; } catch {}
+    };
+    for (const name of ["subscribe", "prompt"]) {
+      const original = proto[name];
+      if (typeof original !== "function") continue;
+      proto[name] = function (this: any, ...args: any[]) {
+        try { stash(this); } catch {}
+        return Reflect.apply(original, this, args);
+      };
+    }
+  }
+} catch (e) {
+  try { process.stderr.write(`[pi-dish-bridge] AgentSession capture patch failed (queue editing disabled): ${e}\n`); } catch {}
+}
+
+// Extract the delivery-match text of a queued message the way AgentSession's
+// private _getUserMessageText does: a string is itself; otherwise join the
+// text parts of the content array. Handles both raw content (compaction
+// buffer) and AgentMessage-shaped entries (agent-core queues).
+function queueEntryText(entry: any): string {
+  if (typeof entry === "string") return entry;
+  const content = Array.isArray(entry) ? entry : entry?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) return content.filter((c: any) => c?.type === "text").map((c: any) => c.text).join("");
+  return "";
 }
 
 export default function (pi: ExtensionAPI) {
@@ -176,6 +228,13 @@ export default function (pi: ExtensionAPI) {
   let compactionStuckTimer: ReturnType<typeof setTimeout> | null = null;
   const compactionQueue: Array<string | any[]> = [];
   const COMPACTION_STUCK_MS = 6 * 60 * 1000;
+
+  // Steering/follow-up queue, mirrored from the live AgentSession's own
+  // queue_update events (see the capture patch at module scope). `lastQueue`
+  // is the fallback snapshot; live reads via getCapturedSession() are preferred
+  // when the instance is available.
+  let lastQueue: { steering: string[]; followUp: string[] } = { steering: [], followUp: [] };
+  let queueUnsub: (() => void) | null = null;
   let modelId: string | null = null;
   let contextUsage: { tokens: number | null; contextWindow: number; percent: number | null } | null = null;
   let sessionName: string | null = null;
@@ -235,6 +294,68 @@ export default function (pi: ExtensionAPI) {
 
   function emitTo(sock: net.Socket, obj: unknown) {
     try { sock.write(JSON.stringify(obj) + "\n"); } catch {}
+  }
+
+  // The live AgentSession, if the module-scope capture patch stashed one and it
+  // still looks like an AgentSession. All queue features feature-detect on this.
+  function getCapturedSession(): any {
+    try {
+      const holder = (globalThis as any)[AGENT_SESSION_HOLDER];
+      const s = holder?.current;
+      if (s && typeof s.subscribe === "function") return s;
+    } catch {}
+    return null;
+  }
+
+  // Current queue as clients should see it: pi's steering/follow-up queues
+  // (live read when the instance is captured, else the mirrored fallback) plus
+  // any messages we're holding through compaction — a send during compaction
+  // should be just as visible and cancellable as a real queued one.
+  function mergedQueue(): { steering: string[]; followUp: string[] } {
+    let steering: string[];
+    let followUp: string[];
+    const s = getCapturedSession();
+    if (s) {
+      try {
+        steering = [...s.getSteeringMessages()];
+        followUp = [...s.getFollowUpMessages()];
+      } catch {
+        steering = [...lastQueue.steering];
+        followUp = [...lastQueue.followUp];
+      }
+    } else {
+      steering = [...lastQueue.steering];
+      followUp = [...lastQueue.followUp];
+    }
+    for (const entry of compactionQueue) followUp.push(queueEntryText(entry));
+    return { steering, followUp };
+  }
+
+  function broadcastQueue(): void {
+    broadcast({ type: "event", event: "queue_update", data: mergedQueue() });
+  }
+
+  // Subscribe to the live AgentSession's queue_update events once. Idempotent
+  // and lazy: called from session_start and whenever a client connects, so a
+  // session captured after the bridge loaded (or re-captured across /reload)
+  // still gets wired up.
+  function ensureQueueSubscription(): void {
+    if (queueUnsub) return;
+    const s = getCapturedSession();
+    if (!s) return;
+    try {
+      const unsub = s.subscribe((event: any) => {
+        if (event?.type !== "queue_update") return;
+        lastQueue = {
+          steering: Array.isArray(event.steering) ? [...event.steering] : [],
+          followUp: Array.isArray(event.followUp) ? [...event.followUp] : [],
+        };
+        broadcastQueue();
+      });
+      if (typeof unsub === "function") queueUnsub = unsub;
+    } catch (e) {
+      try { process.stderr.write(`[pi-dish-bridge] queue subscription failed: ${e}\n`); } catch {}
+    }
   }
 
   function emitExtensionUIRequest(req: any) {
@@ -498,6 +619,8 @@ export default function (pi: ExtensionAPI) {
     if (compactionStuckTimer) { clearTimeout(compactionStuckTimer); compactionStuckTimer = null; }
     compacting = false;
     compactionQueue.length = 0;
+    if (queueUnsub) { try { queueUnsub(); } catch {} queueUnsub = null; }
+    lastQueue = { steering: [], followUp: [] };
     contextUsage = null;
     lastRegistrySig = null;
     pendingDialogs.clear();
@@ -526,6 +649,7 @@ export default function (pi: ExtensionAPI) {
       thinkingLevel: getThinkingLevel(),
       name: sessionName,
       pid: process.pid,
+      queue: mergedQueue(),
     };
   }
 
@@ -558,6 +682,7 @@ export default function (pi: ExtensionAPI) {
       }
     });
 
+    ensureQueueSubscription();
     emitTo(sock, { type: "hello", instanceId, ...stateSnapshot() });
     replayExtensionUI(sock);
   }
@@ -704,6 +829,7 @@ export default function (pi: ExtensionAPI) {
   async function deliverUserMessage(content: string | any[], deliverAs?: string): Promise<{ queued: boolean }> {
     if (compacting) {
       compactionQueue.push(content);
+      broadcastQueue();
       return { queued: true };
     }
     await pi.sendUserMessage(content, deliverAsOptions(deliverAs));
@@ -718,6 +844,9 @@ export default function (pi: ExtensionAPI) {
   function flushCompactionQueue(): void {
     const pending = compactionQueue.splice(0);
     if (!pending.length) return;
+    // The buffer just emptied; the replayed sends re-enter pi's own queue and
+    // re-emit queue_update, but reflect the drain immediately.
+    broadcastQueue();
     (async () => {
       for (let i = 0; i < pending.length; i++) {
         try {
@@ -789,6 +918,52 @@ export default function (pi: ExtensionAPI) {
           const { queued } = await deliverUserMessage(content, "followUp");
           respond(true, { queued });
           return;
+        }
+
+        case "cancel_queued": {
+          // Remove a not-yet-delivered queued message so pi-dish can return its
+          // text to the composer. Splices pi's private queue arrays directly
+          // (feature-detected, version-sensitive — verified pi 0.80.3) then
+          // re-emits so the TUI's own display and our subscription reconcile.
+          try {
+            const kind = cmd?.kind;
+            const text = typeof cmd?.text === "string" ? cmd.text : "";
+            if ((kind !== "steering" && kind !== "followUp") || !text) {
+              return respond(false, undefined, "kind (steering|followUp) and non-empty text required");
+            }
+            const index = cmd?.index;
+
+            // Messages held through compaction live in our own buffer, not pi's
+            // queue yet — only ever surfaced as follow-ups.
+            if (kind === "followUp") {
+              const ci = compactionQueue.findIndex((e) => queueEntryText(e) === text);
+              if (ci >= 0) {
+                compactionQueue.splice(ci, 1);
+                broadcastQueue();
+                return respond(true, { text });
+              }
+            }
+
+            const s = getCapturedSession();
+            const unavailable = "queue editing unavailable (pi internals changed — update pi-dish-bridge)";
+            if (!s) return respond(false, undefined, unavailable);
+            const arr: string[] = kind === "steering" ? s._steeringMessages : s._followUpMessages;
+            if (!Array.isArray(arr) || typeof s._emitQueueUpdate !== "function") {
+              return respond(false, undefined, unavailable);
+            }
+            const idx = Number.isInteger(index) && arr[index] === text ? index : arr.indexOf(text);
+            if (idx < 0) return respond(false, undefined, "message already delivered");
+            arr.splice(idx, 1);
+            const coreQueue = kind === "steering" ? s.agent?.steeringQueue?.messages : s.agent?.followUpQueue?.messages;
+            if (Array.isArray(coreQueue)) {
+              const ci = coreQueue.findIndex((m: any) => queueEntryText(m) === text);
+              if (ci >= 0) coreQueue.splice(ci, 1);
+            }
+            s._emitQueueUpdate();
+            return respond(true, { text });
+          } catch (e: any) {
+            return respond(false, undefined, String(e?.message || e));
+          }
         }
 
         case "abort": {
@@ -948,6 +1123,7 @@ export default function (pi: ExtensionAPI) {
     registryPath = path.join(REGISTRY_DIR, `${sessionId}.json`);
 
     bindSocket();
+    ensureQueueSubscription();
 
     writeRegistry();
     broadcast({ type: "event", event: "session_start", data: { sessionId, sessionFile, cwd } });

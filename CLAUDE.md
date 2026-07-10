@@ -183,6 +183,24 @@ per-session state: the server remembers each live session's current set
 connection; the client wipes the DOM on session switch (`clearExtensionUI`).
 Widget collapse state is remembered per session+key across switches.
 
+Steering/follow-up queue (`queue_update`): pi does **not** route this event
+through the extension runner (verified pi 0.80.3), so the bridge can't observe
+it via `pi.on`. Instead the bridge patches `AgentSession.prototype`
+(`subscribe`/`prompt`, guarded by a `Symbol.for` flag) to stash the live
+instance into a global holder — global, not module-local, because pi's
+`/reload` re-evaluates the extension but keeps the same AgentSession. From
+there it `subscribe()`s for `queue_update` and broadcasts a merged queue (pi's
+steering + follow-up arrays, plus any messages held during compaction). `POST
+/api/sessions/:id/queue/cancel` (bridge `cancel_queued`) removes a
+not-yet-delivered message by splicing pi's private `_steeringMessages` /
+`_followUpMessages` **and** the agent-core `steeringQueue`/`followUpQueue`
+arrays, then calling `_emitQueueUpdate()`. All of this is feature-detected and
+version-sensitive: a patch/shape mismatch disables queue editing (clear error)
+rather than breaking the bridge. The server replays `sess.queueState` (from the
+bridge hello / last `queue_update`) into every new SSE connection, and forwards
+delivered `role:'user'` `message_end`s mid-turn so a steer shows in the
+transcript before the `turn_end` JSONL catch-up.
+
 Scroll pinning: streaming only follows while the viewport is near the bottom
 (`isPinnedToBottom`, 80px threshold). Sending a prompt or hitting
 jump-to-bottom sets `followStream`, which forces following regardless of
@@ -340,9 +358,15 @@ so the outside-click closer must treat detached targets as inside.
   dedupes consecutive, caps at 50). ArrowUp with the caret at position 0
   walks back; ArrowDown at the end walks forward and finally restores the
   stashed draft. Typing exits browsing (`historyIndex = -1` on input).
-- **Queue panel**: `queue_update` chips are buttons toggling `#queuePanel`,
-  which lists queued steering/follow-up texts. View-only — pi has no API to
-  cancel a queued message (upstream PR candidate).
+- **Queue strip**: `renderQueueStatus(data)` renders `queue_update` into
+  `#queuePanel` as an always-visible-when-non-empty strip above the composer —
+  one row per pending steering/follow-up message (including ones typed in the
+  TUI), each ellipsized (click to expand) with an `↩ Edit` button.
+  `editQueuedMessage()` POSTs `/api/sessions/:id/queue/cancel` (kind + array
+  index + text) to pull the message out of pi's queue and back into the
+  composer (appended with a blank line if the composer already holds different
+  text); the follow-up `queue_update` reconciles the strip. See the queue
+  paragraph under the streaming pipeline for the bridge-side mechanics.
 
 ## Message view (public/app.js)
 

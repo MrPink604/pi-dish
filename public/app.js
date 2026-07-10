@@ -738,9 +738,10 @@ async function selectSession(id) {
   }
   if (sessionActions) sessionActions.style.display = currentSession.isActive ? '' : 'none';
 
-  // Working state and queue chips are per-session — seed from the list data
+  // Working state and queue strip are per-session — seed from the list data
   // instead of leaking the previous session's state until the init event.
   renderQueueStatus(null);
+  pendingSelfEcho = null;
   setTurnInProgress(currentSession.isActive && !!currentSession.turnInProgress);
 
   renderSessions();
@@ -1977,9 +1978,33 @@ function startMessageStream(sessionId) {
       try {
         const { message } = JSON.parse(e.data);
         if (!message) return;
-        cancelStreamingRender();
         const container = document.getElementById('messages');
         if (!container) return;
+        if (message.role === 'user') {
+          // pi echoes every user message it processes — including the prompt
+          // this client just rendered optimistically in sendMessage. Skip that
+          // one echo or the prompt shows twice until the turn_end catch-up.
+          if (pendingSelfEcho !== null && extractTextContent(message.content) === pendingSelfEcho) {
+            pendingSelfEcho = null;
+            return;
+          }
+          // A steer/follow-up pi just delivered mid-turn (or a prompt typed in
+          // the TUI). Insert it un-indexed before the streaming placeholder
+          // (if any); the turn_end JSONL catch-up strips un-indexed .message
+          // nodes and re-inserts the authoritative indexed render, so this
+          // never duplicates.
+          const wasPinned = isPinnedToBottom(container);
+          const streaming = container.querySelector('.message.assistant[data-streaming="true"]');
+          const tmp = document.createElement('template');
+          tmp.innerHTML = renderUserMessage(message, formatTime(message.timestamp || Date.now()));
+          const el = tmp.content.firstElementChild;
+          if (streaming) streaming.before(el);
+          else container.appendChild(el);
+          if (wasPinned || followStream) scrollToBottom(container); else updateJumpButton(container);
+          return;
+        }
+        if (message.role !== 'assistant') return;
+        cancelStreamingRender();
         // Swap the streaming placeholder for the finalized render in place.
         // It stays un-indexed, so the turn_end JSONL catch-up replaces it
         // with the authoritative version (fetchNewMessagesSince strips all
@@ -2285,6 +2310,10 @@ async function sendPrompt() {
   container.insertAdjacentHTML('beforeend', renderUserMessage({
     role: 'user', content: optimisticContent, timestamp: Date.now()
   }, formatTime(Date.now())));
+  // Arm the echo suppressor: pi re-emits this prompt as a user message_end
+  // when the turn starts, and we've already rendered it. '' is a valid value
+  // (images-only prompt), hence the null sentinel.
+  pendingSelfEcho = message;
   followStream = true; // sending means: follow the stream from here on
   scrollToBottom(container);
 
@@ -2304,11 +2333,16 @@ async function sendPrompt() {
   } catch (e) {
     setStatus(`Error: ${e.message}`, 'error');
     setTurnInProgress(false);
+    pendingSelfEcho = null; // no echo is coming for a failed send
     restoreAttachments(images); // don't lose them on a failed send
   }
 }
 
 var turnInProgress = false;
+
+// Text of the prompt whose optimistic render is awaiting its pi echo (null
+// when none) — see the user branch of the message_end stream handler.
+var pendingSelfEcho = null;
 
 // --- Live activity: elapsed turn time + currently running tool -----------
 // The working badge reads "Working 1:42 · Bash" so a glance says what the
@@ -2417,47 +2451,60 @@ async function sendQueuedMessage(kind) {
 function sendSteer() { return sendQueuedMessage('steer'); }
 function sendFollowUp() { return sendQueuedMessage('followUp'); }
 
-// Pending steering/follow-up queue indicator (from queue_update events).
-// Chips toggle an expandable panel listing the queued message texts.
-// (pi exposes no API to cancel a queued message — view-only for now.)
+// Pending steering/follow-up queue strip (from queue_update events, including
+// messages typed in the TUI). Always visible above the composer while the
+// queue is non-empty; each row's Edit button pulls the message back out of
+// pi's queue and into the composer.
 var lastQueueData = null;
 
 function renderQueueStatus(data) {
   lastQueueData = data;
-  const el = document.getElementById('queueStatus');
   const panel = document.getElementById('queuePanel');
-  if (!el) return;
+  if (!panel) return;
   const steering = data?.steering || [];
   const followUp = data?.followUp || [];
   if (!steering.length && !followUp.length) {
-    el.style.display = 'none'; el.innerHTML = '';
-    if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
+    panel.style.display = 'none';
+    panel.innerHTML = '';
     return;
   }
-  const chip = (label, items) =>
-    `<button class="queue-chip" onclick="toggleQueuePanel()" title="Show queued messages">${label}: ${items.length}</button>`;
-  el.innerHTML =
-    (steering.length ? chip('steering', steering) : '') +
-    (followUp.length ? chip('follow-up', followUp) : '');
-  el.style.display = '';
-  if (panel && panel.style.display !== 'none') renderQueuePanel();
+  const rows = [];
+  steering.forEach((text, i) => rows.push(queueRowHtml('steering', 'steer', text, i)));
+  followUp.forEach((text, i) => rows.push(queueRowHtml('followUp', 'follow-up', text, i)));
+  panel.innerHTML = rows.join('');
+  panel.style.display = '';
 }
 
-function toggleQueuePanel() {
-  const panel = document.getElementById('queuePanel');
-  if (!panel) return;
-  if (panel.style.display === 'none') { renderQueuePanel(); panel.style.display = ''; }
-  else { panel.style.display = 'none'; }
+function queueRowHtml(kind, label, text, index) {
+  return `<div class="queue-item" data-kind="${kind}" data-index="${index}">
+    <span class="queue-item-kind">${label}</span>
+    <span class="queue-item-text" onclick="this.classList.toggle('expanded')" title="Click to expand">${escapeHtml(text)}</span>
+    <button class="queue-item-edit" onclick="editQueuedMessage(this)" title="Remove from queue and edit">↩ Edit</button>
+  </div>`;
 }
 
-function renderQueuePanel() {
-  const panel = document.getElementById('queuePanel');
-  if (!panel) return;
-  const row = (kind, text) =>
-    `<div class="queue-item"><span class="queue-item-kind">${kind}</span><span class="queue-item-text">${escapeHtml(text)}</span></div>`;
-  panel.innerHTML =
-    (lastQueueData?.steering || []).map((m) => row('steer', m)).join('') +
-    (lastQueueData?.followUp || []).map((m) => row('follow-up', m)).join('');
+// Cancel a queued message on the bridge and return its text to the composer.
+async function editQueuedMessage(btn) {
+  if (!currentSession) return;
+  const row = btn.closest('.queue-item');
+  if (!row) return;
+  const kind = row.dataset.kind;
+  const index = Number(row.dataset.index);
+  const text = row.querySelector('.queue-item-text')?.textContent || '';
+  if (!text) return;
+  try {
+    await apiSend(`/api/sessions/${currentSession.id}/queue/cancel`, { kind, index, text });
+    const input = document.getElementById('promptInput');
+    if (input) {
+      const existing = input.value.trim();
+      input.value = existing && existing !== text ? `${existing}\n\n${text}` : text;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.focus();
+    }
+    // The follow-up queue_update reconciles the strip; no manual removal needed.
+  } catch (e) {
+    setStatus(e.message, 'error');
+  }
 }
 
 async function abortTurn() {
