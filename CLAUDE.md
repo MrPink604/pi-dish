@@ -226,6 +226,16 @@ feed) clears it; programmatic or layout-driven scroll shifts must not.
 - `test/tmux.test.js` — real tmux on a throwaway socket; `fake-pi.js`
   performs the registry handshake. `test/terminal.test.js` — real PTY + WS.
   `test/bridge-session.test.js` — socket protocol guards.
+- `test/pi-bridge.integration.test.js` — **the pi-upgrade canary**: spawns the
+  real `pi` binary (skip-if-absent) with the real `extensions/pi-dish-bridge`
+  in a temp HOME whose `models.json` routes `fakeprov/fake-model` to an
+  in-test fake Anthropic `/v1/messages` SSE server (a HOLD marker in the
+  prompt pins a turn open). Covers the seams every other suite fakes: bridge
+  registration, a real agent turn end to end, `queue_update` via the
+  AgentSession prototype capture, `cancel_queued`'s private-array splice, and
+  `navigate_tree` after priming a command context (`/dish-prime` over the pi
+  child's own RPC stdin). **Run this after bumping pi** — a green run means
+  the version-sensitive bridge internals still hold.
 - `test/helpers.test.js` — unit tests for `public/helpers.js`, the pure
   frontend helpers (escaping, formatting, filtering, fuzzy match, mood).
   Helpers are plain script globals in the browser and CommonJS exports in
