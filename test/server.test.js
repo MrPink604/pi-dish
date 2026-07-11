@@ -441,6 +441,10 @@ test('GET /page with an unknown token is a bare 404', async () => {
   assert.equal(await res.text(), 'Not found');
 });
 
+test('the server exports PI_DISH_URL for spawned agents (pi-dish-pages skill)', () => {
+  assert.equal(process.env.PI_DISH_URL, base);
+});
+
 test('PUT /api/models/enabled persists pi scoped models in settings.json', async () => {
   const settingsFile = path.join(tmpHome, '.pi', 'agent', 'settings.json');
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });

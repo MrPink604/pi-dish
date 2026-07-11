@@ -110,9 +110,15 @@ your global pi extensions dir:
 git clone https://github.com/MrPink604/pi-dish
 cd pi-dish
 npm install
-mkdir -p ~/.pi/agent/extensions
+mkdir -p ~/.pi/agent/extensions ~/.pi/agent/skills
 ln -s "$PWD/extensions/pi-dish-bridge" ~/.pi/agent/extensions/pi-dish-bridge
+ln -s "$PWD/skills/pi-dish-pages" ~/.pi/agent/skills/pi-dish-pages
 ```
+
+The second symlink is optional: it vends the `pi-dish-pages` skill, which
+teaches agents to publish HTML artifacts (plans, reports) as pages hosted by
+this server — ask an agent to "publish the plan as a page" and you get back
+a link. See "Published pages" below.
 
 Symlink, don't copy — a stale copied bridge loaded alongside the current one
 races for the session socket.
@@ -182,6 +188,31 @@ PI_DISH_SHARE_BASE_URL=https://share.example.com  # absolute base for the link s
 proxy while keeping the main API on localhost. `PI_DISH_SHARE_BASE_URL` just
 sets the URL the UI copies out; when unset the link is built from the current
 origin.
+
+### Published pages
+
+Agents often generate HTML explainer artifacts — a plan, a report, a little
+dashboard. pi-dish can host them: the agent writes the file(s) to disk and
+registers the path, and the server serves it at `/page/<token>` — live from
+disk, so the agent editing the file and saying "refresh" is the whole update
+loop.
+
+```bash
+curl -s -X POST "${PI_DISH_URL:-http://localhost:3333}/api/pages" \
+  -H 'Content-Type: application/json' \
+  -d '{"path":"/abs/path/plan.html","title":"Refactor plan"}'
+# → { "token": "…", "path": "/page/…", "url": null }
+```
+
+The `pi-dish-pages` skill (see Setup) teaches agents this flow; sessions
+spawned from pi-dish get `PI_DISH_URL` in their env automatically. A root can
+be a single file or a directory with an `index.html` (relative assets are
+served under the token). Publishing is deliberately ungated — anyone who can
+reach the main UI is trusted; the share-only port never registers pages, it
+only serves existing tokens (`/page/<token>` is available there alongside
+`/share/<token>`). You can also publish by hand: the file viewer (tap any
+file mention in a transcript) has a 🌐 button, and the stats modal lists a
+session's pages with revoke.
 
 ## Slash command support
 

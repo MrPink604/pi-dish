@@ -1341,6 +1341,9 @@ async function spawnPiInTmux({ target, args, cwd }) {
   const spec = getPiLaunchSpec();
   const token = crypto.randomBytes(16).toString('hex');
   const env = { ...spec.env, PI_DISH_SPAWN_TOKEN: token };
+  // tmux windows don't inherit this process's env — pass the server URL
+  // through so the pi-dish-pages skill works in tmux-spawned sessions too.
+  if (process.env.PI_DISH_URL) env.PI_DISH_URL = process.env.PI_DISH_URL;
   const command = [...spec.argv, ...args];
 
   let paneId;
@@ -1624,6 +1627,12 @@ function findSessionFile(sessionId) {
 piSDK.getAvailableModels().then(setModelsCache).catch(() => {});
 
 const server = app.listen(PORT, HOST, () => {
+  // Loopback URL for agents running on this machine (the pi-dish-pages
+  // skill curls it). Children spawned by pi-dish inherit process.env (RPC)
+  // or get it via tmux -e; respect an operator-provided value.
+  if (!process.env.PI_DISH_URL) {
+    process.env.PI_DISH_URL = `http://127.0.0.1:${server.address().port}`;
+  }
   console.log(`pi-dish running at http://${HOST}:${PORT}`);
   if (HOST === '127.0.0.1') {
     console.log('Bound to localhost only. To reach it from other devices, set HOST (e.g. HOST=0.0.0.0 or your Tailscale IP) or front it with a reverse proxy.');

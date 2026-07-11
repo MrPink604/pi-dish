@@ -167,6 +167,10 @@ curl -s -X POST localhost:3333/api/pages -H 'Content-Type: application/json' \
 
 The response carries `/page/<token>` (plus an absolute `url` when
 `PI_DISH_SHARE_BASE_URL` is set); the agent pastes that path/link into chat.
+Agents learn this flow from the vended skill (`skills/pi-dish-pages/`,
+symlinked into `~/.pi/agent/skills/` per the README) — the server sets
+`PI_DISH_URL` in its own env at listen time so RPC children inherit it, and
+tmux spawns get it via `-e`; the skill falls back to localhost:3333.
 Content is served **live from disk** — edits show on refresh — and
 re-publishing the same path reuses its token (`createPage` is idempotent per
 resolved root). A root may be one file or a directory (index.html required;
