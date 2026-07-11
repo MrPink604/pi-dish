@@ -62,6 +62,33 @@ const findActive = async (id) => {
 // child process; reusing it also proves the session stays usable).
 let sessionId;
 
+test('getPiLaunchSpec resolves a bare `pi` past node_modules/.bin shims', () => {
+  // Under npm-run PATHs, pi-dish's own dependency shim would shadow the host
+  // pi — the spec must skip node_modules dirs when resolving the bare word.
+  const { getPiLaunchSpec } = require('../lib/rpc-session');
+  const saved = { cmd: process.env.PI_DISH_PI_COMMAND, path: process.env.PATH };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-path-'));
+  const shimDir = path.join(dir, 'node_modules', '.bin');
+  const binDir = path.join(dir, 'bin');
+  fs.mkdirSync(shimDir, { recursive: true });
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(path.join(shimDir, 'pi'), '#!/bin/sh\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(binDir, 'pi'), '#!/bin/sh\n', { mode: 0o755 });
+  try {
+    delete process.env.PI_DISH_PI_COMMAND;
+    process.env.PATH = `${shimDir}${path.delimiter}${binDir}`;
+    assert.equal(getPiLaunchSpec().argv[0], path.join(binDir, 'pi'),
+      'shim dir is skipped, host pi wins');
+    // With nothing but shims on PATH, degrade to the bare word.
+    process.env.PATH = shimDir;
+    assert.equal(getPiLaunchSpec().argv[0], 'pi');
+  } finally {
+    process.env.PI_DISH_PI_COMMAND = saved.cmd;
+    process.env.PATH = saved.path;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('GET /api/models lists what the host pi reports, not the vendored CLI', async () => {
   // lib/pi-sdk.js runs --list-models through the same launch spec sessions
   // use (PI_DISH_PI_COMMAND here) — a host pi upgrade must show up without
