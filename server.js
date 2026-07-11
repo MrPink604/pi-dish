@@ -12,7 +12,7 @@ const {
   BridgeSession,
   REGISTRY_DIR,
 } = require('./lib/bridge-session');
-const { searchFiles, searchHomeDirs } = require('./lib/file-search');
+const { searchFiles, searchHomeDirs, completePath, isPathCompletionToken } = require('./lib/file-search');
 const { resolveFileMention, readFileForViewer } = require('./lib/file-mention');
 const terminal = require('./lib/terminal');
 const tmux = require('./lib/tmux');
@@ -1137,12 +1137,18 @@ function resolveSessionCwd(sessionId) {
   return null;
 }
 
-// Fuzzy file search under a session's cwd — powers @-mentions in the prompt.
+// File search for @-mentions in the prompt. Plain tokens fuzzy-search the
+// session cwd (fff); tokens that name a location (/abs, ~/x, ../x) get
+// shell-style completion instead, so mentions can reach anywhere on disk.
 app.get('/api/sessions/:id/files', async (req, res) => {
   try {
+    const q = String(req.query.q || '');
     const cwd = resolveSessionCwd(req.params.id);
+    if (isPathCompletionToken(q)) {
+      return res.json({ cwd, files: completePath(q, { cwd, limit: 20 }) });
+    }
     if (!cwd) return res.status(404).json({ error: 'Session cwd unknown' });
-    const files = await searchFiles(cwd, String(req.query.q || ''), 20);
+    const files = await searchFiles(cwd, q, 20);
     res.json({ cwd, files });
   } catch (e) {
     res.status(500).json({ error: e.message });

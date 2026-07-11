@@ -164,8 +164,16 @@ picker) uses a cached depth-4 directory walk plus the shared fuzzy scorer
 from `public/helpers.js` instead. Everything degrades to the walker when
 fff is unavailable — never let a missing native binary break the UI.
 
+Tokens that name a location (`/abs`, `~/x`, `./x`, `../x` — relative forms
+resolve against the session cwd) skip fff entirely: `completePath()` does
+shell-style completion (readdir the parent, fuzzy-match the partial
+basename, dotfiles only when the partial starts with `.`), so @-mentions
+reach anywhere on the filesystem without pretending it's indexable.
+Suggestions keep the typed form (`~/` stays `~`-relative).
+
 Client side: `@token` at the caret opens the file autocomplete (accept
-inserts `@relative/path`); the cwd input merges known session cwds
+inserts `@relative/path`; accepting a directory appends `/` and re-fires
+the completion to drill deeper); the cwd input merges known session cwds
 (starred, score-boosted) with live `/api/dirs` results.
 
 ## Client session state (public/app.js)

@@ -455,6 +455,23 @@ function writeRegistry(patch = {}) {
     check(promptVal === 'look at @src/main.js ', `mention inserted (got ${JSON.stringify(promptVal)})`);
     await desktop.fill('#promptInput', '');
 
+    // @~/... path completion: directories drill deeper, files close the mention
+    await desktop.type('#promptInput', '@~/works');
+    await desktop.waitForSelector('.autocomplete-item[data-file="~/workspace"][data-dir]', { timeout: 5000 });
+    check(true, '@~/ token completes home dirs');
+    await desktop.keyboard.press('Tab');
+    check(await desktop.inputValue('#promptInput') === '@~/workspace/',
+      'accepting a dir appends a slash and keeps completing');
+    await desktop.waitForSelector('.autocomplete-item[data-file="~/workspace/proj-alpha"][data-dir]', { timeout: 5000 });
+    await desktop.keyboard.press('Tab');
+    await desktop.type('#promptInput', 'REA');
+    await desktop.waitForSelector('.autocomplete-item[data-file="~/workspace/proj-alpha/README.md"]:not([data-dir])', { timeout: 5000 });
+    await desktop.keyboard.press('Tab');
+    const deepVal = await desktop.inputValue('#promptInput');
+    check(deepVal === '@~/workspace/proj-alpha/README.md ',
+      `drilled mention inserted (got ${JSON.stringify(deepVal)})`);
+    await desktop.fill('#promptInput', '');
+
     // 4. cwd picker: fuzzy directory search under $HOME
     console.log('cwd picker:');
     await desktop.fill('#newSessionCwd', '');

@@ -246,7 +246,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // =========================================================================
 // Autocomplete — slash commands at the start of the input, @file mentions
-// anywhere (fuzzy file search under the session cwd, served by fff).
+// anywhere (fuzzy file search under the session cwd via fff; @/abs, @~/ and
+// @../ tokens get shell-style path completion anywhere on the filesystem).
 // =========================================================================
 
 function handleAutocomplete(text) {
@@ -280,25 +281,29 @@ const GIT_STATUS_LABEL = { modified: '± modified', untracked: '+ new', staged: 
 
 function showFileAutocomplete(files) {
   showAutocompleteList(files.map((f, i) =>
-    `<div class="autocomplete-item${i === 0 ? ' active' : ''}" data-file="${escapeHtml(f.path)}">
-      <span class="autocomplete-icon">📄</span>
-      <span class="autocomplete-name">${escapeHtml(f.path)}</span>
+    `<div class="autocomplete-item${i === 0 ? ' active' : ''}" data-file="${escapeHtml(f.path)}"${f.isDir ? ' data-dir="1"' : ''}>
+      <span class="autocomplete-icon">${f.isDir ? '📁' : '📄'}</span>
+      <span class="autocomplete-name">${escapeHtml(f.path)}${f.isDir ? '/' : ''}</span>
       <span class="autocomplete-desc">${GIT_STATUS_LABEL[f.gitStatus] || ''}</span>
     </div>`).join(''));
 }
 
-// Replace the @token at the caret with the chosen path.
-function acceptFileMention(relPath) {
+// Replace the @token at the caret with the chosen path. Files close the
+// mention with a trailing space; directories append a '/' and re-fire the
+// input event so the completion drills one level deeper.
+function acceptFileMention(relPath, isDir) {
   const input = document.getElementById('promptInput');
   const caret = input.selectionStart ?? input.value.length;
   const m = input.value.slice(0, caret).match(/(?:^|\s)@([^\s@]*)$/);
   hideAutocomplete();
   if (!m) return;
   const start = caret - m[1].length - 1; // include the '@'
-  input.value = input.value.slice(0, start) + '@' + relPath + ' ' + input.value.slice(caret);
-  const pos = start + relPath.length + 2;
+  const insert = relPath + (isDir ? '/' : ' ');
+  input.value = input.value.slice(0, start) + '@' + insert + input.value.slice(caret);
+  const pos = start + 1 + insert.length;
   input.focus();
   input.setSelectionRange(pos, pos);
+  if (isDir) input.dispatchEvent(new Event('input'));
 }
 
 function ensureAutocompleteContainer() {
@@ -351,7 +356,7 @@ function moveAutocomplete(delta) {
 
 function acceptAutocomplete(el) {
   const file = el.getAttribute('data-file');
-  if (file != null) acceptFileMention(file);
+  if (file != null) acceptFileMention(file, el.hasAttribute('data-dir'));
   else acceptAutocompleteByName(el.getAttribute('data-name'));
 }
 

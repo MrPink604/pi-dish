@@ -235,6 +235,40 @@ test('GET /files fuzzy-searches the session cwd', async () => {
   assert.ok(body.files.some(f => f.path === 'src/main.js'));
 });
 
+test('GET /files completes absolute paths outside the session cwd', async () => {
+  // partial basename → the matching directory, flagged so the client drills in
+  let { status, body } = await get(`/api/sessions/${REAL_CWD_ID}/files?q=${encodeURIComponent(tmpHome + '/scr')}`);
+  assert.equal(status, 200);
+  const dirHit = body.files.find(f => f.path === path.join(tmpHome, 'scratch'));
+  assert.ok(dirHit, 'scratch dir suggested from its absolute parent');
+  assert.equal(dirHit.isDir, true);
+  // trailing slash → list inside that directory
+  ({ body } = await get(`/api/sessions/${REAL_CWD_ID}/files?q=${encodeURIComponent(tmpHome + '/scratch/')}`));
+  const fileHit = body.files.find(f => f.path === path.join(tmpHome, 'scratch', 'notes.md'));
+  assert.ok(fileHit && !fileHit.isDir);
+});
+
+test('GET /files completes ~ and ../ tokens, preserving the typed form', async () => {
+  // ~ expands against $HOME but suggestions stay ~-relative
+  let { body } = await get(`/api/sessions/${REAL_CWD_ID}/files?q=${encodeURIComponent('~/scratch/no')}`);
+  assert.ok(body.files.some(f => f.path === '~/scratch/notes.md'));
+  // dotfiles hidden unless the partial starts with a dot
+  ({ body } = await get(`/api/sessions/${REAL_CWD_ID}/files?q=${encodeURIComponent('~/')}`));
+  assert.ok(!body.files.some(f => f.path.includes('/.')), 'no dotfiles for a bare listing');
+  ({ body } = await get(`/api/sessions/${REAL_CWD_ID}/files?q=${encodeURIComponent('~/.p')}`));
+  assert.ok(body.files.some(f => f.path === '~/.pi' && f.isDir));
+  // ../ resolves against the session cwd
+  ({ body } = await get(`/api/sessions/${REAL_CWD_ID}/files?q=${encodeURIComponent('../proj-al')}`));
+  assert.ok(body.files.some(f => f.path === '../proj-alpha' && f.isDir));
+});
+
+test('GET /files path completion works even when the session cwd is missing', async () => {
+  // fixture session's cwd doesn't exist, but ~ completion doesn't need it
+  const { status, body } = await get(`/api/sessions/${SESSION_ID}/files?q=${encodeURIComponent('~/scratch/')}`);
+  assert.equal(status, 200);
+  assert.ok(body.files.some(f => f.path === '~/scratch/notes.md'));
+});
+
 test('GET /files with a missing cwd degrades to an empty list', async () => {
   // fixture session's cwd (/home/user/proj) does not exist on disk
   const { status, body } = await get(`/api/sessions/${SESSION_ID}/files?q=x`);
