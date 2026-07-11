@@ -12,6 +12,9 @@
  *   - queue_update via the AgentSession prototype-capture patch
  *   - cancel_queued splicing pi's private queue arrays
  *   - navigate_tree through a stashed command context (/dish-prime via RPC)
+ *   - version skew: the bundled SDK (lib/pi-sdk.js — share export, branch
+ *     summaries, model registry) must match the host pi that writes the
+ *     session files; `npm test` goes red when the host upgrades past it
  *
  * Run with: npm test  (≈15s; set PI_DISH_SKIP_INTEGRATION=1 to skip)
  */
@@ -26,13 +29,27 @@ const { spawn, execFileSync } = require('node:child_process');
 
 const { sseReader } = require('./sse-reader');
 
-let piOk = !process.env.PI_DISH_SKIP_INTEGRATION;
-try { execFileSync('pi', ['--version'], { stdio: 'ignore', timeout: 15000 }); } catch { piOk = false; }
-
 // Short temp dir — the bridge's Unix socket path must stay under ~108 chars.
+// HOME must be set before resolving the pi launch spec so the alias lookup
+// reads the (empty) temp HOME, not the developer's rc files.
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-int-'));
 process.env.HOME = tmpHome;
 process.env.PORT = '0';
+
+// Resolve the HOST pi like the server does. A bare `pi` here would hit
+// node_modules/.bin first (npm prepends it under `npm test`), silently
+// canary-ing the bundled — usually older — copy instead of the host.
+const { getPiLaunchSpec } = require('../lib/rpc-session.js');
+const piSpec = getPiLaunchSpec();
+const piEnv = { ...process.env, ...piSpec.env };
+
+let piOk = !process.env.PI_DISH_SKIP_INTEGRATION;
+let hostPiVersion = null;
+try {
+  const out = execFileSync(piSpec.argv[0], [...piSpec.argv.slice(1), '--version'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000, env: piEnv });
+  hostPiVersion = (out.match(/\d+\.\d+\.\d+\S*/g) || []).pop() || null;
+} catch { piOk = false; }
 
 // --- fake Anthropic endpoint -------------------------------------------------
 // Streams a scripted reply for each /v1/messages request. A user message
@@ -140,9 +157,9 @@ test.before(async () => {
     },
   }, null, 2));
 
-  pi = spawn('pi', ['--mode', 'rpc', '--model', 'fakeprov/fake-model'], {
+  pi = spawn(piSpec.argv[0], [...piSpec.argv.slice(1), '--mode', 'rpc', '--model', 'fakeprov/fake-model'], {
     cwd: projDir,
-    env: { ...process.env, HOME: tmpHome },
+    env: { ...piEnv, HOME: tmpHome },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   let buf = '';
@@ -167,6 +184,15 @@ test.after(async () => {
   }
   llm.close();
   server.close();
+});
+
+test('bundled pi SDK version matches the host pi', { skip: !piOk }, () => {
+  const bundled = require('../node_modules/@earendil-works/pi-coding-agent/package.json').version;
+  assert.ok(hostPiVersion, 'could not parse a version from host pi --version output');
+  assert.equal(bundled, hostPiVersion,
+    `bundled pi SDK ${bundled} != host pi ${hostPiVersion} — lib/pi-sdk.js runs against the bundled copy `
+    + `while sessions run the host, so share export / branch summaries drift from the session files. `
+    + `Run: npm i @earendil-works/pi-coding-agent@${hostPiVersion} (or upgrade host pi), then re-run this canary.`);
 });
 
 test('the real bridge registers the session and pi-dish lists it', { skip: !piOk, timeout: 60000 }, async () => {

@@ -350,15 +350,21 @@ feed) clears it; programmatic or layout-driven scroll shifts must not.
   performs the registry handshake. `test/terminal.test.js` — real PTY + WS.
   `test/bridge-session.test.js` — socket protocol guards.
 - `test/pi-bridge.integration.test.js` — **the pi-upgrade canary**: spawns the
-  real `pi` binary (skip-if-absent) with the real `extensions/pi-dish-bridge`
+  real **host** `pi` (via `getPiLaunchSpec()`, skip-if-absent; a bare `pi`
+  under `npm test` would resolve to the bundled node_modules/.bin shim — the
+  96c6e20 bug class) with the real `extensions/pi-dish-bridge`
   in a temp HOME whose `models.json` routes `fakeprov/fake-model` to an
   in-test fake Anthropic `/v1/messages` SSE server (a HOLD marker in the
   prompt pins a turn open). Covers the seams every other suite fakes: bridge
   registration, a real agent turn end to end, `queue_update` via the
   AgentSession prototype capture, `cancel_queued`'s private-array splice, and
   `navigate_tree` after priming a command context (`/dish-prime` over the pi
-  child's own RPC stdin). **Run this after bumping pi** — a green run means
-  the version-sensitive bridge internals still hold.
+  child's own RPC stdin). It also asserts the npm-installed pi package
+  version equals the host pi's, so `npm test` goes red when a host upgrade
+  leaves `lib/pi-sdk.js` (share export, branch summaries, model registry)
+  running a stale SDK against the host's session files — fix with
+  `npm i @earendil-works/pi-coding-agent@<host version>`. A green run after
+  bumping pi means the version-sensitive bridge internals still hold.
 - `test/helpers.test.js` — unit tests for `public/helpers.js`, the pure
   frontend helpers (escaping, formatting, filtering, fuzzy match, mood).
   Helpers are plain script globals in the browser and CommonJS exports in
