@@ -25,6 +25,19 @@ if (process.env.PI_FIXTURE_EXIT_ON_START) process.exit(3);
 const home = process.env.HOME;
 const args = process.argv.slice(2);
 
+// lib/pi-sdk.js resolves the model list through the same launch spec as
+// sessions, so `--list-models` reaches this fixture too: print a table shaped
+// like the real CLI's and exit (without this the fixture would sit waiting on
+// RPC stdin until the caller's exec timeout).
+if (args.includes('--list-models')) {
+  process.stdout.write([
+    'Provider  Model  Context  Max Output  Thinking',
+    'test  fake-model  200K  64K  yes',
+    'test  fresh-model  200K  64K  no',
+  ].join('\n') + '\n');
+  process.exit(0);
+}
+
 const sessionIdx = args.indexOf('--session');
 let sessionFile, sessionId;
 if (sessionIdx >= 0 && args[sessionIdx + 1]) {

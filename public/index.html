@@ -5,6 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>pi-dish</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23073642'/%3E%3Ctext x='16' y='23' font-size='20' text-anchor='middle' fill='%23268bd2' font-family='Georgia,serif'%3E%CF%80%3C/text%3E%3C/svg%3E">
+  <!-- Theme is applied before the stylesheet paints so there's no flash of
+       the default theme; app.js owns switching (applyTheme) and refreshes
+       the cached custom-theme tokens from /api/themes after boot. -->
+  <script>try {
+    var t = localStorage.getItem('pi-dish-theme');
+    if (t && t !== 'solarized') document.documentElement.dataset.theme = t;
+    var tok = JSON.parse(localStorage.getItem('pi-dish-theme-tokens') || 'null');
+    if (tok) for (var k in tok) if (/^--[a-z][a-z0-9-]*$/.test(k)) document.documentElement.style.setProperty(k, String(tok[k]));
+  } catch (e) {}</script>
   <link rel="stylesheet" href="style.css">
   <!-- Vendored (see scripts/build-vendor.js) — no CDN so the UI works on
        LAN-only clients and markdown rendering never silently degrades. -->
@@ -25,13 +34,16 @@
     <!-- Sidebar -->
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
-        <h1>π-dish</h1>
-        <button class="btn-icon" onclick="refreshSessions()" title="Refresh">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 12a9 9 0 11-2.636-6.364"/>
-            <path d="M21 3v6h-6"/>
-          </svg>
-        </button>
+        <h1><span class="wordmark-pi">π</span>-dish</h1>
+        <div class="sidebar-header-actions">
+          <select id="themeSelect" class="theme-select" onchange="applyTheme(this.value)" title="Theme"></select>
+          <button class="btn-icon" onclick="refreshSessions()" title="Refresh">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 12a9 9 0 11-2.636-6.364"/>
+              <path d="M21 3v6h-6"/>
+            </svg>
+          </button>
+        </div>
       </div>
       
       <div class="sidebar-tabs">
@@ -57,7 +69,10 @@
         </div>
         <div class="new-session-target" id="newSessionTargetWrap" style="display:none">
           <label class="cwd-label" for="newSessionTarget">run in</label>
-          <select id="newSessionTarget" class="target-select" onchange="onSpawnTargetChange()"></select>
+          <div class="cwd-input-wrap">
+            <input type="text" id="newSessionTarget" class="cwd-input" placeholder="pi-dish (headless)" spellcheck="false" autocomplete="off">
+            <div class="cwd-dropdown" id="spawnTargetDropdown"></div>
+          </div>
         </div>
         <input type="text" id="newSessionTmuxName" class="cwd-input target-name-input" placeholder="new tmux session name" spellcheck="false" autocomplete="off" style="display:none">
         <button class="btn" onclick="createSession()">+ New Session</button>

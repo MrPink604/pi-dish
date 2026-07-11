@@ -40,9 +40,32 @@ clipboard-only button silently no-ops there).
 
 ## Theme
 
-Solarized dark. All colors flow from the `:root` tokens at the top of
-`public/style.css` — no hardcoded hex in rules (use the tokens or an rgba of
-them). The hljs theme is base16 solarized-dark, vendored as
+Solarized dark by default. All colors flow from the `:root` tokens at the top
+of `public/style.css` — no raw palette values in rules: use a token or a
+`color-mix()` over one (only true-black shadows stay rgba). Two border
+tokens: `--border` outlines interactive controls (inputs, buttons,
+dropdowns); `--line` is the softer hairline for structural edges. Collapsed
+tool/thinking/result rows are deliberately unboxed — the hairline border
+appears on `[open]` only — so don't add always-on borders back to them.
+
+Themes: built-ins are `[data-theme]` override blocks in style.css (solarized
+default + graphite); user themes are flat `{"--token": "value"}` JSON files
+in `~/.pi/dish/themes/`, served by `GET /api/themes` (keys gated to custom
+properties, values to color-ish strings, broken files skipped) and applied
+as inline custom properties over the default palette. The picker is the
+select in the sidebar header; the choice + custom tokens are cached in
+localStorage and re-applied pre-paint by an inline `<head>` script in
+index.html (no theme flash), then refreshed from the server after boot.
+`applyTheme` also re-derives the open terminal's xterm theme
+(`terminalTheme()` reads computed tokens live).
+
+Turn markers: user `❯`, assistant a serif-italic π (`.wordmark-pi` shares the
+treatment in the sidebar wordmark — it's the favicon glyph). Assistant
+headers draw a hairline turn rule via `.message-header::after` (flex `order`
+slots it before the timestamp; hidden on `.no-text` tool-only messages,
+whose headers live inside tool groups).
+
+The hljs theme is base16 solarized-dark, vendored as
 `vendor/hljs-theme.min.css`; `style.css` overrides its `code.hljs` background
 so code blocks keep the darker `--bg-darker` panel. The mobile hamburger is
 part of the layout (`.header-menu-btn` in the session header,
@@ -120,6 +143,8 @@ RPC), then polls `REGISTRY_DIR` directly for the entry carrying the token (up
 to 30s, `PI_DISH_SPAWN_TIMEOUT_MS` override for tests). On timeout the window is
 left open (don't kill it) and the error hints the bridge must be installed.
 
+`spawnInTmux` new-windows with `-d`: the user may be attached to the target
+session, and a remote spawn must not switch their current window.
 `isSocketAllowed()` rejects any socket not directly under the tmux tmpdir (the
 same directory `listServers()` enumerates) — the server can be on 0.0.0.0, so
 an arbitrary `-S` path from the LAN must not get through. Placements persist in
@@ -130,11 +155,12 @@ the `/branch` route's "no command context" handling adds a middle path between
 RPC-prime and the 409: if the session has a live spawn pane, send-keys
 `/dish-prime`, wait ~1.5s, retry. `pruneSpawns()` drops entries whose pane is
 gone and session isn't registered (called opportunistically from `GET
-/api/tmux/targets`). Client: the "Run in" `<select>` in the sidebar footer
-(hidden when `/api/config` reports `tmux:false`) lists headless + one option per
-tmux session + a "new session…" per server (reveals a name input); the choice
-persists in `localStorage['pi-dish-spawn-target']` and is reused for resume when
-still valid.
+/api/tmux/targets`). Client: the "Run in" control in the sidebar footer
+(hidden when tmux is unavailable) is a combobox like the cwd picker: headless
+and a "new session…" per server stay pinned at the top, typing fuzzy-filters
+the named tmux sessions below ("new session…" reveals a name input); the
+choice persists in `localStorage['pi-dish-spawn-target']` and is reused for
+resume when still valid.
 
 ## Share links (lib/shares.js, /share/:token)
 
@@ -428,6 +454,8 @@ Polls on the Active tab request `?active=1` — the server skips the historical
 session-tree scan and the client keeps its previously fetched `previous` list
 (the initial load always fetches both, so restoring a saved historical session
 still works).
+Within a workspace node, child folders render before the node's own sessions
+(file-manager order, `renderWorkspaceNode`).
 Clicking a workspace group header collapses it — sessions hidden, group sunk
 below all expanded groups (ordering in `groupByWorkspace`, helpers.js). The 📌
 on a session row pins it into a "Pinned" section at the top with a manual

@@ -62,6 +62,19 @@ const findActive = async (id) => {
 // child process; reusing it also proves the session stays usable).
 let sessionId;
 
+test('GET /api/models lists what the host pi reports, not the vendored CLI', async () => {
+  // lib/pi-sdk.js runs --list-models through the same launch spec sessions
+  // use (PI_DISH_PI_COMMAND here) — a host pi upgrade must show up without
+  // touching pi-dish's own node_modules copy.
+  const { status, body } = await get('/api/models');
+  assert.equal(status, 200);
+  const ids = body.map((m) => `${m.provider}/${m.id}`);
+  assert.ok(ids.includes('test/fake-model'), `host pi models listed (got ${ids.join(', ')})`);
+  assert.ok(ids.includes('test/fresh-model'), 'a model only the host pi knows shows up');
+  assert.equal(body.find((m) => m.id === 'fresh-model').contextWindow, 200000,
+    'context window parsed from the host table');
+});
+
 test('POST /api/sessions/new spawns a headless RPC pi and lists it active', async () => {
   const { status, body } = await post('/api/sessions/new', {});
   assert.equal(status, 200, JSON.stringify(body));

@@ -84,6 +84,7 @@ async function loadCommands(sessionId) {
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
   loadConfig(); // feature flags (terminal) — fire-and-forget
+  loadThemes(); // theme picker options + refresh custom-theme tokens
   loadSpawnTargets(); // populate the "Run in" tmux selector (hidden if no tmux)
   initTerminalKeybar();
   initTerminalResize();
@@ -681,10 +682,11 @@ function renderSessions() {
 
 /**
  * One workspace-tree node → a .session-segment: header (collapse toggle via
- * data-cwd, the node's path prefix), this node's own sessions, then child
- * nodes nested in an indented .workspace-children. Collapsing a node hides
- * its whole subtree, so the header must not hide activity: surface the best
- * signal (working > unread) from all descendant sessions as a header dot.
+ * data-cwd, the node's path prefix), child nodes nested in an indented
+ * .workspace-children, then this node's own sessions — folders before loose
+ * sessions, file-manager style. Collapsing a node hides its whole subtree,
+ * so the header must not hide activity: surface the best signal
+ * (working > unread) from all descendant sessions as a header dot.
  */
 function renderWorkspaceNode(node) {
   const isCollapsed = collapsedGroups.has(node.path);
@@ -696,10 +698,10 @@ function renderWorkspaceNode(node) {
   }
   let body = '';
   if (!isCollapsed) {
-    body = (node.sessions || []).map(s => renderSessionItem(s)).join('');
     if (node.children.length) {
-      body += `<div class="workspace-children">${node.children.map(renderWorkspaceNode).join('')}</div>`;
+      body = `<div class="workspace-children">${node.children.map(renderWorkspaceNode).join('')}</div>`;
     }
+    body += (node.sessions || []).map(s => renderSessionItem(s)).join('');
   }
   return `<div class="session-segment${isCollapsed ? ' collapsed' : ''}">
     <div class="workspace-group-header" data-cwd="${escapeHtml(node.path)}">
@@ -1655,7 +1657,18 @@ function renderModelDropdown(query) {
   filtered.forEach(m => { if (!groups[m.provider]) groups[m.provider] = []; groups[m.provider].push(m); });
   var html = '';
   Object.keys(groups).sort().forEach(provider => {
-    html += '<div class="model-group-header">' + escapeHtml(provider) + '</div>';
+    if (modelEditMode) {
+      // Provider header doubles as a section toggle in edit mode: ✓ all
+      // enabled, – mixed, empty none. Clicking flips the listed models.
+      var provOn = groups[provider].filter(m => m.enabled !== false).length;
+      var provCheck = provOn === groups[provider].length ? '✓' : (provOn ? '–' : '');
+      html += '<div class="model-group-header model-group-toggle" onclick="toggleProviderEnabled(\'' + escapeHtml(provider) + '\')" ' +
+        'title="Toggle all ' + escapeHtml(provider) + ' models">' +
+        '<span class="model-check">' + provCheck + '</span>' + escapeHtml(provider) +
+        '<span class="model-group-count">' + provOn + '/' + groups[provider].length + '</span></div>';
+    } else {
+      html += '<div class="model-group-header">' + escapeHtml(provider) + '</div>';
+    }
     groups[provider].forEach(m => {
       // One row template for both modes — edit mode adds the checkbox span,
       // the disabled dimming, and swaps the click handler.
@@ -1722,6 +1735,18 @@ function toggleModelEnabled(fullId) {
 
 function setAllModelsEnabled(enabled) {
   knownModels.forEach(m => { if (m) m.enabled = enabled; });
+  renderModelDropdown(currentModelQuery());
+  saveEnabledModels();
+}
+
+// Flip a whole provider section. Operates on the models the header is
+// currently listing (i.e. respects the search filter): all on → all off,
+// anything less → all on.
+function toggleProviderEnabled(provider) {
+  var listed = filterModels(currentModelQuery()).filter(m => m && m.provider === provider);
+  if (!listed.length) return;
+  var allOn = listed.every(m => m.enabled !== false);
+  listed.forEach(m => { m.enabled = !allOn; });
   renderModelDropdown(currentModelQuery());
   saveEnabledModels();
 }
@@ -1991,7 +2016,7 @@ function renderAssistantMessage(msg, time, opts = {}) {
 
   return `<div${opts.attrs || ''} class="message assistant${streamingClass}${noTextClass}${msg.errorMessage ? ' error' : ''}" data-timestamp="${timestamp}"${streamingAttr}>
     <div class="message-header">
-      <span class="message-role assistant">◆</span>
+      <span class="message-role assistant">π</span>
       ${showModel ? `<span class="badge">${escapeHtml(msg.model)}</span>` : ''}
       ${opts.streaming ? '<span class="badge streaming">●</span>' : ''}
       ${time ? `<span class="message-time">${time}</span>` : ''}
@@ -2974,10 +2999,15 @@ function hideCwdDropdown() {
 })();
 
 // =========================================================================
-// Spawn target ("Run in") — headless RPC child (default) or a tmux window
+// Spawn target ("Run in") — headless RPC child (default) or a tmux window.
+// A combobox like the cwd picker above it: the action rows (headless, one
+// "new session…" per tmux server) stay pinned at the top, and typing
+// fuzzy-filters the named tmux sessions listed below them.
 // =========================================================================
-// Each entry: { label, target, needsName }. target === null means headless.
-let spawnTargets = [{ label: 'pi-dish (headless)', target: null }];
+// Each entry: { label, target, needsName, pinned }. target === null = headless.
+let spawnTargets = [{ label: 'pi-dish (headless)', target: null, pinned: true }];
+let spawnChoiceKey = 'headless';
+let spawnDropdownIdx = -1;
 
 // Stable key so a saved choice survives target re-fetches/reorders.
 function spawnTargetKey(t) {
@@ -2986,10 +3016,14 @@ function spawnTargetKey(t) {
   return `${t.target.socket}::${t.target.tmuxSession}`;
 }
 
+function currentSpawnTarget() {
+  return spawnTargets.find(t => spawnTargetKey(t) === spawnChoiceKey) || spawnTargets[0];
+}
+
 async function loadSpawnTargets() {
   const wrap = document.getElementById('newSessionTargetWrap');
-  const sel = document.getElementById('newSessionTarget');
-  if (!wrap || !sel) return;
+  const input = document.getElementById('newSessionTarget');
+  if (!wrap || !input) return;
   let data;
   try {
     const res = await fetch('/api/tmux/targets');
@@ -3003,7 +3037,15 @@ async function loadSpawnTargets() {
     return;
   }
 
-  spawnTargets = [{ label: 'pi-dish (headless)', target: null }];
+  spawnTargets = [{ label: 'pi-dish (headless)', target: null, pinned: true }];
+  for (const srv of data.servers) {
+    spawnTargets.push({
+      label: `tmux:${srv.name} — new session…`,
+      target: { type: 'tmux', socket: srv.socket },
+      needsName: true,
+      pinned: true,
+    });
+  }
   for (const srv of data.servers) {
     for (const s of srv.sessions || []) {
       spawnTargets.push({
@@ -3011,44 +3053,100 @@ async function loadSpawnTargets() {
         target: { type: 'tmux', socket: srv.socket, tmuxSession: s.name },
       });
     }
-    spawnTargets.push({
-      label: `tmux:${srv.name} — new session…`,
-      target: { type: 'tmux', socket: srv.socket },
-      needsName: true,
-    });
   }
-
-  sel.innerHTML = spawnTargets
-    .map((t, i) => `<option value="${i}">${escapeHtml(t.label)}</option>`)
-    .join('');
 
   // Restore last choice if its server/session still exists; else headless.
   const saved = localStorage.getItem('pi-dish-spawn-target');
-  const idx = saved ? spawnTargets.findIndex(t => spawnTargetKey(t) === saved) : -1;
-  sel.value = String(idx >= 0 ? idx : 0);
-
+  spawnChoiceKey = (saved && spawnTargets.some(t => spawnTargetKey(t) === saved)) ? saved : 'headless';
+  syncSpawnTargetInput();
   wrap.style.display = '';
-  onSpawnTargetChange();
 }
 
-// Reveal the tmux-session-name input for "new session…" choices; persist the
-// selection.
-function onSpawnTargetChange() {
-  const sel = document.getElementById('newSessionTarget');
+// Reflect the current choice: input shows its label, the tmux-session-name
+// input reveals for "new session…" choices, and the choice persists.
+function syncSpawnTargetInput() {
+  const input = document.getElementById('newSessionTarget');
   const nameInput = document.getElementById('newSessionTmuxName');
-  if (!sel) return;
-  const t = spawnTargets[Number(sel.value)];
-  if (nameInput) nameInput.style.display = t && t.needsName ? '' : 'none';
+  const t = currentSpawnTarget();
+  if (input) input.value = t.label;
+  if (nameInput) nameInput.style.display = t.needsName ? '' : 'none';
   localStorage.setItem('pi-dish-spawn-target', spawnTargetKey(t));
 }
+
+function renderSpawnTargetDropdown(query) {
+  const dropdown = document.getElementById('spawnTargetDropdown');
+  if (!dropdown) return;
+  const q = (query || '').trim();
+  let named = spawnTargets.filter(t => !t.pinned).map(t => ({ t, indices: [] }));
+  if (q) {
+    named = named.map(({ t }) => {
+      const indices = fuzzyMatch(q, t.label);
+      return indices && { t, indices, score: fuzzyScore(indices, t.label) };
+    }).filter(Boolean).sort((a, b) => b.score - a.score);
+  }
+  const rows = [...spawnTargets.filter(t => t.pinned).map(t => ({ t, indices: [] })), ...named];
+  spawnDropdownIdx = -1;
+  dropdown.innerHTML = rows.map(({ t, indices }) =>
+    `<div class="cwd-option" data-key="${escapeHtml(spawnTargetKey(t))}">${indices.length ? highlightFuzzy(t.label, indices) : escapeHtml(t.label)}</div>`
+  ).join('');
+  dropdown.style.display = 'block';
+  dropdown.querySelectorAll('.cwd-option').forEach(el => {
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      chooseSpawnTarget(el.dataset.key);
+    });
+  });
+}
+
+function chooseSpawnTarget(key) {
+  spawnChoiceKey = key;
+  syncSpawnTargetInput();
+  hideSpawnTargetDropdown();
+  if (currentSpawnTarget().needsName) document.getElementById('newSessionTmuxName')?.focus();
+}
+
+function hideSpawnTargetDropdown() {
+  const dropdown = document.getElementById('spawnTargetDropdown');
+  if (dropdown) dropdown.style.display = 'none';
+}
+
+// Wire up the run-in combobox (same conventions as the cwd input above).
+(function() {
+  const input = document.getElementById('newSessionTarget');
+  if (!input) return;
+  // Focus selects the label so typing starts a fresh filter; blur restores
+  // the chosen label over whatever filter text was left behind.
+  input.addEventListener('focus', () => { input.select(); renderSpawnTargetDropdown(''); });
+  input.addEventListener('input', () => renderSpawnTargetDropdown(input.value));
+  input.addEventListener('blur', () => setTimeout(() => { hideSpawnTargetDropdown(); syncSpawnTargetInput(); }, 150));
+  input.addEventListener('keydown', (e) => {
+    const dropdown = document.getElementById('spawnTargetDropdown');
+    if (!dropdown || dropdown.style.display === 'none') return;
+    const options = dropdown.querySelectorAll('.cwd-option');
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      spawnDropdownIdx = moveActiveItem(options, spawnDropdownIdx, e.key === 'ArrowDown' ? 1 : -1);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (spawnDropdownIdx >= 0 && options[spawnDropdownIdx]) {
+        chooseSpawnTarget(options[spawnDropdownIdx].dataset.key);
+      } else {
+        hideSpawnTargetDropdown();
+        syncSpawnTargetInput();
+      }
+    } else if (e.key === 'Escape') {
+      hideSpawnTargetDropdown();
+      syncSpawnTargetInput();
+    }
+  });
+})();
 
 // The target descriptor to send with /new. Throws if a new-tmux-session choice
 // is missing its name. Returns null (headless) when the control is hidden.
 function selectedSpawnTarget() {
   const wrap = document.getElementById('newSessionTargetWrap');
-  const sel = document.getElementById('newSessionTarget');
-  if (!wrap || wrap.style.display === 'none' || !sel) return null;
-  const t = spawnTargets[Number(sel.value)];
+  if (!wrap || wrap.style.display === 'none') return null;
+  const t = currentSpawnTarget();
   if (!t || !t.target) return null;
   if (t.needsName) {
     const name = (document.getElementById('newSessionTmuxName')?.value || '').trim();
@@ -3298,7 +3396,7 @@ function ensureStreamingElement(container) {
   container.insertAdjacentHTML('beforeend',
     `<div class="message assistant streaming no-text" data-streaming="true" data-timestamp="${ts}">
       <div class="message-header">
-        <span class="message-role assistant">◆</span>
+        <span class="message-role assistant">π</span>
         <span class="badge streaming">●</span>
         <span class="message-time">${formatTime(ts)}</span>
       </div>
@@ -3885,7 +3983,12 @@ function filterTree(query) {
   
   var filtered = treeData.nodes.filter(function(node) {
     if (filterMode === 'user-only' && !(node.type === 'message' && node.role === 'user')) return false;
-    if (filterMode === 'no-tools' && node.type === 'message' && node.role === 'toolResult') return false;
+    // No Tools hides the whole tool layer: results AND the text-less
+    // assistant messages that only carry tool calls (keep the leaf — it's
+    // the branch point the modal exists to show).
+    if (filterMode === 'no-tools' && node.type === 'message' &&
+        (node.role === 'toolResult' ||
+         (node.role === 'assistant' && !node.text && !node.isLeaf))) return false;
     if (filterMode === 'default') {
       if (['model_change','thinking_level_change','label','custom'].includes(node.type)) return false;
       if (node.type === 'message' && node.role === 'assistant' && !node.text && !node.isLeaf) return false;
@@ -3945,7 +4048,13 @@ function renderTreeNodeContent(node) {
       var text = node.text || '';
       if (!text && node.stopReason === 'aborted') text = '(aborted)';
       if (!text && node.errorMessage) return '<span class="tree-role assistant">assistant:</span><span class="tree-text error-text">' + escapeHtml(node.errorMessage.substring(0, 80)) + '</span>';
-      if (!text) text = '(tool use)';
+      // Tool-only message: name the calls (server sends getToolSummary
+      // strings) instead of an anonymous "(tool use)".
+      if (!text && node.toolCalls && node.toolCalls.length) {
+        var calls = node.toolCalls.map(function(tc) { return tc.args ? tc.name + ': ' + tc.args : tc.name; }).join(' · ');
+        return '<span class="tree-role assistant">assistant:</span><span class="tree-text muted">' + escapeHtml(calls) + '</span>';
+      }
+      if (!text) text = '(empty)';
       return '<span class="tree-role assistant">assistant:</span><span class="tree-text">' + escapeHtml(text) + '</span>';
     }
     if (node.role === 'toolResult') {
@@ -4061,6 +4170,57 @@ function updateTerminalButtons() {
   if (btn) btn.style.display = show ? '' : 'none';
   const row = document.getElementById('cpTerminalRow');
   if (row) row.style.display = show ? '' : 'none';
+}
+
+// =========================================================================
+// Theme — all colors flow from the :root tokens (style.css). Built-in themes
+// are [data-theme] blocks; user themes (~/.pi/dish/themes/*.json, served by
+// /api/themes) are token maps applied as inline custom properties over the
+// default palette. The applied theme + tokens are cached in localStorage so
+// index.html can re-apply them pre-paint; loadThemes() then refreshes the
+// cache from the server (the theme file may have changed on disk).
+// =========================================================================
+
+let availableThemes = [{ id: 'solarized', builtin: true }, { id: 'graphite', builtin: true }];
+
+async function loadThemes() {
+  try {
+    const res = await fetch('/api/themes');
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.themes) && data.themes.length) availableThemes = data.themes;
+    }
+  } catch {}
+  renderThemeSelect();
+  // Re-resolve the saved choice against the fresh list: picks up edits to a
+  // custom theme's file, and falls back to default if the file is gone.
+  const saved = localStorage.getItem('pi-dish-theme');
+  if (saved && saved !== 'solarized') applyTheme(saved);
+}
+
+function renderThemeSelect() {
+  const sel = document.getElementById('themeSelect');
+  if (!sel) return;
+  const cur = localStorage.getItem('pi-dish-theme') || 'solarized';
+  sel.innerHTML = availableThemes.map((t) =>
+    `<option value="${escapeHtml(t.id)}"${t.id === cur ? ' selected' : ''}>${escapeHtml(t.id)}</option>`).join('');
+}
+
+function applyTheme(id) {
+  const theme = availableThemes.find((t) => t.id === id) || availableThemes[0];
+  const root = document.documentElement;
+  // Wipe the previous theme's inline tokens (all inline --props are ours).
+  for (const prop of [...root.style]) {
+    if (prop.startsWith('--')) root.style.removeProperty(prop);
+  }
+  if (theme.id === 'solarized') delete root.dataset.theme;
+  else root.dataset.theme = theme.id;
+  for (const [k, v] of Object.entries(theme.tokens || {})) root.style.setProperty(k, v);
+  localStorage.setItem('pi-dish-theme', theme.id);
+  localStorage.setItem('pi-dish-theme-tokens', JSON.stringify(theme.tokens || null));
+  renderThemeSelect();
+  // The terminal bakes token colors in at open time — re-derive live.
+  if (termState?.term) termState.term.options.theme = terminalTheme();
 }
 
 // xterm theme from the :root Solarized tokens; the handful of ANSI slots the

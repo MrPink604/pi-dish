@@ -1199,6 +1199,33 @@ app.get('/api/config', (req, res) => {
   res.json({ terminal: terminal.isTerminalEnabled(), tmux: tmux.isTmuxAvailable() });
 });
 
+// Themes: the two built-ins (defined in style.css) plus any user-supplied
+// token files under ~/.pi/dish/themes/*.json — a flat { "--token": "value" }
+// map applied over the default palette (every color in the stylesheet flows
+// from the :root tokens, so overriding them is a complete theme). Keys are
+// gated to custom-property names and values to plain CSS color-ish strings;
+// unreadable or malformed files are skipped, never an error — a broken theme
+// file must not take down the picker. Re-read per call (shares.js rules) so
+// edits show on refresh.
+app.get('/api/themes', (req, res) => {
+  const themes = [{ id: 'solarized', builtin: true }, { id: 'graphite', builtin: true }];
+  try {
+    const dir = path.join(os.homedir(), '.pi', 'dish', 'themes');
+    for (const f of fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort()) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8'));
+        const tokens = {};
+        for (const [k, v] of Object.entries(raw)) {
+          if (/^--[a-z][a-z0-9-]*$/.test(k) && typeof v === 'string' && /^[#a-zA-Z0-9(),.%\s-]+$/.test(v)) tokens[k] = v;
+        }
+        const id = f.replace(/\.json$/, '');
+        if (Object.keys(tokens).length && !themes.some((t) => t.id === id)) themes.push({ id, tokens });
+      } catch {}
+    }
+  } catch {}
+  res.json({ themes });
+});
+
 // tmux spawn targets: the running tmux servers and their sessions. 200 with
 // available:false when tmux is missing (the client hides the control).
 app.get('/api/tmux/targets', async (req, res) => {

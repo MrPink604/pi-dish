@@ -77,7 +77,12 @@ Rules of thumb:
 - **Reading tools** — in-session search (Ctrl+F, auto-pages older messages
   in), focus mode that hides tool noise, per-message copy buttons.
 - **Mobile-first** — the whole point. Slide-out drawer, slide-up control
-  panel, touch-sized everything, solarized-dark only (you're welcome).
+  panel, touch-sized everything.
+- **Themes** — solarized dark by default, a neutral "graphite" built in, and
+  bring-your-own: drop a JSON file of token overrides in `~/.pi/dish/themes/`
+  (e.g. `mytheme.json` containing `{"--bg-dark": "#101014", "--accent":
+  "#7aa2f7"}` — the full token list is the `:root` block at the top of
+  `public/style.css`) and it appears in the picker in the sidebar header.
 - **Terminal** (opt-in) — a real shell at the session's cwd, in a panel
   under the transcript (xterm.js + node-pty). The shell survives phone
   screen-locks: the PTY lives server-side and reattaches with scrollback.

@@ -99,6 +99,14 @@ test('POST /api/sessions/new with a tmux target spawns and returns the registere
   assert.ok(spawn, 'tmux-spawns.json has the mapping');
   assert.equal(path.resolve(spawn.socket), path.resolve(TMUX_SOCKET));
   assert.match(spawn.paneId, /^%\d+$/);
+
+  // The spawn must not steal focus: "work" was created with one window
+  // (index 0) and an attached user would be looking at it — the pi window
+  // appears in the background (new-window -d).
+  const current = tmuxCmd(['display-message', '-p', '-t', 'work:', '#{window_index}']).trim();
+  assert.equal(current, '0', `session's current window unchanged (got ${current})`);
+  const panes = tmuxCmd(['list-panes', '-s', '-t', 'work', '-F', '#{pane_id}']).trim().split('\n');
+  assert.ok(panes.includes(spawn.paneId), 'pi pane exists in the session');
 });
 
 test('POST /api/sessions/new rejects a socket outside the tmux tmpdir', { skip: !tmuxOk }, async () => {

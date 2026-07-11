@@ -4,15 +4,22 @@
   box-sizing: border-box;
 }
 
-/* Solarized-dark palette, tuned for readability: backgrounds and hues are
-   canonical solarized; body/muted text sit a step brighter than base0/base01
-   so small phone type stays legible. */
+/* Solarized-dark palette (default theme), tuned for readability: backgrounds
+   and hues are canonical solarized; body/muted text sit a step brighter than
+   base0/base01 so small phone type stays legible.
+
+   Theming: every color in the stylesheet is either one of these tokens or a
+   color-mix() over one — no raw palette values in rules — so an alternate
+   theme is just a [data-theme] override block. `--border` outlines
+   interactive controls (inputs, buttons, dropdowns); `--line` is the softer
+   hairline for structural separations (panel edges, details borders). */
 :root {
   --bg-dark: #002b36;    /* base03 — app background */
   --bg-darker: #00212b;  /* a step below base03 — chrome, code */
   --bg-card: #073642;    /* base02 — cards, inputs */
   --bg-hover: #0b4354;
   --border: #11475a;
+  --line: color-mix(in srgb, var(--text-muted) 16%, transparent);
   --text: #b0c4c8;
   --text-bright: #dbe5e6;
   --text-muted: #6f8b93;
@@ -30,6 +37,31 @@
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Monaco, Consolas, monospace;
   --sidebar-width: 280px;
   --content-max: 980px; /* reading column for messages + composer on wide screens */
+}
+
+/* Alternate theme: a neutral dark for people who don't share the solarized
+   habit. Same hue roles, no blue-green cast. Picked via the ◐ toggle in the
+   sidebar header (persisted in localStorage, applied pre-paint from
+   index.html so there's no flash). */
+:root[data-theme='graphite'] {
+  --bg-dark: #16191d;
+  --bg-darker: #101215;
+  --bg-card: #1e2329;
+  --bg-hover: #272e36;
+  --border: #2b333c;
+  --text: #b9c2c9;
+  --text-bright: #e4e9ed;
+  --text-muted: #7b8791;
+  --accent: #5ea3d8;
+  --accent-dim: #467fa9;
+  --success: #8fb35f;
+  --success-bright: #a3c76e;
+  --cyan: #4aa8a0;
+  --warning: #c9a233;
+  --orange: #c97a4a;
+  --orange-dim: #a5613a;
+  --error: #d97070;
+  --error-dim: #b25555;
 }
 
 body {
@@ -55,17 +87,51 @@ body.sidebar-open {
 .sidebar {
   width: var(--sidebar-width);
   background: var(--bg-darker);
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
 }
 
 .sidebar-header {
-  padding: 16px;
+  padding: 16px 16px 8px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Theme picker — reads as quiet text until pointed at. */
+.theme-select {
+  max-width: 100px;
+  padding: 3px 2px;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  outline: none;
+  cursor: pointer;
+}
+
+.theme-select:hover,
+.theme-select:focus {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--bg-card);
+}
+
+/* The π in the wordmark, the assistant turn marker, and the empty state all
+   share the favicon's serif italic π — the one glyph this app owns. */
+.wordmark-pi {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-style: italic;
+  font-weight: 400;
 }
 
 .sidebar-header h1 {
@@ -185,7 +251,7 @@ body.sidebar-open {
   width: 12px;
   height: 12px;
   margin-top: -6px;
-  border: 2px solid rgba(111, 139, 147, 0.3); /* --text-muted */
+  border: 2px solid color-mix(in srgb, var(--text-muted) 30%, transparent); /* --text-muted */
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: search-spin 0.7s linear infinite;
@@ -210,7 +276,7 @@ body.sidebar-open {
 }
 
 .session-item-snippet mark {
-  background: rgba(181, 137, 0, 0.35); /* --warning */
+  background: color-mix(in srgb, var(--warning) 35%, transparent); /* --warning */
   color: var(--text-bright);
   border-radius: 2px;
   padding: 0 1px;
@@ -262,7 +328,7 @@ body.sidebar-open {
 .workspace-children {
   margin-left: 12px;
   padding-left: 4px;
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--line);
 }
 
 .workspace-children .workspace-group-header {
@@ -271,7 +337,7 @@ body.sidebar-open {
 
 /* Pinned section — manual order, drag handles to rearrange */
 .pinned-segment {
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
   margin-bottom: 4px;
   padding-bottom: 4px;
 }
@@ -381,10 +447,11 @@ body.sidebar-open {
 }
 
 .session-item {
-  padding: 12px;
+  padding: 9px 12px;
+  border: 1px solid transparent; /* .active swaps the color — no layout jump */
   border-radius: 6px;
   cursor: pointer;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   transition: background 0.15s;
 }
 
@@ -394,7 +461,7 @@ body.sidebar-open {
 
 .session-item.active {
   background: var(--bg-card);
-  border: 1px solid var(--accent-dim);
+  border-color: var(--accent-dim);
 }
 
 .session-item-header {
@@ -436,7 +503,7 @@ body.sidebar-open {
 /* New activity since the session was last on screen */
 .session-item-status.unread {
   background: var(--accent);
-  box-shadow: 0 0 6px rgba(38, 139, 210, 0.6);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 
 @keyframes pulse {
@@ -483,7 +550,7 @@ body.sidebar-open {
 
 .sidebar-footer {
   padding: 12px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -520,24 +587,6 @@ body.sidebar-open {
   display: flex;
   align-items: center;
   gap: 6px;
-}
-
-.target-select {
-  flex: 1;
-  min-width: 0;
-  padding: 4px 8px;
-  font-size: 12px;
-  font-family: var(--font-mono);
-  color: var(--text);
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  outline: none;
-  cursor: pointer;
-}
-
-.target-select:focus {
-  border-color: var(--accent);
 }
 
 .target-name-input {
@@ -625,7 +674,8 @@ body.sidebar-open {
 
 .empty-icon {
   font-size: 64px;
-  font-weight: 200;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-style: italic;
   color: var(--border);
   margin-bottom: 16px;
 }
@@ -640,7 +690,7 @@ body.sidebar-open {
 
 .session-header {
   padding: 16px 24px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -730,7 +780,7 @@ body.sidebar-open {
   color: var(--text);
   background: var(--bg-darker);
   border: none;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
   outline: none;
   box-sizing: border-box;
   flex-shrink: 0;
@@ -750,6 +800,23 @@ body.sidebar-open {
   position: sticky;
   top: 0;
   background: var(--bg-card);
+}
+
+/* Edit mode: the provider header is a section toggle (✓ / – / empty). */
+.model-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 4px;
+  cursor: pointer;
+}
+
+.model-group-toggle:hover { color: var(--text); }
+
+.model-group-count {
+  margin-left: auto;
+  font-weight: 400;
+  opacity: 0.7;
 }
 
 .model-option {
@@ -800,7 +867,7 @@ body.sidebar-open {
   align-items: center;
   gap: 6px;
   padding: 6px 10px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
   flex-shrink: 0;
 }
 
@@ -845,9 +912,9 @@ body.sidebar-open {
 }
 
 .model-badge.free {
-  background: rgba(133, 153, 0, 0.15);
+  background: color-mix(in srgb, var(--success) 15%, transparent);
   color: var(--success-bright);
-  border: 1px solid rgba(133, 153, 0, 0.35);
+  border: 1px solid color-mix(in srgb, var(--success) 35%, transparent);
 }
 
 .model-badge.reasoning {
@@ -869,17 +936,17 @@ body.sidebar-open {
 }
 
 .badge-context.high {
-  background: rgba(181, 137, 0, 0.2);
+  background: color-mix(in srgb, var(--warning) 20%, transparent);
   color: var(--warning);
 }
 
 .badge-context.critical {
-  background: rgba(220, 50, 47, 0.2);
+  background: color-mix(in srgb, var(--error) 20%, transparent);
   color: var(--error);
 }
 
 .badge.streaming {
-  background: rgba(38, 139, 210, 0.2);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
   color: var(--accent);
 }
 
@@ -887,7 +954,7 @@ body.sidebar-open {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  background: rgba(38, 139, 210, 0.15);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
   color: var(--accent);
   visibility: hidden;
 }
@@ -961,7 +1028,7 @@ body.sidebar-open {
 
 .message-role {
   font-weight: 600;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .message-role.user {
@@ -969,9 +1036,35 @@ body.sidebar-open {
   font-family: var(--font-mono);
 }
 
+/* π — the agent's own glyph (matches the wordmark/favicon), serif italic so
+   it reads as a mark, not a letter of the text. */
 .message-role.assistant {
   color: var(--success);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-style: italic;
+  font-weight: 400;
+  font-size: 16px;
+  line-height: 1;
 }
+
+/* Turn rule: a hairline running from the turn marker (❯ / π) to the
+   timestamp, so every turn boundary reads as a section break. flex `order`
+   puts it between the badges and the time (a ::after would otherwise land
+   right of the time). Tool-only messages (.no-text) skip it: their headers
+   sit inside tool groups where a full-width rule is noise. */
+.message.user .message-header::after,
+.message.assistant .message-header::after {
+  content: '';
+  order: 1;
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+.message.user .message-header .message-time,
+.message.assistant .message-header .message-time { order: 2; }
+
+.message.assistant.no-text .message-header::after { display: none; }
 
 .message-time {
   font-size: 11px;
@@ -986,11 +1079,14 @@ body.sidebar-open {
   padding: 0 0 8px 0;
 }
 
+/* User turns: a borderless tinted card that hugs its content — a one-line
+   question shouldn't span the whole reading column. */
 .message.user .message-content {
-  padding: 8px 16px;
-  background: rgba(38, 139, 210, 0.08);
-  border-radius: 8px;
-  border: 1px solid rgba(38, 139, 210, 0.22);
+  padding: 8px 14px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 10px;
+  width: fit-content;
+  max-width: 100%;
   margin-bottom: 8px;
   color: var(--text-bright);
 }
@@ -1045,13 +1141,13 @@ body.sidebar-open {
 .markdown-body blockquote {
   margin: 8px 0;
   padding: 4px 12px;
-  border-left: 3px solid var(--border);
+  border-left: 3px solid var(--line);
   color: var(--text-muted);
 }
 
 .markdown-body hr {
   border: none;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
   margin: 12px 0;
 }
 
@@ -1062,7 +1158,7 @@ body.sidebar-open {
   overflow-x: auto;
   margin: 8px 0;
   font-size: 13px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
 }
 
 /* The vendored hljs theme sets its own background on <code>; keep our
@@ -1092,7 +1188,7 @@ body.sidebar-open {
 }
 
 .markdown-body th, .markdown-body td {
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   padding: 6px 12px;
   text-align: left;
 }
@@ -1110,17 +1206,34 @@ body.sidebar-open {
   color: var(--error);
   padding: 8px 12px;
   margin-top: 4px;
-  background: rgba(220, 50, 47, 0.08);
+  background: color-mix(in srgb, var(--error) 8%, transparent);
   border-radius: 4px;
 }
 
+/* Collapsible activity blocks (thinking / tool calls / tool results / tool
+   groups): collapsed they're plain muted text lines — no box — so a turn's
+   machinery reads as a quiet list; the hairline box only appears around
+   opened content. Hover gives the row a soft pill. */
+
 /* Thinking block — collapsed by default, <details> element */
 .thinking-block {
-  margin: 4px 0;
-  border-radius: 4px;
-  border: 1px solid rgba(38, 139, 210, 0.15);
-  background: rgba(38, 139, 210, 0.03);
+  margin: 2px 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
   overflow: hidden;
+}
+
+.thinking-block[open] {
+  border-color: color-mix(in srgb, var(--accent) 15%, transparent);
+  background: color-mix(in srgb, var(--accent) 3%, transparent);
+}
+
+.thinking-header:hover,
+.tool-call-header:hover,
+.tool-result-header:hover,
+.tool-group-header:hover,
+.live-tool-header:hover {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
 }
 
 .thinking-header {
@@ -1153,7 +1266,7 @@ body.sidebar-open {
 .thinking-label {
   font-weight: 500;
   font-style: italic;
-  color: rgba(38, 139, 210, 0.7);
+  color: color-mix(in srgb, var(--accent) 70%, transparent);
 }
 
 .thinking-preview {
@@ -1180,7 +1293,8 @@ body.sidebar-open {
   line-height: 1.5;
   max-height: 300px;
   overflow-y: auto;
-  border-top: 1px solid rgba(38, 139, 210, 0.1);
+  border-top: 1px solid color-mix(in srgb, var(--accent) 10%, transparent);
+  scrollbar-width: thin;
 }
 
 /* Branch summary — tree navigation's record of an abandoned branch */
@@ -1188,9 +1302,9 @@ body.sidebar-open {
 
 .branch-summary-details {
   margin: 8px 0;
-  border-radius: 4px;
-  border: 1px dashed rgba(181, 137, 0, 0.4);
-  background: rgba(181, 137, 0, 0.05);
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--warning) 25%, transparent);
+  background: color-mix(in srgb, var(--warning) 5%, transparent);
   overflow: hidden;
 }
 
@@ -1229,15 +1343,19 @@ body.sidebar-open {
 .branch-summary-details[open] .branch-summary-preview { display: none; }
 
 .branch-summary-details > .message-content {
-  border-top: 1px solid rgba(181, 137, 0, 0.15);
+  border-top: 1px solid color-mix(in srgb, var(--warning) 15%, transparent);
 }
 
 /* Tool call — collapsible <details> with icon + summary */
 .tool-call {
-  margin: 4px 0;
-  border-radius: 4px;
-  border: 1px solid var(--border);
+  margin: 2px 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
   overflow: hidden;
+}
+
+.tool-call[open] {
+  border-color: var(--line);
 }
 
 .tool-call-header {
@@ -1293,7 +1411,7 @@ body.sidebar-open {
 }
 
 .tool-call-content {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
   max-height: 250px;
   overflow-y: auto;
 }
@@ -1309,14 +1427,13 @@ body.sidebar-open {
    and tool results are folded into one closed <details> per turn
    (groupToolActivity in app.js), so past turns read prompt → answer. */
 .tool-group {
-  margin: 4px 0 8px;
-  border-radius: 4px;
-  border: 1px dashed var(--border);
-  overflow: hidden;
+  margin: 2px 0 8px;
+  border-radius: 6px;
 }
 
 .tool-group-header {
   padding: 5px 12px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1356,9 +1473,12 @@ body.sidebar-open {
   flex: 1;
 }
 
+/* Open group: contents hang off a soft indent guide (same idiom as the
+   sidebar's nested workspaces) instead of sitting in a dashed box. */
 .tool-group-body {
-  padding: 2px 10px 6px;
-  border-top: 1px dashed var(--border);
+  margin-left: 10px;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--line);
 }
 
 .tool-call-content code {
@@ -1371,9 +1491,13 @@ body.sidebar-open {
 }
 
 .tool-result-details {
-  border-radius: 4px;
-  border: 1px solid var(--border);
+  border-radius: 6px;
+  border: 1px solid transparent;
   overflow: hidden;
+}
+
+.tool-result-details[open] {
+  border-color: var(--line);
 }
 
 .tool-result-header {
@@ -1447,7 +1571,7 @@ body.sidebar-open {
 }
 
 .tool-result-content {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
 }
 
 /* Tool-result images (e.g. a `read` on a PNG) align with the pre's padding
@@ -1471,7 +1595,7 @@ body.sidebar-open {
 /* Input */
 .input-area {
   padding: 16px max(24px, calc((100% - var(--content-max)) / 2));
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
   background: var(--bg-darker);
   position: relative; /* anchor for autocomplete + control panel */
 }
@@ -1800,7 +1924,7 @@ body.sidebar-open {
     z-index: 200;
     transform: translateX(-100%);
     transition: transform 0.25s ease;
-    border-right: 1px solid var(--border);
+    border-right: 1px solid var(--line);
   }
 
   .sidebar.open {
@@ -1948,7 +2072,7 @@ body.sidebar-open {
   .input-area {
     padding: 6px 10px;
     padding-bottom: calc(env(safe-area-inset-bottom) + 6px);
-    background: rgba(0, 33, 43, 0.96);
+    background: color-mix(in srgb, var(--bg-darker) 96%, transparent);
     backdrop-filter: blur(10px);
   }
 
@@ -2086,7 +2210,7 @@ body.sidebar-open {
   justify-content: space-between;
   padding: 12px 16px;
   background: var(--bg-darker);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
   gap: 12px;
 }
 
@@ -2176,7 +2300,7 @@ body.sidebar-open {
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
 }
 
 .tree-modal .modal-header h3 {
@@ -2248,11 +2372,11 @@ body.sidebar-open {
 }
 
 .tree-node.is-leaf {
-  background: rgba(38, 139, 210, 0.06);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
 }
 
 .tree-node.is-leaf.active {
-  background: rgba(38, 139, 210, 0.1);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .tree-prefix {
@@ -2307,7 +2431,7 @@ body.sidebar-open {
   font-size: 10px;
   padding: 0 5px;
   border-radius: 3px;
-  background: rgba(38, 139, 210, 0.15);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
   color: var(--accent);
   margin-left: 6px;
   flex-shrink: 0;
@@ -2318,7 +2442,7 @@ body.sidebar-open {
   align-items: center;
   justify-content: space-between;
   padding: 8px 16px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
   font-size: 11px;
   color: var(--text-muted);
 }
@@ -2328,7 +2452,7 @@ body.sidebar-open {
 }
 
 .tree-node.selected {
-  background: rgba(38, 139, 210, 0.15);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
   border-left-color: var(--warning);
 }
 
@@ -2461,7 +2585,7 @@ body.sidebar-open {
 .ext-ui-widget {
   margin: 8px 24px 0;
   border-radius: 6px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   background: var(--bg-card);
   overflow: hidden;
   font-size: 12px;
@@ -2480,7 +2604,7 @@ body.sidebar-open {
   align-items: center;
   justify-content: space-between;
   padding: 6px 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
   background: var(--bg-darker);
   cursor: pointer;
   user-select: none;
@@ -2679,7 +2803,7 @@ body.sidebar-open {
   align-items: center;
   gap: 8px;
   padding: 6px 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
   background: var(--bg-darker);
   flex-shrink: 0;
 }
@@ -2708,7 +2832,7 @@ body.sidebar-open {
 }
 
 mark.search-mark {
-  background: rgba(181, 137, 0, 0.4);
+  background: color-mix(in srgb, var(--warning) 40%, transparent);
   color: inherit;
   border-radius: 2px;
 }
@@ -2769,7 +2893,7 @@ button.badge-context {
   margin-top: 4px;
   padding: 4px 6px;
   background: var(--bg-darker);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   border-radius: 6px;
   max-height: 160px;
   overflow-y: auto;
@@ -2885,7 +3009,7 @@ img.msg-image {
   position: fixed;
   inset: 0;
   z-index: 300;
-  background: rgba(0, 33, 43, 0.9); /* --bg-darker at high opacity */
+  background: color-mix(in srgb, var(--bg-darker) 90%, transparent); /* --bg-darker at high opacity */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2953,7 +3077,7 @@ img.msg-image {
   text-align: left;
   cursor: pointer;
   word-break: break-all;
-  border-bottom: 1px dashed rgba(38, 139, 210, 0.4);
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .stats-copy:hover { color: var(--accent); border-bottom-color: var(--accent); }
@@ -2964,7 +3088,7 @@ img.msg-image {
 .stats-share {
   margin-top: 14px;
   padding-top: 12px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
 }
 
 .stats-share-title {
@@ -3007,7 +3131,7 @@ img.msg-image {
   border: 1px solid var(--error-dim);
 }
 
-.btn-small.btn-danger:hover { background: rgba(220, 50, 47, 0.12); filter: none; }
+.btn-small.btn-danger:hover { background: color-mix(in srgb, var(--error) 12%, transparent); filter: none; }
 
 /* Published pages: rows in the stats modal + the file viewer's publish bar */
 .stats-page-row {
@@ -3032,7 +3156,7 @@ img.msg-image {
   align-items: center;
   gap: 6px 10px;
   padding: 6px 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
   font-size: 12px;
   color: var(--text-muted);
 }
@@ -3085,13 +3209,16 @@ img.msg-image {
 }
 
 /* Clickable file mentions (linkifyFilePaths) — read as text, hint at
-   interactivity like .stats-copy does. */
+   interactivity like .stats-copy does. text-decoration, not border-bottom:
+   the class can land on flex-stretched elements (tool-call summaries) where
+   a border would draw across the empty stretch. */
 .file-link {
   cursor: pointer;
-  border-bottom: 1px dashed rgba(38, 139, 210, 0.4);
+  text-decoration: underline dashed color-mix(in srgb, var(--accent) 40%, transparent);
+  text-underline-offset: 3px;
 }
 
-.file-link:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.file-link:hover { color: var(--accent); text-decoration-color: var(--accent); }
 
 /* File viewer modal */
 .file-modal { max-width: 900px; max-height: 85vh; }
@@ -3102,7 +3229,7 @@ img.msg-image {
   justify-content: space-between;
   gap: 12px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
 }
 
 .file-modal-header h3 {
@@ -3121,7 +3248,7 @@ img.msg-image {
   font-size: 11px;
   color: var(--text-muted);
   padding: 6px 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
   overflow-wrap: anywhere;
 }
 
@@ -3169,7 +3296,7 @@ img.msg-image {
   align-items: center;
   gap: 10px;
   padding: 8px 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
   background: var(--bg-darker);
 }
 
@@ -3204,7 +3331,7 @@ img.msg-image {
   align-items: baseline;
   gap: 10px;
   padding: 6px 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
   margin-bottom: 8px;
 }
 
@@ -3224,7 +3351,7 @@ img.msg-image {
 .diff-repo-error { color: var(--warning); font-size: 12px; margin: 4px 0 8px; }
 
 .diff-file {
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   border-radius: 6px;
   margin-bottom: 6px;
   background: var(--bg-card);
@@ -3243,7 +3370,7 @@ img.msg-image {
 }
 
 .diff-file > summary::-webkit-details-marker { display: none; }
-.diff-file[open] > summary { border-bottom: 1px solid var(--border); }
+.diff-file[open] > summary { border-bottom: 1px solid var(--line); }
 
 .diff-status {
   flex-shrink: 0;
@@ -3254,11 +3381,11 @@ img.msg-image {
   font-weight: 700;
 }
 
-.diff-status-add { color: var(--success-bright); background: rgba(133, 153, 0, 0.15); }
-.diff-status-del { color: var(--error); background: rgba(220, 50, 47, 0.15); }
-.diff-status-mod { color: var(--warning); background: rgba(181, 137, 0, 0.15); }
-.diff-status-ren { color: var(--cyan); background: rgba(42, 161, 152, 0.15); }
-.diff-status-conflict { color: var(--orange); background: rgba(203, 75, 22, 0.15); }
+.diff-status-add { color: var(--success-bright); background: color-mix(in srgb, var(--success) 15%, transparent); }
+.diff-status-del { color: var(--error); background: color-mix(in srgb, var(--error) 15%, transparent); }
+.diff-status-mod { color: var(--warning); background: color-mix(in srgb, var(--warning) 15%, transparent); }
+.diff-status-ren { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 15%, transparent); }
+.diff-status-conflict { color: var(--orange); background: color-mix(in srgb, var(--orange) 15%, transparent); }
 
 .diff-file-path { flex: 1; overflow-wrap: anywhere; }
 .diff-file-counts { flex-shrink: 0; font-size: 11px; white-space: nowrap; }
@@ -3282,9 +3409,9 @@ img.msg-image {
   min-width: 100%;
 }
 
-.diff-line.diff-add { background: rgba(133, 153, 0, 0.12); color: var(--text-bright); }
-.diff-line.diff-del { background: rgba(220, 50, 47, 0.12); color: var(--text-muted); }
-.diff-line.diff-hunk { color: var(--accent); background: rgba(38, 139, 210, 0.08); }
+.diff-line.diff-add { background: color-mix(in srgb, var(--success) 12%, transparent); color: var(--text-bright); }
+.diff-line.diff-del { background: color-mix(in srgb, var(--error) 12%, transparent); color: var(--text-muted); }
+.diff-line.diff-hunk { color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 
 .diff-clean {
   color: var(--text-muted);
@@ -3338,18 +3465,22 @@ img.msg-image {
   }
 }
 
-/* Live Tool Panels */
+/* Live Tool Panels — same unboxed idiom as the historical blocks; the
+   running state keeps an accent outline so an in-flight tool has presence. */
 .live-tool-panel {
-  margin: 6px 0;
+  margin: 2px 0;
   border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg-card);
+  border: 1px solid transparent;
   overflow: hidden;
   font-family: var(--font-mono);
 }
 
+.live-tool-panel[open] {
+  border-color: var(--line);
+}
+
 .live-tool-panel.running {
-  border-color: rgba(38, 139, 210, 0.35);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 .live-tool-panel.running .live-tool-status-dot {
@@ -3369,11 +3500,15 @@ img.msg-image {
 }
 
 .live-tool-panel.complete {
-  border-color: var(--border);
+  border-color: transparent;
+}
+
+.live-tool-panel.complete[open] {
+  border-color: var(--line);
 }
 
 .live-tool-panel.error {
-  border-color: rgba(220, 50, 47, 0.4);
+  border-color: color-mix(in srgb, var(--error) 40%, transparent);
 }
 
 .live-tool-header {
@@ -3462,7 +3597,7 @@ img.msg-image {
 }
 
 .live-tool-output {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
   padding: 8px 12px;
   font-size: 12px;
   color: var(--text);
@@ -3530,7 +3665,7 @@ img.msg-image {
   min-height: 140px;
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
   background: var(--bg-darker);
 }
 
@@ -3555,7 +3690,7 @@ img.msg-image {
   align-items: center;
   gap: 8px;
   padding: 4px 10px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
   font-size: 12px;
 }
 
@@ -3599,7 +3734,7 @@ img.msg-image {
   display: none;
   gap: 6px;
   padding: 6px 8px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
   overflow-x: auto;
 }
 

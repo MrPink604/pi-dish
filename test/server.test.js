@@ -633,6 +633,37 @@ test('POST /branch on a live bridge session forwards navigate_tree', async () =>
   }
 });
 
+// --- Themes ----------------------------------------------------------------
+
+test('GET /api/themes lists built-ins plus valid user theme files', async () => {
+  const themesDir = path.join(tmpHome, '.pi', 'dish', 'themes');
+  fs.mkdirSync(themesDir, { recursive: true });
+  fs.writeFileSync(path.join(themesDir, 'mytheme.json'), JSON.stringify({
+    '--bg-dark': '#101010',
+    '--accent': 'rgb(1, 2, 3)',
+    'not-a-token': '#fff',            // key must be a custom property
+    '--evil': 'url(javascript:1)',    // value gated to color-ish strings
+    '--also-bad': 42,                 // non-string value
+  }));
+  fs.writeFileSync(path.join(themesDir, 'broken.json'), '{ torn');
+
+  const { status, body } = await get('/api/themes');
+  assert.equal(status, 200);
+  assert.deepEqual(body.themes.filter(t => t.builtin).map(t => t.id), ['solarized', 'graphite']);
+  const custom = body.themes.find(t => t.id === 'mytheme');
+  assert.ok(custom, 'user theme file is listed');
+  assert.deepEqual(custom.tokens, { '--bg-dark': '#101010', '--accent': 'rgb(1, 2, 3)' },
+    'invalid keys/values are dropped');
+  assert.ok(!body.themes.some(t => t.id === 'broken'), 'unparseable file is skipped');
+});
+
+test('GET /api/themes without a themes dir serves the built-ins', async () => {
+  fs.rmSync(path.join(tmpHome, '.pi', 'dish', 'themes'), { recursive: true, force: true });
+  const { status, body } = await get('/api/themes');
+  assert.equal(status, 200);
+  assert.deepEqual(body.themes.map(t => t.id), ['solarized', 'graphite']);
+});
+
 // --- Public share links --------------------------------------------------
 // TREE_ID is a valid pi v3 session; the HTML exporter (and thus GET
 // /share/:token) rejects the id-less shorthand fixtures.
