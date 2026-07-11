@@ -310,11 +310,13 @@
       <div class="modal-header file-modal-header">
         <h3 id="fileModalTitle">File</h3>
         <div class="file-modal-controls">
+          <button class="btn-icon" id="fileModalPublish" onclick="publishFileModal()" title="Publish as page (anyone with the link can view)" style="display:none">🌐</button>
           <button class="btn-icon" onclick="copyFileModalContent(this)" title="Copy contents">⧉</button>
           <button class="btn-icon" onclick="closeFileModal()" title="Close (Esc)">✕</button>
         </div>
       </div>
       <div class="file-modal-path" id="fileModalPath"></div>
+      <div class="file-modal-page" id="fileModalPage" style="display:none"></div>
       <div class="file-modal-body" id="fileModalBody"></div>
     </div>
   </div>

@@ -444,6 +444,27 @@ function writeRegistry(patch = {}) {
       `bare mention resolved to the deep tool-written path (got ${JSON.stringify(shownPath)})`);
     check(await desktop.locator('#fileModal .markdown-body h1').textContent() === 'deep findings',
       'markdown file renders rendered');
+
+    // Publish the viewed file as a page: 🌐 → link row → the public URL
+    // serves the file content → unpublish clears it.
+    await desktop.click('#fileModalPublish');
+    await desktop.waitForSelector('#fileModalPage .stats-share-link', { timeout: 5000 });
+    const pageLink = await desktop.locator('#fileModalPage .stats-share-link').textContent();
+    check(/\/page\/[A-Za-z0-9_-]+$/.test(pageLink), `publish shows a token link (got ${pageLink})`);
+    const pageRes = await fetch(pageLink);
+    check(pageRes.status === 200 && (await pageRes.text()).includes('hello from deep'),
+      'published page serves the file content');
+    // Re-opening the viewer on the same file shows the existing page link.
+    await desktop.keyboard.press('Escape');
+    await desktop.waitForSelector('#fileModal', { state: 'hidden', timeout: 2000 });
+    await findingsLink.click();
+    await desktop.waitForSelector('#fileModalPage .stats-share-link', { timeout: 5000 });
+    check(true, 'existing page link resurfaces when the file is viewed again');
+    await desktop.click('#filePageRevoke');
+    await desktop.waitForFunction(() =>
+      document.getElementById('fileModalPage').style.display === 'none', { timeout: 5000 });
+    check((await fetch(pageLink)).status === 404, 'unpublish revokes the public URL');
+
     await desktop.keyboard.press('Escape');
     await desktop.waitForSelector('#fileModal', { state: 'hidden', timeout: 2000 });
     check(true, 'Escape closes the viewer');

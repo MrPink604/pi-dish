@@ -1253,8 +1253,10 @@ function openStatsModal() {
           : escapeHtml(String(v));
         return `<tr><td class="stats-key">${escapeHtml(k)}</td><td class="stats-val">${val}</td></tr>`;
       }).join('') + '</table>' +
-        '<div class="stats-share" id="statsShare"></div>';
+        '<div class="stats-share" id="statsShare"></div>' +
+        '<div class="stats-share" id="statsPages"></div>';
       loadShareSection(currentSession.id);
+      loadPagesSection(currentSession.id);
     })
     .catch(e => { body.textContent = 'Failed to load stats: ' + e.message; });
 }
@@ -1311,6 +1313,7 @@ function closeStatsModal() {
 // GET /api/sessions/:id/file. Markdown renders rendered; code highlights;
 // images display inline. The raw text is kept for the copy button.
 let fileModalRaw = null;
+let fileModalAbsPath = null; // resolved path of the viewed file (publish target)
 
 async function openFileViewer(mention) {
   if (!currentSession) return;
@@ -1318,6 +1321,9 @@ async function openFileViewer(mention) {
   const title = document.getElementById('fileModalTitle');
   const pathEl = document.getElementById('fileModalPath');
   fileModalRaw = null;
+  fileModalAbsPath = null;
+  document.getElementById('fileModalPublish').style.display = 'none';
+  renderFilePageRow(null);
   title.textContent = mention.replace(/:\d+(?::\d+)?$/, '').split('/').pop();
   pathEl.textContent = '';
   body.innerHTML = '<div class="loading">Loading…</div>';
@@ -1327,6 +1333,17 @@ async function openFileViewer(mention) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     title.textContent = data.path.split('/').pop();
+    fileModalAbsPath = data.path;
+    document.getElementById('fileModalPublish').style.display = '';
+    // Already published (by the agent or a previous click)? Show its link.
+    fetch('/api/pages')
+      .then((r) => r.json())
+      .then((list) => {
+        if (fileModalAbsPath !== data.path) return; // modal moved on
+        const page = Array.isArray(list) && list.find((p) => p.root === data.path);
+        if (page) renderFilePageRow(page);
+      })
+      .catch(() => {});
     const kb = data.size >= 10240 ? `${Math.round(data.size / 1024)} KB` : `${data.size} B`;
     pathEl.textContent = `${shortCwd(data.path)} · ${kb}${data.truncated ? ' · truncated preview' : ''}`;
     pathEl.title = data.path;
@@ -1357,6 +1374,85 @@ function closeFileModal() {
   document.getElementById('fileModal').style.display = 'none';
   document.getElementById('fileModalBody').innerHTML = '';
   fileModalRaw = null;
+  fileModalAbsPath = null;
+  renderFilePageRow(null);
+}
+
+// --- Published pages (file viewer + stats modal) ---
+// The agent's flow is the API itself (write plan.html, then
+// `curl -X POST …/api/pages`); these are the user-initiated equivalents:
+// 🌐 in the file viewer publishes the viewed file, the stats modal lists a
+// session's published pages with copy/revoke.
+
+function renderFilePageRow(page) {
+  const el = document.getElementById('fileModalPage');
+  if (!page) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const link = page.url || (location.origin + page.path);
+  el.style.display = '';
+  el.innerHTML = 'Published: ' +
+    `<button type="button" class="stats-copy stats-share-link" data-copy="${escapeHtml(link)}" title="Click to copy">${escapeHtml(link)}</button>` +
+    '<button type="button" class="btn-small btn-danger" id="filePageRevoke">Unpublish</button>';
+  el.querySelector('.stats-copy').addEventListener('click', function () {
+    copyTextToClipboard(this.dataset.copy).then(
+      () => setStatus('Page link copied'),
+      () => setStatus('Copy failed (clipboard blocked)', 'error'),
+    );
+  });
+  el.querySelector('#filePageRevoke').addEventListener('click', () => {
+    fetch(`/api/pages/${encodeURIComponent(page.token)}`, { method: 'DELETE' })
+      .then(() => renderFilePageRow(null))
+      .catch((e) => setStatus('Failed to unpublish: ' + e.message, 'error'));
+  });
+}
+
+async function publishFileModal() {
+  if (!fileModalAbsPath || !currentSession) return;
+  try {
+    const res = await fetch('/api/pages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: fileModalAbsPath,
+        sessionId: currentSession.id,
+        title: fileModalAbsPath.split('/').pop(),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    renderFilePageRow(data);
+  } catch (e) {
+    setStatus('Publish failed: ' + e.message, 'error');
+  }
+}
+
+// Published pages section of the stats modal (only rendered when non-empty —
+// most sessions publish nothing and don't need the visual noise).
+function loadPagesSection(sessionId) {
+  const el = document.getElementById('statsPages');
+  if (!el) return;
+  fetch(`/api/pages?sessionId=${encodeURIComponent(sessionId)}`)
+    .then((r) => r.json())
+    .then((list) => {
+      if (!Array.isArray(list) || !list.length) { el.innerHTML = ''; return; }
+      el.innerHTML = '<div class="stats-share-title">Published pages</div>' +
+        list.map((p) => {
+          const link = p.url || (location.origin + p.path);
+          const label = p.title || p.root.split('/').pop();
+          return `<div class="stats-page-row" data-token="${escapeHtml(p.token)}">` +
+            `<span class="stats-page-name" title="${escapeHtml(p.root)}">${escapeHtml(label)}${p.missing ? ' <span class="stats-page-missing">(file missing)</span>' : ''}</span>` +
+            `<button type="button" class="stats-copy stats-share-link" data-copy="${escapeHtml(link)}" title="Click to copy">${escapeHtml(link)}</button>` +
+            '<button type="button" class="btn-small btn-danger stats-page-revoke">Revoke</button></div>';
+        }).join('');
+      el.querySelectorAll('.stats-page-revoke').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const token = btn.closest('.stats-page-row').dataset.token;
+          fetch(`/api/pages/${encodeURIComponent(token)}`, { method: 'DELETE' })
+            .then(() => loadPagesSection(sessionId))
+            .catch((e) => setStatus('Failed to revoke: ' + e.message, 'error'));
+        });
+      });
+    })
+    .catch(() => { el.innerHTML = ''; });
 }
 
 function copyFileModalContent(btn) {

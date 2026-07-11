@@ -154,6 +154,38 @@ the API return an absolute `url`; else `url` is null and the client builds it
 from `location.origin`. UI is a section in the stats modal (create / copy /
 revoke; copy goes through `copyTextToClipboard`).
 
+## Published pages (lib/pages.js, /page/:token)
+
+Static hosting for agent-written HTML artifacts (plan explainers, reports).
+The agent creates the file(s) on disk — usually in the project tree — then
+points the server at the path:
+
+```bash
+curl -s -X POST localhost:3333/api/pages -H 'Content-Type: application/json' \
+  -d '{"path":"/abs/path/plan.html","title":"Refactor plan"}'
+```
+
+The response carries `/page/<token>` (plus an absolute `url` when
+`PI_DISH_SHARE_BASE_URL` is set); the agent pastes that path/link into chat.
+Content is served **live from disk** — edits show on refresh — and
+re-publishing the same path reuses its token (`createPage` is idempotent per
+resolved root). A root may be one file or a directory (index.html required;
+assets served at `/page/<token>/<rel>`, contained by sendFile's root option;
+the bare token URL 302s to the trailing-slash form so the document's relative
+asset URLs resolve under the token — and express non-strict routing sends
+both spellings to the same route, so the redirect must branch on `req.path`
+or it loops). Registry is `~/.pi/dish/pages.json` (shares.js rules:
+re-read per call, temp-file + rename). Gate: registration is main-app-only,
+but tokens can be exposed on the public share listener, so a root must lie
+inside a session workspace (the given sessionId's cwd, else any live
+session's cwd) or `~/.pi/dish/pages` (always-allowed drop dir) — lexical
+containment, same threat model as the file viewer. Unknown tokens are bare
+404s. `/page` routes are mounted on the main app **and** the
+`PI_DISH_SHARE_PORT` listener, like `/share`. UI: 🌐 in the file viewer
+publishes the viewed file (link row with copy + Unpublish; re-opening the
+file resurfaces it), and the stats modal lists the session's pages with
+revoke — both are the user-initiated equivalents of the agent's curl.
+
 ## File / directory fuzzy search (lib/file-search.js)
 
 Backed by fff (`@ff-labs/fff-node`, ESM-only + native binary, loaded via

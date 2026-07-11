@@ -18,6 +18,7 @@ const { aggregateDiffs } = require('./lib/git-diff');
 const terminal = require('./lib/terminal');
 const tmux = require('./lib/tmux');
 const shares = require('./lib/shares');
+const pages = require('./lib/pages');
 const {
   getSessionInfo,
   readSessionMessages,
@@ -791,6 +792,127 @@ app.get('/api/sessions/:id/share', (req, res) => {
 // Public route — always available on the main app (the share listener is opt-in).
 app.get('/share/:token', serveSharedSession);
 
+// =========================================================================
+// Published pages (lib/pages.js)
+// =========================================================================
+//
+// Agents write an HTML artifact (plan explainer, report) to disk, then point
+// the server at it: POST /api/pages { path } from the agent's shell
+// (`curl localhost:3333/api/pages …`) or the file viewer's publish button.
+// The public GET /page/:token serves the content *live from disk* (an edited
+// plan shows fresh on refresh) and is mounted on both the main app and the
+// optional share listener, like /share. Unknown tokens are bare 404s.
+
+function pagePayload(token, entry) {
+  const pagePath = `/page/${token}`;
+  const base = process.env.PI_DISH_SHARE_BASE_URL;
+  return {
+    token,
+    path: pagePath,
+    url: base ? base.replace(/\/+$/, '') + pagePath : null,
+    root: entry.root,
+    title: entry.title || null,
+    sessionId: entry.sessionId || null,
+    createdAt: entry.createdAt,
+  };
+}
+
+// Registration is main-app-only, but a token can end up on the public share
+// listener — so a LAN client must not be able to publish arbitrary files
+// (~/.ssh/…) to the world. A root is publishable when it lives inside a
+// session's workspace (given sessionId's cwd, or any live session's cwd) or
+// the ~/.pi/dish/pages drop dir. Containment is lexical, same threat model
+// as the file viewer (lib/file-mention.js).
+function isPageRootAllowed(root, sessionId) {
+  const contained = (p, base) => {
+    if (!base) return false;
+    const b = path.resolve(base);
+    return p === b || p.startsWith(b + path.sep);
+  };
+  if (contained(root, pages.pagesDropDir())) return true;
+  if (sessionId && contained(root, resolveSessionCwd(sessionId))) return true;
+  for (const reg of listRegisteredSessions()) {
+    if (contained(root, reg.cwd)) return true;
+  }
+  for (const rpc of getAllRPCSessions()) {
+    if (rpc.alive && contained(root, rpc.cwd)) return true;
+  }
+  return false;
+}
+
+app.post('/api/pages', (req, res) => {
+  const { path: rawPath, title, sessionId } = req.body || {};
+  if (typeof rawPath !== 'string' || !rawPath) {
+    return res.status(400).json({ error: 'path required' });
+  }
+  if (!path.isAbsolute(rawPath)) {
+    return res.status(400).json({ error: 'path must be absolute' });
+  }
+  const root = path.resolve(rawPath);
+  let stat;
+  try { stat = fs.statSync(root); } catch {
+    return res.status(404).json({ error: `No such file: ${root}` });
+  }
+  if (!stat.isFile() && !stat.isDirectory()) {
+    return res.status(400).json({ error: 'path must be a file or directory' });
+  }
+  if (stat.isDirectory() && !fs.existsSync(path.join(root, 'index.html'))) {
+    return res.status(400).json({ error: 'directory pages need an index.html' });
+  }
+  if (!isPageRootAllowed(root, sessionId)) {
+    return res.status(403).json({
+      error: 'path must be inside a session workspace or ~/.pi/dish/pages',
+    });
+  }
+  const token = pages.createPage({ root, title: title || null, sessionId: sessionId || null });
+  res.json(pagePayload(token, pages.getPage(token)));
+});
+
+app.get('/api/pages', (req, res) => {
+  let list = pages.listPages();
+  if (req.query.sessionId) list = list.filter((p) => p.sessionId === req.query.sessionId);
+  res.json(list.map(({ token, ...entry }) => ({
+    ...pagePayload(token, entry),
+    missing: !fs.existsSync(entry.root),
+  })));
+});
+
+app.delete('/api/pages/:token', (req, res) => {
+  res.json({ revoked: pages.revokePage(req.params.token) });
+});
+
+// The public serving routes. File roots serve the file itself; directory
+// roots serve index.html at /page/:token/ (the bare token URL redirects so
+// the document's relative asset URLs resolve under the token) and contained
+// assets at /page/:token/<rel>. res.sendFile rejects `..` traversal and
+// absolute rests via its root option — every failure is a bare 404.
+function servePage(req, res) {
+  const entry = pages.getPage(req.params.token);
+  if (!entry) return res.status(404).type('text/plain').send('Not found');
+  const notFound = () => { if (!res.headersSent) res.status(404).type('text/plain').send('Not found'); };
+  let stat;
+  try { stat = fs.statSync(entry.root); } catch { return notFound(); }
+  // Non-strict routing sends /page/:token/ to the bare route too — read the
+  // trailing slash off the real path or the redirect below would loop.
+  const rest = req.params[0] || (req.path.endsWith('/') ? '/' : '');
+
+  if (stat.isFile()) {
+    if (rest) return notFound(); // a file page has no sub-paths
+    return res.sendFile(entry.root, (err) => { if (err) notFound(); });
+  }
+  if (!rest) return res.redirect(302, `/page/${req.params.token}/`);
+  const rel = rest === '/' ? 'index.html' : rest.replace(/^\//, '');
+  res.sendFile(rel, { root: entry.root }, (err) => { if (err) notFound(); });
+}
+
+app.get('/page/:token', servePage);
+app.get('/page/:token/*', (req, res) => {
+  // Normalize express 4's wildcard into the shape servePage expects: the
+  // rest including its leading slash ('/' for the bare trailing-slash URL).
+  req.params[0] = '/' + (req.params[0] || '');
+  servePage(req, res);
+});
+
 // Execute a slash command against an active session.
 app.post('/api/sessions/:id/command', async (req, res) => {
   const { message, deliverAs } = req.body;
@@ -1531,12 +1653,18 @@ const server = app.listen(PORT, HOST, () => {
 });
 
 // Optional dedicated share listener: a second minimal app that serves ONLY
-// GET /share/:token (everything else 404s), so operators can expose public
-// session traces on their own port/host without opening the rest of the API.
-// The share route stays available on the main app regardless.
+// the public content routes — GET /share/:token and GET /page/:token[/*]
+// (everything else 404s) — so operators can expose public session traces and
+// published pages on their own port/host without opening the rest of the
+// API. Both stay available on the main app regardless.
 if (process.env.PI_DISH_SHARE_PORT) {
   const shareApp = express();
   shareApp.get('/share/:token', serveSharedSession);
+  shareApp.get('/page/:token', servePage);
+  shareApp.get('/page/:token/*', (req, res) => {
+    req.params[0] = '/' + (req.params[0] || '');
+    servePage(req, res);
+  });
   shareApp.use((req, res) => res.status(404).type('text/plain').send('Not found'));
   const shareHost = process.env.PI_DISH_SHARE_HOST || HOST;
   const shareServer = shareApp.listen(process.env.PI_DISH_SHARE_PORT, shareHost, () => {

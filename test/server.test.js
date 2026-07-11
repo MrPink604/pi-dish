@@ -351,6 +351,100 @@ test('GET /diff 404s when the session cwd is unknown', async () => {
   assert.equal(status, 404);
 });
 
+// --- published pages (lib/pages.js, /api/pages, /page/:token) ---------------
+
+test('POST /api/pages publishes a file and /page/:token serves it live from disk', async () => {
+  const planFile = path.join(realCwd, 'plan.html');
+  fs.writeFileSync(planFile, '<h1>the plan</h1>');
+  const { status, body } = await post('/api/pages', {
+    path: planFile, sessionId: REAL_CWD_ID, title: 'The Plan',
+  });
+  assert.equal(status, 200);
+  assert.ok(body.token);
+  assert.equal(body.path, `/page/${body.token}`);
+  assert.equal(body.title, 'The Plan');
+
+  const res = await fetch(base + body.path);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /text\/html/);
+  assert.equal(await res.text(), '<h1>the plan</h1>');
+
+  // Live from disk: an edit shows without re-publishing.
+  fs.writeFileSync(planFile, '<h1>the revised plan</h1>');
+  assert.equal(await (await fetch(base + body.path)).text(), '<h1>the revised plan</h1>');
+
+  // Idempotent per path: re-publishing reuses the token.
+  const again = await post('/api/pages', { path: planFile, sessionId: REAL_CWD_ID });
+  assert.equal(again.body.token, body.token);
+
+  // Listed for the session, then revocable.
+  const list = await get(`/api/pages?sessionId=${REAL_CWD_ID}`);
+  assert.ok(list.body.some((p) => p.token === body.token && p.missing === false));
+  const revoked = await del(`/api/pages/${body.token}`);
+  assert.equal(revoked.body.revoked, true);
+  assert.equal((await fetch(base + body.path)).status, 404);
+});
+
+test('directory pages serve index.html and contained assets only', async () => {
+  const dir = path.join(realCwd, 'report');
+  fs.mkdirSync(path.join(dir, 'assets'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'index.html'), '<link href="assets/s.css"><p>report</p>');
+  fs.writeFileSync(path.join(dir, 'assets', 's.css'), 'p { color: red; }');
+  const { status, body } = await post('/api/pages', { path: dir, sessionId: REAL_CWD_ID });
+  assert.equal(status, 200);
+
+  // Bare token URL redirects to the trailing-slash form so the document's
+  // relative asset URLs resolve under the token.
+  const bare = await fetch(base + body.path, { redirect: 'manual' });
+  assert.equal(bare.status, 302);
+  assert.equal(bare.headers.get('location'), `${body.path}/`);
+
+  const index = await fetch(base + body.path + '/');
+  assert.match(await index.text(), /report/);
+  const asset = await fetch(base + body.path + '/assets/s.css');
+  assert.equal(asset.status, 200);
+  assert.match(await asset.text(), /color: red/);
+
+  // Traversal out of the root must 404 (encoded so the client can't
+  // normalize it away), as must missing assets.
+  assert.equal((await fetch(base + body.path + '/%2e%2e/secret.txt')).status, 404);
+  assert.equal((await fetch(base + body.path + '/nope.css')).status, 404);
+  await del(`/api/pages/${body.token}`);
+});
+
+test('POST /api/pages validates the root and gates it to session reach', async () => {
+  const rel = await post('/api/pages', { path: 'plan.html' });
+  assert.equal(rel.status, 400, 'relative paths rejected');
+  const missing = await post('/api/pages', { path: path.join(realCwd, 'nope.html') });
+  assert.equal(missing.status, 404, 'nonexistent path rejected');
+
+  // Outside every session cwd and the drop dir → 403, with or without a
+  // session id (tokens can be exposed on the public share listener).
+  const secret = path.join(tmpHome, 'secret.txt');
+  assert.equal((await post('/api/pages', { path: secret })).status, 403);
+  assert.equal((await post('/api/pages', { path: secret, sessionId: REAL_CWD_ID })).status, 403);
+
+  // A directory without index.html can't be a page.
+  const bare = path.join(realCwd, 'no-index');
+  fs.mkdirSync(bare, { recursive: true });
+  assert.equal((await post('/api/pages', { path: bare, sessionId: REAL_CWD_ID })).status, 400);
+
+  // The ~/.pi/dish/pages drop dir is publishable without any session.
+  const dropDir = path.join(tmpHome, '.pi', 'dish', 'pages');
+  fs.mkdirSync(dropDir, { recursive: true });
+  const dropped = path.join(dropDir, 'note.html');
+  fs.writeFileSync(dropped, '<p>dropped</p>');
+  const ok = await post('/api/pages', { path: dropped });
+  assert.equal(ok.status, 200);
+  await del(`/api/pages/${ok.body.token}`);
+});
+
+test('GET /page with an unknown token is a bare 404', async () => {
+  const res = await fetch(base + '/page/does-not-exist');
+  assert.equal(res.status, 404);
+  assert.equal(await res.text(), 'Not found');
+});
+
 test('PUT /api/models/enabled persists pi scoped models in settings.json', async () => {
   const settingsFile = path.join(tmpHome, '.pi', 'agent', 'settings.json');
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
