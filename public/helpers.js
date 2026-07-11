@@ -536,6 +536,40 @@ function highlightTokens(text, tokens) {
   return out + escapeHtml(str.slice(pos));
 }
 
+/**
+ * Render a unified diff's hunks as HTML lines for the diff modal. File-level
+ * header lines (diff --git, index, ---/+++, mode/rename noise) are dropped —
+ * the modal's file row already shows path and status; only content from the
+ * first @@ onward renders. Returns '' for empty/missing patches.
+ */
+function renderDiffHtml(patch) {
+  if (!patch) return '';
+  const out = [];
+  let inHunk = false;
+  for (const line of String(patch).split('\n')) {
+    if (line.startsWith('@@')) {
+      inHunk = true;
+      out.push(`<div class="diff-line diff-hunk">${escapeHtml(line)}</div>`);
+      continue;
+    }
+    if (!inHunk) continue;
+    const cls = line[0] === '+' ? ' diff-add' : line[0] === '-' ? ' diff-del' : '';
+    out.push(`<div class="diff-line${cls}">${escapeHtml(line) || ' '}</div>`);
+  }
+  return out.join('');
+}
+
+/** CSS-safe class suffix for a git status letter (M/A/D/R/C/U/?/T). */
+function diffStatusClass(letter) {
+  switch (letter) {
+    case 'A': case '?': return 'add';
+    case 'D': return 'del';
+    case 'R': case 'C': return 'ren';
+    case 'U': return 'conflict';
+    default: return 'mod';
+  }
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRelativeTime, formatTime, formatDuration,
@@ -546,5 +580,6 @@ if (typeof module !== 'undefined' && module.exports) {
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     modelMatchesPattern, isModelEnabled, pushPromptHistory, sanitizeMarkdownUrl,
     buildSnippet, highlightTokens, looksLikeFilePath, findPathTokens,
+    renderDiffHtml, diffStatusClass,
   };
 }

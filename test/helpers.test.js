@@ -478,3 +478,36 @@ test('findPathTokens picks file mentions out of prose, skipping URLs and word pa
   assert.equal(text.slice(t0.start, t0.end), 'findings.md');
   assert.deepEqual(H.findPathTokens('no paths here at all'), []);
 });
+
+test('renderDiffHtml renders hunk content only, with add/del classes', () => {
+  const patch = [
+    'diff --git a/x.txt b/x.txt',
+    'index 000..111 100644',
+    '--- a/x.txt',
+    '+++ b/x.txt',
+    '@@ -1,2 +1,2 @@',
+    ' context <tag>',
+    '-removed',
+    '+added',
+    '',
+  ].join('\n');
+  const html = H.renderDiffHtml(patch);
+  assert.ok(!html.includes('diff --git'), 'file headers are dropped');
+  assert.ok(!html.includes('index 000'), 'index lines are dropped');
+  assert.ok(html.includes('<div class="diff-line diff-hunk">@@ -1,2 +1,2 @@</div>'));
+  assert.ok(html.includes('<div class="diff-line diff-add">+added</div>'));
+  assert.ok(html.includes('<div class="diff-line diff-del">-removed</div>'));
+  assert.ok(html.includes('&lt;tag&gt;'), 'content is HTML-escaped');
+  assert.equal(H.renderDiffHtml(null), '');
+  assert.equal(H.renderDiffHtml(''), '');
+});
+
+test('diffStatusClass maps git status letters to CSS-safe suffixes', () => {
+  assert.equal(H.diffStatusClass('A'), 'add');
+  assert.equal(H.diffStatusClass('?'), 'add');
+  assert.equal(H.diffStatusClass('D'), 'del');
+  assert.equal(H.diffStatusClass('R'), 'ren');
+  assert.equal(H.diffStatusClass('U'), 'conflict');
+  assert.equal(H.diffStatusClass('M'), 'mod');
+  assert.equal(H.diffStatusClass('T'), 'mod');
+});

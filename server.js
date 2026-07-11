@@ -14,6 +14,7 @@ const {
 } = require('./lib/bridge-session');
 const { searchFiles, searchHomeDirs, completePath, isPathCompletionToken } = require('./lib/file-search');
 const { resolveFileMention, readFileForViewer } = require('./lib/file-mention');
+const { aggregateDiffs } = require('./lib/git-diff');
 const terminal = require('./lib/terminal');
 const tmux = require('./lib/tmux');
 const shares = require('./lib/shares');
@@ -1180,6 +1181,20 @@ app.get('/api/sessions/:id/file', async (req, res) => {
       line: resolved.line ?? null,
       ...file,
     });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Aggregate uncommitted git diffs for every repo under the session cwd (the
+// user's workspaces are polyrepos — several checkouts side by side under one
+// agent cwd). The cwd comes from the session, never the request, so there's
+// no path input to gate. See lib/git-diff.js.
+app.get('/api/sessions/:id/diff', async (req, res) => {
+  try {
+    const cwd = resolveSessionCwd(req.params.id);
+    if (!cwd) return res.status(404).json({ error: 'Session cwd unknown' });
+    res.json(await aggregateDiffs(cwd));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

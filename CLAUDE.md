@@ -176,6 +176,27 @@ inserts `@relative/path`; accepting a directory appends `/` and re-fires
 the completion to drill deeper); the cwd input merges known session cwds
 (starred, score-boosted) with live `/api/dirs` results.
 
+## Diff view (lib/git-diff.js, GET /api/sessions/:id/diff)
+
+The ± header button swaps the transcript for the session's uncommitted
+changes — aggregated across **every** git repo under the session cwd, because
+the user's workspaces are polyrepos (several checkouts side by side under one
+agent cwd). `lib/git-diff.js` walks for repos (bounded depth/count, skips
+node_modules-style heavies, doesn't descend into found repos), then per repo
+parses `git status --porcelain=v2 --branch -z` and splits one `git diff HEAD`
+(staged + unstaged in one pass) into per-file patches — `splitPatch` counts
++/− only inside hunks (an added line starting `++ ` must not read as a
+header); untracked files get synthesized new-file patches (size-capped,
+binary-checked). All git calls are execFile argv arrays with timeouts
+(lib/tmux.js rules); failures degrade to an `error` field on the repo entry
+or `gitAvailable:false` — one broken repo must not blank the view. The cwd
+comes from the session, never the request, so there's no path input to gate.
+Client: `.session-view.diff-open` hides transcript/composer/terminal in CSS
+(`!important`, since several carry JS-managed inline display); rendering goes
+through pure `renderDiffHtml`/`diffStatusClass` in helpers.js. Fetched on
+open and ⟳ only — no polling. Closed by ✕ / Escape / session switch.
+Inactive sessions can't reach it (the whole actions row hides for them).
+
 ## Client session state (public/app.js)
 
 `sessions` (sidebar lists) and `currentSession` (a **detached copy** of the

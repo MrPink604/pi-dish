@@ -34,6 +34,27 @@ const CWD = path.join(tmpHome, 'workspace', 'proj-alpha');
 fs.mkdirSync(path.join(CWD, 'src'), { recursive: true });
 fs.writeFileSync(path.join(CWD, 'src', 'main.js'), 'console.log(1);\n');
 fs.writeFileSync(path.join(CWD, 'README.md'), '# alpha\n');
+
+// A dirty git repo under the cwd for the diff view (one committed+modified
+// file, one untracked). Filenames chosen not to collide with the @-mention
+// fuzzy-search assertions ('ma', 'REA').
+const { execFileSync } = require('node:child_process');
+const REPO = path.join(CWD, 'repo-x');
+fs.mkdirSync(REPO, { recursive: true });
+const git = (...args) => execFileSync('git', args, {
+  cwd: REPO,
+  env: {
+    ...process.env,
+    GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null',
+  },
+});
+git('init', '-q', '-b', 'main');
+fs.writeFileSync(path.join(REPO, 'zeta.txt'), 'one\n');
+git('add', '-A');
+git('commit', '-q', '-m', 'init');
+fs.writeFileSync(path.join(REPO, 'zeta.txt'), 'one\ntwo\n');
+fs.writeFileSync(path.join(REPO, 'zulu.txt'), 'brand new\n');
 const sessionDir = path.join(tmpHome, '.pi', 'agent', 'sessions', '--home-user-proj--');
 const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
 fs.mkdirSync(sessionDir, { recursive: true });
@@ -426,6 +447,38 @@ function writeRegistry(patch = {}) {
     await desktop.keyboard.press('Escape');
     await desktop.waitForSelector('#fileModal', { state: 'hidden', timeout: 2000 });
     check(true, 'Escape closes the viewer');
+
+    // Diff view: the ± header button swaps the transcript for the aggregate
+    // uncommitted changes of every repo under the cwd; Escape restores it.
+    console.log('diff view:');
+    await desktop.click('#btnDiff');
+    await desktop.waitForSelector('.diff-repo', { timeout: 5000 });
+    check(await desktop.evaluate(() => document.getElementById('messages').offsetParent === null),
+      'transcript hidden while the diff view is open');
+    check(await desktop.locator('.diff-repo-path').first().textContent() === 'repo-x',
+      'repo under the cwd discovered and titled by relative path');
+    const diffFiles = await desktop.evaluate(() =>
+      [...document.querySelectorAll('.diff-file')].map((el) => ({
+        status: el.querySelector('.diff-status').textContent,
+        path: el.querySelector('.diff-file-path').textContent,
+        open: el.open,
+      })));
+    check(diffFiles.some((f) => f.path === 'zeta.txt' && f.status === 'M'),
+      `modified file listed with status M (got ${JSON.stringify(diffFiles)})`);
+    check(diffFiles.some((f) => f.path === 'zulu.txt' && f.status === '?'),
+      'untracked file listed with status ?');
+    check(diffFiles.every((f) => f.open), 'small changeset opens patches by default');
+    check(await desktop.evaluate(() =>
+      [...document.querySelectorAll('.diff-line.diff-add')].some((el) => el.textContent === '+two')),
+      'modified patch renders its added line');
+    check(await desktop.evaluate(() =>
+      [...document.querySelectorAll('.diff-line.diff-add')].some((el) => el.textContent === '+brand new')),
+      'untracked patch is synthesized and rendered');
+    await desktop.keyboard.press('Escape');
+    await desktop.waitForFunction(() => document.getElementById('messages').offsetParent !== null,
+      { timeout: 2000 });
+    check(await desktop.locator('#btnDiff.active').count() === 0,
+      'Escape closes the diff view and restores the transcript');
 
     // Wide desktop: the message feed centers a reading column instead of
     // hugging the left edge.

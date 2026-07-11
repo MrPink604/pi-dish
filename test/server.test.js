@@ -310,6 +310,47 @@ test('GET /file rejects traversal and unreachable absolute paths', async () => {
   assert.equal(empty.status, 400);
 });
 
+test('GET /diff aggregates uncommitted changes across repos under the session cwd', async (t) => {
+  const { execFileSync } = require('node:child_process');
+  const git = (cwd, ...args) => execFileSync('git', args, {
+    cwd, encoding: 'utf8',
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t',
+      GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null',
+    },
+  });
+  try { git(tmpHome, '--version'); } catch { return t.skip('git not available'); }
+
+  // A repo *under* the session cwd (the polyrepo case: cwd itself isn't one).
+  const repo = path.join(realCwd, 'repo-x');
+  fs.mkdirSync(repo, { recursive: true });
+  git(repo, 'init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'one\n');
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '-q', '-m', 'init');
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'one\ntwo\n'); // modified
+  fs.writeFileSync(path.join(repo, 'new.txt'), 'fresh\n');  // untracked
+
+  const { status, body } = await get(`/api/sessions/${REAL_CWD_ID}/diff`);
+  assert.equal(status, 200);
+  assert.equal(body.root, realCwd);
+  assert.equal(body.gitAvailable, true);
+  const entry = body.repos.find(r => r.path === 'repo-x');
+  assert.ok(entry, 'repo under the cwd is discovered');
+  assert.equal(entry.branch, 'main');
+  const byPath = Object.fromEntries(entry.files.map(f => [f.path, f]));
+  assert.equal(byPath['a.txt'].status, 'M');
+  assert.ok(byPath['a.txt'].patch.includes('+two'));
+  assert.equal(byPath['new.txt'].status, '?');
+  assert.ok(byPath['new.txt'].patch.includes('+fresh'), 'untracked files get synthesized patches');
+});
+
+test('GET /diff 404s when the session cwd is unknown', async () => {
+  const { status } = await get(`/api/sessions/${NO_CWD_ID}/diff`);
+  assert.equal(status, 404);
+});
+
 test('PUT /api/models/enabled persists pi scoped models in settings.json', async () => {
   const settingsFile = path.join(tmpHome, '.pi', 'agent', 'settings.json');
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });

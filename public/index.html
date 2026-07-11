@@ -116,6 +116,12 @@
                 <path d="M4 6h16M7 12h10M10 18h4"/>
               </svg>
             </button>
+            <button class="btn-icon" id="btnDiff" onclick="toggleDiffView()" title="Uncommitted changes (all repos under cwd)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <path d="M12 3.5v8M8 7.5h8"/>
+                <path d="M8 18h8"/>
+              </svg>
+            </button>
             <button class="btn-icon" id="btnTree" onclick="openTreeModal()" title="Session tree">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="12" r="2"/>
@@ -146,7 +152,25 @@
         <div class="messages" id="messages">
           <!-- Messages will be rendered here -->
         </div>
-        
+
+        <!-- Diff view: the ± header button swaps the transcript for the
+             aggregate uncommitted changes of every git repo under the
+             session cwd (.session-view.diff-open hides the rest). -->
+        <div class="diff-view" id="diffView">
+          <div class="diff-view-header">
+            <span class="diff-view-title">Uncommitted changes</span>
+            <span class="diff-view-root" id="diffViewRoot"></span>
+            <button class="btn-icon" onclick="loadDiffView()" title="Refresh">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 12a9 9 0 11-2.636-6.364"/>
+                <path d="M21 3v6h-6"/>
+              </svg>
+            </button>
+            <button class="btn-icon" onclick="closeDiffView()" title="Close (Esc)">✕</button>
+          </div>
+          <div class="diff-view-body" id="diffViewBody"></div>
+        </div>
+
         <!-- Terminal panel (feature-flagged: PI_DISH_TERMINAL=1 on the server).
              A shell at the session's cwd; the PTY lives server-side and
              survives socket drops, so closing/reopening reattaches. -->
@@ -209,6 +233,10 @@
             <button class="cp-row" id="btnFocusMobile" onclick="toggleFocusMode()" title="Hide tool calls/results">
               <span class="cp-label">Focus mode</span>
               <span class="cp-value" id="focusModeState">off</span>
+            </button>
+            <button class="cp-row" onclick="closeControlPanel(); openDiffView()" title="Uncommitted changes (all repos under cwd)">
+              <span class="cp-label">Changes</span>
+              <span class="cp-value">±</span>
             </button>
             <button class="cp-row" onclick="closeControlPanel(); openTreeModal()" title="Session tree">
               <span class="cp-label">Session tree</span>

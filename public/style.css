@@ -3117,6 +3117,159 @@ img.msg-image {
   }
 }
 
+/* Diff view — main-pane takeover (± header button): aggregate uncommitted
+   changes across every git repo under the session cwd. `.diff-open` on the
+   session view hides the transcript/composer; !important because several of
+   those elements carry JS-managed inline display values. */
+.diff-view {
+  display: none;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.session-view.diff-open .diff-view { display: flex; }
+
+.session-view.diff-open .messages,
+.session-view.diff-open .search-bar,
+.session-view.diff-open .terminal-panel,
+.session-view.diff-open .resume-bar,
+.session-view.diff-open .input-area { display: none !important; }
+
+.diff-view-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-darker);
+}
+
+.diff-view-title { font-size: 13px; font-weight: 600; white-space: nowrap; }
+
+.diff-view-root {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Same centered reading column as .messages */
+.diff-view-body {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px max(24px, calc((100% - var(--content-max)) / 2)) 24px;
+}
+
+.diff-view-body .loading,
+.diff-view-body .error,
+.diff-empty { padding: 24px 8px; color: var(--text-muted); }
+
+.diff-repo { margin-bottom: 22px; }
+
+.diff-repo-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+
+.diff-repo-path {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-bright);
+  overflow-wrap: anywhere;
+}
+
+.diff-repo-branch { font-family: var(--font-mono); font-size: 11px; color: var(--cyan); }
+.diff-repo-ab { font-size: 11px; color: var(--warning); }
+.diff-repo-stat { margin-left: auto; font-family: var(--font-mono); font-size: 11px; white-space: nowrap; }
+.diff-plus { color: var(--success-bright); }
+.diff-minus { color: var(--error); }
+.diff-repo-error { color: var(--warning); font-size: 12px; margin: 4px 0 8px; }
+
+.diff-file {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  background: var(--bg-card);
+  overflow: hidden;
+}
+
+.diff-file > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.diff-file > summary::-webkit-details-marker { display: none; }
+.diff-file[open] > summary { border-bottom: 1px solid var(--border); }
+
+.diff-status {
+  flex-shrink: 0;
+  width: 18px;
+  text-align: center;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.diff-status-add { color: var(--success-bright); background: rgba(133, 153, 0, 0.15); }
+.diff-status-del { color: var(--error); background: rgba(220, 50, 47, 0.15); }
+.diff-status-mod { color: var(--warning); background: rgba(181, 137, 0, 0.15); }
+.diff-status-ren { color: var(--cyan); background: rgba(42, 161, 152, 0.15); }
+.diff-status-conflict { color: var(--orange); background: rgba(203, 75, 22, 0.15); }
+
+.diff-file-path { flex: 1; overflow-wrap: anywhere; }
+.diff-file-counts { flex-shrink: 0; font-size: 11px; white-space: nowrap; }
+.diff-file-note { color: var(--text-muted); font-size: 11px; padding: 4px 10px; }
+
+.diff-patch {
+  overflow-x: auto;
+  background: var(--bg-darker);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  padding: 6px 0;
+}
+
+/* width:max-content + min-width so add/del backgrounds span the full
+   scrollable width, not just the viewport. */
+.diff-line {
+  white-space: pre;
+  padding: 0 10px;
+  width: max-content;
+  min-width: 100%;
+}
+
+.diff-line.diff-add { background: rgba(133, 153, 0, 0.12); color: var(--text-bright); }
+.diff-line.diff-del { background: rgba(220, 50, 47, 0.12); color: var(--text-muted); }
+.diff-line.diff-hunk { color: var(--accent); background: rgba(38, 139, 210, 0.08); }
+
+.diff-clean {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  padding: 8px 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 768px) {
+  .diff-view-body { padding: 8px 10px 16px; }
+}
+
 /* Extension status badge in session header */
 .ext-ui-status-badge {
   display: inline-flex;
