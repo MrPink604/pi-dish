@@ -817,29 +817,12 @@ function pagePayload(token, entry) {
   };
 }
 
-// Registration is main-app-only, but a token can end up on the public share
-// listener — so a LAN client must not be able to publish arbitrary files
-// (~/.ssh/…) to the world. A root is publishable when it lives inside a
-// session's workspace (given sessionId's cwd, or any live session's cwd) or
-// the ~/.pi/dish/pages drop dir. Containment is lexical, same threat model
-// as the file viewer (lib/file-mention.js).
-function isPageRootAllowed(root, sessionId) {
-  const contained = (p, base) => {
-    if (!base) return false;
-    const b = path.resolve(base);
-    return p === b || p.startsWith(b + path.sep);
-  };
-  if (contained(root, pages.pagesDropDir())) return true;
-  if (sessionId && contained(root, resolveSessionCwd(sessionId))) return true;
-  for (const reg of listRegisteredSessions()) {
-    if (contained(root, reg.cwd)) return true;
-  }
-  for (const rpc of getAllRPCSessions()) {
-    if (rpc.alive && contained(root, rpc.cwd)) return true;
-  }
-  return false;
-}
-
+// Deliberately no path gate on registration: sharing governance rests with
+// the main app, which is assumed reachable only by trusted people (same
+// trust model as the rest of the API — anything on this port can already
+// drive agents with shell access, so a "no paths outside the workspace"
+// rule would only be theater: an agent can copy any file into its cwd).
+// The public share listener never registers, only serves known tokens.
 app.post('/api/pages', (req, res) => {
   const { path: rawPath, title, sessionId } = req.body || {};
   if (typeof rawPath !== 'string' || !rawPath) {
@@ -858,11 +841,6 @@ app.post('/api/pages', (req, res) => {
   }
   if (stat.isDirectory() && !fs.existsSync(path.join(root, 'index.html'))) {
     return res.status(400).json({ error: 'directory pages need an index.html' });
-  }
-  if (!isPageRootAllowed(root, sessionId)) {
-    return res.status(403).json({
-      error: 'path must be inside a session workspace or ~/.pi/dish/pages',
-    });
   }
   const token = pages.createPage({ root, title: title || null, sessionId: sessionId || null });
   res.json(pagePayload(token, pages.getPage(token)));

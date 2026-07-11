@@ -175,12 +175,13 @@ the bare token URL 302s to the trailing-slash form so the document's relative
 asset URLs resolve under the token — and express non-strict routing sends
 both spellings to the same route, so the redirect must branch on `req.path`
 or it loops). Registry is `~/.pi/dish/pages.json` (shares.js rules:
-re-read per call, temp-file + rename). Gate: registration is main-app-only,
-but tokens can be exposed on the public share listener, so a root must lie
-inside a session workspace (the given sessionId's cwd, else any live
-session's cwd) or `~/.pi/dish/pages` (always-allowed drop dir) — lexical
-containment, same threat model as the file viewer. Unknown tokens are bare
-404s. `/page` routes are mounted on the main app **and** the
+re-read per call, temp-file + rename). **Deliberately no path gate on
+registration** (any absolute path — /tmp, wherever — publishes): sharing
+governance rests with the main app, which only trusted people can reach, and
+a workspace-containment rule would be theater (an agent can copy any file
+into its cwd). The public listener never registers, only serves known
+tokens; asset serving is still contained to the registered root. Unknown
+tokens are bare 404s. `/page` routes are mounted on the main app **and** the
 `PI_DISH_SHARE_PORT` listener, like `/share`. UI: 🌐 in the file viewer
 publishes the viewed file (link row with copy + Unpublish; re-opening the
 file resurfaces it), and the stats modal lists the session's pages with

@@ -412,30 +412,26 @@ test('directory pages serve index.html and contained assets only', async () => {
   await del(`/api/pages/${body.token}`);
 });
 
-test('POST /api/pages validates the root and gates it to session reach', async () => {
+test('POST /api/pages validates the root but imposes no path gate', async () => {
   const rel = await post('/api/pages', { path: 'plan.html' });
   assert.equal(rel.status, 400, 'relative paths rejected');
   const missing = await post('/api/pages', { path: path.join(realCwd, 'nope.html') });
   assert.equal(missing.status, 404, 'nonexistent path rejected');
-
-  // Outside every session cwd and the drop dir → 403, with or without a
-  // session id (tokens can be exposed on the public share listener).
-  const secret = path.join(tmpHome, 'secret.txt');
-  assert.equal((await post('/api/pages', { path: secret })).status, 403);
-  assert.equal((await post('/api/pages', { path: secret, sessionId: REAL_CWD_ID })).status, 403);
 
   // A directory without index.html can't be a page.
   const bare = path.join(realCwd, 'no-index');
   fs.mkdirSync(bare, { recursive: true });
   assert.equal((await post('/api/pages', { path: bare, sessionId: REAL_CWD_ID })).status, 400);
 
-  // The ~/.pi/dish/pages drop dir is publishable without any session.
-  const dropDir = path.join(tmpHome, '.pi', 'dish', 'pages');
-  fs.mkdirSync(dropDir, { recursive: true });
-  const dropped = path.join(dropDir, 'note.html');
-  fs.writeFileSync(dropped, '<p>dropped</p>');
-  const ok = await post('/api/pages', { path: dropped });
+  // Deliberately no workspace containment: sharing governance rests with
+  // whoever can reach the main app (an agent could copy any file into its
+  // cwd anyway, so a gate would only be theater). Paths outside any session
+  // cwd — /tmp artifacts, this temp HOME — publish fine.
+  const outside = path.join(tmpHome, 'outside-any-cwd.html');
+  fs.writeFileSync(outside, '<p>outside</p>');
+  const ok = await post('/api/pages', { path: outside });
   assert.equal(ok.status, 200);
+  assert.equal(await (await fetch(base + ok.body.path)).text(), '<p>outside</p>');
   await del(`/api/pages/${ok.body.token}`);
 });
 
