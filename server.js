@@ -7,10 +7,12 @@ const piSDK = require('./lib/pi-sdk');
 const { createRPCSession, resumeRPCSession, getRPCSession, getAllRPCSessions, getPiLaunchSpec } = require('./lib/rpc-session');
 const {
   listRegisteredSessions,
+  invalidateRegistryCache,
   getRegisteredSession,
   getBridgeSession,
   BridgeSession,
   REGISTRY_DIR,
+  pidAlive,
 } = require('./lib/bridge-session');
 const { searchFiles, searchHomeDirs, completePath, isPathCompletionToken } = require('./lib/file-search');
 const { resolveFileMention, readFileForViewer } = require('./lib/file-mention');
@@ -138,6 +140,39 @@ function trackExtUIState(sess) {
     if (data?.id) state.dialogs.delete(data.id);
   });
   return sess;
+}
+
+/**
+ * Where a live session's pi process runs, for the stats modal's "Running in"
+ * row. Null for inactive sessions. Kinds:
+ * - rpc: a headless child of this server (dies with it)
+ * - tmux: a pi TUI in a tmux pane — socket from the bridge's own $TMUX stamp,
+ *   else from our spawn placement; session/window resolved live (null fields
+ *   when the pane query fails — the socket name alone still locates it)
+ * - terminal: bridge-registered but not in tmux (a plain terminal somewhere)
+ * RPC is checked first on purpose: RPC children also load the bridge and
+ * inherit this server's own $TMUX, which would misreport them as tmux TUIs.
+ */
+async function describeRuntime(sessionId) {
+  const rpc = getRPCSession(sessionId);
+  if (rpc?.alive) return { kind: 'rpc', pid: rpc.proc?.pid ?? null };
+  const reg = getRegisteredSession(sessionId);
+  if (!reg) return null;
+  const spawn = tmux.getSpawn(sessionId);
+  const socket = reg.tmux?.socket || spawn?.socket || null;
+  if (socket) {
+    const paneId = (reg.tmux?.socket ? reg.tmux.pane : spawn?.paneId) || null;
+    const loc = paneId ? await tmux.paneLocation(socket, paneId) : null;
+    return {
+      kind: 'tmux',
+      pid: reg.pid ?? null,
+      server: path.basename(socket),
+      tmuxSession: loc?.tmuxSession ?? null,
+      windowIndex: loc?.windowIndex ?? null,
+      windowName: loc?.windowName ?? null,
+    };
+  }
+  return { kind: 'terminal', pid: reg.pid ?? null };
 }
 
 /** Live context usage, whichever backend reports it (registry beats RPC stats). */
@@ -689,6 +724,7 @@ app.get('/api/sessions/:id/stats', async (req, res) => {
     res.json({
       sessionFile,
       sessionId,
+      runtime: await describeRuntime(sessionId),
       cwd: reg?.cwd || info.cwd || null,
       model: reg?.model || info.model || null,
       thinkingLevel: reg?.thinkingLevel || null,
@@ -1164,6 +1200,51 @@ app.post('/api/sessions/:id/abort', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// Close a live session: shut its pi process down (the JSONL stays resumable).
+// RPC children get RPCSession.kill(); anything bridge-registered — including
+// tmux TUIs pi-dish didn't spawn — gets SIGTERM to the registry pid. Both pi
+// modes treat SIGTERM as a graceful shutdown that runs extension cleanup, so
+// the bridge unlinks its own registry entry/socket and, in tmux, only pi dies
+// (the surrounding shell/window survives). Respond only once the process has
+// actually exited, so the next sessions poll can't show it as still live; no
+// SIGKILL escalation — a hung pi is for the user to inspect, not to lose.
+app.post('/api/sessions/:id/close', async (req, res) => {
+  const sessionId = req.params.id;
+  const rpc = getRPCSession(sessionId);
+  const reg = getRegisteredSession(sessionId);
+  let exited;
+  if (rpc?.alive) {
+    rpc.kill();
+    // Our own child: kill(pid, 0) still succeeds while it's a zombie, so wait
+    // on the 'exit'-driven flag instead of the pid.
+    exited = () => !rpc.alive;
+  } else if (reg?.pid) {
+    try {
+      process.kill(reg.pid, 'SIGTERM');
+    } catch (e) {
+      if (e.code !== 'ESRCH') {
+        return res.status(500).json({ error: `Failed to signal pi (pid ${reg.pid}): ${e.message}` });
+      }
+    }
+    exited = () => !pidAlive(reg.pid);
+  } else {
+    return res.status(404).json({ error: 'Session not active' });
+  }
+
+  const timeoutMs = Number(process.env.PI_DISH_CLOSE_TIMEOUT_MS) || 10000;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (exited()) {
+      // The client re-fetches the session list on this response — don't let
+      // the registry memo serve the dead session as live for another 500ms.
+      invalidateRegistryCache();
+      return res.json({ success: true });
+    }
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  res.status(500).json({ error: `pi did not exit within ${Math.round(timeoutMs / 1000)}s — it may be stuck; check the process directly` });
 });
 
 app.get('/api/cwds', (req, res) => {

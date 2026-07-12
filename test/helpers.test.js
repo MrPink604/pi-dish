@@ -52,6 +52,19 @@ test('formatCacheStat shows hit rate and flags unreported writes', () => {
   assert.equal(H.formatCacheStat(null, undefined, undefined), '—');
 });
 
+test('formatRuntime names each backend and degrades to partial tmux info', () => {
+  assert.equal(H.formatRuntime({ kind: 'rpc', pid: 4321 }), 'pi-dish server (headless) · pid 4321');
+  assert.equal(
+    H.formatRuntime({ kind: 'tmux', pid: 99, server: 'default', tmuxSession: 'work', windowIndex: 3, windowName: 'pi' }),
+    'tmux default · work:3 pi · pid 99');
+  // Pane query failed (dead server, no tmux): the socket name still locates it.
+  assert.equal(H.formatRuntime({ kind: 'tmux', pid: 99, server: 'default', tmuxSession: null }),
+    'tmux default · pid 99');
+  assert.equal(H.formatRuntime({ kind: 'terminal', pid: 7 }), 'terminal · pid 7');
+  assert.equal(H.formatRuntime({ kind: 'terminal', pid: null }), 'terminal');
+  assert.equal(H.formatRuntime(null), '—');
+});
+
 test('formatRelativeTime buckets by age', () => {
   const now = Date.now();
   assert.equal(H.formatRelativeTime(null), '');

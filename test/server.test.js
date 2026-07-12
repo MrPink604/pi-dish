@@ -540,6 +540,56 @@ test('POST endpoints validate input and reject inactive sessions', async () => {
   assert.equal(deadCancel.status, 404);
 });
 
+// --- Close session + runtime location --------------------------------------
+
+test('POST /close SIGTERMs the registry pid; /stats reports where it runs', async () => {
+  const { spawn } = require('node:child_process');
+  const CLOSE_ID = '2026-07-04T16-00-00-close001';
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registryDir, { recursive: true });
+  // A real process to kill — the fake-bridge pattern of pid: process.pid
+  // would SIGTERM the test itself here.
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  // The registry prune only stats socketPath — a plain file keeps the entry
+  // alive without a listener (the close route never connects).
+  const sockStub = path.join(tmpHome, 'close-sock-stub');
+  fs.writeFileSync(sockStub, '');
+  fs.writeFileSync(path.join(registryDir, `${CLOSE_ID}.json`), JSON.stringify({
+    sessionId: CLOSE_ID, socketPath: sockStub, pid: child.pid, cwd: '/home/user/proj',
+    sessionFile: SESSION_FILE,
+    // The bridge's $TMUX stamp. The socket doesn't exist, so the live pane
+    // query fails — session/window stay null but the server name still shows.
+    tmux: { socket: '/tmp/tmux-99999/work', pane: '%7' },
+  }));
+  await new Promise(r => setTimeout(r, 600)); // registry scan memo TTL
+
+  try {
+    const stats = await get(`/api/sessions/${CLOSE_ID}/stats`);
+    assert.equal(stats.status, 200);
+    assert.equal(stats.body.runtime.kind, 'tmux');
+    assert.equal(stats.body.runtime.server, 'work');
+    assert.equal(stats.body.runtime.pid, child.pid);
+    assert.equal(stats.body.runtime.tmuxSession, null);
+
+    const exited = new Promise(r => child.once('exit', (code, signal) => r(signal)));
+    const closed = await post(`/api/sessions/${CLOSE_ID}/close`, {});
+    assert.equal(closed.status, 200);
+    assert.equal(closed.body.success, true);
+    assert.equal(await exited, 'SIGTERM', 'the pi process got a graceful SIGTERM');
+  } finally {
+    try { child.kill('SIGKILL'); } catch {}
+    fs.rmSync(path.join(registryDir, `${CLOSE_ID}.json`), { force: true });
+  }
+});
+
+test('POST /close on an inactive session is a 404; inactive /stats has no runtime', async () => {
+  const closed = await post(`/api/sessions/${SESSION_ID}/close`, {});
+  assert.equal(closed.status, 404);
+  const stats = await get(`/api/sessions/${SESSION_ID}/stats`);
+  assert.equal(stats.status, 200);
+  assert.equal(stats.body.runtime, null);
+});
+
 // --- Tree branching (inactive sessions go through pi's SDK) ---------------
 // These mutate TREE_FILE (branching appends entries by design) and so run
 // in this order.

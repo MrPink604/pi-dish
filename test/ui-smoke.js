@@ -1084,6 +1084,35 @@ function writeRegistry(patch = {}) {
       'latch clears after the next key');
     await mobile.click('#termCloseBtn');
 
+    // 13. Close session: the stats modal shows where the session runs, and
+    // its danger button SIGTERMs the pi process, flipping the view to the
+    // inactive/resume state. A dummy child stands in for pi — the registry
+    // normally carries this process's own pid, which close must never get.
+    console.log('close session:');
+    const { spawn } = require('child_process');
+    const dummy = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    let dummySignal = null;
+    const dummyGone = new Promise((r) => dummy.on('exit', (code, sig) => { dummySignal = sig; r(); }));
+    writeRegistry({ pid: dummy.pid });
+    await desktop.waitForTimeout(700); // registry scan memo TTL
+    await desktop.click(`.session-item[data-id="${registryState.sessionId}"]`);
+    await desktop.waitForSelector('.message.assistant');
+    await desktop.click('#sessionContext');
+    await desktop.waitForSelector('#sessionCloseBtn', { timeout: 2000 });
+    const runtimeRow = await desktop.evaluate(() => {
+      const row = [...document.querySelectorAll('#statsBody tr')]
+        .find((tr) => tr.querySelector('.stats-key')?.textContent === 'Running in');
+      return row ? row.querySelector('.stats-val').textContent : null;
+    });
+    check(runtimeRow === `terminal · pid ${dummy.pid}`,
+      `stats modal shows where the session runs (got ${JSON.stringify(runtimeRow)})`);
+    desktop.once('dialog', (d) => d.accept());
+    await desktop.click('#sessionCloseBtn');
+    await desktop.waitForSelector('#resumeBar', { state: 'visible', timeout: 10000 });
+    check(true, 'view flipped to the inactive/resume state after close');
+    await dummyGone;
+    check(dummySignal === 'SIGTERM', `pi process got a graceful SIGTERM (got ${dummySignal})`);
+
     check(errors.length === 0, errors.length ? `no page errors — got: ${errors.join(' | ')}` : 'no page errors');
   } catch (e) {
     failures++;

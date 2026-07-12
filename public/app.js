@@ -1246,9 +1246,10 @@ function openStatsModal() {
         ['Tokens in / out', `${formatTokens(s.tokens?.input)} / ${formatTokens(s.tokens?.output)}`],
         ['Cache', formatCacheStat(s.tokens?.cacheRead, s.tokens?.cacheWrite, s.tokens?.input)],
         ['Cost', fmtMoney(s.cost)],
+        s.runtime ? ['Running in', formatRuntime(s.runtime)] : null,
         ['cwd', s.cwd || '—', !!s.cwd],
         ['Session file', s.sessionFile || '—', !!s.sessionFile],
-      ];
+      ].filter(Boolean);
       body.innerHTML = '<table class="stats-table">' + rows.map(([k, v, copyable]) => {
         const val = copyable
           ? `<button type="button" class="stats-copy" data-copy="${escapeHtml(String(v))}" title="Click to copy">${escapeHtml(String(v))}</button>`
@@ -1256,9 +1257,11 @@ function openStatsModal() {
         return `<tr><td class="stats-key">${escapeHtml(k)}</td><td class="stats-val">${val}</td></tr>`;
       }).join('') + '</table>' +
         '<div class="stats-share" id="statsShare"></div>' +
-        '<div class="stats-share" id="statsPages"></div>';
+        '<div class="stats-share" id="statsPages"></div>' +
+        '<div class="stats-share" id="statsClose"></div>';
       loadShareSection(currentSession.id);
       loadPagesSection(currentSession.id);
+      renderCloseSection(currentSession.id);
     })
     .catch(e => { body.textContent = 'Failed to load stats: ' + e.message; });
 }
@@ -1302,6 +1305,43 @@ function renderShareSection(sessionId, share) {
       .then(r => r.json())
       .then(() => renderShareSection(sessionId, null))
       .catch(e => setStatus('Failed to revoke share: ' + e.message, 'error'));
+  });
+}
+
+// Close-session section of the stats modal (active sessions only): SIGTERM
+// the pi process via POST /close. The transcript stays on disk and resumable —
+// only the running process goes away, so this is the phone-side equivalent of
+// Ctrl+D in the TUI.
+function renderCloseSection(sessionId) {
+  const el = document.getElementById('statsClose');
+  if (!el) return;
+  if (!currentSession?.isActive) { el.remove(); return; }
+  el.innerHTML = '<div class="stats-share-title">Session process</div>' +
+    '<div class="stats-share-body">' +
+    '<button type="button" class="btn-small btn-danger" id="sessionCloseBtn">Close session</button>' +
+    '<div class="stats-share-hint">Shuts down this pi process. The transcript is kept and can be resumed.</div>' +
+    '</div>';
+  el.querySelector('#sessionCloseBtn').addEventListener('click', async () => {
+    const warn = currentSession.turnInProgress
+      ? 'A turn is in progress — closing will abort it. Close this session?'
+      : 'Close this session? The pi process will shut down (the transcript stays resumable).';
+    if (!confirm(warn)) return;
+    const btn = el.querySelector('#sessionCloseBtn');
+    btn.disabled = true;
+    btn.textContent = 'Closing…';
+    try {
+      await apiSend(`/api/sessions/${sessionId}/close`);
+      closeStatsModal();
+      setStatus('Session closed');
+      // Re-fetch both lists (the session just moved from active to previous)
+      // and re-select so the view flips to its inactive state (resume bar).
+      await loadSessions(undefined, { withPrevious: true });
+      if (currentSession?.id === sessionId) selectSession(sessionId);
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = 'Close session';
+      setStatus('Close failed: ' + e.message, 'error');
+    }
   });
 }
 

@@ -18,6 +18,15 @@ const SOCKET_DIR = path.join(ROOT, "sockets");
 // with the session it registers. Harmless (and undefined) otherwise.
 const SPAWN_TOKEN = process.env.PI_DISH_SPAWN_TOKEN || null;
 
+// Where this pi lives, for pi-dish's "Running in" display: $TMUX is
+// "socketPath,serverPid,sessionIdx" and $TMUX_PANE the %pane id. Stamped into
+// the registry entry so even sessions pi-dish didn't spawn report their tmux
+// location. Null outside tmux (a plain terminal, or an RPC child — the server
+// distinguishes its own children before trusting this).
+const TMUX_LOCATION = process.env.TMUX
+  ? { socket: process.env.TMUX.split(",")[0], pane: process.env.TMUX_PANE || null }
+  : null;
+
 const FORWARDED_EVENTS = [
   "agent_start",
   "agent_end",
@@ -590,6 +599,7 @@ export default function (pi: ExtensionAPI) {
       turnInProgress,
       compacting,
       spawnToken: SPAWN_TOKEN,
+      tmux: TMUX_LOCATION,
     };
     const sig = JSON.stringify(entry);
     if (sig === lastRegistrySig) return;

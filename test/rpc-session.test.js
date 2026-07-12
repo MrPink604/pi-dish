@@ -255,6 +255,25 @@ test('a dead pi disappears from the active list', async () => {
   assert.ok(gone, 'killed session left the active list');
 });
 
+test('POST /close shuts down an RPC child and removes it from the active list', async () => {
+  const { status, body } = await post('/api/sessions/new', {});
+  assert.equal(status, 200, JSON.stringify(body));
+  const id = body.id;
+  assert.ok(await findActive(id), 'fresh session is active');
+
+  // The stats modal's "Running in" row: a server-owned headless child.
+  const stats = await get(`/api/sessions/${id}/stats`);
+  assert.equal(stats.status, 200);
+  assert.equal(stats.body.runtime.kind, 'rpc');
+  assert.ok(stats.body.runtime.pid, 'child pid is reported');
+
+  const closed = await post(`/api/sessions/${id}/close`, {});
+  assert.equal(closed.status, 200, JSON.stringify(closed.body));
+  assert.equal(closed.body.success, true);
+  // /close responds only after the child exited, so no pruning race here.
+  assert.equal(await findActive(id), null, 'closed session left the active list');
+});
+
 test('a pi that dies on startup surfaces as a 500, not a hang', async () => {
   const saved = process.env.PI_DISH_PI_COMMAND;
   process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_EXIT_ON_START=1 ${process.execPath} ${FIXTURE}`;

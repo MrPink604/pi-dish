@@ -122,6 +122,23 @@ BridgeSession, else alive RPCSession, else null). Don't re-roll the
 branch on `instanceof BridgeSession` only for genuinely backend-specific
 calls (setModel arg shapes, runCommand vs the RPC slash emulation).
 
+Close + runtime location: `POST /api/sessions/:id/close` shuts a live
+session's pi down — RPC children via `RPCSession.kill()`, anything
+bridge-registered via SIGTERM to the registry pid. Both pi modes treat
+SIGTERM as a graceful shutdown that runs extension cleanup (the bridge
+unlinks its own registry entry/socket; in tmux only pi dies, the
+window/shell survives), so this safely closes TUIs pi-dish didn't spawn. The
+route responds only after the process exits and then invalidates the
+registry memo (`invalidateRegistryCache`) — the client re-fetches the list
+immediately and must not see the dead session as live. No SIGKILL
+escalation: a hung pi is for the user to inspect. The bridge stamps
+`$TMUX`/`$TMUX_PANE` as `tmux: { socket, pane }` on its registry entry;
+`describeRuntime()` (server.js) turns that — or the tmux-spawn placement —
+into the `runtime` field on `GET /stats` (kind rpc | tmux | terminal; RPC is
+checked first because RPC children also load the bridge and inherit the
+server's own `$TMUX`). UI: the stats modal's "Running in" row
+(`formatRuntime` in helpers.js) and its Close-session section.
+
 ## tmux spawning (lib/tmux.js)
 
 `POST /api/sessions/new` and `/resume` default to a `pi --mode rpc` child of

@@ -51,6 +51,26 @@ function formatCacheStat(cacheRead, cacheWrite, input) {
   return s;
 }
 
+// One line for the stats modal's "Running in" row, from the server's runtime
+// object (GET /stats): rpc = headless child of the pi-dish server, tmux = a
+// TUI pane (session/window fields are null when the live pane query failed —
+// the server name alone still locates it), terminal = a TUI outside tmux.
+function formatRuntime(r) {
+  if (!r || !r.kind) return '—';
+  const pid = r.pid ? ` · pid ${r.pid}` : '';
+  if (r.kind === 'rpc') return `pi-dish server (headless)${pid}`;
+  if (r.kind === 'tmux') {
+    let where = `tmux ${r.server || '?'}`;
+    if (r.tmuxSession) {
+      where += ` · ${r.tmuxSession}`;
+      if (r.windowIndex != null) where += `:${r.windowIndex}`;
+      if (r.windowName) where += ` ${r.windowName}`;
+    }
+    return where + pid;
+  }
+  return `terminal${pid}`;
+}
+
 function formatRelativeTime(ts) {
   if (!ts) return '';
   const diff = Math.max(0, Date.now() - new Date(ts).getTime());
@@ -572,7 +592,7 @@ function diffStatusClass(letter) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRelativeTime, formatTime, formatDuration,
+    escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRuntime, formatRelativeTime, formatTime, formatDuration,
     shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText, extractImageBlocks, messageHasVisibleText,
     contextClass, sessionMetaText, parseModelId, formatModelRef,
     groupByWorkspace, buildWorkspaceTree, collectTreeSessions,
