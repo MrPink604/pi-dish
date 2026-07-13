@@ -570,10 +570,13 @@ so the outside-click closer must treat detached targets as inside.
   and refer to it by bare filename — `linkifyFilePaths()` (runs inside
   `applyHighlight`) marks path-looking inline code, tool-call summaries, and
   plain-prose tokens (`looksLikeFilePath`/`findPathTokens` in helpers.js) as
-  `.file-link`; a delegated click opens `#fileModal` (markdown rendered, code
-  highlighted, images inline, copy button; the viewer body goes through
-  `applyHighlight` too, so a markdown file's own mentions are clickable in
-  turn). The server resolves the mention against the session: qualified
+  `.file-link`; a delegated click opens `#fileView`, a main-pane takeover on
+  the diff-view pattern (`.session-view.file-open` hides the transcript;
+  file/diff views are mutually exclusive — each open closes the other;
+  markdown rendered, code highlighted, images inline, copy button; the
+  viewer body goes through `applyHighlight` too, so a markdown file's own
+  mentions are clickable in turn). The server resolves the mention against
+  the session: qualified
   mentions prefer the exact cwd-relative file, bare basenames prefer the
   paths mined from the session's tool calls (read/write/edit `path`/`cwd`
   args + absolute tokens in bash commands — most recent reference wins), then

@@ -794,8 +794,9 @@ async function selectSession(id) {
   // The terminal panel is per-session (its PTY keeps running server-side;
   // reopening reattaches with scrollback).
   closeTerminal();
-  // The diff view shows the previous session's workspace — close it.
+  // The diff and file views show the previous session's workspace — close them.
   closeDiffView();
+  closeFileView();
   // Extension widgets/statuses/dialogs are per-session; the new session's
   // remembered set is replayed by the server when its stream connects.
   clearExtensionUI();
@@ -1349,39 +1350,46 @@ function closeStatsModal() {
   document.getElementById('statsModal').style.display = 'none';
 }
 
-// --- File viewer modal ---
-// Opens a file mentioned in the chat (clickable .file-link spans). The
-// server resolves the mention against the session's tool calls — see
-// GET /api/sessions/:id/file. Markdown renders rendered; code highlights;
-// images display inline. The raw text is kept for the copy button.
-let fileModalRaw = null;
-let fileModalAbsPath = null; // resolved path of the viewed file (publish target)
+// --- File view (main-pane takeover) ---
+// Opens a file mentioned in the chat (clickable .file-link spans) in place
+// of the transcript, same pattern as the diff view. The server resolves the
+// mention against the session's tool calls — see GET /api/sessions/:id/file.
+// Markdown renders rendered; code highlights; images display inline. The
+// raw text is kept for the copy button.
+let fileViewRaw = null;
+let fileViewAbsPath = null; // resolved path of the viewed file (publish target)
+
+function isFileViewOpen() {
+  return document.getElementById('sessionView').classList.contains('file-open');
+}
 
 async function openFileViewer(mention) {
   if (!currentSession) return;
-  const body = document.getElementById('fileModalBody');
-  const title = document.getElementById('fileModalTitle');
-  const pathEl = document.getElementById('fileModalPath');
-  fileModalRaw = null;
-  fileModalAbsPath = null;
-  document.getElementById('fileModalPublish').style.display = 'none';
+  const body = document.getElementById('fileViewBody');
+  const title = document.getElementById('fileViewTitle');
+  const pathEl = document.getElementById('fileViewPath');
+  fileViewRaw = null;
+  fileViewAbsPath = null;
+  document.getElementById('fileViewPublish').style.display = 'none';
   renderFilePageRow(null);
   title.textContent = mention.replace(/:\d+(?::\d+)?$/, '').split('/').pop();
   pathEl.textContent = '';
+  pathEl.title = '';
   body.innerHTML = '<div class="loading">Loading…</div>';
-  document.getElementById('fileModal').style.display = 'flex';
+  closeDiffView(); // the two takeover panes are mutually exclusive
+  document.getElementById('sessionView').classList.add('file-open');
   try {
     const res = await fetch(`/api/sessions/${currentSession.id}/file?path=${encodeURIComponent(mention)}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     title.textContent = data.path.split('/').pop();
-    fileModalAbsPath = data.path;
-    document.getElementById('fileModalPublish').style.display = '';
+    fileViewAbsPath = data.path;
+    document.getElementById('fileViewPublish').style.display = '';
     // Already published (by the agent or a previous click)? Show its link.
     fetch('/api/pages')
       .then((r) => r.json())
       .then((list) => {
-        if (fileModalAbsPath !== data.path) return; // modal moved on
+        if (fileViewAbsPath !== data.path) return; // view moved on
         const page = Array.isArray(list) && list.find((p) => p.root === data.path);
         if (page) renderFilePageRow(page);
       })
@@ -1390,10 +1398,10 @@ async function openFileViewer(mention) {
     pathEl.textContent = `${shortCwd(data.path)} · ${kb}${data.truncated ? ' · truncated preview' : ''}`;
     pathEl.title = data.path;
     if (data.image) {
-      body.innerHTML = `<img class="file-modal-img" src="data:${escapeHtml(data.image.mimeType)};base64,${escapeHtml(data.image.data)}" alt="">`;
+      body.innerHTML = `<img class="file-view-img" src="data:${escapeHtml(data.image.mimeType)};base64,${escapeHtml(data.image.data)}" alt="">`;
       return;
     }
-    fileModalRaw = data.content;
+    fileViewRaw = data.content;
     const ext = (data.path.match(/\.([A-Za-z0-9]+)$/) || [])[1]?.toLowerCase();
     if (ext === 'md' || ext === 'markdown') {
       body.innerHTML = `<div class="markdown-body">${formatMarkdown(data.content)}</div>`;
@@ -1412,11 +1420,11 @@ async function openFileViewer(mention) {
   }
 }
 
-function closeFileModal() {
-  document.getElementById('fileModal').style.display = 'none';
-  document.getElementById('fileModalBody').innerHTML = '';
-  fileModalRaw = null;
-  fileModalAbsPath = null;
+function closeFileView() {
+  document.getElementById('sessionView').classList.remove('file-open');
+  document.getElementById('fileViewBody').innerHTML = '';
+  fileViewRaw = null;
+  fileViewAbsPath = null;
   renderFilePageRow(null);
 }
 
@@ -1427,7 +1435,7 @@ function closeFileModal() {
 // session's published pages with copy/revoke.
 
 function renderFilePageRow(page) {
-  const el = document.getElementById('fileModalPage');
+  const el = document.getElementById('fileViewPage');
   if (!page) { el.style.display = 'none'; el.innerHTML = ''; return; }
   const link = page.url || (location.origin + page.path);
   el.style.display = '';
@@ -1447,16 +1455,16 @@ function renderFilePageRow(page) {
   });
 }
 
-async function publishFileModal() {
-  if (!fileModalAbsPath || !currentSession) return;
+async function publishFileView() {
+  if (!fileViewAbsPath || !currentSession) return;
   try {
     const res = await fetch('/api/pages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        path: fileModalAbsPath,
+        path: fileViewAbsPath,
         sessionId: currentSession.id,
-        title: fileModalAbsPath.split('/').pop(),
+        title: fileViewAbsPath.split('/').pop(),
       }),
     });
     const data = await res.json();
@@ -1497,9 +1505,9 @@ function loadPagesSection(sessionId) {
     .catch(() => { el.innerHTML = ''; });
 }
 
-function copyFileModalContent(btn) {
-  if (fileModalRaw == null) return;
-  copyTextToClipboard(fileModalRaw).then(
+function copyFileViewContent(btn) {
+  if (fileViewRaw == null) return;
+  copyTextToClipboard(fileViewRaw).then(
     () => { btn.textContent = '✓'; setTimeout(() => { btn.textContent = '⧉'; }, 1200); },
     () => setStatus('Copy failed (clipboard blocked)', 'error'),
   );
@@ -1522,6 +1530,7 @@ function toggleDiffView() {
 
 async function openDiffView() {
   if (!currentSession) return;
+  closeFileView(); // the two takeover panes are mutually exclusive
   document.getElementById('sessionView').classList.add('diff-open');
   document.getElementById('btnDiff')?.classList.add('active');
   await loadDiffView();
@@ -4005,12 +4014,12 @@ function closeTreeModal() {
 
 document.addEventListener('keydown', function(e) {
   if (e.key !== 'Escape') return;
-  if (document.getElementById('fileModal').style.display !== 'none') {
-    e.preventDefault(); closeFileModal();
-  } else if (document.getElementById('treeModal').style.display !== 'none') {
+  if (document.getElementById('treeModal').style.display !== 'none') {
     e.preventDefault(); closeTreeModal();
   } else if (document.getElementById('statsModal').style.display !== 'none') {
     e.preventDefault(); closeStatsModal();
+  } else if (isFileViewOpen()) {
+    e.preventDefault(); closeFileView();
   } else if (isDiffViewOpen()) {
     e.preventDefault(); closeDiffView();
   }

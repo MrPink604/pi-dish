@@ -3150,7 +3150,7 @@ img.msg-image {
 
 .stats-page-missing { color: var(--warning); font-size: 11px; }
 
-.file-modal-page {
+.file-view-page {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -3220,20 +3220,34 @@ img.msg-image {
 
 .file-link:hover { color: var(--accent); text-decoration-color: var(--accent); }
 
-/* File viewer modal */
-.file-modal { max-width: 900px; max-height: 85vh; }
-
-.file-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
+/* File view — main-pane takeover (clickable file mentions): shows the
+   referenced file in place of the transcript, same pattern as .diff-view. */
+.file-view {
+  display: none;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
-.file-modal-header h3 {
-  font-size: 14px;
+.session-view.file-open .file-view { display: flex; }
+
+.session-view.file-open .messages,
+.session-view.file-open .search-bar,
+.session-view.file-open .terminal-panel,
+.session-view.file-open .resume-bar,
+.session-view.file-open .input-area { display: none !important; }
+
+.file-view-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-darker);
+}
+
+.file-view-title {
+  font-size: 13px;
   font-weight: 600;
   font-family: var(--font-mono);
   overflow: hidden;
@@ -3241,36 +3255,27 @@ img.msg-image {
   white-space: nowrap;
 }
 
-.file-modal-controls { display: flex; align-items: center; gap: 8px; }
-
-.file-modal-path {
+.file-view-path {
+  flex: 1;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-muted);
-  padding: 6px 16px;
-  border-bottom: 1px solid var(--line);
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.file-modal-body {
+/* Same centered reading column as .messages */
+.file-view-body {
+  flex: 1;
   overflow-y: auto;
-  padding: 12px 16px;
   -webkit-overflow-scrolling: touch;
+  padding: 12px max(24px, calc((100% - var(--content-max)) / 2)) 24px;
 }
 
-.file-modal-body .loading, .file-modal-body .error { padding: 24px 8px; }
+.file-view-body .loading, .file-view-body .error { padding: 24px 8px; }
 
-.file-modal-img { max-width: 100%; display: block; margin: 0 auto; }
-
-@media (max-width: 768px) {
-  .file-modal {
-    width: 100vw;
-    height: 100dvh;
-    max-width: none;
-    max-height: none;
-    border-radius: 0;
-  }
-}
+.file-view-img { max-width: 100%; display: block; margin: 0 auto; }
 
 /* Diff view — main-pane takeover (± header button): aggregate uncommitted
    changes across every git repo under the session cwd. `.diff-open` on the
@@ -3422,7 +3427,7 @@ img.msg-image {
 }
 
 @media (max-width: 768px) {
-  .diff-view-body { padding: 8px 10px 16px; }
+  .diff-view-body, .file-view-body { padding: 8px 10px 16px; }
 }
 
 /* Extension status badge in session header */

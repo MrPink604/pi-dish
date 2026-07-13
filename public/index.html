@@ -186,6 +186,21 @@
           <div class="diff-view-body" id="diffViewBody"></div>
         </div>
 
+        <!-- File view: clicking a file mention in the transcript swaps it
+             for the referenced file (.session-view.file-open hides the
+             rest — same takeover pattern as the diff view). -->
+        <div class="file-view" id="fileView">
+          <div class="file-view-header">
+            <span class="file-view-title" id="fileViewTitle">File</span>
+            <span class="file-view-path" id="fileViewPath"></span>
+            <button class="btn-icon" id="fileViewPublish" onclick="publishFileView()" title="Publish as page (anyone with the link can view)" style="display:none">🌐</button>
+            <button class="btn-icon" onclick="copyFileViewContent(this)" title="Copy contents">⧉</button>
+            <button class="btn-icon" onclick="closeFileView()" title="Close (Esc)">✕</button>
+          </div>
+          <div class="file-view-page" id="fileViewPage" style="display:none"></div>
+          <div class="file-view-body" id="fileViewBody"></div>
+        </div>
+
         <!-- Terminal panel (feature-flagged: PI_DISH_TERMINAL=1 on the server).
              A shell at the session's cwd; the PTY lives server-side and
              survives socket drops, so closing/reopening reattaches. -->
@@ -316,23 +331,6 @@
         <button class="btn-icon" onclick="closeStatsModal()" title="Close (Esc)">✕</button>
       </div>
       <div class="stats-body" id="statsBody">Loading...</div>
-    </div>
-  </div>
-
-  <!-- File viewer modal (clickable file mentions in the transcript) -->
-  <div class="modal-overlay" id="fileModal" style="display:none" onclick="if(event.target===this)closeFileModal()">
-    <div class="modal file-modal">
-      <div class="modal-header file-modal-header">
-        <h3 id="fileModalTitle">File</h3>
-        <div class="file-modal-controls">
-          <button class="btn-icon" id="fileModalPublish" onclick="publishFileModal()" title="Publish as page (anyone with the link can view)" style="display:none">🌐</button>
-          <button class="btn-icon" onclick="copyFileModalContent(this)" title="Copy contents">⧉</button>
-          <button class="btn-icon" onclick="closeFileModal()" title="Close (Esc)">✕</button>
-        </div>
-      </div>
-      <div class="file-modal-path" id="fileModalPath"></div>
-      <div class="file-modal-page" id="fileModalPage" style="display:none"></div>
-      <div class="file-modal-body" id="fileModalBody"></div>
     </div>
   </div>
 

@@ -436,38 +436,42 @@ function writeRegistry(patch = {}) {
     check(await desktop.locator('.message.assistant .markdown-body span.file-link',
       { hasText: 'README.md' }).count() === 1, 'plain-prose mention linkified');
     await findingsLink.click();
-    await desktop.waitForSelector('#fileModal .markdown-body h1', { timeout: 5000 });
-    check(await desktop.locator('#fileModalTitle').textContent() === 'findings.md',
+    await desktop.waitForSelector('#fileView .markdown-body h1', { timeout: 5000 });
+    check(await desktop.evaluate(() => document.getElementById('messages').offsetParent === null),
+      'transcript hidden while the file view is open');
+    check(await desktop.locator('#fileViewTitle').textContent() === 'findings.md',
       'viewer titled by filename');
-    const shownPath = await desktop.locator('#fileModalPath').textContent();
+    const shownPath = await desktop.locator('#fileViewPath').textContent();
     check(shownPath.includes('deep/nest/findings.md'),
       `bare mention resolved to the deep tool-written path (got ${JSON.stringify(shownPath)})`);
-    check(await desktop.locator('#fileModal .markdown-body h1').textContent() === 'deep findings',
+    check(await desktop.locator('#fileView .markdown-body h1').textContent() === 'deep findings',
       'markdown file renders rendered');
 
     // Publish the viewed file as a page: 🌐 → link row → the public URL
     // serves the file content → unpublish clears it.
-    await desktop.click('#fileModalPublish');
-    await desktop.waitForSelector('#fileModalPage .stats-share-link', { timeout: 5000 });
-    const pageLink = await desktop.locator('#fileModalPage .stats-share-link').textContent();
+    await desktop.click('#fileViewPublish');
+    await desktop.waitForSelector('#fileViewPage .stats-share-link', { timeout: 5000 });
+    const pageLink = await desktop.locator('#fileViewPage .stats-share-link').textContent();
     check(/\/page\/[A-Za-z0-9_-]+$/.test(pageLink), `publish shows a token link (got ${pageLink})`);
     const pageRes = await fetch(pageLink);
     check(pageRes.status === 200 && (await pageRes.text()).includes('hello from deep'),
       'published page serves the file content');
     // Re-opening the viewer on the same file shows the existing page link.
     await desktop.keyboard.press('Escape');
-    await desktop.waitForSelector('#fileModal', { state: 'hidden', timeout: 2000 });
+    await desktop.waitForSelector('#fileView', { state: 'hidden', timeout: 2000 });
     await findingsLink.click();
-    await desktop.waitForSelector('#fileModalPage .stats-share-link', { timeout: 5000 });
+    await desktop.waitForSelector('#fileViewPage .stats-share-link', { timeout: 5000 });
     check(true, 'existing page link resurfaces when the file is viewed again');
     await desktop.click('#filePageRevoke');
     await desktop.waitForFunction(() =>
-      document.getElementById('fileModalPage').style.display === 'none', { timeout: 5000 });
+      document.getElementById('fileViewPage').style.display === 'none', { timeout: 5000 });
     check((await fetch(pageLink)).status === 404, 'unpublish revokes the public URL');
 
     await desktop.keyboard.press('Escape');
-    await desktop.waitForSelector('#fileModal', { state: 'hidden', timeout: 2000 });
-    check(true, 'Escape closes the viewer');
+    await desktop.waitForSelector('#fileView', { state: 'hidden', timeout: 2000 });
+    await desktop.waitForFunction(() => document.getElementById('messages').offsetParent !== null,
+      { timeout: 2000 });
+    check(true, 'Escape closes the viewer and restores the transcript');
 
     // Diff view: the ± header button swaps the transcript for the aggregate
     // uncommitted changes of every repo under the cwd; Escape restores it.
