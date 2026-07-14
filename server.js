@@ -1434,7 +1434,7 @@ function findSessionBySpawnToken(token) {
 // the window, and wait up to 30s for the session to register. The window is
 // left open on timeout for the user to inspect. `args` are pi's CLI args
 // (a TUI launch — never --mode rpc). Returns the registered session id.
-async function spawnPiInTmux({ target, args, cwd }) {
+async function spawnPiInTmux({ target, args, cwd, hidden }) {
   if (!tmux.isTmuxAvailable()) {
     const err = new Error('tmux is not available on this host'); err.status = 400; throw err;
   }
@@ -1481,24 +1481,86 @@ async function spawnPiInTmux({ target, args, cwd }) {
     }
     await new Promise((r) => setTimeout(r, 300));
   }
-  const err = new Error(`pi did not register within ${Math.round(timeoutMs / 1000)}s — the tmux window was left open for inspection. Ensure the pi-dish-bridge extension is installed in pi's global extensions.`);
+  // A user-targeted window stays open for inspection; a hidden headless
+  // window is invisible — leaving it would just leak a pi nobody can see.
+  if (hidden) tmux.killPane(socket, paneId).catch(() => {});
+  const err = new Error(`pi did not register within ${Math.round(timeoutMs / 1000)}s — ${hidden ? 'the hidden headless window was closed' : 'the tmux window was left open for inspection'}. Ensure the pi-dish-bridge extension is installed in pi's global extensions.`);
   err.status = 500;
   throw err;
 }
 
-// Spawn a fresh session. Default: a headless `pi --mode rpc` child (dies with
-// this server). Optional `target: { type: 'tmux', socket, tmuxSession }` or
-// `{ ..., newTmuxSession }` opens a persistent pi TUI in tmux instead.
+// --- Durable headless sessions -----------------------------------------------
+// A target-less spawn/resume prefers a hidden, detached tmux session over an
+// RPC child: RPC children die with this server (pi --mode rpc shuts down on
+// stdin EOF), so a dev-mode restart or crash kills them. A pi TUI in tmux
+// survives independently and the bridge registry re-connects it. The hidden
+// placement lives on a dedicated socket (`pi-dish` under the tmux tmpdir) in
+// one session named `headless`, so it never touches the user's own tmux
+// servers; it still shows up in /api/tmux/targets and is attachable
+// (`tmux -L pi-dish attach`) when a pi needs inspecting.
+// PI_DISH_HEADLESS=rpc forces the old RPC children; =tmux forces the tmux
+// path; unset auto-detects: tmux present AND the bridge extension installed
+// at its documented path (a bridge-less pi can never register, and eating the
+// 30s registration timeout on every spawn would be brutal). One failed
+// registration flips the path off until the server restarts.
+const HEADLESS_TMUX_SERVER = 'pi-dish';
+const HEADLESS_TMUX_SESSION = 'headless';
+let headlessTmuxBroken = false;
+
+function headlessTmuxEnabled() {
+  const mode = process.env.PI_DISH_HEADLESS || '';
+  if (mode === 'rpc') return false;
+  if (!tmux.isTmuxAvailable()) return false;
+  if (mode === 'tmux') return true;
+  if (headlessTmuxBroken) return false;
+  const home = process.env.HOME || os.homedir();
+  return fs.existsSync(path.join(home, '.pi', 'agent', 'extensions', 'pi-dish-bridge'));
+}
+
+// Serialized: two concurrent spawns must not both decide the hidden session
+// doesn't exist yet and race their `new-session` calls.
+let headlessSpawnChain = Promise.resolve();
+function spawnPiHeadlessTmux(opts) {
+  const run = headlessSpawnChain.then(() => _spawnPiHeadlessTmux(opts));
+  headlessSpawnChain = run.then(() => {}, () => {});
+  return run;
+}
+
+async function _spawnPiHeadlessTmux({ args, cwd }) {
+  // tmux won't create its tmpdir for -S sockets (only for -L); 0700 matches
+  // what tmux itself would create.
+  fs.mkdirSync(tmux.tmuxTmpdir(), { recursive: true, mode: 0o700 });
+  const socket = path.join(tmux.tmuxTmpdir(), HEADLESS_TMUX_SERVER);
+  const target = (await tmux.hasSession(socket, HEADLESS_TMUX_SESSION))
+    ? { socket, tmuxSession: HEADLESS_TMUX_SESSION }
+    : { socket, newTmuxSession: HEADLESS_TMUX_SESSION };
+  return spawnPiInTmux({ target, args, cwd, hidden: true });
+}
+
+// Spawn a fresh session. Default ("headless"): a hidden tmux window when the
+// headless-tmux path is available (survives server restarts), else a
+// `pi --mode rpc` child (dies with this server). An explicit `target:
+// { type: 'tmux', socket, tmuxSession }` or `{ ..., newTmuxSession }` opens a
+// pi TUI in one of the user's own tmux sessions instead.
 app.post('/api/sessions/new', async (req, res) => {
   try {
     let { model, cwd, target } = req.body || {};
     if (cwd && cwd.startsWith('~')) {
       cwd = path.join(process.env.HOME, cwd.slice(1).replace(/^\//, ''));
     }
+    const args = model ? ['--model', model] : [];
     if (target && target.type === 'tmux') {
-      const args = model ? ['--model', model] : [];
       const id = await spawnPiInTmux({ target, args, cwd });
       return res.json({ success: true, id });
+    }
+    if (headlessTmuxEnabled()) {
+      try {
+        const id = await spawnPiHeadlessTmux({ args, cwd });
+        return res.json({ success: true, id });
+      } catch (e) {
+        headlessTmuxBroken = true;
+        console.error('Headless tmux spawn failed — falling back to an RPC child:', e.message);
+      }
     }
     const rpc = await createRPCSession({ model, cwd });
     res.json({ success: true, id: rpc.id });
@@ -1508,8 +1570,9 @@ app.post('/api/sessions/new', async (req, res) => {
   }
 });
 
-// Resume an inactive session. Default: `pi --mode rpc --session <path>` child;
-// with a tmux `target`, `pi --session <path>` in a tmux window instead.
+// Resume an inactive session. Default: the same headless dispatch as /new
+// (hidden tmux when available, else an RPC `pi --mode rpc --session <path>`
+// child); with a tmux `target`, `pi --session <path>` in that window instead.
 app.post('/api/sessions/:id/resume', async (req, res) => {
   const sessionId = req.params.id;
 
@@ -1532,6 +1595,15 @@ app.post('/api/sessions/:id/resume', async (req, res) => {
     if (target && target.type === 'tmux') {
       const id = await spawnPiInTmux({ target, args: ['--session', sessionFile], cwd });
       return res.json({ success: true, id });
+    }
+    if (headlessTmuxEnabled()) {
+      try {
+        const id = await spawnPiHeadlessTmux({ args: ['--session', sessionFile], cwd });
+        return res.json({ success: true, id });
+      } catch (e) {
+        headlessTmuxBroken = true;
+        console.error('Headless tmux resume failed — falling back to an RPC child:', e.message);
+      }
     }
     const rpc = await resumeRPCSession(sessionFile, cwd || process.env.HOME);
     res.json({ success: true, id: rpc.id });

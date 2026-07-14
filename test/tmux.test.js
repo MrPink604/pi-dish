@@ -28,6 +28,9 @@ const TMUX_SOCKET = path.join(tmuxTmp, 's');
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-pi.js');
 // getPiLaunchSpec() reads this — run our fixture instead of a real `pi`.
 process.env.PI_DISH_PI_COMMAND = `${process.execPath} ${FIXTURE}`;
+// Force the headless-tmux dispatch: the temp HOME has no bridge extension
+// installed, so auto-detection would (correctly) fall back to RPC children.
+process.env.PI_DISH_HEADLESS = 'tmux';
 
 let tmuxOk = true;
 try { execFileSync('tmux', ['-V'], { stdio: 'ignore' }); } catch { tmuxOk = false; }
@@ -52,6 +55,7 @@ test.before(async () => {
 test.after(() => {
   server.close();
   try { execFileSync('tmux', ['-S', TMUX_SOCKET, 'kill-server'], { stdio: 'ignore' }); } catch {}
+  try { execFileSync('tmux', ['-S', path.join(tmuxTmp, 'pi-dish'), 'kill-server'], { stdio: 'ignore' }); } catch {}
   try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {}
   try { fs.rmSync(tmuxTmp, { recursive: true, force: true }); } catch {}
 });
@@ -131,6 +135,39 @@ test('POST /api/sessions/:id/resume with a tmux target resumes into tmux', { ski
   assert.equal(status, 200, JSON.stringify(body));
   assert.equal(body.id, id, 'resume keeps the original session id');
   assert.ok(tmux.getSpawn(id), 'resume placement persisted');
+});
+
+// --- Durable headless sessions: no target → hidden tmux session -------------
+
+test('POST /api/sessions/new with no target spawns into the hidden headless tmux session', { skip: !tmuxOk }, async () => {
+  const { status, body } = await post('/api/sessions/new', { model: 'anthropic/claude-opus-4' });
+  assert.equal(status, 200, JSON.stringify(body));
+
+  const spawn = tmux.getSpawn(body.id);
+  assert.ok(spawn, 'placement persisted like any tmux spawn');
+  assert.equal(path.basename(spawn.socket), 'pi-dish', 'lands on the dedicated pi-dish socket');
+  const loc = await tmux.paneLocation(spawn.socket, spawn.paneId);
+  assert.equal(loc.tmuxSession, 'headless', 'pane lives in the hidden headless session');
+
+  // The property the feature exists for: pi is not a child of this server
+  // process, so a server restart can't take it down. (An RPC child's ppid
+  // would be ours; a tmux pane's is the tmux server's.)
+  const entry = JSON.parse(fs.readFileSync(path.join(tmpHome, '.pi', 'dish', 'sessions', `${body.id}.json`), 'utf8'));
+  const stat = fs.readFileSync(`/proc/${entry.pid}/stat`, 'utf8');
+  const ppid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
+  assert.notEqual(ppid, process.pid, 'spawned pi is not a child of the pi-dish server');
+});
+
+test('a second headless spawn reuses the hidden session as a new window', { skip: !tmuxOk }, async () => {
+  const { status, body } = await post('/api/sessions/new', {});
+  assert.equal(status, 200, JSON.stringify(body));
+  const socket = tmux.getSpawn(body.id).socket;
+  const sessions = execFileSync('tmux', ['-S', socket, 'list-sessions', '-F', '#{session_name}'], { encoding: 'utf8' })
+    .split('\n').filter(Boolean);
+  assert.deepEqual(sessions, ['headless'], 'still exactly one hidden session');
+  const panes = execFileSync('tmux', ['-S', socket, 'list-panes', '-s', '-t', 'headless', '-F', '#{pane_id}'], { encoding: 'utf8' })
+    .split('\n').filter(Boolean);
+  assert.ok(panes.length >= 2, `both headless spawns share the session (got ${panes.length} panes)`);
 });
 
 test('POST /api/sessions/new times out (window left open) when pi never registers', { skip: !tmuxOk }, async () => {

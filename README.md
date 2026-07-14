@@ -250,16 +250,18 @@ pi has no API to dismiss it programmatically.
 - **Context usage** comes from the horse's mouth — the bridge writes
   `ctx.getContextUsage()` into its registry entry on every turn/model
   change, so 1M-context models report correctly instead of being guessed.
-- **Spawning**: "New session" and "Resume" spawn `pi --mode rpc` as a child of
-  the server (which dies when the server restarts); set `PI_DISH_PI_COMMAND` to
-  customize the launch command (a wrapper script, env vars, extra flags — it
-  also mirrors a simple `alias pi=...` from your shell rc). The **Run in**
-  selector (shown when tmux is installed) instead opens a real pi TUI as a new
-  window on a chosen tmux server, so the session survives server restarts and
-  detaches/reattaches like any tmux window. pi-dish drives it over the bridge
-  once its extension registers. Requires the pi-dish-bridge extension in pi's
-  global extensions (spawned windows are correlated to their registration by a
-  one-shot `PI_DISH_SPAWN_TOKEN`).
+- **Spawning**: "New session" and "Resume" open pi in a hidden, detached tmux
+  session (`tmux -L pi-dish attach -t headless` to peek at one) when tmux and
+  the bridge extension are available, so headless sessions **survive server
+  restarts**; without them, pi runs as an RPC child of the server (which dies
+  when the server restarts). `PI_DISH_HEADLESS=rpc|tmux` overrides the
+  auto-detection. Set `PI_DISH_PI_COMMAND` to customize the launch command (a
+  wrapper script, env vars, extra flags — it also mirrors a simple
+  `alias pi=...` from your shell rc). The **Run in** selector (shown when tmux
+  is installed) instead opens a real pi TUI as a new window on a chosen tmux
+  server, detaching/reattaching like any tmux window. pi-dish drives spawned
+  sessions over the bridge once its extension registers (windows are
+  correlated to their registration by a one-shot `PI_DISH_SPAWN_TOKEN`).
 
 Writing a pi extension whose UI should show up in pi-dish? See
 [extensions/pi-dish-bridge/README.md](extensions/pi-dish-bridge/README.md)

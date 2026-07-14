@@ -60,6 +60,10 @@ test('formatRuntime names each backend and degrades to partial tmux info', () =>
   // Pane query failed (dead server, no tmux): the socket name still locates it.
   assert.equal(H.formatRuntime({ kind: 'tmux', pid: 99, server: 'default', tmuxSession: null }),
     'tmux default · pid 99');
+  // The hidden headless placement reads as headless, not as tmux plumbing.
+  assert.equal(
+    H.formatRuntime({ kind: 'tmux', pid: 7, server: 'pi-dish', tmuxSession: 'headless', windowIndex: 1, windowName: 'pi' }),
+    'headless (hidden tmux — survives restarts) · pid 7');
   assert.equal(H.formatRuntime({ kind: 'terminal', pid: 7 }), 'terminal · pid 7');
   assert.equal(H.formatRuntime({ kind: 'terminal', pid: null }), 'terminal');
   assert.equal(H.formatRuntime(null), '—');

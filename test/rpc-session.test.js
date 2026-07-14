@@ -21,6 +21,9 @@ const { sseReader } = require('./sse-reader');
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-rpc-test-'));
 process.env.HOME = tmpHome;
 process.env.PORT = '0';
+// This suite is about the RPC child backend — pin the headless dispatch to it
+// so a host with tmux doesn't divert target-less spawns to hidden tmux.
+process.env.PI_DISH_HEADLESS = 'rpc';
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-rpc-pi.js');
 const CMD_LOG = path.join(tmpHome, 'rpc-commands.jsonl');

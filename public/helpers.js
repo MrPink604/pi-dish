@@ -60,6 +60,11 @@ function formatRuntime(r) {
   const pid = r.pid ? ` · pid ${r.pid}` : '';
   if (r.kind === 'rpc') return `pi-dish server (headless)${pid}`;
   if (r.kind === 'tmux') {
+    // The hidden headless placement (dedicated pi-dish socket) reads as
+    // "headless" to the user — the tmux part is plumbing worth a hint only.
+    if (r.server === 'pi-dish' && r.tmuxSession === 'headless') {
+      return `headless (hidden tmux — survives restarts)${pid}`;
+    }
     let where = `tmux ${r.server || '?'}`;
     if (r.tmuxSession) {
       where += ` · ${r.tmuxSession}`;

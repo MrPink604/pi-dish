@@ -141,12 +141,23 @@ server's own `$TMUX`). UI: the stats modal's "Running in" row
 
 ## tmux spawning (lib/tmux.js)
 
-`POST /api/sessions/new` and `/resume` default to a `pi --mode rpc` child of
-the server (dies on restart). An optional `target: { type:'tmux', socket,
-tmuxSession }` (or `{ ..., newTmuxSession }`) instead opens a real pi **TUI** as
-a tmux window — no `--mode rpc` — that survives restarts; the pi-dish-bridge
-extension registers it and pi-dish drives it over the normal BridgeSession
-path. `lib/tmux.js` wraps tmux via execFile (argv arrays, short timeouts, never
+`POST /api/sessions/new` and `/resume` dispatch target-less ("headless")
+spawns to a **hidden detached tmux session** when available — dedicated
+socket `pi-dish` under the tmux tmpdir, one session named `headless`, spawns
+serialized so concurrent requests can't race `new-session` — so headless
+sessions survive server restarts (`npm run dev` hot reload included). A
+`pi --mode rpc` child of the server (dies with it on stdin EOF — pi shuts
+down when the pipe closes, so orphaning can't save it) is the fallback:
+`PI_DISH_HEADLESS=rpc` forces it, `=tmux` forces the hidden-tmux path, unset
+auto-detects (tmux present AND `~/.pi/agent/extensions/pi-dish-bridge`
+exists — without the bridge, registration can never happen and every spawn
+would eat the 30s timeout; one failed registration also flips the path off
+until restart, falling back to RPC in the same request). On a hidden-spawn
+timeout the pane is killed, not left open — nobody can see it. An explicit
+`target: { type:'tmux', socket, tmuxSession }` (or `{ ..., newTmuxSession }`)
+opens a real pi **TUI** as a window on one of the user's own tmux servers
+instead; the pi-dish-bridge extension registers it and pi-dish drives it over
+the normal BridgeSession path. `lib/tmux.js` wraps tmux via execFile (argv arrays, short timeouts, never
 a shell string): `listServers()` scans sockets under `$TMUX_TMPDIR ||
 /tmp/tmux-$UID/` (`:` field separator in `-F`, since tmux sanitizes a tab to
 `_` and forbids `:` in session names), `spawnInTmux()` new-window/new-session
@@ -157,8 +168,9 @@ the spawned pi's env (via tmux `-e`), and the bridge stamps it as `spawnToken`
 on its registry entry. `spawnPiInTmux` (server.js) builds the child from
 `getPiLaunchSpec()` (exported from rpc-session.js — same wrapper/alias env as
 RPC), then polls `REGISTRY_DIR` directly for the entry carrying the token (up
-to 30s, `PI_DISH_SPAWN_TIMEOUT_MS` override for tests). On timeout the window is
-left open (don't kill it) and the error hints the bridge must be installed.
+to 30s, `PI_DISH_SPAWN_TIMEOUT_MS` override for tests). On timeout a
+user-targeted window is left open (don't kill it) and the error hints the
+bridge must be installed; hidden headless panes are killed instead.
 
 `spawnInTmux` new-windows with `-d`: the user may be attached to the target
 session, and a remote spawn must not switch their current window.
