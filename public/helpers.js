@@ -76,6 +76,16 @@ function formatRuntime(r) {
   return `terminal${pid}`;
 }
 
+// Generation speed for one assistant message or a whole session. Null when
+// the sample can't mean anything: no tokens, or under a second of generation
+// (sub-second bursts read as absurd rates).
+function formatTokSpeed(outputTokens, durationMs) {
+  if (!outputTokens || !durationMs || durationMs < 1000) return null;
+  const rate = outputTokens / (durationMs / 1000);
+  if (!Number.isFinite(rate) || rate <= 0) return null;
+  return (rate >= 10 ? Math.round(rate) : Math.round(rate * 10) / 10) + ' tok/s';
+}
+
 function formatRelativeTime(ts) {
   if (!ts) return '';
   const diff = Math.max(0, Date.now() - new Date(ts).getTime());
@@ -597,7 +607,7 @@ function diffStatusClass(letter) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRuntime, formatRelativeTime, formatTime, formatDuration,
+    escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRuntime, formatRelativeTime, formatTime, formatDuration, formatTokSpeed,
     shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText, extractImageBlocks, messageHasVisibleText,
     contextClass, sessionMetaText, parseModelId, formatModelRef,
     groupByWorkspace, buildWorkspaceTree, collectTreeSessions,

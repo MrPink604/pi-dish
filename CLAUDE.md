@@ -79,7 +79,12 @@ module: `getSessionInfo` (single-file list metadata), `readSessionMessages`
 (the paginated message stream), `getSessionStats` (token/cost aggregates for
 `/stats`), and `readSessionCwd` (bounded first-line read — never load a whole
 file just for its header). The readers share one `statCached` implementation
-keyed on (mtimeMs, size). These in-memory LRUs are sized for the *viewed*
+keyed on (mtimeMs, size). Messages carry their JSONL entry `id` (share deep
+links key on it) and assistant messages `durationMs`/`outputTokens`:
+`message.timestamp` (ms epoch) is stamped when the API call starts, the
+entry's own timestamp when it's appended — the delta is generation time
+(`assistantGenStats`), which also feeds the stats `genMs`/`genOutput` sums
+(measurable messages only, so tok/s averages aren't diluted). These in-memory LRUs are sized for the *viewed*
 sessions only — anything that iterates the whole corpus (the sidebar scan,
 list search) must go through `lib/session-index.js` instead, or thousands of
 sessions turn a capped LRU into a 0%-hit-rate full re-parse per request. The
@@ -133,10 +138,14 @@ registry memo (`invalidateRegistryCache`) — the client re-fetches the list
 immediately and must not see the dead session as live. No SIGKILL
 escalation: a hung pi is for the user to inspect. The bridge stamps
 `$TMUX`/`$TMUX_PANE` as `tmux: { socket, pane }` on its registry entry;
-`describeRuntime()` (server.js) turns that — or the tmux-spawn placement —
-into the `runtime` field on `GET /stats` (kind rpc | tmux | terminal; RPC is
-checked first because RPC children also load the bridge and inherit the
-server's own `$TMUX`). UI: the stats modal's "Running in" row
+`describeRuntime()` (server.js) turns that — or the tmux-spawn placement,
+or failing both a pid-ancestry scan of every pane on the tmpdir's servers
+(`findPaneByPid` in lib/tmux.js; covers stamp-less entries from older
+bridges) — into the `runtime` field on `GET /stats` (kind rpc | tmux |
+terminal; RPC is checked first because RPC children also load the bridge
+and inherit the server's own `$TMUX`). Tests that assert runtime kinds pin
+`TMUX_TMPDIR` to an empty temp dir, or the tmux session enclosing
+`npm test` gets found by the pid walk. UI: the stats modal's "Running in" row
 (`formatRuntime` in helpers.js) and its Close-session section.
 
 ## tmux spawning (lib/tmux.js)
@@ -207,7 +216,11 @@ reveal whether a session exists. The route is always on the main app;
 with the main server. `PI_DISH_SHARE_BASE_URL` (trailing slash trimmed) makes
 the API return an absolute `url`; else `url` is null and the client builds it
 from `location.origin`. UI is a section in the stats modal (create / copy /
-revoke; copy goes through `copyTextToClipboard`).
+revoke; copy goes through `copyTextToClipboard`). Per-message deep links: the
+hover 🔗 in a turn header copies `<share url>?targetId=<entry id>` — pi's
+export HTML scrolls to that entry on load (`navigateTo` in its template). It
+reuses the session's share; with none it confirms before creating one (a
+share exposes the whole session, not just the message).
 
 ## Published pages (lib/pages.js, /page/:token)
 
@@ -244,7 +257,11 @@ tokens are bare 404s. `/page` routes are mounted on the main app **and** the
 `PI_DISH_SHARE_PORT` listener, like `/share`. UI: 🌐 in the file viewer
 publishes the viewed file (link row with copy + Unpublish; re-opening the
 file resurfaces it), and the stats modal lists the session's pages with
-revoke — both are the user-initiated equivalents of the agent's curl.
+revoke — both are the user-initiated equivalents of the agent's curl. The
+header artifacts button (`#btnArtifacts`, count-badged, hidden at zero)
+collects everything shared from the session — its pages plus the share
+link — in one modal (open/copy/revoke); `refreshArtifacts` re-fetches on
+session select, turn end, and every publish/revoke path.
 
 ## File / directory fuzzy search (lib/file-search.js)
 

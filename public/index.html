@@ -137,6 +137,14 @@
                 <path d="M8 18h8"/>
               </svg>
             </button>
+            <button class="btn-icon" id="btnArtifacts" onclick="openArtifactsModal()" title="Shared artifacts (published pages & links)" style="display:none">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+                <path d="M21 8l-9-5-9 5 9 5 9-5z"/>
+                <path d="M3 8v8l9 5 9-5V8"/>
+                <path d="M12 13v10"/>
+              </svg>
+              <span class="artifact-count" id="artifactCount"></span>
+            </button>
             <button class="btn-icon" id="btnTree" onclick="openTreeModal()" title="Session tree">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="12" r="2"/>
@@ -268,6 +276,10 @@
               <span class="cp-label">Changes</span>
               <span class="cp-value">±</span>
             </button>
+            <button class="cp-row" id="cpArtifactsRow" onclick="closeControlPanel(); openArtifactsModal()" title="Shared artifacts (published pages & links)" style="display:none">
+              <span class="cp-label">Shared artifacts</span>
+              <span class="cp-value" id="artifactCountMobile"></span>
+            </button>
             <button class="cp-row" onclick="closeControlPanel(); openTreeModal()" title="Session tree">
               <span class="cp-label">Session tree</span>
               <span class="cp-value">⑂</span>
@@ -320,6 +332,17 @@
         <div class="tree-status" id="treeStatus"></div>
         <span class="tree-hint">Click a node to branch from that point</span>
       </div>
+    </div>
+  </div>
+
+  <!-- Artifacts Modal: everything published/shared from the session -->
+  <div class="modal-overlay" id="artifactsModal" style="display:none" onclick="if(event.target===this)closeArtifactsModal()">
+    <div class="modal stats-modal">
+      <div class="modal-header">
+        <h3>Shared artifacts</h3>
+        <button class="btn-icon" onclick="closeArtifactsModal()" title="Close (Esc)">✕</button>
+      </div>
+      <div class="stats-body" id="artifactsBody">Loading...</div>
     </div>
   </div>
 

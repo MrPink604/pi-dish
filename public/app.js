@@ -187,6 +187,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     e.preventDefault();
     openFileViewer(link.textContent.trim());
   });
+
+  // Per-message share link (the hover 🔗 in turn headers).
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.msg-link-btn');
+    if (btn) copyMessageShareLink(btn);
+  });
   
   // Periodic refresh must preserve an in-flight server search, or the list
   // resets to unfiltered mid-search.
@@ -833,6 +839,12 @@ async function selectSession(id) {
   pendingSelfEcho = null;
   setTurnInProgress(currentSession.isActive && !!currentSession.turnInProgress);
 
+  // Artifacts are per-session; clear the previous session's badge before the
+  // fetch lands so a stale count never shows against the new session.
+  sessionArtifacts = { pages: [], share: null };
+  updateArtifactsBadge();
+  refreshArtifacts(id);
+
   renderSessions();
   updateSessionHeader();
   if (currentSession.isActive) {
@@ -1235,6 +1247,9 @@ function openStatsModal() {
       if (s.error) { body.textContent = s.error; return; }
       const cu = s.contextUsage || {};
       const fmtMoney = (v) => v == null ? '—' : '$' + v.toFixed(4);
+      // Session-wide generation speed: output tokens over the summed
+      // per-message generation time (only messages with measurable timing).
+      const avgSpeed = formatTokSpeed(s.genOutput, s.genMs);
       // [key, value, copyable?] — copyable rows render the value as a
       // click-to-copy button (paths, handy for jumping to the file in a shell).
       const rows = [
@@ -1246,6 +1261,7 @@ function openStatsModal() {
         ['Messages', `${s.userMessages} user · ${s.assistantMessages} assistant · ${s.toolCalls} tool calls`],
         ['Tokens in / out', `${formatTokens(s.tokens?.input)} / ${formatTokens(s.tokens?.output)}`],
         ['Cache', formatCacheStat(s.tokens?.cacheRead, s.tokens?.cacheWrite, s.tokens?.input)],
+        avgSpeed ? ['Speed', `${avgSpeed} avg · ${formatDuration(s.genMs)} generating`] : null,
         ['Cost', fmtMoney(s.cost)],
         s.runtime ? ['Running in', formatRuntime(s.runtime)] : null,
         ['cwd', s.cwd || '—', !!s.cwd],
@@ -1292,7 +1308,7 @@ function renderShareSection(sessionId, share) {
     bodyEl.querySelector('#shareCreateBtn').addEventListener('click', () => {
       fetch(`/api/sessions/${sessionId}/share`, { method: 'POST' })
         .then(r => r.json())
-        .then(s => renderShareSection(sessionId, s))
+        .then(s => { renderShareSection(sessionId, s); refreshArtifacts(sessionId); })
         .catch(e => setStatus('Failed to create share: ' + e.message, 'error'));
     });
     return;
@@ -1304,9 +1320,38 @@ function renderShareSection(sessionId, share) {
   bodyEl.querySelector('#shareRevokeBtn').addEventListener('click', () => {
     fetch(`/api/sessions/${sessionId}/share`, { method: 'DELETE' })
       .then(r => r.json())
-      .then(() => renderShareSection(sessionId, null))
+      .then(() => { renderShareSection(sessionId, null); refreshArtifacts(sessionId); })
       .catch(e => setStatus('Failed to revoke share: ' + e.message, 'error'));
   });
+}
+
+// The hover 🔗 in a turn header: copy the session's public share URL deep
+// linked to that message (?targetId=<entry id> — pi's export HTML scrolls
+// there on load). Reuses the existing share; if none exists yet, creating
+// one publishes the whole session, so that asks first.
+async function copyMessageShareLink(btn) {
+  if (!currentSession) return;
+  const entryId = btn.dataset.entryId;
+  if (!entryId) return;
+  const sessionId = currentSession.id;
+  try {
+    let res = await fetch(`/api/sessions/${sessionId}/share`);
+    let share = res.status === 404 ? null : await res.json();
+    if (!share || share.error) {
+      if (!confirm('No share link exists for this session yet — create one? Anyone with the link can view the whole session read-only.')) return;
+      res = await fetch(`/api/sessions/${sessionId}/share`, { method: 'POST' });
+      share = await res.json();
+      if (!res.ok) throw new Error(share.error || `HTTP ${res.status}`);
+      refreshArtifacts(sessionId);
+    }
+    const base = share.url || (location.origin + share.path);
+    await copyTextToClipboard(`${base}?targetId=${encodeURIComponent(entryId)}`);
+    btn.classList.add('copied');
+    setTimeout(() => btn.classList.remove('copied'), 1200);
+    setStatus('Message share link copied');
+  } catch (e) {
+    setStatus('Share link failed: ' + e.message, 'error');
+  }
 }
 
 // Close-session section of the stats modal (active sessions only): SIGTERM
@@ -1450,7 +1495,7 @@ function renderFilePageRow(page) {
   });
   el.querySelector('#filePageRevoke').addEventListener('click', () => {
     fetch(`/api/pages/${encodeURIComponent(page.token)}`, { method: 'DELETE' })
-      .then(() => renderFilePageRow(null))
+      .then(() => { renderFilePageRow(null); refreshArtifacts(currentSession?.id); })
       .catch((e) => setStatus('Failed to unpublish: ' + e.message, 'error'));
   });
 }
@@ -1470,6 +1515,7 @@ async function publishFileView() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     renderFilePageRow(data);
+    refreshArtifacts(currentSession.id);
   } catch (e) {
     setStatus('Publish failed: ' + e.message, 'error');
   }
@@ -1497,12 +1543,108 @@ function loadPagesSection(sessionId) {
         btn.addEventListener('click', () => {
           const token = btn.closest('.stats-page-row').dataset.token;
           fetch(`/api/pages/${encodeURIComponent(token)}`, { method: 'DELETE' })
-            .then(() => loadPagesSection(sessionId))
+            .then(() => { loadPagesSection(sessionId); refreshArtifacts(sessionId); })
             .catch((e) => setStatus('Failed to revoke: ' + e.message, 'error'));
         });
       });
     })
     .catch(() => { el.innerHTML = ''; });
+}
+
+// --- Shared artifacts (header 📦: everything published/shared from the
+// session in one place) ---
+// Pages the agent (or the file viewer's 🌐) published plus the session share
+// link. The badge count keeps them discoverable without opening the stats
+// modal; refreshed on session select, turn end (agents publish mid-turn),
+// and after any publish/revoke in the UI.
+let sessionArtifacts = { pages: [], share: null };
+let artifactsSeq = 0; // drops stale responses on fast session switches
+
+async function refreshArtifacts(sessionId) {
+  if (!sessionId) return;
+  const seq = ++artifactsSeq;
+  try {
+    const [pagesRes, shareRes] = await Promise.all([
+      fetch(`/api/pages?sessionId=${encodeURIComponent(sessionId)}`),
+      fetch(`/api/sessions/${sessionId}/share`),
+    ]);
+    const pages = pagesRes.ok ? await pagesRes.json() : [];
+    const share = (shareRes.ok && shareRes.status !== 404) ? await shareRes.json() : null;
+    if (seq !== artifactsSeq || currentSession?.id !== sessionId) return;
+    sessionArtifacts = { pages: Array.isArray(pages) ? pages : [], share };
+    updateArtifactsBadge();
+    if (document.getElementById('artifactsModal').style.display !== 'none') renderArtifactsModal();
+  } catch {}
+}
+
+function updateArtifactsBadge() {
+  const n = sessionArtifacts.pages.length + (sessionArtifacts.share ? 1 : 0);
+  const btn = document.getElementById('btnArtifacts');
+  const row = document.getElementById('cpArtifactsRow');
+  if (btn) {
+    btn.style.display = n ? '' : 'none';
+    document.getElementById('artifactCount').textContent = n;
+  }
+  if (row) {
+    row.style.display = n ? '' : 'none';
+    document.getElementById('artifactCountMobile').textContent = String(n);
+  }
+}
+
+function openArtifactsModal() {
+  if (!currentSession) return;
+  document.getElementById('artifactsModal').style.display = 'flex';
+  renderArtifactsModal();
+  refreshArtifacts(currentSession.id);
+}
+
+function closeArtifactsModal() {
+  document.getElementById('artifactsModal').style.display = 'none';
+}
+
+function renderArtifactsModal() {
+  const body = document.getElementById('artifactsBody');
+  if (!body) return;
+  const { pages, share } = sessionArtifacts;
+  if (!pages.length && !share) {
+    body.innerHTML = '<div class="stats-share-hint">Nothing shared from this session yet — published pages and share links show up here.</div>';
+    return;
+  }
+  let html = '';
+  if (pages.length) {
+    html += '<div class="stats-share-title">Published pages</div>' + pages.map((p) => {
+      const link = p.url || (location.origin + p.path);
+      const label = p.title || p.root.split('/').pop();
+      return `<div class="artifact-row">
+        <a class="artifact-link" href="${escapeHtml(link)}" target="_blank" rel="noopener" title="${escapeHtml(p.root)}">${escapeHtml(label)}</a>
+        ${p.missing ? '<span class="stats-page-missing">(file missing)</span>' : ''}
+        <span class="artifact-meta">${escapeHtml(formatRelativeTime(p.createdAt))}</span>
+        <button type="button" class="btn-icon artifact-copy" data-copy="${escapeHtml(link)}" title="Copy link">⧉</button>
+        <button type="button" class="btn-small btn-danger artifact-revoke" data-token="${escapeHtml(p.token)}">Revoke</button>
+      </div>`;
+    }).join('');
+  }
+  if (share) {
+    const link = share.url || (location.origin + share.path);
+    html += '<div class="stats-share-title">Session share link</div>' +
+      `<div class="artifact-row">
+        <a class="artifact-link" href="${escapeHtml(link)}" target="_blank" rel="noopener">Read-only transcript</a>
+        <span class="artifact-meta"></span>
+        <button type="button" class="btn-icon artifact-copy" data-copy="${escapeHtml(link)}" title="Copy link">⧉</button>
+      </div>`;
+  }
+  body.innerHTML = html;
+  body.querySelectorAll('.artifact-copy').forEach((btn) => btn.addEventListener('click', () => {
+    copyTextToClipboard(btn.dataset.copy).then(
+      () => setStatus('Link copied'),
+      () => setStatus('Copy failed (clipboard blocked)', 'error'),
+    );
+  }));
+  body.querySelectorAll('.artifact-revoke').forEach((btn) => btn.addEventListener('click', () => {
+    fetch(`/api/pages/${encodeURIComponent(btn.dataset.token)}`, { method: 'DELETE' })
+      .then(() => refreshArtifacts(currentSession?.id))
+      .catch((e) => setStatus('Failed to revoke: ' + e.message, 'error'));
+  }));
 }
 
 function copyFileViewContent(btn) {
@@ -2027,11 +2169,23 @@ function imageBlocksHtml(content, alt = 'image') {
   return `<div class="msg-images">${imgs}</div>`;
 }
 
+// Hover 🔗 on a turn header: copies the public share URL deep-linked to this
+// message (pi's HTML export scrolls to ?targetId=<JSONL entry id>). Only
+// JSONL-backed messages have an entry id — streaming placeholders don't.
+function messageLinkBtnHtml(msg) {
+  if (!msg.id) return '';
+  return `<button type="button" class="msg-link-btn" data-entry-id="${escapeHtml(msg.id)}" title="Copy share link to this message">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+    </svg></button>`;
+}
+
 function renderUserMessage(msg, time, attrs = '') {
   const text = extractTextContent(msg.content);
   const imagesHtml = imageBlocksHtml(msg.content, 'attached image');
   return `<div${attrs} class="message user">
-    <div class="message-header"><span class="message-role user">❯</span>${time ? `<span class="message-time">${time}</span>` : ''}</div>
+    <div class="message-header"><span class="message-role user">❯</span>${time ? `<span class="message-time">${time}</span>` : ''}${messageLinkBtnHtml(msg)}</div>
     <div class="message-content user-content">${text ? `<div class="markdown-body">${formatMarkdown(text)}</div>` : ''}${imagesHtml}</div>
   </div>`;
 }
@@ -2062,13 +2216,21 @@ function renderAssistantMessage(msg, time, opts = {}) {
   // Tool-only messages (no prose, no error) are fully hidden in focus mode —
   // without this their empty header row lingers as a stray marker.
   const noTextClass = messageHasVisibleText(msg) ? '' : ' no-text';
+  // Generation speed rides the header next to the time — JSONL-backed
+  // renders only (streaming messages have no timing until finalized).
+  const speed = formatTokSpeed(msg.outputTokens, msg.durationMs);
+  const speedHtml = speed
+    ? `<span class="message-speed" title="${msg.outputTokens} output tokens in ${(msg.durationMs / 1000).toFixed(1)}s">${speed}</span>`
+    : '';
 
   return `<div${opts.attrs || ''} class="message assistant${streamingClass}${noTextClass}${msg.errorMessage ? ' error' : ''}" data-timestamp="${timestamp}"${streamingAttr}>
     <div class="message-header">
       <span class="message-role assistant">π</span>
       ${showModel ? `<span class="badge">${escapeHtml(msg.model)}</span>` : ''}
       ${opts.streaming ? '<span class="badge streaming">●</span>' : ''}
+      ${speedHtml}
       ${time ? `<span class="message-time">${time}</span>` : ''}
+      ${messageLinkBtnHtml(msg)}
     </div>
     ${thinkingHtml}${toolCallsHtml}
     ${textHtml ? `<div class="message-content"><div class="markdown-body">${textHtml}</div></div>` : ''}
@@ -2350,6 +2512,7 @@ function startMessageStream(sessionId) {
       // stalls long sessions.
       fetchNewMessagesSince(sessionId);
       refreshSessions();
+      refreshArtifacts(sessionId); // the agent may have published pages mid-turn
       setStatus('');
     };
     evtSource.addEventListener('turn_end', handleTurnEnd);
@@ -4018,6 +4181,8 @@ document.addEventListener('keydown', function(e) {
     e.preventDefault(); closeTreeModal();
   } else if (document.getElementById('statsModal').style.display !== 'none') {
     e.preventDefault(); closeStatsModal();
+  } else if (document.getElementById('artifactsModal').style.display !== 'none') {
+    e.preventDefault(); closeArtifactsModal();
   } else if (isFileViewOpen()) {
     e.preventDefault(); closeFileView();
   } else if (isDiffViewOpen()) {

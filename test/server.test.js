@@ -17,6 +17,10 @@ const path = require('node:path');
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-test-'));
 process.env.HOME = tmpHome;
 process.env.PORT = '0'; // random free port
+// The runtime pid-fallback (describeRuntime → findPaneByPid) scans every tmux
+// server under the tmpdir; point it at an empty temp dir so a tmux session
+// enclosing `npm test` can't leak into the runtime assertions below.
+process.env.TMUX_TMPDIR = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-test-tmux-'));
 
 const SESSION_ID = '2026-07-04T10-00-00-abcdef12';
 const sessionDir = path.join(tmpHome, '.pi', 'agent', 'sessions', '--home-user-proj--');
@@ -31,7 +35,10 @@ const entries = [
   ], usage: { input: 100, output: 40, cacheRead: 10, cacheWrite: 5, totalTokens: 1234, cost: { total: 0.03 } }, timestamp: '2026-07-04T10:00:02.000Z' } },
   { type: 'message', message: { role: 'toolResult', content: [{ type: 'text', text: 'charlie output' }], timestamp: '2026-07-04T10:00:03.000Z' } },
   { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'delta question alpha' }], timestamp: '2026-07-04T10:00:04.000Z' } },
-  { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'echo final' }], usage: { input: 200, output: 60, cacheRead: 0, cacheWrite: 0, totalTokens: 1234, cost: { total: 0.02 } }, timestamp: '2026-07-04T10:00:05.000Z' } },
+  // The last assistant entry carries an entry id (per-message share links)
+  // and real generation timing: message.timestamp = start (ms epoch),
+  // entry timestamp = end → 2s for 60 output tokens.
+  { type: 'message', id: 'ent5', timestamp: '2026-07-04T10:00:05.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'echo final' }], usage: { input: 200, output: 60, cacheRead: 0, cacheWrite: 0, totalTokens: 1234, cost: { total: 0.02 } }, timestamp: Date.parse('2026-07-04T10:00:03.000Z') } },
 ];
 const SESSION_FILE = path.join(sessionDir, `${SESSION_ID}.jsonl`);
 fs.writeFileSync(SESSION_FILE, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
@@ -168,6 +175,11 @@ test('GET /messages returns the tail with indexes', async () => {
   assert.equal(body.hasMore, false);
   assert.deepEqual(body.messages.map(m => m.index), [0, 1, 2, 3, 4]);
   assert.deepEqual(body.messages.map(m => m.role), ['user', 'assistant', 'toolResult', 'user', 'assistant']);
+  // Entry id + generation stats ride the message (share deep links, tok/s).
+  const last = body.messages[4];
+  assert.equal(last.id, 'ent5');
+  assert.equal(last.durationMs, 2000);
+  assert.equal(last.outputTokens, 60);
 });
 
 test('GET /messages honors limit / before / after cursors', async () => {
@@ -494,6 +506,10 @@ test('GET /stats aggregates tokens, cost, and message counts from the JSONL', as
   assert.equal(body.totalMessages, 5);
   assert.deepEqual(body.tokens, { input: 300, output: 100, cacheRead: 10, cacheWrite: 5, total: 415 });
   assert.ok(Math.abs(body.cost - 0.05) < 1e-9);
+  // Generation speed inputs: only the last assistant message has measurable
+  // timing (2s for 60 output tokens) — the other's timestamps are unusable.
+  assert.equal(body.genMs, 2000);
+  assert.equal(body.genOutput, 60);
   assert.equal(body.cwd, '/home/user/proj');
   assert.equal(body.contextUsage.tokens, 1234);
   const missing = await get('/api/sessions/nope/stats');
@@ -739,6 +755,13 @@ test('GET /share/:token renders the exported HTML inline; unknown token 404s', a
   assert.match(res.headers.get('content-type') || '', /text\/html/);
   const html = await res.text();
   assert.ok(html.includes('<html'), 'body is the standalone export');
+  // The export embeds the entries (ids included) as base64 JSON and its
+  // loader reads ?targetId= — the contract per-message share links rely on.
+  const dataMatch = html.match(/id="session-data"[^>]*>([^<]+)</);
+  assert.ok(dataMatch, 'export embeds session data');
+  const payload = Buffer.from(dataMatch[1], 'base64').toString('utf8');
+  assert.ok(payload.includes('"id":"e4"'), 'entry ids reach the export payload');
+  assert.ok(html.includes('targetId'), 'export understands targetId deep links');
 
   const unknown = await fetch(`${base}/share/nonexistent-token`);
   assert.equal(unknown.status, 404);

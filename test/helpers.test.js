@@ -38,6 +38,14 @@ test('formatTokens abbreviates thousands', () => {
   assert.equal(H.formatTokens(65029568), '65.0M'); // cache reads get huge
 });
 
+test('formatTokSpeed formats rates and rejects meaningless samples', () => {
+  assert.equal(H.formatTokSpeed(100, 4000), '25 tok/s');
+  assert.equal(H.formatTokSpeed(42, 5000), '8.4 tok/s'); // one decimal under 10
+  assert.equal(H.formatTokSpeed(100, 999), null, 'sub-second bursts read as absurd rates');
+  assert.equal(H.formatTokSpeed(0, 5000), null);
+  assert.equal(H.formatTokSpeed(undefined, undefined), null);
+});
+
 test('formatCacheStat shows hit rate and flags unreported writes', () => {
   // reads but zero writes ⇒ the provider API has no write metric (you can't
   // read what was never written) — hit rate carries the signal instead

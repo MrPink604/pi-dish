@@ -188,6 +188,36 @@ test('POST /api/sessions/new times out (window left open) when pi never register
   }
 });
 
+test('findPaneByPid locates a pane by process ancestry', { skip: !tmuxOk }, async () => {
+  // A window whose root process is a shell with a sleeping child: the direct
+  // pane_pid must match, and so must a descendant (the registered pi is
+  // usually a child/grandchild of the pane's shell).
+  // The trailing `:` stops sh exec-optimizing the single command — sleep must
+  // stay a *child* of the pane's sh for the ancestry-walk assertion below.
+  const paneId = tmuxCmd(['new-window', '-d', '-t', 'work', '-P', '-F', '#{pane_id}', '--', 'sh', '-c', 'sleep 30; :']).trim();
+  const panePid = Number(tmuxCmd(['display-message', '-p', '-t', paneId, '#{pane_pid}']).trim());
+  assert.ok(panePid, 'spawned pane has a root pid');
+
+  const direct = await tmux.findPaneByPid(panePid);
+  assert.equal(direct?.paneId, paneId);
+  assert.equal(direct?.tmuxSession, 'work');
+
+  // Find the sleep child of the pane's sh and resolve from it (ancestry walk).
+  let childPid = null;
+  for (let i = 0; i < 20 && !childPid; i++) {
+    try {
+      childPid = Number(execFileSync('pgrep', ['-P', String(panePid)], { encoding: 'utf8' }).trim().split('\n')[0]) || null;
+    } catch { /* child not up yet */ }
+    if (!childPid) await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.ok(childPid, 'the sleep child exists');
+  const viaChild = await tmux.findPaneByPid(childPid);
+  assert.equal(viaChild?.paneId, paneId, 'a descendant pid resolves to the same pane');
+
+  // A pid outside any pane on this tmpdir's servers finds nothing.
+  assert.equal(await tmux.findPaneByPid(1), null);
+});
+
 test('tmux-spawns.json persistence and prune', async () => {
   // Persist two mappings; one is "registered", one has a dead pane.
   tmux.recordSpawn('kept-session', { socket: TMUX_SOCKET, paneId: '%999' });

@@ -147,9 +147,11 @@ function trackExtUIState(sess) {
  * row. Null for inactive sessions. Kinds:
  * - rpc: a headless child of this server (dies with it)
  * - tmux: a pi TUI in a tmux pane — socket from the bridge's own $TMUX stamp,
- *   else from our spawn placement; session/window resolved live (null fields
- *   when the pane query fails — the socket name alone still locates it)
- * - terminal: bridge-registered but not in tmux (a plain terminal somewhere)
+ *   else from our spawn placement, else found by walking the pid's ancestry
+ *   across every server's panes (registry entries from older bridges carry
+ *   no stamp); session/window resolved live (null fields when every lookup
+ *   fails — the socket name alone still locates it)
+ * - terminal: bridge-registered and genuinely outside tmux
  * RPC is checked first on purpose: RPC children also load the bridge and
  * inherit this server's own $TMUX, which would misreport them as tmux TUIs.
  */
@@ -162,14 +164,35 @@ async function describeRuntime(sessionId) {
   const socket = reg.tmux?.socket || spawn?.socket || null;
   if (socket) {
     const paneId = (reg.tmux?.socket ? reg.tmux.pane : spawn?.paneId) || null;
-    const loc = paneId ? await tmux.paneLocation(socket, paneId) : null;
+    let loc = paneId ? await tmux.paneLocation(socket, paneId) : null;
+    let server = path.basename(socket);
+    if (!loc) {
+      // Stamp went stale (pane died/moved, unreachable socket) — locate the
+      // process itself before settling for the bare server name.
+      const pane = await tmux.findPaneByPid(reg.pid);
+      if (pane) { loc = pane; server = path.basename(pane.socket); }
+    }
     return {
       kind: 'tmux',
       pid: reg.pid ?? null,
-      server: path.basename(socket),
+      server,
       tmuxSession: loc?.tmuxSession ?? null,
       windowIndex: loc?.windowIndex ?? null,
       windowName: loc?.windowName ?? null,
+    };
+  }
+  // No tmux stamp at all (registered by an older bridge, or $TMUX was unset
+  // when pi started under a wrapper) — the process may still live in a tmux
+  // pane; find it by pid ancestry before reporting a plain terminal.
+  const pane = await tmux.findPaneByPid(reg.pid);
+  if (pane) {
+    return {
+      kind: 'tmux',
+      pid: reg.pid ?? null,
+      server: path.basename(pane.socket),
+      tmuxSession: pane.tmuxSession,
+      windowIndex: pane.windowIndex,
+      windowName: pane.windowName,
     };
   }
   return { kind: 'terminal', pid: reg.pid ?? null };
@@ -715,7 +738,7 @@ app.get('/api/sessions/:id/stats', async (req, res) => {
     const sessionFile = findSessionFile(sessionId);
     if (!sessionFile) return res.status(404).json({ error: 'Session not found' });
 
-    const { tokens, cost, userMessages, assistantMessages, toolCalls, toolResults } =
+    const { tokens, cost, userMessages, assistantMessages, toolCalls, toolResults, genMs, genOutput } =
       getSessionStats(sessionFile);
 
     const reg = getRegisteredSession(sessionId);
@@ -735,6 +758,8 @@ app.get('/api/sessions/:id/stats', async (req, res) => {
       totalMessages: userMessages + assistantMessages + toolResults,
       tokens: { ...tokens, total: tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite },
       cost,
+      genMs,
+      genOutput,
       contextUsage: contextUsage || {
         tokens: info.contextTokens || null,
         contextWindow: info.contextWindow,

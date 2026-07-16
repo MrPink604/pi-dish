@@ -1072,6 +1072,41 @@ body.sidebar-open {
   margin-left: auto;
 }
 
+/* Generation speed (tok/s) — same muted treatment as the time; order 2 slots
+   it after the turn rule, right before the timestamp. */
+.message-speed {
+  order: 2;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Per-message share link: invisible until the turn is hovered; touch layouts
+   have no hover, so it stays faintly visible there. order 4 puts it past the
+   timestamp at the header's far right. */
+.msg-link-btn {
+  order: 4;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s;
+}
+
+.message:hover .msg-link-btn,
+.msg-link-btn:focus-visible { opacity: 1; }
+
+.msg-link-btn:hover { color: var(--accent); }
+
+.msg-link-btn.copied { opacity: 1; color: var(--success); }
+
+@media (hover: none) {
+  .msg-link-btn { opacity: 0.45; }
+}
+
 /* Message content — rendered markdown */
 .message-content {
   font-size: 14px;
@@ -3149,6 +3184,54 @@ img.msg-image {
 }
 
 .stats-page-missing { color: var(--warning); font-size: 11px; }
+
+/* --- Shared artifacts (header 📦 + modal) --- */
+
+#btnArtifacts { position: relative; }
+
+.artifact-count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 14px;
+  text-align: center;
+}
+
+.artifact-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.artifact-row:last-child { border-bottom: none; }
+
+.artifact-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-link:hover { text-decoration: underline; }
+
+.artifact-meta {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
 
 .file-view-page {
   display: flex;

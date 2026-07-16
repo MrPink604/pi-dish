@@ -24,6 +24,10 @@ const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-ui-'));
 process.env.HOME = tmpHome;
 process.env.PORT = '0';
 process.env.PI_DISH_TERMINAL = '1'; // exercise the terminal panel
+// Empty tmux tmpdir: describeRuntime's pid-ancestry fallback scans it, and a
+// tmux session enclosing this test would otherwise claim the dummy pi child
+// (the close-session section expects a plain "terminal" runtime).
+process.env.TMUX_TMPDIR = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-ui-tmux-'));
 // A configless HOME makes zsh launch its newuser wizard inside the PTY,
 // which swallows the first line of input — give it an empty rc file.
 fs.writeFileSync(path.join(tmpHome, '.zshrc'), '');
@@ -68,7 +72,10 @@ const sessionFile = path.join(sessionDir, `${SESSION_ID}.jsonl`);
 const appendEntry = (e) => fs.appendFileSync(sessionFile, JSON.stringify(e) + '\n');
 appendEntry({ type: 'session', cwd: CWD, timestamp: '2026-07-05T00:00:00.000Z' });
 appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'existing question' }], timestamp: '2026-07-05T00:00:01.000Z' } });
-appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'existing **answer**' }], timestamp: '2026-07-05T00:00:02.000Z' } });
+// Entry id + generation timing (start = message.timestamp ms epoch, end =
+// entry timestamp): 45 output tokens in 1.5s → the header shows "30 tok/s"
+// and the 🔗 button deep-links ?targetId=ui-a1.
+appendEntry({ type: 'message', id: 'ui-a1', timestamp: '2026-07-05T00:00:02.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'existing **answer**' }], timestamp: Date.parse('2026-07-05T00:00:00.500Z'), usage: { output: 45 } } });
 // A historical turn with tool activity — must fold into a closed .tool-group.
 appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'check the readme' }], timestamp: '2026-07-05T00:00:03.000Z' } });
 appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'hist1', name: 'Read', arguments: { path: 'README.md' } }], timestamp: '2026-07-05T00:00:04.000Z' } });
@@ -411,10 +418,35 @@ function writeRegistry(patch = {}) {
     check(await desktop.locator('.session-item-status.working').count() === 0,
       'working dot cleared after the turn');
 
+    // Per-message tok/s: the fixture's timed assistant message shows its
+    // generation speed in the header.
+    console.log('per-message speed + share link:');
+    const speedBadge = desktop.locator('.message.assistant .message-speed', { hasText: '30 tok/s' });
+    check(await speedBadge.count() === 1, 'timed assistant message shows 30 tok/s');
+
+    // Per-message share link: no share exists yet, so the button asks before
+    // creating one; accepting copies the deep link (?targetId=<entry id>).
+    const linkBtn = desktop.locator('.message [data-entry-id="ui-a1"].msg-link-btn');
+    check(await linkBtn.count() === 1, 'entry-backed message has a share-link button');
+    desktop.once('dialog', (d) => d.accept());
+    await linkBtn.click({ force: true }); // hover-revealed; force skips the hover dance
+    await desktop.waitForFunction(() =>
+      /Message share link copied/.test(document.getElementById('status')?.textContent || ''), { timeout: 5000 });
+    const msgLink = await desktop.evaluate(() => navigator.clipboard.readText());
+    check(/\/share\/[A-Za-z0-9_-]+\?targetId=ui-a1$/.test(msgLink),
+      `clipboard holds the share deep link (got ${JSON.stringify(msgLink)})`);
+    // (The export itself rejects this id-less shorthand fixture —
+    // server.test.js proves the targetId anchor contract on a valid session.)
+
     // Stats modal: the session-file / cwd rows are click-to-copy buttons.
     await desktop.click('#sessionContext');
     await desktop.waitForSelector('#statsModal .stats-copy', { timeout: 2000 });
-    const fileBtn = desktop.locator('.stats-copy').last();
+    // Session-wide speed row from the one timed assistant message.
+    check(/30 tok\/s avg/.test(await desktop.locator('#statsBody').textContent()),
+      'stats modal shows the session average speed');
+    // Scope to the table — the share section (created by the message-link
+    // step above) renders its own .stats-copy after it.
+    const fileBtn = desktop.locator('.stats-table .stats-copy').last();
     const filePath = await fileBtn.getAttribute('data-copy');
     check(filePath.endsWith('.jsonl'), `session-file row exposes the path (got ${filePath})`);
     await fileBtn.click();
@@ -456,6 +488,21 @@ function writeRegistry(patch = {}) {
     const pageRes = await fetch(pageLink);
     check(pageRes.status === 200 && (await pageRes.text()).includes('hello from deep'),
       'published page serves the file content');
+
+    // Shared-artifacts badge: the page plus the share link created earlier.
+    console.log('artifacts:');
+    await desktop.waitForFunction(() =>
+      document.getElementById('artifactCount')?.textContent === '2', { timeout: 5000 });
+    check(true, 'artifacts badge counts the page + the share link');
+    await desktop.click('#btnArtifacts');
+    await desktop.waitForSelector('#artifactsModal .artifact-row', { timeout: 2000 });
+    const artifactLabels = await desktop.locator('#artifactsModal .artifact-link').allTextContents();
+    check(artifactLabels.includes('findings.md') && artifactLabels.includes('Read-only transcript'),
+      `artifacts modal lists the page and the share link (got ${JSON.stringify(artifactLabels)})`);
+    const pageHref = await desktop.locator('#artifactsModal .artifact-link').first().getAttribute('href');
+    check(/\/page\/[A-Za-z0-9_-]+$/.test(pageHref), `page artifact links its public URL (got ${pageHref})`);
+    await desktop.keyboard.press('Escape');
+    await desktop.waitForSelector('#artifactsModal', { state: 'hidden', timeout: 2000 });
     // Re-opening the viewer on the same file shows the existing page link.
     await desktop.keyboard.press('Escape');
     await desktop.waitForSelector('#fileView', { state: 'hidden', timeout: 2000 });
@@ -466,6 +513,9 @@ function writeRegistry(patch = {}) {
     await desktop.waitForFunction(() =>
       document.getElementById('fileViewPage').style.display === 'none', { timeout: 5000 });
     check((await fetch(pageLink)).status === 404, 'unpublish revokes the public URL');
+    await desktop.waitForFunction(() =>
+      document.getElementById('artifactCount')?.textContent === '1', { timeout: 5000 });
+    check(true, 'artifacts badge drops the revoked page (share link remains)');
 
     await desktop.keyboard.press('Escape');
     await desktop.waitForSelector('#fileView', { state: 'hidden', timeout: 2000 });

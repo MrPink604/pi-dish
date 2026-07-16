@@ -105,6 +105,28 @@ test('readSessionMessages returns the displayable stream in order', () => {
   assert.equal(all[1].toolName, undefined, 'non-toolResult messages have no toolName');
 });
 
+test('readSessionMessages carries entry ids and assistant generation stats', () => {
+  const file = writeSession([
+    { type: 'session', cwd: '/x' },
+    { type: 'message', id: 'u1', timestamp: '2026-07-01T10:00:00.000Z',
+      message: { role: 'user', content: [{ type: 'text', text: 'q' }], timestamp: Date.parse('2026-07-01T10:00:00.000Z') } },
+    // start = message.timestamp (ms epoch), end = entry timestamp → 5s.
+    { type: 'message', id: 'a1', timestamp: '2026-07-01T10:00:05.000Z',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'ans' }],
+        timestamp: Date.parse('2026-07-01T10:00:00.000Z'), usage: { output: 100 } } },
+    // No message-level start timestamp — no duration, no absurd tok/s.
+    { type: 'message', id: 'a2', timestamp: '2026-07-01T10:00:06.000Z',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'x' }], usage: { output: 10 } } },
+  ]);
+  const all = SF.readSessionMessages(file);
+  assert.equal(all[0].id, 'u1');
+  assert.equal(all[0].durationMs, undefined, 'user messages carry no generation stats');
+  assert.equal(all[1].id, 'a1');
+  assert.equal(all[1].durationMs, 5000);
+  assert.equal(all[1].outputTokens, 100);
+  assert.equal(all[2].durationMs, undefined, 'missing start timestamp yields no duration');
+});
+
 test('readSessionMessages cache revalidates on append and survives LRU pressure', () => {
   const file = writeSession([userMsg('a')]);
   assert.equal(SF.readSessionMessages(file).length, 1);
@@ -151,6 +173,20 @@ test('getSessionStats aggregates usage and revalidates on append', () => {
 
   fs.appendFileSync(file, JSON.stringify(userMsg('another')) + '\n');
   assert.equal(SF.getSessionStats(file).userMessages, 2, 'size/mtime change invalidates');
+});
+
+test('getSessionStats sums generation time over measurable assistant messages only', () => {
+  const file = writeSession([
+    { type: 'message', timestamp: '2026-07-01T10:00:10.000Z', message: { role: 'assistant',
+      content: [], timestamp: Date.parse('2026-07-01T10:00:00.000Z'), usage: { output: 200 } } },
+    { type: 'message', timestamp: '2026-07-01T10:00:15.000Z', message: { role: 'assistant',
+      content: [], timestamp: Date.parse('2026-07-01T10:00:10.000Z'), usage: { output: 100 } } },
+    assistantMsg('no timing', { output: 50 }), // timestampless — excluded from both sums
+  ]);
+  const stats = SF.getSessionStats(file);
+  assert.equal(stats.genMs, 15000);
+  assert.equal(stats.genOutput, 300, 'unmeasurable output does not dilute the average');
+  assert.equal(stats.tokens.output, 350, 'token totals still count everything');
 });
 
 test('readSessionCwd reads the header line without loading the file', () => {
