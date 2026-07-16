@@ -133,17 +133,19 @@ test('reattaching within the idle window cancels the pending kill', async () => 
 
 test('idle kill defers while a detached shell is still producing output', async () => {
   const ws = new FakeWS();
-  terminal.attachClient('lib-busy', sessionCwd, ws, { idleKillMs: 300 });
-  // ~1.2s of output, an order of magnitude past idleKillMs.
-  ws.input('for i in $(seq 1 12); do echo busy-$i; sleep 0.1; done\r');
+  terminal.attachClient('lib-busy', sessionCwd, ws, { idleKillMs: 500 });
+  // ~1.5s of output at a cadence (50ms) far inside idleKillMs — with only a
+  // 3x margin, one slow loop iteration under parallel-suite load opened a
+  // false idle window and killed the shell mid-assertion (flaked under load).
+  ws.input('for i in $(seq 1 30); do echo busy-$i; sleep 0.05; done\r');
   await until(() => ws.sent.some(m => m.type === 'output' && m.data.includes('busy-1')));
   ws.close();
 
-  await new Promise(r => setTimeout(r, 600)); // idleKillMs would have fired twice
+  await new Promise(r => setTimeout(r, 1000)); // idleKillMs would have fired twice
   assert.ok(terminal._terminals.has('lib-busy'), 'still alive while output continues');
 
   const term = terminal._terminals.get('lib-busy');
-  await until(() => Date.now() - term.lastOutputAt > 350, 5000); // loop finished + silence window
+  await until(() => Date.now() - term.lastOutputAt > 550, 5000); // loop finished + silence window
   await until(() => !terminal._terminals.has('lib-busy'), 3000);
 });
 
