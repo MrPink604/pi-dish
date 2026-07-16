@@ -154,12 +154,33 @@ function trackExtUIState(sess) {
  * - terminal: bridge-registered and genuinely outside tmux
  * RPC is checked first on purpose: RPC children also load the bridge and
  * inherit this server's own $TMUX, which would misreport them as tmux TUIs.
+ *
+ * The tmux/terminal resolution is cached per (sessionId, pid): every lookup
+ * spawns tmux subprocesses (the pid-ancestry scan hits every server socket,
+ * and a stale one costs its full 2s timeout), while a pi process never
+ * changes panes. Keying on the pid recomputes after a close+resume; the TTL
+ * only bounds how late a window/session *rename* shows up. A dead session
+ * bypasses the cache entirely (reg gone → null before the lookup).
  */
+const runtimeCache = new Map(); // sessionId -> { pid, at, value }
+const RUNTIME_CACHE_TTL_MS = 60_000;
+
 async function describeRuntime(sessionId) {
   const rpc = getRPCSession(sessionId);
   if (rpc?.alive) return { kind: 'rpc', pid: rpc.proc?.pid ?? null };
   const reg = getRegisteredSession(sessionId);
   if (!reg) return null;
+  const cached = runtimeCache.get(sessionId);
+  if (cached && cached.pid === (reg.pid ?? null) && Date.now() - cached.at < RUNTIME_CACHE_TTL_MS) {
+    return cached.value;
+  }
+  const value = await resolveRuntime(sessionId, reg);
+  if (runtimeCache.size >= 200) runtimeCache.clear(); // live sessions number in the dozens
+  runtimeCache.set(sessionId, { pid: reg.pid ?? null, at: Date.now(), value });
+  return value;
+}
+
+async function resolveRuntime(sessionId, reg) {
   const spawn = tmux.getSpawn(sessionId);
   const socket = reg.tmux?.socket || spawn?.socket || null;
   if (socket) {

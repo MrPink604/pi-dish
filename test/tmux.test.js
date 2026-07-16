@@ -218,6 +218,45 @@ test('findPaneByPid locates a pane by process ancestry', { skip: !tmuxOk }, asyn
   assert.equal(await tmux.findPaneByPid(1), null);
 });
 
+test('runtime location is cached per pid: a rename shows the old name within TTL', { skip: !tmuxOk }, async () => {
+  // A dedicated tmux session whose pane shell becomes the registered pi pid —
+  // no tmux stamp on the registry entry, so resolution goes through the
+  // pid-ancestry scan (the expensive path the cache exists for).
+  tmuxCmd(['new-session', '-d', '-s', 'cachesrc']);
+  const panePid = Number(tmuxCmd(['display-message', '-p', '-t', 'cachesrc:0', '#{pane_pid}']).trim());
+
+  const CACHE_ID = '2026-07-16T00-00-00-runcache1';
+  const sdir = path.join(tmpHome, '.pi', 'agent', 'sessions', '--x--');
+  fs.mkdirSync(sdir, { recursive: true });
+  fs.writeFileSync(path.join(sdir, `${CACHE_ID}.jsonl`),
+    JSON.stringify({ type: 'session', cwd: '/tmp', timestamp: '2026-07-16T00:00:00.000Z' }) + '\n');
+  const regDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(regDir, { recursive: true });
+  const sockStub = path.join(tmpHome, 'runtime-sock-stub');
+  fs.writeFileSync(sockStub, ''); // prune only checks existence, never connects
+  fs.writeFileSync(path.join(regDir, `${CACHE_ID}.json`),
+    JSON.stringify({ sessionId: CACHE_ID, socketPath: sockStub, pid: panePid, cwd: '/tmp' }));
+  await new Promise((r) => setTimeout(r, 600)); // registry scan memo TTL
+
+  try {
+    const first = await get(`/api/sessions/${CACHE_ID}/stats`);
+    assert.equal(first.status, 200);
+    assert.equal(first.body.runtime.kind, 'tmux');
+    assert.equal(first.body.runtime.tmuxSession, 'cachesrc', 'pid scan finds the pane');
+
+    // Structural cache proof: rename the tmux session, ask again — a live
+    // lookup would see the new name, so the old one must have come from the
+    // (sessionId, pid) cache.
+    tmuxCmd(['rename-session', '-t', 'cachesrc', 'cachedst']);
+    const second = await get(`/api/sessions/${CACHE_ID}/stats`);
+    assert.equal(second.body.runtime.tmuxSession, 'cachesrc', 'served from cache, not re-resolved');
+  } finally {
+    try { tmuxCmd(['kill-session', '-t', 'cachedst']); } catch {}
+    try { tmuxCmd(['kill-session', '-t', 'cachesrc']); } catch {}
+    fs.rmSync(path.join(regDir, `${CACHE_ID}.json`), { force: true });
+  }
+});
+
 test('tmux-spawns.json persistence and prune', async () => {
   // Persist two mappings; one is "registered", one has a dead pane.
   tmux.recordSpawn('kept-session', { socket: TMUX_SOCKET, paneId: '%999' });
