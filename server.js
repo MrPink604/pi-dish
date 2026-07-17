@@ -1,4 +1,5 @@
 const express = require('express');
+const compression = require('compression');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -16,7 +17,7 @@ const {
 } = require('./lib/bridge-session');
 const { searchFiles, searchHomeDirs, completePath, isPathCompletionToken } = require('./lib/file-search');
 const { resolveFileMention, readFileForViewer } = require('./lib/file-mention');
-const { aggregateDiffs } = require('./lib/git-diff');
+const { aggregateDiffs, getFilePatch } = require('./lib/git-diff');
 const terminal = require('./lib/terminal');
 const tmux = require('./lib/tmux');
 const shares = require('./lib/shares');
@@ -41,6 +42,19 @@ const PORT = process.env.PORT || 3333;
 // HOST=0.0.0.0 (all interfaces) or HOST=<tailscale ip>. There is no auth —
 // anything that can reach the port can drive agents with shell access.
 const HOST = process.env.HOST || '127.0.0.1';
+
+// Compress static text and JSON responses over LAN links. Event streams are
+// deliberately excluded: compression buffers partial output unless every
+// event is explicitly flushed, which would add latency to chat streaming.
+app.use(compression({
+  threshold: 1024,
+  filter(req, res) {
+    if (req.path.endsWith('/stream')) return false;
+    const type = String(res.getHeader('Content-Type') || '');
+    if (type.startsWith('text/event-stream')) return false;
+    return compression.filter(req, res);
+  },
+}));
 
 // Image attachments arrive as base64 in the prompt body — allow well past
 // the default 100kb (a few downscaled phone photos).
@@ -508,6 +522,44 @@ app.get('/api/sessions', (req, res) => {
   res.json({ active, previous, indexing });
 });
 
+// Historical image blocks can be megabytes. Keep those bytes out of the
+// paginated JSON so the browser can decode/cache them as resources and defer
+// off-screen images with loading=lazy. Streaming events still carry inline
+// data; only authoritative JSONL-backed responses are projected this way.
+function messageForClient(sessionId, message, index) {
+  if (!Array.isArray(message.content)) return { ...message, index };
+  let changed = false;
+  const content = message.content.map((block, blockIndex) => {
+    if (!block || block.type !== 'image' || typeof block.data !== 'string' || !block.data) return block;
+    changed = true;
+    const { data, ...metadata } = block;
+    return {
+      ...metadata,
+      mimeType: block.mimeType || 'image/png',
+      url: `/api/sessions/${encodeURIComponent(sessionId)}/messages/${index}/images/${blockIndex}`,
+    };
+  });
+  return { ...message, ...(changed ? { content } : {}), index };
+}
+
+app.get('/api/sessions/:id/messages/:messageIndex/images/:blockIndex', (req, res) => {
+  const messageIndex = Number(req.params.messageIndex);
+  const blockIndex = Number(req.params.blockIndex);
+  if (!Number.isInteger(messageIndex) || messageIndex < 0 ||
+      !Number.isInteger(blockIndex) || blockIndex < 0) {
+    return res.status(400).json({ error: 'valid message and image indexes required' });
+  }
+  const sessionFile = findSessionFile(req.params.id);
+  if (!sessionFile) return res.status(404).json({ error: 'Session not found' });
+  const block = readSessionMessages(sessionFile)[messageIndex]?.content?.[blockIndex];
+  if (!block || block.type !== 'image' || typeof block.data !== 'string' || !block.data) {
+    return res.status(404).json({ error: 'Image not found' });
+  }
+  const mimeType = /^image\/[A-Za-z0-9.+-]+$/.test(block.mimeType || '') ? block.mimeType : 'image/png';
+  res.setHeader('Cache-Control', 'private, no-cache');
+  res.type(mimeType).send(Buffer.from(block.data, 'base64'));
+});
+
 app.get('/api/sessions/:id/messages', (req, res) => {
   const sessionId = req.params.id;
   const isActive = !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId);
@@ -565,7 +617,8 @@ app.get('/api/sessions/:id/messages', (req, res) => {
     });
   }
 
-  const slice = all.slice(startIdx, endIdx + 1).map((m, i) => ({ ...m, index: startIdx + i }));
+  const slice = all.slice(startIdx, endIdx + 1)
+    .map((m, i) => messageForClient(sessionId, m, startIdx + i));
   res.json({
     messages: slice,
     session: { id: sessionId, isActive, ...info },
@@ -1583,6 +1636,36 @@ app.get('/api/sessions/:id/files', async (req, res) => {
   }
 });
 
+async function resolveViewerMention(sessionId, mention) {
+  const cwd = resolveSessionCwd(sessionId);
+  const sessionFile = findSessionFile(sessionId);
+  if (!cwd && !sessionFile) return { error: 'Unknown session', status: 404 };
+  let messages = [];
+  if (sessionFile) { try { messages = readSessionMessages(sessionFile); } catch {} }
+  const resolved = await resolveFileMention(mention, { cwd, messages });
+  if (!resolved) return { error: `Couldn't find "${mention}" among this session's files`, status: 404 };
+  return { cwd, resolved };
+}
+
+// Image previews use a normal resource response instead of base64 JSON. The
+// same session-aware resolver gates both metadata and bytes, so this does not
+// create a path traversal shortcut around the file viewer's reach rules.
+app.get('/api/sessions/:id/file/content', async (req, res) => {
+  try {
+    const mention = String(req.query.path || '');
+    if (!mention || mention.length > 1024) return res.status(400).json({ error: 'path required' });
+    const found = await resolveViewerMention(req.params.id, mention);
+    if (found.error) return res.status(found.status).json({ error: found.error });
+    const file = readFileForViewer(found.resolved.absPath, { imageData: 'buffer' });
+    if (file.error) return res.status(file.status || 415).json({ error: file.error, path: found.resolved.absPath });
+    if (!file.image?.buffer) return res.status(415).json({ error: 'File is not an image' });
+    res.setHeader('Cache-Control', 'private, no-cache');
+    res.type(file.image.mimeType).send(file.image.buffer);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Read a file mentioned in the chat (clickable filenames in the transcript).
 // "findings.md" written deep in the tree resolves through the session's own
 // tool calls; reads are gated to the cwd subtree + tool-touched paths. See
@@ -1591,23 +1674,59 @@ app.get('/api/sessions/:id/file', async (req, res) => {
   try {
     const mention = String(req.query.path || '');
     if (!mention || mention.length > 1024) return res.status(400).json({ error: 'path required' });
-    const cwd = resolveSessionCwd(req.params.id);
-    const sessionFile = findSessionFile(req.params.id);
-    if (!cwd && !sessionFile) return res.status(404).json({ error: 'Unknown session' });
-    let messages = [];
-    if (sessionFile) { try { messages = readSessionMessages(sessionFile); } catch {} }
-    const resolved = await resolveFileMention(mention, { cwd, messages });
-    if (!resolved) {
-      return res.status(404).json({ error: `Couldn't find "${mention}" among this session's files` });
-    }
-    const file = readFileForViewer(resolved.absPath);
+    const found = await resolveViewerMention(req.params.id, mention);
+    if (found.error) return res.status(found.status).json({ error: found.error });
+    const { cwd, resolved } = found;
+    const file = readFileForViewer(resolved.absPath, { imageData: false });
     if (file.error) return res.status(file.status || 415).json({ error: file.error, path: resolved.absPath });
+    if (file.image) {
+      file.image.url = `/api/sessions/${encodeURIComponent(req.params.id)}/file/content?path=${encodeURIComponent(mention)}&v=${file.mtime}-${file.size}`;
+    }
     res.json({
       path: resolved.absPath,
       relPath: cwd && resolved.absPath.startsWith(cwd + '/') ? resolved.absPath.slice(cwd.length + 1) : null,
       line: resolved.line ?? null,
       ...file,
     });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+const DIFF_INLINE_FILE_LIMIT = 6;
+const DIFF_SNAPSHOT_TTL_MS = 60 * 1000;
+const diffSnapshots = new Map(); // sessionId -> { cwd, at, data }
+
+function rememberDiffSnapshot(sessionId, cwd, data) {
+  diffSnapshots.delete(sessionId);
+  diffSnapshots.set(sessionId, { cwd, at: Date.now(), data });
+  while (diffSnapshots.size > 4) diffSnapshots.delete(diffSnapshots.keys().next().value);
+}
+
+// A large pane receives metadata first. Patch lookup selects from the exact
+// aggregate snapshot used for that response (rather than accepting a path to
+// pass to git), preserving both security and within-pane consistency.
+app.get('/api/sessions/:id/diff/patch', async (req, res) => {
+  try {
+    const repoPath = String(req.query.repo || '');
+    const filePath = String(req.query.path || '');
+    if (!repoPath || !filePath || repoPath.length > 2048 || filePath.length > 4096) {
+      return res.status(400).json({ error: 'repo and path required' });
+    }
+    const cwd = resolveSessionCwd(req.params.id);
+    if (!cwd) return res.status(404).json({ error: 'Session cwd unknown' });
+    let snapshot = diffSnapshots.get(req.params.id);
+    if (!snapshot || snapshot.cwd !== cwd || Date.now() - snapshot.at > DIFF_SNAPSHOT_TTL_MS) {
+      const data = await aggregateDiffs(cwd, { inlineLimit: DIFF_INLINE_FILE_LIMIT });
+      rememberDiffSnapshot(req.params.id, cwd, data);
+      snapshot = diffSnapshots.get(req.params.id);
+    }
+    const repo = snapshot.data.repos.find(item => item.path === repoPath);
+    const file = repo?.files.find(item => item.path === filePath);
+    if (!repo || !file) return res.status(404).json({ error: 'Patch not found' });
+    const patch = file.patch ? file : await getFilePatch(path.resolve(cwd, repo.path), file);
+    if (!patch?.patch) return res.status(404).json({ error: 'Patch not found' });
+    res.json({ patch: patch.patch, truncated: !!patch.truncated, binary: !!patch.binary });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1621,7 +1740,9 @@ app.get('/api/sessions/:id/diff', async (req, res) => {
   try {
     const cwd = resolveSessionCwd(req.params.id);
     if (!cwd) return res.status(404).json({ error: 'Session cwd unknown' });
-    res.json(await aggregateDiffs(cwd));
+    const data = await aggregateDiffs(cwd, { inlineLimit: DIFF_INLINE_FILE_LIMIT });
+    rememberDiffSnapshot(req.params.id, cwd, data);
+    res.json(data);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

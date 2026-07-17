@@ -169,15 +169,17 @@ test('getToolOutputText concatenates text blocks only', () => {
   assert.equal(H.getToolOutputText(null), '');
 });
 
-test('extractImageBlocks pulls image blocks and defaults the mime type', () => {
+test('extractImageBlocks accepts inline and resource-backed images', () => {
   assert.deepEqual(H.extractImageBlocks([
     { type: 'text', text: 'Read image file [image/png]' },
     { type: 'image', data: 'AAA', mimeType: 'image/png' },
     { type: 'image', data: 'BBB' }, // mimeType absent → default
-    { type: 'image' },              // no data → skipped
+    { type: 'image', url: '/api/sessions/s/messages/2/images/1', mimeType: 'image/webp' },
+    { type: 'image' },              // no data/url → skipped
   ]), [
     { data: 'AAA', mimeType: 'image/png' },
     { data: 'BBB', mimeType: 'image/png' },
+    { url: '/api/sessions/s/messages/2/images/1', mimeType: 'image/webp' },
   ]);
   // Non-array content (plain string, null) yields nothing.
   assert.deepEqual(H.extractImageBlocks('Read image file'), []);

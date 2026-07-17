@@ -10,9 +10,11 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
+const zlib = require('node:zlib');
 
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-test-'));
 process.env.HOME = tmpHome;
@@ -23,6 +25,8 @@ process.env.PORT = '0'; // random free port
 process.env.TMUX_TMPDIR = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-test-tmux-'));
 
 const SESSION_ID = '2026-07-04T10-00-00-abcdef12';
+const TINY_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+const TINY_PNG = Buffer.from(TINY_PNG_BASE64, 'base64');
 const sessionDir = path.join(tmpHome, '.pi', 'agent', 'sessions', '--home-user-proj--');
 fs.mkdirSync(sessionDir, { recursive: true });
 
@@ -33,7 +37,10 @@ const entries = [
     { type: 'text', text: 'bravo reply with **markdown**' },
     { type: 'toolCall', id: 'tc1', name: 'Bash', arguments: { command: 'ls' } },
   ], usage: { input: 100, output: 40, cacheRead: 10, cacheWrite: 5, totalTokens: 1234, cost: { total: 0.03 } }, timestamp: '2026-07-04T10:00:02.000Z' } },
-  { type: 'message', message: { role: 'toolResult', content: [{ type: 'text', text: 'charlie output' }], timestamp: '2026-07-04T10:00:03.000Z' } },
+  { type: 'message', message: { role: 'toolResult', content: [
+    { type: 'text', text: 'charlie output' },
+    { type: 'image', data: TINY_PNG_BASE64, mimeType: 'image/png' },
+  ], timestamp: '2026-07-04T10:00:03.000Z' } },
   { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'delta question alpha' }], timestamp: '2026-07-04T10:00:04.000Z' } },
   // The last assistant entry carries an entry id (per-message share links)
   // and real generation timing: message.timestamp = start (ms epoch),
@@ -42,6 +49,15 @@ const entries = [
 ];
 const SESSION_FILE = path.join(sessionDir, `${SESSION_ID}.jsonl`);
 fs.writeFileSync(SESSION_FILE, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
+
+// Repetitive but realistically large chat payload for wire-size assertions.
+// Kept in its own session so cursor/count tests on SESSION_ID stay stable.
+const BANDWIDTH_ID = '2026-07-04T10-30-00-bandwidth';
+fs.writeFileSync(path.join(sessionDir, `${BANDWIDTH_ID}.jsonl`), [
+  { type: 'session', cwd: '/home/user/proj', timestamp: '2026-07-04T10:30:00.000Z' },
+  { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'measure chat transfer' }], timestamp: '2026-07-04T10:30:01.000Z' } },
+  { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: ('repeated transcript content '.repeat(2500)) }], timestamp: '2026-07-04T10:30:02.000Z' } },
+].map(e => JSON.stringify(e)).join('\n') + '\n');
 
 // Second fixture whose cwd exists on disk — exercises /files fuzzy search
 // and the /file mention viewer (tool calls referencing a deep file plus a
@@ -55,6 +71,8 @@ fs.mkdirSync(deepDir, { recursive: true });
 fs.mkdirSync(scratchDir, { recursive: true });
 fs.writeFileSync(path.join(realCwd, 'src', 'main.js'), 'console.log(1);\n');
 fs.writeFileSync(path.join(realCwd, 'README.md'), '# alpha\n');
+fs.writeFileSync(path.join(realCwd, 'preview.png'), TINY_PNG);
+fs.writeFileSync(path.join(realCwd, 'large.md'), ('# repeated document\n\nbody text for compression\n'.repeat(3000)));
 fs.writeFileSync(path.join(deepDir, 'findings.md'), '# deep findings\n');
 fs.writeFileSync(path.join(scratchDir, 'notes.md'), 'scratch notes\n');
 fs.writeFileSync(path.join(tmpHome, 'secret.txt'), 'outside the session reach\n');
@@ -120,6 +138,17 @@ const del = async (p) => {
   const res = await fetch(base + p, { method: 'DELETE' });
   return { status: res.status, body: await res.json() };
 };
+
+// Node's fetch transparently decompresses response bodies. This lower-level
+// helper keeps the wire bytes intact so compression ratios are meaningful.
+const rawGet = (p, headers = {}) => new Promise((resolve, reject) => {
+  const req = http.get(base + p, { headers }, (res) => {
+    const chunks = [];
+    res.on('data', (chunk) => chunks.push(chunk));
+    res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
+  });
+  req.on('error', reject);
+});
 
 test('GET /api/sessions lists the fixture session with derived metadata', async () => {
   const { status, body } = await get('/api/sessions');
@@ -199,6 +228,32 @@ test('GET /messages honors limit / before / after cursors', async () => {
   const bogus = await get(`/api/sessions/${SESSION_ID}/messages?after=abc&limit=2`);
   assert.deepEqual(bogus.body.messages.map(m => m.index), [3, 4]);
   assert.ok(bogus.body.messages.every(m => Number.isFinite(m.index)), 'indexes stay numeric');
+});
+
+test('GET /messages moves historical image bytes to a cacheable resource', async () => {
+  const { body } = await get(`/api/sessions/${SESSION_ID}/messages`);
+  const image = body.messages[2].content.find(block => block.type === 'image');
+  assert.ok(image?.url, 'message payload carries an image resource URL');
+  assert.equal(image.data, undefined, 'base64 bytes are not duplicated into chat JSON');
+
+  const res = await fetch(base + image.url);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'image/png');
+  assert.deepEqual(Buffer.from(await res.arrayBuffer()), TINY_PNG);
+});
+
+test('large chat JSON negotiates gzip and materially reduces wire bytes', async () => {
+  const resource = `/api/sessions/${BANDWIDTH_ID}/messages`;
+  const identity = await rawGet(resource, { 'Accept-Encoding': 'identity' });
+  const gzip = await rawGet(resource, { 'Accept-Encoding': 'gzip' });
+
+  assert.equal(identity.status, 200);
+  assert.equal(gzip.status, 200);
+  assert.equal(gzip.headers['content-encoding'], 'gzip');
+  assert.match(gzip.headers.vary || '', /Accept-Encoding/i);
+  assert.deepEqual(zlib.gunzipSync(gzip.body), identity.body, 'compression preserves the JSON bytes');
+  assert.ok(gzip.body.length < identity.body.length * 0.5,
+    `expected at least 50% savings (${identity.body.length} -> ${gzip.body.length})`);
 });
 
 test('GET /search returns match indexes with roles', async () => {
@@ -311,6 +366,29 @@ test('GET /file serves cwd-relative paths and strips :line suffixes', async () =
   assert.equal(body.line, 1);
 });
 
+test('GET /file returns image metadata while a resource route serves the bytes', async () => {
+  const { status, body } = await get(`/api/sessions/${REAL_CWD_ID}/file?path=preview.png`);
+  assert.equal(status, 200);
+  assert.equal(body.image.mimeType, 'image/png');
+  assert.ok(body.image.url, 'viewer JSON carries a resource URL');
+  assert.equal(body.image.data, undefined, 'viewer JSON does not carry base64 bytes');
+
+  const res = await fetch(base + body.image.url);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'image/png');
+  assert.deepEqual(Buffer.from(await res.arrayBuffer()), TINY_PNG);
+});
+
+test('large document JSON negotiates gzip with substantial savings', async () => {
+  const resource = `/api/sessions/${REAL_CWD_ID}/file?path=large.md`;
+  const identity = await rawGet(resource, { 'Accept-Encoding': 'identity' });
+  const gzip = await rawGet(resource, { 'Accept-Encoding': 'gzip' });
+  assert.equal(gzip.headers['content-encoding'], 'gzip');
+  assert.deepEqual(zlib.gunzipSync(gzip.body), identity.body);
+  assert.ok(gzip.body.length < identity.body.length * 0.5,
+    `expected at least 50% savings (${identity.body.length} -> ${gzip.body.length})`);
+});
+
 test('GET /file rejects traversal and unreachable absolute paths', async () => {
   const dotdot = await get(`/api/sessions/${REAL_CWD_ID}/file?path=${encodeURIComponent('../../secret.txt')}`);
   assert.equal(dotdot.status, 404, 'lexical traversal out of the cwd must not read');
@@ -356,6 +434,40 @@ test('GET /diff aggregates uncommitted changes across repos under the session cw
   assert.ok(byPath['a.txt'].patch.includes('+two'));
   assert.equal(byPath['new.txt'].status, '?');
   assert.ok(byPath['new.txt'].patch.includes('+fresh'), 'untracked files get synthesized patches');
+});
+
+test('large diff summaries defer collapsed patches and serve one on demand', async (t) => {
+  const { execFileSync } = require('node:child_process');
+  const git = (cwd, ...args) => execFileSync('git', args, {
+    cwd, encoding: 'utf8',
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t',
+      GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null',
+    },
+  });
+  try { git(tmpHome, '--version'); } catch { return t.skip('git not available'); }
+
+  const repo = path.join(realCwd, 'repo-big');
+  fs.mkdirSync(repo, { recursive: true });
+  git(repo, 'init', '-q', '-b', 'main');
+  for (let i = 0; i < 7; i++) fs.writeFileSync(path.join(repo, `file-${i}.txt`), `old ${i}\n`);
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '-q', '-m', 'init');
+  for (let i = 0; i < 7; i++) fs.writeFileSync(path.join(repo, `file-${i}.txt`), `old ${i}\nnew ${i}\n`);
+
+  const { body } = await get(`/api/sessions/${REAL_CWD_ID}/diff`);
+  const entry = body.repos.find(r => r.path === 'repo-big');
+  assert.ok(entry, 'large repo is present in the summary');
+  assert.equal(entry.files.length, 7);
+  assert.ok(entry.files.every(f => f.patch === undefined && f.patchDeferred === true),
+    'collapsed patch text is absent from the summary payload');
+
+  const query = new URLSearchParams({ repo: 'repo-big', path: 'file-3.txt' });
+  const patch = await get(`/api/sessions/${REAL_CWD_ID}/diff/patch?${query}`);
+  assert.equal(patch.status, 200);
+  assert.match(patch.body.patch, /\+new 3/);
+  assert.equal(patch.body.truncated, false);
 });
 
 test('GET /diff 404s when the session cwd is unknown', async () => {
@@ -982,6 +1094,14 @@ test('SSE replays remembered extension UI state to new connections', async () =>
   };
 
   try {
+    // Compression middleware must not buffer event-stream chunks. Asking for
+    // gzip still yields an identity-encoded stream.
+    const streamHeaders = await fetch(`${base}/api/sessions/${BRIDGE_ID}/stream`, {
+      headers: { 'Accept-Encoding': 'gzip' },
+    });
+    assert.equal(streamHeaders.headers.get('content-encoding'), null);
+    await streamHeaders.body.cancel();
+
     // First client: receives live emissions (and causes the server to connect).
     const s1 = sseReader(`${base}/api/sessions/${BRIDGE_ID}/stream`);
     await s1.waitFor(e => e.event === 'init');
@@ -1025,4 +1145,18 @@ test('GET /api/config reports terminal disabled without PI_DISH_TERMINAL=1', asy
   const { status, body } = await get('/api/config');
   assert.equal(status, 200);
   assert.equal(body.terminal, false);
+});
+
+test('terminal-disabled startup omits xterm assets and compresses large static text', async () => {
+  const html = await (await fetch(base + '/')).text();
+  assert.doesNotMatch(html, /vendor\/xterm(?:-addon-fit)?\.(?:js|css)/,
+    'feature-gated terminal assets must not be part of the initial document');
+
+  const identity = await rawGet('/app.js', { 'Accept-Encoding': 'identity' });
+  const gzip = await rawGet('/app.js', { 'Accept-Encoding': 'gzip' });
+  assert.equal(gzip.headers['content-encoding'], 'gzip');
+  assert.match(gzip.headers.vary || '', /Accept-Encoding/i);
+  assert.deepEqual(zlib.gunzipSync(gzip.body), identity.body);
+  assert.ok(gzip.body.length < identity.body.length * 0.5,
+    `expected at least 50% savings (${identity.body.length} -> ${gzip.body.length})`);
 });

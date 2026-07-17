@@ -1452,7 +1452,8 @@ async function openFileViewer(mention) {
     pathEl.textContent = `${shortCwd(data.path)} · ${kb}${data.truncated ? ' · truncated preview' : ''}`;
     pathEl.title = data.path;
     if (data.image) {
-      body.innerHTML = `<img class="file-view-img" src="data:${escapeHtml(data.image.mimeType)};base64,${escapeHtml(data.image.data)}" alt="">`;
+      const src = data.image.url || `data:${data.image.mimeType};base64,${data.image.data}`;
+      body.innerHTML = `<img class="file-view-img" src="${escapeHtml(src)}" decoding="async" alt="">`;
       return;
     }
     fileViewRaw = data.content;
@@ -1857,6 +1858,11 @@ async function loadDiffView() {
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     rootEl.textContent = shortCwd(data.root);
     body.innerHTML = renderDiffViewHtml(data);
+    body.querySelectorAll('details.diff-file').forEach(details => {
+      details.addEventListener('toggle', () => {
+        if (details.open) loadDeferredDiffPatch(details);
+      });
+    });
   } catch (e) {
     body.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
   }
@@ -1891,9 +1897,12 @@ function renderDiffViewHtml(data) {
       const counts = f.binary
         ? '<span class="diff-file-note">binary</span>'
         : `<span class="diff-plus">+${f.additions}</span> <span class="diff-minus">−${f.deletions}</span>`;
+      const patchAttrs = `data-repo="${escapeHtml(repo.path)}" data-path="${escapeHtml(f.path)}" data-old-path="${escapeHtml(f.oldPath || '')}"`;
       const patchHtml = f.patch
-        ? `<div class="diff-patch" data-repo="${escapeHtml(repo.path)}" data-path="${escapeHtml(f.path)}" data-old-path="${escapeHtml(f.oldPath || '')}">${renderDiffHtml(f.patch)}${f.truncated ? '<div class="diff-file-note">… patch truncated</div>' : ''}</div>`
-        : `<div class="diff-file-note diff-patch-missing">${f.binary ? 'Binary file' : f.truncated ? 'Too large to preview' : 'No patch available'}</div>`;
+        ? `<div class="diff-patch" ${patchAttrs}>${renderDiffHtml(f.patch)}${f.truncated ? '<div class="diff-file-note">… patch truncated</div>' : ''}</div>`
+        : f.patchDeferred
+          ? `<div class="diff-patch" ${patchAttrs} data-deferred="1"><div class="loading">Loading patch…</div></div>`
+          : `<div class="diff-file-note diff-patch-missing">${f.binary ? 'Binary file' : f.truncated ? 'Too large to preview' : 'No patch available'}</div>`;
       html += `<details class="diff-file"${f.patch ? openAttr : ''}>`
         + `<summary><span class="diff-status diff-status-${diffStatusClass(f.status)}">${escapeHtml(f.status)}</span>`
         + `<span class="diff-file-path">${name}</span>`
@@ -1912,6 +1921,25 @@ function renderDiffViewHtml(data) {
     html += `<div class="diff-clean">clean: ${names}</div>`;
   }
   return html;
+}
+
+async function loadDeferredDiffPatch(details) {
+  const patch = details.querySelector('.diff-patch[data-deferred="1"]');
+  if (!patch || patch.dataset.loading || !currentSession) return;
+  patch.dataset.loading = '1';
+  try {
+    const query = new URLSearchParams({ repo: patch.dataset.repo, path: patch.dataset.path });
+    const res = await fetch(`/api/sessions/${currentSession.id}/diff/patch?${query}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    patch.innerHTML = renderDiffHtml(data.patch) +
+      (data.truncated ? '<div class="diff-file-note">… patch truncated</div>' : '');
+    delete patch.dataset.deferred;
+    delete patch.dataset.loading;
+  } catch (e) {
+    delete patch.dataset.loading;
+    patch.innerHTML = `<div class="diff-file-note diff-patch-missing">Could not load patch: ${escapeHtml(e.message)}. Collapse and reopen to retry.</div>`;
+  }
 }
 
 // --- Export ---
@@ -2326,9 +2354,11 @@ async function fetchNewMessagesSince(sessionId) {
 function imageBlocksHtml(content, alt = 'image') {
   const images = extractImageBlocks(content);
   if (!images.length) return '';
-  const imgs = images.map(img =>
-    `<img class="msg-image" src="data:${escapeHtml(img.mimeType)};base64,${escapeHtml(img.data)}" alt="${escapeHtml(alt)}">`
-  ).join('');
+  const imgs = images.map(img => {
+    const src = img.url || `data:${img.mimeType};base64,${img.data}`;
+    const loading = img.url ? ' loading="lazy" decoding="async"' : '';
+    return `<img class="msg-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"${loading}>`;
+  }).join('');
   return `<div class="msg-images">${imgs}</div>`;
 }
 
@@ -4526,11 +4556,36 @@ async function confirmBranch() {
 // =========================================================================
 
 let appConfig = { terminal: false };
+let terminalAssetsPromise = null;
+
+function loadTerminalAsset(tag, attrs) {
+  return new Promise((resolve, reject) => {
+    const el = document.createElement(tag);
+    Object.assign(el, attrs);
+    el.onload = resolve;
+    el.onerror = () => reject(new Error(`Failed to load ${attrs.src || attrs.href}`));
+    document.head.appendChild(el);
+  });
+}
+
+function loadTerminalAssets() {
+  if (terminalAssetsPromise) return terminalAssetsPromise;
+  terminalAssetsPromise = (async () => {
+    const css = loadTerminalAsset('link', { rel: 'stylesheet', href: 'vendor/xterm.css' });
+    await Promise.all([
+      css,
+      loadTerminalAsset('script', { src: 'vendor/xterm.js' }),
+    ]);
+    await loadTerminalAsset('script', { src: 'vendor/xterm-addon-fit.js' });
+  })();
+  return terminalAssetsPromise;
+}
 
 async function loadConfig() {
   try {
     const res = await fetch('/api/config');
     appConfig = await res.json();
+    if (appConfig.terminal) await loadTerminalAssets();
   } catch { /* feature stays hidden */ }
   updateTerminalButtons();
 }

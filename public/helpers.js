@@ -160,20 +160,19 @@ function getToolOutputText(partialResult) {
 }
 
 /**
- * Image content blocks — { data, mimeType } — from a message or tool-result
- * content array (e.g. a `read` on an image yields a text block plus an
- * {type:'image'} block). Non-array content and blocks without base64 data
- * yield nothing; mimeType defaults to image/png. Rendering is done by the
- * caller (this stays DOM-free); the browser data URI is
- * `data:${mimeType};base64,${data}`.
+ * Image content blocks from a message or tool-result content array. Live
+ * events carry `{ data, mimeType }`; historical pages project those bytes to
+ * `{ url, mimeType }` so the browser can cache/lazy-load them. Non-array
+ * content and blocks without either source yield nothing; mimeType defaults
+ * to image/png. Rendering stays with the DOM-owning caller.
  */
 function extractImageBlocks(content) {
   if (!Array.isArray(content)) return [];
   const out = [];
   for (const block of content) {
-    if (block && block.type === 'image' && block.data) {
-      out.push({ data: block.data, mimeType: block.mimeType || 'image/png' });
-    }
+    if (!block || block.type !== 'image') continue;
+    if (block.url) out.push({ url: block.url, mimeType: block.mimeType || 'image/png' });
+    else if (block.data) out.push({ data: block.data, mimeType: block.mimeType || 'image/png' });
   }
   return out;
 }
