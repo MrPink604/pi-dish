@@ -223,12 +223,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const messagesEl = document.getElementById('messages');
   if (messagesEl) {
-    messagesEl.addEventListener('scroll', () => updateJumpButton(messagesEl), { passive: true });
+    messagesEl.addEventListener('scroll', () => {
+      updateJumpButton(messagesEl);
+      maybeLoadOlderMessages(messagesEl);
+    }, { passive: true });
     // Any deliberate gesture in the feed cancels forced follow. Harmless when
     // already at the bottom — normal proximity pinning takes over seamlessly.
     const cancelFollow = () => { followStream = false; };
-    messagesEl.addEventListener('wheel', cancelFollow, { passive: true });
-    messagesEl.addEventListener('touchmove', cancelFollow, { passive: true });
+    messagesEl.addEventListener('wheel', (e) => {
+      cancelFollow();
+      if (e.deltaY < 0) maybeLoadOlderMessages(messagesEl);
+    }, { passive: true });
+    messagesEl.addEventListener('touchmove', () => {
+      cancelFollow();
+      maybeLoadOlderMessages(messagesEl);
+    }, { passive: true });
     messagesEl.addEventListener('mousedown', cancelFollow, { passive: true });
     // Copy a fenced code block's text (delegated — messages re-render often).
     messagesEl.addEventListener('click', (e) => {
@@ -790,7 +799,14 @@ function mergeCurrentSession(id, fields) {
 // Session Selection
 // =========================================================================
 
-async function selectSession(id) {
+async function selectSession(id, { forceTranscriptReload = false } = {}) {
+  // Search marks are transient UI, but the pages search loaded are not. Clear
+  // the marks before moving the current transcript into its short-lived DOM
+  // cache so revisiting restores clean, already-finalized message nodes.
+  cancelStreamingRender();
+  closeSearch();
+  stashCurrentTranscript();
+  if (forceTranscriptReload) transcriptCache.delete(id);
   if (!setCurrentSession(id)) return;
   // Tear down the previous session's stream up front, before the awaits below.
   // Left open, its in-flight turn_end/message_update events fire against the
@@ -2172,6 +2188,9 @@ async function selectModel(fullModelId) {
 // =========================================================================
 
 const MESSAGE_PAGE_SIZE = 50;
+const TRANSCRIPT_CACHE_TTL_MS = 15 * 60 * 1000;
+const TRANSCRIPT_CACHE_MAX_SESSIONS = 5;
+const LOAD_OLDER_SCROLL_THRESHOLD = 200;
 
 // Pagination cursors for the currently loaded session.
 let oldestLoadedIndex = null;
@@ -2179,6 +2198,76 @@ let lastLoadedIndex = null;
 let hasMoreOlder = false;
 let totalMessages = 0;
 let loadingOlder = false;
+
+// Recently viewed transcript DOM, including every page the reader explicitly
+// loaded. Moving nodes into a DocumentFragment preserves expensive markdown,
+// highlighting, open tool groups, and image elements without serializing or
+// re-downloading them. The bounded TTL/LRU policy keeps that convenience from
+// turning a tour through many large sessions into unbounded memory growth.
+const transcriptCache = new Map();
+
+function pruneTranscriptCache(skipId) {
+  const now = Date.now();
+  for (const [id, entry] of transcriptCache) {
+    if (id !== skipId && now - entry.lastUsed > TRANSCRIPT_CACHE_TTL_MS) transcriptCache.delete(id);
+  }
+  while (transcriptCache.size > TRANSCRIPT_CACHE_MAX_SESSIONS) {
+    const oldest = [...transcriptCache.entries()]
+      .filter(([id]) => id !== skipId)
+      .sort((a, b) => a[1].lastUsed - b[1].lastUsed)[0];
+    if (!oldest) break;
+    transcriptCache.delete(oldest[0]);
+  }
+}
+
+function stashCurrentTranscript() {
+  const id = currentSession?.id;
+  const container = document.getElementById('messages');
+  if (!id || !container || lastLoadedIndex == null || container.querySelector('.loading, .error')) return;
+  const scrollTop = container.scrollTop;
+  const mood = document.getElementById('moodIndicator');
+  const fragment = transcriptCache.get(id)?.fragment || document.createDocumentFragment();
+  fragment.replaceChildren();
+  while (container.firstChild) fragment.appendChild(container.firstChild);
+  transcriptCache.set(id, {
+    fragment,
+    oldestLoadedIndex,
+    lastLoadedIndex,
+    hasMoreOlder,
+    totalMessages,
+    scrollTop,
+    moodDescription: mood?.dataset.moodDescription || '',
+    moodFace: mood?.dataset.moodFace || '',
+    lastUsed: Date.now(),
+  });
+  pruneTranscriptCache(id);
+}
+
+function restoreCachedTranscript(id) {
+  const cached = transcriptCache.get(id);
+  if (!cached) return false;
+  if (Date.now() - cached.lastUsed > TRANSCRIPT_CACHE_TTL_MS) {
+    transcriptCache.delete(id);
+    return false;
+  }
+  const container = document.getElementById('messages');
+  if (!container || !cached.fragment.childNodes.length) return false;
+  container.replaceChildren(cached.fragment);
+  oldestLoadedIndex = cached.oldestLoadedIndex;
+  lastLoadedIndex = cached.lastLoadedIndex;
+  hasMoreOlder = cached.hasMoreOlder;
+  totalMessages = cached.totalMessages;
+  cached.lastUsed = Date.now();
+  setMoodIndicator(cached.moodDescription, cached.moodFace);
+  container.scrollTop = cached.scrollTop;
+  updateJumpButton(container);
+  pruneTranscriptCache(id);
+  return true;
+}
+
+function maybeLoadOlderMessages(container) {
+  if (container?.scrollTop <= LOAD_OLDER_SCROLL_THRESHOLD) loadOlderMessages();
+}
 
 function renderMessageHtml(msg) {
   const time = msg.timestamp ? formatTime(msg.timestamp) : '';
@@ -2197,6 +2286,13 @@ async function loadMessages(id) {
   cancelStreamingRender();
   closeSearch();
   const container = document.getElementById('messages');
+  if (restoreCachedTranscript(id)) {
+    // Keep the warm pages visible while checking for anything appended since
+    // this session was last viewed. Inactive sessions have no SSE init to do
+    // this catch-up for them.
+    await fetchNewMessagesSince(id);
+    return;
+  }
   container.innerHTML = '<div class="loading">Loading...</div>';
   oldestLoadedIndex = null;
   lastLoadedIndex = null;
@@ -2246,6 +2342,8 @@ function renderMessages(messages) {
 async function loadOlderMessages() {
   if (loadingOlder || !hasMoreOlder || !currentSession || oldestLoadedIndex == null) return;
   loadingOlder = true;
+  const sessionId = currentSession.id;
+  const beforeIndex = oldestLoadedIndex;
   const container = document.getElementById('messages');
   const bar = document.getElementById('loadOlderBar');
   if (bar) bar.querySelector('.load-older-btn').textContent = 'Loading...';
@@ -2258,8 +2356,11 @@ async function loadOlderMessages() {
   const anchorOffset = anchor ? anchor.getBoundingClientRect().top : 0;
 
   try {
-    const res = await fetch(`/api/sessions/${currentSession.id}/messages?limit=${MESSAGE_PAGE_SIZE}&before=${oldestLoadedIndex}`);
+    const res = await fetch(`/api/sessions/${sessionId}/messages?limit=${MESSAGE_PAGE_SIZE}&before=${beforeIndex}`);
     const data = await res.json();
+    // The request belongs to the transcript that initiated it. A quick
+    // session switch must not prepend those messages into the new session.
+    if (currentSession?.id !== sessionId) return;
     const { messages, firstIndex, hasMore } = data;
     if (messages && messages.length) {
       const html = messages.map(renderMessageHtml).join('');
@@ -4542,7 +4643,7 @@ async function confirmBranch() {
       } catch {}
     }
     setStatus('Branched — reloading');
-    selectSession(currentSession.id);
+    selectSession(currentSession.id, { forceTranscriptReload: true });
   } catch (e) {
     setStatus('Branch failed: ' + e.message, 'error');
     if (btn) { btn.disabled = false; btn.textContent = 'Branch from here'; }

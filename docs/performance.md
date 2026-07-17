@@ -59,6 +59,11 @@ The optimization tests enforce the following:
 - Historical transcript images and file-viewer images are resource URLs, not
   base64 JSON fields. The bytes and MIME type are preserved; transcript images
   use native lazy loading and still render successfully in the browser.
+- Transcript pages intentionally loaded by scrolling or in-session search stay
+  warm across brief session switches (five sessions, 15-minute TTL). Their
+  finalized DOM is moved into a fragment and restored in place, avoiding a
+  repeat tail download and markdown/highlighting pass; an incremental
+  `after=` request still catches up newly appended messages.
 - Diffs with at most six files retain inline patches and open-by-default
   behavior. Larger changesets omit collapsed patch bodies from the summary
   response; expanding a file fetches the same patch, after which line

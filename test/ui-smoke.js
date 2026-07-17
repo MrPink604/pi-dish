@@ -106,11 +106,26 @@ const CWD_B = path.join(tmpHome, 'workspace', 'proj-beta');
 fs.mkdirSync(CWD_B, { recursive: true });
 const sessionDirB = path.join(tmpHome, '.pi', 'agent', 'sessions', '--home-user-proj-beta--');
 fs.mkdirSync(sessionDirB, { recursive: true });
-fs.writeFileSync(path.join(sessionDirB, `${BETA_ID}.jsonl`), [
+const betaEntries = [
   { type: 'session', cwd: CWD_B, timestamp: '2026-07-04T00:00:00.000Z' },
   { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'beta question' }], timestamp: '2026-07-04T00:00:01.000Z' } },
   { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'beta answer' }], timestamp: '2026-07-04T00:00:02.000Z' } },
-].map((e) => JSON.stringify(e)).join('\n') + '\n');
+];
+// Long enough to require three transcript pages. This protects intentional
+// history loading: scrolling to the top pages backward, and switching away
+// briefly must not discard the pages the reader chose to load.
+for (let i = 0; i < 128; i++) {
+  betaEntries.push({
+    type: 'message',
+    message: {
+      role: i % 2 ? 'assistant' : 'user',
+      content: [{ type: 'text', text: `${i === 0 ? 'archival needle · ' : ''}beta history ${i}` }],
+      timestamp: new Date(Date.parse('2026-07-04T00:01:00.000Z') + i * 1000).toISOString(),
+    },
+  });
+}
+fs.writeFileSync(path.join(sessionDirB, `${BETA_ID}.jsonl`),
+  betaEntries.map((e) => JSON.stringify(e)).join('\n') + '\n');
 
 // --- fake bridge socket -------------------------------------------------------
 // Speaks the newline-delimited JSON protocol from lib/bridge-session.js:
@@ -1164,6 +1179,42 @@ function writeRegistry(patch = {}) {
       document.querySelectorAll('#sessionList .session-item').length >= 3, null, { timeout: 5000 });
     check(await desktop.locator('.session-item-snippet').count() === 0,
       'clearing the query drops snippets and restores the list');
+
+    // 13. Long transcript history: reaching the top should implicitly page
+    // older messages. Pages loaded deliberately stay warm across a brief
+    // session switch, including the earliest page a filtered search may need.
+    console.log('transcript history retention:');
+    await desktop.click(`.session-item[data-id="${BETA_ID}"]`);
+    await desktop.waitForFunction(() =>
+      document.querySelectorAll('#messages [data-msg-index]').length === 50,
+      null, { timeout: 5000 });
+    await desktop.evaluate(() => { document.getElementById('messages').scrollTop = 0; });
+    await desktop.waitForFunction(() =>
+      document.querySelectorAll('#messages [data-msg-index]').length >= 100,
+      null, { timeout: 5000 });
+    check(true, 'scrolling to the top implicitly loads the previous transcript page');
+    await desktop.evaluate(() => { document.getElementById('messages').scrollTop = 0; });
+    await desktop.waitForFunction(() =>
+      document.querySelector('#messages [data-msg-index="0"]'),
+      null, { timeout: 5000 });
+    const loadedBetaCount = await desktop.locator('#messages [data-msg-index]').count();
+    check(loadedBetaCount === 130, `repeated upward scrolling reaches the full history (got ${loadedBetaCount})`);
+    await desktop.evaluate(() => {
+      const el = document.getElementById('messages');
+      el.scrollTop = el.scrollHeight;
+    });
+    check(await desktop.locator('#messages [data-msg-index]').count() === loadedBetaCount,
+      'returning to the latest message keeps intentionally loaded history');
+    await desktop.click(`.session-item[data-id="${registryState.sessionId}"]`);
+    await desktop.waitForSelector('#messages .message.assistant');
+    await desktop.click(`.session-item[data-id="${BETA_ID}"]`);
+    await desktop.waitForFunction((count) =>
+      document.querySelectorAll('#messages [data-msg-index]').length === count,
+      loadedBetaCount, { timeout: 5000 });
+    check(await desktop.locator('#messages [data-msg-index="0"]').count() === 1,
+      'briefly switching sessions preserves the earliest loaded history');
+    await desktop.click(`.session-item[data-id="${registryState.sessionId}"]`);
+    await desktop.waitForSelector('#messages .message.assistant');
 
     await desktop.click('#tabActive');
     await desktop.waitForTimeout(200);

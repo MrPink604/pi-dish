@@ -669,6 +669,17 @@ so the outside-click closer must treat detached targets as inside.
   match index is in the DOM, then marks hits (`mark.search-mark`) and outlines
   the message (`.search-current`). In focus mode, `toolResult` matches are
   skipped.
+- **History retention and implicit paging**: the newest 50 messages still form
+  the cold-load baseline, but scrolling within 200px of the top implicitly
+  calls `loadOlderMessages()` (the explicit button remains as a fallback).
+  Pages a reader intentionally loaded are moved, not cloned, into a bounded
+  per-session `DocumentFragment` cache on navigation: five recent transcripts
+  for 15 minutes, including their scroll position, open DOM state, cursors,
+  and mood. Restoring a warm transcript immediately performs an `after=`
+  catch-up, so retention saves rendering/bandwidth without hiding new output.
+  Branch navigation must pass `forceTranscriptReload` because it can change
+  authoritative history. Older-page responses are session-scoped so a fast
+  switch cannot prepend one session's history into another.
 
 ## Tree navigation / branch summaries (tree modal, POST /branch)
 
