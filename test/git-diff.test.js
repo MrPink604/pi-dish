@@ -93,6 +93,20 @@ test('splitPatch resolves deletions and renames', () => {
   assert.equal(files[1].oldPath, 'old.txt');
 });
 
+test('parseNumstat handles ordinary, renamed, and binary records', () => {
+  const out = [
+    '2\t1\tplain.txt',
+    '3\t0\t', 'old name.txt', 'new name.txt',
+    '-\t-\timage.png',
+    '',
+  ].join('\0');
+  assert.deepEqual(GD.parseNumstat(out), [
+    { path: 'plain.txt', oldPath: null, additions: 2, deletions: 1, binary: false },
+    { path: 'new name.txt', oldPath: 'old name.txt', additions: 3, deletions: 0, binary: false },
+    { path: 'image.png', oldPath: null, additions: 0, deletions: 0, binary: true },
+  ]);
+});
+
 // --- repo walking + aggregation ---------------------------------------------
 
 test('findGitRepos finds nested repos but skips heavies and repo interiors', { skip: !gitOk }, () => {
@@ -173,4 +187,21 @@ test('a non-repo cwd with no repos below returns an empty list', { skip: !gitOk 
   fs.mkdirSync(dir, { recursive: true });
   const out = await GD.aggregateDiffs(path.join(tmpDir, 'norepos'));
   assert.deepEqual(out.repos, []);
+});
+
+test('inline limit returns numstat summaries and generates one selected patch on demand', { skip: !gitOk }, async () => {
+  const dir = makeRepo('summary', Object.fromEntries(
+    Array.from({ length: 7 }, (_, i) => [`file-${i}.txt`, `old ${i}\n`]),
+  ));
+  for (let i = 0; i < 7; i++) fs.writeFileSync(path.join(dir, `file-${i}.txt`), `old ${i}\nnew ${i}\n`);
+
+  const out = await GD.aggregateDiffs(dir, { inlineLimit: 6 });
+  const files = out.repos[0].files;
+  assert.equal(files.length, 7);
+  assert.ok(files.every(file => file.patch === undefined && file.patchDeferred === true));
+  assert.ok(files.every(file => file.additions === 1 && file.deletions === 0));
+
+  const selected = await GD.getFilePatch(dir, files[3]);
+  assert.match(selected.patch, /\+new 3/);
+  assert.equal(selected.truncated, false);
 });

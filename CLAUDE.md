@@ -38,6 +38,12 @@ falls back to `execCommand('copy')` because `navigator.clipboard` doesn't
 exist on insecure origins (phones hit the server over plain LAN http — a
 clipboard-only button silently no-ops there).
 
+Static text and JSON responses pass through Express's `compression`
+middleware (1KB threshold). `/api/sessions/:id/stream` is explicitly excluded:
+compressor buffering adds SSE latency unless every event is flushed. Keep the
+identity-encoded SSE assertion when changing middleware order. The external
+scripts are ordered `defer` scripts so HTML parsing is not blocked.
+
 ## Theme
 
 Solarized dark by default. All colors flow from the `:root` tokens at the top
@@ -94,6 +100,13 @@ copy (callers overlay live usage onto it); the other readers return the
 cached value itself — never mutate it. Context window/percent are derived in
 server.js (`withContext`) at read time, not inside the cache — the models
 cache warms asynchronously and would bake in stale windows.
+
+`GET /api/sessions/:id/messages` projects historical `{type:'image', data}`
+blocks to resource URLs; the indexed image route reads the authoritative cached
+message and returns binary bytes. This keeps base64 out of paginated JSON and
+lets `<img loading="lazy">` defer off-screen transcript images. Do not mutate
+the cached message array while projecting it. Live SSE images remain inline so
+a just-produced image can render before the JSONL catch-up.
 
 ## Session index (lib/session-index.js)
 
@@ -333,6 +346,14 @@ Client: `.session-view.diff-open` hides transcript/composer/terminal in CSS
 through pure `renderDiffHtml`/`diffStatusClass` in helpers.js. Fetched on
 open and ⟳ only — no polling. Closed by ✕ / Escape / session switch.
 Inactive sessions can't reach it (the whole actions row hides for them).
+Changesets of six files or fewer keep their patches inline and open by
+default. Larger responses use `git diff --numstat -z` metadata and mark text
+files `patchDeferred` without generating their patch strings; opening a file
+fetches `/diff/patch` and renders only that patch. The server
+keeps a short, four-entry aggregate snapshot cache so the patch comes from the
+same view as its summary and so the patch route never passes client-supplied
+paths to git. Preserve both the small-diff behavior and the lazy large-diff
+browser assertions.
 
 ## Client session state (public/app.js)
 
@@ -505,7 +526,8 @@ timer re-arms for the remaining silence). A `restart` WS frame kills and
 respawns the shell carrying attached sockets over (⟳ in the panel header;
 frame handlers look the terminal up per message, never close over it, so
 input follows the new PTY). Client side:
-xterm.js + fit addon (vendored, UMD globals), theme built from the `:root`
+xterm.js + fit addon (vendored, UMD globals, loaded only after `/api/config`
+enables the terminal — disabled app loads must not request them), theme built from the `:root`
 tokens in `terminalTheme()`, mobile extra-keys bar with a ctrl latch that
 rewrites the next key in `term.onData`. The panel's top edge is a drag
 handle (`initTerminalResize`; pointer capture, so no document listeners;

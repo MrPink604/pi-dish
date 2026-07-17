@@ -361,8 +361,16 @@ function writeRegistry(patch = {}) {
     await desktop.waitForSelector('.message.tool-result .tool-result-details img.msg-image', { timeout: 3000 });
     check(await imgResult.locator('.tool-result-details img.msg-image').count() === 1,
       'image tool result renders one img.msg-image inside the details');
-    const imgSrc = await imgResult.locator('img.msg-image').getAttribute('src');
-    check(imgSrc.startsWith('data:image/png;base64,'), `image src is a png data URI (got ${imgSrc.slice(0, 30)}…)`);
+    const historicalImage = imgResult.locator('img.msg-image');
+    const imgSrc = await historicalImage.getAttribute('src');
+    check(imgSrc.startsWith(`/api/sessions/${SESSION_ID}/messages/`),
+      `historical image uses a session resource URL (got ${imgSrc})`);
+    check(await historicalImage.getAttribute('loading') === 'lazy', 'historical image opts into native lazy loading');
+    await desktop.waitForFunction(() => {
+      const img = document.querySelector('.message.tool-result img.msg-image');
+      return img?.complete && img.naturalWidth === 1;
+    }, { timeout: 3000 });
+    check(true, 'resource-backed historical image renders successfully');
     await histGroup.evaluate(el => { el.open = false; });
 
     // 2. Prompt round-trip through the fake bridge
@@ -612,6 +620,38 @@ function writeRegistry(patch = {}) {
       { timeout: 2000 });
     check(await desktop.locator('#btnDiff.active').count() === 0,
       'Escape closes the diff view and restores the transcript');
+
+    // Grow the same changeset past the inline threshold. The summary must
+    // remain useful immediately without constructing hidden patch DOM; opening
+    // one file loads just that patch and preserves line-comment behavior.
+    console.log('large diff lazy patches:');
+    for (let i = 0; i < 5; i++) fs.writeFileSync(path.join(REPO, `lazy-${i}.txt`), `lazy line ${i}\n`);
+    await desktop.click('#btnDiff');
+    await desktop.waitForFunction(() => document.querySelectorAll('.diff-file').length === 7,
+      { timeout: 5000 });
+    check(await desktop.locator('.diff-file[open]').count() === 0, 'large changeset starts collapsed');
+    check(await desktop.locator('.diff-line').count() === 0, 'collapsed large diff builds no patch-line DOM');
+    const lazyFile = desktop.locator('.diff-file').filter({ hasText: 'lazy-3.txt' });
+    await lazyFile.locator('summary').click();
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('.diff-line.diff-add')].some(el => el.textContent === '+lazy line 3'),
+      { timeout: 5000 });
+    check(await desktop.locator('.diff-line').count() === 2,
+      'expanding one file renders only its hunk and added line');
+    await desktop.evaluate(() => {
+      const line = [...document.querySelectorAll('.diff-line.diff-add')]
+        .find((el) => el.textContent === '+lazy line 3');
+      const range = document.createRange();
+      range.selectNodeContents(line);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      captureDiffCommentSelection();
+    });
+    check(await desktop.locator('#diffCommentBtn').isEnabled(), 'lazy patch lines retain comment selection');
+    await desktop.keyboard.press('Escape');
+    await desktop.waitForFunction(() => document.getElementById('messages').offsetParent !== null,
+      { timeout: 2000 });
 
     // Wide desktop: the message feed centers a reading column instead of
     // hugging the left edge.

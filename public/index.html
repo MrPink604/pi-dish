@@ -18,13 +18,13 @@
   <!-- Vendored (see scripts/build-vendor.js) — no CDN so the UI works on
        LAN-only clients and markdown rendering never silently degrades. -->
   <link rel="stylesheet" href="vendor/hljs-theme.min.css">
-  <link rel="stylesheet" href="vendor/xterm.css">
-  <script src="vendor/marked.min.js"></script>
-  <script src="vendor/highlight.js"></script>
-  <!-- Terminal (feature-flagged; see /api/config). deferred — only used
-       after DOMContentLoaded, no need to block first paint on 480KB. -->
-  <script src="vendor/xterm.js" defer></script>
-  <script src="vendor/xterm-addon-fit.js" defer></script>
+  <!-- Ordered deferred scripts preserve the marked → helpers → app dependency
+       chain without blocking HTML parsing. Terminal assets are loaded by
+       app.js only when /api/config enables that feature. -->
+  <script src="vendor/marked.min.js" defer></script>
+  <script src="vendor/highlight.js" defer></script>
+  <script src="helpers.js" defer></script>
+  <script src="app.js" defer></script>
 </head>
 <body>
   <div class="app">
@@ -378,8 +378,6 @@
     </div>
   </div>
 
-  <script src="helpers.js"></script>
-  <script src="app.js"></script>
   <div class="model-dropdown" id="modelDropdown"></div>
   <div class="thinking-dropdown" id="thinkingDropdown" style="display:none"></div>
 </body>
