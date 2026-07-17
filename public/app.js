@@ -800,11 +800,20 @@ function mergeCurrentSession(id, fields) {
 // =========================================================================
 
 async function selectSession(id, { forceTranscriptReload = false } = {}) {
+  // Validate the target before tearing anything down: a stale id (a resume
+  // racing a filtered refresh, a pruned session) must leave the current view
+  // intact instead of stashing the transcript and then bailing on a blank pane.
+  if (!findSession(id)) return;
   // Search marks are transient UI, but the pages search loaded are not. Clear
   // the marks before moving the current transcript into its short-lived DOM
   // cache so revisiting restores clean, already-finalized message nodes.
   cancelStreamingRender();
   closeSearch();
+  // The diff and file views show the previous session's workspace — close them
+  // before stashing: their takeover CSS display:nones #messages, whose
+  // scrollTop reads 0 while hidden and would be cached as the reader's spot.
+  closeDiffView();
+  closeFileView();
   stashCurrentTranscript();
   if (forceTranscriptReload) transcriptCache.delete(id);
   if (!setCurrentSession(id)) return;
@@ -817,9 +826,6 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
   // The terminal panel is per-session (its PTY keeps running server-side;
   // reopening reattaches with scrollback).
   closeTerminal();
-  // The diff and file views show the previous session's workspace — close them.
-  closeDiffView();
-  closeFileView();
   // Extension widgets/statuses/dialogs are per-session; the new session's
   // remembered set is replayed by the server when its stream connects.
   clearExtensionUI();
@@ -2190,6 +2196,10 @@ async function selectModel(fullModelId) {
 const MESSAGE_PAGE_SIZE = 50;
 const TRANSCRIPT_CACHE_TTL_MS = 15 * 60 * 1000;
 const TRANSCRIPT_CACHE_MAX_SESSIONS = 5;
+// The session-count bound alone puts no ceiling on retained DOM — one
+// deep-scrolled transcript can hold thousands of highlighted messages. Cap
+// each stash at its newest messages; trimmed history re-pages in on demand.
+const TRANSCRIPT_CACHE_MAX_MESSAGES = 300;
 const LOAD_OLDER_SCROLL_THRESHOLD = 200;
 
 // Pagination cursors for the currently loaded session.
@@ -2229,7 +2239,7 @@ function stashCurrentTranscript() {
   const fragment = transcriptCache.get(id)?.fragment || document.createDocumentFragment();
   fragment.replaceChildren();
   while (container.firstChild) fragment.appendChild(container.firstChild);
-  transcriptCache.set(id, {
+  const entry = {
     fragment,
     oldestLoadedIndex,
     lastLoadedIndex,
@@ -2239,8 +2249,30 @@ function stashCurrentTranscript() {
     moodDescription: mood?.dataset.moodDescription || '',
     moodFace: mood?.dataset.moodFace || '',
     lastUsed: Date.now(),
-  });
+  };
+  trimStashedTranscript(entry);
+  transcriptCache.set(id, entry);
   pruneTranscriptCache(id);
+}
+
+// Drop a stash's oldest messages past the cap and re-point its older-page
+// cursor at the oldest survivor, so a restore pages the trimmed history back
+// in through the normal top-of-feed path (the load-older bar goes with the
+// trimmed nodes; the first implicit page-in re-renders it with a fresh count).
+function trimStashedTranscript(entry) {
+  const { fragment } = entry;
+  const indexed = fragment.querySelectorAll('[data-msg-index]');
+  if (indexed.length <= TRANSCRIPT_CACHE_MAX_MESSAGES) return;
+  // Cut at the top-level ancestor of the oldest kept message — messages
+  // folded into a tool-group must move (or stay) with their group.
+  let keep = indexed[indexed.length - TRANSCRIPT_CACHE_MAX_MESSAGES];
+  while (keep.parentNode && keep.parentNode !== fragment) keep = keep.parentNode;
+  while (fragment.firstChild && fragment.firstChild !== keep) fragment.firstChild.remove();
+  const first = fragment.querySelector('[data-msg-index]');
+  const firstIndex = first ? parseInt(first.dataset.msgIndex, 10) : NaN;
+  if (Number.isNaN(firstIndex)) return;
+  entry.oldestLoadedIndex = firstIndex;
+  entry.hasMoreOlder = firstIndex > 0;
 }
 
 function restoreCachedTranscript(id) {

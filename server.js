@@ -943,12 +943,20 @@ function shortString(value, max) {
 }
 
 function inferSessionForPath(absPath) {
-  const candidates = listRegisteredSessions().filter((entry) => {
-    if (!entry.cwd) return false;
-    const cwd = path.resolve(entry.cwd);
-    return absPath === cwd || absPath.startsWith(cwd + path.sep);
-  });
-  return candidates.length === 1 ? candidates[0].sessionId : null;
+  // Nested session cwds are normal here (a checkout under a workspace root
+  // that another session sits in), so the most specific containing cwd wins.
+  // Only a genuine tie — two sessions at the same depth, e.g. the same cwd —
+  // is ambiguous enough to give up on.
+  const candidates = listRegisteredSessions()
+    .filter((entry) => {
+      if (!entry.cwd) return false;
+      const cwd = path.resolve(entry.cwd);
+      return absPath === cwd || absPath.startsWith(cwd + path.sep);
+    })
+    .sort((a, b) => path.resolve(b.cwd).length - path.resolve(a.cwd).length);
+  if (!candidates.length) return null;
+  if (candidates[1] && path.resolve(candidates[1].cwd).length === path.resolve(candidates[0].cwd).length) return null;
+  return candidates[0].sessionId;
 }
 
 function cleanAnchor(raw) {
@@ -1720,6 +1728,12 @@ app.get('/api/sessions/:id/diff/patch', async (req, res) => {
       const data = await aggregateDiffs(cwd, { inlineLimit: DIFF_INLINE_FILE_LIMIT });
       rememberDiffSnapshot(req.params.id, cwd, data);
       snapshot = diffSnapshots.get(req.params.id);
+    } else {
+      // Browsing a large diff means patch fetches spread over minutes: touch
+      // the snapshot on every hit (re-stamps `at` and its eviction order), or
+      // the TTL/insertion-order eviction silently swaps in a rebuild of a
+      // changed tree that no longer matches the summary the pane is showing.
+      rememberDiffSnapshot(req.params.id, cwd, snapshot.data);
     }
     const repo = snapshot.data.repos.find(item => item.path === repoPath);
     const file = repo?.files.find(item => item.path === filePath);

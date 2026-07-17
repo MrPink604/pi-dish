@@ -654,6 +654,42 @@ test('POST /api/pages validates the root but imposes no path gate', async () => 
   await del(`/api/pages/${ok.body.token}`);
 });
 
+test('publishing without a sessionId infers the most specific containing cwd', async () => {
+  // Nested session cwds (a checkout under a workspace root another session
+  // sits in) must route to the deepest match, not bail as ambiguous — a page
+  // stored with sessionId null makes every later page comment 404.
+  const OUTER_ID = '2026-07-04T16-00-00-inferout';
+  const INNER_ID = '2026-07-04T16-00-00-inferinn';
+  const outerCwd = path.join(tmpHome, 'ws');
+  const innerCwd = path.join(outerCwd, 'repo');
+  fs.mkdirSync(innerCwd, { recursive: true });
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const sockStub = path.join(tmpHome, 'infer-sock-stub');
+  fs.writeFileSync(sockStub, '');
+  for (const [id, cwd] of [[OUTER_ID, outerCwd], [INNER_ID, innerCwd]]) {
+    fs.writeFileSync(path.join(registryDir, `${id}.json`), JSON.stringify({
+      sessionId: id, socketPath: sockStub, pid: process.pid, cwd, sessionFile: SESSION_FILE,
+    }));
+  }
+  await new Promise(r => setTimeout(r, 600)); // registry scan memo TTL
+
+  const artifact = path.join(innerCwd, 'findings.html');
+  fs.writeFileSync(artifact, '<p>findings</p>');
+  try {
+    const { status, body } = await post('/api/pages', { path: artifact });
+    assert.equal(status, 200);
+    const inner = await get(`/api/pages?sessionId=${INNER_ID}`);
+    assert.ok(inner.body.some((p) => p.token === body.token),
+      'the page routes to the deepest containing session cwd');
+    await del(`/api/pages/${body.token}`);
+  } finally {
+    for (const id of [OUTER_ID, INNER_ID]) {
+      fs.rmSync(path.join(registryDir, `${id}.json`), { force: true });
+    }
+  }
+});
+
 test('GET /page with an unknown token is a bare 404', async () => {
   const res = await fetch(base + '/page/does-not-exist');
   assert.equal(res.status, 404);

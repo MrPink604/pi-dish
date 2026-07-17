@@ -49,6 +49,15 @@ function ancestorPids() {
   return result;
 }
 
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
+}
+
 function registryEntries() {
   const dir = path.join(os.homedir(), '.pi', 'dish', 'sessions');
   let names;
@@ -56,7 +65,14 @@ function registryEntries() {
   return names.filter((name) => name.endsWith('.json')).flatMap((name) => {
     try {
       const entry = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
-      return entry?.sessionId ? [entry] : [];
+      if (!entry?.sessionId) return [];
+      // Mirror the server's scanRegistry liveness rules (minus its pruning
+      // side effects — this CLI only reads): a crashed pi leaves its entry
+      // behind, and a dead session must not win cwd fallback or inflate the
+      // "N live sessions" count in the ambiguity error.
+      if (entry.socketPath && !fs.existsSync(entry.socketPath)) return [];
+      if (Number.isInteger(entry.pid) && !pidAlive(entry.pid)) return [];
+      return [entry];
     } catch {
       return [];
     }
