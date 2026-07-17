@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pi-dish Comments"
+  short_description: "Review anchored comments from pi-dish"
+  default_prompt: "Use $pi-dish-comments to inventory open comments and address a coherent relevant group."

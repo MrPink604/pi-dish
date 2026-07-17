@@ -88,6 +88,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadSpawnTargets(); // populate the "Run in" tmux selector (hidden if no tmux)
   initTerminalKeybar();
   initTerminalResize();
+  initCommentSelections();
   // Full fetch: restoring the saved session may need the historical list.
   await loadSessions(undefined, { withPrevious: true });
   loadModels();
@@ -1403,6 +1404,10 @@ function closeStatsModal() {
 // raw text is kept for the copy button.
 let fileViewRaw = null;
 let fileViewAbsPath = null; // resolved path of the viewed file (publish target)
+let fileViewRelPath = null;
+let fileCommentSelection = null;
+let diffCommentSelection = null;
+let anchoredCommentDraft = null;
 
 function isFileViewOpen() {
   return document.getElementById('sessionView').classList.contains('file-open');
@@ -1415,6 +1420,9 @@ async function openFileViewer(mention) {
   const pathEl = document.getElementById('fileViewPath');
   fileViewRaw = null;
   fileViewAbsPath = null;
+  fileViewRelPath = null;
+  fileCommentSelection = null;
+  document.getElementById('fileCommentBtn').disabled = true;
   document.getElementById('fileViewPublish').style.display = 'none';
   renderFilePageRow(null);
   title.textContent = mention.replace(/:\d+(?::\d+)?$/, '').split('/').pop();
@@ -1429,6 +1437,7 @@ async function openFileViewer(mention) {
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     title.textContent = data.path.split('/').pop();
     fileViewAbsPath = data.path;
+    fileViewRelPath = data.relPath;
     document.getElementById('fileViewPublish').style.display = '';
     // Already published (by the agent or a previous click)? Show its link.
     fetch('/api/pages')
@@ -1470,7 +1479,157 @@ function closeFileView() {
   document.getElementById('fileViewBody').innerHTML = '';
   fileViewRaw = null;
   fileViewAbsPath = null;
+  fileViewRelPath = null;
+  fileCommentSelection = null;
+  document.getElementById('fileCommentBtn').disabled = true;
   renderFilePageRow(null);
+}
+
+// --- Anchored review comments (file + diff views) ---
+// A selection is captured on pointer-up, before clicking the header button
+// can collapse it.  Files/prose use a quote with surrounding text; diffs add
+// old/new line coordinates parsed from the unified hunk.
+
+function selectionTextAnchor(root, range) {
+  const before = document.createRange();
+  before.selectNodeContents(root);
+  before.setEnd(range.startContainer, range.startOffset);
+  const after = document.createRange();
+  after.selectNodeContents(root);
+  after.setStart(range.endContainer, range.endOffset);
+  return {
+    type: 'text',
+    // Keep the exact selected extent. Trimming would leave prefix/suffix
+    // relative to different boundaries and break exact re-anchoring.
+    quote: range.toString(),
+    prefix: before.toString().slice(-300),
+    suffix: after.toString().slice(0, 300),
+  };
+}
+
+function captureFileCommentSelection() {
+  const button = document.getElementById('fileCommentBtn');
+  fileCommentSelection = null;
+  button.disabled = true;
+  if (!isFileViewOpen() || !fileViewAbsPath || fileViewRaw == null) return;
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || !selection.rangeCount) return;
+  const root = document.getElementById('fileViewBody');
+  const range = selection.getRangeAt(0);
+  if (!root.contains(range.commonAncestorContainer)) return;
+  const selectedText = range.toString();
+  if (!selectedText.trim() || selectedText.length > 12000) return;
+  const anchor = selectionTextAnchor(root, range);
+
+  // Plain text/code previews preserve file text exactly, so add line numbers
+  // when the selected quote is unambiguous. Markdown still has the durable
+  // quote/prefix/suffix selector after rendering removed its source markup.
+  const first = fileViewRaw.indexOf(anchor.quote);
+  if (first >= 0 && fileViewRaw.indexOf(anchor.quote, first + 1) < 0) {
+    anchor.startLine = fileViewRaw.slice(0, first).split('\n').length;
+    anchor.endLine = anchor.startLine + anchor.quote.split('\n').length - 1;
+  }
+  fileCommentSelection = {
+    sessionId: currentSession.id,
+    quote: anchor.quote,
+    target: { kind: 'file', path: fileViewAbsPath, relPath: fileViewRelPath, anchor },
+  };
+  button.disabled = false;
+  button.title = 'Comment on selected text';
+}
+
+function captureDiffCommentSelection() {
+  const button = document.getElementById('diffCommentBtn');
+  diffCommentSelection = null;
+  button.disabled = true;
+  if (!isDiffViewOpen()) return;
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || !selection.rangeCount) return;
+  const range = selection.getRangeAt(0);
+  const patch = (range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
+    ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement)?.closest('.diff-patch');
+  if (!patch) return;
+  const lines = [...patch.querySelectorAll('.diff-line[data-diff-line="1"]:not(.diff-hunk)')]
+    .filter((line) => { try { return range.intersectsNode(line); } catch { return false; } });
+  if (!lines.length) return;
+  const nums = (key) => lines.map((line) => Number(line.dataset[key])).filter((n) => Number.isInteger(n) && n > 0);
+  const oldNums = nums('oldLine');
+  const newNums = nums('newLine');
+  const quote = lines.map((line) => line.textContent).join('\n').slice(0, 12000);
+  diffCommentSelection = {
+    sessionId: currentSession.id,
+    quote,
+    target: {
+      kind: 'diff', repo: patch.dataset.repo, path: patch.dataset.path,
+      oldPath: patch.dataset.oldPath || null,
+      anchor: {
+        type: 'lines', quote,
+        ...(oldNums.length ? { oldStart: Math.min(...oldNums), oldEnd: Math.max(...oldNums) } : {}),
+        ...(newNums.length ? { newStart: Math.min(...newNums), newEnd: Math.max(...newNums) } : {}),
+      },
+    },
+  };
+  button.disabled = false;
+  button.title = 'Comment on selected diff lines';
+}
+
+function initCommentSelections() {
+  document.getElementById('fileViewBody').addEventListener('pointerup', () => setTimeout(captureFileCommentSelection, 0));
+  document.getElementById('diffViewBody').addEventListener('pointerup', () => setTimeout(captureDiffCommentSelection, 0));
+}
+
+function openCommentModal(draft) {
+  if (!draft) return;
+  anchoredCommentDraft = draft;
+  document.getElementById('commentAnchorPreview').textContent = draft.quote;
+  document.getElementById('commentBody').value = '';
+  document.getElementById('commentStatus').textContent = '';
+  document.getElementById('commentModal').style.display = 'flex';
+  document.getElementById('commentBody').focus();
+}
+
+function commentOnFileSelection() { openCommentModal(fileCommentSelection); }
+function commentOnDiffSelection() { openCommentModal(diffCommentSelection); }
+
+function closeCommentModal() {
+  document.getElementById('commentModal').style.display = 'none';
+  document.getElementById('commentStatus').textContent = '';
+  anchoredCommentDraft = null;
+}
+
+function handleCommentKey(event) {
+  if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+    event.preventDefault();
+    submitAnchoredComment();
+  }
+}
+
+async function submitAnchoredComment() {
+  if (!anchoredCommentDraft) return;
+  const body = document.getElementById('commentBody').value.trim();
+  if (!body) return document.getElementById('commentBody').focus();
+  const button = document.getElementById('commentSendBtn');
+  button.disabled = true;
+  document.getElementById('commentStatus').textContent = 'Saving…';
+  try {
+    const response = await fetch('/api/comments', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: anchoredCommentDraft.sessionId,
+        body,
+        target: anchoredCommentDraft.target,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    closeCommentModal();
+    window.getSelection()?.removeAllRanges();
+    setStatus('Comment saved');
+  } catch (error) {
+    document.getElementById('commentStatus').textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 // --- Published pages (file viewer + stats modal) ---
@@ -1682,11 +1841,15 @@ function closeDiffView() {
   document.getElementById('sessionView').classList.remove('diff-open');
   document.getElementById('btnDiff')?.classList.remove('active');
   document.getElementById('diffViewBody').innerHTML = '';
+  diffCommentSelection = null;
+  document.getElementById('diffCommentBtn').disabled = true;
 }
 
 async function loadDiffView() {
   const body = document.getElementById('diffViewBody');
   const rootEl = document.getElementById('diffViewRoot');
+  diffCommentSelection = null;
+  document.getElementById('diffCommentBtn').disabled = true;
   body.innerHTML = '<div class="loading">Loading…</div>';
   try {
     const res = await fetch(`/api/sessions/${currentSession.id}/diff`);
@@ -1729,7 +1892,7 @@ function renderDiffViewHtml(data) {
         ? '<span class="diff-file-note">binary</span>'
         : `<span class="diff-plus">+${f.additions}</span> <span class="diff-minus">−${f.deletions}</span>`;
       const patchHtml = f.patch
-        ? `<div class="diff-patch">${renderDiffHtml(f.patch)}${f.truncated ? '<div class="diff-file-note">… patch truncated</div>' : ''}</div>`
+        ? `<div class="diff-patch" data-repo="${escapeHtml(repo.path)}" data-path="${escapeHtml(f.path)}" data-old-path="${escapeHtml(f.oldPath || '')}">${renderDiffHtml(f.patch)}${f.truncated ? '<div class="diff-file-note">… patch truncated</div>' : ''}</div>`
         : `<div class="diff-file-note diff-patch-missing">${f.binary ? 'Binary file' : f.truncated ? 'Too large to preview' : 'No patch available'}</div>`;
       html += `<details class="diff-file"${f.patch ? openAttr : ''}>`
         + `<summary><span class="diff-status diff-status-${diffStatusClass(f.status)}">${escapeHtml(f.status)}</span>`
@@ -4177,7 +4340,9 @@ function closeTreeModal() {
 
 document.addEventListener('keydown', function(e) {
   if (e.key !== 'Escape') return;
-  if (document.getElementById('treeModal').style.display !== 'none') {
+  if (document.getElementById('commentModal').style.display !== 'none') {
+    e.preventDefault(); closeCommentModal();
+  } else if (document.getElementById('treeModal').style.display !== 'none') {
     e.preventDefault(); closeTreeModal();
   } else if (document.getElementById('statsModal').style.display !== 'none') {
     e.preventDefault(); closeStatsModal();

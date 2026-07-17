@@ -21,6 +21,7 @@ const terminal = require('./lib/terminal');
 const tmux = require('./lib/tmux');
 const shares = require('./lib/shares');
 const pages = require('./lib/pages');
+const comments = require('./lib/comments');
 const {
   getSessionInfo,
   readSessionMessages,
@@ -875,6 +876,159 @@ app.get('/api/sessions/:id/share', (req, res) => {
 app.get('/share/:token', serveSharedSession);
 
 // =========================================================================
+// Anchored comments (lib/comments.js)
+// =========================================================================
+//
+// The browser creates comments from a selected file/prose range or diff
+// lines. When the user later asks the agent to read comments, the
+// pi-dish-comments skill lists the open index, fetches whichever related ids
+// it needs, and acknowledges completed items. Creating a comment never
+// prompts, steers, or starts an agent turn.
+
+function shortString(value, max) {
+  return typeof value === 'string' && value.length <= max ? value : null;
+}
+
+function inferSessionForPath(absPath) {
+  const candidates = listRegisteredSessions().filter((entry) => {
+    if (!entry.cwd) return false;
+    const cwd = path.resolve(entry.cwd);
+    return absPath === cwd || absPath.startsWith(cwd + path.sep);
+  });
+  return candidates.length === 1 ? candidates[0].sessionId : null;
+}
+
+function cleanAnchor(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const type = raw.type === 'lines' ? 'lines' : raw.type === 'text' ? 'text' : null;
+  if (!type) return null;
+  const anchor = { type };
+  for (const key of ['quote', 'prefix', 'suffix']) {
+    const value = shortString(raw[key], key === 'quote' ? 12000 : 500);
+    if (value != null) anchor[key] = value;
+  }
+  for (const key of ['startLine', 'endLine', 'oldStart', 'oldEnd', 'newStart', 'newEnd']) {
+    if (Number.isInteger(raw[key]) && raw[key] >= 0) anchor[key] = raw[key];
+  }
+  return (anchor.quote || type === 'lines') ? anchor : null;
+}
+
+function cleanCommentTarget(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const anchor = cleanAnchor(raw.anchor);
+  if (!anchor) return null;
+  if (raw.kind === 'file') {
+    const filePath = shortString(raw.path, 4096);
+    if (!filePath || !path.isAbsolute(filePath)) return null;
+    return {
+      kind: 'file', path: path.resolve(filePath),
+      relPath: shortString(raw.relPath, 4096), anchor,
+    };
+  }
+  if (raw.kind === 'diff') {
+    const repo = shortString(raw.repo, 4096);
+    const filePath = shortString(raw.path, 4096);
+    if (!repo || !filePath) return null;
+    return {
+      kind: 'diff', repo, path: filePath,
+      oldPath: shortString(raw.oldPath, 4096), anchor,
+    };
+  }
+  if (raw.kind === 'page') {
+    const pageToken = shortString(raw.pageToken, 256);
+    const page = pageToken && pages.getPage(pageToken);
+    if (!page) return null;
+    return {
+      kind: 'page', pageToken, root: page.root,
+      title: page.title || null, anchor,
+    };
+  }
+  return null;
+}
+
+app.post('/api/comments', (req, res) => {
+  const rawBody = req.body?.body;
+  const body = typeof rawBody === 'string' ? shortString(rawBody.trim(), 10000) : null;
+  const target = cleanCommentTarget(req.body?.target);
+  if (!body) return res.status(400).json({ error: 'comment body required (max 10000 characters)' });
+  if (!target) return res.status(400).json({ error: 'valid anchored target required' });
+
+  let sessionId = shortString(req.body?.sessionId, 512);
+  if (target.kind === 'page') {
+    const page = pages.getPage(target.pageToken);
+    sessionId = page?.sessionId || sessionId || inferSessionForPath(page.root);
+  }
+  if (!sessionId || (!findSessionFile(sessionId) && !getRegisteredSession(sessionId))) {
+    return res.status(404).json({ error: 'target session not found' });
+  }
+  res.status(201).json(comments.createComment({ sessionId, body, target }));
+});
+
+function commentIndexEntry(comment) {
+  const target = comment.target || {};
+  const anchor = target.anchor || {};
+  const indexedAnchor = { type: anchor.type };
+  for (const key of ['startLine', 'endLine', 'oldStart', 'oldEnd', 'newStart', 'newEnd']) {
+    if (Number.isInteger(anchor[key])) indexedAnchor[key] = anchor[key];
+  }
+  if (anchor.quote) indexedAnchor.quotePreview = anchor.quote.slice(0, 240);
+  const indexedTarget = { kind: target.kind, anchor: indexedAnchor };
+  for (const key of ['path', 'relPath', 'repo', 'oldPath', 'root', 'title', 'pageToken']) {
+    if (target[key] != null) indexedTarget[key] = target[key];
+  }
+  return {
+    id: comment.id,
+    createdAt: comment.createdAt,
+    bodyPreview: comment.body.slice(0, 240),
+    target: indexedTarget,
+  };
+}
+
+// Lightweight, unpaginated inventory. It gives the agent enough location
+// and intent to infer useful groups without loading every full anchor/body.
+// Reading this index changes no comment state.
+app.get('/api/comments/index', (req, res) => {
+  const sessionId = shortString(req.query.sessionId, 512);
+  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  const open = comments.listComments({ sessionId, state: 'open' });
+  res.json({ comments: open.map(commentIndexEntry), total: open.length });
+});
+
+app.get('/api/comments/count', (req, res) => {
+  const sessionId = shortString(req.query.sessionId, 512);
+  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  res.json({ total: comments.listComments({ sessionId, state: 'open' }).length });
+});
+
+// Fetch an agent-selected group from the inventory. This is a state-free
+// read; acknowledgment remains a separate, explicit close operation.
+app.post('/api/comments/get', (req, res) => {
+  const sessionId = shortString(req.body?.sessionId, 512);
+  const rawIds = req.body?.ids;
+  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  if (!Array.isArray(rawIds) || !rawIds.length || rawIds.length > 200
+      || rawIds.some((id) => typeof id !== 'string' || !id || id.length > 256)) {
+    return res.status(400).json({ error: 'ids must contain 1-200 comment ids' });
+  }
+  const ids = [...new Set(rawIds)];
+  const openById = new Map(comments.listComments({ sessionId, state: 'open' })
+    .map((comment) => [comment.id, comment]));
+  const selected = ids.map((id) => openById.get(id)).filter(Boolean);
+  const missing = ids.filter((id) => !openById.has(id));
+  res.json({ comments: selected, missing, total: selected.length, hasMore: false });
+});
+
+app.post('/api/comments/:id/ack', (req, res) => {
+  const existing = comments.getComment(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'comment not found' });
+  if (!req.body?.sessionId || req.body.sessionId !== existing.sessionId) {
+    return res.status(403).json({ error: 'comment belongs to a different session' });
+  }
+  const comment = comments.acknowledgeComment(req.params.id);
+  res.json(comment);
+});
+
+// =========================================================================
 // Published pages (lib/pages.js)
 // =========================================================================
 //
@@ -924,7 +1078,8 @@ app.post('/api/pages', (req, res) => {
   if (stat.isDirectory() && !fs.existsSync(path.join(root, 'index.html'))) {
     return res.status(400).json({ error: 'directory pages need an index.html' });
   }
-  const token = pages.createPage({ root, title: title || null, sessionId: sessionId || null });
+  const associatedSessionId = sessionId || inferSessionForPath(root);
+  const token = pages.createPage({ root, title: title || null, sessionId: associatedSessionId || null });
   res.json(pagePayload(token, pages.getPage(token)));
 });
 
@@ -946,7 +1101,22 @@ app.delete('/api/pages/:token', (req, res) => {
 // the document's relative asset URLs resolve under the token) and contained
 // assets at /page/:token/<rel>. res.sendFile rejects `..` traversal and
 // absolute rests via its root option — every failure is a bare 404.
-function servePage(req, res) {
+function sendPageFile(file, req, res, annotate) {
+  if (!annotate || path.extname(file).toLowerCase() !== '.html') {
+    return res.sendFile(file, (err) => {
+      if (err && !res.headersSent) res.status(404).type('text/plain').send('Not found');
+    });
+  }
+  fs.readFile(file, 'utf8', (err, html) => {
+    if (err) return res.status(404).type('text/plain').send('Not found');
+    const tag = `<script src="/artifact-comments.js" data-page-token="${req.params.token}"></script>`;
+    const at = html.toLowerCase().lastIndexOf('</body>');
+    const annotated = at >= 0 ? html.slice(0, at) + tag + html.slice(at) : html + tag;
+    res.type('html').send(annotated);
+  });
+}
+
+function servePage(req, res, annotate = false) {
   const entry = pages.getPage(req.params.token);
   if (!entry) return res.status(404).type('text/plain').send('Not found');
   const notFound = () => { if (!res.headersSent) res.status(404).type('text/plain').send('Not found'); };
@@ -958,19 +1128,22 @@ function servePage(req, res) {
 
   if (stat.isFile()) {
     if (rest) return notFound(); // a file page has no sub-paths
-    return res.sendFile(entry.root, (err) => { if (err) notFound(); });
+    return sendPageFile(entry.root, req, res, annotate);
   }
   if (!rest) return res.redirect(302, `/page/${req.params.token}/`);
   const rel = rest === '/' ? 'index.html' : rest.replace(/^\//, '');
+  if (rel === 'index.html' && annotate) {
+    return sendPageFile(path.join(entry.root, rel), req, res, true);
+  }
   res.sendFile(rel, { root: entry.root }, (err) => { if (err) notFound(); });
 }
 
-app.get('/page/:token', servePage);
+app.get('/page/:token', (req, res) => servePage(req, res, true));
 app.get('/page/:token/*', (req, res) => {
   // Normalize express 4's wildcard into the shape servePage expects: the
   // rest including its leading slash ('/' for the bare trailing-slash URL).
   req.params[0] = '/' + (req.params[0] || '');
-  servePage(req, res);
+  servePage(req, res, true);
 });
 
 // Execute a slash command against an active session.
@@ -1873,7 +2046,9 @@ const server = app.listen(PORT, HOST, () => {
 if (process.env.PI_DISH_SHARE_PORT) {
   const shareApp = express();
   shareApp.get('/share/:token', serveSharedSession);
-  shareApp.get('/page/:token', servePage);
+  // Do not pass Express's `next` callback as servePage's annotate argument.
+  // The dedicated public listener always serves the original HTML unchanged.
+  shareApp.get('/page/:token', (req, res) => servePage(req, res));
   shareApp.get('/page/:token/*', (req, res) => {
     req.params[0] = '/' + (req.params[0] || '');
     servePage(req, res);

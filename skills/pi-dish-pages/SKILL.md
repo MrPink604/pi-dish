@@ -19,9 +19,10 @@ refreshes; do not re-register.
 2. Register the **absolute** path with the pi-dish server:
 
    ```bash
+   PI_DISH_SESSION_ID="$(node ~/.pi/agent/skills/pi-dish-comments/scripts/pi-dish-comments.js session 2>/dev/null || true)"
    curl -s -X POST "${PI_DISH_URL:-http://localhost:3333}/api/pages" \
      -H 'Content-Type: application/json' \
-     -d "{\"path\": \"$PWD/plan.html\", \"title\": \"Refactor plan\"}"
+     -d "{\"path\": \"$PWD/plan.html\", \"title\": \"Refactor plan\", \"sessionId\": \"$PI_DISH_SESSION_ID\"}"
    ```
 
    (`PI_DISH_URL` is set in sessions spawned by pi-dish; the default port is
@@ -42,6 +43,10 @@ refreshes; do not re-register.
 
 - Re-registering the same path returns the same token — the link is stable
   across your edits.
+- Passing the discovered session id lets comments left on the hosted page
+  route back to this agent. If the comments skill is not installed, page
+  publishing still works but artifact comments cannot wake the originating
+  session automatically.
 - Unpublish with `curl -X DELETE "$PI_DISH_URL/api/pages/<token>"`.
 - Anyone who can reach the pi-dish server (and, if configured, its public
   share listener) can view the page. Don't publish secrets.

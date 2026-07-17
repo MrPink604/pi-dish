@@ -151,6 +151,7 @@ function respond(sock, id, data) {
 
 // The bridge's steering/follow-up queue, mirrored to clients via queue_update.
 let liveQueue = { steering: [], followUp: [] };
+let runCommandCount = 0;
 function setQueue(q) { liveQueue = q; emit('queue_update', liveQueue); }
 
 function handleCommand(sock, msg) {
@@ -163,6 +164,9 @@ function handleCommand(sock, msg) {
       ] });
     case 'get_commands':
       return respond(sock, msg.id, [{ name: 'help', description: 'show help', source: 'builtin' }]);
+    case 'run_command':
+      runCommandCount++;
+      return respond(sock, msg.id, {});
     case 'prompt':
       lastPrompt = msg;
       // Mirror the real bridge: a prompt sent mid-compaction is buffered and
@@ -479,6 +483,41 @@ function writeRegistry(patch = {}) {
     check(await desktop.locator('#fileView .markdown-body h1').textContent() === 'deep findings',
       'markdown file renders rendered');
 
+    // Select rendered prose and save an anchored comment. This must not send
+    // a prompt or initiate an agent turn.
+    await desktop.evaluate(() => {
+      const node = [...document.querySelectorAll('#fileViewBody p')]
+        .find((el) => el.textContent.includes('hello from deep')).firstChild;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      captureFileCommentSelection();
+    });
+    check(await desktop.locator('#fileCommentBtn').isEnabled(), 'file text selection enables comment action');
+    check(await desktop.evaluate(() => {
+      const root = document.createElement('div');
+      root.textContent = 'before  selected  after';
+      document.body.append(root);
+      const range = document.createRange();
+      range.setStart(root.firstChild, 6);
+      range.setEnd(root.firstChild, 18);
+      const anchor = selectionTextAnchor(root, range);
+      const exact = anchor.prefix + anchor.quote + anchor.suffix === root.textContent
+        && anchor.quote === '  selected  ';
+      root.remove();
+      return exact;
+    }), 'text anchors preserve selected boundary whitespace exactly');
+    await desktop.click('#fileCommentBtn');
+    await desktop.fill('#commentBody', 'Make this finding more specific.');
+    await desktop.click('#commentSendBtn');
+    await desktop.waitForSelector('#commentModal', { state: 'hidden', timeout: 5000 });
+    const fileComments = await (await fetch(`${base}/api/comments/index?sessionId=${SESSION_ID}`)).json();
+    check(fileComments.total === 1 && fileComments.comments[0].target.kind === 'file',
+      'file selection persisted as one anchored comment');
+    check(runCommandCount === 0, 'saving a comment did not initiate or queue an agent command');
+
     // Publish the viewed file as a page: 🌐 → link row → the public URL
     // serves the file content → unpublish clears it.
     await desktop.click('#fileViewPublish');
@@ -549,6 +588,25 @@ function writeRegistry(patch = {}) {
     check(await desktop.evaluate(() =>
       [...document.querySelectorAll('.diff-line.diff-add')].some((el) => el.textContent === '+brand new')),
       'untracked patch is synthesized and rendered');
+    await desktop.evaluate(() => {
+      const line = [...document.querySelectorAll('.diff-line.diff-add')]
+        .find((el) => el.textContent === '+two');
+      const range = document.createRange();
+      range.selectNodeContents(line);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      captureDiffCommentSelection();
+    });
+    check(await desktop.locator('#diffCommentBtn').isEnabled(), 'diff line selection enables comment action');
+    await desktop.click('#diffCommentBtn');
+    await desktop.fill('#commentBody', 'Use a more descriptive value here.');
+    await desktop.click('#commentSendBtn');
+    await desktop.waitForSelector('#commentModal', { state: 'hidden', timeout: 5000 });
+    const diffComments = await (await fetch(`${base}/api/comments/index?sessionId=${SESSION_ID}`)).json();
+    const diffComment = diffComments.comments.find((comment) => comment.target.kind === 'diff');
+    check(diffComments.total === 2 && diffComment?.target.anchor.newStart === 2,
+      'diff selection persisted with its new-side line anchor');
     await desktop.keyboard.press('Escape');
     await desktop.waitForFunction(() => document.getElementById('messages').offsetParent !== null,
       { timeout: 2000 });

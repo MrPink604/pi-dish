@@ -581,15 +581,34 @@ function renderDiffHtml(patch) {
   if (!patch) return '';
   const out = [];
   let inHunk = false;
-  for (const line of String(patch).split('\n')) {
+  let oldLine = null, newLine = null;
+  const lines = String(patch).split('\n');
+  // A patch's terminating newline is a separator, not an additional blank
+  // source line. Real blank context lines still carry the unified-diff ' '.
+  if (lines.at(-1) === '') lines.pop();
+  for (const line of lines) {
     if (line.startsWith('@@')) {
       inHunk = true;
-      out.push(`<div class="diff-line diff-hunk">${escapeHtml(line)}</div>`);
+      const match = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      oldLine = match ? Number(match[1]) : null;
+      newLine = match ? Number(match[2]) : null;
+      out.push(`<div class="diff-line diff-hunk" data-diff-line="1">${escapeHtml(line)}</div>`);
       continue;
     }
     if (!inHunk) continue;
+    // Git's marker describes the preceding line; it is not itself a source
+    // line and must not advance or expose old/new line coordinates.
+    if (line[0] === '\\') {
+      out.push(`<div class="diff-line diff-note">${escapeHtml(line)}</div>`);
+      continue;
+    }
     const cls = line[0] === '+' ? ' diff-add' : line[0] === '-' ? ' diff-del' : '';
-    out.push(`<div class="diff-line${cls}">${escapeHtml(line) || ' '}</div>`);
+    const oldAt = line[0] === '+' ? null : oldLine;
+    const newAt = line[0] === '-' ? null : newLine;
+    const attrs = ` data-diff-line="1" data-old-line="${oldAt ?? ''}" data-new-line="${newAt ?? ''}"`;
+    out.push(`<div class="diff-line${cls}"${attrs}>${escapeHtml(line) || ' '}</div>`);
+    if (line[0] !== '+' && oldLine != null) oldLine++;
+    if (line[0] !== '-' && newLine != null) newLine++;
   }
   return out.join('');
 }

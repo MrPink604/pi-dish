@@ -263,6 +263,34 @@ collects everything shared from the session — its pages plus the share
 link — in one modal (open/copy/revoke); `refreshArtifacts` re-fetches on
 session select, turn end, and every publish/revoke path.
 
+## Anchored comments (lib/comments.js, /api/comments)
+
+Out-of-band review feedback for the current agent, created from selected text
+in the file viewer, selected hunk lines in the diff view, or selected prose in
+a published HTML artifact. Storage is `~/.pi/dish/comments.json`, using the
+same synchronous re-read + temp-file/rename pattern as pages/shares. Schema is
+`{ id, sessionId, body, target, createdAt, acknowledgedAt }`; target kinds are
+`file`, `diff`, and `page`, with a text quote/prefix/suffix or old/new line
+range anchor. There is deliberately no lifecycle beyond open (`null`) and
+acknowledged (timestamp).
+
+API: `POST /api/comments` and `POST /api/comments/:id/ack` (the
+session id is required in the ack body). Comment creation never calls a
+session prompt/command endpoint:
+the user explicitly tells the agent when to read comments. The vended skill
+at `skills/pi-dish-comments/` bundles a Node CLI. Its normal discovery flow is
+an unpaginated lightweight `list` (`GET /api/comments/index`) followed by
+agent-selected `get <ids…>` groups (`POST /api/comments/get`); neither changes
+state or requires earlier comments to be acknowledged. `ack`, `count`, and
+`session` round out the CLI. It infers the active session by
+matching process ancestry to the bridge registry. No pi tool is registered.
+
+Main-server page responses inject `public/artifact-comments.js` into HTML
+roots/indexes. Its shadow-DOM selection UI posts page-token anchors; the
+dedicated public share listener continues to serve raw, non-commentable page
+HTML. Published pages need a `sessionId` to route feedback; the pages skill
+uses the comments CLI's session discovery when registering an artifact.
+
 ## File / directory fuzzy search (lib/file-search.js)
 
 Backed by fff (`@ff-labs/fff-node`, ESM-only + native binary, loaded via

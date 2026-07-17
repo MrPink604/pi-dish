@@ -118,12 +118,14 @@ npm install
 mkdir -p ~/.pi/agent/extensions ~/.pi/agent/skills
 ln -s "$PWD/extensions/pi-dish-bridge" ~/.pi/agent/extensions/pi-dish-bridge
 ln -s "$PWD/skills/pi-dish-pages" ~/.pi/agent/skills/pi-dish-pages
+ln -s "$PWD/skills/pi-dish-comments" ~/.pi/agent/skills/pi-dish-comments
 ```
 
-The second symlink is optional: it vends the `pi-dish-pages` skill, which
-teaches agents to publish HTML artifacts (plans, reports) as pages hosted by
-this server — ask an agent to "publish the plan as a page" and you get back
-a link. See "Published pages" below.
+The skill symlinks are optional. `pi-dish-pages` teaches agents to publish
+HTML artifacts, while `pi-dish-comments` gives them a small CLI-backed inbox
+for anchored feedback left on files, diffs, and those artifacts. Ask an agent
+to "publish the plan as a page" and you get back a link; see "Published
+pages" below.
 
 Symlink, don't copy — a stale copied bridge loaded alongside the current one
 races for the session socket.
@@ -218,6 +220,30 @@ only serves existing tokens (`/page/<token>` is available there alongside
 `/share/<token>`). You can also publish by hand: the file viewer (tap any
 file mention in a transcript) has a 🌐 button, and the stats modal lists a
 session's pages with revoke.
+
+### Anchored comments
+
+Select text in the file viewer, select lines in the uncommitted-diff view, or
+select prose in a published HTML page, then use the 💬 action to leave a
+comment for that session's agent. Comments live outside the transcript. The
+act of adding one never prompts, steers, queues, or starts the agent. Tell the
+agent “there are comments; go read them” when you want it to act. The skill
+first inventories every open comment by location and short intent, then
+fetches whatever groups it infers belong together. Acknowledgment closes a
+handled comment but is never required to inspect another one.
+
+The bundled CLI is also usable directly:
+
+```bash
+node ~/.pi/agent/skills/pi-dish-comments/scripts/pi-dish-comments.js list
+node ~/.pi/agent/skills/pi-dish-comments/scripts/pi-dish-comments.js get <id> [<id> ...]
+node ~/.pi/agent/skills/pi-dish-comments/scripts/pi-dish-comments.js ack <comment-id>
+```
+
+It identifies the calling agent through the bridge registry and process
+ancestry; `--session <id>` is available for ambiguous cases. A comment has
+only two states: open and acknowledged. Acknowledging it closes it—there are
+no replies, threads, assignments, or resolution workflow.
 
 ## Slash command support
 

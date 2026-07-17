@@ -379,11 +379,13 @@ test('POST /api/pages publishes a file and /page/:token serves it live from disk
   const res = await fetch(base + body.path);
   assert.equal(res.status, 200);
   assert.match(res.headers.get('content-type'), /text\/html/);
-  assert.equal(await res.text(), '<h1>the plan</h1>');
+  const firstHtml = await res.text();
+  assert.match(firstHtml, /<h1>the plan<\/h1>/);
+  assert.match(firstHtml, new RegExp(`artifact-comments\\.js[^>]+${body.token}`), 'main page view gets the comment overlay');
 
   // Live from disk: an edit shows without re-publishing.
   fs.writeFileSync(planFile, '<h1>the revised plan</h1>');
-  assert.equal(await (await fetch(base + body.path)).text(), '<h1>the revised plan</h1>');
+  assert.match(await (await fetch(base + body.path)).text(), /<h1>the revised plan<\/h1>/);
 
   // Idempotent per path: re-publishing reuses the token.
   const again = await post('/api/pages', { path: planFile, sessionId: REAL_CWD_ID });
@@ -424,6 +426,99 @@ test('directory pages serve index.html and contained assets only', async () => {
   await del(`/api/pages/${body.token}`);
 });
 
+// --- anchored comments (lib/comments.js, /api/comments) -------------------
+
+test('comments support unpaginated indexing, selected reads, and acknowledgment', async () => {
+  const fileTarget = {
+    kind: 'file', path: path.join(realCwd, 'README.md'), relPath: 'README.md',
+    anchor: { type: 'text', quote: 'alpha', prefix: '# ', suffix: '\n', startLine: 1, endLine: 1 },
+  };
+  const first = await post('/api/comments', {
+    sessionId: REAL_CWD_ID, body: 'Clarify this heading.', target: fileTarget,
+  });
+  assert.equal(first.status, 201);
+  assert.ok(first.body.id);
+  assert.equal(first.body.acknowledgedAt, null);
+  assert.equal(first.body.notifySuggested, undefined, 'creating a comment carries no agent-turn notification');
+
+  const second = await post('/api/comments', {
+    sessionId: REAL_CWD_ID, body: 'Use the stronger name.',
+    target: {
+      kind: 'diff', repo: 'repo-x', path: 'a.txt',
+      anchor: { type: 'lines', quote: '+two', oldStart: 1, oldEnd: 1, newStart: 2, newEnd: 2 },
+    },
+  });
+  assert.equal(second.status, 201);
+  assert.equal(second.body.notifySuggested, undefined);
+
+  const index = await get(`/api/comments/index?sessionId=${REAL_CWD_ID}`);
+  assert.equal(index.status, 200);
+  assert.equal(index.body.total, 2, 'the full open index is not gated by acknowledgment');
+  assert.deepEqual(index.body.comments.map((c) => c.id), [first.body.id, second.body.id]);
+  assert.equal(index.body.comments[0].bodyPreview, 'Clarify this heading.');
+  assert.equal(index.body.comments[0].target.anchor.quotePreview, 'alpha');
+  assert.equal(index.body.comments[0].target.anchor.prefix, undefined, 'index omits full anchor context');
+
+  const selected = await post('/api/comments/get', {
+    sessionId: REAL_CWD_ID, ids: [second.body.id, first.body.id],
+  });
+  assert.equal(selected.status, 200);
+  assert.deepEqual(selected.body.comments.map((c) => c.id), [second.body.id, first.body.id],
+    'the agent can fetch any inferred group in its requested order without acking earlier comments');
+  assert.equal(selected.body.comments[1].target.anchor.prefix, '# ', 'selected fetch returns the full anchor');
+  assert.deepEqual(selected.body.missing, []);
+
+  const count = await get(`/api/comments/count?sessionId=${REAL_CWD_ID}`);
+  assert.deepEqual(count.body, { total: 2 });
+
+  const wrongSession = await post(`/api/comments/${first.body.id}/ack`, { sessionId: SESSION_ID });
+  assert.equal(wrongSession.status, 403);
+  const ack = await post(`/api/comments/${first.body.id}/ack`, { sessionId: REAL_CWD_ID });
+  assert.equal(ack.status, 200);
+  assert.ok(ack.body.acknowledgedAt);
+
+  const indexAfterAck = await get(`/api/comments/index?sessionId=${REAL_CWD_ID}`);
+  assert.deepEqual(indexAfterAck.body.comments.map((c) => c.id), [second.body.id]);
+
+  await post(`/api/comments/${second.body.id}/ack`, { sessionId: REAL_CWD_ID });
+});
+
+test('published-page comments inherit the page session and artifact identity', async () => {
+  const artifact = path.join(realCwd, 'commentable.html');
+  fs.writeFileSync(artifact, '<p>Selected artifact prose</p>');
+  const page = await post('/api/pages', { path: artifact, sessionId: REAL_CWD_ID, title: 'Commentable' });
+  const created = await post('/api/comments', {
+    body: 'Make this more concrete.',
+    target: {
+      kind: 'page', pageToken: page.body.token,
+      anchor: { type: 'text', quote: 'artifact prose', prefix: 'Selected ', suffix: '' },
+    },
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.sessionId, REAL_CWD_ID);
+  assert.equal(created.body.target.root, artifact);
+
+  const selected = await post('/api/comments/get', { sessionId: REAL_CWD_ID, ids: [created.body.id] });
+  assert.deepEqual(selected.body.comments.map((c) => c.id), [created.body.id]);
+  await post(`/api/comments/${created.body.id}/ack`, { sessionId: REAL_CWD_ID });
+  await del(`/api/pages/${page.body.token}`);
+});
+
+test('comments reject unanchored targets and unknown sessions/pages', async () => {
+  assert.equal((await post('/api/comments', {
+    sessionId: REAL_CWD_ID, body: 'no anchor', target: { kind: 'file', path: path.join(realCwd, 'README.md') },
+  })).status, 400);
+  assert.equal((await post('/api/comments', {
+    sessionId: 'missing-session', body: 'hello',
+    target: { kind: 'file', path: path.join(realCwd, 'README.md'), anchor: { type: 'text', quote: 'x' } },
+  })).status, 404);
+  assert.equal((await post('/api/comments', {
+    sessionId: REAL_CWD_ID, body: 'hello',
+    target: { kind: 'page', pageToken: 'missing', anchor: { type: 'text', quote: 'x' } },
+  })).status, 400);
+  assert.equal((await post('/api/comments/get', { sessionId: REAL_CWD_ID, ids: [] })).status, 400);
+});
+
 test('POST /api/pages validates the root but imposes no path gate', async () => {
   const rel = await post('/api/pages', { path: 'plan.html' });
   assert.equal(rel.status, 400, 'relative paths rejected');
@@ -443,7 +538,7 @@ test('POST /api/pages validates the root but imposes no path gate', async () => 
   fs.writeFileSync(outside, '<p>outside</p>');
   const ok = await post('/api/pages', { path: outside });
   assert.equal(ok.status, 200);
-  assert.equal(await (await fetch(base + ok.body.path)).text(), '<p>outside</p>');
+  assert.match(await (await fetch(base + ok.body.path)).text(), /<p>outside<\/p>/);
   await del(`/api/pages/${ok.body.token}`);
 });
 
@@ -784,11 +879,15 @@ test('GET/DELETE /share reflect and revoke the current share state', async () =>
   assert.deepEqual(revokedAgain.body, { revoked: false });
 });
 
-test('dedicated share listener serves only /share/:token', async () => {
+test('dedicated share listener serves only raw shared sessions and pages', async () => {
   const { spawn } = require('node:child_process');
   // Create a share on the main server (writes shares.json under tmpHome; the
   // child reads the same HOME).
   const created = await post(`/api/sessions/${TREE_ID}/share`, {});
+  const pageFile = path.join(realCwd, 'share-listener-page.html');
+  const rawPage = '<!doctype html><h1>raw shared page</h1>';
+  fs.writeFileSync(pageFile, rawPage);
+  const page = await post('/api/pages', { path: pageFile, sessionId: REAL_CWD_ID });
 
   // Grab a free port for the share listener.
   const sharePort = await new Promise((resolve) => {
@@ -815,6 +914,10 @@ test('dedicated share listener serves only /share/:token', async () => {
       } catch { await new Promise(r => setTimeout(r, 100)); }
     }
     assert.ok(ready, 'share listener came up and served the token');
+
+    const pageRes = await fetch(`${shareBase}/page/${page.body.token}`);
+    assert.equal(pageRes.status, 200);
+    assert.equal(await pageRes.text(), rawPage, 'share listener does not inject the comment overlay');
 
     const notFound = await fetch(`${shareBase}/api/sessions`);
     assert.equal(notFound.status, 404, 'the share listener exposes nothing but /share');

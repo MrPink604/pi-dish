@@ -519,12 +519,28 @@ test('renderDiffHtml renders hunk content only, with add/del classes', () => {
   const html = H.renderDiffHtml(patch);
   assert.ok(!html.includes('diff --git'), 'file headers are dropped');
   assert.ok(!html.includes('index 000'), 'index lines are dropped');
-  assert.ok(html.includes('<div class="diff-line diff-hunk">@@ -1,2 +1,2 @@</div>'));
-  assert.ok(html.includes('<div class="diff-line diff-add">+added</div>'));
-  assert.ok(html.includes('<div class="diff-line diff-del">-removed</div>'));
+  assert.ok(html.includes('<div class="diff-line diff-hunk" data-diff-line="1">@@ -1,2 +1,2 @@</div>'));
+  assert.ok(html.includes('<div class="diff-line diff-add" data-diff-line="1" data-old-line="" data-new-line="2">+added</div>'));
+  assert.ok(html.includes('<div class="diff-line diff-del" data-diff-line="1" data-old-line="2" data-new-line="">-removed</div>'));
+  assert.ok(!html.includes('data-old-line="3" data-new-line="3"'), 'trailing patch newline is not a phantom source line');
   assert.ok(html.includes('&lt;tag&gt;'), 'content is HTML-escaped');
   assert.equal(H.renderDiffHtml(null), '');
   assert.equal(H.renderDiffHtml(''), '');
+});
+
+test('renderDiffHtml does not assign or advance line numbers for no-newline markers', () => {
+  const patch = [
+    '@@ -4,2 +4,3 @@',
+    '-old last',
+    '\\ No newline at end of file',
+    '+new last',
+    '+extra',
+  ].join('\n');
+  const html = H.renderDiffHtml(patch);
+  assert.ok(html.includes('<div class="diff-line diff-note">\\ No newline at end of file</div>'));
+  assert.ok(html.includes('data-old-line="" data-new-line="4">+new last</div>'));
+  assert.ok(html.includes('data-old-line="" data-new-line="5">+extra</div>'));
+  assert.ok(!html.includes('diff-note" data-diff-line'), 'the marker is not selectable as a diff line');
 });
 
 test('diffStatusClass maps git status letters to CSS-safe suffixes', () => {
