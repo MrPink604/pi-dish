@@ -7,6 +7,15 @@
 // bug class). Read these freely; never assign to them anywhere else.
 let sessions = { active: [], previous: [] };
 let currentSession = null;
+const RESPONSE_MODE_KEY = 'pi-dish-response-metadata';
+const SESSION_SPEND_KEY = 'pi-dish-show-session-spend';
+const RESPONSE_MODES = new Set(['hidden', 'compact', 'performance', 'performance-cost']);
+let responseMetadataMode = RESPONSE_MODES.has(localStorage.getItem(RESPONSE_MODE_KEY)) ? localStorage.getItem(RESPONSE_MODE_KEY) : 'compact';
+let showSessionSpend = localStorage.getItem(SESSION_SPEND_KEY) === '1';
+let responseDetailSeq = 0;
+const responseDetails = new Map();
+let settingsTab = 'preferences', usageRange = '30', usageTimer = null;
+let settingsRenderSeq = 0, usageFetchSeq = 0, spendFetchSeq = 0;
 
 // Live tool panel tracking: toolCallId -> { el, startTime }
 let liveToolPanels = new Map();
@@ -177,6 +186,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.addEventListener('click', (e) => {
     const img = e.target.closest('img.msg-image');
     if (img) openImageLightbox(img.src);
+  });
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.message-metadata-btn');
+    if (btn) openResponseDetails(btn.dataset.detailId);
   });
 
   // Tap a linkified file mention to open it in the viewer. preventDefault
@@ -867,6 +880,7 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
   sessionArtifacts = { pages: [], share: null };
   updateArtifactsBadge();
   refreshArtifacts(id);
+  refreshSessionSpend();
 
   renderSessions();
   updateSessionHeader();
@@ -918,6 +932,7 @@ async function loadModels(sessionId) {
     const data = await res.json();
     if (seq !== modelsSeq) return; // superseded by a newer session's fetch
     knownModels = Array.isArray(data) ? data : [];
+    refreshResponsePricingState();
   } catch (e) {
     console.error('Failed to load models:', e);
     if (seq === modelsSeq) knownModels = [];
@@ -1240,6 +1255,106 @@ function toggleFocusMode() {
   if (container && isPinnedToBottom(container)) scrollToBottom(container);
 }
 
+// --- Global preferences and usage ---
+function openSettingsModal(tab = settingsTab) {
+  document.getElementById('settingsModal').style.display = 'flex';
+  switchSettingsTab(tab);
+}
+
+function closeSettingsModal() {
+  document.getElementById('settingsModal').style.display = 'none';
+  clearTimeout(usageTimer); usageTimer = null;
+}
+
+function switchSettingsTab(tab) {
+  settingsTab = tab === 'usage' ? 'usage' : 'preferences';
+  clearTimeout(usageTimer); usageTimer = null;
+  document.getElementById('settingsPreferencesTab').classList.toggle('active', settingsTab === 'preferences');
+  document.getElementById('settingsUsageTab').classList.toggle('active', settingsTab === 'usage');
+  if (settingsTab === 'usage') loadUsageSummary(); else renderPreferences();
+}
+
+async function renderPreferences() {
+  const renderSeq = ++settingsRenderSeq;
+  const body = document.getElementById('settingsBody');
+  body.innerHTML = `<div class="preference-row"><label for="responseMetadataMode"><strong>Response metadata</strong><small>Stored on this device. “Effective speed” includes time to first token and JSONL append.</small></label>
+    <select id="responseMetadataMode"><option value="hidden">Hidden</option><option value="compact">Compact</option><option value="performance">Performance</option><option value="performance-cost">Performance + estimated cost</option></select></div>
+    <label class="preference-row toggle-row"><span><strong>Show estimated session spend in desktop header</strong><small>Stored on this device; off by default.</small></span><input id="showSessionSpend" type="checkbox"></label>
+    <div class="preference-row"><label for="monthlyBudget"><strong>Monthly budget warning (USD)</strong><small>Server-global: applies to every device. Estimates use Pi catalog pricing; blank clears.</small></label><div class="budget-save"><input id="monthlyBudget" type="number" min="0.01" step="0.01" placeholder="No warning"><button class="btn-small" id="saveBudget">Save</button></div><small id="budgetStatus"></small></div>`;
+  const mode = body.querySelector('#responseMetadataMode'); mode.value = responseMetadataMode;
+  mode.addEventListener('change', () => {
+    responseMetadataMode = RESPONSE_MODES.has(mode.value) ? mode.value : 'compact';
+    localStorage.setItem(RESPONSE_MODE_KEY, responseMetadataMode); updateRenderedResponseMetadata();
+  });
+  const spend = body.querySelector('#showSessionSpend'); spend.checked = showSessionSpend;
+  spend.addEventListener('change', () => { showSessionSpend = spend.checked; localStorage.setItem(SESSION_SPEND_KEY, showSessionSpend ? '1' : '0'); refreshSessionSpend(); });
+  try {
+    const r = await fetch('/api/settings'), s = await r.json();
+    if (renderSeq !== settingsRenderSeq || settingsTab !== 'preferences') return;
+    body.querySelector('#monthlyBudget').value = s.monthlyBudgetUsd ?? '';
+  } catch {
+    if (renderSeq !== settingsRenderSeq || settingsTab !== 'preferences') return;
+    body.querySelector('#budgetStatus').textContent = 'Could not load server setting.';
+  }
+  if (renderSeq !== settingsRenderSeq || settingsTab !== 'preferences') return;
+  body.querySelector('#saveBudget').addEventListener('click', async () => {
+    const input = body.querySelector('#monthlyBudget'), status = body.querySelector('#budgetStatus');
+    const value = input.value.trim() === '' ? null : Number(input.value);
+    try { const r = await fetch('/api/settings', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ monthlyBudgetUsd:value }) }); const d = await r.json(); if (!r.ok) throw new Error(d.error); status.textContent = 'Saved for all devices.'; }
+    catch (e) { status.textContent = 'Save failed: ' + e.message; }
+  });
+}
+
+function setUsageRange(range) { usageRange = range; loadUsageSummary(); }
+async function loadUsageSummary() {
+  ++settingsRenderSeq;
+  const fetchSeq = ++usageFetchSeq;
+  const requestedRange = usageRange;
+  const body = document.getElementById('settingsBody');
+  body.innerHTML = `<div class="usage-ranges">${[['1','Today'],['7','7 days'],['30','30 days'],['all','All']].map(([v,l]) => `<button class="settings-tab${usageRange===v?' active':''}" data-range="${v}">${l}</button>`).join('')}</div><div class="usage-state">Loading estimated usage…</div>`;
+  body.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => setUsageRange(b.dataset.range)));
+  try {
+    const r = await fetch('/api/usage-summary?days=' + requestedRange), d = await r.json();
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    if (fetchSeq !== usageFetchSeq || d.range !== usageRange || settingsTab !== 'usage' || document.getElementById('settingsModal').style.display === 'none') return;
+    renderUsageSummary(body, d);
+    if (d.indexing) usageTimer = setTimeout(() => { if (settingsTab === 'usage' && document.getElementById('settingsModal').style.display !== 'none') loadUsageSummary(); }, 1000);
+  } catch (e) {
+    if (fetchSeq !== usageFetchSeq || requestedRange !== usageRange || settingsTab !== 'usage' || document.getElementById('settingsModal').style.display === 'none') return;
+    const state = body.querySelector('.usage-state');
+    if (state) state.textContent = 'Could not load usage: ' + e.message;
+  }
+}
+
+function renderUsageSummary(body, d) {
+  const t = d.totals || {}, h = d.headlineCosts || {}, budget = d.monthlyBudgetUsd;
+  const headline = [['Today',h.today],['7 days',h.days7],['30 days',h.days30],['This month',h.month]].map(([k,v]) => `<div><small>${k}</small><strong>${formatEstimatedCost(v)}</strong></div>`).join('');
+  const progress = budget ? Math.min(100, (h.month || 0) / budget * 100) : null;
+  const bars = (d.daily || []).map(x => `<span style="height:${Math.max(2, Math.min(100, (x.costs?.total || 0) / Math.max(0.000001, ...(d.daily||[]).map(y=>y.costs?.total||0)) * 100))}%" title="${escapeHtml(x.day)}: ${formatEstimatedCost(x.costs?.total || 0)}"></span>`).join('');
+  const groups = (title, rows) => `<section class="usage-group"><h4>${title}</h4>${rows?.length ? rows.slice(0,20).map(x => {
+    const spend = x.priced === false
+      ? 'pricing unavailable'
+      : `${formatEstimatedCost(x.costs?.total)}${x.unpricedCalls ? ` + ${x.unpricedCalls} unpriced` : ''}`;
+    return `<div><span title="${escapeHtml(x.key || x.name || x.id)}">${escapeHtml(x.key || x.name || x.id)}</span><span>${x.calls} calls · ${escapeHtml(spend)}</span></div>`;
+  }).join('') : '<small>No usage in this range.</small>'}</section>`;
+  body.innerHTML = `<div class="usage-ranges">${[['1','Today'],['7','7 days'],['30','30 days'],['all','All']].map(([v,l]) => `<button class="settings-tab${usageRange===v?' active':''}" data-range="${v}">${l}</button>`).join('')}</div>
+    ${d.indexing ? '<div class="usage-notice">History is indexing; totals will refresh…</div>' : ''}<div class="usage-headlines">${headline}</div>
+    <div class="usage-summary"><strong>${t.calls || 0} calls</strong> · ${formatTokens((t.tokens?.input||0)+(t.tokens?.output||0)+(t.tokens?.cacheRead||0)+(t.tokens?.cacheWrite||0))} tokens in selected range</div>
+    ${budget ? `<div class="budget-progress"><div style="width:${progress}%"></div></div><small>${formatEstimatedCost(h.month)} of ~$${Number(budget).toFixed(2)} monthly warning${progress>=100?' — warning exceeded':''}</small>` : '<small>No monthly budget warning configured.</small>'}
+    ${d.unpricedModelCalls ? `<div class="usage-notice">${d.unpricedModelCalls} calls have unavailable pricing and are excluded from estimated spend; unknown usage is not $0 billed.</div>` : ''}
+    <section class="usage-group"><h4>Last 30 days</h4><div class="usage-bars">${bars}</div></section>
+    <div class="usage-groups">${groups('Models',d.groups?.models)}${groups('Workspaces',d.groups?.workspaces)}${groups('Sessions',d.groups?.sessions)}</div>`;
+  body.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => setUsageRange(b.dataset.range)));
+}
+
+async function refreshSessionSpend() {
+  const badge = document.getElementById('sessionSpendBadge');
+  if (!badge) return;
+  if (!showSessionSpend || !currentSession) { badge.style.display = 'none'; ++spendFetchSeq; return; }
+  const id = currentSession.id, seq = ++spendFetchSeq;
+  try { const r = await fetch(`/api/sessions/${id}/stats`), s = await r.json(); if (seq !== spendFetchSeq || currentSession?.id !== id || !showSessionSpend) return; badge.textContent = formatEstimatedCost(s.costs?.total ?? s.cost); badge.style.display = ''; } catch { if (seq === spendFetchSeq) badge.style.display = 'none'; }
+}
+
 // --- Session stats modal ---
 function openStatsModal() {
   if (!currentSession) return;
@@ -1269,33 +1384,41 @@ function openStatsModal() {
     .then(s => {
       if (s.error) { body.textContent = s.error; return; }
       const cu = s.contextUsage || {};
-      const fmtMoney = (v) => v == null ? '—' : '$' + v.toFixed(4);
-      // Session-wide generation speed: output tokens over the summed
-      // per-message generation time (only messages with measurable timing).
+      // Session-wide effective speed: output tokens over the summed
+      // per-message response time (only messages with measurable timing).
       const avgSpeed = formatTokSpeed(s.genOutput, s.genMs);
       // [key, value, copyable?] — copyable rows render the value as a
       // click-to-copy button (paths, handy for jumping to the file in a shell).
       const rows = [
+        ['__section', 'Summary'],
         ['Model', s.model || '—'],
         ['Thinking', s.thinkingLevel || '—'],
         ['Context', (cu.tokens != null ? formatTokens(cu.tokens) : '—') +
           ' / ' + (cu.contextWindow ? formatTokens(cu.contextWindow) : '—') +
           (cu.percent != null ? ` (${Math.round(cu.percent * 10) / 10}%)` : '')],
         ['Messages', `${s.userMessages} user · ${s.assistantMessages} assistant · ${s.toolCalls} tool calls`],
+        ['__section', 'Performance'],
+        s.responseTiming?.medianMs ? ['Response time', `${formatDuration(s.responseTiming.medianMs)} median · ${formatDuration(s.responseTiming.slowestMs)} slowest`] : null,
+        avgSpeed ? ['Effective speed', `${avgSpeed} avg · ${formatDuration(s.genMs)} measured response time`] : null,
+        ['__section', 'Tokens & cache'],
         ['Tokens in / out', `${formatTokens(s.tokens?.input)} / ${formatTokens(s.tokens?.output)}`],
+        s.reasoningTokens ? ['Reasoning', formatTokens(s.reasoningTokens)] : null,
         ['Cache', formatCacheStat(s.tokens?.cacheRead, s.tokens?.cacheWrite, s.tokens?.input)],
-        avgSpeed ? ['Speed', `${avgSpeed} avg · ${formatDuration(s.genMs)} generating`] : null,
-        ['Cost', fmtMoney(s.cost)],
+        ['__section', 'Estimated spend'],
+        ['Estimated total', formatEstimatedCost(s.costs?.total ?? s.cost)],
+        ['Components', `input ${formatEstimatedCost(s.costs?.input)} · output ${formatEstimatedCost(s.costs?.output)} · cache read ${formatEstimatedCost(s.costs?.cacheRead)} · write ${formatEstimatedCost(s.costs?.cacheWrite)}`],
+        ['__section', 'Location'],
         s.runtime ? ['Running in', formatRuntime(s.runtime)] : null,
         ['cwd', s.cwd || '—', !!s.cwd],
         ['Session file', s.sessionFile || '—', !!s.sessionFile],
       ].filter(Boolean);
       body.innerHTML = '<table class="stats-table">' + rows.map(([k, v, copyable]) => {
+        if (k === '__section') return `<tr class="stats-section"><th colspan="2">${escapeHtml(v)}</th></tr>`;
         const val = copyable
           ? `<button type="button" class="stats-copy" data-copy="${escapeHtml(String(v))}" title="Click to copy">${escapeHtml(String(v))}</button>`
           : escapeHtml(String(v));
         return `<tr><td class="stats-key">${escapeHtml(k)}</td><td class="stats-val">${val}</td></tr>`;
-      }).join('') + '</table>' +
+      }).join('') + '</table><div class="telemetry-note">Spend is estimated from Pi catalog pricing, not provider-billed. Response time is request start → JSONL append; effective speed includes TTFT.</div>' +
         '<div class="stats-share" id="statsShare"></div>' +
         '<div class="stats-share" id="statsPages"></div>' +
         '<div class="stats-share" id="statsClose"></div>';
@@ -2140,8 +2263,10 @@ function renderModelDropdown(query) {
       var cls = 'model-option' + (isCurrentModel(m) ? ' active' : '') + (modelEditMode && !on ? ' disabled' : '');
       var check = modelEditMode ? '<span class="model-check">' + (on ? '✓' : '') + '</span>' : '';
       var handler = modelEditMode ? 'toggleModelEnabled' : 'selectModel';
+      var context = m.contextWindow ? formatTokens(m.contextWindow) + ' context' : 'context unknown';
+      var pricing = formatModelPricing(m);
       html += '<div class="' + cls + '" onclick="' + handler + '(\'' + escapeHtml(fullId) + '\')" title="' +
-        escapeHtml(fullId) + '">' + check + '<span class="model-option-name">' + escapeHtml(m.id) + '</span>' + badges + '</div>';
+        escapeHtml(fullId) + '">' + check + '<span class="model-option-copy"><span class="model-option-name">' + escapeHtml(m.id) + '</span><span class="model-option-pricing">' + escapeHtml(context + ' · ' + pricing) + '</span></span>' + badges + '</div>';
     });
   });
   if (!filtered.length) html += '<div class="model-option" style="color:var(--text-muted);cursor:default">No models found</div>';
@@ -2598,12 +2723,20 @@ function renderAssistantMessage(msg, time, opts = {}) {
   // Tool-only messages (no prose, no error) are fully hidden in focus mode —
   // without this their empty header row lingers as a stray marker.
   const noTextClass = messageHasVisibleText(msg) ? '' : ' no-text';
-  // Generation speed rides the header next to the time — JSONL-backed
+  // Effective response speed rides the header next to the time — JSONL-backed
   // renders only (streaming messages have no timing until finalized).
-  const speed = formatTokSpeed(msg.outputTokens, msg.durationMs);
-  const speedHtml = speed
-    ? `<span class="message-speed" title="${msg.outputTokens} output tokens in ${(msg.durationMs / 1000).toFixed(1)}s">${speed}</span>`
-    : '';
+  let speedHtml = '';
+  const hasMetadata = !opts.streaming && (msg.usage || msg.durationMs);
+  const detail = hasMetadata ? responseDetailProjection(msg) : null;
+  const metadata = detail ? formatResponseMetadata(detail, responseMetadataMode) : null;
+  if (hasMetadata) {
+    const detailId = `response-${++responseDetailSeq}`;
+    // Keep only the small telemetry projection the detail modal consumes;
+    // retaining full message content here would pin every transcript render.
+    responseDetails.set(detailId, detail);
+    if (responseDetails.size > 2000) responseDetails.delete(responseDetails.keys().next().value);
+    speedHtml = `<button type="button" class="message-speed message-metadata-btn" data-detail-id="${detailId}" title="Response details. Response time is request start to JSONL append; effective speed includes time to first token."${metadata ? '' : ' style="display:none"'}>${escapeHtml(metadata || '')}</button>`;
+  }
 
   return `<div${opts.attrs || ''} class="message assistant${streamingClass}${noTextClass}${msg.errorMessage ? ' error' : ''}" data-timestamp="${timestamp}"${streamingAttr}>
     <div class="message-header">
@@ -2619,6 +2752,66 @@ function renderAssistantMessage(msg, time, opts = {}) {
     ${errorHtml}
   </div>`;
 }
+
+function updateRenderedResponseMetadata() {
+  document.querySelectorAll('.message-metadata-btn').forEach(btn => {
+    const text = formatResponseMetadata(responseDetails.get(btn.dataset.detailId), responseMetadataMode);
+    btn.textContent = text || '';
+    btn.style.display = text ? '' : 'none';
+  });
+}
+
+function responsePricingKnown(msg) {
+  if (Number.isFinite(msg?.usage?.cost?.total) && msg.usage.cost.total !== 0) return true;
+  const modelRef = msg?.responseModel || msg?.model || '';
+  const ref = parseModelId(modelRef);
+  const provider = msg?.provider || ref.provider;
+  const modelId = ref.id || modelRef;
+  return knownModels.some(m => m?.pricing && m.provider === provider && m.id === modelId);
+}
+
+function responseDetailProjection(msg) {
+  return {
+    usage: msg.usage,
+    durationMs: msg.durationMs,
+    outputTokens: msg.outputTokens,
+    provider: msg.provider,
+    model: msg.model,
+    responseModel: msg.responseModel,
+    stopReason: msg.stopReason,
+    pricingKnown: responsePricingKnown(msg),
+  };
+}
+
+function refreshResponsePricingState() {
+  for (const detail of responseDetails.values()) detail.pricingKnown = responsePricingKnown(detail);
+  updateRenderedResponseMetadata();
+}
+
+function openResponseDetails(id) {
+  const m = responseDetails.get(id); if (!m) return;
+  const u = m.usage || {}, c = u.cost || {};
+  const selected = m.model || currentSession?.model || '—';
+  const model = m.responseModel || selected;
+  const prompt = (u.input||0)+(u.cacheRead||0)+(u.cacheWrite||0);
+  const modelRows = m.responseModel && m.responseModel !== selected
+    ? [['Selected model', selected], ['Response model', model]]
+    : [['Model', model]];
+  const rows = [
+    ...modelRows, ['Provider', m.provider || '—'],
+    ['Response time', m.durationMs ? formatDuration(m.durationMs) : '—'],
+    ['Effective speed', formatTokSpeed(m.outputTokens || u.output, m.durationMs) || '—'],
+    ['Tokens', `${formatTokens(u.input)} input · ${formatTokens(u.output)} output${u.reasoning ? ` · ${formatTokens(u.reasoning)} reasoning` : ''}`],
+    ['Cache', `${formatTokens(u.cacheRead)} read · ${formatTokens(u.cacheWrite)} write${prompt ? ` · ${Math.round((u.cacheRead||0)/prompt*100)}% hit` : ''}`],
+    ['Estimated input', m.pricingKnown ? formatEstimatedCost(c.input) : 'Pricing unavailable'],
+    ['Estimated output', m.pricingKnown ? formatEstimatedCost(c.output) : 'Pricing unavailable'],
+    ['Estimated cache read / write', m.pricingKnown ? `${formatEstimatedCost(c.cacheRead)} / ${formatEstimatedCost(c.cacheWrite)}` : 'Pricing unavailable'],
+    ['Estimated total', m.pricingKnown ? formatEstimatedCost(c.total) : 'Pricing unavailable'], ['Stop reason', m.stopReason || '—'],
+  ];
+  document.getElementById('responseDetailsBody').innerHTML = '<div class="telemetry-note">Pi catalog estimates, not provider-billed amounts. Response time is request start → JSONL append; effective speed includes TTFT.</div><table class="stats-table">' + rows.map(([k,v]) => `<tr><td class="stats-key">${escapeHtml(k)}</td><td class="stats-val">${escapeHtml(v)}</td></tr>`).join('') + '</table>';
+  document.getElementById('responseDetailsModal').style.display = 'flex';
+}
+function closeResponseDetails() { document.getElementById('responseDetailsModal').style.display = 'none'; }
 
 function renderThinkingBlock(thinking) {
   const preview = thinking.substring(0, 80).replace(/\n/g, ' ');
@@ -2895,6 +3088,7 @@ function startMessageStream(sessionId) {
       fetchNewMessagesSince(sessionId);
       refreshSessions();
       refreshArtifacts(sessionId); // the agent may have published pages mid-turn
+      refreshSessionSpend();
       setStatus('');
     };
     evtSource.addEventListener('turn_end', handleTurnEnd);
@@ -4561,6 +4755,10 @@ document.addEventListener('keydown', function(e) {
   if (e.key !== 'Escape') return;
   if (document.getElementById('commentBubble').style.display !== 'none') {
     e.preventDefault(); closeCommentBubble();
+  } else if (document.getElementById('responseDetailsModal').style.display !== 'none') {
+    e.preventDefault(); closeResponseDetails();
+  } else if (document.getElementById('settingsModal').style.display !== 'none') {
+    e.preventDefault(); closeSettingsModal();
   } else if (document.getElementById('treeModal').style.display !== 'none') {
     e.preventDefault(); closeTreeModal();
   } else if (document.getElementById('statsModal').style.display !== 'none') {

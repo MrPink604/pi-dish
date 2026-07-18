@@ -1078,7 +1078,13 @@ body.sidebar-open {
   order: 2;
   font-size: 11px;
   color: var(--text-muted);
+  border: 0;
+  background: transparent;
+  padding: 1px 3px;
+  font-family: inherit;
 }
+.message-metadata-btn { cursor: pointer; border-radius: 3px; }
+.message-metadata-btn:hover, .message-metadata-btn:focus { color: var(--accent); background: var(--bg-hover); }
 
 /* Per-message share link: invisible until the turn is hovered; touch layouts
    have no hover, so it stays faintly visible there. order 4 puts it past the
@@ -3095,6 +3101,8 @@ img.msg-image {
 .stats-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 
 .stats-table td { padding: 6px 8px; vertical-align: top; }
+.stats-section th { padding: 12px 8px 4px; text-align: left; color: var(--text-muted); font-size: 11px; text-transform: uppercase; border-bottom: 1px solid var(--line); }
+.stats-section:first-child th { padding-top: 2px; }
 
 .stats-key { color: var(--text-muted); white-space: nowrap; width: 1%; }
 
@@ -3118,6 +3126,34 @@ img.msg-image {
 .stats-copy:hover { color: var(--accent); border-bottom-color: var(--accent); }
 
 .stats-copy.copied { color: var(--success-bright); border-bottom-color: transparent; }
+
+.telemetry-note, .usage-notice { color: var(--text-muted); font-size: 11px; line-height: 1.4; margin-top: 10px; }
+.settings-modal { width: min(720px, calc(100vw - 24px)); max-height: min(760px, 90dvh); }
+.settings-tabs, .usage-ranges { display: flex; gap: 4px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+.settings-tab { border: 0; background: transparent; color: var(--text-muted); padding: 6px 10px; border-radius: 4px; cursor: pointer; font: inherit; font-size: 12px; }
+.settings-tab.active, .settings-tab:hover { color: var(--text); background: var(--bg-hover); }
+.settings-body { padding: 16px; overflow: auto; }
+.preference-row { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.preference-row label, .preference-row > span { display: flex; flex-direction: column; gap: 4px; }
+.preference-row small, .settings-body > small { color: var(--text-muted); }
+.preference-row select, .preference-row input { color: var(--text); background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 6px; }
+.budget-save { display: flex; gap: 6px; }
+.usage-ranges { padding: 0 0 10px; }
+.usage-headlines { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; margin: 12px 0; }
+.usage-headlines > div { display: flex; flex-direction: column; gap: 3px; padding: 8px; background: var(--bg-card); border-radius: 4px; }
+.usage-headlines small { color: var(--text-muted); }
+.usage-summary { margin: 10px 0; }
+.budget-progress { height: 5px; background: var(--bg-hover); margin: 12px 0 5px; }
+.budget-progress > div { height: 100%; background: var(--warning); }
+.usage-bars { height: 60px; display: flex; align-items: end; gap: 2px; }
+.usage-bars span { flex: 1; min-width: 2px; background: var(--accent-dim); }
+.usage-groups { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; }
+.usage-group { margin-top: 14px; min-width: 0; }
+.usage-group h4 { margin: 0 0 6px; font-size: 12px; color: var(--text-muted); }
+.usage-group > div:not(.usage-bars) { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; font-size: 11px; border-bottom: 1px solid var(--line); }
+.usage-group > div span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.response-details-modal { width: min(540px, calc(100vw - 24px)); }
+.session-spend-badge { cursor: pointer; }
 
 /* Public share link section of the stats modal. */
 .stats-share {
@@ -3289,6 +3325,13 @@ img.msg-image {
     max-width: none;
     max-height: 90dvh;
   }
+  .global-settings-btn { display: inline-flex; }
+  .session-spend-badge { display: none !important; }
+  .settings-modal { width: 100vw; max-width: none; max-height: 95dvh; }
+  .preference-row { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .toggle-row { flex-direction: row; }
+  .usage-headlines { grid-template-columns: repeat(2,1fr); }
+  .usage-groups { grid-template-columns: 1fr; }
 }
 
 /* Clickable file mentions (linkifyFilePaths) — read as text, hint at

@@ -68,6 +68,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const SESSIONS_DIR = path.join(os.homedir(), '.pi', 'agent', 'sessions');
 const PI_SETTINGS_FILE = path.join(os.homedir(), '.pi', 'agent', 'settings.json');
+const DISH_SETTINGS_FILE = path.join(os.homedir(), '.pi', 'dish', 'settings.json');
 
 // =========================================================================
 // Helpers
@@ -93,13 +94,18 @@ const MODEL_CONTEXT_WINDOWS = {
 
 function normalizeModel(model) {
   if (!model) return null;
+  const sourcePricing = model.pricing || model.cost;
+  const pricing = sourcePricing && Number.isFinite(sourcePricing.input) && Number.isFinite(sourcePricing.output)
+    ? Object.fromEntries(['input', 'output', 'cacheRead', 'cacheWrite'].filter(k => Number.isFinite(sourcePricing[k])).map(k => [k, sourcePricing[k]]))
+    : null;
   return {
     id: model.id || model.modelId,
     name: model.name || model.id || model.modelId,
     provider: model.provider,
     contextWindow: model.contextWindow || 0,
     reasoning: !!model.reasoning,
-    free: !!(model.free || (model.cost && model.cost.input === 0 && model.cost.output === 0)),
+    pricing,
+    free: !!pricing && pricing.input === 0 && pricing.output === 0,
   };
 }
 
@@ -418,19 +424,7 @@ function getPreviousSessions(registered = listRegisteredSessions()) {
   let indexing = false;
 
   try {
-    const dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true });
-    for (const dir of dirs) {
-      if (!dir.isDirectory()) continue;
-      const dirPath = path.join(SESSIONS_DIR, dir.name);
-      for (const file of fs.readdirSync(dirPath)) {
-        if (!file.endsWith('.jsonl')) continue;
-        // Session ids are the file basename (newer pi prefixes a timestamp,
-        // older files are a bare UUID) — matching the bridge registry ids.
-        const id = file.slice(0, -'.jsonl'.length);
-        if (activeIds.has(id)) continue;
-        candidates.push({ file: path.join(dirPath, file), id, dirName: dir.name });
-      }
-    }
+    candidates.push(...enumerateSessionCandidates(activeIds));
 
     const scan = sessionIndex.scanSessions(candidates.map(c => c.file));
     indexing = scan.indexing;
@@ -465,6 +459,22 @@ function getPreviousSessions(registered = listRegisteredSessions()) {
 
   previous.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
   return { previous, indexing };
+}
+
+function enumerateSessionCandidates(excludeIds = new Set()) {
+  const out = [];
+  let dirs = []; try { dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true }); } catch { return out; }
+  for (const dir of dirs) {
+    if (!dir.isDirectory()) continue;
+    const dirPath = path.join(SESSIONS_DIR, dir.name);
+    let files = []; try { files = fs.readdirSync(dirPath); } catch { continue; }
+    for (const name of files) {
+      if (!name.endsWith('.jsonl')) continue;
+      const id = name.slice(0, -6);
+      if (!excludeIds.has(id)) out.push({ file: path.join(dirPath, name), id, dirName: dir.name });
+    }
+  }
+  return out;
 }
 
 // =========================================================================
@@ -520,6 +530,101 @@ app.get('/api/sessions', (req, res) => {
     previous = filterSessionsByQuery(previous, query);
   }
   res.json({ active, previous, indexing });
+});
+
+const emptyUsage = () => ({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 }, costs: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, calls: 0, measured: 0, durationMs: 0, slowestMs: 0 });
+function addUsage(to, from) {
+  if (!from) return to;
+  for (const k of Object.keys(to.tokens)) to.tokens[k] += from.tokens?.[k] || 0;
+  for (const k of Object.keys(to.costs)) to.costs[k] += from.costs?.[k] || 0;
+  for (const k of ['calls', 'measured', 'durationMs']) to[k] += from[k] || 0;
+  to.slowestMs = Math.max(to.slowestMs, from.slowestMs || 0);
+  return to;
+}
+function localDay(offset = 0) {
+  const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() - offset);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function readDishSettings() {
+  try { const v = JSON.parse(fs.readFileSync(DISH_SETTINGS_FILE, 'utf8')); return v && typeof v === 'object' ? v : {}; } catch { return {}; }
+}
+
+app.get('/api/usage-summary', (req, res) => {
+  const range = String(req.query.days || '30');
+  if (!['1', '7', '30', 'all'].includes(range)) return res.status(400).json({ error: 'days must be 1, 7, 30, or all' });
+  const candidates = enumerateSessionCandidates();
+  const scan = sessionIndex.scanSessions(candidates.map(c => c.file));
+  const cutoff = range === 'all' ? null : localDay(Number(range) - 1);
+  const totals = emptyUsage(), byModel = new Map(), byWorkspace = new Map(), bySession = new Map();
+  const modelOwners = [];
+  const dailyMap = new Map(), headline = { today: 0, days7: 0, days30: 0, all: 0, month: 0 };
+  const now = new Date(), monthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-`;
+  for (const c of candidates) {
+    const info = scan.infos.get(c.file), usage = info?.usage;
+    if (!usage) continue;
+    const selected = emptyUsage();
+    for (const [day, bucket] of Object.entries(usage.days || {})) {
+      const cost = bucket.costs?.total || 0;
+      const dated = day !== 'unknown';
+      headline.all += cost;
+      if (dated && day === localDay()) headline.today += cost;
+      if (dated && day >= localDay(6)) headline.days7 += cost;
+      if (dated && day >= localDay(29)) { headline.days30 += cost; addUsage(dailyMap.get(day) || (dailyMap.set(day, emptyUsage()), dailyMap.get(day)), bucket); }
+      if (dated && day.startsWith(monthPrefix)) headline.month += cost;
+      if (!cutoff || (dated && day >= cutoff)) addUsage(selected, bucket);
+    }
+    addUsage(totals, selected);
+    if (selected.calls) {
+      addUsage(byWorkspace.get(info.cwd || usage.cwd || '(unknown)') || (byWorkspace.set(info.cwd || usage.cwd || '(unknown)', emptyUsage()), byWorkspace.get(info.cwd || usage.cwd || '(unknown)')), selected);
+      bySession.set(c.id, { id: c.id, name: info.name || c.id.slice(0, 8), workspace: info.cwd || usage.cwd || null, ...selected });
+    }
+    for (const [ref, bucket] of Object.entries(usage.models || {})) {
+      const modelSelected = emptyUsage();
+      if (bucket.days) for (const [day, part] of Object.entries(bucket.days)) { if (!cutoff || (day !== 'unknown' && day >= cutoff)) addUsage(modelSelected, part); }
+      else if (!cutoff) addUsage(modelSelected, bucket); // schema-2 transitional safety
+      if (modelSelected.calls) {
+        addUsage(byModel.get(ref) || (byModel.set(ref, { ...emptyUsage(), provider: bucket.provider, model: bucket.model }), byModel.get(ref)), modelSelected);
+        modelOwners.push({ ref, sessionId: c.id, workspace: info.cwd || usage.cwd || '(unknown)', calls: modelSelected.calls });
+      }
+    }
+  }
+  // Do not make history wait on a host `pi --list-models` subprocess. Startup
+  // warms this cache (and /api/models refreshes it); persisted nonzero costs
+  // still identify priced calls while a catalog is unavailable.
+  const pricedRefs = new Set((modelsCache || []).filter(m => m.pricing).map(m => `${m.provider}/${m.id}`));
+  const freeRefs = new Set((modelsCache || []).filter(m => m.free).map(m => `${m.provider}/${m.id}`));
+  let unpricedModelCalls = 0;
+  for (const [ref, b] of byModel) {
+    b.priced = b.costs.total !== 0 || pricedRefs.has(ref) || freeRefs.has(ref);
+    if (!b.priced) {
+      b.unpricedCalls = b.calls;
+      unpricedModelCalls += b.calls;
+    }
+  }
+  for (const owner of modelOwners) {
+    if (byModel.get(owner.ref)?.priced !== false) continue;
+    const session = bySession.get(owner.sessionId);
+    const workspace = byWorkspace.get(owner.workspace);
+    if (session) session.unpricedCalls = (session.unpricedCalls || 0) + owner.calls;
+    if (workspace) workspace.unpricedCalls = (workspace.unpricedCalls || 0) + owner.calls;
+  }
+  totals.unpricedCalls = unpricedModelCalls;
+  const top = map => [...map.entries()].map(([key, value]) => ({ key, ...value })).sort((a, b) => b.costs.total - a.costs.total || b.calls - a.calls).slice(0, 20);
+  res.json({ range, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort((a,b) => b.costs.total-a.costs.total).slice(0,20) }, headlineCosts: headline, daily: Array.from({ length: 30 }, (_, i) => { const day = localDay(29 - i); return { day, ...(dailyMap.get(day) || emptyUsage()) }; }), unpricedModelCalls, indexing: scan.indexing, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
+});
+
+app.get('/api/settings', (_req, res) => res.json({ monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null }));
+app.put('/api/settings', (req, res) => {
+  const value = req.body?.monthlyBudgetUsd;
+  if (value !== null && (!Number.isFinite(value) || value <= 0 || value > 1_000_000)) return res.status(400).json({ error: 'monthlyBudgetUsd must be null or a positive number at most 1000000' });
+  const settings = readDishSettings();
+  if (value === null) delete settings.monthlyBudgetUsd; else settings.monthlyBudgetUsd = value;
+  try {
+    fs.mkdirSync(path.dirname(DISH_SETTINGS_FILE), { recursive: true });
+    const tmp = `${DISH_SETTINGS_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n'); fs.renameSync(tmp, DISH_SETTINGS_FILE);
+    res.json({ monthlyBudgetUsd: value });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Historical image blocks can be megabytes. Keep those bytes out of the
@@ -813,7 +918,7 @@ app.get('/api/sessions/:id/stats', async (req, res) => {
     const sessionFile = findSessionFile(sessionId);
     if (!sessionFile) return res.status(404).json({ error: 'Session not found' });
 
-    const { tokens, cost, userMessages, assistantMessages, toolCalls, toolResults, genMs, genOutput } =
+    const { tokens, reasoningTokens, cost, costs, responseTiming, userMessages, assistantMessages, toolCalls, toolResults, genMs, genOutput } =
       getSessionStats(sessionFile);
 
     const reg = getRegisteredSession(sessionId);
@@ -833,6 +938,9 @@ app.get('/api/sessions/:id/stats', async (req, res) => {
       totalMessages: userMessages + assistantMessages + toolResults,
       tokens: { ...tokens, total: tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite },
       cost,
+      costs,
+      reasoningTokens,
+      responseTiming,
       genMs,
       genOutput,
       contextUsage: contextUsage || {

@@ -72,10 +72,10 @@ const sessionFile = path.join(sessionDir, `${SESSION_ID}.jsonl`);
 const appendEntry = (e) => fs.appendFileSync(sessionFile, JSON.stringify(e) + '\n');
 appendEntry({ type: 'session', cwd: CWD, timestamp: '2026-07-05T00:00:00.000Z' });
 appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'existing question' }], timestamp: '2026-07-05T00:00:01.000Z' } });
-// Entry id + generation timing (start = message.timestamp ms epoch, end =
+// Entry id + response timing (start = message.timestamp ms epoch, end =
 // entry timestamp): 45 output tokens in 1.5s → the header shows "30 tok/s"
 // and the 🔗 button deep-links ?targetId=ui-a1.
-appendEntry({ type: 'message', id: 'ui-a1', timestamp: '2026-07-05T00:00:02.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'existing **answer**' }], timestamp: Date.parse('2026-07-05T00:00:00.500Z'), usage: { output: 45 } } });
+appendEntry({ type: 'message', id: 'ui-a1', timestamp: '2026-07-05T00:00:02.000Z', message: { role: 'assistant', provider: 'test', model: 'smoke-model', stopReason: 'stop', content: [{ type: 'text', text: 'existing **answer**' }], timestamp: Date.parse('2026-07-05T00:00:00.500Z'), usage: { input: 100, output: 45, reasoning: 5, cacheRead: 20, cacheWrite: 10, cost: { input: 0.0003, output: 0.000675, cacheRead: 0.00001, cacheWrite: 0.00002, total: 0.001005 } } } });
 // A historical turn with tool activity — must fold into a closed .tool-group.
 appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'check the readme' }], timestamp: '2026-07-05T00:00:03.000Z' } });
 appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'hist1', name: 'Read', arguments: { path: 'README.md' } }], timestamp: '2026-07-05T00:00:04.000Z' } });
@@ -173,9 +173,9 @@ function handleCommand(sock, msg) {
   switch (msg.command) {
     case 'get_available_models':
       return respond(sock, msg.id, { models: [
-        { id: 'smoke-model', provider: 'test', name: 'Smoke Model' },
-        { id: 'other-model', provider: 'test', name: 'Other Model' },
-        { id: 'third-model', provider: 'test', name: 'Third Model' },
+        { id: 'smoke-model', provider: 'test', name: 'Smoke Model', contextWindow: 200000, pricing: { input: 3, output: 15 } },
+        { id: 'other-model', provider: 'test', name: 'Other Model', contextWindow: 128000, pricing: null },
+        { id: 'third-model', provider: 'test', name: 'Third Model', contextWindow: 32000, pricing: { input: 0, output: 0 } },
       ] });
     case 'get_commands':
       return respond(sock, msg.id, [{ name: 'help', description: 'show help', source: 'builtin' }]);
@@ -450,6 +450,18 @@ function writeRegistry(patch = {}) {
     console.log('per-message speed + share link:');
     const speedBadge = desktop.locator('.message.assistant .message-speed', { hasText: '30 tok/s' });
     check(await speedBadge.count() === 1, 'timed assistant message shows 30 tok/s');
+    await speedBadge.click();
+    check((await desktop.locator('#responseDetailsBody').textContent()).includes('Estimated total'), 'response details shows estimated costs');
+    await desktop.keyboard.press('Escape');
+    await desktop.click('.global-settings-btn');
+    await desktop.waitForSelector('#responseMetadataMode');
+    await desktop.selectOption('#responseMetadataMode', 'performance-cost');
+    check((await speedBadge.textContent()).includes('~$'), 'response mode updates rendered metadata');
+    check(await desktop.evaluate(() => localStorage.getItem('pi-dish-response-metadata')) === 'performance-cost', 'response mode persists');
+    await desktop.click('#settingsUsageTab');
+    await desktop.waitForSelector('.usage-ranges');
+    check(await desktop.locator('.usage-ranges button').count() === 4, 'usage tab offers all ranges');
+    await desktop.keyboard.press('Escape');
 
     // Per-message share link: no share exists yet, so the button asks before
     // creating one; accepting copies the deep link (?targetId=<entry id>).

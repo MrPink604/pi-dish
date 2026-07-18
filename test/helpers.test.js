@@ -554,3 +554,21 @@ test('diffStatusClass maps git status letters to CSS-safe suffixes', () => {
   assert.equal(H.diffStatusClass('M'), 'mod');
   assert.equal(H.diffStatusClass('T'), 'mod');
 });
+
+test('telemetry formatters label compact response metadata and catalog estimates', () => {
+  const msg = { durationMs: 2000, outputTokens: 60, usage: { output: 60, cost: { total: 0.0012 } } };
+  assert.equal(H.formatResponseMetadata(msg, 'hidden'), null);
+  assert.equal(H.formatResponseMetadata(msg, 'compact'), '30 tok/s');
+  assert.equal(H.formatResponseMetadata(msg, 'performance'), '2.0s · 30 tok/s');
+  assert.equal(H.formatResponseMetadata(msg, 'performance-cost'), '2.0s · 30 tok/s · ~$0.0012');
+  assert.equal(H.formatResponseMetadata({ ...msg, pricingKnown: false }, 'performance-cost'), '2.0s · 30 tok/s');
+  assert.equal(H.formatResponseMetadata({ usage: { output: 1200 } }, 'compact'), '1.2k out');
+  assert.equal(H.formatEstimatedCost(undefined), '—');
+  assert.equal(H.formatEstimatedCost(0.00001), '~$0.000010', 'tiny response costs do not round to apparent zero');
+});
+
+test('model pricing formatter distinguishes free from unavailable pricing', () => {
+  assert.equal(H.formatModelPricing({ free: true, pricing: { input: 0, output: 0 } }), 'free');
+  assert.equal(H.formatModelPricing({ pricing: null }), 'pricing unavailable');
+  assert.equal(H.formatModelPricing({ pricing: { input: 3, output: 15 } }), '$3/$15 per 1M in/out');
+});

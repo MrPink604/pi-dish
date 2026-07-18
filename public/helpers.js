@@ -86,6 +86,39 @@ function formatTokSpeed(outputTokens, durationMs) {
   return (rate >= 10 ? Math.round(rate) : Math.round(rate * 10) / 10) + ' tok/s';
 }
 
+/** Pi catalog estimate; deliberately never presented as a provider bill. */
+function formatEstimatedCost(value, digits = 4) {
+  if (!Number.isFinite(value)) return '—';
+  if (value === 0) return '~$0';
+  const precision = value < 0.0001 ? Math.max(digits, 6) : value < 0.01 ? Math.max(digits, 4) : 2;
+  return `~$${value.toFixed(precision)}`;
+}
+
+/** Compact metadata label for an authoritative, indexed assistant response. */
+function formatResponseMetadata(msg, mode = 'compact') {
+  if (!msg || mode === 'hidden') return null;
+  const usage = msg.usage || {};
+  const speed = formatTokSpeed(msg.outputTokens || usage.output, msg.durationMs);
+  const tokens = usage.output ? `${formatTokens(usage.output)} out` : null;
+  const elapsed = Number.isFinite(msg.durationMs) && msg.durationMs > 0
+    ? `${msg.durationMs < 10000 ? (msg.durationMs / 1000).toFixed(1) : Math.round(msg.durationMs / 1000)}s`
+    : null;
+  if (mode === 'compact') return speed || tokens;
+  const performance = [elapsed, speed].filter(Boolean).join(' · ');
+  if (mode === 'performance-cost') {
+    const cost = msg.pricingKnown !== false && Number.isFinite(usage.cost?.total) ? formatEstimatedCost(usage.cost.total) : null;
+    return [performance, cost].filter(Boolean).join(' · ') || tokens;
+  }
+  return performance || tokens;
+}
+
+function formatModelPricing(model) {
+  if (!model) return 'pricing unavailable';
+  if (model.free) return 'free';
+  if (!model.pricing) return 'pricing unavailable';
+  return `$${model.pricing.input}/$${model.pricing.output} per 1M in/out`;
+}
+
 function formatRelativeTime(ts) {
   if (!ts) return '';
   const diff = Math.max(0, Date.now() - new Date(ts).getTime());
@@ -626,6 +659,7 @@ function diffStatusClass(letter) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRuntime, formatRelativeTime, formatTime, formatDuration, formatTokSpeed,
+    formatEstimatedCost, formatResponseMetadata, formatModelPricing,
     shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText, extractImageBlocks, messageHasVisibleText,
     contextClass, sessionMetaText, parseModelId, formatModelRef,
     groupByWorkspace, buildWorkspaceTree, collectTreeSessions,

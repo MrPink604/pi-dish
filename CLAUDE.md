@@ -86,16 +86,20 @@ module: `getSessionInfo` (single-file list metadata), `readSessionMessages`
 `/stats`), and `readSessionCwd` (bounded first-line read — never load a whole
 file just for its header). The readers share one `statCached` implementation
 keyed on (mtimeMs, size). Messages carry their JSONL entry `id` (share deep
-links key on it) and assistant messages `durationMs`/`outputTokens`:
+links key on it) and sanitized assistant usage/provider/model metadata plus
+`durationMs`/`outputTokens`:
 `message.timestamp` (ms epoch) is stamped when the API call starts, the
-entry's own timestamp when it's appended — the delta is generation time
-(`assistantGenStats`), which also feeds the stats `genMs`/`genOutput` sums
-(measurable messages only, so tok/s averages aren't diluted). These in-memory LRUs are sized for the *viewed*
+entry's own timestamp when it's appended — the delta is response time, not
+decode-only generation time (`assistantGenStats`). It also feeds the stats
+`genMs`/`genOutput` sums (measurable messages only, so effective tok/s
+averages aren't diluted). These in-memory LRUs are sized for the *viewed*
 sessions only — anything that iterates the whole corpus (the sidebar scan,
 list search) must go through `lib/session-index.js` instead, or thousands of
 sessions turn a capped LRU into a 0%-hit-rate full re-parse per request. The
-content-based cores (`parseSessionContent`, `buildSearchTextFromContent`) are
-exported so the index derives both from one read. `getSessionInfo` returns a
+content-based cores (`parseSessionContent`, `buildSearchTextFromContent`,
+`buildIndexedUsageFromContent`) are exported so the index derives metadata,
+search text, and compact daily/model usage summaries from one read.
+`getSessionInfo` returns a
 copy (callers overlay live usage onto it); the other readers return the
 cached value itself — never mutate it. Context window/percent are derived in
 server.js (`withContext`) at read time, not inside the cache — the models
@@ -110,9 +114,10 @@ a just-produced image can render before the JSONL catch-up.
 
 ## Session index (lib/session-index.js)
 
-Persistent (mtimeMs, size)-keyed index of list metadata + lowercased search
-text for **every** session JSONL, backing the historical scan
-(`getPreviousSessions`) and list search — built because the user's work
+Persistent (mtimeMs, size)-keyed index of list metadata, compact usage
+summaries, and lowercased search text for **every** session JSONL, backing the
+historical scan (`getPreviousSessions`), global `/api/usage-summary`, and list
+search — built because the user's work
 machine has thousands of sessions (GBs of JSONL), where per-request re-parsing
 means multi-second event-loop stalls per sidebar poll/search keystroke.
 Storage is `~/.pi/dish/session-index/{meta,text}.ndjson`: append-only NDJSON
@@ -132,6 +137,26 @@ carry a `searchSnippet` (`buildSnippet`/`highlightTokens` in helpers.js) so
 the client can show *why* a row matched. Tests prove persistence structurally:
 scans with `PI_DISH_INDEX_SYNC_BUDGET=0` can't parse, so whatever they serve
 came from disk.
+
+## Performance and usage telemetry (public/app.js, /api/usage-summary)
+
+Assistant response metadata is intentionally quiet and configurable from the
+global gear. The display mode and optional desktop session-spend badge are
+device-local (`pi-dish-response-metadata`, `pi-dish-show-session-spend` in
+localStorage); the monthly budget warning is server-global in
+`~/.pi/dish/settings.json`. Compact is the default and shows effective output
+tok/s. Performance modes may add response time and estimated cost; clicking a
+label always opens the detailed token/cache/timing/cost projection regardless
+of the selected density. Never call the timing decode/generation time: the
+available timestamps span request start through finished JSONL append, so TTFT
+and append overhead are included. Never present cost as billed spend: it is an
+estimate from Pi's model catalog, and absent pricing must remain distinct from
+an explicitly free model.
+
+The Usage tab aggregates the compact summaries stored in the session index by
+day, model, workspace, and session. Finite date ranges exclude timestamp-less
+`unknown` buckets; all-time totals include them. Do not replace this with a
+synchronous walk/reparse of the full JSONL corpus.
 
 Server-side session dispatch: `getLiveSession(id)` in server.js is the one
 place bridge-vs-RPC resolution lives (bridge registry entry → connected

@@ -79,6 +79,32 @@ test('index persists: a zero-budget scan after state reset still serves entries'
   assert.ok(index.getSearchText(file).includes('persisted needle'), 'search text survived too');
 });
 
+test('versionless metadata is queued for reindex instead of being served stale', async () => {
+  const file = writeSession([
+    userMsg('fresh metadata'),
+    { type: 'message', timestamp: '2026-07-01T10:00:02.000Z', message: {
+      role: 'assistant', content: [], usage: { output: 5, cost: { total: 0.01 } },
+    } },
+  ]);
+  const stats = fs.statSync(file);
+  index.resetForTests();
+  fs.mkdirSync(indexDir, { recursive: true });
+  fs.appendFileSync(path.join(indexDir, 'meta.ndjson'), JSON.stringify({
+    f: file, m: stats.mtimeMs, s: stats.size,
+    v: { name: 'stale metadata', messageCount: 999, lastActivity: '2020-01-01T00:00:00.000Z' },
+  }) + '\n');
+
+  const first = withBudget(0, () => index.scanSessions([file]));
+  assert.equal(first.infos.has(file), false, 'old schema is not served as current telemetry');
+  assert.equal(first.indexing, true);
+  await waitFor(() => withBudget(0, () => index.scanSessions([file])).indexing === false,
+    'schema migration reindex');
+  const fresh = withBudget(0, () => index.scanSessions([file])).infos.get(file);
+  assert.equal(fresh.name, 'fresh metadata');
+  assert.equal(fresh.messageCount, 1);
+  assert.equal(fresh.usage.total.costs.total, 0.01);
+});
+
 test('zero sync budget queues a backlog that the background build drains', async () => {
   const files = [writeSession([userMsg('aaa')]), writeSession([userMsg('bbb')])];
   const first = withBudget(0, () => index.scanSessions(files));

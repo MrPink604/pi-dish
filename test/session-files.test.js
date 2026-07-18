@@ -159,13 +159,16 @@ test('getSessionStats aggregates usage and revalidates on append', () => {
     { type: 'message', message: { role: 'assistant', content: [
       { type: 'toolCall', id: 't1', name: 'Bash', arguments: {} },
       { type: 'toolCall', id: 't2', name: 'Read', arguments: {} },
-    ], usage: { input: 100, output: 50, cacheRead: 400, cacheWrite: 20, cost: { total: 0.5 } } } },
+    ], usage: { input: 100, output: 50, cacheRead: 400, cacheWrite: 20, reasoning: 12,
+      cost: { input: 0.1, output: 0.3, cacheRead: 0.02, cacheWrite: 0.08, total: 0.5 } } } },
     { type: 'message', message: { role: 'toolResult', toolName: 'Bash', content: [] } },
     assistantMsg('done', { input: 10, output: 5 }),
   ]);
   const stats = SF.getSessionStats(file);
   assert.deepEqual(stats.tokens, { input: 110, output: 55, cacheRead: 400, cacheWrite: 20 });
   assert.equal(stats.cost, 0.5);
+  assert.deepEqual(stats.costs, { input: 0.1, output: 0.3, cacheRead: 0.02, cacheWrite: 0.08, total: 0.5 });
+  assert.equal(stats.reasoningTokens, 12);
   assert.equal(stats.userMessages, 1);
   assert.equal(stats.assistantMessages, 2);
   assert.equal(stats.toolCalls, 2);
@@ -187,6 +190,42 @@ test('getSessionStats sums generation time over measurable assistant messages on
   assert.equal(stats.genMs, 15000);
   assert.equal(stats.genOutput, 300, 'unmeasurable output does not dilute the average');
   assert.equal(stats.tokens.output, 350, 'token totals still count everything');
+  assert.deepEqual(stats.responseTiming, { measured: 2, medianMs: 7500, slowestMs: 10000 });
+});
+
+test('indexed usage groups local days and model changes without retaining message content', () => {
+  const content = [
+    { type: 'session', cwd: '/workspace/alpha' },
+    { type: 'model_change', provider: 'anthropic', modelId: 'fallback-model' },
+    { type: 'message', timestamp: '2026-07-01T10:00:03.000Z', message: {
+      role: 'assistant', content: [{ type: 'text', text: 'large text that is not indexed into usage' }],
+      timestamp: Date.parse('2026-07-01T10:00:01.000Z'),
+      usage: { input: 10, output: 4, reasoning: 2, cost: { output: 0.04, total: 0.04 } },
+    } },
+    { type: 'message', timestamp: '2026-07-02T11:00:05.000Z', message: {
+      role: 'assistant', provider: 'openai', model: 'selected-router', responseModel: 'routed-model', content: [],
+      timestamp: Date.parse('2026-07-02T11:00:01.000Z'),
+      usage: { input: 20, output: 8, cacheRead: 30, cost: { input: 0.02, total: 0.08 } },
+    } },
+    { type: 'message', message: { role: 'assistant', content: [], usage: { output: 1, cost: { total: 0.01 } } } },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n';
+
+  const usage = SF.buildIndexedUsageFromContent(content);
+  assert.equal(usage.cwd, '/workspace/alpha');
+  assert.equal(usage.total.calls, 3);
+  assert.equal(usage.total.tokens.output, 13);
+  assert.equal(usage.total.tokens.reasoning, 2);
+  assert.equal(usage.total.costs.total, 0.13);
+  assert.equal(usage.total.measured, 2);
+  assert.equal(usage.total.durationMs, 6000);
+  assert.equal(usage.total.slowestMs, 4000);
+  assert.equal(usage.days['2026-07-01'].calls, 1);
+  assert.equal(usage.days['2026-07-02'].calls, 1);
+  assert.equal(usage.days.unknown.calls, 1);
+  assert.equal(usage.models['anthropic/fallback-model'].calls, 2, 'model_change is the fallback');
+  assert.equal(usage.models['openai/routed-model'].calls, 1, 'concrete response model overrides the selected model and fallback');
+  assert.equal(usage.models['openai/selected-router'], undefined);
+  assert.equal('content' in usage.total, false);
 });
 
 test('readSessionCwd reads the header line without loading the file', () => {

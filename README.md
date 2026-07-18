@@ -69,11 +69,17 @@ Rules of thumb:
   render as real modals you can answer from the browser; widgets and status
   badges render natively.
 - **Session controls** — model switcher (mirrors pi's scoped-models
-  settings), thinking-level toggle, session rename, stats (tokens, cache,
-  cost), HTML export via pi's own exporter, session tree for branching —
-  with optional branch summaries (pi's `/tree` summarize flow): jump back
-  to an earlier point and inject an LLM summary of the branch you're
+  settings), thinking-level toggle, session rename, response performance and
+  estimated-spend details, HTML export via pi's own exporter, session tree for
+  branching — with optional branch summaries (pi's `/tree` summarize flow):
+  jump back to an earlier point and inject an LLM summary of the branch you're
   abandoning, so explored dead-ends still inform the conversation.
+- **Usage insights** — quiet per-response effective speed by default, with
+  device-local metadata density controls and click-through token/cache/cost
+  details. The global Settings → Usage view summarizes estimated spend by
+  day, model, workspace, and session, with an optional server-wide monthly
+  warning. Spend is estimated from Pi catalog pricing, not provider billing;
+  unavailable pricing is called out rather than shown as free.
 - **Reading tools** — in-session search (Ctrl+F, auto-pages older messages
   in), focus mode that hides tool noise, per-message copy buttons.
 - **Mobile-first** — the whole point. Slide-out drawer, slide-up control

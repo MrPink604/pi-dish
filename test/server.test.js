@@ -43,9 +43,9 @@ const entries = [
   ], timestamp: '2026-07-04T10:00:03.000Z' } },
   { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'delta question alpha' }], timestamp: '2026-07-04T10:00:04.000Z' } },
   // The last assistant entry carries an entry id (per-message share links)
-  // and real generation timing: message.timestamp = start (ms epoch),
+  // and real response timing: message.timestamp = start (ms epoch),
   // entry timestamp = end → 2s for 60 output tokens.
-  { type: 'message', id: 'ent5', timestamp: '2026-07-04T10:00:05.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'echo final' }], usage: { input: 200, output: 60, cacheRead: 0, cacheWrite: 0, totalTokens: 1234, cost: { total: 0.02 } }, timestamp: Date.parse('2026-07-04T10:00:03.000Z') } },
+  { type: 'message', id: 'ent5', timestamp: '2026-07-04T10:00:05.000Z', message: { role: 'assistant', provider: 'test', model: 'selected-model', responseModel: 'routed-model', content: [{ type: 'text', text: 'echo final' }], usage: { input: 200, output: 60, cacheRead: 0, cacheWrite: 0, totalTokens: 1234, providerRaw: 'do not expose', cost: { total: 0.02, providerRaw: 99 } }, timestamp: Date.parse('2026-07-04T10:00:03.000Z') } },
 ];
 const SESSION_FILE = path.join(sessionDir, `${SESSION_ID}.jsonl`);
 fs.writeFileSync(SESSION_FILE, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
@@ -134,6 +134,14 @@ const post = async (p, body) => {
   return { status: res.status, body: await res.json() };
 };
 
+const put = async (p, body) => {
+  const res = await fetch(base + p, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: await res.json() };
+};
+
 const del = async (p) => {
   const res = await fetch(base + p, { method: 'DELETE' });
   return { status: res.status, body: await res.json() };
@@ -209,6 +217,13 @@ test('GET /messages returns the tail with indexes', async () => {
   assert.equal(last.id, 'ent5');
   assert.equal(last.durationMs, 2000);
   assert.equal(last.outputTokens, 60);
+  assert.equal(last.provider, 'test');
+  assert.equal(last.model, 'selected-model');
+  assert.equal(last.responseModel, 'routed-model');
+  assert.deepEqual(last.usage, {
+    input: 200, output: 60, cacheRead: 0, cacheWrite: 0, totalTokens: 1234,
+    cost: { total: 0.02 },
+  }, 'usage API exposes only documented counters and estimated costs');
 });
 
 test('GET /messages honors limit / before / after cursors', async () => {
@@ -705,37 +720,29 @@ test('PUT /api/models/enabled persists pi scoped models in settings.json', async
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
   fs.writeFileSync(settingsFile, JSON.stringify({ theme: 'dark' }));
 
-  const put = async (body) => {
-    const res = await fetch(base + '/api/models/enabled', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    return { status: res.status, body: await res.json() };
-  };
-
   // Scope down to two models — other settings fields survive
-  const scoped = await put({ enabledIds: ['anthropic/claude-sonnet-4-5', 'zai/glm-5.2'] });
+  const scoped = await put('/api/models/enabled', { enabledIds: ['anthropic/claude-sonnet-4-5', 'zai/glm-5.2'] });
   assert.equal(scoped.status, 200);
   let settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
   assert.deepEqual(settings.enabledModels, ['anthropic/claude-sonnet-4-5', 'zai/glm-5.2']);
   assert.equal(settings.theme, 'dark');
 
   // null clears the filter entirely (pi treats absent/empty as all enabled)
-  const cleared = await put({ enabledIds: null });
+  const cleared = await put('/api/models/enabled', { enabledIds: null });
   assert.equal(cleared.status, 200);
   settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
   assert.equal('enabledModels' in settings, false);
 
   // Empty array behaves like clearing too
-  await put({ enabledIds: ['x/y'] });
-  await put({ enabledIds: [] });
+  await put('/api/models/enabled', { enabledIds: ['x/y'] });
+  await put('/api/models/enabled', { enabledIds: [] });
   settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
   assert.equal('enabledModels' in settings, false);
 
   // Malformed bodies are rejected
-  const bad = await put({ enabledIds: 'not-an-array' });
+  const bad = await put('/api/models/enabled', { enabledIds: 'not-an-array' });
   assert.equal(bad.status, 400);
-  const badItems = await put({ enabledIds: ['ok', 42] });
+  const badItems = await put('/api/models/enabled', { enabledIds: ['ok', 42] });
   assert.equal(badItems.status, 400);
 });
 
@@ -749,7 +756,10 @@ test('GET /stats aggregates tokens, cost, and message counts from the JSONL', as
   assert.equal(body.totalMessages, 5);
   assert.deepEqual(body.tokens, { input: 300, output: 100, cacheRead: 10, cacheWrite: 5, total: 415 });
   assert.ok(Math.abs(body.cost - 0.05) < 1e-9);
-  // Generation speed inputs: only the last assistant message has measurable
+  assert.deepEqual(body.costs, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.05 });
+  assert.equal(body.reasoningTokens, 0);
+  assert.deepEqual(body.responseTiming, { measured: 1, medianMs: 2000, slowestMs: 2000 });
+  // Effective speed inputs: only the last assistant message has measurable
   // timing (2s for 60 output tokens) — the other's timestamps are unusable.
   assert.equal(body.genMs, 2000);
   assert.equal(body.genOutput, 60);
@@ -757,6 +767,71 @@ test('GET /stats aggregates tokens, cost, and message counts from the JSONL', as
   assert.equal(body.contextUsage.tokens, 1234);
   const missing = await get('/api/sessions/nope/stats');
   assert.equal(missing.status, 404);
+});
+
+test('usage summary filters local-day ranges and keeps timestamp-less cost all-time only', async () => {
+  const usageId = 'usage-summary-' + Date.now();
+  const usageFile = path.join(sessionDir, usageId + '.jsonl');
+  const now = new Date();
+  const old = new Date(now); old.setDate(old.getDate() - 10);
+  const baselineToday = (await get('/api/usage-summary?days=1')).body;
+  const baselineAll = (await get('/api/usage-summary?days=all')).body;
+  const entries = [
+    { type: 'session', cwd: '/workspace/usage', timestamp: now.toISOString() },
+    { type: 'message', timestamp: now.toISOString(), message: { role: 'user', content: [{ type: 'text', text: 'usage fixture' }] } },
+    { type: 'message', timestamp: now.toISOString(), message: { role: 'assistant', provider: 'known', model: 'paid', content: [],
+      usage: { input: 100, output: 10, cost: { input: 0.4, output: 0.6, total: 1 } } } },
+    { type: 'message', timestamp: now.toISOString(), message: { role: 'assistant', provider: 'missing', model: 'unpriced', content: [],
+      usage: { input: 50, output: 5, cost: { total: 0 } } } },
+    { type: 'message', timestamp: old.toISOString(), message: { role: 'assistant', provider: 'known', model: 'old-paid', content: [],
+      usage: { input: 20, output: 2, cost: { total: 2 } } } },
+    { type: 'message', message: { role: 'assistant', provider: 'known', model: 'dateless-paid', content: [],
+      usage: { input: 30, output: 3, cost: { total: 4 } } } },
+  ];
+  fs.writeFileSync(usageFile, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
+  try {
+    const today = await get('/api/usage-summary?days=1');
+    assert.equal(today.status, 200);
+    assert.equal(today.body.range, '1');
+    assert.equal(today.body.totals.calls - baselineToday.totals.calls, 2);
+    assert.equal(today.body.totals.costs.total - baselineToday.totals.costs.total, 1);
+    assert.equal(today.body.headlineCosts.today - baselineToday.headlineCosts.today, 1);
+    assert.equal(today.body.headlineCosts.days7 - baselineToday.headlineCosts.days7, 1,
+      'dateless usage must not leak into recent ranges');
+    assert.equal(today.body.headlineCosts.days30 - baselineToday.headlineCosts.days30, 3);
+    assert.equal(today.body.headlineCosts.all - baselineToday.headlineCosts.all, 7);
+    assert.equal(today.body.unpricedModelCalls - baselineToday.unpricedModelCalls, 1);
+    assert.ok(today.body.groups.models.some(m => m.key === 'missing/unpriced' && m.priced === false));
+
+    const all = await get('/api/usage-summary?days=all');
+    assert.equal(all.body.totals.calls - baselineAll.totals.calls, 4);
+    assert.equal(all.body.totals.costs.total - baselineAll.totals.costs.total, 7);
+    assert.equal(all.body.daily.length, 30);
+    assert.ok(all.body.groups.workspaces.some(w => w.key === '/workspace/usage'));
+
+    const invalid = await get('/api/usage-summary?days=2');
+    assert.equal(invalid.status, 400);
+  } finally {
+    fs.rmSync(usageFile, { force: true });
+  }
+});
+
+test('server-global telemetry settings preserve unrelated fields and validate budgets', async () => {
+  const settingsFile = path.join(tmpHome, '.pi', 'dish', 'settings.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ keep: 'yes' }));
+
+  const saved = await put('/api/settings', { monthlyBudgetUsd: 25.5 });
+  assert.deepEqual(saved, { status: 200, body: { monthlyBudgetUsd: 25.5 } });
+  assert.deepEqual(await get('/api/settings'), saved);
+  assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).keep, 'yes');
+
+  for (const value of [0, -1, 1000001, '25']) {
+    assert.equal((await put('/api/settings', { monthlyBudgetUsd: value })).status, 400);
+  }
+  const cleared = await put('/api/settings', { monthlyBudgetUsd: null });
+  assert.deepEqual(cleared.body, { monthlyBudgetUsd: null });
+  assert.equal('monthlyBudgetUsd' in JSON.parse(fs.readFileSync(settingsFile, 'utf8')), false);
 });
 
 test('POST endpoints validate input and reject inactive sessions', async () => {
