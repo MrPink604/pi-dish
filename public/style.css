@@ -2262,6 +2262,12 @@ body.sidebar-open {
   min-width: 0;
 }
 
+.resume-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .resume-label {
   font-size: 13px;
   color: var(--text-muted);

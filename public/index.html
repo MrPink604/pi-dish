@@ -250,7 +250,10 @@
             <span class="resume-label">Read-only — session is inactive</span>
             <span class="resume-cwd">~</span>
           </div>
-          <button class="btn btn-primary" onclick="resumeSession()">Resume</button>
+          <div class="resume-actions">
+            <button class="btn" id="inactiveStatsBtn" onclick="openStatsModal()">Stats</button>
+            <button class="btn btn-primary" onclick="resumeSession()">Resume</button>
+          </div>
         </div>
 
         <!-- Input (for active sessions) -->

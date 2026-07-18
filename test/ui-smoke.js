@@ -1368,6 +1368,15 @@ function writeRegistry(patch = {}) {
     await dummyGone;
     check(dummySignal === 'SIGTERM', `pi process got a graceful SIGTERM (got ${dummySignal})`);
 
+    // Stats remain useful after a session stops (and on devices where the
+    // desktop context badge is hidden), so the read-only bar keeps them
+    // available without requiring a successful resume.
+    await desktop.click('#inactiveStatsBtn');
+    await desktop.waitForSelector('#statsModal', { state: 'visible' });
+    await desktop.locator('#statsBody').getByText('Performance', { exact: true }).waitFor();
+    check(true, 'inactive session stats are accessible without resuming');
+    await desktop.click('#statsModal .modal-header .btn-icon');
+
     check(errors.length === 0, errors.length ? `no page errors — got: ${errors.join(' | ')}` : 'no page errors');
   } catch (e) {
     failures++;
