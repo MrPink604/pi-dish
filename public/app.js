@@ -1427,9 +1427,9 @@ function closeStatsModal() {
 let fileViewRaw = null;
 let fileViewAbsPath = null; // resolved path of the viewed file (publish target)
 let fileViewRelPath = null;
-let fileCommentSelection = null;
-let diffCommentSelection = null;
 let anchoredCommentDraft = null;
+let commentAnchorRange = null;
+let commentDraftVersion = 0;
 
 function isFileViewOpen() {
   return document.getElementById('sessionView').classList.contains('file-open');
@@ -1443,8 +1443,7 @@ async function openFileViewer(mention) {
   fileViewRaw = null;
   fileViewAbsPath = null;
   fileViewRelPath = null;
-  fileCommentSelection = null;
-  document.getElementById('fileCommentBtn').disabled = true;
+  closeCommentBubble();
   document.getElementById('fileViewPublish').style.display = 'none';
   renderFilePageRow(null);
   title.textContent = mention.replace(/:\d+(?::\d+)?$/, '').split('/').pop();
@@ -1503,15 +1502,14 @@ function closeFileView() {
   fileViewRaw = null;
   fileViewAbsPath = null;
   fileViewRelPath = null;
-  fileCommentSelection = null;
-  document.getElementById('fileCommentBtn').disabled = true;
+  closeCommentBubble();
   renderFilePageRow(null);
 }
 
 // --- Anchored review comments (file + diff views) ---
-// A selection is captured on pointer-up, before clicking the header button
-// can collapse it.  Files/prose use a quote with surrounding text; diffs add
-// old/new line coordinates parsed from the unified hunk.
+// A valid selection immediately opens a compact composer beside it.
+// Files/prose use a quote with surrounding text; diffs add old/new line
+// coordinates parsed from the unified hunk.
 
 function selectionTextAnchor(root, range) {
   const before = document.createRange();
@@ -1530,10 +1528,12 @@ function selectionTextAnchor(root, range) {
   };
 }
 
-function captureFileCommentSelection() {
-  const button = document.getElementById('fileCommentBtn');
-  fileCommentSelection = null;
-  button.disabled = true;
+function isCommentBubbleOpen() {
+  return document.getElementById('commentBubble').style.display !== 'none';
+}
+
+function captureFileCommentSelection(focusComposer = false) {
+  if (isCommentBubbleOpen()) return;
   if (!isFileViewOpen() || !fileViewAbsPath || fileViewRaw == null) return;
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || !selection.rangeCount) return;
@@ -1552,19 +1552,15 @@ function captureFileCommentSelection() {
     anchor.startLine = fileViewRaw.slice(0, first).split('\n').length;
     anchor.endLine = anchor.startLine + anchor.quote.split('\n').length - 1;
   }
-  fileCommentSelection = {
+  openCommentBubble({
     sessionId: currentSession.id,
     quote: anchor.quote,
     target: { kind: 'file', path: fileViewAbsPath, relPath: fileViewRelPath, anchor },
-  };
-  button.disabled = false;
-  button.title = 'Comment on selected text';
+  }, range, focusComposer);
 }
 
-function captureDiffCommentSelection() {
-  const button = document.getElementById('diffCommentBtn');
-  diffCommentSelection = null;
-  button.disabled = true;
+function captureDiffCommentSelection(focusComposer = false) {
+  if (isCommentBubbleOpen()) return;
   if (!isDiffViewOpen()) return;
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || !selection.rangeCount) return;
@@ -1579,7 +1575,7 @@ function captureDiffCommentSelection() {
   const oldNums = nums('oldLine');
   const newNums = nums('newLine');
   const quote = lines.map((line) => line.textContent).join('\n').slice(0, 12000);
-  diffCommentSelection = {
+  openCommentBubble({
     sessionId: currentSession.id,
     quote,
     target: {
@@ -1591,33 +1587,89 @@ function captureDiffCommentSelection() {
         ...(newNums.length ? { newStart: Math.min(...newNums), newEnd: Math.max(...newNums) } : {}),
       },
     },
-  };
-  button.disabled = false;
-  button.title = 'Comment on selected diff lines';
+  }, range, focusComposer);
 }
 
 function initCommentSelections() {
-  document.getElementById('fileViewBody').addEventListener('pointerup', () => setTimeout(captureFileCommentSelection, 0));
-  document.getElementById('diffViewBody').addEventListener('pointerup', () => setTimeout(captureDiffCommentSelection, 0));
+  const fileBody = document.getElementById('fileViewBody');
+  const diffBody = document.getElementById('diffViewBody');
+  fileBody.addEventListener('pointerup', () => setTimeout(captureFileCommentSelection, 0));
+  diffBody.addEventListener('pointerup', () => setTimeout(captureDiffCommentSelection, 0));
+  fileBody.addEventListener('scroll', positionCommentBubble);
+  diffBody.addEventListener('scroll', positionCommentBubble);
+  document.addEventListener('keyup', (event) => {
+    if (!event.shiftKey) return;
+    if (isFileViewOpen()) setTimeout(() => captureFileCommentSelection(true), 0);
+    else if (isDiffViewOpen()) setTimeout(() => captureDiffCommentSelection(true), 0);
+  });
+  const reposition = () => positionCommentBubble();
+  window.addEventListener('resize', reposition);
+  window.visualViewport?.addEventListener('resize', reposition);
+  window.visualViewport?.addEventListener('scroll', reposition);
+  if (window.ResizeObserver) {
+    new ResizeObserver(reposition).observe(document.getElementById('commentBubble'));
+  }
 }
 
-function openCommentModal(draft) {
+function positionCommentBubble() {
+  const bubble = document.getElementById('commentBubble');
+  if (!commentAnchorRange || bubble.style.display === 'none') return;
+  let selectionRect;
+  try { selectionRect = commentAnchorRange.getBoundingClientRect(); }
+  catch { return; }
+  const viewport = window.visualViewport;
+  const viewportLeft = viewport?.offsetLeft || 0;
+  const viewportTop = viewport?.offsetTop || 0;
+  const viewportWidth = viewport?.width || innerWidth;
+  const viewportHeight = viewport?.height || innerHeight;
+  const viewportRight = viewportLeft + viewportWidth;
+  const viewportBottom = viewportTop + viewportHeight;
+  const margin = 8;
+  const gap = 8;
+  bubble.style.maxWidth = `${Math.max(0, viewportWidth - margin * 2)}px`;
+  bubble.style.maxHeight = `${Math.max(0, viewportHeight - margin * 2)}px`;
+  const width = bubble.offsetWidth;
+  const height = bubble.offsetHeight;
+  const left = Math.max(viewportLeft + margin, Math.min(
+    viewportRight - width - margin,
+    selectionRect.left + (selectionRect.width - width) / 2,
+  ));
+  const below = selectionRect.bottom + gap;
+  const preferredTop = below + height <= viewportBottom - margin
+    ? below
+    : selectionRect.top - height - gap;
+  const top = Math.max(viewportTop + margin, Math.min(
+    viewportBottom - height - margin,
+    preferredTop,
+  ));
+  bubble.style.left = `${left}px`;
+  bubble.style.top = `${top}px`;
+}
+
+function openCommentBubble(draft, range, focusComposer = false) {
   if (!draft) return;
   anchoredCommentDraft = draft;
+  commentAnchorRange = range.cloneRange();
+  commentDraftVersion += 1;
   document.getElementById('commentAnchorPreview').textContent = draft.quote;
   document.getElementById('commentBody').value = '';
   document.getElementById('commentStatus').textContent = '';
-  document.getElementById('commentModal').style.display = 'flex';
-  document.getElementById('commentBody').focus();
+  document.getElementById('commentSendBtn').disabled = false;
+  const bubble = document.getElementById('commentBubble');
+  bubble.style.display = 'block';
+  positionCommentBubble();
+  if (focusComposer) {
+    document.getElementById('commentBody').focus();
+    setTimeout(positionCommentBubble, 0);
+  }
 }
 
-function commentOnFileSelection() { openCommentModal(fileCommentSelection); }
-function commentOnDiffSelection() { openCommentModal(diffCommentSelection); }
-
-function closeCommentModal() {
-  document.getElementById('commentModal').style.display = 'none';
+function closeCommentBubble() {
+  document.getElementById('commentBubble').style.display = 'none';
   document.getElementById('commentStatus').textContent = '';
   anchoredCommentDraft = null;
+  commentAnchorRange = null;
+  commentDraftVersion += 1;
 }
 
 function handleCommentKey(event) {
@@ -1629,6 +1681,8 @@ function handleCommentKey(event) {
 
 async function submitAnchoredComment() {
   if (!anchoredCommentDraft) return;
+  const draft = anchoredCommentDraft;
+  const draftVersion = commentDraftVersion;
   const body = document.getElementById('commentBody').value.trim();
   if (!body) return document.getElementById('commentBody').focus();
   const button = document.getElementById('commentSendBtn');
@@ -1638,20 +1692,24 @@ async function submitAnchoredComment() {
     const response = await fetch('/api/comments', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        sessionId: anchoredCommentDraft.sessionId,
+        sessionId: draft.sessionId,
         body,
-        target: anchoredCommentDraft.target,
+        target: draft.target,
       }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-    closeCommentModal();
-    window.getSelection()?.removeAllRanges();
+    if (draftVersion === commentDraftVersion && anchoredCommentDraft === draft) {
+      closeCommentBubble();
+      window.getSelection()?.removeAllRanges();
+    }
     setStatus('Comment saved');
   } catch (error) {
-    document.getElementById('commentStatus').textContent = error.message;
+    if (draftVersion === commentDraftVersion) {
+      document.getElementById('commentStatus').textContent = error.message;
+    }
   } finally {
-    button.disabled = false;
+    if (draftVersion === commentDraftVersion) button.disabled = false;
   }
 }
 
@@ -1864,15 +1922,13 @@ function closeDiffView() {
   document.getElementById('sessionView').classList.remove('diff-open');
   document.getElementById('btnDiff')?.classList.remove('active');
   document.getElementById('diffViewBody').innerHTML = '';
-  diffCommentSelection = null;
-  document.getElementById('diffCommentBtn').disabled = true;
+  closeCommentBubble();
 }
 
 async function loadDiffView() {
   const body = document.getElementById('diffViewBody');
   const rootEl = document.getElementById('diffViewRoot');
-  diffCommentSelection = null;
-  document.getElementById('diffCommentBtn').disabled = true;
+  closeCommentBubble();
   body.innerHTML = '<div class="loading">Loading…</div>';
   try {
     const res = await fetch(`/api/sessions/${currentSession.id}/diff`);
@@ -4503,8 +4559,8 @@ function closeTreeModal() {
 
 document.addEventListener('keydown', function(e) {
   if (e.key !== 'Escape') return;
-  if (document.getElementById('commentModal').style.display !== 'none') {
-    e.preventDefault(); closeCommentModal();
+  if (document.getElementById('commentBubble').style.display !== 'none') {
+    e.preventDefault(); closeCommentBubble();
   } else if (document.getElementById('treeModal').style.display !== 'none') {
     e.preventDefault(); closeTreeModal();
   } else if (document.getElementById('statsModal').style.display !== 'none') {

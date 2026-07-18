@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+NODE_VERSION=22.19.0
+PLAYWRIGHT_VERSION=1.61.1
+temp_dir=
+chrome_deb=
+
+cleanup() {
+  [ -z "$temp_dir" ] || rm -rf "$temp_dir"
+  [ -z "$chrome_deb" ] || rm -f "$chrome_deb"
+}
+trap cleanup EXIT
+
+echo "Installing system prerequisites..."
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends \
+  build-essential ca-certificates curl git pkg-config python3 xz-utils
+
+if ! node -e "const [a,b]=process.versions.node.split('.').map(Number); process.exit(a > 22 || (a === 22 && b >= 19) ? 0 : 1)" 2>/dev/null; then
+  case "$(uname -m)" in
+    x86_64) node_arch=x64 ;;
+    aarch64|arm64) node_arch=arm64 ;;
+    *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+  esac
+  echo "Installing Node.js ${NODE_VERSION}..."
+  archive="node-v${NODE_VERSION}-linux-${node_arch}.tar.xz"
+  temp_dir="$(mktemp -d)"
+  curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/${archive}" -o "${temp_dir}/${archive}"
+  sudo tar -xJf "${temp_dir}/${archive}" -C /usr/local --strip-components=1
+  hash -r
+fi
+
+echo "Using Node.js $(node --version) and npm $(npm --version)"
+
+if [ ! -x /opt/google/chrome/chrome ]; then
+  case "$(uname -m)" in
+    x86_64)
+      echo "Installing Google Chrome..."
+      chrome_deb="$(mktemp --suffix=.deb)"
+      curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o "$chrome_deb"
+      sudo apt-get install -y "$chrome_deb"
+      ;;
+    aarch64|arm64)
+      echo "Installing Chromium..."
+      sudo apt-get install -y chromium
+      sudo mkdir -p /opt/google/chrome
+      sudo ln -sf /usr/bin/chromium /opt/google/chrome/chrome
+      ;;
+  esac
+fi
+
+echo "Installing Playwright ${PLAYWRIGHT_VERSION}..."
+sudo npm install --global "playwright@${PLAYWRIGHT_VERSION}"
+
+echo "Installing repository dependencies..."
+npm ci
+
+echo "Orb setup complete."

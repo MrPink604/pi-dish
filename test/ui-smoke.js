@@ -518,7 +518,41 @@ function writeRegistry(patch = {}) {
       selection.addRange(range);
       captureFileCommentSelection();
     });
-    check(await desktop.locator('#fileCommentBtn').isEnabled(), 'file text selection enables comment action');
+    await desktop.waitForSelector('#commentBubble', { state: 'visible', timeout: 2000 });
+    check(true, 'file text selection opens the anchored comment bubble');
+    const bubbleBox = await desktop.locator('#commentBubble').boundingBox();
+    check(bubbleBox.x >= 0 && bubbleBox.y >= 0
+      && bubbleBox.x + bubbleBox.width <= 1280 && bubbleBox.y + bubbleBox.height <= 800,
+      `comment bubble is clamped within the viewport (got ${JSON.stringify(bubbleBox)})`);
+    check(await desktop.evaluate(() => document.activeElement !== document.getElementById('commentBody')),
+      'pointer selection opens without stealing focus from selection-to-copy');
+    await desktop.setViewportSize({ width: 420, height: 500 });
+    await desktop.waitForFunction(() => {
+      const box = document.getElementById('commentBubble').getBoundingClientRect();
+      return box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight;
+    }, { timeout: 2000 });
+    const narrowBubbleBox = await desktop.locator('#commentBubble').boundingBox();
+    check(narrowBubbleBox.x >= 0 && narrowBubbleBox.y >= 0
+      && narrowBubbleBox.x + narrowBubbleBox.width <= 420
+      && narrowBubbleBox.y + narrowBubbleBox.height <= 500,
+      `comment bubble remains clamped after resize (got ${JSON.stringify(narrowBubbleBox)})`);
+    await desktop.setViewportSize({ width: 1280, height: 800 });
+    await desktop.keyboard.press('Escape');
+    await desktop.evaluate(() => {
+      const node = [...document.querySelectorAll('#fileViewBody p')]
+        .find((el) => el.textContent.includes('hello from deep')).firstChild;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.dispatchEvent(new KeyboardEvent('keyup', {
+        key: 'ArrowRight', shiftKey: true, bubbles: true,
+      }));
+    });
+    await desktop.waitForSelector('#commentBubble', { state: 'visible', timeout: 2000 });
+    check(await desktop.evaluate(() => document.activeElement === document.getElementById('commentBody')),
+      'keyboard selection opens and focuses the comment composer');
     check(await desktop.evaluate(() => {
       const root = document.createElement('div');
       root.textContent = 'before  selected  after';
@@ -532,10 +566,12 @@ function writeRegistry(patch = {}) {
       root.remove();
       return exact;
     }), 'text anchors preserve selected boundary whitespace exactly');
-    await desktop.click('#fileCommentBtn');
     await desktop.fill('#commentBody', 'Make this finding more specific.');
+    await desktop.evaluate(() => captureFileCommentSelection());
+    check(await desktop.locator('#commentBody').inputValue() === 'Make this finding more specific.',
+      'another capture attempt does not discard an open comment draft');
     await desktop.click('#commentSendBtn');
-    await desktop.waitForSelector('#commentModal', { state: 'hidden', timeout: 5000 });
+    await desktop.waitForSelector('#commentBubble', { state: 'hidden', timeout: 5000 });
     const fileComments = await (await fetch(`${base}/api/comments/index?sessionId=${SESSION_ID}`)).json();
     check(fileComments.total === 1 && fileComments.comments[0].target.kind === 'file',
       'file selection persisted as one anchored comment');
@@ -621,11 +657,11 @@ function writeRegistry(patch = {}) {
       selection.addRange(range);
       captureDiffCommentSelection();
     });
-    check(await desktop.locator('#diffCommentBtn').isEnabled(), 'diff line selection enables comment action');
-    await desktop.click('#diffCommentBtn');
+    await desktop.waitForSelector('#commentBubble', { state: 'visible', timeout: 2000 });
+    check(true, 'diff line selection opens the anchored comment bubble');
     await desktop.fill('#commentBody', 'Use a more descriptive value here.');
     await desktop.click('#commentSendBtn');
-    await desktop.waitForSelector('#commentModal', { state: 'hidden', timeout: 5000 });
+    await desktop.waitForSelector('#commentBubble', { state: 'hidden', timeout: 5000 });
     const diffComments = await (await fetch(`${base}/api/comments/index?sessionId=${SESSION_ID}`)).json();
     const diffComment = diffComments.comments.find((comment) => comment.target.kind === 'diff');
     check(diffComments.total === 2 && diffComment?.target.anchor.newStart === 2,
@@ -663,7 +699,11 @@ function writeRegistry(patch = {}) {
       selection.addRange(range);
       captureDiffCommentSelection();
     });
-    check(await desktop.locator('#diffCommentBtn').isEnabled(), 'lazy patch lines retain comment selection');
+    await desktop.waitForSelector('#commentBubble', { state: 'visible', timeout: 2000 });
+    check(true, 'lazy patch line selection opens the comment bubble');
+    await desktop.keyboard.press('Escape');
+    await desktop.waitForSelector('#commentBubble', { state: 'hidden', timeout: 2000 });
+    check(await desktop.locator('#diffView').isVisible(), 'first Escape closes the comment bubble only');
     await desktop.keyboard.press('Escape');
     await desktop.waitForFunction(() => document.getElementById('messages').offsetParent !== null,
       { timeout: 2000 });

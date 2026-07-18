@@ -100,7 +100,7 @@ desktop app for some reason.
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 22.19+
 - [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) — the
   coding agent this whole thing remote-controls
 - A network you trust (see above)
@@ -297,7 +297,7 @@ for what crosses the bridge and what stays TUI-only.
 
 ```bash
 npm test              # API + unit tests (node:test)
-npm run test:ui       # browser smoke test (needs Chrome + global playwright)
+npm run test:ui       # browser smoke test (needs Chrome + global Playwright)
 npm run build:vendor  # regenerate public/vendor/ after bumping marked/highlight.js
 npm run electron:dev  # desktop shell
 ```
