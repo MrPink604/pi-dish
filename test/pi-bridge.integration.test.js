@@ -11,7 +11,8 @@
  *   - prompt → real agent turn → bridge event forwarding → SSE → JSONL
  *   - queue_update via the AgentSession prototype-capture patch
  *   - cancel_queued splicing pi's private queue arrays
- *   - navigate_tree through a stashed command context (/dish-prime via RPC)
+ *   - navigate_tree through a self-primed command context (the bridge runs
+ *     its /dish-prime via the captured AgentSession's prompt())
  *   - version skew: the bundled SDK (lib/pi-sdk.js — share export, branch
  *     summaries, model registry) must match the host pi that writes the
  *     session files; `npm test` goes red when the host upgrades past it
@@ -119,15 +120,6 @@ const post = async (p, body) => {
   const r = await fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
   return { status: r.status, body: await r.json().catch(() => ({})) };
 };
-
-// Send an RPC command on the real pi's stdin and await its response — the
-// same channel server.js uses to prime RPC-backed sessions.
-let rpcSeq = 0;
-function piRpc(type, params = {}, timeout = 30000) {
-  const id = `int-${++rpcSeq}`;
-  pi.stdin.write(JSON.stringify({ id, type, ...params }) + '\n');
-  return waitFor(() => piStdout.find((m) => m.type === 'response' && m.id === id), timeout, `response to ${type}`);
-}
 
 async function waitFor(fn, timeout = 10000, label = 'condition') {
   const deadline = Date.now() + timeout;
@@ -284,23 +276,16 @@ test('steering queue: queue_update fires and cancel_queued splices pi internals'
   }
 });
 
-test('navigate_tree: 409 without a command context, works after /dish-prime', { skip: !piOk, timeout: 60000 }, async () => {
+test('navigate_tree: self-primes a command context via the captured AgentSession', { skip: !piOk, timeout: 60000 }, async () => {
   const { body: tree } = await get(`/api/sessions/${sessionId}/tree`);
   const target = (tree.nodes || []).find((n) =>
     n.type === 'message' && n.role === 'user' && n.text === 'hello integration');
   assert.ok(target?.id, 'found the first prompt in the tree');
 
-  // No command context stashed yet, no spawn pane to prime through → 409
-  // with the actionable hint.
-  const blocked = await post(`/api/sessions/${sessionId}/branch`, { entryId: target.id });
-  assert.equal(blocked.status, 409, JSON.stringify(blocked.body));
-  assert.match(blocked.body.error, /dish-push/);
-
-  // Prime the command context the same way the server primes RPC sessions:
-  // a slash command through pi's own executor stashes its ctx in the bridge.
-  const primed = await piRpc('prompt', { message: '/dish-prime' });
-  assert.equal(primed.success, true, JSON.stringify(primed));
-
+  // No command context has been stashed (no /dish-* command ran) and this pi
+  // isn't a server-spawned child, so no external prime path exists. The
+  // bridge must acquire the ctx itself: its /dish-prime through the captured
+  // AgentSession's prompt() — the version-sensitive seam this canary pins.
   const branched = await post(`/api/sessions/${sessionId}/branch`, { entryId: target.id });
   assert.equal(branched.status, 200, JSON.stringify(branched.body));
   assert.equal(branched.body.editorText, 'hello integration', 'user-message target returns its text for re-edit');

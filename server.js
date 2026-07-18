@@ -1357,7 +1357,10 @@ app.post('/api/sessions/:id/branch', async (req, res) => {
           return res.status(409).json({ error: 'The pi session is running an older pi-dish-bridge — run /reload in it (or restart it) to enable tree navigation.' });
         }
         if (/no command context/i.test(e.message || '')) {
-          return res.status(409).json({ error: "pi's extension API only hands out session control inside command handlers — run /dish-push once in this session's TUI, then retry. (Web-spawned sessions are primed automatically.)" });
+          // The bridge self-primes through its captured AgentSession, so this
+          // is now the rare case where no capture exists (no prompt or
+          // subscribe since the bridge loaded) and no prime path reached it.
+          return res.status(409).json({ error: "pi hands out session control only inside command handlers and this session couldn't be primed remotely — send any prompt to it (or run /dish-push once in its TUI), then retry." });
         }
         throw e;
       }

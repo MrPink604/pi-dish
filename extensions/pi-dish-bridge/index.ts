@@ -189,6 +189,20 @@ export default function (pi: ExtensionAPI) {
     if (ctx && typeof ctx.navigateTree === "function") commandCtx = ctx;
   }
 
+  // Self-prime: the extension API alone has no remote path to a command
+  // context, but the captured AgentSession's own prompt() executes extension
+  // commands immediately (pi builds each command a fresh context carrying the
+  // session-control methods, bound to the running mode's handlers — so a TUI
+  // gets its own re-rendering navigateTree). Running our /dish-prime through
+  // it stashes that ctx without the user ever typing in the TUI.
+  // Feature-detected: no captured session, no self-prime.
+  async function acquireCommandCtx(): Promise<void> {
+    if (commandCtx) return;
+    const s = getCapturedSession();
+    if (!s || typeof s.prompt !== "function") return;
+    try { await s.prompt("/dish-prime"); } catch {}
+  }
+
   pi.registerCommand("dish-prime", {
     description: "Enable pi-dish remote session control (tree navigation)",
     handler: async (_args: string, ctx: any) => {
@@ -763,10 +777,18 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (name === "reload") {
-      return {
-        ok: false,
-        error: "pi's extension API can't trigger /reload on a TUI session remotely — run /reload in the TUI (web-spawned sessions support it).",
-      };
+      // ctx.reload() lives on command contexts only; the captured
+      // AgentSession's prompt() executes our /dish-reload to get one, so this
+      // works on TUI sessions too. Fire-and-forget like /compact: reload
+      // tears this module down and re-evaluates it, so awaiting completion
+      // would race our own socket shutting down.
+      const s = getCapturedSession();
+      if (!s || typeof s.prompt !== "function") {
+        return { ok: false, error: "pi's extension API can't trigger /reload on this session remotely — run /reload in the TUI." };
+      }
+      (s.prompt("/dish-reload") as Promise<any>)
+        ?.catch?.((e: any) => console.error("[pi-dish-bridge] reload failed:", e?.message || e));
+      return { ok: true, info: "Reload started" };
     }
 
     // --- Skills / prompt templates / extension commands via pi.getCommands() ---
@@ -1061,6 +1083,7 @@ export default function (pi: ExtensionAPI) {
           // user-message re-edit text is computed here for the web composer.
           if (!lastCtx) return respond(false, undefined, "no active context");
           if (turnInProgress) return respond(false, undefined, "cannot navigate the tree while a turn is in progress");
+          if (!commandCtx) await acquireCommandCtx();
           if (!commandCtx) return respond(false, undefined, "no command context");
           const targetId = typeof cmd.targetId === "string" ? cmd.targetId : "";
           if (!targetId) return respond(false, undefined, "targetId required");
@@ -1079,20 +1102,28 @@ export default function (pi: ExtensionAPI) {
             editorText = textOf((target as any).content) || undefined;
           }
           let result;
-          try {
-            result = await commandCtx.navigateTree(targetId, {
-              summarize: !!cmd.summarize,
-              customInstructions: typeof cmd.customInstructions === "string" && cmd.customInstructions.trim() ? cmd.customInstructions : undefined,
-              label: typeof cmd.label === "string" && cmd.label.trim() ? cmd.label : undefined,
-            });
-          } catch (e: any) {
-            const msg = String(e?.message || e);
-            if (/stale/i.test(msg)) {
-              // Captured before a reload/session switch — force a re-prime.
-              commandCtx = null;
-              return respond(false, undefined, "no command context");
+          for (let attempt = 0; ; attempt++) {
+            try {
+              result = await commandCtx.navigateTree(targetId, {
+                summarize: !!cmd.summarize,
+                customInstructions: typeof cmd.customInstructions === "string" && cmd.customInstructions.trim() ? cmd.customInstructions : undefined,
+                label: typeof cmd.label === "string" && cmd.label.trim() ? cmd.label : undefined,
+              });
+              break;
+            } catch (e: any) {
+              const msg = String(e?.message || e);
+              if (/stale/i.test(msg)) {
+                // Captured before a reload/session switch — re-prime and retry
+                // once before giving up.
+                commandCtx = null;
+                if (attempt === 0) {
+                  await acquireCommandCtx();
+                  if (commandCtx) continue;
+                }
+                return respond(false, undefined, "no command context");
+              }
+              return respond(false, undefined, msg);
             }
-            return respond(false, undefined, msg);
           }
           refreshContextUsage();
           writeRegistry();

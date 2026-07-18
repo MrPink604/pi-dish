@@ -453,8 +453,9 @@ feed) clears it; programmatic or layout-driven scroll shifts must not.
   prompt pins a turn open). Covers the seams every other suite fakes: bridge
   registration, a real agent turn end to end, `queue_update` via the
   AgentSession prototype capture, `cancel_queued`'s private-array splice, and
-  `navigate_tree` after priming a command context (`/dish-prime` over the pi
-  child's own RPC stdin). It also asserts the npm-installed pi package
+  `navigate_tree` self-priming its command context (the bridge's own
+  `/dish-prime` through the captured AgentSession's `prompt()`, no external
+  prime path). It also asserts the npm-installed pi package
   version equals the host pi's, so `npm test` goes red when a host upgrade
   leaves `lib/pi-sdk.js` (share export, branch summaries, model registry)
   running a stale SDK against the host's session files — fix with
@@ -697,11 +698,18 @@ select/resume). Two backends:
   carry session-control methods, and events get plain contexts — so the
   bridge stashes the ctx from every `/dish-*` command it executes
   (`commandCtx` in the bridge; contexts stay valid until reload/session
-  switch). RPC-backed sessions are primed automatically: the server sends
-  `/dish-prime` through `rpc.prompt()` (pi's command executor) on the first
-  "no command context" error and retries. TUI-only sessions have no remote
-  path to a command context — the route 409s with a "run /dish-push once in
-  the TUI" hint.
+  switch). When no ctx is stashed the bridge **self-primes**: the captured
+  AgentSession's own `prompt("/dish-prime")` executes extension commands
+  immediately (pi builds each a fresh command context bound to the running
+  mode's handlers — a TUI gets its re-rendering `navigateTree`), so remote
+  tree navigation works on TUI sessions nobody has typed `/dish-*` into.
+  The same primitive backs remote `/reload` on TUI sessions
+  (`s.prompt("/dish-reload")`, fire-and-forget — reload tears the bridge
+  module down, so awaiting it would race the socket). The server keeps its
+  older prime fallbacks for bridges that predate self-priming (RPC
+  `/dish-prime` via `rpc.prompt()`, send-keys into a recorded spawn pane);
+  the 409 hint remains only for the no-capture edge (nothing has called
+  `prompt`/`subscribe` since the bridge loaded).
 - **Inactive sessions** go through the SDK (`branchSession` in pi-sdk.js).
   The summary bills to the session's own model (last `model_change`, else
   the last assistant message's provider/model) with auth from
