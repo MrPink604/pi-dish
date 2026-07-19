@@ -623,3 +623,13 @@ test('aggregateUsageWeekly chunks from the end and merges model rows by ref', ()
   assert.deepEqual(refs, ['a/m1', 'b/m2']);
   assert.equal(weeks[1].models.reduce((s, m) => s + m.calls, 0), 7);
 });
+
+test('tmuxPrefixSeq maps tmux prefix notation to raw bytes', () => {
+  assert.equal(H.tmuxPrefixSeq('C-b'), '\x02');
+  assert.equal(H.tmuxPrefixSeq('C-a'), '\x01');
+  assert.equal(H.tmuxPrefixSeq('C-Space'), '\x00');
+  assert.equal(H.tmuxPrefixSeq('M-x'), '\x1bx');
+  assert.equal(H.tmuxPrefixSeq('F12'), null, 'unmappable prefixes return null (button hides)');
+  assert.equal(H.tmuxPrefixSeq(null), null);
+  assert.equal(H.tmuxPrefixSeq(undefined), null);
+});

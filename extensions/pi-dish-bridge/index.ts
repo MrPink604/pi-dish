@@ -58,6 +58,7 @@ const EMULATED_BUILTINS = [
   { name: "name", description: "Set session display name" },
   { name: "thinking", description: "Set thinking level (off|minimal|low|medium|high|xhigh)" },
   { name: "abort", description: "Abort the current agent operation" },
+  { name: "reload", description: "Reload extensions, skills, and prompt templates" },
 ];
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
@@ -781,13 +782,18 @@ export default function (pi: ExtensionAPI) {
       // AgentSession's prompt() executes our /dish-reload to get one, so this
       // works on TUI sessions too. Fire-and-forget like /compact: reload
       // tears this module down and re-evaluates it, so awaiting completion
-      // would race our own socket shutting down.
+      // would race our own socket shutting down. The trigger is deferred a
+      // beat further: fired in this tick, the teardown outruns the
+      // run_command response frame and the server sees "socket closed" for a
+      // reload that ran.
       const s = getCapturedSession();
       if (!s || typeof s.prompt !== "function") {
         return { ok: false, error: "pi's extension API can't trigger /reload on this session remotely — run /reload in the TUI." };
       }
-      (s.prompt("/dish-reload") as Promise<any>)
-        ?.catch?.((e: any) => console.error("[pi-dish-bridge] reload failed:", e?.message || e));
+      setTimeout(() => {
+        (s.prompt("/dish-reload") as Promise<any>)
+          ?.catch?.((e: any) => console.error("[pi-dish-bridge] reload failed:", e?.message || e));
+      }, 50);
       return { ok: true, info: "Reload started" };
     }
 

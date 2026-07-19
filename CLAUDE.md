@@ -188,6 +188,21 @@ BridgeSession, else alive RPCSession, else null). Don't re-roll the
 branch on `instanceof BridgeSession` only for genuinely backend-specific
 calls (setModel arg shapes, runCommand vs the RPC slash emulation).
 
+Remote `/reload` (`reloadBridgeSession` in server.js): the bridge triggers it
+via the captured AgentSession's `prompt("/dish-reload")`, **deferred a
+macrotask** — fired in the same tick, the reload's socket teardown outruns
+the run_command response frame. The server keeps two escape hatches: a
+"socket closed" rejection on `/reload` specifically is treated as success
+(old bridges lose the race; the reload ran), and any other bridge failure
+falls back to `tmux send-keys '/reload'` into the pane `locatePiPane()`
+finds (bridge $TMUX stamp → spawn placement → pid-ancestry walk — same
+order as `resolveRuntime`, stamps verified with `paneExists` first). The
+send-keys path is deliberate even though it appends to any draft sitting in
+the TUI composer: it is the only route that can upgrade a session running an
+*out-of-date* bridge from the UI. The integration test's reload canary
+asserts a marker extension really re-evaluates — keep it last in the file,
+it churns the bridge socket.
+
 Close + runtime location: `POST /api/sessions/:id/close` shuts a live
 session's pi down — RPC children via `RPCSession.kill()`, anything
 bridge-registered via SIGTERM to the registry pid. Both pi modes treat
@@ -566,7 +581,21 @@ Opt-in feature (flag + node-pty must load — degrade gracefully like fff,
 never let the native module break the server). One persistent PTY per pi
 session, spawned at the session cwd, shared by all WebSocket clients on
 `/api/sessions/:id/terminal` (upgrade handler registered only when enabled;
-`GET /api/config` tells the client). The PTY outlives sockets on purpose —
+`GET /api/config` tells the client). `?mode=tmux` swaps the shell for a live
+view of the pane the session's pi runs in (`locatePiPane` +
+`tmux.attachPaneArgv`): the PTY runs a **grouped** tmux session
+(`new-session -t <owner>`, `destroy-unattached on`, pi window/pane
+selected) — never a bare `attach`, which would drag the user's desktop
+client along on every window switch — keyed `<sessionId>:tmux` so shell and
+pane view coexist, with `$TMUX` stripped from the PTY env (a server itself
+inside tmux couldn't nest the attach otherwise). This is also the only way
+to *see* hidden headless-spawn TUIs. No locatable pane → an `error` frame
+and a 1011 close, which the client shows in the panel status (the ⇆ mode
+button in the panel header switches back; last mode persists per session in
+`localStorage['pi-dish-terminal-mode-<id>']`). The attach frame carries
+`tmuxPrefix` (`tmux.getPrefixKey`), which surfaces as an extra-keys-bar
+button sending the prefix byte (`tmuxPrefixSeq` in helpers.js — null for
+unmappable prefixes hides the button). The PTY outlives sockets on purpose —
 phones drop the connection on every screen lock — with a ~200KB ring buffer
 replayed in the `attach` frame (client resets the emulator before writing
 it) and a 15-min idle kill that needs *both* no clients and no output for

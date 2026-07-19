@@ -5427,8 +5427,11 @@ function toggleTerminal() {
   else openTerminal();
 }
 
-async function openTerminal() {
+async function openTerminal(mode) {
   if (!terminalFeatureAvailable() || !currentSession || termState) return;
+  // 'shell' (default) or 'tmux' (a grouped tmux client viewing the pane the
+  // session's pi runs in). The last choice sticks per session.
+  if (!mode) mode = localStorage.getItem('pi-dish-terminal-mode-' + currentSession.id) === 'tmux' ? 'tmux' : 'shell';
   const panel = document.getElementById('terminalPanel');
   const container = document.getElementById('terminalContainer');
   applySavedTerminalSize(panel);
@@ -5459,9 +5462,10 @@ async function openTerminal() {
   if (fitAddon) term.loadAddon(fitAddon);
 
   termState = {
-    term, fitAddon, ws: null, sessionId: currentSession.id,
-    reconnectTimer: null, attempts: 0, closedByUser: false, exited: false,
+    term, fitAddon, ws: null, sessionId: currentSession.id, mode,
+    tmuxPrefix: null, reconnectTimer: null, attempts: 0, closedByUser: false, exited: false,
   };
+  updateTerminalModeUI();
 
   term.open(container);
   fitTerminal();
@@ -5505,7 +5509,8 @@ function connectTerminalWS() {
   if (!termState) return;
   const state = termState;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/api/sessions/${encodeURIComponent(state.sessionId)}/terminal`);
+  const modeQ = state.mode === 'tmux' ? '?mode=tmux' : '';
+  const ws = new WebSocket(`${proto}://${location.host}/api/sessions/${encodeURIComponent(state.sessionId)}/terminal${modeQ}`);
   state.ws = ws;
   setTerminalStatus(state.attempts ? 'reconnecting…' : 'connecting…', 'reconnecting');
 
@@ -5515,6 +5520,8 @@ function connectTerminalWS() {
     if (msg.type === 'attach') {
       state.attempts = 0;
       setTerminalStatus('');
+      state.tmuxPrefix = msg.tmuxPrefix || null;
+      updateTerminalModeUI();
       // Reattach: the replay buffer contains everything we may have already
       // rendered — reset and replay rather than double-print.
       state.term.reset();
@@ -5559,9 +5566,46 @@ function closeTerminal() {
   document.getElementById('terminalPanel').style.display = 'none';
 }
 
+// The mode button shows the *target* mode; the keybar prefix key appears
+// only on a tmux attach that reported its prefix. Both are re-derived on
+// open, attach, and mode switch.
+function updateTerminalModeUI() {
+  const btn = document.getElementById('termModeBtn');
+  if (btn) {
+    const showBtn = !!(termState && appConfig.tmux && currentSession?.isActive);
+    btn.style.display = showBtn ? '' : 'none';
+    if (termState?.mode === 'tmux') {
+      btn.textContent = '⇆ shell';
+      btn.title = 'Switch to a plain shell at the session cwd';
+    } else {
+      btn.textContent = '⇆ pi tmux';
+      btn.title = "Attach to the tmux pane the session's pi runs in";
+    }
+  }
+  const prefixBtn = document.getElementById('termKeyPrefix');
+  if (prefixBtn) {
+    const seq = termState?.mode === 'tmux' ? tmuxPrefixSeq(termState.tmuxPrefix) : null;
+    prefixBtn.style.display = seq ? '' : 'none';
+    if (seq) prefixBtn.textContent = termState.tmuxPrefix;
+  }
+}
+
+function switchTerminalMode() {
+  if (!termState || !currentSession) return;
+  const next = termState.mode === 'tmux' ? 'shell' : 'tmux';
+  const id = termState.sessionId;
+  if (next === 'tmux') localStorage.setItem('pi-dish-terminal-mode-' + id, 'tmux');
+  else localStorage.removeItem('pi-dish-terminal-mode-' + id);
+  closeTerminal();
+  openTerminal(next);
+}
+
 function restartTerminalShell() {
   if (!termState) return;
-  if (!confirm('Restart shell? Anything running in it will be killed.')) return;
+  const q = termState.mode === 'tmux'
+    ? 'Reattach the tmux client? (The tmux session and everything in it keeps running.)'
+    : 'Restart shell? Anything running in it will be killed.';
+  if (!confirm(q)) return;
   termState.exited = false; // a fresh shell supersedes an exited one
   if (termState.ws?.readyState === WebSocket.OPEN) {
     termSend({ type: 'restart' });
@@ -5589,6 +5633,12 @@ const TERM_KEY_SEQUENCES = {
 function termKeybarPress(key) {
   if (!termState) return;
   if (key === 'ctrl') { setTermCtrlLatch(!termCtrlLatch); return; }
+  if (key === 'tmux-prefix') {
+    const seq = tmuxPrefixSeq(termState.tmuxPrefix);
+    if (seq) termSend({ type: 'input', data: seq });
+    termState.term.focus();
+    return;
+  }
   let seq = TERM_KEY_SEQUENCES[key];
   if (!seq) {
     // Arrows honor DECCKM (application cursor keys) so vim/less/etc work.

@@ -92,7 +92,12 @@ Rules of thumb:
 - **Terminal** (opt-in) — a real shell at the session's cwd, in a panel
   under the transcript (xterm.js + node-pty). The shell survives phone
   screen-locks: the PTY lives server-side and reattaches with scrollback.
-  Mobile gets an extra-keys bar (esc/tab/ctrl/arrows/^C). Off by default —
+  Mobile gets an extra-keys bar (esc/tab/ctrl/arrows/^C). For sessions
+  running in tmux (including headless spawns in the hidden tmux session),
+  the panel's ⇆ button swaps the shell for a live view of the pi TUI's own
+  tmux pane — grouped-session attach, so window switching on the phone
+  never yanks your desktop client around — and the extra-keys bar grows a
+  button for the server's prefix key. Off by default —
   start with `PI_DISH_TERMINAL=1` to enable, and reread the security
   section first: this hands a raw shell to anyone who can reach the port
   (the prompt API already executes code via the agent, but the terminal

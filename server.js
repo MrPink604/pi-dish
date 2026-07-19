@@ -240,6 +240,26 @@ async function resolveRuntime(sessionId, reg) {
   return { kind: 'terminal', pid: reg.pid ?? null };
 }
 
+/**
+ * The exact tmux pane a live session's pi runs in — for typing into the TUI
+ * (the send-keys fallbacks). Same resolution order as resolveRuntime (bridge
+ * $TMUX stamp → our spawn placement → pid-ancestry scan), but stamped
+ * placements are verified against the server first so a stale stamp can't
+ * swallow keystrokes. Null when the session isn't in tmux or can't be found.
+ */
+async function locatePiPane(sessionId) {
+  const reg = getRegisteredSession(sessionId);
+  if (!reg) return null;
+  const candidates = [];
+  if (reg.tmux?.socket && reg.tmux.pane) candidates.push({ socket: reg.tmux.socket, paneId: reg.tmux.pane });
+  const spawn = tmux.getSpawn(sessionId);
+  if (spawn?.socket && spawn.paneId) candidates.push({ socket: spawn.socket, paneId: spawn.paneId });
+  for (const c of candidates) {
+    if (await tmux.paneExists(c.socket, c.paneId)) return c;
+  }
+  return tmux.findPaneByPid(reg.pid);
+}
+
 /** Live context usage, whichever backend reports it (registry beats RPC stats). */
 function getLiveContextUsage(sessionId) {
   const reg = getRegisteredSession(sessionId);
@@ -1344,6 +1364,30 @@ app.get('/page/:token/*', (req, res) => {
   servePage(req, res, true);
 });
 
+// /reload against a bridge session, with two escape hatches:
+// - Bridges that fire the reload in the same tick as their run_command
+//   response lose the response frame to their own socket teardown — a
+//   "socket closed" rejection on /reload specifically is the signature of a
+//   reload that *started*, not a failure. Report success; the bridge
+//   re-registers itself after re-evaluating.
+// - Bridges that can't run it at all (no emulated reload / no captured
+//   AgentSession — exactly the state a running TUI is in when its loaded
+//   bridge predates the current one) fall back to typing /reload into the
+//   session's own tmux pane, when one can be located. That's also the only
+//   path that can upgrade an out-of-date bridge from the UI.
+async function reloadBridgeSession(sess, sessionId) {
+  try {
+    const data = await sess.runCommand('/reload');
+    return { info: data?.info || 'Reloading extensions…' };
+  } catch (e) {
+    if (/socket closed/i.test(e?.message || '')) return { info: 'Reloading extensions…' };
+    const pane = await locatePiPane(sessionId);
+    if (!pane) throw e;
+    await tmux.sendKeys(pane.socket, pane.paneId, '/reload');
+    return { info: 'Sent /reload to the session’s tmux pane' };
+  }
+}
+
 // Execute a slash command against an active session.
 app.post('/api/sessions/:id/command', async (req, res) => {
   const { message, deliverAs } = req.body;
@@ -1354,6 +1398,10 @@ app.post('/api/sessions/:id/command', async (req, res) => {
     const sess = await getLiveSession(req.params.id);
     if (!sess) return res.status(404).json({ error: 'Session not active' });
     if (sess instanceof BridgeSession) {
+      if (message.trim() === '/reload') {
+        const result = await reloadBridgeSession(sess, req.params.id);
+        return res.json({ success: true, info: result.info });
+      }
       const data = await sess.runCommand(message, deliverAs);
       return res.json({ success: true, info: data?.info });
     }
@@ -2346,7 +2394,8 @@ if (terminal.isTerminalEnabled()) {
   const TERMINAL_PATH_RE = /^\/api\/sessions\/([^/]+)\/terminal$/;
 
   server.on('upgrade', (req, socket, head) => {
-    const match = TERMINAL_PATH_RE.exec((req.url || '').split('?')[0]);
+    const url = new URL(req.url || '', 'http://localhost');
+    const match = TERMINAL_PATH_RE.exec(url.pathname);
     if (!match) return socket.destroy();
     const sessionId = decodeURIComponent(match[1]);
     // Only spawn shells for sessions pi-dish actually knows about.
@@ -2355,14 +2404,40 @@ if (terminal.isTerminalEnabled()) {
       socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
       return socket.destroy();
     }
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      try {
-        terminal.attachClient(sessionId, resolveSessionCwd(sessionId), ws);
-      } catch (e) {
-        try { ws.send(JSON.stringify({ type: 'error', error: e.message })); } catch {}
-        ws.close(1011, 'terminal failed');
+    (async () => {
+      // mode=tmux: instead of a shell at the cwd, attach a grouped tmux
+      // client viewing the pane the session's pi runs in (works for hidden
+      // headless spawns too — it's the only way to *see* those TUIs). The
+      // PTY is keyed separately so the plain shell and the pane view
+      // coexist. $TMUX is stripped or a server running inside tmux couldn't
+      // nest the attach.
+      let key = sessionId;
+      let opts;
+      if (url.searchParams.get('mode') === 'tmux') {
+        const pane = await locatePiPane(sessionId);
+        const command = pane && await tmux.attachPaneArgv(pane.socket, pane.paneId);
+        if (!command) {
+          return wss.handleUpgrade(req, socket, head, (ws) => {
+            try { ws.send(JSON.stringify({ type: 'error', error: 'No tmux pane found for this session' })); } catch {}
+            ws.close(1011, 'no tmux pane');
+          });
+        }
+        key = `${sessionId}:tmux`;
+        opts = {
+          command,
+          env: { TMUX: undefined, TMUX_PANE: undefined },
+          meta: { tmuxPrefix: await tmux.getPrefixKey(pane.socket) },
+        };
       }
-    });
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        try {
+          terminal.attachClient(key, resolveSessionCwd(sessionId), ws, opts);
+        } catch (e) {
+          try { ws.send(JSON.stringify({ type: 'error', error: e.message })); } catch {}
+          ws.close(1011, 'terminal failed');
+        }
+      });
+    })().catch(() => socket.destroy());
   });
 
   server.on('close', () => terminal.killAllTerminals());

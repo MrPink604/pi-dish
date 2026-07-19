@@ -113,6 +113,38 @@ test('POST /api/sessions/new with a tmux target spawns and returns the registere
   assert.ok(panes.includes(spawn.paneId), 'pi pane exists in the session');
 });
 
+test('/reload falls back to send-keys into the owning tmux pane when the bridge cannot run it', { skip: !tmuxOk }, async () => {
+  const { status, body } = await post('/api/sessions/new', {
+    target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+  const id = body.id;
+  let sess = null;
+  for (let i = 0; i < 10 && !sess; i++) {
+    const list = await get('/api/sessions?active=1');
+    sess = list.body.active.find((s) => s.id === id) || null;
+    if (!sess) await new Promise((r) => setTimeout(r, 200));
+  }
+  assert.ok(sess, 'spawned session is active');
+
+  // fake-pi answers run_command like an old bridge (unknown command), so the
+  // server must locate the pane from the recorded spawn placement and type
+  // /reload into the TUI instead of surfacing the bridge error.
+  const rel = await post(`/api/sessions/${id}/command`, { message: '/reload' });
+  assert.equal(rel.status, 200, JSON.stringify(rel.body));
+  assert.match(rel.body.info || '', /tmux pane/i);
+
+  // fake-pi logs its stdin (what tmux send-keys typed) next to its JSONL.
+  const reg = JSON.parse(fs.readFileSync(path.join(tmpHome, '.pi', 'dish', 'sessions', `${id}.json`), 'utf8'));
+  let keys = '';
+  for (let i = 0; i < 20; i++) {
+    try { keys = fs.readFileSync(`${reg.sessionFile}.keys`, 'utf8'); } catch {}
+    if (/\/reload/.test(keys)) break;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  assert.match(keys, /\/reload/, `send-keys /reload reached the pane (got: ${JSON.stringify(keys)})`);
+});
+
 test('POST /api/sessions/new rejects a socket outside the tmux tmpdir', { skip: !tmuxOk }, async () => {
   const { status, body } = await post('/api/sessions/new', {
     target: { type: 'tmux', socket: '/tmp/not-a-real-tmux.sock', tmuxSession: 'work' },
@@ -255,6 +287,20 @@ test('runtime location is cached per pid: a rename shows the old name within TTL
     try { tmuxCmd(['kill-session', '-t', 'cachesrc']); } catch {}
     fs.rmSync(path.join(regDir, `${CACHE_ID}.json`), { force: true });
   }
+});
+
+test('attachPaneArgv builds a grouped viewer; getPrefixKey reads the server prefix', { skip: !tmuxOk }, async () => {
+  const paneId = tmuxCmd(['list-panes', '-t', 'work:0', '-F', '#{pane_id}']).trim().split('\n')[0];
+  const argv = await tmux.attachPaneArgv(TMUX_SOCKET, paneId);
+  assert.equal(argv[0], 'tmux');
+  assert.ok(argv.includes('new-session'), 'creates a session (grouped), never a bare attach');
+  const t = argv.indexOf('-t');
+  assert.equal(argv[t + 1], '=work', 'grouped with the owning session, exact-matched');
+  assert.ok(argv.includes('destroy-unattached'), 'viewer session dies with its client');
+  assert.ok(argv.filter((a) => a === paneId).length >= 2, 'selects the pi window and pane');
+
+  assert.equal(await tmux.getPrefixKey(TMUX_SOCKET), 'C-b', 'config-less server default prefix');
+  assert.equal(await tmux.attachPaneArgv(TMUX_SOCKET, '%9999'), null, 'gone pane yields null');
 });
 
 test('tmux-spawns.json persistence and prune', async () => {

@@ -1266,6 +1266,36 @@ test('SSE replays remembered extension UI state to new connections', async () =>
   }
 });
 
+test('/reload maps a run_command socket teardown to success (old-bridge race)', async () => {
+  const BRIDGE_ID = '2026-07-19T10-00-00-re10ad01';
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const socketPath = path.join(tmpHome, 'dish-reload-test.sock');
+
+  // A bridge that fires its reload before the response frame flushes looks
+  // like this from the server: the run_command request goes out, the socket
+  // dies. That must read as "reload started", not an error.
+  const bridge = net.createServer((sock) => {
+    sock.write(JSON.stringify({ type: 'hello', turnInProgress: false }) + '\n');
+    sock.on('data', () => sock.destroy());
+    sock.on('error', () => {});
+  });
+  await new Promise(r => bridge.listen(socketPath, r));
+  fs.writeFileSync(path.join(registryDir, `${BRIDGE_ID}.json`), JSON.stringify({
+    sessionId: BRIDGE_ID, socketPath, pid: process.pid, cwd: '/home/user/proj', sessionFile: SESSION_FILE,
+  }));
+  await new Promise(r => setTimeout(r, 600)); // registry memo TTL
+
+  try {
+    const { status, body } = await post(`/api/sessions/${BRIDGE_ID}/command`, { message: '/reload' });
+    assert.equal(status, 200, JSON.stringify(body));
+    assert.match(body.info || '', /reload/i);
+  } finally {
+    fs.rmSync(path.join(registryDir, `${BRIDGE_ID}.json`), { force: true });
+    bridge.close();
+  }
+});
+
 test('GET /api/config reports terminal disabled without PI_DISH_TERMINAL=1', async () => {
   const { status, body } = await get('/api/config');
   assert.equal(status, 200);

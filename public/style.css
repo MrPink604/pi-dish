@@ -4050,6 +4050,14 @@ img.msg-image {
   white-space: nowrap;
 }
 
+/* Text-bearing header button (mode switch) — btn-icon sizing is for glyphs */
+.terminal-mode-btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+  padding: 5px 8px;
+}
+
 .terminal-status.error { color: var(--error); }
 .terminal-status.reconnecting { color: var(--warning); }
 

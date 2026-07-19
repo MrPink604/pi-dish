@@ -45,7 +45,33 @@ if (process.env.PI_FIXTURE_NOREGISTER) {
   try { fs.unlinkSync(socketPath); } catch {}
   const srv = net.createServer((sock) => {
     sock.write(JSON.stringify({ type: 'hello', turnInProgress: false }) + '\n');
+    // Answer commands like an *old* bridge: run_command is unknown. This is
+    // what lets tmux.test.js exercise the server's send-keys fallbacks —
+    // leaving commands unanswered would instead hang callers for the full
+    // BridgeSession timeout.
+    let buf = '';
+    sock.on('data', (chunk) => {
+      buf += chunk.toString();
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1);
+        let msg;
+        try { msg = JSON.parse(line); } catch { continue; }
+        if (msg.id !== undefined) {
+          sock.write(JSON.stringify({ type: 'response', id: msg.id, success: false, error: `unknown command: ${msg.command}` }) + '\n');
+        }
+      }
+    });
+    sock.on('error', () => {});
   });
+
+  // Log whatever lands on stdin (tmux send-keys types into this pane) so
+  // tests can assert keystrokes actually reached the pi TUI stand-in.
+  try {
+    process.stdin.on('data', (chunk) => {
+      fs.appendFileSync(sessionFile + '.keys', chunk.toString());
+    });
+  } catch {}
   srv.listen(socketPath, () => {
     fs.writeFileSync(path.join(regDir, sessionId + '.json'), JSON.stringify({
       sessionId,

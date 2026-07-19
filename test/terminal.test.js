@@ -11,12 +11,18 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
+const { execFileSync } = require('node:child_process');
 
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-term-test-'));
 process.env.HOME = tmpHome;
+// The mode=tmux tests run a throwaway tmux server in here; pinning the tmpdir
+// also keeps pid-walk fallbacks away from the developer's real tmux.
+const tmuxTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-tt-'));
+process.env.TMUX_TMPDIR = tmuxTmp;
 // A configless HOME makes zsh launch its zsh-newuser-install wizard, which
 // swallows the first line of input — give it an empty rc file instead.
 fs.writeFileSync(path.join(tmpHome, '.zshrc'), '');
@@ -84,6 +90,26 @@ test('attachClient spawns a shell in the given cwd and round-trips input/output'
   const out = ws.messages('output').map(m => m.data).join('');
   assert.ok(out.includes(sessionCwd), `pwd output should contain ${sessionCwd}`);
   terminal.killTerminal('lib-echo');
+});
+
+test('attachClient with a command argv runs it, applies the env overlay, and stamps meta on attach', async () => {
+  process.env.PD_TEST_GONE = 'must-not-leak';
+  const ws = new FakeWS();
+  terminal.attachClient('lib-cmd', sessionCwd, ws, {
+    command: [process.execPath, '-e',
+      'console.log("cmd-out-" + (40+3), process.env.PD_TEST_EXTRA, "stripped:" + (process.env.PD_TEST_GONE === undefined))'],
+    env: { PD_TEST_EXTRA: 'extra-ok', PD_TEST_GONE: undefined },
+    meta: { tmuxPrefix: 'C-b' },
+  });
+  const attach = ws.messages('attach')[0];
+  assert.equal(attach.tmuxPrefix, 'C-b', 'meta fields ride on the attach frame');
+
+  await until(() => ws.sent.some(m => m.type === 'output' && m.data.includes('cmd-out-43')));
+  const out = ws.messages('output').map(m => m.data).join('');
+  assert.ok(out.includes('extra-ok'), 'env overlay is visible to the command');
+  assert.ok(out.includes('stripped:true'), 'undefined overlay keys are removed from the env');
+  delete process.env.PD_TEST_GONE;
+  terminal.killTerminal('lib-cmd');
 });
 
 test('reattach replays buffered output after the first client drops', async () => {
@@ -199,6 +225,77 @@ test('WS endpoint: end-to-end echo through a real WebSocket', async () => {
 
   ws.close();
   terminal.killTerminal(SESSION_ID);
+});
+
+test('WS endpoint: mode=tmux without a locatable pane sends an error frame and closes', async () => {
+  const ws = new WebSocket(`${wsBase}/api/sessions/${SESSION_ID}/terminal?mode=tmux`);
+  const frames = [];
+  ws.onmessage = (ev) => frames.push(JSON.parse(ev.data));
+  const closed = new Promise((resolve) => { ws.onclose = resolve; ws.onerror = resolve; });
+  await closed;
+  assert.ok(frames.some(f => f.type === 'error' && /tmux pane/i.test(f.error)),
+    `expected a no-pane error frame, got ${JSON.stringify(frames)}`);
+});
+
+let tmuxOk = true;
+try { execFileSync('tmux', ['-V'], { stdio: 'ignore' }); } catch { tmuxOk = false; }
+
+test('WS endpoint: mode=tmux attaches a grouped viewer of the owning pane and cleans up', { skip: !tmuxOk, timeout: 30000 }, async () => {
+  const TMUX_ID = '2026-07-19T11-00-00-tmxview1';
+  const sock = path.join(tmuxTmp, 'view-test');
+  execFileSync('tmux', ['-S', sock, '-f', '/dev/null', 'new-session', '-d', '-s', 'owner', '-x', '80', '-y', '24']);
+  const paneId = execFileSync('tmux', ['-S', sock, 'list-panes', '-t', 'owner:0', '-F', '#{pane_id}'], { encoding: 'utf8' }).trim();
+  // Arithmetic marker (the echoed input can't satisfy the assertion) printed
+  // *in the owning pane* — the viewer must render it.
+  execFileSync('tmux', ['-S', sock, 'send-keys', '-t', paneId, 'echo pane-marker-$((40+2))', 'Enter']);
+
+  // Bridge-style registry entry stamped with the pane, like the real bridge
+  // writes from $TMUX/$TMUX_PANE. The socket must accept or the registry
+  // scan prunes the entry.
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const bridgeSock = path.join(tmpHome, 'view-bridge.sock');
+  const bridge = net.createServer((s) => s.write(JSON.stringify({ type: 'hello' }) + '\n'));
+  await new Promise(r => bridge.listen(bridgeSock, r));
+  fs.writeFileSync(path.join(registryDir, `${TMUX_ID}.json`), JSON.stringify({
+    sessionId: TMUX_ID, socketPath: bridgeSock, pid: process.pid, cwd: sessionCwd,
+    tmux: { socket: sock, pane: paneId },
+  }));
+  await new Promise(r => setTimeout(r, 600)); // registry memo TTL
+
+  try {
+    const ws = new WebSocket(`${wsBase}/api/sessions/${TMUX_ID}/terminal?mode=tmux`);
+    const frames = [];
+    ws.onmessage = (ev) => frames.push(JSON.parse(ev.data));
+    await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = () => reject(new Error('ws refused')); });
+
+    await until(() => frames.some(f => f.type === 'attach'));
+    assert.equal(frames[0].tmuxPrefix, 'C-b', 'attach frame carries the server prefix (config-less default)');
+
+    // The viewer draws the owning pane's content, through its own grouped
+    // session — never by attaching the owner directly (which would drag the
+    // user's real client along on window switches).
+    await until(() => frames.some(f => f.type === 'output' && f.data.includes('pane-marker-42')), 10000);
+    const sessions = execFileSync('tmux', ['-S', sock, 'list-sessions', '-F', '#{session_name}'], { encoding: 'utf8' })
+      .trim().split('\n');
+    assert.ok(sessions.some(s => s.startsWith('dish-view-')), `viewer session exists (got ${sessions})`);
+    assert.equal(execFileSync('tmux', ['-S', sock, 'list-clients', '-t', '=owner', '-F', 'x'], { encoding: 'utf8' }).trim(),
+      '', 'no client attached to the owner session itself');
+
+    // Killing the PTY detaches the viewer client; destroy-unattached reaps
+    // the grouped session so they can't pile up on the user's server.
+    ws.close();
+    terminal.killTerminal(`${TMUX_ID}:tmux`);
+    await until(() => {
+      const left = execFileSync('tmux', ['-S', sock, 'list-sessions', '-F', '#{session_name}'], { encoding: 'utf8' })
+        .trim().split('\n');
+      return !left.some(s => s.startsWith('dish-view-'));
+    }, 10000);
+  } finally {
+    fs.rmSync(path.join(registryDir, `${TMUX_ID}.json`), { force: true });
+    bridge.close();
+    try { execFileSync('tmux', ['-S', sock, 'kill-server'], { stdio: 'ignore' }); } catch {}
+  }
 });
 
 test('WS endpoint: unknown session id is rejected', async () => {

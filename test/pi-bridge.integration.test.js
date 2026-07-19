@@ -107,6 +107,19 @@ fs.symlinkSync(path.join(__dirname, '..', 'extensions', 'pi-dish-bridge'), path.
 const projDir = path.join(tmpHome, 'proj');
 fs.mkdirSync(projDir, { recursive: true });
 
+// Marker extension: appends a line on every evaluation, so the /reload test
+// can prove extensions really re-evaluated (not just that the command 200'd).
+const loadLog = path.join(tmpHome, 'ext-loads.log');
+fs.mkdirSync(path.join(extDir, 'load-marker'), { recursive: true });
+fs.writeFileSync(path.join(extDir, 'load-marker', 'index.ts'), [
+  'import * as fs from "node:fs";',
+  `export default function () { fs.appendFileSync(${JSON.stringify(loadLog)}, Date.now() + "\\n"); }`,
+  '',
+].join('\n'));
+const extLoadCount = () => {
+  try { return fs.readFileSync(loadLog, 'utf8').split('\n').filter(Boolean).length; } catch { return 0; }
+};
+
 const server = require('../server.js');
 
 let base;
@@ -289,4 +302,30 @@ test('navigate_tree: self-primes a command context via the captured AgentSession
   const branched = await post(`/api/sessions/${sessionId}/branch`, { entryId: target.id });
   assert.equal(branched.status, 200, JSON.stringify(branched.body));
   assert.equal(branched.body.editorText, 'hello integration', 'user-message target returns its text for re-edit');
+});
+
+// Last on purpose: reload tears the bridge down and re-registers it.
+test('/reload from the API: responds ok, re-evaluates extensions, session stays usable', { skip: !piOk, timeout: 60000 }, async () => {
+  const before = extLoadCount();
+  assert.ok(before > 0, 'marker extension loaded at startup');
+
+  // The bridge must answer run_command *before* its own reload teardown —
+  // fired in the same tick, the socket dies first and this comes back 400
+  // "socket closed" for a reload that actually ran.
+  const rel = await post(`/api/sessions/${sessionId}/command`, { message: '/reload' });
+  assert.equal(rel.status, 200, JSON.stringify(rel.body));
+
+  await waitFor(() => extLoadCount() > before, 15000, 'extension re-evaluation after /reload');
+
+  // The re-loaded bridge re-registers the same session and it keeps working.
+  await waitFor(async () => {
+    const { body } = await get('/api/sessions?active=1');
+    return body.active.some((s) => s.id === sessionId);
+  }, 15000, 'session active again after reload');
+  const p = await post(`/api/sessions/${sessionId}/prompt`, { message: 'after reload' });
+  assert.equal(p.status, 200, JSON.stringify(p.body));
+  await waitFor(async () => {
+    const { body } = await get(`/api/sessions/${sessionId}/messages`);
+    return body.messages?.some((m) => JSON.stringify(m.content || '').includes('echo: after reload'));
+  }, 20000, 'post-reload turn persisted');
 });

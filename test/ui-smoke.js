@@ -1047,6 +1047,26 @@ function writeRegistry(patch = {}) {
       `drag handle grows the panel (${heightBefore}px -> ${heightAfter}px)`);
     check(await desktop.evaluate(() => localStorage.getItem('pi-dish-terminal-size') !== null),
       'resized height persists to localStorage');
+    // Mode switch: tmux is available on this machine but the fixture session
+    // has no pane, so the tmux view must fail with the clear no-pane error —
+    // and switching back must land in a working shell again.
+    if (await desktop.evaluate(() => appConfig.tmux)) {
+      check((await desktop.locator('#termModeBtn').textContent()).includes('pi tmux'),
+        'mode button offers the tmux pane view');
+      await desktop.click('#termModeBtn');
+      await desktop.waitForFunction(() =>
+        /tmux pane/i.test(document.getElementById('terminalStatus').textContent), { timeout: 5000 });
+      check(true, 'pane-less session surfaces the no-tmux-pane error');
+      await desktop.click('#termModeBtn'); // back to shell
+      await desktop.waitForFunction(() => document.getElementById('terminalStatus').textContent === '',
+        { timeout: 5000 });
+      await desktop.keyboard.type('echo back-to-shell-$((6+3))\r');
+      await desktop.waitForFunction(() => {
+        const rows = document.querySelector('#terminalPanel .xterm');
+        return rows && rows.textContent.includes('back-to-shell-9');
+      }, { timeout: 5000 });
+      check(true, 'switching back re-enters a working shell');
+    }
     await desktop.click('#termCloseBtn');
 
     // 9. Drafts persist per session; ArrowUp recalls sent prompts

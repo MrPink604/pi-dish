@@ -743,6 +743,25 @@ function aggregateUsageWeekly(daily) {
   return out;
 }
 
+/**
+ * tmux prefix key notation ("C-b", "C-a", "M-x", "C-Space") → the raw byte
+ * sequence a terminal sends for it. Null when unmappable — the on-screen
+ * prefix button hides rather than sending the wrong bytes.
+ */
+function tmuxPrefixSeq(prefix) {
+  if (typeof prefix !== 'string') return null;
+  if (/^C-Space$/i.test(prefix)) return '\x00';
+  let m = /^C-([a-zA-Z@[\\\]^_?])$/.exec(prefix);
+  if (m) {
+    if (m[1] === '?') return '\x7f';
+    const code = m[1].toUpperCase().charCodeAt(0);
+    return String.fromCharCode(code & 31);
+  }
+  m = /^M-(.)$/.exec(prefix);
+  if (m) return '\x1b' + m[1];
+  return null;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRuntime, formatRelativeTime, formatTime, formatDuration, formatTokSpeed,
@@ -756,5 +775,6 @@ if (typeof module !== 'undefined' && module.exports) {
     buildSnippet, highlightTokens, looksLikeFilePath, findPathTokens,
     renderDiffHtml, diffStatusClass,
     shortModelName, niceTicks, formatUsageDay, aggregateUsageWeekly,
+    tmuxPrefixSeq,
   };
 }

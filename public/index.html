@@ -226,6 +226,7 @@
             <span class="terminal-title">&gt;_</span>
             <span class="terminal-cwd" id="terminalCwd"></span>
             <span class="terminal-status" id="terminalStatus"></span>
+            <button class="btn-icon terminal-mode-btn" id="termModeBtn" onclick="switchTerminalMode()" style="display:none"></button>
             <button class="btn-icon" id="termRestartBtn" onclick="restartTerminalShell()" title="Restart shell (kills anything running in it)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 12a9 9 0 11-2.636-6.364"/>
@@ -242,6 +243,7 @@
             <button data-termkey="esc">esc</button>
             <button data-termkey="tab">tab</button>
             <button data-termkey="ctrl" id="termKeyCtrl">ctrl</button>
+            <button data-termkey="tmux-prefix" id="termKeyPrefix" style="display:none" title="tmux prefix"></button>
             <button data-termkey="up">↑</button>
             <button data-termkey="down">↓</button>
             <button data-termkey="left">←</button>
