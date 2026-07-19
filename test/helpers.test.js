@@ -572,3 +572,54 @@ test('model pricing formatter distinguishes free from unavailable pricing', () =
   assert.equal(H.formatModelPricing({ pricing: null }), 'pricing unavailable');
   assert.equal(H.formatModelPricing({ pricing: { input: 3, output: 15 } }), '$3/$15 per 1M in/out');
 });
+
+test('shortModelName strips providers, vendor prefixes, versions, and date stamps', () => {
+  assert.equal(H.shortModelName('anthropic/claude-opus-4-8'), 'claude-opus-4-8');
+  assert.equal(H.shortModelName('us.anthropic.claude-sonnet-4-5-20250929-v1:0'), 'claude-sonnet-4-5');
+  assert.equal(H.shortModelName('claude-3-5-sonnet-20241022'), 'claude-3-5-sonnet');
+  assert.equal(H.shortModelName('gpt-4o-2024-11-20'), 'gpt-4o');
+  assert.equal(H.shortModelName('gpt-4.1'), 'gpt-4.1'); // dots in ids are not vendor prefixes
+  assert.equal(H.shortModelName('amazon.nova-pro-v1:0'), 'nova-pro');
+  assert.equal(H.shortModelName('deepseek-v4'), 'deepseek-v4'); // "-vN" without ":N" is a real model name
+  assert.equal(H.shortModelName('gemini-2.5-pro'), 'gemini-2.5-pro');
+  assert.equal(H.shortModelName(''), 'unknown');
+});
+
+test('niceTicks produces clean ascending steps that cover the maximum', () => {
+  assert.deepEqual(H.niceTicks(3.42), { step: 1, top: 4, ticks: [0, 1, 2, 3, 4] });
+  assert.deepEqual(H.niceTicks(0.037).ticks, [0, 0.01, 0.02, 0.03, 0.04]);
+  assert.deepEqual(H.niceTicks(100).ticks, [0, 25, 50, 75, 100]);
+  const t = H.niceTicks(875);
+  assert.ok(t.top >= 875 && t.ticks.length >= 4 && t.ticks.length <= 6);
+  assert.equal(t.ticks[0], 0);
+  assert.deepEqual(H.niceTicks(0).ticks, [0, 1]); // empty ranges still draw an axis
+});
+
+test('formatUsageDay renders locale-free short and long labels', () => {
+  assert.equal(H.formatUsageDay('2026-07-12'), 'Jul 12');
+  assert.equal(H.formatUsageDay('2026-07-12', 'long'), 'Sun, Jul 12, 2026');
+  assert.equal(H.formatUsageDay('unknown'), 'unknown');
+});
+
+test('aggregateUsageWeekly chunks from the end and merges model rows by ref', () => {
+  const mkDay = (day, cost, ref) => ({
+    day, calls: 1,
+    tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
+    costs: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
+    models: [{ ref, provider: ref.split('/')[0], model: ref.split('/')[1], calls: 1, cost, tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, reasoning: 0 } }],
+  });
+  const daily = [];
+  for (let i = 0; i < 10; i++) daily.push(mkDay(`2026-07-${String(i + 1).padStart(2, '0')}`, 1, i % 2 ? 'a/m1' : 'b/m2'));
+  const weeks = H.aggregateUsageWeekly(daily);
+  assert.equal(weeks.length, 2);
+  // Anchored at the end: the oldest bucket is the partial one.
+  assert.deepEqual(weeks.map(w => w.days), [3, 7]);
+  assert.equal(weeks[0].day, '2026-07-01');
+  assert.equal(weeks[1].day, '2026-07-04');
+  assert.equal(weeks[1].calls, 7);
+  assert.equal(weeks[1].costs.total, 7);
+  assert.equal(weeks[1].tokens.input, 70);
+  const refs = weeks[1].models.map(m => m.ref).sort();
+  assert.deepEqual(refs, ['a/m1', 'b/m2']);
+  assert.equal(weeks[1].models.reduce((s, m) => s + m.calls, 0), 7);
+});

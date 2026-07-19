@@ -806,8 +806,22 @@ test('usage summary filters local-day ranges and keeps timestamp-less cost all-t
     const all = await get('/api/usage-summary?days=all');
     assert.equal(all.body.totals.calls - baselineAll.totals.calls, 4);
     assert.equal(all.body.totals.costs.total - baselineAll.totals.costs.total, 7);
-    assert.equal(all.body.daily.length, 30);
     assert.ok(all.body.groups.workspaces.some(w => w.key === '/workspace/usage'));
+
+    // The daily series spans the requested range and stacks per-model data.
+    assert.equal(today.body.daily.length, 1);
+    const seven = await get('/api/usage-summary?days=7');
+    assert.equal(seven.body.daily.length, 7);
+    const todayEntry = seven.body.daily[6];
+    assert.ok(todayEntry.models.some(m => m.ref === 'known/paid' && m.cost >= 1 && m.calls >= 1),
+      'today must carry a per-model breakdown');
+    const thirty = await get('/api/usage-summary?days=30');
+    assert.equal(thirty.body.daily.length, 30);
+    assert.ok(thirty.body.daily[19].models.some(m => m.ref === 'known/old-paid' && m.cost >= 2),
+      '10-day-old usage must land on its own day');
+    assert.ok(all.body.daily.length >= 11 && all.body.daily.length <= 365,
+      'all-time daily spans from the earliest dated day, capped at a year');
+    assert.ok(!all.body.daily.some(d => d.day === 'unknown'), 'dateless usage stays out of the daily series');
 
     const invalid = await get('/api/usage-summary?days=2');
     assert.equal(invalid.status, 400);

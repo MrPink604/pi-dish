@@ -78,6 +78,20 @@ part of the layout (`.header-menu-btn` in the session header,
 `.empty-menu-btn` over the empty state) — don't reintroduce a fixed floating
 button; it clipped over content.
 
+## Main-pane takeovers are the norm; modals are the exception
+
+Content-rich or exploratory surfaces swap into the main viewing pane and get
+the full width/height: the diff view and file viewer (classes on
+`.session-view`), and the usage view (`.main.usage-open`, a `<main>`-level
+sibling because it isn't session-scoped). Each has a header row (title, ⟳
+where refresh makes sense, ✕), closes on Escape and on session switch, and
+hides the panes beneath via CSS `!important` (several carry JS-managed inline
+display). New surfaces of this kind should follow that pattern — a takeover
+pane, not a modal. Modals stay for small, focused interactions (session
+stats, settings, confirmations, the response-details popup); if a modal
+needs internal tabs or scrolls through several unrelated sections, it has
+outgrown modalhood.
+
 ## Session JSONL parsing (lib/session-files.js)
 
 All server-side reads of `~/.pi/agent/sessions/*.jsonl` go through this
@@ -153,10 +167,19 @@ and append overhead are included. Never present cost as billed spend: it is an
 estimate from Pi's model catalog, and absent pricing must remain distinct from
 an explicitly free model.
 
-The Usage tab aggregates the compact summaries stored in the session index by
-day, model, workspace, and session. Finite date ranges exclude timestamp-less
-`unknown` buckets; all-time totals include them. Do not replace this with a
-synchronous walk/reparse of the full JSONL corpus.
+The usage view (bar-chart button in the sidebar header; a main-pane takeover,
+see the takeover section) aggregates the compact summaries stored in the
+session index by day, model, workspace, and session. Finite date ranges
+exclude timestamp-less `unknown` buckets; all-time totals include them. Do
+not replace this with a synchronous walk/reparse of the full JSONL corpus.
+The `/api/usage-summary` `daily` series spans the requested range ('all' from
+the earliest dated day, capped at a year) and each day carries a per-model
+breakdown; the client stacks the chart by the range's top five models
+(validated `--chart-N` theme tokens in style.css — series color only ever
+comes from those slots, the folded tail wears `--chart-other`), folds series
+longer than 90 days into weeks (`aggregateUsageWeekly`), and opens a
+day-detail panel from a bar click without another request. The KPI row is
+fixed headline windows; the range presets scope everything below them.
 
 Server-side session dispatch: `getLiveSession(id)` in server.js is the one
 place bridge-vs-RPC resolution lives (bridge registry entry → connected

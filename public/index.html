@@ -37,7 +37,13 @@
         <h1><span class="wordmark-pi">π</span>-dish</h1>
         <div class="sidebar-header-actions">
           <select id="themeSelect" class="theme-select" onchange="applyTheme(this.value)" title="Theme"></select>
-          <button class="btn-icon global-settings-btn" onclick="openSettingsModal()" title="Settings and usage" aria-label="Settings and usage">⚙</button>
+          <button class="btn-icon" onclick="openUsageView()" title="Usage and spend" aria-label="Usage and spend">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M5 20v-8M12 20V5M19 20v-5"/>
+              <path d="M3 20h18"/>
+            </svg>
+          </button>
+          <button class="btn-icon global-settings-btn" onclick="openSettingsModal()" title="Settings" aria-label="Settings">⚙</button>
           <button class="btn-icon" onclick="refreshSessions()" title="Refresh">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 12a9 9 0 11-2.636-6.364"/>
@@ -311,6 +317,30 @@
           </div>
         </div>
       </div>
+
+      <!-- Usage view: the global usage/spend overview as a main-pane
+           takeover (.main.usage-open hides the empty state and session
+           view — the diff/file-view pattern, one level up because usage
+           isn't session-scoped). Opened from the sidebar header. -->
+      <div class="usage-view" id="usageView">
+        <div class="usage-view-header">
+          <button class="menu-btn" onclick="toggleSidebar()" aria-label="Open session list">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M3 12h18M3 6h18M3 18h18"/>
+            </svg>
+          </button>
+          <span class="usage-view-title">Usage</span>
+          <span class="usage-view-note">Estimated from Pi's model catalog — not billed spend</span>
+          <button class="btn-icon" onclick="loadUsageView()" title="Refresh">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 12a9 9 0 11-2.636-6.364"/>
+              <path d="M21 3v6h-6"/>
+            </svg>
+          </button>
+          <button class="btn-icon" onclick="closeUsageView()" title="Close (Esc)">✕</button>
+        </div>
+        <div class="usage-view-body" id="usageViewBody"></div>
+      </div>
     </main>
   </div>
 
@@ -382,10 +412,6 @@
   <div class="modal-overlay" id="settingsModal" style="display:none" onclick="if(event.target===this)closeSettingsModal()">
     <div class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
       <div class="modal-header"><h3 id="settingsTitle">Settings</h3><button class="btn-icon" onclick="closeSettingsModal()" title="Close (Esc)">✕</button></div>
-      <div class="settings-tabs" role="tablist">
-        <button id="settingsPreferencesTab" class="settings-tab active" onclick="switchSettingsTab('preferences')" role="tab">Preferences</button>
-        <button id="settingsUsageTab" class="settings-tab" onclick="switchSettingsTab('usage')" role="tab">Usage</button>
-      </div>
       <div class="settings-body" id="settingsBody"></div>
     </div>
   </div>

@@ -458,10 +458,7 @@ function writeRegistry(patch = {}) {
     await desktop.selectOption('#responseMetadataMode', 'performance-cost');
     check((await speedBadge.textContent()).includes('~$'), 'response mode updates rendered metadata');
     check(await desktop.evaluate(() => localStorage.getItem('pi-dish-response-metadata')) === 'performance-cost', 'response mode persists');
-    await desktop.click('#settingsUsageTab');
-    await desktop.waitForSelector('.usage-ranges');
-    check(await desktop.locator('.usage-ranges button').count() === 4, 'usage tab offers all ranges');
-    await desktop.keyboard.press('Escape');
+    await desktop.keyboard.press('Escape'); // usage moved out of the modal — its takeover has a dedicated section below
 
     // Per-message share link: no share exists yet, so the button asks before
     // creating one; accepting copies the deep link (?targetId=<entry id>).
@@ -1270,6 +1267,44 @@ function writeRegistry(patch = {}) {
 
     await desktop.click('#tabActive');
     await desktop.waitForTimeout(200);
+
+    // Usage view: the global usage overview as a main-pane takeover (sidebar
+    // header bar-chart button). Range presets re-scope the sections, a bar
+    // click opens that day's per-model detail, a session row jumps into the
+    // session, and Escape closes the pane. Asserted on the all-time range so
+    // the fixed fixture dates stay in-window whenever the smoke runs.
+    console.log('usage view:');
+    await desktop.click('[title="Usage and spend"]');
+    await desktop.waitForSelector('.usage-kpis', { timeout: 5000 });
+    check(await desktop.evaluate(() => document.querySelector('.main').classList.contains('usage-open')),
+      'usage button opens the takeover pane');
+    check(await desktop.evaluate(() => document.getElementById('sessionView').offsetParent === null),
+      'session view hidden while usage is open');
+    await desktop.click('[data-range="all"]');
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('#usageViewBody .usage-row')].some((r) => r.textContent.includes('smoke-model')),
+      null, { timeout: 5000 });
+    check(true, 'all-time range lists the fixture model with its share');
+    await desktop.waitForSelector('#usageChart svg', { timeout: 5000 });
+    check(await desktop.locator('#usageChart .usage-col').count() >= 2,
+      'stacked daily chart renders one column per bucket');
+    check(await desktop.locator('#usageChart text.tick').count() >= 4,
+      'chart draws axis tick labels');
+    await desktop.locator('#usageChart .usage-col[aria-label*="$0."]').first().click();
+    await desktop.waitForSelector('.usage-day-detail', { timeout: 2000 });
+    check(await desktop.evaluate(() => document.querySelector('.usage-day-detail').textContent.includes('smoke-model')),
+      "clicking a bar opens that day's per-model detail");
+    await desktop.click(`[data-session-id="${SESSION_ID}"]`);
+    await desktop.waitForFunction(() => !document.querySelector('.main').classList.contains('usage-open'),
+      null, { timeout: 2000 });
+    check(await desktop.evaluate(() => document.getElementById('sessionView').offsetParent !== null),
+      'session row closes the takeover and shows that session');
+    await desktop.click('[title="Usage and spend"]');
+    await desktop.waitForSelector('.usage-kpis', { timeout: 5000 });
+    await desktop.keyboard.press('Escape');
+    await desktop.waitForFunction(() => !document.querySelector('.main').classList.contains('usage-open'),
+      null, { timeout: 2000 });
+    check(true, 'Escape closes the usage view');
 
     // 3. Mobile: hamburger + drawer from empty state and session header
     console.log('mobile:');

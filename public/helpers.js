@@ -656,6 +656,93 @@ function diffStatusClass(letter) {
   }
 }
 
+// --- Usage view (chart math and labels) ---
+
+/**
+ * Readable model name from a model id (provider stripped): drops
+ * bedrock-style vendor prefixes ("us.anthropic."), trailing wire-format
+ * versions ("-v1:0"), and trailing release-date stamps ("-20250929",
+ * "-2024-11-20", "@20250219"). Display form only — keep the full ref in a
+ * title attribute so nothing is hidden.
+ */
+function shortModelName(model) {
+  if (!model) return 'unknown';
+  let name = String(model);
+  const slash = name.lastIndexOf('/');
+  if (slash >= 0) name = name.slice(slash + 1);
+  name = name.replace(/^(?:[a-z]{2,3}\.)?(?:anthropic|amazon|meta|mistral|cohere|ai21|google|deepseek|qwen)\./, '');
+  name = name.replace(/-v\d+:\d+$/, ''); // bedrock wire format only — "-v4" is a real model name
+  name = name.replace(/[-@](?:20\d{6}|20\d{2}-\d{2}-\d{2})$/, '');
+  return name || String(model);
+}
+
+/**
+ * Clean axis ticks for a positive maximum: ~`target` steps on a
+ * 1/2/2.5/5×10^k grid, ascending from 0; `top` is the last tick (≥ max).
+ */
+function niceTicks(max, target = 4) {
+  if (!Number.isFinite(max) || max <= 0) return { step: 1, top: 1, ticks: [0, 1] };
+  const rawStep = max / target;
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  let step = 10 * mag;
+  for (const m of [1, 2, 2.5, 5]) { if (rawStep <= m * mag) { step = m * mag; break; } }
+  const ticks = [];
+  const top = Math.ceil(max / step - 1e-9) * step;
+  for (let i = 0; i * step <= top + step / 2; i++) ticks.push(Math.round(i * step * 1e9) / 1e9);
+  return { step, top: ticks[ticks.length - 1], ticks };
+}
+
+const USAGE_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const USAGE_WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** "2026-07-12" → "Jul 12" ('short') or "Sat, Jul 12, 2026" ('long'). Locale-free. */
+function formatUsageDay(day, style = 'short') {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day || ''));
+  if (!m) return String(day || '');
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  const label = `${USAGE_MONTH_NAMES[mo - 1] || m[2]} ${d}`;
+  if (style !== 'long') return label;
+  return `${USAGE_WEEKDAY_NAMES[new Date(y, mo - 1, d, 12).getDay()]}, ${label}, ${y}`;
+}
+
+/**
+ * Fold a long daily usage series into week buckets (chart bars and their
+ * 2px gaps stop reading past ~90 marks). Chunks of 7 anchored at the END so
+ * the newest bucket always ends today; the oldest may be partial. Model rows
+ * merge by ref. Entries keep the daily shape plus `days` (bucket span);
+ * `day` is the bucket's first day.
+ */
+function aggregateUsageWeekly(daily) {
+  const out = [];
+  const tokenKeys = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'];
+  const costKeys = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'];
+  for (let end = daily.length; end > 0; end -= 7) {
+    const chunk = daily.slice(Math.max(0, end - 7), end);
+    const models = new Map();
+    const agg = {
+      day: chunk[0].day, days: chunk.length, calls: 0,
+      tokens: Object.fromEntries(tokenKeys.map(k => [k, 0])),
+      costs: Object.fromEntries(costKeys.map(k => [k, 0])),
+      models: [],
+    };
+    for (const d of chunk) {
+      agg.calls += d.calls || 0;
+      for (const k of tokenKeys) agg.tokens[k] += d.tokens?.[k] || 0;
+      for (const k of costKeys) agg.costs[k] += d.costs?.[k] || 0;
+      for (const dm of d.models || []) {
+        const t = models.get(dm.ref) || { ref: dm.ref, provider: dm.provider, model: dm.model, calls: 0, cost: 0, tokens: Object.fromEntries(tokenKeys.map(k => [k, 0])) };
+        t.calls += dm.calls || 0;
+        t.cost += dm.cost || 0;
+        for (const k of tokenKeys) t.tokens[k] += dm.tokens?.[k] || 0;
+        models.set(dm.ref, t);
+      }
+    }
+    agg.models = [...models.values()].sort((a, b) => b.cost - a.cost || b.calls - a.calls);
+    out.unshift(agg);
+  }
+  return out;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRuntime, formatRelativeTime, formatTime, formatDuration, formatTokSpeed,
@@ -668,5 +755,6 @@ if (typeof module !== 'undefined' && module.exports) {
     modelMatchesPattern, isModelEnabled, pushPromptHistory, sanitizeMarkdownUrl,
     buildSnippet, highlightTokens, looksLikeFilePath, findPathTokens,
     renderDiffHtml, diffStatusClass,
+    shortModelName, niceTicks, formatUsageDay, aggregateUsageWeekly,
   };
 }

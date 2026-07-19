@@ -37,6 +37,17 @@
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Monaco, Consolas, monospace;
   --sidebar-width: 280px;
   --content-max: 980px; /* reading column for messages + composer on wide screens */
+  /* Chart series (usage view): categorical slots in a fixed order —
+     blue → orange → cyan → yellow → red — chosen by running every ordering
+     of the theme hues through the dataviz palette validator (adjacent-pair
+     CVD ΔE and ≥3:1 contrast on --bg-dark). Slot follows rank, never
+     recycled; the folded tail wears the de-emphasis gray. */
+  --chart-1: var(--accent);
+  --chart-2: var(--orange);
+  --chart-3: var(--cyan);
+  --chart-4: var(--warning);
+  --chart-5: var(--error);
+  --chart-other: color-mix(in srgb, var(--text-muted) 45%, var(--bg-card));
 }
 
 /* Alternate theme: a neutral dark for people who don't share the solarized
@@ -62,6 +73,14 @@
   --orange-dim: #a5613a;
   --error: #d97070;
   --error-dim: #b25555;
+  /* Chart slots: graphite's soft accents sit above the dark-mode lightness
+     band the chart palette is validated against, so these are the
+     validator-snapped steps (hue held, lightness moved into band, cyan's
+     chroma lifted) rather than the raw UI tokens. Orange passed as-is. */
+  --chart-1: #5499ce;
+  --chart-3: #2aa79e;
+  --chart-4: #b38d0f;
+  --chart-5: #d76e6e;
 }
 
 body {
@@ -3135,29 +3154,12 @@ img.msg-image {
 
 .telemetry-note, .usage-notice { color: var(--text-muted); font-size: 11px; line-height: 1.4; margin-top: 10px; }
 .settings-modal { width: min(720px, calc(100vw - 24px)); max-height: min(760px, 90dvh); }
-.settings-tabs, .usage-ranges { display: flex; gap: 4px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
-.settings-tab { border: 0; background: transparent; color: var(--text-muted); padding: 6px 10px; border-radius: 4px; cursor: pointer; font: inherit; font-size: 12px; }
-.settings-tab.active, .settings-tab:hover { color: var(--text); background: var(--bg-hover); }
 .settings-body { padding: 16px; overflow: auto; }
 .preference-row { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .preference-row label, .preference-row > span { display: flex; flex-direction: column; gap: 4px; }
 .preference-row small, .settings-body > small { color: var(--text-muted); }
 .preference-row select, .preference-row input { color: var(--text); background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 6px; }
 .budget-save { display: flex; gap: 6px; }
-.usage-ranges { padding: 0 0 10px; }
-.usage-headlines { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; margin: 12px 0; }
-.usage-headlines > div { display: flex; flex-direction: column; gap: 3px; padding: 8px; background: var(--bg-card); border-radius: 4px; }
-.usage-headlines small { color: var(--text-muted); }
-.usage-summary { margin: 10px 0; }
-.budget-progress { height: 5px; background: var(--bg-hover); margin: 12px 0 5px; }
-.budget-progress > div { height: 100%; background: var(--warning); }
-.usage-bars { height: 60px; display: flex; align-items: end; gap: 2px; }
-.usage-bars span { flex: 1; min-width: 2px; background: var(--accent-dim); }
-.usage-groups { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; }
-.usage-group { margin-top: 14px; min-width: 0; }
-.usage-group h4 { margin: 0 0 6px; font-size: 12px; color: var(--text-muted); }
-.usage-group > div:not(.usage-bars) { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; font-size: 11px; border-bottom: 1px solid var(--line); }
-.usage-group > div span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .response-details-modal { width: min(540px, calc(100vw - 24px)); }
 .session-spend-badge { cursor: pointer; }
 
@@ -3336,8 +3338,6 @@ img.msg-image {
   .settings-modal { width: 100vw; max-width: none; max-height: 95dvh; }
   .preference-row { align-items: flex-start; flex-direction: column; gap: 8px; }
   .toggle-row { flex-direction: row; }
-  .usage-headlines { grid-template-columns: repeat(2,1fr); }
-  .usage-groups { grid-template-columns: 1fr; }
 }
 
 /* Clickable file mentions (linkifyFilePaths) — read as text, hint at
@@ -3460,6 +3460,133 @@ img.msg-image {
 .diff-view-body .loading,
 .diff-view-body .error,
 .diff-empty { padding: 24px 8px; color: var(--text-muted); }
+
+/* --- Usage view (main-pane takeover, .main.usage-open) --------------------
+   Global usage overview on the diff/file-view pattern, one level up: it
+   hides the empty state and the session view because it isn't tied to a
+   session. Chart marks are thin, gridlines hairline+solid, and all chart
+   text wears text tokens — series color lives only on marks and swatches. */
+.usage-view { display: none; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.main.usage-open .usage-view { display: flex; }
+.main.usage-open .empty-state,
+.main.usage-open .session-view { display: none !important; }
+
+.usage-view-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-darker);
+}
+.usage-view-title { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.usage-view-note { flex: 1; font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-view-header .btn-icon:first-of-type { margin-left: auto; }
+
+/* Same centered reading column as .messages */
+.usage-view-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 16px max(24px, calc((100% - var(--content-max)) / 2)) 40px; }
+.usage-refreshing { opacity: 0.55; pointer-events: none; }
+.usage-state { padding: 18px 0; color: var(--text-muted); }
+.usage-empty { color: var(--text-muted); font-size: 11px; }
+
+.usage-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.usage-kpi { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; background: var(--bg-card); border-radius: 6px; }
+.usage-kpi small { color: var(--text-muted); font-size: 11px; }
+.usage-kpi strong { font-size: 18px; font-weight: 600; color: var(--text-bright); }
+
+.usage-budget { margin-top: 12px; }
+.usage-budget small { color: var(--text-muted); font-size: 11px; }
+.usage-budget-track { height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--accent) 18%, var(--bg-card)); margin-bottom: 4px; }
+.usage-budget-fill { height: 100%; border-radius: 3px; background: var(--accent); }
+.usage-budget.warn .usage-budget-track { background: color-mix(in srgb, var(--warning) 18%, var(--bg-card)); }
+.usage-budget.warn .usage-budget-fill { background: var(--warning); }
+.usage-budget.over .usage-budget-track { background: color-mix(in srgb, var(--error) 18%, var(--bg-card)); }
+.usage-budget.over .usage-budget-fill { background: var(--error); }
+
+.usage-ranges { display: flex; gap: 4px; margin: 18px 0 4px; }
+.usage-range-btn { border: 0; background: transparent; color: var(--text-muted); padding: 6px 10px; border-radius: 4px; cursor: pointer; font: inherit; font-size: 12px; }
+.usage-range-btn.active, .usage-range-btn:hover { color: var(--text); background: var(--bg-hover); }
+
+.usage-total-line { margin: 6px 0 2px; font-size: 12px; color: var(--text-muted); }
+.usage-total-line strong { font-size: 15px; color: var(--text-bright); }
+
+.usage-section { margin-top: 24px; min-width: 0; }
+.usage-section h4 { margin: 0 0 8px; font-size: 12px; color: var(--text-muted); font-weight: 600; }
+
+.usage-chart svg { display: block; }
+.usage-chart .grid { stroke: var(--line); stroke-width: 1; }
+.usage-chart .axis { stroke: color-mix(in srgb, var(--text-muted) 35%, transparent); stroke-width: 1; }
+.usage-chart text.tick { fill: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.usage-chart .hit { fill: transparent; }
+.usage-chart .usage-col { cursor: pointer; outline: none; }
+.usage-chart .usage-col:hover .seg,
+.usage-chart .usage-col:focus-visible .seg { filter: brightness(1.15); }
+.usage-chart .usage-col.selected .hit,
+.usage-chart .usage-col:focus-visible .hit { fill: color-mix(in srgb, var(--accent) 10%, transparent); }
+
+.seg.s1, .swatch.s1, .tt-key.s1, .usage-share-bar .s1 { fill: var(--chart-1); background: var(--chart-1); }
+.seg.s2, .swatch.s2, .tt-key.s2, .usage-share-bar .s2 { fill: var(--chart-2); background: var(--chart-2); }
+.seg.s3, .swatch.s3, .tt-key.s3, .usage-share-bar .s3 { fill: var(--chart-3); background: var(--chart-3); }
+.seg.s4, .swatch.s4, .tt-key.s4, .usage-share-bar .s4 { fill: var(--chart-4); background: var(--chart-4); }
+.seg.s5, .swatch.s5, .tt-key.s5, .usage-share-bar .s5 { fill: var(--chart-5); background: var(--chart-5); }
+.seg.sother, .swatch.sother, .tt-key.sother, .usage-share-bar .sother { fill: var(--chart-other); background: var(--chart-other); }
+
+.usage-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; }
+.usage-legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text); }
+.swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+
+.usage-tooltip {
+  position: fixed;
+  z-index: 300;
+  display: none;
+  pointer-events: none;
+  background: var(--bg-darker);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 11px;
+  max-width: 280px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+.usage-tooltip .tt-day { color: var(--text-muted); }
+.usage-tooltip .tt-total { font-size: 13px; font-weight: 600; color: var(--text-bright); margin: 2px 0 6px; }
+.usage-tooltip .tt-row { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+.usage-tooltip .tt-key { width: 10px; height: 2px; border-radius: 1px; flex-shrink: 0; }
+.usage-tooltip .tt-row strong { min-width: 52px; font-variant-numeric: tabular-nums; }
+.usage-tooltip .tt-row span { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.usage-day-detail { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-top: 14px; }
+.usage-day-detail-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.usage-day-detail-header h4 { margin: 0; font-size: 13px; color: var(--text-bright); }
+.usage-day-detail-header h4 small { color: var(--text-muted); font-weight: 400; }
+.usage-day-stats { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-bottom: 8px; }
+.usage-day-stats > div { display: flex; flex-direction: column; gap: 1px; }
+.usage-day-stats small { color: var(--text-muted); font-size: 11px; }
+.usage-day-stats strong { font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
+
+.usage-share-bar { display: flex; gap: 2px; height: 12px; margin-bottom: 10px; }
+.usage-share-bar span { border-radius: 2px; min-width: 2px; }
+
+.usage-row { position: relative; display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 11px; border-bottom: 1px solid var(--line); min-width: 0; }
+.usage-row .usage-row-name { flex: 1; display: flex; align-items: baseline; gap: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.usage-row .usage-row-name small { color: var(--text-muted); }
+.usage-row .usage-row-meta { color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.usage-bar-row { flex-wrap: wrap; padding-bottom: 8px; }
+.usage-row-bar { position: absolute; left: 0; bottom: 2px; height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--accent) 45%, transparent); }
+.usage-row.clickable { cursor: pointer; }
+.usage-row.clickable:hover { background: var(--bg-hover); }
+
+.usage-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
+
+/* Usage view on phones: these live after the base rules above — an earlier
+   media block would lose the same-specificity cascade. */
+@media (max-width: 768px) {
+  .usage-view-note { display: none; }
+  .usage-view-body { padding: 12px 12px 32px; }
+  .usage-kpis { grid-template-columns: repeat(2, 1fr); }
+  .usage-kpi strong { font-size: 16px; }
+  .usage-columns { grid-template-columns: 1fr; }
+}
 
 .diff-repo { margin-bottom: 22px; }
 

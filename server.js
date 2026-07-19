@@ -557,7 +557,7 @@ app.get('/api/usage-summary', (req, res) => {
   const cutoff = range === 'all' ? null : localDay(Number(range) - 1);
   const totals = emptyUsage(), byModel = new Map(), byWorkspace = new Map(), bySession = new Map();
   const modelOwners = [];
-  const dailyMap = new Map(), headline = { today: 0, days7: 0, days30: 0, all: 0, month: 0 };
+  const dailyMap = new Map(), dailyModels = new Map(), headline = { today: 0, days7: 0, days30: 0, all: 0, month: 0 };
   const now = new Date(), monthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-`;
   for (const c of candidates) {
     const info = scan.infos.get(c.file), usage = info?.usage;
@@ -569,18 +569,25 @@ app.get('/api/usage-summary', (req, res) => {
       headline.all += cost;
       if (dated && day === localDay()) headline.today += cost;
       if (dated && day >= localDay(6)) headline.days7 += cost;
-      if (dated && day >= localDay(29)) { headline.days30 += cost; addUsage(dailyMap.get(day) || (dailyMap.set(day, emptyUsage()), dailyMap.get(day)), bucket); }
+      if (dated && day >= localDay(29)) headline.days30 += cost;
+      if (dated) addUsage(dailyMap.get(day) || (dailyMap.set(day, emptyUsage()), dailyMap.get(day)), bucket);
       if (dated && day.startsWith(monthPrefix)) headline.month += cost;
       if (!cutoff || (dated && day >= cutoff)) addUsage(selected, bucket);
     }
     addUsage(totals, selected);
     if (selected.calls) {
       addUsage(byWorkspace.get(info.cwd || usage.cwd || '(unknown)') || (byWorkspace.set(info.cwd || usage.cwd || '(unknown)', emptyUsage()), byWorkspace.get(info.cwd || usage.cwd || '(unknown)')), selected);
-      bySession.set(c.id, { id: c.id, name: info.name || c.id.slice(0, 8), workspace: info.cwd || usage.cwd || null, ...selected });
+      bySession.set(c.id, { id: c.id, name: info.name || c.id, workspace: info.cwd || usage.cwd || null, ...selected });
     }
     for (const [ref, bucket] of Object.entries(usage.models || {})) {
       const modelSelected = emptyUsage();
-      if (bucket.days) for (const [day, part] of Object.entries(bucket.days)) { if (!cutoff || (day !== 'unknown' && day >= cutoff)) addUsage(modelSelected, part); }
+      if (bucket.days) for (const [day, part] of Object.entries(bucket.days)) {
+        if (day !== 'unknown') {
+          const dayModels = dailyModels.get(day) || (dailyModels.set(day, new Map()), dailyModels.get(day));
+          addUsage(dayModels.get(ref) || (dayModels.set(ref, { provider: bucket.provider, model: bucket.model, ...emptyUsage() }), dayModels.get(ref)), part);
+        }
+        if (!cutoff || (day !== 'unknown' && day >= cutoff)) addUsage(modelSelected, part);
+      }
       else if (!cutoff) addUsage(modelSelected, bucket); // schema-2 transitional safety
       if (modelSelected.calls) {
         addUsage(byModel.get(ref) || (byModel.set(ref, { ...emptyUsage(), provider: bucket.provider, model: bucket.model }), byModel.get(ref)), modelSelected);
@@ -610,7 +617,29 @@ app.get('/api/usage-summary', (req, res) => {
   }
   totals.unpricedCalls = unpricedModelCalls;
   const top = map => [...map.entries()].map(([key, value]) => ({ key, ...value })).sort((a, b) => b.costs.total - a.costs.total || b.calls - a.calls).slice(0, 20);
-  res.json({ range, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort((a,b) => b.costs.total-a.costs.total).slice(0,20) }, headlineCosts: headline, daily: Array.from({ length: 30 }, (_, i) => { const day = localDay(29 - i); return { day, ...(dailyMap.get(day) || emptyUsage()) }; }), unpricedModelCalls, indexing: scan.indexing, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
+  // The daily series spans the requested range (for 'all', from the earliest
+  // dated usage, capped at a year) so the chart always reflects the selected
+  // window. Each day carries a per-model breakdown so the client can stack the
+  // chart by model and open day details without another request.
+  const DAILY_SPAN_CAP = 365;
+  let spanDays = range === 'all' ? 1 : Number(range);
+  if (range === 'all') {
+    let earliest = null;
+    for (const day of dailyMap.keys()) if (!earliest || day < earliest) earliest = day;
+    if (earliest) {
+      const [y, m, d] = earliest.split('-').map(Number);
+      const start = new Date(y, m - 1, d, 12), today = new Date(); today.setHours(12, 0, 0, 0);
+      spanDays = Math.min(DAILY_SPAN_CAP, Math.max(1, Math.round((today - start) / 86400000) + 1));
+    }
+  }
+  const daily = Array.from({ length: spanDays }, (_, i) => {
+    const day = localDay(spanDays - 1 - i);
+    const models = [...(dailyModels.get(day)?.entries() || [])]
+      .map(([ref, b]) => ({ ref, provider: b.provider, model: b.model, calls: b.calls, cost: b.costs.total, tokens: b.tokens }))
+      .sort((a, b) => b.cost - a.cost || b.calls - a.calls);
+    return { day, ...(dailyMap.get(day) || emptyUsage()), models };
+  });
+  res.json({ range, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort((a,b) => b.costs.total-a.costs.total).slice(0,20) }, headlineCosts: headline, daily, unpricedModelCalls, indexing: scan.indexing, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
 });
 
 app.get('/api/settings', (_req, res) => res.json({ monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null }));

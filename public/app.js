@@ -14,7 +14,7 @@ let responseMetadataMode = RESPONSE_MODES.has(localStorage.getItem(RESPONSE_MODE
 let showSessionSpend = localStorage.getItem(SESSION_SPEND_KEY) === '1';
 let responseDetailSeq = 0;
 const responseDetails = new Map();
-let settingsTab = 'preferences', usageRange = '30', usageTimer = null;
+let usageRange = '30', usageTimer = null, usageData = null, usageChart = null, usageSelectedDay = null;
 let settingsRenderSeq = 0, usageFetchSeq = 0, spendFetchSeq = 0;
 
 // Live tool panel tracking: toolCallId -> { el, startTime }
@@ -827,6 +827,7 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
   // scrollTop reads 0 while hidden and would be cached as the reader's spot.
   closeDiffView();
   closeFileView();
+  closeUsageView(); // picking a session while the usage takeover is up means "show me that session"
   stashCurrentTranscript();
   if (forceTranscriptReload) transcriptCache.delete(id);
   if (!setCurrentSession(id)) return;
@@ -1255,23 +1256,15 @@ function toggleFocusMode() {
   if (container && isPinnedToBottom(container)) scrollToBottom(container);
 }
 
-// --- Global preferences and usage ---
-function openSettingsModal(tab = settingsTab) {
+// --- Global preferences (modal — the usage overview lives in its own
+// main-pane takeover view now, opened from the sidebar header) ---
+function openSettingsModal() {
   document.getElementById('settingsModal').style.display = 'flex';
-  switchSettingsTab(tab);
+  renderPreferences();
 }
 
 function closeSettingsModal() {
   document.getElementById('settingsModal').style.display = 'none';
-  clearTimeout(usageTimer); usageTimer = null;
-}
-
-function switchSettingsTab(tab) {
-  settingsTab = tab === 'usage' ? 'usage' : 'preferences';
-  clearTimeout(usageTimer); usageTimer = null;
-  document.getElementById('settingsPreferencesTab').classList.toggle('active', settingsTab === 'preferences');
-  document.getElementById('settingsUsageTab').classList.toggle('active', settingsTab === 'usage');
-  if (settingsTab === 'usage') loadUsageSummary(); else renderPreferences();
 }
 
 async function renderPreferences() {
@@ -1290,13 +1283,13 @@ async function renderPreferences() {
   spend.addEventListener('change', () => { showSessionSpend = spend.checked; localStorage.setItem(SESSION_SPEND_KEY, showSessionSpend ? '1' : '0'); refreshSessionSpend(); });
   try {
     const r = await fetch('/api/settings'), s = await r.json();
-    if (renderSeq !== settingsRenderSeq || settingsTab !== 'preferences') return;
+    if (renderSeq !== settingsRenderSeq ) return;
     body.querySelector('#monthlyBudget').value = s.monthlyBudgetUsd ?? '';
   } catch {
-    if (renderSeq !== settingsRenderSeq || settingsTab !== 'preferences') return;
+    if (renderSeq !== settingsRenderSeq ) return;
     body.querySelector('#budgetStatus').textContent = 'Could not load server setting.';
   }
-  if (renderSeq !== settingsRenderSeq || settingsTab !== 'preferences') return;
+  if (renderSeq !== settingsRenderSeq ) return;
   body.querySelector('#saveBudget').addEventListener('click', async () => {
     const input = body.querySelector('#monthlyBudget'), status = body.querySelector('#budgetStatus');
     const value = input.value.trim() === '' ? null : Number(input.value);
@@ -1305,47 +1298,399 @@ async function renderPreferences() {
   });
 }
 
-function setUsageRange(range) { usageRange = range; loadUsageSummary(); }
-async function loadUsageSummary() {
-  ++settingsRenderSeq;
+// --- Usage view (main-pane takeover) ---
+// Global usage/spend overview: KPI headlines, a stacked-by-model daily chart,
+// model share, and workspace/session breakdowns. Opened from the sidebar
+// header; `.main.usage-open` hides the empty state and session view (the
+// diff/file-view takeover pattern, one level up because usage isn't
+// session-scoped). Data is /api/usage-summary — the range presets scope
+// everything below them; the KPI row above is fixed headline windows.
+// Chart series colors are the validated --chart-N theme tokens; the top five
+// models in the range take slots 1–5 and the rest fold into "other".
+const USAGE_RANGES = [['1', 'Today'], ['7', '7 days'], ['30', '30 days'], ['all', 'All time']];
+const USAGE_RANGE_LABELS = { 1: 'today', 7: 'the last 7 days', 30: 'the last 30 days', all: 'all time' };
+
+function isUsageViewOpen() {
+  return document.querySelector('.main').classList.contains('usage-open');
+}
+
+function openUsageView() {
+  closeSidebar();
+  if (isUsageViewOpen()) return;
+  document.querySelector('.main').classList.add('usage-open');
+  loadUsageView();
+}
+
+function closeUsageView() {
+  document.querySelector('.main').classList.remove('usage-open');
+  clearTimeout(usageTimer); usageTimer = null;
+  hideUsageTooltip();
+}
+
+function setUsageRange(range) {
+  usageRange = range;
+  usageSelectedDay = null;
+  loadUsageView();
+}
+
+async function loadUsageView() {
   const fetchSeq = ++usageFetchSeq;
   const requestedRange = usageRange;
-  const body = document.getElementById('settingsBody');
-  body.innerHTML = `<div class="usage-ranges">${[['1','Today'],['7','7 days'],['30','30 days'],['all','All']].map(([v,l]) => `<button class="settings-tab${usageRange===v?' active':''}" data-range="${v}">${l}</button>`).join('')}</div><div class="usage-state">Loading estimated usage…</div>`;
-  body.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => setUsageRange(b.dataset.range)));
+  const body = document.getElementById('usageViewBody');
+  // Refetch keeps the frame: dim the previous render instead of blanking it.
+  if (body.childElementCount) body.classList.add('usage-refreshing');
+  else body.innerHTML = '<div class="usage-state">Loading estimated usage…</div>';
   try {
-    const r = await fetch('/api/usage-summary?days=' + requestedRange), d = await r.json();
+    const r = await fetch('/api/usage-summary?days=' + requestedRange);
+    const d = await r.json();
     if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-    if (fetchSeq !== usageFetchSeq || d.range !== usageRange || settingsTab !== 'usage' || document.getElementById('settingsModal').style.display === 'none') return;
-    renderUsageSummary(body, d);
-    if (d.indexing) usageTimer = setTimeout(() => { if (settingsTab === 'usage' && document.getElementById('settingsModal').style.display !== 'none') loadUsageSummary(); }, 1000);
+    if (fetchSeq !== usageFetchSeq || requestedRange !== usageRange || !isUsageViewOpen()) return;
+    usageData = d;
+    renderUsageView(d);
+    if (d.indexing) usageTimer = setTimeout(() => { if (isUsageViewOpen()) loadUsageView(); }, 1000);
   } catch (e) {
-    if (fetchSeq !== usageFetchSeq || requestedRange !== usageRange || settingsTab !== 'usage' || document.getElementById('settingsModal').style.display === 'none') return;
-    const state = body.querySelector('.usage-state');
-    if (state) state.textContent = 'Could not load usage: ' + e.message;
+    if (fetchSeq !== usageFetchSeq || requestedRange !== usageRange || !isUsageViewOpen()) return;
+    body.classList.remove('usage-refreshing');
+    body.innerHTML = `<div class="usage-state">Could not load usage: ${escapeHtml(e.message)}</div>`;
   }
 }
 
-function renderUsageSummary(body, d) {
-  const t = d.totals || {}, h = d.headlineCosts || {}, budget = d.monthlyBudgetUsd;
-  const headline = [['Today',h.today],['7 days',h.days7],['30 days',h.days30],['This month',h.month]].map(([k,v]) => `<div><small>${k}</small><strong>${formatEstimatedCost(v)}</strong></div>`).join('');
-  const progress = budget ? Math.min(100, (h.month || 0) / budget * 100) : null;
-  const bars = (d.daily || []).map(x => `<span style="height:${Math.max(2, Math.min(100, (x.costs?.total || 0) / Math.max(0.000001, ...(d.daily||[]).map(y=>y.costs?.total||0)) * 100))}%" title="${escapeHtml(x.day)}: ${formatEstimatedCost(x.costs?.total || 0)}"></span>`).join('');
-  const groups = (title, rows) => `<section class="usage-group"><h4>${title}</h4>${rows?.length ? rows.slice(0,20).map(x => {
-    const spend = x.priced === false
-      ? 'pricing unavailable'
-      : `${formatEstimatedCost(x.costs?.total)}${x.unpricedCalls ? ` + ${x.unpricedCalls} unpriced` : ''}`;
-    return `<div><span title="${escapeHtml(x.key || x.name || x.id)}">${escapeHtml(x.key || x.name || x.id)}</span><span>${x.calls} calls · ${escapeHtml(spend)}</span></div>`;
-  }).join('') : '<small>No usage in this range.</small>'}</section>`;
-  body.innerHTML = `<div class="usage-ranges">${[['1','Today'],['7','7 days'],['30','30 days'],['all','All']].map(([v,l]) => `<button class="settings-tab${usageRange===v?' active':''}" data-range="${v}">${l}</button>`).join('')}</div>
-    ${d.indexing ? '<div class="usage-notice">History is indexing; totals will refresh…</div>' : ''}<div class="usage-headlines">${headline}</div>
-    <div class="usage-summary"><strong>${t.calls || 0} calls</strong> · ${formatTokens((t.tokens?.input||0)+(t.tokens?.output||0)+(t.tokens?.cacheRead||0)+(t.tokens?.cacheWrite||0))} tokens in selected range</div>
-    ${budget ? `<div class="budget-progress"><div style="width:${progress}%"></div></div><small>${formatEstimatedCost(h.month)} of ~$${Number(budget).toFixed(2)} monthly warning${progress>=100?' — warning exceeded':''}</small>` : '<small>No monthly budget warning configured.</small>'}
-    ${d.unpricedModelCalls ? `<div class="usage-notice">${d.unpricedModelCalls} calls have unavailable pricing and are excluded from estimated spend; unknown usage is not $0 billed.</div>` : ''}
-    <section class="usage-group"><h4>Last 30 days</h4><div class="usage-bars">${bars}</div></section>
-    <div class="usage-groups">${groups('Models',d.groups?.models)}${groups('Workspaces',d.groups?.workspaces)}${groups('Sessions',d.groups?.sessions)}</div>`;
-  body.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => setUsageRange(b.dataset.range)));
+function usageMetricValue(bucket, metric) {
+  return metric === 'cost' ? (bucket.costs?.total || 0) : (bucket.calls || 0);
 }
+function usageModelValue(m, metric) {
+  return metric === 'cost' ? (m.cost || 0) : (m.calls || 0);
+}
+function usageTokensTotal(tokens) {
+  return ['input', 'output', 'cacheRead', 'cacheWrite'].reduce((s, k) => s + (tokens?.[k] || 0), 0);
+}
+
+function renderUsageView(d) {
+  const body = document.getElementById('usageViewBody');
+  body.classList.remove('usage-refreshing');
+  const t = d.totals || {}, h = d.headlineCosts || {};
+  const budget = d.monthlyBudgetUsd;
+
+  const kpis = [['Today', h.today], ['Last 7 days', h.days7], ['Last 30 days', h.days30], ['This month', h.month]]
+    .map(([k, v]) => `<div class="usage-kpi"><small>${k}</small><strong>${formatEstimatedCost(v)}</strong></div>`).join('');
+
+  let budgetHtml = '';
+  if (budget) {
+    const pct = Math.min(100, (h.month || 0) / budget * 100);
+    const cls = pct >= 100 ? ' over' : pct >= 80 ? ' warn' : '';
+    budgetHtml = `<div class="usage-budget${cls}"><div class="usage-budget-track"><div class="usage-budget-fill" style="width:${pct.toFixed(1)}%"></div></div><small>${formatEstimatedCost(h.month)} of ~$${Number(budget).toFixed(2)} monthly budget${pct >= 100 ? ' — over budget' : ''}</small></div>`;
+  }
+
+  const ranges = USAGE_RANGES
+    .map(([v, l]) => `<button class="usage-range-btn${usageRange === v ? ' active' : ''}" data-range="${v}">${l}</button>`).join('');
+
+  const summary = `<div class="usage-total-line"><strong>${formatEstimatedCost(t.costs?.total)}</strong> · ${t.calls || 0} calls · ${formatTokens(usageTokensTotal(t.tokens))} tokens in ${USAGE_RANGE_LABELS[d.range] || 'the selected range'}</div>`;
+
+  // Chart model: series slots follow the range's top models by spend so the
+  // chart, its legend, and the model-share section all agree on colors.
+  const metric = (t.costs?.total || 0) > 0 ? 'cost' : 'calls';
+  const daily = d.daily || [];
+  const buckets = daily.length > 90 ? aggregateUsageWeekly(daily) : daily;
+  const seriesRefs = (d.groups?.models || []).slice(0, 5).map(m => m.key);
+  usageChart = { buckets, seriesRefs, metric };
+  const showChart = d.range !== '1' && buckets.length > 1 && (t.calls || 0) > 0;
+  const chartSection = showChart
+    ? `<section class="usage-section"><h4>${metric === 'cost' ? 'Estimated spend' : 'Calls'} per ${buckets === daily ? 'day' : 'week'}</h4><div class="usage-chart" id="usageChart"></div></section>`
+    : '';
+  if (d.range === '1' && daily.length) usageSelectedDay = daily[daily.length - 1].day;
+
+  body.innerHTML = `
+    <div class="usage-kpis">${kpis}</div>
+    ${budgetHtml}
+    ${d.indexing ? '<div class="usage-notice">History is indexing; totals will refresh…</div>' : ''}
+    <div class="usage-ranges">${ranges}</div>
+    ${(t.calls || 0) === 0 ? '<div class="usage-state">No usage in this range.</div>' : summary}
+    ${chartSection}
+    <div id="usageDayDetail"></div>
+    ${usageModelShareHtml(d, metric)}
+    <div class="usage-columns">
+      ${usageGroupListHtml('Workspaces', d.groups?.workspaces, 'workspace', metric)}
+      ${usageGroupListHtml('Sessions', d.groups?.sessions, 'session', metric)}
+    </div>
+    ${d.unpricedModelCalls ? `<div class="usage-notice">${d.unpricedModelCalls} calls have unavailable pricing and are excluded from estimated spend; unknown usage is not $0 billed.</div>` : ''}
+  `;
+  body.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => setUsageRange(b.dataset.range)));
+  // Session rows jump to the session itself — the takeover closes so the
+  // transcript is visible underneath.
+  body.querySelectorAll('[data-session-id]').forEach(row => row.addEventListener('click', () => {
+    closeUsageView();
+    selectSession(row.dataset.sessionId);
+  }));
+  if (showChart) drawUsageChart();
+  renderUsageDayDetail();
+}
+
+// Chart geometry is computed against the holder's live width; redraw on
+// resize instead of scaling a stale viewBox (bars keep their mark specs).
+function drawUsageChart() {
+  const holder = document.getElementById('usageChart');
+  if (!holder || !usageChart) return;
+  const { buckets, seriesRefs, metric } = usageChart;
+  const width = Math.max(280, holder.clientWidth || 0);
+  const max = Math.max(...buckets.map(b => usageMetricValue(b, metric)));
+  const { step, top, ticks } = niceTicks(max);
+  const dec = (String(step).split('.')[1] || '').length;
+  const fmtTick = v => metric === 'cost' ? (v === 0 ? '$0' : '$' + v.toFixed(dec)) : formatTokens(v);
+
+  const yLabelW = Math.max(...ticks.map(v => fmtTick(v).length)) * 6.5 + 12;
+  const margin = { top: 8, right: 4, bottom: 22, left: Math.ceil(yLabelW) };
+  const plotH = 170;
+  const height = margin.top + plotH + margin.bottom;
+  const plotW = Math.max(60, width - margin.left - margin.right);
+  const n = buckets.length;
+  const band = plotW / n;
+  const barW = Math.max(2, Math.min(24, band - 2));
+  const yFor = v => margin.top + plotH - (top > 0 ? v / top * plotH : 0);
+
+  const parts = [];
+  for (const v of ticks) {
+    const y = yFor(v);
+    if (v > 0) parts.push(`<line class="grid" x1="${margin.left}" x2="${margin.left + plotW}" y1="${y}" y2="${y}"/>`);
+    parts.push(`<text class="tick" x="${margin.left - 6}" y="${y + 3}" text-anchor="end">${fmtTick(v)}</text>`);
+  }
+  parts.push(`<line class="axis" x1="${margin.left}" x2="${margin.left + plotW}" y1="${yFor(0)}" y2="${yFor(0)}"/>`);
+  // Sparse x labels, anchored so the newest bucket is always labeled.
+  const stride = Math.max(1, Math.ceil(n / Math.max(3, Math.floor(plotW / 80))));
+  for (let i = 0; i < n; i++) {
+    if ((n - 1 - i) % stride !== 0) continue;
+    const x = margin.left + band * (i + 0.5);
+    parts.push(`<text class="tick" x="${x}" y="${margin.top + plotH + 15}" text-anchor="middle">${formatUsageDay(buckets[i].day)}</text>`);
+  }
+
+  let anyOther = false;
+  for (let i = 0; i < n; i++) {
+    const b = buckets[i];
+    const total = usageMetricValue(b, metric);
+    const byRef = new Map((b.models || []).map(m => [m.ref, m]));
+    const segs = [];
+    let known = 0;
+    seriesRefs.forEach((ref, s) => {
+      const v = byRef.has(ref) ? usageModelValue(byRef.get(ref), metric) : 0;
+      known += v;
+      if (v > 0) segs.push({ cls: 's' + (s + 1), v });
+    });
+    const other = Math.max(0, total - known);
+    if (other > 0) { segs.push({ cls: 'sother', v: other }); anyOther = true; }
+
+    const x = margin.left + band * i + (band - barW) / 2;
+    const label = (b.days > 1 ? `Week of ${formatUsageDay(b.day)}` : formatUsageDay(b.day, 'long')) + ': ' +
+      (metric === 'cost' ? formatEstimatedCost(b.costs?.total) : `${b.calls} calls`);
+    const seg = [];
+    let cursor = yFor(0);
+    for (let sI = 0; sI < segs.length; sI++) {
+      const hPx = top > 0 ? segs[sI].v / top * plotH : 0;
+      if (hPx <= 0) continue;
+      const isTop = sI === segs.length - 1;
+      // 2px surface gap between stacked fills (shaved off each lower segment).
+      const drawH = Math.max(0.75, hPx - (isTop ? 0 : 2));
+      const yTop = cursor - hPx;
+      if (isTop) {
+        const r = Math.min(3, barW / 2, drawH);
+        seg.push(`<path class="seg ${segs[sI].cls}" d="M${x},${(yTop + drawH).toFixed(1)} V${(yTop + r).toFixed(1)} Q${x},${yTop.toFixed(1)} ${x + r},${yTop.toFixed(1)} H${(x + barW - r).toFixed(1)} Q${x + barW},${yTop.toFixed(1)} ${x + barW},${(yTop + r).toFixed(1)} V${(yTop + drawH).toFixed(1)} Z"/>`);
+      } else {
+        seg.push(`<rect class="seg ${segs[sI].cls}" x="${x}" y="${yTop.toFixed(1)}" width="${barW.toFixed(1)}" height="${drawH.toFixed(1)}"/>`);
+      }
+      cursor = yTop;
+    }
+    parts.push(`<g class="usage-col${b.day === usageSelectedDay ? ' selected' : ''}" data-i="${i}" tabindex="0" role="button" aria-label="${escapeHtml(label)}"><rect class="hit" x="${margin.left + band * i}" y="${margin.top}" width="${band.toFixed(2)}" height="${plotH}"/>${seg.join('')}</g>`);
+  }
+
+  const legendItems = seriesRefs.map((ref, i) =>
+    `<span class="usage-legend-item" title="${escapeHtml(ref)}"><i class="swatch s${i + 1}"></i>${escapeHtml(shortModelName(ref))}</span>`);
+  if (anyOther || (usageData?.groups?.models || []).length > seriesRefs.length)
+    legendItems.push('<span class="usage-legend-item"><i class="swatch sother"></i>other</span>');
+
+  holder.innerHTML = `<svg width="${width}" height="${height}" role="img" aria-label="${metric === 'cost' ? 'Estimated spend' : 'Calls'} per ${buckets[0]?.days > 1 ? 'week' : 'day'}">${parts.join('')}</svg>` +
+    (legendItems.length > 1 ? `<div class="usage-legend">${legendItems.join('')}</div>` : '');
+
+  holder.onpointermove = e => {
+    const g = e.target.closest('.usage-col');
+    if (!g) { hideUsageTooltip(); return; }
+    showUsageTooltip(buckets[Number(g.dataset.i)], e);
+  };
+  holder.onpointerleave = () => hideUsageTooltip();
+  holder.onclick = e => {
+    const g = e.target.closest('.usage-col');
+    if (g) toggleUsageDay(buckets[Number(g.dataset.i)].day);
+  };
+  holder.onkeydown = e => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const g = e.target.closest('.usage-col');
+    if (g) { e.preventDefault(); toggleUsageDay(buckets[Number(g.dataset.i)].day); }
+  };
+}
+
+function toggleUsageDay(day) {
+  usageSelectedDay = usageSelectedDay === day ? null : day;
+  document.querySelectorAll('#usageChart .usage-col').forEach(g => {
+    g.classList.toggle('selected', usageChart.buckets[Number(g.dataset.i)]?.day === usageSelectedDay);
+  });
+  renderUsageDayDetail();
+}
+
+function renderUsageDayDetail() {
+  const holder = document.getElementById('usageDayDetail');
+  if (!holder) return;
+  const bucket = usageChart?.buckets?.find(b => b.day === usageSelectedDay)
+    || (usageData?.range === '1' ? usageData.daily?.[usageData.daily.length - 1] : null);
+  if (!bucket || !usageSelectedDay) { holder.innerHTML = ''; return; }
+  const metric = usageChart?.metric || 'cost';
+  const title = bucket.days > 1
+    ? `Week of ${formatUsageDay(bucket.day)} <small>· ${bucket.days} days</small>`
+    : formatUsageDay(bucket.day, 'long');
+  const tok = bucket.tokens || {};
+  const stats = [
+    ['Estimated spend', formatEstimatedCost(bucket.costs?.total)],
+    ['Calls', String(bucket.calls || 0)],
+    ['Tokens in / out', `${formatTokens(tok.input)} / ${formatTokens(tok.output)}`],
+    ['Cache read / write', `${formatTokens(tok.cacheRead)} / ${formatTokens(tok.cacheWrite)}`],
+  ].map(([k, v]) => `<div><small>${k}</small><strong>${v}</strong></div>`).join('');
+  const slotFor = ref => {
+    const i = (usageChart?.seriesRefs || []).indexOf(ref);
+    return i >= 0 ? 's' + (i + 1) : 'sother';
+  };
+  const rows = (bucket.models || []).map(m => `
+    <div class="usage-row" title="${escapeHtml(m.ref)}">
+      <i class="swatch ${slotFor(m.ref)}"></i>
+      <span class="usage-row-name">${escapeHtml(shortModelName(m.model || m.ref))}<small>${escapeHtml(m.provider || '')}</small></span>
+      <span class="usage-row-meta">${m.calls} calls · ${formatTokens(usageTokensTotal(m.tokens))} tok · ${metric === 'cost' ? formatEstimatedCost(m.cost) : ''}</span>
+    </div>`).join('');
+  holder.innerHTML = `<section class="usage-day-detail">
+    <div class="usage-day-detail-header"><h4>${title}</h4><button class="btn-icon" title="Close details" data-close-day>✕</button></div>
+    <div class="usage-day-stats">${stats}</div>
+    ${rows || '<small class="usage-empty">No usage this day.</small>'}
+  </section>`;
+  holder.querySelector('[data-close-day]').addEventListener('click', () => toggleUsageDay(usageSelectedDay));
+}
+
+// Part-to-whole share of the range by model: one horizontal stacked bar
+// (top five slots + other) over the per-model table that doubles as the
+// chart's WCAG-clean twin.
+function usageModelShareHtml(d, metric) {
+  const models = d.groups?.models || [];
+  if (!models.length) return '';
+  const total = models.reduce((s, m) => s + usageModelValue({ cost: m.costs?.total, calls: m.calls }, metric), 0);
+  const val = m => usageModelValue({ cost: m.costs?.total, calls: m.calls }, metric);
+  const segs = [];
+  models.slice(0, 5).forEach((m, i) => {
+    const share = total > 0 ? val(m) / total : 0;
+    if (share > 0.004) segs.push(`<span class="s${i + 1}" style="flex-grow:${(share * 1000).toFixed(1)}" title="${escapeHtml(shortModelName(m.key))}"></span>`);
+  });
+  const restShare = total > 0 ? models.slice(5).reduce((s, m) => s + val(m), 0) / total : 0;
+  if (restShare > 0.004) segs.push(`<span class="sother" style="flex-grow:${(restShare * 1000).toFixed(1)}" title="other models"></span>`);
+  const rows = models.map((m, i) => {
+    const share = total > 0 ? val(m) / total : 0;
+    const pct = share > 0 ? (share * 100 < 1 ? (share * 100).toFixed(1) : Math.round(share * 100)) + '%' : '—';
+    const spend = m.priced === false ? 'pricing unavailable'
+      : `${formatEstimatedCost(m.costs?.total)}${m.unpricedCalls ? ` + ${m.unpricedCalls} unpriced` : ''}`;
+    return `<div class="usage-row" title="${escapeHtml(m.key)}">
+      <i class="swatch ${i < 5 ? 's' + (i + 1) : 'sother'}"></i>
+      <span class="usage-row-name">${escapeHtml(shortModelName(m.model || m.key))}<small>${escapeHtml(m.provider || '')}</small></span>
+      <span class="usage-row-meta">${pct} · ${m.calls} calls · ${formatTokens(usageTokensTotal(m.tokens))} tok · ${escapeHtml(spend)}</span>
+    </div>`;
+  }).join('');
+  return `<section class="usage-section"><h4>Models</h4>
+    ${segs.length ? `<div class="usage-share-bar">${segs.join('')}</div>` : ''}
+    ${rows}</section>`;
+}
+
+// Workspace/session magnitude lists: single-hue micro-bars (share of the
+// largest entry) under each row — magnitude, not identity, so no palette.
+function usageGroupListHtml(title, rows, kind, metric) {
+  const list = (rows || []).slice(0, 12);
+  const val = x => usageModelValue({ cost: x.costs?.total, calls: x.calls }, metric);
+  const maxV = Math.max(1e-9, ...list.map(val));
+  const items = list.map(x => {
+    const name = kind === 'workspace' ? shortCwd(x.key) : (x.name || x.id);
+    const sub = kind === 'session' && x.workspace ? shortCwd(x.workspace) : '';
+    const spend = x.priced === false ? 'pricing unavailable'
+      : `${formatEstimatedCost(x.costs?.total)}${x.unpricedCalls ? ` + ${x.unpricedCalls} unpriced` : ''}`;
+    const attrs = kind === 'session' ? ` data-session-id="${escapeHtml(x.id)}" role="button" tabindex="0"` : '';
+    return `<div class="usage-row usage-bar-row${kind === 'session' ? ' clickable' : ''}"${attrs} title="${escapeHtml(x.key || x.name || x.id)}">
+      <span class="usage-row-name">${escapeHtml(name)}${sub ? `<small>${escapeHtml(sub)}</small>` : ''}</span>
+      <span class="usage-row-meta">${x.calls} calls · ${escapeHtml(spend)}</span>
+      <span class="usage-row-bar" style="width:${(val(x) / maxV * 100).toFixed(1)}%"></span>
+    </div>`;
+  }).join('');
+  return `<section class="usage-section"><h4>${title}</h4>${items || '<small class="usage-empty">No usage in this range.</small>'}</section>`;
+}
+
+function ensureUsageTooltip() {
+  let el = document.getElementById('usageTooltip');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'usageTooltip';
+    el.className = 'usage-tooltip';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+// One tooltip, every series at that X; values lead, labels follow. Built
+// with textContent — model names are untrusted strings.
+function showUsageTooltip(bucket, e) {
+  if (!bucket) return;
+  const el = ensureUsageTooltip();
+  el.replaceChildren();
+  const metric = usageChart?.metric || 'cost';
+  const head = document.createElement('div');
+  head.className = 'tt-day';
+  head.textContent = bucket.days > 1 ? `Week of ${formatUsageDay(bucket.day)} · ${bucket.days} days` : formatUsageDay(bucket.day, 'long');
+  const total = document.createElement('div');
+  total.className = 'tt-total';
+  total.textContent = (metric === 'cost' ? formatEstimatedCost(bucket.costs?.total) : `${bucket.calls} calls`) +
+    (metric === 'cost' ? ` · ${bucket.calls || 0} calls` : '');
+  el.append(head, total);
+  const seriesRefs = usageChart?.seriesRefs || [];
+  const byRef = new Map((bucket.models || []).map(m => [m.ref, m]));
+  const rows = [];
+  seriesRefs.forEach((ref, i) => {
+    const m = byRef.get(ref);
+    if (m) rows.push(['s' + (i + 1), shortModelName(ref), usageModelValue(m, metric)]);
+  });
+  let otherV = 0, extra = 0;
+  for (const m of bucket.models || []) {
+    if (!seriesRefs.includes(m.ref)) { otherV += usageModelValue(m, metric); extra++; }
+  }
+  if (extra) rows.push(['sother', `other (${extra} model${extra > 1 ? 's' : ''})`, otherV]);
+  for (const [cls, name, v] of rows) {
+    const row = document.createElement('div');
+    row.className = 'tt-row';
+    const key = document.createElement('i');
+    key.className = 'tt-key ' + cls;
+    const value = document.createElement('strong');
+    value.textContent = metric === 'cost' ? formatEstimatedCost(v) : String(v);
+    const label = document.createElement('span');
+    label.textContent = name;
+    row.append(key, value, label);
+    el.appendChild(row);
+  }
+  el.style.display = 'block';
+  const pad = 12, r = el.getBoundingClientRect();
+  let x = e.clientX + pad;
+  if (x + r.width > window.innerWidth - 8) x = Math.max(8, e.clientX - r.width - pad);
+  let y = e.clientY - r.height - pad;
+  if (y < 8) y = e.clientY + pad;
+  el.style.left = x + 'px';
+  el.style.top = y + 'px';
+}
+
+function hideUsageTooltip() {
+  const el = document.getElementById('usageTooltip');
+  if (el) el.style.display = 'none';
+}
+
+let usageResizeTimer = null;
+window.addEventListener('resize', () => {
+  if (!isUsageViewOpen()) return;
+  clearTimeout(usageResizeTimer);
+  usageResizeTimer = setTimeout(drawUsageChart, 150);
+});
 
 async function refreshSessionSpend() {
   const badge = document.getElementById('sessionSpendBadge');
@@ -4765,6 +5110,8 @@ document.addEventListener('keydown', function(e) {
     e.preventDefault(); closeStatsModal();
   } else if (document.getElementById('artifactsModal').style.display !== 'none') {
     e.preventDefault(); closeArtifactsModal();
+  } else if (isUsageViewOpen()) {
+    e.preventDefault(); closeUsageView();
   } else if (isFileViewOpen()) {
     e.preventDefault(); closeFileView();
   } else if (isDiffViewOpen()) {
