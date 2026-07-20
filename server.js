@@ -2241,6 +2241,11 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
     }
   });
 
+  // Tree navigation changed the session's authoritative history — the client
+  // must re-render the transcript from the JSONL (the bridge anchors the new
+  // leaf on disk before broadcasting this).
+  sub('session_tree', (data) => send('session_tree', data || {}));
+
   sub('tool_execution_start', (data) => send('tool_execution_start', data));
   sub('tool_execution_update', (data) => send('tool_execution_update', data));
   sub('tool_execution_end', (data) => send('tool_execution_end', data));

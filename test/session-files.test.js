@@ -138,6 +138,50 @@ test('readSessionMessages cache revalidates on append and survives LRU pressure'
   assert.equal(SF.readSessionMessages(file).length, 2, 'evicted entries re-parse correctly');
 });
 
+test('readSessionMessages follows the active tree path, not file order', () => {
+  // A /tree branch: e3/e4 are abandoned, the last entry (pi's leaf on
+  // reopen) anchors the new branch at e2 and carries the follow-up turn.
+  const tmsg = (id, parentId, role, text) => ({
+    type: 'message', id, parentId,
+    message: { role, content: [{ type: 'text', text }] },
+  });
+  const file = writeSession([
+    { type: 'session', version: 3, id: 'sess', cwd: '/p', timestamp: '2026-07-01T10:00:00.000Z' },
+    tmsg('e1', null, 'user', 'first prompt'),
+    tmsg('e2', 'e1', 'assistant', 'first answer'),
+    tmsg('e3', 'e2', 'user', 'abandoned prompt'),
+    tmsg('e4', 'e3', 'assistant', 'abandoned answer'),
+    { type: 'branch_summary', id: 'bs1', parentId: 'e2', fromId: 'e2', summary: 'tried X' },
+    tmsg('e5', 'bs1', 'user', 'retry prompt'),
+  ]);
+  const texts = SF.readSessionMessages(file).map(m => m.content[0].text);
+  assert.deepEqual(texts, ['first prompt', 'first answer', 'tried X', 'retry prompt'],
+    'abandoned branch entries do not render; active path keeps file order');
+});
+
+test('readSessionMessages keeps every entry when the leaf is the last message', () => {
+  const tmsg = (id, parentId, role, text) => ({
+    type: 'message', id, parentId,
+    message: { role, content: [{ type: 'text', text }] },
+  });
+  const file = writeSession([
+    tmsg('e1', null, 'user', 'one'),
+    tmsg('e2', 'e1', 'assistant', 'two'),
+  ]);
+  assert.equal(SF.readSessionMessages(file).length, 2);
+});
+
+test('readSessionMessages treats pre-tree files (no parentId) as linear', () => {
+  // Legacy shorthand entries have ids but no tree data — nothing may be
+  // dropped just because a parent chain cannot be built.
+  const file = writeSession([
+    { type: 'message', id: 'a1', message: { role: 'user', content: [{ type: 'text', text: 'one' }] } },
+    { type: 'message', id: 'a2', message: { role: 'assistant', content: [{ type: 'text', text: 'two' }] } },
+    userMsg('three'),
+  ]);
+  assert.equal(SF.readSessionMessages(file).length, 3);
+});
+
 test('buildSearchTextFromContent lowercases and caps message text', () => {
   const content = [
     userMsg('Find The NEEDLE here'),

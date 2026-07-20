@@ -299,9 +299,32 @@ test('navigate_tree: self-primes a command context via the captured AgentSession
   // isn't a server-spawned child, so no external prime path exists. The
   // bridge must acquire the ctx itself: its /dish-prime through the captured
   // AgentSession's prompt() — the version-sensitive seam this canary pins.
-  const branched = await post(`/api/sessions/${sessionId}/branch`, { entryId: target.id });
-  assert.equal(branched.status, 200, JSON.stringify(branched.body));
-  assert.equal(branched.body.editorText, 'hello integration', 'user-message target returns its text for re-edit');
+  const stream = sseReader(`${base}/api/sessions/${sessionId}/stream`);
+  try {
+    await stream.waitFor((e) => e.event === 'init');
+    const branched = await post(`/api/sessions/${sessionId}/branch`, { entryId: target.id });
+    assert.equal(branched.status, 200, JSON.stringify(branched.body));
+    assert.equal(branched.body.editorText, 'hello integration', 'user-message target returns its text for re-edit');
+
+    // The bridge broadcasts session_tree so open clients re-render the
+    // transcript (also covers /tree typed into the TUI).
+    await stream.waitFor((e) => e.event === 'session_tree', 15000);
+  } finally {
+    stream.close();
+  }
+
+  // A no-summary navigation persists nothing by itself (pi's branch() only
+  // moves an in-memory pointer) — the bridge must anchor the new leaf on
+  // disk, so the tree and the transcript reflect it immediately, not after
+  // the next turn.
+  const { body: after } = await get(`/api/sessions/${sessionId}/tree`);
+  assert.ok(!new Set(after.activePathIds).has(target.id),
+    'the branched-away turn left the active path without another append');
+  const { body: msgs } = await get(`/api/sessions/${sessionId}/messages`);
+  const texts = msgs.messages.map((m) => (Array.isArray(m.content) ? m.content : [])
+    .filter((b) => b.type === 'text').map((b) => b.text).join(''));
+  assert.ok(!texts.some((t) => t.includes('hello integration')),
+    'the abandoned branch no longer renders in the transcript');
 });
 
 // Last on purpose: reload tears the bridge down and re-registers it.

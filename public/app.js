@@ -3561,6 +3561,16 @@ function startMessageStream(sessionId) {
         refreshSessions();
       } catch { setStatus('Compaction finished'); }
     });
+    // Tree navigation (from any surface — this UI, the TUI, another client)
+    // rewrote the session's authoritative history: re-render the transcript
+    // from the JSONL. The UI's own branch flow also reloads after its POST
+    // resolves; a second forced reload of the same state is harmless.
+    evtSource.addEventListener('session_tree', () => {
+      if (currentSession && currentSession.id === sessionId) {
+        selectSession(sessionId, { forceTranscriptReload: true });
+      }
+    });
+
     evtSource.addEventListener('auto_retry_start', (e) => {
       try {
         const d = JSON.parse(e.data);

@@ -954,6 +954,15 @@ test('POST /branch on a user message returns its text and persists the leaf move
   const active = new Set(tree.body.activePathIds);
   assert.ok(active.has('e1') && active.has('e2'), 'path up to the target parent stays active');
   assert.ok(!active.has('e3') && !active.has('e4'), 'the abandoned branch is no longer the active path');
+
+  // The transcript follows the same active path — the abandoned turn stays
+  // in the file but must no longer render in /messages.
+  const msgs = await get(`/api/sessions/${TREE_ID}/messages`);
+  assert.equal(msgs.status, 200);
+  const texts = msgs.body.messages.map(m => m.content?.[0]?.text);
+  assert.ok(texts.includes('first prompt') && texts.includes('first answer'), 'active path still renders');
+  assert.ok(!texts.includes('second prompt') && !texts.includes('second answer'),
+    'abandoned branch messages are gone from the transcript');
 });
 
 test('POST /branch with an unknown entry id fails without touching the file', async () => {

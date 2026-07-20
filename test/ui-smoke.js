@@ -982,6 +982,26 @@ function writeRegistry(patch = {}) {
       document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Working', { timeout: 6000 });
     check(true, 'working badge resets after the flushed turn');
 
+    // 8c-3. Tree navigation: a session_tree event means the authoritative
+    // history changed (a /tree branch — from this UI, the TUI, or another
+    // client), and the client must re-render the transcript from the JSONL.
+    // The shrink direction is the structural proof: an append-only catch-up
+    // can never remove a message, only a forced full reload can.
+    console.log('tree navigation reload:');
+    const preBranchJsonl = fs.readFileSync(sessionFile, 'utf-8');
+    appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'pre-branch marker' }], timestamp: new Date().toISOString() } });
+    emit('session_tree', { newLeafId: 'anywhere' });
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('.message.user')].some((el) => el.textContent.includes('pre-branch marker')),
+      { timeout: 5000 });
+    check(true, 'session_tree triggers a transcript re-fetch (new entry renders)');
+    fs.writeFileSync(sessionFile, preBranchJsonl); // the "branch": history shrinks
+    emit('session_tree', { newLeafId: 'anywhere' });
+    await desktop.waitForFunction(() =>
+      ![...document.querySelectorAll('.message.user')].some((el) => el.textContent.includes('pre-branch marker')),
+      { timeout: 5000 });
+    check(true, 'branched-away message disappears (forced reload, not a catch-up)');
+
     // 8d. Terminal: header button opens a shell at the session cwd over the
     // WS endpoint; output round-trips; close + reopen reattaches the same
     // PTY and replays scrollback (arithmetic markers so the echo of the

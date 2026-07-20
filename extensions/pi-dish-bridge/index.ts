@@ -1250,4 +1250,38 @@ export default function (pi: ExtensionAPI) {
     // replayed prompts don't start a turn mid-reconnect.
     setTimeout(endCompaction, 0);
   });
+
+  // Tree navigation (pi's /tree — from the TUI, the web UI, or an extension).
+  // Two jobs:
+  //  1. Anchor the new leaf on disk. pi's no-summary branch() only moves an
+  //     in-memory pointer; a reopened JSONL — and every external reader,
+  //     pi-dish's transcript included — re-derives the leaf from the file's
+  //     *last entry*. When the navigation appended nothing (no branch_summary,
+  //     no label), append a no-op label entry, the same anchor lib/pi-sdk.js
+  //     writes for inactive-session branches. Skipped automatically when the
+  //     last entry already is the leaf.
+  //  2. Broadcast the event so connected clients re-render the transcript
+  //     from the (now anchored) file.
+  pi.on("session_tree", (event: any, ctx: ExtensionContext) => {
+    wrapExtensionUI(ctx);
+    lastCtx = ctx ?? lastCtx;
+    try {
+      const sm: any = ctx?.sessionManager;
+      const entries = sm?.getEntries?.() ?? [];
+      const last = entries[entries.length - 1];
+      const leafId = sm?.getLeafId?.() ?? null;
+      if (last && last.id !== leafId) {
+        // Navigating to the root resets the leaf to null — anchor via the old
+        // tip then (appendLabelChange needs an existing target; parentId is
+        // taken from the current leaf either way).
+        const target = leafId ?? event?.oldLeafId ?? last.id;
+        sm.appendLabelChange(target, sm.getLabel(target));
+      }
+    } catch (e) {
+      console.error("[pi-dish-bridge] failed to anchor tree navigation:", e);
+    }
+    refreshContextUsage(ctx);
+    writeRegistry();
+    broadcast({ type: "event", event: "session_tree", data: { newLeafId: event?.newLeafId ?? null } });
+  });
 }
