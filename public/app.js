@@ -1342,8 +1342,10 @@ async function loadUsageView() {
   else body.innerHTML = '<div class="usage-state">Loading estimated usage…</div>';
   try {
     const r = await fetch('/api/usage-summary?days=' + requestedRange);
+    // A stale server (or proxy) answers with an HTML error page — surface the
+    // status instead of a JSON parse error.
+    if (!r.ok) throw new Error(await r.json().then(d => d.error, () => null) || `HTTP ${r.status}`);
     const d = await r.json();
-    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
     if (fetchSeq !== usageFetchSeq || requestedRange !== usageRange || !isUsageViewOpen()) return;
     usageData = d;
     renderUsageView(d);
