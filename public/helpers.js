@@ -327,6 +327,48 @@ function buildWorkspaceTree(groups, collapsedSet) {
   return tops.sort((a, b) => collapsed(a.path) - collapsed(b.path) || a.order - b.order);
 }
 
+/**
+ * Group sessions into date buckets for the sidebar's Recent view: Today,
+ * Yesterday, This week / Last week (Monday-start), then one bucket per
+ * month, newest first; sessions sort by recency inside each. Returns
+ * [{ key, label, sessions }] — `key` is the stable collapse-state handle
+ * ('today', 'week', 'm:2026-06', …), `label` the header text. Sessions with
+ * no usable timestamp (epoch-0 fallbacks) land in a trailing 'undated'
+ * bucket instead of a comical "January 1970" month.
+ */
+function groupSessionsByDate(list, now = Date.now()) {
+  const day = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  const today = day(now);
+  const yesterday = today - 86400e3;
+  const weekStart = today - (((new Date(today).getDay() + 6) % 7) * 86400e3);
+  const lastWeekStart = weekStart - 7 * 86400e3;
+  const bucketOf = (t) => {
+    if (!Number.isFinite(t) || t <= 0) return { key: 'undated', label: 'Undated' };
+    if (t >= today) return { key: 'today', label: 'Today' };
+    if (t >= yesterday) return { key: 'yesterday', label: 'Yesterday' };
+    if (t >= weekStart) return { key: 'week', label: 'This week' };
+    if (t >= lastWeekStart) return { key: 'lastweek', label: 'Last week' };
+    const d = new Date(t);
+    return {
+      key: `m:${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+      label: d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }),
+    };
+  };
+  const sorted = [...list].sort((a, b) => new Date(b.lastActivity || 0) - new Date(a.lastActivity || 0));
+  const buckets = new Map();
+  for (const s of sorted) {
+    const b = bucketOf(new Date(s.lastActivity || 0).getTime());
+    if (!buckets.has(b.key)) buckets.set(b.key, { ...b, sessions: [] });
+    buckets.get(b.key).sessions.push(s);
+  }
+  // Input order is recency-desc, so buckets appear newest-first already —
+  // except 'undated', which must sink below everything dated.
+  const out = [...buckets.values()];
+  const u = out.findIndex(b => b.key === 'undated');
+  if (u !== -1) out.push(out.splice(u, 1)[0]);
+  return out;
+}
+
 /** All sessions in a workspace-tree subtree (collapsed headers aggregate status). */
 function collectTreeSessions(node, out = []) {
   if (node.sessions) out.push(...node.sessions);
@@ -347,14 +389,107 @@ function partitionPinned(list, pinnedIds) {
   return [pinned, list.filter(s => !pinnedSet.has(s.id))];
 }
 
-/** Filter sessions locally: every whitespace-separated token must match name/cwd/model/id */
+// =========================================================================
+// Session filter query grammar — one dialect for the sidebar's local filter,
+// the server-side list search, and saved scopes, so a query means the same
+// thing everywhere it can be typed.
+//
+//   foo "two words"        plain terms (AND) — metadata, plus message content
+//                          where the caller supplies it (server search)
+//   -foo -name:subagent    negation — always metadata-only, so a session
+//                          whose *content* merely mentions the word survives
+//   name:x cwd:x model:x id:x   field-scoped terms
+//   since:7d since:2026-07-01 before:...   lastActivity bounds (h/d/w or ISO)
+//
+// Unknown prefixes stay literal text ("subagent: fix" searches for the colon
+// form), so the grammar never eats a query that wasn't meant for it.
+// =========================================================================
+
+const QUERY_FIELDS = new Set(['name', 'cwd', 'model', 'id']);
+
+/** "7d"/"12h"/"2w" → ms span; ISO "YYYY-MM-DD" → ms epoch (local midnight); null otherwise. */
+function parseQueryDate(value, now) {
+  const rel = /^(\d+)([hdw])$/.exec(value);
+  if (rel) {
+    const ms = Number(rel[1]) * { h: 3600e3, d: 86400e3, w: 7 * 86400e3 }[rel[2]];
+    return now - ms;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const t = new Date(value + 'T00:00:00').getTime();
+    return Number.isFinite(t) ? t : null;
+  }
+  return null;
+}
+
+/**
+ * Parse a filter query → { terms: [{ neg, field, value }], since, before }.
+ * `since`/`before` are ms epochs (null when absent); multiple occurrences
+ * AND (max since, min before). Values are lowercased. `now` is injectable
+ * for tests. A malformed since:/before: value falls back to a literal term.
+ */
+function parseSessionQuery(query, now = Date.now()) {
+  const parsed = { terms: [], since: null, before: null };
+  if (!query) return parsed;
+  // Tokens are non-space runs, but a double-quoted span (optionally after a
+  // -/field: prefix) keeps its spaces: -name:"two words", "two words".
+  const tokenRe = /(-?)([a-zA-Z]+:)?("([^"]*)"|\S+)/g;
+  let m;
+  while ((m = tokenRe.exec(query)) !== null) {
+    const neg = m[1] === '-';
+    const rawPrefix = m[2] ? m[2].slice(0, -1).toLowerCase() : null;
+    const value = (m[4] !== undefined ? m[4] : m[3]).toLowerCase();
+    if (!neg && (rawPrefix === 'since' || rawPrefix === 'before')) {
+      const t = parseQueryDate(value, now);
+      if (t !== null) {
+        if (rawPrefix === 'since') parsed.since = Math.max(parsed.since ?? -Infinity, t);
+        else parsed.before = Math.min(parsed.before ?? Infinity, t);
+        continue;
+      }
+    }
+    if (rawPrefix && QUERY_FIELDS.has(rawPrefix)) {
+      if (value) parsed.terms.push({ neg, field: rawPrefix, value });
+      continue;
+    }
+    // Unknown prefix (or date that didn't parse): the whole token is text.
+    const literal = ((rawPrefix ? rawPrefix + ':' : '') + value);
+    if (literal) parsed.terms.push({ neg, field: null, value: literal });
+  }
+  return parsed;
+}
+
+/** The positive plain-text terms of a parsed query — what content search and
+ * snippet highlighting act on (field terms and negations never touch content). */
+function positiveQueryTokens(parsed) {
+  return parsed.terms.filter(t => !t.neg && !t.field).map(t => t.value);
+}
+
+/**
+ * Evaluate a parsed query against a session. `contentText` (lowercased
+ * message text) widens *positive plain* terms only: negations stay
+ * metadata-only by design — excluding a session because its transcript
+ * mentions a word would make `-subagent` hide half the corpus.
+ */
+function evaluateSessionQuery(parsed, session, contentText) {
+  if (parsed.since !== null || parsed.before !== null) {
+    const t = new Date(session.lastActivity || 0).getTime();
+    if (parsed.since !== null && !(t >= parsed.since)) return false;
+    if (parsed.before !== null && !(t < parsed.before)) return false;
+  }
+  const meta = sessionMetaText(session);
+  for (const term of parsed.terms) {
+    const hay = term.field ? String(session[term.field] || '').toLowerCase() : meta;
+    let hit = hay.includes(term.value);
+    if (!hit && !term.neg && !term.field && contentText) hit = contentText.includes(term.value);
+    if (hit === term.neg) return false;
+  }
+  return true;
+}
+
+/** Filter sessions locally (metadata + dates only — no content on this path). */
 function applyLocalFilter(list, query) {
   if (!query) return list;
-  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
-  return list.filter(s => {
-    const text = sessionMetaText(s);
-    return tokens.every(t => text.includes(t));
-  });
+  const parsed = parseSessionQuery(query);
+  return list.filter(s => evaluateSessionQuery(parsed, s));
 }
 
 /** Simple fuzzy match: all chars of query appear in order in str; returns match indices or null */
@@ -768,8 +903,9 @@ if (typeof module !== 'undefined' && module.exports) {
     formatEstimatedCost, formatResponseMetadata, formatModelPricing,
     shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText, extractImageBlocks, messageHasVisibleText,
     contextClass, sessionMetaText, parseModelId, formatModelRef,
-    groupByWorkspace, buildWorkspaceTree, collectTreeSessions,
+    groupByWorkspace, buildWorkspaceTree, collectTreeSessions, groupSessionsByDate,
     partitionPinned, applyLocalFilter, fuzzyMatch, fuzzyScore,
+    parseSessionQuery, evaluateSessionQuery, positiveQueryTokens,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     modelMatchesPattern, isModelEnabled, pushPromptHistory, sanitizeMarkdownUrl,
     buildSnippet, highlightTokens, looksLikeFilePath, findPathTokens,

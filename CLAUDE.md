@@ -657,6 +657,29 @@ filter row shows a spinner from first keystroke until results land
 (`setSearchBusy`), and `loadSessions` carries a sequence guard so a slow
 stale response can't clobber a newer one.
 
+Filter queries speak one grammar everywhere (`parseSessionQuery` /
+`evaluateSessionQuery` in helpers.js, shared by `applyLocalFilter` and the
+server's `matchSessionQuery`): `-term` negation, `name:`/`cwd:`/`model:`/`id:`
+field terms, `since:`/`before:` bounds on lastActivity (`7d`/`12h`/`2w` or
+ISO dates), quoted phrases. Negations and field terms are **metadata-only by
+design** — only positive plain terms may match message content (and only they
+justify the content read + snippet), so `-subagent` can't hide a session whose
+transcript merely mentions the word. Unknown prefixes stay literal text.
+Saved filters ("scopes") are server-global `savedFilters` in
+`~/.pi/dish/settings.json` (PUT `/api/settings` is a partial update — budget
+and filters can't clobber each other); which chips are *active* is
+device-local (`pi-dish-active-scopes`). Active scopes apply client-side on
+top of query/server results and stay applied across tabs/views until toggled
+off — the "N hidden by scopes" note at the list's end is the audit trail, keep
+it. Chips render under the filter input ("+ save filter" appears while a query
+is typed; deletion lives in the settings modal). The view toggle beside the
+input switches All/Active grouping between the workspace tree and a Recent
+view (`groupSessionsByDate` in helpers.js: Today/Yesterday/This week/Last
+week/month buckets, `pi-dish-sidebar-view` in localStorage); Recent rows carry
+the cwd hint, and collapsed date buckets keep their chronological slot
+(collapse keys are `date:<bucket>` in the same `pi-dish-collapsed-groups`
+store) instead of sinking like workspace groups.
+
 ## Model dropdown / scoped models (public/app.js)
 
 The header model dropdown mirrors pi's scoped-models feature (`/scoped-models`

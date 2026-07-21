@@ -199,6 +199,41 @@ test('GET /api/sessions?q= filters on message content', async () => {
   assert.equal(metaMatch.searchSnippet, undefined);
 });
 
+test('GET /api/sessions?q= speaks the filter grammar: negation, fields, dates', async () => {
+  // Negation is metadata-only: the fixture's *content* has "bravo", but the
+  // metadata doesn't, so -bravo must NOT hide it.
+  const negContent = await get(`/api/sessions?q=${encodeURIComponent('-bravo')}`);
+  assert.ok(negContent.body.previous.some(s => s.id === SESSION_ID), 'content-only word must not exclude via negation');
+  const negName = await get(`/api/sessions?q=${encodeURIComponent('-name:hello')}`);
+  assert.ok(!negName.body.previous.some(s => s.id === SESSION_ID), 'name negation excludes');
+
+  // Field terms scope to one field: "proj" is in the cwd, not the name.
+  const byCwd = await get(`/api/sessions?q=${encodeURIComponent('cwd:proj')}`);
+  assert.ok(byCwd.body.previous.some(s => s.id === SESSION_ID));
+  const byWrongField = await get(`/api/sessions?q=${encodeURIComponent('name:proj')}`);
+  assert.ok(!byWrongField.body.previous.some(s => s.id === SESSION_ID));
+
+  // Date bounds run against lastActivity = max(file mtime, entry timestamps),
+  // so pin a dedicated fixture's mtime to a known past date.
+  const DATED_ID = '2026-06-15T09-00-00-datedfix';
+  const datedFile = path.join(sessionDir, `${DATED_ID}.jsonl`);
+  fs.writeFileSync(datedFile, [
+    { type: 'session', cwd: '/home/user/proj', timestamp: '2026-06-15T09:00:00.000Z' },
+    { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'dated fixture' }], timestamp: '2026-06-15T09:00:01.000Z' } },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n');
+  const datedAt = new Date('2026-06-15T09:00:01.000Z');
+  fs.utimesSync(datedFile, datedAt, datedAt);
+  const inRange = await get(`/api/sessions?q=${encodeURIComponent('dated since:2026-06-01 before:2026-07-01')}`);
+  assert.ok(inRange.body.previous.some(s => s.id === DATED_ID));
+  const tooOld = await get(`/api/sessions?q=${encodeURIComponent('dated since:2026-07-01')}`);
+  assert.ok(!tooOld.body.previous.some(s => s.id === DATED_ID));
+
+  // Combined: a content term plus a negation still yields a snippet.
+  const combo = await get(`/api/sessions?q=${encodeURIComponent('bravo -name:zzz')}`);
+  const sess = combo.body.previous.find(s => s.id === SESSION_ID);
+  assert.ok(sess?.searchSnippet?.includes('bravo'), 'snippet from the positive term');
+});
+
 test('GET /api/sessions reports indexing:false once the corpus is indexed', async () => {
   const { body } = await get('/api/sessions');
   assert.equal(body.indexing, false);
@@ -836,7 +871,7 @@ test('server-global telemetry settings preserve unrelated fields and validate bu
   fs.writeFileSync(settingsFile, JSON.stringify({ keep: 'yes' }));
 
   const saved = await put('/api/settings', { monthlyBudgetUsd: 25.5 });
-  assert.deepEqual(saved, { status: 200, body: { monthlyBudgetUsd: 25.5 } });
+  assert.deepEqual(saved, { status: 200, body: { monthlyBudgetUsd: 25.5, savedFilters: [] } });
   assert.deepEqual(await get('/api/settings'), saved);
   assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).keep, 'yes');
 
@@ -844,8 +879,29 @@ test('server-global telemetry settings preserve unrelated fields and validate bu
     assert.equal((await put('/api/settings', { monthlyBudgetUsd: value })).status, 400);
   }
   const cleared = await put('/api/settings', { monthlyBudgetUsd: null });
-  assert.deepEqual(cleared.body, { monthlyBudgetUsd: null });
+  assert.deepEqual(cleared.body, { monthlyBudgetUsd: null, savedFilters: [] });
   assert.equal('monthlyBudgetUsd' in JSON.parse(fs.readFileSync(settingsFile, 'utf8')), false);
+});
+
+test('saved filters persist server-globally and update independently of the budget', async () => {
+  const settingsFile = path.join(tmpHome, '.pi', 'dish', 'settings.json');
+  await put('/api/settings', { monthlyBudgetUsd: 10 });
+  const filters = [{ name: 'No subagents', query: '-name:subagent' }, { name: 'This week', query: 'since:7d' }];
+  const saved = await put('/api/settings', { savedFilters: filters });
+  assert.deepEqual(saved, { status: 200, body: { monthlyBudgetUsd: 10, savedFilters: filters } });
+  assert.deepEqual((await get('/api/settings')).body.savedFilters, filters);
+  // A budget-only PUT must not clobber the filters (and vice versa).
+  await put('/api/settings', { monthlyBudgetUsd: null });
+  assert.deepEqual((await get('/api/settings')).body.savedFilters, filters);
+
+  for (const bad of ['nope', [{ name: '', query: 'x' }], [{ name: 'a', query: '' }],
+      [{ name: 'dup', query: 'x' }, { name: 'dup', query: 'y' }], [{ name: 'x'.repeat(61), query: 'q' }]]) {
+    assert.equal((await put('/api/settings', { savedFilters: bad })).status, 400, JSON.stringify(bad));
+  }
+
+  const clearedAll = await put('/api/settings', { savedFilters: [] });
+  assert.deepEqual(clearedAll.body.savedFilters, []);
+  assert.equal('savedFilters' in JSON.parse(fs.readFileSync(settingsFile, 'utf8')), false);
 });
 
 test('POST endpoints validate input and reject inactive sessions', async () => {

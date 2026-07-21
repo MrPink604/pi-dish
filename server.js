@@ -34,6 +34,7 @@ const sessionIndex = require('./lib/session-index');
 const {
   isModelEnabled, extractTextContent, THINKING_LEVEL_NAMES,
   sessionMetaText, parseModelId, formatModelRef, buildSnippet,
+  parseSessionQuery, evaluateSessionQuery, positiveQueryTokens,
 } = require('./public/helpers');
 
 const app = express();
@@ -503,26 +504,28 @@ function enumerateSessionCandidates(excludeIds = new Set()) {
 
 // null when the session doesn't match; { snippet } when it does. `snippet`
 // is set only for matches the metadata alone doesn't explain — the client
-// shows it under the row so a content match doesn't look arbitrary.
-function matchSessionQuery(session, query) {
-  const tokens = query.split(/\s+/).filter(Boolean);
-  if (!tokens.length) return {};
-  const meta = sessionMetaText(session);
-  if (tokens.every(t => meta.includes(t))) return {};
-  if (session.sessionFile) {
+// shows it under the row so a content match doesn't look arbitrary. Queries
+// speak the shared grammar (parseSessionQuery in helpers.js): negations and
+// field terms are metadata-only, so only positive plain terms can justify
+// the content read.
+function matchSessionQuery(session, parsed) {
+  if (evaluateSessionQuery(parsed, session)) return {};
+  const contentTokens = positiveQueryTokens(parsed);
+  if (contentTokens.length && session.sessionFile) {
     const historyText = sessionIndex.getSearchText(session.sessionFile);
-    const fullText = meta + ' ' + historyText;
-    if (tokens.every(t => fullText.includes(t))) {
-      return { snippet: buildSnippet(historyText, tokens) };
+    if (evaluateSessionQuery(parsed, session, historyText)) {
+      return { snippet: buildSnippet(historyText, contentTokens) };
     }
   }
   return null;
 }
 
 function filterSessionsByQuery(list, query) {
+  const parsed = parseSessionQuery(query);
+  if (!parsed.terms.length && parsed.since === null && parsed.before === null) return list;
   const out = [];
   for (const session of list) {
-    const m = matchSessionQuery(session, query);
+    const m = matchSessionQuery(session, parsed);
     if (!m) continue;
     out.push(m.snippet ? { ...session, searchSnippet: m.snippet } : session);
   }
@@ -662,17 +665,52 @@ app.get('/api/usage-summary', (req, res) => {
   res.json({ range, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort((a,b) => b.costs.total-a.costs.total).slice(0,20) }, headlineCosts: headline, daily, unpricedModelCalls, indexing: scan.indexing, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
 });
 
-app.get('/api/settings', (_req, res) => res.json({ monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null }));
+// Saved sidebar filters ("scopes") are server-global like the budget: the
+// user defines "no subagents" once, every device gets the chip. Which chips
+// are *active* stays device-local (localStorage) — a phone and a desktop can
+// scope differently.
+function sanitizeSavedFilters(value) {
+  if (!Array.isArray(value) || value.length > 50) return null;
+  const out = [];
+  const seen = new Set();
+  for (const f of value) {
+    const name = typeof f?.name === 'string' ? f.name.trim() : '';
+    const query = typeof f?.query === 'string' ? f.query.trim() : '';
+    if (!name || !query || name.length > 60 || query.length > 500 || seen.has(name)) return null;
+    seen.add(name);
+    out.push({ name, query });
+  }
+  return out;
+}
+
+function settingsForClient(settings = readDishSettings()) {
+  return {
+    monthlyBudgetUsd: settings.monthlyBudgetUsd ?? null,
+    savedFilters: sanitizeSavedFilters(settings.savedFilters) || [],
+  };
+}
+
+app.get('/api/settings', (_req, res) => res.json(settingsForClient()));
+// Partial update: only the keys present in the body change, so the budget
+// form and the saved-filters UI can't clobber each other's setting.
 app.put('/api/settings', (req, res) => {
-  const value = req.body?.monthlyBudgetUsd;
-  if (value !== null && (!Number.isFinite(value) || value <= 0 || value > 1_000_000)) return res.status(400).json({ error: 'monthlyBudgetUsd must be null or a positive number at most 1000000' });
+  const body = req.body || {};
   const settings = readDishSettings();
-  if (value === null) delete settings.monthlyBudgetUsd; else settings.monthlyBudgetUsd = value;
+  if ('monthlyBudgetUsd' in body) {
+    const value = body.monthlyBudgetUsd;
+    if (value !== null && (!Number.isFinite(value) || value <= 0 || value > 1_000_000)) return res.status(400).json({ error: 'monthlyBudgetUsd must be null or a positive number at most 1000000' });
+    if (value === null) delete settings.monthlyBudgetUsd; else settings.monthlyBudgetUsd = value;
+  }
+  if ('savedFilters' in body) {
+    const filters = sanitizeSavedFilters(body.savedFilters);
+    if (!filters) return res.status(400).json({ error: 'savedFilters must be up to 50 { name, query } entries with unique non-empty names (≤60 chars) and queries (≤500 chars)' });
+    if (filters.length === 0) delete settings.savedFilters; else settings.savedFilters = filters;
+  }
   try {
     fs.mkdirSync(path.dirname(DISH_SETTINGS_FILE), { recursive: true });
     const tmp = `${DISH_SETTINGS_FILE}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n'); fs.renameSync(tmp, DISH_SETTINGS_FILE);
-    res.json({ monthlyBudgetUsd: value });
+    res.json(settingsForClient(settings));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

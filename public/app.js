@@ -95,6 +95,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadConfig(); // feature flags (terminal) — fire-and-forget
   loadThemes(); // theme picker options + refresh custom-theme tokens
   loadSpawnTargets(); // populate the "Run in" tmux selector (hidden if no tmux)
+  updateViewToggle();
+  renderScopeChips(); // cached definitions paint immediately…
+  loadSavedFilters(); // …then the server copy replaces them
   initTerminalKeybar();
   initTerminalResize();
   initCommentSelections();
@@ -231,6 +234,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   initPinnedDrag();
+
+  document.getElementById('scopeChips').addEventListener('click', (e) => {
+    if (e.target.closest('.scope-add')) { saveCurrentFilterAsScope(); return; }
+    const chip = e.target.closest('.scope-chip');
+    if (chip) toggleScope(chip.dataset.name);
+  });
 
   promptInput.addEventListener('blur', () => { setTimeout(hideAutocomplete, 200); });
 
@@ -406,6 +415,103 @@ let sidebarTab = 'active'; // 'active' (only live sessions, default) or 'all' (l
 let filterQuery = '';
 let filterDebounceTimer = null;
 
+// --- sidebar view: group by workspace (tree) or by date (Recent) ---
+let sidebarView = localStorage.getItem('pi-dish-sidebar-view') === 'recent' ? 'recent' : 'workspace';
+
+function toggleSidebarView() {
+  sidebarView = sidebarView === 'recent' ? 'workspace' : 'recent';
+  localStorage.setItem('pi-dish-sidebar-view', sidebarView);
+  updateViewToggle();
+  renderSessions();
+}
+
+function updateViewToggle() {
+  const btn = document.getElementById('viewToggle');
+  if (!btn) return;
+  // The icon shows the *current* grouping; the title says what a click does.
+  btn.innerHTML = sidebarView === 'recent'
+    ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>'
+    : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>';
+  btn.title = sidebarView === 'recent' ? 'Grouped by date — switch to workspaces' : 'Grouped by workspace — switch to recent';
+}
+
+// --- saved filters ("scopes"): server-global definitions, device-local
+// active set. An active scope stays applied — AND-combined with whatever is
+// typed — until its chip is toggled off, so "no subagents" is set once, not
+// retyped. Definitions are cached locally only so chips paint before the
+// settings fetch lands; the server copy wins on every load.
+let savedFilters = readJSONPref('pi-dish-saved-filters-cache', []);
+let activeScopes = new Set(readJSONPref('pi-dish-active-scopes', []));
+
+async function loadSavedFilters() {
+  try {
+    const res = await fetch('/api/settings');
+    const data = await res.json();
+    savedFilters = Array.isArray(data.savedFilters) ? data.savedFilters : [];
+    localStorage.setItem('pi-dish-saved-filters-cache', JSON.stringify(savedFilters));
+    renderScopeChips();
+    renderSessions();
+  } catch (e) { console.error('Failed to load saved filters:', e); }
+}
+
+async function persistSavedFilters(next) {
+  const res = await fetch('/api/settings', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ savedFilters: next }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'save failed');
+  savedFilters = data.savedFilters;
+  localStorage.setItem('pi-dish-saved-filters-cache', JSON.stringify(savedFilters));
+  renderScopeChips();
+  renderSessions();
+}
+
+/** The combined query of every active scope ('' when none apply). */
+function scopeQuery() {
+  return savedFilters.filter(f => activeScopes.has(f.name)).map(f => f.query).join(' ');
+}
+
+function toggleScope(name) {
+  if (activeScopes.has(name)) activeScopes.delete(name);
+  else activeScopes.add(name);
+  localStorage.setItem('pi-dish-active-scopes', JSON.stringify([...activeScopes]));
+  renderScopeChips();
+  renderSessions();
+}
+
+async function saveCurrentFilterAsScope() {
+  const query = filterQuery.trim();
+  if (!query) return;
+  const name = window.prompt('Name this filter:', '');
+  if (!name || !name.trim()) return;
+  const trimmed = name.trim().slice(0, 60);
+  const next = savedFilters.filter(f => f.name !== trimmed).concat([{ name: trimmed, query }]);
+  try {
+    // The new scope starts active and replaces the typed query — it now
+    // carries the filter, so leaving the text too would double-apply it.
+    activeScopes.add(trimmed);
+    localStorage.setItem('pi-dish-active-scopes', JSON.stringify([...activeScopes]));
+    document.getElementById('filterInput').value = '';
+    filterQuery = '';
+    await persistSavedFilters(next);
+    if (sidebarTab === 'all') loadSessions();
+  } catch (e) { alert('Could not save filter: ' + e.message); }
+}
+
+function renderScopeChips() {
+  const el = document.getElementById('scopeChips');
+  if (!el) return;
+  const chips = savedFilters.map(f => `
+    <button class="scope-chip${activeScopes.has(f.name) ? ' active' : ''}"
+      data-name="${escapeHtml(f.name)}" title="${escapeHtml(f.query)}">${escapeHtml(f.name)}</button>`);
+  if (filterQuery.trim()) {
+    chips.push('<button class="scope-chip scope-add" title="Save the current query as a reusable filter">+ save filter</button>');
+  }
+  el.innerHTML = chips.join('');
+  el.style.display = chips.length ? '' : 'none';
+}
+
 // --- seen tracking: which sessions have new activity since last viewed ---
 let seenActivity = {};
 seenActivity = readJSONPref('pi-dish-seen', {});
@@ -458,6 +564,7 @@ function onFilterInput() {
   const q = document.getElementById('filterInput').value.trim();
   // Local filter is instant; server search is debounced
   filterQuery = q;
+  renderScopeChips(); // the "+ save filter" chip tracks whether a query is typed
   if (sidebarTab === 'all') {
     if (q.length > 0) {
       // Busy from the first keystroke — the debounce window is part of the
@@ -555,16 +662,18 @@ function renderSessionItem(session, opts = {}) {
   const timeAgo = formatRelativeTime(session.lastActivity);
   const isPinned = pinnedSessions.includes(session.id);
   const pinBtn = `<button class="session-pin-btn${isPinned ? ' pinned' : ''}" title="${isPinned ? 'Unpin' : 'Pin to top'}">📌</button>`;
-  // Rows in the pinned section get a drag handle (reorder) and a cwd hint —
-  // they've left their workspace group, so the group label isn't there.
+  // Rows in the pinned section get a drag handle (reorder); pinned and
+  // Recent-view rows get a cwd hint — they've left their workspace group,
+  // so the group label isn't there.
   const dragHandle = opts.pinnedRow ? '<span class="session-drag-handle" title="Drag to reorder">⠿</span>' : '';
-  const cwdHint = opts.pinnedRow ? `<span class="session-item-cwd">${escapeHtml(shortCwd(session.cwd || '~'))}</span>` : '';
+  const cwdHint = (opts.pinnedRow || opts.showCwd) ? `<span class="session-item-cwd">${escapeHtml(shortCwd(session.cwd || '~'))}</span>` : '';
   // Server search attaches a snippet when a session matched on message
   // content the row's metadata doesn't show — render it so the match
-  // doesn't look arbitrary.
+  // doesn't look arbitrary. Only positive plain terms can cause a content
+  // match, so only they get marked.
   const snippetLine = session.searchSnippet
     ? `<div class="session-item-snippet">${highlightTokens(session.searchSnippet,
-        filterQuery.toLowerCase().split(/\s+/).filter(Boolean))}</div>`
+        positiveQueryTokens(parseSessionQuery(filterQuery)))}</div>`
     : '';
 
   return `
@@ -672,7 +781,13 @@ function renderSessions() {
 
   // In All mode with a query, the server already filtered (including message
   // content) — don't re-filter locally.
-  const filtered = (sidebarTab === 'all' && filterQuery) ? showing : applyLocalFilter(showing, filterQuery);
+  const queried = (sidebarTab === 'all' && filterQuery) ? showing : applyLocalFilter(showing, filterQuery);
+  // Active scopes apply client-side on top of whatever the query kept —
+  // metadata/date-only by design, so they behave identically on both tabs.
+  const sq = scopeQuery();
+  const scopeParsed = sq ? parseSessionQuery(sq) : null;
+  const filtered = scopeParsed ? queried.filter(s => evaluateSessionQuery(scopeParsed, s)) : queried;
+  const scopesHidden = queried.length - filtered.length;
 
   let html = '';
   // First boot over a big corpus: the server is still indexing and the list
@@ -696,8 +811,17 @@ function renderSessions() {
         ${pinned.map(s => renderSessionItem(s, { pinnedRow: true })).join('')}
       </div>`;
     }
-    const tree = buildWorkspaceTree(groupByWorkspace(rest, collapsedGroups), collapsedGroups);
-    html += tree.map(renderWorkspaceNode).join('');
+    if (sidebarView === 'recent') {
+      html += groupSessionsByDate(rest).map(renderDateBucket).join('');
+    } else {
+      const tree = buildWorkspaceTree(groupByWorkspace(rest, collapsedGroups), collapsedGroups);
+      html += tree.map(renderWorkspaceNode).join('');
+    }
+  }
+  // Sessions a forgotten chip silently removed must stay discoverable — the
+  // note is the audit trail for "why isn't my session in the list?".
+  if (scopesHidden > 0) {
+    html += `<div class="scope-hidden-note">${scopesHidden} hidden by scopes</div>`;
   }
 
   // The 10s poll usually changes nothing — skip the DOM churn (and touch/hover
@@ -738,6 +862,33 @@ function renderWorkspaceNode(node) {
       <span class="workspace-group-label" title="${escapeHtml(node.path)}">${escapeHtml(node.label)}</span>
       ${headerDot}<span class="workspace-group-count">${node.count}</span>
       <button class="workspace-new-btn" data-path="${escapeHtml(node.path)}" title="New session in ${escapeHtml(node.path)}">+</button>
+    </div>
+    ${body}
+  </div>`;
+}
+
+/**
+ * One Recent-view date bucket → a .session-segment sharing the workspace
+ * header chrome (same collapse delegation via data-cwd, keyed 'date:<key>' so
+ * the two views' collapse states can't collide). Unlike workspace groups,
+ * collapsed buckets stay in chronological place — sinking "Today" below
+ * "May" would break the timeline. Rows carry the cwd hint: the workspace
+ * label isn't above them in this view.
+ */
+function renderDateBucket(bucket) {
+  const key = 'date:' + bucket.key;
+  const isCollapsed = collapsedGroups.has(key);
+  let headerDot = '';
+  if (isCollapsed) {
+    if (bucket.sessions.some(s => s.turnInProgress)) headerDot = '<span class="session-item-status working" title="Agent working"></span>';
+    else if (bucket.sessions.some(isUnread)) headerDot = '<span class="session-item-status unread" title="New activity"></span>';
+  }
+  const body = isCollapsed ? '' : bucket.sessions.map(s => renderSessionItem(s, { showCwd: true })).join('');
+  return `<div class="session-segment${isCollapsed ? ' collapsed' : ''}">
+    <div class="workspace-group-header" data-cwd="${escapeHtml(key)}">
+      <span class="workspace-group-chevron">${isCollapsed ? '▸' : '▾'}</span>
+      <span class="workspace-group-label">${escapeHtml(bucket.label)}</span>
+      ${headerDot}<span class="workspace-group-count">${bucket.sessions.length}</span>
     </div>
     ${body}
   </div>`;
@@ -1273,7 +1424,8 @@ async function renderPreferences() {
   body.innerHTML = `<div class="preference-row"><label for="responseMetadataMode"><strong>Response metadata</strong><small>Stored on this device. “Effective speed” includes time to first token and JSONL append.</small></label>
     <select id="responseMetadataMode"><option value="hidden">Hidden</option><option value="compact">Compact</option><option value="performance">Performance</option><option value="performance-cost">Performance + estimated cost</option></select></div>
     <label class="preference-row toggle-row"><span><strong>Show estimated session spend in desktop header</strong><small>Stored on this device; off by default.</small></span><input id="showSessionSpend" type="checkbox"></label>
-    <div class="preference-row"><label for="monthlyBudget"><strong>Monthly budget warning (USD)</strong><small>Server-global: applies to every device. Estimates use Pi catalog pricing; blank clears.</small></label><div class="budget-save"><input id="monthlyBudget" type="number" min="0.01" step="0.01" placeholder="No warning"><button class="btn-small" id="saveBudget">Save</button></div><small id="budgetStatus"></small></div>`;
+    <div class="preference-row"><label for="monthlyBudget"><strong>Monthly budget warning (USD)</strong><small>Server-global: applies to every device. Estimates use Pi catalog pricing; blank clears.</small></label><div class="budget-save"><input id="monthlyBudget" type="number" min="0.01" step="0.01" placeholder="No warning"><button class="btn-small" id="saveBudget">Save</button></div><small id="budgetStatus"></small></div>
+    <div class="preference-row"><label><strong>Saved sidebar filters</strong><small>Server-global. Chips under the sidebar filter toggle these per device; type a query there and hit “+ save filter” to add one.</small></label><div id="savedFiltersList" class="saved-filters-list"></div></div>`;
   const mode = body.querySelector('#responseMetadataMode'); mode.value = responseMetadataMode;
   mode.addEventListener('change', () => {
     responseMetadataMode = RESPONSE_MODES.has(mode.value) ? mode.value : 'compact';
@@ -1281,10 +1433,30 @@ async function renderPreferences() {
   });
   const spend = body.querySelector('#showSessionSpend'); spend.checked = showSessionSpend;
   spend.addEventListener('change', () => { showSessionSpend = spend.checked; localStorage.setItem(SESSION_SPEND_KEY, showSessionSpend ? '1' : '0'); refreshSessionSpend(); });
+  const renderSavedFiltersList = () => {
+    const listEl = body.querySelector('#savedFiltersList');
+    if (!listEl) return;
+    listEl.innerHTML = savedFilters.length
+      ? savedFilters.map(f => `<div class="saved-filter-row"><span class="saved-filter-name">${escapeHtml(f.name)}</span><code class="saved-filter-query">${escapeHtml(f.query)}</code><button class="btn-icon saved-filter-del" data-name="${escapeHtml(f.name)}" title="Delete filter">✕</button></div>`).join('')
+      : '<small class="saved-filters-empty">No saved filters yet.</small>';
+    for (const btn of listEl.querySelectorAll('.saved-filter-del')) {
+      btn.addEventListener('click', async () => {
+        try {
+          await persistSavedFilters(savedFilters.filter(f => f.name !== btn.dataset.name));
+          renderSavedFiltersList();
+        } catch (e) { alert('Could not delete filter: ' + e.message); }
+      });
+    }
+  };
+  renderSavedFiltersList();
   try {
     const r = await fetch('/api/settings'), s = await r.json();
     if (renderSeq !== settingsRenderSeq ) return;
     body.querySelector('#monthlyBudget').value = s.monthlyBudgetUsd ?? '';
+    if (Array.isArray(s.savedFilters)) {
+      savedFilters = s.savedFilters;
+      renderSavedFiltersList();
+    }
   } catch {
     if (renderSeq !== settingsRenderSeq ) return;
     body.querySelector('#budgetStatus').textContent = 'Could not load server setting.';

@@ -265,7 +265,7 @@ body.sidebar-open {
 .sidebar-filter.searching::after {
   content: '';
   position: absolute;
-  right: 18px;
+  right: 50px; /* inside the input — clear of the view-toggle button */
   top: 50%;
   width: 12px;
   height: 12px;
@@ -303,6 +303,66 @@ body.sidebar-open {
 
 /* First boot over a large corpus: the historical list is still backfilling. */
 .indexing-note {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* The filter row hosts the input plus the workspace/recent view toggle. */
+.sidebar-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.view-toggle {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+/* Saved-filter scopes: toggle chips under the filter box. Active chips keep
+   filtering until switched off — the hidden-note at the list's end is the
+   reminder that they're doing so. */
+.scope-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 8px 8px;
+}
+
+.scope-chip {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scope-chip:hover {
+  color: var(--text);
+  border-color: var(--accent-dim);
+}
+
+.scope-chip.active {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.scope-chip.scope-add {
+  border-style: dashed;
+}
+
+.scope-hidden-note {
   padding: 8px 12px;
   font-size: 11px;
   color: var(--text-muted);
@@ -3160,6 +3220,23 @@ img.msg-image {
 .preference-row small, .settings-body > small { color: var(--text-muted); }
 .preference-row select, .preference-row input { color: var(--text); background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 6px; }
 .budget-save { display: flex; gap: 6px; }
+
+/* Saved-filter management in the settings modal (creation lives in the
+   sidebar's "+ save filter" chip). */
+.saved-filters-list { display: flex; flex-direction: column; gap: 4px; }
+.saved-filter-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.saved-filter-name { font-size: 12px; color: var(--text); flex-shrink: 0; }
+.saved-filter-query {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.saved-filter-del { flex-shrink: 0; }
+.saved-filters-empty { color: var(--text-muted); }
 .response-details-modal { width: min(540px, calc(100vw - 24px)); }
 .session-spend-badge { cursor: pointer; }
 

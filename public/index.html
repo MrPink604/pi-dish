@@ -60,8 +60,10 @@
       
       <div class="sidebar-filter">
         <input type="text" class="filter-input" id="filterInput" placeholder="Filter sessions..." oninput="onFilterInput()">
+        <button class="btn-icon view-toggle" id="viewToggle" onclick="toggleSidebarView()"></button>
       </div>
-      
+      <div class="scope-chips" id="scopeChips"></div>
+
       <div class="session-list" id="sessionList">
         <!-- Sessions will be rendered here -->
       </div>

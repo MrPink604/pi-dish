@@ -318,6 +318,100 @@ test('applyLocalFilter requires every token across name/cwd/model/id', () => {
   assert.equal(H.applyLocalFilter(list, ''), list);
 });
 
+test('parseSessionQuery splits terms, negation, fields, quotes, and dates', () => {
+  const now = new Date('2026-07-21T12:00:00').getTime();
+  const p = H.parseSessionQuery('foo -bar name:sub -cwd:api "two words" since:7d before:2026-07-01', now);
+  assert.deepEqual(p.terms, [
+    { neg: false, field: null, value: 'foo' },
+    { neg: true, field: null, value: 'bar' },
+    { neg: false, field: 'name', value: 'sub' },
+    { neg: true, field: 'cwd', value: 'api' },
+    { neg: false, field: null, value: 'two words' },
+  ]);
+  assert.equal(p.since, now - 7 * 86400e3);
+  assert.equal(p.before, new Date('2026-07-01T00:00:00').getTime());
+});
+
+test('parseSessionQuery keeps unknown prefixes and bad dates literal', () => {
+  const p = H.parseSessionQuery('subagent: fix since:banana -name:"two words"');
+  assert.deepEqual(p.terms, [
+    { neg: false, field: null, value: 'subagent:' },
+    { neg: false, field: null, value: 'fix' },
+    { neg: false, field: null, value: 'since:banana' },
+    { neg: true, field: 'name', value: 'two words' },
+  ]);
+  assert.equal(p.since, null);
+  const empty = H.parseSessionQuery('');
+  assert.deepEqual(empty, { terms: [], since: null, before: null });
+});
+
+test('parseSessionQuery ANDs repeated date bounds (max since, min before)', () => {
+  const now = new Date('2026-07-21T12:00:00').getTime();
+  const p = H.parseSessionQuery('since:7d since:1d before:2026-07-01 before:2026-06-01', now);
+  assert.equal(p.since, now - 86400e3);
+  assert.equal(p.before, new Date('2026-06-01T00:00:00').getTime());
+});
+
+test('evaluateSessionQuery: fields scope, negation is metadata-only, content widens plain terms', () => {
+  const s = { name: 'subagent: fix tests', cwd: '/home/u/webapp', model: 'gpt-5.5', id: 's1', lastActivity: '2026-07-20T10:00:00' };
+  const q = (str, content) => H.evaluateSessionQuery(H.parseSessionQuery(str, new Date('2026-07-21T12:00:00').getTime()), s, content);
+  assert.equal(q('name:subagent'), true);
+  assert.equal(q('-name:subagent'), false);
+  assert.equal(q('cwd:webapp fix'), true);
+  assert.equal(q('model:webapp'), false); // field-scoped: webapp is the cwd, not the model
+  // Positive plain terms reach content; negations never do.
+  assert.equal(q('deploy'), false);
+  assert.equal(q('deploy', 'we discussed the deploy here'), true);
+  assert.equal(q('-deploy', 'we discussed the deploy here'), true);
+  // Date bounds against lastActivity.
+  assert.equal(q('since:7d'), true);
+  assert.equal(q('since:1d'), false);
+  assert.equal(q('before:2026-07-01'), false);
+  assert.equal(q('since:7d before:2026-07-21'), true);
+});
+
+test('positiveQueryTokens extracts only plain positive terms', () => {
+  const p = H.parseSessionQuery('foo -bar name:sub "two words" since:7d');
+  assert.deepEqual(H.positiveQueryTokens(p), ['foo', 'two words']);
+});
+
+test('applyLocalFilter understands the query grammar', () => {
+  const list = [
+    { name: 'subagent: fix login', cwd: '/home/u/webapp', model: 'gpt-5.5', id: 's1', lastActivity: '2026-07-20' },
+    { name: 'refactor', cwd: '/home/u/api', model: 'glm-5.2', id: 's2', lastActivity: '2026-05-01' },
+  ];
+  assert.deepEqual(H.applyLocalFilter(list, '-name:subagent').map(s => s.id), ['s2']);
+  assert.deepEqual(H.applyLocalFilter(list, 'cwd:webapp').map(s => s.id), ['s1']);
+  assert.equal(H.applyLocalFilter(list, ''), list);
+});
+
+test('groupSessionsByDate buckets by recency with undated sunk last', () => {
+  const now = new Date('2026-07-21T12:00:00').getTime(); // a Tuesday
+  const list = [
+    { id: 'old', lastActivity: '2026-05-05T09:00:00' },
+    { id: 'today', lastActivity: '2026-07-21T08:00:00' },
+    { id: 'undated', lastActivity: new Date(0).toISOString() },
+    { id: 'yesterday', lastActivity: '2026-07-20T23:00:00' },
+    { id: 'lastweek', lastActivity: '2026-07-17T10:00:00' }, // Friday of the prior week
+    { id: 'today2', lastActivity: '2026-07-21T01:00:00' },
+  ];
+  const buckets = H.groupSessionsByDate(list, now);
+  assert.deepEqual(buckets.map(b => b.key), ['today', 'yesterday', 'lastweek', 'm:2026-05', 'undated']);
+  assert.deepEqual(buckets[0].sessions.map(s => s.id), ['today', 'today2']);
+  assert.equal(buckets[3].label, new Date('2026-05-05').toLocaleDateString(undefined, { month: 'long', year: 'numeric' }));
+});
+
+test('groupSessionsByDate: Monday belongs to This week, Sunday before to Last week', () => {
+  const now = new Date('2026-07-21T12:00:00').getTime(); // Tue; week starts Mon 2026-07-20
+  const list = [
+    { id: 'mon', lastActivity: '2026-07-20T00:30:00' },
+    { id: 'sun', lastActivity: '2026-07-19T23:30:00' },
+  ];
+  const buckets = H.groupSessionsByDate(list, now);
+  // Monday 00:30 is "Yesterday" (more specific than This week); Sunday falls to Last week.
+  assert.deepEqual(buckets.map(b => b.key), ['yesterday', 'lastweek']);
+});
+
 test('fuzzyMatch finds in-order chars; fuzzyScore prefers tight early matches', () => {
   assert.deepEqual(H.fuzzyMatch('abc', 'a-b-c'), [0, 2, 4]);
   assert.equal(H.fuzzyMatch('abc', 'acb'), null);

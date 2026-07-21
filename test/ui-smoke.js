@@ -1269,6 +1269,71 @@ function writeRegistry(patch = {}) {
     check(await desktop.locator('.session-item-snippet').count() === 0,
       'clearing the query drops snippets and restores the list');
 
+    // 12b. Filter grammar + saved scopes + Recent view.
+    console.log('filter grammar, scopes, recent view:');
+    // Negation is metadata-only and works server-side on the All tab.
+    await desktop.fill('#filterInput', '-beta');
+    await desktop.waitForFunction((betaId) =>
+      document.querySelectorAll('#sessionList .session-item').length >= 2 &&
+      !document.querySelector(`.session-item[data-id="${betaId}"]`), BETA_ID, { timeout: 5000 });
+    check(true, 'negative filter -beta hides the beta session, keeps the rest');
+    // Typing surfaced the "+ save filter" chip — save the query as a scope.
+    await desktop.evaluate(() => { window.prompt = () => 'No beta'; });
+    await desktop.click('.scope-chip.scope-add');
+    await desktop.waitForSelector('.scope-chip.active', { timeout: 5000 });
+    check(await desktop.evaluate(() => document.querySelector('.scope-chip.active')?.textContent) === 'No beta',
+      'saved scope renders as an active chip');
+    check(await desktop.evaluate(() => document.getElementById('filterInput').value) === '',
+      'saving a scope clears the typed query it absorbed');
+    await desktop.waitForFunction((betaId) =>
+      !document.querySelector(`.session-item[data-id="${betaId}"]`) &&
+      document.querySelector('.scope-hidden-note')?.textContent === '1 hidden by scopes',
+      BETA_ID, { timeout: 5000 });
+    check(true, 'active scope keeps filtering with an audit note for the hidden row');
+    // Scope state is device-local; definitions are server-global settings.
+    check(await desktop.evaluate(() => localStorage.getItem('pi-dish-active-scopes')) === JSON.stringify(['No beta']),
+      'active scope persisted to localStorage');
+    const serverFilters = await fetch(`${base}/api/settings`).then(r => r.json());
+    check(JSON.stringify(serverFilters.savedFilters) === JSON.stringify([{ name: 'No beta', query: '-beta' }]),
+      'scope definition persisted server-side');
+    // Toggling the chip off restores the hidden session.
+    await desktop.click('.scope-chip');
+    await desktop.waitForSelector(`.session-item[data-id="${BETA_ID}"]`, { timeout: 5000 });
+    check(await desktop.locator('.scope-hidden-note').count() === 0, 'inactive scope stops filtering');
+    // Recent view: date buckets instead of the workspace tree, rows carry cwd.
+    await desktop.click('#viewToggle');
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('.workspace-group-label')].some(el => el.textContent === 'Today'),
+      null, { timeout: 5000 });
+    check(await desktop.evaluate(() => localStorage.getItem('pi-dish-sidebar-view')) === 'recent',
+      'view choice persisted');
+    check(await desktop.evaluate(() =>
+      document.querySelectorAll('#sessionList .session-item').length ===
+      document.querySelectorAll('#sessionList .session-item .session-item-cwd').length),
+      'recent-view rows all show their workspace');
+    check(await desktop.locator('.workspace-new-btn').count() === 0,
+      'date headers carry no per-workspace + button');
+    // Collapsing a date bucket hides rows but keeps its chronological slot.
+    await desktop.click('.workspace-group-header[data-cwd="date:today"]');
+    await desktop.waitForSelector('.session-segment.collapsed', { timeout: 2000 });
+    check(await desktop.locator('.session-segment.collapsed .session-item').count() === 0,
+      'collapsed date bucket hides its sessions');
+    await desktop.click('.workspace-group-header[data-cwd="date:today"]');
+    await desktop.waitForFunction(() => !document.querySelector('.session-segment.collapsed'), null, { timeout: 2000 });
+    // Delete the scope from the settings modal; chips row empties.
+    await desktop.evaluate(() => openSettingsModal());
+    await desktop.waitForSelector('.saved-filter-del', { timeout: 5000 });
+    await desktop.click('.saved-filter-del');
+    await desktop.waitForSelector('.saved-filters-empty', { timeout: 5000 });
+    await desktop.evaluate(() => closeSettingsModal());
+    await desktop.waitForFunction(() => !document.querySelector('.scope-chip'), null, { timeout: 5000 });
+    check(true, 'deleting the saved filter in settings clears the chips');
+    // Back to the workspace view for the sections below.
+    await desktop.click('#viewToggle');
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('.workspace-group-label')].some(el => el.textContent === 'proj-alpha'),
+      null, { timeout: 5000 });
+
     // 13. Long transcript history: reaching the top should implicitly page
     // older messages. Pages loaded deliberately stay warm across a brief
     // session switch, including the earliest page a filtered search may need.
