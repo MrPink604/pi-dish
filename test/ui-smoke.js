@@ -1373,6 +1373,62 @@ function writeRegistry(patch = {}) {
     await desktop.click('#tabActive');
     await desktop.waitForTimeout(200);
 
+    // 13b. Advanced search takeover: opened via the "full search" chip
+    // (carrying the sidebar query), same grammar, multi-snippet results,
+    // facet buttons that rewrite the query text, and click-through that
+    // lands on the in-session match. Runs *after* the retention section on
+    // purpose — click-through warms the beta transcript cache, which would
+    // break that section's cold-load page-count assertions.
+    console.log('advanced search takeover:');
+    await desktop.fill('#filterInput', 'beta');
+    await desktop.waitForSelector('.search-open-chip', { timeout: 2000 });
+    await desktop.click('.search-open-chip');
+    await desktop.waitForFunction(() =>
+      document.querySelector('.main').classList.contains('search-open'), null, { timeout: 5000 });
+    check(await desktop.evaluate(() => document.getElementById('searchViewInput').value) === 'beta',
+      'full-search chip carries the sidebar query into the takeover');
+    check(await desktop.evaluate(() => document.getElementById('sessionView').offsetParent === null),
+      'session view hidden while search is open');
+    await desktop.fill('#searchViewInput', 'beta answer');
+    await desktop.waitForSelector(`.search-result[data-id="${BETA_ID}"] .search-result-snippet mark`, { timeout: 5000 });
+    check(true, 'content match renders highlighted snippets');
+    const countText = await desktop.evaluate((id) =>
+      document.querySelector(`.search-result[data-id="${id}"] .search-result-count`)?.textContent, BETA_ID);
+    check(/^\d+ matches$/.test(countText || '') && parseInt(countText) > 1,
+      `occurrence count rendered (got "${countText}")`);
+    // The Active-only facet rewrites the query text (is:active) and filters.
+    await desktop.click('#searchFacetActive');
+    await desktop.waitForFunction((id) =>
+      document.getElementById('searchViewInput').value.includes('is:active') &&
+      !document.querySelector(`.search-result[data-id="${id}"]`), BETA_ID, { timeout: 5000 });
+    check(true, 'Active-only facet injects is:active and drops historical sessions');
+    await desktop.click('#searchFacetActive');
+    await desktop.waitForSelector(`.search-result[data-id="${BETA_ID}"]`, { timeout: 5000 });
+    check(!(await desktop.evaluate(() => document.getElementById('searchViewInput').value)).includes('is:active'),
+      'toggling the facet off removes its token, keeping the text terms');
+    // Click-through: takeover closes, the session opens, and the positive
+    // tokens land in the in-session search with the match marked.
+    await desktop.click(`.search-result[data-id="${BETA_ID}"]`);
+    await desktop.waitForFunction(() =>
+      !document.querySelector('.main').classList.contains('search-open'), null, { timeout: 5000 });
+    await desktop.waitForSelector('mark.search-mark', { timeout: 10000 });
+    check(await desktop.evaluate(() => document.getElementById('searchInput').value) === 'beta answer',
+      'click-through hands the tokens to the in-session search');
+    check(await desktop.evaluate(() => document.getElementById('sessionName').textContent) === 'beta question',
+      'click-through opened the matched session');
+    // Escape closes the takeover.
+    await desktop.evaluate(() => { closeSearch(); openSearchView('alpha'); });
+    await desktop.waitForFunction(() =>
+      document.querySelector('.main').classList.contains('search-open'), null, { timeout: 5000 });
+    await desktop.keyboard.press('Escape');
+    await desktop.waitForFunction(() =>
+      !document.querySelector('.main').classList.contains('search-open'), null, { timeout: 5000 });
+    check(true, 'Escape closes the search takeover');
+    await desktop.fill('#filterInput', '');
+    await desktop.waitForSelector(`.session-item[data-id="${registryState.sessionId}"]`, { timeout: 5000 });
+    await desktop.click(`.session-item[data-id="${registryState.sessionId}"]`);
+    await desktop.waitForSelector('#messages .message.assistant', { timeout: 5000 });
+
     // Usage view: the global usage overview as a main-pane takeover (sidebar
     // header bar-chart button). Range presets re-scope the sections, a bar
     // click opens that day's per-model detail, a session row jumps into the

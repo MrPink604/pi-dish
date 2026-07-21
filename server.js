@@ -33,7 +33,7 @@ const {
 const sessionIndex = require('./lib/session-index');
 const {
   isModelEnabled, extractTextContent, THINKING_LEVEL_NAMES,
-  sessionMetaText, parseModelId, formatModelRef, buildSnippet,
+  sessionMetaText, parseModelId, formatModelRef, buildSnippet, buildSnippets,
   parseSessionQuery, evaluateSessionQuery, positiveQueryTokens,
 } = require('./public/helpers');
 
@@ -553,6 +553,41 @@ app.get('/api/sessions', (req, res) => {
     previous = filterSessionsByQuery(previous, query);
   }
   res.json({ active, previous, indexing });
+});
+
+// Advanced search (the main-pane takeover): one flat result list over every
+// session, same grammar as the sidebar, but with *multiple* snippets and an
+// occurrence count per content match — the sidebar's single snippet is a
+// row decoration; this is the primary content. Metadata-matched sessions
+// still get snippets when the positive tokens also occur in their content
+// (a name hit with 12 transcript mentions should show them). Recency order,
+// capped; `total` tells the client when the cap truncated.
+const SEARCH_RESULT_CAP = 100;
+app.get('/api/search', (req, res) => {
+  const query = (req.query.q || '').trim().toLowerCase();
+  const registered = listRegisteredSessions();
+  const active = getActiveSessions(registered);
+  const { previous, indexing } = getPreviousSessions(registered);
+  const parsed = parseSessionQuery(query);
+  const contentTokens = positiveQueryTokens(parsed);
+  const results = [];
+  for (const session of [...active, ...previous]) {
+    let snippets = [], matchCount = 0;
+    if (evaluateSessionQuery(parsed, session)) {
+      if (contentTokens.length && session.sessionFile) {
+        ({ snippets, count: matchCount } =
+          buildSnippets(sessionIndex.getSearchText(session.sessionFile), contentTokens));
+      }
+    } else {
+      if (!contentTokens.length || !session.sessionFile) continue;
+      const text = sessionIndex.getSearchText(session.sessionFile);
+      if (!evaluateSessionQuery(parsed, session, text)) continue;
+      ({ snippets, count: matchCount } = buildSnippets(text, contentTokens));
+    }
+    results.push({ ...session, snippets, matchCount });
+  }
+  results.sort((a, b) => new Date(b.lastActivity || 0) - new Date(a.lastActivity || 0));
+  res.json({ results: results.slice(0, SEARCH_RESULT_CAP), total: results.length, indexing });
 });
 
 const emptyUsage = () => ({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 }, costs: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, calls: 0, measured: 0, durationMs: 0, slowestMs: 0 });

@@ -234,6 +234,40 @@ test('GET /api/sessions?q= speaks the filter grammar: negation, fields, dates', 
   assert.ok(sess?.searchSnippet?.includes('bravo'), 'snippet from the positive term');
 });
 
+test('GET /api/search returns flat results with multi-snippets and match counts', async () => {
+  // "alpha" occurs in the fixture's name AND twice in its content ("hello
+  // alpha", "delta question alpha") — a metadata match still carries content
+  // snippets so the count is honest.
+  const { status, body } = await get('/api/search?q=alpha');
+  assert.equal(status, 200);
+  assert.equal(typeof body.indexing, 'boolean');
+  assert.ok(body.total >= 1);
+  const sess = body.results.find(s => s.id === SESSION_ID);
+  assert.ok(sess, 'fixture session in results');
+  assert.ok(sess.matchCount >= 2, `content occurrences counted (got ${sess.matchCount})`);
+  assert.ok(sess.snippets.length >= 1 && sess.snippets.every(s => s.includes('alpha')),
+    'every snippet shows the token');
+
+  // Pure metadata query (no positive plain term): matches carry no snippets.
+  const byCwd = await get(`/api/search?q=${encodeURIComponent('cwd:proj')}`);
+  const metaSess = byCwd.body.results.find(s => s.id === SESSION_ID);
+  assert.ok(metaSess);
+  assert.deepEqual(metaSess.snippets, []);
+  assert.equal(metaSess.matchCount, 0);
+
+  // Grammar holds here too: negation excludes, is:active scopes to live.
+  const neg = await get(`/api/search?q=${encodeURIComponent('alpha -name:hello')}`);
+  assert.ok(!neg.body.results.some(s => s.id === SESSION_ID));
+  const liveOnly = await get(`/api/search?q=${encodeURIComponent('alpha is:active')}`);
+  assert.ok(!liveOnly.body.results.some(s => s.id === SESSION_ID), 'historical session excluded by is:active');
+
+  // Empty query browses everything, recency-first.
+  const all = await get('/api/search?q=');
+  assert.ok(all.body.results.length >= 3);
+  const times = all.body.results.map(s => new Date(s.lastActivity || 0).getTime());
+  assert.ok(times.every((t, i) => i === 0 || t <= times[i - 1]), 'recency order');
+});
+
 test('GET /api/sessions reports indexing:false once the corpus is indexed', async () => {
   const { body } = await get('/api/sessions');
   assert.equal(body.indexing, false);

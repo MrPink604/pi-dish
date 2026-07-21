@@ -680,6 +680,26 @@ the cwd hint, and collapsed date buckets keep their chronological slot
 (collapse keys are `date:<bucket>` in the same `pi-dish-collapsed-groups`
 store) instead of sinking like workspace groups.
 
+Advanced search is a main-pane takeover (`.main.search-open`, usage-view
+pattern and mutually exclusive with it), opened from the sidebar-header 🔍 or
+the "⤢ full search" chip that appears beside "+ save filter" while a query is
+typed. It speaks the **same grammar** — never fork the dialect — via `GET
+/api/search?q=`: one flat recency-ordered result list over every session,
+each content match carrying up to four snippets plus a total occurrence count
+(`buildSnippets` in helpers.js; windows never reach back into the previous
+one). Metadata-matched sessions still get snippets when the positive tokens
+occur in their content; only positive plain terms ever trigger the content
+read. `is:active` is a grammar term (liveness test, not a substring; a typo'd
+`is:` value matches nothing). The facet row (date presets, workspace/model
+selects sourced from the sidebar's session lists — not from results, or
+picking one would empty the rest — and Active-only) is pure UI over the
+grammar: facets rewrite the visible query text, which stays the single source
+of truth. Active scopes filter results client-side with the same hidden-count
+note. Click-through closes the takeover, selects the session (after a full
+list reload if the sidebar lists don't currently hold it — selectSession
+validates against them), and hands the positive tokens to the in-session
+search so the reader lands on the match.
+
 ## Model dropdown / scoped models (public/app.js)
 
 The header model dropdown mirrors pi's scoped-models feature (`/scoped-models`

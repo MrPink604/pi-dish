@@ -237,8 +237,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('scopeChips').addEventListener('click', (e) => {
     if (e.target.closest('.scope-add')) { saveCurrentFilterAsScope(); return; }
+    if (e.target.closest('.search-open-chip')) { openSearchView(filterQuery); return; }
     const chip = e.target.closest('.scope-chip');
     if (chip) toggleScope(chip.dataset.name);
+  });
+
+  const searchViewInput = document.getElementById('searchViewInput');
+  searchViewInput.addEventListener('input', () => onSearchViewInput());
+  searchViewInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') onSearchViewInput({ immediate: true }); });
+  document.getElementById('searchViewBody').addEventListener('click', (e) => {
+    const card = e.target.closest('.search-result');
+    if (card) openSearchResult(card.dataset.id);
   });
 
   promptInput.addEventListener('blur', () => { setTimeout(hideAutocomplete, 200); });
@@ -507,6 +516,7 @@ function renderScopeChips() {
       data-name="${escapeHtml(f.name)}" title="${escapeHtml(f.query)}">${escapeHtml(f.name)}</button>`);
   if (filterQuery.trim()) {
     chips.push('<button class="scope-chip scope-add" title="Save the current query as a reusable filter">+ save filter</button>');
+    chips.push('<button class="scope-chip search-open-chip" title="Open this query in the full search view">⤢ full search</button>');
   }
   el.innerHTML = chips.join('');
   el.style.display = chips.length ? '' : 'none';
@@ -979,6 +989,7 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
   closeDiffView();
   closeFileView();
   closeUsageView(); // picking a session while the usage takeover is up means "show me that session"
+  closeSearchView();
   stashCurrentTranscript();
   if (forceTranscriptReload) transcriptCache.delete(id);
   if (!setCurrentSession(id)) return;
@@ -1470,6 +1481,194 @@ async function renderPreferences() {
   });
 }
 
+// --- Advanced search (main-pane takeover) ---
+// Full-width search over every session: the sidebar grammar verbatim (one
+// dialect — never fork it), multiple highlighted snippets per session with
+// an occurrence count, facet controls that are pure UI over the grammar
+// (they rewrite the query text, which stays the single source of truth),
+// and click-through that opens the session and hands the positive tokens to
+// the in-session search so the reader lands on the match. `<main>`-level
+// like the usage view because search isn't session-scoped; active scopes
+// keep applying here (client-side, with the same hidden-count audit note).
+let searchViewSeq = 0;
+let searchViewQuery = '';
+let searchViewTimer = null;
+let searchViewRepollTimer = null;
+
+function isSearchViewOpen() {
+  return document.querySelector('.main').classList.contains('search-open');
+}
+
+function openSearchView(initialQuery) {
+  closeSidebar();
+  closeUsageView(); // takeovers are mutually exclusive
+  if (typeof initialQuery === 'string') searchViewQuery = initialQuery;
+  const input = document.getElementById('searchViewInput');
+  input.value = searchViewQuery;
+  document.querySelector('.main').classList.add('search-open');
+  input.focus();
+  input.select();
+  runSearchView();
+}
+
+function closeSearchView() {
+  document.querySelector('.main').classList.remove('search-open');
+  clearTimeout(searchViewTimer);
+  clearTimeout(searchViewRepollTimer);
+}
+
+function onSearchViewInput({ immediate = false } = {}) {
+  searchViewQuery = document.getElementById('searchViewInput').value;
+  clearTimeout(searchViewTimer);
+  if (immediate) runSearchView();
+  else searchViewTimer = setTimeout(runSearchView, 300);
+}
+
+async function runSearchView() {
+  const seq = ++searchViewSeq;
+  const body = document.getElementById('searchViewBody');
+  if (body.childElementCount) body.classList.add('usage-refreshing');
+  else body.innerHTML = '<div class="usage-state">Searching…</div>';
+  try {
+    const r = await fetch('/api/search?q=' + encodeURIComponent(searchViewQuery.trim()));
+    if (!r.ok) throw new Error(await r.json().then(d => d.error, () => null) || `HTTP ${r.status}`);
+    const d = await r.json();
+    if (seq !== searchViewSeq || !isSearchViewOpen()) return;
+    renderSearchView(d);
+    if (d.indexing) searchViewRepollTimer = setTimeout(() => { if (isSearchViewOpen()) runSearchView(); }, 1000);
+  } catch (e) {
+    if (seq !== searchViewSeq || !isSearchViewOpen()) return;
+    body.classList.remove('usage-refreshing');
+    body.innerHTML = `<div class="usage-state">Search failed: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// Facet plumbing: replace any `prefix:` term in the query text with the
+// picked value (or drop it). Rewriting the visible query — instead of
+// keeping hidden facet state — means what you see is exactly what runs,
+// and a facet choice can be hand-edited afterwards.
+function setSearchToken(prefix, value) {
+  const input = document.getElementById('searchViewInput');
+  let q = input.value
+    .replace(new RegExp(`(^|\\s)-?${prefix}:("[^"]*"|\\S+)`, 'gi'), ' ')
+    .replace(/\s{2,}/g, ' ').trim();
+  if (value) q = (q ? q + ' ' : '') + prefix + ':' + (/\s/.test(value) ? `"${value}"` : value);
+  input.value = q;
+  onSearchViewInput({ immediate: true });
+}
+
+const SEARCH_DATE_PRESETS = [['', 'Any time'], ['1d', '24h'], ['7d', '7 days'], ['30d', '30 days']];
+
+function searchFacetState() {
+  const parsed = parseSessionQuery(searchViewQuery);
+  const val = (f) => parsed.terms.find(t => t.field === f && !t.neg)?.value || '';
+  return {
+    cwd: val('cwd'),
+    model: val('model'),
+    activeOnly: parsed.terms.some(t => t.field === 'is' && !t.neg && t.value === 'active'),
+    since: (searchViewQuery.match(/(?:^|\s)since:(\S+)/i) || [])[1] || '',
+  };
+}
+
+// Facet options come from the sidebar's session lists (the full corpus the
+// client already knows), not from the current results — otherwise picking a
+// workspace would immediately empty every other option.
+function searchFacetOptions() {
+  const all = [...sessions.active, ...sessions.previous];
+  const cwds = new Map(), models = new Set();
+  for (const s of all) {
+    if (s.cwd) cwds.set(s.cwd, shortCwd(s.cwd));
+    if (s.model && s.model !== 'unknown') models.add(s.model);
+  }
+  return {
+    cwds: [...cwds.entries()].sort((a, b) => a[1].localeCompare(b[1])),
+    models: [...models].sort(),
+  };
+}
+
+function renderSearchFacetsHtml() {
+  const st = searchFacetState();
+  const opts = searchFacetOptions();
+  const presets = SEARCH_DATE_PRESETS.map(([v, l]) =>
+    `<button class="usage-range-btn${st.since === v ? ' active' : ''}" data-since="${v}">${l}</button>`).join('');
+  const cwdOptions = ['<option value="">All workspaces</option>',
+    ...opts.cwds.map(([cwd, label]) =>
+      `<option value="${escapeHtml(cwd)}"${cwd.toLowerCase() === st.cwd ? ' selected' : ''}>${escapeHtml(label)}</option>`)].join('');
+  const modelOptions = ['<option value="">All models</option>',
+    ...opts.models.map(m =>
+      `<option value="${escapeHtml(m)}"${m.toLowerCase() === st.model ? ' selected' : ''}>${escapeHtml(m)}</option>`)].join('');
+  return `<div class="search-facets">
+    <div class="usage-ranges">${presets}</div>
+    <select class="search-facet-select" id="searchFacetCwd">${cwdOptions}</select>
+    <select class="search-facet-select" id="searchFacetModel">${modelOptions}</select>
+    <button class="scope-chip${st.activeOnly ? ' active' : ''}" id="searchFacetActive" title="is:active">Active only</button>
+  </div>`;
+}
+
+function renderSearchView(d) {
+  const body = document.getElementById('searchViewBody');
+  body.classList.remove('usage-refreshing');
+  const tokens = positiveQueryTokens(parseSessionQuery(searchViewQuery));
+  const sq = scopeQuery();
+  const scopeParsed = sq ? parseSessionQuery(sq) : null;
+  const shown = scopeParsed ? d.results.filter(s => evaluateSessionQuery(scopeParsed, s)) : d.results;
+  const scopesHidden = d.results.length - shown.length;
+
+  const cards = shown.map(s => {
+    let dot = '';
+    if (s.turnInProgress) dot = '<span class="session-item-status working"></span>';
+    else if (s.isActive) dot = '<span class="live-dot"></span>';
+    const count = s.matchCount
+      ? `<span class="search-result-count">${s.matchCount} ${s.matchCount === 1 ? 'match' : 'matches'}</span>` : '';
+    const snippets = (s.snippets || []).map(sn =>
+      `<div class="search-result-snippet">${highlightTokens(sn, tokens)}</div>`).join('');
+    return `<div class="search-result" data-id="${escapeHtml(s.id)}">
+      <div class="search-result-header">
+        ${dot}<span class="search-result-name">${highlightTokens(s.name || 'Unnamed', tokens)}</span>
+        ${count}<span class="search-result-time">${formatRelativeTime(s.lastActivity)}</span>
+      </div>
+      <div class="search-result-meta">${escapeHtml(shortCwd(s.cwd || '~'))} · ${escapeHtml(s.model)}</div>
+      ${snippets}
+    </div>`;
+  }).join('');
+
+  body.innerHTML = `
+    ${renderSearchFacetsHtml()}
+    ${d.indexing ? '<div class="usage-notice">History is indexing; results will refresh…</div>' : ''}
+    <div class="search-count-line">${shown.length === 1 ? '1 session' : `${shown.length} sessions`}${d.total > d.results.length ? ` — showing the ${d.results.length} most recent, narrow the query for the rest` : ''}</div>
+    ${cards || '<div class="usage-state">No matching sessions.</div>'}
+    ${scopesHidden > 0 ? `<div class="scope-hidden-note">${scopesHidden} hidden by scopes</div>` : ''}
+  `;
+  body.querySelectorAll('[data-since]').forEach(b =>
+    b.addEventListener('click', () => setSearchToken('since', b.dataset.since || null)));
+  body.querySelector('#searchFacetCwd').addEventListener('change', (e) =>
+    setSearchToken('cwd', e.target.value || null));
+  body.querySelector('#searchFacetModel').addEventListener('change', (e) =>
+    setSearchToken('model', e.target.value || null));
+  body.querySelector('#searchFacetActive').addEventListener('click', () =>
+    setSearchToken('is', searchFacetState().activeOnly ? null : 'active'));
+}
+
+/**
+ * Click-through: close the takeover, show the session, and — when the query
+ * had text terms — hand them to the in-session search so the reader lands on
+ * the actual match instead of at the transcript's tail.
+ */
+async function openSearchResult(id) {
+  const tokens = positiveQueryTokens(parseSessionQuery(searchViewQuery));
+  closeSearchView();
+  // Search results span the whole corpus; the sidebar lists may be narrowed
+  // (or Active-tab-only) right now, and selectSession validates against them.
+  if (!findSession(id)) await loadSessions(undefined, { withPrevious: true });
+  await selectSession(id);
+  if (tokens.length && currentSession?.id === id) {
+    openSearch();
+    const input = document.getElementById('searchInput');
+    input.value = tokens.join(' ');
+    runSessionSearch(input.value.trim().toLowerCase());
+  }
+}
+
 // --- Usage view (main-pane takeover) ---
 // Global usage/spend overview: KPI headlines, a stacked-by-model daily chart,
 // model share, and workspace/session breakdowns. Opened from the sidebar
@@ -1488,6 +1687,7 @@ function isUsageViewOpen() {
 
 function openUsageView() {
   closeSidebar();
+  closeSearchView(); // takeovers are mutually exclusive
   if (isUsageViewOpen()) return;
   document.querySelector('.main').classList.add('usage-open');
   loadUsageView();
@@ -5294,6 +5494,8 @@ document.addEventListener('keydown', function(e) {
     e.preventDefault(); closeStatsModal();
   } else if (document.getElementById('artifactsModal').style.display !== 'none') {
     e.preventDefault(); closeArtifactsModal();
+  } else if (isSearchViewOpen()) {
+    e.preventDefault(); closeSearchView();
   } else if (isUsageViewOpen()) {
     e.preventDefault(); closeUsageView();
   } else if (isFileViewOpen()) {

@@ -37,6 +37,12 @@
         <h1><span class="wordmark-pi">π</span>-dish</h1>
         <div class="sidebar-header-actions">
           <select id="themeSelect" class="theme-select" onchange="applyTheme(this.value)" title="Theme"></select>
+          <button class="btn-icon" onclick="openSearchView(filterQuery || undefined)" title="Search all sessions" aria-label="Search all sessions">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <circle cx="11" cy="11" r="7"/>
+              <path d="M21 21l-4.35-4.35"/>
+            </svg>
+          </button>
           <button class="btn-icon" onclick="openUsageView()" title="Usage and spend" aria-label="Usage and spend">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <path d="M5 20v-8M12 20V5M19 20v-5"/>
@@ -344,6 +350,26 @@
           <button class="btn-icon" onclick="closeUsageView()" title="Close (Esc)">✕</button>
         </div>
         <div class="usage-view-body" id="usageViewBody"></div>
+      </div>
+
+      <!-- Advanced search: a flat, full-width result surface over every
+           session (multiple snippets per match) — same takeover pattern as
+           the usage view, and the same query grammar as the sidebar filter.
+           Opened from the sidebar header 🔍 or the "full search" chip. -->
+      <div class="search-view" id="searchView">
+        <div class="search-view-header">
+          <button class="menu-btn" onclick="toggleSidebar()" aria-label="Open session list">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M3 12h18M3 6h18M3 18h18"/>
+            </svg>
+          </button>
+          <span class="usage-view-title">Search</span>
+          <input type="text" class="search-view-input" id="searchViewInput"
+            placeholder='Search sessions… ("phrase", -term, name:, cwd:, model:, is:active, since:7d)'
+            spellcheck="false" autocomplete="off">
+          <button class="btn-icon" onclick="closeSearchView()" title="Close (Esc)">✕</button>
+        </div>
+        <div class="search-view-body" id="searchViewBody"></div>
       </div>
     </main>
   </div>

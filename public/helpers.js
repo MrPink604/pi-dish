@@ -399,13 +399,14 @@ function partitionPinned(list, pinnedIds) {
 //   -foo -name:subagent    negation — always metadata-only, so a session
 //                          whose *content* merely mentions the word survives
 //   name:x cwd:x model:x id:x   field-scoped terms
+//   is:active               live sessions only (-is:active for historical)
 //   since:7d since:2026-07-01 before:...   lastActivity bounds (h/d/w or ISO)
 //
 // Unknown prefixes stay literal text ("subagent: fix" searches for the colon
 // form), so the grammar never eats a query that wasn't meant for it.
 // =========================================================================
 
-const QUERY_FIELDS = new Set(['name', 'cwd', 'model', 'id']);
+const QUERY_FIELDS = new Set(['name', 'cwd', 'model', 'id', 'is']);
 
 /** "7d"/"12h"/"2w" → ms span; ISO "YYYY-MM-DD" → ms epoch (local midnight); null otherwise. */
 function parseQueryDate(value, now) {
@@ -477,9 +478,16 @@ function evaluateSessionQuery(parsed, session, contentText) {
   }
   const meta = sessionMetaText(session);
   for (const term of parsed.terms) {
-    const hay = term.field ? String(session[term.field] || '').toLowerCase() : meta;
-    let hit = hay.includes(term.value);
-    if (!hit && !term.neg && !term.field && contentText) hit = contentText.includes(term.value);
+    let hit;
+    if (term.field === 'is') {
+      // Not a substring field: is:active tests liveness (anything else
+      // simply never matches, so a typo can't silently mean "everything").
+      hit = term.value === 'active' && !!session.isActive;
+    } else {
+      const hay = term.field ? String(session[term.field] || '').toLowerCase() : meta;
+      hit = hay.includes(term.value);
+      if (!hit && !term.neg && !term.field && contentText) hit = contentText.includes(term.value);
+    }
     if (hit === term.neg) return false;
   }
   return true;
@@ -686,24 +694,49 @@ function findPathTokens(text) {
  * marks elided ends with an ellipsis. '' when no token occurs.
  */
 function buildSnippet(text, tokens, radius = 60) {
-  let at = -1, tokenLen = 0;
-  for (const t of tokens) {
-    const i = text.indexOf(t);
-    if (i !== -1 && (at === -1 || i < at)) { at = i; tokenLen = t.length; }
+  return buildSnippets(text, tokens, { radius, max: 1 }).snippets[0] || '';
+}
+
+/**
+ * Multi-window variant for the advanced-search view: up to `max` excerpts,
+ * each around the next token occurrence past the previous window, plus the
+ * total occurrence count of all tokens (which keeps counting past the last
+ * window — "12 matches" with 4 snippets is meaningful).
+ */
+function buildSnippets(text, tokens, { radius = 60, max = 4 } = {}) {
+  const valid = tokens.filter(Boolean);
+  if (!valid.length) return { snippets: [], count: 0 };
+  let count = 0;
+  for (const t of valid) {
+    let i = text.indexOf(t);
+    while (i !== -1) { count++; i = text.indexOf(t, i + t.length); }
   }
-  if (at === -1) return '';
-  let start = Math.max(0, at - radius);
-  let end = Math.min(text.length, at + tokenLen + radius);
-  // Don't cut words: pull the window edges in to the whitespace inside it.
-  if (start > 0) {
-    const ws = text.indexOf(' ', start);
-    if (ws !== -1 && ws < at) start = ws + 1;
+  const snippets = [];
+  let from = 0;
+  while (snippets.length < max) {
+    let at = -1, tokenLen = 0;
+    for (const t of valid) {
+      const i = text.indexOf(t, from);
+      if (i !== -1 && (at === -1 || i < at)) { at = i; tokenLen = t.length; }
+    }
+    if (at === -1) break;
+    // Never reach back into the previous window: repeated text between
+    // adjacent excerpts reads like a rendering bug.
+    let start = Math.max(snippets.length ? from : 0, at - radius);
+    let end = Math.min(text.length, at + tokenLen + radius);
+    // Don't cut words: pull the window edges in to the whitespace inside it.
+    if (start > 0) {
+      const ws = text.indexOf(' ', start);
+      if (ws !== -1 && ws < at) start = ws + 1;
+    }
+    if (end < text.length) {
+      const ws = text.lastIndexOf(' ', end);
+      if (ws >= at + tokenLen) end = ws;
+    }
+    snippets.push((start > 0 ? '…' : '') + text.slice(start, end).trim() + (end < text.length ? '…' : ''));
+    from = end + 1;
   }
-  if (end < text.length) {
-    const ws = text.lastIndexOf(' ', end);
-    if (ws >= at + tokenLen) end = ws;
-  }
-  return (start > 0 ? '…' : '') + text.slice(start, end).trim() + (end < text.length ? '…' : '');
+  return { snippets, count };
 }
 
 /**
@@ -908,7 +941,7 @@ if (typeof module !== 'undefined' && module.exports) {
     parseSessionQuery, evaluateSessionQuery, positiveQueryTokens,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     modelMatchesPattern, isModelEnabled, pushPromptHistory, sanitizeMarkdownUrl,
-    buildSnippet, highlightTokens, looksLikeFilePath, findPathTokens,
+    buildSnippet, buildSnippets, highlightTokens, looksLikeFilePath, findPathTokens,
     renderDiffHtml, diffStatusClass,
     shortModelName, niceTicks, formatUsageDay, aggregateUsageWeekly,
     tmuxPrefixSeq,

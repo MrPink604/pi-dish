@@ -370,6 +370,35 @@ test('evaluateSessionQuery: fields scope, negation is metadata-only, content wid
   assert.equal(q('since:7d before:2026-07-21'), true);
 });
 
+test('evaluateSessionQuery: is:active tests liveness, not substrings', () => {
+  const live = { name: 'x', cwd: '/a', model: 'm', id: 's1', isActive: true, lastActivity: '2026-07-20' };
+  const dead = { ...live, id: 's2', isActive: false };
+  const q = (str, s) => H.evaluateSessionQuery(H.parseSessionQuery(str), s);
+  assert.equal(q('is:active', live), true);
+  assert.equal(q('is:active', dead), false);
+  assert.equal(q('-is:active', dead), true);
+  assert.equal(q('-is:active', live), false);
+  assert.equal(q('is:banana', live), false); // typo can't mean "everything"
+});
+
+test('buildSnippets returns multiple windows and a total occurrence count', () => {
+  const text = 'alpha starts here. ' + 'padding words go between the occurrences to separate windows. '.repeat(3)
+    + 'alpha again in the middle. ' + 'more padding words follow before the last one appears far away. '.repeat(3)
+    + 'final alpha here. and one trailing alpha beyond the window cap.';
+  const { snippets, count } = H.buildSnippets(text, ['alpha'], { radius: 20, max: 3 });
+  assert.equal(count, 4);
+  assert.equal(snippets.length, 3);
+  assert.ok(snippets[0].includes('alpha starts'));
+  assert.ok(snippets[1].includes('alpha again'));
+  assert.ok(snippets[2].includes('final alpha'));
+  assert.ok(snippets[1].startsWith('…') && snippets[1].endsWith('…'), 'middle window marks both elided ends');
+  assert.deepEqual(H.buildSnippets(text, []), { snippets: [], count: 0 });
+  assert.deepEqual(H.buildSnippets(text, ['zzz']), { snippets: [], count: 0 });
+  // The single-snippet wrapper still behaves as before.
+  assert.ok(H.buildSnippet(text, ['alpha']).includes('alpha starts'));
+  assert.equal(H.buildSnippet(text, ['zzz']), '');
+});
+
 test('positiveQueryTokens extracts only plain positive terms', () => {
   const p = H.parseSessionQuery('foo -bar name:sub "two words" since:7d');
   assert.deepEqual(H.positiveQueryTokens(p), ['foo', 'two words']);

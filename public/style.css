@@ -3548,6 +3548,101 @@ img.msg-image {
 .main.usage-open .empty-state,
 .main.usage-open .session-view { display: none !important; }
 
+/* --- Advanced search (main-pane takeover, .main.search-open) --------------
+   Same shell as the usage view; the query input owns the header. Facets are
+   plain controls that rewrite the query text — no separate facet state. */
+.search-view { display: none; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.main.search-open .search-view { display: flex; }
+.main.search-open .empty-state,
+.main.search-open .session-view { display: none !important; }
+
+.search-view-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-darker);
+}
+
+.search-view-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+}
+.search-view-input:focus { border-color: var(--accent); }
+.search-view-input::placeholder { color: var(--text-muted); }
+
+.search-view-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 16px max(24px, calc((100% - var(--content-max)) / 2)) 40px; }
+
+.search-facets {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.search-facet-select {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 3px 6px;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-width: 180px;
+}
+
+.search-count-line { font-size: 11px; color: var(--text-muted); margin-bottom: 10px; }
+
+.search-result {
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: var(--bg-card);
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.search-result:hover { border-color: var(--accent-dim); }
+
+.search-result-header { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.search-result-name {
+  font-size: 13px;
+  color: var(--text-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.search-result-count { flex-shrink: 0; font-size: 11px; color: var(--accent); }
+.search-result-time { flex-shrink: 0; margin-left: auto; font-size: 11px; color: var(--text-muted); }
+.search-result-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+.search-result-snippet {
+  margin-top: 6px;
+  padding-left: 8px;
+  border-left: 2px solid var(--line);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.search-result-snippet mark,
+.search-result-name mark {
+  background: color-mix(in srgb, var(--warning) 35%, transparent); /* --warning */
+  color: var(--text-bright);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
 .usage-view-header {
   display: flex;
   align-items: center;
@@ -3663,6 +3758,7 @@ img.msg-image {
   .usage-kpis { grid-template-columns: repeat(2, 1fr); }
   .usage-kpi strong { font-size: 16px; }
   .usage-columns { grid-template-columns: 1fr; }
+  .search-view-body { padding: 12px 12px 32px; }
 }
 
 .diff-repo { margin-bottom: 22px; }
