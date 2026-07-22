@@ -112,13 +112,6 @@ function formatResponseMetadata(msg, mode = 'compact') {
   return performance || tokens;
 }
 
-function formatModelPricing(model) {
-  if (!model) return 'pricing unavailable';
-  if (model.free) return 'free';
-  if (!model.pricing) return 'pricing unavailable';
-  return `$${model.pricing.input}/$${model.pricing.output} per 1M in/out`;
-}
-
 function formatRelativeTime(ts) {
   if (!ts) return '';
   const diff = Math.max(0, Date.now() - new Date(ts).getTime());
@@ -933,7 +926,7 @@ function tmuxPrefixSeq(prefix) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRuntime, formatRelativeTime, formatTime, formatDuration, formatTokSpeed,
-    formatEstimatedCost, formatResponseMetadata, formatModelPricing,
+    formatEstimatedCost, formatResponseMetadata,
     shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText, extractImageBlocks, messageHasVisibleText,
     contextClass, sessionMetaText, parseModelId, formatModelRef,
     groupByWorkspace, buildWorkspaceTree, collectTreeSessions, groupSessionsByDate,

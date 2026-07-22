@@ -3003,9 +3003,8 @@ function renderModelDropdown(query) {
       var check = modelEditMode ? '<span class="model-check">' + (on ? '✓' : '') + '</span>' : '';
       var handler = modelEditMode ? 'toggleModelEnabled' : 'selectModel';
       var context = m.contextWindow ? formatTokens(m.contextWindow) + ' context' : 'context unknown';
-      var pricing = formatModelPricing(m);
       html += '<div class="' + cls + '" onclick="' + handler + '(\'' + escapeHtml(fullId) + '\')" title="' +
-        escapeHtml(fullId) + '">' + check + '<span class="model-option-copy"><span class="model-option-name">' + escapeHtml(m.id) + '</span><span class="model-option-pricing">' + escapeHtml(context + ' · ' + pricing) + '</span></span>' + badges + '</div>';
+        escapeHtml(fullId) + '">' + check + '<span class="model-option-copy"><span class="model-option-name">' + escapeHtml(m.id) + '</span><span class="model-option-context">' + escapeHtml(context) + '</span></span>' + badges + '</div>';
     });
   });
   if (!filtered.length) html += '<div class="model-option" style="color:var(--text-muted);cursor:default">No models found</div>';

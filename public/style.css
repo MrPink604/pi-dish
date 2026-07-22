@@ -909,9 +909,22 @@ body.sidebar-open {
   white-space: nowrap;
 }
 
+.model-option-copy {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
 .model-option-name {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.model-option-context {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .model-option:hover {

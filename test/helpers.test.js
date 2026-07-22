@@ -690,12 +690,6 @@ test('telemetry formatters label compact response metadata and catalog estimates
   assert.equal(H.formatEstimatedCost(0.00001), '~$0.000010', 'tiny response costs do not round to apparent zero');
 });
 
-test('model pricing formatter distinguishes free from unavailable pricing', () => {
-  assert.equal(H.formatModelPricing({ free: true, pricing: { input: 0, output: 0 } }), 'free');
-  assert.equal(H.formatModelPricing({ pricing: null }), 'pricing unavailable');
-  assert.equal(H.formatModelPricing({ pricing: { input: 3, output: 15 } }), '$3/$15 per 1M in/out');
-});
-
 test('shortModelName strips providers, vendor prefixes, versions, and date stamps', () => {
   assert.equal(H.shortModelName('anthropic/claude-opus-4-8'), 'claude-opus-4-8');
   assert.equal(H.shortModelName('us.anthropic.claude-sonnet-4-5-20250929-v1:0'), 'claude-sonnet-4-5');
