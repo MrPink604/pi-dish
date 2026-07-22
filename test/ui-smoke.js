@@ -1451,6 +1451,18 @@ function writeRegistry(patch = {}) {
       [...document.querySelectorAll('#usageViewBody .usage-row')].some((r) => r.textContent.includes('smoke-model')),
       null, { timeout: 5000 });
     check(true, 'all-time range lists the fixture model with its share');
+    // Token breakdowns: the totals line splits in/out with a cache rate
+    // (fixture: 100 in, 45 out, 20 cacheRead over a 130-token prompt side =
+    // 15% hit), and the model rows carry the compact per-row form.
+    check(await desktop.evaluate(() => {
+      const line = document.querySelector('.usage-token-line');
+      return !!line && line.textContent.includes('100 in') && line.textContent.includes('45 out') &&
+        line.textContent.includes('(15% hit)');
+    }), 'range totals break down in/out tokens and the cache rate');
+    check(await desktop.evaluate(() =>
+      [...document.querySelectorAll('#usageViewBody .usage-row.model-toggle')]
+        .some((r) => r.textContent.includes('100 in / 45 out') && r.textContent.includes('15% cached'))),
+      'model rows carry in/out and cached-share breakdowns');
     await desktop.waitForSelector('#usageChart svg', { timeout: 5000 });
     check(await desktop.locator('#usageChart .usage-col').count() >= 2,
       'stacked daily chart renders one column per bucket');
@@ -1460,6 +1472,8 @@ function writeRegistry(patch = {}) {
     await desktop.waitForSelector('.usage-day-detail', { timeout: 2000 });
     check(await desktop.evaluate(() => document.querySelector('.usage-day-detail').textContent.includes('smoke-model')),
       "clicking a bar opens that day's per-model detail");
+    check(await desktop.evaluate(() => document.querySelector('.usage-day-detail').textContent.includes('% hit')),
+      'day detail includes the cache hit rate');
     // Sort toggle refetches with sort=tokens and re-renders the breakdowns.
     await desktop.click('.usage-sort [data-sort="tokens"]');
     await desktop.waitForFunction(() =>

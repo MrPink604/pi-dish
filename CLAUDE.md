@@ -189,7 +189,10 @@ rebuilt server-side from the per-session `usage.models` day buckets (the
 truncated groups can't be filtered client-side), while `groups.models`
 stays unfiltered as the facet list and the KPI headlines stay global. The
 filter set is client memory only (`usageModelFilter`), deliberately not
-persisted.
+persisted. Totals, breakdown rows, and the day detail also split tokens
+in/out and show the cached share (`usageTokensDetail` in app.js) — the rate's
+denominator is the whole prompt side, matching `formatCacheStat` in the
+stats modal; keep the two consistent.
 
 Server-side session dispatch: `getLiveSession(id)` in server.js is the one
 place bridge-vs-RPC resolution lives (bridge registry entry → connected

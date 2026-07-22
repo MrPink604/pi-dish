@@ -1775,6 +1775,16 @@ function usageModelValue(m, metric) {
 function usageTokensTotal(tokens) {
   return ['input', 'output', 'cacheRead', 'cacheWrite'].reduce((s, k) => s + (tokens?.[k] || 0), 0);
 }
+// Compact per-row breakdown: "1.2M in / 800k out · 92% cached". The cached
+// share is cacheRead over the whole prompt side (input + cache read + cache
+// write) — the same denominator formatCacheStat uses in the stats modal.
+function usageTokensDetail(tokens) {
+  const t = tokens || {};
+  const parts = [`${formatTokens(t.input)} in / ${formatTokens(t.output)} out`];
+  const prompt = (t.input || 0) + (t.cacheRead || 0) + (t.cacheWrite || 0);
+  if (prompt > 0 && (t.cacheRead || 0) > 0) parts.push(`${Math.round((t.cacheRead || 0) / prompt * 100)}% cached`);
+  return parts.join(' · ');
+}
 
 function renderUsageView(d) {
   const body = document.getElementById('usageViewBody');
@@ -1797,7 +1807,8 @@ function renderUsageView(d) {
   const sortCtl = `<span class="usage-sort"><small>Show</small>${[['cost', 'Cost'], ['tokens', 'Tokens']]
     .map(([v, l]) => `<button class="usage-range-btn${usageSort === v ? ' active' : ''}" data-sort="${v}">${l}</button>`).join('')}</span>`;
 
-  const summary = `<div class="usage-total-line"><strong>${formatEstimatedCost(t.costs?.total)}</strong> · ${t.calls || 0} calls · ${formatTokens(usageTokensTotal(t.tokens))} tokens in ${USAGE_RANGE_LABELS[d.range] || 'the selected range'}</div>`;
+  const summary = `<div class="usage-total-line"><strong>${formatEstimatedCost(t.costs?.total)}</strong> · ${t.calls || 0} calls · ${formatTokens(usageTokensTotal(t.tokens))} tokens in ${USAGE_RANGE_LABELS[d.range] || 'the selected range'}</div>` +
+    `<div class="usage-token-line">${formatTokens(t.tokens?.input)} in · ${formatTokens(t.tokens?.output)} out · cache ${formatCacheStat(t.tokens?.cacheRead, t.tokens?.cacheWrite, t.tokens?.input)}</div>`;
   const filterNote = usageModelFilter.size
     ? `<div class="usage-filter-note">Filtered to ${[...usageModelFilter].map(r => `<b title="${escapeHtml(r)}">${escapeHtml(shortModelName(r))}</b>`).join(', ')}<button class="usage-range-btn" data-clear-models>✕ clear</button></div>`
     : '';
@@ -1982,7 +1993,7 @@ function renderUsageDayDetail() {
     ['Estimated spend', formatEstimatedCost(bucket.costs?.total)],
     ['Calls', String(bucket.calls || 0)],
     ['Tokens in / out', `${formatTokens(tok.input)} / ${formatTokens(tok.output)}`],
-    ['Cache read / write', `${formatTokens(tok.cacheRead)} / ${formatTokens(tok.cacheWrite)}`],
+    ['Cache', formatCacheStat(tok.cacheRead, tok.cacheWrite, tok.input)],
   ].map(([k, v]) => `<div><small>${k}</small><strong>${v}</strong></div>`).join('');
   const slotFor = ref => {
     const i = (usageChart?.seriesRefs || []).indexOf(ref);
@@ -1990,6 +2001,7 @@ function renderUsageDayDetail() {
   };
   const rows = (bucket.models || []).map(m => {
     const meta = [`${m.calls} calls`, `${formatTokens(usageTokensTotal(m.tokens))} tok`];
+    if (usageTokensTotal(m.tokens) > 0) meta.push(usageTokensDetail(m.tokens));
     if (metric === 'cost') meta.push(formatEstimatedCost(m.cost));
     return `
     <div class="usage-row" title="${escapeHtml(m.ref)}">
@@ -2036,10 +2048,11 @@ function usageModelShareHtml(d, metric, seriesRefs) {
     const pct = share > 0 ? (share * 100 < 1 ? (share * 100).toFixed(1) : Math.round(share * 100)) + '%' : '—';
     const spend = m.priced === false ? 'pricing unavailable'
       : `${formatEstimatedCost(m.costs?.total)}${m.unpricedCalls ? ` + ${m.unpricedCalls} unpriced` : ''}`;
+    const detail = usageTokensTotal(m.tokens) > 0 ? ` · ${usageTokensDetail(m.tokens)}` : '';
     return `<div class="usage-row model-toggle${filtered ? (on ? ' on' : ' off') : ''}" data-model-ref="${escapeHtml(m.key)}" role="button" tabindex="0" aria-pressed="${on}" title="${escapeHtml(m.key)} — click to toggle model filter">
       <i class="swatch ${on ? slotFor(m.key) : 'soff'}"></i>
       <span class="usage-row-name">${escapeHtml(shortModelName(m.model || m.key))}<small>${escapeHtml(m.provider || '')}</small></span>
-      <span class="usage-row-meta">${pct} · ${m.calls} calls · ${formatTokens(usageTokensTotal(m.tokens))} tok · ${escapeHtml(spend)}</span>
+      <span class="usage-row-meta">${pct} · ${m.calls} calls · ${formatTokens(usageTokensTotal(m.tokens))} tok${detail} · ${escapeHtml(spend)}</span>
     </div>`;
   };
   const rows = models.map(m => rowHtml(m, isOn(m.key))).join('');
@@ -2064,9 +2077,10 @@ function usageGroupListHtml(title, rows, kind, metric) {
     const spend = x.priced === false ? 'pricing unavailable'
       : `${formatEstimatedCost(x.costs?.total)}${x.unpricedCalls ? ` + ${x.unpricedCalls} unpriced` : ''}`;
     const attrs = kind === 'session' ? ` data-session-id="${escapeHtml(x.id)}" role="button" tabindex="0"` : '';
+    const detail = usageTokensTotal(x.tokens) > 0 ? ` · ${usageTokensDetail(x.tokens)}` : '';
     return `<div class="usage-row usage-bar-row${kind === 'session' ? ' clickable' : ''}"${attrs} title="${escapeHtml(x.key || x.name || x.id)}">
       <span class="usage-row-name">${escapeHtml(name)}${sub ? `<small>${escapeHtml(sub)}</small>` : ''}</span>
-      <span class="usage-row-meta">${x.calls} calls · ${formatTokens(usageTokensTotal(x.tokens))} tok · ${escapeHtml(spend)}</span>
+      <span class="usage-row-meta">${x.calls} calls · ${formatTokens(usageTokensTotal(x.tokens))} tok${detail} · ${escapeHtml(spend)}</span>
       <span class="usage-row-bar" style="width:${(val(x) / maxV * 100).toFixed(1)}%"></span>
     </div>`;
   }).join('');
