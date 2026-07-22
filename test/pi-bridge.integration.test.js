@@ -216,6 +216,13 @@ test('the real bridge registers the session and pi-dish lists it', { skip: !piOk
   sessionId = entry.sessionId;
   assert.ok(sessionId, 'registry entry carries the session id');
   assert.equal(entry.pid, pi.pid, 'entry belongs to the pi we spawned');
+  // The socket file must be named by a fixed-length hash, not the session id:
+  // bind() caps a Unix socket path at sun_path (~108 bytes) and long session
+  // ids used to blow it. 30 chars covers hash + ".sock" with slack.
+  assert.ok(path.basename(entry.socketPath).length <= 30,
+    `socket basename must be hash-sized, got ${path.basename(entry.socketPath)}`);
+  assert.ok(!path.basename(entry.socketPath).includes(sessionId),
+    'socket path must not embed the literal session id');
 
   const sess = await waitFor(async () => {
     const { body } = await get('/api/sessions?active=1');

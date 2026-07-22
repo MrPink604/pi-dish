@@ -13,6 +13,15 @@ const ROOT = path.join(os.homedir(), ".pi", "dish");
 const REGISTRY_DIR = path.join(ROOT, "sessions");
 const SOCKET_DIR = path.join(ROOT, "sockets");
 
+// bind() caps a Unix socket path at sun_path (~104-108 bytes), and session ids
+// (JSONL basenames) can be long enough to blow it. The socket file is named by
+// a hash of the id — nothing derives this path from the session name; every
+// consumer reads socketPath from the registry entry.
+function socketPathFor(sessionId: string): string {
+  const digest = crypto.createHash("sha256").update(sessionId).digest("hex").slice(0, 24);
+  return path.join(SOCKET_DIR, `${digest}.sock`);
+}
+
 // Set by pi-dish when it spawns this pi inside a tmux window (see lib/tmux.js).
 // Written into the registry entry so the server can correlate the tmux spawn
 // with the session it registers. Harmless (and undefined) otherwise.
@@ -1166,7 +1175,7 @@ export default function (pi: ExtensionAPI) {
     sessionFile = sf;
     sessionId = path.basename(sf, ".jsonl");
     cwd = ctx.cwd;
-    socketPath = path.join(SOCKET_DIR, `${sessionId}.sock`);
+    socketPath = socketPathFor(sessionId);
     registryPath = path.join(REGISTRY_DIR, `${sessionId}.json`);
 
     bindSocket();
