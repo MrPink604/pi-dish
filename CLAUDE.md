@@ -179,7 +179,17 @@ breakdown; the client stacks the chart by the range's top five models
 comes from those slots, the folded tail wears `--chart-other`), folds series
 longer than 90 days into weeks (`aggregateUsageWeekly`), and opens a
 day-detail panel from a bar click without another request. The KPI row is
-fixed headline windows; the range presets scope everything below them.
+fixed headline windows; the range presets scope everything below them. The
+Cost/Tokens toggle is the whole view's metric — it re-ranks the breakdowns
+server-side (`sort=`, groups are truncated to the top 20 there) *and* drives
+what the chart, tooltip, and day detail plot; don't regress it to a
+list-only sort. Model rows are a multi-select filter (`models=` refs on the
+same endpoint): totals, daily series, and the workspace/session groups are
+rebuilt server-side from the per-session `usage.models` day buckets (the
+truncated groups can't be filtered client-side), while `groups.models`
+stays unfiltered as the facet list and the KPI headlines stay global. The
+filter set is client memory only (`usageModelFilter`), deliberately not
+persisted.
 
 Server-side session dispatch: `getLiveSession(id)` in server.js is the one
 place bridge-vs-RPC resolution lives (bridge registry entry → connected

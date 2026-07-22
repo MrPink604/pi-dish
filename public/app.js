@@ -16,6 +16,7 @@ let responseDetailSeq = 0;
 const responseDetails = new Map();
 let usageRange = '30', usageTimer = null, usageData = null, usageChart = null, usageSelectedDay = null;
 let usageSort = localStorage.getItem('pi-dish-usage-sort') === 'tokens' ? 'tokens' : 'cost';
+let usageModelFilter = new Set(); // multi-select model refs; empty = all models
 let settingsRenderSeq = 0, usageFetchSeq = 0, spendFetchSeq = 0;
 
 // Live tool panel tracking: toolCallId -> { el, startTime }
@@ -1706,9 +1707,11 @@ function setUsageRange(range) {
   loadUsageView();
 }
 
-// Breakdown sort (cost vs tokens) is server-side: the groups are truncated to
-// the top 20 there, so the client re-sorting its slice would show the wrong
-// twenty. Device-local preference, like the response-metadata density.
+// The cost/tokens toggle is the view's metric: it re-ranks the breakdowns
+// server-side (the groups are truncated to the top 20 there, so the client
+// re-sorting its slice would show the wrong twenty) *and* switches what the
+// chart, tooltip, and day detail plot. Device-local preference, like the
+// response-metadata density.
 function setUsageSort(sort) {
   if (usageSort === sort) return;
   usageSort = sort;
@@ -1716,33 +1719,54 @@ function setUsageSort(sort) {
   loadUsageView();
 }
 
+// Model filter (multi-select): clicking rows in the Models section toggles
+// refs in/out. Applied server-side — the workspace/session groups only exist
+// pre-truncated, so a filtered view needs a refetch, not a client re-slice.
+function usageModelsKey() { return [...usageModelFilter].join(','); }
+function toggleUsageModelFilter(ref) {
+  if (usageModelFilter.has(ref)) usageModelFilter.delete(ref);
+  else usageModelFilter.add(ref);
+  loadUsageView();
+}
+function clearUsageModelFilter() {
+  if (!usageModelFilter.size) return;
+  usageModelFilter.clear();
+  loadUsageView();
+}
+
 async function loadUsageView() {
   const fetchSeq = ++usageFetchSeq;
-  const requestedRange = usageRange, requestedSort = usageSort;
+  const requestedRange = usageRange, requestedSort = usageSort, requestedModels = usageModelsKey();
+  const stale = () => fetchSeq !== usageFetchSeq || requestedRange !== usageRange ||
+    requestedSort !== usageSort || requestedModels !== usageModelsKey() || !isUsageViewOpen();
   const body = document.getElementById('usageViewBody');
   // Refetch keeps the frame: dim the previous render instead of blanking it.
   if (body.childElementCount) body.classList.add('usage-refreshing');
   else body.innerHTML = '<div class="usage-state">Loading estimated usage…</div>';
   try {
-    const r = await fetch('/api/usage-summary?days=' + requestedRange + '&sort=' + requestedSort);
+    const r = await fetch('/api/usage-summary?days=' + requestedRange + '&sort=' + requestedSort +
+      (requestedModels ? '&models=' + encodeURIComponent(requestedModels) : ''));
     // A stale server (or proxy) answers with an HTML error page — surface the
     // status instead of a JSON parse error.
     if (!r.ok) throw new Error(await r.json().then(d => d.error, () => null) || `HTTP ${r.status}`);
     const d = await r.json();
-    if (fetchSeq !== usageFetchSeq || requestedRange !== usageRange || requestedSort !== usageSort || !isUsageViewOpen()) return;
+    if (stale()) return;
     usageData = d;
     renderUsageView(d);
     if (d.indexing) usageTimer = setTimeout(() => { if (isUsageViewOpen()) loadUsageView(); }, 1000);
   } catch (e) {
-    if (fetchSeq !== usageFetchSeq || requestedRange !== usageRange || requestedSort !== usageSort || !isUsageViewOpen()) return;
+    if (stale()) return;
     body.classList.remove('usage-refreshing');
     body.innerHTML = `<div class="usage-state">Could not load usage: ${escapeHtml(e.message)}</div>`;
   }
 }
 
 function usageMetricValue(bucket, metric) {
-  return metric === 'cost' ? (bucket.costs?.total || 0) : (bucket.calls || 0);
+  if (metric === 'cost') return bucket.costs?.total || 0;
+  if (metric === 'tokens') return usageTokensTotal(bucket.tokens);
+  return bucket.calls || 0;
 }
+const USAGE_METRIC_LABELS = { cost: 'Estimated spend', tokens: 'Tokens', calls: 'Calls' };
 function usageModelValue(m, metric) {
   if (metric === 'cost') return m.cost || 0;
   if (metric === 'tokens') return usageTokensTotal(m.tokens);
@@ -1770,25 +1794,29 @@ function renderUsageView(d) {
 
   const ranges = USAGE_RANGES
     .map(([v, l]) => `<button class="usage-range-btn${usageRange === v ? ' active' : ''}" data-range="${v}">${l}</button>`).join('');
-  const sortCtl = `<span class="usage-sort"><small>Sort by</small>${[['cost', 'Cost'], ['tokens', 'Tokens']]
+  const sortCtl = `<span class="usage-sort"><small>Show</small>${[['cost', 'Cost'], ['tokens', 'Tokens']]
     .map(([v, l]) => `<button class="usage-range-btn${usageSort === v ? ' active' : ''}" data-sort="${v}">${l}</button>`).join('')}</span>`;
 
   const summary = `<div class="usage-total-line"><strong>${formatEstimatedCost(t.costs?.total)}</strong> · ${t.calls || 0} calls · ${formatTokens(usageTokensTotal(t.tokens))} tokens in ${USAGE_RANGE_LABELS[d.range] || 'the selected range'}</div>`;
+  const filterNote = usageModelFilter.size
+    ? `<div class="usage-filter-note">Filtered to ${[...usageModelFilter].map(r => `<b title="${escapeHtml(r)}">${escapeHtml(shortModelName(r))}</b>`).join(', ')}<button class="usage-range-btn" data-clear-models>✕ clear</button></div>`
+    : '';
 
-  // Chart model: series slots follow the range's top models (server sort
-  // order — spend, or tokens when that sort is chosen) so the chart, its
-  // legend, and the model-share section all agree on colors.
-  const metric = (t.costs?.total || 0) > 0 ? 'cost' : 'calls';
-  // The breakdown lists rank and size their bars by the chosen sort; the
-  // daily chart keeps plotting spend/calls regardless.
-  const listMetric = usageSort === 'tokens' ? 'tokens' : metric;
+  // One metric drives the whole view — chart, tooltip, day detail, and the
+  // breakdown bars all plot it: tokens when that toggle is chosen, else
+  // spend, else calls when nothing in range carries a cost.
+  const metric = usageSort === 'tokens' ? 'tokens' : (t.costs?.total || 0) > 0 ? 'cost' : 'calls';
+  // Chart model: series slots follow the range's top *active* models (server
+  // sort order; the model filter narrows the palette to the selected refs) so
+  // the chart, its legend, and the model-share section all agree on colors.
+  const activeModels = (d.groups?.models || []).filter(m => !usageModelFilter.size || usageModelFilter.has(m.key));
   const daily = d.daily || [];
   const buckets = daily.length > 90 ? aggregateUsageWeekly(daily) : daily;
-  const seriesRefs = (d.groups?.models || []).slice(0, 5).map(m => m.key);
-  usageChart = { buckets, seriesRefs, metric };
+  const seriesRefs = activeModels.slice(0, 5).map(m => m.key);
+  usageChart = { buckets, seriesRefs, metric, activeModelCount: activeModels.length };
   const showChart = d.range !== '1' && buckets.length > 1 && (t.calls || 0) > 0;
   const chartSection = showChart
-    ? `<section class="usage-section"><h4>${metric === 'cost' ? 'Estimated spend' : 'Calls'} per ${buckets === daily ? 'day' : 'week'}</h4><div class="usage-chart" id="usageChart"></div></section>`
+    ? `<section class="usage-section"><h4>${USAGE_METRIC_LABELS[metric]} per ${buckets === daily ? 'day' : 'week'}</h4><div class="usage-chart" id="usageChart"></div></section>`
     : '';
   if (d.range === '1' && daily.length) usageSelectedDay = daily[daily.length - 1].day;
 
@@ -1798,17 +1826,27 @@ function renderUsageView(d) {
     ${d.indexing ? '<div class="usage-notice">History is indexing; totals will refresh…</div>' : ''}
     <div class="usage-ranges">${ranges}${sortCtl}</div>
     ${(t.calls || 0) === 0 ? '<div class="usage-state">No usage in this range.</div>' : summary}
+    ${filterNote}
     ${chartSection}
     <div id="usageDayDetail"></div>
-    ${usageModelShareHtml(d, listMetric)}
+    ${usageModelShareHtml(d, metric, seriesRefs)}
     <div class="usage-columns">
-      ${usageGroupListHtml('Workspaces', d.groups?.workspaces, 'workspace', listMetric)}
-      ${usageGroupListHtml('Sessions', d.groups?.sessions, 'session', listMetric)}
+      ${usageGroupListHtml('Workspaces', d.groups?.workspaces, 'workspace', metric)}
+      ${usageGroupListHtml('Sessions', d.groups?.sessions, 'session', metric)}
     </div>
     ${d.unpricedModelCalls ? `<div class="usage-notice">${d.unpricedModelCalls} calls have unavailable pricing and are excluded from estimated spend; unknown usage is not $0 billed.</div>` : ''}
   `;
   body.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => setUsageRange(b.dataset.range)));
   body.querySelectorAll('[data-sort]').forEach(b => b.addEventListener('click', () => setUsageSort(b.dataset.sort)));
+  body.querySelector('[data-clear-models]')?.addEventListener('click', clearUsageModelFilter);
+  body.querySelectorAll('[data-model-ref]').forEach(row => {
+    row.addEventListener('click', () => toggleUsageModelFilter(row.dataset.modelRef));
+    row.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      toggleUsageModelFilter(row.dataset.modelRef);
+    });
+  });
   // Session rows jump to the session itself — the takeover closes so the
   // transcript is visible underneath.
   body.querySelectorAll('[data-session-id]').forEach(row => row.addEventListener('click', () => {
@@ -1873,7 +1911,9 @@ function drawUsageChart() {
 
     const x = margin.left + band * i + (band - barW) / 2;
     const label = (b.days > 1 ? `Week of ${formatUsageDay(b.day)}` : formatUsageDay(b.day, 'long')) + ': ' +
-      (metric === 'cost' ? formatEstimatedCost(b.costs?.total) : `${b.calls} calls`);
+      (metric === 'cost' ? formatEstimatedCost(b.costs?.total)
+        : metric === 'tokens' ? `${formatTokens(usageTokensTotal(b.tokens))} tokens`
+        : `${b.calls} calls`);
     const seg = [];
     let cursor = yFor(0);
     for (let sI = 0; sI < segs.length; sI++) {
@@ -1896,10 +1936,10 @@ function drawUsageChart() {
 
   const legendItems = seriesRefs.map((ref, i) =>
     `<span class="usage-legend-item" title="${escapeHtml(ref)}"><i class="swatch s${i + 1}"></i>${escapeHtml(shortModelName(ref))}</span>`);
-  if (anyOther || (usageData?.groups?.models || []).length > seriesRefs.length)
+  if (anyOther || (usageChart.activeModelCount || 0) > seriesRefs.length)
     legendItems.push('<span class="usage-legend-item"><i class="swatch sother"></i>other</span>');
 
-  holder.innerHTML = `<svg width="${width}" height="${height}" role="img" aria-label="${metric === 'cost' ? 'Estimated spend' : 'Calls'} per ${buckets[0]?.days > 1 ? 'week' : 'day'}">${parts.join('')}</svg>` +
+  holder.innerHTML = `<svg width="${width}" height="${height}" role="img" aria-label="${USAGE_METRIC_LABELS[metric]} per ${buckets[0]?.days > 1 ? 'week' : 'day'}">${parts.join('')}</svg>` +
     (legendItems.length > 1 ? `<div class="usage-legend">${legendItems.join('')}</div>` : '');
 
   holder.onpointermove = e => {
@@ -1948,12 +1988,16 @@ function renderUsageDayDetail() {
     const i = (usageChart?.seriesRefs || []).indexOf(ref);
     return i >= 0 ? 's' + (i + 1) : 'sother';
   };
-  const rows = (bucket.models || []).map(m => `
+  const rows = (bucket.models || []).map(m => {
+    const meta = [`${m.calls} calls`, `${formatTokens(usageTokensTotal(m.tokens))} tok`];
+    if (metric === 'cost') meta.push(formatEstimatedCost(m.cost));
+    return `
     <div class="usage-row" title="${escapeHtml(m.ref)}">
       <i class="swatch ${slotFor(m.ref)}"></i>
       <span class="usage-row-name">${escapeHtml(shortModelName(m.model || m.ref))}<small>${escapeHtml(m.provider || '')}</small></span>
-      <span class="usage-row-meta">${m.calls} calls · ${formatTokens(usageTokensTotal(m.tokens))} tok · ${metric === 'cost' ? formatEstimatedCost(m.cost) : ''}</span>
-    </div>`).join('');
+      <span class="usage-row-meta">${meta.join(' · ')}</span>
+    </div>`;
+  }).join('');
   holder.innerHTML = `<section class="usage-day-detail">
     <div class="usage-day-detail-header"><h4>${title}</h4><button class="btn-icon" title="Close details" data-close-day>✕</button></div>
     <div class="usage-day-stats">${stats}</div>
@@ -1964,33 +2008,48 @@ function renderUsageDayDetail() {
 
 // Part-to-whole share of the range by model: one horizontal stacked bar
 // (top five slots + other) over the per-model table that doubles as the
-// chart's WCAG-clean twin.
-function usageModelShareHtml(d, metric) {
+// chart's WCAG-clean twin. The rows are also the model filter's toggles —
+// the list itself is never filtered (it's the facet control): with a filter
+// active, selected rows keep their chart slot colors and share of the
+// *selected* total while deselected rows dim with a hollow swatch.
+function usageModelShareHtml(d, metric, seriesRefs) {
   const models = d.groups?.models || [];
-  if (!models.length) return '';
+  const filtered = usageModelFilter.size > 0;
+  if (!models.length && !filtered) return '';
+  const isOn = ref => !filtered || usageModelFilter.has(ref);
   const val = m => usageModelValue({ cost: m.costs?.total, calls: m.calls, tokens: m.tokens }, metric);
-  const total = models.reduce((s, m) => s + val(m), 0);
+  const slotFor = ref => {
+    const i = seriesRefs.indexOf(ref);
+    return i >= 0 ? 's' + (i + 1) : 'sother';
+  };
+  const active = models.filter(m => isOn(m.key));
+  const total = active.reduce((s, m) => s + val(m), 0);
   const segs = [];
-  models.slice(0, 5).forEach((m, i) => {
+  active.slice(0, 5).forEach(m => {
     const share = total > 0 ? val(m) / total : 0;
-    if (share > 0.004) segs.push(`<span class="s${i + 1}" style="flex-grow:${(share * 1000).toFixed(1)}" title="${escapeHtml(shortModelName(m.key))}"></span>`);
+    if (share > 0.004) segs.push(`<span class="${slotFor(m.key)}" style="flex-grow:${(share * 1000).toFixed(1)}" title="${escapeHtml(shortModelName(m.key))}"></span>`);
   });
-  const restShare = total > 0 ? models.slice(5).reduce((s, m) => s + val(m), 0) / total : 0;
+  const restShare = total > 0 ? active.slice(5).reduce((s, m) => s + val(m), 0) / total : 0;
   if (restShare > 0.004) segs.push(`<span class="sother" style="flex-grow:${(restShare * 1000).toFixed(1)}" title="other models"></span>`);
-  const rows = models.map((m, i) => {
-    const share = total > 0 ? val(m) / total : 0;
+  const rowHtml = (m, on) => {
+    const share = on && total > 0 ? val(m) / total : 0;
     const pct = share > 0 ? (share * 100 < 1 ? (share * 100).toFixed(1) : Math.round(share * 100)) + '%' : '—';
     const spend = m.priced === false ? 'pricing unavailable'
       : `${formatEstimatedCost(m.costs?.total)}${m.unpricedCalls ? ` + ${m.unpricedCalls} unpriced` : ''}`;
-    return `<div class="usage-row" title="${escapeHtml(m.key)}">
-      <i class="swatch ${i < 5 ? 's' + (i + 1) : 'sother'}"></i>
+    return `<div class="usage-row model-toggle${filtered ? (on ? ' on' : ' off') : ''}" data-model-ref="${escapeHtml(m.key)}" role="button" tabindex="0" aria-pressed="${on}" title="${escapeHtml(m.key)} — click to toggle model filter">
+      <i class="swatch ${on ? slotFor(m.key) : 'soff'}"></i>
       <span class="usage-row-name">${escapeHtml(shortModelName(m.model || m.key))}<small>${escapeHtml(m.provider || '')}</small></span>
       <span class="usage-row-meta">${pct} · ${m.calls} calls · ${formatTokens(usageTokensTotal(m.tokens))} tok · ${escapeHtml(spend)}</span>
     </div>`;
-  }).join('');
-  return `<section class="usage-section"><h4>Models</h4>
+  };
+  const rows = models.map(m => rowHtml(m, isOn(m.key))).join('');
+  // Selected refs with no usage in this range still get a row, or a range
+  // switch could strand a filter with nothing visible to untoggle.
+  const missing = [...usageModelFilter].filter(ref => !models.some(m => m.key === ref))
+    .map(ref => rowHtml({ key: ref, calls: 0, tokens: {}, costs: { total: 0 } }, true)).join('');
+  return `<section class="usage-section"><h4>Models <small class="usage-hint">click to filter</small></h4>
     ${segs.length ? `<div class="usage-share-bar">${segs.join('')}</div>` : ''}
-    ${rows}</section>`;
+    ${rows}${missing}</section>`;
 }
 
 // Workspace/session magnitude lists: single-hue micro-bars (share of the
@@ -2037,8 +2096,9 @@ function showUsageTooltip(bucket, e) {
   head.textContent = bucket.days > 1 ? `Week of ${formatUsageDay(bucket.day)} · ${bucket.days} days` : formatUsageDay(bucket.day, 'long');
   const total = document.createElement('div');
   total.className = 'tt-total';
-  total.textContent = (metric === 'cost' ? formatEstimatedCost(bucket.costs?.total) : `${bucket.calls} calls`) +
-    (metric === 'cost' ? ` · ${bucket.calls || 0} calls` : '');
+  total.textContent = metric === 'cost' ? `${formatEstimatedCost(bucket.costs?.total)} · ${bucket.calls || 0} calls`
+    : metric === 'tokens' ? `${formatTokens(usageTokensTotal(bucket.tokens))} tokens · ${bucket.calls || 0} calls`
+    : `${bucket.calls} calls`;
   el.append(head, total);
   const seriesRefs = usageChart?.seriesRefs || [];
   const byRef = new Map((bucket.models || []).map(m => [m.ref, m]));
@@ -2058,7 +2118,7 @@ function showUsageTooltip(bucket, e) {
     const key = document.createElement('i');
     key.className = 'tt-key ' + cls;
     const value = document.createElement('strong');
-    value.textContent = metric === 'cost' ? formatEstimatedCost(v) : String(v);
+    value.textContent = metric === 'cost' ? formatEstimatedCost(v) : metric === 'tokens' ? formatTokens(v) : String(v);
     const label = document.createElement('span');
     label.textContent = name;
     row.append(key, value, label);

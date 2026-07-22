@@ -612,6 +612,16 @@ app.get('/api/usage-summary', (req, res) => {
   if (!['1', '7', '30', 'all'].includes(range)) return res.status(400).json({ error: 'days must be 1, 7, 30, or all' });
   const sort = String(req.query.sort || 'cost');
   if (!['cost', 'tokens'].includes(sort)) return res.status(400).json({ error: 'sort must be cost or tokens' });
+  // Multi-select model filter. It has to be applied here, not client-side:
+  // the workspace/session groups are truncated to the top 20 below, and only
+  // the per-session usage.models day buckets can rebuild their totals for a
+  // subset of models. groups.models stays unfiltered — it is the facet list
+  // the client toggles from. Headline KPIs stay global (fixed windows).
+  const modelsRaw = req.query.models == null ? '' : String(req.query.models);
+  if (modelsRaw.length > 4000) return res.status(400).json({ error: 'models filter too long' });
+  const modelRefs = modelsRaw.split(',').map(s => s.trim()).filter(Boolean);
+  if (modelRefs.length > 100) return res.status(400).json({ error: 'models filter lists too many models' });
+  const modelFilter = modelRefs.length ? new Set(modelRefs) : null;
   const candidates = enumerateSessionCandidates();
   const scan = sessionIndex.scanSessions(candidates.map(c => c.file));
   const cutoff = range === 'all' ? null : localDay(Number(range) - 1);
@@ -632,12 +642,9 @@ app.get('/api/usage-summary', (req, res) => {
       if (dated && day >= localDay(29)) headline.days30 += cost;
       if (dated) addUsage(dailyMap.get(day) || (dailyMap.set(day, emptyUsage()), dailyMap.get(day)), bucket);
       if (dated && day.startsWith(monthPrefix)) headline.month += cost;
-      if (!cutoff || (dated && day >= cutoff)) addUsage(selected, bucket);
-    }
-    addUsage(totals, selected);
-    if (selected.calls) {
-      addUsage(byWorkspace.get(info.cwd || usage.cwd || '(unknown)') || (byWorkspace.set(info.cwd || usage.cwd || '(unknown)', emptyUsage()), byWorkspace.get(info.cwd || usage.cwd || '(unknown)')), selected);
-      bySession.set(c.id, { id: c.id, name: info.name || c.id, workspace: info.cwd || usage.cwd || null, ...selected });
+      // Under a model filter the session's selected usage is rebuilt from its
+      // per-model buckets below; the day buckets can't be split by model.
+      if (!modelFilter && (!cutoff || (dated && day >= cutoff))) addUsage(selected, bucket);
     }
     for (const [ref, bucket] of Object.entries(usage.models || {})) {
       const modelSelected = emptyUsage();
@@ -651,8 +658,16 @@ app.get('/api/usage-summary', (req, res) => {
       else if (!cutoff) addUsage(modelSelected, bucket); // schema-2 transitional safety
       if (modelSelected.calls) {
         addUsage(byModel.get(ref) || (byModel.set(ref, { ...emptyUsage(), provider: bucket.provider, model: bucket.model }), byModel.get(ref)), modelSelected);
-        modelOwners.push({ ref, sessionId: c.id, workspace: info.cwd || usage.cwd || '(unknown)', calls: modelSelected.calls });
+        if (!modelFilter || modelFilter.has(ref)) {
+          modelOwners.push({ ref, sessionId: c.id, workspace: info.cwd || usage.cwd || '(unknown)', calls: modelSelected.calls });
+          if (modelFilter) addUsage(selected, modelSelected);
+        }
       }
+    }
+    addUsage(totals, selected);
+    if (selected.calls) {
+      addUsage(byWorkspace.get(info.cwd || usage.cwd || '(unknown)') || (byWorkspace.set(info.cwd || usage.cwd || '(unknown)', emptyUsage()), byWorkspace.get(info.cwd || usage.cwd || '(unknown)')), selected);
+      bySession.set(c.id, { id: c.id, name: info.name || c.id, workspace: info.cwd || usage.cwd || null, ...selected });
     }
   }
   // Do not make history wait on a host `pi --list-models` subprocess. Startup
@@ -665,7 +680,9 @@ app.get('/api/usage-summary', (req, res) => {
     b.priced = b.costs.total !== 0 || pricedRefs.has(ref) || freeRefs.has(ref);
     if (!b.priced) {
       b.unpricedCalls = b.calls;
-      unpricedModelCalls += b.calls;
+      // The bottom-of-view notice reflects the filtered totals; the facet
+      // list keeps every model's own unpriced annotation.
+      if (!modelFilter || modelFilter.has(ref)) unpricedModelCalls += b.calls;
     }
   }
   for (const owner of modelOwners) {
@@ -689,7 +706,11 @@ app.get('/api/usage-summary', (req, res) => {
   let spanDays = range === 'all' ? 1 : Number(range);
   if (range === 'all') {
     let earliest = null;
-    for (const day of dailyMap.keys()) if (!earliest || day < earliest) earliest = day;
+    if (modelFilter) {
+      for (const [day, models] of dailyModels) {
+        if ((!earliest || day < earliest) && [...models.keys()].some(ref => modelFilter.has(ref))) earliest = day;
+      }
+    } else for (const day of dailyMap.keys()) if (!earliest || day < earliest) earliest = day;
     if (earliest) {
       const [y, m, d] = earliest.split('-').map(Number);
       const start = new Date(y, m - 1, d, 12), today = new Date(); today.setHours(12, 0, 0, 0);
@@ -698,12 +719,17 @@ app.get('/api/usage-summary', (req, res) => {
   }
   const daily = Array.from({ length: spanDays }, (_, i) => {
     const day = localDay(spanDays - 1 - i);
-    const models = [...(dailyModels.get(day)?.entries() || [])]
+    const dayEntries = [...(dailyModels.get(day)?.entries() || [])]
+      .filter(([ref]) => !modelFilter || modelFilter.has(ref));
+    const models = dayEntries
       .map(([ref, b]) => ({ ref, provider: b.provider, model: b.model, calls: b.calls, cost: b.costs.total, tokens: b.tokens }))
       .sort((a, b) => b.cost - a.cost || b.calls - a.calls);
-    return { day, ...(dailyMap.get(day) || emptyUsage()), models };
+    if (!modelFilter) return { day, ...(dailyMap.get(day) || emptyUsage()), models };
+    const dayTotal = emptyUsage();
+    for (const [, b] of dayEntries) addUsage(dayTotal, b);
+    return { day, ...dayTotal, models };
   });
-  res.json({ range, sort, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort((a, b) => rank(b) - rank(a) || b.calls - a.calls).slice(0, 20) }, headlineCosts: headline, daily, unpricedModelCalls, indexing: scan.indexing, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
+  res.json({ range, sort, models: modelFilter ? [...modelFilter] : null, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort((a, b) => rank(b) - rank(a) || b.calls - a.calls).slice(0, 20) }, headlineCosts: headline, daily, unpricedModelCalls, indexing: scan.indexing, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
 });
 
 // Saved sidebar filters ("scopes") are server-global like the budget: the

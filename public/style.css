@@ -3763,6 +3763,17 @@ img.msg-image {
 .usage-row.clickable { cursor: pointer; }
 .usage-row.clickable:hover { background: var(--bg-hover); }
 
+/* Model rows double as the multi-select filter: deselected rows dim behind a
+   hollow swatch; selected rows keep their chart slot color. */
+.usage-row.model-toggle { cursor: pointer; }
+.usage-row.model-toggle:hover { background: var(--bg-hover); }
+.usage-row.model-toggle.off { opacity: 0.45; }
+.swatch.soff { background: transparent; border: 1px solid var(--text-muted); }
+
+.usage-filter-note { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 6px 0 2px; font-size: 11px; color: var(--text-muted); }
+.usage-filter-note b { color: var(--text-bright); font-weight: 600; }
+.usage-section h4 .usage-hint { color: var(--text-muted); font-weight: 400; font-size: 11px; margin-left: 4px; }
+
 .usage-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
 
 /* Usage view on phones: these live after the base rules above — an earlier

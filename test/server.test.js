@@ -845,6 +845,10 @@ test('usage summary filters local-day ranges and keeps timestamp-less cost all-t
   const old = new Date(now); old.setDate(old.getDate() - 10);
   const baselineToday = (await get('/api/usage-summary?days=1')).body;
   const baselineAll = (await get('/api/usage-summary?days=all')).body;
+  const filterUrl = refs => '/api/usage-summary?days=all&models=' + encodeURIComponent(refs);
+  const baselinePaid = (await get(filterUrl('known/paid'))).body;
+  const baselinePair = (await get(filterUrl('known/paid,known/old-paid'))).body;
+  const baselineUnpriced = (await get(filterUrl('missing/unpriced'))).body;
   const entries = [
     { type: 'session', cwd: '/workspace/usage', timestamp: now.toISOString() },
     { type: 'message', timestamp: now.toISOString(), message: { role: 'user', content: [{ type: 'text', text: 'usage fixture' }] } },
@@ -909,6 +913,39 @@ test('usage summary filters local-day ranges and keeps timestamp-less cost all-t
     assert.ok(modelPos(byTokens.body, 'known/dateless-paid') < modelPos(byTokens.body, 'known/old-paid'));
     const badSort = await get('/api/usage-summary?days=all&sort=calls');
     assert.equal(badSort.status, 400);
+
+    // Model filter: totals, daily series, and the workspace/session groups
+    // reflect only the selected refs; groups.models stays the unfiltered
+    // facet list the client toggles from.
+    const paid = (await get(filterUrl('known/paid'))).body;
+    assert.deepEqual(paid.models, ['known/paid']);
+    assert.equal(paid.totals.calls - baselinePaid.totals.calls, 1);
+    assert.equal(paid.totals.costs.total - baselinePaid.totals.costs.total, 1);
+    assert.ok(paid.groups.models.some(m => m.key === 'known/dateless-paid'),
+      'facet list keeps deselected models');
+    const paidSession = paid.groups.sessions.find(s => s.id === usageId);
+    assert.ok(paidSession && paidSession.calls === 1 && paidSession.costs.total === 1,
+      'session group carries only the filtered model usage');
+    const wsBase = baselinePaid.groups.workspaces.find(w => w.key === '/workspace/usage');
+    const wsPaid = paid.groups.workspaces.find(w => w.key === '/workspace/usage');
+    assert.equal((wsPaid?.calls || 0) - (wsBase?.calls || 0), 1,
+      'workspace group carries only the filtered model usage');
+    assert.ok(paid.daily.every(d => d.models.every(m => m.ref === 'known/paid')),
+      'daily per-model breakdowns are filtered');
+    assert.ok(paid.headlineCosts.all - baselineAll.headlineCosts.all >= 7 - 1e-9,
+      'headline KPIs stay global under a model filter');
+
+    const pair = (await get(filterUrl('known/paid,known/old-paid'))).body;
+    assert.equal(pair.totals.calls - baselinePair.totals.calls, 2);
+    assert.equal(pair.totals.costs.total - baselinePair.totals.costs.total, 3);
+
+    const unpriced = (await get(filterUrl('missing/unpriced'))).body;
+    assert.equal(unpriced.totals.calls - baselineUnpriced.totals.calls, 1);
+    assert.equal(unpriced.unpricedModelCalls - baselineUnpriced.unpricedModelCalls, 1);
+    assert.equal(unpriced.groups.sessions.find(s => s.id === usageId)?.unpricedCalls, 1);
+
+    const tooMany = await get(filterUrl(Array.from({ length: 101 }, (_, i) => 'p/m' + i).join(',')));
+    assert.equal(tooMany.status, 400);
   } finally {
     fs.rmSync(usageFile, { force: true });
   }

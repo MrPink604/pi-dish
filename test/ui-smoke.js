@@ -1468,10 +1468,42 @@ function writeRegistry(patch = {}) {
       null, { timeout: 5000 });
     check(await desktop.evaluate(() => localStorage.getItem('pi-dish-usage-sort') === 'tokens'),
       'tokens sort activates and persists device-locally');
+    await desktop.waitForFunction(() =>
+      document.querySelector('#usageChart svg')?.getAttribute('aria-label')?.startsWith('Tokens'),
+      null, { timeout: 5000 });
+    check(true, 'tokens metric drives the daily chart, not just the tables');
     await desktop.click('.usage-sort [data-sort="cost"]');
     await desktop.waitForFunction(() =>
       document.querySelector('.usage-sort [data-sort="cost"]')?.classList.contains('active'),
       null, { timeout: 5000 });
+    // Model filter: model rows are multi-select toggles; the filter is
+    // applied server-side, so the workspace/session groups reflect it. The
+    // beta session's calls index under unknown/unknown, so filtering to the
+    // fixture's smoke-model must drop the beta workspace.
+    check(await desktop.evaluate(() =>
+      [...document.querySelectorAll('#usageViewBody .usage-row')].some((r) => r.textContent.includes('proj-beta'))),
+      'unfiltered usage lists the beta workspace');
+    await desktop.click('.usage-row.model-toggle[data-model-ref="test/smoke-model"]');
+    await desktop.waitForFunction(() =>
+      document.querySelector('.usage-filter-note')?.textContent.includes('smoke-model'),
+      null, { timeout: 5000 });
+    check(await desktop.evaluate(() =>
+      ![...document.querySelectorAll('#usageViewBody .usage-row')].some((r) => r.textContent.includes('proj-beta'))),
+      'model filter drops workspaces/sessions without that model');
+    check(await desktop.evaluate(() => {
+      const rows = [...document.querySelectorAll('#usageViewBody .usage-row.model-toggle')];
+      return rows.some((r) => r.classList.contains('on') && r.textContent.includes('smoke-model')) &&
+        rows.some((r) => r.classList.contains('off'));
+    }), 'facet list keeps deselected models, dimmed');
+    await desktop.click('#usageViewBody .usage-row.model-toggle.off');
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('#usageViewBody .usage-row')].some((r) => r.textContent.includes('proj-beta')),
+      null, { timeout: 5000 });
+    check(true, 'multi-select re-adds a second model and the beta workspace returns');
+    await desktop.click('[data-clear-models]');
+    await desktop.waitForFunction(() => !document.querySelector('.usage-filter-note'),
+      null, { timeout: 5000 });
+    check(true, 'clear removes the model filter');
     await desktop.click(`[data-session-id="${SESSION_ID}"]`);
     await desktop.waitForFunction(() => !document.querySelector('.main').classList.contains('usage-open'),
       null, { timeout: 2000 });
