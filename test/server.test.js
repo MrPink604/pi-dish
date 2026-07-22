@@ -894,6 +894,21 @@ test('usage summary filters local-day ranges and keeps timestamp-less cost all-t
 
     const invalid = await get('/api/usage-summary?days=2');
     assert.equal(invalid.status, 400);
+
+    // sort=tokens reorders the groups by displayed token totals (default is
+    // cost): paid has 110 tokens / $1 while dateless-paid has 33 tokens / $4.
+    const modelPos = (body, ref) => body.groups.models.findIndex(m => m.key === ref);
+    assert.ok(modelPos(all.body, 'known/dateless-paid') < modelPos(all.body, 'known/paid'),
+      'default sort ranks by cost');
+    const byTokens = await get('/api/usage-summary?days=all&sort=tokens');
+    assert.equal(byTokens.body.sort, 'tokens');
+    for (const ref of ['known/paid', 'missing/unpriced', 'known/dateless-paid', 'known/old-paid'])
+      assert.ok(modelPos(byTokens.body, ref) >= 0, ref + ' present under tokens sort');
+    assert.ok(modelPos(byTokens.body, 'known/paid') < modelPos(byTokens.body, 'missing/unpriced'));
+    assert.ok(modelPos(byTokens.body, 'missing/unpriced') < modelPos(byTokens.body, 'known/dateless-paid'));
+    assert.ok(modelPos(byTokens.body, 'known/dateless-paid') < modelPos(byTokens.body, 'known/old-paid'));
+    const badSort = await get('/api/usage-summary?days=all&sort=calls');
+    assert.equal(badSort.status, 400);
   } finally {
     fs.rmSync(usageFile, { force: true });
   }

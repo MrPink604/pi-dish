@@ -776,10 +776,15 @@ function writeRegistry(patch = {}) {
     await desktop.click('#sessionName');
     await desktop.fill('#sessionNameInput', 'renamed live');
     await desktop.keyboard.press('Enter');
-    await desktop.waitForTimeout(400);
-    check(await desktop.locator('#sessionName').textContent() === 'renamed live', 'header shows new name');
-    const itemName = await desktop.locator('.session-item-name').first().textContent();
-    check(itemName === 'renamed live', `sidebar shows new name without reload (got ${JSON.stringify(itemName)})`);
+    // Event-driven: the rename lands after a round-trip through the bridge —
+    // a fixed sleep races it on a loaded machine. The renamed text persists
+    // once set, so the rAF-polled wait can't miss it.
+    await desktop.waitForFunction(() => document.getElementById('sessionName').textContent === 'renamed live',
+      null, { timeout: 5000 });
+    check(true, 'header shows new name');
+    await desktop.waitForFunction(() => document.querySelector('.session-item-name')?.textContent === 'renamed live',
+      null, { timeout: 5000 });
+    check(true, 'sidebar shows new name without reload');
 
     // 6. Scoped models: dropdown edit mode toggles models and persists to
     // pi's settings.json (enabledModels), normal view hides disabled ones
@@ -1455,6 +1460,18 @@ function writeRegistry(patch = {}) {
     await desktop.waitForSelector('.usage-day-detail', { timeout: 2000 });
     check(await desktop.evaluate(() => document.querySelector('.usage-day-detail').textContent.includes('smoke-model')),
       "clicking a bar opens that day's per-model detail");
+    // Sort toggle refetches with sort=tokens and re-renders the breakdowns.
+    await desktop.click('.usage-sort [data-sort="tokens"]');
+    await desktop.waitForFunction(() =>
+      document.querySelector('.usage-sort [data-sort="tokens"]')?.classList.contains('active') &&
+      [...document.querySelectorAll('#usageViewBody .usage-row')].some((r) => r.textContent.includes('smoke-model')),
+      null, { timeout: 5000 });
+    check(await desktop.evaluate(() => localStorage.getItem('pi-dish-usage-sort') === 'tokens'),
+      'tokens sort activates and persists device-locally');
+    await desktop.click('.usage-sort [data-sort="cost"]');
+    await desktop.waitForFunction(() =>
+      document.querySelector('.usage-sort [data-sort="cost"]')?.classList.contains('active'),
+      null, { timeout: 5000 });
     await desktop.click(`[data-session-id="${SESSION_ID}"]`);
     await desktop.waitForFunction(() => !document.querySelector('.main').classList.contains('usage-open'),
       null, { timeout: 2000 });

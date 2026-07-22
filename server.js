@@ -610,6 +610,8 @@ function readDishSettings() {
 app.get('/api/usage-summary', (req, res) => {
   const range = String(req.query.days || '30');
   if (!['1', '7', '30', 'all'].includes(range)) return res.status(400).json({ error: 'days must be 1, 7, 30, or all' });
+  const sort = String(req.query.sort || 'cost');
+  if (!['cost', 'tokens'].includes(sort)) return res.status(400).json({ error: 'sort must be cost or tokens' });
   const candidates = enumerateSessionCandidates();
   const scan = sessionIndex.scanSessions(candidates.map(c => c.file));
   const cutoff = range === 'all' ? null : localDay(Number(range) - 1);
@@ -674,7 +676,11 @@ app.get('/api/usage-summary', (req, res) => {
     if (workspace) workspace.unpricedCalls = (workspace.unpricedCalls || 0) + owner.calls;
   }
   totals.unpricedCalls = unpricedModelCalls;
-  const top = map => [...map.entries()].map(([key, value]) => ({ key, ...value })).sort((a, b) => b.costs.total - a.costs.total || b.calls - a.calls).slice(0, 20);
+  // Rank by the same token total the client displays (reasoning stays out of
+  // the sum there too), so the sorted order matches the numbers on screen.
+  const displayedTokens = t => (t?.input || 0) + (t?.output || 0) + (t?.cacheRead || 0) + (t?.cacheWrite || 0);
+  const rank = b => sort === 'tokens' ? displayedTokens(b.tokens) : b.costs.total;
+  const top = map => [...map.entries()].map(([key, value]) => ({ key, ...value })).sort((a, b) => rank(b) - rank(a) || b.calls - a.calls).slice(0, 20);
   // The daily series spans the requested range (for 'all', from the earliest
   // dated usage, capped at a year) so the chart always reflects the selected
   // window. Each day carries a per-model breakdown so the client can stack the
@@ -697,7 +703,7 @@ app.get('/api/usage-summary', (req, res) => {
       .sort((a, b) => b.cost - a.cost || b.calls - a.calls);
     return { day, ...(dailyMap.get(day) || emptyUsage()), models };
   });
-  res.json({ range, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort((a,b) => b.costs.total-a.costs.total).slice(0,20) }, headlineCosts: headline, daily, unpricedModelCalls, indexing: scan.indexing, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
+  res.json({ range, sort, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort((a, b) => rank(b) - rank(a) || b.calls - a.calls).slice(0, 20) }, headlineCosts: headline, daily, unpricedModelCalls, indexing: scan.indexing, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
 });
 
 // Saved sidebar filters ("scopes") are server-global like the budget: the

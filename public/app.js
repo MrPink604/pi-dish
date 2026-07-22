@@ -15,6 +15,7 @@ let showSessionSpend = localStorage.getItem(SESSION_SPEND_KEY) === '1';
 let responseDetailSeq = 0;
 const responseDetails = new Map();
 let usageRange = '30', usageTimer = null, usageData = null, usageChart = null, usageSelectedDay = null;
+let usageSort = localStorage.getItem('pi-dish-usage-sort') === 'tokens' ? 'tokens' : 'cost';
 let settingsRenderSeq = 0, usageFetchSeq = 0, spendFetchSeq = 0;
 
 // Live tool panel tracking: toolCallId -> { el, startTime }
@@ -1705,25 +1706,35 @@ function setUsageRange(range) {
   loadUsageView();
 }
 
+// Breakdown sort (cost vs tokens) is server-side: the groups are truncated to
+// the top 20 there, so the client re-sorting its slice would show the wrong
+// twenty. Device-local preference, like the response-metadata density.
+function setUsageSort(sort) {
+  if (usageSort === sort) return;
+  usageSort = sort;
+  localStorage.setItem('pi-dish-usage-sort', sort);
+  loadUsageView();
+}
+
 async function loadUsageView() {
   const fetchSeq = ++usageFetchSeq;
-  const requestedRange = usageRange;
+  const requestedRange = usageRange, requestedSort = usageSort;
   const body = document.getElementById('usageViewBody');
   // Refetch keeps the frame: dim the previous render instead of blanking it.
   if (body.childElementCount) body.classList.add('usage-refreshing');
   else body.innerHTML = '<div class="usage-state">Loading estimated usage…</div>';
   try {
-    const r = await fetch('/api/usage-summary?days=' + requestedRange);
+    const r = await fetch('/api/usage-summary?days=' + requestedRange + '&sort=' + requestedSort);
     // A stale server (or proxy) answers with an HTML error page — surface the
     // status instead of a JSON parse error.
     if (!r.ok) throw new Error(await r.json().then(d => d.error, () => null) || `HTTP ${r.status}`);
     const d = await r.json();
-    if (fetchSeq !== usageFetchSeq || requestedRange !== usageRange || !isUsageViewOpen()) return;
+    if (fetchSeq !== usageFetchSeq || requestedRange !== usageRange || requestedSort !== usageSort || !isUsageViewOpen()) return;
     usageData = d;
     renderUsageView(d);
     if (d.indexing) usageTimer = setTimeout(() => { if (isUsageViewOpen()) loadUsageView(); }, 1000);
   } catch (e) {
-    if (fetchSeq !== usageFetchSeq || requestedRange !== usageRange || !isUsageViewOpen()) return;
+    if (fetchSeq !== usageFetchSeq || requestedRange !== usageRange || requestedSort !== usageSort || !isUsageViewOpen()) return;
     body.classList.remove('usage-refreshing');
     body.innerHTML = `<div class="usage-state">Could not load usage: ${escapeHtml(e.message)}</div>`;
   }
@@ -1733,7 +1744,9 @@ function usageMetricValue(bucket, metric) {
   return metric === 'cost' ? (bucket.costs?.total || 0) : (bucket.calls || 0);
 }
 function usageModelValue(m, metric) {
-  return metric === 'cost' ? (m.cost || 0) : (m.calls || 0);
+  if (metric === 'cost') return m.cost || 0;
+  if (metric === 'tokens') return usageTokensTotal(m.tokens);
+  return m.calls || 0;
 }
 function usageTokensTotal(tokens) {
   return ['input', 'output', 'cacheRead', 'cacheWrite'].reduce((s, k) => s + (tokens?.[k] || 0), 0);
@@ -1757,12 +1770,18 @@ function renderUsageView(d) {
 
   const ranges = USAGE_RANGES
     .map(([v, l]) => `<button class="usage-range-btn${usageRange === v ? ' active' : ''}" data-range="${v}">${l}</button>`).join('');
+  const sortCtl = `<span class="usage-sort"><small>Sort by</small>${[['cost', 'Cost'], ['tokens', 'Tokens']]
+    .map(([v, l]) => `<button class="usage-range-btn${usageSort === v ? ' active' : ''}" data-sort="${v}">${l}</button>`).join('')}</span>`;
 
   const summary = `<div class="usage-total-line"><strong>${formatEstimatedCost(t.costs?.total)}</strong> · ${t.calls || 0} calls · ${formatTokens(usageTokensTotal(t.tokens))} tokens in ${USAGE_RANGE_LABELS[d.range] || 'the selected range'}</div>`;
 
-  // Chart model: series slots follow the range's top models by spend so the
-  // chart, its legend, and the model-share section all agree on colors.
+  // Chart model: series slots follow the range's top models (server sort
+  // order — spend, or tokens when that sort is chosen) so the chart, its
+  // legend, and the model-share section all agree on colors.
   const metric = (t.costs?.total || 0) > 0 ? 'cost' : 'calls';
+  // The breakdown lists rank and size their bars by the chosen sort; the
+  // daily chart keeps plotting spend/calls regardless.
+  const listMetric = usageSort === 'tokens' ? 'tokens' : metric;
   const daily = d.daily || [];
   const buckets = daily.length > 90 ? aggregateUsageWeekly(daily) : daily;
   const seriesRefs = (d.groups?.models || []).slice(0, 5).map(m => m.key);
@@ -1777,18 +1796,19 @@ function renderUsageView(d) {
     <div class="usage-kpis">${kpis}</div>
     ${budgetHtml}
     ${d.indexing ? '<div class="usage-notice">History is indexing; totals will refresh…</div>' : ''}
-    <div class="usage-ranges">${ranges}</div>
+    <div class="usage-ranges">${ranges}${sortCtl}</div>
     ${(t.calls || 0) === 0 ? '<div class="usage-state">No usage in this range.</div>' : summary}
     ${chartSection}
     <div id="usageDayDetail"></div>
-    ${usageModelShareHtml(d, metric)}
+    ${usageModelShareHtml(d, listMetric)}
     <div class="usage-columns">
-      ${usageGroupListHtml('Workspaces', d.groups?.workspaces, 'workspace', metric)}
-      ${usageGroupListHtml('Sessions', d.groups?.sessions, 'session', metric)}
+      ${usageGroupListHtml('Workspaces', d.groups?.workspaces, 'workspace', listMetric)}
+      ${usageGroupListHtml('Sessions', d.groups?.sessions, 'session', listMetric)}
     </div>
     ${d.unpricedModelCalls ? `<div class="usage-notice">${d.unpricedModelCalls} calls have unavailable pricing and are excluded from estimated spend; unknown usage is not $0 billed.</div>` : ''}
   `;
   body.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => setUsageRange(b.dataset.range)));
+  body.querySelectorAll('[data-sort]').forEach(b => b.addEventListener('click', () => setUsageSort(b.dataset.sort)));
   // Session rows jump to the session itself — the takeover closes so the
   // transcript is visible underneath.
   body.querySelectorAll('[data-session-id]').forEach(row => row.addEventListener('click', () => {
@@ -1948,8 +1968,8 @@ function renderUsageDayDetail() {
 function usageModelShareHtml(d, metric) {
   const models = d.groups?.models || [];
   if (!models.length) return '';
-  const total = models.reduce((s, m) => s + usageModelValue({ cost: m.costs?.total, calls: m.calls }, metric), 0);
-  const val = m => usageModelValue({ cost: m.costs?.total, calls: m.calls }, metric);
+  const val = m => usageModelValue({ cost: m.costs?.total, calls: m.calls, tokens: m.tokens }, metric);
+  const total = models.reduce((s, m) => s + val(m), 0);
   const segs = [];
   models.slice(0, 5).forEach((m, i) => {
     const share = total > 0 ? val(m) / total : 0;
@@ -1977,7 +1997,7 @@ function usageModelShareHtml(d, metric) {
 // largest entry) under each row — magnitude, not identity, so no palette.
 function usageGroupListHtml(title, rows, kind, metric) {
   const list = (rows || []).slice(0, 12);
-  const val = x => usageModelValue({ cost: x.costs?.total, calls: x.calls }, metric);
+  const val = x => usageModelValue({ cost: x.costs?.total, calls: x.calls, tokens: x.tokens }, metric);
   const maxV = Math.max(1e-9, ...list.map(val));
   const items = list.map(x => {
     const name = kind === 'workspace' ? shortCwd(x.key) : (x.name || x.id);
@@ -1987,7 +2007,7 @@ function usageGroupListHtml(title, rows, kind, metric) {
     const attrs = kind === 'session' ? ` data-session-id="${escapeHtml(x.id)}" role="button" tabindex="0"` : '';
     return `<div class="usage-row usage-bar-row${kind === 'session' ? ' clickable' : ''}"${attrs} title="${escapeHtml(x.key || x.name || x.id)}">
       <span class="usage-row-name">${escapeHtml(name)}${sub ? `<small>${escapeHtml(sub)}</small>` : ''}</span>
-      <span class="usage-row-meta">${x.calls} calls · ${escapeHtml(spend)}</span>
+      <span class="usage-row-meta">${x.calls} calls · ${formatTokens(usageTokensTotal(x.tokens))} tok · ${escapeHtml(spend)}</span>
       <span class="usage-row-bar" style="width:${(val(x) / maxV * 100).toFixed(1)}%"></span>
     </div>`;
   }).join('');

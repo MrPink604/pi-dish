@@ -3675,9 +3675,11 @@ img.msg-image {
 .usage-budget.over .usage-budget-track { background: color-mix(in srgb, var(--error) 18%, var(--bg-card)); }
 .usage-budget.over .usage-budget-fill { background: var(--error); }
 
-.usage-ranges { display: flex; gap: 4px; margin: 18px 0 4px; }
+.usage-ranges { display: flex; flex-wrap: wrap; gap: 4px; margin: 18px 0 4px; align-items: center; }
 .usage-range-btn { border: 0; background: transparent; color: var(--text-muted); padding: 6px 10px; border-radius: 4px; cursor: pointer; font: inherit; font-size: 12px; }
 .usage-range-btn.active, .usage-range-btn:hover { color: var(--text); background: var(--bg-hover); }
+.usage-sort { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.usage-sort small { color: var(--text-muted); font-size: 11px; margin-right: 2px; }
 
 .usage-total-line { margin: 6px 0 2px; font-size: 12px; color: var(--text-muted); }
 .usage-total-line strong { font-size: 15px; color: var(--text-bright); }
