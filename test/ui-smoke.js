@@ -964,8 +964,20 @@ function writeRegistry(patch = {}) {
     fakeCompacting = true;
     emit('compaction_start', { reason: 'manual' });
     await desktop.waitForFunction(() =>
-      document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Compacting context…', { timeout: 3000 });
-    check(true, 'compaction drives the working badge');
+      /^Compacting context…/.test(document.querySelector('#sessionWorking .spinner-text')?.textContent || ''), { timeout: 3000 });
+    check(true, 'compaction drives the working badge (with elapsed timer)');
+
+    // A /compact typed while one runs must be refused client-side before it
+    // ever reaches the server, and the composer text must survive.
+    await desktop.fill('#promptInput', '');
+    await desktop.type('#promptInput', '/compact');
+    await desktop.click('#btnSend');
+    await desktop.waitForFunction(() =>
+      document.getElementById('status')?.textContent === 'Compaction already in progress', { timeout: 3000 });
+    check(true, 'second /compact is refused while compacting');
+    check(await desktop.evaluate(() => document.getElementById('promptInput').value) === '/compact',
+      'refused /compact keeps the composer text');
+    await desktop.fill('#promptInput', '');
 
     const repliesBefore = await desktop.evaluate(() =>
       [...document.querySelectorAll('.message.assistant')].filter((m) => /Streamed reply/.test(m.textContent)).length);
@@ -987,6 +999,31 @@ function writeRegistry(patch = {}) {
       document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Working', { timeout: 6000 });
     check(true, 'working badge resets after the flushed turn');
 
+    // Auto-compaction runs *inside* a turn (turn + compaction flags both on):
+    // the badge must switch to Compacting while it runs and hand back to the
+    // turn's Working timer when it ends. Previously the turn badge masked it
+    // and the user couldn't tell why the stream had stalled — or that a
+    // /compact sent now would corrupt the session.
+    console.log('auto-compaction mid-turn:');
+    emit('turn_start', {});
+    await desktop.waitForFunction(() =>
+      /^Working/.test(document.querySelector('#sessionWorking .spinner-text')?.textContent || ''), { timeout: 3000 });
+    emit('compaction_start', { reason: 'auto' });
+    await desktop.waitForFunction(() =>
+      /^Compacting context…/.test(document.querySelector('#sessionWorking .spinner-text')?.textContent || ''), { timeout: 3000 });
+    check(true, 'auto-compaction takes over the badge mid-turn');
+    emit('compaction_end', { reason: 'auto', result: { tokensBefore: 152300, estimatedTokensAfter: 30500 } });
+    await desktop.waitForFunction(() =>
+      /^Working/.test(document.querySelector('#sessionWorking .spinner-text')?.textContent || ''), { timeout: 3000 });
+    check(true, 'badge hands back to the turn timer when auto-compaction ends');
+    await desktop.waitForFunction(() =>
+      document.getElementById('status')?.textContent === 'Compacted: 152.3k → ~30.5k tokens', { timeout: 3000 });
+    check(true, 'estimatedTokensAfter is reported when present');
+    emit('turn_end', {});
+    await desktop.waitForFunction(() =>
+      document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Working', { timeout: 3000 });
+    check(true, 'badge fully resets after the compacted turn');
+
     // 8c-3. Tree navigation: a session_tree event means the authoritative
     // history changed (a /tree branch — from this UI, the TUI, or another
     // client), and the client must re-render the transcript from the JSONL.
@@ -1000,6 +1037,18 @@ function writeRegistry(patch = {}) {
       [...document.querySelectorAll('.message.user')].some((el) => el.textContent.includes('pre-branch marker')),
       { timeout: 5000 });
     check(true, 'session_tree triggers a transcript re-fetch (new entry renders)');
+    // That reload tore down and reopened the SSE stream; an event emitted
+    // into the gap before the new connection's subs register is silently
+    // lost. Real clients recover appended messages via the init catch-up,
+    // but a tree rewrite *shrinks* history — not append-recoverable — so
+    // prove the new stream is live before the next emit. Extension statuses
+    // are remembered server-side and replayed into every new connection, so
+    // this badge arrives whichever side of the reconnect the event lands on.
+    emit('extension_ui_request', { method: 'setStatus', statusKey: 'tree-sync', statusText: 'stream reconnected' });
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('.ext-ui-status-badge')].some((el) => el.textContent === 'stream reconnected'),
+      { timeout: 5000 });
+    emit('extension_ui_request', { method: 'setStatus', statusKey: 'tree-sync', statusText: '' });
     fs.writeFileSync(sessionFile, preBranchJsonl); // the "branch": history shrinks
     emit('session_tree', { newLeafId: 'anywhere' });
     await desktop.waitForFunction(() =>

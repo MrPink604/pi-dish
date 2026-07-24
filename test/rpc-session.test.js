@@ -226,6 +226,30 @@ test('slash commands map onto RPC protocol commands', async () => {
   assert.match(typo.body.error, /unknown or unsupported command/);
 });
 
+test('a /compact issued while one runs is refused, not forwarded to pi', async () => {
+  const before = readLog().filter(c => c.type === 'compact').length;
+  // The fixture holds the compaction open ~150ms (compaction_start streamed,
+  // response deferred) — long enough to prove the second command is gated.
+  const firstP = post(`/api/sessions/${sessionId}/command`, { message: '/compact' });
+  await new Promise(r => setTimeout(r, 40));
+
+  // Mid-compaction the session list must say so (the client's sidebar dot
+  // and SSE init frame read this flag).
+  assert.equal((await findActive(sessionId)).compacting, true, 'list reflects compacting');
+
+  const second = await post(`/api/sessions/${sessionId}/command`, { message: '/compact' });
+  assert.equal(second.status, 400);
+  assert.match(second.body.error, /already in progress/i);
+
+  const first = await firstP;
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.match(first.body.info, /Compacted/);
+  assert.equal((await findActive(sessionId)).compacting, false, 'flag clears when compaction ends');
+
+  const compacts = readLog().filter(c => c.type === 'compact').length;
+  assert.equal(compacts - before, 1, 'exactly one compact command reached pi');
+});
+
 test('POST /resume spawns pi --session and keeps the original id', async () => {
   const id = '2026-07-10T09-00-00-rpcres01';
   const dir = path.join(tmpHome, '.pi', 'agent', 'sessions', 'resumerpc');

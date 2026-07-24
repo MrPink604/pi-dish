@@ -774,6 +774,31 @@ test('publishing without a sessionId infers the most specific containing cwd', a
   }
 });
 
+test('the session list forwards the registry compacting flag', async () => {
+  // The bridge stamps compacting on its registry entry (auto- and manual
+  // compaction alike); the list must surface it — the sidebar dot and the
+  // client's per-session seed on select read it from here.
+  const ID = '2026-07-24T10-00-00-compctd1';
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const sockStub = path.join(tmpHome, 'compact-sock-stub');
+  fs.writeFileSync(sockStub, '');
+  fs.writeFileSync(path.join(registryDir, `${ID}.json`), JSON.stringify({
+    sessionId: ID, socketPath: sockStub, pid: process.pid, cwd: tmpHome,
+    sessionFile: SESSION_FILE, turnInProgress: true, compacting: true,
+  }));
+  await new Promise(r => setTimeout(r, 600)); // registry scan memo TTL
+  try {
+    const { body } = await get('/api/sessions');
+    const sess = body.active.find(s => s.id === ID);
+    assert.ok(sess, 'registered session is listed');
+    assert.equal(sess.compacting, true);
+    assert.equal(sess.turnInProgress, true);
+  } finally {
+    fs.rmSync(path.join(registryDir, `${ID}.json`), { force: true });
+  }
+});
+
 test('GET /page with an unknown token is a bare 404', async () => {
   const res = await fetch(base + '/page/does-not-exist');
   assert.equal(res.status, 404);

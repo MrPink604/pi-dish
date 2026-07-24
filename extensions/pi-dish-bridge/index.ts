@@ -50,7 +50,7 @@ const FORWARDED_EVENTS = [
   // queue_update is deliberately NOT here: pi never routes it through the
   // extension runner (verified pi 0.80.3), so pi.on("queue_update") never
   // fires. The real source is the AgentSession.subscribe() listener installed
-  // in ensureQueueSubscription() — see the capture patch at module scope.
+  // in ensureSessionSubscription() — see the capture patch at module scope.
   "auto_retry_start",
   "auto_retry_end",
   "extension_error",
@@ -261,6 +261,13 @@ export default function (pi: ExtensionAPI) {
   let compactionStuckTimer: ReturnType<typeof setTimeout> | null = null;
   const compactionQueue: Array<string | any[]> = [];
   const COMPACTION_STUCK_MS = 6 * 60 * 1000;
+  // True once ensureSessionSubscription() is listening to the AgentSession's
+  // real compaction_start/compaction_end events. While live, those drive the
+  // gate and the wire broadcasts; the session_before_compact/session_compact
+  // extension handlers below then skip their own broadcasts instead of
+  // double-reporting. (The extension pair stays as the fallback for the rare
+  // uncaptured session — nothing has called prompt/subscribe since load.)
+  let compactionEventsLive = false;
 
   // Steering/follow-up queue, mirrored from the live AgentSession's own
   // queue_update events (see the capture patch at module scope). `lastQueue`
@@ -368,26 +375,56 @@ export default function (pi: ExtensionAPI) {
     broadcast({ type: "event", event: "queue_update", data: mergedQueue() });
   }
 
-  // Subscribe to the live AgentSession's queue_update events once. Idempotent
+  // Subscribe to the live AgentSession's own event stream once. Idempotent
   // and lazy: called from session_start and whenever a client connects, so a
   // session captured after the bridge loaded (or re-captured across /reload)
-  // still gets wired up.
-  function ensureQueueSubscription(): void {
+  // still gets wired up. Carries two event families pi's extension runner
+  // never delivers:
+  //  - queue_update (steering/follow-up queues)
+  //  - compaction_start/compaction_end — unlike the extension-facing
+  //    session_before_compact/session_compact pair, these also fire when a
+  //    compaction fails or is aborted, so the send gate releases the moment
+  //    compaction actually stops instead of waiting out the stuck timer.
+  function ensureSessionSubscription(): void {
     if (queueUnsub) return;
     const s = getCapturedSession();
     if (!s) return;
     try {
       const unsub = s.subscribe((event: any) => {
-        if (event?.type !== "queue_update") return;
-        lastQueue = {
-          steering: Array.isArray(event.steering) ? [...event.steering] : [],
-          followUp: Array.isArray(event.followUp) ? [...event.followUp] : [],
-        };
-        broadcastQueue();
+        if (event?.type === "queue_update") {
+          lastQueue = {
+            steering: Array.isArray(event.steering) ? [...event.steering] : [],
+            followUp: Array.isArray(event.followUp) ? [...event.followUp] : [],
+          };
+          broadcastQueue();
+        } else if (event?.type === "compaction_start") {
+          beginCompaction();
+          broadcast({ type: "event", event: "compaction_start", data: { reason: event.reason } });
+        } else if (event?.type === "compaction_end") {
+          const r = event.result;
+          broadcast({
+            type: "event",
+            event: "compaction_end",
+            data: {
+              reason: event.reason,
+              aborted: !!event.aborted,
+              willRetry: !!event.willRetry,
+              errorMessage: event.errorMessage,
+              result: r ? { tokensBefore: r.tokensBefore, estimatedTokensAfter: r.estimatedTokensAfter } : undefined,
+            },
+          });
+          // Manual compaction emits this inside compact(), before its finally
+          // reconnects the agent — defer the gate release so flushed prompts
+          // don't start a turn mid-reconnect.
+          setTimeout(endCompaction, 0);
+        }
       });
-      if (typeof unsub === "function") queueUnsub = unsub;
+      if (typeof unsub === "function") {
+        queueUnsub = unsub;
+        compactionEventsLive = true;
+      }
     } catch (e) {
-      try { process.stderr.write(`[pi-dish-bridge] queue subscription failed: ${e}\n`); } catch {}
+      try { process.stderr.write(`[pi-dish-bridge] session subscription failed: ${e}\n`); } catch {}
     }
   }
 
@@ -654,6 +691,7 @@ export default function (pi: ExtensionAPI) {
     compacting = false;
     compactionQueue.length = 0;
     if (queueUnsub) { try { queueUnsub(); } catch {} queueUnsub = null; }
+    compactionEventsLive = false;
     lastQueue = { steering: [], followUp: [] };
     contextUsage = null;
     lastRegistrySig = null;
@@ -716,7 +754,7 @@ export default function (pi: ExtensionAPI) {
       }
     });
 
-    ensureQueueSubscription();
+    ensureSessionSubscription();
     emitTo(sock, { type: "hello", instanceId, ...stateSnapshot() });
     replayExtensionUI(sock);
   }
@@ -737,16 +775,38 @@ export default function (pi: ExtensionAPI) {
     // --- Emulated built-ins ---
     if (name === "compact") {
       if (!lastCtx) return { ok: false, error: "no active context" };
+      // pi's compact() starts by aborting the agent and rewriting its message
+      // list — triggered while a compaction (auto or manual) is already
+      // running, the two race that rewrite and corrupt the session. Refuse
+      // instead; isCompacting is pi's own authoritative flag (it also covers
+      // branch summarization, which the same race applies to).
+      if (compacting || getCapturedSession()?.isCompacting) {
+        return { ok: false, error: "Compaction already in progress — wait for it to finish." };
+      }
+      // Raise the gate before the async events land so two rapid /compact
+      // sends can't both get past the check above.
+      beginCompaction();
       // ctx.compact() is fire-and-forget and returns void (pi >= 0.80);
-      // outcome arrives via session_before_compact/session_compact (broadcast
-      // as compaction_start/compaction_end below). Older pi returned a
-      // promise — report a rejection so the client isn't stuck on "started".
-      (lastCtx.compact(args ? { customInstructions: args } : undefined) as any)
-        ?.catch?.((e: any) => {
-          console.error("[pi-dish-bridge] compact failed:", e?.message || e);
-          broadcast({ type: "event", event: "compaction_end", data: { reason: "manual", errorMessage: String(e?.message || e) } });
-          endCompaction();
-        });
+      // outcome arrives via the AgentSession compaction events (or the
+      // session_before_compact/session_compact fallback below). Older pi
+      // returned a promise — report a rejection so the client isn't stuck.
+      try {
+        (lastCtx.compact(args ? { customInstructions: args } : undefined) as any)
+          ?.catch?.((e: any) => {
+            console.error("[pi-dish-bridge] compact failed:", e?.message || e);
+            // With the session subscription live the AgentSession's own
+            // compaction_end (errorMessage) already reported and released.
+            if (!compactionEventsLive) {
+              broadcast({ type: "event", event: "compaction_end", data: { reason: "manual", errorMessage: String(e?.message || e) } });
+            }
+            endCompaction();
+          });
+      } catch (e: any) {
+        // Synchronous throw: compaction never started — drop the gate we
+        // raised optimistically or it would swallow sends until the net.
+        endCompaction();
+        return { ok: false, error: String(e?.message || e) };
+      }
       return { ok: true, info: "Compaction started" };
     }
     if (name === "dish-push") {
@@ -755,6 +815,7 @@ export default function (pi: ExtensionAPI) {
     }
     if (name === "abort") {
       if (!lastCtx) return { ok: false, error: "no active context" };
+      abortCompactionIfRunning();
       (lastCtx.abort() as any)
         ?.catch?.((e: any) => console.error("[pi-dish-bridge] abort failed:", e?.message || e));
       return { ok: true, info: "Aborted" };
@@ -905,8 +966,34 @@ export default function (pi: ExtensionAPI) {
     })();
   }
 
-  // Clear the compaction gate and flush. Idempotent: the success path
-  // (session_compact) and the stuck-timer net can both call it.
+  // pi keeps compaction on its own abort controller — plain abort() leaves a
+  // running compaction untouched. A user hitting Stop mid-compaction expects
+  // it to stop, so cancel that too. Feature-detected; the resulting
+  // compaction_end (aborted) releases the gate and informs clients.
+  function abortCompactionIfRunning(): void {
+    const s = getCapturedSession();
+    if ((compacting || s?.isCompacting) && typeof s?.abortCompaction === "function") {
+      try { s.abortCompaction(); } catch {}
+    }
+  }
+
+  // Raise the compaction gate: buffer user sends until it releases, and
+  // (re-)arm the stuck-timer net. Idempotent — the manual /compact trigger,
+  // the AgentSession compaction_start event, and the session_before_compact
+  // fallback can each fire first.
+  function beginCompaction(): void {
+    if (compactionStuckTimer) clearTimeout(compactionStuckTimer);
+    compactionStuckTimer = setTimeout(() => {
+      console.error("[pi-dish-bridge] compaction end never observed; releasing queue gate");
+      endCompaction();
+    }, COMPACTION_STUCK_MS);
+    if (compacting) return;
+    compacting = true;
+    writeRegistry();
+  }
+
+  // Clear the compaction gate and flush. Idempotent: the compaction_end
+  // paths and the stuck-timer net can all call it.
   function endCompaction(): void {
     if (compactionStuckTimer) { clearTimeout(compactionStuckTimer); compactionStuckTimer = null; }
     if (!compacting) return;
@@ -1015,6 +1102,7 @@ export default function (pi: ExtensionAPI) {
 
         case "abort": {
           if (!lastCtx) return respond(false, undefined, "no active context");
+          abortCompactionIfRunning();
           await lastCtx.abort();
           respond(true);
           return;
@@ -1098,6 +1186,11 @@ export default function (pi: ExtensionAPI) {
           // user-message re-edit text is computed here for the web composer.
           if (!lastCtx) return respond(false, undefined, "no active context");
           if (turnInProgress) return respond(false, undefined, "cannot navigate the tree while a turn is in progress");
+          // Compaction (and branch summarization) rewrite the message list;
+          // navigating the tree concurrently races that rewrite.
+          if (compacting || getCapturedSession()?.isCompacting) {
+            return respond(false, undefined, "cannot navigate the tree while compaction is in progress");
+          }
           if (!commandCtx) await acquireCommandCtx();
           if (!commandCtx) return respond(false, undefined, "no command context");
           const targetId = typeof cmd.targetId === "string" ? cmd.targetId : "";
@@ -1179,7 +1272,7 @@ export default function (pi: ExtensionAPI) {
     registryPath = path.join(REGISTRY_DIR, `${sessionId}.json`);
 
     bindSocket();
-    ensureQueueSubscription();
+    ensureSessionSubscription();
 
     writeRegistry();
     broadcast({ type: "event", event: "session_start", data: { sessionId, sessionFile, cwd } });
@@ -1225,16 +1318,12 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_before_compact", (event: any, ctx: ExtensionContext) => {
     wrapExtensionUI(ctx);
     lastCtx = ctx ?? lastCtx;
-    compacting = true;
-    if (compactionStuckTimer) clearTimeout(compactionStuckTimer);
-    // pi emits no event when compaction fails or is cancelled — only on success
-    // (session_compact). Arm a net so a failed compaction can't leave the gate
-    // stuck on and swallow every later prompt.
-    compactionStuckTimer = setTimeout(() => {
-      console.error("[pi-dish-bridge] compaction end never observed; releasing queue gate");
-      endCompaction();
-    }, COMPACTION_STUCK_MS);
-    writeRegistry();
+    // Gate + stuck-timer net regardless of source; with the session
+    // subscription live the AgentSession's compaction_start already broadcast
+    // (it fires before this extension event in both the manual and auto
+    // paths), so only the fallback broadcasts here.
+    beginCompaction();
+    if (compactionEventsLive) return;
     // Don't forward the raw event: it carries branchEntries (the whole
     // pre-compaction transcript) and an AbortSignal.
     broadcast({ type: "event", event: "compaction_start", data: { reason: event?.reason, willRetry: event?.willRetry } });
@@ -1244,6 +1333,10 @@ export default function (pi: ExtensionAPI) {
     lastCtx = ctx ?? lastCtx;
     refreshContextUsage(ctx);
     writeRegistry();
+    // With the subscription live, the richer compaction_end (result incl.
+    // estimatedTokensAfter, aborted, errorMessage) follows via the
+    // AgentSession event stream and releases the gate there.
+    if (compactionEventsLive) return;
     const entry = event?.compactionEntry;
     broadcast({
       type: "event",

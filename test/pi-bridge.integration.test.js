@@ -162,6 +162,14 @@ test.before(async () => {
     },
   }, null, 2));
 
+  // A tiny keep-recent window so the compaction test can compact the small
+  // test session (the default 20k keeps everything and pi refuses with
+  // "Nothing to compact"). Auto-compaction still never triggers: its
+  // threshold is context-window-relative and this session stays tiny.
+  fs.writeFileSync(path.join(agentDir, 'settings.json'), JSON.stringify({
+    compaction: { keepRecentTokens: 1 },
+  }, null, 2));
+
   pi = spawn(piSpec.argv[0], [...piSpec.argv.slice(1), '--mode', 'rpc', '--model', 'fakeprov/fake-model'], {
     cwd: projDir,
     env: { ...piEnv, HOME: tmpHome },
@@ -332,6 +340,59 @@ test('navigate_tree: self-primes a command context via the captured AgentSession
     .filter((b) => b.type === 'text').map((b) => b.text).join(''));
   assert.ok(!texts.some((t) => t.includes('hello integration')),
     'the abandoned branch no longer renders in the transcript');
+});
+
+// The compaction gate, against real pi: a /compact issued while a compaction
+// runs used to race pi's message rewrite and corrupt the session. The
+// summarization request goes to the fake LLM like any turn, so HOLD in the
+// custom instructions pins the compaction open; the events observed here come
+// through the bridge's AgentSession subscription (compaction_start/_end are
+// internal AgentSession events — another version-sensitive seam this pins).
+test('compaction: second /compact refused, prompts queue until compaction ends', { skip: !piOk, timeout: 60000 }, async () => {
+  const stream = sseReader(`${base}/api/sessions/${sessionId}/stream`);
+  try {
+    await stream.waitFor((e) => e.event === 'init');
+
+    // navigate_tree just cut the active branch back to the root — rebuild
+    // some history so prepareCompaction has something to summarize.
+    for (const m of ['compaction filler one', 'compaction filler two']) {
+      await post(`/api/sessions/${sessionId}/prompt`, { message: m });
+      await stream.waitFor((e) => e.event === 'turn_end', 20000);
+    }
+
+    const held = new Promise((r) => { holdArrived = r; });
+    const first = await post(`/api/sessions/${sessionId}/command`, { message: '/compact HOLD the essentials' });
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    await stream.waitFor((e) => e.event === 'compaction_start', 15000);
+    await held;
+
+    // The gate: a concurrent /compact is refused with a clear error.
+    const second = await post(`/api/sessions/${sessionId}/command`, { message: '/compact' });
+    assert.equal(second.status, 400, JSON.stringify(second.body));
+    assert.match(second.body.error || '', /already in progress/i);
+
+    // Prompts sent mid-compaction are held by the bridge and reported queued.
+    const queued = await post(`/api/sessions/${sessionId}/prompt`, { message: 'sent during compaction' });
+    assert.equal(queued.status, 200);
+    assert.equal(queued.body.result?.queued, true, JSON.stringify(queued.body));
+
+    holdRelease();
+    const end = await stream.waitFor((e) => e.event === 'compaction_end', 20000);
+    assert.ok(!end.data?.errorMessage, `compaction failed: ${JSON.stringify(end.data)}`);
+
+    // Gate released: the held prompt flushes as a real turn and persists.
+    await stream.waitFor((e) => e.event === 'turn_end', 20000);
+    const { body: msgs } = await get(`/api/sessions/${sessionId}/messages`);
+    const texts = msgs.messages.map((m) => (Array.isArray(m.content) ? m.content : [])
+      .filter((b) => b.type === 'text').map((b) => b.text).join(''));
+    assert.ok(texts.includes('sent during compaction'), 'queued prompt delivered after compaction');
+    const { body: tree } = await get(`/api/sessions/${sessionId}/tree`);
+    assert.ok((tree.nodes || []).some((n) => n.type === 'compaction'),
+      'compaction entry persisted to the JSONL');
+  } finally {
+    stream.close();
+    if (holdRelease) holdRelease();
+  }
 });
 
 // Last on purpose: reload tears the bridge down and re-registers it.

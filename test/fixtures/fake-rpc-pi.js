@@ -142,7 +142,17 @@ function handle(cmd) {
     case 'get_session_stats':
       return respond(id, { contextUsage: { tokens: 1234, contextWindow: 200000, percent: 1 } });
     case 'compact':
-      return respond(id, { tokensBefore: 1000, estimatedTokensAfter: 200 });
+      // Mirror real pi: RPC mode forwards the AgentSession's
+      // compaction_start/compaction_end events ahead of the response. The
+      // delay holds the compaction open long enough for tests to prove a
+      // concurrent /compact is refused instead of reaching pi.
+      out({ type: 'compaction_start', reason: 'manual' });
+      return (async () => {
+        await sleep(150);
+        out({ type: 'compaction_end', reason: 'manual', aborted: false, willRetry: false,
+              result: { tokensBefore: 1000, estimatedTokensAfter: 200 } });
+        respond(id, { tokensBefore: 1000, estimatedTokensAfter: 200 });
+      })();
     case 'export_html':
       return respond(id, { path: cmd.outputPath || '/tmp/fake-export.html' });
     case 'new_session':

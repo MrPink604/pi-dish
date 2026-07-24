@@ -665,8 +665,11 @@ function renderSessionItem(session, opts = {}) {
   const activeClass = currentSession?.id === session.id ? 'active' : '';
   const inactiveClass = session.isActive ? '' : 'inactive';
   // One dot, best signal wins: working (pulsing) > unread (accent) > live-in-All.
+  // Compacting shares the working dot (it's the same "busy" pulse) but names
+  // the state, since sends are held while it runs.
   let liveDot = '';
-  if (session.turnInProgress) liveDot = '<span class="session-item-status working" title="Agent working"></span>';
+  if (session.compacting) liveDot = '<span class="session-item-status working" title="Compacting context"></span>';
+  else if (session.turnInProgress) liveDot = '<span class="session-item-status working" title="Agent working"></span>';
   else if (isUnread(session)) liveDot = '<span class="session-item-status unread" title="New activity since you last looked"></span>';
   else if (sidebarTab === 'all' && session.isActive) liveDot = '<span class="live-dot" title="Active session"></span>';
   const displayName = session.name || 'Unnamed';
@@ -858,7 +861,7 @@ function renderWorkspaceNode(node) {
   let headerDot = '';
   if (isCollapsed) {
     const all = collectTreeSessions(node);
-    if (all.some(s => s.turnInProgress)) headerDot = '<span class="session-item-status working" title="Agent working"></span>';
+    if (all.some(s => s.turnInProgress || s.compacting)) headerDot = '<span class="session-item-status working" title="Agent working"></span>';
     else if (all.some(isUnread)) headerDot = '<span class="session-item-status unread" title="New activity"></span>';
   }
   let body = '';
@@ -892,7 +895,7 @@ function renderDateBucket(bucket) {
   const isCollapsed = collapsedGroups.has(key);
   let headerDot = '';
   if (isCollapsed) {
-    if (bucket.sessions.some(s => s.turnInProgress)) headerDot = '<span class="session-item-status working" title="Agent working"></span>';
+    if (bucket.sessions.some(s => s.turnInProgress || s.compacting)) headerDot = '<span class="session-item-status working" title="Agent working"></span>';
     else if (bucket.sessions.some(isUnread)) headerDot = '<span class="session-item-status unread" title="New activity"></span>';
   }
   const body = isCollapsed ? '' : bucket.sessions.map(s => renderSessionItem(s, { showCwd: true })).join('');
@@ -1038,6 +1041,7 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
   // instead of leaking the previous session's state until the init event.
   renderQueueStatus(null);
   pendingSelfEcho = null;
+  setCompacting(currentSession.isActive && !!currentSession.compacting);
   setTurnInProgress(currentSession.isActive && !!currentSession.turnInProgress);
 
   // Artifacts are per-session; clear the previous session's badge before the
@@ -1618,7 +1622,7 @@ function renderSearchView(d) {
 
   const cards = shown.map(s => {
     let dot = '';
-    if (s.turnInProgress) dot = '<span class="session-item-status working"></span>';
+    if (s.turnInProgress || s.compacting) dot = '<span class="session-item-status working"></span>';
     else if (s.isActive) dot = '<span class="live-dot"></span>';
     const count = s.matchCount
       ? `<span class="search-result-count">${s.matchCount} ${s.matchCount === 1 ? 'match' : 'matches'}</span>` : '';
@@ -3850,20 +3854,18 @@ function startMessageStream(sessionId) {
     evtSource.addEventListener('init', (e) => {
       try {
         const data = JSON.parse(e.data);
-        if (data.turnInProgress) {
-          setTurnInProgress(true);
-          setStatus('Waiting for response...', 'working');
-        } else if (data.compacting) {
-          // Connected mid-compaction (e.g. a TUI /compact) — show the indicator
-          // straight away instead of waiting for the next compaction event.
-          setTurnInProgress(false);
-          setCompacting(true);
-          setStatus('Compacting context...', 'working');
-          fetchNewMessagesSince(sessionId);
-        } else {
-          // Turn not in progress — incremental catch-up for any messages
-          // written since our initial load (avoids full reload stall).
-          setTurnInProgress(false);
+        // Both flags, independently: auto-compaction runs inside a turn
+        // (both true), a TUI /compact has neither turn nor stream events yet
+        // (compacting only), and a reconnect after either ended must clear
+        // stale indicators (both false). setCompacting first so the
+        // turn-off path doesn't wipe status a live compaction still owns.
+        setCompacting(!!data.compacting);
+        setTurnInProgress(!!data.turnInProgress);
+        if (data.compacting) setStatus('Compacting context...', 'working');
+        else if (data.turnInProgress) setStatus('Waiting for response...', 'working');
+        if (!data.turnInProgress) {
+          // No turn running — incremental catch-up for any messages written
+          // since our initial load (avoids full reload stall).
           fetchNewMessagesSince(sessionId);
         }
       } catch {}
@@ -4015,6 +4017,10 @@ function startMessageStream(sessionId) {
           setStatus('Compaction failed: ' + data.errorMessage, 'error');
           return;
         }
+        if (data.aborted) {
+          setStatus('Compaction cancelled');
+          return;
+        }
         const r = data.result;
         // The bridge path knows tokensBefore but not the post-compaction size
         // (context tokens are unknown until the next LLM response).
@@ -4052,6 +4058,7 @@ function startMessageStream(sessionId) {
     });
 
     evtSource.addEventListener('session_ended', () => {
+      setCompacting(false);
       setTurnInProgress(false);
       setStatus('Session ended');
       refreshSessions();
@@ -4233,6 +4240,13 @@ async function sendPrompt() {
 
   // Slash commands go to the command endpoint, never to the model as text.
   if (message.startsWith('/')) {
+    // The bridge refuses a /compact while one runs (concurrent compactions
+    // race pi's message rewrite); fail fast here too so the composer text
+    // survives and the feedback is immediate.
+    if (compactingNow && /^\/compact(\s|$)/.test(message)) {
+      setStatus('Compaction already in progress', 'error');
+      return;
+    }
     input.value = '';
     input.style.height = '';
     recordPrompt(message);
@@ -4279,9 +4293,10 @@ async function sendPrompt() {
     const resp = await apiSend(`/api/sessions/${currentSession.id}/prompt`, images ? { message, images } : { message });
     if (resp?.result?.queued) {
       // Held by the bridge until compaction finishes; no turn is running yet.
-      // Undo the optimistic "Working" badge and restore the compacting one.
-      setTurnInProgress(false);
+      // Raise the compacting indicator before undoing the optimistic
+      // "Working" badge so the turn-off path doesn't blank the strip/status.
       setCompacting(true);
+      setTurnInProgress(false);
       setStatus('Queued — will send when compaction finishes', 'working');
     } else {
       setStatus('Waiting for response...', 'working');
@@ -4308,9 +4323,25 @@ let turnStartedAt = null;
 let workingTicker = null;
 const runningTools = new Map(); // toolCallId -> toolName
 
+// Compaction state, tracked separately from the turn: manual compaction has
+// no turn at all, while auto-compaction runs inside one. Whichever is on,
+// the badge must say so — a send during compaction is held by the bridge,
+// and the user needs to see why nothing is streaming (and must not fire a
+// second /compact into it).
+var compactingNow = false;
+let compactingStartedAt = null;
+
 function updateWorkingIndicator() {
   const desktop = document.querySelector('#sessionWorking .spinner-text');
   const mobile = document.querySelector('#sessionWorkingMobile .spinner-text');
+  // Compacting wins the badge text over the turn: it's the rarer state and
+  // the one that changes what a send does right now.
+  if (compactingNow) {
+    const elapsed = compactingStartedAt ? formatDuration(Date.now() - compactingStartedAt) : '';
+    if (desktop) desktop.textContent = 'Compacting context…' + (elapsed ? ' ' + elapsed : '');
+    if (mobile) mobile.textContent = 'Compacting…';
+    return;
+  }
   if (!turnInProgress || !turnStartedAt) {
     if (desktop) desktop.textContent = 'Working';
     if (mobile) mobile.textContent = '';
@@ -4324,58 +4355,69 @@ function updateWorkingIndicator() {
   if (mobile) mobile.textContent = elapsed;
 }
 
+// One place decides whether the pulsing badge, its ticker, and the Stop
+// button are on: a running turn or a running compaction (or both, during
+// auto-compaction) keeps them alive. Text comes from updateWorkingIndicator.
+function syncActivityIndicator() {
+  const active = turnInProgress || compactingNow;
+  if (active) {
+    if (!workingTicker) workingTicker = setInterval(updateWorkingIndicator, 1000);
+  } else if (workingTicker) {
+    clearInterval(workingTicker);
+    workingTicker = null;
+  }
+  var workingDesktop = document.getElementById('sessionWorking');
+  var workingMobile = document.getElementById('sessionWorkingMobile');
+  if (workingDesktop) workingDesktop.classList.toggle('active', active);
+  if (workingMobile) workingMobile.classList.toggle('active', active);
+  // Stop stays reachable during compaction — the bridge cancels a running
+  // compaction on abort. Steer/follow-up only make sense against a turn,
+  // so they remain setTurnInProgress's business.
+  var btnStop = document.getElementById('btnStop');
+  if (btnStop) btnStop.style.display = active ? '' : 'none';
+  updateWorkingIndicator();
+}
+
 function setTurnInProgress(active) {
   const starting = active && !turnInProgress;
   turnInProgress = active;
   if (starting) {
     turnStartedAt = Date.now();
-    if (!workingTicker) workingTicker = setInterval(updateWorkingIndicator, 1000);
   } else if (!active) {
     turnStartedAt = null;
     runningTools.clear();
-    if (workingTicker) { clearInterval(workingTicker); workingTicker = null; }
   }
-  updateWorkingIndicator();
+  syncActivityIndicator();
   // Reflect in the sidebar immediately — the working dot shouldn't wait for
   // the next 10s poll. (turn events only stream for the viewed session.)
   if (currentSession && !!currentSession.turnInProgress !== !!active) {
     patchSession(currentSession.id, { turnInProgress: !!active });
   }
-  var btnStop = document.getElementById('btnStop');
   var btnSteer = document.getElementById('btnSteer');
   var btnFollowUp = document.getElementById('btnFollowUp');
   var btnSend = document.getElementById('btnSend');
-  if (btnStop) btnStop.style.display = active ? '' : 'none';
   if (btnSteer) btnSteer.style.display = active ? '' : 'none';
   if (btnFollowUp) btnFollowUp.style.display = active ? '' : 'none';
   if (btnSend) btnSend.style.display = active ? 'none' : '';
-  if (!active) renderQueueStatus(null);
-  
-  // Dedicated working indicator — independent of transient status text
-  var workingDesktop = document.getElementById('sessionWorking');
-  var workingMobile = document.getElementById('sessionWorkingMobile');
-  if (workingDesktop) workingDesktop.classList.toggle('active', active);
-  if (workingMobile) workingMobile.classList.toggle('active', active);
-  
-  if (!active) setStatus('');
+  // A turn ending mid-compaction (manual /compact aborts the agent first;
+  // auto-compaction holds queued sends) must not wipe the compaction badge,
+  // the held-message strip, or the status line.
+  if (!active && !compactingNow) {
+    renderQueueStatus(null);
+    setStatus('');
+  }
 }
 
-// Compaction has no turn, so setTurnInProgress doesn't cover it. Drive the same
-// working badge so a TUI-started /compact is visible in the webapp, and so the
-// user knows a send right now will be held until compaction finishes. During
-// auto-compaction a turn is already active — its "Working" badge covers it, so
-// only take over the badge when no turn is running.
 function setCompacting(active) {
-  if (turnInProgress) return; // the turn badge already owns the indicator
   const on = !!active;
-  const workingDesktop = document.getElementById('sessionWorking');
-  const workingMobile = document.getElementById('sessionWorkingMobile');
-  const desktopText = document.querySelector('#sessionWorking .spinner-text');
-  const mobileText = document.querySelector('#sessionWorkingMobile .spinner-text');
-  if (workingDesktop) workingDesktop.classList.toggle('active', on);
-  if (workingMobile) workingMobile.classList.toggle('active', on);
-  if (desktopText) desktopText.textContent = on ? 'Compacting context…' : 'Working';
-  if (mobileText) mobileText.textContent = on ? 'Compacting…' : '';
+  compactingNow = on;
+  compactingStartedAt = on ? (compactingStartedAt || Date.now()) : null;
+  syncActivityIndicator();
+  // Sidebar dot immediately, same as the turn dot (compaction events only
+  // stream for the viewed session; other rows update via the poll).
+  if (currentSession && !!currentSession.compacting !== on) {
+    patchSession(currentSession.id, { compacting: on });
+  }
 }
 
 // Steer and follow-up share everything but the endpoint and status strings.
@@ -4464,7 +4506,9 @@ async function editQueuedMessage(btn) {
 }
 
 async function abortTurn() {
-  if (!currentSession || !turnInProgress) return;
+  // Compaction counts: the bridge cancels a running compaction on abort, and
+  // its compaction_end (aborted) event clears the compacting indicator.
+  if (!currentSession || (!turnInProgress && !compactingNow)) return;
   setStatus('Stopping...', 'working');
   try {
     await apiSend('/api/sessions/' + currentSession.id + '/abort');

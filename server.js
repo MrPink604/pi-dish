@@ -360,6 +360,7 @@ function activeSessionEntry(v) {
     lastActivity: v.lastActivity,
     isActive: true,
     turnInProgress: !!v.turnInProgress,
+    compacting: !!v.compacting,
     cwd: v.cwd || null,
     sessionFile: v.sessionFile || null,
     pid: v.pid || null,
@@ -394,6 +395,7 @@ function getActiveSessions(registered = listRegisteredSessions()) {
       // isUnreadSession() flag the session unread forever and churn the sort.
       lastActivity: info.lastActivity || reg.updatedAt || new Date(0),
       turnInProgress: reg.turnInProgress,
+      compacting: reg.compacting,
       cwd: reg.cwd || info.cwd,
       sessionFile: reg.sessionFile,
       pid: reg.pid,
@@ -420,6 +422,7 @@ function getActiveSessions(registered = listRegisteredSessions()) {
       messageCount: state.messageCount,
       lastActivity: rpc.lastActivityAt,
       turnInProgress: rpc.turnInProgress,
+      compacting: rpc.compacting,
       cwd: rpc.cwd,
       sessionFile: rpc.sessionFile || state.sessionFile,
       pid: rpc.proc?.pid,
@@ -991,10 +994,20 @@ async function runRpcSlashCommand(rpc, message) {
 
   switch (name) {
     case 'compact': {
-      const result = await rpc.compact(args || undefined);
-      rpc._refreshStats();
-      const saved = result ? ` (${result.tokensBefore} → ~${result.estimatedTokensAfter} tokens)` : '';
-      return { info: `Compacted${saved}` };
+      // pi's compact() aborts the agent and rewrites its message list — a
+      // second compact issued while one runs (auto-compaction included)
+      // races that rewrite. The flag tracks pi's own compaction events plus
+      // the in-flight request below.
+      if (rpc.compacting) throw new Error('Compaction already in progress — wait for it to finish.');
+      rpc.compacting = true;
+      try {
+        const result = await rpc.compact(args || undefined);
+        rpc._refreshStats();
+        const saved = result ? ` (${result.tokensBefore} → ~${result.estimatedTokensAfter} tokens)` : '';
+        return { info: `Compacted${saved}` };
+      } finally {
+        rpc.compacting = false;
+      }
     }
     case 'abort':
       await rpc.abort();
