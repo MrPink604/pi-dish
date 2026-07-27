@@ -199,6 +199,31 @@ test('GET /api/sessions?q= filters on message content', async () => {
   assert.equal(metaMatch.searchSnippet, undefined);
 });
 
+test('GET /api/sessions?active=1&q= content-matches registered sessions', async () => {
+  // The sidebar's Active tab searches server-side too — a live session must
+  // match on transcript content (with a snippet), not just metadata.
+  const ID = '2026-07-27T10-00-00-actsrch1';
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const sockStub = path.join(tmpHome, 'actsearch-sock-stub');
+  fs.writeFileSync(sockStub, '');
+  fs.writeFileSync(path.join(registryDir, `${ID}.json`), JSON.stringify({
+    sessionId: ID, socketPath: sockStub, pid: process.pid, cwd: tmpHome,
+    sessionFile: SESSION_FILE, name: 'plain name',
+  }));
+  await new Promise(r => setTimeout(r, 600)); // registry scan memo TTL
+  try {
+    const hit = await get('/api/sessions?active=1&q=bravo');
+    const sess = hit.body.active.find(s => s.id === ID);
+    assert.ok(sess, 'content match keeps the live session in the active list');
+    assert.ok(sess.searchSnippet.includes('bravo'), `snippet shows the hit: ${sess.searchSnippet}`);
+    const miss = await get('/api/sessions?active=1&q=zzz-not-there');
+    assert.ok(!miss.body.active.some(s => s.id === ID), 'non-matching query filters it out');
+  } finally {
+    fs.rmSync(path.join(registryDir, `${ID}.json`), { force: true });
+  }
+});
+
 test('GET /api/sessions?q= speaks the filter grammar: negation, fields, dates', async () => {
   // Negation is metadata-only: the fixture's *content* has "bravo", but the
   // metadata doesn't, so -bravo must NOT hide it.

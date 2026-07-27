@@ -662,10 +662,14 @@ Each item shows one status dot, best signal first: pulsing green
 (`.session-item-status.unread`, activity since the session was last on
 screen — `isUnreadSession()` in helpers.js against the localStorage
 `pi-dish-seen` map), or the static green `.live-dot` (All tab only). The tab
-title carries the unread count (`(2) pi-dish`). Search in All mode is server-side
-(`/api/sessions?q=` — matches metadata and message content via the session
-index; content matches render their `searchSnippet` under the row with the
-tokens marked); filtering in Active mode is local and metadata-only. The
+title carries the unread count (`(2) pi-dish`). Typed queries are server-side
+on **both** tabs (`/api/sessions?q=`, plus `active=1` on the Active tab so the
+historical scan is still skipped — matches metadata and message content via
+the session index; content matches render their `searchSnippet` under the row
+with the tokens marked), so a content match can't vanish on a tab switch. The
+local metadata-only filter (`applyLocalFilter`) only bridges the debounce
+window: `renderSessions` uses it until the lists reflect the typed query
+(`listsQueriedFor`), then the server-filtered lists are authoritative. The
 filter row shows a spinner from first keystroke until results land
 (`setSearchBusy`), and `loadSessions` carries a sequence guard so a slow
 stale response can't clobber a newer one.

@@ -1323,6 +1323,25 @@ function writeRegistry(patch = {}) {
     check(await desktop.locator('.session-item-snippet').count() === 0,
       'clearing the query drops snippets and restores the list');
 
+    // 12a. Active-tab content search: queries go through the server on both
+    // tabs — a session matched by transcript content must not vanish when
+    // the tab switches (the old Active filter was local metadata-only and
+    // cleared the results).
+    await desktop.click('#tabActive');
+    await desktop.fill('#filterInput', 'existing');
+    await desktop.waitForSelector(`.session-item[data-id="${registryState.sessionId}"] .session-item-snippet`, { timeout: 5000 });
+    check(true, 'Active-tab query content-matches the live session with a snippet');
+    await desktop.click('#tabAll');
+    await desktop.waitForSelector(`.session-item[data-id="${registryState.sessionId}"] .session-item-snippet`, { timeout: 5000 });
+    await desktop.click('#tabActive');
+    await desktop.waitForSelector(`.session-item[data-id="${registryState.sessionId}"] .session-item-snippet`, { timeout: 5000 });
+    check(await desktop.evaluate(() => document.getElementById('filterInput').value) === 'existing',
+      'query survives tab switches and keeps matching on both tabs');
+    await desktop.fill('#filterInput', '');
+    await desktop.click('#tabAll');
+    await desktop.waitForFunction(() =>
+      document.querySelectorAll('#sessionList .session-item').length >= 3, null, { timeout: 5000 });
+
     // 12b. Filter grammar + saved scopes + Recent view.
     console.log('filter grammar, scopes, recent view:');
     // Negation is metadata-only and works server-side on the All tab.

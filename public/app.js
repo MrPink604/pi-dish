@@ -506,7 +506,7 @@ async function saveCurrentFilterAsScope() {
     document.getElementById('filterInput').value = '';
     filterQuery = '';
     await persistSavedFilters(next);
-    if (sidebarTab === 'all') loadSessions();
+    loadSessions(); // both tabs' lists may be server-filtered by the old query
   } catch (e) { alert('Could not save filter: ' + e.message); }
 }
 
@@ -566,30 +566,28 @@ function switchTab(tab) {
   document.getElementById('tabAll').classList.toggle('active', tab === 'all');
   document.getElementById('filterInput').placeholder = tab === 'active' ? 'Filter active sessions...' : 'Search all sessions...';
   renderSessions();
-  // Re-run any pending query under the new tab's semantics: server-side in
-  // All, full list otherwise (a server search may have narrowed `sessions`).
-  loadSessions(tab === 'all' && filterQuery ? filterQuery : undefined);
+  // Re-run any pending query under the new tab's scope (Active skips the
+  // historical scan) — both tabs search server-side, so a content match on
+  // All must not vanish when the same query lands on Active.
+  loadSessions(filterQuery || undefined);
 }
 
 function onFilterInput() {
   clearTimeout(filterDebounceTimer);
   const q = document.getElementById('filterInput').value.trim();
-  // Local filter is instant; server search is debounced
   filterQuery = q;
   renderScopeChips(); // the "+ save filter" chip tracks whether a query is typed
-  if (sidebarTab === 'all') {
-    if (q.length > 0) {
-      // Busy from the first keystroke — the debounce window is part of the
-      // latency the user sees, and a search box that shows nothing for
-      // 300ms+ reads as "not filtering".
-      setSearchBusy(true);
-      filterDebounceTimer = setTimeout(() => loadSessions(q), 300);
-    } else {
-      // Query cleared: reload the full browse list from server
-      loadSessions();
-    }
+  // Instant metadata narrowing while the server search is in flight.
+  renderSessions();
+  if (q.length > 0) {
+    // Busy from the first keystroke — the debounce window is part of the
+    // latency the user sees, and a search box that shows nothing for
+    // 300ms+ reads as "not filtering".
+    setSearchBusy(true);
+    filterDebounceTimer = setTimeout(() => loadSessions(q), 300);
   } else {
-    renderSessions();
+    // Query cleared: the lists hold server-filtered results — reload.
+    loadSessions();
   }
 }
 
@@ -605,6 +603,10 @@ function setSearchBusy(busy) {
 let loadSessionsSeq = 0; // drops out-of-order responses (cf. modelsSeq)
 let sessionIndexing = false; // server is still backfilling its session index
 let indexingRefreshTimer = null;
+// The query the current `sessions` lists were server-filtered by ('' when
+// unfiltered) — renderSessions falls back to local metadata narrowing until
+// the lists reflect what's typed.
+let listsQueriedFor = '';
 
 async function loadSessions(query, { withPrevious = sidebarTab === 'all' } = {}) {
   const seq = ++loadSessionsSeq;
@@ -630,6 +632,7 @@ async function loadSessions(query, { withPrevious = sidebarTab === 'all' } = {})
         }, 1000);
       }
     }
+    listsQueriedFor = query || '';
     const next = {
       active: data.active || [],
       previous: withPrevious ? (data.previous || []) : sessions.previous,
@@ -656,9 +659,9 @@ async function loadSessions(query, { withPrevious = sidebarTab === 'all' } = {})
   }
 }
 
-// Refresh the list, preserving an in-flight server-side search (All tab) so
-// a background poll — or the sidebar refresh button — doesn't reset it.
-function refreshSessions() { return loadSessions(sidebarTab === 'all' && filterQuery ? filterQuery : undefined); }
+// Refresh the list, preserving an in-flight server-side search so a
+// background poll — or the sidebar refresh button — doesn't reset it.
+function refreshSessions() { return loadSessions(filterQuery || undefined); }
 
 function renderSessionItem(session, opts = {}) {
   const ctxClass = contextClass(session.contextPercent);
@@ -794,9 +797,11 @@ function renderSessions() {
   const countEl = document.getElementById('countActive');
   if (countEl) countEl.textContent = active.length || '';
 
-  // In All mode with a query, the server already filtered (including message
-  // content) — don't re-filter locally.
-  const queried = (sidebarTab === 'all' && filterQuery) ? showing : applyLocalFilter(showing, filterQuery);
+  // Once the lists reflect the typed query, the server's filtering (which
+  // includes message content) is authoritative — re-filtering locally would
+  // drop content-only matches, since the local pass is metadata-only. Until
+  // that response lands, narrow locally so typing feels instant.
+  const queried = (filterQuery && listsQueriedFor === filterQuery) ? showing : applyLocalFilter(showing, filterQuery);
   // Active scopes apply client-side on top of whatever the query kept —
   // metadata/date-only by design, so they behave identically on both tabs.
   const sq = scopeQuery();
@@ -811,9 +816,11 @@ function renderSessions() {
     html += '<div class="indexing-note">Indexing sessions…</div>';
   }
   if (filtered.length === 0) {
+    // With a query, `active` is the server-filtered list — an empty one
+    // means "no matches", not "no sessions running".
     const msg = sidebarTab === 'active'
-      ? (active.length === 0 ? 'No active sessions<br><span style="font-size:11px">Click "+ New Session" or resume one from All</span>' : 'No matches')
-      : (showing.length === 0 ? 'No sessions found' : 'No matches');
+      ? (active.length === 0 && !filterQuery ? 'No active sessions<br><span style="font-size:11px">Click "+ New Session" or resume one from All</span>' : 'No matches')
+      : (showing.length === 0 && !filterQuery ? 'No sessions found' : 'No matches');
     html += `<div class="empty-session"><p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">${msg}</p></div>`;
   } else {
     const [pinned, rest] = partitionPinned(filtered, pinnedSessions);
