@@ -958,8 +958,8 @@ app.post('/api/sessions/:id/queue/cancel', async (req, res) => {
   if ((kind !== 'steering' && kind !== 'followUp') || typeof text !== 'string' || !text) {
     return res.status(400).json({ error: 'kind (steering|followUp) and non-empty text required' });
   }
-  if (index !== undefined && !Number.isInteger(index)) {
-    return res.status(400).json({ error: 'index must be an integer' });
+  if (!Number.isInteger(index) || index < 0) {
+    return res.status(400).json({ error: 'index must be a non-negative integer' });
   }
   try {
     const sess = await getLiveSession(req.params.id);
@@ -1725,24 +1725,31 @@ app.get('/api/models', async (req, res) => {
 
 // Persist the scoped-models set the same way pi's /scoped-models selector
 // does: explicit "provider/id" strings in settings.enabledModels, absent when
-// everything is enabled. pi only rewrites settings fields it modified itself
-// (merge-on-save under a file lock), so this survives a running TUI unless
-// that session also edits enabledModels; running sessions pick the new scope
-// up on their next launch.
-app.put('/api/models/enabled', (req, res) => {
+// everything is enabled. Use pi's SettingsManager rather than rewriting its
+// file ourselves: it locks, re-reads, and merges only the modified field, so
+// concurrent settings writes from a running pi keep their unrelated fields.
+app.put('/api/models/enabled', async (req, res) => {
   const { enabledIds } = req.body || {};
   const clearing = enabledIds == null;
   if (!clearing && (!Array.isArray(enabledIds) ||
       !enabledIds.every(id => typeof id === 'string' && id.trim()))) {
     return res.status(400).json({ error: 'enabledIds must be null or an array of model ids' });
   }
+  const normalizedIds = clearing ? undefined : enabledIds.map(id => id.trim());
+  if (normalizedIds && new Set(normalizedIds).size !== normalizedIds.length) {
+    return res.status(400).json({ error: 'enabledIds must not contain duplicate model ids' });
+  }
   try {
-    const settings = readPiSettings();
-    if (clearing || enabledIds.length === 0) delete settings.enabledModels;
-    else settings.enabledModels = enabledIds;
-    fs.mkdirSync(path.dirname(PI_SETTINGS_FILE), { recursive: true });
-    fs.writeFileSync(PI_SETTINGS_FILE, JSON.stringify(settings, null, 2));
-    res.json({ success: true, enabledModels: settings.enabledModels || null });
+    const sdk = await piSDK.getSDK();
+    const settingsManager = sdk.SettingsManager.create(
+      process.cwd(), path.dirname(PI_SETTINGS_FILE), { projectTrusted: false },
+    );
+    const patterns = normalizedIds?.length ? normalizedIds : undefined;
+    settingsManager.setEnabledModels(patterns);
+    await settingsManager.flush();
+    const errors = settingsManager.drainErrors();
+    if (errors.length) throw errors[0].error;
+    res.json({ success: true, enabledModels: patterns || null });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

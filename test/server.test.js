@@ -839,9 +839,10 @@ test('PUT /api/models/enabled persists pi scoped models in settings.json', async
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
   fs.writeFileSync(settingsFile, JSON.stringify({ theme: 'dark' }));
 
-  // Scope down to two models — other settings fields survive
-  const scoped = await put('/api/models/enabled', { enabledIds: ['anthropic/claude-sonnet-4-5', 'zai/glm-5.2'] });
+  // Scope down to two models — ids are normalized and other fields survive.
+  const scoped = await put('/api/models/enabled', { enabledIds: [' anthropic/claude-sonnet-4-5 ', 'zai/glm-5.2'] });
   assert.equal(scoped.status, 200);
+  assert.deepEqual(scoped.body.enabledModels, ['anthropic/claude-sonnet-4-5', 'zai/glm-5.2']);
   let settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
   assert.deepEqual(settings.enabledModels, ['anthropic/claude-sonnet-4-5', 'zai/glm-5.2']);
   assert.equal(settings.theme, 'dark');
@@ -863,6 +864,54 @@ test('PUT /api/models/enabled persists pi scoped models in settings.json', async
   assert.equal(bad.status, 400);
   const badItems = await put('/api/models/enabled', { enabledIds: ['ok', 42] });
   assert.equal(badItems.status, 400);
+  const duplicate = await put('/api/models/enabled', { enabledIds: ['x/y', ' x/y '] });
+  assert.equal(duplicate.status, 400);
+});
+
+test('PUT /api/models/enabled preserves a concurrent pi settings write', async () => {
+  const settingsFile = path.join(tmpHome, '.pi', 'agent', 'settings.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ theme: 'dark' }));
+
+  // Model a separate pi process: hold pi's own settings lock with a snapshot,
+  // then commit an unrelated field before releasing it. The API must wait,
+  // re-read that write under the same lock, and merge enabledModels into it.
+  const lockfilePath = path.join(__dirname, '..', 'node_modules', '@earendil-works',
+    'pi-coding-agent', 'node_modules', 'proper-lockfile');
+  const script = `
+    const fs = require('node:fs');
+    const lockfile = require(${JSON.stringify(lockfilePath)});
+    const file = process.argv[1];
+    const release = lockfile.lockSync(file, { realpath: false });
+    const snapshot = JSON.parse(fs.readFileSync(file, 'utf8'));
+    process.stdout.write('locked\\n');
+    setTimeout(() => {
+      snapshot.concurrentPiWrite = 'preserved';
+      fs.writeFileSync(file, JSON.stringify(snapshot, null, 2));
+      release();
+    }, 60);
+  `;
+  const { spawn } = require('node:child_process');
+  const child = spawn(process.execPath, ['-e', script, settingsFile], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let childStderr = '';
+  child.stderr.on('data', (chunk) => { childStderr += chunk; });
+  const locked = new Promise((resolve, reject) => {
+    child.stdout.once('data', resolve);
+    child.once('error', reject);
+  });
+  const exited = new Promise((resolve) => child.once('exit', resolve));
+  await locked;
+
+  const [updated, exitCode] = await Promise.all([
+    put('/api/models/enabled', { enabledIds: ['anthropic/concurrent-model'] }),
+    exited,
+  ]);
+  assert.equal(exitCode, 0, childStderr);
+  assert.equal(updated.status, 200, JSON.stringify(updated.body));
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  assert.equal(settings.theme, 'dark');
+  assert.equal(settings.concurrentPiWrite, 'preserved');
+  assert.deepEqual(settings.enabledModels, ['anthropic/concurrent-model']);
 });
 
 test('GET /stats aggregates tokens, cost, and message counts from the JSONL', async () => {
@@ -1075,8 +1124,10 @@ test('POST endpoints validate input and reject inactive sessions', async () => {
   assert.equal(noText.status, 400);
   const badIndex = await post(`/api/sessions/${SESSION_ID}/queue/cancel`, { kind: 'steering', text: 'x', index: 'first' });
   assert.equal(badIndex.status, 400);
+  const missingIndex = await post(`/api/sessions/${SESSION_ID}/queue/cancel`, { kind: 'steering', text: 'x' });
+  assert.equal(missingIndex.status, 400);
   // Valid body, but the fixture session is not live
-  const deadCancel = await post(`/api/sessions/${SESSION_ID}/queue/cancel`, { kind: 'followUp', text: 'x' });
+  const deadCancel = await post(`/api/sessions/${SESSION_ID}/queue/cancel`, { kind: 'followUp', index: 0, text: 'x' });
   assert.equal(deadCancel.status, 404);
 });
 
