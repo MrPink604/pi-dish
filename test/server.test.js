@@ -670,6 +670,74 @@ test('POST /api/pages publishes a file and /page/:token serves it live from disk
   assert.equal((await fetch(base + body.path)).status, 404);
 });
 
+test('POST /api/pages rejects malformed or unknown explicit sessionIds without creating a page', async () => {
+  const artifact = path.join(realCwd, 'invalid-session-page.html');
+  fs.writeFileSync(artifact, '<p>must not publish</p>');
+
+  for (const sessionId of [null, '', { arbitrary: true }, 'x'.repeat(513)]) {
+    const invalid = await post('/api/pages', { path: artifact, sessionId });
+    assert.equal(invalid.status, 400);
+    assert.match(invalid.body.error, /sessionId.*non-empty string.*512/);
+  }
+
+  const unknown = await post('/api/pages', { path: artifact, sessionId: 'missing-page-session' });
+  assert.equal(unknown.status, 404);
+  assert.match(unknown.body.error, /known active or historical session/);
+
+  const list = await get('/api/pages');
+  assert.ok(!list.body.some((page) => page.root === artifact), 'an invalid association creates no page record');
+});
+
+test('POST /api/pages with an invalid explicit sessionId cannot mutate an existing page association', async () => {
+  const artifact = path.join(realCwd, 'stable-page-session.html');
+  fs.writeFileSync(artifact, '<p>stable association</p>');
+  const published = await post('/api/pages', {
+    path: artifact, sessionId: REAL_CWD_ID, title: 'Original title',
+  });
+  assert.equal(published.status, 200);
+
+  const rejected = await post('/api/pages', {
+    path: artifact, sessionId: 'missing-page-session', title: 'Poisoned title',
+  });
+  assert.equal(rejected.status, 404);
+
+  const list = await get('/api/pages');
+  const preserved = list.body.find((page) => page.token === published.body.token);
+  assert.ok(preserved);
+  assert.equal(preserved.sessionId, REAL_CWD_ID);
+  assert.equal(preserved.title, 'Original title');
+  assert.equal(preserved.createdAt, published.body.createdAt);
+  await del(`/api/pages/${published.body.token}`);
+});
+
+test('POST /api/pages accepts historical and active sessionIds with idempotent reassociation', async () => {
+  const ACTIVE_ID = '2026-07-28T10-00-00-pageact1';
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const sockStub = path.join(tmpHome, 'page-active-sock-stub');
+  fs.writeFileSync(sockStub, '');
+  fs.writeFileSync(path.join(registryDir, `${ACTIVE_ID}.json`), JSON.stringify({
+    sessionId: ACTIVE_ID, socketPath: sockStub, pid: process.pid, cwd: realCwd,
+  }));
+  await new Promise(r => setTimeout(r, 600)); // registry scan memo TTL
+
+  const artifact = path.join(realCwd, 'valid-page-sessions.html');
+  fs.writeFileSync(artifact, '<p>valid associations</p>');
+  try {
+    const historical = await post('/api/pages', { path: artifact, sessionId: REAL_CWD_ID });
+    assert.equal(historical.status, 200);
+    assert.equal(historical.body.sessionId, REAL_CWD_ID);
+
+    const active = await post('/api/pages', { path: artifact, sessionId: ACTIVE_ID });
+    assert.equal(active.status, 200);
+    assert.equal(active.body.token, historical.body.token, 'republishing the root reuses its page token');
+    assert.equal(active.body.sessionId, ACTIVE_ID, 'a valid explicit session updates the association');
+    await del(`/api/pages/${active.body.token}`);
+  } finally {
+    fs.rmSync(path.join(registryDir, `${ACTIVE_ID}.json`), { force: true });
+  }
+});
+
 test('directory pages serve index.html and contained assets only', async () => {
   const dir = path.join(realCwd, 'report');
   fs.mkdirSync(path.join(dir, 'assets'), { recursive: true });
@@ -809,6 +877,7 @@ test('POST /api/pages validates the root but imposes no path gate', async () => 
   fs.writeFileSync(outside, '<p>outside</p>');
   const ok = await post('/api/pages', { path: outside });
   assert.equal(ok.status, 200);
+  assert.equal(ok.body.sessionId, null, 'omitted sessionId remains null when no live cwd contains the page');
   assert.match(await (await fetch(base + ok.body.path)).text(), /<p>outside<\/p>/);
   await del(`/api/pages/${ok.body.token}`);
 });
@@ -838,6 +907,7 @@ test('publishing without a sessionId infers the most specific containing cwd', a
   try {
     const { status, body } = await post('/api/pages', { path: artifact });
     assert.equal(status, 200);
+    assert.equal(body.sessionId, INNER_ID);
     const inner = await get(`/api/pages?sessionId=${INNER_ID}`);
     assert.ok(inner.body.some((p) => p.token === body.token),
       'the page routes to the deepest containing session cwd');
