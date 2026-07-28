@@ -37,7 +37,7 @@ const entries = [
     { type: 'text', text: 'bravo reply with **markdown**' },
     { type: 'toolCall', id: 'tc1', name: 'Bash', arguments: { command: 'ls' } },
   ], usage: { input: 100, output: 40, cacheRead: 10, cacheWrite: 5, totalTokens: 1234, cost: { total: 0.03 } }, timestamp: '2026-07-04T10:00:02.000Z' } },
-  { type: 'message', message: { role: 'toolResult', content: [
+  { type: 'message', id: 'img00001', message: { role: 'toolResult', content: [
     { type: 'text', text: 'charlie output' },
     { type: 'image', data: TINY_PNG_BASE64, mimeType: 'image/png' },
   ], timestamp: '2026-07-04T10:00:03.000Z' } },
@@ -110,6 +110,19 @@ fs.writeFileSync(TREE_FILE, [
   { type: 'message', id: 'e2', parentId: 'e1', timestamp: '2026-07-04T14:00:02.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'first answer' }], timestamp: '2026-07-04T14:00:02.000Z' } },
   { type: 'message', id: 'e3', parentId: 'e2', timestamp: '2026-07-04T14:00:03.000Z', message: { role: 'user', content: [{ type: 'text', text: 'second prompt' }], timestamp: '2026-07-04T14:00:03.000Z' } },
   { type: 'message', id: 'e4', parentId: 'e3', timestamp: '2026-07-04T14:00:04.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'second answer' }], timestamp: '2026-07-04T14:00:04.000Z' } },
+].map(e => JSON.stringify(e)).join('\n') + '\n');
+
+// Fifth fixture: an image on a tree branch. Its resource URL must remain
+// bound to the JSONL entry after a later append selects a sibling branch.
+const IMAGE_TREE_ID = '2026-07-04T14-30-00-imgtree1';
+const IMAGE_TREE_FILE = path.join(sessionDir, `${IMAGE_TREE_ID}.jsonl`);
+fs.writeFileSync(IMAGE_TREE_FILE, [
+  { type: 'session', version: 3, id: 'image-tree-session', cwd: '/home/user/proj', timestamp: '2026-07-04T14:30:00.000Z' },
+  { type: 'message', id: 'root0001', parentId: null, message: { role: 'user', content: [{ type: 'text', text: 'show image' }] } },
+  { type: 'message', id: 'base0001', parentId: 'root0001', message: { role: 'assistant', content: [{ type: 'text', text: 'reading' }] } },
+  { type: 'message', id: 'image001', parentId: 'base0001', message: { role: 'toolResult', content: [
+    { type: 'image', data: TINY_PNG_BASE64, mimeType: 'image/png' },
+  ] } },
 ].map(e => JSON.stringify(e)).join('\n') + '\n');
 
 const server = require('../server.js');
@@ -343,12 +356,41 @@ test('GET /messages moves historical image bytes to a cacheable resource', async
   const { body } = await get(`/api/sessions/${SESSION_ID}/messages`);
   const image = body.messages[2].content.find(block => block.type === 'image');
   assert.ok(image?.url, 'message payload carries an image resource URL');
+  assert.match(image.url, /\/messages\/img00001\/images\/1$/,
+    'resource identity is the stable JSONL entry id');
   assert.equal(image.data, undefined, 'base64 bytes are not duplicated into chat JSON');
 
   const res = await fetch(base + image.url);
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('content-type'), 'image/png');
   assert.deepEqual(Buffer.from(await res.arrayBuffer()), TINY_PNG);
+
+  const invalid = await fetch(`${base}/api/sessions/${SESSION_ID}/messages/%20/images/0`);
+  assert.equal(invalid.status, 400, 'malformed entry ids are rejected');
+});
+
+test('historical image resource stays stable after active branch navigation', async () => {
+  const before = await get(`/api/sessions/${IMAGE_TREE_ID}/messages`);
+  const image = before.body.messages.flatMap(message => message.content)
+    .find(block => block.type === 'image');
+  assert.match(image.url, /\/messages\/image001\/images\/0$/);
+  const first = await fetch(base + image.url);
+  assert.equal(first.status, 200);
+  assert.deepEqual(Buffer.from(await first.arrayBuffer()), TINY_PNG);
+
+  fs.appendFileSync(IMAGE_TREE_FILE, JSON.stringify({
+    type: 'message', id: 'retry001', parentId: 'base0001',
+    message: { role: 'user', content: [{ type: 'text', text: 'take the other branch' }] },
+  }) + '\n');
+  const after = await get(`/api/sessions/${IMAGE_TREE_ID}/messages`);
+  assert.equal(after.body.messages.some(message =>
+    message.content.some(block => block.type === 'image')), false,
+  'image entry is no longer on the active branch');
+
+  const second = await fetch(base + image.url);
+  assert.equal(second.status, 200, 'old lazy resource URL remains addressable');
+  assert.deepEqual(Buffer.from(await second.arrayBuffer()), TINY_PNG,
+    'the stable URL still resolves to the original entry bytes');
 });
 
 test('large chat JSON negotiates gzip and materially reduces wire bytes', async () => {
@@ -572,11 +614,19 @@ test('large diff summaries defer collapsed patches and serve one on demand', asy
   assert.ok(entry.files.every(f => f.patch === undefined && f.patchDeferred === true),
     'collapsed patch text is absent from the summary payload');
 
-  const query = new URLSearchParams({ repo: 'repo-big', path: 'file-3.txt' });
+  const query = new URLSearchParams({
+    repo: 'repo-big', path: 'file-3.txt', snapshot: body.snapshotId,
+  });
   const patch = await get(`/api/sessions/${REAL_CWD_ID}/diff/patch?${query}`);
   assert.equal(patch.status, 200);
   assert.match(patch.body.patch, /\+new 3/);
   assert.equal(patch.body.truncated, false);
+
+  fs.writeFileSync(path.join(repo, 'file-3.txt'), 'old 3\nnew 3\ndrifted after summary\n');
+  const stale = await get(`/api/sessions/${REAL_CWD_ID}/diff/patch?${query}`);
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.stale, true);
+  assert.equal(stale.body.patch, undefined, 'a changed working tree is never served under the old pane');
 });
 
 test('GET /diff 404s when the session cwd is unknown', async () => {

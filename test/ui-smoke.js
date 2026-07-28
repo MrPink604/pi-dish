@@ -79,7 +79,7 @@ appendEntry({ type: 'message', id: 'ui-a1', timestamp: '2026-07-05T00:00:02.000Z
 // A historical turn with tool activity — must fold into a closed .tool-group.
 appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'check the readme' }], timestamp: '2026-07-05T00:00:03.000Z' } });
 appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'hist1', name: 'Read', arguments: { path: 'README.md' } }], timestamp: '2026-07-05T00:00:04.000Z' } });
-appendEntry({ type: 'message', message: { role: 'toolResult', toolName: 'Read', content: [{ type: 'text', text: 'Read image file [image/png]' }, { type: 'image', data: TINY_PNG, mimeType: 'image/png' }], timestamp: '2026-07-05T00:00:05.000Z' } });
+appendEntry({ type: 'message', id: 'ui-img1', message: { role: 'toolResult', toolName: 'Read', content: [{ type: 'text', text: 'Read image file [image/png]' }, { type: 'image', data: TINY_PNG, mimeType: 'image/png' }], timestamp: '2026-07-05T00:00:05.000Z' } });
 appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'the readme says alpha' }], timestamp: '2026-07-05T00:00:06.000Z' } });
 // Pad the history so the feed is taller than the viewport — the forced-follow
 // scroll check needs a genuinely scrollable container to mean anything.
@@ -378,8 +378,8 @@ function writeRegistry(patch = {}) {
       'image tool result renders one img.msg-image inside the details');
     const historicalImage = imgResult.locator('img.msg-image');
     const imgSrc = await historicalImage.getAttribute('src');
-    check(imgSrc.startsWith(`/api/sessions/${SESSION_ID}/messages/`),
-      `historical image uses a session resource URL (got ${imgSrc})`);
+    check(imgSrc === `/api/sessions/${SESSION_ID}/messages/ui-img1/images/1`,
+      `historical image URL uses its stable JSONL entry id (got ${imgSrc})`);
     check(await historicalImage.getAttribute('loading') === 'lazy', 'historical image opts into native lazy loading');
     await desktop.waitForFunction(() => {
       const img = document.querySelector('.message.tool-result img.msg-image');
