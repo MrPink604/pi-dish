@@ -306,6 +306,49 @@ test('GET /api/search returns flat results with multi-snippets and match counts'
   assert.ok(times.every((t, i) => i === 0 || t <= times[i - 1]), 'recency order');
 });
 
+test('GET /api/search applies saved scope before the 100-result cap', async (t) => {
+  const oldBudget = process.env.PI_DISH_INDEX_SYNC_BUDGET;
+  process.env.PI_DISH_INDEX_SYNC_BUDGET = '1000';
+  const scopeDir = path.join(tmpHome, '.pi', 'agent', 'sessions', '--scope-cap-test--');
+  fs.mkdirSync(scopeDir, { recursive: true });
+  t.after(() => {
+    if (oldBudget === undefined) delete process.env.PI_DISH_INDEX_SYNC_BUDGET;
+    else process.env.PI_DISH_INDEX_SYNC_BUDGET = oldBudget;
+    fs.rmSync(scopeDir, { recursive: true, force: true });
+  });
+
+  const writeCapSession = (id, cwd, timestamp) => {
+    const file = path.join(scopeDir, `${id}.jsonl`);
+    fs.writeFileSync(file, [
+      { type: 'session', cwd, timestamp },
+      { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'scope-cap-boundary' }], timestamp } },
+    ].map(e => JSON.stringify(e)).join('\n') + '\n');
+    const at = new Date(timestamp);
+    fs.utimesSync(file, at, at);
+  };
+
+  const targetId = '2026-07-01T00-00-00-scope-target';
+  writeCapSession(targetId, '/workspace/scope-target', '2026-07-01T00:00:00.000Z');
+  for (let i = 0; i < 100; i++) {
+    writeCapSession(
+      `2026-07-02T00-00-${String(i).padStart(2, '0')}-scope-filler`,
+      '/workspace/scope-other',
+      new Date(Date.parse('2026-07-02T00:00:00.000Z') + i * 1000).toISOString(),
+    );
+  }
+
+  const unscoped = await get('/api/search?q=scope-cap-boundary');
+  assert.equal(unscoped.body.total, 101);
+  assert.equal(unscoped.body.results.length, 100);
+  assert.ok(!unscoped.body.results.some(s => s.id === targetId),
+    'the older target is beyond the unscoped cap');
+
+  const scoped = await get(`/api/search?q=scope-cap-boundary&scope=${encodeURIComponent('cwd:scope-target')}`);
+  assert.equal(scoped.body.total, 1, 'total describes the scoped result set');
+  assert.deepEqual(scoped.body.results.map(s => s.id), [targetId]);
+  assert.equal(scoped.body.hiddenByScopes, 100, 'hidden count covers the full pre-cap query result set');
+});
+
 test('GET /api/sessions reports indexing:false once the corpus is indexed', async () => {
   const { body } = await get('/api/sessions');
   assert.equal(body.indexing, false);
@@ -426,6 +469,17 @@ test('GET /search requires all tokens to match within one message', async () => 
   assert.deepEqual(both.body.matches.map(m => m.index), [3]);
   const none = await get(`/api/sessions/${SESSION_ID}/search?q=delta bravo`);
   assert.deepEqual(none.body.matches, []);
+});
+
+test('GET /search mode=any returns relevant messages for session-wide advanced matches', async () => {
+  const advanced = await get(`/api/search?q=${encodeURIComponent('delta bravo')}`);
+  assert.ok(advanced.body.results.some(s => s.id === SESSION_ID),
+    'advanced search keeps session-wide AND semantics');
+  const clickThrough = await get(`/api/sessions/${SESSION_ID}/search?q=${encodeURIComponent('delta bravo')}&mode=any`);
+  assert.deepEqual(clickThrough.body.matches, [
+    { index: 1, role: 'assistant' },
+    { index: 3, role: 'user' },
+  ]);
 });
 
 test('GET /search with empty query or unknown session', async () => {

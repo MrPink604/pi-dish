@@ -565,33 +565,47 @@ app.get('/api/sessions', (req, res) => {
 // row decoration; this is the primary content. Metadata-matched sessions
 // still get snippets when the positive tokens also occur in their content
 // (a name hit with 12 transcript mentions should show them). Recency order,
-// capped; `total` tells the client when the cap truncated.
+// capped; `total` tells the client when the cap truncated. Saved scopes are
+// a separate, metadata/date-only query because their active set is local to
+// each device; apply it here before recency sorting and truncation.
 const SEARCH_RESULT_CAP = 100;
 app.get('/api/search', (req, res) => {
   const query = (req.query.q || '').trim().toLowerCase();
+  const scopeQuery = String(req.query.scope || '').trim().toLowerCase();
   const registered = listRegisteredSessions();
   const active = getActiveSessions(registered);
   const { previous, indexing } = getPreviousSessions(registered);
   const parsed = parseSessionQuery(query);
+  const scopeParsed = parseSessionQuery(scopeQuery);
+  const hasScope = scopeParsed.terms.length || scopeParsed.since !== null || scopeParsed.before !== null;
   const contentTokens = positiveQueryTokens(parsed);
   const results = [];
+  let hiddenByScopes = 0;
   for (const session of [...active, ...previous]) {
-    let snippets = [], matchCount = 0;
-    if (evaluateSessionQuery(parsed, session)) {
-      if (contentTokens.length && session.sessionFile) {
-        ({ snippets, count: matchCount } =
-          buildSnippets(sessionIndex.getSearchText(session.sessionFile), contentTokens));
-      }
-    } else {
+    let text = null;
+    if (!evaluateSessionQuery(parsed, session)) {
       if (!contentTokens.length || !session.sessionFile) continue;
-      const text = sessionIndex.getSearchText(session.sessionFile);
+      text = sessionIndex.getSearchText(session.sessionFile);
       if (!evaluateSessionQuery(parsed, session, text)) continue;
+    }
+    if (hasScope && !evaluateSessionQuery(scopeParsed, session)) {
+      hiddenByScopes++;
+      continue;
+    }
+    let snippets = [], matchCount = 0;
+    if (contentTokens.length && session.sessionFile) {
+      text ??= sessionIndex.getSearchText(session.sessionFile);
       ({ snippets, count: matchCount } = buildSnippets(text, contentTokens));
     }
     results.push({ ...session, snippets, matchCount });
   }
   results.sort((a, b) => new Date(b.lastActivity || 0) - new Date(a.lastActivity || 0));
-  res.json({ results: results.slice(0, SEARCH_RESULT_CAP), total: results.length, indexing });
+  res.json({
+    results: results.slice(0, SEARCH_RESULT_CAP),
+    total: results.length,
+    hiddenByScopes,
+    indexing,
+  });
 });
 
 const emptyUsage = () => ({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 }, costs: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, calls: 0, measured: 0, durationMs: 0, slowestMs: 0 });
@@ -904,12 +918,18 @@ app.get('/api/sessions/:id/messages', (req, res) => {
   });
 });
 
-// In-session text search: returns the stream indexes of messages whose text
-// content matches all whitespace-separated tokens (case-insensitive). The
-// frontend uses this to jump backwards/forwards through matches.
+// In-session text search: by default, returns the stream indexes of messages
+// whose text content matches all whitespace-separated tokens (case-insensitive).
+// `mode=any` is the explicit advanced-search click-through contract: the
+// advanced result already proved session-wide AND, and this mode returns each
+// relevant message when those terms are distributed through the transcript.
 app.get('/api/sessions/:id/search', (req, res) => {
   const query = (req.query.q || '').trim().toLowerCase();
   if (!query) return res.json({ matches: [], totalMessages: 0 });
+  const mode = String(req.query.mode || 'message');
+  if (mode !== 'message' && mode !== 'any') {
+    return res.status(400).json({ error: 'mode must be message or any' });
+  }
   const sessionFile = findSessionFile(req.params.id);
   if (!sessionFile) return res.status(404).json({ error: 'Session not found' });
 
@@ -918,7 +938,10 @@ app.get('/api/sessions/:id/search', (req, res) => {
   const matches = [];
   for (let i = 0; i < all.length; i++) {
     const text = extractTextContent(all[i].content).toLowerCase();
-    if (text && tokens.every(t => text.includes(t))) matches.push({ index: i, role: all[i].role });
+    const matched = mode === 'any'
+      ? tokens.some(t => text.includes(t))
+      : tokens.every(t => text.includes(t));
+    if (text && matched) matches.push({ index: i, role: all[i].role });
   }
   res.json({ matches, totalMessages: all.length });
 });

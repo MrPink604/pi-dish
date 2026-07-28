@@ -24,6 +24,7 @@ const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-ui-'));
 process.env.HOME = tmpHome;
 process.env.PORT = '0';
 process.env.PI_DISH_TERMINAL = '1'; // exercise the terminal panel
+process.env.PI_DISH_INDEX_SYNC_BUDGET = '1000'; // deterministic >100-session search fixtures
 // Empty tmux tmpdir: describeRuntime's pid-ancestry fallback scans it, and a
 // tmux session enclosing this test would otherwise claim the dummy pi child
 // (the close-session section expects a plain "terminal" runtime).
@@ -119,13 +120,15 @@ for (let i = 0; i < 128; i++) {
     type: 'message',
     message: {
       role: i % 2 ? 'assistant' : 'user',
-      content: [{ type: 'text', text: `${i === 0 ? 'archival needle · ' : ''}beta history ${i}` }],
+      content: [{ type: 'text', text: `${i === 0 ? 'archival needle cedar · ' : i === 1 ? 'maple · ' : i === 2 ? 'boundary-contract · ' : ''}beta history ${i}` }],
       timestamp: new Date(Date.parse('2026-07-04T00:01:00.000Z') + i * 1000).toISOString(),
     },
   });
 }
-fs.writeFileSync(path.join(sessionDirB, `${BETA_ID}.jsonl`),
-  betaEntries.map((e) => JSON.stringify(e)).join('\n') + '\n');
+const betaFile = path.join(sessionDirB, `${BETA_ID}.jsonl`);
+fs.writeFileSync(betaFile, betaEntries.map((e) => JSON.stringify(e)).join('\n') + '\n');
+const betaAt = new Date('2026-07-04T00:05:00.000Z');
+fs.utimesSync(betaFile, betaAt, betaAt);
 
 // --- fake bridge socket -------------------------------------------------------
 // Speaks the newline-delimited JSON protocol from lib/bridge-session.js:
@@ -1887,6 +1890,53 @@ function writeRegistry(patch = {}) {
     // purpose — click-through warms the beta transcript cache, which would
     // break that section's cold-load page-count assertions.
     console.log('advanced search takeover:');
+    // Add the cap-boundary corpus only now: earlier sidebar tree/drag checks
+    // intentionally retain their small deterministic fixture set.
+    for (let i = 0; i < 100; i++) {
+      const id = `2026-07-06T00-00-${String(i).padStart(2, '0')}-boundary`;
+      const timestamp = new Date(Date.parse('2026-07-06T00:00:00.000Z') + i * 1000).toISOString();
+      const file = path.join(sessionDir, `${id}.jsonl`);
+      fs.writeFileSync(file, [
+        { type: 'session', cwd: CWD, timestamp },
+        { type: 'message', message: { role: 'user', content: [{ type: 'text', text: `boundary-contract filler ${i}` }], timestamp } },
+      ].map(e => JSON.stringify(e)).join('\n') + '\n');
+      const at = new Date(timestamp);
+      fs.utimesSync(file, at, at);
+    }
+    // Save a device-local active scope, then prove the beta session is absent
+    // at rank 101 without it but survives when the server applies the scope
+    // before truncating. The server-reported hidden count covers all 100
+    // excluded sessions, not merely rows from an already-capped response.
+    await desktop.fill('#filterInput', 'cwd:proj-beta');
+    await desktop.evaluate(() => { window.prompt = () => 'Beta only'; });
+    await desktop.click('.scope-chip.scope-add');
+    await desktop.waitForSelector('.scope-chip[data-name="Beta only"].active', { timeout: 5000 });
+    await desktop.click('.scope-chip[data-name="Beta only"]');
+    await desktop.waitForFunction(() =>
+      !document.querySelector('.scope-chip[data-name="Beta only"]').classList.contains('active'));
+    await desktop.evaluate(() => openSearchView('boundary-contract'));
+    await desktop.waitForFunction((id) =>
+      document.querySelectorAll('.search-result').length === 100 &&
+      !document.querySelector(`.search-result[data-id="${id}"]`) &&
+      document.querySelector('.search-count-line')?.textContent.includes('showing the 100 most recent'),
+      BETA_ID, { timeout: 10000 });
+    check(true, 'unscoped rank-101 session is omitted with truthful cap messaging');
+    await desktop.evaluate(() => closeSearchView());
+    await desktop.click('.scope-chip[data-name="Beta only"]');
+    await desktop.waitForSelector('.scope-chip[data-name="Beta only"].active', { timeout: 5000 });
+    check(await desktop.evaluate(() => localStorage.getItem('pi-dish-active-scopes')) === JSON.stringify(['Beta only']),
+      'advanced-search active scope state remains device-local');
+    await desktop.evaluate(() => openSearchView('boundary-contract'));
+    await desktop.waitForFunction((id) =>
+      document.querySelectorAll('.search-result').length === 1 &&
+      document.querySelector(`.search-result[data-id="${id}"]`) &&
+      document.querySelector('.scope-hidden-note')?.textContent === '100 hidden by scopes',
+      BETA_ID, { timeout: 10000 });
+    check(!await desktop.evaluate(() =>
+      document.querySelector('.search-count-line').textContent.includes('showing the 100 most recent')),
+      'scoped total and cap messaging describe the post-scope result set');
+    await desktop.evaluate(() => closeSearchView());
+
     await desktop.fill('#filterInput', 'beta');
     await desktop.waitForSelector('.search-open-chip', { timeout: 2000 });
     await desktop.click('.search-open-chip');
@@ -1896,12 +1946,18 @@ function writeRegistry(patch = {}) {
       'full-search chip carries the sidebar query into the takeover');
     check(await desktop.evaluate(() => document.getElementById('sessionView').offsetParent === null),
       'session view hidden while search is open');
-    await desktop.fill('#searchViewInput', 'beta answer');
-    await desktop.waitForSelector(`.search-result[data-id="${BETA_ID}"] .search-result-snippet mark`, { timeout: 5000 });
-    check(true, 'content match renders highlighted snippets');
+    await desktop.fill('#searchViewInput', 'cedar maple');
+    await desktop.waitForFunction((id) => {
+      const card = document.querySelector(`.search-result[data-id="${id}"]`);
+      const marks = [...(card?.querySelectorAll('.search-result-snippet mark') || [])]
+        .map(el => el.textContent.toLowerCase());
+      return marks.includes('cedar') && marks.includes('maple') &&
+        card.querySelector('.search-result-count')?.textContent === '2 matches';
+    }, BETA_ID, { timeout: 5000 });
+    check(true, 'distributed content terms render highlighted snippets');
     const countText = await desktop.evaluate((id) =>
       document.querySelector(`.search-result[data-id="${id}"] .search-result-count`)?.textContent, BETA_ID);
-    check(/^\d+ matches$/.test(countText || '') && parseInt(countText) > 1,
+    check(countText === '2 matches',
       `occurrence count rendered (got "${countText}")`);
     // The Active-only facet rewrites the query text (is:active) and filters.
     await desktop.click('#searchFacetActive');
@@ -1919,8 +1975,12 @@ function writeRegistry(patch = {}) {
     await desktop.waitForFunction(() =>
       !document.querySelector('.main').classList.contains('search-open'), null, { timeout: 5000 });
     await desktop.waitForSelector('mark.search-mark', { timeout: 10000 });
-    check(await desktop.evaluate(() => document.getElementById('searchInput').value) === 'beta answer',
-      'click-through hands the tokens to the in-session search');
+    check(await desktop.evaluate(() => document.getElementById('searchInput').value) === 'cedar maple',
+      'click-through hands distributed terms to the explicit in-session mode');
+    check(await desktop.evaluate(() =>
+      document.querySelector('mark.search-mark')?.textContent.toLowerCase() === 'maple' &&
+      document.getElementById('searchCount').textContent !== 'no matches'),
+      'distributed-term click-through lands on a relevant transcript message');
     check(await desktop.evaluate(() => document.getElementById('sessionName').textContent) === 'beta question',
       'click-through opened the matched session');
     // Escape closes the takeover.
@@ -1931,6 +1991,9 @@ function writeRegistry(patch = {}) {
     await desktop.waitForFunction(() =>
       !document.querySelector('.main').classList.contains('search-open'), null, { timeout: 5000 });
     check(true, 'Escape closes the search takeover');
+    await desktop.click('.scope-chip[data-name="Beta only"].active');
+    check(await desktop.evaluate(() => localStorage.getItem('pi-dish-active-scopes')) === JSON.stringify([]),
+      'toggling the saved scope inactive remains device-local');
     await desktop.fill('#filterInput', '');
     await desktop.waitForSelector(`.session-item[data-id="${registryState.sessionId}"]`, { timeout: 5000 });
     await desktop.click(`.session-item[data-id="${registryState.sessionId}"]`);
