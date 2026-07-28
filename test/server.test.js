@@ -126,6 +126,8 @@ fs.writeFileSync(IMAGE_TREE_FILE, [
 ].map(e => JSON.stringify(e)).join('\n') + '\n');
 
 const server = require('../server.js');
+const { invalidateRegistryCache } = require('../lib/bridge-session');
+const { processIdentity, processIdentityAlive } = require('../lib/process-identity');
 
 let base;
 test.before(async () => {
@@ -1312,6 +1314,39 @@ test('POST endpoints validate input and reject inactive sessions', async () => {
 
 // --- Close session + runtime location --------------------------------------
 
+test('POST /close prunes a reused registry PID without signaling the new process', async () => {
+  const { spawn } = require('node:child_process');
+  const id = '2026-07-04T15-50-00-reusedpid';
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  const registryPath = path.join(registryDir, `${id}.json`);
+  const socketPath = path.join(tmpHome, 'reused-pid-close.sock');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const actual = processIdentity(child.pid);
+  fs.writeFileSync(socketPath, 'stale socket path');
+  fs.writeFileSync(registryPath, JSON.stringify({
+    sessionId: id,
+    socketPath,
+    pid: child.pid,
+    startTime: '0',
+    sessionFile: SESSION_FILE,
+  }));
+  invalidateRegistryCache();
+
+  try {
+    const closed = await post(`/api/sessions/${id}/close`, {});
+    assert.equal(closed.status, 404, JSON.stringify(closed.body));
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(processIdentityAlive(actual), true, 'unrelated reused-PID process received no signal');
+    assert.equal(fs.existsSync(registryPath), false, 'mismatched current claim was pruned');
+  } finally {
+    try { child.kill('SIGKILL'); } catch {}
+    fs.rmSync(registryPath, { force: true });
+    fs.rmSync(socketPath, { force: true });
+    invalidateRegistryCache();
+  }
+});
+
 test('POST /close SIGTERMs the registry pid; /stats reports where it runs', async () => {
   const { spawn } = require('node:child_process');
   const CLOSE_ID = '2026-07-04T16-00-00-close001';
@@ -1324,8 +1359,10 @@ test('POST /close SIGTERMs the registry pid; /stats reports where it runs', asyn
   // alive without a listener (the close route never connects).
   const sockStub = path.join(tmpHome, 'close-sock-stub');
   fs.writeFileSync(sockStub, '');
+  const identity = processIdentity(child.pid);
   fs.writeFileSync(path.join(registryDir, `${CLOSE_ID}.json`), JSON.stringify({
-    sessionId: CLOSE_ID, socketPath: sockStub, pid: child.pid, cwd: '/home/user/proj',
+    sessionId: CLOSE_ID, socketPath: sockStub, pid: child.pid, startTime: identity.startTime,
+    cwd: '/home/user/proj',
     sessionFile: SESSION_FILE,
     // The bridge's $TMUX stamp. The socket doesn't exist, so the live pane
     // query fails — session/window stay null but the server name still shows.
@@ -1349,6 +1386,104 @@ test('POST /close SIGTERMs the registry pid; /stats reports where it runs', asyn
   } finally {
     try { child.kill('SIGKILL'); } catch {}
     fs.rmSync(path.join(registryDir, `${CLOSE_ID}.json`), { force: true });
+  }
+});
+
+test('POST /close refuses an unreachable legacy registry PID without signaling it', async () => {
+  const { spawn } = require('node:child_process');
+  const id = '2026-07-04T16-10-00-legacy-refuse';
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  const registryPath = path.join(registryDir, `${id}.json`);
+  const socketPath = path.join(tmpHome, 'legacy-refuse.sock');
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const identity = processIdentity(child.pid);
+  fs.writeFileSync(socketPath, 'not a listening socket');
+  fs.writeFileSync(registryPath, JSON.stringify({
+    sessionId: id, socketPath, pid: child.pid, sessionFile: SESSION_FILE,
+  }));
+  invalidateRegistryCache();
+
+  try {
+    const listed = await get('/api/sessions?active=1');
+    assert.ok(listed.body.active.some((session) => session.id === id),
+      'a live legacy PID remains visible without a birth marker');
+    const closed = await post(`/api/sessions/${id}/close`, {});
+    assert.equal(closed.status, 409, JSON.stringify(closed.body));
+    assert.match(closed.body.error, /without a successful bridge identity handshake/);
+    assert.equal(processIdentityAlive(identity), true, 'legacy PID received no unproven signal');
+    assert.equal(fs.existsSync(registryPath), false, 'unreachable legacy claim was pruned');
+  } finally {
+    try { child.kill('SIGKILL'); } catch {}
+    fs.rmSync(registryPath, { force: true });
+    fs.rmSync(socketPath, { force: true });
+    invalidateRegistryCache();
+  }
+});
+
+test('POST /close accepts a legacy entry only after its bridge hello proves session and PID', async () => {
+  const { spawn } = require('node:child_process');
+  const id = '2026-07-04T16-20-00-legacy-proof';
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  const registryPath = path.join(registryDir, `${id}.json`);
+  const socketPath = path.join(tmpHome, 'legacy-proof.sock');
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const sockets = [];
+  const bridge = net.createServer((sock) => {
+    sockets.push(sock);
+    sock.write(JSON.stringify({ type: 'hello', sessionId: id, pid: child.pid }) + '\n');
+  });
+  await new Promise((r) => bridge.listen(socketPath, r));
+  fs.writeFileSync(registryPath, JSON.stringify({
+    sessionId: id, socketPath, pid: child.pid, sessionFile: SESSION_FILE,
+  }));
+  invalidateRegistryCache();
+
+  try {
+    const exited = new Promise((r) => child.once('exit', (code, signal) => r(signal)));
+    const closed = await post(`/api/sessions/${id}/close`, {});
+    assert.equal(closed.status, 200, JSON.stringify(closed.body));
+    assert.equal(await exited, 'SIGTERM', 'proved legacy pi received graceful SIGTERM');
+    assert.equal(fs.existsSync(registryPath), false, 'closed legacy claim was pruned');
+  } finally {
+    try { child.kill('SIGKILL'); } catch {}
+    for (const sock of sockets) sock.destroy();
+    await new Promise((r) => bridge.close(r));
+    fs.rmSync(registryPath, { force: true });
+    invalidateRegistryCache();
+  }
+});
+
+test('POST /close preserves a legacy claim when a stale pooled hello does not match', async () => {
+  const { spawn } = require('node:child_process');
+  const id = '2026-07-04T16-30-00-legacy-mismatch';
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  const registryPath = path.join(registryDir, `${id}.json`);
+  const socketPath = path.join(tmpHome, 'legacy-mismatch.sock');
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const identity = processIdentity(child.pid);
+  const sockets = [];
+  const bridge = net.createServer((sock) => {
+    sockets.push(sock);
+    sock.write(JSON.stringify({ type: 'hello', sessionId: id, pid: process.pid }) + '\n');
+  });
+  await new Promise((r) => bridge.listen(socketPath, r));
+  fs.writeFileSync(registryPath, JSON.stringify({
+    sessionId: id, socketPath, pid: child.pid, sessionFile: SESSION_FILE,
+  }));
+  invalidateRegistryCache();
+
+  try {
+    const closed = await post(`/api/sessions/${id}/close`, {});
+    assert.equal(closed.status, 409, JSON.stringify(closed.body));
+    assert.match(closed.body.error, /did not prove the registered session and PID/);
+    assert.equal(processIdentityAlive(identity), true, 'mismatched hello authorized no signal');
+    assert.equal(fs.existsSync(registryPath), true, 'mismatch does not erase the current claim');
+  } finally {
+    try { child.kill('SIGKILL'); } catch {}
+    for (const sock of sockets) sock.destroy();
+    await new Promise((r) => bridge.close(r));
+    fs.rmSync(registryPath, { force: true });
+    invalidateRegistryCache();
   }
 });
 

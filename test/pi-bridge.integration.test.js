@@ -137,6 +137,8 @@ const extLoadCount = () => {
 };
 
 const server = require('../server.js');
+const { getBridgeSession } = require('../lib/bridge-session');
+const { processIdentity } = require('../lib/process-identity');
 
 let base;
 let pi; // the spawned real-pi child
@@ -357,6 +359,8 @@ test('the real bridge binds under a long HOME using PI_DISH_SOCKET_DIR and regis
   sessionId = entry.sessionId;
   assert.ok(sessionId, 'registry entry carries the session id');
   assert.equal(entry.pid, pi.pid, 'entry belongs to the pi we spawned');
+  assert.equal(entry.startTime, processIdentity(pi.pid)?.startTime,
+    'registry entry carries the pi process birth marker');
   // This is an actual successful bind from a HOME whose default full path is
   // too long, not merely an assertion about basename length.
   const defaultPath = path.join(tmpHome, '.pi', 'dish', 'sockets', path.basename(entry.socketPath));
@@ -371,6 +375,11 @@ test('the real bridge binds under a long HOME using PI_DISH_SOCKET_DIR and regis
     `socket basename must be hash-sized, got ${path.basename(entry.socketPath)}`);
   assert.ok(!path.basename(entry.socketPath).includes(sessionId),
     'socket path must not embed the literal session id');
+
+  const bridge = await getBridgeSession(sessionId);
+  const hello = await bridge.waitForHello();
+  assert.equal(hello.pid, pi.pid, 'bridge hello identifies the pi process');
+  assert.equal(hello.startTime, entry.startTime, 'bridge hello proves the registry birth marker');
 
   const sess = await waitFor(async () => {
     const { body } = await get('/api/sessions?active=1');
