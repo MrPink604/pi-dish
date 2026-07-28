@@ -27,10 +27,14 @@ process.env.PI_DISH_HEADLESS = 'rpc';
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-rpc-pi.js');
 const CMD_LOG = path.join(tmpHome, 'rpc-commands.jsonl');
+const START_LOG = path.join(tmpHome, 'rpc-starts.jsonl');
 process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_LOG=${CMD_LOG} ${process.execPath} ${FIXTURE}`;
+process.env.PI_FIXTURE_START_LOG = START_LOG;
 
 const server = require('../server.js');
-const { getAllRPCSessions } = require('../lib/rpc-session');
+const { getAllRPCSessions, getRPCSession } = require('../lib/rpc-session');
+const { invalidateRegistryCache } = require('../lib/bridge-session');
+const { processIdentity } = require('../lib/process-identity');
 
 let base;
 test.before(async () => {
@@ -53,6 +57,12 @@ const post = async (p, body) => {
 const readLog = () => {
   try {
     return fs.readFileSync(CMD_LOG, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+  } catch { return []; }
+};
+
+const readStarts = () => {
+  try {
+    return fs.readFileSync(START_LOG, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
   } catch { return []; }
 };
 
@@ -121,6 +131,43 @@ test('POST /api/sessions/new spawns a headless RPC pi and lists it active', asyn
   // The fixture created a real session JSONL — the message reader sees it.
   const messages = await get(`/api/sessions/${sessionId}/messages`);
   assert.equal(messages.status, 200);
+});
+
+test('an unreachable bridge falls back to the existing RPC transport without spawning', async () => {
+  const rpc = getRPCSession(sessionId);
+  assert.ok(rpc?.alive, 'fixture RPC transport is healthy');
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  const registryPath = path.join(registryDir, `${sessionId}.json`);
+  const socketPath = path.join(tmpHome, 'unreachable-bridge.sock');
+  fs.mkdirSync(registryDir, { recursive: true });
+  // A regular file exists (so registry scanning retains the claim) but cannot
+  // accept a Unix-socket connection, deterministically yielding ECONNREFUSED.
+  fs.writeFileSync(socketPath, 'not a listening socket');
+  const identity = processIdentity(process.pid);
+  fs.writeFileSync(registryPath, JSON.stringify({
+    sessionId,
+    sessionFile: rpc.sessionFile,
+    cwd: rpc.cwd,
+    socketPath,
+    pid: identity.pid,
+    startTime: identity.startTime,
+  }));
+  invalidateRegistryCache();
+  const startsBefore = readStarts().length;
+  const processCountBefore = getAllRPCSessions().length;
+
+  try {
+    const commands = await get(`/api/commands?sessionId=${encodeURIComponent(sessionId)}`);
+    assert.equal(commands.status, 200, JSON.stringify(commands.body));
+    assert.equal(readStarts().length, startsBefore, 'transport fallback did not launch another pi');
+    assert.equal(getAllRPCSessions().length, processCountBefore, 'RPC session set is unchanged');
+    assert.equal(getRPCSession(sessionId), rpc, 'the already-owned RPCSession was reused');
+    assert.equal(fs.existsSync(registryPath), false, 'definitively unreachable claim was pruned');
+  } finally {
+    fs.rmSync(registryPath, { force: true });
+    fs.rmSync(socketPath, { force: true });
+    invalidateRegistryCache();
+  }
 });
 
 test('prompt round-trips: RPC events stream over SSE and land in the JSONL', async () => {

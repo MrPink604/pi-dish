@@ -10,10 +10,15 @@ const {
   listRegisteredSessions,
   invalidateRegistryCache,
   getRegisteredSession,
+  refreshRegisteredSession,
+  sameRegistryClaim,
+  pruneRegisteredSession,
+  pruneUnreachableRegisteredSession,
   getBridgeSession,
   BridgeSession,
   REGISTRY_DIR,
-  pidAlive,
+  processIdentity,
+  processIdentityAlive,
 } = require('./lib/bridge-session');
 const { searchFiles, searchHomeDirs, completePath, isPathCompletionToken } = require('./lib/file-search');
 const { resolveFileMention, readFileForViewer } = require('./lib/file-mention');
@@ -123,11 +128,23 @@ function normalizeModels(models) {
  * alive RPCSession) or null when neither backend has it. Both classes share
  * prompt/steer/abort/setName/setThinkingLevel/getCommands/getAvailableModels/
  * respondExtensionUI; routes that need a backend-specific call branch on
- * `instanceof BridgeSession`. A failed bridge connect throws (callers' catch
- * blocks turn that into a 500, same as before).
+ * `instanceof BridgeSession`. If connecting a registered bridge fails, only
+ * an already-owned live RPCSession may be used as a fallback; transport
+ * resolution never launches another pi process. Definitively dead socket
+ * claims are pruned without touching a replacement bridge's registry file.
  */
 async function getLiveSession(sessionId) {
-  if (getRegisteredSession(sessionId)) return trackExtUIState(await getBridgeSession(sessionId));
+  const registered = getRegisteredSession(sessionId);
+  if (registered) {
+    try {
+      return trackExtUIState(await getBridgeSession(sessionId));
+    } catch (error) {
+      pruneUnreachableRegisteredSession(registered, error);
+      const rpc = getRPCSession(sessionId);
+      if (rpc?.alive) return trackExtUIState(rpc);
+      throw error;
+    }
+  }
   const rpc = getRPCSession(sessionId);
   return rpc?.alive ? trackExtUIState(rpc) : null;
 }
@@ -1857,7 +1874,7 @@ app.post('/api/sessions/:id/abort', async (req, res) => {
 app.post('/api/sessions/:id/close', async (req, res) => {
   const sessionId = req.params.id;
   const rpc = getRPCSession(sessionId);
-  const reg = getRegisteredSession(sessionId);
+  let reg = getRegisteredSession(sessionId);
   let exited;
   if (rpc?.alive) {
     rpc.kill();
@@ -1865,6 +1882,72 @@ app.post('/api/sessions/:id/close', async (req, res) => {
     // on the 'exit'-driven flag instead of the pid.
     exited = () => !rpc.alive;
   } else if (reg?.pid) {
+    const hasBirthMarker = Object.prototype.hasOwnProperty.call(reg, 'startTime');
+    let identity;
+    let legacyBridge = null;
+
+    if (!hasBirthMarker) {
+      // Legacy registry PIDs remain visible for compatibility, but kill(pid,
+      // 0) cannot prove that a reused PID is still the registered pi. Require
+      // the old bridge itself to identify this session and PID over its live
+      // socket, then capture the process's exact birth identity locally.
+      try {
+        legacyBridge = await getBridgeSession(sessionId);
+        const hello = await legacyBridge.waitForHello({ timeout: 2000 });
+        if (legacyBridge.socketPath !== reg.socketPath
+            || hello?.sessionId !== sessionId
+            || Number(hello?.pid) !== Number(reg.pid)) {
+          // The disagreement proves this pooled connection is stale, not that
+          // the on-disk claim is stale. Preserve the current claim and force a
+          // future attempt to reconnect to its listener.
+          legacyBridge.close();
+          invalidateRegistryCache();
+          return res.status(409).json({
+            error: 'Refusing to close this legacy bridge entry because its live handshake did not prove the registered session and PID. Refresh or reload the bridge, then retry.',
+          });
+        }
+        identity = processIdentity(reg.pid);
+      } catch (e) {
+        pruneUnreachableRegisteredSession(reg, e);
+        return res.status(409).json({
+          error: `Refusing to signal legacy registry pid ${reg.pid} without a successful bridge identity handshake: ${e.message}. Reload or upgrade that pi bridge, then retry.`,
+        });
+      }
+      if (!identity) {
+        pruneRegisteredSession(reg);
+        return res.status(409).json({
+          error: `Refusing to signal legacy registry pid ${reg.pid} because its exact process identity could not be verified. Reload or upgrade that pi bridge, then retry.`,
+        });
+      }
+    }
+
+    // Bypass the registry memo and re-read the claim immediately before the
+    // destructive operation. A replacement bridge for the same session must
+    // not inherit an earlier request's authorization to signal its PID.
+    const fresh = refreshRegisteredSession(sessionId);
+    if (!fresh || !sameRegistryClaim(reg, fresh)) {
+      return res.status(409).json({
+        error: 'The bridge registry identity changed while closing; no process was signaled. Refresh the session and retry.',
+      });
+    }
+    reg = fresh;
+    if (hasBirthMarker) {
+      identity = { pid: Number(reg.pid), startTime: String(reg.startTime) };
+    } else if (!legacyBridge?.alive) {
+      return res.status(409).json({
+        error: 'The legacy bridge disconnected before its process could be signaled; no process was signaled. Reload or upgrade the bridge, then retry.',
+      });
+    }
+
+    // Final birth-marker check is intentionally adjacent to SIGTERM. If the
+    // registered process exited and its PID was reused, the new process has a
+    // different starttime and is never signaled.
+    if (!processIdentityAlive(identity)) {
+      pruneRegisteredSession(reg);
+      return res.status(409).json({
+        error: `The registered pi identity for pid ${reg.pid} is stale; no process was signaled. The stale registry claim was discarded.`,
+      });
+    }
     try {
       process.kill(reg.pid, 'SIGTERM');
     } catch (e) {
@@ -1872,7 +1955,7 @@ app.post('/api/sessions/:id/close', async (req, res) => {
         return res.status(500).json({ error: `Failed to signal pi (pid ${reg.pid}): ${e.message}` });
       }
     }
-    exited = () => !pidAlive(reg.pid);
+    exited = () => !processIdentityAlive(identity);
   } else {
     return res.status(404).json({ error: 'Session not active' });
   }
@@ -1883,7 +1966,8 @@ app.post('/api/sessions/:id/close', async (req, res) => {
     if (exited()) {
       // The client re-fetches the session list on this response — don't let
       // the registry memo serve the dead session as live for another 500ms.
-      invalidateRegistryCache();
+      if (reg) pruneRegisteredSession(reg);
+      else invalidateRegistryCache();
       return res.json({ success: true });
     }
     await new Promise((r) => setTimeout(r, 150));

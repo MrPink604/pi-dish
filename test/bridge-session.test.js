@@ -11,9 +11,17 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 
-const { BridgeSession } = require('../lib/bridge-session.js');
-
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bridge-test-'));
+process.env.HOME = tmpDir;
+
+const {
+  BridgeSession,
+  REGISTRY_DIR,
+  invalidateRegistryCache,
+  listRegisteredSessions,
+  pruneRegisteredSession,
+} = require('../lib/bridge-session.js');
+const { processIdentity } = require('../lib/process-identity');
 
 test('send() resolves matched responses and times out on unanswered commands', async () => {
   const socketPath = path.join(tmpDir, 'bridge.sock');
@@ -45,6 +53,41 @@ test('send() resolves matched responses and times out on unanswered commands', a
   await new Promise((r) => server.close(r));
 });
 
+test('registry scan prunes a current entry whose process starttime does not match', () => {
+  fs.mkdirSync(REGISTRY_DIR, { recursive: true });
+  const socketPath = path.join(tmpDir, 'reused-pid.sock');
+  const registryPath = path.join(REGISTRY_DIR, 'reused-pid.json');
+  fs.writeFileSync(socketPath, 'stale socket path');
+  fs.writeFileSync(registryPath, JSON.stringify({
+    sessionId: 'reused-pid',
+    socketPath,
+    pid: process.pid,
+    startTime: '0',
+  }));
+  invalidateRegistryCache();
+
+  assert.deepEqual(listRegisteredSessions(), [], 'PID reuse cannot satisfy the old birth identity');
+  assert.equal(fs.existsSync(registryPath), false, 'stale claim is pruned');
+  assert.equal(fs.existsSync(socketPath), true, 'scanner never unlinks a possibly rebound socket path');
+});
+
+test('pruning an inspected claim preserves a replacement bridge registry entry', () => {
+  fs.mkdirSync(REGISTRY_DIR, { recursive: true });
+  const socketPath = path.join(tmpDir, 'replacement.sock');
+  const registryPath = path.join(REGISTRY_DIR, 'replacement.json');
+  const identity = processIdentity(process.pid);
+  const inspected = {
+    sessionId: 'replacement', socketPath, pid: identity.pid,
+    startTime: identity.startTime, instanceId: 'old-instance',
+  };
+  const replacement = { ...inspected, instanceId: 'new-instance' };
+  fs.writeFileSync(registryPath, JSON.stringify(replacement));
+
+  assert.equal(pruneRegisteredSession(inspected), false, 'old claim cannot prune a replacement instance');
+  assert.deepEqual(JSON.parse(fs.readFileSync(registryPath, 'utf8')), replacement);
+  fs.rmSync(registryPath, { force: true });
+});
+
 test('tracks compacting state from the hello and compaction events', async () => {
   const socketPath = path.join(tmpDir, 'bridge-compact.sock');
   let clientSock = null;
@@ -58,7 +101,8 @@ test('tracks compacting state from the hello and compaction events', async () =>
 
   const sess = new BridgeSession({ sessionId: 'compact-session', socketPath, pid: process.pid, cwd: tmpDir });
   await sess.connect();
-  await new Promise((r) => setTimeout(r, 20)); // let the hello land
+  const hello = await sess.waitForHello();
+  assert.equal(hello.type, 'hello', 'hello can be awaited as identity proof');
   assert.equal(sess.compacting, true, 'hello with compacting seeds the flag');
 
   clientSock.write(JSON.stringify({ type: 'event', event: 'compaction_end', data: {} }) + '\n');

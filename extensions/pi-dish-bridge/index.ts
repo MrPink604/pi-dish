@@ -9,6 +9,23 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 
+// Exact process-birth identity for registry consumers. A PID alone can be
+// reused after this pi exits; Linux proc field 22 is stable for this process's
+// lifetime. On platforms without /proc the marker is omitted, preserving the
+// legacy handshake-required behavior instead of publishing false identity.
+function processStartTime(pid: number): string | null {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    if (!fields[19] || fields[0] === "Z") return null;
+    return fields[19];
+  } catch {
+    return null;
+  }
+}
+
+const PROCESS_START_TIME = processStartTime(process.pid);
+
 const ROOT = path.join(os.homedir(), ".pi", "dish");
 const REGISTRY_DIR = path.join(ROOT, "sessions");
 const DEFAULT_SOCKET_DIR = path.join(ROOT, "sockets");
@@ -723,6 +740,8 @@ export default function (pi: ExtensionAPI) {
       sessionFile,
       cwd,
       pid: process.pid,
+      ...(PROCESS_START_TIME ? { startTime: PROCESS_START_TIME } : {}),
+      instanceId,
       socketPath,
       name: sessionName,
       model: modelId,
@@ -793,6 +812,7 @@ export default function (pi: ExtensionAPI) {
       thinkingLevel: getThinkingLevel(),
       name: sessionName,
       pid: process.pid,
+      ...(PROCESS_START_TIME ? { startTime: PROCESS_START_TIME } : {}),
       queue: mergedQueue(),
     };
   }
