@@ -1410,6 +1410,7 @@ function pagePayload(token, entry) {
 // The public share listener never registers, only serves known tokens.
 app.post('/api/pages', (req, res) => {
   const { path: rawPath, title, sessionId } = req.body || {};
+  const hasSessionId = Object.prototype.hasOwnProperty.call(req.body || {}, 'sessionId');
   if (typeof rawPath !== 'string' || !rawPath) {
     return res.status(400).json({ error: 'path required' });
   }
@@ -1427,7 +1428,21 @@ app.post('/api/pages', (req, res) => {
   if (stat.isDirectory() && !fs.existsSync(path.join(root, 'index.html'))) {
     return res.status(400).json({ error: 'directory pages need an index.html' });
   }
-  const associatedSessionId = sessionId || inferSessionForPath(root);
+  let associatedSessionId;
+  if (hasSessionId) {
+    associatedSessionId = shortString(sessionId, 512);
+    if (!associatedSessionId) {
+      return res.status(400).json({ error: 'sessionId must be a non-empty string (max 512 characters)' });
+    }
+    // findSessionFile deliberately accepts partial route ids; persisted page
+    // associations must instead match the canonical JSONL basename exactly.
+    if (!sessionIsActive(associatedSessionId)
+        && !enumerateSessionCandidates().some(({ id }) => id === associatedSessionId)) {
+      return res.status(404).json({ error: 'sessionId does not identify a known active or historical session' });
+    }
+  } else {
+    associatedSessionId = inferSessionForPath(root);
+  }
   const token = pages.createPage({ root, title: title || null, sessionId: associatedSessionId || null });
   res.json(pagePayload(token, pages.getPage(token)));
 });
