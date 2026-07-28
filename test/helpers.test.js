@@ -701,8 +701,9 @@ test('telemetry formatters label compact response metadata and catalog estimates
   assert.equal(H.formatResponseMetadata(msg, 'performance'), '2.0s · 30 tok/s');
   assert.equal(H.formatResponseMetadata(msg, 'performance-cost'), '2.0s · 30 tok/s · ~$0.0012');
   assert.equal(H.formatResponseMetadata({ ...msg, pricingKnown: false }, 'performance-cost'), '2.0s · 30 tok/s');
+  assert.equal(H.formatResponseMetadata({ ...msg, usage: { ...msg.usage, cost: { total: 0 } } }, 'performance-cost'), '2.0s · 30 tok/s · ~$0');
   assert.equal(H.formatResponseMetadata({ usage: { output: 1200 } }, 'compact'), '1.2k out');
-  assert.equal(H.formatEstimatedCost(undefined), '—');
+  assert.equal(H.formatEstimatedCost(undefined), 'Unavailable');
   assert.equal(H.formatEstimatedCost(0.00001), '~$0.000010', 'tiny response costs do not round to apparent zero');
 });
 
@@ -739,7 +740,8 @@ test('aggregateUsageWeekly chunks from the end and merges model rows by ref', ()
     day, calls: 1,
     tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
     costs: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
-    models: [{ ref, provider: ref.split('/')[0], model: ref.split('/')[1], calls: 1, cost, tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, reasoning: 0 } }],
+    costUnavailable: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    models: [{ ref, provider: ref.split('/')[0], model: ref.split('/')[1], calls: 1, cost, costUnavailable: { total: 0 }, tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, reasoning: 0 } }],
   });
   const daily = [];
   for (let i = 0; i < 10; i++) daily.push(mkDay(`2026-07-${String(i + 1).padStart(2, '0')}`, 1, i % 2 ? 'a/m1' : 'b/m2'));
@@ -755,6 +757,37 @@ test('aggregateUsageWeekly chunks from the end and merges model rows by ref', ()
   const refs = weeks[1].models.map(m => m.ref).sort();
   assert.deepEqual(refs, ['a/m1', 'b/m2']);
   assert.equal(weeks[1].models.reduce((s, m) => s + m.calls, 0), 7);
+});
+
+test('aggregateUsageWeekly preserves component availability across mixed days', () => {
+  const tokens = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0 };
+  const known = {
+    day: '2026-07-01', calls: 1, tokens,
+    costs: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    costUnavailable: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    models: [{ ref: 'free/model', calls: 1, cost: 0, costUnavailable: { total: 0 }, tokens }],
+  };
+  const partial = {
+    day: '2026-07-02', calls: 1, tokens,
+    costs: { input: null, output: 0.2, cacheRead: null, cacheWrite: null, total: 0.2 },
+    costUnavailable: { input: 1, output: 0, cacheRead: 1, cacheWrite: 1, total: 0 },
+    models: [{ ref: 'free/model', calls: 1, cost: 0.2, costUnavailable: { total: 0 }, tokens }],
+  };
+  let week = H.aggregateUsageWeekly([known, partial])[0];
+  assert.equal(week.costs.total, 0.2, 'known totals survive unknown components');
+  assert.equal(week.costs.input, null);
+  assert.equal(week.costUnavailable.input, 1);
+  assert.equal(week.models[0].cost, 0.2, 'explicit-zero model cost remains part of a known sum');
+
+  const missingTotal = {
+    ...partial, day: '2026-07-03', costs: { ...partial.costs, total: null },
+    costUnavailable: { ...partial.costUnavailable, total: 1 },
+    models: [{ ref: 'free/model', calls: 1, cost: null, costUnavailable: { total: 1 }, tokens }],
+  };
+  week = H.aggregateUsageWeekly([known, partial, missingTotal])[0];
+  assert.equal(week.costs.total, null, 'a mixed week never exposes a partial total');
+  assert.equal(week.costUnavailable.total, 1);
+  assert.equal(week.models[0].cost, null, 'the same all-known rule applies per model');
 });
 
 test('tmuxPrefixSeq maps tmux prefix notation to raw bytes', () => {

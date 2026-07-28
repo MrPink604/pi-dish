@@ -1105,7 +1105,8 @@ test('GET /stats aggregates tokens, cost, and message counts from the JSONL', as
   assert.equal(body.totalMessages, 5);
   assert.deepEqual(body.tokens, { input: 300, output: 100, cacheRead: 10, cacheWrite: 5, total: 415 });
   assert.ok(Math.abs(body.cost - 0.05) < 1e-9);
-  assert.deepEqual(body.costs, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.05 });
+  assert.deepEqual(body.costs, { input: null, output: null, cacheRead: null, cacheWrite: null, total: 0.05 });
+  assert.deepEqual(body.costUnavailable, { input: 2, output: 2, cacheRead: 2, cacheWrite: 2, total: 0 });
   assert.equal(body.reasoningTokens, 0);
   assert.deepEqual(body.responseTiming, { measured: 1, medianMs: 2000, slowestMs: 2000 });
   // Effective speed inputs: only the last assistant message has measurable
@@ -1118,111 +1119,151 @@ test('GET /stats aggregates tokens, cost, and message counts from the JSONL', as
   assert.equal(missing.status, 404);
 });
 
-test('usage summary filters local-day ranges and keeps timestamp-less cost all-time only', async () => {
+test('usage summary preserves cost availability through every grouping and filter', async () => {
   const usageId = 'usage-summary-' + Date.now();
   const usageFile = path.join(sessionDir, usageId + '.jsonl');
   const now = new Date();
   const old = new Date(now); old.setDate(old.getDate() - 10);
   const baselineToday = (await get('/api/usage-summary?days=1')).body;
-  const baselineAll = (await get('/api/usage-summary?days=all')).body;
-  const filterUrl = refs => '/api/usage-summary?days=all&models=' + encodeURIComponent(refs);
-  const baselinePaid = (await get(filterUrl('known/paid'))).body;
-  const baselinePair = (await get(filterUrl('known/paid,known/old-paid'))).body;
-  const baselineUnpriced = (await get(filterUrl('missing/unpriced'))).body;
+  const refs = ['audit/paid', 'audit/free', 'audit/total-only', 'audit/mixed', 'audit/old-paid', 'audit/dateless-paid'];
+  const filterUrl = (models, days = 'all', sort = 'cost') =>
+    `/api/usage-summary?days=${days}&sort=${sort}&models=${encodeURIComponent(models)}`;
   const entries = [
     { type: 'session', cwd: '/workspace/usage', timestamp: now.toISOString() },
     { type: 'message', timestamp: now.toISOString(), message: { role: 'user', content: [{ type: 'text', text: 'usage fixture' }] } },
-    { type: 'message', timestamp: now.toISOString(), message: { role: 'assistant', provider: 'known', model: 'paid', content: [],
-      usage: { input: 100, output: 10, cost: { input: 0.4, output: 0.6, total: 1 } } } },
-    { type: 'message', timestamp: now.toISOString(), message: { role: 'assistant', provider: 'missing', model: 'unpriced', content: [],
-      usage: { input: 50, output: 5, cost: { total: 0 } } } },
-    { type: 'message', timestamp: old.toISOString(), message: { role: 'assistant', provider: 'known', model: 'old-paid', content: [],
+    { type: 'message', timestamp: now.toISOString(), message: { role: 'assistant', provider: 'audit', model: 'paid', content: [],
+      usage: { input: 100, output: 10, cost: { input: 0.4, output: 0.6, cacheRead: 0, cacheWrite: 0, total: 1 } } } },
+    { type: 'message', timestamp: now.toISOString(), message: { role: 'assistant', provider: 'audit', model: 'free', content: [],
+      usage: { input: 50, output: 5, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } } },
+    { type: 'message', timestamp: now.toISOString(), message: { role: 'assistant', provider: 'audit', model: 'total-only', content: [],
+      usage: { input: 20, output: 2, cost: { total: 0.5 } } } },
+    { type: 'message', timestamp: now.toISOString(), message: { role: 'assistant', provider: 'audit', model: 'mixed', content: [],
+      usage: { input: 2, output: 1, cost: { input: 0.1, output: 0.1, cacheRead: 0, cacheWrite: 0, total: 0.2 } } } },
+    { type: 'message', timestamp: old.toISOString(), message: { role: 'assistant', provider: 'audit', model: 'old-paid', content: [],
       usage: { input: 20, output: 2, cost: { total: 2 } } } },
-    { type: 'message', message: { role: 'assistant', provider: 'known', model: 'dateless-paid', content: [],
+    { type: 'message', message: { role: 'assistant', provider: 'audit', model: 'dateless-paid', content: [],
       usage: { input: 30, output: 3, cost: { total: 4 } } } },
   ];
   fs.writeFileSync(usageFile, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
   try {
-    const today = await get('/api/usage-summary?days=1');
-    assert.equal(today.status, 200);
-    assert.equal(today.body.range, '1');
-    assert.equal(today.body.totals.calls - baselineToday.totals.calls, 2);
-    assert.equal(today.body.totals.costs.total - baselineToday.totals.costs.total, 1);
-    assert.equal(today.body.headlineCosts.today - baselineToday.headlineCosts.today, 1);
-    assert.equal(today.body.headlineCosts.days7 - baselineToday.headlineCosts.days7, 1,
-      'dateless usage must not leak into recent ranges');
-    assert.equal(today.body.headlineCosts.days30 - baselineToday.headlineCosts.days30, 3);
-    assert.equal(today.body.headlineCosts.all - baselineToday.headlineCosts.all, 7);
-    assert.equal(today.body.unpricedModelCalls - baselineToday.unpricedModelCalls, 1);
-    assert.ok(today.body.groups.models.some(m => m.key === 'missing/unpriced' && m.priced === false));
+    const knownToday = (await get(filterUrl(refs.join(','), '1'))).body;
+    assert.equal(knownToday.range, '1');
+    assert.equal(knownToday.totals.calls, 4);
+    assert.ok(Math.abs(knownToday.totals.costs.total - 1.7) < 1e-9,
+      'total stays known when every selected call reports it');
+    assert.equal(knownToday.totals.costs.input, null,
+      'a total-only call keeps the component aggregate unavailable');
+    assert.equal(knownToday.totals.costUnavailable.input, 1);
+    assert.ok(Math.abs(knownToday.headlineCosts.today - baselineToday.headlineCosts.today - 1.7) < 1e-9);
+    assert.ok(Math.abs(knownToday.headlineCosts.days7 - baselineToday.headlineCosts.days7 - 1.7) < 1e-9,
+      'old and dateless usage stay out of the recent headline');
 
-    const all = await get('/api/usage-summary?days=all');
-    assert.equal(all.body.totals.calls - baselineAll.totals.calls, 4);
-    assert.equal(all.body.totals.costs.total - baselineAll.totals.costs.total, 7);
-    assert.ok(all.body.groups.workspaces.some(w => w.key === '/workspace/usage'));
+    const free = (await get(filterUrl('audit/free'))).body;
+    assert.equal(free.totals.costs.total, 0, 'explicit-zero/free totals stay numeric');
+    assert.deepEqual(free.totals.costUnavailable,
+      { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
+    assert.equal(free.groups.models.find(m => m.key === 'audit/free').priced, true,
+      'explicit zero is available even without catalog inference');
+
+    const totalOnly = (await get(filterUrl('audit/total-only'))).body;
+    assert.equal(totalOnly.totals.costs.total, 0.5);
+    assert.equal(totalOnly.totals.costs.input, null);
+    assert.equal(totalOnly.totals.costUnavailable.input, 1);
+
+    // Add a second mixed-model call which reports input cost but no total.
+    // Every aggregate containing it must become unavailable rather than
+    // exposing the first call's partial cost.
+    fs.appendFileSync(usageFile, JSON.stringify({
+      type: 'message', timestamp: now.toISOString(), message: {
+        role: 'assistant', provider: 'audit', model: 'mixed', content: [],
+        usage: { input: 3, output: 1, cost: { input: 0.1 } },
+      },
+    }) + '\n');
+
+    const all = (await get(filterUrl(refs.join(',')))).body;
+    assert.equal(all.totals.calls, 7);
+    assert.equal(all.totals.costs.total, null, 'range total is unavailable for mixed calls');
+    assert.equal(all.totals.costUnavailable.total, 1);
+    assert.equal(all.unpricedModelCalls, 1);
+    const workspace = all.groups.workspaces.find(w => w.key === '/workspace/usage');
+    const session = all.groups.sessions.find(s => s.id === usageId);
+    assert.equal(workspace.costs.total, null);
+    assert.equal(workspace.unpricedCalls, 1);
+    assert.equal(workspace.priced, false);
+    assert.equal(session.costs.total, null);
+    assert.equal(session.unpricedCalls, 1);
+
+    const mixed = all.groups.models.find(m => m.key === 'audit/mixed');
+    assert.equal(mixed.calls, 2);
+    assert.equal(mixed.costs.input, 0.2, 'a component reported by every mixed call remains known');
+    assert.equal(mixed.costs.output, null);
+    assert.equal(mixed.costs.total, null);
+    assert.equal(mixed.costUnavailable.total, 1);
+    assert.equal(mixed.priced, false);
 
     // The daily series spans the requested range and stacks per-model data.
-    assert.equal(today.body.daily.length, 1);
-    const seven = await get('/api/usage-summary?days=7');
-    assert.equal(seven.body.daily.length, 7);
-    const todayEntry = seven.body.daily[6];
-    assert.ok(todayEntry.models.some(m => m.ref === 'known/paid' && m.cost >= 1 && m.calls >= 1),
-      'today must carry a per-model breakdown');
-    const thirty = await get('/api/usage-summary?days=30');
-    assert.equal(thirty.body.daily.length, 30);
-    assert.ok(thirty.body.daily[19].models.some(m => m.ref === 'known/old-paid' && m.cost >= 2),
+    assert.equal(all.daily.some(d => d.day === 'unknown'), false, 'dateless usage stays out of daily series');
+    const todayEntry = (await get(filterUrl(refs.join(','), '7'))).body.daily.at(-1);
+    assert.equal(todayEntry.costs.total, null);
+    const mixedDay = todayEntry.models.find(m => m.ref === 'audit/mixed');
+    assert.equal(mixedDay.cost, null);
+    assert.equal(mixedDay.costUnavailable.total, 1);
+    assert.ok(todayEntry.models.some(m => m.ref === 'audit/paid' && m.cost === 1),
+      'daily model data keeps known totals beside unavailable ones');
+    const thirty = (await get(filterUrl(refs.join(','), '30'))).body;
+    assert.equal(thirty.daily.length, 30);
+    assert.ok(thirty.daily.some(d => d.models.some(m => m.ref === 'audit/old-paid' && m.cost === 2)),
       '10-day-old usage must land on its own day');
-    assert.ok(all.body.daily.length >= 11 && all.body.daily.length <= 365,
+    assert.ok(all.daily.length >= 11 && all.daily.length <= 365,
       'all-time daily spans from the earliest dated day, capped at a year');
-    assert.ok(!all.body.daily.some(d => d.day === 'unknown'), 'dateless usage stays out of the daily series');
+    const afterMixedToday = (await get('/api/usage-summary?days=1')).body;
+    assert.equal(afterMixedToday.headlineCosts.today, null, 'headline becomes unavailable for a missing total');
+    assert.equal(afterMixedToday.headlineCostUnavailable.today - baselineToday.headlineCostUnavailable.today, 1);
 
     const invalid = await get('/api/usage-summary?days=2');
     assert.equal(invalid.status, 400);
 
-    // sort=tokens reorders the groups by displayed token totals (default is
-    // cost): paid has 110 tokens / $1 while dateless-paid has 33 tokens / $4.
+    // Cost sorting keeps known explicit zero ahead of unavailable totals;
+    // token sorting still follows the displayed token accounting.
     const modelPos = (body, ref) => body.groups.models.findIndex(m => m.key === ref);
-    assert.ok(modelPos(all.body, 'known/dateless-paid') < modelPos(all.body, 'known/paid'),
-      'default sort ranks by cost');
-    const byTokens = await get('/api/usage-summary?days=all&sort=tokens');
-    assert.equal(byTokens.body.sort, 'tokens');
-    for (const ref of ['known/paid', 'missing/unpriced', 'known/dateless-paid', 'known/old-paid'])
-      assert.ok(modelPos(byTokens.body, ref) >= 0, ref + ' present under tokens sort');
-    assert.ok(modelPos(byTokens.body, 'known/paid') < modelPos(byTokens.body, 'missing/unpriced'));
-    assert.ok(modelPos(byTokens.body, 'missing/unpriced') < modelPos(byTokens.body, 'known/dateless-paid'));
-    assert.ok(modelPos(byTokens.body, 'known/dateless-paid') < modelPos(byTokens.body, 'known/old-paid'));
+    assert.ok(modelPos(all, 'audit/dateless-paid') < modelPos(all, 'audit/paid'));
+    assert.ok(modelPos(all, 'audit/free') < modelPos(all, 'audit/mixed'),
+      'known zero sorts ahead of unavailable cost');
+    const byTokens = (await get(filterUrl(refs.join(','), 'all', 'tokens'))).body;
+    assert.equal(byTokens.sort, 'tokens');
+    assert.ok(modelPos(byTokens, 'audit/paid') < modelPos(byTokens, 'audit/free'));
+    assert.ok(modelPos(byTokens, 'audit/free') < modelPos(byTokens, 'audit/dateless-paid'));
     const badSort = await get('/api/usage-summary?days=all&sort=calls');
     assert.equal(badSort.status, 400);
 
     // Model filter: totals, daily series, and the workspace/session groups
     // reflect only the selected refs; groups.models stays the unfiltered
     // facet list the client toggles from.
-    const paid = (await get(filterUrl('known/paid'))).body;
-    assert.deepEqual(paid.models, ['known/paid']);
-    assert.equal(paid.totals.calls - baselinePaid.totals.calls, 1);
-    assert.equal(paid.totals.costs.total - baselinePaid.totals.costs.total, 1);
-    assert.ok(paid.groups.models.some(m => m.key === 'known/dateless-paid'),
+    const paid = (await get(filterUrl('audit/paid'))).body;
+    assert.deepEqual(paid.models, ['audit/paid']);
+    assert.equal(paid.totals.calls, 1);
+    assert.equal(paid.totals.costs.total, 1);
+    assert.ok(paid.groups.models.some(m => m.key === 'audit/dateless-paid'),
       'facet list keeps deselected models');
     const paidSession = paid.groups.sessions.find(s => s.id === usageId);
     assert.ok(paidSession && paidSession.calls === 1 && paidSession.costs.total === 1,
       'session group carries only the filtered model usage');
-    const wsBase = baselinePaid.groups.workspaces.find(w => w.key === '/workspace/usage');
     const wsPaid = paid.groups.workspaces.find(w => w.key === '/workspace/usage');
-    assert.equal((wsPaid?.calls || 0) - (wsBase?.calls || 0), 1,
-      'workspace group carries only the filtered model usage');
-    assert.ok(paid.daily.every(d => d.models.every(m => m.ref === 'known/paid')),
+    assert.equal(wsPaid.calls, 1, 'workspace group carries only filtered usage');
+    assert.ok(paid.daily.every(d => d.models.every(m => m.ref === 'audit/paid')),
       'daily per-model breakdowns are filtered');
-    assert.ok(paid.headlineCosts.all - baselineAll.headlineCosts.all >= 7 - 1e-9,
-      'headline KPIs stay global under a model filter');
+    assert.equal(paid.headlineCosts.today, afterMixedToday.headlineCosts.today,
+      'headline KPIs stay global under model filters');
 
-    const pair = (await get(filterUrl('known/paid,known/old-paid'))).body;
-    assert.equal(pair.totals.calls - baselinePair.totals.calls, 2);
-    assert.equal(pair.totals.costs.total - baselinePair.totals.costs.total, 3);
+    const pair = (await get(filterUrl('audit/paid,audit/old-paid'))).body;
+    assert.equal(pair.totals.calls, 2);
+    assert.equal(pair.totals.costs.total, 3);
 
-    const unpriced = (await get(filterUrl('missing/unpriced'))).body;
-    assert.equal(unpriced.totals.calls - baselineUnpriced.totals.calls, 1);
-    assert.equal(unpriced.unpricedModelCalls - baselineUnpriced.unpricedModelCalls, 1);
-    assert.equal(unpriced.groups.sessions.find(s => s.id === usageId)?.unpricedCalls, 1);
+    const unavailable = (await get(filterUrl('audit/mixed'))).body;
+    assert.equal(unavailable.totals.calls, 2);
+    assert.equal(unavailable.totals.costs.total, null);
+    assert.equal(unavailable.unpricedModelCalls, 1);
+    assert.equal(unavailable.groups.sessions.find(s => s.id === usageId)?.unpricedCalls, 1);
 
     const tooMany = await get(filterUrl(Array.from({ length: 101 }, (_, i) => 'p/m' + i).join(',')));
     assert.equal(tooMany.status, 400);

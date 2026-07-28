@@ -625,11 +625,23 @@ app.get('/api/search', (req, res) => {
   });
 });
 
-const emptyUsage = () => ({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 }, costs: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, calls: 0, measured: 0, durationMs: 0, slowestMs: 0 });
+const USAGE_COST_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'];
+const emptyUsage = () => ({
+  tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
+  costs: Object.fromEntries(USAGE_COST_KEYS.map(key => [key, 0])),
+  costUnavailable: Object.fromEntries(USAGE_COST_KEYS.map(key => [key, 0])),
+  calls: 0, measured: 0, durationMs: 0, slowestMs: 0,
+});
 function addUsage(to, from) {
   if (!from) return to;
   for (const k of Object.keys(to.tokens)) to.tokens[k] += from.tokens?.[k] || 0;
-  for (const k of Object.keys(to.costs)) to.costs[k] += from.costs?.[k] || 0;
+  for (const k of USAGE_COST_KEYS) {
+    const unavailable = from.costUnavailable?.[k] || 0;
+    to.costUnavailable[k] += unavailable;
+    const value = from.costs?.[k];
+    if (unavailable || !Number.isFinite(value)) to.costs[k] = null;
+    else if (to.costs[k] !== null) to.costs[k] += value;
+  }
   for (const k of ['calls', 'measured', 'durationMs']) to[k] += from[k] || 0;
   to.slowestMs = Math.max(to.slowestMs, from.slowestMs || 0);
   return to;
@@ -661,22 +673,21 @@ app.get('/api/usage-summary', (req, res) => {
   const scan = sessionIndex.scanSessions(candidates.map(c => c.file));
   const cutoff = range === 'all' ? null : localDay(Number(range) - 1);
   const totals = emptyUsage(), byModel = new Map(), byWorkspace = new Map(), bySession = new Map();
-  const modelOwners = [];
-  const dailyMap = new Map(), dailyModels = new Map(), headline = { today: 0, days7: 0, days30: 0, all: 0, month: 0 };
+  const dailyMap = new Map(), dailyModels = new Map();
+  const headlineUsage = Object.fromEntries(['today', 'days7', 'days30', 'all', 'month'].map(key => [key, emptyUsage()]));
   const now = new Date(), monthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-`;
   for (const c of candidates) {
     const info = scan.infos.get(c.file), usage = info?.usage;
     if (!usage) continue;
     const selected = emptyUsage();
     for (const [day, bucket] of Object.entries(usage.days || {})) {
-      const cost = bucket.costs?.total || 0;
       const dated = day !== 'unknown';
-      headline.all += cost;
-      if (dated && day === localDay()) headline.today += cost;
-      if (dated && day >= localDay(6)) headline.days7 += cost;
-      if (dated && day >= localDay(29)) headline.days30 += cost;
+      addUsage(headlineUsage.all, bucket);
+      if (dated && day === localDay()) addUsage(headlineUsage.today, bucket);
+      if (dated && day >= localDay(6)) addUsage(headlineUsage.days7, bucket);
+      if (dated && day >= localDay(29)) addUsage(headlineUsage.days30, bucket);
       if (dated) addUsage(dailyMap.get(day) || (dailyMap.set(day, emptyUsage()), dailyMap.get(day)), bucket);
-      if (dated && day.startsWith(monthPrefix)) headline.month += cost;
+      if (dated && day.startsWith(monthPrefix)) addUsage(headlineUsage.month, bucket);
       // Under a model filter the session's selected usage is rebuilt from its
       // per-model buckets below; the day buckets can't be split by model.
       if (!modelFilter && (!cutoff || (dated && day >= cutoff))) addUsage(selected, bucket);
@@ -694,7 +705,6 @@ app.get('/api/usage-summary', (req, res) => {
       if (modelSelected.calls) {
         addUsage(byModel.get(ref) || (byModel.set(ref, { ...emptyUsage(), provider: bucket.provider, model: bucket.model }), byModel.get(ref)), modelSelected);
         if (!modelFilter || modelFilter.has(ref)) {
-          modelOwners.push({ ref, sessionId: c.id, workspace: info.cwd || usage.cwd || '(unknown)', calls: modelSelected.calls });
           if (modelFilter) addUsage(selected, modelSelected);
         }
       }
@@ -705,34 +715,29 @@ app.get('/api/usage-summary', (req, res) => {
       bySession.set(c.id, { id: c.id, name: info.name || c.id, workspace: info.cwd || usage.cwd || null, ...selected });
     }
   }
-  // Do not make history wait on a host `pi --list-models` subprocess. Startup
-  // warms this cache (and /api/models refreshes it); persisted nonzero costs
-  // still identify priced calls while a catalog is unavailable.
-  const pricedRefs = new Set((modelsCache || []).filter(m => m.pricing).map(m => `${m.provider}/${m.id}`));
-  const freeRefs = new Set((modelsCache || []).filter(m => m.free).map(m => `${m.provider}/${m.id}`));
   let unpricedModelCalls = 0;
   for (const [ref, b] of byModel) {
-    b.priced = b.costs.total !== 0 || pricedRefs.has(ref) || freeRefs.has(ref);
-    if (!b.priced) {
-      b.unpricedCalls = b.calls;
-      // The bottom-of-view notice reflects the filtered totals; the facet
-      // list keeps every model's own unpriced annotation.
-      if (!modelFilter || modelFilter.has(ref)) unpricedModelCalls += b.calls;
-    }
+    b.priced = Number.isFinite(b.costs.total);
+    b.unpricedCalls = b.costUnavailable.total;
+    // The bottom-of-view notice reflects the filtered totals; the facet list
+    // keeps every model's own unavailable annotation.
+    if (!modelFilter || modelFilter.has(ref)) unpricedModelCalls += b.unpricedCalls;
   }
-  for (const owner of modelOwners) {
-    if (byModel.get(owner.ref)?.priced !== false) continue;
-    const session = bySession.get(owner.sessionId);
-    const workspace = byWorkspace.get(owner.workspace);
-    if (session) session.unpricedCalls = (session.unpricedCalls || 0) + owner.calls;
-    if (workspace) workspace.unpricedCalls = (workspace.unpricedCalls || 0) + owner.calls;
+  for (const bucket of [...byWorkspace.values(), ...bySession.values()]) {
+    bucket.priced = Number.isFinite(bucket.costs.total);
+    bucket.unpricedCalls = bucket.costUnavailable.total;
   }
   totals.unpricedCalls = unpricedModelCalls;
   // Rank by the same token total the client displays (reasoning stays out of
   // the sum there too), so the sorted order matches the numbers on screen.
   const displayedTokens = t => (t?.input || 0) + (t?.output || 0) + (t?.cacheRead || 0) + (t?.cacheWrite || 0);
-  const rank = b => sort === 'tokens' ? displayedTokens(b.tokens) : b.costs.total;
-  const top = map => [...map.entries()].map(([key, value]) => ({ key, ...value })).sort((a, b) => rank(b) - rank(a) || b.calls - a.calls).slice(0, 20);
+  const compare = (a, b) => {
+    if (sort === 'tokens') return displayedTokens(b.tokens) - displayedTokens(a.tokens) || b.calls - a.calls;
+    const aKnown = Number.isFinite(a.costs?.total), bKnown = Number.isFinite(b.costs?.total);
+    if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
+    return (bKnown ? b.costs.total - a.costs.total : 0) || b.calls - a.calls;
+  };
+  const top = map => [...map.entries()].map(([key, value]) => ({ key, ...value })).sort(compare).slice(0, 20);
   // The daily series spans the requested range (for 'all', from the earliest
   // dated usage, capped at a year) so the chart always reflects the selected
   // window. Each day carries a per-model breakdown so the client can stack the
@@ -757,14 +762,16 @@ app.get('/api/usage-summary', (req, res) => {
     const dayEntries = [...(dailyModels.get(day)?.entries() || [])]
       .filter(([ref]) => !modelFilter || modelFilter.has(ref));
     const models = dayEntries
-      .map(([ref, b]) => ({ ref, provider: b.provider, model: b.model, calls: b.calls, cost: b.costs.total, tokens: b.tokens }))
-      .sort((a, b) => b.cost - a.cost || b.calls - a.calls);
+      .map(([ref, b]) => ({ ref, provider: b.provider, model: b.model, calls: b.calls, cost: b.costs.total, costUnavailable: b.costUnavailable, tokens: b.tokens }))
+      .sort((a, b) => Number.isFinite(b.cost) - Number.isFinite(a.cost) || (Number.isFinite(b.cost) ? b.cost - a.cost : 0) || b.calls - a.calls);
     if (!modelFilter) return { day, ...(dailyMap.get(day) || emptyUsage()), models };
     const dayTotal = emptyUsage();
     for (const [, b] of dayEntries) addUsage(dayTotal, b);
     return { day, ...dayTotal, models };
   });
-  res.json({ range, sort, models: modelFilter ? [...modelFilter] : null, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort((a, b) => rank(b) - rank(a) || b.calls - a.calls).slice(0, 20) }, headlineCosts: headline, daily, unpricedModelCalls, indexing: scan.indexing, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
+  const headlineCosts = Object.fromEntries(Object.entries(headlineUsage).map(([key, bucket]) => [key, bucket.costs.total]));
+  const headlineCostUnavailable = Object.fromEntries(Object.entries(headlineUsage).map(([key, bucket]) => [key, bucket.costUnavailable.total]));
+  res.json({ range, sort, models: modelFilter ? [...modelFilter] : null, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort(compare).slice(0, 20) }, headlineCosts, headlineCostUnavailable, daily, unpricedModelCalls, indexing: scan.indexing, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
 });
 
 // Saved sidebar filters ("scopes") are server-global like the budget: the
@@ -1138,7 +1145,7 @@ app.get('/api/sessions/:id/stats', async (req, res) => {
     const sessionFile = findSessionFile(sessionId);
     if (!sessionFile) return res.status(404).json({ error: 'Session not found' });
 
-    const { tokens, reasoningTokens, cost, costs, responseTiming, userMessages, assistantMessages, toolCalls, toolResults, genMs, genOutput } =
+    const { tokens, reasoningTokens, cost, costs, costUnavailable, responseTiming, userMessages, assistantMessages, toolCalls, toolResults, genMs, genOutput } =
       getSessionStats(sessionFile);
 
     const reg = getRegisteredSession(sessionId);
@@ -1159,6 +1166,7 @@ app.get('/api/sessions/:id/stats', async (req, res) => {
       tokens: { ...tokens, total: tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite },
       cost,
       costs,
+      costUnavailable,
       reasoningTokens,
       responseTiming,
       genMs,

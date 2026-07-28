@@ -18,6 +18,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const net = require('node:net');
 const path = require('node:path');
+const { processIdentity } = require('../lib/process-identity');
 
 // --- temp HOME with one live fixture session ---------------------------------
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-ui-'));
@@ -76,7 +77,7 @@ appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text'
 // Entry id + response timing (start = message.timestamp ms epoch, end =
 // entry timestamp): 45 output tokens in 1.5s → the header shows "30 tok/s"
 // and the 🔗 button deep-links ?targetId=ui-a1.
-appendEntry({ type: 'message', id: 'ui-a1', timestamp: '2026-07-05T00:00:02.000Z', message: { role: 'assistant', provider: 'test', model: 'smoke-model', stopReason: 'stop', content: [{ type: 'text', text: 'existing **answer**' }], timestamp: Date.parse('2026-07-05T00:00:00.500Z'), usage: { input: 100, output: 45, reasoning: 5, cacheRead: 20, cacheWrite: 10, cost: { input: 0.0003, output: 0.000675, cacheRead: 0.00001, cacheWrite: 0.00002, total: 0.001005 } } } });
+appendEntry({ type: 'message', id: 'ui-a1', timestamp: '2026-07-05T00:00:02.000Z', message: { role: 'assistant', provider: 'test', model: 'smoke-model', stopReason: 'stop', content: [{ type: 'text', text: 'existing **answer**' }], timestamp: Date.parse('2026-07-05T00:00:00.500Z'), usage: { input: 100, output: 45, reasoning: 5, cacheRead: 20, cacheWrite: 10, cost: { total: 0.001005 } } } });
 // A historical turn with tool activity — must fold into a closed .tool-group.
 appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'check the readme' }], timestamp: '2026-07-05T00:00:03.000Z' } });
 appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'hist1', name: 'Read', arguments: { path: 'README.md' } }], timestamp: '2026-07-05T00:00:04.000Z' } });
@@ -307,6 +308,8 @@ let registryState = {
   socketPath,
   sessionFile,
   pid: process.pid,
+  startTime: processIdentity(process.pid)?.startTime,
+  instanceId: 'ui-smoke-main',
   cwd: CWD,
   name: 'smoke session',
   model: 'smoke-model',
@@ -454,7 +457,11 @@ function writeRegistry(patch = {}) {
     const speedBadge = desktop.locator('.message.assistant .message-speed', { hasText: '30 tok/s' });
     check(await speedBadge.count() === 1, 'timed assistant message shows 30 tok/s');
     await speedBadge.click();
-    check((await desktop.locator('#responseDetailsBody').textContent()).includes('Estimated total'), 'response details shows estimated costs');
+    const detailRows = await desktop.locator('#responseDetailsBody tr').allTextContents();
+    check(detailRows.some(t => t.includes('Estimated input') && t.includes('Unavailable')),
+      'response details label an omitted component unavailable');
+    check(detailRows.some(t => t.includes('Estimated total') && t.includes('~$0.0010')),
+      'response details keep a known total beside unavailable components');
     await desktop.keyboard.press('Escape');
     await desktop.click('.global-settings-btn');
     await desktop.waitForSelector('#responseMetadataMode');
@@ -481,8 +488,11 @@ function writeRegistry(patch = {}) {
     await desktop.click('#sessionContext');
     await desktop.waitForSelector('#statsModal .stats-copy', { timeout: 2000 });
     // Session-wide speed row from the one timed assistant message.
-    check(/30 tok\/s avg/.test(await desktop.locator('#statsBody').textContent()),
+    const statsText = await desktop.locator('#statsBody').textContent();
+    check(/30 tok\/s avg/.test(statsText),
       'stats modal shows the session average speed');
+    check(statsText.includes('Estimated totalUnavailable') && statsText.includes('input Unavailable'),
+      'mixed session stats do not format incomplete costs as zero');
     // Scope to the table — the share section (created by the message-link
     // step above) renders its own .stats-copy after it.
     const fileBtn = desktop.locator('.stats-table .stats-copy').last();
@@ -2028,12 +2038,27 @@ function writeRegistry(patch = {}) {
       [...document.querySelectorAll('#usageViewBody .usage-row.model-toggle')]
         .some((r) => r.textContent.includes('100 in / 45 out') && r.textContent.includes('15% cached'))),
       'model rows carry in/out and cached-share breakdowns');
+    check(await desktop.evaluate(() =>
+      document.querySelector('.usage-total-line strong')?.textContent === 'Unavailable'),
+      'mixed usage total is labeled unavailable');
+    check(await desktop.evaluate(() =>
+      [...document.querySelectorAll('#usageViewBody .usage-row.model-toggle')]
+        .some((r) => r.textContent.includes('pricing unavailable'))),
+      'models with missing totals say pricing unavailable');
+    check(await desktop.evaluate(() =>
+      document.querySelector('#usageViewBody .usage-notice')?.textContent
+        .includes('affected spend totals are unavailable rather than shown as $0')),
+      'usage notice explains that unavailable pricing makes affected spend totals unavailable');
     await desktop.waitForSelector('#usageChart svg', { timeout: 5000 });
     check(await desktop.locator('#usageChart .usage-col').count() >= 2,
       'stacked daily chart renders one column per bucket');
     check(await desktop.locator('#usageChart text.tick').count() >= 4,
       'chart draws axis tick labels');
-    await desktop.locator('#usageChart .usage-col[aria-label*="$0."]').first().click();
+    check((await desktop.locator('#usageChart svg').getAttribute('aria-label')).startsWith('Calls'),
+      'unavailable cost falls back to call-count chart geometry');
+    const smokeBucket = await desktop.evaluate(() => usageChart.buckets.findIndex(b =>
+      b.models?.some(m => m.ref === 'test/smoke-model')));
+    await desktop.locator('#usageChart .usage-col').nth(smokeBucket).click();
     await desktop.waitForSelector('.usage-day-detail', { timeout: 2000 });
     check(await desktop.evaluate(() => document.querySelector('.usage-day-detail').textContent.includes('smoke-model')),
       "clicking a bar opens that day's per-model detail");
@@ -2172,7 +2197,7 @@ function writeRegistry(patch = {}) {
     const dummy = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
     let dummySignal = null;
     const dummyGone = new Promise((r) => dummy.on('exit', (code, sig) => { dummySignal = sig; r(); }));
-    writeRegistry({ pid: dummy.pid });
+    writeRegistry({ pid: dummy.pid, startTime: processIdentity(dummy.pid)?.startTime });
     await desktop.waitForTimeout(700); // registry scan memo TTL
     await desktop.click(`.session-item[data-id="${registryState.sessionId}"]`);
     await desktop.waitForSelector('.message.assistant');

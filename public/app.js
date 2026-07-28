@@ -1800,13 +1800,13 @@ async function loadUsageView() {
 }
 
 function usageMetricValue(bucket, metric) {
-  if (metric === 'cost') return bucket.costs?.total || 0;
+  if (metric === 'cost') return Number.isFinite(bucket.costs?.total) ? bucket.costs.total : 0;
   if (metric === 'tokens') return usageTokensTotal(bucket.tokens);
   return bucket.calls || 0;
 }
 const USAGE_METRIC_LABELS = { cost: 'Estimated spend', tokens: 'Tokens', calls: 'Calls' };
 function usageModelValue(m, metric) {
-  if (metric === 'cost') return m.cost || 0;
+  if (metric === 'cost') return Number.isFinite(m.cost) ? m.cost : 0;
   if (metric === 'tokens') return usageTokensTotal(m.tokens);
   return m.calls || 0;
 }
@@ -1828,6 +1828,7 @@ function renderUsageView(d) {
   const body = document.getElementById('usageViewBody');
   body.classList.remove('usage-refreshing');
   const t = d.totals || {}, h = d.headlineCosts || {};
+  const hu = d.headlineCostUnavailable || {};
   const budget = d.monthlyBudgetUsd;
 
   const kpis = [['Today', h.today], ['Last 7 days', h.days7], ['Last 30 days', h.days30], ['This month', h.month]]
@@ -1835,9 +1836,13 @@ function renderUsageView(d) {
 
   let budgetHtml = '';
   if (budget) {
-    const pct = Math.min(100, (h.month || 0) / budget * 100);
-    const cls = pct >= 100 ? ' over' : pct >= 80 ? ' warn' : '';
-    budgetHtml = `<div class="usage-budget${cls}"><div class="usage-budget-track"><div class="usage-budget-fill" style="width:${pct.toFixed(1)}%"></div></div><small>${formatEstimatedCost(h.month)} of ~$${Number(budget).toFixed(2)} monthly budget${pct >= 100 ? ' — over budget' : ''}</small></div>`;
+    if (Number.isFinite(h.month)) {
+      const pct = Math.min(100, h.month / budget * 100);
+      const cls = pct >= 100 ? ' over' : pct >= 80 ? ' warn' : '';
+      budgetHtml = `<div class="usage-budget${cls}"><div class="usage-budget-track"><div class="usage-budget-fill" style="width:${pct.toFixed(1)}%"></div></div><small>${formatEstimatedCost(h.month)} of ~$${Number(budget).toFixed(2)} monthly budget${pct >= 100 ? ' — over budget' : ''}</small></div>`;
+    } else {
+      budgetHtml = `<div class="usage-budget"><small>Budget tracking unavailable${hu.month ? ` — ${hu.month} calls have unavailable pricing` : ''}.</small></div>`;
+    }
   }
 
   const ranges = USAGE_RANGES
@@ -1854,7 +1859,7 @@ function renderUsageView(d) {
   // One metric drives the whole view — chart, tooltip, day detail, and the
   // breakdown bars all plot it: tokens when that toggle is chosen, else
   // spend, else calls when nothing in range carries a cost.
-  const metric = usageSort === 'tokens' ? 'tokens' : (t.costs?.total || 0) > 0 ? 'cost' : 'calls';
+  const metric = usageSort === 'tokens' ? 'tokens' : Number.isFinite(t.costs?.total) && t.costs.total > 0 ? 'cost' : 'calls';
   // Chart model: series slots follow the range's top *active* models (server
   // sort order; the model filter narrows the palette to the selected refs) so
   // the chart, its legend, and the model-share section all agree on colors.
@@ -1883,7 +1888,7 @@ function renderUsageView(d) {
       ${usageGroupListHtml('Workspaces', d.groups?.workspaces, 'workspace', metric)}
       ${usageGroupListHtml('Sessions', d.groups?.sessions, 'session', metric)}
     </div>
-    ${d.unpricedModelCalls ? `<div class="usage-notice">${d.unpricedModelCalls} calls have unavailable pricing and are excluded from estimated spend; unknown usage is not $0 billed.</div>` : ''}
+    ${d.unpricedModelCalls ? `<div class="usage-notice">${d.unpricedModelCalls} call${d.unpricedModelCalls === 1 ? '' : 's'} ${d.unpricedModelCalls === 1 ? 'has' : 'have'} unavailable pricing; affected spend totals are unavailable rather than shown as $0.</div>` : ''}
   `;
   body.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => setUsageRange(b.dataset.range)));
   body.querySelectorAll('[data-sort]').forEach(b => b.addEventListener('click', () => setUsageSort(b.dataset.sort)));
@@ -3740,12 +3745,7 @@ function updateRenderedResponseMetadata() {
 }
 
 function responsePricingKnown(msg) {
-  if (Number.isFinite(msg?.usage?.cost?.total) && msg.usage.cost.total !== 0) return true;
-  const modelRef = msg?.responseModel || msg?.model || '';
-  const ref = parseModelId(modelRef);
-  const provider = msg?.provider || ref.provider;
-  const modelId = ref.id || modelRef;
-  return knownModels.some(m => m?.pricing && m.provider === provider && m.id === modelId);
+  return Number.isFinite(msg?.usage?.cost?.total);
 }
 
 function responseDetailProjection(msg) {
@@ -3781,10 +3781,10 @@ function openResponseDetails(id) {
     ['Effective speed', formatTokSpeed(m.outputTokens || u.output, m.durationMs) || '—'],
     ['Tokens', `${formatTokens(u.input)} input · ${formatTokens(u.output)} output${u.reasoning ? ` · ${formatTokens(u.reasoning)} reasoning` : ''}`],
     ['Cache', `${formatTokens(u.cacheRead)} read · ${formatTokens(u.cacheWrite)} write${prompt ? ` · ${Math.round((u.cacheRead||0)/prompt*100)}% hit` : ''}`],
-    ['Estimated input', m.pricingKnown ? formatEstimatedCost(c.input) : 'Pricing unavailable'],
-    ['Estimated output', m.pricingKnown ? formatEstimatedCost(c.output) : 'Pricing unavailable'],
-    ['Estimated cache read / write', m.pricingKnown ? `${formatEstimatedCost(c.cacheRead)} / ${formatEstimatedCost(c.cacheWrite)}` : 'Pricing unavailable'],
-    ['Estimated total', m.pricingKnown ? formatEstimatedCost(c.total) : 'Pricing unavailable'], ['Stop reason', m.stopReason || '—'],
+    ['Estimated input', formatEstimatedCost(c.input)],
+    ['Estimated output', formatEstimatedCost(c.output)],
+    ['Estimated cache read / write', `${formatEstimatedCost(c.cacheRead)} / ${formatEstimatedCost(c.cacheWrite)}`],
+    ['Estimated total', formatEstimatedCost(c.total)], ['Stop reason', m.stopReason || '—'],
   ];
   document.getElementById('responseDetailsBody').innerHTML = '<div class="telemetry-note">Pi catalog estimates, not provider-billed amounts. Response time is request start → JSONL append; effective speed includes TTFT.</div><table class="stats-table">' + rows.map(([k,v]) => `<tr><td class="stats-key">${escapeHtml(k)}</td><td class="stats-val">${escapeHtml(v)}</td></tr>`).join('') + '</table>';
   document.getElementById('responseDetailsModal').style.display = 'flex';

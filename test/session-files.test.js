@@ -127,6 +127,21 @@ test('readSessionMessages carries entry ids and assistant generation stats', () 
   assert.equal(all[2].durationMs, undefined, 'missing start timestamp yields no duration');
 });
 
+test('sanitizeUsage preserves missing and explicit-zero cost components', () => {
+  assert.deepEqual(SF.sanitizeUsage({
+    input: 12,
+    providerRaw: 'private',
+    cost: { total: 0.25, providerRaw: 99 },
+  }), { input: 12, cost: { total: 0.25 } }, 'total-only data does not acquire zero components');
+  assert.deepEqual(SF.sanitizeUsage({
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  }), {
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  }, 'explicit free pricing remains known numeric zero');
+  assert.equal(SF.sanitizeUsage({ cost: { input: NaN } }), undefined,
+    'an empty sanitized cost object is omitted rather than implying availability');
+});
+
 test('readSessionMessages cache revalidates on append and survives LRU pressure', () => {
   const file = writeSession([userMsg('a')]);
   assert.equal(SF.readSessionMessages(file).length, 1);
@@ -208,12 +223,14 @@ test('getSessionStats aggregates usage and revalidates on append', () => {
     ], usage: { input: 100, output: 50, cacheRead: 400, cacheWrite: 20, reasoning: 12,
       cost: { input: 0.1, output: 0.3, cacheRead: 0.02, cacheWrite: 0.08, total: 0.5 } } } },
     { type: 'message', message: { role: 'toolResult', toolName: 'Bash', content: [] } },
-    assistantMsg('done', { input: 10, output: 5 }),
+    assistantMsg('done', { input: 10, output: 5,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }),
   ]);
   const stats = SF.getSessionStats(file);
   assert.deepEqual(stats.tokens, { input: 110, output: 55, cacheRead: 400, cacheWrite: 20 });
   assert.equal(stats.cost, 0.5);
   assert.deepEqual(stats.costs, { input: 0.1, output: 0.3, cacheRead: 0.02, cacheWrite: 0.08, total: 0.5 });
+  assert.deepEqual(stats.costUnavailable, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
   assert.equal(stats.reasoningTokens, 12);
   assert.equal(stats.userMessages, 1);
   assert.equal(stats.assistantMessages, 2);
@@ -222,6 +239,31 @@ test('getSessionStats aggregates usage and revalidates on append', () => {
 
   fs.appendFileSync(file, JSON.stringify(userMsg('another')) + '\n');
   assert.equal(SF.getSessionStats(file).userMessages, 2, 'size/mtime change invalidates');
+});
+
+test('getSessionStats requires every call to report each cost component', () => {
+  const file = writeSession([
+    assistantMsg('total only', { cost: { total: 0.4 } }),
+    assistantMsg('partial', { cost: { input: 0.1, total: 0.2 } }),
+    assistantMsg('explicit free', {
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    }),
+  ]);
+  const stats = SF.getSessionStats(file);
+  assert.ok(Math.abs(stats.cost - 0.6) < 1e-9, 'a total remains known when every call reports total');
+  assert.equal(stats.costs.input, null, 'partial component sums are not exposed as authoritative');
+  assert.equal(stats.costs.output, null);
+  assert.equal(stats.costs.cacheRead, null);
+  assert.equal(stats.costs.cacheWrite, null);
+  assert.ok(Math.abs(stats.costs.total - 0.6) < 1e-9);
+  assert.deepEqual(stats.costUnavailable, {
+    input: 1, output: 2, cacheRead: 2, cacheWrite: 2, total: 0,
+  });
+
+  fs.appendFileSync(file, JSON.stringify(assistantMsg('missing total', { cost: { input: 0.3 } })) + '\n');
+  const mixed = SF.getSessionStats(file);
+  assert.equal(mixed.costs.total, null, 'one unavailable total invalidates a mixed-call total');
+  assert.equal(mixed.costUnavailable.total, 1);
 });
 
 test('getSessionStats sums generation time over measurable assistant messages only', () => {
@@ -262,6 +304,12 @@ test('indexed usage groups local days and model changes without retaining messag
   assert.equal(usage.total.tokens.output, 13);
   assert.equal(usage.total.tokens.reasoning, 2);
   assert.equal(usage.total.costs.total, 0.13);
+  assert.deepEqual(usage.total.costs, {
+    input: null, output: null, cacheRead: null, cacheWrite: null, total: 0.13,
+  });
+  assert.deepEqual(usage.total.costUnavailable, {
+    input: 2, output: 2, cacheRead: 3, cacheWrite: 3, total: 0,
+  });
   assert.equal(usage.total.measured, 2);
   assert.equal(usage.total.durationMs, 6000);
   assert.equal(usage.total.slowestMs, 4000);
@@ -272,6 +320,18 @@ test('indexed usage groups local days and model changes without retaining messag
   assert.equal(usage.models['openai/routed-model'].calls, 1, 'concrete response model overrides the selected model and fallback');
   assert.equal(usage.models['openai/selected-router'], undefined);
   assert.equal('content' in usage.total, false);
+});
+
+test('indexed usage keeps all-known and explicit-zero costs numeric', () => {
+  const content = [
+    assistantMsg('priced', { cost: { input: 0.1, output: 0.2, cacheRead: 0.03, cacheWrite: 0.04, total: 0.37 } }),
+    assistantMsg('free', { cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }),
+  ].map(e => JSON.stringify(e)).join('\n') + '\n';
+  const usage = SF.buildIndexedUsageFromContent(content);
+  assert.deepEqual(usage.total.costs,
+    { input: 0.1, output: 0.2, cacheRead: 0.03, cacheWrite: 0.04, total: 0.37 });
+  assert.deepEqual(usage.total.costUnavailable,
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
 });
 
 test('readSessionCwd reads the header line without loading the file', () => {
