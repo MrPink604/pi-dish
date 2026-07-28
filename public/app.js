@@ -7,6 +7,13 @@
 // bug class). Read these freely; never assign to them anywhere else.
 let sessions = { active: [], previous: [] };
 let currentSession = null;
+// Every selection, including a forced reload of the same session, owns a new
+// generation. Async transcript/stream work may mutate the pane only while its
+// generation still owns it; comparing the session id alone is not enough.
+let sessionSelectionGeneration = 0;
+function ownsSessionView(sessionId, generation) {
+  return currentSession?.id === sessionId && sessionSelectionGeneration === generation;
+}
 const RESPONSE_MODE_KEY = 'pi-dish-response-metadata';
 const SESSION_SPEND_KEY = 'pi-dish-show-session-spend';
 const RESPONSE_MODES = new Set(['hidden', 'compact', 'performance', 'performance-cost']);
@@ -990,6 +997,10 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
   // racing a filtered refresh, a pruned session) must leave the current view
   // intact instead of stashing the transcript and then bailing on a blank pane.
   if (!findSession(id)) return;
+  const selectionGeneration = ++sessionSelectionGeneration;
+  loadingOlder = false;
+  loadingOlderGeneration += 1;
+  stashPromptState();
   // Search marks are transient UI, but the pages search loaded are not. Clear
   // the marks before moving the current transcript into its short-lived DOM
   // cache so revisiting restores clean, already-finalized message nodes.
@@ -1000,6 +1011,7 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
   // scrollTop reads 0 while hidden and would be cached as the reader's spot.
   closeDiffView();
   closeFileView();
+  closeStatsModal();
   closeUsageView(); // picking a session while the usage takeover is up means "show me that session"
   closeSearchView();
   stashCurrentTranscript();
@@ -1035,6 +1047,7 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
     if (resumeBar) resumeBar.style.display = 'none';
     restorePromptState();
   } else {
+    clearPromptComposer();
     if (inputArea) inputArea.style.display = 'none';
     if (resumeBar) {
       resumeBar.style.display = '';
@@ -1047,7 +1060,6 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
   // Working state and queue strip are per-session — seed from the list data
   // instead of leaking the previous session's state until the init event.
   renderQueueStatus(null);
-  pendingSelfEcho = null;
   setCompacting(currentSession.isActive && !!currentSession.compacting);
   setTurnInProgress(currentSession.isActive && !!currentSession.turnInProgress);
 
@@ -1066,10 +1078,11 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
     loadModels(id);
     loadCommands(id); // refresh autocomplete with this session's commands
   }
-  await loadMessages(id);
+  await loadMessages(id, selectionGeneration);
+  if (!ownsSessionView(id, selectionGeneration)) return;
   
   if (currentSession.isActive) {
-    startMessageStream(id);
+    startMessageStream(id, selectionGeneration);
   } else {
     if (messageStream) { messageStream.close(); messageStream = null; }
   }
@@ -2180,8 +2193,19 @@ async function refreshSessionSpend() {
 }
 
 // --- Session stats modal ---
+let statsModalGeneration = 0;
+let statsModalSessionId = null;
+
+function ownsStatsModal(sessionId, generation) {
+  return statsModalSessionId === sessionId && statsModalGeneration === generation &&
+    document.getElementById('statsModal').style.display !== 'none';
+}
+
 function openStatsModal() {
   if (!currentSession) return;
+  const sessionId = currentSession.id;
+  const generation = ++statsModalGeneration;
+  statsModalSessionId = sessionId;
   const modal = document.getElementById('statsModal');
   const body = document.getElementById('statsBody');
   modal.style.display = 'flex';
@@ -2203,9 +2227,10 @@ function openStatsModal() {
       );
     });
   }
-  fetch(`/api/sessions/${currentSession.id}/stats`)
+  fetch(`/api/sessions/${sessionId}/stats`)
     .then(r => r.json())
     .then(s => {
+      if (!ownsStatsModal(sessionId, generation)) return;
       if (s.error) { body.textContent = s.error; return; }
       const cu = s.contextUsage || {};
       // Session-wide effective speed: output tokens over the summed
@@ -2246,28 +2271,32 @@ function openStatsModal() {
         '<div class="stats-share" id="statsShare"></div>' +
         '<div class="stats-share" id="statsPages"></div>' +
         '<div class="stats-share" id="statsClose"></div>';
-      loadShareSection(currentSession.id);
-      loadPagesSection(currentSession.id);
-      renderCloseSection(currentSession.id);
+      loadShareSection(sessionId, generation);
+      loadPagesSection(sessionId, generation);
+      renderCloseSection(sessionId, generation);
     })
-    .catch(e => { body.textContent = 'Failed to load stats: ' + e.message; });
+    .catch(e => {
+      if (ownsStatsModal(sessionId, generation)) body.textContent = 'Failed to load stats: ' + e.message;
+    });
 }
 
 // Public share link section of the stats modal. Fetches current state (404 =
 // no share) and renders either a "Create share link" button or the existing
 // link as a click-to-copy row plus a Revoke button.
-function loadShareSection(sessionId) {
+function loadShareSection(sessionId, generation) {
+  if (!ownsStatsModal(sessionId, generation)) return;
   const el = document.getElementById('statsShare');
   if (!el) return;
   el.innerHTML = '<div class="stats-share-title">Public share link</div>' +
     '<div class="stats-share-body">Loading…</div>';
   fetch(`/api/sessions/${sessionId}/share`)
     .then(r => (r.status === 404 ? null : r.json()))
-    .then(share => renderShareSection(sessionId, share))
-    .catch(() => renderShareSection(sessionId, null));
+    .then(share => renderShareSection(sessionId, share, generation))
+    .catch(() => renderShareSection(sessionId, null, generation));
 }
 
-function renderShareSection(sessionId, share) {
+function renderShareSection(sessionId, share, generation) {
+  if (!ownsStatsModal(sessionId, generation)) return;
   const el = document.getElementById('statsShare');
   if (!el) return;
   const bodyEl = el.querySelector('.stats-share-body') || el;
@@ -2278,8 +2307,14 @@ function renderShareSection(sessionId, share) {
     bodyEl.querySelector('#shareCreateBtn').addEventListener('click', () => {
       fetch(`/api/sessions/${sessionId}/share`, { method: 'POST' })
         .then(r => r.json())
-        .then(s => { renderShareSection(sessionId, s); refreshArtifacts(sessionId); })
-        .catch(e => setStatus('Failed to create share: ' + e.message, 'error'));
+        .then(s => {
+          if (!ownsStatsModal(sessionId, generation)) return;
+          renderShareSection(sessionId, s, generation);
+          refreshArtifacts(sessionId);
+        })
+        .catch(e => {
+          if (ownsStatsModal(sessionId, generation)) setStatus('Failed to create share: ' + e.message, 'error');
+        });
     });
     return;
   }
@@ -2290,8 +2325,14 @@ function renderShareSection(sessionId, share) {
   bodyEl.querySelector('#shareRevokeBtn').addEventListener('click', () => {
     fetch(`/api/sessions/${sessionId}/share`, { method: 'DELETE' })
       .then(r => r.json())
-      .then(() => { renderShareSection(sessionId, null); refreshArtifacts(sessionId); })
-      .catch(e => setStatus('Failed to revoke share: ' + e.message, 'error'));
+      .then(() => {
+        if (!ownsStatsModal(sessionId, generation)) return;
+        renderShareSection(sessionId, null, generation);
+        refreshArtifacts(sessionId);
+      })
+      .catch(e => {
+        if (ownsStatsModal(sessionId, generation)) setStatus('Failed to revoke share: ' + e.message, 'error');
+      });
   });
 }
 
@@ -2328,17 +2369,19 @@ async function copyMessageShareLink(btn) {
 // the pi process via POST /close. The transcript stays on disk and resumable —
 // only the running process goes away, so this is the phone-side equivalent of
 // Ctrl+D in the TUI.
-function renderCloseSection(sessionId) {
+function renderCloseSection(sessionId, generation) {
+  if (!ownsStatsModal(sessionId, generation)) return;
   const el = document.getElementById('statsClose');
   if (!el) return;
-  if (!currentSession?.isActive) { el.remove(); return; }
+  if (!findSession(sessionId)?.isActive) { el.remove(); return; }
   el.innerHTML = '<div class="stats-share-title">Session process</div>' +
     '<div class="stats-share-body">' +
     '<button type="button" class="btn-small btn-danger" id="sessionCloseBtn">Close session</button>' +
     '<div class="stats-share-hint">Shuts down this pi process. The transcript is kept and can be resumed.</div>' +
     '</div>';
   el.querySelector('#sessionCloseBtn').addEventListener('click', async () => {
-    const warn = currentSession.turnInProgress
+    if (!ownsStatsModal(sessionId, generation)) return;
+    const warn = findSession(sessionId)?.turnInProgress
       ? 'A turn is in progress — closing will abort it. Close this session?'
       : 'Close this session? The pi process will shut down (the transcript stays resumable).';
     if (!confirm(warn)) return;
@@ -2347,6 +2390,7 @@ function renderCloseSection(sessionId) {
     btn.textContent = 'Closing…';
     try {
       await apiSend(`/api/sessions/${sessionId}/close`);
+      if (!ownsStatsModal(sessionId, generation)) return;
       closeStatsModal();
       setStatus('Session closed');
       // Re-fetch both lists (the session just moved from active to previous)
@@ -2354,6 +2398,7 @@ function renderCloseSection(sessionId) {
       await loadSessions(undefined, { withPrevious: true });
       if (currentSession?.id === sessionId) selectSession(sessionId);
     } catch (e) {
+      if (!ownsStatsModal(sessionId, generation)) return;
       btn.disabled = false;
       btn.textContent = 'Close session';
       setStatus('Close failed: ' + e.message, 'error');
@@ -2362,6 +2407,8 @@ function renderCloseSection(sessionId) {
 }
 
 function closeStatsModal() {
+  statsModalGeneration += 1;
+  statsModalSessionId = null;
   document.getElementById('statsModal').style.display = 'none';
 }
 
@@ -2374,6 +2421,9 @@ function closeStatsModal() {
 let fileViewRaw = null;
 let fileViewAbsPath = null; // resolved path of the viewed file (publish target)
 let fileViewRelPath = null;
+let fileViewSessionId = null;
+let fileViewGeneration = 0;
+let fileViewSelectionGeneration = 0;
 let anchoredCommentDraft = null;
 let commentAnchorRange = null;
 let commentDraftVersion = 0;
@@ -2382,8 +2432,17 @@ function isFileViewOpen() {
   return document.getElementById('sessionView').classList.contains('file-open');
 }
 
+function ownsFileView(sessionId, generation) {
+  return fileViewSessionId === sessionId && fileViewGeneration === generation &&
+    ownsSessionView(sessionId, fileViewSelectionGeneration) && isFileViewOpen();
+}
+
 async function openFileViewer(mention) {
   if (!currentSession) return;
+  const sessionId = currentSession.id;
+  const generation = ++fileViewGeneration;
+  fileViewSessionId = sessionId;
+  fileViewSelectionGeneration = sessionSelectionGeneration;
   const body = document.getElementById('fileViewBody');
   const title = document.getElementById('fileViewTitle');
   const pathEl = document.getElementById('fileViewPath');
@@ -2400,8 +2459,9 @@ async function openFileViewer(mention) {
   closeDiffView(); // the two takeover panes are mutually exclusive
   document.getElementById('sessionView').classList.add('file-open');
   try {
-    const res = await fetch(`/api/sessions/${currentSession.id}/file?path=${encodeURIComponent(mention)}`);
+    const res = await fetch(`/api/sessions/${sessionId}/file?path=${encodeURIComponent(mention)}`);
     const data = await res.json();
+    if (!ownsFileView(sessionId, generation)) return;
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     title.textContent = data.path.split('/').pop();
     fileViewAbsPath = data.path;
@@ -2411,9 +2471,9 @@ async function openFileViewer(mention) {
     fetch('/api/pages')
       .then((r) => r.json())
       .then((list) => {
-        if (fileViewAbsPath !== data.path) return; // view moved on
+        if (!ownsFileView(sessionId, generation) || fileViewAbsPath !== data.path) return;
         const page = Array.isArray(list) && list.find((p) => p.root === data.path);
-        if (page) renderFilePageRow(page);
+        if (page) renderFilePageRow(page, sessionId, generation);
       })
       .catch(() => {});
     const kb = data.size >= 10240 ? `${Math.round(data.size / 1024)} KB` : `${data.size} B`;
@@ -2439,11 +2499,15 @@ async function openFileViewer(mention) {
     // markdown file's own file references become clickable in turn.
     applyHighlight(body);
   } catch (e) {
+    if (!ownsFileView(sessionId, generation)) return;
     body.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
   }
 }
 
 function closeFileView() {
+  fileViewGeneration += 1;
+  fileViewSessionId = null;
+  fileViewSelectionGeneration = 0;
   document.getElementById('sessionView').classList.remove('file-open');
   document.getElementById('fileViewBody').innerHTML = '';
   fileViewRaw = null;
@@ -2500,7 +2564,7 @@ function captureFileCommentSelection(focusComposer = false) {
     anchor.endLine = anchor.startLine + anchor.quote.split('\n').length - 1;
   }
   openCommentBubble({
-    sessionId: currentSession.id,
+    sessionId: fileViewSessionId,
     quote: anchor.quote,
     target: { kind: 'file', path: fileViewAbsPath, relPath: fileViewRelPath, anchor },
   }, range, focusComposer);
@@ -2523,7 +2587,7 @@ function captureDiffCommentSelection(focusComposer = false) {
   const newNums = nums('newLine');
   const quote = lines.map((line) => line.textContent).join('\n').slice(0, 12000);
   openCommentBubble({
-    sessionId: currentSession.id,
+    sessionId: diffViewSessionId,
     quote,
     target: {
       kind: 'diff', repo: patch.dataset.repo, path: patch.dataset.path,
@@ -2666,9 +2730,10 @@ async function submitAnchoredComment() {
 // 🌐 in the file viewer publishes the viewed file, the stats modal lists a
 // session's published pages with copy/revoke.
 
-function renderFilePageRow(page) {
+function renderFilePageRow(page, sessionId, generation) {
   const el = document.getElementById('fileViewPage');
   if (!page) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  if (!ownsFileView(sessionId, generation)) return;
   const link = page.url || (location.origin + page.path);
   el.style.display = '';
   el.innerHTML = 'Published: ' +
@@ -2682,40 +2747,53 @@ function renderFilePageRow(page) {
   });
   el.querySelector('#filePageRevoke').addEventListener('click', () => {
     fetch(`/api/pages/${encodeURIComponent(page.token)}`, { method: 'DELETE' })
-      .then(() => { renderFilePageRow(null); refreshArtifacts(currentSession?.id); })
-      .catch((e) => setStatus('Failed to unpublish: ' + e.message, 'error'));
+      .then(() => {
+        if (!ownsFileView(sessionId, generation)) return;
+        renderFilePageRow(null, sessionId, generation);
+        refreshArtifacts(sessionId);
+      })
+      .catch((e) => {
+        if (ownsFileView(sessionId, generation)) setStatus('Failed to unpublish: ' + e.message, 'error');
+      });
   });
 }
 
 async function publishFileView() {
   if (!fileViewAbsPath || !currentSession) return;
+  const sessionId = fileViewSessionId;
+  const generation = fileViewGeneration;
+  const path = fileViewAbsPath;
+  if (!ownsFileView(sessionId, generation)) return;
   try {
     const res = await fetch('/api/pages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        path: fileViewAbsPath,
-        sessionId: currentSession.id,
-        title: fileViewAbsPath.split('/').pop(),
+        path,
+        sessionId,
+        title: path.split('/').pop(),
       }),
     });
     const data = await res.json();
+    if (!ownsFileView(sessionId, generation)) return;
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    renderFilePageRow(data);
-    refreshArtifacts(currentSession.id);
+    renderFilePageRow(data, sessionId, generation);
+    refreshArtifacts(sessionId);
   } catch (e) {
-    setStatus('Publish failed: ' + e.message, 'error');
+    if (ownsFileView(sessionId, generation)) setStatus('Publish failed: ' + e.message, 'error');
   }
 }
 
 // Published pages section of the stats modal (only rendered when non-empty —
 // most sessions publish nothing and don't need the visual noise).
-function loadPagesSection(sessionId) {
+function loadPagesSection(sessionId, generation) {
+  if (!ownsStatsModal(sessionId, generation)) return;
   const el = document.getElementById('statsPages');
   if (!el) return;
   fetch(`/api/pages?sessionId=${encodeURIComponent(sessionId)}`)
     .then((r) => r.json())
     .then((list) => {
+      if (!ownsStatsModal(sessionId, generation)) return;
       if (!Array.isArray(list) || !list.length) { el.innerHTML = ''; return; }
       el.innerHTML = '<div class="stats-share-title">Published pages</div>' +
         list.map((p) => {
@@ -2730,12 +2808,18 @@ function loadPagesSection(sessionId) {
         btn.addEventListener('click', () => {
           const token = btn.closest('.stats-page-row').dataset.token;
           fetch(`/api/pages/${encodeURIComponent(token)}`, { method: 'DELETE' })
-            .then(() => { loadPagesSection(sessionId); refreshArtifacts(sessionId); })
-            .catch((e) => setStatus('Failed to revoke: ' + e.message, 'error'));
+            .then(() => {
+              if (!ownsStatsModal(sessionId, generation)) return;
+              loadPagesSection(sessionId, generation);
+              refreshArtifacts(sessionId);
+            })
+            .catch((e) => {
+              if (ownsStatsModal(sessionId, generation)) setStatus('Failed to revoke: ' + e.message, 'error');
+            });
         });
       });
     })
-    .catch(() => { el.innerHTML = ''; });
+    .catch(() => { if (ownsStatsModal(sessionId, generation)) el.innerHTML = ''; });
 }
 
 // --- Shared artifacts (header 📦: everything published/shared from the
@@ -2848,8 +2932,18 @@ function copyFileViewContent(btn) {
 // side by side). The ± header button swaps the transcript for this view;
 // `.session-view.diff-open` does the hiding in CSS. Fetched on open and on
 // the ⟳ button; no polling. Closed by ✕/Escape/session switch.
+let diffViewSessionId = null;
+let diffViewGeneration = 0;
+let diffViewSelectionGeneration = 0;
+let diffPatchRequestGeneration = 0;
+
 function isDiffViewOpen() {
   return document.getElementById('sessionView').classList.contains('diff-open');
+}
+
+function ownsDiffView(sessionId, generation) {
+  return diffViewSessionId === sessionId && diffViewGeneration === generation &&
+    ownsSessionView(sessionId, diffViewSelectionGeneration) && isDiffViewOpen();
 }
 
 function toggleDiffView() {
@@ -2866,6 +2960,9 @@ async function openDiffView() {
 }
 
 function closeDiffView() {
+  diffViewGeneration += 1;
+  diffViewSessionId = null;
+  diffViewSelectionGeneration = 0;
   document.getElementById('sessionView').classList.remove('diff-open');
   document.getElementById('btnDiff')?.classList.remove('active');
   document.getElementById('diffViewBody').innerHTML = '';
@@ -2873,13 +2970,19 @@ function closeDiffView() {
 }
 
 async function loadDiffView() {
+  if (!currentSession || !isDiffViewOpen()) return;
+  const sessionId = currentSession.id;
+  const generation = ++diffViewGeneration;
+  diffViewSessionId = sessionId;
+  diffViewSelectionGeneration = sessionSelectionGeneration;
   const body = document.getElementById('diffViewBody');
   const rootEl = document.getElementById('diffViewRoot');
   closeCommentBubble();
   body.innerHTML = '<div class="loading">Loading…</div>';
   try {
-    const res = await fetch(`/api/sessions/${currentSession.id}/diff`);
+    const res = await fetch(`/api/sessions/${sessionId}/diff`);
     const data = await res.json();
+    if (!ownsDiffView(sessionId, generation)) return;
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     rootEl.textContent = shortCwd(data.root);
     body.innerHTML = renderDiffViewHtml(data);
@@ -2889,6 +2992,7 @@ async function loadDiffView() {
       });
     });
   } catch (e) {
+    if (!ownsDiffView(sessionId, generation)) return;
     body.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
   }
 }
@@ -2950,16 +3054,23 @@ function renderDiffViewHtml(data) {
 
 async function loadDeferredDiffPatch(details) {
   const patch = details.querySelector('.diff-patch[data-deferred="1"]');
-  if (!patch || patch.dataset.loading || !currentSession) return;
+  if (!patch || patch.dataset.loading || !currentSession || !diffViewSessionId) return;
+  const sessionId = diffViewSessionId;
+  const viewGeneration = diffViewGeneration;
+  const requestGeneration = ++diffPatchRequestGeneration;
+  if (!ownsDiffView(sessionId, viewGeneration)) return;
   patch.dataset.loading = '1';
+  patch.dataset.requestGeneration = String(requestGeneration);
   try {
     const query = new URLSearchParams({
       repo: patch.dataset.repo,
       path: patch.dataset.path,
       snapshot: patch.dataset.snapshot,
     });
-    const res = await fetch(`/api/sessions/${currentSession.id}/diff/patch?${query}`);
+    const res = await fetch(`/api/sessions/${sessionId}/diff/patch?${query}`);
     const data = await res.json();
+    if (!ownsDiffView(sessionId, viewGeneration) || !patch.isConnected ||
+        patch.dataset.requestGeneration !== String(requestGeneration)) return;
     if (res.status === 409 && data.stale) {
       patch.innerHTML = '<div class="diff-file-note">Working tree changed — refreshing the diff…</div>';
       await loadDiffView();
@@ -2970,8 +3081,12 @@ async function loadDeferredDiffPatch(details) {
       (data.truncated ? '<div class="diff-file-note">… patch truncated</div>' : '');
     delete patch.dataset.deferred;
     delete patch.dataset.loading;
+    delete patch.dataset.requestGeneration;
   } catch (e) {
+    if (!ownsDiffView(sessionId, viewGeneration) || !patch.isConnected ||
+        patch.dataset.requestGeneration !== String(requestGeneration)) return;
     delete patch.dataset.loading;
+    delete patch.dataset.requestGeneration;
     patch.innerHTML = `<div class="diff-file-note diff-patch-missing">Could not load patch: ${escapeHtml(e.message)}. Collapse and reopen to retry.</div>`;
   }
 }
@@ -3170,11 +3285,14 @@ function toggleProviderEnabled(provider) {
 
 let saveEnabledTimer = null;
 function saveEnabledModels() {
+  const enabled = knownModels.filter(m => m && m.enabled !== false);
+  // Snapshot at edit time. A session switch can replace knownModels before
+  // the debounce fires, but it must not rewrite or discard the user's edit.
+  const enabledIds = enabled.length === knownModels.length
+    ? null
+    : enabled.map(m => m.provider + '/' + m.id);
   clearTimeout(saveEnabledTimer);
   saveEnabledTimer = setTimeout(async () => {
-    var enabled = knownModels.filter(m => m && m.enabled !== false);
-    // Everything enabled = no filter; persist as null so pi clears enabledModels.
-    var enabledIds = enabled.length === knownModels.length ? null : enabled.map(m => m.provider + '/' + m.id);
     try {
       await apiSend('/api/models/enabled', { enabledIds }, 'PUT');
     } catch (e) { setStatus('Failed to save model list: ' + e.message, 'error'); }
@@ -3221,6 +3339,7 @@ let lastLoadedIndex = null;
 let hasMoreOlder = false;
 let totalMessages = 0;
 let loadingOlder = false;
+let loadingOlderGeneration = 0;
 
 // Recently viewed transcript DOM, including every page the reader explicitly
 // loaded. Moving nodes into a DocumentFragment preserves expensive markdown,
@@ -3327,7 +3446,7 @@ function renderMessageHtml(msg) {
   return '';
 }
 
-async function loadMessages(id) {
+async function loadMessages(id, selectionGeneration = sessionSelectionGeneration) {
   cancelStreamingRender();
   closeSearch();
   const container = document.getElementById('messages');
@@ -3335,7 +3454,7 @@ async function loadMessages(id) {
     // Keep the warm pages visible while checking for anything appended since
     // this session was last viewed. Inactive sessions have no SSE init to do
     // this catch-up for them.
-    await fetchNewMessagesSince(id);
+    await fetchNewMessagesSince(id, selectionGeneration);
     return;
   }
   container.innerHTML = '<div class="loading">Loading...</div>';
@@ -3351,7 +3470,7 @@ async function loadMessages(id) {
     const data = await res.json();
     // A newer selection may have superseded us while the fetch was in flight —
     // don't clobber its transcript/cursors with this stale response.
-    if (currentSession?.id !== id) return;
+    if (!ownsSessionView(id, selectionGeneration)) return;
     const { messages, session, firstIndex, lastIndex, hasMore, totalMessages: total } = data;
     mergeCurrentSession(id, session);
     oldestLoadedIndex = firstIndex;
@@ -3360,6 +3479,7 @@ async function loadMessages(id) {
     totalMessages = total || 0;
     renderMessages(messages);
   } catch (e) {
+    if (!ownsSessionView(id, selectionGeneration)) return;
     container.innerHTML = `<div class="error">Failed to load messages: ${e.message}</div>`;
   }
 }
@@ -3388,6 +3508,8 @@ async function loadOlderMessages() {
   if (loadingOlder || !hasMoreOlder || !currentSession || oldestLoadedIndex == null) return;
   loadingOlder = true;
   const sessionId = currentSession.id;
+  const selectionGeneration = sessionSelectionGeneration;
+  const requestGeneration = ++loadingOlderGeneration;
   const beforeIndex = oldestLoadedIndex;
   const container = document.getElementById('messages');
   const bar = document.getElementById('loadOlderBar');
@@ -3404,8 +3526,9 @@ async function loadOlderMessages() {
     const res = await fetch(`/api/sessions/${sessionId}/messages?limit=${MESSAGE_PAGE_SIZE}&before=${beforeIndex}`);
     const data = await res.json();
     // The request belongs to the transcript that initiated it. A quick
-    // session switch must not prepend those messages into the new session.
-    if (currentSession?.id !== sessionId) return;
+    // session switch or same-session forced reload must not prepend those
+    // messages into the replacement transcript.
+    if (!ownsSessionView(sessionId, selectionGeneration) || requestGeneration !== loadingOlderGeneration) return;
     const { messages, firstIndex, hasMore } = data;
     if (messages && messages.length) {
       const html = messages.map(renderMessageHtml).join('');
@@ -3432,24 +3555,26 @@ async function loadOlderMessages() {
       if (existingBar) existingBar.remove();
     }
   } catch (e) {
+    if (!ownsSessionView(sessionId, selectionGeneration) || requestGeneration !== loadingOlderGeneration) return;
     if (bar) bar.querySelector('.load-older-btn').textContent = `Failed: ${e.message} — retry`;
   } finally {
-    loadingOlder = false;
+    if (requestGeneration === loadingOlderGeneration) loadingOlder = false;
   }
 }
 
-async function fetchNewMessagesSince(sessionId) {
+async function fetchNewMessagesSince(sessionId, selectionGeneration = sessionSelectionGeneration) {
   // Incremental catch-up after turn_end / init. Avoids the full reload that
   // stalls long sessions.
   if (lastLoadedIndex == null) {
     // No baseline yet — fall back to a full tail load.
-    return loadMessages(sessionId);
+    return loadMessages(sessionId, selectionGeneration);
   }
   try {
     const res = await fetch(`/api/sessions/${sessionId}/messages?after=${lastLoadedIndex}`);
     const data = await res.json();
-    // Bail if the user switched sessions while this catch-up was in flight.
-    if (currentSession?.id !== sessionId) return;
+    // Bail if the user switched sessions or force-reloaded this same session
+    // while the catch-up was in flight.
+    if (!ownsSessionView(sessionId, selectionGeneration)) return;
     const { messages, lastIndex, totalMessages: total, session } = data;
     mergeCurrentSession(sessionId, session);
     if (typeof total === 'number') totalMessages = total;
@@ -3462,6 +3587,12 @@ async function fetchNewMessagesSince(sessionId) {
     const existing = new Set();
     container.querySelectorAll('[data-msg-index]').forEach(el => existing.add(parseInt(el.dataset.msgIndex, 10)));
     const fresh = messages.filter(m => !existing.has(m.index));
+    // If this browser was away when pi emitted the user echo, the stream could
+    // not consume its optimistic association. The authoritative indexed user
+    // message is now present, so that association no longer has work to do.
+    fresh.filter(m => m.role === 'user').forEach(m => {
+      consumePendingSelfEcho(sessionId, extractTextContent(m.content));
+    });
     updateMoodFromMessages(fresh);
     if (fresh.length === 0) {
       if (lastIndex != null) lastLoadedIndex = lastIndex;
@@ -3487,6 +3618,7 @@ async function fetchNewMessagesSince(sessionId) {
     finalizeRender(container);
     if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
   } catch (e) {
+    if (!ownsSessionView(sessionId, selectionGeneration)) return;
     console.error('fetchNewMessagesSince failed:', e);
   }
 }
@@ -3855,7 +3987,7 @@ function finalizeLiveToolPanel(data) {
 let messageStream = null;
 let streamReconnectTimeout = null;
 
-function startMessageStream(sessionId) {
+function startMessageStream(sessionId, selectionGeneration = sessionSelectionGeneration) {
   if (streamReconnectTimeout) { clearTimeout(streamReconnectTimeout); streamReconnectTimeout = null; }
   if (messageStream) { messageStream.close(); messageStream = null; }
   if (!sessionId) return;
@@ -3863,13 +3995,20 @@ function startMessageStream(sessionId) {
   try {
     const evtSource = new EventSource(`/api/sessions/${sessionId}/stream`);
     messageStream = evtSource;
+    const ownsStream = () => messageStream === evtSource && ownsSessionView(sessionId, selectionGeneration);
+    const addOwnedListener = (event, listener) => evtSource.addEventListener(event, (e) => {
+      if (ownsStream()) listener(e);
+    });
+    let turnCleanupDone = false;
 
-    evtSource.onopen = () => setStatus('');
+    evtSource.onopen = () => { if (ownsStream()) setStatus(''); };
 
     // Server sends current state on connect so we can catch up
-    evtSource.addEventListener('init', (e) => {
+    addOwnedListener('init', (e) => {
       try {
         const data = JSON.parse(e.data);
+        turnCleanupDone = !data.turnInProgress;
+        if (!data.turnInProgress) abortingSessions.delete(sessionId);
         // Both flags, independently: auto-compaction runs inside a turn
         // (both true), a TUI /compact has neither turn nor stream events yet
         // (compacting only), and a reconnect after either ended must clear
@@ -3882,12 +4021,12 @@ function startMessageStream(sessionId) {
         if (!data.turnInProgress) {
           // No turn running — incremental catch-up for any messages written
           // since our initial load (avoids full reload stall).
-          fetchNewMessagesSince(sessionId);
+          fetchNewMessagesSince(sessionId, selectionGeneration);
         }
       } catch {}
     });
 
-    evtSource.addEventListener('stream_error', (e) => {
+    addOwnedListener('stream_error', (e) => {
       try {
         const data = JSON.parse(e.data || '{}');
         setStatus(data.error || 'Stream error', 'error');
@@ -3897,9 +4036,15 @@ function startMessageStream(sessionId) {
       evtSource.close();
     });
 
-    evtSource.addEventListener('turn_start', () => setTurnInProgress(true));
+    addOwnedListener('turn_start', () => {
+      turnCleanupDone = false;
+      setTurnInProgress(true);
+    });
 
     const handleTurnEnd = () => {
+      if (turnCleanupDone || !ownsStream()) return;
+      turnCleanupDone = true;
+      abortingSessions.delete(sessionId);
       setTurnInProgress(false);
       cancelStreamingRender();
       // Clean up any orphaned running panels (defensive)
@@ -3915,30 +4060,31 @@ function startMessageStream(sessionId) {
       }
       // Incrementally pull only new messages from JSONL — full reload
       // stalls long sessions.
-      fetchNewMessagesSince(sessionId);
+      fetchNewMessagesSince(sessionId, selectionGeneration);
       refreshSessions();
       refreshArtifacts(sessionId); // the agent may have published pages mid-turn
       refreshSessionSpend();
       setStatus('');
     };
-    evtSource.addEventListener('turn_end', handleTurnEnd);
+    addOwnedListener('turn_end', handleTurnEnd);
     // An aborted/errored turn can end with agent_end and no paired turn_end;
     // both server backends treat it as turn-terminating, so we must too. The
     // guard avoids double catch-up when turn_end already ran.
-    evtSource.addEventListener('agent_end', () => { if (turnInProgress) handleTurnEnd(); });
+    addOwnedListener('agent_end', handleTurnEnd);
 
     // message_update streams text, thinking, and partial tool calls live —
     // rendered incrementally through the throttled streaming renderer.
-    evtSource.addEventListener('message_update', (e) => {
+    addOwnedListener('message_update', (e) => {
       try {
         const { message } = JSON.parse(e.data);
         if (!message || message.role !== 'assistant') return;
+        turnCleanupDone = false;
         if (!turnInProgress) setTurnInProgress(true);
         queueStreamingRender(message);
       } catch (err) {}
     });
 
-    evtSource.addEventListener('message_end', (e) => {
+    addOwnedListener('message_end', (e) => {
       try {
         const { message } = JSON.parse(e.data);
         if (!message) return;
@@ -3948,8 +4094,7 @@ function startMessageStream(sessionId) {
           // pi echoes every user message it processes — including the prompt
           // this client just rendered optimistically in sendMessage. Skip that
           // one echo or the prompt shows twice until the turn_end catch-up.
-          if (pendingSelfEcho !== null && extractTextContent(message.content) === pendingSelfEcho) {
-            pendingSelfEcho = null;
+          if (consumePendingSelfEcho(sessionId, extractTextContent(message.content))) {
             return;
           }
           // A steer/follow-up pi just delivered mid-turn (or a prompt typed in
@@ -3987,46 +4132,50 @@ function startMessageStream(sessionId) {
       } catch (err) {}
     });
 
-    evtSource.addEventListener('tool_execution_start', (e) => {
+    addOwnedListener('tool_execution_start', (e) => {
       try {
         const data = JSON.parse(e.data);
         appendLiveToolPanel(data);
       } catch (err) { console.error('tool_execution_start error:', err); }
     });
 
-    evtSource.addEventListener('tool_execution_update', (e) => {
+    addOwnedListener('tool_execution_update', (e) => {
       try {
         const data = JSON.parse(e.data);
         updateLiveToolPanel(data);
       } catch (err) { console.error('tool_execution_update error:', err); }
     });
 
-    evtSource.addEventListener('tool_execution_end', (e) => {
+    addOwnedListener('tool_execution_end', (e) => {
       try {
         const data = JSON.parse(e.data);
         finalizeLiveToolPanel(data);
       } catch (err) { console.error('tool_execution_end error:', err); }
     });
 
-    evtSource.addEventListener('extension_ui_request', (e) => {
+    addOwnedListener('extension_ui_request', (e) => {
       try { handleExtensionUI(JSON.parse(e.data)); } catch (err) { console.error('extension_ui_request error:', err); }
     });
 
-    evtSource.addEventListener('queue_update', (e) => {
+    addOwnedListener('queue_update', (e) => {
       try { renderQueueStatus(JSON.parse(e.data)); } catch {}
     });
 
     // Dialog answered elsewhere (TUI or another browser) — dismiss ours.
-    evtSource.addEventListener('extension_ui_resolved', (e) => {
+    addOwnedListener('extension_ui_resolved', (e) => {
       try { dismissExtDialog(JSON.parse(e.data).id); } catch {}
     });
 
-    evtSource.addEventListener('compaction_start', () => {
+    addOwnedListener('compaction_start', () => {
       setStatus('Compacting context...', 'working');
       setCompacting(true);
     });
-    evtSource.addEventListener('compaction_end', (e) => {
+    addOwnedListener('compaction_end', (e) => {
       setCompacting(false);
+      // A manual compaction has no turn_end/agent_end boundary. Whether Stop
+      // won the race, compaction failed, or it completed first, its end is the
+      // authoritative point where a compaction-only abort gate can clear.
+      if (!turnInProgress) abortingSessions.delete(sessionId);
       try {
         const data = JSON.parse(e.data);
         if (data.errorMessage) {
@@ -4054,26 +4203,27 @@ function startMessageStream(sessionId) {
     // rewrote the session's authoritative history: re-render the transcript
     // from the JSONL. The UI's own branch flow also reloads after its POST
     // resolves; a second forced reload of the same state is harmless.
-    evtSource.addEventListener('session_tree', () => {
+    addOwnedListener('session_tree', () => {
       if (currentSession && currentSession.id === sessionId) {
         selectSession(sessionId, { forceTranscriptReload: true });
       }
     });
 
-    evtSource.addEventListener('auto_retry_start', (e) => {
+    addOwnedListener('auto_retry_start', (e) => {
       try {
         const d = JSON.parse(e.data);
         setStatus(`Retrying (attempt ${d.attempt}/${d.maxAttempts})...`, 'working');
       } catch {}
     });
-    evtSource.addEventListener('auto_retry_end', (e) => {
+    addOwnedListener('auto_retry_end', (e) => {
       try {
         const d = JSON.parse(e.data);
         if (d.success === false) setStatus('Retry failed: ' + (d.finalError || 'unknown'), 'error');
       } catch {}
     });
 
-    evtSource.addEventListener('session_ended', () => {
+    addOwnedListener('session_ended', () => {
+      abortingSessions.delete(sessionId);
       setCompacting(false);
       setTurnInProgress(false);
       setStatus('Session ended');
@@ -4081,14 +4231,16 @@ function startMessageStream(sessionId) {
     });
 
     evtSource.onerror = () => {
+      if (!ownsStream()) return;
       if (evtSource.readyState === EventSource.CLOSED) {
         setStatus('Stream disconnected', 'error');
         streamReconnectTimeout = setTimeout(() => {
-          if (currentSession && currentSession.id === sessionId) startMessageStream(sessionId);
+          if (ownsSessionView(sessionId, selectionGeneration)) startMessageStream(sessionId, selectionGeneration);
         }, 3000);
       }
     };
   } catch (err) {
+    if (!ownsSessionView(sessionId, selectionGeneration)) return;
     console.error('Stream failed:', err);
     setStatus('Stream failed', 'error');
   }
@@ -4101,6 +4253,9 @@ function startMessageStream(sessionId) {
 // --- Image attachments -------------------------------------------------
 
 var pendingImages = []; // { data: base64 (no data: prefix), mimeType }
+const pendingImagesBySession = new Map();
+let composerSessionId = null;
+let composerDraftDirty = false;
 
 async function addImageFiles(files) {
   for (const file of Array.from(files || [])) {
@@ -4165,13 +4320,6 @@ function takePendingImages() {
   return imgs;
 }
 
-/** Put detached attachments back after a failed send. */
-function restoreAttachments(images) {
-  if (!images) return;
-  pendingImages = images.concat(pendingImages);
-  renderAttachmentStrip();
-}
-
 function openImageLightbox(src) {
   const overlay = document.createElement('div');
   overlay.className = 'lightbox-overlay';
@@ -4192,29 +4340,68 @@ var draftSaveTimer = null;
 function draftKey(id) { return `pi-dish-draft-${id}`; }
 function historyKey(id) { return `pi-dish-history-${id}`; }
 
+function writeSessionDraft(sessionId, value) {
+  if (!sessionId) return;
+  try {
+    if (value.trim() && value.length < 50000) localStorage.setItem(draftKey(sessionId), value);
+    else localStorage.removeItem(draftKey(sessionId));
+  } catch {}
+}
+
+// Save the visible composer before currentSession changes. Attachments are
+// memory-only but, like text drafts, belong to the session where they were
+// added and must not follow a rapid session switch.
+function stashPromptState() {
+  clearTimeout(draftSaveTimer);
+  if (!composerSessionId) return;
+  const input = document.getElementById('promptInput');
+  if (composerDraftDirty) writeSessionDraft(composerSessionId, input?.value || '');
+  if (pendingImages.length) pendingImagesBySession.set(composerSessionId, pendingImages);
+  else pendingImagesBySession.delete(composerSessionId);
+  pendingImages = [];
+  composerSessionId = null;
+  composerDraftDirty = false;
+  renderAttachmentStrip();
+}
+
+function clearPromptComposer() {
+  composerSessionId = null;
+  composerDraftDirty = false;
+  pendingImages = [];
+  const input = document.getElementById('promptInput');
+  if (input) { input.value = ''; input.style.height = ''; }
+  renderAttachmentStrip();
+}
+
 function saveDraftSoon() {
   clearTimeout(draftSaveTimer);
+  const sessionId = composerSessionId;
+  composerDraftDirty = true;
   draftSaveTimer = setTimeout(() => {
-    if (!currentSession) return;
+    if (!sessionId || composerSessionId !== sessionId) return;
     const v = document.getElementById('promptInput').value;
-    try {
-      if (v.trim() && v.length < 50000) localStorage.setItem(draftKey(currentSession.id), v);
-      else localStorage.removeItem(draftKey(currentSession.id));
-    } catch {}
+    writeSessionDraft(sessionId, v);
+    composerDraftDirty = false;
   }, 300);
 }
 
-function clearDraft() {
+function clearDraft(sessionId = composerSessionId) {
   clearTimeout(draftSaveTimer);
-  if (currentSession) try { localStorage.removeItem(draftKey(currentSession.id)); } catch {}
+  if (sessionId) try { localStorage.removeItem(draftKey(sessionId)); } catch {}
+  if (composerSessionId === sessionId) composerDraftDirty = false;
 }
 
 /** On session switch: load that session's draft + history into the input. */
 function restorePromptState() {
   const input = document.getElementById('promptInput');
+  composerSessionId = currentSession.id;
+  composerDraftDirty = false;
   let draft = '';
   try { draft = localStorage.getItem(draftKey(currentSession.id)) || ''; } catch {}
   input.value = draft;
+  pendingImages = pendingImagesBySession.get(currentSession.id) || [];
+  pendingImagesBySession.delete(currentSession.id);
+  renderAttachmentStrip();
   autosizePromptInput(input);
   historyIndex = -1;
   historyStash = '';
@@ -4222,11 +4409,42 @@ function restorePromptState() {
   if (!Array.isArray(promptHistory)) promptHistory = [];
 }
 
-function recordPrompt(message) {
-  if (!currentSession) return;
+function recordPrompt(message, sessionId = composerSessionId) {
+  if (!sessionId) return;
   promptHistory = pushPromptHistory(promptHistory, message, 50);
   historyIndex = -1;
-  try { localStorage.setItem(historyKey(currentSession.id), JSON.stringify(promptHistory)); } catch {}
+  try { localStorage.setItem(historyKey(sessionId), JSON.stringify(promptHistory)); } catch {}
+}
+
+function mergeComposerText(existing, restored) {
+  const current = (existing || '').trim();
+  if (!current || current === restored) return restored;
+  return `${existing}\n\n${restored}`;
+}
+
+// Failed sends and queue edits complete asynchronously. Restore their payload
+// to the originating session even if another session now owns the composer.
+function restorePromptToSession(sessionId, message, images) {
+  let saved = '';
+  try { saved = localStorage.getItem(draftKey(sessionId)) || ''; } catch {}
+  const restored = message ? mergeComposerText(saved, message) : saved;
+  writeSessionDraft(sessionId, restored);
+
+  if (images?.length) {
+    if (composerSessionId === sessionId && currentSession?.id === sessionId) {
+      pendingImages = images.concat(pendingImages);
+      renderAttachmentStrip();
+    } else {
+      pendingImagesBySession.set(sessionId, images.concat(pendingImagesBySession.get(sessionId) || []));
+    }
+  }
+
+  if (composerSessionId === sessionId && currentSession?.id === sessionId && message) {
+    const input = document.getElementById('promptInput');
+    input.value = mergeComposerText(input.value, message);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.focus();
+  }
 }
 
 function navigateHistory(dir, input) {
@@ -4246,10 +4464,40 @@ function navigateHistory(dir, input) {
   return true;
 }
 
+let clientPromptSequence = 0;
+const pendingOptimisticPrompts = new Map();
+
+function nextClientPromptId() {
+  clientPromptSequence += 1;
+  return `prompt-${Date.now().toString(36)}-${clientPromptSequence.toString(36)}`;
+}
+
+function discardOptimisticPrompt(clientPromptId) {
+  const pending = pendingOptimisticPrompts.get(clientPromptId);
+  if (!pending) return;
+  pendingOptimisticPrompts.delete(clientPromptId);
+  pending.element?.remove();
+}
+
+function consumePendingSelfEcho(sessionId, message) {
+  for (const [clientPromptId, pending] of pendingOptimisticPrompts) {
+    if (pending.sessionId !== sessionId || pending.message !== message) continue;
+    pendingOptimisticPrompts.delete(clientPromptId);
+    return true;
+  }
+  return false;
+}
+
 async function sendPrompt() {
   const input = document.getElementById('promptInput');
   const message = input.value.trim();
   if ((!message && !pendingImages.length) || !currentSession) return;
+  const sessionId = currentSession.id;
+  const selectionGeneration = sessionSelectionGeneration;
+  if (abortingSessions.has(sessionId)) {
+    setStatus('Wait for the current turn to finish stopping', 'working');
+    return;
+  }
 
   if (message === '/tree') { input.value = ''; openTreeModal(); return; }
   hideAutocomplete();
@@ -4265,25 +4513,27 @@ async function sendPrompt() {
     }
     input.value = '';
     input.style.height = '';
-    recordPrompt(message);
-    clearDraft();
+    recordPrompt(message, sessionId);
+    clearDraft(sessionId);
     setStatus('Running ' + message.split(' ')[0] + '...', 'working');
     try {
-      const data = await apiSend(`/api/sessions/${currentSession.id}/command`, { message });
+      const data = await apiSend(`/api/sessions/${sessionId}/command`, { message });
+      if (!ownsSessionView(sessionId, selectionGeneration)) return;
       setStatus(data.info || 'Done');
       refreshSessions();
     } catch (e) {
-      setStatus(`${message.split(' ')[0]}: ${e.message}`, 'error');
-      input.value = message; // let the user fix and retry
-      input.dispatchEvent(new Event('input'));
+      restorePromptToSession(sessionId, message, null);
+      if (ownsSessionView(sessionId, selectionGeneration)) {
+        setStatus(`${message.split(' ')[0]}: ${e.message}`, 'error');
+      }
     }
     return;
   }
 
   input.value = '';
   input.style.height = '';
-  recordPrompt(message);
-  clearDraft();
+  recordPrompt(message, sessionId);
+  clearDraft(sessionId);
   const images = takePendingImages();
   setStatus('Sending...', 'working');
 
@@ -4293,20 +4543,30 @@ async function sendPrompt() {
   const optimisticContent = [];
   if (message) optimisticContent.push({ type: 'text', text: message });
   for (const img of images || []) optimisticContent.push({ type: 'image', data: img.data, mimeType: img.mimeType });
-  container.insertAdjacentHTML('beforeend', renderUserMessage({
+  const clientPromptId = nextClientPromptId();
+  const template = document.createElement('template');
+  template.innerHTML = renderUserMessage({
     role: 'user', content: optimisticContent, timestamp: Date.now()
-  }, formatTime(Date.now())));
+  }, formatTime(Date.now()), ` data-client-prompt-id="${clientPromptId}"`);
+  const optimisticElement = template.content.firstElementChild;
+  container.appendChild(optimisticElement);
   // Arm the echo suppressor: pi re-emits this prompt as a user message_end
   // when the turn starts, and we've already rendered it. '' is a valid value
-  // (images-only prompt), hence the null sentinel.
-  pendingSelfEcho = message;
+  // (images-only prompt). The stable id also lets queue Edit remove exactly
+  // this optimistic bubble even when several prompts have identical text.
+  pendingOptimisticPrompts.set(clientPromptId, {
+    clientPromptId, sessionId, message, element: optimisticElement, status: 'sending',
+  });
   followStream = true; // sending means: follow the stream from here on
   scrollToBottom(container);
 
   setTurnInProgress(true);
 
   try {
-    const resp = await apiSend(`/api/sessions/${currentSession.id}/prompt`, images ? { message, images } : { message });
+    const resp = await apiSend(`/api/sessions/${sessionId}/prompt`, images ? { message, images } : { message });
+    const pending = pendingOptimisticPrompts.get(clientPromptId);
+    if (pending) pending.status = resp?.result?.queued ? 'queued' : 'accepted';
+    if (!ownsSessionView(sessionId, selectionGeneration)) return;
     if (resp?.result?.queued) {
       // Held by the bridge until compaction finishes; no turn is running yet.
       // Raise the compacting indicator before undoing the optimistic
@@ -4314,22 +4574,22 @@ async function sendPrompt() {
       setCompacting(true);
       setTurnInProgress(false);
       setStatus('Queued — will send when compaction finishes', 'working');
+      renderQueueStatus(lastQueueData);
     } else {
       setStatus('Waiting for response...', 'working');
     }
   } catch (e) {
-    setStatus(`Error: ${e.message}`, 'error');
-    setTurnInProgress(false);
-    pendingSelfEcho = null; // no echo is coming for a failed send
-    restoreAttachments(images); // don't lose them on a failed send
+    discardOptimisticPrompt(clientPromptId); // no echo is coming for a failed send
+    restorePromptToSession(sessionId, message, images);
+    if (ownsSessionView(sessionId, selectionGeneration)) {
+      setStatus(`Error: ${e.message}`, 'error');
+      setTurnInProgress(false);
+    }
   }
 }
 
 var turnInProgress = false;
-
-// Text of the prompt whose optimistic render is awaiting its pi echo (null
-// when none) — see the user branch of the message_end stream handler.
-var pendingSelfEcho = null;
+const abortingSessions = new Set();
 
 // --- Live activity: elapsed turn time + currently running tool -----------
 // The working badge reads "Working 1:42 · Bash" so a glance says what the
@@ -4442,23 +4702,32 @@ async function sendQueuedMessage(kind) {
   const input = document.getElementById('promptInput');
   const message = input.value.trim();
   if ((!message && !pendingImages.length) || !currentSession || !currentSession.isActive) return;
+  const sessionId = currentSession.id;
+  const selectionGeneration = sessionSelectionGeneration;
+  if (abortingSessions.has(sessionId)) {
+    setStatus('Wait for the current turn to finish stopping', 'working');
+    return;
+  }
 
   input.value = '';
   input.style.height = '';
-  recordPrompt(message);
-  clearDraft();
+  recordPrompt(message, sessionId);
+  clearDraft(sessionId);
   const images = takePendingImages();
   setStatus(steer ? 'Steering...' : 'Queueing follow-up...', 'working');
 
   const body = steer ? { message } : { message, deliverAs: 'followUp' };
   if (images) body.images = images;
   try {
-    const resp = await apiSend(`/api/sessions/${currentSession.id}${steer ? '/steer' : '/prompt'}`, body);
+    const resp = await apiSend(`/api/sessions/${sessionId}${steer ? '/steer' : '/prompt'}`, body);
+    if (!ownsSessionView(sessionId, selectionGeneration)) return;
     if (resp?.result?.queued) setStatus('Queued — will send when compaction finishes');
     else setStatus(steer ? 'Steered' : 'Queued for after this turn');
   } catch (e) {
-    setStatus(`${steer ? 'Steer' : 'Follow-up'} failed: ${e.message}`, 'error');
-    restoreAttachments(images); // don't lose them on a failed send
+    restorePromptToSession(sessionId, message, images);
+    if (ownsSessionView(sessionId, selectionGeneration)) {
+      setStatus(`${steer ? 'Steer' : 'Follow-up'} failed: ${e.message}`, 'error');
+    }
   }
 }
 
@@ -4483,14 +4752,27 @@ function renderQueueStatus(data) {
     return;
   }
   const rows = [];
-  steering.forEach((text, i) => rows.push(queueRowHtml('steering', 'steer', text, i)));
-  followUp.forEach((text, i) => rows.push(queueRowHtml('followUp', 'follow-up', text, i)));
+  const associated = new Set();
+  const row = (kind, label, text, index) => {
+    let clientPromptId = null;
+    for (const [id, pending] of pendingOptimisticPrompts) {
+      if (associated.has(id) || pending.sessionId !== currentSession?.id ||
+          pending.status !== 'queued' || pending.message !== text) continue;
+      clientPromptId = id;
+      associated.add(id);
+      break;
+    }
+    rows.push(queueRowHtml(kind, label, text, index, clientPromptId));
+  };
+  steering.forEach((text, i) => row('steering', 'steer', text, i));
+  followUp.forEach((text, i) => row('followUp', 'follow-up', text, i));
   panel.innerHTML = rows.join('');
   panel.style.display = '';
 }
 
-function queueRowHtml(kind, label, text, index) {
-  return `<div class="queue-item" data-kind="${kind}" data-index="${index}">
+function queueRowHtml(kind, label, text, index, clientPromptId = null) {
+  const clientAttr = clientPromptId ? ` data-client-prompt-id="${escapeHtml(clientPromptId)}"` : '';
+  return `<div class="queue-item" data-kind="${kind}" data-index="${index}"${clientAttr}>
     <span class="queue-item-kind">${label}</span>
     <span class="queue-item-text" onclick="this.classList.toggle('expanded')" title="Click to expand">${escapeHtml(text)}</span>
     <button class="queue-item-edit" onclick="editQueuedMessage(this)" title="Remove from queue and edit">↩ Edit</button>
@@ -4500,24 +4782,32 @@ function queueRowHtml(kind, label, text, index) {
 // Cancel a queued message on the bridge and return its text to the composer.
 async function editQueuedMessage(btn) {
   if (!currentSession) return;
+  const sessionId = currentSession.id;
+  const selectionGeneration = sessionSelectionGeneration;
   const row = btn.closest('.queue-item');
   if (!row) return;
   const kind = row.dataset.kind;
   const index = Number(row.dataset.index);
   const text = row.querySelector('.queue-item-text')?.textContent || '';
+  const clientPromptId = row.dataset.clientPromptId || null;
   if (!text) return;
+  const clientPrompt = clientPromptId ? pendingOptimisticPrompts.get(clientPromptId) : null;
+  const previousPromptStatus = clientPrompt?.status;
+  // queue_update can arrive before the cancel HTTP response. Exclude the row
+  // being edited from duplicate-text reassociation while cancellation is in
+  // flight, so a remaining identical prompt keeps its own client id.
+  if (clientPrompt) clientPrompt.status = 'cancelling';
   try {
-    await apiSend(`/api/sessions/${currentSession.id}/queue/cancel`, { kind, index, text });
-    const input = document.getElementById('promptInput');
-    if (input) {
-      const existing = input.value.trim();
-      input.value = existing && existing !== text ? `${existing}\n\n${text}` : text;
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.focus();
-    }
+    await apiSend(`/api/sessions/${sessionId}/queue/cancel`, { kind, index, text });
+    if (clientPromptId) discardOptimisticPrompt(clientPromptId);
+    restorePromptToSession(sessionId, text, null);
     // The follow-up queue_update reconciles the strip; no manual removal needed.
   } catch (e) {
-    setStatus(e.message, 'error');
+    if (clientPrompt && pendingOptimisticPrompts.has(clientPromptId)) {
+      clientPrompt.status = previousPromptStatus;
+      renderQueueStatus(lastQueueData);
+    }
+    if (ownsSessionView(sessionId, selectionGeneration)) setStatus(e.message, 'error');
   }
 }
 
@@ -4525,12 +4815,20 @@ async function abortTurn() {
   // Compaction counts: the bridge cancels a running compaction on abort, and
   // its compaction_end (aborted) event clears the compacting indicator.
   if (!currentSession || (!turnInProgress && !compactingNow)) return;
+  const sessionId = currentSession.id;
+  const selectionGeneration = sessionSelectionGeneration;
+  if (abortingSessions.has(sessionId)) return;
+  abortingSessions.add(sessionId);
   setStatus('Stopping...', 'working');
   try {
-    await apiSend('/api/sessions/' + currentSession.id + '/abort');
-    setStatus('Stopped');
-    setTurnInProgress(false);
-  } catch (e) { setStatus('Stop failed: ' + e.message, 'error'); }
+    await apiSend('/api/sessions/' + sessionId + '/abort');
+    // HTTP acknowledgement only means the abort request was accepted. Keep
+    // the turn owned by the stream until turn_end/agent_end performs cleanup
+    // and JSONL catch-up.
+  } catch (e) {
+    abortingSessions.delete(sessionId);
+    if (ownsSessionView(sessionId, selectionGeneration)) setStatus('Stop failed: ' + e.message, 'error');
+  }
 }
 
 // New session — cwd from the picker input unless a caller (the workspace
@@ -5968,14 +6266,12 @@ function toggleTerminal() {
 
 async function openTerminal(mode) {
   if (!terminalFeatureAvailable() || !currentSession || termState) return;
+  const session = currentSession;
+  const sessionId = session.id;
+  const selectionGeneration = sessionSelectionGeneration;
   // 'shell' (default) or 'tmux' (a grouped tmux client viewing the pane the
   // session's pi runs in). The last choice sticks per session.
-  if (!mode) mode = localStorage.getItem('pi-dish-terminal-mode-' + currentSession.id) === 'tmux' ? 'tmux' : 'shell';
-  const panel = document.getElementById('terminalPanel');
-  const container = document.getElementById('terminalContainer');
-  applySavedTerminalSize(panel);
-  panel.style.display = '';
-  document.getElementById('terminalCwd').textContent = shortCwd(currentSession.cwd || '~');
+  if (!mode) mode = localStorage.getItem('pi-dish-terminal-mode-' + sessionId) === 'tmux' ? 'tmux' : 'shell';
 
   // Have the Nerd Font symbols ready before xterm first paints — otherwise
   // prompt icons flash as tofu until the lazy font load lands. Never block
@@ -5986,7 +6282,13 @@ async function openTerminal(mode) {
       new Promise(r => setTimeout(r, 2000)),
     ]);
   } catch {}
-  if (termState || !currentSession) return; // double-click / switched away during the await
+  if (termState || !ownsSessionView(sessionId, selectionGeneration)) return;
+
+  const panel = document.getElementById('terminalPanel');
+  const container = document.getElementById('terminalContainer');
+  applySavedTerminalSize(panel);
+  panel.style.display = '';
+  document.getElementById('terminalCwd').textContent = shortCwd(session.cwd || '~');
 
   const css = getComputedStyle(document.documentElement);
   const term = new Terminal({
@@ -6001,7 +6303,7 @@ async function openTerminal(mode) {
   if (fitAddon) term.loadAddon(fitAddon);
 
   termState = {
-    term, fitAddon, ws: null, sessionId: currentSession.id, mode,
+    term, fitAddon, ws: null, sessionId, mode,
     tmuxPrefix: null, reconnectTimer: null, attempts: 0, closedByUser: false, exited: false,
   };
   updateTerminalModeUI();
