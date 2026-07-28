@@ -72,17 +72,22 @@ if (process.env.PI_FIXTURE_NOREGISTER) {
       fs.appendFileSync(sessionFile + '.keys', chunk.toString());
     });
   } catch {}
-  srv.listen(socketPath, () => {
-    fs.writeFileSync(path.join(regDir, sessionId + '.json'), JSON.stringify({
-      sessionId,
-      sessionFile,
-      cwd: process.cwd(),
-      pid: process.pid,
-      socketPath,
-      name: 'tmux spawn',
-      model: 'anthropic/claude-opus-4',
-      spawnToken: token,
-    }));
-  });
+  const register = () => {
+    srv.listen(socketPath, () => {
+      fs.writeFileSync(path.join(regDir, sessionId + '.json'), JSON.stringify({
+        sessionId,
+        sessionFile,
+        cwd: process.cwd(),
+        pid: process.pid,
+        socketPath,
+        name: 'tmux spawn',
+        model: 'anthropic/claude-opus-4',
+        spawnToken: token,
+      }));
+    });
+  };
+  const registerDelay = Number(process.env.PI_FIXTURE_REGISTER_DELAY_MS) || 0;
+  if (registerDelay > 0) setTimeout(register, registerDelay);
+  else register();
   setInterval(() => {}, 1 << 30);
 }

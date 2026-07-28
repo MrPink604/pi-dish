@@ -169,6 +169,64 @@ test('POST /api/sessions/:id/resume with a tmux target resumes into tmux', { ski
   assert.ok(tmux.getSpawn(id), 'resume placement persisted');
 });
 
+test('overlapping resume requests share the first target and launch one process', { skip: !tmuxOk }, async () => {
+  const id = '2026-07-09T09-00-00-resumeflight';
+  const dir = path.join(tmpHome, '.pi', 'agent', 'sessions', 'resumeflight');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${id}.jsonl`), JSON.stringify({ type: 'session', cwd: tmpHome }) + '\n');
+
+  const hiddenSocket = path.join(tmuxTmp, 'pi-dish');
+  const paneCount = (socket, target) => {
+    try {
+      return execFileSync('tmux', ['-S', socket, 'list-panes', '-s', '-t', target, '-F', '#{pane_id}'], { encoding: 'utf8' })
+        .split('\n').filter(Boolean).length;
+    } catch {
+      return 0;
+    }
+  };
+  const workBefore = paneCount(TMUX_SOCKET, 'work');
+  const hiddenBefore = paneCount(hiddenSocket, 'headless');
+  process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_REGISTER_DELAY_MS=500 ${process.execPath} ${FIXTURE}`;
+  try {
+    // The explicit target arrives first. The overlapping target-less request
+    // must wait for it rather than starting a hidden-tmux writer of its own.
+    const first = post(`/api/sessions/${id}/resume`, {
+      target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    const second = post(`/api/sessions/${id}/resume`, {});
+    const [a, b] = await Promise.all([first, second]);
+
+    assert.equal(a.status, 200, JSON.stringify(a.body));
+    assert.equal(b.status, 200, JSON.stringify(b.body));
+    assert.equal(a.body.id, id);
+    assert.equal(b.body.id, id);
+    assert.equal(b.body.alreadyActive, true);
+    assert.equal(b.body.sharedResume, true, 'second caller reports the shared in-flight launch');
+    assert.equal(path.resolve(tmux.getSpawn(id).socket), path.resolve(TMUX_SOCKET),
+      'the first explicit target wins deterministically');
+    assert.equal(paneCount(TMUX_SOCKET, 'work'), workBefore + 1, 'exactly one explicit pane launched');
+    assert.equal(paneCount(hiddenSocket, 'headless'), hiddenBefore, 'no hidden fallback pane launched');
+  } finally {
+    process.env.PI_DISH_PI_COMMAND = `${process.execPath} ${FIXTURE}`;
+  }
+});
+
+test('a registration landing during the final timeout sleep is accepted', { skip: !tmuxOk }, async () => {
+  process.env.PI_DISH_SPAWN_TIMEOUT_MS = '900';
+  process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_REGISTER_DELAY_MS=700 ${process.execPath} ${FIXTURE}`;
+  try {
+    const { status, body } = await post('/api/sessions/new', {
+      target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+    });
+    assert.equal(status, 200, JSON.stringify(body));
+    assert.ok(body.id, 'deadline registration returned its session id');
+  } finally {
+    delete process.env.PI_DISH_SPAWN_TIMEOUT_MS;
+    process.env.PI_DISH_PI_COMMAND = `${process.execPath} ${FIXTURE}`;
+  }
+});
+
 // --- Durable headless sessions: no target → hidden tmux session -------------
 
 test('POST /api/sessions/new with no target spawns into the hidden headless tmux session', { skip: !tmuxOk }, async () => {
@@ -200,6 +258,53 @@ test('a second headless spawn reuses the hidden session as a new window', { skip
   const panes = execFileSync('tmux', ['-S', socket, 'list-panes', '-s', '-t', 'headless', '-F', '#{pane_id}'], { encoding: 'utf8' })
     .split('\n').filter(Boolean);
   assert.ok(panes.length >= 2, `both headless spawns share the session (got ${panes.length} panes)`);
+});
+
+test('hidden tmux timeout removes the pane before starting RPC fallback', { skip: !tmuxOk }, async () => {
+  const id = '2026-07-09T09-00-00-hiddenfallback';
+  const dir = path.join(tmpHome, '.pi', 'agent', 'sessions', 'hiddenfallback');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${id}.jsonl`), JSON.stringify({ type: 'session', cwd: tmpHome }) + '\n');
+
+  const hiddenSocket = path.join(tmuxTmp, 'pi-dish');
+  const countHiddenPanes = () => execFileSync(
+    'tmux', ['-S', hiddenSocket, 'list-panes', '-s', '-t', 'headless', '-F', '#{pane_id}'],
+    { encoding: 'utf8' },
+  ).split('\n').filter(Boolean).length;
+  const before = countHiddenPanes();
+  const rpcFixture = path.join(__dirname, 'fixtures', 'fake-rpc-pi.js');
+  const router = `if [ "$1" = "--mode" ]; then exec ${process.execPath} ${rpcFixture} "$@"; else exec ${process.execPath} ${FIXTURE} "$@"; fi`;
+  const startLog = path.join(tmpHome, 'hidden-fallback-rpc-starts.jsonl');
+  process.env.PI_DISH_SPAWN_TIMEOUT_MS = '450';
+  process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_NOREGISTER=1 PI_FIXTURE_START_LOG=${startLog} sh -c '${router}' --`;
+  const killPaneAndWait = tmux.killPaneAndWait;
+  try {
+    // First simulate cleanup itself failing. This request must not fall back,
+    // and the failed placement must survive beyond the finished HTTP flight.
+    tmux.killPaneAndWait = async () => { throw new Error('simulated cleanup failure'); };
+    const failed = await post(`/api/sessions/${id}/resume`, {});
+    assert.equal(failed.status, 500, JSON.stringify(failed.body));
+    assert.match(failed.body.error, /refusing to start an RPC fallback/i);
+    assert.equal(fs.existsSync(startLog), false, 'cleanup failure starts no RPC process');
+
+    // A retry self-heals the remembered old pane first. Only then may a new
+    // hidden attempt time out cleanly and fall back to RPC.
+    tmux.killPaneAndWait = killPaneAndWait;
+    const { status, body } = await post(`/api/sessions/${id}/resume`, {});
+    assert.equal(status, 200, JSON.stringify(body));
+    assert.equal(body.id, id);
+    assert.equal(countHiddenPanes(), before, 'timed-out hidden pane is gone when fallback returns');
+    assert.equal(tmux.getSpawn(id), null, 'timed-out placement was never persisted');
+    const starts = fs.readFileSync(startLog, 'utf8').trim().split('\n').filter(Boolean);
+    assert.equal(starts.length, 1, 'RPC starts once, after remembered cleanup succeeds');
+
+    const closed = await post(`/api/sessions/${id}/close`, {});
+    assert.equal(closed.status, 200, JSON.stringify(closed.body));
+  } finally {
+    tmux.killPaneAndWait = killPaneAndWait;
+    delete process.env.PI_DISH_SPAWN_TIMEOUT_MS;
+    process.env.PI_DISH_PI_COMMAND = `${process.execPath} ${FIXTURE}`;
+  }
 });
 
 test('POST /api/sessions/new times out (window left open) when pi never registers', { skip: !tmuxOk }, async () => {
@@ -312,4 +417,33 @@ test('tmux-spawns.json persistence and prune', async () => {
   await tmux.pruneSpawns(new Set(['kept-session']));
   assert.ok(tmux.getSpawn('kept-session'), 'registered session kept even with a bogus pane');
   assert.equal(tmux.getSpawn('gone-session'), null, 'unregistered dead-pane mapping pruned');
+});
+
+test('paneExists rejects an exit-0 empty target field and prune removes that stale placement', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-fake-tmux-'));
+  const binDir = path.join(dir, 'bin');
+  const home = path.join(dir, 'home');
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.mkdirSync(home, { recursive: true });
+  const fakeTmux = path.join(binDir, 'tmux');
+  fs.writeFileSync(fakeTmux, '#!/bin/sh\nprintf "\\n"\n', { mode: 0o755 });
+  const modulePath = path.join(__dirname, '..', 'lib', 'tmux.js');
+  const script = `
+    const tmux = require(${JSON.stringify(modulePath)});
+    (async () => {
+      tmux.recordSpawn('stale', { socket: '/tmp/fake.sock', paneId: '%9' });
+      const exists = await tmux.paneExists('/tmp/fake.sock', '%9');
+      await tmux.pruneSpawns();
+      process.stdout.write(JSON.stringify({ exists, retained: !!tmux.getSpawn('stale') }));
+    })().catch((e) => { console.error(e); process.exit(1); });
+  `;
+  try {
+    const out = execFileSync(process.execPath, ['-e', script], {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home, PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}` },
+    });
+    assert.deepEqual(JSON.parse(out), { exists: false, retained: false });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

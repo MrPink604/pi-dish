@@ -50,6 +50,10 @@ if (sessionIdx >= 0 && args[sessionIdx + 1]) {
   fs.writeFileSync(sessionFile, JSON.stringify({ type: 'session', cwd: process.cwd() }) + '\n');
 }
 
+if (process.env.PI_FIXTURE_START_LOG) {
+  fs.appendFileSync(process.env.PI_FIXTURE_START_LOG, JSON.stringify({ pid: process.pid, sessionFile }) + '\n');
+}
+
 const modelIdx = args.indexOf('--model');
 let model = { provider: 'test', id: 'fake-model' };
 if (modelIdx >= 0 && args[modelIdx + 1]) {
@@ -111,8 +115,13 @@ function handle(cmd) {
   logCmd(cmd);
   const { id, type } = cmd;
   switch (type) {
-    case 'get_state':
-      return respond(id, { sessionFile, sessionId, sessionName, model, thinkingLevel: 'medium', messageCount: 1 });
+    case 'get_state': {
+      const state = { sessionFile, sessionId, sessionName, model, thinkingLevel: 'medium', messageCount: 1 };
+      const delay = Number(process.env.PI_FIXTURE_STARTUP_DELAY_MS) || 0;
+      if (delay > 0) setTimeout(() => respond(id, state), delay);
+      else respond(id, state);
+      return;
+    }
     case 'prompt': {
       respond(id, {});
       // A steer delivered mid-turn is queued by real pi; here it's just logged.
