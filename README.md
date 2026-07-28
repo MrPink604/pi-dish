@@ -157,12 +157,14 @@ export PI_DISH_SOCKET_DIR=/run/user/$(id -u)/pi-dish
 npm start
 ```
 
-The bridge creates a missing directory with mode `0700` and still rejects an
-override whose resulting full socket path is too long. An existing directory
-must already be owned by the current user with mode `0700`; pi-dish reports an
-actionable error instead of changing arbitrary directory permissions. pi-dish
-forwards the setting to sessions it launches in tmux; independently launched
-`pi` processes must inherit it from your shell or service environment.
+The bridge creates a missing directory with mode `0700` and automatically
+tightens its owned default `~/.pi/dish/sockets/` directory from older releases
+to `0700`. An override whose resulting full socket path is too long is still
+rejected. An existing override directory must already be owned by the current
+user with mode `0700`; pi-dish reports an actionable error instead of changing
+arbitrary override permissions. pi-dish forwards the setting to sessions it
+launches in tmux; independently launched `pi` processes must inherit it from
+your shell or service environment.
 
 Then start the server:
 

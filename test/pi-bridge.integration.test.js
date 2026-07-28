@@ -285,6 +285,62 @@ test('an existing shared PI_DISH_SOCKET_DIR is rejected without permission mutat
     'bridge did not mutate the existing directory mode');
 });
 
+test('the real bridge migrates its owned default socket directory from 0755 to 0700', { skip: !piOk, timeout: 30000 }, async () => {
+  const migrationHome = path.join(tmpRoot, 'migration-home');
+  const migrationAgentDir = path.join(migrationHome, '.pi', 'agent');
+  const migrationExtDir = path.join(migrationAgentDir, 'extensions');
+  const migrationProject = path.join(migrationHome, 'proj');
+  const migrationSocketDir = path.join(migrationHome, '.pi', 'dish', 'sockets');
+  fs.mkdirSync(migrationExtDir, { recursive: true });
+  fs.mkdirSync(migrationProject, { recursive: true });
+  fs.symlinkSync(
+    path.join(__dirname, '..', 'extensions', 'pi-dish-bridge'),
+    path.join(migrationExtDir, 'pi-dish-bridge'),
+  );
+  fs.copyFileSync(path.join(agentDir, 'models.json'), path.join(migrationAgentDir, 'models.json'));
+  fs.mkdirSync(migrationSocketDir, { recursive: true });
+  fs.chmodSync(migrationSocketDir, 0o755);
+
+  const env = { ...piEnv, HOME: migrationHome };
+  delete env.PI_DISH_SOCKET_DIR;
+  const child = spawn(piSpec.argv[0], [...piSpec.argv.slice(1), '--mode', 'rpc', '--model', 'fakeprov/fake-model'], {
+    cwd: migrationProject,
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+  child.stdout.resume();
+  try {
+    const registryDir = path.join(migrationHome, '.pi', 'dish', 'sessions');
+    const deadline = Date.now() + 10000;
+    let entry = null;
+    while (!entry && child.exitCode === null && Date.now() < deadline) {
+      try {
+        for (const name of fs.readdirSync(registryDir)) {
+          const candidate = JSON.parse(fs.readFileSync(path.join(registryDir, name), 'utf8'));
+          if (candidate.pid === child.pid && fs.existsSync(candidate.socketPath)) {
+            entry = candidate;
+            break;
+          }
+        }
+      } catch {}
+      if (!entry) await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.ok(entry, `bridge did not bind/register after default migration; stderr:\n${stderr}`);
+    assert.equal(fs.statSync(migrationSocketDir).mode & 0o777, 0o700,
+      'bridge tightened the self-owned default directory');
+  } finally {
+    if (child.exitCode === null) child.kill('SIGTERM');
+    await new Promise((resolve) => {
+      if (child.exitCode !== null) return resolve();
+      child.once('exit', resolve);
+      setTimeout(resolve, 3000);
+    });
+    if (child.exitCode === null) child.kill('SIGKILL');
+  }
+});
+
 test('the real bridge binds under a long HOME using PI_DISH_SOCKET_DIR and registers', { skip: !piOk, timeout: 60000 }, async () => {
   const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
   const entry = await waitFor(() => {

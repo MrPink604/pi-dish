@@ -56,13 +56,20 @@ function ensureSocketDirectory(): void {
   let created = false;
   try {
     created = fs.mkdirSync(SOCKET_DIR, { recursive: true, mode: 0o700 }) !== undefined;
-    // mkdir's mode is umask-sensitive. Tighten only a directory this bridge
-    // invocation created; never mutate an existing override/shared directory.
-    if (created) fs.chmodSync(SOCKET_DIR, 0o700);
-    const stat = fs.statSync(SOCKET_DIR);
+    let stat = fs.statSync(SOCKET_DIR);
     if (!stat.isDirectory()) throw new Error("path is not a directory");
     if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
       throw new Error(`directory is owned by uid ${stat.uid}, expected uid ${process.getuid()}`);
+    }
+    // mkdir's mode is umask-sensitive. Tighten directories this bridge made,
+    // and migrate the bridge-owned default from older releases (normally
+    // 0755 under umask 022). Existing overrides are never mutated.
+    if (created || (!SOCKET_DIR_OVERRIDE && (stat.mode & 0o777) !== 0o700)) {
+      if (!created && typeof process.getuid !== "function") {
+        throw new Error("cannot verify ownership before repairing directory mode");
+      }
+      fs.chmodSync(SOCKET_DIR, 0o700);
+      stat = fs.statSync(SOCKET_DIR);
     }
     const mode = stat.mode & 0o777;
     if (mode !== 0o700) {

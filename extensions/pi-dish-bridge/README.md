@@ -16,7 +16,9 @@ environment of every `pi` process, for example
 XDG fallback. The override directory is created with mode `0700`, and an
 override that is still too long is rejected with the same startup error. An
 existing directory must be owned by the current user with mode `0700`; the
-bridge validates it without changing its permissions.
+bridge validates it without changing its permissions. The bridge-owned default
+`~/.pi/dish/sockets/` is different: if an older release created it as `0755`,
+the bridge automatically tightens that owned directory to `0700`.
 
 ## What crosses the bridge
 

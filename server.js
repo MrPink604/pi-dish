@@ -2167,7 +2167,17 @@ function validateBridgeSocketConfig(env) {
     }
     const mode = stat.mode & 0o777;
     if (mode !== 0o700) {
-      throw bridgeSocketConfigError(`${socketDir} has mode ${mode.toString(8).padStart(4, '0')}, expected 0700. Choose or create a private PI_DISH_SOCKET_DIR; pi-dish will not change an existing directory's permissions.`);
+      if (override) {
+        throw bridgeSocketConfigError(`${socketDir} has mode ${mode.toString(8).padStart(4, '0')}, expected 0700. Choose or create a private PI_DISH_SOCKET_DIR; pi-dish will not change an existing override directory's permissions.`);
+      }
+      if (typeof process.getuid !== 'function') {
+        throw bridgeSocketConfigError(`cannot verify ownership before repairing the default socket directory ${socketDir} from mode ${mode.toString(8).padStart(4, '0')} to 0700`);
+      }
+      try {
+        fs.chmodSync(socketDir, 0o700);
+      } catch (e) {
+        throw bridgeSocketConfigError(`cannot repair the owned default socket directory ${socketDir} to mode 0700: ${e.message}`);
+      }
     }
   }
 }
@@ -2191,9 +2201,10 @@ async function spawnPiInTmux({ target, args, cwd, hidden }) {
 
   const spec = getPiLaunchSpec();
   const env = { ...spec.env };
-  // Pin the HOME used by bridge default-path validation into tmux when the
-  // launch spec did not intentionally provide a different one.
-  if (!env.HOME && process.env.HOME) env.HOME = process.env.HOME;
+  // Pin the HOME used by bridge default-path validation into tmux. Otherwise
+  // a long-running tmux server can contribute a stale HOME and make the child
+  // bind/register in a tree different from the one this server scans.
+  if (!Object.hasOwn(env, 'HOME')) env.HOME = process.env.HOME || os.homedir();
   // tmux windows don't inherit this process's env — pass the server URL
   // through so the pi-dish-pages skill works in tmux-spawned sessions too.
   if (process.env.PI_DISH_URL) env.PI_DISH_URL = process.env.PI_DISH_URL;
@@ -2215,7 +2226,7 @@ async function spawnPiInTmux({ target, args, cwd, hidden }) {
       socket,
       tmuxSession: target.tmuxSession,
       newTmuxSessionName: target.newTmuxSession,
-      cwd: cwd || process.env.HOME,
+      cwd: cwd || env.HOME,
       command,
       env,
     }));
@@ -2267,6 +2278,12 @@ async function spawnPiInTmux({ target, args, cwd, hidden }) {
   }
   const err = new Error(`pi did not register within ${timeoutLabel} — ${hidden ? 'the hidden headless window was closed' : 'the tmux window was left open for inspection'}. Ensure the pi-dish-bridge extension is installed in pi's global extensions.`);
   err.status = 500;
+  if (!hidden) {
+    const state = await tmux.paneProcessState(socket, paneId);
+    if (state.paneExists || state.knownProcesses.length) {
+      err.resumeUncertain = { socket, paneId, knownProcesses: state.knownProcesses };
+    }
+  }
   throw err;
 }
 
@@ -2362,15 +2379,40 @@ const resumeFlights = new Map(); // real session file -> Promise<{ id }>
 // request/flight ends. Preserve that placement by canonical file so a retry
 // must finish the cleanup before it can launch any backend.
 const failedResumeCleanups = new Map(); // real session file -> { socket, paneId, knownProcesses, timeout }
+// Explicit tmux timeouts deliberately leave their panes open for inspection.
+// Remember the pane and exact process identities so a later resume cannot
+// start another writer for the same canonical JSONL while it is uncertain.
+const uncertainExplicitResumes = new Map(); // real session file -> { socket, paneId, knownProcesses }
 
 function sessionIsActive(sessionId) {
   return !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId)?.alive;
 }
 
+function clearResumeQuarantines(sessionFile) {
+  failedResumeCleanups.delete(sessionFile);
+  uncertainExplicitResumes.delete(sessionFile);
+}
+
+function activeSessionClearsQuarantine(sessionId) {
+  const registered = getRegisteredSession(sessionId);
+  const rpc = getRPCSession(sessionId);
+  if (!registered && !rpc?.alive) return false;
+  const activeFile = registered?.sessionFile || rpc?.sessionFile || rpc?.state?.sessionFile;
+  if (activeFile) {
+    try { clearResumeQuarantines(fs.realpathSync(activeFile)); } catch {}
+  }
+  return true;
+}
+
 async function launchResumedSession({ sessionFile, cwd, target }) {
   if (target && target.type === 'tmux') {
-    const id = await spawnPiInTmux({ target, args: ['--session', sessionFile], cwd });
-    return { id };
+    try {
+      const id = await spawnPiInTmux({ target, args: ['--session', sessionFile], cwd });
+      return { id };
+    } catch (e) {
+      if (e.resumeUncertain) uncertainExplicitResumes.set(sessionFile, e.resumeUncertain);
+      throw e;
+    }
   }
   if (headlessTmuxEnabled()) {
     try {
@@ -2395,7 +2437,7 @@ async function launchResumedSession({ sessionFile, cwd, target }) {
 app.post('/api/sessions/:id/resume', async (req, res) => {
   const requestedId = req.params.id;
 
-  if (sessionIsActive(requestedId)) {
+  if (activeSessionClearsQuarantine(requestedId)) {
     return res.json({ success: true, id: requestedId, alreadyActive: true });
   }
 
@@ -2411,8 +2453,37 @@ app.post('/api/sessions/:id/resume', async (req, res) => {
 
   // The route id may be a partial historical match; liveness belongs to the
   // canonical JSONL basename, so check it again before creating a flight.
-  if (sessionIsActive(sessionId)) {
+  invalidateRegistryCache();
+  if (activeSessionClearsQuarantine(sessionId)) {
     return res.json({ success: true, id: sessionId, alreadyActive: true });
+  }
+
+  const uncertainExplicit = uncertainExplicitResumes.get(sessionFile);
+  if (uncertainExplicit) {
+    const state = await tmux.paneProcessState(
+      uncertainExplicit.socket,
+      uncertainExplicit.paneId,
+      { knownProcesses: uncertainExplicit.knownProcesses },
+    );
+    if (!state.paneExists && !state.knownProcesses.length) {
+      if (uncertainExplicitResumes.get(sessionFile) === uncertainExplicit) {
+        uncertainExplicitResumes.delete(sessionFile);
+      }
+    } else {
+      uncertainExplicitResumes.set(sessionFile, {
+        ...uncertainExplicit,
+        knownProcesses: state.knownProcesses,
+      });
+      // Registration can race the inspection above. Refresh once more before
+      // refusing a retry whose original pane has just become the active writer.
+      invalidateRegistryCache();
+      if (activeSessionClearsQuarantine(sessionId)) {
+        return res.json({ success: true, id: sessionId, alreadyActive: true });
+      }
+      return res.status(409).json({
+        error: `A previous explicit tmux resume timed out and its pane/process is still present (${uncertainExplicit.paneId}); refusing to launch another process against this session file. Inspect or close that tmux pane before retrying.`,
+      });
+    }
   }
 
   const failedCleanup = failedResumeCleanups.get(sessionFile);
