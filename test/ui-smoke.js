@@ -79,7 +79,7 @@ appendEntry({ type: 'message', id: 'ui-a1', timestamp: '2026-07-05T00:00:02.000Z
 // A historical turn with tool activity — must fold into a closed .tool-group.
 appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'check the readme' }], timestamp: '2026-07-05T00:00:03.000Z' } });
 appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'hist1', name: 'Read', arguments: { path: 'README.md' } }], timestamp: '2026-07-05T00:00:04.000Z' } });
-appendEntry({ type: 'message', message: { role: 'toolResult', toolName: 'Read', content: [{ type: 'text', text: 'Read image file [image/png]' }, { type: 'image', data: TINY_PNG, mimeType: 'image/png' }], timestamp: '2026-07-05T00:00:05.000Z' } });
+appendEntry({ type: 'message', id: 'ui-img1', message: { role: 'toolResult', toolName: 'Read', content: [{ type: 'text', text: 'Read image file [image/png]' }, { type: 'image', data: TINY_PNG, mimeType: 'image/png' }], timestamp: '2026-07-05T00:00:05.000Z' } });
 appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'the readme says alpha' }], timestamp: '2026-07-05T00:00:06.000Z' } });
 // Pad the history so the feed is taller than the viewport — the forced-follow
 // scroll check needs a genuinely scrollable container to mean anything.
@@ -378,8 +378,8 @@ function writeRegistry(patch = {}) {
       'image tool result renders one img.msg-image inside the details');
     const historicalImage = imgResult.locator('img.msg-image');
     const imgSrc = await historicalImage.getAttribute('src');
-    check(imgSrc.startsWith(`/api/sessions/${SESSION_ID}/messages/`),
-      `historical image uses a session resource URL (got ${imgSrc})`);
+    check(imgSrc === `/api/sessions/${SESSION_ID}/messages/ui-img1/images/1`,
+      `historical image URL uses its stable JSONL entry id (got ${imgSrc})`);
     check(await historicalImage.getAttribute('loading') === 'lazy', 'historical image opts into native lazy loading');
     await desktop.waitForFunction(() => {
       const img = document.querySelector('.message.tool-result img.msg-image');
@@ -1580,7 +1580,64 @@ function writeRegistry(patch = {}) {
     check(JSON.stringify(await desktop.evaluate(() => window.__auditEnabledBody?.enabledIds)) ===
       JSON.stringify(['audit/kept']),
       'enabled-model debounce persists the edit-time ID snapshot');
-    await desktop.evaluate((a) => { loadModels(a); selectSession(a, { forceTranscriptReload: true }); }, SESSION_ID);
+    await desktop.evaluate((a) => { loadModels(a); return selectSession(a, { forceTranscriptReload: true }); }, SESSION_ID);
+
+    // Terminal startup waits for fonts before constructing xterm or its
+    // WebSocket. Hold that wait for A, select B, and start B's open before
+    // releasing both continuations: only B's exact selected view may create
+    // terminal state or connect.
+    console.log('terminal async ownership:');
+    await desktop.evaluate(() => {
+      window.__auditFontLoadDescriptor = Object.getOwnPropertyDescriptor(document.fonts, 'load');
+      window.__auditNativeWebSocket = window.WebSocket;
+      window.__auditTerminalUrls = [];
+      let releaseFonts;
+      const heldFonts = new Promise((resolve) => { releaseFonts = resolve; });
+      Object.defineProperty(document.fonts, 'load', {
+        configurable: true,
+        value: () => heldFonts,
+      });
+      window.WebSocket = new Proxy(window.WebSocket, {
+        construct(Target, args) {
+          window.__auditTerminalUrls.push(String(args[0]));
+          return Reflect.construct(Target, args);
+        },
+      });
+      window.__releaseAuditFonts = releaseFonts;
+      window.__auditTerminalA = openTerminal();
+    });
+    await desktop.waitForTimeout(50);
+    check(await desktop.evaluate(() => !termState && window.__auditTerminalUrls.length === 0 &&
+      document.getElementById('terminalPanel').style.display === 'none'),
+      'terminal does not open or connect while A font readiness is held');
+    await desktop.evaluate((b) => selectSession(b, { forceTranscriptReload: true }), SESSION2_ID);
+    await desktop.evaluate(() => {
+      window.__auditTerminalB = openTerminal();
+      window.__releaseAuditFonts();
+    });
+    await desktop.evaluate(() => Promise.all([window.__auditTerminalA, window.__auditTerminalB]));
+    await desktop.waitForFunction(() => document.getElementById('terminalStatus').textContent === '',
+      { timeout: 5000 });
+    const terminalOwnership = await desktop.evaluate(({ a, b }) => ({
+      owner: termState?.sessionId,
+      urls: window.__auditTerminalUrls.slice(),
+      currentId: currentSession?.id,
+      hasAUrl: window.__auditTerminalUrls.some((url) => url.includes(encodeURIComponent(a))),
+      hasBUrl: window.__auditTerminalUrls.some((url) => url.includes(encodeURIComponent(b))),
+    }), { a: SESSION_ID, b: SESSION2_ID });
+    check(terminalOwnership.currentId === SESSION2_ID && terminalOwnership.owner === SESSION2_ID &&
+      terminalOwnership.urls.length === 1 && !terminalOwnership.hasAUrl && terminalOwnership.hasBUrl,
+      `stale A terminal open cannot connect for or interfere with B (got ${JSON.stringify(terminalOwnership)})`);
+    await desktop.evaluate(() => {
+      closeTerminal();
+      window.WebSocket = window.__auditNativeWebSocket;
+      if (window.__auditFontLoadDescriptor) {
+        Object.defineProperty(document.fonts, 'load', window.__auditFontLoadDescriptor);
+      } else {
+        delete document.fonts.load;
+      }
+    });
+    await desktop.evaluate((a) => selectSession(a, { forceTranscriptReload: true }), SESSION_ID);
 
     // Clean up: clear the extension UI and deregister session 2 so the
     // mobile section still sees a single Active session.

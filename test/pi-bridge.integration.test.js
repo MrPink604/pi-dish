@@ -36,6 +36,14 @@ const { sseReader } = require('./sse-reader');
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-int-'));
 process.env.HOME = tmpHome;
 process.env.PORT = '0';
+const QUEUE_IMAGE_A = {
+  mimeType: 'image/png',
+  data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+};
+const QUEUE_IMAGE_B = {
+  mimeType: 'image/gif',
+  data: 'R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==',
+};
 
 // Resolve the HOST pi like the server does. A bare `pi` here would hit
 // node_modules/.bin first (npm prepends it under `npm test`), silently
@@ -263,7 +271,7 @@ test('prompt round-trip: real agent turn → bridge events → SSE → JSONL', {
   }
 });
 
-test('steering queue: queue_update fires and cancel_queued splices pi internals', { skip: !piOk, timeout: 60000 }, async () => {
+test('steering queue cancellation preserves duplicate index and image identity', { skip: !piOk, timeout: 60000 }, async () => {
   const stream = sseReader(`${base}/api/sessions/${sessionId}/stream`);
   try {
     await stream.waitFor((e) => e.event === 'init');
@@ -274,30 +282,51 @@ test('steering queue: queue_update fires and cancel_queued splices pi internals'
     await stream.waitFor((e) => e.event === 'turn_start', 20000);
     await held;
 
-    const queued = await post(`/api/sessions/${sessionId}/prompt`, { message: 'queued steer text' });
-    assert.equal(queued.status, 200);
+    for (const body of [
+      { message: 'duplicate queued steer', images: [QUEUE_IMAGE_A] },
+      { message: 'other queued steer' },
+      { message: 'duplicate queued steer', images: [QUEUE_IMAGE_B] },
+    ]) {
+      const queued = await post(`/api/sessions/${sessionId}/prompt`, body);
+      assert.equal(queued.status, 200, JSON.stringify(queued.body));
+    }
 
     // queue_update reaches us only through the bridge's AgentSession
     // prototype-capture patch — this is the pi-upgrade canary.
     const update = await stream.waitFor(
-      (e) => e.event === 'queue_update' && (e.data?.steering || []).includes('queued steer text'), 15000);
+      (e) => e.event === 'queue_update' && JSON.stringify(e.data?.steering) ===
+        JSON.stringify(['duplicate queued steer', 'other queued steer', 'duplicate queued steer']), 15000);
     assert.ok(update, 'queue_update observed via the AgentSession capture');
 
-    // cancel_queued splices pi's private queue arrays (version-sensitive).
+    // Cancel the second duplicate. The text-only AgentSession mirror and the
+    // agent core's full-content queue must both remove index 2, not the first
+    // text match (which carries a distinguishable PNG attachment).
     const cancel = await post(`/api/sessions/${sessionId}/queue/cancel`,
-      { kind: 'steering', index: 0, text: 'queued steer text' });
+      { kind: 'steering', index: 2, text: 'duplicate queued steer' });
     assert.equal(cancel.status, 200, JSON.stringify(cancel.body));
     await stream.waitFor(
-      (e) => e.event === 'queue_update' && !(e.data?.steering || []).includes('queued steer text'), 15000);
+      (e) => e.event === 'queue_update' && JSON.stringify(e.data?.steering) ===
+        JSON.stringify(['duplicate queued steer', 'other queued steer']), 15000);
 
     holdRelease();
-    await stream.waitFor((e) => e.event === 'turn_end', 20000);
+    await stream.waitFor((e) => e.event === 'agent_end', 20000);
 
-    // The cancelled steer must never have been delivered to the model.
+    // Exact queue order and image identity survive delivery: the first
+    // duplicate (PNG) remains, while the selected second duplicate (GIF) is
+    // absent. Removing the core queue's first text match reverses this order
+    // and delivers the GIF, so both regressions are pinned here.
     const { body: msgs } = await get(`/api/sessions/${sessionId}/messages`);
-    const texts = msgs.messages.map((m) => (Array.isArray(m.content) ? m.content : [])
-      .filter((b) => b.type === 'text').map((b) => b.text).join(''));
-    assert.ok(!texts.includes('queued steer text'), 'cancelled steer stayed out of the transcript');
+    const queuedUsers = msgs.messages.filter((m) => m.role === 'user').map((m) => ({
+      message: m,
+      text: (Array.isArray(m.content) ? m.content : [])
+        .filter((b) => b.type === 'text').map((b) => b.text).join(''),
+    })).filter(({ text }) => text === 'duplicate queued steer' || text === 'other queued steer');
+    assert.deepEqual(queuedUsers.map(({ text }) => text), ['duplicate queued steer', 'other queued steer']);
+    const image = queuedUsers[0].message.content.find((b) => b.type === 'image');
+    assert.equal(image?.mimeType, QUEUE_IMAGE_A.mimeType, 'the uncancelled duplicate kept its image metadata');
+    const imageResponse = await fetch(base + image.url);
+    assert.equal(imageResponse.status, 200);
+    assert.deepEqual(Buffer.from(await imageResponse.arrayBuffer()), Buffer.from(QUEUE_IMAGE_A.data, 'base64'));
   } finally {
     stream.close();
     if (holdRelease) holdRelease();
@@ -372,20 +401,46 @@ test('compaction: second /compact refused, prompts queue until compaction ends',
     assert.match(second.body.error || '', /already in progress/i);
 
     // Prompts sent mid-compaction are held by the bridge and reported queued.
-    const queued = await post(`/api/sessions/${sessionId}/prompt`, { message: 'sent during compaction' });
-    assert.equal(queued.status, 200);
-    assert.equal(queued.body.result?.queued, true, JSON.stringify(queued.body));
+    // Cancel index 2 from duplicate/other/duplicate: compactionQueue must use
+    // the selected merged-row index rather than its first matching text.
+    for (const message of ['compaction duplicate', 'compaction other', 'compaction duplicate']) {
+      const queued = await post(`/api/sessions/${sessionId}/prompt`, { message });
+      assert.equal(queued.status, 200);
+      assert.equal(queued.body.result?.queued, true, JSON.stringify(queued.body));
+    }
+    await stream.waitFor((e) => e.event === 'queue_update' &&
+      JSON.stringify(e.data?.followUp) === JSON.stringify([
+        'compaction duplicate', 'compaction other', 'compaction duplicate',
+      ]), 15000);
+    const cancelled = await post(`/api/sessions/${sessionId}/queue/cancel`, {
+      kind: 'followUp', index: 2, text: 'compaction duplicate',
+    });
+    assert.equal(cancelled.status, 200, JSON.stringify(cancelled.body));
+    await stream.waitFor((e) => e.event === 'queue_update' &&
+      JSON.stringify(e.data?.followUp) === JSON.stringify(['compaction duplicate', 'compaction other']), 15000);
+    // Leave one buffered row to flush. The extension send API is deliberately
+    // fire-and-forget, so testing two-row delivery here would exercise an
+    // unrelated send-scheduling race rather than cancellation identity.
+    const cancelledOther = await post(`/api/sessions/${sessionId}/queue/cancel`, {
+      kind: 'followUp', index: 1, text: 'compaction other',
+    });
+    assert.equal(cancelledOther.status, 200, JSON.stringify(cancelledOther.body));
 
     holdRelease();
     const end = await stream.waitFor((e) => e.event === 'compaction_end', 20000);
     assert.ok(!end.data?.errorMessage, `compaction failed: ${JSON.stringify(end.data)}`);
 
-    // Gate released: the held prompt flushes as a real turn and persists.
-    await stream.waitFor((e) => e.event === 'turn_end', 20000);
-    const { body: msgs } = await get(`/api/sessions/${sessionId}/messages`);
+    // Gate released: the first duplicate remains and flushes as a real turn.
+    const msgs = await waitFor(async () => {
+      const { body } = await get(`/api/sessions/${sessionId}/messages`);
+      const texts = body.messages.filter((m) => m.role === 'user').map((m) =>
+        (Array.isArray(m.content) ? m.content : []).filter((b) => b.type === 'text').map((b) => b.text).join(''));
+      return texts.includes('compaction duplicate') ? body : null;
+    }, 20000, 'compaction queue flush');
     const texts = msgs.messages.map((m) => (Array.isArray(m.content) ? m.content : [])
       .filter((b) => b.type === 'text').map((b) => b.text).join(''));
-    assert.ok(texts.includes('sent during compaction'), 'queued prompt delivered after compaction');
+    assert.deepEqual(texts.filter((text) => text === 'compaction duplicate' || text === 'compaction other'),
+      ['compaction duplicate']);
     const { body: tree } = await get(`/api/sessions/${sessionId}/tree`);
     assert.ok((tree.nodes || []).some((n) => n.type === 'compaction'),
       'compaction entry persisted to the JSONL');

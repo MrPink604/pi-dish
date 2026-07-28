@@ -37,7 +37,7 @@ const entries = [
     { type: 'text', text: 'bravo reply with **markdown**' },
     { type: 'toolCall', id: 'tc1', name: 'Bash', arguments: { command: 'ls' } },
   ], usage: { input: 100, output: 40, cacheRead: 10, cacheWrite: 5, totalTokens: 1234, cost: { total: 0.03 } }, timestamp: '2026-07-04T10:00:02.000Z' } },
-  { type: 'message', message: { role: 'toolResult', content: [
+  { type: 'message', id: 'img00001', message: { role: 'toolResult', content: [
     { type: 'text', text: 'charlie output' },
     { type: 'image', data: TINY_PNG_BASE64, mimeType: 'image/png' },
   ], timestamp: '2026-07-04T10:00:03.000Z' } },
@@ -110,6 +110,19 @@ fs.writeFileSync(TREE_FILE, [
   { type: 'message', id: 'e2', parentId: 'e1', timestamp: '2026-07-04T14:00:02.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'first answer' }], timestamp: '2026-07-04T14:00:02.000Z' } },
   { type: 'message', id: 'e3', parentId: 'e2', timestamp: '2026-07-04T14:00:03.000Z', message: { role: 'user', content: [{ type: 'text', text: 'second prompt' }], timestamp: '2026-07-04T14:00:03.000Z' } },
   { type: 'message', id: 'e4', parentId: 'e3', timestamp: '2026-07-04T14:00:04.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'second answer' }], timestamp: '2026-07-04T14:00:04.000Z' } },
+].map(e => JSON.stringify(e)).join('\n') + '\n');
+
+// Fifth fixture: an image on a tree branch. Its resource URL must remain
+// bound to the JSONL entry after a later append selects a sibling branch.
+const IMAGE_TREE_ID = '2026-07-04T14-30-00-imgtree1';
+const IMAGE_TREE_FILE = path.join(sessionDir, `${IMAGE_TREE_ID}.jsonl`);
+fs.writeFileSync(IMAGE_TREE_FILE, [
+  { type: 'session', version: 3, id: 'image-tree-session', cwd: '/home/user/proj', timestamp: '2026-07-04T14:30:00.000Z' },
+  { type: 'message', id: 'root0001', parentId: null, message: { role: 'user', content: [{ type: 'text', text: 'show image' }] } },
+  { type: 'message', id: 'base0001', parentId: 'root0001', message: { role: 'assistant', content: [{ type: 'text', text: 'reading' }] } },
+  { type: 'message', id: 'image001', parentId: 'base0001', message: { role: 'toolResult', content: [
+    { type: 'image', data: TINY_PNG_BASE64, mimeType: 'image/png' },
+  ] } },
 ].map(e => JSON.stringify(e)).join('\n') + '\n');
 
 const server = require('../server.js');
@@ -343,12 +356,41 @@ test('GET /messages moves historical image bytes to a cacheable resource', async
   const { body } = await get(`/api/sessions/${SESSION_ID}/messages`);
   const image = body.messages[2].content.find(block => block.type === 'image');
   assert.ok(image?.url, 'message payload carries an image resource URL');
+  assert.match(image.url, /\/messages\/img00001\/images\/1$/,
+    'resource identity is the stable JSONL entry id');
   assert.equal(image.data, undefined, 'base64 bytes are not duplicated into chat JSON');
 
   const res = await fetch(base + image.url);
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('content-type'), 'image/png');
   assert.deepEqual(Buffer.from(await res.arrayBuffer()), TINY_PNG);
+
+  const invalid = await fetch(`${base}/api/sessions/${SESSION_ID}/messages/%20/images/0`);
+  assert.equal(invalid.status, 400, 'malformed entry ids are rejected');
+});
+
+test('historical image resource stays stable after active branch navigation', async () => {
+  const before = await get(`/api/sessions/${IMAGE_TREE_ID}/messages`);
+  const image = before.body.messages.flatMap(message => message.content)
+    .find(block => block.type === 'image');
+  assert.match(image.url, /\/messages\/image001\/images\/0$/);
+  const first = await fetch(base + image.url);
+  assert.equal(first.status, 200);
+  assert.deepEqual(Buffer.from(await first.arrayBuffer()), TINY_PNG);
+
+  fs.appendFileSync(IMAGE_TREE_FILE, JSON.stringify({
+    type: 'message', id: 'retry001', parentId: 'base0001',
+    message: { role: 'user', content: [{ type: 'text', text: 'take the other branch' }] },
+  }) + '\n');
+  const after = await get(`/api/sessions/${IMAGE_TREE_ID}/messages`);
+  assert.equal(after.body.messages.some(message =>
+    message.content.some(block => block.type === 'image')), false,
+  'image entry is no longer on the active branch');
+
+  const second = await fetch(base + image.url);
+  assert.equal(second.status, 200, 'old lazy resource URL remains addressable');
+  assert.deepEqual(Buffer.from(await second.arrayBuffer()), TINY_PNG,
+    'the stable URL still resolves to the original entry bytes');
 });
 
 test('large chat JSON negotiates gzip and materially reduces wire bytes', async () => {
@@ -572,11 +614,19 @@ test('large diff summaries defer collapsed patches and serve one on demand', asy
   assert.ok(entry.files.every(f => f.patch === undefined && f.patchDeferred === true),
     'collapsed patch text is absent from the summary payload');
 
-  const query = new URLSearchParams({ repo: 'repo-big', path: 'file-3.txt' });
+  const query = new URLSearchParams({
+    repo: 'repo-big', path: 'file-3.txt', snapshot: body.snapshotId,
+  });
   const patch = await get(`/api/sessions/${REAL_CWD_ID}/diff/patch?${query}`);
   assert.equal(patch.status, 200);
   assert.match(patch.body.patch, /\+new 3/);
   assert.equal(patch.body.truncated, false);
+
+  fs.writeFileSync(path.join(repo, 'file-3.txt'), 'old 3\nnew 3\ndrifted after summary\n');
+  const stale = await get(`/api/sessions/${REAL_CWD_ID}/diff/patch?${query}`);
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.stale, true);
+  assert.equal(stale.body.patch, undefined, 'a changed working tree is never served under the old pane');
 });
 
 test('GET /diff 404s when the session cwd is unknown', async () => {
@@ -839,9 +889,10 @@ test('PUT /api/models/enabled persists pi scoped models in settings.json', async
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
   fs.writeFileSync(settingsFile, JSON.stringify({ theme: 'dark' }));
 
-  // Scope down to two models — other settings fields survive
-  const scoped = await put('/api/models/enabled', { enabledIds: ['anthropic/claude-sonnet-4-5', 'zai/glm-5.2'] });
+  // Scope down to two models — ids are normalized and other fields survive.
+  const scoped = await put('/api/models/enabled', { enabledIds: [' anthropic/claude-sonnet-4-5 ', 'zai/glm-5.2'] });
   assert.equal(scoped.status, 200);
+  assert.deepEqual(scoped.body.enabledModels, ['anthropic/claude-sonnet-4-5', 'zai/glm-5.2']);
   let settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
   assert.deepEqual(settings.enabledModels, ['anthropic/claude-sonnet-4-5', 'zai/glm-5.2']);
   assert.equal(settings.theme, 'dark');
@@ -863,6 +914,54 @@ test('PUT /api/models/enabled persists pi scoped models in settings.json', async
   assert.equal(bad.status, 400);
   const badItems = await put('/api/models/enabled', { enabledIds: ['ok', 42] });
   assert.equal(badItems.status, 400);
+  const duplicate = await put('/api/models/enabled', { enabledIds: ['x/y', ' x/y '] });
+  assert.equal(duplicate.status, 400);
+});
+
+test('PUT /api/models/enabled preserves a concurrent pi settings write', async () => {
+  const settingsFile = path.join(tmpHome, '.pi', 'agent', 'settings.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ theme: 'dark' }));
+
+  // Model a separate pi process: hold pi's own settings lock with a snapshot,
+  // then commit an unrelated field before releasing it. The API must wait,
+  // re-read that write under the same lock, and merge enabledModels into it.
+  const lockfilePath = path.join(__dirname, '..', 'node_modules', '@earendil-works',
+    'pi-coding-agent', 'node_modules', 'proper-lockfile');
+  const script = `
+    const fs = require('node:fs');
+    const lockfile = require(${JSON.stringify(lockfilePath)});
+    const file = process.argv[1];
+    const release = lockfile.lockSync(file, { realpath: false });
+    const snapshot = JSON.parse(fs.readFileSync(file, 'utf8'));
+    process.stdout.write('locked\\n');
+    setTimeout(() => {
+      snapshot.concurrentPiWrite = 'preserved';
+      fs.writeFileSync(file, JSON.stringify(snapshot, null, 2));
+      release();
+    }, 60);
+  `;
+  const { spawn } = require('node:child_process');
+  const child = spawn(process.execPath, ['-e', script, settingsFile], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let childStderr = '';
+  child.stderr.on('data', (chunk) => { childStderr += chunk; });
+  const locked = new Promise((resolve, reject) => {
+    child.stdout.once('data', resolve);
+    child.once('error', reject);
+  });
+  const exited = new Promise((resolve) => child.once('exit', resolve));
+  await locked;
+
+  const [updated, exitCode] = await Promise.all([
+    put('/api/models/enabled', { enabledIds: ['anthropic/concurrent-model'] }),
+    exited,
+  ]);
+  assert.equal(exitCode, 0, childStderr);
+  assert.equal(updated.status, 200, JSON.stringify(updated.body));
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  assert.equal(settings.theme, 'dark');
+  assert.equal(settings.concurrentPiWrite, 'preserved');
+  assert.deepEqual(settings.enabledModels, ['anthropic/concurrent-model']);
 });
 
 test('GET /stats aggregates tokens, cost, and message counts from the JSONL', async () => {
@@ -1075,8 +1174,10 @@ test('POST endpoints validate input and reject inactive sessions', async () => {
   assert.equal(noText.status, 400);
   const badIndex = await post(`/api/sessions/${SESSION_ID}/queue/cancel`, { kind: 'steering', text: 'x', index: 'first' });
   assert.equal(badIndex.status, 400);
+  const missingIndex = await post(`/api/sessions/${SESSION_ID}/queue/cancel`, { kind: 'steering', text: 'x' });
+  assert.equal(missingIndex.status, 400);
   // Valid body, but the fixture session is not live
-  const deadCancel = await post(`/api/sessions/${SESSION_ID}/queue/cancel`, { kind: 'followUp', text: 'x' });
+  const deadCancel = await post(`/api/sessions/${SESSION_ID}/queue/cancel`, { kind: 'followUp', index: 0, text: 'x' });
   assert.equal(deadCancel.status, 404);
 });
 

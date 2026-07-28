@@ -3026,7 +3026,7 @@ function renderDiffViewHtml(data) {
       const counts = f.binary
         ? '<span class="diff-file-note">binary</span>'
         : `<span class="diff-plus">+${f.additions}</span> <span class="diff-minus">−${f.deletions}</span>`;
-      const patchAttrs = `data-repo="${escapeHtml(repo.path)}" data-path="${escapeHtml(f.path)}" data-old-path="${escapeHtml(f.oldPath || '')}"`;
+      const patchAttrs = `data-repo="${escapeHtml(repo.path)}" data-path="${escapeHtml(f.path)}" data-old-path="${escapeHtml(f.oldPath || '')}" data-snapshot="${escapeHtml(data.snapshotId || '')}"`;
       const patchHtml = f.patch
         ? `<div class="diff-patch" ${patchAttrs}>${renderDiffHtml(f.patch)}${f.truncated ? '<div class="diff-file-note">… patch truncated</div>' : ''}</div>`
         : f.patchDeferred
@@ -3062,11 +3062,20 @@ async function loadDeferredDiffPatch(details) {
   patch.dataset.loading = '1';
   patch.dataset.requestGeneration = String(requestGeneration);
   try {
-    const query = new URLSearchParams({ repo: patch.dataset.repo, path: patch.dataset.path });
+    const query = new URLSearchParams({
+      repo: patch.dataset.repo,
+      path: patch.dataset.path,
+      snapshot: patch.dataset.snapshot,
+    });
     const res = await fetch(`/api/sessions/${sessionId}/diff/patch?${query}`);
     const data = await res.json();
     if (!ownsDiffView(sessionId, viewGeneration) || !patch.isConnected ||
         patch.dataset.requestGeneration !== String(requestGeneration)) return;
+    if (res.status === 409 && data.stale) {
+      patch.innerHTML = '<div class="diff-file-note">Working tree changed — refreshing the diff…</div>';
+      await loadDiffView();
+      return;
+    }
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     patch.innerHTML = renderDiffHtml(data.patch) +
       (data.truncated ? '<div class="diff-file-note">… patch truncated</div>' : '');
@@ -6257,14 +6266,12 @@ function toggleTerminal() {
 
 async function openTerminal(mode) {
   if (!terminalFeatureAvailable() || !currentSession || termState) return;
+  const session = currentSession;
+  const sessionId = session.id;
+  const selectionGeneration = sessionSelectionGeneration;
   // 'shell' (default) or 'tmux' (a grouped tmux client viewing the pane the
   // session's pi runs in). The last choice sticks per session.
-  if (!mode) mode = localStorage.getItem('pi-dish-terminal-mode-' + currentSession.id) === 'tmux' ? 'tmux' : 'shell';
-  const panel = document.getElementById('terminalPanel');
-  const container = document.getElementById('terminalContainer');
-  applySavedTerminalSize(panel);
-  panel.style.display = '';
-  document.getElementById('terminalCwd').textContent = shortCwd(currentSession.cwd || '~');
+  if (!mode) mode = localStorage.getItem('pi-dish-terminal-mode-' + sessionId) === 'tmux' ? 'tmux' : 'shell';
 
   // Have the Nerd Font symbols ready before xterm first paints — otherwise
   // prompt icons flash as tofu until the lazy font load lands. Never block
@@ -6275,7 +6282,13 @@ async function openTerminal(mode) {
       new Promise(r => setTimeout(r, 2000)),
     ]);
   } catch {}
-  if (termState || !currentSession) return; // double-click / switched away during the await
+  if (termState || !ownsSessionView(sessionId, selectionGeneration)) return;
+
+  const panel = document.getElementById('terminalPanel');
+  const container = document.getElementById('terminalContainer');
+  applySavedTerminalSize(panel);
+  panel.style.display = '';
+  document.getElementById('terminalCwd').textContent = shortCwd(session.cwd || '~');
 
   const css = getComputedStyle(document.documentElement);
   const term = new Terminal({
@@ -6290,7 +6303,7 @@ async function openTerminal(mode) {
   if (fitAddon) term.loadAddon(fitAddon);
 
   termState = {
-    term, fitAddon, ws: null, sessionId: currentSession.id, mode,
+    term, fitAddon, ws: null, sessionId, mode,
     tmuxPrefix: null, reconnectTimer: null, attempts: 0, closedByUser: false, exited: false,
   };
   updateTerminalModeUI();

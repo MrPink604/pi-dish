@@ -186,13 +186,15 @@ test('buildSearchTextFromContent lowercases and caps message text', () => {
   const content = [
     userMsg('Find The NEEDLE here'),
     assistantMsg('HAYSTACK reply ' + 'x'.repeat(600)),
-    { type: 'custom_message', content: 'Injected NOTE' },
+    { type: 'custom_message', customType: 'session-message', content: 'Injected NOTE' },
+    { type: 'custom_message', customType: 'internal', content: 'PRIVATE MARKER' },
     'not json',
   ].map(e => typeof e === 'string' ? e : JSON.stringify(e)).join('\n') + '\n';
   const text = SF.buildSearchTextFromContent(content);
   assert.ok(text.includes('the needle'));
   assert.ok(text.includes('haystack'));
   assert.ok(text.includes('injected note'));
+  assert.ok(!text.includes('private marker'), 'non-transcript custom entries are excluded');
   assert.ok(!text.includes('x'.repeat(501)), 'per-message text capped at 500 chars');
 });
 

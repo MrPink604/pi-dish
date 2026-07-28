@@ -1057,7 +1057,7 @@ export default function (pi: ExtensionAPI) {
         case "cancel_queued": {
           // Remove a not-yet-delivered queued message so pi-dish can return its
           // text to the composer. Splices pi's private queue arrays directly
-          // (feature-detected, version-sensitive — verified pi 0.80.3) then
+          // (feature-detected, version-sensitive — verified pi 0.81.1) then
           // re-emits so the TUI's own display and our subscription reconcile.
           try {
             const kind = cmd?.kind;
@@ -1066,13 +1066,28 @@ export default function (pi: ExtensionAPI) {
               return respond(false, undefined, "kind (steering|followUp) and non-empty text required");
             }
             const index = cmd?.index;
+            if (!Number.isInteger(index) || index < 0) {
+              return respond(false, undefined, "index must be a non-negative integer");
+            }
 
             // Messages held through compaction live in our own buffer, not pi's
-            // queue yet — only ever surfaced as follow-ups.
+            // queue yet — only ever surfaced after pi's follow-ups. Translate
+            // the selected merged-row index to the exact compaction buffer row;
+            // matching by text would cancel the wrong duplicate.
             if (kind === "followUp") {
-              const ci = compactionQueue.findIndex((e) => queueEntryText(e) === text);
-              if (ci >= 0) {
-                compactionQueue.splice(ci, 1);
+              const captured = getCapturedSession();
+              let piFollowUpCount = lastQueue.followUp.length;
+              try {
+                const visible = captured?.getFollowUpMessages();
+                if (Array.isArray(visible)) piFollowUpCount = visible.length;
+              } catch {}
+              const compactionIndex = index - piFollowUpCount;
+              if (compactionIndex >= 0) {
+                if (compactionIndex >= compactionQueue.length ||
+                    queueEntryText(compactionQueue[compactionIndex]) !== text) {
+                  return respond(false, undefined, "message already delivered or queue changed");
+                }
+                compactionQueue.splice(compactionIndex, 1);
                 broadcastQueue();
                 return respond(true, { text });
               }
@@ -1085,14 +1100,23 @@ export default function (pi: ExtensionAPI) {
             if (!Array.isArray(arr) || typeof s._emitQueueUpdate !== "function") {
               return respond(false, undefined, unavailable);
             }
-            const idx = Number.isInteger(index) && arr[index] === text ? index : arr.indexOf(text);
-            if (idx < 0) return respond(false, undefined, "message already delivered");
-            arr.splice(idx, 1);
             const coreQueue = kind === "steering" ? s.agent?.steeringQueue?.messages : s.agent?.followUpQueue?.messages;
-            if (Array.isArray(coreQueue)) {
-              const ci = coreQueue.findIndex((m: any) => queueEntryText(m) === text);
-              if (ci >= 0) coreQueue.splice(ci, 1);
+            if (!Array.isArray(coreQueue)) {
+              return respond(false, undefined, unavailable);
             }
+            // AgentSession keeps text-only display mirrors alongside the agent
+            // core's full messages (which may carry images/metadata). They must
+            // remain index-aligned: validate both projections before mutating
+            // either array, then remove the selected index from both.
+            if (arr.length !== coreQueue.length) {
+              return respond(false, undefined, "queue editing unavailable (pi queues are out of sync — retry after the next queue update)");
+            }
+            if (index >= arr.length || queueEntryText(arr[index]) !== text ||
+                queueEntryText(coreQueue[index]) !== text) {
+              return respond(false, undefined, "message already delivered or queue changed");
+            }
+            arr.splice(index, 1);
+            coreQueue.splice(index, 1);
             s._emitQueueUpdate();
             return respond(true, { text });
           } catch (e: any) {

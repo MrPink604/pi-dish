@@ -19,6 +19,7 @@ const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-idx-'));
 process.env.HOME = tmpHome;
 
 const index = require('../lib/session-index.js');
+const sessionFiles = require('../lib/session-files.js');
 
 const sessionsDir = path.join(tmpHome, '.pi', 'agent', 'sessions', '--proj--');
 fs.mkdirSync(sessionsDir, { recursive: true });
@@ -105,6 +106,29 @@ test('versionless metadata is queued for reindex instead of being served stale',
   assert.equal(fresh.usage.total.costs.total, 0.01);
 });
 
+test('versionless search text migrates through the bounded indexing backlog', async () => {
+  const file = writeSession([userMsg('fresh searchable text')]);
+  const stats = fs.statSync(file);
+  index.resetForTests();
+  fs.mkdirSync(indexDir, { recursive: true });
+  fs.appendFileSync(path.join(indexDir, 'meta.ndjson'), JSON.stringify({
+    f: file, m: stats.mtimeMs, s: stats.size, ver: 3,
+    v: { name: 'fresh searchable text', messageCount: 1, lastActivity: '2026-07-01T10:00:00.000Z' },
+  }) + '\n');
+  fs.appendFileSync(path.join(indexDir, 'text.ndjson'), JSON.stringify({
+    f: file, m: stats.mtimeMs, s: stats.size, nl: 1, t: 'stale schema text',
+  }) + '\n');
+
+  const first = withBudget(0, () => index.scanSessions([file]));
+  assert.equal(first.infos.has(file), false, 'old text schema is not paired with current metadata');
+  assert.equal(first.indexing, true, 'migration honors the zero synchronous budget');
+  await waitFor(() => withBudget(0, () => index.scanSessions([file])).indexing === false,
+    'search schema migration reindex');
+  const text = index.getSearchText(file);
+  assert.ok(text.includes('fresh searchable text'));
+  assert.ok(!text.includes('stale schema text'));
+});
+
 test('zero sync budget queues a backlog that the background build drains', async () => {
   const files = [writeSession([userMsg('aaa')]), writeSession([userMsg('bbb')])];
   const first = withBudget(0, () => index.scanSessions(files));
@@ -144,6 +168,39 @@ test('getSearchText extends from the appended byte range', () => {
 
   assert.equal(index.getSearchText(path.join(sessionsDir, 'missing.jsonl')), '',
     'missing file degrades to empty');
+});
+
+test('getSearchText rebuilds when an append changes the active tree branch', () => {
+  const treeMsg = (id, parentId, role, text) => ({
+    type: 'message', id, parentId,
+    message: { role, content: [{ type: 'text', text }] },
+  });
+  const file = writeSession([
+    { type: 'session', version: 3, id: 'session-tree', cwd: '/p' },
+    treeMsg('e1', null, 'user', 'root prompt'),
+    treeMsg('e2', 'e1', 'assistant', 'root answer'),
+    treeMsg('e3', 'e2', 'user', 'SECRET_ABANDONED prompt'),
+    treeMsg('e4', 'e3', 'assistant', 'SECRET_ABANDONED answer'),
+  ]);
+
+  assert.ok(index.getSearchText(file).includes('secret_abandoned'),
+    'the original leaf is searchable before navigation');
+  fs.appendFileSync(file, [
+    { type: 'branch_summary', id: 'bs1', parentId: 'e2', fromId: 'e2', summary: 'tried another route' },
+    treeMsg('e5', 'bs1', 'user', 'authoritative retry'),
+  ].map(entry => JSON.stringify(entry)).join('\n') + '\n');
+
+  const text = index.getSearchText(file);
+  const transcript = sessionFiles.readSessionMessages(file)
+    .map(message => message.content[0].text.toLowerCase());
+  assert.ok(!text.includes('secret_abandoned'), 'abandoned branch text is discarded');
+  assert.ok(transcript.every(part => text.includes(part)),
+    `indexed text agrees with the active transcript: ${transcript.join(', ')}`);
+
+  index.resetForTests();
+  const persisted = withBudget(0, () => index.scanSessions([file]));
+  assert.equal(persisted.indexing, false, 'rebuilt branch-aware text was persisted');
+  assert.ok(!index.getSearchText(file).includes('secret_abandoned'));
 });
 
 test('deleted session files are dropped from the index', () => {
