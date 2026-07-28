@@ -143,8 +143,28 @@ races for the session socket.
 
 After that, any `pi` you launch (TUI in tmux, headless, spawned from
 pi-dish) registers itself at `~/.pi/dish/sessions/<id>.json` and opens a
-Unix socket at `~/.pi/dish/sockets/<id>.sock`. Already-running sessions pick
+hashed Unix socket under `~/.pi/dish/sockets/`. Already-running sessions pick
 the extension up after a `/reload`.
+
+Unix socket paths have a small platform limit. The bridge checks the full
+UTF-8 path against a conservative 103-byte ceiling before it starts. If your
+home path makes the default too long, set a short **absolute** directory for
+every `pi` process (and for pi-dish) rather than relying on an automatic temp
+fallback:
+
+```bash
+export PI_DISH_SOCKET_DIR=/run/user/$(id -u)/pi-dish
+npm start
+```
+
+The bridge creates a missing directory with mode `0700` and automatically
+tightens its owned default `~/.pi/dish/sockets/` directory from older releases
+to `0700`. An override whose resulting full socket path is too long is still
+rejected. An existing override directory must already be owned by the current
+user with mode `0700`; pi-dish reports an actionable error instead of changing
+arbitrary override permissions. pi-dish forwards the setting to sessions it
+launches in tmux; independently launched `pi` processes must inherit it from
+your shell or service environment.
 
 Then start the server:
 

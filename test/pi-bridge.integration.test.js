@@ -30,12 +30,20 @@ const { spawn, execFileSync } = require('node:child_process');
 
 const { sseReader } = require('./sse-reader');
 
-// Short temp dir — the bridge's Unix socket path must stay under ~108 chars.
+// Deliberately long HOME: the default bridge socket path exceeds the
+// conservative cross-platform sun_path limit. The explicit short override
+// must let the real extension load and bind successfully.
 // HOME must be set before resolving the pi launch spec so the alias lookup
 // reads the (empty) temp HOME, not the developer's rc files.
-const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-int-'));
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-int-'));
+const tmpHome = path.join(tmpRoot, `long-home-${'x'.repeat(90)}`);
+const socketDir = path.join(tmpRoot, 's');
+fs.mkdirSync(tmpHome, { recursive: true });
+// Existing private overrides are valid and must not be mutated by bridge init.
+fs.mkdirSync(socketDir, { recursive: true, mode: 0o700 });
 process.env.HOME = tmpHome;
 process.env.PORT = '0';
+process.env.PI_DISH_SOCKET_DIR = socketDir;
 const QUEUE_IMAGE_A = {
   mimeType: 'image/png',
   data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
@@ -205,6 +213,7 @@ test.after(async () => {
   }
   llm.close();
   server.close();
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
 test('bundled pi SDK version matches the host pi', { skip: !piOk }, () => {
@@ -216,7 +225,123 @@ test('bundled pi SDK version matches the host pi', { skip: !piOk }, () => {
     + `Run: npm i @earendil-works/pi-coding-agent@${hostPiVersion} (or upgrade host pi), then re-run this canary.`);
 });
 
-test('the real bridge registers the session and pi-dish lists it', { skip: !piOk, timeout: 60000 }, async () => {
+async function bridgeConfigFailure(socketOverride) {
+  const env = { ...piEnv, HOME: tmpHome };
+  if (socketOverride === null) delete env.PI_DISH_SOCKET_DIR;
+  else env.PI_DISH_SOCKET_DIR = socketOverride;
+  const child = spawn(piSpec.argv[0], [...piSpec.argv.slice(1), '--mode', 'rpc', '--model', 'fakeprov/fake-model'], {
+    cwd: projDir,
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+  child.stdout.resume();
+  try {
+    const deadline = Date.now() + 10000;
+    while (!/PI_DISH_SOCKET_DIR/.test(stderr) && child.exitCode === null && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+    let childRegistered = false;
+    try {
+      childRegistered = fs.readdirSync(registryDir).some((name) => {
+        try {
+          return JSON.parse(fs.readFileSync(path.join(registryDir, name), 'utf8')).pid === child.pid;
+        } catch {
+          return false;
+        }
+      });
+    } catch {}
+    return { stderr, childRegistered };
+  } finally {
+    if (child.exitCode === null) child.kill('SIGTERM');
+    await new Promise((resolve) => {
+      if (child.exitCode !== null) return resolve();
+      child.once('exit', resolve);
+      setTimeout(resolve, 3000);
+    });
+    if (child.exitCode === null) child.kill('SIGKILL');
+  }
+}
+
+test('a long HOME without PI_DISH_SOCKET_DIR fails bridge startup with an actionable error', { skip: !piOk, timeout: 30000 }, async () => {
+  const { stderr, childRegistered } = await bridgeConfigFailure(null);
+  assert.match(stderr, /Unix socket path is \d+ bytes \(maximum 103\)/,
+    `bridge should report the byte limit, got stderr:\n${stderr}`);
+  assert.match(stderr, /Set PI_DISH_SOCKET_DIR to a short absolute directory/);
+  assert.equal(childRegistered, false, 'over-limit bridge never writes a registry entry');
+});
+
+test('an existing shared PI_DISH_SOCKET_DIR is rejected without permission mutation', { skip: !piOk, timeout: 30000 }, async () => {
+  const unsafeDir = path.join(tmpRoot, 'shared-socket-dir');
+  fs.mkdirSync(unsafeDir, { recursive: true, mode: 0o755 });
+  fs.chmodSync(unsafeDir, 0o755);
+  const { stderr, childRegistered } = await bridgeConfigFailure(unsafeDir);
+  assert.match(stderr, /PI_DISH_SOCKET_DIR is not a private usable directory/);
+  assert.match(stderr, /mode is 0755, expected 0700/);
+  assert.equal(childRegistered, false, 'unsafe override never writes a registry entry');
+  assert.equal(fs.statSync(unsafeDir).mode & 0o777, 0o755,
+    'bridge did not mutate the existing directory mode');
+});
+
+test('the real bridge migrates its owned default socket directory from 0755 to 0700', { skip: !piOk, timeout: 30000 }, async () => {
+  const migrationHome = path.join(tmpRoot, 'migration-home');
+  const migrationAgentDir = path.join(migrationHome, '.pi', 'agent');
+  const migrationExtDir = path.join(migrationAgentDir, 'extensions');
+  const migrationProject = path.join(migrationHome, 'proj');
+  const migrationSocketDir = path.join(migrationHome, '.pi', 'dish', 'sockets');
+  fs.mkdirSync(migrationExtDir, { recursive: true });
+  fs.mkdirSync(migrationProject, { recursive: true });
+  fs.symlinkSync(
+    path.join(__dirname, '..', 'extensions', 'pi-dish-bridge'),
+    path.join(migrationExtDir, 'pi-dish-bridge'),
+  );
+  fs.copyFileSync(path.join(agentDir, 'models.json'), path.join(migrationAgentDir, 'models.json'));
+  fs.mkdirSync(migrationSocketDir, { recursive: true });
+  fs.chmodSync(migrationSocketDir, 0o755);
+
+  const env = { ...piEnv, HOME: migrationHome };
+  delete env.PI_DISH_SOCKET_DIR;
+  const child = spawn(piSpec.argv[0], [...piSpec.argv.slice(1), '--mode', 'rpc', '--model', 'fakeprov/fake-model'], {
+    cwd: migrationProject,
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+  child.stdout.resume();
+  try {
+    const registryDir = path.join(migrationHome, '.pi', 'dish', 'sessions');
+    const deadline = Date.now() + 10000;
+    let entry = null;
+    while (!entry && child.exitCode === null && Date.now() < deadline) {
+      try {
+        for (const name of fs.readdirSync(registryDir)) {
+          const candidate = JSON.parse(fs.readFileSync(path.join(registryDir, name), 'utf8'));
+          if (candidate.pid === child.pid && fs.existsSync(candidate.socketPath)) {
+            entry = candidate;
+            break;
+          }
+        }
+      } catch {}
+      if (!entry) await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.ok(entry, `bridge did not bind/register after default migration; stderr:\n${stderr}`);
+    assert.equal(fs.statSync(migrationSocketDir).mode & 0o777, 0o700,
+      'bridge tightened the self-owned default directory');
+  } finally {
+    if (child.exitCode === null) child.kill('SIGTERM');
+    await new Promise((resolve) => {
+      if (child.exitCode !== null) return resolve();
+      child.once('exit', resolve);
+      setTimeout(resolve, 3000);
+    });
+    if (child.exitCode === null) child.kill('SIGKILL');
+  }
+});
+
+test('the real bridge binds under a long HOME using PI_DISH_SOCKET_DIR and registers', { skip: !piOk, timeout: 60000 }, async () => {
   const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
   const entry = await waitFor(() => {
     try {
@@ -232,9 +357,16 @@ test('the real bridge registers the session and pi-dish lists it', { skip: !piOk
   sessionId = entry.sessionId;
   assert.ok(sessionId, 'registry entry carries the session id');
   assert.equal(entry.pid, pi.pid, 'entry belongs to the pi we spawned');
-  // The socket file must be named by a fixed-length hash, not the session id:
-  // bind() caps a Unix socket path at sun_path (~108 bytes) and long session
-  // ids used to blow it. 30 chars covers hash + ".sock" with slack.
+  // This is an actual successful bind from a HOME whose default full path is
+  // too long, not merely an assertion about basename length.
+  const defaultPath = path.join(tmpHome, '.pi', 'dish', 'sockets', path.basename(entry.socketPath));
+  assert.ok(Buffer.byteLength(defaultPath) > 103, `test HOME must exceed sun_path limit (got ${defaultPath})`);
+  assert.equal(path.resolve(path.dirname(entry.socketPath)), path.resolve(socketDir));
+  assert.ok(fs.statSync(entry.socketPath).isSocket(), 'override contains the live Unix socket');
+  assert.equal(fs.statSync(socketDir).mode & 0o777, 0o700, 'socket directory is private');
+
+  // The socket file remains named by a fixed-length hash, not the session id.
+  // 30 chars covers the hash plus ".sock" with slack.
   assert.ok(path.basename(entry.socketPath).length <= 30,
     `socket basename must be hash-sized, got ${path.basename(entry.socketPath)}`);
   assert.ok(!path.basename(entry.socketPath).includes(sessionId),

@@ -11,7 +11,30 @@ import * as path from "node:path";
 
 const ROOT = path.join(os.homedir(), ".pi", "dish");
 const REGISTRY_DIR = path.join(ROOT, "sessions");
-const SOCKET_DIR = path.join(ROOT, "sockets");
+const DEFAULT_SOCKET_DIR = path.join(ROOT, "sockets");
+const SOCKET_DIR_OVERRIDE = process.env.PI_DISH_SOCKET_DIR || null;
+const SOCKET_DIR = (() => {
+  if (!SOCKET_DIR_OVERRIDE) return DEFAULT_SOCKET_DIR;
+  if (!path.isAbsolute(SOCKET_DIR_OVERRIDE)) {
+    throw new Error("[pi-dish-bridge] PI_DISH_SOCKET_DIR must be an absolute path");
+  }
+  return path.resolve(SOCKET_DIR_OVERRIDE);
+})();
+
+// macOS exposes 104 bytes for sockaddr_un.sun_path (Linux exposes 108), and
+// one byte is needed for the terminating NUL. Enforce the conservative limit
+// against the UTF-8 byte length before bind() or a registry write is attempted.
+const MAX_SOCKET_PATH_BYTES = 103;
+
+function assertSocketPathLength(socketPath: string): void {
+  const bytes = Buffer.byteLength(socketPath);
+  if (bytes <= MAX_SOCKET_PATH_BYTES) return;
+  const source = SOCKET_DIR_OVERRIDE ? "PI_DISH_SOCKET_DIR" : "the default socket directory";
+  const action = SOCKET_DIR_OVERRIDE
+    ? "Set PI_DISH_SOCKET_DIR to a shorter absolute directory."
+    : "Set PI_DISH_SOCKET_DIR to a short absolute directory and make it available to every pi process.";
+  throw new Error(`[pi-dish-bridge] Unix socket path is ${bytes} bytes (maximum ${MAX_SOCKET_PATH_BYTES}) using ${source}: ${socketPath}. ${action}`);
+}
 
 // bind() caps a Unix socket path at sun_path (~104-108 bytes), and session ids
 // (JSONL basenames) can be long enough to blow it. The socket file is named by
@@ -19,7 +42,42 @@ const SOCKET_DIR = path.join(ROOT, "sockets");
 // consumer reads socketPath from the registry entry.
 function socketPathFor(sessionId: string): string {
   const digest = crypto.createHash("sha256").update(sessionId).digest("hex").slice(0, 24);
-  return path.join(SOCKET_DIR, `${digest}.sock`);
+  const socketPath = path.join(SOCKET_DIR, `${digest}.sock`);
+  assertSocketPathLength(socketPath);
+  return socketPath;
+}
+
+// The basename is fixed-size, so this rejects a long HOME/override as soon as
+// the extension loads rather than waiting for session_start and bind().
+assertSocketPathLength(path.join(SOCKET_DIR, `${"0".repeat(24)}.sock`));
+
+function ensureSocketDirectory(): void {
+  const label = SOCKET_DIR_OVERRIDE ? "PI_DISH_SOCKET_DIR" : "the default pi-dish socket directory";
+  let created = false;
+  try {
+    created = fs.mkdirSync(SOCKET_DIR, { recursive: true, mode: 0o700 }) !== undefined;
+    let stat = fs.statSync(SOCKET_DIR);
+    if (!stat.isDirectory()) throw new Error("path is not a directory");
+    if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
+      throw new Error(`directory is owned by uid ${stat.uid}, expected uid ${process.getuid()}`);
+    }
+    // mkdir's mode is umask-sensitive. Tighten directories this bridge made,
+    // and migrate the bridge-owned default from older releases (normally
+    // 0755 under umask 022). Existing overrides are never mutated.
+    if (created || (!SOCKET_DIR_OVERRIDE && (stat.mode & 0o777) !== 0o700)) {
+      if (!created && typeof process.getuid !== "function") {
+        throw new Error("cannot verify ownership before repairing directory mode");
+      }
+      fs.chmodSync(SOCKET_DIR, 0o700);
+      stat = fs.statSync(SOCKET_DIR);
+    }
+    const mode = stat.mode & 0o777;
+    if (mode !== 0o700) {
+      throw new Error(`directory mode is ${mode.toString(8).padStart(4, "0")}, expected 0700`);
+    }
+  } catch (e: any) {
+    throw new Error(`[pi-dish-bridge] ${label} is not a private usable directory: ${SOCKET_DIR}: ${String(e?.message || e)}. Choose an absolute directory owned by this user with mode 0700.`);
+  }
 }
 
 // Set by pi-dish when it spawns this pi inside a tmux window (see lib/tmux.js).
@@ -166,6 +224,10 @@ function queueEntryText(entry: any): string {
 }
 
 export default function (pi: ExtensionAPI) {
+  // Validate/create before claiming the duplicate-load sentinel. A corrected
+  // environment followed by /reload must not be blocked by a failed claim.
+  ensureSocketDirectory();
+
   // Two bridge copies loaded into one pi process (e.g. a stale copied install
   // alongside the repo symlink) would each unlink and re-bind the same session
   // socket — whichever loads last wins, and a stale winner silently downgrades
@@ -182,7 +244,6 @@ export default function (pi: ExtensionAPI) {
   g[LOAD_SENTINEL] = true;
 
   fs.mkdirSync(REGISTRY_DIR, { recursive: true });
-  fs.mkdirSync(SOCKET_DIR, { recursive: true });
 
   // Session-control methods (ctx.navigateTree, ctx.reload, …) exist only on
   // command contexts, which pi supplies when it executes an extension
@@ -242,6 +303,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   let server: net.Server | null = null;
+  let socketReady = false;
   let socketPath: string | null = null;
   let registryPath: string | null = null;
   let sessionId: string | null = null;
@@ -602,13 +664,22 @@ export default function (pi: ExtensionAPI) {
   function bindSocket() {
     if (!socketPath) return;
     try { fs.unlinkSync(socketPath); } catch {}
-    server = net.createServer(handleClient);
-    server.on("error", (e) => {
+    socketReady = false;
+    const nextServer = net.createServer(handleClient);
+    server = nextServer;
+    nextServer.on("error", (e) => {
+      if (server === nextServer) socketReady = false;
       // best effort: log to stderr
       try { process.stderr.write(`[pi-dish-bridge] server error: ${e}\n`); } catch {}
     });
-    server.listen(socketPath, () => {
+    nextServer.listen(socketPath, () => {
+      if (server !== nextServer) return;
+      socketReady = true;
       try { fs.chmodSync(socketPath!, 0o600); } catch {}
+      // A registry entry is a liveness claim. Publish it only after bind has
+      // created the socket, or an immediate server scan can prune the entry in
+      // the listen()/writeRegistry race.
+      writeRegistry();
     });
   }
 
@@ -645,7 +716,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function writeRegistry() {
-    if (!sessionId || !registryPath || !sessionFile) return;
+    if (!sessionId || !registryPath || !sessionFile || !socketReady) return;
     ensureSocketOwnership();
     const entry = {
       sessionId,
@@ -676,6 +747,7 @@ export default function (pi: ExtensionAPI) {
     for (const c of clients) { try { c.destroy(); } catch {} }
     clients.clear();
     if (server) { try { server.close(); } catch {} server = null; }
+    socketReady = false;
     ownershipProbe = false;
     lastOwnershipProbe = 0;
     if (socketPath) { try { fs.unlinkSync(socketPath); } catch {} }

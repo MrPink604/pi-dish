@@ -250,6 +250,37 @@ test('a /compact issued while one runs is refused, not forwarded to pi', async (
   assert.equal(compacts - before, 1, 'exactly one compact command reached pi');
 });
 
+test('overlapping RPC resumes launch exactly one process for the JSONL', async () => {
+  const id = '2026-07-10T09-00-00-rpcflight';
+  const dir = path.join(tmpHome, '.pi', 'agent', 'sessions', 'rpcflight');
+  const startLog = path.join(tmpHome, 'rpc-resume-starts.jsonl');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${id}.jsonl`), JSON.stringify({ type: 'session', cwd: tmpHome }) + '\n');
+
+  const saved = process.env.PI_DISH_PI_COMMAND;
+  process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_LOG=${CMD_LOG} PI_FIXTURE_START_LOG=${startLog} PI_FIXTURE_STARTUP_DELAY_MS=400 ${process.execPath} ${FIXTURE}`;
+  try {
+    const [a, b] = await Promise.all([
+      post(`/api/sessions/${id}/resume`, {}),
+      post(`/api/sessions/${id}/resume`, {}),
+    ]);
+    assert.equal(a.status, 200, JSON.stringify(a.body));
+    assert.equal(b.status, 200, JSON.stringify(b.body));
+    assert.equal(a.body.id, id);
+    assert.equal(b.body.id, id);
+    assert.equal([a.body, b.body].filter((body) => body.sharedResume).length, 1,
+      'one caller owns the launch and one reports sharing it');
+    const starts = fs.readFileSync(startLog, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
+    assert.equal(starts.length, 1, `exactly one RPC process started (got ${starts.length})`);
+    assert.equal(path.resolve(starts[0].sessionFile), path.resolve(path.join(dir, `${id}.jsonl`)));
+
+    const closed = await post(`/api/sessions/${id}/close`, {});
+    assert.equal(closed.status, 200, JSON.stringify(closed.body));
+  } finally {
+    process.env.PI_DISH_PI_COMMAND = saved;
+  }
+});
+
 test('POST /resume spawns pi --session and keeps the original id', async () => {
   const id = '2026-07-10T09-00-00-rpcres01';
   const dir = path.join(tmpHome, '.pi', 'agent', 'sessions', 'resumerpc');

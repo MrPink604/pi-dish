@@ -2125,6 +2125,63 @@ function findSessionBySpawnToken(token) {
   return null;
 }
 
+const MAX_BRIDGE_SOCKET_PATH_BYTES = 103;
+const BRIDGE_SOCKET_BASENAME = `${'0'.repeat(24)}.sock`;
+
+function bridgeSocketConfigError(message) {
+  const err = new Error(`Invalid pi-dish bridge socket configuration: ${message}`);
+  err.status = 500;
+  // A configuration error cannot be repaired by silently changing the
+  // transport to RPC; the user explicitly requested no automatic fallback.
+  err.preventHeadlessFallback = true;
+  return err;
+}
+
+function validateBridgeSocketConfig(env) {
+  const override = env.PI_DISH_SOCKET_DIR || null;
+  if (override && !path.isAbsolute(override)) {
+    throw bridgeSocketConfigError('PI_DISH_SOCKET_DIR must be an absolute path');
+  }
+  const socketDir = override
+    ? path.resolve(override)
+    : path.join(env.HOME || os.homedir(), '.pi', 'dish', 'sockets');
+  const socketPath = path.join(socketDir, BRIDGE_SOCKET_BASENAME);
+  const bytes = Buffer.byteLength(socketPath);
+  if (bytes > MAX_BRIDGE_SOCKET_PATH_BYTES) {
+    const action = override
+      ? 'Set PI_DISH_SOCKET_DIR to a shorter absolute directory.'
+      : 'Set PI_DISH_SOCKET_DIR to a short absolute directory.';
+    throw bridgeSocketConfigError(`Unix socket path is ${bytes} bytes (maximum ${MAX_BRIDGE_SOCKET_PATH_BYTES}): ${socketPath}. ${action}`);
+  }
+
+  if (fs.existsSync(socketDir)) {
+    let stat;
+    try { stat = fs.statSync(socketDir); } catch (e) {
+      throw bridgeSocketConfigError(`cannot inspect ${socketDir}: ${e.message}`);
+    }
+    if (!stat.isDirectory()) {
+      throw bridgeSocketConfigError(`${override ? 'PI_DISH_SOCKET_DIR' : 'default socket path'} is not a directory: ${socketDir}`);
+    }
+    if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+      throw bridgeSocketConfigError(`${socketDir} is owned by uid ${stat.uid}, expected uid ${process.getuid()}`);
+    }
+    const mode = stat.mode & 0o777;
+    if (mode !== 0o700) {
+      if (override) {
+        throw bridgeSocketConfigError(`${socketDir} has mode ${mode.toString(8).padStart(4, '0')}, expected 0700. Choose or create a private PI_DISH_SOCKET_DIR; pi-dish will not change an existing override directory's permissions.`);
+      }
+      if (typeof process.getuid !== 'function') {
+        throw bridgeSocketConfigError(`cannot verify ownership before repairing the default socket directory ${socketDir} from mode ${mode.toString(8).padStart(4, '0')} to 0700`);
+      }
+      try {
+        fs.chmodSync(socketDir, 0o700);
+      } catch (e) {
+        throw bridgeSocketConfigError(`cannot repair the owned default socket directory ${socketDir} to mode 0700: ${e.message}`);
+      }
+    }
+  }
+}
+
 // Build the tmux child argv+env from the same launch spec RPC uses (so a
 // PI_DISH_PI_COMMAND wrapper or a simple `pi` alias's env carries over), open
 // the window, and wait up to 30s for the session to register. The window is
@@ -2143,11 +2200,24 @@ async function spawnPiInTmux({ target, args, cwd, hidden }) {
   }
 
   const spec = getPiLaunchSpec();
-  const token = crypto.randomBytes(16).toString('hex');
-  const env = { ...spec.env, PI_DISH_SPAWN_TOKEN: token };
+  const env = { ...spec.env };
+  // Pin the HOME used by bridge default-path validation into tmux. Otherwise
+  // a long-running tmux server can contribute a stale HOME and make the child
+  // bind/register in a tree different from the one this server scans.
+  if (!Object.hasOwn(env, 'HOME')) env.HOME = process.env.HOME || os.homedir();
   // tmux windows don't inherit this process's env — pass the server URL
   // through so the pi-dish-pages skill works in tmux-spawned sessions too.
   if (process.env.PI_DISH_URL) env.PI_DISH_URL = process.env.PI_DISH_URL;
+  // Pin the bridge socket setting even when it is unset: an older tmux server
+  // may retain a stale override in its global environment. An explicit value
+  // in PI_DISH_PI_COMMAND still wins, matching RPC launch-spec precedence.
+  if (!Object.hasOwn(env, 'PI_DISH_SOCKET_DIR')) {
+    env.PI_DISH_SOCKET_DIR = process.env.PI_DISH_SOCKET_DIR || '';
+  }
+  validateBridgeSocketConfig(env);
+
+  const token = crypto.randomBytes(16).toString('hex');
+  env.PI_DISH_SPAWN_TOKEN = token;
   const command = [...spec.argv, ...args];
 
   let paneId;
@@ -2156,7 +2226,7 @@ async function spawnPiInTmux({ target, args, cwd, hidden }) {
       socket,
       tmuxSession: target.tmuxSession,
       newTmuxSessionName: target.newTmuxSession,
-      cwd: cwd || process.env.HOME,
+      cwd: cwd || env.HOME,
       command,
       env,
     }));
@@ -2165,23 +2235,55 @@ async function spawnPiInTmux({ target, args, cwd, hidden }) {
   }
 
   const timeoutMs = Number(process.env.PI_DISH_SPAWN_TIMEOUT_MS) || 30000;
+  const timeoutLabel = timeoutMs < 1000 ? `${timeoutMs}ms` : `${Math.round(timeoutMs / 1000)}s`;
   const deadline = Date.now() + timeoutMs;
+  const acceptRegistration = (entry) => {
+    tmux.recordSpawn(entry.sessionId, { socket, paneId });
+    invalidateRegistryCache();
+    // Prime the command context so POST /branch can navigate the tree
+    // remotely (TUI sessions otherwise 409 — see the branch route).
+    tmux.sendKeys(socket, paneId, '/dish-prime').catch(() => {});
+    return entry.sessionId;
+  };
   while (Date.now() < deadline) {
     const entry = findSessionBySpawnToken(token);
-    if (entry) {
-      tmux.recordSpawn(entry.sessionId, { socket, paneId });
-      // Prime the command context so POST /branch can navigate the tree
-      // remotely (TUI sessions otherwise 409 — see the branch route).
-      tmux.sendKeys(socket, paneId, '/dish-prime').catch(() => {});
-      return entry.sessionId;
-    }
-    await new Promise((r) => setTimeout(r, 300));
+    if (entry) return acceptRegistration(entry);
+    await new Promise((r) => setTimeout(r, Math.min(300, Math.max(1, deadline - Date.now()))));
   }
+  // Registration may have landed during the final sleep, exactly at the
+  // deadline. Check once more before declaring a timeout and killing a hidden
+  // pane that is already ready.
+  const deadlineEntry = findSessionBySpawnToken(token);
+  if (deadlineEntry) return acceptRegistration(deadlineEntry);
+
   // A user-targeted window stays open for inspection; a hidden headless
-  // window is invisible — leaving it would just leak a pi nobody can see.
-  if (hidden) tmux.killPane(socket, paneId).catch(() => {});
-  const err = new Error(`pi did not register within ${Math.round(timeoutMs / 1000)}s — ${hidden ? 'the hidden headless window was closed' : 'the tmux window was left open for inspection'}. Ensure the pi-dish-bridge extension is installed in pi's global extensions.`);
+  // window is invisible. It must be fully gone before the caller may start an
+  // RPC fallback, or both processes can write the same session JSONL.
+  if (hidden) {
+    const cleanupTimeoutMs = Math.min(5000, Math.max(1000, timeoutMs));
+    try {
+      await tmux.killPaneAndWait(socket, paneId, { timeout: cleanupTimeoutMs });
+    } catch (cleanupError) {
+      const err = new Error(`pi did not register within ${timeoutLabel}, and hidden tmux cleanup failed; refusing to start an RPC fallback that could write the same session file: ${cleanupError.message}`);
+      err.status = 500;
+      err.preventHeadlessFallback = true;
+      err.cleanupFailed = {
+        socket,
+        paneId,
+        knownProcesses: cleanupError.remainingProcesses || [],
+        timeout: cleanupTimeoutMs,
+      };
+      throw err;
+    }
+  }
+  const err = new Error(`pi did not register within ${timeoutLabel} — ${hidden ? 'the hidden headless window was closed' : 'the tmux window was left open for inspection'}. Ensure the pi-dish-bridge extension is installed in pi's global extensions.`);
   err.status = 500;
+  if (!hidden) {
+    const state = await tmux.paneProcessState(socket, paneId);
+    if (state.paneExists || state.knownProcesses.length) {
+      err.resumeUncertain = { socket, paneId, knownProcesses: state.knownProcesses };
+    }
+  }
   throw err;
 }
 
@@ -2254,6 +2356,7 @@ app.post('/api/sessions/new', async (req, res) => {
         const id = await spawnPiHeadlessTmux({ args, cwd });
         return res.json({ success: true, id });
       } catch (e) {
+        if (e.preventHeadlessFallback) throw e;
         headlessTmuxBroken = true;
         console.error('Headless tmux spawn failed — falling back to an RPC child:', e.message);
       }
@@ -2266,46 +2369,181 @@ app.post('/api/sessions/new', async (req, res) => {
   }
 });
 
+// Resume is single-flight at the HTTP dispatch boundary, not in one backend:
+// explicit tmux, hidden tmux, and RPC requests for the same canonical JSONL
+// all share the first launch. This map is intentionally process-local — it
+// closes overlapping requests to this server, while bridge/RPC liveness is
+// still the durable source of truth before and after each flight.
+const resumeFlights = new Map(); // real session file -> Promise<{ id }>
+// A failed hidden-pane cleanup may leave the old JSONL writer alive after its
+// request/flight ends. Preserve that placement by canonical file so a retry
+// must finish the cleanup before it can launch any backend.
+const failedResumeCleanups = new Map(); // real session file -> { socket, paneId, knownProcesses, timeout }
+// Explicit tmux timeouts deliberately leave their panes open for inspection.
+// Remember the pane and exact process identities so a later resume cannot
+// start another writer for the same canonical JSONL while it is uncertain.
+const uncertainExplicitResumes = new Map(); // real session file -> { socket, paneId, knownProcesses }
+
+function sessionIsActive(sessionId) {
+  return !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId)?.alive;
+}
+
+function clearResumeQuarantines(sessionFile) {
+  failedResumeCleanups.delete(sessionFile);
+  uncertainExplicitResumes.delete(sessionFile);
+}
+
+function activeSessionClearsQuarantine(sessionId) {
+  const registered = getRegisteredSession(sessionId);
+  const rpc = getRPCSession(sessionId);
+  if (!registered && !rpc?.alive) return false;
+  const activeFile = registered?.sessionFile || rpc?.sessionFile || rpc?.state?.sessionFile;
+  if (activeFile) {
+    try { clearResumeQuarantines(fs.realpathSync(activeFile)); } catch {}
+  }
+  return true;
+}
+
+async function launchResumedSession({ sessionFile, cwd, target }) {
+  if (target && target.type === 'tmux') {
+    try {
+      const id = await spawnPiInTmux({ target, args: ['--session', sessionFile], cwd });
+      return { id };
+    } catch (e) {
+      if (e.resumeUncertain) uncertainExplicitResumes.set(sessionFile, e.resumeUncertain);
+      throw e;
+    }
+  }
+  if (headlessTmuxEnabled()) {
+    try {
+      const id = await spawnPiHeadlessTmux({ args: ['--session', sessionFile], cwd });
+      return { id };
+    } catch (e) {
+      if (e.preventHeadlessFallback) {
+        if (e.cleanupFailed) failedResumeCleanups.set(sessionFile, e.cleanupFailed);
+        throw e;
+      }
+      headlessTmuxBroken = true;
+      console.error('Headless tmux resume failed — falling back to an RPC child:', e.message);
+    }
+  }
+  const rpc = await resumeRPCSession(sessionFile, cwd || process.env.HOME);
+  return { id: rpc.id };
+}
+
 // Resume an inactive session. Default: the same headless dispatch as /new
 // (hidden tmux when available, else an RPC `pi --mode rpc --session <path>`
 // child); with a tmux `target`, `pi --session <path>` in that window instead.
 app.post('/api/sessions/:id/resume', async (req, res) => {
-  const sessionId = req.params.id;
+  const requestedId = req.params.id;
 
-  if (getRegisteredSession(sessionId) || getRPCSession(sessionId)?.alive) {
+  if (activeSessionClearsQuarantine(requestedId)) {
+    return res.json({ success: true, id: requestedId, alreadyActive: true });
+  }
+
+  const foundSessionFile = findSessionFile(requestedId);
+  if (!foundSessionFile) return res.status(404).json({ error: 'Session file not found' });
+  let sessionFile;
+  try {
+    sessionFile = fs.realpathSync(foundSessionFile);
+  } catch {
+    return res.status(404).json({ error: 'Session file not found' });
+  }
+  const sessionId = path.basename(sessionFile, '.jsonl');
+
+  // The route id may be a partial historical match; liveness belongs to the
+  // canonical JSONL basename, so check it again before creating a flight.
+  invalidateRegistryCache();
+  if (activeSessionClearsQuarantine(sessionId)) {
     return res.json({ success: true, id: sessionId, alreadyActive: true });
   }
 
-  const sessionFile = findSessionFile(sessionId);
-  if (!sessionFile) return res.status(404).json({ error: 'Session file not found' });
+  const uncertainExplicit = uncertainExplicitResumes.get(sessionFile);
+  if (uncertainExplicit) {
+    const state = await tmux.paneProcessState(
+      uncertainExplicit.socket,
+      uncertainExplicit.paneId,
+      { knownProcesses: uncertainExplicit.knownProcesses },
+    );
+    if (!state.paneExists && !state.knownProcesses.length) {
+      if (uncertainExplicitResumes.get(sessionFile) === uncertainExplicit) {
+        uncertainExplicitResumes.delete(sessionFile);
+      }
+    } else {
+      uncertainExplicitResumes.set(sessionFile, {
+        ...uncertainExplicit,
+        knownProcesses: state.knownProcesses,
+      });
+      // Registration can race the inspection above. Refresh once more before
+      // refusing a retry whose original pane has just become the active writer.
+      invalidateRegistryCache();
+      if (activeSessionClearsQuarantine(sessionId)) {
+        return res.json({ success: true, id: sessionId, alreadyActive: true });
+      }
+      return res.status(409).json({
+        error: `A previous explicit tmux resume timed out and its pane/process is still present (${uncertainExplicit.paneId}); refusing to launch another process against this session file. Inspect or close that tmux pane before retrying.`,
+      });
+    }
+  }
+
+  const failedCleanup = failedResumeCleanups.get(sessionFile);
+  if (failedCleanup) {
+    try {
+      await tmux.killPaneAndWait(failedCleanup.socket, failedCleanup.paneId, {
+        knownProcesses: failedCleanup.knownProcesses,
+        timeout: failedCleanup.timeout,
+      });
+      if (failedResumeCleanups.get(sessionFile) === failedCleanup) failedResumeCleanups.delete(sessionFile);
+      invalidateRegistryCache();
+    } catch (cleanupError) {
+      if (Array.isArray(cleanupError.remainingProcesses)) {
+        failedResumeCleanups.set(sessionFile, {
+          ...failedCleanup,
+          knownProcesses: cleanupError.remainingProcesses,
+        });
+      }
+      return res.status(500).json({
+        error: `Previous hidden tmux cleanup is still incomplete; refusing to resume another process against this session file: ${cleanupError.message}`,
+      });
+    }
+  }
+
+  const existingFlight = resumeFlights.get(sessionFile);
+  if (existingFlight) {
+    try {
+      const result = await existingFlight;
+      // A launch promise settling is not itself proof that the process stayed
+      // alive. Refresh bridge state after waiting before reporting the shared
+      // first caller's target as active.
+      invalidateRegistryCache();
+      if (!sessionIsActive(result.id)) {
+        const err = new Error('The concurrent resume completed, but the session is no longer active');
+        err.status = 500;
+        throw err;
+      }
+      return res.json({ success: true, id: result.id, alreadyActive: true, sharedResume: true });
+    } catch (e) {
+      console.error('Concurrent session resume failed:', e);
+      return res.status(e.status || 500).json({ error: e.message });
+    }
+  }
 
   let cwd = readSessionCwd(sessionFile);
-
   if (cwd && !fs.existsSync(cwd)) {
     console.warn(`Session cwd ${cwd} doesn't exist, using HOME`);
     cwd = process.env.HOME;
   }
 
-  const target = req.body?.target;
+  const flight = launchResumedSession({ sessionFile, cwd, target: req.body?.target });
+  resumeFlights.set(sessionFile, flight);
   try {
-    if (target && target.type === 'tmux') {
-      const id = await spawnPiInTmux({ target, args: ['--session', sessionFile], cwd });
-      return res.json({ success: true, id });
-    }
-    if (headlessTmuxEnabled()) {
-      try {
-        const id = await spawnPiHeadlessTmux({ args: ['--session', sessionFile], cwd });
-        return res.json({ success: true, id });
-      } catch (e) {
-        headlessTmuxBroken = true;
-        console.error('Headless tmux resume failed — falling back to an RPC child:', e.message);
-      }
-    }
-    const rpc = await resumeRPCSession(sessionFile, cwd || process.env.HOME);
-    res.json({ success: true, id: rpc.id });
+    const result = await flight;
+    res.json({ success: true, id: result.id });
   } catch (e) {
     console.error('Failed to resume session:', e);
     res.status(e.status || 500).json({ error: e.message });
+  } finally {
+    if (resumeFlights.get(sessionFile) === flight) resumeFlights.delete(sessionFile);
   }
 });
 

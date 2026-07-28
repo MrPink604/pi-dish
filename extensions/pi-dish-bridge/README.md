@@ -5,6 +5,21 @@ TUI renders everything either way, so an incompatible call is **silently
 invisible** in pi-dish — nothing errors. This page is the contract; write to
 it and your UI appears in the web/phone client with zero extra work.
 
+## Socket directory
+
+The bridge normally creates its hashed control sockets under
+`~/.pi/dish/sockets/`. It rejects any full UTF-8 socket path longer than 103
+bytes before binding or writing a session registry entry. On systems with a
+long home path, set `PI_DISH_SOCKET_DIR` to a short absolute directory in the
+environment of every `pi` process, for example
+`/run/user/$(id -u)/pi-dish`. There is deliberately no automatic `/tmp` or
+XDG fallback. The override directory is created with mode `0700`, and an
+override that is still too long is rejected with the same startup error. An
+existing directory must be owned by the current user with mode `0700`; the
+bridge validates it without changing its permissions. The bridge-owned default
+`~/.pi/dish/sockets/` is different: if an older release created it as `0755`,
+the bridge automatically tightens that owned directory to `0700`.
+
 ## What crosses the bridge
 
 | Call | Web rendering | Notes |

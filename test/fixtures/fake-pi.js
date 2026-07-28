@@ -11,6 +11,7 @@ const fs = require('fs');
 const net = require('net');
 const os = require('os');
 const path = require('path');
+const { spawn } = require('child_process');
 
 const token = process.env.PI_DISH_SPAWN_TOKEN || '';
 const home = process.env.HOME || os.homedir();
@@ -29,6 +30,14 @@ if (sessionIdx >= 0 && args[sessionIdx + 1]) {
 
 // Never register — exercises the server's 30s spawn timeout path.
 if (process.env.PI_FIXTURE_NOREGISTER) {
+  if (process.env.PI_FIXTURE_SURVIVOR_FILE) {
+    const child = spawn(process.execPath, ['-e', 'process.on("SIGHUP", () => {}); setInterval(() => {}, 1 << 30);'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    fs.writeFileSync(process.env.PI_FIXTURE_SURVIVOR_FILE, String(child.pid));
+    child.unref();
+  }
   setInterval(() => {}, 1 << 30);
 } else {
   fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
@@ -39,7 +48,7 @@ if (process.env.PI_FIXTURE_NOREGISTER) {
   const regDir = path.join(home, '.pi', 'dish', 'sessions');
   const sockDir = path.join(home, '.pi', 'dish', 'sockets');
   fs.mkdirSync(regDir, { recursive: true });
-  fs.mkdirSync(sockDir, { recursive: true });
+  fs.mkdirSync(sockDir, { recursive: true, mode: 0o700 });
 
   const socketPath = path.join(sockDir, sessionId + '.sock');
   try { fs.unlinkSync(socketPath); } catch {}
@@ -72,17 +81,22 @@ if (process.env.PI_FIXTURE_NOREGISTER) {
       fs.appendFileSync(sessionFile + '.keys', chunk.toString());
     });
   } catch {}
-  srv.listen(socketPath, () => {
-    fs.writeFileSync(path.join(regDir, sessionId + '.json'), JSON.stringify({
-      sessionId,
-      sessionFile,
-      cwd: process.cwd(),
-      pid: process.pid,
-      socketPath,
-      name: 'tmux spawn',
-      model: 'anthropic/claude-opus-4',
-      spawnToken: token,
-    }));
-  });
+  const register = () => {
+    srv.listen(socketPath, () => {
+      fs.writeFileSync(path.join(regDir, sessionId + '.json'), JSON.stringify({
+        sessionId,
+        sessionFile,
+        cwd: process.cwd(),
+        pid: process.pid,
+        socketPath,
+        name: 'tmux spawn',
+        model: 'anthropic/claude-opus-4',
+        spawnToken: token,
+      }));
+    });
+  };
+  const registerDelay = Number(process.env.PI_FIXTURE_REGISTER_DELAY_MS) || 0;
+  if (registerDelay > 0) setTimeout(register, registerDelay);
+  else register();
   setInterval(() => {}, 1 << 30);
 }
