@@ -88,7 +88,7 @@ function formatTokSpeed(outputTokens, durationMs) {
 
 /** Pi catalog estimate; deliberately never presented as a provider bill. */
 function formatEstimatedCost(value, digits = 4) {
-  if (!Number.isFinite(value)) return '—';
+  if (!Number.isFinite(value)) return 'Unavailable';
   if (value === 0) return '~$0';
   const precision = value < 0.0001 ? Math.max(digits, 6) : value < 0.01 ? Math.max(digits, 4) : 2;
   return `~$${value.toFixed(precision)}`;
@@ -889,21 +889,31 @@ function aggregateUsageWeekly(daily) {
       day: chunk[0].day, days: chunk.length, calls: 0,
       tokens: Object.fromEntries(tokenKeys.map(k => [k, 0])),
       costs: Object.fromEntries(costKeys.map(k => [k, 0])),
+      costUnavailable: Object.fromEntries(costKeys.map(k => [k, 0])),
       models: [],
     };
     for (const d of chunk) {
       agg.calls += d.calls || 0;
       for (const k of tokenKeys) agg.tokens[k] += d.tokens?.[k] || 0;
-      for (const k of costKeys) agg.costs[k] += d.costs?.[k] || 0;
+      for (const k of costKeys) {
+        const unavailable = d.costUnavailable?.[k] || 0;
+        agg.costUnavailable[k] += unavailable;
+        const value = d.costs?.[k];
+        if (unavailable || !Number.isFinite(value)) agg.costs[k] = null;
+        else if (agg.costs[k] !== null) agg.costs[k] += value;
+      }
       for (const dm of d.models || []) {
-        const t = models.get(dm.ref) || { ref: dm.ref, provider: dm.provider, model: dm.model, calls: 0, cost: 0, tokens: Object.fromEntries(tokenKeys.map(k => [k, 0])) };
+        const t = models.get(dm.ref) || { ref: dm.ref, provider: dm.provider, model: dm.model, calls: 0, cost: 0, costUnavailable: { total: 0 }, tokens: Object.fromEntries(tokenKeys.map(k => [k, 0])) };
         t.calls += dm.calls || 0;
-        t.cost += dm.cost || 0;
+        const unavailable = dm.costUnavailable?.total || 0;
+        t.costUnavailable.total += unavailable;
+        if (unavailable || !Number.isFinite(dm.cost)) t.cost = null;
+        else if (t.cost !== null) t.cost += dm.cost;
         for (const k of tokenKeys) t.tokens[k] += dm.tokens?.[k] || 0;
         models.set(dm.ref, t);
       }
     }
-    agg.models = [...models.values()].sort((a, b) => b.cost - a.cost || b.calls - a.calls);
+    agg.models = [...models.values()].sort((a, b) => Number.isFinite(b.cost) - Number.isFinite(a.cost) || (Number.isFinite(b.cost) ? b.cost - a.cost : 0) || b.calls - a.calls);
     out.unshift(agg);
   }
   return out;

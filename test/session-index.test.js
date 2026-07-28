@@ -106,13 +106,52 @@ test('versionless metadata is queued for reindex instead of being served stale',
   assert.equal(fresh.usage.total.costs.total, 0.01);
 });
 
+test('schema-3 zero-filled usage migrates through the bounded reindex backlog', async () => {
+  const file = writeSession([
+    userMsg('cost availability source'),
+    { type: 'message', timestamp: '2026-07-01T10:00:02.000Z', message: {
+      role: 'assistant', provider: 'test', model: 'total-only', content: [],
+      usage: { input: 5, output: 2, cost: { total: 0.25 } },
+    } },
+  ]);
+  const stats = fs.statSync(file);
+  index.resetForTests();
+  fs.mkdirSync(indexDir, { recursive: true });
+  fs.appendFileSync(path.join(indexDir, 'meta.ndjson'), JSON.stringify({
+    f: file, m: stats.mtimeMs, s: stats.size, ver: 3,
+    v: {
+      name: 'stale zero-filled metadata', messageCount: 1, lastActivity: '2026-07-01T10:00:02.000Z',
+      usage: { total: { calls: 1, costs: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.25 } } },
+    },
+  }) + '\n');
+  fs.appendFileSync(path.join(indexDir, 'text.ndjson'), JSON.stringify({
+    f: file, m: stats.mtimeMs, s: stats.size, ver: 1, nl: 1, t: 'cost availability source',
+  }) + '\n');
+
+  const first = withBudget(0, () => index.scanSessions([file]));
+  assert.equal(first.infos.has(file), false, 'schema-3 metadata is never served with false zeros');
+  assert.equal(first.indexing, true, 'migration honors the synchronous reindex budget');
+  await waitFor(() => withBudget(0, () => index.scanSessions([file])).indexing === false,
+    'cost availability schema migration');
+  const fresh = withBudget(0, () => index.scanSessions([file])).infos.get(file);
+  assert.deepEqual(fresh.usage.total.costs,
+    { input: null, output: null, cacheRead: null, cacheWrite: null, total: 0.25 });
+  assert.deepEqual(fresh.usage.total.costUnavailable,
+    { input: 1, output: 1, cacheRead: 1, cacheWrite: 1, total: 0 });
+
+  index.resetForTests();
+  const persisted = withBudget(0, () => index.scanSessions([file]));
+  assert.equal(persisted.indexing, false, 'rebuilt schema-4 metadata persists');
+  assert.equal(persisted.infos.get(file).usage.total.costs.input, null);
+});
+
 test('versionless search text migrates through the bounded indexing backlog', async () => {
   const file = writeSession([userMsg('fresh searchable text')]);
   const stats = fs.statSync(file);
   index.resetForTests();
   fs.mkdirSync(indexDir, { recursive: true });
   fs.appendFileSync(path.join(indexDir, 'meta.ndjson'), JSON.stringify({
-    f: file, m: stats.mtimeMs, s: stats.size, ver: 3,
+    f: file, m: stats.mtimeMs, s: stats.size, ver: 4,
     v: { name: 'fresh searchable text', messageCount: 1, lastActivity: '2026-07-01T10:00:00.000Z' },
   }) + '\n');
   fs.appendFileSync(path.join(indexDir, 'text.ndjson'), JSON.stringify({
