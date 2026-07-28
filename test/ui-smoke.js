@@ -916,6 +916,38 @@ function writeRegistry(patch = {}) {
     await desktop.waitForFunction(() => document.getElementById('queuePanel').style.display === 'none', { timeout: 5000 });
     check(true, 'strip hides when the queue drains');
 
+    // Abort acknowledgement is not the turn boundary. The UI must stay in a
+    // stopping turn until agent_end, reject a new prompt rather than letting
+    // the backend auto-steer it into that turn, then run live-tool cleanup and
+    // authoritative JSONL catch-up from agent_end.
+    console.log('abort ownership + cleanup:');
+    emit('turn_start', {});
+    emit('tool_execution_start', { toolCallId: 'abort-tool', toolName: 'Bash', args: { command: 'sleep 30' } });
+    await desktop.waitForSelector('details.live-tool-panel[data-tool-call-id="abort-tool"]', { timeout: 3000 });
+    const promptBeforeAbort = lastPrompt;
+    await desktop.click('#btnStop');
+    await desktop.waitForFunction(() => document.getElementById('status')?.textContent === 'Stopping...',
+      { timeout: 3000 });
+    await desktop.waitForTimeout(100); // HTTP acknowledgement has landed
+    check(await desktop.evaluate(() => turnInProgress),
+      'abort HTTP acknowledgement does not clear turn state');
+    await desktop.fill('#promptInput', 'must wait for abort boundary');
+    await desktop.press('#promptInput', 'Enter');
+    check(await desktop.inputValue('#promptInput') === 'must wait for abort boundary',
+      'send during abort remains in the composer');
+    check(lastPrompt === promptBeforeAbort, 'send during abort did not reach the backend as a steer');
+    appendEntry({ type: 'message', message: {
+      role: 'user', content: [{ type: 'text', text: 'abort catch-up marker' }], timestamp: new Date().toISOString(),
+    } });
+    emit('agent_end', {}); // aborted RPC turns have no paired turn_end
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('.message.user[data-msg-index]')]
+        .some((el) => el.textContent.includes('abort catch-up marker')), { timeout: 5000 });
+    check(!(await desktop.evaluate(() => turnInProgress)), 'agent_end clears the aborted turn');
+    check(await desktop.locator('details.live-tool-panel').count() === 0,
+      'agent_end catch-up removes the aborted turn live tool panel');
+    await desktop.fill('#promptInput', '');
+
     // 8b. Working indicator: a synthetic turn (fully event-driven, so there
     // is no timing window) shows the elapsed timer + running tool in the
     // header badge, ticks, and resets when the turn ends.
@@ -955,6 +987,13 @@ function writeRegistry(patch = {}) {
     await desktop.waitForFunction(() =>
       document.getElementById('status')?.textContent === 'Compacted (was 152.3k tokens)', { timeout: 3000 });
     check(true, 'completed compaction reports tokensBefore');
+    emit('compaction_start', { reason: 'manual' });
+    await desktop.waitForSelector('#btnStop', { state: 'visible', timeout: 3000 });
+    await desktop.click('#btnStop');
+    emit('compaction_end', { reason: 'manual', errorMessage: 'lost abort race' });
+    await desktop.waitForFunction(() => !compactingNow, { timeout: 3000 });
+    check(!(await desktop.evaluate((id) => abortingSessions.has(id), SESSION_ID)),
+      'compaction_end clears a compaction-only abort gate even on failure');
 
     // 8c-2. Compaction gates sends: while compacting there's no turn, but a
     // prompt sent now must be held (bridge buffers, acks queued) and delivered
@@ -1205,6 +1244,344 @@ function writeRegistry(patch = {}) {
     check(await desktop.locator('.ext-ui-widget').count() === 1, 'switch-back replays only session 1 widget');
     check(await desktop.locator('.ext-ui-status-badge').textContent() === '2 running',
       'status badge replayed on switch-back');
+
+    // 10a. Selection/transcript ownership. Hold A's tail response, fully
+    // select B, then release A: A must not reopen its stream or touch B's pane.
+    console.log('session/transcript async ownership:');
+    await desktop.evaluate(({ a }) => {
+      const realFetch = window.fetch.bind(window);
+      window.__auditRealFetch = realFetch;
+      let held = false;
+      window.fetch = (input, init) => {
+        const url = String(input);
+        if (!held && url.includes(`/api/sessions/${a}/messages?limit=`)) {
+          held = true;
+          return new Promise((resolve) => {
+            window.__releaseAuditSelection = () => realFetch(input, init).then(resolve);
+          });
+        }
+        return realFetch(input, init);
+      };
+      transcriptCache.delete(a);
+      window.__auditSelectionA = selectSession(a, { forceTranscriptReload: true });
+    }, { a: SESSION_ID });
+    await desktop.waitForFunction(() => typeof window.__releaseAuditSelection === 'function');
+    await desktop.evaluate((b) => selectSession(b, { forceTranscriptReload: true }), SESSION2_ID);
+    await desktop.waitForFunction((b) => currentSession?.id === b &&
+      [...document.querySelectorAll('#messages .message')].some((el) => el.textContent.includes('second session')),
+      SESSION2_ID, { timeout: 5000 });
+    await desktop.evaluate(async () => {
+      window.__releaseAuditSelection();
+      await window.__auditSelectionA;
+    });
+    const rapidSelection = await desktop.evaluate((b) => ({
+      currentId: currentSession?.id,
+      streamUrl: messageStream?.url || '',
+      text: document.getElementById('messages').textContent,
+      generation: sessionSelectionGeneration,
+      expected: b,
+    }), SESSION2_ID);
+    check(rapidSelection.currentId === SESSION2_ID && rapidSelection.streamUrl.includes(`/${SESSION2_ID}/stream`) &&
+      rapidSelection.text.includes('second session') && !rapidSelection.text.includes('existing answer'),
+      'stale A selection cannot replace B stream or transcript');
+    await desktop.evaluate(() => { window.fetch = window.__auditRealFetch; });
+
+    // A same-session force reload gets a new generation too. An older catch-up
+    // response carrying a unique marker must be ignored after the reload.
+    await desktop.evaluate((a) => selectSession(a, { forceTranscriptReload: true }), SESSION_ID);
+    await desktop.waitForSelector('#messages .message.assistant', { timeout: 5000 });
+    await desktop.evaluate((a) => {
+      const realFetch = window.fetch.bind(window);
+      window.__auditRealFetch = realFetch;
+      let held = false;
+      window.fetch = (input, init) => {
+        const url = String(input);
+        if (!held && url.includes(`/api/sessions/${a}/messages?after=`)) {
+          held = true;
+          return new Promise((resolve) => {
+            window.__releaseAuditCatchup = () => resolve(new Response(JSON.stringify({
+              messages: [{ index: 99999, role: 'user', content: [{ type: 'text', text: 'STALE CATCH-UP MARKER' }] }],
+              lastIndex: 99999, totalMessages: 100000,
+            }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+          });
+        }
+        return realFetch(input, init);
+      };
+      window.__auditOldCatchup = fetchNewMessagesSince(a, sessionSelectionGeneration);
+    }, SESSION_ID);
+    await desktop.waitForFunction(() => typeof window.__releaseAuditCatchup === 'function');
+    await desktop.evaluate((a) => selectSession(a, { forceTranscriptReload: true }), SESSION_ID);
+    await desktop.evaluate(async () => {
+      window.__releaseAuditCatchup();
+      await window.__auditOldCatchup;
+      window.fetch = window.__auditRealFetch;
+    });
+    check(!(await desktop.locator('#messages').textContent()).includes('STALE CATCH-UP MARKER'),
+      'same-session force reload invalidates the older catch-up generation');
+
+    // Stats stays bound to the session/modal generation that opened it. The
+    // delayed A response must not overwrite B or build A actions under B.
+    await desktop.evaluate(({ a }) => {
+      const realFetch = window.fetch.bind(window);
+      window.__auditRealFetch = realFetch;
+      let held = false;
+      window.fetch = (input, init) => {
+        const url = String(input);
+        if (!held && url.endsWith(`/api/sessions/${a}/stats`)) {
+          held = true;
+          return new Promise((resolve) => {
+            window.__releaseAuditStats = () => resolve(new Response(JSON.stringify({ model: 'STALE-A-STATS' }), {
+              status: 200, headers: { 'Content-Type': 'application/json' },
+            }));
+          });
+        }
+        return realFetch(input, init);
+      };
+      openStatsModal();
+    }, { a: SESSION_ID });
+    await desktop.waitForFunction(() => typeof window.__releaseAuditStats === 'function');
+    await desktop.evaluate((b) => selectSession(b, { forceTranscriptReload: true }), SESSION2_ID);
+    await desktop.evaluate(() => openStatsModal());
+    await desktop.waitForSelector('#statsBody .stats-table', { timeout: 5000 });
+    await desktop.evaluate(() => window.__releaseAuditStats());
+    await desktop.waitForTimeout(50);
+    const statsOwner = await desktop.evaluate(() => ({
+      sessionId: statsModalSessionId,
+      text: document.getElementById('statsBody').textContent,
+      visible: document.getElementById('statsModal').style.display !== 'none',
+    }));
+    check(statsOwner.visible && statsOwner.sessionId === SESSION2_ID && !statsOwner.text.includes('STALE-A-STATS'),
+      'stale stats response cannot combine session A data with session B actions');
+    await desktop.evaluate(() => { closeStatsModal(); window.fetch = window.__auditRealFetch; });
+    await desktop.evaluate((a) => selectSession(a, { forceTranscriptReload: true }), SESSION_ID);
+
+    // Latest request owns the file and diff takeover panes. Resolve an older
+    // request only after a newer one has painted and verify it cannot overwrite.
+    await desktop.evaluate(() => {
+      const realFetch = window.fetch.bind(window);
+      window.__auditRealFetch = realFetch;
+      window.fetch = (input, init) => {
+        const url = String(input);
+        if (url.includes('/file?path=stale-audit.md')) {
+          return new Promise((resolve) => {
+            window.__releaseAuditFile = () => resolve(new Response(JSON.stringify({
+              path: '/stale/stale-audit.md', relPath: 'stale-audit.md', size: 5, content: 'STALE FILE',
+            }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+          });
+        }
+        return realFetch(input, init);
+      };
+      window.__auditOldFile = openFileViewer('stale-audit.md');
+    });
+    await desktop.waitForFunction(() => typeof window.__releaseAuditFile === 'function');
+    await desktop.evaluate(() => openFileViewer('findings.md'));
+    await desktop.waitForSelector('#fileView .markdown-body h1', { timeout: 5000 });
+    await desktop.evaluate(async () => { window.__releaseAuditFile(); await window.__auditOldFile; });
+    check(await desktop.locator('#fileViewTitle').textContent() === 'findings.md' &&
+      !(await desktop.locator('#fileViewBody').textContent()).includes('STALE FILE'),
+      'stale file response cannot overwrite the latest open file');
+    await desktop.evaluate(() => { closeFileView(); window.fetch = window.__auditRealFetch; });
+
+    await desktop.evaluate(({ a }) => {
+      const realFetch = window.fetch.bind(window);
+      window.__auditRealFetch = realFetch;
+      let held = false;
+      window.fetch = (input, init) => {
+        const url = String(input);
+        if (!held && url.endsWith(`/api/sessions/${a}/diff`)) {
+          held = true;
+          return new Promise((resolve) => {
+            window.__releaseAuditDiff = () => resolve(new Response(JSON.stringify({
+              root: '/STALE-DIFF-ROOT', gitAvailable: true, repos: [],
+            }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+          });
+        }
+        return realFetch(input, init);
+      };
+      window.__auditOldDiff = openDiffView();
+    }, { a: SESSION_ID });
+    await desktop.waitForFunction(() => typeof window.__releaseAuditDiff === 'function');
+    await desktop.evaluate(() => loadDiffView());
+    await desktop.waitForSelector('.diff-repo', { timeout: 5000 });
+    await desktop.evaluate(async () => { window.__releaseAuditDiff(); await window.__auditOldDiff; });
+    check(!(await desktop.locator('#diffViewRoot').textContent()).includes('STALE-DIFF-ROOT') &&
+      await desktop.locator('.diff-repo').count() > 0,
+      'stale diff response cannot overwrite the latest diff view');
+    await desktop.evaluate(() => { closeDiffView(); window.fetch = window.__auditRealFetch; });
+
+    // Deferred patches carry the same view generation. Let an old patch land
+    // after closing/reopening the diff and loading the replacement patch.
+    await desktop.evaluate(() => openDiffView());
+    await desktop.waitForFunction(() => document.querySelectorAll('.diff-file').length === 7,
+      { timeout: 5000 });
+    await desktop.evaluate(() => {
+      const realFetch = window.fetch.bind(window);
+      window.__auditRealFetch = realFetch;
+      let held = false;
+      window.fetch = (input, init) => {
+        const url = String(input);
+        if (!held && url.includes('/diff/patch?') && url.includes('lazy-4.txt')) {
+          held = true;
+          return new Promise((resolve) => {
+            window.__releaseAuditPatch = () => resolve(new Response(JSON.stringify({
+              patch: '@@ -0,0 +1 @@\n+STALE PATCH', truncated: false,
+            }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+          });
+        }
+        return realFetch(input, init);
+      };
+    });
+    await desktop.locator('.diff-file').filter({ hasText: 'lazy-4.txt' }).locator('summary').click();
+    await desktop.waitForFunction(() => typeof window.__releaseAuditPatch === 'function');
+    await desktop.evaluate(() => { closeDiffView(); openDiffView(); });
+    await desktop.waitForFunction(() => document.querySelectorAll('.diff-file').length === 7,
+      { timeout: 5000 });
+    await desktop.locator('.diff-file').filter({ hasText: 'lazy-4.txt' }).locator('summary').click();
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('.diff-line.diff-add')].some((el) => el.textContent === '+lazy line 4'),
+      { timeout: 5000 });
+    await desktop.evaluate(() => window.__releaseAuditPatch());
+    await desktop.waitForTimeout(50);
+    check(!(await desktop.locator('#diffViewBody').textContent()).includes('STALE PATCH'),
+      'stale deferred patch cannot mutate a reopened diff view');
+    await desktop.evaluate(() => { closeDiffView(); window.fetch = window.__auditRealFetch; });
+
+    // Failed sends restore the payload to A even when B owns the composer by
+    // the time the request fails, and remove the exact optimistic bubble.
+    console.log('send/queue async ownership:');
+    await desktop.fill('#promptInput', 'failed prompt from A');
+    await desktop.evaluate(({ a, image }) => {
+      pendingImages = [{ data: image, mimeType: 'image/png' }];
+      renderAttachmentStrip();
+      const realApiSend = apiSend;
+      window.__auditRealApiSend = realApiSend;
+      apiSend = (url, ...args) => {
+        if (url === `/api/sessions/${a}/prompt`) {
+          return new Promise((resolve, reject) => {
+            window.__rejectAuditPrompt = () => reject(new Error('audit send failure'));
+          });
+        }
+        return realApiSend(url, ...args);
+      };
+      window.__auditFailedPrompt = sendPrompt();
+    }, { a: SESSION_ID, image: TINY_PNG });
+    await desktop.waitForFunction(() => typeof window.__rejectAuditPrompt === 'function' &&
+      document.querySelector('[data-client-prompt-id]'));
+    await desktop.evaluate((b) => selectSession(b, { forceTranscriptReload: true }), SESSION2_ID);
+    await desktop.evaluate(async () => {
+      window.__rejectAuditPrompt();
+      await window.__auditFailedPrompt;
+      apiSend = window.__auditRealApiSend;
+    });
+    const failedOwnership = await desktop.evaluate((a) => ({
+      currentText: document.getElementById('promptInput').value,
+      originDraft: localStorage.getItem(draftKey(a)),
+      originImages: pendingImagesBySession.get(a)?.length || 0,
+      pendingMatch: [...pendingOptimisticPrompts.values()].some((p) => p.message === 'failed prompt from A'),
+    }), SESSION_ID);
+    check(!failedOwnership.currentText.includes('failed prompt from A') &&
+      failedOwnership.originDraft === 'failed prompt from A' && failedOwnership.originImages === 1 &&
+      !failedOwnership.pendingMatch,
+      'failed prompt restores text/images only to A and removes its optimistic association');
+    await desktop.evaluate((a) => selectSession(a, { forceTranscriptReload: true }), SESSION_ID);
+    check(await desktop.inputValue('#promptInput') === 'failed prompt from A' &&
+      await desktop.locator('#attachmentStrip .attachment-thumb').count() === 1,
+      'originating session restores the failed payload when revisited');
+    await desktop.evaluate((a) => {
+      document.getElementById('promptInput').value = '';
+      pendingImages = [];
+      pendingImagesBySession.delete(a);
+      clearDraft(a);
+      renderAttachmentStrip();
+    }, SESSION_ID);
+
+    // A compaction-buffered optimistic prompt is associated to its queue row
+    // by a client id. Cancelling one of two identical prompts removes only its
+    // bubble/echo suppression, and an A->B switch cannot receive its text.
+    await desktop.evaluate((a) => {
+      const container = document.getElementById('messages');
+      const makePending = (id) => {
+        const el = document.createElement('div');
+        el.className = 'message user';
+        el.dataset.clientPromptId = id;
+        el.textContent = 'duplicate buffered prompt';
+        container.appendChild(el);
+        pendingOptimisticPrompts.set(id, {
+          clientPromptId: id, sessionId: a, message: 'duplicate buffered prompt', element: el, status: 'queued',
+        });
+        return el;
+      };
+      window.__auditQueuedFirst = makePending('audit-buffered-first');
+      window.__auditQueuedSecond = makePending('audit-buffered-second');
+      renderQueueStatus({ followUp: ['duplicate buffered prompt'] });
+      const realApiSend = apiSend;
+      window.__auditRealApiSend = realApiSend;
+      apiSend = (url, ...args) => {
+        if (url.endsWith('/queue/cancel')) {
+          return new Promise((resolve) => { window.__resolveAuditQueueEdit = () => resolve({ success: true }); });
+        }
+        return realApiSend(url, ...args);
+      };
+      const row = document.querySelector('.queue-item');
+      window.__auditQueueAssociation = row.dataset.clientPromptId;
+      window.__auditQueueEdit = editQueuedMessage(row.querySelector('.queue-item-edit'));
+      // Real bridge queue_update may beat the HTTP response. The remaining
+      // duplicate must associate to the second prompt, not reuse the one being edited.
+      renderQueueStatus({ followUp: ['duplicate buffered prompt'] });
+      window.__auditRemainingQueueAssociation = document.querySelector('.queue-item')?.dataset.clientPromptId;
+    }, SESSION_ID);
+    check(await desktop.evaluate(() => window.__auditQueueAssociation) === 'audit-buffered-first',
+      'buffered queue row carries its stable optimistic prompt id');
+    check(await desktop.evaluate(() => window.__auditRemainingQueueAssociation) === 'audit-buffered-second',
+      'queue update before cancel acknowledgement preserves duplicate prompt association');
+    await desktop.evaluate((b) => selectSession(b, { forceTranscriptReload: true }), SESSION2_ID);
+    await desktop.evaluate(async () => {
+      window.__resolveAuditQueueEdit();
+      await window.__auditQueueEdit;
+      apiSend = window.__auditRealApiSend;
+    });
+    const queueOwnership = await desktop.evaluate((a) => ({
+      currentText: document.getElementById('promptInput').value,
+      originDraft: localStorage.getItem(draftKey(a)),
+      firstPending: pendingOptimisticPrompts.has('audit-buffered-first'),
+      secondPending: pendingOptimisticPrompts.has('audit-buffered-second'),
+      firstRemoved: window.__auditQueuedFirst.parentNode === null,
+      secondRetained: window.__auditQueuedSecond.parentNode !== null,
+    }), SESSION_ID);
+    check(!queueOwnership.currentText.includes('duplicate buffered prompt') &&
+      queueOwnership.originDraft === 'duplicate buffered prompt',
+      'queue edit completion restores A without touching B composer/draft');
+    check(!queueOwnership.firstPending && queueOwnership.secondPending &&
+      queueOwnership.firstRemoved && queueOwnership.secondRetained,
+      'queue edit removes only the associated bubble and echo suppression');
+    await desktop.evaluate((a) => {
+      discardOptimisticPrompt('audit-buffered-second');
+      localStorage.removeItem(draftKey(a));
+    }, SESSION_ID);
+
+    // Enabled-model persistence uses the IDs at edit time, not whichever
+    // model list a session switch/reload installs before the debounce fires.
+    await desktop.evaluate(async () => {
+      const realApiSend = apiSend;
+      window.__auditRealApiSend = realApiSend;
+      apiSend = async (url, body, ...args) => {
+        if (url === '/api/models/enabled') { window.__auditEnabledBody = body; return { success: true }; }
+        return realApiSend(url, body, ...args);
+      };
+      knownModels = [
+        { provider: 'audit', id: 'kept', enabled: true },
+        { provider: 'audit', id: 'removed', enabled: false },
+      ];
+      saveEnabledModels();
+      knownModels = [{ provider: 'other-session', id: 'replacement', enabled: true }];
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      apiSend = window.__auditRealApiSend;
+    });
+    check(JSON.stringify(await desktop.evaluate(() => window.__auditEnabledBody?.enabledIds)) ===
+      JSON.stringify(['audit/kept']),
+      'enabled-model debounce persists the edit-time ID snapshot');
+    await desktop.evaluate((a) => { loadModels(a); selectSession(a, { forceTranscriptReload: true }); }, SESSION_ID);
+
     // Clean up: clear the extension UI and deregister session 2 so the
     // mobile section still sees a single Active session.
     emit('extension_ui_request', { method: 'setWidget', widgetKey: 'procs', widgetLines: [] });
