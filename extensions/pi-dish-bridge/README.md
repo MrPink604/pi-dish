@@ -14,7 +14,9 @@ long home path, set `PI_DISH_SOCKET_DIR` to a short absolute directory in the
 environment of every `pi` process, for example
 `/run/user/$(id -u)/pi-dish`. There is deliberately no automatic `/tmp` or
 XDG fallback. The override directory is created with mode `0700`, and an
-override that is still too long is rejected with the same startup error.
+override that is still too long is rejected with the same startup error. An
+existing directory must be owned by the current user with mode `0700`; the
+bridge validates it without changing its permissions.
 
 ## What crosses the bridge
 

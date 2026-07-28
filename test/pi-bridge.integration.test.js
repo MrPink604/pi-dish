@@ -39,6 +39,8 @@ const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-int-'));
 const tmpHome = path.join(tmpRoot, `long-home-${'x'.repeat(90)}`);
 const socketDir = path.join(tmpRoot, 's');
 fs.mkdirSync(tmpHome, { recursive: true });
+// Existing private overrides are valid and must not be mutated by bridge init.
+fs.mkdirSync(socketDir, { recursive: true, mode: 0o700 });
 process.env.HOME = tmpHome;
 process.env.PORT = '0';
 process.env.PI_DISH_SOCKET_DIR = socketDir;
@@ -223,9 +225,10 @@ test('bundled pi SDK version matches the host pi', { skip: !piOk }, () => {
     + `Run: npm i @earendil-works/pi-coding-agent@${hostPiVersion} (or upgrade host pi), then re-run this canary.`);
 });
 
-test('a long HOME without PI_DISH_SOCKET_DIR fails bridge startup with an actionable error', { skip: !piOk, timeout: 30000 }, async () => {
+async function bridgeConfigFailure(socketOverride) {
   const env = { ...piEnv, HOME: tmpHome };
-  delete env.PI_DISH_SOCKET_DIR;
+  if (socketOverride === null) delete env.PI_DISH_SOCKET_DIR;
+  else env.PI_DISH_SOCKET_DIR = socketOverride;
   const child = spawn(piSpec.argv[0], [...piSpec.argv.slice(1), '--mode', 'rpc', '--model', 'fakeprov/fake-model'], {
     cwd: projDir,
     env,
@@ -239,10 +242,6 @@ test('a long HOME without PI_DISH_SOCKET_DIR fails bridge startup with an action
     while (!/PI_DISH_SOCKET_DIR/.test(stderr) && child.exitCode === null && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    assert.match(stderr, /Unix socket path is \d+ bytes \(maximum 103\)/,
-      `bridge should report the byte limit, got stderr:\n${stderr}`);
-    assert.match(stderr, /Set PI_DISH_SOCKET_DIR to a short absolute directory/);
-
     const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
     let childRegistered = false;
     try {
@@ -254,7 +253,7 @@ test('a long HOME without PI_DISH_SOCKET_DIR fails bridge startup with an action
         }
       });
     } catch {}
-    assert.equal(childRegistered, false, 'over-limit bridge never writes a registry entry');
+    return { stderr, childRegistered };
   } finally {
     if (child.exitCode === null) child.kill('SIGTERM');
     await new Promise((resolve) => {
@@ -264,6 +263,26 @@ test('a long HOME without PI_DISH_SOCKET_DIR fails bridge startup with an action
     });
     if (child.exitCode === null) child.kill('SIGKILL');
   }
+}
+
+test('a long HOME without PI_DISH_SOCKET_DIR fails bridge startup with an actionable error', { skip: !piOk, timeout: 30000 }, async () => {
+  const { stderr, childRegistered } = await bridgeConfigFailure(null);
+  assert.match(stderr, /Unix socket path is \d+ bytes \(maximum 103\)/,
+    `bridge should report the byte limit, got stderr:\n${stderr}`);
+  assert.match(stderr, /Set PI_DISH_SOCKET_DIR to a short absolute directory/);
+  assert.equal(childRegistered, false, 'over-limit bridge never writes a registry entry');
+});
+
+test('an existing shared PI_DISH_SOCKET_DIR is rejected without permission mutation', { skip: !piOk, timeout: 30000 }, async () => {
+  const unsafeDir = path.join(tmpRoot, 'shared-socket-dir');
+  fs.mkdirSync(unsafeDir, { recursive: true, mode: 0o755 });
+  fs.chmodSync(unsafeDir, 0o755);
+  const { stderr, childRegistered } = await bridgeConfigFailure(unsafeDir);
+  assert.match(stderr, /PI_DISH_SOCKET_DIR is not a private usable directory/);
+  assert.match(stderr, /mode is 0755, expected 0700/);
+  assert.equal(childRegistered, false, 'unsafe override never writes a registry entry');
+  assert.equal(fs.statSync(unsafeDir).mode & 0o777, 0o755,
+    'bridge did not mutate the existing directory mode');
 });
 
 test('the real bridge binds under a long HOME using PI_DISH_SOCKET_DIR and registers', { skip: !piOk, timeout: 60000 }, async () => {

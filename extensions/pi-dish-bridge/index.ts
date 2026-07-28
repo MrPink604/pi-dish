@@ -51,6 +51,28 @@ function socketPathFor(sessionId: string): string {
 // the extension loads rather than waiting for session_start and bind().
 assertSocketPathLength(path.join(SOCKET_DIR, `${"0".repeat(24)}.sock`));
 
+function ensureSocketDirectory(): void {
+  const label = SOCKET_DIR_OVERRIDE ? "PI_DISH_SOCKET_DIR" : "the default pi-dish socket directory";
+  let created = false;
+  try {
+    created = fs.mkdirSync(SOCKET_DIR, { recursive: true, mode: 0o700 }) !== undefined;
+    // mkdir's mode is umask-sensitive. Tighten only a directory this bridge
+    // invocation created; never mutate an existing override/shared directory.
+    if (created) fs.chmodSync(SOCKET_DIR, 0o700);
+    const stat = fs.statSync(SOCKET_DIR);
+    if (!stat.isDirectory()) throw new Error("path is not a directory");
+    if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
+      throw new Error(`directory is owned by uid ${stat.uid}, expected uid ${process.getuid()}`);
+    }
+    const mode = stat.mode & 0o777;
+    if (mode !== 0o700) {
+      throw new Error(`directory mode is ${mode.toString(8).padStart(4, "0")}, expected 0700`);
+    }
+  } catch (e: any) {
+    throw new Error(`[pi-dish-bridge] ${label} is not a private usable directory: ${SOCKET_DIR}: ${String(e?.message || e)}. Choose an absolute directory owned by this user with mode 0700.`);
+  }
+}
+
 // Set by pi-dish when it spawns this pi inside a tmux window (see lib/tmux.js).
 // Written into the registry entry so the server can correlate the tmux spawn
 // with the session it registers. Harmless (and undefined) otherwise.
@@ -195,6 +217,10 @@ function queueEntryText(entry: any): string {
 }
 
 export default function (pi: ExtensionAPI) {
+  // Validate/create before claiming the duplicate-load sentinel. A corrected
+  // environment followed by /reload must not be blocked by a failed claim.
+  ensureSocketDirectory();
+
   // Two bridge copies loaded into one pi process (e.g. a stale copied install
   // alongside the repo symlink) would each unlink and re-bind the same session
   // socket — whichever loads last wins, and a stale winner silently downgrades
@@ -211,8 +237,6 @@ export default function (pi: ExtensionAPI) {
   g[LOAD_SENTINEL] = true;
 
   fs.mkdirSync(REGISTRY_DIR, { recursive: true });
-  fs.mkdirSync(SOCKET_DIR, { recursive: true, mode: 0o700 });
-  fs.chmodSync(SOCKET_DIR, 0o700);
 
   // Session-control methods (ctx.navigateTree, ctx.reload, …) exist only on
   // command contexts, which pi supplies when it executes an extension

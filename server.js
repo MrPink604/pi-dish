@@ -2125,6 +2125,53 @@ function findSessionBySpawnToken(token) {
   return null;
 }
 
+const MAX_BRIDGE_SOCKET_PATH_BYTES = 103;
+const BRIDGE_SOCKET_BASENAME = `${'0'.repeat(24)}.sock`;
+
+function bridgeSocketConfigError(message) {
+  const err = new Error(`Invalid pi-dish bridge socket configuration: ${message}`);
+  err.status = 500;
+  // A configuration error cannot be repaired by silently changing the
+  // transport to RPC; the user explicitly requested no automatic fallback.
+  err.preventHeadlessFallback = true;
+  return err;
+}
+
+function validateBridgeSocketConfig(env) {
+  const override = env.PI_DISH_SOCKET_DIR || null;
+  if (override && !path.isAbsolute(override)) {
+    throw bridgeSocketConfigError('PI_DISH_SOCKET_DIR must be an absolute path');
+  }
+  const socketDir = override
+    ? path.resolve(override)
+    : path.join(env.HOME || os.homedir(), '.pi', 'dish', 'sockets');
+  const socketPath = path.join(socketDir, BRIDGE_SOCKET_BASENAME);
+  const bytes = Buffer.byteLength(socketPath);
+  if (bytes > MAX_BRIDGE_SOCKET_PATH_BYTES) {
+    const action = override
+      ? 'Set PI_DISH_SOCKET_DIR to a shorter absolute directory.'
+      : 'Set PI_DISH_SOCKET_DIR to a short absolute directory.';
+    throw bridgeSocketConfigError(`Unix socket path is ${bytes} bytes (maximum ${MAX_BRIDGE_SOCKET_PATH_BYTES}): ${socketPath}. ${action}`);
+  }
+
+  if (fs.existsSync(socketDir)) {
+    let stat;
+    try { stat = fs.statSync(socketDir); } catch (e) {
+      throw bridgeSocketConfigError(`cannot inspect ${socketDir}: ${e.message}`);
+    }
+    if (!stat.isDirectory()) {
+      throw bridgeSocketConfigError(`${override ? 'PI_DISH_SOCKET_DIR' : 'default socket path'} is not a directory: ${socketDir}`);
+    }
+    if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+      throw bridgeSocketConfigError(`${socketDir} is owned by uid ${stat.uid}, expected uid ${process.getuid()}`);
+    }
+    const mode = stat.mode & 0o777;
+    if (mode !== 0o700) {
+      throw bridgeSocketConfigError(`${socketDir} has mode ${mode.toString(8).padStart(4, '0')}, expected 0700. Choose or create a private PI_DISH_SOCKET_DIR; pi-dish will not change an existing directory's permissions.`);
+    }
+  }
+}
+
 // Build the tmux child argv+env from the same launch spec RPC uses (so a
 // PI_DISH_PI_COMMAND wrapper or a simple `pi` alias's env carries over), open
 // the window, and wait up to 30s for the session to register. The window is
@@ -2143,14 +2190,23 @@ async function spawnPiInTmux({ target, args, cwd, hidden }) {
   }
 
   const spec = getPiLaunchSpec();
-  const token = crypto.randomBytes(16).toString('hex');
-  const env = { ...spec.env, PI_DISH_SPAWN_TOKEN: token };
+  const env = { ...spec.env };
+  // Pin the HOME used by bridge default-path validation into tmux when the
+  // launch spec did not intentionally provide a different one.
+  if (!env.HOME && process.env.HOME) env.HOME = process.env.HOME;
   // tmux windows don't inherit this process's env — pass the server URL
   // through so the pi-dish-pages skill works in tmux-spawned sessions too.
   if (process.env.PI_DISH_URL) env.PI_DISH_URL = process.env.PI_DISH_URL;
-  // The bridge's short Unix-socket directory must likewise reach tmux servers
-  // that predate the pi-dish process and therefore lack its current env.
-  if (process.env.PI_DISH_SOCKET_DIR) env.PI_DISH_SOCKET_DIR = process.env.PI_DISH_SOCKET_DIR;
+  // Pin the bridge socket setting even when it is unset: an older tmux server
+  // may retain a stale override in its global environment. An explicit value
+  // in PI_DISH_PI_COMMAND still wins, matching RPC launch-spec precedence.
+  if (!Object.hasOwn(env, 'PI_DISH_SOCKET_DIR')) {
+    env.PI_DISH_SOCKET_DIR = process.env.PI_DISH_SOCKET_DIR || '';
+  }
+  validateBridgeSocketConfig(env);
+
+  const token = crypto.randomBytes(16).toString('hex');
+  env.PI_DISH_SPAWN_TOKEN = token;
   const command = [...spec.argv, ...args];
 
   let paneId;
@@ -2193,13 +2249,19 @@ async function spawnPiInTmux({ target, args, cwd, hidden }) {
   // window is invisible. It must be fully gone before the caller may start an
   // RPC fallback, or both processes can write the same session JSONL.
   if (hidden) {
+    const cleanupTimeoutMs = Math.min(5000, Math.max(1000, timeoutMs));
     try {
-      await tmux.killPaneAndWait(socket, paneId);
+      await tmux.killPaneAndWait(socket, paneId, { timeout: cleanupTimeoutMs });
     } catch (cleanupError) {
       const err = new Error(`pi did not register within ${timeoutLabel}, and hidden tmux cleanup failed; refusing to start an RPC fallback that could write the same session file: ${cleanupError.message}`);
       err.status = 500;
       err.preventHeadlessFallback = true;
-      err.cleanupFailed = { socket, paneId };
+      err.cleanupFailed = {
+        socket,
+        paneId,
+        knownProcesses: cleanupError.remainingProcesses || [],
+        timeout: cleanupTimeoutMs,
+      };
       throw err;
     }
   }
@@ -2299,7 +2361,7 @@ const resumeFlights = new Map(); // real session file -> Promise<{ id }>
 // A failed hidden-pane cleanup may leave the old JSONL writer alive after its
 // request/flight ends. Preserve that placement by canonical file so a retry
 // must finish the cleanup before it can launch any backend.
-const failedResumeCleanups = new Map(); // real session file -> { socket, paneId }
+const failedResumeCleanups = new Map(); // real session file -> { socket, paneId, knownProcesses, timeout }
 
 function sessionIsActive(sessionId) {
   return !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId)?.alive;
@@ -2356,10 +2418,19 @@ app.post('/api/sessions/:id/resume', async (req, res) => {
   const failedCleanup = failedResumeCleanups.get(sessionFile);
   if (failedCleanup) {
     try {
-      await tmux.killPaneAndWait(failedCleanup.socket, failedCleanup.paneId);
+      await tmux.killPaneAndWait(failedCleanup.socket, failedCleanup.paneId, {
+        knownProcesses: failedCleanup.knownProcesses,
+        timeout: failedCleanup.timeout,
+      });
       if (failedResumeCleanups.get(sessionFile) === failedCleanup) failedResumeCleanups.delete(sessionFile);
       invalidateRegistryCache();
     } catch (cleanupError) {
+      if (Array.isArray(cleanupError.remainingProcesses)) {
+        failedResumeCleanups.set(sessionFile, {
+          ...failedCleanup,
+          knownProcesses: cleanupError.remainingProcesses,
+        });
+      }
       return res.status(500).json({
         error: `Previous hidden tmux cleanup is still incomplete; refusing to resume another process against this session file: ${cleanupError.message}`,
       });

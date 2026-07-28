@@ -153,6 +153,84 @@ test('POST /api/sessions/new rejects a socket outside the tmux tmpdir', { skip: 
   assert.match(body.error, /invalid tmux socket/i);
 });
 
+test('invalid bridge socket configuration fails before tmux spawn or headless fallback', { skip: !tmuxOk }, async () => {
+  const workWindows = () => tmuxCmd(['list-windows', '-t', 'work']).split('\n').filter(Boolean).length;
+  const spawnExplicit = () => post('/api/sessions/new', {
+    target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+  });
+  const savedHome = process.env.HOME;
+  const savedSocketDir = process.env.PI_DISH_SOCKET_DIR;
+  const unsafeDir = path.join(tmpHome, 'shared-sockets');
+  fs.mkdirSync(unsafeDir, { recursive: true, mode: 0o755 });
+  fs.chmodSync(unsafeDir, 0o755);
+
+  try {
+    const cases = [
+      {
+        configure() { process.env.PI_DISH_SOCKET_DIR = 'relative/sockets'; },
+        pattern: /PI_DISH_SOCKET_DIR must be an absolute path/,
+      },
+      {
+        configure() { process.env.PI_DISH_SOCKET_DIR = path.join(os.tmpdir(), 'x'.repeat(120)); },
+        pattern: /Unix socket path is \d+ bytes \(maximum 103\)/,
+      },
+      {
+        configure() { process.env.PI_DISH_SOCKET_DIR = unsafeDir; },
+        pattern: /mode 0755, expected 0700/,
+      },
+      {
+        configure() {
+          delete process.env.PI_DISH_SOCKET_DIR;
+          process.env.HOME = path.join(os.tmpdir(), `long-home-${'x'.repeat(120)}`);
+        },
+        pattern: /Set PI_DISH_SOCKET_DIR to a short absolute directory/,
+      },
+    ];
+
+    for (const { configure, pattern } of cases) {
+      process.env.HOME = savedHome;
+      configure();
+      const before = workWindows();
+      const startedAt = Date.now();
+      const result = await spawnExplicit();
+      assert.equal(result.status, 500, JSON.stringify(result.body));
+      assert.match(result.body.error, pattern);
+      assert.equal(workWindows(), before, 'preflight creates no tmux window');
+      assert.ok(Date.now() - startedAt < 1000, 'preflight fails without registration timeout');
+    }
+
+    assert.equal(fs.statSync(unsafeDir).mode & 0o777, 0o755,
+      'existing shared override permissions were not mutated');
+
+    // Target-less hidden dispatch must surface the same configuration error,
+    // not silently launch an RPC child.
+    process.env.HOME = savedHome;
+    process.env.PI_DISH_SOCKET_DIR = 'relative/sockets';
+    const hidden = await post('/api/sessions/new', {});
+    assert.equal(hidden.status, 500, JSON.stringify(hidden.body));
+    assert.match(hidden.body.error, /PI_DISH_SOCKET_DIR must be an absolute path/);
+
+    // An old tmux server can retain environment values from before pi-dish
+    // started. Pinning an empty value makes the validated default path match
+    // the child bridge's effective path instead of inheriting a stale override.
+    delete process.env.PI_DISH_SOCKET_DIR;
+    tmuxCmd(['set-environment', '-g', 'PI_DISH_SOCKET_DIR', 'stale/relative/sockets']);
+    const pinned = await spawnExplicit();
+    assert.equal(pinned.status, 200, JSON.stringify(pinned.body));
+    const entry = JSON.parse(fs.readFileSync(
+      path.join(tmpHome, '.pi', 'dish', 'sessions', `${pinned.body.id}.json`),
+      'utf8',
+    ));
+    const childEnv = fs.readFileSync(`/proc/${entry.pid}/environ`).toString().split('\0');
+    assert.ok(childEnv.includes('PI_DISH_SOCKET_DIR='), 'child received the validated empty override');
+  } finally {
+    try { tmuxCmd(['set-environment', '-gu', 'PI_DISH_SOCKET_DIR']); } catch {}
+    process.env.HOME = savedHome;
+    if (savedSocketDir === undefined) delete process.env.PI_DISH_SOCKET_DIR;
+    else process.env.PI_DISH_SOCKET_DIR = savedSocketDir;
+  }
+});
+
 test('POST /api/sessions/:id/resume with a tmux target resumes into tmux', { skip: !tmuxOk }, async () => {
   // A historical session on disk to resume.
   const id = '2026-07-09T09-00-00-resume01';
@@ -275,21 +353,31 @@ test('hidden tmux timeout removes the pane before starting RPC fallback', { skip
   const rpcFixture = path.join(__dirname, 'fixtures', 'fake-rpc-pi.js');
   const router = `if [ "$1" = "--mode" ]; then exec ${process.execPath} ${rpcFixture} "$@"; else exec ${process.execPath} ${FIXTURE} "$@"; fi`;
   const startLog = path.join(tmpHome, 'hidden-fallback-rpc-starts.jsonl');
+  const survivorFile = path.join(tmpHome, 'hidden-fallback-survivor.pid');
   process.env.PI_DISH_SPAWN_TIMEOUT_MS = '450';
-  process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_NOREGISTER=1 PI_FIXTURE_START_LOG=${startLog} sh -c '${router}' --`;
-  const killPaneAndWait = tmux.killPaneAndWait;
+  process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_NOREGISTER=1 PI_FIXTURE_SURVIVOR_FILE=${survivorFile} PI_FIXTURE_START_LOG=${startLog} sh -c '${router}' --`;
+  let survivorPid = null;
   try {
-    // First simulate cleanup itself failing. This request must not fall back,
-    // and the failed placement must survive beyond the finished HTTP flight.
-    tmux.killPaneAndWait = async () => { throw new Error('simulated cleanup failure'); };
+    // kill-pane succeeds, but the real detached descendant survives. The
+    // request must quarantine its exact process identity and refuse fallback.
     const failed = await post(`/api/sessions/${id}/resume`, {});
     assert.equal(failed.status, 500, JSON.stringify(failed.body));
     assert.match(failed.body.error, /refusing to start an RPC fallback/i);
+    assert.match(failed.body.error, /pane gone.*processes still alive/i);
     assert.equal(fs.existsSync(startLog), false, 'cleanup failure starts no RPC process');
+    survivorPid = Number(fs.readFileSync(survivorFile, 'utf8'));
+    assert.ok(survivorPid, 'fixture descendant survived the pane');
+    assert.equal(countHiddenPanes(), before, 'tmux pane is gone despite surviving descendant');
 
-    // A retry self-heals the remembered old pane first. Only then may a new
-    // hidden attempt time out cleanly and fall back to RPC.
-    tmux.killPaneAndWait = killPaneAndWait;
+    const blockedRetry = await post(`/api/sessions/${id}/resume`, {});
+    assert.equal(blockedRetry.status, 500, JSON.stringify(blockedRetry.body));
+    assert.match(blockedRetry.body.error, /Previous hidden tmux cleanup is still incomplete/);
+    assert.equal(fs.existsSync(startLog), false, 'retry launches no RPC while descendant identity is alive');
+
+    process.kill(survivorPid, 'SIGKILL');
+    // The next hidden attempt should not create another survivor: after its
+    // ordinary timeout/cleanup, RPC fallback is finally safe.
+    process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_NOREGISTER=1 PI_FIXTURE_START_LOG=${startLog} sh -c '${router}' --`;
     const { status, body } = await post(`/api/sessions/${id}/resume`, {});
     assert.equal(status, 200, JSON.stringify(body));
     assert.equal(body.id, id);
@@ -301,9 +389,63 @@ test('hidden tmux timeout removes the pane before starting RPC fallback', { skip
     const closed = await post(`/api/sessions/${id}/close`, {});
     assert.equal(closed.status, 200, JSON.stringify(closed.body));
   } finally {
-    tmux.killPaneAndWait = killPaneAndWait;
+    if (survivorPid) { try { process.kill(survivorPid, 'SIGKILL'); } catch {} }
     delete process.env.PI_DISH_SPAWN_TIMEOUT_MS;
     process.env.PI_DISH_PI_COMMAND = `${process.execPath} ${FIXTURE}`;
+  }
+});
+
+test('pane-gone cleanup quarantine tracks surviving descendants by pid and starttime', { skip: !tmuxOk }, async () => {
+  const marker = path.join(tmpHome, `survivor-${Date.now()}.pid`);
+  const survivorCode = 'process.on("SIGHUP", () => {}); setInterval(() => {}, 1 << 30);';
+  const paneCode = [
+    'const fs = require("fs");',
+    'const { spawn } = require("child_process");',
+    `const child = spawn(${JSON.stringify(process.execPath)}, ["-e", ${JSON.stringify(survivorCode)}], { detached: true, stdio: "ignore" });`,
+    `fs.writeFileSync(${JSON.stringify(marker)}, String(child.pid));`,
+    'child.unref();',
+    'setInterval(() => {}, 1 << 30);',
+  ].join(' ');
+  const paneId = tmuxCmd([
+    'new-window', '-d', '-t', 'work', '-P', '-F', '#{pane_id}', '--', process.execPath, '-e', paneCode,
+  ]).trim();
+
+  let survivorPid = null;
+  let knownProcesses = [];
+  try {
+    for (let i = 0; i < 30 && !survivorPid; i++) {
+      try { survivorPid = Number(fs.readFileSync(marker, 'utf8')) || null; } catch {}
+      if (!survivorPid) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.ok(survivorPid, 'pane fixture spawned its detached descendant');
+
+    let firstError;
+    await assert.rejects(
+      () => tmux.killPaneAndWait(TMUX_SOCKET, paneId, { timeout: 250 }),
+      (error) => { firstError = error; return /pane gone.*processes still alive/.test(error.message); },
+    );
+    assert.equal(await tmux.paneExists(TMUX_SOCKET, paneId), false, 'tmux pane is gone');
+    knownProcesses = firstError.remainingProcesses;
+    const survivor = knownProcesses.find((identity) => identity.pid === survivorPid);
+    assert.match(survivor?.startTime || '', /^\d+$/, 'quarantine preserves /proc starttime');
+
+    await assert.rejects(
+      () => tmux.killPaneAndWait(TMUX_SOCKET, paneId, { timeout: 200, knownProcesses }),
+      /pane gone.*processes still alive/,
+      'retry remains blocked even though paneProcessId is now unavailable',
+    );
+
+    // A reused pid with a different starttime is not the quarantined writer.
+    await tmux.killPaneAndWait(TMUX_SOCKET, paneId, {
+      timeout: 100,
+      knownProcesses: [{ pid: survivorPid, startTime: '0' }],
+    });
+  } finally {
+    if (survivorPid) { try { process.kill(survivorPid, 'SIGKILL'); } catch {} }
+    if (knownProcesses.length) {
+      await tmux.killPaneAndWait(TMUX_SOCKET, paneId, { timeout: 1000, knownProcesses }).catch(() => {});
+    }
+    fs.rmSync(marker, { force: true });
   }
 });
 
