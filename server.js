@@ -1434,7 +1434,10 @@ app.post('/api/pages', (req, res) => {
     if (!associatedSessionId) {
       return res.status(400).json({ error: 'sessionId must be a non-empty string (max 512 characters)' });
     }
-    if (!sessionIsActive(associatedSessionId) && !findSessionFile(associatedSessionId)) {
+    // findSessionFile deliberately accepts partial route ids; persisted page
+    // associations must instead match the canonical JSONL basename exactly.
+    if (!sessionIsActive(associatedSessionId)
+        && !enumerateSessionCandidates().some(({ id }) => id === associatedSessionId)) {
       return res.status(404).json({ error: 'sessionId does not identify a known active or historical session' });
     }
   } else {

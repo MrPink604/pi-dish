@@ -684,6 +684,11 @@ test('POST /api/pages rejects malformed or unknown explicit sessionIds without c
   assert.equal(unknown.status, 404);
   assert.match(unknown.body.error, /known active or historical session/);
 
+  const historicalPrefix = REAL_CWD_ID.slice(0, -4);
+  assert.ok(REAL_CWD_ID.startsWith(historicalPrefix));
+  const partial = await post('/api/pages', { path: artifact, sessionId: historicalPrefix });
+  assert.equal(partial.status, 404, 'a prefix of a historical JSONL basename is not a valid association');
+
   const list = await get('/api/pages');
   assert.ok(!list.body.some((page) => page.root === artifact), 'an invalid association creates no page record');
 });
@@ -697,9 +702,9 @@ test('POST /api/pages with an invalid explicit sessionId cannot mutate an existi
   assert.equal(published.status, 200);
 
   const rejected = await post('/api/pages', {
-    path: artifact, sessionId: 'missing-page-session', title: 'Poisoned title',
+    path: artifact, sessionId: REAL_CWD_ID.slice(0, -4), title: 'Poisoned title',
   });
-  assert.equal(rejected.status, 404);
+  assert.equal(rejected.status, 404, 'a historical id prefix is rejected before persistence');
 
   const list = await get('/api/pages');
   const preserved = list.body.find((page) => page.token === published.body.token);
