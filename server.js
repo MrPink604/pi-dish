@@ -17,7 +17,7 @@ const {
 } = require('./lib/bridge-session');
 const { searchFiles, searchHomeDirs, completePath, isPathCompletionToken } = require('./lib/file-search');
 const { resolveFileMention, readFileForViewer } = require('./lib/file-mention');
-const { aggregateDiffs, getFilePatch } = require('./lib/git-diff');
+const { aggregateDiffs, getFilePatch, getDiffVersion } = require('./lib/git-diff');
 const terminal = require('./lib/terminal');
 const tmux = require('./lib/tmux');
 const shares = require('./lib/shares');
@@ -26,6 +26,7 @@ const comments = require('./lib/comments');
 const {
   getSessionInfo,
   readSessionMessages,
+  readSessionMessageById,
   getSessionStats,
   readSessionCwd,
   decodeDirToCwd,
@@ -788,9 +789,16 @@ app.put('/api/settings', (req, res) => {
 // paginated JSON so the browser can decode/cache them as resources and defer
 // off-screen images with loading=lazy. Streaming events still carry inline
 // data; only authoritative JSONL-backed responses are projected this way.
+const VALID_ENTRY_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,198}[A-Za-z0-9])?$/;
+
 function messageForClient(sessionId, message, index) {
   if (!Array.isArray(message.content)) return { ...message, index };
   let changed = false;
+  // Current Pi JSONL entries have collision-checked IDs. Keep the positional
+  // fallback for legacy pre-tree sessions, whose append-only stream cannot be
+  // reshuffled by branch navigation.
+  const resourceId = typeof message.id === 'string' && VALID_ENTRY_ID_RE.test(message.id)
+    ? message.id : String(index);
   const content = message.content.map((block, blockIndex) => {
     if (!block || block.type !== 'image' || typeof block.data !== 'string' || !block.data) return block;
     changed = true;
@@ -798,22 +806,27 @@ function messageForClient(sessionId, message, index) {
     return {
       ...metadata,
       mimeType: block.mimeType || 'image/png',
-      url: `/api/sessions/${encodeURIComponent(sessionId)}/messages/${index}/images/${blockIndex}`,
+      url: `/api/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(resourceId)}/images/${blockIndex}`,
     };
   });
   return { ...message, ...(changed ? { content } : {}), index };
 }
 
-app.get('/api/sessions/:id/messages/:messageIndex/images/:blockIndex', (req, res) => {
-  const messageIndex = Number(req.params.messageIndex);
+app.get('/api/sessions/:id/messages/:messageId/images/:blockIndex', (req, res) => {
+  const messageId = req.params.messageId;
   const blockIndex = Number(req.params.blockIndex);
-  if (!Number.isInteger(messageIndex) || messageIndex < 0 ||
-      !Number.isInteger(blockIndex) || blockIndex < 0) {
-    return res.status(400).json({ error: 'valid message and image indexes required' });
+  if (!VALID_ENTRY_ID_RE.test(messageId) || !Number.isInteger(blockIndex) || blockIndex < 0) {
+    return res.status(400).json({ error: 'valid message id and image index required' });
   }
   const sessionFile = findSessionFile(req.params.id);
   if (!sessionFile) return res.status(404).json({ error: 'Session not found' });
-  const block = readSessionMessages(sessionFile)[messageIndex]?.content?.[blockIndex];
+  let message = readSessionMessageById(sessionFile, messageId);
+  // Nearly-free compatibility for URLs emitted for legacy id-less sessions.
+  if (!message && /^\d+$/.test(messageId)) {
+    const legacyIndex = Number(messageId);
+    if (Number.isSafeInteger(legacyIndex)) message = readSessionMessages(sessionFile)[legacyIndex];
+  }
+  const block = message?.content?.[blockIndex];
   if (!block || block.type !== 'image' || typeof block.data !== 'string' || !block.data) {
     return res.status(404).json({ error: 'Image not found' });
   }
@@ -2016,43 +2029,59 @@ app.get('/api/sessions/:id/file', async (req, res) => {
 
 const DIFF_INLINE_FILE_LIMIT = 6;
 const DIFF_SNAPSHOT_TTL_MS = 60 * 1000;
-const diffSnapshots = new Map(); // sessionId -> { cwd, at, data }
+const diffSnapshots = new Map(); // sessionId -> { id, cwd, at, version, data }
 
 function rememberDiffSnapshot(sessionId, cwd, data) {
+  const { version, ...clientData } = data;
+  const snapshot = {
+    id: crypto.randomBytes(12).toString('hex'),
+    cwd,
+    at: Date.now(),
+    version,
+    data: clientData,
+  };
   diffSnapshots.delete(sessionId);
-  diffSnapshots.set(sessionId, { cwd, at: Date.now(), data });
+  diffSnapshots.set(sessionId, snapshot);
   while (diffSnapshots.size > 4) diffSnapshots.delete(diffSnapshots.keys().next().value);
+  return snapshot;
+}
+
+function staleDiffResponse(res) {
+  return res.status(409).json({
+    stale: true,
+    error: 'The working tree changed since this diff was loaded; refresh the diff pane.',
+  });
 }
 
 // A large pane receives metadata first. Patch lookup selects from the exact
-// aggregate snapshot used for that response (rather than accepting a path to
-// pass to git), preserving both security and within-pane consistency.
+// aggregate snapshot used for that response (rather than accepting an
+// arbitrary path). The working-tree version is checked around patch creation;
+// drift returns an explicit stale response instead of mixing snapshots.
 app.get('/api/sessions/:id/diff/patch', async (req, res) => {
   try {
     const repoPath = String(req.query.repo || '');
     const filePath = String(req.query.path || '');
-    if (!repoPath || !filePath || repoPath.length > 2048 || filePath.length > 4096) {
-      return res.status(400).json({ error: 'repo and path required' });
+    const snapshotId = String(req.query.snapshot || '');
+    if (!repoPath || !filePath || !/^[a-f0-9]{24}$/.test(snapshotId) ||
+        repoPath.length > 2048 || filePath.length > 4096) {
+      return res.status(400).json({ error: 'repo, path, and snapshot required' });
     }
     const cwd = resolveSessionCwd(req.params.id);
     if (!cwd) return res.status(404).json({ error: 'Session cwd unknown' });
-    let snapshot = diffSnapshots.get(req.params.id);
-    if (!snapshot || snapshot.cwd !== cwd || Date.now() - snapshot.at > DIFF_SNAPSHOT_TTL_MS) {
-      const data = await aggregateDiffs(cwd, { inlineLimit: DIFF_INLINE_FILE_LIMIT });
-      rememberDiffSnapshot(req.params.id, cwd, data);
-      snapshot = diffSnapshots.get(req.params.id);
-    } else {
-      // Browsing a large diff means patch fetches spread over minutes: touch
-      // the snapshot on every hit (re-stamps `at` and its eviction order), or
-      // the TTL/insertion-order eviction silently swaps in a rebuild of a
-      // changed tree that no longer matches the summary the pane is showing.
-      rememberDiffSnapshot(req.params.id, cwd, snapshot.data);
-    }
+    const snapshot = diffSnapshots.get(req.params.id);
+    if (!snapshot || snapshot.id !== snapshotId || snapshot.cwd !== cwd ||
+        Date.now() - snapshot.at > DIFF_SNAPSHOT_TTL_MS) return staleDiffResponse(res);
     const repo = snapshot.data.repos.find(item => item.path === repoPath);
     const file = repo?.files.find(item => item.path === filePath);
     if (!repo || !file) return res.status(404).json({ error: 'Patch not found' });
+    if (await getDiffVersion(cwd) !== snapshot.version) return staleDiffResponse(res);
     const patch = file.patch ? file : await getFilePatch(path.resolve(cwd, repo.path), file);
+    if (await getDiffVersion(cwd) !== snapshot.version) return staleDiffResponse(res);
     if (!patch?.patch) return res.status(404).json({ error: 'Patch not found' });
+    // Sliding TTL and LRU recency without replacing the snapshot identity.
+    snapshot.at = Date.now();
+    diffSnapshots.delete(req.params.id);
+    diffSnapshots.set(req.params.id, snapshot);
     res.json({ patch: patch.patch, truncated: !!patch.truncated, binary: !!patch.binary });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -2068,8 +2097,8 @@ app.get('/api/sessions/:id/diff', async (req, res) => {
     const cwd = resolveSessionCwd(req.params.id);
     if (!cwd) return res.status(404).json({ error: 'Session cwd unknown' });
     const data = await aggregateDiffs(cwd, { inlineLimit: DIFF_INLINE_FILE_LIMIT });
-    rememberDiffSnapshot(req.params.id, cwd, data);
-    res.json(data);
+    const snapshot = rememberDiffSnapshot(req.params.id, cwd, data);
+    res.json({ ...snapshot.data, snapshotId: snapshot.id });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
