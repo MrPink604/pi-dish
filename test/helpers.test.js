@@ -345,6 +345,22 @@ test('parseSessionQuery keeps unknown prefixes and bad dates literal', () => {
   assert.deepEqual(empty, { terms: [], since: null, before: null });
 });
 
+test('parseSessionQuery accepts only real ISO calendar dates', () => {
+  const p = H.parseSessionQuery(
+    'since:2024-02-29 before:2026-02-31 since:2026-02-29 before:2026-13-01 since:2026-04-31 before:2026-01-00',
+  );
+  assert.equal(p.since, new Date('2024-02-29T00:00:00').getTime(),
+    'a valid leap day keeps local-midnight semantics');
+  assert.equal(p.before, null);
+  assert.deepEqual(p.terms, [
+    { neg: false, field: null, value: 'before:2026-02-31' },
+    { neg: false, field: null, value: 'since:2026-02-29' },
+    { neg: false, field: null, value: 'before:2026-13-01' },
+    { neg: false, field: null, value: 'since:2026-04-31' },
+    { neg: false, field: null, value: 'before:2026-01-00' },
+  ], 'impossible ISO values fall back to documented literal terms');
+});
+
 test('parseSessionQuery ANDs repeated date bounds (max since, min before)', () => {
   const now = new Date('2026-07-21T12:00:00').getTime();
   const p = H.parseSessionQuery('since:7d since:1d before:2026-07-01 before:2026-06-01', now);

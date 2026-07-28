@@ -256,7 +256,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   searchViewInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') onSearchViewInput({ immediate: true }); });
   document.getElementById('searchViewBody').addEventListener('click', (e) => {
     const card = e.target.closest('.search-result');
-    if (card) openSearchResult(card.dataset.id);
+    if (card) openSearchResult(card.dataset.id, card.dataset.contentMatches === '1');
   });
 
   promptInput.addEventListener('blur', () => { setTimeout(hideAutocomplete, 200); });
@@ -469,6 +469,7 @@ async function loadSavedFilters() {
     localStorage.setItem('pi-dish-saved-filters-cache', JSON.stringify(savedFilters));
     renderScopeChips();
     renderSessions();
+    if (isSearchViewOpen()) runSearchView();
   } catch (e) { console.error('Failed to load saved filters:', e); }
 }
 
@@ -483,6 +484,7 @@ async function persistSavedFilters(next) {
   localStorage.setItem('pi-dish-saved-filters-cache', JSON.stringify(savedFilters));
   renderScopeChips();
   renderSessions();
+  if (isSearchViewOpen()) runSearchView();
 }
 
 /** The combined query of every active scope ('' when none apply). */
@@ -496,6 +498,7 @@ function toggleScope(name) {
   localStorage.setItem('pi-dish-active-scopes', JSON.stringify([...activeScopes]));
   renderScopeChips();
   renderSessions();
+  if (isSearchViewOpen()) runSearchView();
 }
 
 async function saveCurrentFilterAsScope() {
@@ -1298,19 +1301,25 @@ function updateSearchCount(msg) {
     : (search.query ? 'no matches' : '');
 }
 
-async function runSessionSearch(query) {
+async function runSessionSearch(query, { mode = 'message', closeIfEmpty = false } = {}) {
   if (!currentSession) return;
+  const sessionId = currentSession.id;
   updateSearchCount('searching…');
   try {
-    const res = await fetch(`/api/sessions/${currentSession.id}/search?q=${encodeURIComponent(query)}`);
+    const params = new URLSearchParams({ q: query });
+    if (mode !== 'message') params.set('mode', mode);
+    const res = await fetch(`/api/sessions/${sessionId}/search?${params}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
+    if (currentSession?.id !== sessionId) return;
     search.query = query;
     search.matches = visibleSearchMatchesOf(data.matches || []);
     search.pos = search.matches.length - 1; // start from the latest match
     if (search.matches.length) await jumpToSearchResult();
+    else if (closeIfEmpty) { closeSearch(); return; }
     updateSearchCount();
   } catch (e) {
+    if (currentSession?.id !== sessionId) return;
     updateSearchCount('search failed');
     console.error('Session search failed:', e);
   }
@@ -1514,10 +1523,11 @@ async function renderPreferences() {
 // (they rewrite the query text, which stays the single source of truth),
 // and click-through that opens the session and hands the positive tokens to
 // the in-session search so the reader lands on the match. `<main>`-level
-// like the usage view because search isn't session-scoped; active scopes
-// keep applying here (client-side, with the same hidden-count audit note).
+// like the usage view because search isn't session-scoped; active scopes are
+// sent separately so the server applies them before its result cap.
 let searchViewSeq = 0;
 let searchViewQuery = '';
+let searchViewRenderedQuery = '';
 let searchViewTimer = null;
 let searchViewRepollTimer = null;
 
@@ -1552,15 +1562,21 @@ function onSearchViewInput({ immediate = false } = {}) {
 
 async function runSearchView() {
   const seq = ++searchViewSeq;
+  const query = searchViewQuery.trim();
+  const scope = scopeQuery().trim();
   const body = document.getElementById('searchViewBody');
   if (body.childElementCount) body.classList.add('usage-refreshing');
   else body.innerHTML = '<div class="usage-state">Searching…</div>';
   try {
-    const r = await fetch('/api/search?q=' + encodeURIComponent(searchViewQuery.trim()));
+    const params = new URLSearchParams({ q: query });
+    if (scope) params.set('scope', scope);
+    const r = await fetch('/api/search?' + params);
     if (!r.ok) throw new Error(await r.json().then(d => d.error, () => null) || `HTTP ${r.status}`);
     const d = await r.json();
-    if (seq !== searchViewSeq || !isSearchViewOpen()) return;
-    renderSearchView(d);
+    if (seq !== searchViewSeq || !isSearchViewOpen() ||
+        query !== searchViewQuery.trim() || scope !== scopeQuery().trim()) return;
+    searchViewRenderedQuery = query;
+    renderSearchView(d, query);
     if (d.indexing) searchViewRepollTimer = setTimeout(() => { if (isSearchViewOpen()) runSearchView(); }, 1000);
   } catch (e) {
     if (seq !== searchViewSeq || !isSearchViewOpen()) return;
@@ -1631,14 +1647,12 @@ function renderSearchFacetsHtml() {
   </div>`;
 }
 
-function renderSearchView(d) {
+function renderSearchView(d, query = searchViewQuery) {
   const body = document.getElementById('searchViewBody');
   body.classList.remove('usage-refreshing');
-  const tokens = positiveQueryTokens(parseSessionQuery(searchViewQuery));
-  const sq = scopeQuery();
-  const scopeParsed = sq ? parseSessionQuery(sq) : null;
-  const shown = scopeParsed ? d.results.filter(s => evaluateSessionQuery(scopeParsed, s)) : d.results;
-  const scopesHidden = d.results.length - shown.length;
+  const tokens = positiveQueryTokens(parseSessionQuery(query));
+  const shown = d.results || [];
+  const scopesHidden = Number(d.hiddenByScopes) || 0;
 
   const cards = shown.map(s => {
     let dot = '';
@@ -1648,7 +1662,7 @@ function renderSearchView(d) {
       ? `<span class="search-result-count">${s.matchCount} ${s.matchCount === 1 ? 'match' : 'matches'}</span>` : '';
     const snippets = (s.snippets || []).map(sn =>
       `<div class="search-result-snippet">${highlightTokens(sn, tokens)}</div>`).join('');
-    return `<div class="search-result" data-id="${escapeHtml(s.id)}">
+    return `<div class="search-result" data-id="${escapeHtml(s.id)}" data-content-matches="${s.matchCount > 0 ? '1' : '0'}">
       <div class="search-result-header">
         ${dot}<span class="search-result-name">${highlightTokens(s.name || 'Unnamed', tokens)}</span>
         ${count}<span class="search-result-time">${formatRelativeTime(s.lastActivity)}</span>
@@ -1680,18 +1694,18 @@ function renderSearchView(d) {
  * had text terms — hand them to the in-session search so the reader lands on
  * the actual match instead of at the transcript's tail.
  */
-async function openSearchResult(id) {
-  const tokens = positiveQueryTokens(parseSessionQuery(searchViewQuery));
+async function openSearchResult(id, hasContentMatches) {
+  const tokens = positiveQueryTokens(parseSessionQuery(searchViewRenderedQuery));
   closeSearchView();
   // Search results span the whole corpus; the sidebar lists may be narrowed
   // (or Active-tab-only) right now, and selectSession validates against them.
   if (!findSession(id)) await loadSessions(undefined, { withPrevious: true });
   await selectSession(id);
-  if (tokens.length && currentSession?.id === id) {
+  if (tokens.length && hasContentMatches && currentSession?.id === id) {
     openSearch();
     const input = document.getElementById('searchInput');
     input.value = tokens.join(' ');
-    runSessionSearch(input.value.trim().toLowerCase());
+    await runSessionSearch(input.value.trim().toLowerCase(), { mode: 'any', closeIfEmpty: true });
   }
 }
 

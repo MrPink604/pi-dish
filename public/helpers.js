@@ -408,7 +408,12 @@ function parseQueryDate(value, now) {
     const ms = Number(rel[1]) * { h: 3600e3, d: 86400e3, w: 7 * 86400e3 }[rel[2]];
     return now - ms;
   }
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (iso) {
+    const year = Number(iso[1]), month = Number(iso[2]), day = Number(iso[3]);
+    const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    const maxDay = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+    if (!maxDay || day < 1 || day > maxDay) return null;
     const t = new Date(value + 'T00:00:00').getTime();
     return Number.isFinite(t) ? t : null;
   }
