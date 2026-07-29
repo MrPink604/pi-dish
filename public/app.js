@@ -10,6 +10,15 @@ let currentSession = null;
 // Provisional rows for asynchronous Pi launches. They are presentation state,
 // not sessions: the durable source of truth remains tmux + the bridge registry.
 const pendingSessionSpawns = new Map(); // spawn id -> { cwd, target }
+let currentSessionSpawnId = null;
+// Spawn operations are server-process-local and cannot be resumed after a
+// page reload, so their old draft keys have no view that could restore them.
+try {
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const key = localStorage.key(i);
+    if (key?.startsWith('pi-dish-draft-spawn:')) localStorage.removeItem(key);
+  }
+} catch {}
 // Every selection, including a forced reload of the same session, owns a new
 // generation. Async transcript/stream work may mutate the pane only while its
 // generation still owns it; comparing the session id alone is not enough.
@@ -241,8 +250,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (header) { if (header.dataset.cwd) toggleGroupCollapsed(header.dataset.cwd); return; }
     const item = e.target.closest('.session-item');
     if (!item) return;
-    if (item.classList.contains('starting')) return;
-    selectSession(item.dataset.id);
+    if (item.classList.contains('starting')) showPendingSessionView(item.dataset.spawnId);
+    else selectSession(item.dataset.id);
     if (window.innerWidth <= 768) closeSidebar();
   });
 
@@ -312,6 +321,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 // =========================================================================
 
 function handleAutocomplete(text) {
+  // A provisional composer has no session cwd or live command set yet.
+  if (currentSessionSpawnId) { hideAutocomplete(); return; }
   // @token ending at the caret → file mention
   const input = document.getElementById('promptInput');
   const caret = input.selectionStart ?? text.length;
@@ -730,7 +741,7 @@ function renderSessionItem(session, opts = {}) {
 function renderPendingSessionItem(spawnId, spawn) {
   const cwd = spawn.cwd || '~';
   return `
-    <div class="session-item starting" data-spawn-id="${escapeHtml(spawnId)}">
+    <div class="session-item starting${currentSessionSpawnId === spawnId ? ' active' : ''}" data-spawn-id="${escapeHtml(spawnId)}">
       <div class="session-item-header">
         <span class="session-item-status working" title="Starting session"></span>
         <span class="session-item-name">Starting session…</span>
@@ -1026,6 +1037,103 @@ function mergeCurrentSession(id, fields) {
 // Session Selection
 // =========================================================================
 
+function pendingComposerKey(spawnId) { return `spawn:${spawnId}`; }
+
+// Show a usable pane before the bridge has produced a real session id. Keep
+// currentSession null so no transcript/stream/action can accidentally target
+// the operation id; only the composer is owned by the provisional key.
+function showPendingSessionView(spawnId) {
+  const spawn = pendingSessionSpawns.get(spawnId);
+  if (!spawn) return;
+  sessionSelectionGeneration += 1;
+  loadingOlder = false;
+  loadingOlderGeneration += 1;
+  stashPromptState();
+  cancelStreamingRender();
+  closeSearch();
+  closeDiffView();
+  closeFileView();
+  closeStatsModal();
+  closeUsageView();
+  closeSearchView();
+  stashCurrentTranscript();
+  setCurrentSession(null);
+  currentSessionSpawnId = spawnId;
+
+  if (streamReconnectTimeout) { clearTimeout(streamReconnectTimeout); streamReconnectTimeout = null; }
+  if (messageStream) { messageStream.close(); messageStream = null; }
+  followStream = false;
+  closeTerminal();
+  clearExtensionUI();
+  closeControlPanel();
+  hideAutocomplete();
+  modelsSeq += 1;
+  commandsSeq += 1;
+
+  document.getElementById('emptyState').style.display = 'none';
+  document.getElementById('sessionView').style.display = 'flex';
+  document.querySelector('.input-area').style.display = '';
+  document.getElementById('resumeBar').style.display = 'none';
+  document.querySelector('.session-actions').style.display = 'none';
+
+  renderQueueStatus(null);
+  setCompacting(false);
+  setTurnInProgress(false);
+  sessionArtifacts = { pages: [], share: null };
+  updateArtifactsBadge();
+  refreshSessionSpend();
+
+  const nameEl = document.getElementById('sessionName');
+  nameEl.textContent = 'Starting session…';
+  nameEl.classList.remove('editable-name');
+  nameEl.title = '';
+  nameEl.onclick = null;
+  const modelBtn = document.getElementById('sessionModel');
+  modelBtn.textContent = 'Pi starting';
+  modelBtn.onclick = null;
+  modelBtn.style.cursor = 'default';
+  document.getElementById('sessionMsgCount').textContent = '0 msgs';
+  document.getElementById('sessionContext').textContent = '0%';
+  document.getElementById('sessionContext').className = 'badge badge-context';
+  document.getElementById('sessionContextBar').textContent = '0%';
+  document.getElementById('sessionContextBar').className = 'badge badge-context';
+  document.getElementById('sessionSpendBadge').style.display = 'none';
+  updateThinkingBadges();
+  updateTerminalButtons();
+
+  oldestLoadedIndex = null;
+  lastLoadedIndex = null;
+  hasMoreOlder = false;
+  totalMessages = 0;
+  setMoodIndicator('', '');
+  const targetLabel = spawn.target ? 'tmux' : 'the headless session';
+  document.getElementById('messages').innerHTML = `<div class="empty-state pending-session-state" style="padding: 48px;">
+    <p>Starting Pi in ${targetLabel}…</p>
+    <small>You can write your prompt while it starts.</small>
+  </div>`;
+
+  restorePromptState(pendingComposerKey(spawnId));
+  setComposerWaiting(true);
+  setStatus('Pi is starting — your draft will be ready when it connects', 'working');
+  renderSessions();
+  document.getElementById('promptInput').focus();
+}
+
+function showPendingSessionFailure(spawnId, message) {
+  if (currentSessionSpawnId !== spawnId) return;
+  document.getElementById('sessionName').textContent = 'Session failed to start';
+  document.getElementById('messages').innerHTML = `<div class="empty-state pending-session-state" style="padding: 48px;">
+    <p>Pi could not start.</p>
+    <small>${escapeHtml(message)}</small>
+  </div>`;
+  const input = document.getElementById('promptInput');
+  input.placeholder = 'Your draft is preserved here so you can copy it';
+  const btn = document.getElementById('btnSend');
+  btn.disabled = true;
+  btn.textContent = 'Not started';
+  btn.title = message;
+}
+
 async function selectSession(id, { forceTranscriptReload = false } = {}) {
   // Validate the target before tearing anything down: a stale id (a resume
   // racing a filtered refresh, a pruned session) must leave the current view
@@ -1035,6 +1143,8 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
   loadingOlder = false;
   loadingOlderGeneration += 1;
   stashPromptState();
+  currentSessionSpawnId = null;
+  setComposerWaiting(false);
   // Search marks are transient UI, but the pages search loaded are not. Clear
   // the marks before moving the current transcript into its short-lived DOM
   // cache so revisiting restores clean, already-finalized message nodes.
@@ -4418,6 +4528,16 @@ function clearPromptComposer() {
   renderAttachmentStrip();
 }
 
+function setComposerWaiting(waiting) {
+  const input = document.getElementById('promptInput');
+  if (input) input.placeholder = waiting ? 'Write your prompt while Pi starts…' : 'Send a message...';
+  const btn = document.getElementById('btnSend');
+  if (!btn) return;
+  btn.disabled = waiting;
+  btn.textContent = waiting ? 'Starting…' : 'Send';
+  btn.title = waiting ? 'Your draft will be preserved until Pi connects' : '';
+}
+
 function saveDraftSoon() {
   clearTimeout(draftSaveTimer);
   const sessionId = composerSessionId;
@@ -4437,20 +4557,21 @@ function clearDraft(sessionId = composerSessionId) {
 }
 
 /** On session switch: load that session's draft + history into the input. */
-function restorePromptState() {
+function restorePromptState(ownerId = currentSession?.id) {
+  if (!ownerId) return;
   const input = document.getElementById('promptInput');
-  composerSessionId = currentSession.id;
+  composerSessionId = ownerId;
   composerDraftDirty = false;
   let draft = '';
-  try { draft = localStorage.getItem(draftKey(currentSession.id)) || ''; } catch {}
+  try { draft = localStorage.getItem(draftKey(ownerId)) || ''; } catch {}
   input.value = draft;
-  pendingImages = pendingImagesBySession.get(currentSession.id) || [];
-  pendingImagesBySession.delete(currentSession.id);
+  pendingImages = pendingImagesBySession.get(ownerId) || [];
+  pendingImagesBySession.delete(ownerId);
   renderAttachmentStrip();
   autosizePromptInput(input);
   historyIndex = -1;
   historyStash = '';
-  promptHistory = readJSONPref(historyKey(currentSession.id), []);
+  promptHistory = readJSONPref(historyKey(ownerId), []);
   if (!Array.isArray(promptHistory)) promptHistory = [];
 }
 
@@ -4465,6 +4586,37 @@ function mergeComposerText(existing, restored) {
   const current = (existing || '').trim();
   if (!current || current === restored) return restored;
   return `${existing}\n\n${restored}`;
+}
+
+function migratePromptState(fromId, toId) {
+  let sourceDraft = '', destinationDraft = '';
+  try {
+    sourceDraft = localStorage.getItem(draftKey(fromId)) || '';
+    destinationDraft = localStorage.getItem(draftKey(toId)) || '';
+    localStorage.removeItem(draftKey(fromId));
+  } catch {}
+  const destinationVisible = composerSessionId === toId && currentSession?.id === toId;
+  if (sourceDraft) {
+    const input = document.getElementById('promptInput');
+    const merged = mergeComposerText(destinationVisible ? input.value : destinationDraft, sourceDraft);
+    writeSessionDraft(toId, merged);
+    if (destinationVisible) {
+      input.value = merged;
+      composerDraftDirty = false;
+      autosizePromptInput(input);
+    }
+  }
+
+  const sourceImages = pendingImagesBySession.get(fromId) || [];
+  if (sourceImages.length) {
+    if (destinationVisible) {
+      pendingImages = sourceImages.concat(pendingImages);
+      renderAttachmentStrip();
+    } else {
+      pendingImagesBySession.set(toId, sourceImages.concat(pendingImagesBySession.get(toId) || []));
+    }
+  }
+  pendingImagesBySession.delete(fromId);
 }
 
 // Failed sends and queue edits complete asynchronously. Restore their payload
@@ -4536,6 +4688,15 @@ function consumePendingSelfEcho(sessionId, message) {
 async function sendPrompt() {
   const input = document.getElementById('promptInput');
   const message = input.value.trim();
+  if (currentSessionSpawnId) {
+    if (message || pendingImages.length) {
+      const starting = pendingSessionSpawns.has(currentSessionSpawnId);
+      setStatus(starting
+        ? 'Pi is still starting — your prompt is saved'
+        : 'Pi did not start — your prompt is preserved', starting ? 'working' : 'error');
+    }
+    return;
+  }
   if ((!message && !pendingImages.length) || !currentSession) return;
   const sessionId = currentSession.id;
   const selectionGeneration = sessionSelectionGeneration;
@@ -4746,6 +4907,15 @@ async function sendQueuedMessage(kind) {
   const steer = kind === 'steer';
   const input = document.getElementById('promptInput');
   const message = input.value.trim();
+  if (currentSessionSpawnId) {
+    if (message || pendingImages.length) {
+      const starting = pendingSessionSpawns.has(currentSessionSpawnId);
+      setStatus(starting
+        ? 'Pi is still starting — your prompt is saved'
+        : 'Pi did not start — your prompt is preserved', starting ? 'working' : 'error');
+    }
+    return;
+  }
   if ((!message && !pendingImages.length) || !currentSession || !currentSession.isActive) return;
   const sessionId = currentSession.id;
   const selectionGeneration = sessionSelectionGeneration;
@@ -4878,10 +5048,16 @@ async function abortTurn() {
 
 const SESSION_SPAWN_POLL_MS = 250;
 
-async function monitorSessionSpawn(spawnId, selectionGeneration) {
+async function monitorSessionSpawn(spawnId) {
   try {
     for (;;) {
-      const res = await fetch(`/api/session-spawns/${encodeURIComponent(spawnId)}`);
+      let res;
+      try {
+        res = await fetch(`/api/session-spawns/${encodeURIComponent(spawnId)}`);
+      } catch {
+        await new Promise(r => setTimeout(r, SESSION_SPAWN_POLL_MS));
+        continue;
+      }
       const data = await res.json().catch(() => ({}));
       if (!res.ok && res.status !== 202) throw new Error(data.error || `spawn status failed (${res.status})`);
       if (data.status === 'starting') {
@@ -4889,32 +5065,46 @@ async function monitorSessionSpawn(spawnId, selectionGeneration) {
         continue;
       }
 
-      pendingSessionSpawns.delete(spawnId);
-      renderSessions();
       if (data.status === 'error') throw new Error(data.error || 'Session failed to start');
       if (data.status !== 'ready' || !data.sessionId) throw new Error('Session spawn returned an invalid result');
 
-      setStatus('Session created');
       // Registration is already complete, but ride out any overlapping list
       // request before selecting the authoritative session row.
-      for (let attempt = 0; attempt < 10; attempt++) {
+      for (;;) {
         await loadSessions();
         if (findSession(data.sessionId)) {
-          // Do not yank the user away if they selected another session while
-          // this process was starting. Starting several sessions also selects
-          // only whichever one becomes ready first.
-          if (sessionSelectionGeneration === selectionGeneration) selectSession(data.sessionId);
+          pendingSessionSpawns.delete(spawnId);
+          renderSessions();
+          const showingSpawn = currentSessionSpawnId === spawnId;
+          // Capture the visible provisional composer before moving its draft
+          // and attachments onto the bridge's authoritative session id.
+          if (showingSpawn) stashPromptState();
+          migratePromptState(pendingComposerKey(spawnId), data.sessionId);
+          // Do not yank the user away if they selected another session (or a
+          // newer spawn) while this process was starting.
+          if (showingSpawn) {
+            setStatus('Session created');
+            selectSession(data.sessionId);
+          }
           return;
+        }
+        if (currentSessionSpawnId === spawnId) {
+          setStatus('Session created — connecting the UI…', 'working');
         }
         await new Promise(r => setTimeout(r, SESSION_SPAWN_POLL_MS));
       }
-      setStatus('Session started but is not visible yet — try refreshing', 'error');
-      return;
     }
   } catch (e) {
     pendingSessionSpawns.delete(spawnId);
     renderSessions();
-    setStatus(`Session start failed: ${e.message}`, 'error');
+    if (currentSessionSpawnId === spawnId) {
+      showPendingSessionFailure(spawnId, e.message);
+      setStatus(`Session start failed: ${e.message}`, 'error');
+    } else {
+      const ownerId = pendingComposerKey(spawnId);
+      clearDraft(ownerId);
+      pendingImagesBySession.delete(ownerId);
+    }
   }
 }
 
@@ -4945,9 +5135,9 @@ async function createSession(cwd) {
       target: !!target,
     });
     switchTab('active');
-    renderSessions();
-    setStatus(target ? 'Session starting in tmux…' : 'Session starting…', 'working');
-    void monitorSessionSpawn(data.spawnId, sessionSelectionGeneration);
+    showPendingSessionView(data.spawnId);
+    if (window.innerWidth <= 768) closeSidebar();
+    void monitorSessionSpawn(data.spawnId);
   } catch (e) { setStatus(`Error: ${e.message}`, 'error'); }
 }
 

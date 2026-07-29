@@ -554,12 +554,12 @@ body.sidebar-open {
 }
 
 .session-item.starting {
-  cursor: default;
+  cursor: pointer;
   opacity: 0.8;
 }
 
 .session-item.starting:hover {
-  background: transparent;
+  background: var(--bg-hover);
 }
 
 .session-item-header {
@@ -1895,6 +1895,15 @@ body.sidebar-open {
 
 .btn-primary:hover {
   background: var(--accent-dim);
+}
+
+#btnSend:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+#btnSend:disabled:hover {
+  background: var(--accent);
 }
 
 .btn-sm {

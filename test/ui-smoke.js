@@ -786,7 +786,7 @@ function writeRegistry(patch = {}) {
 
     // New-session display is decoupled from durable tmux startup: the POST
     // returns a provisional operation and the sidebar owns the readiness wait.
-    let finishSpawn = false;
+    let spawnResult = 'starting';
     let readySpawnPolled = false;
     let asyncSpawnBody = null;
     await desktop.route('**/api/sessions/new', async (route) => {
@@ -794,11 +794,13 @@ function writeRegistry(patch = {}) {
       await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ success: true, pending: true, spawnId: 'ui-spawn-1' }) });
     });
     await desktop.route('**/api/session-spawns/ui-spawn-1', async (route) => {
-      if (finishSpawn) readySpawnPolled = true;
-      const result = finishSpawn
+      if (spawnResult === 'ready') readySpawnPolled = true;
+      const result = spawnResult === 'ready'
         ? { status: 'ready', sessionId: SESSION_ID }
-        : { status: 'starting', createdAt: Date.now() };
-      await route.fulfill({ status: finishSpawn ? 200 : 202, contentType: 'application/json', body: JSON.stringify(result) });
+        : spawnResult === 'error'
+          ? { status: 'error', error: 'fixture launch failed' }
+          : { status: 'starting', createdAt: Date.now() };
+      await route.fulfill({ status: spawnResult === 'starting' ? 202 : 200, contentType: 'application/json', body: JSON.stringify(result) });
     });
     await desktop.fill('#newSessionCwd', CWD);
     await desktop.click('.sidebar-footer .btn');
@@ -806,9 +808,50 @@ function writeRegistry(patch = {}) {
     check(asyncSpawnBody?.async === true, 'new-session request opts into asynchronous spawning');
     check(await desktop.locator('.session-item.starting').textContent().then(t => t.includes('Starting session')),
       'provisional starting row appears before registration');
-    finishSpawn = true;
+    check(await desktop.locator('.session-item.starting').evaluate((el) => el.classList.contains('active')) &&
+      await desktop.locator('#sessionName').textContent() === 'Starting session…',
+      'provisional session pane opens immediately');
+    check(await desktop.locator('#btnSend').isDisabled(), 'send waits for the real bridge session');
+    const startupDraft = 'draft typed while Pi starts';
+    await desktop.fill('#promptInput', startupDraft);
+    await desktop.keyboard.press('Enter');
+    check(await desktop.inputValue('#promptInput') === startupDraft &&
+      (await desktop.locator('#status').textContent()).includes('still starting'),
+      'typing and Enter preserve the prompt while Pi starts');
+    await desktop.waitForTimeout(400); // debounced provisional draft save
+    check(await desktop.evaluate((id) => localStorage.getItem('pi-dish-draft-spawn:' + id), 'ui-spawn-1') === startupDraft,
+      'provisional composer owns its draft before registration');
+    spawnResult = 'ready';
     await desktop.waitForFunction(() => !document.querySelector('.session-item.starting'), null, { timeout: 3000 });
     check(readySpawnPolled, 'ready spawn reconciles the provisional row to the registered session');
+    await desktop.waitForFunction(({ id, draft }) => currentSession?.id === id &&
+      document.getElementById('promptInput').value === draft,
+    { id: SESSION_ID, draft: startupDraft }, { timeout: 3000 });
+    const migratedDraft = await desktop.evaluate(({ spawnId, sessionId }) => ({
+      provisional: localStorage.getItem('pi-dish-draft-spawn:' + spawnId),
+      session: localStorage.getItem('pi-dish-draft-' + sessionId),
+    }), { spawnId: 'ui-spawn-1', sessionId: SESSION_ID });
+    check(migratedDraft.provisional === null && migratedDraft.session === startupDraft &&
+      !(await desktop.locator('#btnSend').isDisabled()),
+      'draft transfers to the registered session and Send becomes ready');
+    await desktop.fill('#promptInput', '');
+    await desktop.waitForTimeout(400);
+
+    spawnResult = 'starting';
+    await desktop.click('.sidebar-footer .btn');
+    await desktop.waitForSelector('.session-item.starting');
+    const failedDraft = 'keep this after a startup failure';
+    await desktop.fill('#promptInput', failedDraft);
+    spawnResult = 'error';
+    await desktop.waitForFunction(() => document.getElementById('sessionName').textContent === 'Session failed to start',
+      null, { timeout: 3000 });
+    check(await desktop.inputValue('#promptInput') === failedDraft &&
+      await desktop.locator('#btnSend').isDisabled(),
+      'failed spawn keeps its provisional draft accessible');
+    await desktop.evaluate(async (id) => {
+      await selectSession(id);
+      localStorage.removeItem('pi-dish-draft-spawn:ui-spawn-1');
+    }, SESSION_ID);
     await desktop.unroute('**/api/sessions/new');
     await desktop.unroute('**/api/session-spawns/ui-spawn-1');
 
