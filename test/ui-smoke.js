@@ -784,6 +784,34 @@ function writeRegistry(patch = {}) {
     check(opts.some(t => t.includes('workspace/proj-alpha')), 'proj-alpha found by fuzzy dir search');
     await desktop.keyboard.press('Escape');
 
+    // New-session display is decoupled from durable tmux startup: the POST
+    // returns a provisional operation and the sidebar owns the readiness wait.
+    let finishSpawn = false;
+    let readySpawnPolled = false;
+    let asyncSpawnBody = null;
+    await desktop.route('**/api/sessions/new', async (route) => {
+      asyncSpawnBody = route.request().postDataJSON();
+      await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ success: true, pending: true, spawnId: 'ui-spawn-1' }) });
+    });
+    await desktop.route('**/api/session-spawns/ui-spawn-1', async (route) => {
+      if (finishSpawn) readySpawnPolled = true;
+      const result = finishSpawn
+        ? { status: 'ready', sessionId: SESSION_ID }
+        : { status: 'starting', createdAt: Date.now() };
+      await route.fulfill({ status: finishSpawn ? 200 : 202, contentType: 'application/json', body: JSON.stringify(result) });
+    });
+    await desktop.fill('#newSessionCwd', CWD);
+    await desktop.click('.sidebar-footer .btn');
+    await desktop.waitForSelector('.session-item.starting');
+    check(asyncSpawnBody?.async === true, 'new-session request opts into asynchronous spawning');
+    check(await desktop.locator('.session-item.starting').textContent().then(t => t.includes('Starting session')),
+      'provisional starting row appears before registration');
+    finishSpawn = true;
+    await desktop.waitForFunction(() => !document.querySelector('.session-item.starting'), null, { timeout: 3000 });
+    check(readySpawnPolled, 'ready spawn reconciles the provisional row to the registered session');
+    await desktop.unroute('**/api/sessions/new');
+    await desktop.unroute('**/api/session-spawns/ui-spawn-1');
+
     // 5. Rename propagates to the sidebar without a reload
     console.log('rename:');
     await desktop.click('#sessionName');

@@ -543,6 +543,25 @@ body.sidebar-open {
   border-color: var(--accent-dim);
 }
 
+.starting-segment {
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+}
+
+.starting-header {
+  cursor: default;
+}
+
+.session-item.starting {
+  cursor: default;
+  opacity: 0.8;
+}
+
+.session-item.starting:hover {
+  background: transparent;
+}
+
 .session-item-header {
   display: flex;
   align-items: center;

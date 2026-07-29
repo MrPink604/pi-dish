@@ -2470,33 +2470,80 @@ async function _spawnPiHeadlessTmux({ args, cwd }) {
 // `pi --mode rpc` child (dies with this server). An explicit `target:
 // { type: 'tmux', socket, tmuxSession }` or `{ ..., newTmuxSession }` opens a
 // pi TUI in one of the user's own tmux sessions instead.
+async function createSession({ model, cwd, target }) {
+  if (cwd && cwd.startsWith('~')) {
+    cwd = path.join(process.env.HOME, cwd.slice(1).replace(/^\//, ''));
+  }
+  const args = model ? ['--model', model] : [];
+  if (target && target.type === 'tmux') {
+    return spawnPiInTmux({ target, args, cwd });
+  }
+  if (headlessTmuxEnabled()) {
+    try {
+      return await spawnPiHeadlessTmux({ args, cwd });
+    } catch (e) {
+      if (e.preventHeadlessFallback) throw e;
+      headlessTmuxBroken = true;
+      console.error('Headless tmux spawn failed — falling back to an RPC child:', e.message);
+    }
+  }
+  const rpc = await createRPCSession({ model, cwd });
+  return rpc.id;
+}
+
+// The browser can decouple its provisional "Starting…" row from the actual
+// Pi startup. Keep the operation state process-local: the durable artifact is
+// still the tmux process + bridge registry, so a server restart cannot kill a
+// successfully launched session. Existing API callers remain blocking unless
+// they explicitly pass async:true.
+const sessionSpawnOperations = new Map(); // spawn id -> { status, sessionId?, error? }
+const SESSION_SPAWN_RESULT_TTL_MS = 5 * 60 * 1000;
+
+function startSessionSpawn(options) {
+  const spawnId = crypto.randomUUID();
+  const operation = { status: 'starting', createdAt: Date.now() };
+  sessionSpawnOperations.set(spawnId, operation);
+
+  Promise.resolve()
+    .then(() => createSession(options))
+    .then((sessionId) => {
+      operation.status = 'ready';
+      operation.sessionId = sessionId;
+    })
+    .catch((e) => {
+      console.error('Failed to create session:', e);
+      operation.status = 'error';
+      operation.error = e.message;
+    })
+    .finally(() => {
+      const timer = setTimeout(() => {
+        if (sessionSpawnOperations.get(spawnId) === operation) sessionSpawnOperations.delete(spawnId);
+      }, SESSION_SPAWN_RESULT_TTL_MS);
+      timer.unref?.();
+    });
+
+  return spawnId;
+}
+
 app.post('/api/sessions/new', async (req, res) => {
+  const { model, cwd, target } = req.body || {};
+  if (req.body?.async === true) {
+    const spawnId = startSessionSpawn({ model, cwd, target });
+    return res.status(202).json({ success: true, pending: true, spawnId });
+  }
   try {
-    let { model, cwd, target } = req.body || {};
-    if (cwd && cwd.startsWith('~')) {
-      cwd = path.join(process.env.HOME, cwd.slice(1).replace(/^\//, ''));
-    }
-    const args = model ? ['--model', model] : [];
-    if (target && target.type === 'tmux') {
-      const id = await spawnPiInTmux({ target, args, cwd });
-      return res.json({ success: true, id });
-    }
-    if (headlessTmuxEnabled()) {
-      try {
-        const id = await spawnPiHeadlessTmux({ args, cwd });
-        return res.json({ success: true, id });
-      } catch (e) {
-        if (e.preventHeadlessFallback) throw e;
-        headlessTmuxBroken = true;
-        console.error('Headless tmux spawn failed — falling back to an RPC child:', e.message);
-      }
-    }
-    const rpc = await createRPCSession({ model, cwd });
-    res.json({ success: true, id: rpc.id });
+    const id = await createSession({ model, cwd, target });
+    res.json({ success: true, id });
   } catch (e) {
     console.error('Failed to create session:', e);
     res.status(e.status || 500).json({ success: false, error: e.message });
   }
+});
+
+app.get('/api/session-spawns/:id', (req, res) => {
+  const operation = sessionSpawnOperations.get(req.params.id);
+  if (!operation) return res.status(404).json({ error: 'Session spawn not found' });
+  res.status(operation.status === 'starting' ? 202 : 200).json(operation);
 });
 
 // Resume is single-flight at the HTTP dispatch boundary, not in one backend:

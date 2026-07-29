@@ -7,6 +7,9 @@
 // bug class). Read these freely; never assign to them anywhere else.
 let sessions = { active: [], previous: [] };
 let currentSession = null;
+// Provisional rows for asynchronous Pi launches. They are presentation state,
+// not sessions: the durable source of truth remains tmux + the bridge registry.
+const pendingSessionSpawns = new Map(); // spawn id -> { cwd, target }
 // Every selection, including a forced reload of the same session, owns a new
 // generation. Async transcript/stream work may mutate the pane only while its
 // generation still owns it; comparing the session id alone is not enough.
@@ -238,6 +241,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (header) { if (header.dataset.cwd) toggleGroupCollapsed(header.dataset.cwd); return; }
     const item = e.target.closest('.session-item');
     if (!item) return;
+    if (item.classList.contains('starting')) return;
     selectSession(item.dataset.id);
     if (window.innerWidth <= 768) closeSidebar();
   });
@@ -723,6 +727,23 @@ function renderSessionItem(session, opts = {}) {
   `;
 }
 
+function renderPendingSessionItem(spawnId, spawn) {
+  const cwd = spawn.cwd || '~';
+  return `
+    <div class="session-item starting" data-spawn-id="${escapeHtml(spawnId)}">
+      <div class="session-item-header">
+        <span class="session-item-status working" title="Starting session"></span>
+        <span class="session-item-name">Starting session…</span>
+        <span class="session-item-time">now</span>
+      </div>
+      <div class="session-item-meta">
+        <span class="session-item-cwd" title="${escapeHtml(cwd)}">${escapeHtml(shortCwd(cwd))}</span>
+        <span>${spawn.target ? 'tmux' : 'headless'}</span>
+      </div>
+    </div>
+  `;
+}
+
 // Collapsed workspace groups (by cwd) — collapsed groups hide their sessions
 // and sink to the bottom of the list. Persisted across reloads.
 const collapsedGroups = new Set(readJSONPref('pi-dish-collapsed-groups', []));
@@ -803,9 +824,10 @@ function renderSessions() {
   const list = document.getElementById('sessionList');
   const { active, previous } = sessions;
   const showing = sidebarTab === 'active' ? active : [...active, ...previous];
+  const pending = [...pendingSessionSpawns.entries()];
 
   const countEl = document.getElementById('countActive');
-  if (countEl) countEl.textContent = active.length || '';
+  if (countEl) countEl.textContent = (active.length + pending.length) || '';
 
   // Once the lists reflect the typed query, the server's filtering (which
   // includes message content) is authoritative — re-filtering locally would
@@ -825,7 +847,16 @@ function renderSessions() {
   if (sidebarTab === 'all' && sessionIndexing) {
     html += '<div class="indexing-note">Indexing sessions…</div>';
   }
-  if (filtered.length === 0) {
+  if (pending.length) {
+    html += `<div class="session-segment starting-segment">
+      <div class="workspace-group-header starting-header">
+        <span class="workspace-group-label">Starting</span>
+        <span class="workspace-group-count">${pending.length}</span>
+      </div>
+      ${pending.map(([id, spawn]) => renderPendingSessionItem(id, spawn)).join('')}
+    </div>`;
+  }
+  if (filtered.length === 0 && pending.length === 0) {
     // With a query, `active` is the server-filtered list — an empty one
     // means "no matches", not "no sessions running".
     const msg = sidebarTab === 'active'
@@ -4845,8 +4876,51 @@ async function abortTurn() {
   }
 }
 
+const SESSION_SPAWN_POLL_MS = 250;
+
+async function monitorSessionSpawn(spawnId, selectionGeneration) {
+  try {
+    for (;;) {
+      const res = await fetch(`/api/session-spawns/${encodeURIComponent(spawnId)}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok && res.status !== 202) throw new Error(data.error || `spawn status failed (${res.status})`);
+      if (data.status === 'starting') {
+        await new Promise(r => setTimeout(r, SESSION_SPAWN_POLL_MS));
+        continue;
+      }
+
+      pendingSessionSpawns.delete(spawnId);
+      renderSessions();
+      if (data.status === 'error') throw new Error(data.error || 'Session failed to start');
+      if (data.status !== 'ready' || !data.sessionId) throw new Error('Session spawn returned an invalid result');
+
+      setStatus('Session created');
+      // Registration is already complete, but ride out any overlapping list
+      // request before selecting the authoritative session row.
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await loadSessions();
+        if (findSession(data.sessionId)) {
+          // Do not yank the user away if they selected another session while
+          // this process was starting. Starting several sessions also selects
+          // only whichever one becomes ready first.
+          if (sessionSelectionGeneration === selectionGeneration) selectSession(data.sessionId);
+          return;
+        }
+        await new Promise(r => setTimeout(r, SESSION_SPAWN_POLL_MS));
+      }
+      setStatus('Session started but is not visible yet — try refreshing', 'error');
+      return;
+    }
+  } catch (e) {
+    pendingSessionSpawns.delete(spawnId);
+    renderSessions();
+    setStatus(`Session start failed: ${e.message}`, 'error');
+  }
+}
+
 // New session — cwd from the picker input unless a caller (the workspace
-// header's + button) passes one explicitly.
+// header's + button) passes one explicitly. The server accepts the launch
+// immediately; a provisional sidebar row owns the wait for bridge readiness.
 async function createSession(cwd) {
   let target;
   try {
@@ -4860,18 +4934,20 @@ async function createSession(cwd) {
     }
     // Persist last-used cwd
     if (cwd) localStorage.setItem('pi-dish-cwd', cwd);
-    const data = await apiSend('/api/sessions/new', { cwd: cwd || undefined, target: target || undefined });
-    if (!data.id) { setStatus('Failed to create session', 'error'); return; }
-    setStatus('Session created');
+    const data = await apiSend('/api/sessions/new', {
+      cwd: cwd || undefined,
+      target: target || undefined,
+      async: true,
+    });
+    if (!data.spawnId) { setStatus('Failed to start session', 'error'); return; }
+    pendingSessionSpawns.set(data.spawnId, {
+      cwd: cwd || '~',
+      target: !!target,
+    });
     switchTab('active');
-    // Poll until the new session shows up in the list instead of hoping a
-    // fixed delay is enough.
-    for (let attempt = 0; attempt < 10; attempt++) {
-      await loadSessions();
-      if (findSession(data.id)) { selectSession(data.id); return; }
-      await new Promise(r => setTimeout(r, 1000));
-    }
-    setStatus('Session created but not visible yet — try refreshing', 'error');
+    renderSessions();
+    setStatus(target ? 'Session starting in tmux…' : 'Session starting…', 'working');
+    void monitorSessionSpawn(data.spawnId, sessionSelectionGeneration);
   } catch (e) { setStatus(`Error: ${e.message}`, 'error'); }
 }
 

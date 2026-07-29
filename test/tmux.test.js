@@ -113,6 +113,35 @@ test('POST /api/sessions/new with a tmux target spawns and returns the registere
   assert.ok(panes.includes(spawn.paneId), 'pi pane exists in the session');
 });
 
+test('async tmux spawn returns a provisional operation before bridge registration', { skip: !tmuxOk }, async () => {
+  process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_REGISTER_DELAY_MS=700 ${process.execPath} ${FIXTURE}`;
+  try {
+    const accepted = await post('/api/sessions/new', {
+      async: true,
+      target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+    });
+    assert.equal(accepted.status, 202, JSON.stringify(accepted.body));
+    assert.ok(accepted.body.spawnId, 'a provisional spawn id is returned');
+    assert.equal(accepted.body.id, undefined, 'the response does not wait for a session id');
+
+    const initial = await get(`/api/session-spawns/${accepted.body.spawnId}`);
+    assert.equal(initial.status, 202, JSON.stringify(initial.body));
+    assert.equal(initial.body.status, 'starting');
+
+    let result = initial;
+    for (let i = 0; i < 20 && result.body.status === 'starting'; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      result = await get(`/api/session-spawns/${accepted.body.spawnId}`);
+    }
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.equal(result.body.status, 'ready');
+    assert.ok(result.body.sessionId, 'registration resolves the real session id');
+    assert.ok(tmux.getSpawn(result.body.sessionId), 'the durable tmux placement was persisted');
+  } finally {
+    process.env.PI_DISH_PI_COMMAND = `${process.execPath} ${FIXTURE}`;
+  }
+});
+
 test('/reload falls back to send-keys into the owning tmux pane when the bridge cannot run it', { skip: !tmuxOk }, async () => {
   const { status, body } = await post('/api/sessions/new', {
     target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
