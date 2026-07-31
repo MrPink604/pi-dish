@@ -775,17 +775,45 @@ function writeRegistry(patch = {}) {
       `drilled mention inserted (got ${JSON.stringify(deepVal)})`);
     await desktop.fill('#promptInput', '');
 
-    // 4. cwd picker: fuzzy directory search under $HOME
-    console.log('cwd picker:');
+    // 4. New-session takeover: fuzzy cwd search, lazy directory tree,
+    //    model select, and a routed spawn round-trip.
+    console.log('new-session takeover:');
+    await desktop.click('.sidebar-footer .btn');
+    await desktop.waitForFunction(
+      () => document.querySelector('.main').classList.contains('new-session-open'),
+      null, { timeout: 5000 });
+    check(true, 'takeover opens from the sidebar footer button');
+    check(await desktop.locator('#nsModelSelect option').filter({ hasText: '(default)' }).count() > 0,
+      'model select offers (default)');
+
+    // Fuzzy cwd search from the text input (single source of truth).
     await desktop.fill('#newSessionCwd', '');
     await desktop.type('#newSessionCwd', 'alpha');
     await desktop.waitForSelector('.cwd-option', { timeout: 5000 });
     const opts = await desktop.locator('.cwd-option').allTextContents();
     check(opts.some(t => t.includes('workspace/proj-alpha')), 'proj-alpha found by fuzzy dir search');
-    await desktop.keyboard.press('Escape');
+    await desktop.keyboard.press('Escape'); // dismiss the cwd dropdown (not the takeover)
+    await desktop.fill('#newSessionCwd', '');
 
-    // New-session display is decoupled from durable tmux startup: the POST
-    // returns a provisional operation and the sidebar owns the readiness wait.
+    // Directory tree: expand ~ → workspace, then click-select proj-alpha.
+    await desktop.locator('#nsTree .ns-tree-chevron').first().click();
+    await desktop.waitForFunction(
+      () => [...document.querySelectorAll('#nsTree .ns-tree-name')].some(el => el.textContent === 'workspace'),
+      null, { timeout: 5000 });
+    check(true, 'tree lazily lists the home subdirs');
+    await desktop.locator('.ns-tree-row').filter({ hasText: 'workspace' }).first()
+      .locator('.ns-tree-chevron').click();
+    await desktop.waitForFunction(
+      () => [...document.querySelectorAll('#nsTree .ns-tree-name')].some(el => el.textContent === 'proj-alpha'),
+      null, { timeout: 5000 });
+    await desktop.locator('.ns-tree-row').filter({ hasText: 'proj-alpha' }).first().click();
+    check(await desktop.inputValue('#newSessionCwd') === CWD, 'selecting a tree dir sets the cwd input');
+
+    // Spawn: routed async round-trip (deterministic — no real pi child).
+    // The POST opts into asynchronous spawning; the takeover closes
+    // immediately in favor of the provisional composer pane, and the monitor
+    // reconciles the "Starting" row to the fake session once the routed
+    // status flips ready.
     let spawnResult = 'starting';
     let readySpawnPolled = false;
     let asyncSpawnBody = null;
@@ -802,10 +830,13 @@ function writeRegistry(patch = {}) {
           : { status: 'starting', createdAt: Date.now() };
       await route.fulfill({ status: spawnResult === 'starting' ? 202 : 200, contentType: 'application/json', body: JSON.stringify(result) });
     });
-    await desktop.fill('#newSessionCwd', CWD);
-    await desktop.click('.sidebar-footer .btn');
+    await desktop.click('#nsSpawnBtn');
     await desktop.waitForSelector('.session-item.starting');
-    check(asyncSpawnBody?.async === true, 'new-session request opts into asynchronous spawning');
+    check(asyncSpawnBody?.async === true, 'takeover spawn opts into asynchronous spawning');
+    check(asyncSpawnBody?.cwd === CWD, `POST body carries the chosen cwd (got ${JSON.stringify(asyncSpawnBody?.cwd)})`);
+    check(asyncSpawnBody?.model === undefined, 'default model omitted from POST body');
+    check(!(await desktop.evaluate(() => document.querySelector('.main').classList.contains('new-session-open'))),
+      'takeover closes in favor of the provisional pane');
     check(await desktop.locator('.session-item.starting').textContent().then(t => t.includes('Starting session')),
       'provisional starting row appears before registration');
     check(await desktop.locator('.session-item.starting').evaluate((el) => el.classList.contains('active')) &&
@@ -838,7 +869,13 @@ function writeRegistry(patch = {}) {
     await desktop.waitForTimeout(400);
 
     spawnResult = 'starting';
+    // Second spawn goes back through the takeover (footer button → spawn).
     await desktop.click('.sidebar-footer .btn');
+    await desktop.waitForFunction(
+      () => document.querySelector('.main').classList.contains('new-session-open'),
+      null, { timeout: 5000 });
+    await desktop.fill('#newSessionCwd', CWD);
+    await desktop.click('#nsSpawnBtn');
     await desktop.waitForSelector('.session-item.starting');
     const failedDraft = 'keep this after a startup failure';
     await desktop.fill('#promptInput', failedDraft);
@@ -2127,6 +2164,15 @@ function writeRegistry(patch = {}) {
       'chart draws axis tick labels');
     check((await desktop.locator('#usageChart svg').getAttribute('aria-label')).startsWith('Calls'),
       'unavailable cost falls back to call-count chart geometry');
+    // Event-driven: while the session index is still settling, the view
+    // repolls at 1s and each re-render can shift the chart's day axis (the
+    // 'all' range starts at the earliest *indexed* day), so a bucket index
+    // captured mid-indexing goes stale by click time. Wait for indexing to
+    // settle with the smoke model present, then resolve the index once.
+    await desktop.waitForFunction(() =>
+      usageData && !usageData.indexing &&
+      usageChart.buckets.some(b => b.models?.some(m => m.ref === 'test/smoke-model')),
+      null, { timeout: 10000 });
     const smokeBucket = await desktop.evaluate(() => usageChart.buckets.findIndex(b =>
       b.models?.some(m => m.ref === 'test/smoke-model')));
     await desktop.locator('#usageChart .usage-col').nth(smokeBucket).click();

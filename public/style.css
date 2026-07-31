@@ -3597,6 +3597,107 @@ img.msg-image {
 .main.search-open .empty-state,
 .main.search-open .session-view { display: none !important; }
 
+/* --- New session (main-pane takeover, .main.new-session-open) --------------
+   Configures a fresh session: cwd input + lazy directory tree, model select,
+   and the tmux "Run in" target. Same shell as the usage/search takeovers. */
+.new-session-view { display: none; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.main.new-session-open .new-session-view { display: flex; }
+.main.new-session-open .empty-state,
+.main.new-session-open .session-view { display: none !important; }
+
+.new-session-body {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px max(24px, calc((100% - var(--content-max)) / 2)) 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.ns-section { display: flex; flex-direction: column; gap: 8px; }
+.ns-label { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+
+/* The cwd dropdown lives at the top of the pane now — open it downward. */
+.new-session-view .cwd-input-wrap { flex: none; }
+.new-session-view .cwd-dropdown { top: calc(100% + 4px); bottom: auto; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4); }
+
+.ns-select {
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+}
+.ns-select:focus { border-color: var(--accent); }
+.ns-hidden-note { font-size: 11px; color: var(--text-muted); }
+
+/* The "Run in" section is an .ns-section (flex column) toggled by JS via
+   inline display; keep it left-aligned and full-width when shown. */
+.new-session-view .new-session-target { align-items: stretch; }
+.new-session-view .target-name-input { width: 100%; }
+
+/* Workspace quick-pick chips */
+.ns-workspaces { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ns-workspaces-label { font-size: 11px; color: var(--text-muted); margin-right: 2px; }
+.ns-workspace-chip {
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.ns-workspace-chip:hover { border-color: var(--border); background: var(--bg-hover); }
+
+/* Lazy directory tree */
+.ns-tree {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-darker);
+  max-height: 42vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px 0;
+}
+.ns-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding-right: 10px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  color: var(--text);
+  cursor: pointer;
+}
+.ns-tree-row:hover { background: var(--bg-hover); }
+.ns-tree-row.selected { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.ns-tree-chevron {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 10px;
+  transition: transform 0.12s ease;
+}
+.ns-tree-chevron.open { transform: rotate(90deg); }
+.ns-tree-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ns-tree-empty { font-size: 12px; color: var(--text-muted); min-height: 28px; display: flex; align-items: center; }
+
+.ns-actions { display: flex; align-items: center; gap: 10px; }
+.ns-error { flex: 1; font-size: 12px; color: var(--error); }
+
+@media (pointer: coarse) {
+  .ns-tree-row { min-height: 40px; }
+  .ns-workspace-chip { padding: 6px 10px; }
+}
+
 .search-view-header {
   display: flex;
   align-items: center;

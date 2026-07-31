@@ -75,22 +75,7 @@
       </div>
       
       <div class="sidebar-footer">
-        <div class="new-session-cwd">
-          <label class="cwd-label" for="newSessionCwd">cwd</label>
-          <div class="cwd-input-wrap">
-            <input type="text" id="newSessionCwd" class="cwd-input" placeholder="~" spellcheck="false" autocomplete="off">
-            <div class="cwd-dropdown" id="cwdDropdown"></div>
-          </div>
-        </div>
-        <div class="new-session-target" id="newSessionTargetWrap" style="display:none">
-          <label class="cwd-label" for="newSessionTarget">run in</label>
-          <div class="cwd-input-wrap">
-            <input type="text" id="newSessionTarget" class="cwd-input" placeholder="pi-dish (headless)" spellcheck="false" autocomplete="off">
-            <div class="cwd-dropdown" id="spawnTargetDropdown"></div>
-          </div>
-        </div>
-        <input type="text" id="newSessionTmuxName" class="cwd-input target-name-input" placeholder="new tmux session name" spellcheck="false" autocomplete="off" style="display:none">
-        <button class="btn" onclick="createSession()">+ New Session</button>
+        <button class="btn" onclick="openNewSessionView()">+ New session</button>
       </div>
     </aside>
 
@@ -370,6 +355,54 @@
           <button class="btn-icon" onclick="closeSearchView()" title="Close (Esc)">✕</button>
         </div>
         <div class="search-view-body" id="searchViewBody"></div>
+      </div>
+
+      <!-- New-session view: a main-pane takeover (usage-view pattern) that
+           configures a fresh session — cwd via a text input + a lazy hand-
+           rolled directory tree, model from the cached /api/models catalog,
+           and the "Run in" tmux target. Opened from the sidebar footer,
+           mutually exclusive with the usage/search takeovers. -->
+      <div class="new-session-view" id="newSessionView">
+        <div class="usage-view-header">
+          <button class="menu-btn" onclick="toggleSidebar()" aria-label="Open session list">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M3 12h18M3 6h18M3 18h18"/>
+            </svg>
+          </button>
+          <span class="usage-view-title">New session</span>
+          <button class="btn-icon" onclick="closeNewSessionView()" title="Close (Esc)" style="margin-left:auto">✕</button>
+        </div>
+        <div class="new-session-body">
+          <div class="ns-section">
+            <label class="ns-label" for="newSessionCwd">Working directory</label>
+            <div class="cwd-input-wrap">
+              <input type="text" id="newSessionCwd" class="cwd-input" placeholder="~" spellcheck="false" autocomplete="off">
+              <div class="cwd-dropdown" id="cwdDropdown"></div>
+            </div>
+            <div class="ns-workspaces" id="nsWorkspaces"></div>
+            <div class="ns-tree" id="nsTree"></div>
+          </div>
+
+          <div class="ns-section">
+            <label class="ns-label" for="nsModelSelect">Model</label>
+            <select id="nsModelSelect" class="ns-select" onchange="onNsModelChange(this.value)"></select>
+            <div class="ns-hidden-note" id="nsModelHidden"></div>
+          </div>
+
+          <div class="ns-section new-session-target" id="newSessionTargetWrap" style="display:none">
+            <label class="ns-label" for="newSessionTarget">Run in</label>
+            <div class="cwd-input-wrap">
+              <input type="text" id="newSessionTarget" class="cwd-input" placeholder="pi-dish (headless)" spellcheck="false" autocomplete="off">
+              <div class="cwd-dropdown" id="spawnTargetDropdown"></div>
+            </div>
+            <input type="text" id="newSessionTmuxName" class="cwd-input target-name-input" placeholder="new tmux session name" spellcheck="false" autocomplete="off" style="display:none">
+          </div>
+
+          <div class="ns-actions">
+            <span class="ns-error" id="nsError"></span>
+            <button class="btn btn-primary" id="nsSpawnBtn" onclick="spawnNewSession()">+ New session</button>
+          </div>
+        </div>
       </div>
     </main>
   </div>

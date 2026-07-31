@@ -502,6 +502,38 @@ test('GET /api/dirs fuzzy-finds directories under $HOME', async () => {
   assert.ok(fuzzy.body.some(d => d.path === realCwd));
 });
 
+test('GET /api/dirs/children lists subdirs, excluding dotdirs and heavies', async () => {
+  const treeRoot = path.join(tmpHome, 'treeroot');
+  fs.mkdirSync(path.join(treeRoot, 'alpha'), { recursive: true });
+  fs.mkdirSync(path.join(treeRoot, 'beta'), { recursive: true });
+  fs.mkdirSync(path.join(treeRoot, '.hidden'), { recursive: true });
+  fs.mkdirSync(path.join(treeRoot, 'node_modules'), { recursive: true });
+  fs.writeFileSync(path.join(treeRoot, 'a-file.txt'), 'x\n');
+
+  const { status, body } = await get('/api/dirs/children?path=' + encodeURIComponent(treeRoot));
+  assert.equal(status, 200);
+  assert.equal(body.path, treeRoot);
+  const names = body.dirs.map(d => d.name);
+  assert.deepEqual(names, ['alpha', 'beta'], 'dotdir + node_modules + file excluded, sorted');
+  assert.equal(body.dirs[0].path, path.join(treeRoot, 'alpha'));
+
+  // ~ expands to $HOME
+  const home = await get('/api/dirs/children?path=' + encodeURIComponent('~'));
+  assert.equal(home.status, 200);
+  assert.equal(home.body.path, tmpHome);
+  assert.ok(home.body.dirs.some(d => d.name === 'treeroot'));
+
+  // non-absolute → 400
+  const rel = await get('/api/dirs/children?path=' + encodeURIComponent('relative/path'));
+  assert.equal(rel.status, 400);
+
+  // nonexistent → 200 with error + empty dirs (degrade, don't blank)
+  const missing = await get('/api/dirs/children?path=' + encodeURIComponent(path.join(tmpHome, 'no-such-dir')));
+  assert.equal(missing.status, 200);
+  assert.deepEqual(missing.body.dirs, []);
+  assert.ok(missing.body.error);
+});
+
 test('GET /files fuzzy-searches the session cwd', async () => {
   const { status, body } = await get(`/api/sessions/${REAL_CWD_ID}/files?q=main`);
   assert.equal(status, 200);

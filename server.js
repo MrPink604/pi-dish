@@ -20,7 +20,7 @@ const {
   processIdentity,
   processIdentityAlive,
 } = require('./lib/bridge-session');
-const { searchFiles, searchHomeDirs, completePath, isPathCompletionToken } = require('./lib/file-search');
+const { searchFiles, searchHomeDirs, getDirChildren, completePath, isPathCompletionToken } = require('./lib/file-search');
 const { resolveFileMention, readFileForViewer } = require('./lib/file-mention');
 const { aggregateDiffs, getFilePatch, getDiffVersion } = require('./lib/git-diff');
 const terminal = require('./lib/terminal');
@@ -2067,6 +2067,18 @@ app.get('/api/dirs', (req, res) => {
     res.json(searchHomeDirs(String(req.query.q || ''), 15));
   } catch (e) {
     res.status(500).json([]);
+  }
+});
+
+// Immediate subdirectories of a path, for the new-session cwd tree. Absolute
+// (or ~-prefixed) path required → 400; an unreadable dir degrades to 200 with
+// an `error` field and empty `dirs` so the tree never blanks.
+app.get('/api/dirs/children', (req, res) => {
+  try {
+    res.json(getDirChildren(String(req.query.path || '')));
+  } catch (e) {
+    if (e.badRequest) return res.status(400).json({ error: e.message });
+    res.status(500).json({ error: e.message });
   }
 });
 

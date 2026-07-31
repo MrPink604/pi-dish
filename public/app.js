@@ -1056,6 +1056,7 @@ function showPendingSessionView(spawnId) {
   closeStatsModal();
   closeUsageView();
   closeSearchView();
+  closeNewSessionView(); // the provisional pane replaces the takeover
   stashCurrentTranscript();
   setCurrentSession(null);
   currentSessionSpawnId = spawnId;
@@ -1158,6 +1159,7 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
   closeStatsModal();
   closeUsageView(); // picking a session while the usage takeover is up means "show me that session"
   closeSearchView();
+  closeNewSessionView();
   stashCurrentTranscript();
   if (forceTranscriptReload) transcriptCache.delete(id);
   if (!setCurrentSession(id)) return;
@@ -1265,6 +1267,9 @@ async function loadModels(sessionId) {
     const data = await res.json();
     if (seq !== modelsSeq) return; // superseded by a newer session's fetch
     knownModels = Array.isArray(data) ? data : [];
+    // Cache the last good catalog so the new-session takeover renders its
+    // model select instantly before the background refresh lands.
+    if (knownModels.length) { try { localStorage.setItem('pi-dish-models-cache', JSON.stringify(knownModels)); } catch {} }
     refreshResponsePricingState();
   } catch (e) {
     console.error('Failed to load models:', e);
@@ -1679,6 +1684,7 @@ function isSearchViewOpen() {
 function openSearchView(initialQuery) {
   closeSidebar();
   closeUsageView(); // takeovers are mutually exclusive
+  closeNewSessionView();
   if (typeof initialQuery === 'string') searchViewQuery = initialQuery;
   const input = document.getElementById('searchViewInput');
   input.value = searchViewQuery;
@@ -1869,6 +1875,7 @@ function isUsageViewOpen() {
 function openUsageView() {
   closeSidebar();
   closeSearchView(); // takeovers are mutually exclusive
+  closeNewSessionView();
   if (isUsageViewOpen()) return;
   document.querySelector('.main').classList.add('usage-open');
   loadUsageView();
@@ -5108,9 +5115,31 @@ async function monitorSessionSpawn(spawnId) {
   }
 }
 
-// New session — cwd from the picker input unless a caller (the workspace
-// header's + button) passes one explicitly. The server accepts the launch
-// immediately; a provisional sidebar row owns the wait for bridge readiness.
+// Shared async-spawn kickoff (the workspace-header + button and the
+// new-session takeover): POST /new with async:true — `model` is a canonical
+// provider/id ref or undefined — then register the provisional row, open the
+// pending composer pane, and hand the wait for bridge readiness to
+// monitorSessionSpawn. Throws when the server rejects the request so callers
+// surface the message their own way (status line vs the takeover's inline
+// error).
+async function submitNewSession({ cwd, model, target }) {
+  const data = await apiSend('/api/sessions/new', {
+    cwd: cwd || undefined,
+    model: model || undefined,
+    target: target || undefined,
+    async: true,
+  });
+  if (!data.spawnId) throw new Error('Failed to start session');
+  pendingSessionSpawns.set(data.spawnId, { cwd: cwd || '~', target: !!target });
+  switchTab('active');
+  showPendingSessionView(data.spawnId);
+  if (window.innerWidth <= 768) closeSidebar();
+  void monitorSessionSpawn(data.spawnId);
+  return data.spawnId;
+}
+
+// Direct spawn used by the workspace-header + button (explicit cwd, default
+// model). The full new-session takeover uses spawnNewSession() instead.
 async function createSession(cwd) {
   let target;
   try {
@@ -5122,23 +5151,218 @@ async function createSession(cwd) {
       const cwdInput = document.getElementById('newSessionCwd');
       cwd = cwdInput ? cwdInput.value.trim() : '';
     }
-    // Persist last-used cwd
     if (cwd) localStorage.setItem('pi-dish-cwd', cwd);
-    const data = await apiSend('/api/sessions/new', {
-      cwd: cwd || undefined,
-      target: target || undefined,
-      async: true,
-    });
-    if (!data.spawnId) { setStatus('Failed to start session', 'error'); return; }
-    pendingSessionSpawns.set(data.spawnId, {
-      cwd: cwd || '~',
-      target: !!target,
-    });
-    switchTab('active');
-    showPendingSessionView(data.spawnId);
-    if (window.innerWidth <= 768) closeSidebar();
-    void monitorSessionSpawn(data.spawnId);
+    await submitNewSession({ cwd, target });
   } catch (e) { setStatus(`Error: ${e.message}`, 'error'); }
+}
+
+// =========================================================================
+// New-session takeover (main-pane, usage-view pattern)
+// =========================================================================
+// Full-width configuration surface for a fresh session: a cwd text input
+// (single source of truth) backed by fuzzy /api/dirs matches and a lazy
+// directory tree, a model select fed by the cached /api/models catalog, and
+// the tmux "Run in" target. localStorage keys: pi-dish-cwd (chosen cwd),
+// pi-dish-new-model (chosen model), pi-dish-models-cache (catalog snapshot).
+let newSessionModel = ''; // '' = default (omit --model); else provider/id
+
+function isNewSessionViewOpen() {
+  return document.querySelector('.main').classList.contains('new-session-open');
+}
+
+function openNewSessionView() {
+  closeSidebar(); // on mobile the footer button lives in the drawer
+  closeUsageView(); // takeovers are mutually exclusive
+  closeSearchView();
+  document.querySelector('.main').classList.add('new-session-open');
+
+  // cwd input is the source of truth; prefill from last-used.
+  const cwdInput = document.getElementById('newSessionCwd');
+  if (cwdInput) cwdInput.value = localStorage.getItem('pi-dish-cwd') || '';
+  document.getElementById('nsError').textContent = '';
+
+  // Model: render instantly from the cache (or an already-loaded catalog),
+  // then refresh in the background and re-render, preserving the selection.
+  newSessionModel = localStorage.getItem('pi-dish-new-model') || '';
+  if (!knownModels.length) {
+    try {
+      const cached = JSON.parse(localStorage.getItem('pi-dish-models-cache') || 'null');
+      if (Array.isArray(cached)) knownModels = cached;
+    } catch {}
+  }
+  renderNsModel();
+  loadModels().then(() => { if (isNewSessionViewOpen()) renderNsModel(); });
+
+  renderNsWorkspaces();
+  initNsTree();
+}
+
+function closeNewSessionView() {
+  document.querySelector('.main').classList.remove('new-session-open');
+  hideCwdDropdown();
+}
+
+// Distinct known-session cwds as a quick-pick row above the tree.
+function renderNsWorkspaces() {
+  const wrap = document.getElementById('nsWorkspaces');
+  if (!wrap) return;
+  const seen = new Set();
+  const cwds = [];
+  for (const s of [...sessions.active, ...sessions.previous]) {
+    if (s.cwd && !seen.has(s.cwd)) { seen.add(s.cwd); cwds.push(s.cwd); }
+  }
+  if (!cwds.length) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = '<span class="ns-workspaces-label">Workspaces</span>' +
+    cwds.slice(0, 12).map(c =>
+      `<button class="ns-workspace-chip" data-cwd="${escapeHtml(c)}" title="${escapeHtml(c)}">${escapeHtml(shortCwd(c))}</button>`).join('');
+  wrap.querySelectorAll('.ns-workspace-chip').forEach(b =>
+    b.addEventListener('click', () => setNsCwd(b.dataset.cwd)));
+}
+
+// --- Directory tree (lazy, hand-rolled — no tree dependency) ---
+// Roots at ~; every dir row carries a chevron (expand, fetch children once
+// and cache in the DOM) and selects the cwd on a name click.
+function initNsTree() {
+  const root = document.getElementById('nsTree');
+  if (!root) return;
+  root.innerHTML = '';
+  root.appendChild(makeNsTreeNode('~', '~', 0));
+}
+
+function makeNsTreeNode(pathValue, label, depth) {
+  const node = document.createElement('div');
+  node.className = 'ns-tree-node';
+
+  const row = document.createElement('div');
+  row.className = 'ns-tree-row';
+  row.style.paddingLeft = (8 + depth * 16) + 'px';
+  row.dataset.path = pathValue;
+
+  const chevron = document.createElement('span');
+  chevron.className = 'ns-tree-chevron';
+  chevron.textContent = '▸';
+  chevron.addEventListener('click', (e) => { e.stopPropagation(); toggleNsTreeNode(node, pathValue, depth); });
+
+  const name = document.createElement('span');
+  name.className = 'ns-tree-name';
+  name.textContent = label;
+  row.addEventListener('click', () => {
+    setNsCwd(pathValue);
+    document.querySelectorAll('#nsTree .ns-tree-row.selected').forEach(el => el.classList.remove('selected'));
+    row.classList.add('selected');
+  });
+
+  row.appendChild(chevron);
+  row.appendChild(name);
+
+  const children = document.createElement('div');
+  children.className = 'ns-tree-children';
+  children.style.display = 'none';
+
+  node.appendChild(row);
+  node.appendChild(children);
+  return node;
+}
+
+async function toggleNsTreeNode(node, pathValue, depth) {
+  const children = node.querySelector(':scope > .ns-tree-children');
+  const chevron = node.querySelector(':scope > .ns-tree-row > .ns-tree-chevron');
+  if (node.dataset.loaded) {
+    const open = children.style.display !== 'none';
+    children.style.display = open ? 'none' : '';
+    chevron.classList.toggle('open', !open);
+    return;
+  }
+  node.dataset.loaded = '1';
+  chevron.classList.add('open');
+  children.style.display = '';
+  children.innerHTML = `<div class="ns-tree-empty" style="padding-left:${8 + (depth + 1) * 16}px">…</div>`;
+
+  let data;
+  try {
+    const r = await fetch('/api/dirs/children?path=' + encodeURIComponent(pathValue));
+    data = await r.json();
+  } catch { data = { dirs: [], error: 'failed' }; }
+
+  children.innerHTML = '';
+  const dirs = data.dirs || [];
+  if (!dirs.length) {
+    const empty = document.createElement('div');
+    empty.className = 'ns-tree-empty';
+    empty.style.paddingLeft = (8 + (depth + 1) * 16) + 'px';
+    empty.textContent = data.error ? '(unreadable)' : '(empty)';
+    children.appendChild(empty);
+    return;
+  }
+  for (const d of dirs) children.appendChild(makeNsTreeNode(d.path, d.name, depth + 1));
+}
+
+function setNsCwd(pathValue) {
+  const input = document.getElementById('newSessionCwd');
+  if (input) input.value = pathValue;
+  localStorage.setItem('pi-dish-cwd', pathValue);
+}
+
+// --- Model select ---
+function onNsModelChange(value) {
+  newSessionModel = value || '';
+  localStorage.setItem('pi-dish-new-model', newSessionModel);
+}
+
+function renderNsModel() {
+  const sel = document.getElementById('nsModelSelect');
+  if (!sel) return;
+  const models = Array.isArray(knownModels) ? knownModels : [];
+  const enabled = models.filter(m => m && m.enabled !== false);
+  const hidden = models.length - enabled.length;
+
+  const byProvider = {};
+  enabled.forEach(m => { (byProvider[m.provider] = byProvider[m.provider] || []).push(m); });
+  let html = '<option value="">(default)</option>';
+  Object.keys(byProvider).sort().forEach(p => {
+    html += `<optgroup label="${escapeHtml(p)}">`;
+    byProvider[p].forEach(m => {
+      html += `<option value="${escapeHtml(m.provider + '/' + m.id)}">${escapeHtml(m.id)}</option>`;
+    });
+    html += '</optgroup>';
+  });
+  sel.innerHTML = html;
+
+  // Preserve the selection when the fresh list still has it; else fall back to
+  // "(default)". Send the canonical provider/id form pi resolves reliably.
+  if (newSessionModel && enabled.some(m => (m.provider + '/' + m.id) === newSessionModel)) {
+    sel.value = newSessionModel;
+  } else {
+    sel.value = '';
+    newSessionModel = '';
+  }
+
+  const note = document.getElementById('nsModelHidden');
+  if (note) note.textContent = hidden > 0 ? `${hidden} model${hidden === 1 ? '' : 's'} hidden (not enabled)` : '';
+}
+
+function nsError(msg) {
+  const el = document.getElementById('nsError');
+  if (el) el.textContent = msg;
+}
+
+async function spawnNewSession() {
+  const btn = document.getElementById('nsSpawnBtn');
+  let target;
+  try { target = selectedSpawnTarget(); } catch (e) { nsError(e.message); return; }
+  const cwd = (document.getElementById('newSessionCwd')?.value || '').trim();
+  nsError('');
+  if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+  try {
+    if (cwd) localStorage.setItem('pi-dish-cwd', cwd);
+    await submitNewSession({ cwd, model: newSessionModel || undefined, target });
+    // Success: submitNewSession swapped in the provisional composer pane
+    // (which closes this takeover); monitorSessionSpawn owns the rest.
+  } catch (e) {
+    nsError(e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '+ New session'; }
+  }
 }
 
 // =========================================================================
@@ -5223,7 +5447,7 @@ function hideCwdDropdown() {
   cwdInput.addEventListener('keydown', (e) => {
     const dropdown = document.getElementById('cwdDropdown');
     if (!dropdown || dropdown.style.display === 'none') {
-      if (e.key === 'Enter') { e.preventDefault(); createSession(); }
+      if (e.key === 'Enter') { e.preventDefault(); spawnNewSession(); }
       return;
     }
     const options = dropdown.querySelectorAll('.cwd-option');
@@ -5238,9 +5462,12 @@ function hideCwdDropdown() {
         hideCwdDropdown();
       } else {
         hideCwdDropdown();
-        createSession();
+        spawnNewSession();
       }
     } else if (e.key === 'Escape') {
+      // Close the dropdown only — don't let Escape bubble to the takeover's
+      // global Escape-to-close handler while a suggestion list is open.
+      e.stopPropagation();
       hideCwdDropdown();
     }
   });
@@ -5383,6 +5610,7 @@ function hideSpawnTargetDropdown() {
         syncSpawnTargetInput();
       }
     } else if (e.key === 'Escape') {
+      e.stopPropagation(); // close the dropdown, not the enclosing takeover
       hideSpawnTargetDropdown();
       syncSpawnTargetInput();
     }
@@ -6225,6 +6453,8 @@ document.addEventListener('keydown', function(e) {
     e.preventDefault(); closeStatsModal();
   } else if (document.getElementById('artifactsModal').style.display !== 'none') {
     e.preventDefault(); closeArtifactsModal();
+  } else if (isNewSessionViewOpen()) {
+    e.preventDefault(); closeNewSessionView();
   } else if (isSearchViewOpen()) {
     e.preventDefault(); closeSearchView();
   } else if (isUsageViewOpen()) {

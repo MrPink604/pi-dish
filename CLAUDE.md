@@ -82,12 +82,14 @@ button; it clipped over content.
 
 Content-rich or exploratory surfaces swap into the main viewing pane and get
 the full width/height: the diff view and file viewer (classes on
-`.session-view`), and the usage view (`.main.usage-open`, a `<main>`-level
-sibling because it isn't session-scoped). Each has a header row (title, ⟳
-where refresh makes sense, ✕), closes on Escape and on session switch, and
-hides the panes beneath via CSS `!important` (several carry JS-managed inline
-display). New surfaces of this kind should follow that pattern — a takeover
-pane, not a modal. Modals stay for small, focused interactions (session
+`.session-view`), and the `<main>`-level siblings that aren't session-scoped —
+the usage view (`.main.usage-open`), the advanced-search view
+(`.main.search-open`), and the new-session view (`.main.new-session-open`).
+The three `<main>`-level takeovers are mutually exclusive: opening any closes
+the others. Each has a header row (title, ⟳ where refresh makes sense, ✕),
+closes on Escape and on session switch, and hides the panes beneath via CSS
+`!important` (several carry JS-managed inline display). New surfaces of this
+kind should follow that pattern — a takeover pane, not a modal. Modals stay for small, focused interactions (session
 stats, settings, confirmations, the response-details popup); if a modal
 needs internal tabs or scrolls through several unrelated sections, it has
 outgrown modalhood.
@@ -282,12 +284,38 @@ the `/branch` route's "no command context" handling adds a middle path between
 RPC-prime and the 409: if the session has a live spawn pane, send-keys
 `/dish-prime`, wait ~1.5s, retry. `pruneSpawns()` drops entries whose pane is
 gone and session isn't registered (called opportunistically from `GET
-/api/tmux/targets`). Client: the "Run in" control in the sidebar footer
-(hidden when tmux is unavailable) is a combobox like the cwd picker: headless
-and a "new session…" per server stay pinned at the top, typing fuzzy-filters
-the named tmux sessions below ("new session…" reveals a name input); the
-choice persists in `localStorage['pi-dish-spawn-target']` and is reused for
-resume when still valid.
+/api/tmux/targets`). Client: the "Run in" control (in the new-session
+takeover, hidden when tmux is unavailable) is a combobox like the cwd picker:
+headless and a "new session…" per server stay pinned at the top, typing
+fuzzy-filters the named tmux sessions below ("new session…" reveals a name
+input); the choice persists in `localStorage['pi-dish-spawn-target']` and is
+reused for resume when still valid.
+
+## New-session takeover (public/app.js)
+
+The sidebar footer is a single "+ New session" button that opens
+`#newSessionView` (`.main.new-session-open`, the usage-view `<main>`-level
+takeover pattern; `openNewSessionView`/`closeNewSessionView`). The cwd text
+input is the single source of truth (prefill/save `localStorage['pi-dish-cwd']`),
+typing shows fuzzy `/api/dirs` matches; below it a workspace quick-pick (distinct
+known-session cwds) and a lazy hand-rolled directory tree rooted at `~` — every
+dir row has a chevron that fetches `/api/dirs/children` once (cached in the DOM,
+`(empty)`/`(unreadable)` leaves), a name click selects the cwd. No tree
+dependency — don't add one. The model select renders instantly from
+`localStorage['pi-dish-models-cache']` (written by `loadModels` on success),
+then a background `/api/models` refresh re-renders preserving the selection;
+"(default)" omits `model`, disabled models are hidden with an "N hidden" note,
+the choice persists in `localStorage['pi-dish-new-model']` and is sent as the
+canonical `provider/id` ref (`--model` resolves that reliably). Spawning goes
+through the shared async path (`submitNewSession`): POST `/api/sessions/new`
+with `async:true` → `{ spawnId }`, register the provisional sidebar row, swap
+in the pending composer pane (`showPendingSessionView`, which closes this
+takeover like the other `<main>`-level surfaces), and let
+`monitorSessionSpawn` poll `/api/session-spawns/:id` to reconcile the row and
+migrate the draft onto the real session. A rejected POST shows an inline
+error and the takeover stays open. The workspace-header `+` button
+direct-spawns via `createSession(cwd)` (same async path, default model)
+without the takeover.
 
 ## Share links (lib/shares.js, /share/:token)
 
@@ -389,6 +417,13 @@ fff refuses to index `$HOME`, so `GET /api/dirs?q=` (the new-session cwd
 picker) uses a cached depth-4 directory walk plus the shared fuzzy scorer
 from `public/helpers.js` instead. Everything degrades to the walker when
 fff is unavailable — never let a missing native binary break the UI.
+
+`GET /api/dirs/children?path=` (`getDirChildren`) backs the new-session cwd
+tree: expands a leading `~`, requires an absolute path (400 otherwise),
+`readdirSync` directories-only excluding dotdirs and `SKIP_DIRS`, locale-
+sorted, capped at 500, returning `{ path, dirs:[{name,path}] }`. An
+unreadable/nonexistent dir degrades to 200 `{ path, dirs:[], error }` so the
+tree never blanks.
 
 Tokens that name a location (`/abs`, `~/x`, `./x`, `../x` — relative forms
 resolve against the session cwd) skip fff entirely: `completePath()` does
