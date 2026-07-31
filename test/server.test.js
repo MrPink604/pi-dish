@@ -125,6 +125,38 @@ fs.writeFileSync(IMAGE_TREE_FILE, [
   ] } },
 ].map(e => JSON.stringify(e)).join('\n') + '\n');
 
+// Skills fixture: a global user skill plus a session that reads part of it,
+// invokes it explicitly (/skill: block), and greps it (targeted touch).
+const SKILL_DIR = path.join(tmpHome, '.pi', 'agent', 'skills', 'demo');
+fs.mkdirSync(SKILL_DIR, { recursive: true });
+const SKILL_MD = path.join(SKILL_DIR, 'SKILL.md');
+const skillBody = [
+  '---', 'name: demo', 'description: A demo skill for the skills-view tests.', '---',
+  '', '# Demo skill', 'Intro paragraph line.', '',
+  '## Section A', ...Array.from({ length: 10 }, (_, i) => `A body line ${i} with some words here.`),
+  '', '## Section B (never read)', ...Array.from({ length: 10 }, (_, i) => `B body line ${i} that no read will ever reach in these tests.`),
+  '', '## Section C (never read)', ...Array.from({ length: 10 }, (_, i) => `C appendix line ${i} of legacy notes nobody loads.`),
+  '',
+].join('\n');
+fs.writeFileSync(SKILL_MD, skillBody);
+// Age the skill so the fixture reads (2026-07-20) map against it, while the
+// explicit invocation (2026-07-10) predates it and is excluded from the map.
+const skillEdited = new Date('2026-07-15T00:00:00.000Z');
+fs.utimesSync(SKILL_MD, skillEdited, skillEdited);
+const explicitBlock = `<skill name="demo" location="${SKILL_MD}">\nReferences are relative to ${SKILL_DIR}.\n\n${skillBody}\n</skill>`;
+const SKILLS_SESSION_ID = '2026-07-20T09-00-00-skill001';
+fs.writeFileSync(path.join(sessionDir, `${SKILLS_SESSION_ID}.jsonl`), [
+  { type: 'session', cwd: '/home/user/proj', timestamp: '2026-07-20T09:00:00.000Z' },
+  { type: 'model_change', provider: 'anthropic', modelId: 'claude-demo' },
+  { type: 'message', id: 'skx1', timestamp: '2026-07-10T09:00:00.000Z', message: { role: 'user', content: [{ type: 'text', text: explicitBlock }] } },
+  { type: 'message', id: 'skr1', timestamp: '2026-07-20T09:00:01.000Z', message: { role: 'assistant', content: [
+    { type: 'toolCall', id: 'sktc1', name: 'read', arguments: { path: SKILL_MD, offset: 1, limit: 12 } },
+  ] } },
+  { type: 'message', id: 'skb1', timestamp: '2026-07-20T09:00:02.000Z', message: { role: 'assistant', content: [
+    { type: 'toolCall', id: 'sktc2', name: 'bash', arguments: { command: `grep -n Section ${SKILL_MD}` } },
+  ] } },
+].map(e => JSON.stringify(e)).join('\n') + '\n');
+
 const server = require('../server.js');
 const { invalidateRegistryCache } = require('../lib/bridge-session');
 const { processIdentity, processIdentityAlive } = require('../lib/process-identity');
@@ -1953,4 +1985,84 @@ test('terminal-disabled startup omits xterm assets and compresses large static t
   assert.deepEqual(zlib.gunzipSync(gzip.body), identity.body);
   assert.ok(gzip.body.length < identity.body.length * 0.5,
     `expected at least 50% savings (${identity.body.length} -> ${gzip.body.length})`);
+});
+
+// --- Skills view -----------------------------------------------------------
+
+test('GET /api/skills discovers the fixture skill with mined usage rollups', async () => {
+  const { status, body } = await get('/api/skills');
+  assert.equal(status, 200);
+  assert.equal(body.precision, 'estimate');
+  assert.ok(body.summary.discovered >= 1);
+  const demo = body.skills.find(s => s.name === 'demo');
+  assert.ok(demo, 'demo skill discovered via pi\'s loader');
+  assert.equal(demo.skill, SKILL_MD, 'identity is the absolute SKILL.md path');
+  assert.equal(demo.source, 'global');
+  assert.equal(demo.advertised, true);
+  assert.ok(demo.bodyTokensEst > 0);
+  assert.ok(demo.catalogTokensEst > 0);
+  // Mined activations: one explicit + one read + one targeted grep.
+  assert.equal(demo.usage.kindSplit.read, 1);
+  assert.equal(demo.usage.kindSplit.explicit, 1);
+  assert.equal(demo.usage.kindSplit.targeted, 1);
+  assert.equal(demo.usage.total, 3);
+  assert.equal(demo.usage.weeks12.length, 12);
+  assert.ok(demo.usage.lastUsedTs > 0);
+  assert.ok(body.refine, 'refine config present');
+});
+
+test('disable-model-invocation skills would be manual with zero advertised cost', async () => {
+  // The fixture skill is advertised; assert the invariant the endpoint encodes:
+  // advertised catalog tokens come only from non-manual skills.
+  const { body } = await get('/api/skills');
+  const advertisedTokens = body.skills.filter(s => s.advertised).reduce((a, s) => a + s.catalogTokensEst, 0);
+  const manualTokens = body.skills.filter(s => !s.advertised).reduce((a, s) => a + s.catalogTokensEst, 0);
+  assert.equal(manualTokens, 0, 'manual-only skills add zero advertised cost');
+  assert.ok(advertisedTokens > 0);
+});
+
+test('GET /api/skills/activations streams NDJSON and honors filters', async () => {
+  const url = '/api/skills/activations?skill=' + encodeURIComponent(SKILL_MD);
+  const res = await fetch(base + url);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type') || '', /application\/x-ndjson/);
+  const lines = (await res.text()).trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+  assert.equal(lines.length, 3);
+  assert.ok(lines.every(r => r.skill === SKILL_MD));
+
+  const explicit = await fetch(base + url + '&kind=explicit').then(r => r.text());
+  const exLines = explicit.trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+  assert.equal(exLines.length, 1);
+  assert.equal(exLines[0].kind, 'explicit', 'a /skill: block shows as kind explicit');
+
+  const reads = await fetch(base + url + '&kind=read').then(r => r.text());
+  assert.equal(reads.trim().split('\n').filter(Boolean).length, 1);
+
+  const byCwd = await fetch(base + url + '&cwd=' + encodeURIComponent('/nope')).then(r => r.text());
+  assert.equal(byCwd.trim(), '', 'cwd filter excludes non-matching records');
+
+  const since = await fetch(base + url + '&since=' + encodeURIComponent('2027-01-01')).then(r => r.text());
+  assert.equal(since.trim(), '', 'since filter excludes older records');
+});
+
+test('GET /api/skills/coverage maps ranged reads since mtime; targeted are touches', async () => {
+  const { status, body } = await get('/api/skills/coverage?skill=' + encodeURIComponent(SKILL_MD));
+  assert.equal(status, 200);
+  assert.equal(body.skill, SKILL_MD);
+  assert.equal(body.numMapped, 1, 'only the ranged read since mtime maps');
+  assert.equal(body.targetedTouches, 1, 'the grep is a touch, not a mapped read');
+  assert.equal(body.excludedBeforeMtime, 1, 'the pre-mtime explicit invocation is excluded from the map');
+  assert.equal(body.flatFullRead, false, 'a partial read is not the flat case');
+  assert.ok(body.unreadTokensEst > 0, 'the unread sections carry an estimate');
+  const cold = body.sections.filter(s => s.neverRead);
+  assert.ok(cold.length >= 2, 'Sections B and C are never read');
+  assert.ok(body.sections.some(s => s.reads === 1), 'the read touches at least one section');
+  assert.ok(body.latest && body.latest.sessionId === SKILLS_SESSION_ID, 'latest activation deep-links its session');
+  assert.equal(body.weeks26.length, 26);
+});
+
+test('GET /api/skills/coverage validates the skill path', async () => {
+  assert.equal((await get('/api/skills/coverage')).status, 400);
+  assert.equal((await get('/api/skills/coverage?skill=' + encodeURIComponent('/not/a/skill.txt'))).status, 400);
+  assert.equal((await get('/api/skills/coverage?skill=' + encodeURIComponent('/nope/SKILL.md'))).status, 404);
 });

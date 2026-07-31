@@ -272,3 +272,33 @@ test('log compaction keeps the text log near its live size', () => {
   const { infos } = withBudget(0, () => index.scanSessions([file]));
   assert.equal(infos.get(file).messageCount, 145);
 });
+
+test('skills.ndjson persists: a zero-budget scan serves mined activations from disk', () => {
+  const SKILL = path.join(tmpHome, '.pi', 'agent', 'skills', 'demo', 'SKILL.md');
+  index.setSkillRoots([SKILL]);
+  const file = writeSession([
+    { type: 'session', cwd: '/home/u/proj', timestamp: '2026-07-20T10:00:00.000Z' },
+    { type: 'model_change', provider: 'anthropic', modelId: 'claude-x' },
+    { type: 'message', id: 'r1', timestamp: '2026-07-20T10:00:01.000Z', message: { role: 'assistant', content: [
+      { type: 'toolCall', id: 'tc1', name: 'read', arguments: { path: SKILL, offset: 1, limit: 30 } },
+    ] } },
+  ]);
+  index.scanSessions([file]);
+  index.resetForTests(); // flush + drop in-memory state
+
+  assert.ok(fs.existsSync(path.join(indexDir, 'skills.ndjson')), 'skills log written');
+
+  // Zero-budget scan can't parse JSONL — records must come from disk.
+  const { indexing } = withBudget(0, () => index.scanSessions([file]));
+  assert.equal(indexing, false, 'nothing left to index after reload');
+  const recs = index.getSkillActivations({ skill: SKILL });
+  assert.equal(recs.length, 1, 'activation served from persisted skills.ndjson');
+  assert.equal(recs[0].kind, 'read');
+  assert.deepEqual(recs[0].ranges, [[1, 30]]);
+  assert.equal(recs[0].model, 'anthropic/claude-x');
+
+  // Filters honored against the persisted records.
+  assert.equal(index.getSkillActivations({ skill: SKILL, kind: 'targeted' }).length, 0);
+  assert.equal(index.getSkillActivations({ skill: SKILL, cwd: '/home/u/proj' }).length, 1);
+  assert.equal(index.getSkillActivations({ skill: SKILL, sinceMs: Date.parse('2027-01-01') }).length, 0);
+});

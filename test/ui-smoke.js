@@ -131,6 +131,31 @@ fs.writeFileSync(betaFile, betaEntries.map((e) => JSON.stringify(e)).join('\n') 
 const betaAt = new Date('2026-07-04T00:05:00.000Z');
 fs.utimesSync(betaFile, betaAt, betaAt);
 
+// --- skills fixture: a global skill + a session that partially reads it ------
+const skillDir = path.join(tmpHome, '.pi', 'agent', 'skills', 'smoke-skill');
+fs.mkdirSync(skillDir, { recursive: true });
+const skillMd = path.join(skillDir, 'SKILL.md');
+fs.writeFileSync(skillMd, [
+  '---', 'name: smoke-skill', 'description: A skill for the ui-smoke skills view.', '---',
+  '', '# Smoke skill', 'Intro line.', '',
+  '## Read section', ...Array.from({ length: 8 }, (_, i) => `read line ${i} with words`),
+  '', '## Cold section', ...Array.from({ length: 12 }, (_, i) => `cold appendix line ${i} nobody loads here`),
+  '',
+].join('\n'));
+const skillEdited = new Date('2026-07-01T00:00:00.000Z');
+fs.utimesSync(skillMd, skillEdited, skillEdited);
+// Lives under proj-alpha (no new workspace group) and carries no usage, so it
+// can't perturb the sidebar-tree or usage-view assertions — it exists only to
+// give the skill one mined ranged read for the coverage map.
+const skillSessionFile = path.join(sessionDir, '2026-07-05T00-05-00-skillui1.jsonl');
+fs.writeFileSync(skillSessionFile, [
+  { type: 'session', cwd: CWD, timestamp: '2026-07-05T00:05:00.000Z' },
+  { type: 'message', id: 'skrui1', timestamp: '2026-07-05T00:05:01.000Z', message: { role: 'user', content: [{ type: 'text', text: 'use the smoke skill' }] } },
+  { type: 'message', id: 'skrui2', timestamp: '2026-07-05T00:05:02.000Z', message: { role: 'assistant', content: [
+    { type: 'toolCall', id: 'skuitc1', name: 'read', arguments: { path: skillMd, offset: 1, limit: 10 } },
+  ] } },
+].map((e) => JSON.stringify(e)).join('\n') + '\n');
+
 // --- fake bridge socket -------------------------------------------------------
 // Speaks the newline-delimited JSON protocol from lib/bridge-session.js:
 // requests {id, command, ...} -> {type:'response', id, success, data};
@@ -2237,6 +2262,46 @@ function writeRegistry(patch = {}) {
       null, { timeout: 2000 });
     check(true, 'Escape closes the usage view');
 
+    // Skills view: the observational directory + in-takeover detail + refine
+    // launcher. Opened from the sidebar-header shield button.
+    console.log('skills view:');
+    await desktop.click('[title="Skills"]');
+    await desktop.waitForFunction(() =>
+      document.querySelector('.main').classList.contains('skills-open') &&
+      [...document.querySelectorAll('.sk-row .sk-name')].some((n) => n.textContent.includes('smoke-skill')),
+      null, { timeout: 8000 });
+    check(await desktop.evaluate(() => document.getElementById('sessionView').offsetParent === null),
+      'session view hidden while the skills takeover is open');
+    check(await desktop.evaluate(() =>
+      /inferred from tool calls/.test(document.querySelector('.sk-summary')?.textContent || '') &&
+      /catalog ~\d/.test(document.querySelector('.sk-summary')?.textContent || '')),
+      'directory summary badges inferred usage and the estimated catalog footprint');
+    // Open the detail page for the fixture skill.
+    await desktop.evaluate(() => {
+      [...document.querySelectorAll('.sk-row')].find((r) => r.querySelector('.sk-name').textContent.includes('smoke-skill')).click();
+    });
+    await desktop.waitForSelector('.skills-detail-wrap', { timeout: 8000 });
+    check(await desktop.evaluate(() => !!document.querySelector('.skills-detail-title')?.textContent.includes('smoke-skill')),
+      'detail header names the skill in-takeover (not a modal)');
+    check(await desktop.evaluate(() =>
+      [...document.querySelectorAll('.sec-row.cold .never')].some((n) => /never read/.test(n.textContent))),
+      'coverage map flags a never-read section');
+    check(await desktop.evaluate(() => !!document.querySelector('.spark-lg') && document.querySelectorAll('.spark-lg i').length === 26),
+      'side column renders the 26-week sparkline');
+    // Refine launcher: prefills the new-session takeover with a draft (never sends).
+    await desktop.click('.refine-btn');
+    await desktop.waitForFunction(() =>
+      document.querySelector('.main').classList.contains('new-session-open'), null, { timeout: 5000 });
+    check(await desktop.evaluate(() => (document.getElementById('newSessionCwd').value || '').includes('smoke-skill')),
+      'refine sets the new-session cwd to the skill directory');
+    check(await desktop.evaluate(() => typeof nsPendingDraft === 'string' &&
+      nsPendingDraft.includes('SKILL.md') && /coverage\?skill=/.test(nsPendingDraft)),
+      'refine stashes an evidence-bundle draft (path + coverage URL), never auto-sent');
+    await desktop.keyboard.press('Escape');
+    await desktop.waitForFunction(() => !document.querySelector('.main').classList.contains('new-session-open'),
+      null, { timeout: 2000 });
+    check(true, 'Escape closes the new-session takeover opened by refine');
+
     // 3. Mobile: hamburger + drawer from empty state and session header
     console.log('mobile:');
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
@@ -2399,6 +2464,7 @@ function writeRegistry(patch = {}) {
   } catch (e) {
     failures++;
     console.error('  ✘ smoke test crashed:', e.message);
+    console.error(e.stack);
     if (errors.length) console.error('  collected page errors:', errors.join(' | '));
   } finally {
     await browser.close();

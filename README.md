@@ -130,13 +130,18 @@ mkdir -p ~/.pi/agent/extensions ~/.pi/agent/skills
 ln -s "$PWD/extensions/pi-dish-bridge" ~/.pi/agent/extensions/pi-dish-bridge
 ln -s "$PWD/skills/pi-dish-pages" ~/.pi/agent/skills/pi-dish-pages
 ln -s "$PWD/skills/pi-dish-comments" ~/.pi/agent/skills/pi-dish-comments
+ln -s "$PWD/skills/pi-dish-skill-refine" ~/.pi/agent/skills/pi-dish-skill-refine
 ```
 
 The skill symlinks are optional. `pi-dish-pages` teaches agents to publish
 HTML artifacts, while `pi-dish-comments` gives them a small CLI-backed inbox
 for anchored feedback left on files, diffs, and those artifacts. Ask an agent
 to "publish the plan as a page" and you get back a link; see "Published
-pages" below.
+pages" below. `pi-dish-skill-refine` is the default methodology the Skills
+view's "✎ Refine with an agent" button drafts against — symlink it so that
+button leads with `/skill:pi-dish-skill-refine`; without it the button falls
+back to referencing the skill's markdown by absolute path (and
+`PI_DISH_REFINE` / the `refine` dish setting override it entirely).
 
 Symlink, don't copy — a stale copied bridge loaded alongside the current one
 races for the session socket.

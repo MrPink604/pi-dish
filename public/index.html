@@ -49,6 +49,11 @@
               <path d="M3 20h18"/>
             </svg>
           </button>
+          <button class="btn-icon" onclick="openSkillsView()" title="Skills" aria-label="Skills">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3l7 4v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V7z"/>
+            </svg>
+          </button>
           <button class="btn-icon global-settings-btn" onclick="openSettingsModal()" title="Settings" aria-label="Settings">⚙</button>
           <button class="btn-icon" onclick="refreshSessions()" title="Refresh">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -403,6 +408,23 @@
             <button class="btn btn-primary" id="nsSpawnBtn" onclick="spawnNewSession()">+ New session</button>
           </div>
         </div>
+      </div>
+
+      <!-- Skills view: a main-pane takeover (usage-view pattern) — an
+           observational directory of discovered skills and their mined
+           activation coverage. Directory + an in-takeover detail page.
+           Opened from the sidebar header; mutually exclusive with the other
+           takeovers. See TASKS/skills-view-phase1.md. -->
+      <div class="skills-view" id="skillsView">
+        <div class="usage-view-header skills-view-header">
+          <button class="menu-btn" onclick="toggleSidebar()" aria-label="Open session list">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M3 12h18M3 6h18M3 18h18"/>
+            </svg>
+          </button>
+          <div class="skills-header-inner" id="skillsViewHeader"></div>
+        </div>
+        <div class="skills-view-body" id="skillsViewBody"></div>
       </div>
     </main>
   </div>
