@@ -302,3 +302,29 @@ test('skills.ndjson persists: a zero-budget scan serves mined activations from d
   assert.equal(index.getSkillActivations({ skill: SKILL, cwd: '/home/u/proj' }).length, 1);
   assert.equal(index.getSkillActivations({ skill: SKILL, sinceMs: Date.parse('2027-01-01') }).length, 0);
 });
+
+test('an index populated before skills mining re-mines its files (upgrade path)', () => {
+  // A pre-skills pi-dish build left meta/text current but no skills entries.
+  // The staleness check must treat those files as stale, or a machine with an
+  // existing index reports zero skill usage for its whole historical corpus.
+  const SKILL = path.join(tmpHome, '.pi', 'agent', 'skills', 'demo', 'SKILL.md');
+  const file = writeSession([
+    { type: 'session', cwd: '/home/u/proj', timestamp: '2026-07-20T10:00:00.000Z' },
+    { type: 'message', id: 'r1', timestamp: '2026-07-20T10:00:01.000Z', message: { role: 'assistant', content: [
+      { type: 'toolCall', id: 'tc1', name: 'read', arguments: { path: SKILL, offset: 5, limit: 10 } },
+    ] } },
+  ]);
+  index.scanSessions([file]);
+  index.resetForTests(); // flush everything to disk
+
+  // Simulate the pre-skills index: meta/text logs exist, skills log doesn't.
+  fs.rmSync(path.join(indexDir, 'skills.ndjson'));
+
+  // Budgeted scan: meta/text are current, but the missing skills entry makes
+  // the file stale, so it re-parses and re-mines.
+  const { indexing } = index.scanSessions([file]);
+  assert.equal(indexing, false);
+  const recs = index.getSkillActivations({ skill: SKILL });
+  assert.equal(recs.length, 1, 'historical file was re-mined despite current meta/text');
+  assert.deepEqual(recs[0].ranges, [[5, 14]]);
+});
