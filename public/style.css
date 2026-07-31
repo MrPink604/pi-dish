@@ -453,6 +453,42 @@ body.sidebar-open {
   .session-pin-btn { opacity: 0.35; }
 }
 
+/* Row-level close (live rows only): quiet hover-reveal ✕ beside the pin.
+   Danger color appears only in the armed two-tap confirm state. */
+.session-close-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  padding: 0 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.session-item:hover .session-close-btn { opacity: 0.6; }
+.session-close-btn:hover { opacity: 1; }
+
+.session-close-btn.confirm,
+.session-item:hover .session-close-btn.confirm {
+  color: var(--error);
+  font-weight: 600;
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .session-close-btn { opacity: 0.35; }
+  .session-close-btn.confirm { opacity: 1; }
+}
+
+/* Close POST in flight — dim the row and swallow taps until it resolves */
+.session-item.closing {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
 .session-drag-handle {
   color: var(--text-muted);
   font-size: 12px;

@@ -2305,6 +2305,58 @@ function writeRegistry(patch = {}) {
       'latch clears after the next key');
     await mobile.click('#termCloseBtn');
 
+    // 12b. Row-level close: live rows carry a quiet hover-reveal ✕ with a
+    // two-tap inline confirm. The POST is intercepted (deterministic — the
+    // real SIGTERM round-trip is covered by the stats-modal section below,
+    // which needs the session still live here).
+    console.log('row-level close:');
+    const closeRowSel = `.session-item[data-id="${SESSION_ID}"]`;
+    await desktop.waitForSelector(`${closeRowSel} .session-close-btn`, { state: 'attached', timeout: 5000 });
+    check(true, 'live row carries the close button');
+    // Hover-reveal: transparent until the row is hovered.
+    await desktop.mouse.move(900, 400); // park the pointer off the sidebar
+    const preOpacity = await desktop.$eval(`${closeRowSel} .session-close-btn`, (el) => getComputedStyle(el).opacity);
+    check(preOpacity === '0', `close button hidden until hover (opacity ${preOpacity})`);
+    await desktop.hover(closeRowSel);
+    await desktop.waitForFunction((sel) =>
+      parseFloat(getComputedStyle(document.querySelector(sel)).opacity) > 0,
+      `${closeRowSel} .session-close-btn`, { timeout: 5000 });
+    check(true, 'close button revealed on row hover');
+    // First tap arms the confirm state; the tap must not select the row.
+    const selectedBefore = await desktop.evaluate(() => document.querySelector('.session-item.active')?.dataset.id || null);
+    await desktop.click(`${closeRowSel} .session-close-btn`);
+    check(await desktop.locator(`${closeRowSel} .session-close-btn.confirm`).count() === 1,
+      'first tap arms the danger confirm state');
+    check(await desktop.evaluate(() => document.querySelector('.session-item.active')?.dataset.id || null) === selectedBefore,
+      'confirm tap does not select the row');
+    // A poll re-render must restore (not clear) the armed state.
+    await desktop.evaluate(() => renderSessions());
+    check(await desktop.locator(`${closeRowSel} .session-close-btn.confirm`).count() === 1,
+      'list re-render preserves the armed confirm');
+    // The armed state auto-reverts after ~3s.
+    await desktop.waitForFunction((sel) => !document.querySelector(sel),
+      `${closeRowSel} .session-close-btn.confirm`, { timeout: 6000 });
+    check(true, 'confirm state reverts after ~3s');
+    // Tap-tap through with the POST routed: assert it fired with the row id.
+    let closePostUrl = null;
+    let resolveClosePost;
+    const closePostFired = new Promise((r) => { resolveClosePost = r; });
+    await desktop.route('**/api/sessions/*/close', async (route) => {
+      closePostUrl = route.request().url();
+      resolveClosePost();
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true }) });
+    });
+    await desktop.hover(closeRowSel);
+    await desktop.click(`${closeRowSel} .session-close-btn`);
+    await desktop.click(`${closeRowSel} .session-close-btn.confirm`);
+    await Promise.race([closePostFired, new Promise((r) => setTimeout(r, 5000))]);
+    check(closePostUrl !== null && closePostUrl.includes(`/api/sessions/${SESSION_ID}/close`),
+      `second tap fires POST /close for the row (got ${JSON.stringify(closePostUrl)})`);
+    await desktop.unroute('**/api/sessions/*/close');
+    // The interception left the session live server-side; wait for the
+    // post-close list reload to settle before the real close section below.
+    await desktop.waitForSelector(`${closeRowSel} .session-close-btn`, { state: 'attached', timeout: 5000 });
+
     // 13. Close session: the stats modal shows where the session runs, and
     // its danger button SIGTERMs the pi process, flipping the view to the
     // inactive/resume state. A dummy child stands in for pi — the registry

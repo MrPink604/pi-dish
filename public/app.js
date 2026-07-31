@@ -241,6 +241,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('sessionList').addEventListener('click', (e) => {
     const pinBtn = e.target.closest('.session-pin-btn');
     if (pinBtn) { toggleSessionPinned(pinBtn.closest('.session-item').dataset.id); return; }
+    // Row-level close: two-tap confirm — never a row select.
+    const closeBtn = e.target.closest('.session-close-btn');
+    if (closeBtn) {
+      e.stopPropagation();
+      handleRowCloseClick(closeBtn.closest('.session-item').dataset.id);
+      return;
+    }
     // A finished drag still emits a click on the handle — never treat it as a select.
     if (e.target.closest('.session-drag-handle')) return;
     // The header's + spawns a session at the node's path — not a collapse toggle.
@@ -688,6 +695,42 @@ async function loadSessions(query, { withPrevious = sidebarTab === 'all' } = {})
 // background poll — or the sidebar refresh button — doesn't reset it.
 function refreshSessions() { return loadSessions(filterQuery || undefined); }
 
+// Row-level close (live rows): a quiet ✕ with a two-tap inline confirm —
+// first tap arms a danger-styled "close?" state that auto-reverts after ~3s,
+// second tap fires POST /close. State lives in module vars (not the DOM) so
+// the 10s poll's re-render restores an armed confirm instead of clearing it.
+let sessionCloseConfirmId = null; // row awaiting its second confirm tap
+let sessionCloseConfirmTimer = null;
+let sessionCloseBusyId = null;    // row whose close POST is in flight
+
+function handleRowCloseClick(id) {
+  if (sessionCloseBusyId) return; // one close at a time
+  if (sessionCloseConfirmId === id) { performRowClose(id); return; }
+  clearTimeout(sessionCloseConfirmTimer);
+  sessionCloseConfirmId = id;
+  sessionCloseConfirmTimer = setTimeout(() => {
+    sessionCloseConfirmId = null;
+    renderSessions();
+  }, 3000);
+  renderSessions();
+}
+
+async function performRowClose(id) {
+  clearTimeout(sessionCloseConfirmTimer);
+  sessionCloseConfirmId = null;
+  sessionCloseBusyId = id;
+  renderSessions();
+  try {
+    await apiSend(`/api/sessions/${id}/close`);
+    sessionCloseBusyId = null;
+    await finishSessionClose(id);
+  } catch (e) {
+    sessionCloseBusyId = null;
+    setStatus('Close failed: ' + e.message, 'error');
+    renderSessions();
+  }
+}
+
 function renderSessionItem(session, opts = {}) {
   const ctxClass = contextClass(session.contextPercent);
   const activeClass = currentSession?.id === session.id ? 'active' : '';
@@ -705,6 +748,13 @@ function renderSessionItem(session, opts = {}) {
   const timeAgo = formatRelativeTime(session.lastActivity);
   const isPinned = pinnedSessions.includes(session.id);
   const pinBtn = `<button class="session-pin-btn${isPinned ? ' pinned' : ''}" title="${isPinned ? 'Unpin' : 'Pin to top'}">📌</button>`;
+  // Live rows only; the confirm/busy states read the module vars so a poll
+  // re-render restores an armed confirm rather than silently clearing it.
+  const closeArmed = sessionCloseConfirmId === session.id;
+  const closeBusy = sessionCloseBusyId === session.id;
+  const closeBtn = session.isActive
+    ? `<button class="session-close-btn${closeArmed ? ' confirm' : ''}" title="${closeArmed ? 'Tap again to close this session' : 'Close session (transcript stays resumable)'}">${closeBusy ? '…' : closeArmed ? 'close?' : '✕'}</button>`
+    : '';
   // Rows in the pinned section get a drag handle (reorder); pinned and
   // Recent-view rows get a cwd hint — they've left their workspace group,
   // so the group label isn't there.
@@ -720,11 +770,11 @@ function renderSessionItem(session, opts = {}) {
     : '';
 
   return `
-    <div class="session-item ${activeClass} ${inactiveClass}" data-id="${escapeHtml(session.id)}">
+    <div class="session-item ${activeClass} ${inactiveClass}${closeBusy ? ' closing' : ''}" data-id="${escapeHtml(session.id)}">
       <div class="session-item-header">
         ${dragHandle}${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>
         <span class="session-item-time">${timeAgo}</span>
-        ${pinBtn}
+        ${pinBtn}${closeBtn}
       </div>
       <div class="session-item-meta">
         ${cwdHint}
@@ -2532,6 +2582,16 @@ async function copyMessageShareLink(btn) {
   }
 }
 
+// Shared post-close handling (stats-modal close and the sidebar row ✕):
+// re-fetch both lists (the session just moved from active to previous) and,
+// when it was the selected session, re-select so the view flips to its
+// inactive state (resume bar).
+async function finishSessionClose(sessionId) {
+  setStatus('Session closed');
+  await loadSessions(undefined, { withPrevious: true });
+  if (currentSession?.id === sessionId) selectSession(sessionId);
+}
+
 // Close-session section of the stats modal (active sessions only): SIGTERM
 // the pi process via POST /close. The transcript stays on disk and resumable —
 // only the running process goes away, so this is the phone-side equivalent of
@@ -2559,11 +2619,7 @@ function renderCloseSection(sessionId, generation) {
       await apiSend(`/api/sessions/${sessionId}/close`);
       if (!ownsStatsModal(sessionId, generation)) return;
       closeStatsModal();
-      setStatus('Session closed');
-      // Re-fetch both lists (the session just moved from active to previous)
-      // and re-select so the view flips to its inactive state (resume bar).
-      await loadSessions(undefined, { withPrevious: true });
-      if (currentSession?.id === sessionId) selectSession(sessionId);
+      await finishSessionClose(sessionId);
     } catch (e) {
       if (!ownsStatsModal(sessionId, generation)) return;
       btn.disabled = false;

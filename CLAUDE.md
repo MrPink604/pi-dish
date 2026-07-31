@@ -237,7 +237,9 @@ terminal; RPC is checked first because RPC children also load the bridge
 and inherit the server's own `$TMUX`). Tests that assert runtime kinds pin
 `TMUX_TMPDIR` to an empty temp dir, or the tmux session enclosing
 `npm test` gets found by the pid walk. UI: the stats modal's "Running in" row
-(`formatRuntime` in helpers.js) and its Close-session section.
+(`formatRuntime` in helpers.js) and its Close-session section, plus the
+row-level ✕ on live sidebar rows — both funnel post-close handling through
+`finishSessionClose` (list re-fetch + re-select flips the view to inactive).
 
 ## tmux spawning (lib/tmux.js)
 
@@ -691,7 +693,10 @@ order: pointer-based drag handles (works on touch), with move/up listeners on
 `document` because reinserting the dragged row releases pointer capture. Both
 persist in localStorage (`pi-dish-collapsed-groups`, `pi-dish-pinned-sessions`);
 `renderSessions` bails while a drag is live so the 10s poll can't rebuild the
-list mid-drag.
+list mid-drag. Live rows also carry a quiet hover-reveal ✕ (always faintly
+visible on touch) with a two-tap inline confirm — the armed/busy state lives
+in module vars (`sessionCloseConfirmId`), so a poll re-render restores an
+armed confirm instead of clearing it; the ~3s revert clears it.
 Each item shows one status dot, best signal first: pulsing green
 (`.session-item-status.working`, turn in progress), accent blue
 (`.session-item-status.unread`, activity since the session was last on
