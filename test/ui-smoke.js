@@ -2320,9 +2320,13 @@ function writeRegistry(patch = {}) {
     const box = await mobile.locator('.header-menu-btn').boundingBox();
     check(box && box.x >= 0 && box.y >= 0 && box.width >= 36, 'header hamburger visible in layout');
 
-    // Layout contract: model selector top-right, context badge bottom-left
+    // Layout contract: title gets its own row above the top-right model
+    // selector, while the context badge stays bottom-left.
     const vp = mobile.viewportSize();
+    const title = await mobile.locator('#sessionName').boundingBox();
     const model = await mobile.locator('#sessionModel').boundingBox();
+    check(title && model && title.y + title.height <= model.y,
+      'session title sits above the model selector');
     check(model && model.x > vp.width / 2 && model.y < 60, 'model selector sits top-right');
     const ctx = await mobile.locator('#sessionContextBar').boundingBox();
     check(ctx && ctx.x < vp.width / 4 && ctx.y > vp.height / 2, 'context badge sits bottom-left');

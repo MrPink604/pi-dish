@@ -2164,7 +2164,7 @@ body.sidebar-open {
     min-width: 0;
   }
 
-  /* Header: hamburger + title in one compact row */
+  /* Header: title gets its own row above the model controls. */
   .session-header {
     padding: 6px 12px 6px 6px;
     padding-top: calc(env(safe-area-inset-top) + 6px);
@@ -2173,13 +2173,15 @@ body.sidebar-open {
     justify-content: flex-start;
   }
 
-  /* Single row: capped title left, context % + model selector right */
+  /* Keep the title independent from the badges so long names can use all
+     of the available width instead of competing with the model selector. */
   .session-info {
     flex: 1;
     min-width: 0;
     display: flex;
-    align-items: center;
-    gap: 8px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
   }
 
   .session-info h2 {
@@ -2189,15 +2191,17 @@ body.sidebar-open {
     overflow: hidden;
     text-overflow: ellipsis;
     margin-bottom: 0;
-    flex: 0 1 auto;
-    max-width: 40vw;
+    width: 100%;
+    max-width: none;
   }
 
   .session-meta-desktop {
-    margin-left: auto;
+    width: 100%;
+    margin-left: 0;
     flex-shrink: 0;
     gap: 6px;
     align-items: center;
+    justify-content: flex-end;
   }
 
   /* Keep only the model selector in the header — context lives bottom-left
