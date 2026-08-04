@@ -131,6 +131,20 @@ fs.writeFileSync(betaFile, betaEntries.map((e) => JSON.stringify(e)).join('\n') 
 const betaAt = new Date('2026-07-04T00:05:00.000Z');
 fs.utimesSync(betaFile, betaAt, betaAt);
 
+// Relevance-ranking fixture: same workspace as beta (so the tree assertions
+// still see two groups), older, and matching "cedar" in its *name* — beta
+// only mentions cedar once in its transcript. Recency would list beta first;
+// the ranked search list must not.
+const RANK_ID = '2026-07-03T00-00-00-uismoke4';
+const rankFile = path.join(sessionDirB, `${RANK_ID}.jsonl`);
+fs.writeFileSync(rankFile, [
+  { type: 'session', cwd: CWD_B, timestamp: '2026-07-03T00:00:00.000Z' },
+  { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'cedar rollout plan' }], timestamp: '2026-07-03T00:00:01.000Z' } },
+  { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'rollout notes only' }], timestamp: '2026-07-03T00:00:02.000Z' } },
+].map((e) => JSON.stringify(e)).join('\n') + '\n');
+const rankAt = new Date('2026-07-03T00:05:00.000Z');
+fs.utimesSync(rankFile, rankAt, rankAt);
+
 // --- skills fixture: a global skill + a session that partially reads it ------
 const skillDir = path.join(tmpHome, '.pi', 'agent', 'skills', 'smoke-skill');
 fs.mkdirSync(skillDir, { recursive: true });
@@ -1897,11 +1911,26 @@ function writeRegistry(patch = {}) {
     check(await desktop.evaluate(() =>
       document.querySelectorAll('#sessionList .session-item').length) === 1,
       'non-matching sessions filtered out');
+    // A typed query swaps the workspace tree for one flat relevance-ranked
+    // list: the older session naming "cedar" leads the newer one that only
+    // mentions it in its transcript.
+    await desktop.fill('#filterInput', 'cedar');
+    await desktop.waitForFunction((ids) =>
+      JSON.stringify([...document.querySelectorAll('#sessionList .session-item')].map((el) => el.dataset.id)) === ids,
+      JSON.stringify([RANK_ID, BETA_ID]), { timeout: 5000 });
+    check(true, 'search results rank the name match above the newer content match');
+    check(await desktop.locator('#sessionList .workspace-group-header').count() === 0,
+      'ranked search list drops the grouping headers');
+    check(await desktop.locator('#sessionList .session-item .session-item-cwd').count() === 2,
+      'ranked rows keep their workspace hint');
+
     await desktop.fill('#filterInput', '');
     await desktop.waitForFunction(() =>
       document.querySelectorAll('#sessionList .session-item').length >= 3, null, { timeout: 5000 });
     check(await desktop.locator('.session-item-snippet').count() === 0,
       'clearing the query drops snippets and restores the list');
+    check(await desktop.locator('#sessionList .workspace-group-header').count() > 0,
+      'clearing the query restores the grouped view');
 
     // 12a. Active-tab content search: queries go through the server on both
     // tabs — a session matched by transcript content must not vanish when
@@ -1938,11 +1967,13 @@ function writeRegistry(patch = {}) {
       'saved scope renders as an active chip');
     check(await desktop.evaluate(() => document.getElementById('filterInput').value) === '',
       'saving a scope clears the typed query it absorbed');
+    // Both proj-beta sessions (the beta transcript and the ranking fixture
+    // sharing its cwd) are hidden by the scope, and the note says so.
     await desktop.waitForFunction((betaId) =>
       !document.querySelector(`.session-item[data-id="${betaId}"]`) &&
-      document.querySelector('.scope-hidden-note')?.textContent === '1 hidden by scopes',
+      document.querySelector('.scope-hidden-note')?.textContent === '2 hidden by scopes',
       BETA_ID, { timeout: 5000 });
-    check(true, 'active scope keeps filtering with an audit note for the hidden row');
+    check(true, 'active scope keeps filtering with an audit note for the hidden rows');
     // Scope state is device-local; definitions are server-global settings.
     check(await desktop.evaluate(() => localStorage.getItem('pi-dish-active-scopes')) === JSON.stringify(['No beta']),
       'active scope persisted to localStorage');
@@ -2048,8 +2079,10 @@ function writeRegistry(patch = {}) {
     }
     // Save a device-local active scope, then prove the beta session is absent
     // at rank 101 without it but survives when the server applies the scope
-    // before truncating. The server-reported hidden count covers all 100
-    // excluded sessions, not merely rows from an already-capped response.
+    // before truncating (the 100 fillers name the term, beta only mentions it
+    // once in its transcript, so it ranks last either way). The
+    // server-reported hidden count covers all 100 excluded sessions, not
+    // merely rows from an already-capped response.
     await desktop.fill('#filterInput', 'cwd:proj-beta');
     await desktop.evaluate(() => { window.prompt = () => 'Beta only'; });
     await desktop.click('.scope-chip.scope-add');
@@ -2061,7 +2094,7 @@ function writeRegistry(patch = {}) {
     await desktop.waitForFunction((id) =>
       document.querySelectorAll('.search-result').length === 100 &&
       !document.querySelector(`.search-result[data-id="${id}"]`) &&
-      document.querySelector('.search-count-line')?.textContent.includes('showing the 100 most recent'),
+      document.querySelector('.search-count-line')?.textContent.includes('showing the 100 best matches'),
       BETA_ID, { timeout: 10000 });
     check(true, 'unscoped rank-101 session is omitted with truthful cap messaging');
     await desktop.evaluate(() => closeSearchView());
@@ -2076,7 +2109,7 @@ function writeRegistry(patch = {}) {
       document.querySelector('.scope-hidden-note')?.textContent === '100 hidden by scopes',
       BETA_ID, { timeout: 10000 });
     check(!await desktop.evaluate(() =>
-      document.querySelector('.search-count-line').textContent.includes('showing the 100 most recent')),
+      document.querySelector('.search-count-line').textContent.includes('showing the 100 best matches')),
       'scoped total and cap messaging describe the post-scope result set');
     await desktop.evaluate(() => closeSearchView());
 

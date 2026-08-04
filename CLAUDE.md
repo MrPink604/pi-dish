@@ -714,6 +714,20 @@ filter row shows a spinner from first keystroke until results land
 (`setSearchBusy`), and `loadSessions` carries a sequence guard so a slow
 stale response can't clobber a newer one.
 
+While a query is typed the sidebar drops grouping (and the pinned segment —
+pins are navigation aids for the unfiltered list) for **one flat
+relevance-ranked list** of `renderSessionItem(s, { showCwd: true })` rows;
+clearing the query restores the grouped views untouched. Ranking is
+`scoreSessionMatch` in helpers.js, shared by client and server: each positive
+plain token scores independently (name hit ≫ other metadata ≫ content, whose
+contribution grows logarithmically from one occurrence and caps), so
+distinct-keyword coverage beats repeating one keyword and recency is only the
+tiebreaker. Field/date-only queries score 0 everywhere and stay
+recency-ordered. The server attaches `searchScore` (it alone can count
+transcript occurrences) and returns the list already sorted; the client
+re-sorts by `searchScore ?? scoreSessionMatch(...)` so the interim
+local-filter pass ranks on metadata alone.
+
 Filter queries speak one grammar everywhere (`parseSessionQuery` /
 `evaluateSessionQuery` in helpers.js, shared by `applyLocalFilter` and the
 server's `matchSessionQuery`): `-term` negation, `name:`/`cwd:`/`model:`/`id:`
@@ -741,7 +755,9 @@ Advanced search is a main-pane takeover (`.main.search-open`, usage-view
 pattern and mutually exclusive with it), opened from the sidebar-header 🔍 or
 the "⤢ full search" chip that appears beside "+ save filter" while a query is
 typed. It speaks the **same grammar** — never fork the dialect — via `GET
-/api/search?q=`: one flat recency-ordered result list over every session,
+/api/search?q=`: one flat result list over every session, ranked by the same
+`scoreSessionMatch` as the sidebar (recency only breaks ties; a query with no
+positive plain term stays purely recency-ordered),
 each content match carrying up to four snippets plus a total occurrence count
 (`buildSnippets` in helpers.js; windows never reach back into the previous
 one). Metadata-matched sessions still get snippets when the positive tokens

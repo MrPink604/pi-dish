@@ -924,6 +924,20 @@ function renderSessions() {
       ? (active.length === 0 && !filterQuery ? 'No active sessions<br><span style="font-size:11px">Click "+ New Session" or resume one from All</span>' : 'No matches')
       : (showing.length === 0 && !filterQuery ? 'No sessions found' : 'No matches');
     html += `<div class="empty-session"><p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">${msg}</p></div>`;
+  } else if (filterQuery) {
+    // Search results are one flat relevance-ranked list — grouping (and the
+    // pinned section, a navigation aid for the unfiltered list) would scatter
+    // the best matches across workspace/date buckets. The server's
+    // searchScore counts transcript occurrences too, so it wins where present;
+    // the interim local-filter pass scores metadata only. Recency breaks ties.
+    const parsed = parseSessionQuery(filterQuery);
+    const ranked = filtered
+      .map(s => [s, s.searchScore ?? scoreSessionMatch(parsed, s)])
+      .sort((a, b) => b[1] - a[1]
+        || new Date(b[0].lastActivity || 0) - new Date(a[0].lastActivity || 0));
+    html += `<div class="session-segment ranked-segment">
+      ${ranked.map(([s]) => renderSessionItem(s, { showCwd: true })).join('')}
+    </div>`;
   } else {
     const [pinned, rest] = partitionPinned(filtered, pinnedSessions);
     if (pinned.length > 0) {
@@ -1875,7 +1889,7 @@ function renderSearchView(d, query = searchViewQuery) {
   body.innerHTML = `
     ${renderSearchFacetsHtml()}
     ${d.indexing ? '<div class="usage-notice">History is indexing; results will refresh…</div>' : ''}
-    <div class="search-count-line">${shown.length === 1 ? '1 session' : `${shown.length} sessions`}${d.total > d.results.length ? ` — showing the ${d.results.length} most recent, narrow the query for the rest` : ''}</div>
+    <div class="search-count-line">${shown.length === 1 ? '1 session' : `${shown.length} sessions`}${d.total > d.results.length ? ` — showing the ${d.results.length} ${tokens.length ? 'best matches' : 'most recent'}, narrow the query for the rest` : ''}</div>
     ${cards || '<div class="usage-state">No matching sessions.</div>'}
     ${scopesHidden > 0 ? `<div class="scope-hidden-note">${scopesHidden} hidden by scopes</div>` : ''}
   `;

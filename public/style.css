@@ -682,6 +682,12 @@ body.sidebar-open {
   margin-bottom: 4px;
 }
 
+/* Search results: a flat relevance-ranked list, no group header — take the
+   headers' top padding so the first row doesn't butt against the filter row */
+.ranked-segment {
+  padding-top: 8px;
+}
+
 .sidebar-footer {
   padding: 12px;
   border-top: 1px solid var(--line);

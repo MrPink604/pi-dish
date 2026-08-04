@@ -306,6 +306,49 @@ test('GET /api/sessions?q= speaks the filter grammar: negation, fields, dates', 
   assert.ok(sess?.searchSnippet?.includes('bravo'), 'snippet from the positive term');
 });
 
+// Relevance-ranking fixtures: two sessions matching "orchid". The older one
+// says it in its name (first user message); the newer one only in content,
+// repeatedly — recency alone would put the wrong one on top.
+const RANK_NAME_ID = '2026-07-05T08-00-00-rankname';
+const RANK_CONTENT_ID = '2026-07-06T08-00-00-rankbody';
+{
+  const write = (id, entries, mtime) => {
+    const file = path.join(sessionDir, `${id}.jsonl`);
+    fs.writeFileSync(file, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
+    fs.utimesSync(file, new Date(mtime), new Date(mtime));
+  };
+  write(RANK_NAME_ID, [
+    { type: 'session', cwd: '/home/user/proj', timestamp: '2026-07-05T08:00:00.000Z' },
+    { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'orchid rollout plan' }], timestamp: '2026-07-05T08:00:01.000Z' } },
+  ], '2026-07-05T08:00:01.000Z');
+  write(RANK_CONTENT_ID, [
+    { type: 'session', cwd: '/home/user/proj', timestamp: '2026-07-06T08:00:00.000Z' },
+    { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'unrelated heading' }], timestamp: '2026-07-06T08:00:01.000Z' } },
+    { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'orchid '.repeat(80) }], timestamp: '2026-07-06T08:00:02.000Z' } },
+  ], '2026-07-06T08:00:02.000Z');
+}
+
+test('GET /api/sessions?q= ranks by relevance, recency only as tiebreaker', async () => {
+  const { body } = await get('/api/sessions?q=orchid');
+  const ids = body.previous.map(s => s.id).filter(id => id === RANK_NAME_ID || id === RANK_CONTENT_ID);
+  assert.deepEqual(ids, [RANK_NAME_ID, RANK_CONTENT_ID],
+    'the name match outranks the newer session that only repeats the word');
+  const named = body.previous.find(s => s.id === RANK_NAME_ID);
+  const shouted = body.previous.find(s => s.id === RANK_CONTENT_ID);
+  assert.ok(named.searchScore > shouted.searchScore,
+    `scores exposed to the client (${named.searchScore} vs ${shouted.searchScore})`);
+  // Content occurrences count even when the metadata already explained the
+  // match — the snippet rule is unchanged (metadata match ⇒ no snippet).
+  assert.equal(named.searchSnippet, undefined);
+  assert.ok(shouted.searchSnippet.includes('orchid'));
+
+  // Field/date-only queries can't score: the list keeps its recency order.
+  const meta = await get(`/api/sessions?q=${encodeURIComponent('cwd:proj')}`);
+  const metaTimes = meta.body.previous.map(s => new Date(s.lastActivity || 0).getTime());
+  assert.ok(metaTimes.every((t, i) => i === 0 || t <= metaTimes[i - 1]), 'recency order');
+  assert.equal(meta.body.previous[0].searchScore, undefined);
+});
+
 test('GET /api/search returns flat results with multi-snippets and match counts', async () => {
   // "alpha" occurs in the fixture's name AND twice in its content ("hello
   // alpha", "delta question alpha") — a metadata match still carries content
@@ -332,6 +375,16 @@ test('GET /api/search returns flat results with multi-snippets and match counts'
   assert.ok(!neg.body.results.some(s => s.id === SESSION_ID));
   const liveOnly = await get(`/api/search?q=${encodeURIComponent('alpha is:active')}`);
   assert.ok(!liveOnly.body.results.some(s => s.id === SESSION_ID), 'historical session excluded by is:active');
+
+  // Ranked, not recency-ordered: the older name match leads the newer
+  // session that merely repeats the word 80 times.
+  const ranked = await get('/api/search?q=orchid');
+  const rankIds = ranked.body.results.map(s => s.id);
+  assert.deepEqual(rankIds, [RANK_NAME_ID, RANK_CONTENT_ID]);
+  assert.ok(ranked.body.results[0].searchScore > ranked.body.results[1].searchScore,
+    'result objects carry the score they were ranked by');
+  assert.ok(ranked.body.results[0].matchCount === 1 && ranked.body.results[1].matchCount > 50,
+    `occurrence counts stay independent of the ranking ${JSON.stringify(ranked.body.results.map(r => [r.id, r.matchCount]))}`);
 
   // Empty query browses everything, recency-first.
   const all = await get('/api/search?q=');

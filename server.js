@@ -41,7 +41,7 @@ const skillsLib = require('./lib/skills');
 const {
   isModelEnabled, extractTextContent, THINKING_LEVEL_NAMES,
   sessionMetaText, parseModelId, formatModelRef, buildSnippet, buildSnippets,
-  parseSessionQuery, evaluateSessionQuery, positiveQueryTokens,
+  parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch,
 } = require('./public/helpers');
 
 const app = express();
@@ -536,20 +536,36 @@ function matchSessionQuery(session, parsed) {
   if (contentTokens.length && session.sessionFile) {
     const historyText = sessionIndex.getSearchText(session.sessionFile);
     if (evaluateSessionQuery(parsed, session, historyText)) {
-      return { snippet: buildSnippet(historyText, contentTokens) };
+      return { snippet: buildSnippet(historyText, contentTokens), text: historyText };
     }
   }
   return null;
 }
 
+// Results are relevance-ordered (scoreSessionMatch in helpers.js), recency
+// only breaking ties: a recency-sorted list buries the session you meant
+// under every transcript that happens to mention one of the words. Ranking
+// needs occurrence counts for *every* match, including the ones metadata
+// already explained, so the content read widens past matchSessionQuery's.
+// Queries with no positive plain term can't score (field/date terms are
+// filters) — those keep the incoming order untouched.
 function filterSessionsByQuery(list, query) {
   const parsed = parseSessionQuery(query);
   if (!parsed.terms.length && parsed.since === null && parsed.before === null) return list;
+  const rank = positiveQueryTokens(parsed).length > 0;
   const out = [];
   for (const session of list) {
     const m = matchSessionQuery(session, parsed);
     if (!m) continue;
-    out.push(m.snippet ? { ...session, searchSnippet: m.snippet } : session);
+    if (!rank) { out.push(session); continue; }
+    const text = m.text ?? (session.sessionFile ? sessionIndex.getSearchText(session.sessionFile) : null);
+    const entry = { ...session, searchScore: scoreSessionMatch(parsed, session, text) };
+    if (m.snippet) entry.searchSnippet = m.snippet;
+    out.push(entry);
+  }
+  if (rank) {
+    out.sort((a, b) => b.searchScore - a.searchScore
+      || new Date(b.lastActivity || 0) - new Date(a.lastActivity || 0));
   }
   return out;
 }
@@ -582,10 +598,12 @@ app.get('/api/sessions', (req, res) => {
 // occurrence count per content match — the sidebar's single snippet is a
 // row decoration; this is the primary content. Metadata-matched sessions
 // still get snippets when the positive tokens also occur in their content
-// (a name hit with 12 transcript mentions should show them). Recency order,
-// capped; `total` tells the client when the cap truncated. Saved scopes are
+// (a name hit with 12 transcript mentions should show them). Relevance order
+// (scoreSessionMatch, recency as tiebreak — a query with no positive plain
+// term scores 0 everywhere and stays purely recency-ordered), capped;
+// `total` tells the client when the cap truncated. Saved scopes are
 // a separate, metadata/date-only query because their active set is local to
-// each device; apply it here before recency sorting and truncation.
+// each device; apply it here before sorting and truncation.
 const SEARCH_RESULT_CAP = 100;
 app.get('/api/search', (req, res) => {
   const query = (req.query.q || '').trim().toLowerCase();
@@ -615,9 +633,10 @@ app.get('/api/search', (req, res) => {
       text ??= sessionIndex.getSearchText(session.sessionFile);
       ({ snippets, count: matchCount } = buildSnippets(text, contentTokens));
     }
-    results.push({ ...session, snippets, matchCount });
+    results.push({ ...session, snippets, matchCount, searchScore: scoreSessionMatch(parsed, session, text) });
   }
-  results.sort((a, b) => new Date(b.lastActivity || 0) - new Date(a.lastActivity || 0));
+  results.sort((a, b) => b.searchScore - a.searchScore
+    || new Date(b.lastActivity || 0) - new Date(a.lastActivity || 0));
   res.json({
     results: results.slice(0, SEARCH_RESULT_CAP),
     total: results.length,

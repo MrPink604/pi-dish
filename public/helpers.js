@@ -491,11 +491,57 @@ function evaluateSessionQuery(parsed, session, contentText) {
   return true;
 }
 
-/** Filter sessions locally (metadata + dates only — no content on this path). */
+/** Non-overlapping occurrences of `token` in `text` (both lowercased). An
+ * indexOf walk, not a regex: tokens are arbitrary user text. */
+function countOccurrences(text, token) {
+  if (!text || !token) return 0;
+  let n = 0, i = text.indexOf(token);
+  while (i !== -1) { n++; i = text.indexOf(token, i + token.length); }
+  return n;
+}
+
+/**
+ * Relevance score for a session against a parsed query — the shared ranking
+ * used by the sidebar filter, `/api/sessions?q=` and `/api/search`.
+ *
+ * The philosophy is *coverage beats repetition*: every positive plain token
+ * contributes independently, so a session hitting two distinct keywords
+ * outranks one that says a single keyword fifty times. Metadata carries the
+ * most signal (a name hit is what you meant; cwd/model/id is nearly as
+ * deliberate), and the content contribution grows logarithmically from a
+ * single hit and caps out — a transcript can't shout its way to the top.
+ *
+ * Only positive plain terms score: field terms, negations and since/before
+ * are filters, so a purely field/date query scores 0 everywhere and the
+ * caller's recency tiebreak stands. `contentText` is the (already lowercased)
+ * indexed search text, optional.
+ */
+function scoreSessionMatch(parsed, session, contentText) {
+  const tokens = positiveQueryTokens(parsed);
+  if (!tokens.length) return 0;
+  const name = String(session.name || '').toLowerCase();
+  const other = [session.cwd, session.model, session.id].join(' ').toLowerCase();
+  let total = 0;
+  for (const token of tokens) {
+    if (name.includes(token)) total += 100;
+    if (other.includes(token)) total += 30;
+    const n = countOccurrences(contentText, token);
+    if (n > 0) total += 20 + Math.min(30, Math.round(8 * Math.log2(n)));
+  }
+  return Math.round(total);
+}
+
+/** Filter sessions locally (metadata + dates only — no content on this path),
+ * relevance-ordered when the query has content-bearing tokens. */
 function applyLocalFilter(list, query) {
   if (!query) return list;
   const parsed = parseSessionQuery(query);
-  return list.filter(s => evaluateSessionQuery(parsed, s));
+  const out = list.filter(s => evaluateSessionQuery(parsed, s));
+  if (!positiveQueryTokens(parsed).length) return out;
+  return out
+    .map(s => [s, scoreSessionMatch(parsed, s)])
+    .sort((a, b) => b[1] - a[1] || new Date(b[0].lastActivity || 0) - new Date(a[0].lastActivity || 0))
+    .map(([s]) => s);
 }
 
 /** Simple fuzzy match: all chars of query appear in order in str; returns match indices or null */
@@ -946,7 +992,7 @@ if (typeof module !== 'undefined' && module.exports) {
     contextClass, sessionMetaText, parseModelId, formatModelRef,
     groupByWorkspace, buildWorkspaceTree, collectTreeSessions, groupSessionsByDate,
     partitionPinned, applyLocalFilter, fuzzyMatch, fuzzyScore,
-    parseSessionQuery, evaluateSessionQuery, positiveQueryTokens,
+    parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     modelMatchesPattern, isModelEnabled, pushPromptHistory, sanitizeMarkdownUrl,
     buildSnippet, buildSnippets, highlightTokens, looksLikeFilePath, findPathTokens,
