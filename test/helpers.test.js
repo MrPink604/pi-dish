@@ -430,6 +430,59 @@ test('applyLocalFilter understands the query grammar', () => {
   assert.equal(H.applyLocalFilter(list, ''), list);
 });
 
+test('scoreSessionMatch: distinct-keyword coverage beats repeating one keyword', () => {
+  const s = (over) => ({ name: 'n', cwd: '/c', model: 'm', id: 'i', ...over });
+  const p = H.parseSessionQuery('alpha bravo');
+  // Every token contributes independently, and each token's content share is
+  // capped — so hitting two keywords (one of them where it counts, the name)
+  // outranks a transcript that shouts a single keyword hundreds of times.
+  const covered = H.scoreSessionMatch(p, s({ name: 'alpha plan' }), 'and bravo once');
+  const shouted = H.scoreSessionMatch(p, s(), 'alpha '.repeat(200) + 'bravo');
+  assert.ok(covered > shouted, `coverage (${covered}) outranks repetition (${shouted})`);
+  // Repetition still helps, just with diminishing returns.
+  assert.ok(H.scoreSessionMatch(p, s(), 'alpha alpha alpha bravo')
+    > H.scoreSessionMatch(p, s(), 'alpha bravo'));
+});
+
+test('scoreSessionMatch: metadata outranks content, name outranks the rest', () => {
+  const p = H.parseSessionQuery('alpha');
+  const named = H.scoreSessionMatch(p, { name: 'alpha rewrite', cwd: '/c', model: 'm', id: 'i' });
+  const inCwd = H.scoreSessionMatch(p, { name: 'n', cwd: '/home/u/alpha', model: 'm', id: 'i' });
+  const contentOnly = H.scoreSessionMatch(p, { name: 'n', cwd: '/c', model: 'm', id: 'i' },
+    'alpha '.repeat(200));
+  assert.equal(named, 100);
+  assert.equal(inCwd, 30);
+  assert.ok(named > contentOnly, `name hit (${named}) beats a content-only match (${contentOnly})`);
+  // Content contribution is capped per token: 20 base + 30 max log bonus.
+  assert.equal(contentOnly, 50);
+  assert.equal(H.scoreSessionMatch(p, { name: 'n', cwd: '/c', model: 'm', id: 'i' }, 'alpha'), 20);
+});
+
+test('scoreSessionMatch: only positive plain terms score', () => {
+  const s = { name: 'alpha', cwd: '/home/u/webapp', model: 'gpt-5.5', id: 's1', isActive: true };
+  const zero = (q) => assert.equal(H.scoreSessionMatch(H.parseSessionQuery(q), s, 'alpha alpha'), 0, q);
+  zero('name:alpha');
+  zero('-bravo');
+  zero('since:7d');
+  zero('is:active');
+  zero('');
+  // Field terms filter but don't rank — the plain term alone carries the score.
+  assert.equal(H.scoreSessionMatch(H.parseSessionQuery('alpha name:alpha'), s), 100);
+});
+
+test('applyLocalFilter orders matches by relevance, then recency', () => {
+  const list = [
+    { name: 'unrelated', cwd: '/home/u/alpha', model: 'm', id: 's1', lastActivity: '2026-07-20' },
+    { name: 'alpha rewrite', cwd: '/home/u/api', model: 'm', id: 's2', lastActivity: '2026-05-01' },
+    { name: 'alpha notes', cwd: '/home/u/api', model: 'm', id: 's3', lastActivity: '2026-06-01' },
+  ];
+  // Name hits rank above the cwd hit despite being older; s3 breaks the
+  // s2/s3 tie on recency.
+  assert.deepEqual(H.applyLocalFilter(list, 'alpha').map(s => s.id), ['s3', 's2', 's1']);
+  // No positive plain term → the incoming order stands.
+  assert.deepEqual(H.applyLocalFilter(list, 'cwd:api').map(s => s.id), ['s2', 's3']);
+});
+
 test('groupSessionsByDate buckets by recency with undated sunk last', () => {
   const now = new Date('2026-07-21T12:00:00').getTime(); // a Tuesday
   const list = [
