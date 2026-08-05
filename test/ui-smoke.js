@@ -574,6 +574,16 @@ function writeRegistry(patch = {}) {
       `bare mention resolved to the deep tool-written path (got ${JSON.stringify(shownPath)})`);
     check(await desktop.locator('#fileView .markdown-body h1').textContent() === 'deep findings',
       'markdown file renders rendered');
+    const rawHref = await desktop.locator('#fileViewRaw').getAttribute('href');
+    check(rawHref.includes(`/api/sessions/${SESSION_ID}/file/content?path=`),
+      `viewer exposes a raw file link (got ${JSON.stringify(rawHref)})`);
+    const rawResponse = await desktop.evaluate(async () => {
+      const response = await fetch(document.getElementById('fileViewRaw').href);
+      return { status: response.status, type: response.headers.get('content-type'), text: await response.text() };
+    });
+    check(rawResponse.status === 200 && /^text\/plain/.test(rawResponse.type)
+      && rawResponse.text.includes('# deep findings'),
+      `raw link serves markdown source as plain text (got ${JSON.stringify(rawResponse)})`);
 
     // Select rendered prose and save an anchored comment. This must not send
     // a prompt or initiate an agent turn.

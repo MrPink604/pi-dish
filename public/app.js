@@ -3087,6 +3087,9 @@ async function openFileViewer(mention) {
   fileViewRelPath = null;
   closeCommentBubble();
   document.getElementById('fileViewPublish').style.display = 'none';
+  const rawLink = document.getElementById('fileViewRaw');
+  rawLink.style.display = 'none';
+  rawLink.removeAttribute('href');
   renderFilePageRow(null);
   title.textContent = mention.replace(/:\d+(?::\d+)?$/, '').split('/').pop();
   pathEl.textContent = '';
@@ -3102,6 +3105,8 @@ async function openFileViewer(mention) {
     title.textContent = data.path.split('/').pop();
     fileViewAbsPath = data.path;
     fileViewRelPath = data.relPath;
+    rawLink.href = `/api/sessions/${encodeURIComponent(sessionId)}/file/content?path=${encodeURIComponent(data.path)}&v=${data.mtime}-${data.size}`;
+    rawLink.style.display = '';
     document.getElementById('fileViewPublish').style.display = '';
     // Already published (by the agent or a previous click)? Show its link.
     fetch('/api/pages')
@@ -3149,6 +3154,9 @@ function closeFileView() {
   fileViewRaw = null;
   fileViewAbsPath = null;
   fileViewRelPath = null;
+  const rawLink = document.getElementById('fileViewRaw');
+  rawLink.style.display = 'none';
+  rawLink.removeAttribute('href');
   closeCommentBubble();
   renderFilePageRow(null);
 }

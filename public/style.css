@@ -3572,6 +3572,15 @@ img.msg-image {
   white-space: nowrap;
 }
 
+.file-view-raw {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-decoration: none;
+}
+
+.file-view-raw:hover { color: var(--text-bright); }
+
 /* Same centered reading column as .messages */
 .file-view-body {
   flex: 1;

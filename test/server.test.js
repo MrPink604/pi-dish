@@ -703,6 +703,15 @@ test('GET /file returns image metadata while a resource route serves the bytes',
   assert.deepEqual(Buffer.from(await res.arrayBuffer()), TINY_PNG);
 });
 
+test('GET /file content serves the raw source of text previews inline', async () => {
+  const resource = `/api/sessions/${REAL_CWD_ID}/file/content?path=${encodeURIComponent('deep/nest/findings.md')}`;
+  const res = await fetch(base + resource);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /^text\/plain/);
+  assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(await res.text(), '# deep findings\n');
+});
+
 test('large document JSON negotiates gzip with substantial savings', async () => {
   const resource = `/api/sessions/${REAL_CWD_ID}/file?path=large.md`;
   const identity = await rawGet(resource, { 'Accept-Encoding': 'identity' });

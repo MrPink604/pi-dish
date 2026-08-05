@@ -2428,20 +2428,24 @@ async function resolveViewerMention(sessionId, mention) {
   return { cwd, resolved };
 }
 
-// Image previews use a normal resource response instead of base64 JSON. The
-// same session-aware resolver gates both metadata and bytes, so this does not
+// Raw files use a normal resource response instead of JSON. The same
+// session-aware resolver gates both previews and bytes, so this does not
 // create a path traversal shortcut around the file viewer's reach rules.
+// Text is deliberately served as text/plain: a viewed HTML/SVG file must not
+// become executable same-origin content merely because the user opens Raw.
 app.get('/api/sessions/:id/file/content', async (req, res) => {
   try {
     const mention = String(req.query.path || '');
     if (!mention || mention.length > 1024) return res.status(400).json({ error: 'path required' });
     const found = await resolveViewerMention(req.params.id, mention);
     if (found.error) return res.status(found.status).json({ error: found.error });
-    const file = readFileForViewer(found.resolved.absPath, { imageData: 'buffer' });
+    const file = readFileForViewer(found.resolved.absPath, { imageData: false });
     if (file.error) return res.status(file.status || 415).json({ error: file.error, path: found.resolved.absPath });
-    if (!file.image?.buffer) return res.status(415).json({ error: 'File is not an image' });
     res.setHeader('Cache-Control', 'private, no-cache');
-    res.type(file.image.mimeType).send(file.image.buffer);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    const safeImageMime = file.image && file.image.mimeType !== 'image/svg+xml'
+      ? file.image.mimeType : 'text/plain; charset=utf-8';
+    res.type(safeImageMime).sendFile(found.resolved.absPath);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
