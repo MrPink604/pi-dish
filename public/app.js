@@ -5810,14 +5810,13 @@ function renderNsModel() {
   });
   sel.innerHTML = html;
 
-  // Preserve the selection when the fresh list still has it; else fall back to
-  // "(default)". Send the canonical provider/id form pi resolves reliably.
-  if (newSessionModel && enabled.some(m => (m.provider + '/' + m.id) === newSessionModel)) {
-    sel.value = newSessionModel;
-  } else {
-    sel.value = '';
-    newSessionModel = '';
-  }
+  // Show the saved selection when the rendered list has it; else display
+  // "(default)" but keep newSessionModel — the first render may be an interim
+  // list (session-scoped knownModels, or empty pre-cache), and clearing here
+  // would lose the selection before the full-catalog refresh re-renders.
+  // Spawning reads the select itself, so a never-restored model can't be sent.
+  sel.value = (newSessionModel && enabled.some(m => (m.provider + '/' + m.id) === newSessionModel))
+    ? newSessionModel : '';
 
   const note = document.getElementById('nsModelHidden');
   if (note) note.textContent = hidden > 0 ? `${hidden} model${hidden === 1 ? '' : 's'} hidden (not enabled)` : '';
@@ -5837,7 +5836,8 @@ async function spawnNewSession() {
   if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
   try {
     if (cwd) localStorage.setItem('pi-dish-cwd', cwd);
-    await submitNewSession({ cwd, model: newSessionModel || undefined, target });
+    const model = document.getElementById('nsModelSelect')?.value || undefined;
+    await submitNewSession({ cwd, model, target });
     // Success: submitNewSession swapped in the provisional composer pane
     // (which closes this takeover); monitorSessionSpawn owns the rest.
   } catch (e) {
