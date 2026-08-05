@@ -279,6 +279,12 @@ function streamTurn(userText, images) {
   const toolArgs = { command: 'echo hi' };
   emit('tool_execution_start', { toolCallId: 'tc1', toolName: 'Bash', args: toolArgs });
   setTimeout(() => {
+    emit('tool_execution_update', {
+      toolCallId: 'tc1',
+      partialResult: { content: [{ type: 'text', text: 'h' }] },
+    });
+  }, 50);
+  setTimeout(() => {
     emit('tool_execution_end', { toolCallId: 'tc1', toolName: 'Bash', args: toolArgs, result: { content: [{ type: 'text', text: 'hi' }] }, isError: false });
     appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'tc1', name: 'Bash', arguments: toolArgs }], timestamp: now() } });
     appendEntry({ type: 'message', message: { role: 'toolResult', toolName: 'Bash', content: [{ type: 'text', text: 'hi' }], timestamp: now() } });
@@ -449,6 +455,11 @@ function writeRegistry(patch = {}) {
     check(true, 'sidebar working dot appears during the turn');
     await desktop.waitForSelector('details.live-tool-panel', { timeout: 5000 });
     check(true, 'live tool panel appeared mid-turn');
+    await desktop.waitForFunction(() =>
+      document.querySelector('.live-tool-output')?.textContent.includes('h'), { timeout: 5000 });
+    check(await desktop.locator('.live-tool-summary').isVisible() &&
+      await desktop.locator('.live-tool-summary').textContent() === 'echo hi',
+      'Bash command remains visible once output starts flowing');
     await desktop.waitForSelector('.message.assistant[data-streaming="true"]', { timeout: 5000 });
     check(true, 'streaming element appeared');
     // The bridge echoed the prompt back as a user message_end (like real pi);
