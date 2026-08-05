@@ -4460,10 +4460,6 @@ img.msg-image {
   min-width: 0;
 }
 
-.live-tool-panel[open] .live-tool-summary {
-  display: none;
-}
-
 .live-tool-status {
   font-size: 11px;
   flex-shrink: 0;
