@@ -6773,6 +6773,21 @@ function showExtDialog(req) {
   marked.use({
     breaks: true,
     gfm: true,
+    // Marked's GFM tokenizer accepts both ~text~ and ~~text~~ as deletion.
+    // Models commonly use a single tilde literally (paths, approximation,
+    // shell syntax), so require the explicit double-tilde form instead.
+    tokenizer: {
+      del(src) {
+        const cap = /^(~~)(?=[^\s~])([\s\S]*?[^\s~])\1(?=[^~]|$)/.exec(src);
+        if (!cap) return;
+        return {
+          type: 'del',
+          raw: cap[0],
+          text: cap[2],
+          tokens: this.lexer.inlineTokens(cap[2]),
+        };
+      },
+    },
     renderer: {
       html(html) { return escapeHtml(typeof html === 'string' ? html : (html && html.text) || ''); },
     },

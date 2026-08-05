@@ -77,7 +77,7 @@ appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text'
 // Entry id + response timing (start = message.timestamp ms epoch, end =
 // entry timestamp): 45 output tokens in 1.5s → the header shows "30 tok/s"
 // and the 🔗 button deep-links ?targetId=ui-a1.
-appendEntry({ type: 'message', id: 'ui-a1', timestamp: '2026-07-05T00:00:02.000Z', message: { role: 'assistant', provider: 'test', model: 'smoke-model', stopReason: 'stop', content: [{ type: 'text', text: 'existing **answer**' }], timestamp: Date.parse('2026-07-05T00:00:00.500Z'), usage: { input: 100, output: 45, reasoning: 5, cacheRead: 20, cacheWrite: 10, cost: { total: 0.001005 } } } });
+appendEntry({ type: 'message', id: 'ui-a1', timestamp: '2026-07-05T00:00:02.000Z', message: { role: 'assistant', provider: 'test', model: 'smoke-model', stopReason: 'stop', content: [{ type: 'text', text: 'existing **answer** with ~literal tildes~ and ~~intentional strike~~' }], timestamp: Date.parse('2026-07-05T00:00:00.500Z'), usage: { input: 100, output: 45, reasoning: 5, cacheRead: 20, cacheWrite: 10, cost: { total: 0.001005 } } } });
 // A historical turn with tool activity — must fold into a closed .tool-group.
 appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'check the readme' }], timestamp: '2026-07-05T00:00:03.000Z' } });
 appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'hist1', name: 'Read', arguments: { path: 'README.md' } }], timestamp: '2026-07-05T00:00:04.000Z' } });
@@ -399,6 +399,14 @@ function writeRegistry(patch = {}) {
     await desktop.waitForSelector('.message.assistant');
     check(await desktop.locator('.message .markdown-body strong').first().textContent() === 'answer',
       'historical markdown rendered');
+    const initialAnswer = desktop.locator('.message.assistant', {
+      has: desktop.locator('[data-entry-id="ui-a1"]'),
+    });
+    check((await initialAnswer.locator('.markdown-body').textContent()).includes('~literal tildes~'),
+      'single tildes remain literal text');
+    check(await initialAnswer.locator('del').count() === 1 &&
+      await initialAnswer.locator('del').textContent() === 'intentional strike',
+      'double tildes still render intentional strikethrough');
 
     // Tool-activity accordion: the historical tool turn folds into one
     // closed group holding the tool-only assistant message + tool result.
