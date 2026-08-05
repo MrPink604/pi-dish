@@ -83,11 +83,20 @@
   --chart-5: #d76e6e;
 }
 
+/* Percentages, not vh/dvh: with interactive-widget=resizes-content (see
+   index.html) the on-screen keyboard shrinks the layout viewport, but
+   viewport units are specified to ignore the keyboard — only a % chain
+   keeps the app above it. */
+html {
+  height: 100%;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
   background: var(--bg-dark);
   color: var(--text);
   line-height: 1.5;
+  height: 100%;
   overscroll-behavior-y: none;
   -webkit-font-smoothing: antialiased;
 }
@@ -98,7 +107,7 @@ body.sidebar-open {
 
 .app {
   display: flex;
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -2123,7 +2132,9 @@ body.sidebar-open {
     left: 0;
     width: 88%;
     max-width: 360px;
-    height: 100dvh;
+    /* % not dvh: shrinks with the keyboard under resizes-content, so the
+       list (and its filter input) stays fully visible while typing. */
+    height: 100%;
     z-index: 200;
     transform: translateX(-100%);
     transition: transform 0.25s ease;

@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- interactive-widget: Android Chrome 108+ defaults to overlaying the
+       keyboard on a full-height layout and panning to the focused input,
+       which shoves the header offscreen and hides the composer. resizes-content
+       shrinks the layout viewport instead, so the flex column compresses. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
   <title>pi-dish</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23073642'/%3E%3Ctext x='16' y='23' font-size='20' text-anchor='middle' fill='%23268bd2' font-family='Georgia,serif'%3E%CF%80%3C/text%3E%3C/svg%3E">
   <!-- Theme is applied before the stylesheet paints so there's no flash of
