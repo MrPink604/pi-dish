@@ -846,6 +846,9 @@ function writeRegistry(patch = {}) {
     // 4. New-session takeover: fuzzy cwd search, lazy directory tree,
     //    model select, and a routed spawn round-trip.
     console.log('new-session takeover:');
+    await desktop.waitForSelector('#sessionRelations .session-relation-chip', { timeout: 5000 });
+    check((await desktop.locator('#sessionRelations').textContent()).includes('Child'),
+      'selected session starts with its child relation chip');
     await desktop.click('.sidebar-footer .btn');
     await desktop.waitForFunction(
       () => document.querySelector('.main').classList.contains('new-session-open'),
@@ -910,6 +913,9 @@ function writeRegistry(patch = {}) {
     check(await desktop.locator('.session-item.starting').evaluate((el) => el.classList.contains('active')) &&
       await desktop.locator('#sessionName').textContent() === 'Starting session…',
       'provisional session pane opens immediately');
+    check(await desktop.locator('#sessionRelations .session-relation-chip').count() === 0 &&
+      !(await desktop.locator('#sessionRelations').isVisible()),
+      'provisional pane clears the previous session relation chips');
     check(await desktop.locator('#btnSend').isDisabled(), 'send waits for the real bridge session');
     const startupDraft = 'draft typed while Pi starts';
     await desktop.fill('#promptInput', startupDraft);

@@ -1132,6 +1132,9 @@ function showPendingSessionView(spawnId) {
   followStream = false;
   closeTerminal();
   clearExtensionUI();
+  // The provisional pane has no session identity yet. Do not leave the
+  // previously selected session's parent/child chips in its header.
+  clearSessionRelations();
   closeControlPanel();
   hideAutocomplete();
   modelsSeq += 1;
