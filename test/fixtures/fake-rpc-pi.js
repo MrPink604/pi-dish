@@ -43,6 +43,13 @@ let sessionFile, sessionId;
 if (sessionIdx >= 0 && args[sessionIdx + 1]) {
   sessionFile = args[sessionIdx + 1];
   sessionId = path.basename(sessionFile, '.jsonl');
+  if (sessionId === 'session') {
+    try {
+      const firstLine = fs.readFileSync(sessionFile, 'utf8').split('\n', 1)[0];
+      const headerId = JSON.parse(firstLine).id;
+      if (typeof headerId === 'string' && /^[A-Za-z0-9._:-]{1,200}$/.test(headerId)) sessionId = headerId;
+    } catch {}
+  }
 } else {
   sessionId = '2026-07-10T00-00-00-' + Math.random().toString(16).slice(2, 10);
   sessionFile = path.join(home, '.pi', 'agent', 'sessions', 'rpcproj', sessionId + '.jsonl');

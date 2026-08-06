@@ -856,9 +856,55 @@ body.sidebar-open {
   color: var(--text-bright);
 }
 
+.session-info {
+  min-width: 0;
+}
+
 .session-meta {
   display: flex;
   gap: 8px;
+}
+
+.session-relations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+  max-width: min(680px, 65vw);
+}
+
+.session-relation-chip {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 240px;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.session-relation-chip:hover,
+.session-relation-chip:focus-visible {
+  color: var(--text-bright);
+  border-color: var(--accent);
+  outline: none;
+}
+
+.session-relation-kind {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.session-relation-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Editable session name */
@@ -2219,6 +2265,16 @@ body.sidebar-open {
     gap: 6px;
     align-items: center;
     justify-content: flex-end;
+  }
+
+  .session-relations {
+    max-width: 100%;
+    margin-top: 0;
+  }
+
+  .session-relation-chip {
+    max-width: min(220px, 100%);
+    font-size: 10px;
   }
 
   /* Keep only the model selector in the header — context lives bottom-left

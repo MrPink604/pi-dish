@@ -29,7 +29,7 @@ const assistantMsg = (text, usage) =>
 
 test('getSessionInfo derives metadata from the JSONL stream', () => {
   const file = writeSession([
-    { type: 'session', cwd: '/home/user/proj', timestamp: '2026-07-01T10:00:00.000Z' },
+    { type: 'session', id: 'core-session-id', cwd: '/home/user/proj', parentSession: '/sessions/parent.jsonl', timestamp: '2026-07-01T10:00:00.000Z' },
     { type: 'model_change', modelId: 'old-model' },
     userMsg('first question that is quite long and definitely over forty characters'),
     assistantMsg('answer', { totalTokens: 500 }),
@@ -40,11 +40,38 @@ test('getSessionInfo derives metadata from the JSONL stream', () => {
   ]);
   const info = SF.getSessionInfo(file);
   assert.equal(info.cwd, '/home/user/proj');
+  assert.equal(info.sessionId, 'core-session-id');
+  assert.equal(info.parentSession, '/sessions/parent.jsonl');
   assert.equal(info.model, 'new-model', 'last model_change wins');
   assert.equal(info.messageCount, 2, 'counts user messages only');
   assert.equal(info.contextTokens, 900, 'latest assistant usage wins');
   assert.equal(info.name, 'first question that is quite long and de...', 'first user message, truncated');
   assert.ok(info.lastActivity instanceof Date);
+});
+
+test('getSessionInfo ignores malformed native lineage metadata', () => {
+  const file = writeSession([{ type: 'session', id: 42, cwd: '/x', parentSession: { path: '/bad' } }]);
+  const info = SF.getSessionInfo(file);
+  assert.equal(info.sessionId, null);
+  assert.equal(info.parentSession, null);
+});
+
+test('only the physical first-line SessionHeader supplies native lineage', () => {
+  const file = writeSession([
+    { type: 'session', id: 'header-id', cwd: '/x', parentSession: '/good-parent.jsonl' },
+    { type: 'session', id: 'later-id', parentSession: '/wrong-parent.jsonl' },
+  ]);
+  const info = SF.getSessionInfo(file);
+  assert.equal(info.sessionId, 'header-id');
+  assert.equal(info.parentSession, '/good-parent.jsonl');
+
+  const leadingBlank = path.join(tmpDir, `session-${fileSeq++}.jsonl`);
+  fs.writeFileSync(leadingBlank, '\n' + JSON.stringify({
+    type: 'session', id: 'not-a-header', cwd: '/x', parentSession: '/wrong-parent.jsonl',
+  }) + '\n');
+  const malformed = SF.getSessionInfo(leadingBlank);
+  assert.equal(malformed.sessionId, null);
+  assert.equal(malformed.parentSession, null);
 });
 
 test('getSessionInfo prefers explicit names and resets tokens on compaction', () => {

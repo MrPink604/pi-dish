@@ -119,6 +119,7 @@ test('POST /api/sessions/new spawns a headless RPC pi and lists it active', asyn
   const { status, body } = await post('/api/sessions/new', {});
   assert.equal(status, 200, JSON.stringify(body));
   assert.ok(body.id, 'a session id is returned');
+  assert.equal(Object.hasOwn(body, 'operationId'), false, 'ordinary blocking response stays backward-compatible');
   sessionId = body.id;
 
   const sess = await findActive(sessionId);
@@ -131,6 +132,33 @@ test('POST /api/sessions/new spawns a headless RPC pi and lists it active', asyn
   // The fixture created a real session JSONL — the message reader sees it.
   const messages = await get(`/api/sessions/${sessionId}/messages`);
   assert.equal(messages.status, 200);
+});
+
+test('source-aware spawn records advisory peer provenance', async () => {
+  const spawned = await post('/api/sessions/new', { requestedBySessionId: sessionId });
+  assert.equal(spawned.status, 200, JSON.stringify(spawned.body));
+  const peerId = spawned.body.id;
+  assert.ok(spawned.body.operationId, 'attributed blocking spawn returns its recorded operation id');
+  assert.ok(await findActive(peerId), 'peer is an otherwise ordinary active RPC session');
+
+  const sourceRelated = await get(`/api/sessions/${sessionId}/related`);
+  assert.ok(sourceRelated.body.relations.some(r => r.kind === 'startedHere' && r.session.id === peerId));
+  const peerRelated = await get(`/api/sessions/${peerId}/related`);
+  assert.ok(peerRelated.body.relations.some(r => r.kind === 'startedFrom' && r.session.id === sessionId));
+
+  const pending = await post('/api/sessions/new', { async: true, requestedBySessionId: sessionId });
+  assert.equal(pending.status, 202, JSON.stringify(pending.body));
+  let operation;
+  for (let i = 0; i < 80; i++) {
+    const state = await get(`/api/session-spawns/${pending.body.spawnId}`);
+    operation = state.body;
+    if (state.status !== 202) break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(operation?.status, 'ready', JSON.stringify(operation));
+  const asyncRelated = await get(`/api/sessions/${operation.sessionId}/related`);
+  assert.ok(asyncRelated.body.relations.some(r => r.kind === 'startedFrom' && r.session.id === sessionId),
+    'async spawn persists the same advisory provenance');
 });
 
 test('an unreachable bridge falls back to the existing RPC transport without spawning', async () => {
@@ -208,6 +236,12 @@ test('a prompt sent mid-turn is delivered with steer behavior', async () => {
     const steered = readLog().slice(before).find(c => c.type === 'prompt' && c.message === 'second thought');
     assert.ok(steered, 'the mid-turn prompt reached pi');
     assert.equal(steered.streamingBehavior, 'steer', 'mid-turn prompts auto-steer instead of erroring');
+
+    const followBefore = readLog().length;
+    const follow = await post(`/api/sessions/${sessionId}/follow-up`, { message: 'after that' });
+    assert.equal(follow.status, 200);
+    const queued = readLog().slice(followBefore).find(c => c.type === 'prompt' && c.message === 'after that');
+    assert.equal(queued.streamingBehavior, 'followUp', 'dedicated endpoint requests Pi follow-up delivery');
 
     await sse.waitFor(e => e.event === 'turn_end');
   } finally {
@@ -344,6 +378,25 @@ test('POST /resume spawns pi --session and keeps the original id', async () => {
 
   const again = await post(`/api/sessions/${id}/resume`, {});
   assert.equal(again.body.alreadyActive, true, 'resuming an active session is a no-op');
+});
+
+test('POST /resume preserves a nested generic session header id', async () => {
+  const id = 'nested-rpc-core-id';
+  const file = path.join(tmpHome, '.pi', 'agent', 'sessions', 'resumerpc', 'parent', 'scope', 'run-0', 'session.jsonl');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, [
+    { type: 'session', id, cwd: tmpHome },
+    { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'nested prompt' }] } },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n');
+
+  const resumed = await post(`/api/sessions/${id}/resume`, {});
+  assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
+  assert.equal(resumed.body.id, id, 'RPC identity matches bridge and historical discovery');
+  assert.ok(await findActive(id), 'nested session is active under its header id');
+  assert.equal(getRPCSession('session'), null, 'generic basename does not create a duplicate live identity');
+
+  const closed = await post(`/api/sessions/${id}/close`, {});
+  assert.equal(closed.status, 200, JSON.stringify(closed.body));
 });
 
 test('a dead pi disappears from the active list', async () => {

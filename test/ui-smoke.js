@@ -109,7 +109,7 @@ fs.mkdirSync(CWD_B, { recursive: true });
 const sessionDirB = path.join(tmpHome, '.pi', 'agent', 'sessions', '--home-user-proj-beta--');
 fs.mkdirSync(sessionDirB, { recursive: true });
 const betaEntries = [
-  { type: 'session', cwd: CWD_B, timestamp: '2026-07-04T00:00:00.000Z' },
+  { type: 'session', cwd: CWD_B, parentSession: sessionFile, timestamp: '2026-07-04T00:00:00.000Z' },
   { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'beta question' }], timestamp: '2026-07-04T00:00:01.000Z' } },
   { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'beta answer' }], timestamp: '2026-07-04T00:00:02.000Z' } },
 ];
@@ -2082,6 +2082,34 @@ function writeRegistry(patch = {}) {
       'briefly switching sessions preserves the earliest loaded history');
     await desktop.click(`.session-item[data-id="${registryState.sessionId}"]`);
     await desktop.waitForSelector('#messages .message.assistant');
+
+    console.log('related-session navigation:');
+    await desktop.evaluate((id) => selectSession(id), BETA_ID);
+    await desktop.waitForSelector('#sessionRelations .session-relation-chip', { timeout: 5000 });
+    check((await desktop.locator('#sessionRelations').textContent()).includes('Parent'),
+      'native Pi parentSession renders a neutral relation chip');
+    await desktop.click('#sessionRelations .session-relation-chip');
+    await desktop.waitForFunction((id) => currentSession?.id === id, registryState.sessionId, { timeout: 5000 });
+    check(true, 'related-session chip navigates to the available peer session');
+    const relationRaceOwner = await desktop.evaluate(async (nextId) => {
+      const originalLoad = loadSessions;
+      let release;
+      loadSessions = () => new Promise(resolve => { release = resolve; });
+      try {
+        const sourceId = currentSession.id;
+        const generation = sessionSelectionGeneration;
+        const pending = openRelatedSession('not-yet-loaded-peer', sourceId, generation);
+        await selectSession(nextId);
+        release();
+        await pending;
+        return currentSession.id;
+      } finally {
+        loadSessions = originalLoad;
+      }
+    }, BETA_ID);
+    check(relationRaceOwner === BETA_ID, 'stale related-session reload cannot hijack a newer selection');
+    await desktop.evaluate((id) => selectSession(id), registryState.sessionId);
+    await desktop.waitForFunction((id) => currentSession?.id === id, registryState.sessionId);
 
     await desktop.click('#tabActive');
     await desktop.waitForTimeout(200);

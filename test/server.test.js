@@ -50,6 +50,17 @@ const entries = [
 const SESSION_FILE = path.join(sessionDir, `${SESSION_ID}.jsonl`);
 fs.writeFileSync(SESSION_FILE, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
 
+// Nested generic session.jsonl, matching alternative launcher layouts. Its
+// authoritative identity comes from the core Pi header and its native
+// parentSession relationship points at the ordinary fixture above.
+const NESTED_SESSION_ID = 'nested-core-child';
+const NESTED_SESSION_FILE = path.join(sessionDir, SESSION_ID, 'scope-a', 'run-0', 'session.jsonl');
+fs.mkdirSync(path.dirname(NESTED_SESSION_FILE), { recursive: true });
+fs.writeFileSync(NESTED_SESSION_FILE, [
+  { type: 'session', version: 3, id: NESTED_SESSION_ID, cwd: '/home/user/proj', parentSession: SESSION_FILE, timestamp: '2026-07-04T10:10:00.000Z' },
+  { type: 'message', id: 'nested-u1', parentId: null, timestamp: '2026-07-04T10:10:01.000Z', message: { role: 'user', content: [{ type: 'text', text: 'nested peer question' }] } },
+].map(e => JSON.stringify(e)).join('\n') + '\n');
+
 // Repetitive but realistically large chat payload for wire-size assertions.
 // Kept in its own session so cursor/count tests on SESSION_ID stay stable.
 const BANDWIDTH_ID = '2026-07-04T10-30-00-bandwidth';
@@ -160,6 +171,7 @@ fs.writeFileSync(path.join(sessionDir, `${SKILLS_SESSION_ID}.jsonl`), [
 const server = require('../server.js');
 const { invalidateRegistryCache } = require('../lib/bridge-session');
 const { processIdentity, processIdentityAlive } = require('../lib/process-identity');
+const sessionProvenance = require('../lib/session-provenance');
 
 let base;
 test.before(async () => {
@@ -214,6 +226,55 @@ test('GET /api/sessions lists the fixture session with derived metadata', async 
   assert.equal(sess.cwd, '/home/user/proj');
   assert.equal(sess.name, 'hello alpha'); // first user message
   assert.equal(sess.messageCount, 2); // user messages only
+});
+
+test('nested generic sessions use the core header id and remain fully addressable', async () => {
+  const listed = await get('/api/sessions');
+  const nested = listed.body.previous.find(s => s.id === NESTED_SESSION_ID);
+  assert.ok(nested, 'nested session should be indexed under its header id');
+  assert.equal(nested.parentSession, SESSION_FILE);
+
+  const messages = await get(`/api/sessions/${NESTED_SESSION_ID}/messages?limit=10`);
+  assert.equal(messages.status, 200);
+  assert.equal(messages.body.messages[0].content[0].text, 'nested peer question');
+
+  const related = await get(`/api/sessions/${NESTED_SESSION_ID}/related`);
+  assert.equal(related.status, 200);
+  const parent = related.body.relations.find(r => r.kind === 'parent' && r.source === 'pi-session-header');
+  assert.equal(parent.session.id, SESSION_ID);
+
+  const inverse = await get(`/api/sessions/${SESSION_ID}/related`);
+  const child = inverse.body.relations.find(r => r.kind === 'child' && r.source === 'pi-session-header');
+  assert.equal(child.session.id, NESTED_SESSION_ID);
+});
+
+test('a newly ambiguous nested header id invalidates route lookup', async () => {
+  const cached = await get(`/api/sessions/${NESTED_SESSION_ID}/messages?limit=10`);
+  assert.equal(cached.status, 200);
+  const duplicate = path.join(sessionDir, 'duplicate-scope', 'run-0', 'session.jsonl');
+  fs.mkdirSync(path.dirname(duplicate), { recursive: true });
+  fs.writeFileSync(duplicate, JSON.stringify({
+    type: 'session', id: NESTED_SESSION_ID, cwd: '/home/user/proj', timestamp: '2026-07-04T10:11:00.000Z',
+  }) + '\n');
+  try {
+    const routed = await get(`/api/sessions/${NESTED_SESSION_ID}/messages?limit=10`);
+    assert.equal(routed.status, 200, 'the messages endpoint preserves its empty-unknown response contract');
+    assert.equal(routed.body.totalMessages, 0,
+      'route access revalidates generic ambiguity before the next full list scan');
+    const listed = await get('/api/sessions');
+    assert.equal(listed.body.previous.some(s => s.id === NESTED_SESSION_ID), false);
+  } finally {
+    fs.rmSync(path.dirname(duplicate), { recursive: true, force: true });
+    await get('/api/sessions');
+  }
+});
+
+test('pi-dish launch provenance adds neutral related-session navigation', async () => {
+  sessionProvenance.recordLaunch(REAL_CWD_ID, SESSION_ID, 'test-operation');
+  const source = await get(`/api/sessions/${SESSION_ID}/related`);
+  assert.ok(source.body.relations.some(r => r.kind === 'startedHere' && r.session.id === REAL_CWD_ID));
+  const child = await get(`/api/sessions/${REAL_CWD_ID}/related`);
+  assert.ok(child.body.relations.some(r => r.kind === 'startedFrom' && r.session.id === SESSION_ID));
 });
 
 test('cwd falls back to the dir-name decode only when the decoded path exists', async () => {
@@ -1450,6 +1511,12 @@ test('POST endpoints validate input and reject inactive sessions', async () => {
   assert.equal(noMsg.status, 400);
   const deadPrompt = await post(`/api/sessions/${SESSION_ID}/prompt`, { message: 'hi' });
   assert.equal(deadPrompt.status, 404);
+  const badDelivery = await post(`/api/sessions/${SESSION_ID}/prompt`, { message: 'hi', deliverAs: 'sometime' });
+  assert.equal(badDelivery.status, 400);
+  const noFollowUp = await post(`/api/sessions/${SESSION_ID}/follow-up`, {});
+  assert.equal(noFollowUp.status, 400);
+  const deadFollowUp = await post(`/api/sessions/${SESSION_ID}/follow-up`, { message: 'later' });
+  assert.equal(deadFollowUp.status, 404);
 
   // A non-base64 image is dropped by sanitizeImages, so an images-only prompt
   // with malformed data has nothing left and is rejected as empty (not stored).

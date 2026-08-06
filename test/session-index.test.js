@@ -66,7 +66,10 @@ test('scanSessions indexes files and revalidates on append', () => {
 });
 
 test('index persists: a zero-budget scan after state reset still serves entries', () => {
-  const file = writeSession([userMsg('persisted needle')]);
+  const file = writeSession([
+    { type: 'session', id: 'persisted-core-id', cwd: '/proj', parentSession: '/sessions/native-parent.jsonl' },
+    userMsg('persisted needle'),
+  ]);
   index.scanSessions([file]);
   index.resetForTests(); // flushes logs, drops all in-memory state
 
@@ -76,6 +79,8 @@ test('index persists: a zero-budget scan after state reset still serves entries'
   const { infos, indexing } = withBudget(0, () => index.scanSessions([file]));
   assert.equal(indexing, false, 'nothing left to index after reload');
   assert.equal(infos.get(file).messageCount, 1, 'served from disk, not re-parsed');
+  assert.equal(infos.get(file).sessionId, 'persisted-core-id', 'core header id persisted');
+  assert.equal(infos.get(file).parentSession, '/sessions/native-parent.jsonl', 'native lineage persisted');
   assert.ok(infos.get(file).lastActivity instanceof Date, 'lastActivity revived as Date');
   assert.ok(index.getSearchText(file).includes('persisted needle'), 'search text survived too');
 });
@@ -141,7 +146,7 @@ test('schema-3 zero-filled usage migrates through the bounded reindex backlog', 
 
   index.resetForTests();
   const persisted = withBudget(0, () => index.scanSessions([file]));
-  assert.equal(persisted.indexing, false, 'rebuilt schema-4 metadata persists');
+  assert.equal(persisted.indexing, false, 'rebuilt current-schema metadata persists');
   assert.equal(persisted.infos.get(file).usage.total.costs.input, null);
 });
 

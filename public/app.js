@@ -23,6 +23,7 @@ try {
 // generation. Async transcript/stream work may mutate the pane only while its
 // generation still owns it; comparing the session id alone is not enough.
 let sessionSelectionGeneration = 0;
+let sessionRelationsSeq = 0;
 function ownsSessionView(sessionId, generation) {
   return currentSession?.id === sessionId && sessionSelectionGeneration === generation;
 }
@@ -1238,9 +1239,10 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
   // The terminal panel is per-session (its PTY keeps running server-side;
   // reopening reattaches with scrollback).
   closeTerminal();
-  // Extension widgets/statuses/dialogs are per-session; the new session's
-  // remembered set is replayed by the server when its stream connects.
+  // Extension widgets/statuses/dialogs and relation navigation are
+  // per-session; clear them before the new session's projections arrive.
   clearExtensionUI();
+  clearSessionRelations();
   localStorage.setItem('pi-dish-session', id);
   markSessionSeen(id, currentSession.lastActivity);
   
@@ -1284,6 +1286,7 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
 
   renderSessions();
   updateSessionHeader();
+  loadSessionRelations(id, selectionGeneration); // summary-only; don't stall transcript hydration
   if (currentSession.isActive) {
     // Fire-and-forget: nothing below needs the results, and both can ask the
     // live session over its socket — don't stall the transcript on them.
@@ -1354,6 +1357,79 @@ function filterModels(query) {
 // =========================================================================
 // Session Header
 // =========================================================================
+
+function clearSessionRelations() {
+  sessionRelationsSeq += 1;
+  const el = document.getElementById('sessionRelations');
+  if (!el) return;
+  el.replaceChildren();
+  el.style.display = 'none';
+}
+
+const RELATION_LABELS = {
+  parent: 'Parent',
+  child: 'Child',
+  startedFrom: 'Started from',
+  startedHere: 'Started here',
+};
+
+function renderSessionRelations(relations) {
+  const el = document.getElementById('sessionRelations');
+  if (!el) return;
+  el.replaceChildren();
+  for (const relation of relations || []) {
+    const target = relation?.session;
+    if (!target?.id) continue;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'session-relation-chip';
+    button.title = `${RELATION_LABELS[relation.kind] || 'Related session'} · ${relation.source || 'session metadata'}`;
+    const kind = document.createElement('span');
+    kind.className = 'session-relation-kind';
+    kind.textContent = RELATION_LABELS[relation.kind] || 'Related';
+    const name = document.createElement('span');
+    name.className = 'session-relation-name';
+    name.textContent = target.name || target.id.slice(0, 8);
+    button.append(kind, name);
+    button.addEventListener('click', () => {
+      const sourceId = currentSession?.id;
+      const generation = sessionSelectionGeneration;
+      openRelatedSession(target.id, sourceId, generation);
+    });
+    el.appendChild(button);
+  }
+  el.style.display = el.childElementCount ? '' : 'none';
+}
+
+async function loadSessionRelations(sessionId, generation) {
+  const seq = ++sessionRelationsSeq;
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/related`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+    if (seq !== sessionRelationsSeq || !ownsSessionView(sessionId, generation)) return;
+    renderSessionRelations(data.relations);
+    if (data.indexing) {
+      setTimeout(() => {
+        if (ownsSessionView(sessionId, generation)) loadSessionRelations(sessionId, generation);
+      }, 1000);
+    }
+  } catch (e) {
+    if (seq === sessionRelationsSeq && ownsSessionView(sessionId, generation)) renderSessionRelations([]);
+    console.error('Failed to load related sessions:', e);
+  }
+}
+
+async function openRelatedSession(sessionId, sourceId, generation) {
+  if (!sourceId || !ownsSessionView(sourceId, generation)) return;
+  if (!findSession(sessionId)) await loadSessions(undefined, { withPrevious: true });
+  if (!ownsSessionView(sourceId, generation)) return;
+  if (!findSession(sessionId)) {
+    setStatus('Related session is not available yet', 'error');
+    return;
+  }
+  selectSession(sessionId);
+}
 
 function updateSessionHeader() {
   if (!currentSession) return;

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pi-dish sessions"
+  short_description: "Spawn and control ordinary peer Pi sessions through pi-dish"
+  default_prompt: "Use $pi-dish-sessions to spawn or interact with an ordinary peer Pi session through the pi-dish server."

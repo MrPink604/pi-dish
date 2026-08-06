@@ -37,6 +37,8 @@ const {
   decodeDirToCwd,
 } = require('./lib/session-files');
 const sessionIndex = require('./lib/session-index');
+const { discoverSessionCandidates, findSessionCandidate } = require('./lib/session-discovery');
+const sessionProvenance = require('./lib/session-provenance');
 const skillsLib = require('./lib/skills');
 const {
   isModelEnabled, extractTextContent, THINKING_LEVEL_NAMES,
@@ -382,6 +384,7 @@ function activeSessionEntry(v) {
     compacting: !!v.compacting,
     cwd: v.cwd || null,
     sessionFile: v.sessionFile || null,
+    parentSession: v.parentSession || null,
     pid: v.pid || null,
   };
 }
@@ -417,6 +420,7 @@ function getActiveSessions(registered = listRegisteredSessions()) {
       compacting: reg.compacting,
       cwd: reg.cwd || info.cwd,
       sessionFile: reg.sessionFile,
+      parentSession: info.parentSession,
       pid: reg.pid,
     }));
     seen.add(reg.sessionId);
@@ -430,6 +434,11 @@ function getActiveSessions(registered = listRegisteredSessions()) {
     if (!rpc.alive || seen.has(rpc.id)) continue;
     const state = rpc.state || {};
     const usage = rpc.lastStats?.contextUsage || null;
+    let info = {};
+    const rpcFile = rpc.sessionFile || state.sessionFile;
+    if (rpcFile && fs.existsSync(rpcFile)) {
+      try { info = parseSessionFile(rpcFile); } catch {}
+    }
     active.push(activeSessionEntry({
       id: rpc.id,
       name: state.sessionName || state.name,
@@ -443,7 +452,8 @@ function getActiveSessions(registered = listRegisteredSessions()) {
       turnInProgress: rpc.turnInProgress,
       compacting: rpc.compacting,
       cwd: rpc.cwd,
-      sessionFile: rpc.sessionFile || state.sessionFile,
+      sessionFile: rpcFile,
+      parentSession: info.parentSession,
       pid: rpc.proc?.pid,
     }));
     seen.add(rpc.id);
@@ -465,9 +475,13 @@ function getPreviousSessions(registered = listRegisteredSessions()) {
   const candidates = []; // { file, id, dirName }
   const previous = [];
   let indexing = false;
+  let discoveryTruncated = false;
 
   try {
-    candidates.push(...enumerateSessionCandidates(activeIds));
+    const discovery = discoverSessionCandidates(SESSIONS_DIR, { excludeIds: activeIds });
+    candidates.push(...discovery.candidates);
+    refreshSessionFileCache(discovery.candidates);
+    discoveryTruncated = discovery.truncated;
 
     const scan = sessionIndex.scanSessions(candidates.map(c => c.file));
     indexing = scan.indexing;
@@ -494,6 +508,7 @@ function getPreviousSessions(registered = listRegisteredSessions()) {
         isActive: false,
         cwd,
         sessionFile: file,
+        parentSession: info.parentSession || null,
       });
     }
   } catch (e) {
@@ -501,23 +516,11 @@ function getPreviousSessions(registered = listRegisteredSessions()) {
   }
 
   previous.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
-  return { previous, indexing };
+  return { previous, indexing, discoveryTruncated };
 }
 
 function enumerateSessionCandidates(excludeIds = new Set()) {
-  const out = [];
-  let dirs = []; try { dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true }); } catch { return out; }
-  for (const dir of dirs) {
-    if (!dir.isDirectory()) continue;
-    const dirPath = path.join(SESSIONS_DIR, dir.name);
-    let files = []; try { files = fs.readdirSync(dirPath); } catch { continue; }
-    for (const name of files) {
-      if (!name.endsWith('.jsonl')) continue;
-      const id = name.slice(0, -6);
-      if (!excludeIds.has(id)) out.push({ file: path.join(dirPath, name), id, dirName: dir.name });
-    }
-  }
-  return out;
+  return discoverSessionCandidates(SESSIONS_DIR, { excludeIds }).candidates;
 }
 
 // =========================================================================
@@ -581,16 +584,113 @@ app.get('/api/sessions', (req, res) => {
   const query = (req.query.q || '').trim().toLowerCase();
   const registered = listRegisteredSessions();
   let active = getActiveSessions(registered);
-  let previous = [], indexing = false;
+  let previous = [], indexing = false, discoveryTruncated = false;
   if (req.query.active !== '1') {
-    ({ previous, indexing } = getPreviousSessions(registered));
+    ({ previous, indexing, discoveryTruncated } = getPreviousSessions(registered));
   }
 
   if (query) {
     active = filterSessionsByQuery(active, query);
     previous = filterSessionsByQuery(previous, query);
   }
-  res.json({ active, previous, indexing });
+  res.json({ active, previous, indexing, discoveryTruncated });
+});
+
+function canonicalSessionPath(file) {
+  if (!file) return null;
+  try { return fs.realpathSync(file); } catch { return path.resolve(file); }
+}
+
+function relationSessionSummary(session) {
+  return {
+    id: session.id,
+    name: session.name,
+    cwd: session.cwd || null,
+    model: session.model || 'unknown',
+    isActive: !!session.isActive,
+    lastActivity: session.lastActivity,
+  };
+}
+
+function buildSessionCatalog() {
+  const registered = listRegisteredSessions();
+  const active = getActiveSessions(registered);
+  const historical = getPreviousSessions(registered);
+  const list = [...active, ...historical.previous];
+  const byId = new Map(list.map(session => [session.id, session]));
+  const byPath = new Map();
+  for (const session of list) {
+    const canonical = canonicalSessionPath(session.sessionFile);
+    if (canonical) byPath.set(canonical, session);
+  }
+  return {
+    list, byId, byPath,
+    indexing: historical.indexing,
+    discoveryTruncated: historical.discoveryTruncated,
+  };
+}
+
+// Advisory relationships only: Pi's native parentSession header and
+// pi-dish-side launch provenance. Neither implies ownership or control rights.
+app.get('/api/sessions/:id/related', (req, res) => {
+  try {
+    const catalog = buildSessionCatalog();
+    let current = catalog.byId.get(req.params.id);
+    if (!current) {
+      const file = findSessionFile(req.params.id, { exact: true });
+      if (!file) return res.status(404).json({ error: 'Session not found' });
+      const info = parseSessionFile(file);
+      current = {
+        id: req.params.id,
+        name: info.name || req.params.id.slice(0, 8),
+        cwd: info.cwd,
+        model: info.model,
+        lastActivity: info.lastActivity,
+        isActive: false,
+        sessionFile: file,
+        parentSession: info.parentSession,
+      };
+      catalog.byId.set(current.id, current);
+      catalog.byPath.set(canonicalSessionPath(file), current);
+      catalog.list.push(current);
+    }
+
+    const relations = [];
+    const seen = new Set();
+    const add = (kind, source, target) => {
+      if (!target || target.id === current.id) return;
+      const key = `${kind}:${source}:${target.id}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      relations.push({ kind, source, session: relationSessionSummary(target) });
+    };
+    const resolveParent = (session) => {
+      if (!session?.parentSession || !session.sessionFile) return null;
+      const parentPath = path.isAbsolute(session.parentSession)
+        ? session.parentSession : path.resolve(path.dirname(session.sessionFile), session.parentSession);
+      return catalog.byPath.get(canonicalSessionPath(parentPath)) || null;
+    };
+
+    add('parent', 'pi-session-header', resolveParent(current));
+    for (const candidate of catalog.list) {
+      if (resolveParent(candidate)?.id === current.id) add('child', 'pi-session-header', candidate);
+    }
+
+    const launch = sessionProvenance.getLaunch(current.id);
+    if (launch) add('startedFrom', 'pi-dish-launch', catalog.byId.get(launch.sourceSessionId));
+    for (const child of sessionProvenance.getLaunchesFrom(current.id)) {
+      add('startedHere', 'pi-dish-launch', catalog.byId.get(child.sessionId));
+    }
+
+    res.json({
+      session: relationSessionSummary(current),
+      relations,
+      indexing: catalog.indexing,
+      discoveryTruncated: catalog.discoveryTruncated,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Advanced search (the main-pane takeover): one flat result list over every
@@ -1289,6 +1389,9 @@ app.post('/api/sessions/:id/prompt', async (req, res) => {
   const { message, deliverAs } = req.body;
   const images = sanitizeImages(req.body.images);
   if (!message && !images.length) return res.status(400).json({ error: 'Message required' });
+  if (deliverAs != null && deliverAs !== 'steer' && deliverAs !== 'followUp') {
+    return res.status(400).json({ error: 'deliverAs must be steer or followUp' });
+  }
   try {
     const sess = await getLiveSession(req.params.id);
     if (!sess) return res.status(404).json({ error: 'Session not active' });
@@ -1309,6 +1412,24 @@ app.post('/api/sessions/:id/steer', async (req, res) => {
     const sess = await getLiveSession(req.params.id);
     if (!sess) return res.status(404).json({ error: 'Session not active' });
     const result = await sess.steer(message || '', images.length ? { images } : {});
+    res.json({ success: true, result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Explicit semantic follow-up endpoint for agents and other non-browser
+// clients. The existing prompt route remains backward compatible.
+app.post('/api/sessions/:id/follow-up', async (req, res) => {
+  const { message } = req.body;
+  const images = sanitizeImages(req.body.images);
+  if (!message && !images.length) return res.status(400).json({ error: 'Message required' });
+  try {
+    const sess = await getLiveSession(req.params.id);
+    if (!sess) return res.status(404).json({ error: 'Session not active' });
+    const opts = { deliverAs: 'followUp' };
+    if (images.length) opts.images = images;
+    const result = await sess.prompt(message || '', opts);
     res.json({ success: true, result });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -2830,6 +2951,10 @@ function startSessionSpawn(options) {
     .then((sessionId) => {
       operation.status = 'ready';
       operation.sessionId = sessionId;
+      if (options.sourceSessionId) {
+        try { sessionProvenance.recordLaunch(sessionId, options.sourceSessionId, spawnId); }
+        catch (e) { console.warn(`Failed to record session launch provenance: ${e.message}`); }
+      }
     })
     .catch((e) => {
       console.error('Failed to create session:', e);
@@ -2848,13 +2973,30 @@ function startSessionSpawn(options) {
 
 app.post('/api/sessions/new', async (req, res) => {
   const { model, cwd, target } = req.body || {};
+  // requestedBySessionId is the public provenance field; retain the earlier
+  // sourceSessionId spelling as a compatibility alias. The header lets the
+  // bundled CLI identify itself without making the claim authoritative.
+  const sourceSessionId = req.get('X-Pi-Dish-Session-Id')
+    || req.body?.requestedBySessionId || req.body?.sourceSessionId || null;
+  if (sourceSessionId && !getRegisteredSession(sourceSessionId) && !getRPCSession(sourceSessionId)?.alive
+      && !findSessionFile(sourceSessionId, { exact: true })) {
+    return res.status(400).json({ error: 'requestedBySessionId must identify an existing session' });
+  }
   if (req.body?.async === true) {
-    const spawnId = startSessionSpawn({ model, cwd, target });
+    const spawnId = startSessionSpawn({ model, cwd, target, sourceSessionId });
     return res.status(202).json({ success: true, pending: true, spawnId });
   }
   try {
     const id = await createSession({ model, cwd, target });
-    res.json({ success: true, id });
+    let operationId = null;
+    if (sourceSessionId) {
+      const candidateOperationId = crypto.randomUUID();
+      try {
+        sessionProvenance.recordLaunch(id, sourceSessionId, candidateOperationId);
+        operationId = candidateOperationId;
+      } catch (e) { console.warn(`Failed to record session launch provenance: ${e.message}`); }
+    }
+    res.json({ success: true, id, ...(operationId ? { operationId } : {}) });
   } catch (e) {
     console.error('Failed to create session:', e);
     res.status(e.status || 500).json({ success: false, error: e.message });
@@ -2947,7 +3089,11 @@ app.post('/api/sessions/:id/resume', async (req, res) => {
   } catch {
     return res.status(404).json({ error: 'Session file not found' });
   }
-  const sessionId = path.basename(sessionFile, '.jsonl');
+  const basenameId = path.basename(sessionFile, '.jsonl');
+  let sessionId = basenameId;
+  if (basenameId === 'session') {
+    try { sessionId = getSessionInfo(sessionFile).sessionId || basenameId; } catch {}
+  }
 
   // The route id may be a partial historical match; liveness belongs to the
   // canonical JSONL basename, so check it again before creating a flight.
@@ -3209,31 +3355,42 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
 // cached (the file may appear later).
 const sessionFileCache = new Map();
 
-function findSessionFile(sessionId) {
+// A full historical discovery is authoritative for route identity too. Refresh
+// both full-id lookup modes together so a newly preferred/removed duplicate
+// cannot leave the list pointing at one file while routes use an older cache.
+function refreshSessionFileCache(candidates) {
+  sessionFileCache.clear();
+  for (const candidate of candidates || []) {
+    sessionFileCache.set(`exact:${candidate.id}`, candidate.file);
+    sessionFileCache.set(`partial:${candidate.id}`, candidate.file);
+  }
+}
+
+function findSessionFile(sessionId, { exact = false } = {}) {
   const reg = getRegisteredSession(sessionId);
   if (reg && reg.sessionFile && fs.existsSync(reg.sessionFile)) return reg.sessionFile;
   const rpc = getRPCSession(sessionId);
   const rpcFile = rpc?.sessionFile || rpc?.state?.sessionFile;
   if (rpcFile && fs.existsSync(rpcFile)) return rpcFile;
 
-  const cached = sessionFileCache.get(sessionId);
-  if (cached && fs.existsSync(cached)) return cached;
+  const cacheKey = `${exact ? 'exact' : 'partial'}:${sessionId}`;
+  const cached = sessionFileCache.get(cacheKey);
+  if (cached && fs.existsSync(cached)) {
+    if (path.basename(cached) !== 'session.jsonl') return cached;
+    // Generic identities can become ambiguous when an external launcher
+    // creates/copies another tree between sidebar scans. Revalidate them on
+    // route access so cached paths never bypass the no-ambiguous-routing rule.
+    const current = findSessionCandidate(SESSIONS_DIR, sessionId, { allowPartial: !exact }).candidate;
+    if (!current) { sessionFileCache.delete(cacheKey); return null; }
+    sessionFileCache.set(cacheKey, current.file);
+    return current.file;
+  }
 
-  try {
-    const dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true });
-    for (const dir of dirs) {
-      if (!dir.isDirectory()) continue;
-      const files = fs.readdirSync(path.join(SESSIONS_DIR, dir.name))
-        .filter(f => f.includes(sessionId) && f.endsWith('.jsonl'));
-      if (files.length) {
-        const found = path.join(SESSIONS_DIR, dir.name, files[0]);
-        if (sessionFileCache.size >= 500) sessionFileCache.clear();
-        sessionFileCache.set(sessionId, found);
-        return found;
-      }
-    }
-  } catch (e) {}
-  return null;
+  const { candidate } = findSessionCandidate(SESSIONS_DIR, sessionId, { allowPartial: !exact });
+  if (!candidate) return null;
+  if (sessionFileCache.size >= 500) sessionFileCache.clear();
+  sessionFileCache.set(cacheKey, candidate.file);
+  return candidate.file;
 }
 
 // =========================================================================

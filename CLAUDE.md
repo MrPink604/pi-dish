@@ -117,7 +117,10 @@ content-based cores (`parseSessionContent`, `buildSearchTextFromContent`,
 search text, and compact daily/model usage summaries from one read.
 `getSessionInfo` returns a
 copy (callers overlay live usage onto it); the other readers return the
-cached value itself — never mutate it. Context window/percent are derived in
+cached value itself — never mutate it. The parser also retains Pi's optional
+core `SessionHeader.id`/`parentSession` provenance. This is display metadata,
+not control authority, and pi-dish never appends custom relationship entries
+to Pi JSONL. Context window/percent are derived in
 server.js (`withContext`) at read time, not inside the cache — the models
 cache warms asynchronously and would bake in stale windows.
 
@@ -127,6 +130,25 @@ message and returns binary bytes. This keeps base64 out of paginated JSON and
 lets `<img loading="lazy">` defer off-screen transcript images. Do not mutate
 the cached message array while projecting it. Live SSE images remain inline so
 a just-produced image can render before the JSONL catch-up.
+
+## Nested session discovery + related sessions
+
+Historical discovery is bounded-recursive (`lib/session-discovery.js`) so
+alternative launchers' nested `.../run-N/session.jsonl` files remain visible
+after their bridge exits. Traditional files retain their basename identity;
+only generic `session.jsonl` uses the validated core header id, matching the
+bridge's live identity rule. Conflicting generic files claiming the same header
+id are omitted as ambiguous rather than routed arbitrarily. Traversal never follows symlink directories and
+is depth/file/entry capped; `/api/sessions` exposes `discoveryTruncated` when the cap
+is reached. All historical route lookup goes through the same discovery path.
+
+`GET /api/sessions/:id/related` resolves native `parentSession` paths only
+against the discovered corpus and combines them with advisory pi-dish launch
+provenance from `~/.pi/dish/session-provenance.json`. The sidecar is UI/audit
+enrichment only: it never grants ownership, cascade semantics, or lifecycle
+authority, and losing it must not affect session operation. The related chips
+under the session header force a full unfiltered list refresh before navigating
+to a target absent from the current Active/search result.
 
 ## Session index (lib/session-index.js)
 
@@ -292,6 +314,16 @@ headless and a "new session…" per server stay pinned at the top, typing
 fuzzy-filters the named tmux sessions below ("new session…" reveals a name
 input); the choice persists in `localStorage['pi-dish-spawn-target']` and is
 reused for resume when still valid.
+
+## Agent peer-session control
+
+The optional `skills/pi-dish-sessions/` CLI gives Pi agents an ergonomic client
+for the existing server controls: list/spawn/show/related, prompt/steer/follow-up,
+interrupt, resume, and graceful close. It identifies the caller using the same
+registry/process-ancestry strategy as the comments CLI and sends that identity
+only as advisory launch provenance. It does not implement delegation policies,
+write JSONL, signal processes, or require any particular subagent scheme.
+`POST /api/sessions/:id/follow-up` is the stable semantic follow-up route.
 
 ## New-session takeover (public/app.js)
 

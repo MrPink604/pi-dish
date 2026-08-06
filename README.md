@@ -130,12 +130,14 @@ mkdir -p ~/.pi/agent/extensions ~/.pi/agent/skills
 ln -s "$PWD/extensions/pi-dish-bridge" ~/.pi/agent/extensions/pi-dish-bridge
 ln -s "$PWD/skills/pi-dish-pages" ~/.pi/agent/skills/pi-dish-pages
 ln -s "$PWD/skills/pi-dish-comments" ~/.pi/agent/skills/pi-dish-comments
+ln -s "$PWD/skills/pi-dish-sessions" ~/.pi/agent/skills/pi-dish-sessions
 ln -s "$PWD/skills/pi-dish-skill-refine" ~/.pi/agent/skills/pi-dish-skill-refine
 ```
 
 The skill symlinks are optional. `pi-dish-pages` teaches agents to publish
-HTML artifacts, while `pi-dish-comments` gives them a small CLI-backed inbox
-for anchored feedback left on files, diffs, and those artifacts. Ask an agent
+HTML artifacts, `pi-dish-comments` gives them a small CLI-backed inbox for
+anchored feedback, and `pi-dish-sessions` lets an agent spawn and interact
+with ordinary peer Pi sessions through the existing server controls. Ask an agent
 to "publish the plan as a page" and you get back a link; see "Published
 pages" below. `pi-dish-skill-refine` is the default methodology the Skills
 view's "✎ Refine with an agent" button drafts against — symlink it so that
@@ -206,6 +208,30 @@ ln -s "$PWD/extensions/mood.ts" ~/.pi/agent/extensions/mood.ts
 
 After pulling changes: `npm install`, restart the server, and `/reload` any
 running pi sessions so they pick up the new bridge.
+
+### Peer session control
+
+The optional `pi-dish-sessions` skill wraps the server's normal session APIs;
+it is an ergonomic control client, not a subagent framework. A spawned peer is
+an ordinary Pi process using the existing hidden-tmux/RPC dispatch. The CLI can
+list, spawn, inspect, prompt, steer, queue a follow-up, interrupt, resume, and
+gracefully close sessions:
+
+```bash
+CLI=~/.pi/agent/skills/pi-dish-sessions/scripts/pi-dish-sessions.js
+node "$CLI" spawn --cwd "$PWD" --name investigation --prompt "Check the cache race" --json
+node "$CLI" list --active
+node "$CLI" related <session-id>
+node "$CLI" follow-up <session-id> "Then summarize the result"
+```
+
+Pi's native `parentSession` header is read when present. Launches requested
+through this CLI also get advisory provenance in
+`~/.pi/dish/session-provenance.json`; pi-dish never appends custom control
+metadata to Pi JSONL. Related-session chips appear beneath the selected session
+header. Sessions launched by other schemes remain normal rows and degrade by
+what is available: live bridge controls when registered, historical read/resume
+when only JSONL remains, and no relation decoration when no hint exists.
 
 ### Public share links
 
