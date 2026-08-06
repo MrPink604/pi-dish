@@ -1382,7 +1382,39 @@ export default function (pi: ExtensionAPI) {
     const sf = ctx.sessionManager.getSessionFile();
     if (!sf) return; // ephemeral, skip
     sessionFile = sf;
-    sessionId = path.basename(sf, ".jsonl");
+    // Session id derivation. Normal pi sessions (new, resumed, forked,
+    // branched) name their files <timestamp>_<uuid>.jsonl — the basename IS
+    // the id pi-dish's historical scan and RPC sessions use, so those keep
+    // the basename (the header carries only the bare uuid; switching to it
+    // would split one session across live/historical listings and duplicate
+    // RPC entries). Same for /import and explicit --session <path> files,
+    // whose basenames are unique and match the historical identity.
+    // pi-subagents children are the exception: non-fork children run with
+    // explicit --session <run-N>/session.jsonl files whose basename is the
+    // generic "session" for every child while the header carries a unique
+    // uuid — deriving the id from that basename made all parallel children
+    // collide on one registry entry and one socket path, so they overwrote
+    // each other's listings and one child's exit unregistered the others.
+    // Only those get the header-derived id.
+    let id = path.basename(sf, ".jsonl");
+    if (id === "session") {
+      const headerId =
+        typeof ctx.sessionManager.getSessionId === "function"
+          ? ctx.sessionManager.getSessionId()
+          : null;
+      // Header ids are free-form in pi (assertValidSessionId is not applied
+      // to every loaded file), but the id lands in registryPath below — keep
+      // it inside REGISTRY_DIR by rejecting separators, traversal, and junk.
+      if (
+        typeof headerId === "string" &&
+        headerId.length > 0 &&
+        headerId.length <= 200 &&
+        /^[A-Za-z0-9._:-]+$/.test(headerId)
+      ) {
+        id = headerId;
+      }
+    }
+    sessionId = id;
     cwd = ctx.cwd;
     socketPath = socketPathFor(sessionId);
     registryPath = path.join(REGISTRY_DIR, `${sessionId}.json`);
