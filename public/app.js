@@ -240,8 +240,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Session items render without inline handlers; one delegated listener
   // selects and (on mobile) closes the drawer.
   document.getElementById('sessionList').addEventListener('click', (e) => {
+    const familyToggle = e.target.closest('.session-family-toggle');
+    if (familyToggle) { toggleSessionFamilyExpanded(familyToggle.dataset.familyId); return; }
     const pinBtn = e.target.closest('.session-pin-btn');
-    if (pinBtn) { toggleSessionPinned(pinBtn.closest('.session-item').dataset.id); return; }
+    if (pinBtn) {
+      const item = pinBtn.closest('.session-item');
+      const family = item.closest('.session-family-root');
+      const memberIds = family
+        ? [...family.querySelectorAll('.session-item[data-id]')].map(row => row.dataset.id)
+        : [item.dataset.id];
+      toggleSessionPinned(item.dataset.id, family?.dataset.familyId || item.dataset.id, memberIds);
+      return;
+    }
     // Row-level close: two-tap confirm — never a row select.
     const closeBtn = e.target.closest('.session-close-btn');
     if (closeBtn) {
@@ -666,8 +676,28 @@ async function loadSessions(query, { withPrevious = sidebarTab === 'all' } = {})
       }
     }
     listsQueriedFor = query || '';
+    let nextActive = data.active || [];
+    if (!withPrevious) {
+      // Active-only polls deliberately skip the historical scan, so they may
+      // be unable to re-resolve a native parent path. Preserve the last full
+      // list's advisory hint until the next full refresh can confirm/remove it.
+      const prior = new Map(sessions.active.map(session => [session.id, session]));
+      nextActive = nextActive.map(session => {
+        const old = prior.get(session.id);
+        if (!old) return session;
+        const preserveParent = !session.parentId && old.parentId;
+        const preserveFamily = !session.familyParentId && old.familyParentId;
+        return preserveParent || preserveFamily
+          ? {
+              ...session,
+              ...(preserveParent ? { parentId: old.parentId, parentSource: old.parentSource } : {}),
+              ...(preserveFamily ? { familyParentId: old.familyParentId } : {}),
+            }
+          : session;
+      });
+    }
     const next = {
-      active: data.active || [],
+      active: nextActive,
       previous: withPrevious ? (data.previous || []) : sessions.previous,
     };
     // Viewing a session (with the tab visible) counts as having seen its
@@ -736,19 +766,33 @@ function renderSessionItem(session, opts = {}) {
   const ctxClass = contextClass(session.contextPercent);
   const activeClass = currentSession?.id === session.id ? 'active' : '';
   const inactiveClass = session.isActive ? '' : 'inactive';
+  const familyNode = opts.familyNode || null;
+  const hasChildren = !!familyNode?.children?.length;
+  const familyExpanded = hasChildren && expandedSessionFamilies.has(session.id);
+  const statusSessions = hasChildren && !familyExpanded
+    ? flattenSessionFamilies([familyNode]) : [session];
   // One dot, best signal wins: working (pulsing) > unread (accent) > live-in-All.
-  // Compacting shares the working dot (it's the same "busy" pulse) but names
-  // the state, since sends are held while it runs.
+  // A collapsed parent aggregates its descendants so hiding rows never hides
+  // the fact that a child is working or has unread activity.
   let liveDot = '';
-  if (session.compacting) liveDot = '<span class="session-item-status working" title="Compacting context"></span>';
-  else if (session.turnInProgress) liveDot = '<span class="session-item-status working" title="Agent working"></span>';
-  else if (isUnread(session)) liveDot = '<span class="session-item-status unread" title="New activity since you last looked"></span>';
-  else if (sidebarTab === 'all' && session.isActive) liveDot = '<span class="live-dot" title="Active session"></span>';
+  if (statusSessions.some(s => s.compacting || s.turnInProgress)) {
+    liveDot = '<span class="session-item-status working" title="Session family working"></span>';
+  } else if (statusSessions.some(isUnread)) {
+    liveDot = '<span class="session-item-status unread" title="New activity in session family"></span>';
+  } else if (sidebarTab === 'all' && statusSessions.some(s => s.isActive)) {
+    liveDot = '<span class="live-dot" title="Active session family"></span>';
+  }
   const displayName = session.name || 'Unnamed';
   const tokenDisplay = session.contextTokens ? `${formatTokens(session.contextTokens)} tok` : '';
-  const timeAgo = formatRelativeTime(session.lastActivity);
-  const isPinned = pinnedSessions.includes(session.id);
-  const pinBtn = `<button class="session-pin-btn${isPinned ? ' pinned' : ''}" title="${isPinned ? 'Unpin' : 'Pin to top'}">📌</button>`;
+  const timeAgo = formatRelativeTime(hasChildren ? familyNode.activity : session.lastActivity);
+  const familyRootId = opts.familyRootId || session.id;
+  const canonicalRootId = sidebarFamilyRootMap.get(familyRootId) || familyRootId;
+  const isPinned = opts.familyPinned ?? pinnedSessions.some(pin =>
+    (sidebarFamilyRootMap.get(pin) || pin) === canonicalRootId);
+  const pinBtn = `<button class="session-pin-btn${isPinned ? ' pinned' : ''}" title="${isPinned ? 'Unpin family' : 'Pin family to top'}">📌</button>`;
+  const familyToggle = hasChildren
+    ? `<button class="session-family-toggle" data-family-id="${escapeHtml(session.id)}" aria-expanded="${familyExpanded}" aria-label="${familyExpanded ? 'Collapse' : 'Show'} ${familyNode.size - 1} child session${familyNode.size === 2 ? '' : 's'}" title="${familyExpanded ? 'Collapse' : 'Show'} ${familyNode.size - 1} child session${familyNode.size === 2 ? '' : 's'}"><span>${familyExpanded ? '▾' : '▸'}</span><small>${familyNode.size - 1}</small></button>`
+    : (opts.familyDepth > 0 ? '<span class="session-family-leaf" aria-hidden="true">↳</span>' : '');
   // Live rows only; the confirm/busy states read the module vars so a poll
   // re-render restores an armed confirm rather than silently clearing it.
   const closeArmed = sessionCloseConfirmId === session.id;
@@ -773,7 +817,7 @@ function renderSessionItem(session, opts = {}) {
   return `
     <div class="session-item ${activeClass} ${inactiveClass}${closeBusy ? ' closing' : ''}" data-id="${escapeHtml(session.id)}">
       <div class="session-item-header">
-        ${dragHandle}${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>
+        ${dragHandle}${familyToggle}${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>
         <span class="session-item-time">${timeAgo}</span>
         ${pinBtn}${closeBtn}
       </div>
@@ -787,6 +831,25 @@ function renderSessionItem(session, opts = {}) {
       ${snippetLine}
     </div>
   `;
+}
+
+function renderSessionFamily(node, opts = {}, depth = 0, rootId = node.session.id) {
+  const expanded = node.children.length > 0 && expandedSessionFamilies.has(node.session.id);
+  const row = renderSessionItem(node.session, {
+    familyNode: node,
+    familyRootId: rootId,
+    familyDepth: depth,
+    familyPinned: !!opts.pinnedFamily,
+    pinnedRow: !!opts.pinnedFamily && depth === 0,
+    showCwd: !!opts.showCwd && depth === 0,
+  });
+  const children = expanded
+    ? `<div class="session-family-children">${node.children.map(child =>
+        renderSessionFamily(child, opts, depth + 1, rootId)).join('')}</div>`
+    : '';
+  const classes = depth === 0 ? 'session-family session-family-root' : 'session-family session-family-child';
+  const familyAttr = depth === 0 ? ` data-family-id="${escapeHtml(rootId)}"` : '';
+  return `<div class="${classes}"${familyAttr}>${row}${children}</div>`;
 }
 
 function renderPendingSessionItem(spawnId, spawn) {
@@ -817,9 +880,69 @@ function toggleGroupCollapsed(cwd) {
   renderSessions();
 }
 
-// Pinned sessions live in a section at the top of the sidebar; the array
-// order is the display order (drag handles rearrange it). Persisted.
+// Session families default collapsed to keep subagents quiet. Store only the
+// explicit expansions so newly discovered families also start collapsed.
+const expandedSessionFamilies = new Set(readJSONPref('pi-dish-expanded-session-families', []));
+
+function toggleSessionFamilyExpanded(id) {
+  if (expandedSessionFamilies.has(id)) expandedSessionFamilies.delete(id);
+  else expandedSessionFamilies.add(id);
+  localStorage.setItem('pi-dish-expanded-session-families', JSON.stringify([...expandedSessionFamilies]));
+  renderSessions();
+}
+
+function currentFamilyRootMap() {
+  const list = [...sessions.active, ...sessions.previous];
+  const roots = buildSessionFamilies(list);
+  const map = new Map();
+  const visit = (node, rootId) => {
+    map.set(node.session.id, rootId);
+    for (const child of node.children) visit(child, rootId);
+  };
+  for (const root of roots) visit(root, root.session.id);
+
+  // Filtered/Active views can omit an ancestor. Follow the server-confirmed
+  // same-cwd family hint beyond the visible fragment so pins retain one stable
+  // family identity and collect every visible sibling fragment.
+  const byId = new Map(list.map(session => [session.id, session]));
+  for (const [memberId, visibleRootId] of map) {
+    let canonical = visibleRootId;
+    let cursor = byId.get(visibleRootId);
+    const seen = new Set([canonical]);
+    while (cursor?.familyParentId && !seen.has(cursor.familyParentId)) {
+      canonical = cursor.familyParentId;
+      seen.add(canonical);
+      cursor = byId.get(canonical);
+    }
+    map.set(memberId, canonical);
+  }
+  return map;
+}
+
+function revealSessionInFamily(id) {
+  const roots = buildSessionFamilies([...sessions.active, ...sessions.previous]);
+  let ancestors = null;
+  const find = (node, path) => {
+    if (node.session.id === id) { ancestors = path; return true; }
+    return node.children.some(child => find(child, [...path, node]));
+  };
+  roots.some(root => find(root, []));
+  let changed = false;
+  for (const ancestor of ancestors || []) {
+    if (!expandedSessionFamilies.has(ancestor.session.id)) {
+      expandedSessionFamilies.add(ancestor.session.id);
+      changed = true;
+    }
+  }
+  if (changed) {
+    localStorage.setItem('pi-dish-expanded-session-families', JSON.stringify([...expandedSessionFamilies]));
+  }
+}
+
+// Pinned sessions live in a section at the top of the sidebar; one stored root
+// id represents the whole same-workspace family, which drags as a block.
 let pinnedSessions = readJSONPref('pi-dish-pinned-sessions', []);
+let sidebarFamilyRootMap = new Map(); // refreshed once per sidebar render
 // Set while a pinned row is being dragged — renderSessions must not rebuild
 // the list out from under the drag (the 10s poll would otherwise do so).
 let pinnedDragActive = false;
@@ -828,10 +951,27 @@ function savePinnedSessions() {
   localStorage.setItem('pi-dish-pinned-sessions', JSON.stringify(pinnedSessions));
 }
 
-function toggleSessionPinned(id) {
-  const idx = pinnedSessions.indexOf(id);
-  if (idx >= 0) pinnedSessions.splice(idx, 1);
-  else pinnedSessions.push(id);
+function toggleSessionPinned(id, displayedRootId = id, renderedMemberIds = [id]) {
+  const roots = currentFamilyRootMap();
+  const canonicalRoot = roots.get(id) || id;
+  const aliases = new Set(renderedMemberIds);
+  aliases.add(displayedRootId);
+  // Include collapsed descendants and legacy child pins from the complete
+  // lists, but keep cross-cwd relationships independent (the helper does).
+  for (const [memberId, rootId] of roots) {
+    if (rootId === canonicalRoot) aliases.add(memberId);
+  }
+  // If Active/search omits the parent, an existing parent pin should still
+  // toggle off from its visible child fragment.
+  const visibleIds = new Set([...document.querySelectorAll('#sessionList .session-item[data-id]')]
+    .map(row => row.dataset.id));
+  for (const memberId of aliases) {
+    const parentId = findSession(memberId)?.familyParentId;
+    if (parentId && !visibleIds.has(parentId)) aliases.add(parentId);
+  }
+  const wasPinned = pinnedSessions.some(pin => aliases.has(pin));
+  pinnedSessions = pinnedSessions.filter(pin => !aliases.has(pin));
+  if (!wasPinned) pinnedSessions.push(canonicalRoot);
   savePinnedSessions();
   renderSessions();
 }
@@ -846,30 +986,34 @@ function initPinnedDrag() {
   document.getElementById('sessionList').addEventListener('pointerdown', (e) => {
     const handle = e.target.closest('.session-drag-handle');
     if (!handle) return;
-    const item = handle.closest('.session-item');
-    const segment = item.parentElement;
+    const family = handle.closest('.session-family-root');
+    const segment = family?.parentElement;
+    if (!family || !segment?.classList.contains('pinned-segment')) return;
     e.preventDefault();
     pinnedDragActive = true;
-    item.classList.add('dragging');
+    family.classList.add('dragging');
 
     // Listeners go on document, not the handle: reordering detaches and
     // reinserts the row, which silently releases pointer capture on it.
     const onMove = (ev) => {
-      const siblings = [...segment.querySelectorAll('.session-item:not(.dragging)')];
+      const siblings = [...segment.children].filter(el =>
+        el.classList.contains('session-family-root') && !el.classList.contains('dragging'));
       const next = siblings.find(sib => {
         const r = sib.getBoundingClientRect();
         return ev.clientY < r.top + r.height / 2;
       });
-      if (next) segment.insertBefore(item, next);
-      else segment.appendChild(item);
+      if (next) segment.insertBefore(family, next);
+      else segment.appendChild(family);
     };
     const onUp = () => {
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onUp);
       document.removeEventListener('pointercancel', onUp);
-      item.classList.remove('dragging');
+      family.classList.remove('dragging');
       pinnedDragActive = false;
-      pinnedSessions = [...segment.querySelectorAll('.session-item')].map(el => el.dataset.id);
+      pinnedSessions = [...segment.children]
+        .filter(el => el.classList.contains('session-family-root'))
+        .map(el => el.dataset.familyId);
       savePinnedSessions();
       renderSessions();
     };
@@ -883,6 +1027,7 @@ let lastSessionListHtml = '';
 
 function renderSessions() {
   if (pinnedDragActive) return; // don't rebuild mid-drag; the drop re-renders
+  sidebarFamilyRootMap = currentFamilyRootMap();
   const list = document.getElementById('sessionList');
   const { active, previous } = sessions;
   const showing = sidebarTab === 'active' ? active : [...active, ...previous];
@@ -940,19 +1085,23 @@ function renderSessions() {
       ${ranked.map(([s]) => renderSessionItem(s, { showCwd: true })).join('')}
     </div>`;
   } else {
-    const [pinned, rest] = partitionPinned(filtered, pinnedSessions);
-    if (pinned.length > 0) {
+    const families = buildSessionFamilies(filtered);
+    const [pinnedFamilies, restFamilies] = partitionPinnedFamilies(families, pinnedSessions);
+    if (pinnedFamilies.length > 0) {
       html += `<div class="session-segment pinned-segment">
         <div class="workspace-group-header pinned-header">
           <span class="workspace-group-label">📌 Pinned</span>
-          <span class="workspace-group-count">${pinned.length}</span>
+          <span class="workspace-group-count">${pinnedFamilies.length}</span>
         </div>
-        ${pinned.map(s => renderSessionItem(s, { pinnedRow: true })).join('')}
+        ${pinnedFamilies.map(family => renderSessionFamily(family, { pinnedFamily: true, showCwd: true })).join('')}
       </div>`;
     }
     if (sidebarView === 'recent') {
-      html += groupSessionsByDate(rest).map(renderDateBucket).join('');
+      // A family belongs to the date bucket of its newest member, so a recent
+      // child moves the whole parent-first block instead of splitting it.
+      html += groupSessionsByDate(restFamilies).map(renderDateBucket).join('');
     } else {
+      const rest = flattenSessionFamilies(restFamilies);
       const tree = buildWorkspaceTree(groupByWorkspace(rest, collapsedGroups), collapsedGroups);
       html += tree.map(renderWorkspaceNode).join('');
     }
@@ -993,7 +1142,7 @@ function renderWorkspaceNode(node) {
     if (node.children.length) {
       body = `<div class="workspace-children">${node.children.map(renderWorkspaceNode).join('')}</div>`;
     }
-    body += (node.sessions || []).map(s => renderSessionItem(s)).join('');
+    body += buildSessionFamilies(node.sessions || []).map(family => renderSessionFamily(family)).join('');
   }
   return `<div class="session-segment${isCollapsed ? ' collapsed' : ''}">
     <div class="workspace-group-header" data-cwd="${escapeHtml(node.path)}">
@@ -1017,17 +1166,18 @@ function renderWorkspaceNode(node) {
 function renderDateBucket(bucket) {
   const key = 'date:' + bucket.key;
   const isCollapsed = collapsedGroups.has(key);
+  const bucketMembers = flattenSessionFamilies(bucket.sessions);
   let headerDot = '';
   if (isCollapsed) {
-    if (bucket.sessions.some(s => s.turnInProgress || s.compacting)) headerDot = '<span class="session-item-status working" title="Agent working"></span>';
-    else if (bucket.sessions.some(isUnread)) headerDot = '<span class="session-item-status unread" title="New activity"></span>';
+    if (bucketMembers.some(s => s.turnInProgress || s.compacting)) headerDot = '<span class="session-item-status working" title="Agent working"></span>';
+    else if (bucketMembers.some(isUnread)) headerDot = '<span class="session-item-status unread" title="New activity"></span>';
   }
-  const body = isCollapsed ? '' : bucket.sessions.map(s => renderSessionItem(s, { showCwd: true })).join('');
+  const body = isCollapsed ? '' : bucket.sessions.map(family => renderSessionFamily(family, { showCwd: true })).join('');
   return `<div class="session-segment${isCollapsed ? ' collapsed' : ''}">
     <div class="workspace-group-header" data-cwd="${escapeHtml(key)}">
       <span class="workspace-group-chevron">${isCollapsed ? '▸' : '▾'}</span>
       <span class="workspace-group-label">${escapeHtml(bucket.label)}</span>
-      ${headerDot}<span class="workspace-group-count">${bucket.sessions.length}</span>
+      ${headerDot}<span class="workspace-group-count">${bucketMembers.length}</span>
     </div>
     ${body}
   </div>`;
@@ -1233,6 +1383,7 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
   stashCurrentTranscript();
   if (forceTranscriptReload) transcriptCache.delete(id);
   if (!setCurrentSession(id)) return;
+  revealSessionInFamily(id);
   // Tear down the previous session's stream up front, before the awaits below.
   // Left open, its in-flight turn_end/message_update events fire against the
   // session we're switching to (loadMessages has already reset the cursors).

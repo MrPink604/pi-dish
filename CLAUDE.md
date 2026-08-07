@@ -717,15 +717,23 @@ session-tree scan and the client keeps its previously fetched `previous` list
 (the initial load always fetches both, so restoring a saved historical session
 still works).
 Within a workspace node, child folders render before the node's own sessions
-(file-manager order, `renderWorkspaceNode`).
+(file-manager order, `renderWorkspaceNode`). Session list rows carry advisory
+`parentId`/`parentSource` hints resolved from native `parentSession` first, then
+the pi-dish launch sidecar; `familyParentId` is emitted only after the resolved
+parent is confirmed in the same cwd and survives filtered child-only results.
+`buildSessionFamilies` groups a child only when its parent is present and has the
+same cwd; the parent stays first while the whole
+block sorts and enters Recent buckets by the newest activity anywhere below it.
+Families default collapsed, with explicit expansions persisted in
+`pi-dish-expanded-session-families`; search remains flat.
 Clicking a workspace group header collapses it — sessions hidden, group sunk
 below all expanded groups (ordering in `groupByWorkspace`, helpers.js). The 📌
-on a session row pins it into a "Pinned" section at the top with a manual
-order: pointer-based drag handles (works on touch), with move/up listeners on
-`document` because reinserting the dragged row releases pointer capture. Both
-persist in localStorage (`pi-dish-collapsed-groups`, `pi-dish-pinned-sessions`);
-`renderSessions` bails while a drag is live so the 10s poll can't rebuild the
-list mid-drag. Live rows also carry a quiet hover-reveal ✕ (always faintly
+on any family member pins the root and its descendants into the top "Pinned"
+section. A root drag handle moves the whole family block (works on touch), with
+move/up listeners on `document` because reinserting the wrapper releases pointer
+capture. Workspace collapse and pin order persist in localStorage
+(`pi-dish-collapsed-groups`, `pi-dish-pinned-sessions`); `renderSessions` bails
+while a drag is live so the 10s poll can't rebuild the list mid-drag. Live rows also carry a quiet hover-reveal ✕ (always faintly
 visible on touch) with a two-tap inline confirm — the armed/busy state lives
 in module vars (`sessionCloseConfirmId`), so a poll re-render restores an
 armed confirm instead of clearing it; the ~3s revert clears it.

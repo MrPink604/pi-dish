@@ -580,6 +580,37 @@ function filterSessionsByQuery(list, query) {
 // `active=1` skips the historical-tree scan entirely — the sidebar's Active
 // tab polls every 10s and would otherwise stat every JSONL just to discard
 // the result.
+// Relationship hints on list rows are presentation-only. They let the client
+// arrange same-workspace families without fetching /related for every row;
+// they never grant control authority. Native Pi lineage wins when both exist.
+function annotateSessionParents(list) {
+  const launches = sessionProvenance.readLaunches();
+  const byCanonicalPath = new Map();
+  const byId = new Map(list.map(session => [session.id, session]));
+  for (const session of list) {
+    const canonical = canonicalSessionPath(session.sessionFile);
+    if (canonical) byCanonicalPath.set(canonical, session);
+  }
+  for (const session of list) {
+    let nativeParent = null;
+    if (session.parentSession && session.sessionFile) {
+      const parentFile = path.isAbsolute(session.parentSession)
+        ? session.parentSession : path.resolve(path.dirname(session.sessionFile), session.parentSession);
+      // A basename alone is not lineage: stale paths must not attach a child
+      // to an unrelated current session that happens to reuse the same id.
+      nativeParent = byCanonicalPath.get(canonicalSessionPath(parentFile))?.id || null;
+    }
+    const launchParent = launches[session.id]?.sourceSessionId || null;
+    const parentId = nativeParent || launchParent;
+    session.parentId = parentId && parentId !== session.id ? parentId : null;
+    session.parentSource = nativeParent
+      ? 'pi-session-header' : launchParent ? 'pi-dish-launch' : null;
+    const parent = byId.get(session.parentId);
+    session.familyParentId = parent && (parent.cwd || '~') === (session.cwd || '~')
+      ? parent.id : null;
+  }
+}
+
 app.get('/api/sessions', (req, res) => {
   const query = (req.query.q || '').trim().toLowerCase();
   const registered = listRegisteredSessions();
@@ -588,6 +619,7 @@ app.get('/api/sessions', (req, res) => {
   if (req.query.active !== '1') {
     ({ previous, indexing, discoveryTruncated } = getPreviousSessions(registered));
   }
+  annotateSessionParents([...active, ...previous]);
 
   if (query) {
     active = filterSessionsByQuery(active, query);

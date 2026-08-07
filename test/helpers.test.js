@@ -299,6 +299,53 @@ test('collectTreeSessions gathers all descendant sessions', () => {
   assert.equal(H.collectTreeSessions(tree[0]).length, 3);
 });
 
+test('buildSessionFamilies keeps parents first and sorts whole blocks by newest descendant', () => {
+  const sessions = [
+    { id: 'parent', cwd: '/w', lastActivity: '2026-01-01T00:00:00Z' },
+    { id: 'child', parentId: 'parent', cwd: '/w', lastActivity: '2026-01-05T00:00:00Z' },
+    { id: 'grandchild', parentId: 'child', cwd: '/w', lastActivity: '2026-01-04T00:00:00Z' },
+    { id: 'standalone', cwd: '/w', lastActivity: '2026-01-03T00:00:00Z' },
+    { id: 'other-cwd', parentId: 'parent', cwd: '/elsewhere', lastActivity: '2026-01-06T00:00:00Z' },
+  ];
+  const roots = H.buildSessionFamilies(sessions);
+  assert.deepEqual(roots.map(root => root.session.id), ['other-cwd', 'parent', 'standalone']);
+  assert.equal(roots[1].activity, Date.parse('2026-01-05T00:00:00Z'));
+  assert.equal(roots[1].size, 3);
+  assert.deepEqual(roots[1].children.map(child => child.session.id), ['child']);
+  assert.deepEqual(H.flattenSessionFamilies([roots[1]]).map(s => s.id), ['parent', 'child', 'grandchild']);
+});
+
+test('session family cycles degrade to standalone roots', () => {
+  const roots = H.buildSessionFamilies([
+    { id: 'a', parentId: 'b', cwd: '/w', lastActivity: 1 },
+    { id: 'b', parentId: 'a', cwd: '/w', lastActivity: 2 },
+  ]);
+  assert.deepEqual(roots.map(root => root.session.id), ['b', 'a']);
+  assert.ok(roots.every(root => root.children.length === 0));
+});
+
+test('partitionPinnedFamilies pins and orders the whole family from any member id', () => {
+  const families = H.buildSessionFamilies([
+    { id: 'p', cwd: '/w', lastActivity: 1 },
+    { id: 'c', parentId: 'p', cwd: '/w', lastActivity: 2 },
+    { id: 'other', cwd: '/w', lastActivity: 3 },
+  ]);
+  const [pinned, rest] = H.partitionPinnedFamilies(families, ['c']);
+  assert.deepEqual(pinned.map(root => root.session.id), ['p']);
+  assert.deepEqual(rest.map(root => root.session.id), ['other']);
+
+  const activeFragment = H.buildSessionFamilies([
+    { id: 'c', parentId: 'p', familyParentId: 'p', cwd: '/w', lastActivity: 2 },
+  ]);
+  assert.deepEqual(H.partitionPinnedFamilies(activeFragment, ['p'])[0]
+    .map(root => root.session.id), ['c'], 'missing inactive parent aliases its visible child fragment');
+  const crossCwdFragment = H.buildSessionFamilies([
+    { id: 'x', parentId: 'p', familyParentId: null, cwd: '/other', lastActivity: 3 },
+  ]);
+  assert.equal(H.partitionPinnedFamilies(crossCwdFragment, ['p'])[0].length, 0,
+    'confirmed cross-workspace lineage never aliases the parent pin');
+});
+
 test('partitionPinned splits in pinned order and skips unknown ids', () => {
   const list = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
   const [pinned, rest] = H.partitionPinned(list, ['c', 'gone', 'a']);

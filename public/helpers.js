@@ -347,10 +347,12 @@ function groupSessionsByDate(list, now = Date.now()) {
       label: d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }),
     };
   };
-  const sorted = [...list].sort((a, b) => new Date(b.lastActivity || 0) - new Date(a.lastActivity || 0));
+  const timestampOf = (item) => Number.isFinite(item?.activity)
+    ? item.activity : new Date(item?.lastActivity || 0).getTime();
+  const sorted = [...list].sort((a, b) => timestampOf(b) - timestampOf(a));
   const buckets = new Map();
   for (const s of sorted) {
-    const b = bucketOf(new Date(s.lastActivity || 0).getTime());
+    const b = bucketOf(timestampOf(s));
     if (!buckets.has(b.key)) buckets.set(b.key, { ...b, sessions: [] });
     buckets.get(b.key).sessions.push(s);
   }
@@ -367,6 +369,105 @@ function collectTreeSessions(node, out = []) {
   if (node.sessions) out.push(...node.sessions);
   for (const child of node.children) collectTreeSessions(child, out);
   return out;
+}
+
+function sessionFamilyParentId(session) {
+  return Object.prototype.hasOwnProperty.call(session || {}, 'familyParentId')
+    ? session.familyParentId : session?.parentId;
+}
+
+/**
+ * Build same-workspace parent/child trees from advisory `parentId` hints.
+ * Roots and sibling subtrees sort as blocks by the newest activity anywhere
+ * below them, while the parent session itself remains the first row.
+ * Missing/cross-workspace parents and cycles degrade to standalone roots.
+ */
+function buildSessionFamilies(list) {
+  const nodes = new Map();
+  (list || []).forEach((session, order) => {
+    if (session?.id && !nodes.has(session.id)) {
+      nodes.set(session.id, { session, children: [], activity: 0, size: 1, order });
+    }
+  });
+
+  const attached = new Set();
+  for (const node of nodes.values()) {
+    const parent = nodes.get(sessionFamilyParentId(node.session));
+    if (!parent || parent === node || (parent.session.cwd || '~') !== (node.session.cwd || '~')) continue;
+    // Follow the declared chain before attaching so malformed A→B→A hints
+    // cannot remove both nodes from the root set or recurse forever.
+    let cursor = parent;
+    const seen = new Set();
+    let cyclic = false;
+    while (cursor && !seen.has(cursor)) {
+      if (cursor === node) { cyclic = true; break; }
+      seen.add(cursor);
+      const next = nodes.get(sessionFamilyParentId(cursor.session));
+      cursor = next && (next.session.cwd || '~') === (cursor.session.cwd || '~') ? next : null;
+    }
+    if (cyclic) continue;
+    parent.children.push(node);
+    attached.add(node.session.id);
+  }
+
+  const activityMs = (session) => {
+    const value = new Date(session.lastActivity || 0).getTime();
+    return Number.isFinite(value) ? value : 0;
+  };
+  const finalize = (node) => {
+    node.activity = activityMs(node.session);
+    node.size = 1;
+    for (const child of node.children) {
+      finalize(child);
+      node.activity = Math.max(node.activity, child.activity);
+      node.size += child.size;
+    }
+    node.children.sort((a, b) => b.activity - a.activity || a.order - b.order);
+    return node;
+  };
+  const roots = [...nodes.values()].filter(node => !attached.has(node.session.id)).map(finalize);
+  return roots.sort((a, b) => b.activity - a.activity || a.order - b.order);
+}
+
+function flattenSessionFamilies(families, out = []) {
+  for (const family of families || []) {
+    out.push(family.session);
+    flattenSessionFamilies(family.children, out);
+  }
+  return out;
+}
+
+/** Split family roots by any pinned member, preserving manual family order. */
+function partitionPinnedFamilies(families, pinnedIds) {
+  if (!pinnedIds?.length) return [[], families || []];
+  const rootByMember = new Map();
+  const index = (node, root) => {
+    rootByMember.set(node.session.id, root);
+    for (const child of node.children) index(child, root);
+  };
+  for (const root of families || []) index(root, root);
+  // In a partial view (notably Active), an inactive parent may be absent while
+  // its active children remain. Let the missing parent id alias those visible
+  // root fragments; when the parent is present, normal same-cwd grouping wins.
+  const rootsByMissingParent = new Map();
+  for (const root of families || []) {
+    const parentId = sessionFamilyParentId(root.session);
+    if (!parentId || rootByMember.has(parentId)) continue;
+    if (!rootsByMissingParent.has(parentId)) rootsByMissingParent.set(parentId, []);
+    rootsByMissingParent.get(parentId).push(root);
+  }
+  const pinned = [];
+  const pinnedRoots = new Set();
+  for (const id of pinnedIds) {
+    const matches = rootByMember.has(id)
+      ? [rootByMember.get(id)] : (rootsByMissingParent.get(id) || []);
+    for (const root of matches) {
+      if (pinnedRoots.has(root.session.id)) continue;
+      pinned.push(root);
+      pinnedRoots.add(root.session.id);
+    }
+  }
+  return [pinned, (families || []).filter(root => !pinnedRoots.has(root.session.id))];
 }
 
 /**
@@ -991,6 +1092,7 @@ if (typeof module !== 'undefined' && module.exports) {
     shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText, extractImageBlocks, messageHasVisibleText,
     contextClass, sessionMetaText, parseModelId, formatModelRef,
     groupByWorkspace, buildWorkspaceTree, collectTreeSessions, groupSessionsByDate,
+    buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies,
     partitionPinned, applyLocalFilter, fuzzyMatch, fuzzyScore,
     parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,

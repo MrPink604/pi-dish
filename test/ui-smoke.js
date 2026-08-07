@@ -161,9 +161,10 @@ fs.utimesSync(skillMd, skillEdited, skillEdited);
 // Lives under proj-alpha (no new workspace group) and carries no usage, so it
 // can't perturb the sidebar-tree or usage-view assertions — it exists only to
 // give the skill one mined ranged read for the coverage map.
-const skillSessionFile = path.join(sessionDir, '2026-07-05T00-05-00-skillui1.jsonl');
+const SKILL_SESSION_ID = '2026-07-05T00-05-00-skillui1';
+const skillSessionFile = path.join(sessionDir, `${SKILL_SESSION_ID}.jsonl`);
 fs.writeFileSync(skillSessionFile, [
-  { type: 'session', cwd: CWD, timestamp: '2026-07-05T00:05:00.000Z' },
+  { type: 'session', cwd: CWD, parentSession: sessionFile, timestamp: '2026-07-05T00:05:00.000Z' },
   { type: 'message', id: 'skrui1', timestamp: '2026-07-05T00:05:01.000Z', message: { role: 'user', content: [{ type: 'text', text: 'use the smoke skill' }] } },
   { type: 'message', id: 'skrui2', timestamp: '2026-07-05T00:05:02.000Z', message: { role: 'assistant', content: [
     { type: 'toolCall', id: 'skuitc1', name: 'read', arguments: { path: skillMd, offset: 1, limit: 10 } },
@@ -1848,6 +1849,38 @@ function writeRegistry(patch = {}) {
     // sessions floats them into a drag-reorderable section at the top.
     console.log('sidebar tree collapse & pin:');
     await desktop.click('#tabAll');
+    await desktop.waitForSelector(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`, { timeout: 5000 });
+    check(await desktop.locator(`.session-item[data-id="${SKILL_SESSION_ID}"]`).count() === 0,
+      'same-workspace child session is grouped under its parent and collapsed by default');
+    const familyRootId = await desktop.locator(`.session-item[data-id="${registryState.sessionId}"]`)
+      .evaluate(el => el.closest('.session-family-root')?.dataset.familyId);
+    check(familyRootId === registryState.sessionId, 'parent anchors the session family block');
+    await desktop.click(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
+    await desktop.waitForSelector(`.session-item[data-id="${SKILL_SESSION_ID}"]`, { timeout: 2000 });
+    const familyIds = await desktop.locator(`.session-family-root[data-family-id="${registryState.sessionId}"] .session-item`)
+      .evaluateAll(rows => rows.map(row => row.dataset.id));
+    check(JSON.stringify(familyIds) === JSON.stringify([registryState.sessionId, SKILL_SESSION_ID]),
+      'expanded family keeps the parent first with its child directly beneath');
+    check(await desktop.evaluate((id) =>
+      JSON.parse(localStorage.getItem('pi-dish-expanded-session-families') || '[]').includes(id), registryState.sessionId),
+      'family expansion persists device-locally');
+    await desktop.click(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
+    await desktop.waitForFunction((id) => !document.querySelector(`.session-item[data-id="${id}"]`), SKILL_SESSION_ID);
+    await desktop.evaluate((id) => patchSession(id, { turnInProgress: true }), SKILL_SESSION_ID);
+    check(await desktop.locator(`.session-item[data-id="${registryState.sessionId}"] .session-item-status.working`).count() === 1,
+      'collapsed parent surfaces a working child status');
+    await desktop.evaluate((id) => patchSession(id, { turnInProgress: false }), SKILL_SESSION_ID);
+    await desktop.evaluate((id) => selectSession(id), SKILL_SESSION_ID);
+    await desktop.waitForFunction((id) => currentSession?.id === id &&
+      document.querySelector(`.session-item[data-id="${id}"]`)?.classList.contains('active'), SKILL_SESSION_ID);
+    check(await desktop.locator(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`)
+      .getAttribute('aria-expanded') === 'true',
+      'selecting a collapsed child reveals its ancestor and active row');
+    await desktop.evaluate((id) => selectSession(id), registryState.sessionId);
+    await desktop.waitForFunction((id) => currentSession?.id === id, registryState.sessionId);
+    await desktop.click(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
+    await desktop.waitForFunction((id) => !document.querySelector(`.session-item[data-id="${id}"]`), SKILL_SESSION_ID);
+
     const groupLabels = () => desktop.evaluate(() =>
       [...document.querySelectorAll('.session-segment:not(.pinned-segment) .workspace-group-label')]
         .map((el) => el.textContent));
@@ -1901,14 +1934,19 @@ function writeRegistry(patch = {}) {
     check(await desktop.evaluate(() =>
       document.querySelector('#sessionList .session-segment')?.classList.contains('pinned-segment')),
       'pinned section renders at the top');
+    check(await desktop.locator(`.pinned-segment .session-item[data-id="${SKILL_SESSION_ID}"]`).count() === 0,
+      'pinned family remains collapsed by default');
     await pinToggle(BETA_ID);
     await desktop.waitForFunction(() =>
-      document.querySelectorAll('.pinned-segment .session-item').length === 2, null, { timeout: 2000 });
+      document.querySelectorAll('.pinned-segment > .session-family-root').length === 2, null, { timeout: 2000 });
     check(await desktop.locator('.pinned-segment .session-drag-handle').count() === 2,
-      'pinned rows carry drag handles');
+      'pinned families carry one drag handle each');
     check(await desktop.locator('.pinned-segment .session-item-cwd').count() === 2,
       'pinned rows show their workspace');
-    // Drag beta's handle above the first pinned row: order flips and persists.
+    // Expand the pinned parent, then drag beta above it: the child must move
+    // with the parent wrapper rather than becoming an independently sorted row.
+    await desktop.click(`.pinned-segment .session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
+    await desktop.waitForSelector(`.pinned-segment .session-item[data-id="${SKILL_SESSION_ID}"]`);
     const handleBox = await desktop.locator(`.pinned-segment .session-item[data-id="${BETA_ID}"] .session-drag-handle`).boundingBox();
     const firstBox = await desktop.locator(`.pinned-segment .session-item[data-id="${registryState.sessionId}"]`).boundingBox();
     await desktop.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
@@ -1916,16 +1954,50 @@ function writeRegistry(patch = {}) {
     await desktop.mouse.move(firstBox.x + 20, firstBox.y + 2, { steps: 5 });
     await desktop.mouse.up();
     await desktop.waitForFunction((want) =>
-      JSON.stringify([...document.querySelectorAll('.pinned-segment .session-item')].map((el) => el.dataset.id)) === want,
+      JSON.stringify([...document.querySelectorAll('.pinned-segment > .session-family-root')].map((el) => el.dataset.familyId)) === want,
       JSON.stringify([BETA_ID, registryState.sessionId]), { timeout: 2000 });
-    check(true, 'drag handle reorders pinned sessions');
+    const draggedFamilyIds = await desktop.locator(`.pinned-segment .session-family-root[data-family-id="${registryState.sessionId}"] .session-item`)
+      .evaluateAll(rows => rows.map(row => row.dataset.id));
+    check(JSON.stringify(draggedFamilyIds) === JSON.stringify([registryState.sessionId, SKILL_SESSION_ID]),
+      'drag handle moves the expanded family as one block');
     check(await desktop.evaluate(() => localStorage.getItem('pi-dish-pinned-sessions')) ===
-      JSON.stringify([BETA_ID, registryState.sessionId]), 'manual order persisted to localStorage');
-    // Unpin both; the section disappears and the sessions rejoin their groups.
+      JSON.stringify([BETA_ID, registryState.sessionId]), 'manual family order persisted to localStorage');
+    // Collapse, then unpin both; the section disappears and families rejoin.
+    await desktop.click(`.pinned-segment .session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
     await pinToggle(BETA_ID);
     await pinToggle(registryState.sessionId);
     await desktop.waitForFunction(() => !document.querySelector('.pinned-segment'), null, { timeout: 2000 });
     check(true, 'unpinning removes the pinned section');
+
+    // A filtered result can contain only the child. Pinning that fragment must
+    // still persist and later render the canonical parent family.
+    await desktop.fill('#filterInput', 'use smoke skill');
+    await desktop.waitForSelector(`.ranked-segment .session-item[data-id="${SKILL_SESSION_ID}"]`, { timeout: 5000 });
+    await pinToggle(SKILL_SESSION_ID);
+    check(await desktop.evaluate(() => localStorage.getItem('pi-dish-pinned-sessions')) ===
+      JSON.stringify([SESSION_ID]), 'pinning a filtered child stores the stable parent family id');
+    await desktop.fill('#filterInput', '');
+    await desktop.waitForFunction((id) => document.querySelector('.pinned-segment .session-item')?.dataset.id === id,
+      SESSION_ID, { timeout: 5000 });
+    check(await desktop.locator(`.pinned-segment .session-item[data-id="${SKILL_SESSION_ID}"]`).count() === 0,
+      'filtered child pin restores the whole family in its collapsed state');
+    await pinToggle(SESSION_ID);
+    await desktop.waitForFunction(() => !document.querySelector('.pinned-segment'), null, { timeout: 2000 });
+
+    // Cross-workspace lineage is navigation-only: pinning its filtered child
+    // must not toggle or absorb the independently pinned parent.
+    await pinToggle(SESSION_ID);
+    await desktop.fill('#filterInput', 'beta answer');
+    await desktop.waitForSelector(`.ranked-segment .session-item[data-id="${BETA_ID}"]`, { timeout: 5000 });
+    await pinToggle(BETA_ID);
+    check(await desktop.evaluate(() => localStorage.getItem('pi-dish-pinned-sessions')) ===
+      JSON.stringify([SESSION_ID, BETA_ID]), 'cross-workspace filtered child pins independently');
+    await desktop.fill('#filterInput', '');
+    await desktop.waitForFunction(() => document.querySelectorAll('.pinned-segment > .session-family-root').length === 2,
+      null, { timeout: 5000 });
+    await pinToggle(BETA_ID);
+    await pinToggle(SESSION_ID);
+    await desktop.waitForFunction(() => !document.querySelector('.pinned-segment'), null, { timeout: 2000 });
 
     // 12. All-tab server search: busy indicator while in flight, content
     // matches carry a highlighted snippet, clearing restores the full list.

@@ -233,6 +233,13 @@ test('nested generic sessions use the core header id and remain fully addressabl
   const nested = listed.body.previous.find(s => s.id === NESTED_SESSION_ID);
   assert.ok(nested, 'nested session should be indexed under its header id');
   assert.equal(nested.parentSession, SESSION_FILE);
+  assert.equal(nested.parentId, SESSION_ID, 'list rows carry resolved native parent identity');
+  assert.equal(nested.parentSource, 'pi-session-header');
+  assert.equal(nested.familyParentId, SESSION_ID, 'same-cwd lineage is approved for sidebar grouping');
+  const filtered = await get('/api/sessions?q=nested%20peer%20question');
+  const filteredChild = filtered.body.previous.find(s => s.id === NESTED_SESSION_ID);
+  assert.equal(filteredChild.familyParentId, SESSION_ID,
+    'filtered child retains stable family identity when the parent row is absent');
 
   const messages = await get(`/api/sessions/${NESTED_SESSION_ID}/messages?limit=10`);
   assert.equal(messages.status, 200);
@@ -246,6 +253,26 @@ test('nested generic sessions use the core header id and remain fully addressabl
   const inverse = await get(`/api/sessions/${SESSION_ID}/related`);
   const child = inverse.body.relations.find(r => r.kind === 'child' && r.source === 'pi-session-header');
   assert.equal(child.session.id, NESTED_SESSION_ID);
+});
+
+test('stale native parent paths do not attach by basename alone', async () => {
+  const id = '2026-07-04T10-12-00-stale-parent';
+  const file = path.join(sessionDir, `${id}.jsonl`);
+  fs.writeFileSync(file, JSON.stringify({
+    type: 'session', id: 'stale-core-id', cwd: '/home/user/proj',
+    parentSession: path.join(tmpHome, 'old-location', `${SESSION_ID}.jsonl`),
+    timestamp: '2026-07-04T10:12:00.000Z',
+  }) + '\n');
+  try {
+    const listed = await get('/api/sessions');
+    const stale = listed.body.previous.find(s => s.id === id);
+    assert.ok(stale);
+    assert.equal(stale.parentId, null, 'unresolved path cannot collide with a current basename');
+    assert.equal(stale.familyParentId, null);
+  } finally {
+    fs.rmSync(file, { force: true });
+    await get('/api/sessions');
+  }
 });
 
 test('a newly ambiguous nested header id invalidates route lookup', async () => {
@@ -271,6 +298,11 @@ test('a newly ambiguous nested header id invalidates route lookup', async () => 
 
 test('pi-dish launch provenance adds neutral related-session navigation', async () => {
   sessionProvenance.recordLaunch(REAL_CWD_ID, SESSION_ID, 'test-operation');
+  const listed = await get('/api/sessions');
+  const launched = listed.body.previous.find(s => s.id === REAL_CWD_ID);
+  assert.equal(launched.parentId, SESSION_ID, 'list rows carry advisory pi-dish launch parent');
+  assert.equal(launched.parentSource, 'pi-dish-launch');
+  assert.equal(launched.familyParentId, null, 'cross-workspace launch remains visually independent');
   const source = await get(`/api/sessions/${SESSION_ID}/related`);
   assert.ok(source.body.relations.some(r => r.kind === 'startedHere' && r.session.id === REAL_CWD_ID));
   const child = await get(`/api/sessions/${REAL_CWD_ID}/related`);

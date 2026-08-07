@@ -229,8 +229,11 @@ Pi's native `parentSession` header is read when present. Launches requested
 through this CLI also get advisory provenance in
 `~/.pi/dish/session-provenance.json`; pi-dish never appends custom control
 metadata to Pi JSONL. Related-session chips appear beneath the selected session
-header. Sessions launched by other schemes remain normal rows and degrade by
-what is available: live bridge controls when registered, historical read/resume
+header. In the unfiltered sidebar, same-workspace children also nest beneath
+their parent as a parent-first block sorted by the newest activity in the whole
+family. Families start collapsed; pinning or dragging any member moves the whole
+family block. Sessions launched by other schemes remain normal rows and degrade
+by what is available: live bridge controls when registered, historical read/resume
 when only JSONL remains, and no relation decoration when no hint exists.
 
 ### Public share links
