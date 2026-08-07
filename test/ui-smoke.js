@@ -2487,6 +2487,22 @@ function writeRegistry(patch = {}) {
       'drawer closes after picking a session');
     const box = await mobile.locator('.header-menu-btn').boundingBox();
     check(box && box.x >= 0 && box.y >= 0 && box.width >= 36, 'header hamburger visible in layout');
+    await mobile.waitForSelector('#sessionRelations .session-relation-chip', { timeout: 5000 });
+    const relationLayout = await mobile.evaluate(() => {
+      const strip = document.getElementById('sessionRelations');
+      const chips = [...strip.querySelectorAll('.session-relation-chip')];
+      const rect = strip.getBoundingClientRect();
+      const tops = chips.map(chip => Math.round(chip.getBoundingClientRect().top));
+      return {
+        height: rect.height,
+        rows: new Set(tops).size,
+        flexWrap: getComputedStyle(strip).flexWrap,
+        maxChipWidth: Math.max(...chips.map(chip => chip.getBoundingClientRect().width)),
+      };
+    });
+    check(relationLayout.rows === 1 && relationLayout.flexWrap === 'nowrap' &&
+      relationLayout.height <= 32 && relationLayout.maxChipWidth <= 171,
+      `related-session chips stay in one compact mobile strip (got ${JSON.stringify(relationLayout)})`);
 
     // Layout contract: title gets its own row above the top-right model
     // selector, while the context badge stays bottom-left.
