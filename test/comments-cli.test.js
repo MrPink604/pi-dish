@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
+const { encodeSessionKey } = require('../lib/session-key');
 
 const run = promisify(execFile);
 const cli = path.join(__dirname, '..', 'skills', 'pi-dish-comments', 'scripts', 'pi-dish-comments.js');
@@ -91,4 +92,25 @@ test('comments CLI discovers its ancestor pi session, pages, and acknowledges', 
   const ack = await run(process.execPath, [cli, 'ack', 'comment-1'], { env });
   assert.match(ack.stdout, /Acknowledged comment-1/);
   assert.deepEqual(ackBody, { sessionId: 'session-1' });
+});
+
+test('comments CLI reports the canonical route for an alternative registry entry', async (t) => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-comments-alt-'));
+  t.after(() => fs.rmSync(tmpHome, { recursive: true, force: true }));
+  const registry = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registry, { recursive: true });
+  fs.writeFileSync(path.join(registry, 'omp-worker.json'), JSON.stringify({
+    protocolVersion: 2,
+    wrapper: { harnessId: 'omp' },
+    harnessId: 'omp',
+    nativeSessionId: 'omp-native',
+    sessionId: 'omp-native',
+    pid: process.pid,
+    cwd: process.cwd(),
+    updatedAt: new Date().toISOString(),
+  }));
+  const env = { ...process.env, HOME: tmpHome };
+  delete env.PI_DISH_SESSION_ID;
+  const session = await run(process.execPath, [cli, 'session'], { env });
+  assert.equal(session.stdout.trim(), encodeSessionKey('omp', 'omp-native'));
 });

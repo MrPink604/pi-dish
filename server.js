@@ -5,16 +5,17 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const piSDK = require('./lib/pi-sdk');
-const { createRPCSession, resumeRPCSession, getRPCSession, getAllRPCSessions, getPiLaunchSpec } = require('./lib/rpc-session');
+const { execFile } = require('child_process');
+const { createRPCSession, resumeRPCSession, getRPCSession: getRawRPCSession, getAllRPCSessions, getPiLaunchSpec } = require('./lib/rpc-session');
 const {
   listRegisteredSessions,
   invalidateRegistryCache,
-  getRegisteredSession,
-  refreshRegisteredSession,
+  getRegisteredSessionByNativeId,
+  validRegistryClaimShape,
   sameRegistryClaim,
   pruneRegisteredSession,
   pruneUnreachableRegisteredSession,
-  getBridgeSession,
+  getBridgeSession: getBridgeSessionForClaim,
   BridgeSession,
   REGISTRY_DIR,
   processIdentity,
@@ -29,15 +30,18 @@ const shares = require('./lib/shares');
 const pages = require('./lib/pages');
 const comments = require('./lib/comments');
 const {
-  getSessionInfo,
-  readSessionMessages,
-  readSessionMessageById,
-  getSessionStats,
-  readSessionCwd,
+  getSessionInfo: getSessionInfoRaw,
+  readSessionMessages: readSessionMessagesRaw,
+  readSessionMessageById: readSessionMessageByIdRaw,
+  getSessionStats: getSessionStatsRaw,
+  readSessionCwd: readSessionCwdRaw,
   decodeDirToCwd,
 } = require('./lib/session-files');
 const sessionIndex = require('./lib/session-index');
-const { discoverSessionCandidates, findSessionCandidate } = require('./lib/session-discovery');
+const { discoverSessionCandidates, discoverHarnessSessions, findSessionCandidate } = require('./lib/session-discovery');
+const { encodeSessionKey, resolveSessionRoute, VERSION: SESSION_KEY_VERSION } = require('./lib/session-key');
+const { getHarness, listHarnesses, resolveLaunchSpec } = require('./lib/harnesses');
+const { inspectProcessAncestry } = require('./lib/process-identity');
 const sessionProvenance = require('./lib/session-provenance');
 const skillsLib = require('./lib/skills');
 const {
@@ -81,6 +85,177 @@ const PI_SETTINGS_FILE = path.join(os.homedir(), '.pi', 'agent', 'settings.json'
 const DISH_SETTINGS_FILE = path.join(os.homedir(), '.pi', 'dish', 'settings.json');
 
 // =========================================================================
+// Harness-aware identity boundary
+// =========================================================================
+
+function routeIdentity(value) {
+  try {
+    return {
+      ...resolveSessionRoute(value),
+      encoded: typeof value === 'string' && value.startsWith(SESSION_KEY_VERSION),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function routeSessionId(harnessId, nativeSessionId) {
+  // Preserve every existing Pi URL/browser key. Alternative corpora use the
+  // canonical encoded tuple, so a native-id collision cannot change a Pi URL.
+  return harnessId === 'pi' ? nativeSessionId : encodeSessionKey(harnessId, nativeSessionId);
+}
+
+function registryIdentity(entry) {
+  const harnessId = entry?.wrapper?.harnessId || entry?.harnessId || 'pi';
+  const nativeSessionId = entry?.nativeSessionId || entry?.sessionId;
+  return harnessId && nativeSessionId ? { harnessId, nativeSessionId } : null;
+}
+
+function getRegisteredSession(sessionId) {
+  const identity = routeIdentity(sessionId);
+  if (!identity) return null;
+  return getRegisteredSessionByNativeId(identity.harnessId, identity.nativeSessionId);
+}
+
+function refreshRegisteredSession(sessionId) {
+  invalidateRegistryCache();
+  return getRegisteredSession(sessionId);
+}
+
+function getRPCSession(sessionId) {
+  const identity = routeIdentity(sessionId);
+  return identity?.harnessId === 'pi' ? getRawRPCSession(identity.nativeSessionId) : null;
+}
+
+async function getBridgeSession(sessionId) {
+  const entry = getRegisteredSession(sessionId);
+  if (!entry) throw new Error(`session ${sessionId} not registered or has conflicting bridge instances`);
+  return getBridgeSessionForClaim(entry);
+}
+
+const sourceByFile = new Map();
+function rememberSessionSource(candidate) {
+  if (candidate?.file) sourceByFile.set(candidate.file, candidate);
+  return candidate;
+}
+function sourceForIdentity(harnessId, nativeSessionId, file) {
+  const descriptor = getHarness(harnessId);
+  return rememberSessionSource({
+    file,
+    id: nativeSessionId,
+    nativeSessionId,
+    sessionKey: encodeSessionKey(harnessId, nativeSessionId),
+    harnessId,
+    profileId: descriptor?.profileId || 'pi-v3',
+    profileVersion: descriptor?.profileVersion || 1,
+  });
+}
+function sourceForRead(input) {
+  if (typeof input !== 'string') return rememberSessionSource(input);
+  return sourceByFile.get(input) || input;
+}
+function apiIdForCandidate(candidate) {
+  return routeSessionId(candidate.harnessId || 'pi', candidate.nativeSessionId || candidate.id);
+}
+function resolveSessionCandidate(sessionId, { discover = true } = {}) {
+  const identity = routeIdentity(sessionId);
+  if (!identity) return null;
+  const descriptor = getHarness(identity.harnessId);
+  if (!descriptor) return null;
+  const registered = getRegisteredSession(sessionId);
+  if (registered?.sessionFile && fs.existsSync(registered.sessionFile)) {
+    return sourceForIdentity(identity.harnessId, identity.nativeSessionId, registered.sessionFile);
+  }
+  if (identity.harnessId === 'pi') {
+    const rpc = getRPCSession(sessionId);
+    const file = rpc?.sessionFile || rpc?.state?.sessionFile;
+    if (file && fs.existsSync(file)) return sourceForIdentity('pi', identity.nativeSessionId, file);
+  }
+  if (!discover) return null;
+  const { candidate } = findSessionCandidate(descriptor.rootPath(), identity.nativeSessionId, {
+    descriptor,
+    allowPartial: false,
+  });
+  return candidate ? rememberSessionSource(candidate) : null;
+}
+function getSessionInfo(input) { return getSessionInfoRaw(sourceForRead(input)); }
+function readSessionMessages(input) { return readSessionMessagesRaw(sourceForRead(input)); }
+function readSessionMessageById(input, id) { return readSessionMessageByIdRaw(sourceForRead(input), id); }
+function getSessionStats(input) { return getSessionStatsRaw(sourceForRead(input)); }
+function readSessionCwd(input) { return readSessionCwdRaw(sourceForRead(input)); }
+
+function sessionIdentityFields(harnessId, nativeSessionId) {
+  const descriptor = getHarness(harnessId);
+  return {
+    id: routeSessionId(harnessId, nativeSessionId),
+    sessionKey: encodeSessionKey(harnessId, nativeSessionId),
+    harnessId,
+    harnessLabel: descriptor?.label || harnessId,
+    nativeSessionId,
+  };
+}
+
+function sessionCapabilities(harnessId, bridgeCapabilities = {}, { active = false, conflicted = false, closeAllowed = false } = {}) {
+  if (conflicted) return Object.fromEntries([
+    'prompt', 'steer', 'followUp', 'abort', 'models', 'setModel', 'setThinking',
+    'rename', 'commands', 'queueCancel', 'tree', 'export', 'close', 'resume',
+  ].map(key => [key, false]));
+  const pi = harnessId === 'pi';
+  const closeMode = getHarness(harnessId)?.closeMode || 'unsupported';
+  const advertised = (name) => active && (pi ? bridgeCapabilities[name] !== false : bridgeCapabilities[name] === true);
+  return {
+    prompt: advertised('prompt'),
+    steer: advertised('steer'),
+    followUp: advertised('followUp'),
+    abort: advertised('abort'),
+    models: active ? advertised('models') : pi,
+    setModel: active ? advertised('setModel') : pi,
+    setThinking: advertised('setThinking'),
+    rename: active ? advertised('rename') : pi,
+    commands: active ? advertised('commands') : pi,
+    queueCancel: advertised('queueCancel'),
+    tree: pi && (active ? advertised('treeNavigation') : true),
+    export: pi,
+    // Client-only harnesses may only detach the exact tmux pane pi-dish
+    // recorded when it launched that client.
+    close: active && (closeMode === 'logical' || (closeMode === 'client-only' && closeAllowed)),
+    resume: !active,
+  };
+}
+
+function spawnMatchesRegistryClaim(spawn, registryEntry) {
+  return !!spawn?.spawnToken
+    && !!spawn?.paneProcess?.pid
+    && !!spawn?.paneProcess?.startTime
+    && spawn.spawnToken === registryEntry?.spawnToken;
+}
+
+function sameProcessIdentity(left, right) {
+  return !!left && !!right
+    && Number(left.pid) === Number(right.pid)
+    && String(left.startTime) === String(right.startTime);
+}
+
+async function proveBridgeRegistryClaim(entry) {
+  const probe = new BridgeSession(entry);
+  try {
+    await probe.connect();
+    await probe.waitForHello({ timeout: 2000 });
+  } finally {
+    probe.close();
+  }
+}
+
+function spawnAllowsClientDetach(spawn, registryEntry) {
+  if (!spawnMatchesRegistryClaim(spawn, registryEntry)) return false;
+  const workerIdentity = { pid: registryEntry.pid, startTime: registryEntry.startTime };
+  const ancestry = inspectProcessAncestry(workerIdentity);
+  return ancestry.complete
+    && sameProcessIdentity(ancestry.processes[0], workerIdentity)
+    && !ancestry.processes.some(process => sameProcessIdentity(process, spawn.paneProcess));
+}
+
+// =========================================================================
 // Helpers
 // =========================================================================
 
@@ -104,6 +279,10 @@ const MODEL_CONTEXT_WINDOWS = {
 
 function normalizeModel(model) {
   if (!model) return null;
+  if (typeof model === 'string') {
+    const { provider, id } = parseModelId(model);
+    return provider && id ? { id, name: id, provider, contextWindow: 0, reasoning: false, pricing: null, free: false } : null;
+  }
   const sourcePricing = model.pricing || model.cost;
   const pricing = sourcePricing && Number.isFinite(sourcePricing.input) && Number.isFinite(sourcePricing.output)
     ? Object.fromEntries(['input', 'output', 'cacheRead', 'cacheWrite'].filter(k => Number.isFinite(sourcePricing[k])).map(k => [k, sourcePricing[k]]))
@@ -139,17 +318,48 @@ function normalizeModels(models) {
 async function getLiveSession(sessionId) {
   const registered = getRegisteredSession(sessionId);
   if (registered) {
+    let bridgeError;
     try {
-      return trackExtUIState(await getBridgeSession(sessionId));
+      // Bind this attempt to the claim we selected. A reload can replace the
+      // registry entry between lookup and connect; resolving by route again
+      // here could connect a different claim and then prune the wrong one if
+      // that connection fails.
+      return trackExtUIState(await getBridgeSessionForClaim(registered));
     } catch (error) {
+      bridgeError = error;
       pruneUnreachableRegisteredSession(registered, error);
+
+      // Extension reloads retire one instance-specific socket and publish a
+      // replacement for the same logical session. The 500ms registry memo can
+      // briefly hand us the retired claim even after the replacement exists,
+      // so refresh once and retry only when the exact claim changed.
+      const replacement = refreshRegisteredSession(sessionId);
+      if (replacement && !sameRegistryClaim(replacement, registered)) {
+        try {
+          return trackExtUIState(await getBridgeSessionForClaim(replacement));
+        } catch (replacementError) {
+          bridgeError = replacementError;
+          pruneUnreachableRegisteredSession(replacement, replacementError);
+        }
+      }
+
       const rpc = getRPCSession(sessionId);
       if (rpc?.alive) return trackExtUIState(rpc);
-      throw error;
+      throw bridgeError;
     }
   }
   const rpc = getRPCSession(sessionId);
   return rpc?.alive ? trackExtUIState(rpc) : null;
+}
+
+// Legacy Pi bridges and RPC sessions retain their established defaults.
+// Protocol-v2 alternative wrappers are capability-deny-by-default: a future
+// wrapper only gains an operation by advertising it explicitly.
+function liveSessionSupports(sess, capability) {
+  if (!(sess instanceof BridgeSession)) return true;
+  return sess.harnessId === 'pi'
+    ? sess.capabilities?.[capability] !== false
+    : sess.capabilities?.[capability] === true;
 }
 
 // Extension UI is per-session state, but SSE connections come and go with
@@ -293,7 +503,7 @@ async function getSessionModels(sessionId) {
   if (!sessionId) return null;
   try {
     const sess = await getLiveSession(sessionId);
-    if (sess) {
+    if (sess && liveSessionSupports(sess, 'models')) {
       const data = await sess.getAvailableModels();
       return normalizeModels(data?.models || data);
     }
@@ -371,6 +581,14 @@ function parseSessionFile(filePath) {
 function activeSessionEntry(v) {
   return {
     id: v.id,
+    sessionKey: v.sessionKey,
+    harnessId: v.harnessId || 'pi',
+    harnessLabel: v.harnessLabel || 'Pi',
+    nativeSessionId: v.nativeSessionId || v.id,
+    capabilities: v.capabilities || sessionCapabilities('pi', {}, { active: true }),
+    closeMode: v.closeMode || 'logical',
+    conflicted: !!v.conflicted,
+    liveInstanceCount: v.liveInstanceCount || 1,
     name: v.name || 'New Session',
     model: v.model || 'unknown',
     contextPercent: roundPercent(v.percent) ?? 0,
@@ -396,16 +614,43 @@ function activeSessionEntry(v) {
 function getActiveSessions(registered = listRegisteredSessions()) {
   const active = [];
   const seen = new Set();
+  const groups = new Map();
   for (const reg of registered) {
+    const identity = registryIdentity(reg);
+    if (!identity || !getHarness(identity.harnessId)) continue;
+    const routeId = routeSessionId(identity.harnessId, identity.nativeSessionId);
+    const group = groups.get(routeId) || [];
+    group.push(reg);
+    groups.set(routeId, group);
+  }
+  for (const [routeId, instances] of groups) {
+    // Multiple simultaneous v2 bridge instances for one logical history are
+    // visible but not controllable until exact launch evidence selects one.
+    const conflicted = instances.length !== 1;
+    const reg = instances.slice().sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))[0];
+    const identity = registryIdentity(reg);
+    const identityFields = sessionIdentityFields(identity.harnessId, identity.nativeSessionId);
+    const ownedSpawn = tmux.getSpawn(routeId);
     let info = {};
     if (reg.sessionFile && fs.existsSync(reg.sessionFile)) {
-      try { info = parseSessionFile(reg.sessionFile); } catch {}
+      try {
+        const source = sourceForIdentity(identity.harnessId, identity.nativeSessionId, reg.sessionFile);
+        info = parseSessionFile(source);
+      } catch {}
     }
     // The bridge reports the session's actual context usage (tokens, window,
     // percent) straight from pi — always prefer it over JSONL guesswork.
     const usage = reg.contextUsage || null;
     active.push(activeSessionEntry({
-      id: reg.sessionId,
+      ...identityFields,
+      capabilities: sessionCapabilities(identity.harnessId, reg.capabilities || {}, {
+        active: true,
+        conflicted,
+        closeAllowed: spawnAllowsClientDetach(ownedSpawn, reg),
+      }),
+      closeMode: getHarness(identity.harnessId).closeMode,
+      conflicted,
+      liveInstanceCount: instances.length,
       name: reg.name || info.name,
       model: reg.model || info.model,
       percent: usage?.percent ?? info.contextPercent,
@@ -423,7 +668,7 @@ function getActiveSessions(registered = listRegisteredSessions()) {
       parentSession: info.parentSession,
       pid: reg.pid,
     }));
-    seen.add(reg.sessionId);
+    seen.add(routeId);
   }
 
   // Sessions spawned by pi-dish via RPC may not be visible through the bridge
@@ -440,7 +685,8 @@ function getActiveSessions(registered = listRegisteredSessions()) {
       try { info = parseSessionFile(rpcFile); } catch {}
     }
     active.push(activeSessionEntry({
-      id: rpc.id,
+      ...sessionIdentityFields('pi', rpc.id),
+      capabilities: sessionCapabilities('pi', {}, { active: true }),
       name: state.sessionName || state.name,
       model: formatModelRef(state.model) || formatModelRef(rpc.model),
       percent: usage?.percent,
@@ -469,7 +715,10 @@ function getActiveSessions(registered = listRegisteredSessions()) {
 // can re-poll instead of mistaking the partial list for the whole one.
 function getPreviousSessions(registered = listRegisteredSessions()) {
   const activeIds = new Set([
-    ...registered.map(r => r.sessionId),
+    ...registered.map((r) => {
+      const identity = registryIdentity(r);
+      return identity ? routeSessionId(identity.harnessId, identity.nativeSessionId) : null;
+    }).filter(Boolean),
     ...getAllRPCSessions().filter(s => s.alive).map(s => s.id),
   ]);
   const candidates = []; // { file, id, dirName }
@@ -478,14 +727,17 @@ function getPreviousSessions(registered = listRegisteredSessions()) {
   let discoveryTruncated = false;
 
   try {
-    const discovery = discoverSessionCandidates(SESSIONS_DIR, { excludeIds: activeIds });
-    candidates.push(...discovery.candidates);
+    const discovery = discoverHarnessSessions();
+    candidates.push(...discovery.candidates.filter(candidate =>
+      !activeIds.has(routeSessionId(candidate.harnessId, candidate.nativeSessionId))));
     refreshSessionFileCache(discovery.candidates);
     discoveryTruncated = discovery.truncated;
 
-    const scan = sessionIndex.scanSessions(candidates.map(c => c.file));
+    const scan = sessionIndex.scanSessions(candidates);
     indexing = scan.indexing;
-    for (const { file, id, dirName } of candidates) {
+    for (const candidate of candidates) {
+      const { file, id, dirName, harnessId, nativeSessionId } = candidate;
+      rememberSessionSource(candidate);
       const raw = scan.infos.get(file);
       if (!raw) continue; // unreadable, or still queued for background indexing
       const info = withContext(raw);
@@ -493,12 +745,16 @@ function getPreviousSessions(registered = listRegisteredSessions()) {
       // hyphenated project dir decodes to a bogus path — only trust it
       // when the decoded directory actually exists.
       let cwd = info.cwd;
-      if (!cwd) {
+      if (!cwd && getHarness(harnessId)?.layout === 'nested') {
         const decoded = decodeDirToCwd(dirName);
         cwd = fs.existsSync(decoded) ? decoded : null;
       }
       previous.push({
-        id,
+        ...sessionIdentityFields(harnessId, nativeSessionId),
+        capabilities: sessionCapabilities(harnessId, {}, { active: false }),
+        closeMode: getHarness(harnessId).closeMode,
+        profileId: candidate.profileId,
+        profileVersion: candidate.profileVersion,
         name: info.name || id.slice(0, 8),
         model: info.model || 'unknown',
         contextPercent: info.contextPercent || 0,
@@ -520,7 +776,8 @@ function getPreviousSessions(registered = listRegisteredSessions()) {
 }
 
 function enumerateSessionCandidates(excludeIds = new Set()) {
-  return discoverSessionCandidates(SESSIONS_DIR, { excludeIds }).candidates;
+  return discoverHarnessSessions().candidates.filter(candidate =>
+    !excludeIds.has(routeSessionId(candidate.harnessId, candidate.nativeSessionId)));
 }
 
 // =========================================================================
@@ -537,7 +794,8 @@ function matchSessionQuery(session, parsed) {
   if (evaluateSessionQuery(parsed, session)) return {};
   const contentTokens = positiveQueryTokens(parsed);
   if (contentTokens.length && session.sessionFile) {
-    const historyText = sessionIndex.getSearchText(session.sessionFile);
+    const historyText = sessionIndex.getSearchText(sourceForIdentity(
+      session.harnessId || 'pi', session.nativeSessionId || session.id, session.sessionFile));
     if (evaluateSessionQuery(parsed, session, historyText)) {
       return { snippet: buildSnippet(historyText, contentTokens), text: historyText };
     }
@@ -561,7 +819,8 @@ function filterSessionsByQuery(list, query) {
     const m = matchSessionQuery(session, parsed);
     if (!m) continue;
     if (!rank) { out.push(session); continue; }
-    const text = m.text ?? (session.sessionFile ? sessionIndex.getSearchText(session.sessionFile) : null);
+    const text = m.text ?? (session.sessionFile ? sessionIndex.getSearchText(sourceForIdentity(
+      session.harnessId || 'pi', session.nativeSessionId || session.id, session.sessionFile)) : null);
     const entry = { ...session, searchScore: scoreSessionMatch(parsed, session, text) };
     if (m.snippet) entry.searchSnippet = m.snippet;
     out.push(entry);
@@ -636,6 +895,9 @@ function canonicalSessionPath(file) {
 function relationSessionSummary(session) {
   return {
     id: session.id,
+    sessionKey: session.sessionKey,
+    harnessId: session.harnessId || 'pi',
+    nativeSessionId: session.nativeSessionId || session.id,
     name: session.name,
     cwd: session.cwd || null,
     model: session.model || 'unknown',
@@ -669,21 +931,24 @@ app.get('/api/sessions/:id/related', (req, res) => {
     const catalog = buildSessionCatalog();
     let current = catalog.byId.get(req.params.id);
     if (!current) {
-      const file = findSessionFile(req.params.id, { exact: true });
-      if (!file) return res.status(404).json({ error: 'Session not found' });
-      const info = parseSessionFile(file);
+      const candidate = resolveSessionCandidate(req.params.id);
+      if (!candidate) return res.status(404).json({ error: 'Session not found' });
+      const info = parseSessionFile(candidate);
       current = {
-        id: req.params.id,
-        name: info.name || req.params.id.slice(0, 8),
+        id: apiIdForCandidate(candidate),
+        sessionKey: candidate.sessionKey,
+        harnessId: candidate.harnessId,
+        nativeSessionId: candidate.nativeSessionId,
+        name: info.name || candidate.nativeSessionId.slice(0, 8),
         cwd: info.cwd,
         model: info.model,
         lastActivity: info.lastActivity,
         isActive: false,
-        sessionFile: file,
+        sessionFile: candidate.file,
         parentSession: info.parentSession,
       };
       catalog.byId.set(current.id, current);
-      catalog.byPath.set(canonicalSessionPath(file), current);
+      catalog.byPath.set(canonicalSessionPath(candidate.file), current);
       catalog.list.push(current);
     }
 
@@ -721,7 +986,8 @@ app.get('/api/sessions/:id/related', (req, res) => {
       discoveryTruncated: catalog.discoveryTruncated,
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    const status = /Invalid session ID|Unknown harness/.test(e.message) ? 400 : 500;
+    res.status(status).json({ error: e.message });
   }
 });
 
@@ -753,7 +1019,8 @@ app.get('/api/search', (req, res) => {
     let text = null;
     if (!evaluateSessionQuery(parsed, session)) {
       if (!contentTokens.length || !session.sessionFile) continue;
-      text = sessionIndex.getSearchText(session.sessionFile);
+      text = sessionIndex.getSearchText(sourceForIdentity(
+        session.harnessId || 'pi', session.nativeSessionId || session.id, session.sessionFile));
       if (!evaluateSessionQuery(parsed, session, text)) continue;
     }
     if (hasScope && !evaluateSessionQuery(scopeParsed, session)) {
@@ -762,7 +1029,8 @@ app.get('/api/search', (req, res) => {
     }
     let snippets = [], matchCount = 0;
     if (contentTokens.length && session.sessionFile) {
-      text ??= sessionIndex.getSearchText(session.sessionFile);
+      text ??= sessionIndex.getSearchText(sourceForIdentity(
+        session.harnessId || 'pi', session.nativeSessionId || session.id, session.sessionFile));
       ({ snippets, count: matchCount } = buildSnippets(text, contentTokens));
     }
     results.push({ ...session, snippets, matchCount, searchScore: scoreSessionMatch(parsed, session, text) });
@@ -822,7 +1090,7 @@ app.get('/api/usage-summary', (req, res) => {
   if (modelRefs.length > 100) return res.status(400).json({ error: 'models filter lists too many models' });
   const modelFilter = modelRefs.length ? new Set(modelRefs) : null;
   const candidates = enumerateSessionCandidates();
-  const scan = sessionIndex.scanSessions(candidates.map(c => c.file));
+  const scan = sessionIndex.scanSessions(candidates);
   const cutoff = range === 'all' ? null : localDay(Number(range) - 1);
   const totals = emptyUsage(), byModel = new Map(), byWorkspace = new Map(), bySession = new Map();
   const dailyMap = new Map(), dailyModels = new Map();
@@ -864,7 +1132,16 @@ app.get('/api/usage-summary', (req, res) => {
     addUsage(totals, selected);
     if (selected.calls) {
       addUsage(byWorkspace.get(info.cwd || usage.cwd || '(unknown)') || (byWorkspace.set(info.cwd || usage.cwd || '(unknown)', emptyUsage()), byWorkspace.get(info.cwd || usage.cwd || '(unknown)')), selected);
-      bySession.set(c.id, { id: c.id, name: info.name || c.id, workspace: info.cwd || usage.cwd || null, ...selected });
+      const routeId = apiIdForCandidate(c);
+      bySession.set(routeId, {
+        id: routeId,
+        sessionKey: c.sessionKey,
+        harnessId: c.harnessId,
+        nativeSessionId: c.nativeSessionId,
+        name: info.name || c.nativeSessionId,
+        workspace: info.cwd || usage.cwd || null,
+        ...selected,
+      });
     }
   }
   let unpricedModelCalls = 0;
@@ -1052,7 +1329,7 @@ app.get('/api/skills', async (req, res) => {
     const inventory = await skillsLib.getSkillsInventory({ cwds });
     sessionIndex.setSkillRoots(inventory.skills.map(s => s.filePath));
     const candidates = enumerateSessionCandidates();
-    const scan = sessionIndex.scanSessions(candidates.map(c => c.file));
+    const scan = sessionIndex.scanSessions(candidates);
     const now = Date.now();
     const skills = inventory.skills.map(s => {
       const records = sessionIndex.getSkillActivations({ skill: s.filePath });
@@ -1089,7 +1366,7 @@ app.get('/api/skills', async (req, res) => {
 // cwd, kind.
 app.get('/api/skills/activations', (req, res) => {
   // Ensure the corpus is indexed (mines skills as a side effect).
-  sessionIndex.scanSessions(enumerateSessionCandidates().map(c => c.file));
+  sessionIndex.scanSessions(enumerateSessionCandidates());
   const filter = {};
   if (req.query.skill) filter.skill = String(req.query.skill);
   if (req.query.cwd) filter.cwd = String(req.query.cwd);
@@ -1124,7 +1401,7 @@ app.get('/api/skills/coverage', (req, res) => {
   try { stat = fs.statSync(skill); content = fs.readFileSync(skill, 'utf-8'); }
   catch { return res.status(404).json({ error: 'skill file not found' }); }
 
-  sessionIndex.scanSessions(enumerateSessionCandidates().map(c => c.file));
+  sessionIndex.scanSessions(enumerateSessionCandidates());
   const now = Date.now();
   const all = sessionIndex.getSkillActivations({ skill });
   const lines = content.split('\n');
@@ -1293,13 +1570,13 @@ app.get('/api/sessions/:id/messages/:messageId/images/:blockIndex', (req, res) =
   if (!VALID_ENTRY_ID_RE.test(messageId) || !Number.isInteger(blockIndex) || blockIndex < 0) {
     return res.status(400).json({ error: 'valid message id and image index required' });
   }
-  const sessionFile = findSessionFile(req.params.id);
-  if (!sessionFile) return res.status(404).json({ error: 'Session not found' });
-  let message = readSessionMessageById(sessionFile, messageId);
+  const session = findSessionSource(req.params.id);
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+  let message = readSessionMessageById(session, messageId);
   // Nearly-free compatibility for URLs emitted for legacy id-less sessions.
   if (!message && /^\d+$/.test(messageId)) {
     const legacyIndex = Number(messageId);
-    if (Number.isSafeInteger(legacyIndex)) message = readSessionMessages(sessionFile)[legacyIndex];
+    if (Number.isSafeInteger(legacyIndex)) message = readSessionMessages(session)[legacyIndex];
   }
   const block = message?.content?.[blockIndex];
   if (!block || block.type !== 'image' || typeof block.data !== 'string' || !block.data) {
@@ -1314,8 +1591,8 @@ app.get('/api/sessions/:id/messages', (req, res) => {
   const sessionId = req.params.id;
   const isActive = !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId);
 
-  const sessionFile = findSessionFile(sessionId);
-  if (!sessionFile) {
+  const sessionSource = findSessionSource(sessionId);
+  if (!sessionSource) {
     return res.json({
       messages: [], session: { id: sessionId, isActive },
       totalMessages: 0, firstIndex: null, lastIndex: null, hasMore: false,
@@ -1335,7 +1612,9 @@ app.get('/api/sessions/:id/messages', (req, res) => {
   const before = req.query.before != null ? cursor(req.query.before) : null;
   const after = req.query.after != null ? cursor(req.query.after) : null;
 
-  const info = parseSessionFile(sessionFile);
+  const routeId = apiIdForCandidate(sessionSource);
+  const identity = sessionIdentityFields(sessionSource.harnessId, sessionSource.nativeSessionId);
+  const info = parseSessionFile(sessionSource);
   // Overlay live context usage when the session can report it.
   const liveUsage = getLiveContextUsage(sessionId);
   if (liveUsage) {
@@ -1343,7 +1622,7 @@ app.get('/api/sessions/:id/messages', (req, res) => {
     if (liveUsage.percent != null) info.contextPercent = roundPercent(liveUsage.percent);
     if (liveUsage.contextWindow) info.contextWindow = liveUsage.contextWindow;
   }
-  const all = readSessionMessages(sessionFile);
+  const all = readSessionMessages(sessionSource);
   const totalMessages = all.length;
   let startIdx, endIdx; // inclusive
   if (after != null) {
@@ -1359,7 +1638,7 @@ app.get('/api/sessions/:id/messages', (req, res) => {
   if (startIdx > endIdx || totalMessages === 0) {
     return res.json({
       messages: [],
-      session: { id: sessionId, isActive, ...info },
+      session: { ...identity, isActive, ...info },
       totalMessages,
       firstIndex: null,
       lastIndex: null,
@@ -1368,10 +1647,10 @@ app.get('/api/sessions/:id/messages', (req, res) => {
   }
 
   const slice = all.slice(startIdx, endIdx + 1)
-    .map((m, i) => messageForClient(sessionId, m, startIdx + i));
+    .map((m, i) => messageForClient(routeId, m, startIdx + i));
   res.json({
     messages: slice,
-    session: { id: sessionId, isActive, ...info },
+    session: { ...identity, isActive, ...info },
     totalMessages,
     firstIndex: startIdx,
     lastIndex: endIdx,
@@ -1391,11 +1670,11 @@ app.get('/api/sessions/:id/search', (req, res) => {
   if (mode !== 'message' && mode !== 'any') {
     return res.status(400).json({ error: 'mode must be message or any' });
   }
-  const sessionFile = findSessionFile(req.params.id);
-  if (!sessionFile) return res.status(404).json({ error: 'Session not found' });
+  const session = findSessionSource(req.params.id);
+  if (!session) return res.status(404).json({ error: 'Session not found' });
 
   const tokens = query.split(/\s+/).filter(Boolean);
-  const all = readSessionMessages(sessionFile);
+  const all = readSessionMessages(session);
   const matches = [];
   for (let i = 0; i < all.length; i++) {
     const text = extractTextContent(all[i].content).toLowerCase();
@@ -1427,6 +1706,10 @@ app.post('/api/sessions/:id/prompt', async (req, res) => {
   try {
     const sess = await getLiveSession(req.params.id);
     if (!sess) return res.status(404).json({ error: 'Session not active' });
+    const capability = deliverAs === 'steer' ? 'steer' : deliverAs === 'followUp' ? 'followUp' : 'prompt';
+    if (!liveSessionSupports(sess, capability)) {
+      return res.status(409).json({ error: `This session does not support ${capability}.` });
+    }
     const opts = deliverAs ? { deliverAs } : {};
     if (images.length) opts.images = images;
     const result = await sess.prompt(message || '', opts);
@@ -1443,6 +1726,7 @@ app.post('/api/sessions/:id/steer', async (req, res) => {
   try {
     const sess = await getLiveSession(req.params.id);
     if (!sess) return res.status(404).json({ error: 'Session not active' });
+    if (!liveSessionSupports(sess, 'steer')) return res.status(409).json({ error: 'This session does not support steering.' });
     const result = await sess.steer(message || '', images.length ? { images } : {});
     res.json({ success: true, result });
   } catch (e) {
@@ -1459,6 +1743,7 @@ app.post('/api/sessions/:id/follow-up', async (req, res) => {
   try {
     const sess = await getLiveSession(req.params.id);
     if (!sess) return res.status(404).json({ error: 'Session not active' });
+    if (!liveSessionSupports(sess, 'followUp')) return res.status(409).json({ error: 'This session does not support follow-ups.' });
     const opts = { deliverAs: 'followUp' };
     if (images.length) opts.images = images;
     const result = await sess.prompt(message || '', opts);
@@ -1484,6 +1769,9 @@ app.post('/api/sessions/:id/queue/cancel', async (req, res) => {
     if (!sess) return res.status(404).json({ error: 'Session not active' });
     if (!(sess instanceof BridgeSession)) {
       return res.status(501).json({ error: 'queue editing requires the pi-dish-bridge extension' });
+    }
+    if (!liveSessionSupports(sess, 'queueCancel')) {
+      return res.status(409).json({ error: 'This session does not support queue cancellation.' });
     }
     const result = await sess.cancelQueued(kind, index, text);
     res.json({ success: true, result });
@@ -1585,6 +1873,9 @@ app.post('/api/sessions/:id/thinking', async (req, res) => {
   try {
     const sess = await getLiveSession(req.params.id);
     if (!sess) return res.status(404).json({ error: 'Session not active' });
+    if (!liveSessionSupports(sess, 'setThinking')) {
+      return res.status(409).json({ error: 'This session does not support changing thinking level.' });
+    }
     const data = await sess.setThinkingLevel(level);
     res.json({ success: true, level: data?.level ?? level });
   } catch (e) {
@@ -1600,18 +1891,19 @@ app.post('/api/sessions/:id/thinking', async (req, res) => {
 app.get('/api/sessions/:id/stats', async (req, res) => {
   const sessionId = req.params.id;
   try {
-    const sessionFile = findSessionFile(sessionId);
-    if (!sessionFile) return res.status(404).json({ error: 'Session not found' });
+    const session = findSessionSource(sessionId);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
 
     const { tokens, reasoningTokens, cost, costs, costUnavailable, responseTiming, userMessages, assistantMessages, toolCalls, toolResults, genMs, genOutput } =
-      getSessionStats(sessionFile);
+      getSessionStats(session);
 
     const reg = getRegisteredSession(sessionId);
     const contextUsage = getLiveContextUsage(sessionId);
-    const info = parseSessionFile(sessionFile);
+    const info = parseSessionFile(session);
     res.json({
-      sessionFile,
-      sessionId,
+      sessionFile: session.file,
+      sessionId: apiIdForCandidate(session),
+      ...sessionIdentityFields(session.harnessId, session.nativeSessionId),
       runtime: await describeRuntime(sessionId),
       cwd: reg?.cwd || info.cwd || null,
       model: reg?.model || info.model || null,
@@ -1643,8 +1935,12 @@ app.get('/api/sessions/:id/stats', async (req, res) => {
 // Export any session (active or not) to a standalone HTML file.
 app.get('/api/sessions/:id/export', async (req, res) => {
   try {
-    const sessionFile = findSessionFile(req.params.id);
-    if (!sessionFile) return res.status(404).json({ error: 'Session not found' });
+    const session = findSessionSource(req.params.id);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    if (session.harnessId !== 'pi') {
+      return res.status(409).json({ error: 'HTML export is only supported for Pi sessions.' });
+    }
+    const sessionFile = session.file;
     const outPath = path.join(os.tmpdir(), `pi-dish-export-${req.params.id.slice(-12)}.html`);
     const htmlPath = await piSDK.exportSessionHtml(sessionFile, outPath);
     res.download(htmlPath, path.basename(sessionFile, '.jsonl') + '.html');
@@ -1679,8 +1975,9 @@ const shareExportCache = new Map();
 async function serveSharedSession(req, res) {
   const share = shares.getShare(req.params.token);
   if (!share) return res.status(404).type('text/plain').send('Not found');
-  const sessionFile = findSessionFile(share.sessionId);
-  if (!sessionFile) return res.status(404).type('text/plain').send('Not found');
+  const session = findSessionSource(share.sessionId);
+  if (!session || session.harnessId !== 'pi') return res.status(404).type('text/plain').send('Not found');
+  const sessionFile = session.file;
   try {
     const st = fs.statSync(sessionFile);
     const cached = shareExportCache.get(req.params.token);
@@ -1701,7 +1998,11 @@ async function serveSharedSession(req, res) {
 }
 
 app.post('/api/sessions/:id/share', (req, res) => {
-  if (!findSessionFile(req.params.id)) return res.status(404).json({ error: 'Session not found' });
+  const session = findSessionSource(req.params.id);
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+  if (session.harnessId !== 'pi') {
+    return res.status(409).json({ error: 'Public HTML sharing is only supported for Pi sessions.' });
+  }
   const token = shares.createShare(req.params.id);
   res.json(sharePayload(token));
 });
@@ -2016,7 +2317,7 @@ app.get('/page/:token/*', (req, res) => {
   servePage(req, res, true);
 });
 
-// /reload against a bridge session, with two escape hatches:
+// /reload against a bridge session, with two Pi-only escape hatches:
 // - Bridges that fire the reload in the same tick as their run_command
 //   response lose the response frame to their own socket teardown — a
 //   "socket closed" rejection on /reload specifically is the signature of a
@@ -2025,14 +2326,19 @@ app.get('/page/:token/*', (req, res) => {
 // - Bridges that can't run it at all (no emulated reload / no captured
 //   AgentSession — exactly the state a running TUI is in when its loaded
 //   bridge predates the current one) fall back to typing /reload into the
-//   session's own tmux pane, when one can be located. That's also the only
-//   path that can upgrade an out-of-date bridge from the UI.
+//   Pi session's own tmux pane, when one can be located. That's also the only
+//   path that can upgrade an out-of-date Pi bridge from the UI. Alternate
+//   wrappers fail closed: their public API profile is the lifecycle authority.
 async function reloadBridgeSession(sess, sessionId) {
   try {
     const data = await sess.runCommand('/reload');
     return { info: data?.info || 'Reloading extensions…' };
   } catch (e) {
     if (/socket closed/i.test(e?.message || '')) return { info: 'Reloading extensions…' };
+    if (sess.harnessId !== 'pi') {
+      e.statusCode = 409;
+      throw e;
+    }
     const pane = await locatePiPane(sessionId);
     if (!pane) throw e;
     await tmux.sendKeys(pane.socket, pane.paneId, '/reload');
@@ -2050,7 +2356,13 @@ app.post('/api/sessions/:id/command', async (req, res) => {
     const sess = await getLiveSession(req.params.id);
     if (!sess) return res.status(404).json({ error: 'Session not active' });
     if (sess instanceof BridgeSession) {
+      if (!liveSessionSupports(sess, 'commands')) {
+        return res.status(409).json({ error: 'This session does not support remote commands.' });
+      }
       if (message.trim() === '/reload') {
+        if (!liveSessionSupports(sess, 'reload')) {
+          return res.status(409).json({ error: 'This session does not support remote extension reload.' });
+        }
         const result = await reloadBridgeSession(sess, req.params.id);
         return res.json({ success: true, info: result.info });
       }
@@ -2060,7 +2372,7 @@ app.post('/api/sessions/:id/command', async (req, res) => {
     const result = await runRpcSlashCommand(sess, message);
     res.json({ success: true, info: result.info });
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    res.status(e.statusCode || 400).json({ error: e.message });
   }
 });
 
@@ -2075,6 +2387,9 @@ app.post('/api/sessions/:id/ui-response', async (req, res) => {
   try {
     const sess = await getLiveSession(req.params.id);
     if (!sess) return res.status(404).json({ error: 'Session not active' });
+    if (!liveSessionSupports(sess, 'extensionUI')) {
+      return res.status(409).json({ error: 'This session does not support remote extension UI.' });
+    }
     await sess.respondExtensionUI(requestId, response);
     // RPC sessions never emit extension_ui_resolved (the bridge does), so
     // drop the answered dialog from the replay state here.
@@ -2091,13 +2406,19 @@ app.post('/api/sessions/:id/rename', async (req, res) => {
   try {
     const sess = await getLiveSession(req.params.id);
     if (sess) {
+      if (!liveSessionSupports(sess, 'rename')) {
+        return res.status(409).json({ error: 'This session does not support renaming.' });
+      }
       await sess.setName(name);
       return res.json({ success: true });
     }
     // Inactive session: append a session_info entry to the JSONL directly.
-    const sessionPath = findSessionFile(req.params.id);
-    if (!sessionPath) return res.status(404).json({ error: 'Session not found' });
-    await piSDK.renameSession(sessionPath, name);
+    const session = findSessionSource(req.params.id);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    if (session.harnessId !== 'pi') {
+      return res.status(409).json({ error: 'Renaming an inactive session is only supported for Pi.' });
+    }
+    await piSDK.renameSession(session.file, name);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -2112,6 +2433,9 @@ app.post('/api/sessions/:id/model', async (req, res) => {
   try {
     const sess = await getLiveSession(req.params.id);
     if (sess) {
+      if (!liveSessionSupports(sess, 'setModel')) {
+        return res.status(409).json({ error: 'This session does not support changing models.' });
+      }
       // The two backends take different setModel shapes (bridge: one ref
       // string, RPC: provider + id on the wire).
       if (sess instanceof BridgeSession) await sess.setModel(`${provider}/${id}`);
@@ -2119,9 +2443,12 @@ app.post('/api/sessions/:id/model', async (req, res) => {
       return res.json({ success: true });
     }
     // Inactive session: append a model_change entry to the JSONL directly.
-    const sessionPath = findSessionFile(req.params.id);
-    if (!sessionPath) return res.status(404).json({ error: 'Session not found' });
-    await piSDK.switchModel(sessionPath, provider, id);
+    const session = findSessionSource(req.params.id);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    if (session.harnessId !== 'pi') {
+      return res.status(409).json({ error: 'Changing the model of an inactive session is only supported for Pi.' });
+    }
+    await piSDK.switchModel(session.file, provider, id);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -2130,9 +2457,12 @@ app.post('/api/sessions/:id/model', async (req, res) => {
 
 app.get('/api/sessions/:id/tree', async (req, res) => {
   try {
-    const sessionPath = findSessionFile(req.params.id);
-    if (!sessionPath) return res.status(404).json({ error: 'Session not found' });
-    const tree = await piSDK.getSessionTree(sessionPath);
+    const session = findSessionSource(req.params.id);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    if (session.harnessId !== 'pi') {
+      return res.status(409).json({ error: 'Session tree navigation is only supported for Pi.' });
+    }
+    const tree = await piSDK.getSessionTree(session.file);
     res.json(tree);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -2181,8 +2511,17 @@ app.post('/api/sessions/:id/branch', async (req, res) => {
       ? customInstructions.trim() : undefined,
   };
   try {
+    const identity = routeIdentity(req.params.id);
+    if (!identity) return res.status(400).json({ error: 'Invalid session ID' });
+    if (identity.harnessId !== 'pi') {
+      return res.status(409).json({ error: 'Session tree navigation is only supported for Pi.' });
+    }
+    const source = findSessionSource(req.params.id);
     const sess = await getLiveSession(req.params.id);
     if (sess) {
+      if (!liveSessionSupports(sess, 'treeNavigation')) {
+        return res.status(409).json({ error: 'This session does not support tree navigation.' });
+      }
       if (!(sess instanceof BridgeSession)) {
         return res.status(409).json({ error: 'This live session has no bridge connection — install the pi-dish-bridge extension to navigate its tree.' });
       }
@@ -2202,9 +2541,8 @@ app.post('/api/sessions/:id/branch', async (req, res) => {
         throw e;
       }
     }
-    const sessionPath = findSessionFile(req.params.id);
-    if (!sessionPath) return res.status(404).json({ error: 'Session not found' });
-    const result = await piSDK.branchSession(sessionPath, entryId, opts);
+    if (!source) return res.status(404).json({ error: 'Session not found' });
+    const result = await piSDK.branchSession(source.file, entryId, opts);
     res.json({ success: true, editorText: result.editorText });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -2240,12 +2578,77 @@ function annotateEnabled(models) {
   return models.map(m => ({ ...m, enabled: isModelEnabled(patterns, m) }));
 }
 
+function harnessLaunchSpec(descriptor) {
+  return descriptor.id === 'pi' ? getPiLaunchSpec() : resolveLaunchSpec(descriptor);
+}
+
+function harnessCommandAvailable(descriptor) {
+  const spec = harnessLaunchSpec(descriptor);
+  const command = spec.argv[0];
+  if (!command) return false;
+  const environment = { ...process.env, ...spec.env };
+  const executable = (file) => { try { fs.accessSync(file, fs.constants.X_OK); return true; } catch { return false; } };
+  if (command.includes(path.sep)) return executable(path.resolve(command));
+  return String(environment.PATH || '').split(path.delimiter)
+    .some(dir => dir && executable(path.join(dir, command)));
+}
+
+function runHarnessModelCommand(descriptor) {
+  const spec = harnessLaunchSpec(descriptor);
+  const args = [...spec.argv.slice(1), ...descriptor.argv.models];
+  return new Promise((resolve, reject) => {
+    execFile(spec.argv[0], args, {
+      env: { ...process.env, ...spec.env },
+      timeout: 15_000,
+      maxBuffer: 10 * 1024 * 1024,
+    }, (error, stdout, stderr) => {
+      if (error) return reject(new Error((stderr || error.message).trim()));
+      try {
+        const parsed = JSON.parse(stdout.trim() || '[]');
+        resolve(normalizeModels(parsed.models || parsed));
+      } catch (parseError) {
+        reject(new Error(`Could not parse ${descriptor.label} model list: ${parseError.message}`));
+      }
+    });
+  });
+}
+
+app.get('/api/harnesses', (_req, res) => {
+  res.json({
+    harnesses: listHarnesses().map(descriptor => ({
+      id: descriptor.id,
+      label: descriptor.label,
+      available: harnessCommandAvailable(descriptor),
+      rpcFallback: descriptor.rpcFallback,
+      closeMode: descriptor.closeMode,
+    })),
+  });
+});
+
 app.get('/api/models', async (req, res) => {
   try {
     const sessionId = req.query.sessionId;
     if (sessionId) {
+      const identity = routeIdentity(sessionId);
+      if (!identity) return res.status(400).json({ error: 'Invalid session ID' });
       const sessionModels = await getSessionModels(sessionId);
-      if (sessionModels) return res.json(annotateEnabled(sessionModels));
+      if (sessionModels) {
+        return res.json(identity.harnessId === 'pi' ? annotateEnabled(sessionModels) : sessionModels);
+      }
+      if (identity.harnessId !== 'pi') {
+        return res.status(409).json({ error: `Model discovery is unavailable for this ${getHarness(identity.harnessId).label} session.` });
+      }
+    }
+
+    const harnessId = req.query.harness || 'pi';
+    const descriptor = getHarness(harnessId);
+    if (!descriptor) return res.status(400).json({ error: `Unknown harness: ${harnessId}` });
+    if (descriptor.modelCatalog === 'command') {
+      if (!harnessCommandAvailable(descriptor)) return res.status(503).json({ error: `${descriptor.label} is not installed.` });
+      return res.json(await runHarnessModelCommand(descriptor));
+    }
+    if (descriptor.modelCatalog !== 'pi-sdk') {
+      return res.status(501).json({ error: `New-session model discovery is not supported for ${descriptor.label}.` });
     }
 
     if (!modelsCache || Date.now() - modelsCacheTime > MODELS_CACHE_TTL) {
@@ -2297,6 +2700,9 @@ app.get('/api/commands', async (req, res) => {
       try {
         const sess = await getLiveSession(sessionId);
         if (sess instanceof BridgeSession) {
+          if (!liveSessionSupports(sess, 'commands')) {
+            return res.status(409).json({ error: 'This session does not support command discovery.' });
+          }
           const data = await sess.getCommands();
           if (data?.commands) return res.json(data.commands);
         } else if (sess) {
@@ -2310,6 +2716,11 @@ app.get('/api/commands', async (req, res) => {
       } catch (e) {
         console.warn(`Live command list failed for ${sessionId}:`, e.message);
       }
+      const identity = routeIdentity(sessionId);
+      if (!identity) return res.status(400).json({ error: 'Invalid session ID' });
+      if (identity.harnessId !== 'pi') {
+        return res.status(409).json({ error: `Command discovery is unavailable for this ${getHarness(identity.harnessId).label} session.` });
+      }
     }
     const commands = await piSDK.getCommands();
     res.json(commands);
@@ -2322,6 +2733,7 @@ app.post('/api/sessions/:id/abort', async (req, res) => {
   try {
     const sess = await getLiveSession(req.params.id);
     if (!sess) return res.status(404).json({ error: 'Session not active' });
+    if (!liveSessionSupports(sess, 'abort')) return res.status(409).json({ error: 'This session does not support abort.' });
     await sess.abort();
     res.json({ success: true });
   } catch (e) {
@@ -2339,6 +2751,100 @@ app.post('/api/sessions/:id/abort', async (req, res) => {
 // SIGKILL escalation — a hung pi is for the user to inspect, not to lose.
 app.post('/api/sessions/:id/close', async (req, res) => {
   const sessionId = req.params.id;
+  const route = routeIdentity(sessionId);
+  if (!route) return res.status(400).json({ error: 'Invalid session ID' });
+  const descriptor = getHarness(route.harnessId);
+  if (!descriptor || descriptor.closeMode === 'unsupported') {
+    return res.status(409).json({ error: `Closing ${descriptor?.label || route.harnessId} sessions is not supported; close the owning tmux client directly.` });
+  }
+  if (descriptor.closeMode === 'client-only') {
+    // Some harnesses move the bridge into a resident worker. Their registry
+    // PID is not necessarily the client we launched and must never be
+    // signaled. The persisted pane is the only lifecycle authority pi-dish
+    // owns.
+    const routeId = routeSessionId(route.harnessId, route.nativeSessionId);
+    const reg = getRegisteredSession(routeId);
+    if (!reg) return res.status(409).json({ error: `${descriptor.label} has no single unambiguous live bridge instance to detach.` });
+    const spawn = tmux.getSpawn(routeId);
+    if (!spawn?.socket || !spawn?.paneId) {
+      return res.status(409).json({ error: `This ${descriptor.label} client was not launched by pi-dish, so no owned tmux pane can be detached.` });
+    }
+    if (!spawnMatchesRegistryClaim(spawn, reg)) {
+      tmux.removeSpawn(routeId, spawn);
+      return res.status(409).json({ error: `The recorded ${descriptor.label} client no longer matches this live agent, so pi-dish will not detach it.` });
+    }
+    const currentPaneProcess = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
+    if (!sameProcessIdentity(currentPaneProcess, spawn.paneProcess)) {
+      tmux.removeSpawn(routeId, spawn);
+      return res.status(409).json({ error: `The recorded ${descriptor.label} client pane has exited or been replaced. The logical agent may still be running.` });
+    }
+    const workerIdentity = { pid: reg.pid, startTime: reg.startTime };
+    const workerAncestry = inspectProcessAncestry(workerIdentity);
+    if (!workerAncestry.complete
+        || !sameProcessIdentity(workerAncestry.processes[0], workerIdentity)
+        || !processIdentityAlive(currentPaneProcess)
+        || !processIdentityAlive(workerIdentity)) {
+      return res.status(409).json({ error: `Could not prove that the live ${descriptor.label} worker is independent of the owned client pane, so pi-dish will not detach it.` });
+    }
+    if (workerAncestry.processes.some(process => sameProcessIdentity(process, currentPaneProcess))) {
+      return res.status(409).json({ error: `The live ${descriptor.label} worker is still in the owned client pane’s process tree, so detaching it could stop the logical agent.` });
+    }
+    // Destructive authority is claim-specific. Re-read and socket-prove the
+    // exact worker immediately before kill-pane, then repeat every process
+    // check so a replacement worker/client cannot race the earlier snapshot.
+    invalidateRegistryCache();
+    const freshReg = getRegisteredSession(routeId);
+    if (!freshReg || !sameRegistryClaim(freshReg, reg)) {
+      return res.status(409).json({ error: `The live ${descriptor.label} bridge changed while detach was being authorized, so pi-dish will not kill the pane.` });
+    }
+    try {
+      await proveBridgeRegistryClaim(freshReg);
+    } catch (error) {
+      return res.status(409).json({ error: `The live ${descriptor.label} bridge could not re-prove its identity before detach: ${error.message}` });
+    }
+    const finalPaneProcess = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
+    const finalWorkerIdentity = { pid: freshReg.pid, startTime: freshReg.startTime };
+    const finalWorkerAncestry = inspectProcessAncestry(finalWorkerIdentity);
+    if (!sameProcessIdentity(finalPaneProcess, spawn.paneProcess)
+        || !processIdentityAlive(finalPaneProcess)
+        || !processIdentityAlive(finalWorkerIdentity)
+        || !finalWorkerAncestry.complete
+        || !sameProcessIdentity(finalWorkerAncestry.processes[0], finalWorkerIdentity)
+        || finalWorkerAncestry.processes.some(process => sameProcessIdentity(process, finalPaneProcess))) {
+      return res.status(409).json({ error: `The ${descriptor.label} client/worker ownership proof changed before detach, so pi-dish will not kill the pane.` });
+    }
+    invalidateRegistryCache();
+    const killAuthorizedReg = getRegisteredSession(routeId);
+    if (!killAuthorizedReg || !sameRegistryClaim(killAuthorizedReg, freshReg)) {
+      return res.status(409).json({ error: `The live ${descriptor.label} bridge changed immediately before detach, so pi-dish will not kill the pane.` });
+    }
+    try {
+      await tmux.killPane(spawn.socket, spawn.paneId);
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline && await tmux.paneExists(spawn.socket, spawn.paneId)) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      if (await tmux.paneExists(spawn.socket, spawn.paneId)) {
+        return res.status(500).json({ error: `The owned ${descriptor.label} client pane did not exit; the logical agent was not signaled.` });
+      }
+      tmux.removeSpawn(routeId, spawn);
+      invalidateRegistryCache();
+      const survivingReg = getRegisteredSession(routeId);
+      let logicalSessionActive = !!survivingReg
+        && sameRegistryClaim(survivingReg, freshReg)
+        && processIdentityAlive(finalWorkerIdentity);
+      if (logicalSessionActive) {
+        try {
+          await proveBridgeRegistryClaim(survivingReg);
+        } catch {
+          logicalSessionActive = false;
+        }
+      }
+      return res.json({ success: true, detached: true, logicalSessionActive });
+    } catch (e) {
+      return res.status(500).json({ error: `Failed to detach the owned ${descriptor.label} client pane: ${e.message}` });
+    }
+  }
   const rpc = getRPCSession(sessionId);
   let reg = getRegisteredSession(sessionId);
   let exited;
@@ -2510,7 +3016,10 @@ app.get('/api/tmux/targets', async (req, res) => {
     // Opportunistically drop spawn placements whose pane and session are both
     // gone, so tmux-spawns.json doesn't grow without bound.
     try {
-      const registered = new Set(listRegisteredSessions().map((r) => r.sessionId));
+      const registered = new Set(listRegisteredSessions().map((entry) => {
+        const identity = registryIdentity(entry);
+        return identity ? routeSessionId(identity.harnessId, identity.nativeSessionId) : null;
+      }).filter(Boolean));
       await tmux.pruneSpawns(registered);
     } catch {}
     res.json({ available: true, servers });
@@ -2545,9 +3054,9 @@ app.get('/api/dirs/children', (req, res) => {
 function resolveSessionCwd(sessionId) {
   const reg = getRegisteredSession(sessionId);
   if (reg?.cwd) return reg.cwd;
-  const sessionFile = findSessionFile(sessionId);
-  if (sessionFile) {
-    try { return parseSessionFile(sessionFile).cwd || null; } catch {}
+  const session = findSessionSource(sessionId);
+  if (session) {
+    try { return parseSessionFile(session).cwd || null; } catch {}
   }
   return null;
 }
@@ -2572,10 +3081,10 @@ app.get('/api/sessions/:id/files', async (req, res) => {
 
 async function resolveViewerMention(sessionId, mention) {
   const cwd = resolveSessionCwd(sessionId);
-  const sessionFile = findSessionFile(sessionId);
-  if (!cwd && !sessionFile) return { error: 'Unknown session', status: 404 };
+  const session = findSessionSource(sessionId);
+  if (!cwd && !session) return { error: 'Unknown session', status: 404 };
   let messages = [];
-  if (sessionFile) { try { messages = readSessionMessages(sessionFile); } catch {} }
+  if (session) { try { messages = readSessionMessages(session); } catch {} }
   const resolved = await resolveFileMention(mention, { cwd, messages });
   if (!resolved) return { error: `Couldn't find "${mention}" among this session's files`, status: 404 };
   return { cwd, resolved };
@@ -2716,17 +3225,21 @@ app.get('/api/sessions/:id/diff', async (req, res) => {
 
 // Poll the bridge registry directly (not through the memoized listing) for the
 // entry carrying our spawn token.
-function findSessionBySpawnToken(token) {
+function findSessionBySpawnToken(token, harnessId) {
   let files;
   try { files = fs.readdirSync(REGISTRY_DIR); } catch { return null; }
+  const matches = [];
   for (const name of files) {
     if (!name.endsWith('.json')) continue;
     try {
       const entry = JSON.parse(fs.readFileSync(path.join(REGISTRY_DIR, name), 'utf8'));
-      if (entry && entry.spawnToken === token && entry.sessionId) return entry;
+      const identity = registryIdentity(entry);
+      if (entry?.spawnToken !== token || !identity || identity.harnessId !== harnessId) continue;
+      if (!validRegistryClaimShape(entry)) continue;
+      matches.push(entry);
     } catch {}
   }
-  return null;
+  return matches.length === 1 ? matches[0] : (matches.length > 1 ? { conflict: true, matches } : null);
 }
 
 const MAX_BRIDGE_SOCKET_PATH_BYTES = 103;
@@ -2786,12 +3299,49 @@ function validateBridgeSocketConfig(env) {
   }
 }
 
+function materializeLaunchWrapper(descriptor, token) {
+  if (descriptor.spawnTokenMode !== 'wrapper') return null;
+  if (!descriptor.wrapperEntrypoint) {
+    throw bridgeSocketConfigError(`${descriptor.label} uses wrapper token injection without a wrapper entrypoint`);
+  }
+  const dir = path.join(os.homedir(), '.pi', 'dish', 'launch-wrappers');
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const stat = fs.statSync(dir);
+  if (!stat.isDirectory()
+      || (typeof process.getuid === 'function' && stat.uid !== process.getuid())) {
+    throw bridgeSocketConfigError(`launch wrapper directory is not owned by this user: ${dir}`);
+  }
+  if ((stat.mode & 0o777) !== 0o700) fs.chmodSync(dir, 0o700);
+  const wrapperPath = path.join(dir, `${descriptor.id}-${token}.ts`);
+  // Prime persists this module path for resident-worker reload/recovery, so
+  // successful launch wrappers intentionally outlive the tmux client.
+  const source = [
+    '// Generated by pi-dish; retained for resident harness reload/recovery.',
+    `import { createHarnessBridge } from ${JSON.stringify(descriptor.wrapperEntrypoint)};`,
+    `export default createHarnessBridge(${JSON.stringify(token)});`,
+    '',
+  ].join('\n');
+  fs.writeFileSync(wrapperPath, source, { mode: 0o600, flag: 'wx' });
+  return wrapperPath;
+}
+
+function injectLaunchWrapper(descriptor, args, wrapperPath) {
+  if (!wrapperPath) return args;
+  const index = args.indexOf(descriptor.wrapperEntrypoint);
+  if (index < 0) {
+    throw bridgeSocketConfigError(`${descriptor.label} launch args do not contain its wrapper entrypoint`);
+  }
+  const injected = [...args];
+  injected[index] = wrapperPath;
+  return injected;
+}
+
 // Build the tmux child argv+env from the same launch spec RPC uses (so a
 // PI_DISH_PI_COMMAND wrapper or a simple `pi` alias's env carries over), open
 // the window, and wait up to 30s for the session to register. The window is
 // left open on timeout for the user to inspect. `args` are pi's CLI args
 // (a TUI launch — never --mode rpc). Returns the registered session id.
-async function spawnPiInTmux({ target, args, cwd, hidden }) {
+async function spawnHarnessInTmux({ descriptor, target, args, cwd, hidden }) {
   if (!tmux.isTmuxAvailable()) {
     const err = new Error('tmux is not available on this host'); err.status = 400; throw err;
   }
@@ -2803,7 +3353,7 @@ async function spawnPiInTmux({ target, args, cwd, hidden }) {
     const err = new Error('target needs tmuxSession or newTmuxSession'); err.status = 400; throw err;
   }
 
-  const spec = getPiLaunchSpec();
+  const spec = harnessLaunchSpec(descriptor);
   const env = { ...spec.env };
   // Pin the HOME used by bridge default-path validation into tmux. Otherwise
   // a long-running tmux server can contribute a stale HOME and make the child
@@ -2822,7 +3372,8 @@ async function spawnPiInTmux({ target, args, cwd, hidden }) {
 
   const token = crypto.randomBytes(16).toString('hex');
   env.PI_DISH_SPAWN_TOKEN = token;
-  const command = [...spec.argv, ...args];
+  const wrapperPath = materializeLaunchWrapper(descriptor, token);
+  const command = [...spec.argv, ...injectLaunchWrapper(descriptor, args, wrapperPath)];
 
   let paneId;
   try {
@@ -2841,34 +3392,90 @@ async function spawnPiInTmux({ target, args, cwd, hidden }) {
   const timeoutMs = Number(process.env.PI_DISH_SPAWN_TIMEOUT_MS) || 30000;
   const timeoutLabel = timeoutMs < 1000 ? `${timeoutMs}ms` : `${Math.round(timeoutMs / 1000)}s`;
   const deadline = Date.now() + timeoutMs;
-  const acceptRegistration = (entry) => {
-    tmux.recordSpawn(entry.sessionId, { socket, paneId });
+  let registrationError = null;
+  const acceptRegistration = async (entry) => {
+    let accepted = entry;
+    if (descriptor.id !== 'pi') {
+      invalidateRegistryCache();
+      const identity = registryIdentity(entry);
+      const current = getRegisteredSessionByNativeId(identity.harnessId, identity.nativeSessionId);
+      if (!current || !sameRegistryClaim(current, entry)) {
+        throw new Error(`${descriptor.label} registry claim changed before socket identity could be proved`);
+      }
+      await proveBridgeRegistryClaim(current);
+      accepted = current;
+    }
+    const identity = registryIdentity(accepted);
+    const routeId = routeSessionId(identity.harnessId, identity.nativeSessionId);
+    const paneProcess = await tmux.paneProcessIdentity(socket, paneId);
+    tmux.recordSpawn(routeId, {
+      socket,
+      paneId,
+      spawnToken: token,
+      bridgeInstanceId: accepted.bridgeInstanceId || accepted.instanceId || null,
+      paneProcess,
+      wrapperPath,
+    });
     invalidateRegistryCache();
     // Prime the command context so POST /branch can navigate the tree
     // remotely (TUI sessions otherwise 409 — see the branch route).
-    tmux.sendKeys(socket, paneId, '/dish-prime').catch(() => {});
-    return entry.sessionId;
+    if (descriptor.id === 'pi') tmux.sendKeys(socket, paneId, '/dish-prime').catch(() => {});
+    return routeId;
   };
   while (Date.now() < deadline) {
-    const entry = findSessionBySpawnToken(token);
-    if (entry) return acceptRegistration(entry);
+    const entry = findSessionBySpawnToken(token, descriptor.id);
+    if (entry?.conflict) {
+      registrationError = new Error(`${descriptor.label} produced multiple bridge registrations for one launch token; refusing to select one.`);
+      registrationError.status = 409;
+      registrationError.preventHeadlessFallback = true;
+      break;
+    }
+    if (entry) {
+      try {
+        return await acceptRegistration(entry);
+      } catch (error) {
+        registrationError = new Error(`${descriptor.label} bridge identity proof failed: ${error.message}`);
+        registrationError.status = 500;
+        registrationError.preventHeadlessFallback = true;
+        break;
+      }
+    }
     await new Promise((r) => setTimeout(r, Math.min(300, Math.max(1, deadline - Date.now()))));
   }
   // Registration may have landed during the final sleep, exactly at the
   // deadline. Check once more before declaring a timeout and killing a hidden
   // pane that is already ready.
-  const deadlineEntry = findSessionBySpawnToken(token);
-  if (deadlineEntry) return acceptRegistration(deadlineEntry);
+  const deadlineEntry = registrationError ? null : findSessionBySpawnToken(token, descriptor.id);
+  if (deadlineEntry?.conflict) {
+    registrationError = new Error(`${descriptor.label} produced multiple bridge registrations for one launch token; refusing to select one.`);
+    registrationError.status = 409;
+    registrationError.preventHeadlessFallback = true;
+  }
+  if (!registrationError && deadlineEntry) {
+    try {
+      return await acceptRegistration(deadlineEntry);
+    } catch (error) {
+      registrationError = new Error(`${descriptor.label} bridge identity proof failed: ${error.message}`);
+      registrationError.status = 500;
+      registrationError.preventHeadlessFallback = true;
+    }
+  }
 
   // A user-targeted window stays open for inspection; a hidden headless
   // window is invisible. It must be fully gone before the caller may start an
   // RPC fallback, or both processes can write the same session JSONL.
-  if (hidden) {
+  const shouldCleanup = hidden || !descriptor.rpcFallback || !!registrationError;
+  if (shouldCleanup) {
     const cleanupTimeoutMs = Math.min(5000, Math.max(1000, timeoutMs));
     try {
       await tmux.killPaneAndWait(socket, paneId, { timeout: cleanupTimeoutMs });
     } catch (cleanupError) {
-      const err = new Error(`pi did not register within ${timeoutLabel}, and hidden tmux cleanup failed; refusing to start an RPC fallback that could write the same session file: ${cleanupError.message}`);
+      const cleanupMessage = registrationError
+        ? `${registrationError.message}, and tmux cleanup failed: ${cleanupError.message}`
+        : descriptor.rpcFallback
+          ? `${descriptor.label} did not register within ${timeoutLabel}, and hidden tmux cleanup failed; refusing to start an RPC fallback that could write the same session file: ${cleanupError.message}`
+          : `${descriptor.label} did not register within ${timeoutLabel}, and tmux cleanup failed: ${cleanupError.message}`;
+      const err = new Error(cleanupMessage);
       err.status = 500;
       err.preventHeadlessFallback = true;
       err.cleanupFailed = {
@@ -2880,14 +3487,20 @@ async function spawnPiInTmux({ target, args, cwd, hidden }) {
       throw err;
     }
   }
-  const err = new Error(`pi did not register within ${timeoutLabel} — ${hidden ? 'the hidden headless window was closed' : 'the tmux window was left open for inspection'}. Ensure the pi-dish-bridge extension is installed in pi's global extensions.`);
+  if (registrationError) throw registrationError;
+  const cleaned = shouldCleanup;
+  const wrapperHint = descriptor.wrapperEntrypoint
+    ? `Ensure ${descriptor.label} can load ${descriptor.wrapperEntrypoint}.`
+    : 'Ensure the pi-dish-bridge extension is installed in Pi’s global extensions.';
+  const err = new Error(`${descriptor.label} did not register within ${timeoutLabel} — ${cleaned ? 'the tmux window was closed' : 'the tmux window was left open for inspection'}. ${wrapperHint}`);
   err.status = 500;
-  if (!hidden) {
+  if (!cleaned) {
     const state = await tmux.paneProcessState(socket, paneId);
     if (state.paneExists || state.knownProcesses.length) {
       err.resumeUncertain = { socket, paneId, knownProcesses: state.knownProcesses };
     }
   }
+  if (!descriptor.rpcFallback) err.preventHeadlessFallback = true;
   throw err;
 }
 
@@ -2909,10 +3522,13 @@ const HEADLESS_TMUX_SERVER = 'pi-dish';
 const HEADLESS_TMUX_SESSION = 'headless';
 let headlessTmuxBroken = false;
 
-function headlessTmuxEnabled() {
+function headlessTmuxEnabled(descriptor = getHarness('pi')) {
   const mode = process.env.PI_DISH_HEADLESS || '';
-  if (mode === 'rpc') return false;
+  if (mode === 'rpc' && descriptor.rpcFallback) return false;
   if (!tmux.isTmuxAvailable()) return false;
+  // Alternate harnesses always load their wrapper explicitly, so tmux
+  // availability is the only prerequisite and RPC is never an option.
+  if (!descriptor.rpcFallback) return true;
   if (mode === 'tmux') return true;
   if (headlessTmuxBroken) return false;
   const home = process.env.HOME || os.homedir();
@@ -2922,13 +3538,13 @@ function headlessTmuxEnabled() {
 // Serialized: two concurrent spawns must not both decide the hidden session
 // doesn't exist yet and race their `new-session` calls.
 let headlessSpawnChain = Promise.resolve();
-function spawnPiHeadlessTmux(opts) {
-  const run = headlessSpawnChain.then(() => _spawnPiHeadlessTmux(opts));
+function spawnHarnessHeadlessTmux(opts) {
+  const run = headlessSpawnChain.then(() => _spawnHarnessHeadlessTmux(opts));
   headlessSpawnChain = run.then(() => {}, () => {});
   return run;
 }
 
-async function _spawnPiHeadlessTmux({ args, cwd }) {
+async function _spawnHarnessHeadlessTmux({ descriptor, args, cwd }) {
   // tmux won't create its tmpdir for -S sockets (only for -L); 0700 matches
   // what tmux itself would create.
   fs.mkdirSync(tmux.tmuxTmpdir(), { recursive: true, mode: 0o700 });
@@ -2936,7 +3552,7 @@ async function _spawnPiHeadlessTmux({ args, cwd }) {
   const target = (await tmux.hasSession(socket, HEADLESS_TMUX_SESSION))
     ? { socket, tmuxSession: HEADLESS_TMUX_SESSION }
     : { socket, newTmuxSession: HEADLESS_TMUX_SESSION };
-  return spawnPiInTmux({ target, args, cwd, hidden: true });
+  return spawnHarnessInTmux({ descriptor, target, args, cwd, hidden: true });
 }
 
 // Spawn a fresh session. Default ("headless"): a hidden tmux window when the
@@ -2944,23 +3560,31 @@ async function _spawnPiHeadlessTmux({ args, cwd }) {
 // `pi --mode rpc` child (dies with this server). An explicit `target:
 // { type: 'tmux', socket, tmuxSession }` or `{ ..., newTmuxSession }` opens a
 // pi TUI in one of the user's own tmux sessions instead.
-async function createSession({ model, thinking, cwd, target }) {
+async function createSession({ harness = 'pi', model, thinking, cwd, target }) {
+  const descriptor = getHarness(harness);
+  if (!descriptor) {
+    const err = new Error(`Unknown harness: ${harness}`); err.status = 400; throw err;
+  }
   if (cwd && cwd.startsWith('~')) {
     cwd = path.join(process.env.HOME, cwd.slice(1).replace(/^\//, ''));
   }
-  const args = model ? ['--model', model] : [];
-  if (thinking) args.push('--thinking', thinking);
+  const args = descriptor.argv.new({ model, thinking });
   if (target && target.type === 'tmux') {
-    return spawnPiInTmux({ target, args, cwd });
+    return spawnHarnessInTmux({ descriptor, target, args, cwd });
   }
-  if (headlessTmuxEnabled()) {
+  if (headlessTmuxEnabled(descriptor)) {
     try {
-      return await spawnPiHeadlessTmux({ args, cwd });
+      return await spawnHarnessHeadlessTmux({ descriptor, args, cwd });
     } catch (e) {
-      if (e.preventHeadlessFallback) throw e;
+      if (!descriptor.rpcFallback || e.preventHeadlessFallback) throw e;
       headlessTmuxBroken = true;
       console.error('Headless tmux spawn failed — falling back to an RPC child:', e.message);
     }
+  }
+  if (!descriptor.rpcFallback) {
+    const err = new Error(`${descriptor.label} requires tmux and does not support RPC fallback.`);
+    err.status = 400;
+    throw err;
   }
   const rpc = await createRPCSession({ model, thinking, cwd });
   return rpc.id;
@@ -3005,7 +3629,8 @@ function startSessionSpawn(options) {
 }
 
 app.post('/api/sessions/new', async (req, res) => {
-  const { model, thinking, cwd, target } = req.body || {};
+  const { harness = 'pi', model, thinking, cwd, target } = req.body || {};
+  if (!getHarness(harness)) return res.status(400).json({ error: `Unknown harness: ${harness}` });
   if (thinking !== undefined && !['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(thinking)) {
     return res.status(400).json({ error: 'Invalid reasoning level' });
   }
@@ -3019,11 +3644,11 @@ app.post('/api/sessions/new', async (req, res) => {
     return res.status(400).json({ error: 'requestedBySessionId must identify an existing session' });
   }
   if (req.body?.async === true) {
-    const spawnId = startSessionSpawn({ model, thinking, cwd, target, sourceSessionId });
+    const spawnId = startSessionSpawn({ harness, model, thinking, cwd, target, sourceSessionId });
     return res.status(202).json({ success: true, pending: true, spawnId });
   }
   try {
-    const id = await createSession({ model, thinking, cwd, target });
+    const id = await createSession({ harness, model, thinking, cwd, target });
     let operationId = null;
     if (sourceSessionId) {
       const candidateOperationId = crypto.randomUUID();
@@ -3080,28 +3705,34 @@ function activeSessionClearsQuarantine(sessionId) {
   return true;
 }
 
-async function launchResumedSession({ sessionFile, cwd, target }) {
+async function launchResumedSession({ descriptor, sessionFile, cwd, target }) {
+  const args = descriptor.argv.resume({ file: sessionFile });
   if (target && target.type === 'tmux') {
     try {
-      const id = await spawnPiInTmux({ target, args: ['--session', sessionFile], cwd });
+      const id = await spawnHarnessInTmux({ descriptor, target, args, cwd });
       return { id };
     } catch (e) {
       if (e.resumeUncertain) uncertainExplicitResumes.set(sessionFile, e.resumeUncertain);
       throw e;
     }
   }
-  if (headlessTmuxEnabled()) {
+  if (headlessTmuxEnabled(descriptor)) {
     try {
-      const id = await spawnPiHeadlessTmux({ args: ['--session', sessionFile], cwd });
+      const id = await spawnHarnessHeadlessTmux({ descriptor, args, cwd });
       return { id };
     } catch (e) {
-      if (e.preventHeadlessFallback) {
+      if (!descriptor.rpcFallback || e.preventHeadlessFallback) {
         if (e.cleanupFailed) failedResumeCleanups.set(sessionFile, e.cleanupFailed);
         throw e;
       }
       headlessTmuxBroken = true;
       console.error('Headless tmux resume failed — falling back to an RPC child:', e.message);
     }
+  }
+  if (!descriptor.rpcFallback) {
+    const err = new Error(`${descriptor.label} requires tmux and does not support RPC fallback.`);
+    err.status = 400;
+    throw err;
   }
   const rpc = await resumeRPCSession(sessionFile, cwd || process.env.HOME);
   return { id: rpc.id };
@@ -3117,19 +3748,16 @@ app.post('/api/sessions/:id/resume', async (req, res) => {
     return res.json({ success: true, id: requestedId, alreadyActive: true });
   }
 
-  const foundSessionFile = findSessionFile(requestedId);
-  if (!foundSessionFile) return res.status(404).json({ error: 'Session file not found' });
+  const sessionSource = findSessionSource(requestedId);
+  if (!sessionSource) return res.status(404).json({ error: 'Session file not found' });
+  const descriptor = getHarness(sessionSource.harnessId);
   let sessionFile;
   try {
-    sessionFile = fs.realpathSync(foundSessionFile);
+    sessionFile = fs.realpathSync(sessionSource.file);
   } catch {
     return res.status(404).json({ error: 'Session file not found' });
   }
-  const basenameId = path.basename(sessionFile, '.jsonl');
-  let sessionId = basenameId;
-  if (basenameId === 'session') {
-    try { sessionId = getSessionInfo(sessionFile).sessionId || basenameId; } catch {}
-  }
+  const sessionId = routeSessionId(sessionSource.harnessId, sessionSource.nativeSessionId);
 
   // The route id may be a partial historical match; liveness belongs to the
   // canonical JSONL basename, so check it again before creating a flight.
@@ -3208,13 +3836,13 @@ app.post('/api/sessions/:id/resume', async (req, res) => {
     }
   }
 
-  let cwd = readSessionCwd(sessionFile);
+  let cwd = readSessionCwd({ ...sessionSource, file: sessionFile });
   if (cwd && !fs.existsSync(cwd)) {
     console.warn(`Session cwd ${cwd} doesn't exist, using HOME`);
     cwd = process.env.HOME;
   }
 
-  const flight = launchResumedSession({ sessionFile, cwd, target: req.body?.target });
+  const flight = launchResumedSession({ descriptor, sessionFile, cwd, target: req.body?.target });
   resumeFlights.set(sessionFile, flight);
   try {
     const result = await flight;
@@ -3397,36 +4025,51 @@ const sessionFileCache = new Map();
 function refreshSessionFileCache(candidates) {
   sessionFileCache.clear();
   for (const candidate of candidates || []) {
-    sessionFileCache.set(`exact:${candidate.id}`, candidate.file);
-    sessionFileCache.set(`partial:${candidate.id}`, candidate.file);
+    const routeId = apiIdForCandidate(candidate);
+    sessionFileCache.set(`exact:${routeId}`, candidate);
+    sessionFileCache.set(`partial:${routeId}`, candidate);
   }
 }
 
-function findSessionFile(sessionId, { exact = false } = {}) {
-  const reg = getRegisteredSession(sessionId);
-  if (reg && reg.sessionFile && fs.existsSync(reg.sessionFile)) return reg.sessionFile;
-  const rpc = getRPCSession(sessionId);
-  const rpcFile = rpc?.sessionFile || rpc?.state?.sessionFile;
-  if (rpcFile && fs.existsSync(rpcFile)) return rpcFile;
+function findSessionSource(sessionId, { exact = false } = {}) {
+  const active = resolveSessionCandidate(sessionId, { discover: false });
+  if (active?.file && fs.existsSync(active.file)) return active;
 
   const cacheKey = `${exact ? 'exact' : 'partial'}:${sessionId}`;
   const cached = sessionFileCache.get(cacheKey);
-  if (cached && fs.existsSync(cached)) {
-    if (path.basename(cached) !== 'session.jsonl') return cached;
+  if (cached?.file && fs.existsSync(cached.file)) {
+    if (path.basename(cached.file) !== 'session.jsonl') return cached;
     // Generic identities can become ambiguous when an external launcher
     // creates/copies another tree between sidebar scans. Revalidate them on
     // route access so cached paths never bypass the no-ambiguous-routing rule.
-    const current = findSessionCandidate(SESSIONS_DIR, sessionId, { allowPartial: !exact }).candidate;
+    const descriptor = getHarness(cached.harnessId);
+    const current = findSessionCandidate(descriptor.rootPath(), cached.nativeSessionId, {
+      descriptor,
+      allowPartial: false,
+    }).candidate;
     if (!current) { sessionFileCache.delete(cacheKey); return null; }
-    sessionFileCache.set(cacheKey, current.file);
-    return current.file;
+    sessionFileCache.set(cacheKey, current);
+    return current;
   }
 
-  const { candidate } = findSessionCandidate(SESSIONS_DIR, sessionId, { allowPartial: !exact });
+  const identity = routeIdentity(sessionId);
+  if (!identity) return null;
+  const descriptor = getHarness(identity.harnessId);
+  if (!descriptor) return null;
+  // Encoded identities are canonical and must always route exactly. Preserve
+  // Pi's legacy substring lookup only for old raw route IDs.
+  const { candidate } = findSessionCandidate(descriptor.rootPath(), identity.nativeSessionId, {
+    descriptor,
+    allowPartial: !identity.encoded && !exact,
+  });
   if (!candidate) return null;
   if (sessionFileCache.size >= 500) sessionFileCache.clear();
-  sessionFileCache.set(cacheKey, candidate.file);
-  return candidate.file;
+  sessionFileCache.set(cacheKey, candidate);
+  return candidate;
+}
+
+function findSessionFile(sessionId, options) {
+  return findSessionSource(sessionId, options)?.file || null;
 }
 
 // =========================================================================

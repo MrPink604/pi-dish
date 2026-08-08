@@ -208,6 +208,11 @@ function contextClass(percent) {
   return percent > 80 ? 'critical' : percent > 50 ? 'high' : '';
 }
 
+/** Missing capability metadata is legacy Pi behavior: supported by default. */
+function sessionSupports(session, capability) {
+  return session?.capabilities?.[capability] !== false;
+}
+
 /** The searchable metadata text of a session — one definition for local
  * filtering and the server-side session search. */
 function sessionMetaText(session) {
@@ -1090,7 +1095,7 @@ if (typeof module !== 'undefined' && module.exports) {
     escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRuntime, formatRelativeTime, formatTime, formatDuration, formatTokSpeed,
     formatEstimatedCost, formatResponseMetadata,
     shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText, extractImageBlocks, messageHasVisibleText,
-    contextClass, sessionMetaText, parseModelId, formatModelRef,
+    contextClass, sessionSupports, sessionMetaText, parseModelId, formatModelRef,
     groupByWorkspace, buildWorkspaceTree, collectTreeSessions, groupSessionsByDate,
     buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies,
     partitionPinned, applyLocalFilter, fuzzyMatch, fuzzyScore,

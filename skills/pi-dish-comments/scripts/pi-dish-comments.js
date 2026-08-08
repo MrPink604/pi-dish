@@ -79,20 +79,27 @@ function registryEntries() {
   });
 }
 
+function registryRouteId(entry) {
+  const harnessId = entry?.wrapper?.harnessId || entry?.harnessId || 'pi';
+  const nativeSessionId = entry?.nativeSessionId || entry?.sessionId;
+  if (harnessId === 'pi') return nativeSessionId;
+  return '~sk1_' + Buffer.from(JSON.stringify([harnessId, nativeSessionId]), 'utf8').toString('base64url');
+}
+
 function discoverSession(explicit) {
   if (explicit) return explicit;
   if (process.env.PI_DISH_SESSION_ID) return process.env.PI_DISH_SESSION_ID;
   const entries = registryEntries();
   const ancestors = ancestorPids();
   const byPid = entries.filter((entry) => Number.isInteger(entry.pid) && ancestors.has(entry.pid));
-  if (byPid.length === 1) return byPid[0].sessionId;
+  if (byPid.length === 1) return registryRouteId(byPid[0]);
   if (byPid.length > 1) {
     byPid.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
-    return byPid[0].sessionId;
+    return registryRouteId(byPid[0]);
   }
   const cwd = path.resolve(process.cwd());
   const byCwd = entries.filter((entry) => entry.cwd && path.resolve(entry.cwd) === cwd);
-  if (byCwd.length === 1) return byCwd[0].sessionId;
+  if (byCwd.length === 1) return registryRouteId(byCwd[0]);
   if (!entries.length) throw new Error('no live pi-dish bridge sessions found');
   throw new Error(`could not identify this session; pass --session <id> (${entries.length} live sessions)`);
 }

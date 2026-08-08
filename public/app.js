@@ -7,9 +7,9 @@
 // bug class). Read these freely; never assign to them anywhere else.
 let sessions = { active: [], previous: [] };
 let currentSession = null;
-// Provisional rows for asynchronous Pi launches. They are presentation state,
+// Provisional rows for asynchronous harness launches. They are presentation state,
 // not sessions: the durable source of truth remains tmux + the bridge registry.
-const pendingSessionSpawns = new Map(); // spawn id -> { cwd, target }
+const pendingSessionSpawns = new Map(); // spawn id -> { cwd, target, harness, harnessLabel }
 let currentSessionSpawnId = null;
 // Spawn operations are server-process-local and cannot be resumed after a
 // page reload, so their old draft keys have no view that could restore them.
@@ -117,6 +117,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadConfig(); // feature flags (terminal) — fire-and-forget
   loadThemes(); // theme picker options + refresh custom-theme tokens
   loadSpawnTargets(); // populate the "Run in" tmux selector (hidden if no tmux)
+  loadHarnesses();
   updateViewToggle();
   renderScopeChips(); // cached definitions paint immediately…
   loadSavedFilters(); // …then the server copy replaces them
@@ -359,7 +360,7 @@ function handleAutocomplete(text) {
 // --- @file mentions ---
 const fileAcFetcher = debouncedFetcher(120,
   async (token) => {
-    const res = await fetch(`/api/sessions/${currentSession.id}/files?q=${encodeURIComponent(token)}`);
+    const res = await fetch(`/api/sessions/${encodeURIComponent(currentSession.id)}/files?q=${encodeURIComponent(token)}`);
     const data = await res.json();
     return res.ok ? data.files : null;
   },
@@ -517,6 +518,11 @@ async function persistSavedFilters(next) {
   localStorage.setItem('pi-dish-saved-filters-cache', JSON.stringify(savedFilters));
   renderScopeChips();
   renderSessions();
+  // A just-saved scope can absorb and clear a typed query while that query's
+  // server response is still in flight. Re-fetch when the currently loaded
+  // lists no longer match the input so a late filtered response cannot leave
+  // the sidebar permanently narrowed after the scope changes or is deleted.
+  if (listsQueriedFor !== filterQuery) loadSessions(filterQuery || undefined);
   if (isSearchViewOpen()) runSearchView();
 }
 
@@ -531,6 +537,7 @@ function toggleScope(name) {
   localStorage.setItem('pi-dish-active-scopes', JSON.stringify([...activeScopes]));
   renderScopeChips();
   renderSessions();
+  if (listsQueriedFor !== filterQuery) loadSessions(filterQuery || undefined);
   if (isSearchViewOpen()) runSearchView();
 }
 
@@ -549,7 +556,6 @@ async function saveCurrentFilterAsScope() {
     document.getElementById('filterInput').value = '';
     filterQuery = '';
     await persistSavedFilters(next);
-    loadSessions(); // both tabs' lists may be server-filtered by the old query
   } catch (e) { alert('Could not save filter: ' + e.message); }
 }
 
@@ -752,7 +758,7 @@ async function performRowClose(id) {
   sessionCloseBusyId = id;
   renderSessions();
   try {
-    await apiSend(`/api/sessions/${id}/close`);
+    await apiSend(`/api/sessions/${encodeURIComponent(id)}/close`);
     sessionCloseBusyId = null;
     await finishSessionClose(id);
   } catch (e) {
@@ -797,9 +803,11 @@ function renderSessionItem(session, opts = {}) {
   // re-render restores an armed confirm rather than silently clearing it.
   const closeArmed = sessionCloseConfirmId === session.id;
   const closeBusy = sessionCloseBusyId === session.id;
-  const closeBtn = session.isActive
-    ? `<button class="session-close-btn${closeArmed ? ' confirm' : ''}" title="${closeArmed ? 'Tap again to close this session' : 'Close session (transcript stays resumable)'}">${closeBusy ? '…' : closeArmed ? 'close?' : '✕'}</button>`
+  const closeBtn = session.isActive && sessionSupports(session, 'close')
+    ? `<button class="session-close-btn${closeArmed ? ' confirm' : ''}" title="${closeArmed ? 'Tap again to close this session' : (session.harnessId === 'prime' ? 'Detach client' : 'Close session (transcript stays resumable)')}">${closeBusy ? '…' : closeArmed ? (session.harnessId === 'prime' ? 'detach?' : 'close?') : '✕'}</button>`
     : '';
+  const harnessBadge = session.harnessId && session.harnessId !== 'pi'
+    ? `<span class="harness-badge">${escapeHtml(session.harnessLabel || session.harnessId)}</span>` : '';
   // Rows in the pinned section get a drag handle (reorder); pinned and
   // Recent-view rows get a cwd hint — they've left their workspace group,
   // so the group label isn't there.
@@ -817,7 +825,7 @@ function renderSessionItem(session, opts = {}) {
   return `
     <div class="session-item ${activeClass} ${inactiveClass}${closeBusy ? ' closing' : ''}" data-id="${escapeHtml(session.id)}">
       <div class="session-item-header">
-        ${dragHandle}${familyToggle}${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>
+        ${dragHandle}${familyToggle}${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>${harnessBadge}
         <span class="session-item-time">${timeAgo}</span>
         ${pinBtn}${closeBtn}
       </div>
@@ -854,11 +862,12 @@ function renderSessionFamily(node, opts = {}, depth = 0, rootId = node.session.i
 
 function renderPendingSessionItem(spawnId, spawn) {
   const cwd = spawn.cwd || '~';
+  const label = spawn.harnessLabel || 'Pi';
   return `
     <div class="session-item starting${currentSessionSpawnId === spawnId ? ' active' : ''}" data-spawn-id="${escapeHtml(spawnId)}">
       <div class="session-item-header">
         <span class="session-item-status working" title="Starting session"></span>
-        <span class="session-item-name">Starting session…</span>
+        <span class="session-item-name">Starting ${escapeHtml(label)}…</span>
         <span class="session-item-time">now</span>
       </div>
       <div class="session-item-meta">
@@ -1260,6 +1269,7 @@ function pendingComposerKey(spawnId) { return `spawn:${spawnId}`; }
 function showPendingSessionView(spawnId) {
   const spawn = pendingSessionSpawns.get(spawnId);
   if (!spawn) return;
+  const harnessLabel = spawn.harnessLabel || 'Pi';
   sessionSelectionGeneration += 1;
   loadingOlder = false;
   loadingOlderGeneration += 1;
@@ -1309,7 +1319,7 @@ function showPendingSessionView(spawnId) {
   nameEl.title = '';
   nameEl.onclick = null;
   const modelBtn = document.getElementById('sessionModel');
-  modelBtn.textContent = 'Pi starting';
+  modelBtn.textContent = `${harnessLabel} starting`;
   modelBtn.onclick = null;
   modelBtn.style.cursor = 'default';
   document.getElementById('sessionMsgCount').textContent = '0 msgs';
@@ -1328,22 +1338,23 @@ function showPendingSessionView(spawnId) {
   setMoodIndicator('', '');
   const targetLabel = spawn.target ? 'tmux' : 'the headless session';
   document.getElementById('messages').innerHTML = `<div class="empty-state pending-session-state" style="padding: 48px;">
-    <p>Starting Pi in ${targetLabel}…</p>
+    <p>Starting ${escapeHtml(harnessLabel)} in ${targetLabel}…</p>
     <small>You can write your prompt while it starts.</small>
   </div>`;
 
   restorePromptState(pendingComposerKey(spawnId));
   setComposerWaiting(true);
-  setStatus('Pi is starting — your draft will be ready when it connects', 'working');
+  setStatus(`${harnessLabel} is starting — your draft will be ready when it connects`, 'working');
   renderSessions();
   document.getElementById('promptInput').focus();
 }
 
-function showPendingSessionFailure(spawnId, message) {
+function showPendingSessionFailure(spawnId, message, spawn) {
   if (currentSessionSpawnId !== spawnId) return;
+  const harnessLabel = spawn?.harnessLabel || 'Agent';
   document.getElementById('sessionName').textContent = 'Session failed to start';
   document.getElementById('messages').innerHTML = `<div class="empty-state pending-session-state" style="padding: 48px;">
-    <p>Pi could not start.</p>
+    <p>${escapeHtml(harnessLabel)} could not start.</p>
     <small>${escapeHtml(message)}</small>
   </div>`;
   const input = document.getElementById('promptInput');
@@ -1444,7 +1455,7 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
   if (currentSession.isActive) {
     // Fire-and-forget: nothing below needs the results, and both can ask the
     // live session over its socket — don't stall the transcript on them.
-    loadModels(id);
+    loadModels(id, currentSession.harnessId);
     loadCommands(id); // refresh autocomplete with this session's commands
   }
   await loadMessages(id, selectionGeneration);
@@ -1464,7 +1475,7 @@ async function resumeSession() {
   setStatus(target ? 'Resuming in tmux…' : 'Resuming session...', 'working');
 
   try {
-    const data = await apiSend(`/api/sessions/${currentSession.id}/resume`, target ? { target } : undefined);
+    const data = await apiSend(`/api/sessions/${encodeURIComponent(currentSession.id)}/resume`, target ? { target } : undefined);
     setStatus('Session resumed');
     // Reload sessions and re-select (it's now active); refreshSessions
     // keeps an in-flight All-tab search intact.
@@ -1480,19 +1491,28 @@ async function resumeSession() {
 // =========================================================================
 
 let knownModels = [];
+let knownModelsHarnessId = null;
 let modelsSeq = 0; // drops out-of-order responses on fast session switches
 
-async function loadModels(sessionId) {
+async function loadModels(sessionId, harnessId) {
+  const requestedHarnessId = harnessId || (sessionId ? findSession(sessionId)?.harnessId : null) || 'pi';
   const seq = ++modelsSeq;
   try {
-    const qs = sessionId ? ('?sessionId=' + encodeURIComponent(sessionId)) : '';
+    const qs = sessionId ? ('?sessionId=' + encodeURIComponent(sessionId))
+      : requestedHarnessId !== 'pi' ? ('?harness=' + encodeURIComponent(requestedHarnessId)) : '';
     const res = await fetch('/api/models' + qs);
     const data = await res.json();
     if (seq !== modelsSeq) return; // superseded by a newer session's fetch
     knownModels = Array.isArray(data) ? data : [];
+    knownModelsHarnessId = requestedHarnessId;
     // Cache the last good catalog so the new-session takeover renders its
     // model select instantly before the background refresh lands.
-    if (knownModels.length) { try { localStorage.setItem('pi-dish-models-cache', JSON.stringify(knownModels)); } catch {} }
+    if (knownModels.length) {
+      try {
+        const key = requestedHarnessId === 'pi' ? 'pi-dish-models-cache' : `pi-dish-models-cache:${requestedHarnessId}`;
+        localStorage.setItem(key, JSON.stringify(knownModels));
+      } catch {}
+    }
     refreshResponsePricingState();
   } catch (e) {
     console.error('Failed to load models:', e);
@@ -1590,14 +1610,21 @@ function updateSessionHeader() {
 
   document.getElementById('sessionName').textContent = currentSession.name || 'Unnamed';
   document.getElementById('sessionMsgCount').textContent = `${currentSession.messageCount} msgs`;
+  const harnessEl = document.getElementById('sessionHarness');
+  const showHarness = currentSession.harnessId && currentSession.harnessId !== 'pi';
+  harnessEl.style.display = showHarness ? '' : 'none';
+  harnessEl.textContent = showHarness ? (currentSession.harnessLabel || currentSession.harnessId) : '';
+  document.getElementById('btnTree').style.display = sessionSupports(currentSession, 'tree') ? '' : 'none';
+  document.getElementById('btnExport').style.display = sessionSupports(currentSession, 'export') ? '' : 'none';
 
   const nameEl = document.getElementById('sessionName');
-  nameEl.classList.toggle('editable-name', !!currentSession.isActive);
-  nameEl.title = currentSession.isActive ? 'Click to rename' : '';
-  nameEl.onclick = currentSession.isActive ? startRename : null;
+  const canRename = currentSession.isActive && sessionSupports(currentSession, 'rename');
+  nameEl.classList.toggle('editable-name', canRename);
+  nameEl.title = canRename ? 'Click to rename' : '';
+  nameEl.onclick = canRename ? startRename : null;
 
   const modelBtn = document.getElementById('sessionModel');
-  if (currentSession.isActive) {
+  if (currentSession.isActive && sessionSupports(currentSession, 'setModel')) {
     modelBtn.textContent = currentSession.model + ' ▾';
     modelBtn.onclick = toggleModelDropdown;
     modelBtn.style.cursor = 'pointer';
@@ -1630,7 +1657,7 @@ let thinkingDropdownOpen = false;
 
 function updateThinkingBadges() {
   const level = currentSession?.thinkingLevel;
-  const show = !!(currentSession && currentSession.isActive);
+  const show = !!(currentSession && currentSession.isActive && sessionSupports(currentSession, 'setThinking'));
   const label = '🧠 ' + (level || '?') + ' ▾';
   const desktop = document.getElementById('sessionThinking');
   if (desktop) {
@@ -1644,7 +1671,7 @@ function updateThinkingBadges() {
 }
 
 function toggleThinkingDropdown(event) {
-  if (!currentSession || !currentSession.isActive) return;
+  if (!currentSession || !currentSession.isActive || !sessionSupports(currentSession, 'setThinking')) return;
   const dropdown = document.getElementById('thinkingDropdown');
   thinkingDropdownOpen = !thinkingDropdownOpen;
   if (!thinkingDropdownOpen) { dropdown.style.display = 'none'; return; }
@@ -1666,9 +1693,9 @@ function closeThinkingDropdown() {
 
 async function selectThinkingLevel(level) {
   closeThinkingDropdown();
-  if (!currentSession) return;
+  if (!currentSession || !sessionSupports(currentSession, 'setThinking')) return;
   try {
-    const data = await apiSend(`/api/sessions/${currentSession.id}/thinking`, { level });
+    const data = await apiSend(`/api/sessions/${encodeURIComponent(currentSession.id)}/thinking`, { level });
     // Pi clamps to what the model supports; trust the reported level.
     patchSession(currentSession.id, { thinkingLevel: data.level || level });
     setStatus('Thinking level: ' + currentSession.thinkingLevel);
@@ -1750,7 +1777,7 @@ async function runSessionSearch(query, { mode = 'message', closeIfEmpty = false 
   try {
     const params = new URLSearchParams({ q: query });
     if (mode !== 'message') params.set('mode', mode);
-    const res = await fetch(`/api/sessions/${sessionId}/search?${params}`);
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/search?${params}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     if (currentSession?.id !== sessionId) return;
@@ -3049,7 +3076,7 @@ async function refreshSessionSpend() {
   if (!badge) return;
   if (!showSessionSpend || !currentSession) { badge.style.display = 'none'; ++spendFetchSeq; return; }
   const id = currentSession.id, seq = ++spendFetchSeq;
-  try { const r = await fetch(`/api/sessions/${id}/stats`), s = await r.json(); if (seq !== spendFetchSeq || currentSession?.id !== id || !showSessionSpend) return; badge.textContent = formatEstimatedCost(s.costs?.total ?? s.cost); badge.style.display = ''; } catch { if (seq === spendFetchSeq) badge.style.display = 'none'; }
+  try { const r = await fetch(`/api/sessions/${encodeURIComponent(id)}/stats`), s = await r.json(); if (seq !== spendFetchSeq || currentSession?.id !== id || !showSessionSpend) return; badge.textContent = formatEstimatedCost(s.costs?.total ?? s.cost); badge.style.display = ''; } catch { if (seq === spendFetchSeq) badge.style.display = 'none'; }
 }
 
 // --- Session stats modal ---
@@ -3087,7 +3114,7 @@ function openStatsModal() {
       );
     });
   }
-  fetch(`/api/sessions/${sessionId}/stats`)
+  fetch(`/api/sessions/${encodeURIComponent(sessionId)}/stats`)
     .then(r => r.json())
     .then(s => {
       if (!ownsStatsModal(sessionId, generation)) return;
@@ -3147,9 +3174,11 @@ function loadShareSection(sessionId, generation) {
   if (!ownsStatsModal(sessionId, generation)) return;
   const el = document.getElementById('statsShare');
   if (!el) return;
+  const session = findSession(sessionId);
+  if (!sessionSupports(session, 'export')) { el.remove(); return; }
   el.innerHTML = '<div class="stats-share-title">Public share link</div>' +
     '<div class="stats-share-body">Loading…</div>';
-  fetch(`/api/sessions/${sessionId}/share`)
+  fetch(`/api/sessions/${encodeURIComponent(sessionId)}/share`)
     .then(r => (r.status === 404 ? null : r.json()))
     .then(share => renderShareSection(sessionId, share, generation))
     .catch(() => renderShareSection(sessionId, null, generation));
@@ -3165,7 +3194,7 @@ function renderShareSection(sessionId, share, generation) {
       '<button type="button" class="btn-small" id="shareCreateBtn">Create share link</button>' +
       '<div class="stats-share-hint">Anyone with the link can view this session read-only.</div>';
     bodyEl.querySelector('#shareCreateBtn').addEventListener('click', () => {
-      fetch(`/api/sessions/${sessionId}/share`, { method: 'POST' })
+      fetch(`/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'POST' })
         .then(r => r.json())
         .then(s => {
           if (!ownsStatsModal(sessionId, generation)) return;
@@ -3183,7 +3212,7 @@ function renderShareSection(sessionId, share, generation) {
     `<button type="button" class="stats-copy stats-share-link" data-copy="${escapeHtml(link)}" title="Click to copy">${escapeHtml(link)}</button>` +
     '<button type="button" class="btn-small btn-danger" id="shareRevokeBtn">Revoke</button>';
   bodyEl.querySelector('#shareRevokeBtn').addEventListener('click', () => {
-    fetch(`/api/sessions/${sessionId}/share`, { method: 'DELETE' })
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'DELETE' })
       .then(r => r.json())
       .then(() => {
         if (!ownsStatsModal(sessionId, generation)) return;
@@ -3206,11 +3235,11 @@ async function copyMessageShareLink(btn) {
   if (!entryId) return;
   const sessionId = currentSession.id;
   try {
-    let res = await fetch(`/api/sessions/${sessionId}/share`);
+    let res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/share`);
     let share = res.status === 404 ? null : await res.json();
     if (!share || share.error) {
       if (!confirm('No share link exists for this session yet — create one? Anyone with the link can view the whole session read-only.')) return;
-      res = await fetch(`/api/sessions/${sessionId}/share`, { method: 'POST' });
+      res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'POST' });
       share = await res.json();
       if (!res.ok) throw new Error(share.error || `HTTP ${res.status}`);
       refreshArtifacts(sessionId);
@@ -3243,30 +3272,34 @@ function renderCloseSection(sessionId, generation) {
   if (!ownsStatsModal(sessionId, generation)) return;
   const el = document.getElementById('statsClose');
   if (!el) return;
-  if (!findSession(sessionId)?.isActive) { el.remove(); return; }
+  const session = findSession(sessionId);
+  if (!session?.isActive || !sessionSupports(session, 'close')) { el.remove(); return; }
+  const detach = session.harnessId === 'prime' || session.closeMode === 'client-only';
   el.innerHTML = '<div class="stats-share-title">Session process</div>' +
     '<div class="stats-share-body">' +
-    '<button type="button" class="btn-small btn-danger" id="sessionCloseBtn">Close session</button>' +
-    '<div class="stats-share-hint">Shuts down this pi process. The transcript is kept and can be resumed.</div>' +
+    `<button type="button" class="btn-small btn-danger" id="sessionCloseBtn">${detach ? 'Detach client' : 'Close session'}</button>` +
+    `<div class="stats-share-hint">${detach ? 'Disconnects this client. The logical agent continues independently.' : 'Shuts down this agent process. The transcript is kept and can be resumed.'}</div>` +
     '</div>';
   el.querySelector('#sessionCloseBtn').addEventListener('click', async () => {
     if (!ownsStatsModal(sessionId, generation)) return;
-    const warn = findSession(sessionId)?.turnInProgress
-      ? 'A turn is in progress — closing will abort it. Close this session?'
-      : 'Close this session? The pi process will shut down (the transcript stays resumable).';
+    const warn = detach
+      ? 'Detach this client? The logical agent will continue independently.'
+      : findSession(sessionId)?.turnInProgress
+        ? 'A turn is in progress — closing will abort it. Close this session?'
+        : 'Close this session? The agent process will shut down (the transcript stays resumable).';
     if (!confirm(warn)) return;
     const btn = el.querySelector('#sessionCloseBtn');
     btn.disabled = true;
-    btn.textContent = 'Closing…';
+    btn.textContent = detach ? 'Detaching…' : 'Closing…';
     try {
-      await apiSend(`/api/sessions/${sessionId}/close`);
+      await apiSend(`/api/sessions/${encodeURIComponent(sessionId)}/close`);
       if (!ownsStatsModal(sessionId, generation)) return;
       closeStatsModal();
       await finishSessionClose(sessionId);
     } catch (e) {
       if (!ownsStatsModal(sessionId, generation)) return;
       btn.disabled = false;
-      btn.textContent = 'Close session';
+      btn.textContent = detach ? 'Detach client' : 'Close session';
       setStatus('Close failed: ' + e.message, 'error');
     }
   });
@@ -3328,7 +3361,7 @@ async function openFileViewer(mention) {
   closeDiffView(); // the two takeover panes are mutually exclusive
   document.getElementById('sessionView').classList.add('file-open');
   try {
-    const res = await fetch(`/api/sessions/${sessionId}/file?path=${encodeURIComponent(mention)}`);
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/file?path=${encodeURIComponent(mention)}`);
     const data = await res.json();
     if (!ownsFileView(sessionId, generation)) return;
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -3711,7 +3744,7 @@ async function refreshArtifacts(sessionId) {
   try {
     const [pagesRes, shareRes] = await Promise.all([
       fetch(`/api/pages?sessionId=${encodeURIComponent(sessionId)}`),
-      fetch(`/api/sessions/${sessionId}/share`),
+      fetch(`/api/sessions/${encodeURIComponent(sessionId)}/share`),
     ]);
     const pages = pagesRes.ok ? await pagesRes.json() : [];
     const share = (shareRes.ok && shareRes.status !== 404) ? await shareRes.json() : null;
@@ -3854,7 +3887,7 @@ async function loadDiffView() {
   closeCommentBubble();
   body.innerHTML = '<div class="loading">Loading…</div>';
   try {
-    const res = await fetch(`/api/sessions/${sessionId}/diff`);
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/diff`);
     const data = await res.json();
     if (!ownsDiffView(sessionId, generation)) return;
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -3941,7 +3974,7 @@ async function loadDeferredDiffPatch(details) {
       path: patch.dataset.path,
       snapshot: patch.dataset.snapshot,
     });
-    const res = await fetch(`/api/sessions/${sessionId}/diff/patch?${query}`);
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/diff/patch?${query}`);
     const data = await res.json();
     if (!ownsDiffView(sessionId, viewGeneration) || !patch.isConnected ||
         patch.dataset.requestGeneration !== String(requestGeneration)) return;
@@ -3968,12 +4001,12 @@ async function loadDeferredDiffPatch(details) {
 // --- Export ---
 function exportSession() {
   if (!currentSession) return;
-  window.open(`/api/sessions/${currentSession.id}/export`, '_blank');
+  window.open(`/api/sessions/${encodeURIComponent(currentSession.id)}/export`, '_blank');
 }
 
 // --- Inline rename ---
 function startRename() {
-  if (!currentSession || !currentSession.isActive) return;
+  if (!currentSession || !currentSession.isActive || !sessionSupports(currentSession, 'rename')) return;
   const nameEl = document.getElementById('sessionName');
   const inputEl = document.getElementById('sessionNameInput');
   nameEl.style.display = 'none';
@@ -3996,7 +4029,7 @@ async function commitRename() {
   nameEl.style.display = '';
   if (!newName || newName === currentSession.name || !currentSession.isActive) return;
   try {
-    await apiSend('/api/sessions/' + currentSession.id + '/rename', { name: newName });
+    await apiSend('/api/sessions/' + encodeURIComponent(currentSession.id) + '/rename', { name: newName });
     patchSession(currentSession.id, { name: newName });
   } catch (e) { setStatus('Rename failed: ' + e.message, 'error'); }
 }
@@ -4011,8 +4044,8 @@ let modelDropdownOpen = false;
 let modelEditMode = false; // scoped-models switcher: toggle which models are enabled
 
 async function toggleModelDropdown() {
-  if (!currentSession || !currentSession.isActive) return;
-  await loadModels(currentSession.id);
+  if (!currentSession || !currentSession.isActive || !sessionSupports(currentSession, 'setModel')) return;
+  await loadModels(currentSession.id, currentSession.harnessId);
   modelDropdownOpen = !modelDropdownOpen;
   modelEditMode = false;
   const dropdown = document.getElementById('modelDropdown');
@@ -4111,12 +4144,15 @@ function renderModelDropdownFooter(dropdown, hidden) {
     html += '<button class="model-footer-btn primary" onclick="exitModelEditMode()">Done</button>';
   } else {
     if (hidden > 0) html += '<span class="model-footer-info">' + hidden + ' hidden</span>';
-    html += '<button class="model-footer-btn" onclick="enterModelEditMode()" title="Choose which models are enabled (pi scoped models)">⚙ Edit models</button>';
+    if (currentSession?.harnessId === 'pi') {
+      html += '<button class="model-footer-btn" onclick="enterModelEditMode()" title="Choose which models are enabled (pi scoped models)">⚙ Edit models</button>';
+    }
   }
   footer.innerHTML = html;
 }
 
 function enterModelEditMode() {
+  if (currentSession?.harnessId !== 'pi') return;
   modelEditMode = true;
   renderModelDropdown(currentModelQuery());
 }
@@ -4185,10 +4221,10 @@ async function selectModel(fullModelId) {
   // Bedrock mirror) — a bare-id comparison silently swallowed those switches.
   // A redundant set_model for the truly-same model is harmless.
   var isSame = fullModelId === currentSession?.model;
-  if (!currentSession || isSame) return;
+  if (!currentSession || !sessionSupports(currentSession, 'setModel') || isSame) return;
   setStatus('Switching model...', 'working');
   try {
-    await apiSend('/api/sessions/' + currentSession.id + '/model', { modelId: fullModelId });
+    await apiSend('/api/sessions/' + encodeURIComponent(currentSession.id) + '/model', { modelId: fullModelId });
     patchSession(currentSession.id, { model: fullModelId });
     setStatus('Model switched to ' + fullModelId);
   } catch (e) { setStatus('Model switch failed: ' + e.message, 'error'); }
@@ -4340,7 +4376,7 @@ async function loadMessages(id, selectionGeneration = sessionSelectionGeneration
   // without a set_mood call doesn't wipe a mood set earlier in the session.
   setMoodIndicator('', '');
   try {
-    const res = await fetch(`/api/sessions/${id}/messages?limit=${MESSAGE_PAGE_SIZE}`);
+    const res = await fetch(`/api/sessions/${encodeURIComponent(id)}/messages?limit=${MESSAGE_PAGE_SIZE}`);
     const data = await res.json();
     // A newer selection may have superseded us while the fetch was in flight —
     // don't clobber its transcript/cursors with this stale response.
@@ -4397,7 +4433,7 @@ async function loadOlderMessages() {
   const anchorOffset = anchor ? anchor.getBoundingClientRect().top : 0;
 
   try {
-    const res = await fetch(`/api/sessions/${sessionId}/messages?limit=${MESSAGE_PAGE_SIZE}&before=${beforeIndex}`);
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages?limit=${MESSAGE_PAGE_SIZE}&before=${beforeIndex}`);
     const data = await res.json();
     // The request belongs to the transcript that initiated it. A quick
     // session switch or same-session forced reload must not prepend those
@@ -4444,7 +4480,7 @@ async function fetchNewMessagesSince(sessionId, selectionGeneration = sessionSel
     return loadMessages(sessionId, selectionGeneration);
   }
   try {
-    const res = await fetch(`/api/sessions/${sessionId}/messages?after=${lastLoadedIndex}`);
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages?after=${lastLoadedIndex}`);
     const data = await res.json();
     // Bail if the user switched sessions or force-reloaded this same session
     // while the catch-up was in flight.
@@ -4518,7 +4554,7 @@ function imageBlocksHtml(content, alt = 'image') {
 // message (pi's HTML export scrolls to ?targetId=<JSONL entry id>). Only
 // JSONL-backed messages have an entry id — streaming placeholders don't.
 function messageLinkBtnHtml(msg) {
-  if (!msg.id) return '';
+  if (!msg.id || !sessionSupports(currentSession, 'export')) return '';
   return `<button type="button" class="msg-link-btn" data-entry-id="${escapeHtml(msg.id)}" title="Copy share link to this message">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
@@ -4862,7 +4898,7 @@ function startMessageStream(sessionId, selectionGeneration = sessionSelectionGen
   if (!sessionId) return;
 
   try {
-    const evtSource = new EventSource(`/api/sessions/${sessionId}/stream`);
+    const evtSource = new EventSource(`/api/sessions/${encodeURIComponent(sessionId)}/stream`);
     messageStream = evtSource;
     const ownsStream = () => messageStream === evtSource && ownsSessionView(sessionId, selectionGeneration);
     const addOwnedListener = (event, listener) => evtSource.addEventListener(event, (e) => {
@@ -5437,7 +5473,7 @@ async function sendPrompt() {
     clearDraft(sessionId);
     setStatus('Running ' + message.split(' ')[0] + '...', 'working');
     try {
-      const data = await apiSend(`/api/sessions/${sessionId}/command`, { message });
+      const data = await apiSend(`/api/sessions/${encodeURIComponent(sessionId)}/command`, { message });
       if (!ownsSessionView(sessionId, selectionGeneration)) return;
       setStatus(data.info || 'Done');
       refreshSessions();
@@ -5483,7 +5519,7 @@ async function sendPrompt() {
   setTurnInProgress(true);
 
   try {
-    const resp = await apiSend(`/api/sessions/${sessionId}/prompt`, images ? { message, images } : { message });
+    const resp = await apiSend(`/api/sessions/${encodeURIComponent(sessionId)}/prompt`, images ? { message, images } : { message });
     const pending = pendingOptimisticPrompts.get(clientPromptId);
     if (pending) pending.status = resp?.result?.queued ? 'queued' : 'accepted';
     if (!ownsSessionView(sessionId, selectionGeneration)) return;
@@ -5648,7 +5684,7 @@ async function sendQueuedMessage(kind) {
   const body = steer ? { message } : { message, deliverAs: 'followUp' };
   if (images) body.images = images;
   try {
-    const resp = await apiSend(`/api/sessions/${sessionId}${steer ? '/steer' : '/prompt'}`, body);
+    const resp = await apiSend(`/api/sessions/${encodeURIComponent(sessionId)}${steer ? '/steer' : '/prompt'}`, body);
     if (!ownsSessionView(sessionId, selectionGeneration)) return;
     if (resp?.result?.queued) setStatus('Queued — will send when compaction finishes');
     else setStatus(steer ? 'Steered' : 'Queued for after this turn');
@@ -5701,10 +5737,12 @@ function renderQueueStatus(data) {
 
 function queueRowHtml(kind, label, text, index, clientPromptId = null) {
   const clientAttr = clientPromptId ? ` data-client-prompt-id="${escapeHtml(clientPromptId)}"` : '';
+  const edit = sessionSupports(currentSession, 'queueCancel')
+    ? '<button class="queue-item-edit" onclick="editQueuedMessage(this)" title="Remove from queue and edit">↩ Edit</button>' : '';
   return `<div class="queue-item" data-kind="${kind}" data-index="${index}"${clientAttr}>
     <span class="queue-item-kind">${label}</span>
     <span class="queue-item-text" onclick="this.classList.toggle('expanded')" title="Click to expand">${escapeHtml(text)}</span>
-    <button class="queue-item-edit" onclick="editQueuedMessage(this)" title="Remove from queue and edit">↩ Edit</button>
+    ${edit}
   </div>`;
 }
 
@@ -5727,7 +5765,7 @@ async function editQueuedMessage(btn) {
   // flight, so a remaining identical prompt keeps its own client id.
   if (clientPrompt) clientPrompt.status = 'cancelling';
   try {
-    await apiSend(`/api/sessions/${sessionId}/queue/cancel`, { kind, index, text });
+    await apiSend(`/api/sessions/${encodeURIComponent(sessionId)}/queue/cancel`, { kind, index, text });
     if (clientPromptId) discardOptimisticPrompt(clientPromptId);
     restorePromptToSession(sessionId, text, null);
     // The follow-up queue_update reconciles the strip; no manual removal needed.
@@ -5750,7 +5788,7 @@ async function abortTurn() {
   abortingSessions.add(sessionId);
   setStatus('Stopping...', 'working');
   try {
-    await apiSend('/api/sessions/' + sessionId + '/abort');
+    await apiSend('/api/sessions/' + encodeURIComponent(sessionId) + '/abort');
     // HTTP acknowledgement only means the abort request was accepted. Keep
     // the turn owned by the stream until turn_end/agent_end performs cleanup
     // and JSONL catch-up.
@@ -5809,10 +5847,11 @@ async function monitorSessionSpawn(spawnId) {
       }
     }
   } catch (e) {
+    const spawn = pendingSessionSpawns.get(spawnId);
     pendingSessionSpawns.delete(spawnId);
     renderSessions();
     if (currentSessionSpawnId === spawnId) {
-      showPendingSessionFailure(spawnId, e.message);
+      showPendingSessionFailure(spawnId, e.message, spawn);
       setStatus(`Session start failed: ${e.message}`, 'error');
     } else {
       const ownerId = pendingComposerKey(spawnId);
@@ -5829,16 +5868,20 @@ async function monitorSessionSpawn(spawnId) {
 // monitorSessionSpawn. Throws when the server rejects the request so callers
 // surface the message their own way (status line vs the takeover's inline
 // error).
-async function submitNewSession({ cwd, model, thinking, target }) {
+async function submitNewSession({ cwd, model, thinking, target, harness }) {
+  const harnessId = harness || 'pi';
   const data = await apiSend('/api/sessions/new', {
     cwd: cwd || undefined,
     model: model || undefined,
     thinking: thinking || undefined,
     target: target || undefined,
+    harness: harnessId,
     async: true,
   });
   if (!data.spawnId) throw new Error('Failed to start session');
-  pendingSessionSpawns.set(data.spawnId, { cwd: cwd || '~', target: !!target });
+  pendingSessionSpawns.set(data.spawnId, {
+    cwd: cwd || '~', target: !!target, harness: harnessId, harnessLabel: harnessLabel(harnessId),
+  });
   // A stashed refine draft rides onto the provisional composer before
   // showPendingSessionView restores it (it never auto-sends).
   if (nsPendingDraft) {
@@ -5866,7 +5909,7 @@ async function createSession(cwd) {
       cwd = cwdInput ? cwdInput.value.trim() : '';
     }
     if (cwd) localStorage.setItem('pi-dish-cwd', cwd);
-    await submitNewSession({ cwd, target });
+    await submitNewSession({ cwd, target, harness: selectedHarnessId() });
   } catch (e) { setStatus(`Error: ${e.message}`, 'error'); }
 }
 
@@ -5881,6 +5924,52 @@ async function createSession(cwd) {
 // level), pi-dish-models-cache (catalog snapshot).
 let newSessionModel = ''; // '' = default (omit --model); else provider/id
 let newSessionThinking = ''; // '' = default (omit --thinking)
+const HARNESS_KEY = 'pi-dish-new-harness';
+let knownHarnesses = [{ id: 'pi', label: 'Pi', available: true }];
+let newSessionHarness = 'pi';
+
+function selectedHarnessId() {
+  return document.getElementById('nsHarnessSelect')?.value || newSessionHarness || 'pi';
+}
+
+function harnessLabel(harnessId) {
+  return knownHarnesses.find(harness => harness.id === harnessId)?.label
+    || (harnessId === 'pi' ? 'Pi' : harnessId);
+}
+
+async function loadHarnesses() {
+  try {
+    const res = await fetch('/api/harnesses');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (Array.isArray(data.harnesses) && data.harnesses.length) knownHarnesses = data.harnesses;
+  } catch (_) {
+    knownHarnesses = [{ id: 'pi', label: 'Pi', available: true }];
+  }
+  renderNsHarnesses();
+}
+
+function renderNsHarnesses() {
+  const sel = document.getElementById('nsHarnessSelect');
+  if (!sel) return;
+  const available = knownHarnesses.filter(h => h?.available !== false);
+  sel.innerHTML = available.map(h => `<option value="${escapeHtml(h.id)}">${escapeHtml(h.label || h.id)}</option>`).join('');
+  if (!available.some(h => h.id === newSessionHarness)) newSessionHarness = available[0]?.id || 'pi';
+  sel.value = newSessionHarness;
+}
+
+function onNsHarnessChange(value) {
+  newSessionHarness = value || 'pi';
+  localStorage.setItem(HARNESS_KEY, newSessionHarness);
+  newSessionModel = localStorage.getItem(`pi-dish-new-model:${newSessionHarness}`)
+    || (newSessionHarness === 'pi' ? localStorage.getItem('pi-dish-new-model') : '') || '';
+  newSessionThinking = localStorage.getItem(`pi-dish-new-thinking:${newSessionHarness}`)
+    || (newSessionHarness === 'pi' ? localStorage.getItem('pi-dish-new-thinking') : '') || '';
+  knownModels = [];
+  knownModelsHarnessId = null;
+  renderNsModel();
+  loadModels(undefined, newSessionHarness).then(() => { if (isNewSessionViewOpen()) renderNsModel(); });
+}
 
 function isNewSessionViewOpen() {
   return document.querySelector('.main').classList.contains('new-session-open');
@@ -5906,16 +5995,26 @@ function openNewSessionView(opts = {}) {
 
   // Model: render instantly from the cache (or an already-loaded catalog),
   // then refresh in the background and re-render, preserving the selection.
-  newSessionModel = localStorage.getItem('pi-dish-new-model') || '';
-  newSessionThinking = localStorage.getItem('pi-dish-new-thinking') || '';
-  if (!knownModels.length) {
+  newSessionHarness = localStorage.getItem(HARNESS_KEY) || 'pi';
+  renderNsHarnesses();
+  newSessionModel = localStorage.getItem(`pi-dish-new-model:${newSessionHarness}`)
+    || (newSessionHarness === 'pi' ? localStorage.getItem('pi-dish-new-model') : '') || '';
+  newSessionThinking = localStorage.getItem(`pi-dish-new-thinking:${newSessionHarness}`)
+    || (newSessionHarness === 'pi' ? localStorage.getItem('pi-dish-new-thinking') : '') || '';
+  if (knownModelsHarnessId !== newSessionHarness) {
+    knownModels = [];
     try {
-      const cached = JSON.parse(localStorage.getItem('pi-dish-models-cache') || 'null');
-      if (Array.isArray(cached)) knownModels = cached;
+      const cacheKey = `pi-dish-models-cache:${newSessionHarness}`;
+      const cached = JSON.parse(localStorage.getItem(cacheKey)
+        || (newSessionHarness === 'pi' ? localStorage.getItem('pi-dish-models-cache') : '') || 'null');
+      if (Array.isArray(cached)) {
+        knownModels = cached;
+        knownModelsHarnessId = newSessionHarness;
+      }
     } catch {}
   }
   renderNsModel();
-  loadModels().then(() => { if (isNewSessionViewOpen()) renderNsModel(); });
+  loadModels(undefined, newSessionHarness).then(() => { if (isNewSessionViewOpen()) renderNsModel(); });
 
   renderNsWorkspaces();
   initNsTree();
@@ -6030,13 +6129,17 @@ function setNsCwd(pathValue) {
 // --- Model select ---
 function onNsModelChange(value) {
   newSessionModel = value || '';
-  localStorage.setItem('pi-dish-new-model', newSessionModel);
+  const harnessId = selectedHarnessId();
+  localStorage.setItem(`pi-dish-new-model:${harnessId}`, newSessionModel);
+  if (harnessId === 'pi') localStorage.setItem('pi-dish-new-model', newSessionModel);
   syncNsThinking();
 }
 
 function onNsThinkingChange(value) {
   newSessionThinking = value || '';
-  localStorage.setItem('pi-dish-new-thinking', newSessionThinking);
+  const harnessId = selectedHarnessId();
+  localStorage.setItem(`pi-dish-new-thinking:${harnessId}`, newSessionThinking);
+  if (harnessId === 'pi') localStorage.setItem('pi-dish-new-thinking', newSessionThinking);
 }
 
 function syncNsThinking() {
@@ -6098,7 +6201,7 @@ async function spawnNewSession() {
     if (cwd) localStorage.setItem('pi-dish-cwd', cwd);
     const model = document.getElementById('nsModelSelect')?.value || undefined;
     const thinking = document.getElementById('nsThinkingSelect')?.value || undefined;
-    await submitNewSession({ cwd, model, thinking, target });
+    await submitNewSession({ cwd, model, thinking, target, harness: selectedHarnessId() });
     // Success: submitNewSession swapped in the provisional composer pane
     // (which closes this takeover); monitorSessionSpawn owns the rest.
   } catch (e) {
@@ -6945,7 +7048,7 @@ const openExtDialogs = new Map(); // requestId -> overlay element
 
 function sendExtDialogResponse(requestId, response) {
   if (!currentSession) return;
-  apiSend(`/api/sessions/${currentSession.id}/ui-response`, { requestId, ...response })
+  apiSend(`/api/sessions/${encodeURIComponent(currentSession.id)}/ui-response`, { requestId, ...response })
     .catch(e => setStatus('Dialog response failed: ' + e.message, 'error'));
   dismissExtDialog(requestId);
 }
@@ -7174,7 +7277,7 @@ async function openTreeModal() {
   if (!currentSession) return;
   setStatus('Loading tree...', 'working');
   try {
-    const res = await fetch('/api/sessions/' + currentSession.id + '/tree');
+    const res = await fetch('/api/sessions/' + encodeURIComponent(currentSession.id) + '/tree');
     if (!res.ok) throw new Error(await res.text());
     treeData = await res.json();
     treeToolCallMap.clear();
@@ -7368,7 +7471,7 @@ async function confirmBranch() {
   if (btn) { btn.disabled = true; btn.textContent = summarize ? 'Summarizing…' : 'Branching…'; }
   setStatus(summarize ? 'Summarizing abandoned branch…' : 'Branching...', 'working');
   try {
-    var data = await apiSend('/api/sessions/' + currentSession.id + '/branch',
+    var data = await apiSend('/api/sessions/' + encodeURIComponent(currentSession.id) + '/branch',
       { entryId, summarize, customInstructions });
     pendingBranchId = null;
     closeTreeModal();

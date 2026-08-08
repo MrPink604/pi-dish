@@ -113,6 +113,7 @@
             <input type="text" id="sessionNameInput" class="name-input" style="display:none"
               onblur="commitRename()" onkeydown="handleRenameKey(event)">
             <div class="session-meta session-meta-desktop">
+              <span class="badge harness-badge" id="sessionHarness" style="display:none"></span>
               <div class="model-selector" id="modelSelector">
                 <button class="badge badge-model" id="sessionModel" onclick="toggleModelDropdown()" title="Change model">model ▾</button>
               </div>
@@ -384,6 +385,12 @@
           <button class="btn-icon" onclick="closeNewSessionView()" title="Close (Esc)" style="margin-left:auto">✕</button>
         </div>
         <div class="new-session-body">
+          <div class="ns-section">
+            <label class="ns-label" for="nsHarnessSelect">Agent</label>
+            <select id="nsHarnessSelect" class="ns-select" onchange="onNsHarnessChange(this.value)">
+              <option value="pi">Pi</option>
+            </select>
+          </div>
           <div class="ns-section">
             <label class="ns-label" for="newSessionCwd">Working directory</label>
             <div class="cwd-input-wrap">

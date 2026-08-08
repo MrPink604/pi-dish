@@ -4003,6 +4003,17 @@ img.msg-image {
   .ns-choice-row { grid-template-columns: 1fr; }
 }
 
+.harness-badge {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--cyan) 45%, transparent);
+  border-radius: 8px;
+  color: var(--cyan);
+  font-size: 9px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
 /* The "Run in" section is an .ns-section (flex column) toggled by JS via
    inline display; keep it left-aligned and full-width when shown. */
 .new-session-view .new-session-target { align-items: stretch; }

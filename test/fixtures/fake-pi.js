@@ -12,12 +12,49 @@ const net = require('net');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const { processIdentity } = require('../../lib/process-identity');
 
-const token = process.env.PI_DISH_SPAWN_TOKEN || '';
 const home = process.env.HOME || os.homedir();
 const args = process.argv.slice(2);
+const harnessId = process.env.PI_FIXTURE_HARNESS || 'pi';
+const extensionIndex = args.indexOf('--extension');
+let wrapperToken = '';
+if (extensionIndex >= 0 && args[extensionIndex + 1]) {
+  try {
+    const source = fs.readFileSync(args[extensionIndex + 1], 'utf8');
+    const match = source.match(/createHarnessBridge\(("[a-f0-9]+")\)/);
+    if (match) wrapperToken = JSON.parse(match[1]);
+  } catch {}
+}
+const token = wrapperToken || process.env.PI_DISH_SPAWN_TOKEN || '';
 
-const sessionIdx = args.indexOf('--session');
+// Prime's launcher/client is not its resident worker. Reproduce that split with
+// a short-lived broker so the worker is genuinely reparented outside the tmux
+// client tree. The unsafe-descendant mode deliberately skips the broker for a
+// fail-closed lifecycle test.
+if (harnessId === 'prime' && !process.env.PI_FIXTURE_PRIME_WORKER) {
+  const workerEnv = { ...process.env, PI_FIXTURE_PRIME_WORKER: '1' };
+  // A warm Prime daemon forwards the extension path but not arbitrary client
+  // environment. The generated wrapper must carry the correlation token.
+  delete workerEnv.PI_DISH_SPAWN_TOKEN;
+  const childEnv = process.env.PI_FIXTURE_PRIME_BROKER
+    ? workerEnv
+    : process.env.PI_FIXTURE_PRIME_DESCENDANT_WORKER
+      ? workerEnv
+      : { ...process.env, PI_FIXTURE_PRIME_BROKER: '1' };
+  const worker = spawn(process.execPath, [__filename, ...args], {
+    detached: true,
+    stdio: 'ignore',
+    env: childEnv,
+  });
+  worker.unref();
+  if (process.env.PI_FIXTURE_PRIME_BROKER) return;
+  setInterval(() => {}, 1 << 30);
+  return;
+}
+
+const sessionFlag = harnessId === 'pi' ? '--session' : '--resume';
+const sessionIdx = args.indexOf(sessionFlag);
 let sessionFile;
 let sessionId;
 if (sessionIdx >= 0 && args[sessionIdx + 1]) {
@@ -25,7 +62,9 @@ if (sessionIdx >= 0 && args[sessionIdx + 1]) {
   sessionId = path.basename(sessionFile, '.jsonl');
 } else {
   sessionId = '2026-07-09T00-00-00-' + (token.slice(0, 8) || 'newsess1');
-  sessionFile = path.join(home, '.pi', 'agent', 'sessions', 'proj', sessionId + '.jsonl');
+  sessionFile = harnessId === 'prime'
+    ? path.join(home, '.prime', 'agent', 'sessions', sessionId + '.jsonl')
+    : path.join(home, harnessId === 'omp' ? '.omp' : '.pi', 'agent', 'sessions', 'proj', sessionId + '.jsonl');
 }
 
 // Never register — exercises the server's 30s spawn timeout path.
@@ -42,7 +81,10 @@ if (process.env.PI_FIXTURE_NOREGISTER) {
 } else {
   fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
   if (!fs.existsSync(sessionFile)) {
-    fs.writeFileSync(sessionFile, JSON.stringify({ type: 'session', cwd: process.cwd() }) + '\n');
+    const header = JSON.stringify({ type: 'session', id: sessionId, cwd: process.cwd() });
+    fs.writeFileSync(sessionFile, harnessId === 'omp'
+      ? `${JSON.stringify({ type: 'title', title: 'OMP tmux spawn' })}\n${header}\n`
+      : `${header}\n`);
   }
 
   const regDir = path.join(home, '.pi', 'dish', 'sessions');
@@ -50,10 +92,37 @@ if (process.env.PI_FIXTURE_NOREGISTER) {
   fs.mkdirSync(regDir, { recursive: true });
   fs.mkdirSync(sockDir, { recursive: true, mode: 0o700 });
 
-  const socketPath = path.join(sockDir, sessionId + '.sock');
+  const socketPath = path.join(sockDir, `${harnessId}-${sessionId}.sock`);
+  const bridgeInstanceId = `test-${token}`;
+  const startTime = processIdentity(process.pid)?.startTime;
+  const capabilities = {
+    prompt: true, steer: true, followUp: true, abort: true,
+    models: true, setModel: true, setThinking: true, rename: true,
+    commands: true, reload: false, queueCancel: false, treeNavigation: false,
+  };
   try { fs.unlinkSync(socketPath); } catch {}
   const srv = net.createServer((sock) => {
-    sock.write(JSON.stringify({ type: 'hello', turnInProgress: false }) + '\n');
+    sock.write(JSON.stringify(harnessId === 'pi'
+      ? { type: 'hello', turnInProgress: false }
+      : {
+          type: 'hello',
+          protocolVersion: 2,
+          wrapper: { harnessId, name: harnessId, wrapperVersion: 'test' },
+          harnessId,
+          nativeSessionId: sessionId,
+          sessionId,
+          sessionFile,
+          bridgeInstanceId,
+          instanceId: bridgeInstanceId,
+          pid: process.pid,
+          startTime,
+          socketPath,
+          spawnToken: token,
+          capabilities: process.env.PI_FIXTURE_HELLO_MISMATCH
+            ? { ...capabilities, reload: true }
+            : capabilities,
+          turnInProgress: false,
+        }) + '\n');
     // Answer commands like an *old* bridge: run_command is unknown. This is
     // what lets tmux.test.js exercise the server's send-keys fallbacks —
     // leaving commands unanswered would instead hang callers for the full
@@ -83,11 +152,22 @@ if (process.env.PI_FIXTURE_NOREGISTER) {
   } catch {}
   const register = () => {
     srv.listen(socketPath, () => {
-      fs.writeFileSync(path.join(regDir, sessionId + '.json'), JSON.stringify({
+      const registryName = harnessId === 'pi' ? `${sessionId}.json` : `${harnessId}-${sessionId}-${token}.json`;
+      fs.writeFileSync(path.join(regDir, registryName), JSON.stringify({
+        ...(harnessId === 'pi' ? {} : {
+          protocolVersion: 2,
+          wrapper: { harnessId, name: harnessId, wrapperVersion: 'test' },
+          harnessId,
+          nativeSessionId: sessionId,
+          bridgeInstanceId,
+          instanceId: bridgeInstanceId,
+          capabilities,
+        }),
         sessionId,
         sessionFile,
         cwd: process.cwd(),
         pid: process.pid,
+        ...(process.env.PI_FIXTURE_INCOMPLETE_CLAIM ? {} : { startTime }),
         socketPath,
         name: 'tmux spawn',
         model: 'anthropic/claude-opus-4',

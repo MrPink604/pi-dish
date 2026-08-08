@@ -20,6 +20,7 @@ process.env.HOME = tmpHome;
 
 const index = require('../lib/session-index.js');
 const sessionFiles = require('../lib/session-files.js');
+const { encodeSessionKey } = require('../lib/session-key.js');
 
 const sessionsDir = path.join(tmpHome, '.pi', 'agent', 'sessions', '--proj--');
 fs.mkdirSync(sessionsDir, { recursive: true });
@@ -63,6 +64,31 @@ test('scanSessions indexes files and revalidates on append', () => {
   fs.appendFileSync(file, JSON.stringify(userMsg('second question')) + '\n');
   ({ infos } = index.scanSessions([file]));
   assert.equal(infos.get(file).messageCount, 2, 'appended file re-indexed');
+});
+
+test('OMP candidates retain their combined model in indexed usage', () => {
+  const file = writeSession([
+    { type: 'title', title: 'OMP usage' },
+    { type: 'session', id: 'omp-usage', cwd: '/omp' },
+    { type: 'model_change', model: 'anthropic/claude-omp' },
+    { type: 'message', timestamp: '2026-07-01T10:00:02.000Z', message: {
+      role: 'assistant', content: [], usage: { input: 5, output: 2 },
+    } },
+  ]);
+  const candidate = {
+    file,
+    harnessId: 'omp',
+    nativeSessionId: 'omp-usage',
+    sessionKey: encodeSessionKey('omp', 'omp-usage'),
+    profileId: 'omp-v1',
+    profileVersion: 1,
+  };
+
+  const { infos, indexing } = index.scanSessions([candidate]);
+  assert.equal(indexing, false);
+  const usage = infos.get(file).usage;
+  assert.ok(usage.models['anthropic/claude-omp']);
+  assert.equal(usage.models['unknown/unknown'], undefined);
 });
 
 test('index persists: a zero-budget scan after state reset still serves entries', () => {

@@ -1,9 +1,10 @@
 # pi-dish 📡🍽
 
 A web (and phone) remote control for [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-coding-agent sessions. Start an agent in tmux at your desk, then steer it from
-the couch: watch it stream, answer its dialogs, send follow-ups, switch models,
-and read back through old sessions — all from a browser on your LAN.
+and selected Pi-lineage coding-agent sessions. Start an agent in tmux at your
+desk, then steer it from the couch: watch it stream, answer its dialogs, send
+follow-ups, switch models, and read back through old sessions — all from a
+browser on your LAN.
 
 Full disclosure: this repo is ~100% vibecoded. A human had opinions and a
 coding agent typed. It works well enough that said human uses it every day
@@ -112,8 +113,10 @@ desktop app for some reason.
 ## Requirements
 
 - Node.js 22.19+
-- [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) — the
-  coding agent this whole thing remote-controls
+- At least one supported agent CLI: [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
+  (`pi`), [Oh My Pi](https://github.com/can1357/oh-my-pi) (`omp`), or
+  [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent)
+  (`prime-agent`)
 - A network you trust (see above)
 
 ## Setup
@@ -148,9 +151,46 @@ back to referencing the skill's markdown by absolute path (and
 Symlink, don't copy — a stale copied bridge loaded alongside the current one
 races for the session socket.
 
+### Oh My Pi and Prime Agent
+
+The new-session picker can also launch OMP and Prime in tmux. Their permanent
+thin wrappers are:
+
+- `extensions/pi-dish-bridge-omp/index.ts`
+- `extensions/pi-dish-bridge-prime/index.ts`
+
+For a session launched outside pi-dish, pass that wrapper with the harness's
+`--extension` option. Managed launches pass a generated module under
+`~/.pi/dish/launch-wrappers/` instead; it imports the same thin wrapper and
+embeds the one-launch correlation token. This matters for Prime because its
+resident daemon forwards extension paths to workers but does not forward
+arbitrary client environment variables. Generated modules are retained so a
+resident worker can reload or recover its extension later.
+
+OMP and Prime use the shared public-extension bridge and never start or fall
+back to native RPC. Their history is discovered from `~/.omp/agent/sessions/`
+and `~/.prime/agent/sessions/` respectively.
+
+The alternative-harness baseline deliberately omits private Pi features:
+queue cancellation, compaction, tree navigation/export, sharing, and inactive
+JSONL mutation are unavailable. OMP close is also unavailable. Prime's agent
+worker is resident, so “Detach client” first revalidates the launch token and
+the tmux pane process's exact PID/birth identity, proves the resident worker is
+outside that pane's process tree, then kills only the pane. If ancestry cannot
+be proven, detach fails closed. It never signals or claims to stop the logical
+agent. In the pinned Prime 0.7.1 canary the worker remains a client descendant,
+so pi-dish disables/refuses detach rather than risking the worker.
+
+Use `PI_DISH_OMP_COMMAND` or `PI_DISH_PRIME_COMMAND` when a CLI is not on
+`PATH`, analogous to `PI_DISH_PI_COMMAND` for Pi.
+
+The current real-host compatibility canary is pinned to OMP 17.2.11 (which
+requires Bun 1.3.14+) and Prime Agent 0.7.1. See Development for the isolated
+install and test command.
+
 After that, any `pi` you launch (TUI in tmux, headless, spawned from
-pi-dish) registers itself at `~/.pi/dish/sessions/<id>.json` and opens a
-hashed Unix socket under `~/.pi/dish/sockets/`. Already-running sessions pick
+pi-dish) writes an instance-scoped entry under `~/.pi/dish/sessions/` and opens
+a hashed Unix socket under `~/.pi/dish/sockets/`. Already-running sessions pick
 the extension up after a `/reload`.
 
 Unix socket paths have a small platform limit. The bridge checks the full
@@ -366,6 +406,36 @@ npm run test:ui       # browser smoke test (needs Chrome + global Playwright)
 npm run build:vendor  # regenerate public/vendor/ after bumping marked/highlight.js
 npm run electron:dev  # desktop shell
 ```
+
+The opt-in lineage canary runs the actual released OMP and Prime CLIs through
+pi-dish's tmux/HTTP orchestration. It uses an isolated HOME, tmux server,
+socket directory, and Prime daemon. A local fake OpenAI Responses endpoint
+provides a deterministic streamed model turn, so no provider credentials or
+paid request are needed. One reproducible isolated install is:
+
+```bash
+PREFIX="$HOME/.local/share/pi-dish-harnesses"
+npm install --prefix "$PREFIX/bun" --no-audit --no-fund bun@1.3.14
+BUN="$PREFIX/bun/node_modules/.bin/bun"
+BUN_INSTALL="$PREFIX/omp" "$BUN" install -g @oh-my-pi/pi-coding-agent@17.2.11
+curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | \
+  env PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL=0 \
+      PRIME_AGENT_INSTALLER_PLAIN=1 \
+      npm_config_prefix="$PREFIX/prime" \
+      PATH="$PREFIX/bun/node_modules/.bin:$PATH" \
+      sh -s -- 0.7.1
+
+PI_DISH_REAL_OMP_BIN="$PREFIX/omp/bin/omp" \
+PI_DISH_REAL_PRIME_BIN="$PREFIX/prime/bin/prime-agent" \
+PI_DISH_REAL_BUN_BIN_DIR="$PREFIX/bun/node_modules/.bin" \
+npm run test:lineage
+```
+
+The canary covers real wrapper registration, model/command discovery, a live
+streamed turn and persisted transcript, canonical history routes, OMP resume
+and unsupported close behavior, plus Prime's worker/client split, unsafe-detach
+refusal, exact-daemon cleanup, resume, and a second streamed/persisted turn
+after resume.
 
 `CLAUDE.md` documents the architecture in detail (it's the file the agent
 that wrote this reads, so it's the most honest documentation in the repo).

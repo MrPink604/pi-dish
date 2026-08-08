@@ -1,5 +1,23 @@
 # Making your pi extension's UI show up in pi-dish
 
+## Loading a wrapper
+
+Load exactly one wrapper in the host's extension configuration:
+
+* Pi: `--extension /path/to/pi-dish/extensions/pi-dish-bridge/index.ts`
+* OMP: `--extension /path/to/pi-dish/extensions/pi-dish-bridge-omp/index.ts`
+* Prime: `--extension /path/to/pi-dish/extensions/pi-dish-bridge-prime/index.ts`
+
+The OMP and Prime wrappers use only the public extension API and require no
+pi-dish RPC process. They intentionally do not expose queue inspection or
+queue cancellation. Pi retains its private, feature-detected queue integration.
+
+For a managed OMP/Prime launch, pi-dish generates a tiny per-launch module in
+`~/.pi/dish/launch-wrappers/`. It imports the wrapper above and embeds the
+correlation token instead of relying on inherited environment variables. The
+file is retained because Prime's resident worker can reload or recover the
+extension after its original tmux client is gone.
+
 The bridge forwards a *subset* of pi's `ctx.ui` surface to web clients. The
 TUI renders everything either way, so an incompatible call is **silently
 invisible** in pi-dish — nothing errors. This page is the contract; write to

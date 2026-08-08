@@ -4,6 +4,9 @@ const http = require('node:http');
 const path = require('node:path');
 const { promisify } = require('node:util');
 const { execFile } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const { encodeSessionKey } = require('../lib/session-key');
 
 const execFileAsync = promisify(execFile);
 const cli = path.join(__dirname, '..', 'skills', 'pi-dish-sessions', 'scripts', 'pi-dish-sessions.js');
@@ -78,4 +81,25 @@ test('peer-session CLI attributes spawn and uses semantic control routes', async
   assert.equal(JSON.parse(shown.stdout).messages[0].content[0].text, 'done');
   const listed = await run(['list', '--active'], base);
   assert.match(listed.stdout, /peer-1\s+active\s+Peer/);
+});
+
+test('peer-session CLI reports the canonical route for an alternative registry entry', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-session-cli-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const registry = path.join(home, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registry, { recursive: true });
+  fs.writeFileSync(path.join(registry, 'prime-worker.json'), JSON.stringify({
+    protocolVersion: 2,
+    wrapper: { harnessId: 'prime' },
+    harnessId: 'prime',
+    nativeSessionId: 'prime-native',
+    sessionId: 'prime-native',
+    pid: process.pid,
+    cwd: process.cwd(),
+    updatedAt: new Date().toISOString(),
+  }));
+  const env = { ...process.env, HOME: home };
+  delete env.PI_DISH_SESSION_ID;
+  const result = await execFileAsync(process.execPath, [cli, 'session'], { env });
+  assert.equal(result.stdout.trim(), encodeSessionKey('prime', 'prime-native'));
 });

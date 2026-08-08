@@ -913,7 +913,7 @@ function writeRegistry(patch = {}) {
     check(asyncSpawnBody?.thinking === 'high', 'POST body carries the chosen reasoning level');
     check(!(await desktop.evaluate(() => document.querySelector('.main').classList.contains('new-session-open'))),
       'takeover closes in favor of the provisional pane');
-    check(await desktop.locator('.session-item.starting').textContent().then(t => t.includes('Starting session')),
+    check(await desktop.locator('.session-item.starting').textContent().then(t => t.includes('Starting Pi')),
       'provisional starting row appears before registration');
     check(await desktop.locator('.session-item.starting').evaluate((el) => el.classList.contains('active')) &&
       await desktop.locator('#sessionName').textContent() === 'Starting session…',

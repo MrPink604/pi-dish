@@ -214,8 +214,11 @@ test.after(async () => {
     if (pi.exitCode === null) pi.kill('SIGKILL');
   }
   llm.close();
-  server.close();
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
+  await new Promise((resolve) => server.close(resolve));
+  // Session-index flushes are timer-backed and can finish just after the HTTP
+  // listener closes. Retry ENOTEMPTY while removing the isolated HOME rather
+  // than turning a skipped integration run into a teardown failure.
+  fs.rmSync(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 test('bundled pi SDK version matches the host pi', { skip: !piOk }, () => {

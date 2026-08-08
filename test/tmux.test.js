@@ -16,6 +16,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { encodeSessionKey, VERSION: SESSION_KEY_VERSION } = require('../lib/session-key');
 
 // Short temp dirs — Unix socket paths have a ~108 char limit.
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-home-'));
@@ -28,6 +29,8 @@ const TMUX_SOCKET = path.join(tmuxTmp, 's');
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-pi.js');
 // getPiLaunchSpec() reads this — run our fixture instead of a real `pi`.
 process.env.PI_DISH_PI_COMMAND = `${process.execPath} ${FIXTURE}`;
+process.env.PI_DISH_OMP_COMMAND = `env PI_FIXTURE_HARNESS=omp ${process.execPath} ${FIXTURE}`;
+process.env.PI_DISH_PRIME_COMMAND = `env PI_FIXTURE_HARNESS=prime ${process.execPath} ${FIXTURE}`;
 // Force the headless-tmux dispatch: the temp HOME has no bridge extension
 // installed, so auto-detection would (correctly) fall back to RPC children.
 process.env.PI_DISH_HEADLESS = 'tmux';
@@ -117,6 +120,191 @@ test('POST /api/sessions/new with a tmux target spawns and returns the registere
   assert.ok(panes.includes(spawn.paneId), 'pi pane exists in the session');
 });
 
+test('OMP launch uses its wrapper descriptor and encoded cross-harness identity', { skip: !tmuxOk }, async () => {
+  const { status, body } = await post('/api/sessions/new', {
+    harness: 'omp',
+    model: 'anthropic/claude-opus-4',
+    target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.ok(body.id.startsWith(SESSION_KEY_VERSION));
+  assert.ok(tmux.getSpawn(body.id), 'the encoded route identity owns the tmux placement');
+
+  const list = await get('/api/sessions?active=1');
+  const session = list.body.active.find(entry => entry.id === body.id);
+  assert.ok(session, 'OMP registration appears in the active list');
+  assert.equal(session.harnessId, 'omp');
+  assert.equal(session.sessionKey, body.id);
+  assert.equal(session.capabilities.tree, false);
+  assert.equal(session.capabilities.export, false);
+  assert.equal(session.capabilities.close, false);
+
+  const messages = await get(`/api/sessions/${encodeURIComponent(body.id)}/messages`);
+  assert.equal(messages.status, 200, JSON.stringify(messages.body));
+  assert.equal(messages.body.session.harnessId, 'omp');
+  assert.equal(messages.body.session.name, 'OMP tmux spawn');
+  const tree = await get(`/api/sessions/${encodeURIComponent(body.id)}/tree`);
+  assert.equal(tree.status, 409);
+  assert.match(tree.body.error, /only supported for Pi/i);
+});
+
+test('OMP resume selects its corpus and uses the descriptor resume path without RPC', { skip: !tmuxOk }, async () => {
+  const nativeId = 'omp-resume-fixture';
+  const file = path.join(tmpHome, '.omp', 'agent', 'sessions', 'project', `${nativeId}.jsonl`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, [
+    { type: 'title', title: 'Resume OMP' },
+    { type: 'session', id: nativeId, cwd: tmpHome },
+  ].map(JSON.stringify).join('\n') + '\n');
+  const routeId = encodeSessionKey('omp', nativeId);
+
+  const resumed = await post(`/api/sessions/${encodeURIComponent(routeId)}/resume`, {
+    target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+  });
+  assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
+  assert.equal(resumed.body.id, routeId);
+  assert.ok(tmux.getSpawn(routeId));
+});
+
+test('alternate harness registration timeout cleans its pane and never falls back to RPC', { skip: !tmuxOk }, async () => {
+  const before = tmuxCmd(['list-panes', '-s', '-t', 'work', '-F', '#{pane_id}']).trim().split('\n').filter(Boolean);
+  process.env.PI_DISH_OMP_COMMAND = `env PI_FIXTURE_HARNESS=omp PI_FIXTURE_NOREGISTER=1 ${process.execPath} ${FIXTURE}`;
+  process.env.PI_DISH_SPAWN_TIMEOUT_MS = '300';
+  try {
+    const { status, body } = await post('/api/sessions/new', {
+      harness: 'omp',
+      target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+    });
+    assert.equal(status, 500, JSON.stringify(body));
+    assert.match(body.error, /Oh My Pi did not register/i);
+    assert.doesNotMatch(body.error, /RPC fallback/i);
+    const after = tmuxCmd(['list-panes', '-s', '-t', 'work', '-F', '#{pane_id}']).trim().split('\n').filter(Boolean);
+    assert.deepEqual(after.sort(), before.sort(), 'failed alternate launch leaves no extra pane');
+  } finally {
+    process.env.PI_DISH_OMP_COMMAND = `env PI_FIXTURE_HARNESS=omp ${process.execPath} ${FIXTURE}`;
+    delete process.env.PI_DISH_SPAWN_TIMEOUT_MS;
+  }
+});
+
+test('alternate launch rejects incomplete claims and mismatched socket hello identity', { skip: !tmuxOk }, async () => {
+  const cases = [
+    ['PI_FIXTURE_INCOMPLETE_CLAIM', /did not register/i],
+    ['PI_FIXTURE_HELLO_MISMATCH', /identity proof failed/i],
+  ];
+  for (const [flag, errorPattern] of cases) {
+    const before = tmuxCmd(['list-panes', '-s', '-t', 'work', '-F', '#{pane_id}']).trim().split('\n').filter(Boolean);
+    process.env.PI_DISH_OMP_COMMAND = `env PI_FIXTURE_HARNESS=omp ${flag}=1 ${process.execPath} ${FIXTURE}`;
+    process.env.PI_DISH_SPAWN_TIMEOUT_MS = '400';
+    try {
+      const result = await post('/api/sessions/new', {
+        harness: 'omp',
+        target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+      });
+      assert.equal(result.status, 500, JSON.stringify(result.body));
+      assert.match(result.body.error, errorPattern);
+      assert.doesNotMatch(result.body.error, /RPC fallback/i);
+      const after = tmuxCmd(['list-panes', '-s', '-t', 'work', '-F', '#{pane_id}']).trim().split('\n').filter(Boolean);
+      assert.deepEqual(after.sort(), before.sort(), `${flag} launch leaves no extra pane`);
+    } finally {
+      process.env.PI_DISH_OMP_COMMAND = `env PI_FIXTURE_HARNESS=omp ${process.execPath} ${FIXTURE}`;
+      delete process.env.PI_DISH_SPAWN_TIMEOUT_MS;
+    }
+  }
+});
+
+test('Prime close detaches only the owned client pane and leaves its resident worker alive', { skip: !tmuxOk }, async () => {
+  const created = await post('/api/sessions/new', {
+    harness: 'prime',
+    target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+  });
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  assert.ok(created.body.id.startsWith(SESSION_KEY_VERSION));
+  const spawn = tmux.getSpawn(created.body.id);
+  assert.ok(spawn);
+  assert.ok(spawn.wrapperPath && fs.existsSync(spawn.wrapperPath),
+    'Prime launch retains its tokenized wrapper for resident-worker recovery');
+  assert.ok(spawn.paneProcess?.pid && spawn.paneProcess?.startTime,
+    'Prime client ownership records an exact pane process identity');
+
+  const regDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  const regFile = fs.readdirSync(regDir).find(name => name.startsWith('prime-') &&
+    JSON.parse(fs.readFileSync(path.join(regDir, name), 'utf8')).spawnToken);
+  assert.ok(regFile, 'Prime worker registry exists');
+  const registry = JSON.parse(fs.readFileSync(path.join(regDir, regFile), 'utf8'));
+  const panePid = Number(tmuxCmd(['display-message', '-p', '-t', spawn.paneId, '#{pane_pid}']).trim());
+  assert.notEqual(registry.pid, panePid, 'registry PID belongs to the resident worker, not the client pane');
+
+  const list = await get('/api/sessions?active=1');
+  const session = list.body.active.find(entry => entry.id === created.body.id);
+  assert.equal(session?.closeMode, 'client-only');
+  assert.equal(session?.capabilities.close, true);
+
+  try {
+    tmux.recordSpawn(created.body.id, {
+      ...spawn,
+      paneProcess: { ...spawn.paneProcess, startTime: '0' },
+    });
+    const refused = await post(`/api/sessions/${encodeURIComponent(created.body.id)}/close`);
+    assert.equal(refused.status, 409, JSON.stringify(refused.body));
+    assert.match(refused.body.error, /exited or been replaced/i);
+    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true,
+      'a mismatched ownership record cannot kill the current pane');
+    assert.doesNotThrow(() => process.kill(registry.pid, 0), 'resident worker remains alive after refused detach');
+
+    // Restore the exact accepted ownership record for the successful detach.
+    tmux.recordSpawn(created.body.id, spawn);
+    const closed = await post(`/api/sessions/${encodeURIComponent(created.body.id)}/close`);
+    assert.equal(closed.status, 200, JSON.stringify(closed.body));
+    assert.deepEqual(closed.body, { success: true, detached: true, logicalSessionActive: true });
+    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), false);
+    assert.doesNotThrow(() => process.kill(registry.pid, 0), 'resident worker was not signaled');
+    assert.equal(tmux.getSpawn(created.body.id), null, 'client ownership record was removed');
+  } finally {
+    try { process.kill(registry.pid, 'SIGTERM'); } catch {}
+    try { fs.unlinkSync(path.join(regDir, regFile)); } catch {}
+  }
+});
+
+test('Prime close refuses when its worker remains in the owned client process tree', { skip: !tmuxOk }, async () => {
+  process.env.PI_DISH_PRIME_COMMAND = `env PI_FIXTURE_HARNESS=prime PI_FIXTURE_PRIME_DESCENDANT_WORKER=1 ${process.execPath} ${FIXTURE}`;
+  let spawn;
+  let registry;
+  let registryPath;
+  try {
+    const created = await post('/api/sessions/new', {
+      harness: 'prime',
+      target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+    });
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+    spawn = tmux.getSpawn(created.body.id);
+    assert.ok(spawn);
+    const regDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+    const regFile = fs.readdirSync(regDir).find(name => {
+      const entry = JSON.parse(fs.readFileSync(path.join(regDir, name), 'utf8'));
+      return entry.harnessId === 'prime' && entry.spawnToken === spawn.spawnToken;
+    });
+    assert.ok(regFile, 'descendant Prime worker registry exists');
+    registryPath = path.join(regDir, regFile);
+    registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+
+    const refused = await post(`/api/sessions/${encodeURIComponent(created.body.id)}/close`);
+    assert.equal(refused.status, 409, JSON.stringify(refused.body));
+    assert.match(refused.body.error, /worker is still in .* client pane.*process tree/i);
+    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true, 'unsafe client pane remains open');
+    assert.doesNotThrow(() => process.kill(registry.pid, 0), 'descendant worker remains alive');
+    assert.ok(tmux.getSpawn(created.body.id), 'ownership record remains available for a later safe detach');
+  } finally {
+    process.env.PI_DISH_PRIME_COMMAND = `env PI_FIXTURE_HARNESS=prime ${process.execPath} ${FIXTURE}`;
+    if (spawn) {
+      try { await tmux.killPane(spawn.socket, spawn.paneId); } catch {}
+    }
+    if (registry?.pid) {
+      try { process.kill(registry.pid, 'SIGTERM'); } catch {}
+    }
+    if (registryPath) fs.rmSync(registryPath, { force: true });
+  }
+});
+
 test('async tmux spawn returns a provisional operation before bridge registration', { skip: !tmuxOk }, async () => {
   process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_REGISTER_DELAY_MS=700 ${process.execPath} ${FIXTURE}`;
   try {
@@ -176,6 +364,29 @@ test('/reload falls back to send-keys into the owning tmux pane when the bridge 
     await new Promise((r) => setTimeout(r, 200));
   }
   assert.match(keys, /\/reload/, `send-keys /reload reached the pane (got: ${JSON.stringify(keys)})`);
+});
+
+test('/reload fails closed for alternate wrappers without typing into tmux', { skip: !tmuxOk }, async () => {
+  const created = await post('/api/sessions/new', {
+    harness: 'omp',
+    target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+  });
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  const spawn = tmux.getSpawn(created.body.id);
+  assert.ok(spawn, 'pi-dish owns the OMP pane');
+
+  const registry = fs.readdirSync(path.join(tmpHome, '.pi', 'dish', 'sessions'))
+    .map(name => JSON.parse(fs.readFileSync(path.join(tmpHome, '.pi', 'dish', 'sessions', name), 'utf8')))
+    .find(entry => entry.harnessId === 'omp' && entry.spawnToken === spawn.spawnToken);
+  assert.ok(registry, 'matching OMP registry claim exists');
+  fs.rmSync(`${registry.sessionFile}.keys`, { force: true });
+
+  const result = await post(`/api/sessions/${encodeURIComponent(created.body.id)}/command`, { message: '/reload' });
+  assert.equal(result.status, 409, JSON.stringify(result.body));
+  assert.match(result.body.error, /does not support remote extension reload/i);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(fs.existsSync(`${registry.sessionFile}.keys`), false, 'no /reload keystrokes reached the alternate TUI');
+  assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true, 'the alternate pane remains untouched');
 });
 
 test('POST /api/sessions/new rejects a socket outside the tmux tmpdir', { skip: !tmuxOk }, async () => {
@@ -728,6 +939,36 @@ test('tmux-spawns.json persistence and prune', async () => {
   await tmux.pruneSpawns(new Set(['kept-session']));
   assert.ok(tmux.getSpawn('kept-session'), 'registered session kept even with a bogus pane');
   assert.equal(tmux.getSpawn('gone-session'), null, 'unregistered dead-pane mapping pruned');
+});
+
+test('pruneSpawns preserves a replacement recorded while its pane probe is in flight', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-racy-prune-'));
+  const binDir = path.join(dir, 'bin');
+  const home = path.join(dir, 'home');
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(binDir, 'tmux'), '#!/bin/sh\nsleep 0.2\nprintf "\\n"\n', { mode: 0o755 });
+  const modulePath = path.join(__dirname, '..', 'lib', 'tmux.js');
+  const script = `
+    const tmux = require(${JSON.stringify(modulePath)});
+    (async () => {
+      tmux.recordSpawn('same', { socket: '/tmp/old.sock', paneId: '%1' });
+      setTimeout(() => tmux.recordSpawn('same', { socket: '/tmp/new.sock', paneId: '%2' }), 50);
+      await tmux.pruneSpawns();
+      process.stdout.write(JSON.stringify(tmux.getSpawn('same')));
+    })().catch((e) => { console.error(e); process.exit(1); });
+  `;
+  try {
+    const out = execFileSync(process.execPath, ['-e', script], {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home, PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}` },
+    });
+    const retained = JSON.parse(out);
+    assert.equal(retained.socket, '/tmp/new.sock');
+    assert.equal(retained.paneId, '%2');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('paneExists rejects an exit-0 empty target field and prune removes that stale placement', () => {

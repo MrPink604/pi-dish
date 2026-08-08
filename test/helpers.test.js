@@ -899,3 +899,10 @@ test('tmuxPrefixSeq maps tmux prefix notation to raw bytes', () => {
   assert.equal(H.tmuxPrefixSeq(null), null);
   assert.equal(H.tmuxPrefixSeq(undefined), null);
 });
+
+test('sessionSupports preserves legacy defaults and honors explicit denial', () => {
+  assert.equal(H.sessionSupports({}, 'tree'), true);
+  assert.equal(H.sessionSupports({ capabilities: {} }, 'close'), true);
+  assert.equal(H.sessionSupports({ capabilities: { close: false } }, 'close'), false);
+  assert.equal(H.sessionSupports({ capabilities: { export: true } }, 'export'), true);
+});

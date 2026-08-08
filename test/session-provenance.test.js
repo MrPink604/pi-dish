@@ -3,6 +3,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { encodeSessionKey } = require('../lib/session-key');
 
 const originalHome = process.env.HOME;
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-provenance-'));
@@ -29,6 +30,14 @@ test('re-recording a child updates rather than duplicates it', () => {
   assert.equal(provenance.getLaunch('child-1').sourceSessionId, 'source-2');
   assert.equal(provenance.getLaunchesFrom('source-1').length, 0);
   assert.equal(provenance.getLaunchesFrom('source-2').length, 1);
+});
+
+test('canonical alternative-harness routes persist as provenance identities', () => {
+  const source = encodeSessionKey('omp', 'source-alt');
+  const child = encodeSessionKey('prime', 'child-alt');
+  provenance.recordLaunch(child, source, 'operation-alt');
+  assert.equal(provenance.getLaunch(child).sourceSessionId, source);
+  assert.deepEqual(provenance.getLaunchesFrom(source).map(entry => entry.sessionId), [child]);
 });
 
 test('broken sidecars and invalid ids degrade safely', () => {

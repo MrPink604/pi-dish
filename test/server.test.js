@@ -23,6 +23,7 @@ process.env.PORT = '0'; // random free port
 // server under the tmpdir; point it at an empty temp dir so a tmux session
 // enclosing `npm test` can't leak into the runtime assertions below.
 process.env.TMUX_TMPDIR = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-test-tmux-'));
+const { encodeSessionKey } = require('../lib/session-key');
 
 const SESSION_ID = '2026-07-04T10-00-00-abcdef12';
 const TINY_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
@@ -226,6 +227,22 @@ test('GET /api/sessions lists the fixture session with derived metadata', async 
   assert.equal(sess.cwd, '/home/user/proj');
   assert.equal(sess.name, 'hello alpha'); // first user message
   assert.equal(sess.messageCount, 2); // user messages only
+});
+
+test('encoded alternative-harness routes never fall back to a partial native id', async () => {
+  const nativeId = 'omp-prefix-real';
+  const ompDir = path.join(tmpHome, '.omp', 'agent', 'sessions', 'project');
+  fs.mkdirSync(ompDir, { recursive: true });
+  fs.writeFileSync(path.join(ompDir, `${nativeId}.jsonl`), [
+    { type: 'title', title: 'Exact OMP fixture' },
+    { type: 'session', id: nativeId, cwd: '/home/user/proj' },
+  ].map(JSON.stringify).join('\n') + '\n');
+
+  const exact = await get(`/api/sessions/${encodeURIComponent(encodeSessionKey('omp', nativeId))}/stats`);
+  assert.equal(exact.status, 200, JSON.stringify(exact.body));
+
+  const partial = await get(`/api/sessions/${encodeURIComponent(encodeSessionKey('omp', 'omp-prefix'))}/stats`);
+  assert.equal(partial.status, 404, 'a canonical encoded route must not select a partial native-id match');
 });
 
 test('nested generic sessions use the core header id and remain fully addressable', async () => {
