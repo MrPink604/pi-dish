@@ -3978,6 +3978,8 @@ img.msg-image {
 
 .ns-section { display: flex; flex-direction: column; gap: 8px; }
 .ns-label { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.ns-choice-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.ns-choice { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 
 /* The cwd dropdown lives at the top of the pane now — open it downward. */
 .new-session-view .cwd-input-wrap { flex: none; }
@@ -3994,7 +3996,12 @@ img.msg-image {
   outline: none;
 }
 .ns-select:focus { border-color: var(--accent); }
+.ns-select:disabled { opacity: .55; cursor: not-allowed; }
 .ns-hidden-note { font-size: 11px; color: var(--text-muted); }
+
+@media (max-width: 600px) {
+  .ns-choice-row { grid-template-columns: 1fr; }
+}
 
 /* The "Run in" section is an .ns-section (flex column) toggled by JS via
    inline display; keep it left-aligned and full-width when shown. */

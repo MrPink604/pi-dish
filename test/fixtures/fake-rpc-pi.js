@@ -58,7 +58,7 @@ if (sessionIdx >= 0 && args[sessionIdx + 1]) {
 }
 
 if (process.env.PI_FIXTURE_START_LOG) {
-  fs.appendFileSync(process.env.PI_FIXTURE_START_LOG, JSON.stringify({ pid: process.pid, sessionFile }) + '\n');
+  fs.appendFileSync(process.env.PI_FIXTURE_START_LOG, JSON.stringify({ pid: process.pid, sessionFile, args }) + '\n');
 }
 
 const modelIdx = args.indexOf('--model');

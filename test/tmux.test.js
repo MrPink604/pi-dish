@@ -83,6 +83,7 @@ test('GET /api/tmux/targets lists the running server and its sessions', { skip: 
 test('POST /api/sessions/new with a tmux target spawns and returns the registered id', { skip: !tmuxOk }, async () => {
   const { status, body } = await post('/api/sessions/new', {
     model: 'anthropic/claude-opus-4',
+    thinking: 'high',
     target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
   });
   assert.equal(status, 200, JSON.stringify(body));
@@ -97,6 +98,9 @@ test('POST /api/sessions/new with a tmux target spawns and returns the registere
     if (!active) await new Promise((r) => setTimeout(r, 200));
   }
   assert.ok(active, 'spawned session is active');
+  const registry = JSON.parse(fs.readFileSync(path.join(tmpHome, '.pi', 'dish', 'sessions', `${body.id}.json`), 'utf8'));
+  assert.deepEqual(registry.launchArgs.slice(registry.launchArgs.indexOf('--thinking'), registry.launchArgs.indexOf('--thinking') + 2),
+    ['--thinking', 'high'], 'reasoning level is forwarded to a tmux-hosted pi CLI');
 
   // The placement was persisted for later re-priming.
   const spawn = tmux.getSpawn(body.id);

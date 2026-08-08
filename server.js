@@ -2944,11 +2944,12 @@ async function _spawnPiHeadlessTmux({ args, cwd }) {
 // `pi --mode rpc` child (dies with this server). An explicit `target:
 // { type: 'tmux', socket, tmuxSession }` or `{ ..., newTmuxSession }` opens a
 // pi TUI in one of the user's own tmux sessions instead.
-async function createSession({ model, cwd, target }) {
+async function createSession({ model, thinking, cwd, target }) {
   if (cwd && cwd.startsWith('~')) {
     cwd = path.join(process.env.HOME, cwd.slice(1).replace(/^\//, ''));
   }
   const args = model ? ['--model', model] : [];
+  if (thinking) args.push('--thinking', thinking);
   if (target && target.type === 'tmux') {
     return spawnPiInTmux({ target, args, cwd });
   }
@@ -2961,7 +2962,7 @@ async function createSession({ model, cwd, target }) {
       console.error('Headless tmux spawn failed — falling back to an RPC child:', e.message);
     }
   }
-  const rpc = await createRPCSession({ model, cwd });
+  const rpc = await createRPCSession({ model, thinking, cwd });
   return rpc.id;
 }
 
@@ -3004,7 +3005,10 @@ function startSessionSpawn(options) {
 }
 
 app.post('/api/sessions/new', async (req, res) => {
-  const { model, cwd, target } = req.body || {};
+  const { model, thinking, cwd, target } = req.body || {};
+  if (thinking !== undefined && !['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(thinking)) {
+    return res.status(400).json({ error: 'Invalid reasoning level' });
+  }
   // requestedBySessionId is the public provenance field; retain the earlier
   // sourceSessionId spelling as a compatibility alias. The header lets the
   // bundled CLI identify itself without making the claim authoritative.
@@ -3015,11 +3019,11 @@ app.post('/api/sessions/new', async (req, res) => {
     return res.status(400).json({ error: 'requestedBySessionId must identify an existing session' });
   }
   if (req.body?.async === true) {
-    const spawnId = startSessionSpawn({ model, cwd, target, sourceSessionId });
+    const spawnId = startSessionSpawn({ model, thinking, cwd, target, sourceSessionId });
     return res.status(202).json({ success: true, pending: true, spawnId });
   }
   try {
-    const id = await createSession({ model, cwd, target });
+    const id = await createSession({ model, thinking, cwd, target });
     let operationId = null;
     if (sourceSessionId) {
       const candidateOperationId = crypto.randomUUID();

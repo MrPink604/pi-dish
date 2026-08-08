@@ -5829,10 +5829,11 @@ async function monitorSessionSpawn(spawnId) {
 // monitorSessionSpawn. Throws when the server rejects the request so callers
 // surface the message their own way (status line vs the takeover's inline
 // error).
-async function submitNewSession({ cwd, model, target }) {
+async function submitNewSession({ cwd, model, thinking, target }) {
   const data = await apiSend('/api/sessions/new', {
     cwd: cwd || undefined,
     model: model || undefined,
+    thinking: thinking || undefined,
     target: target || undefined,
     async: true,
   });
@@ -5876,8 +5877,10 @@ async function createSession(cwd) {
 // (single source of truth) backed by fuzzy /api/dirs matches and a lazy
 // directory tree, a model select fed by the cached /api/models catalog, and
 // the tmux "Run in" target. localStorage keys: pi-dish-cwd (chosen cwd),
-// pi-dish-new-model (chosen model), pi-dish-models-cache (catalog snapshot).
+// pi-dish-new-model (chosen model), pi-dish-new-thinking (chosen reasoning
+// level), pi-dish-models-cache (catalog snapshot).
 let newSessionModel = ''; // '' = default (omit --model); else provider/id
+let newSessionThinking = ''; // '' = default (omit --thinking)
 
 function isNewSessionViewOpen() {
   return document.querySelector('.main').classList.contains('new-session-open');
@@ -5904,6 +5907,7 @@ function openNewSessionView(opts = {}) {
   // Model: render instantly from the cache (or an already-loaded catalog),
   // then refresh in the background and re-render, preserving the selection.
   newSessionModel = localStorage.getItem('pi-dish-new-model') || '';
+  newSessionThinking = localStorage.getItem('pi-dish-new-thinking') || '';
   if (!knownModels.length) {
     try {
       const cached = JSON.parse(localStorage.getItem('pi-dish-models-cache') || 'null');
@@ -6027,6 +6031,23 @@ function setNsCwd(pathValue) {
 function onNsModelChange(value) {
   newSessionModel = value || '';
   localStorage.setItem('pi-dish-new-model', newSessionModel);
+  syncNsThinking();
+}
+
+function onNsThinkingChange(value) {
+  newSessionThinking = value || '';
+  localStorage.setItem('pi-dish-new-thinking', newSessionThinking);
+}
+
+function syncNsThinking() {
+  const sel = document.getElementById('nsThinkingSelect');
+  if (!sel) return;
+  const selectedModel = knownModels.find(m => m && `${m.provider}/${m.id}` === newSessionModel);
+  const unsupported = selectedModel?.reasoning === false;
+  sel.disabled = unsupported;
+  sel.value = unsupported ? '' : newSessionThinking;
+  const note = document.getElementById('nsThinkingNote');
+  if (note) note.textContent = unsupported ? 'The selected model does not support reasoning' : '';
 }
 
 function renderNsModel() {
@@ -6058,6 +6079,7 @@ function renderNsModel() {
 
   const note = document.getElementById('nsModelHidden');
   if (note) note.textContent = hidden > 0 ? `${hidden} model${hidden === 1 ? '' : 's'} hidden (not enabled)` : '';
+  syncNsThinking();
 }
 
 function nsError(msg) {
@@ -6075,7 +6097,8 @@ async function spawnNewSession() {
   try {
     if (cwd) localStorage.setItem('pi-dish-cwd', cwd);
     const model = document.getElementById('nsModelSelect')?.value || undefined;
-    await submitNewSession({ cwd, model, target });
+    const thinking = document.getElementById('nsThinkingSelect')?.value || undefined;
+    await submitNewSession({ cwd, model, thinking, target });
     // Success: submitNewSession swapped in the provisional composer pane
     // (which closes this takeover); monitorSessionSpawn owns the rest.
   } catch (e) {

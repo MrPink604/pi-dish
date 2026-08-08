@@ -857,6 +857,9 @@ function writeRegistry(patch = {}) {
     check(true, 'takeover opens from the sidebar footer button');
     check(await desktop.locator('#nsModelSelect option').filter({ hasText: '(default)' }).count() > 0,
       'model select offers (default)');
+    check(await desktop.locator('#nsThinkingSelect option').filter({ hasText: 'High' }).count() > 0,
+      'reasoning level selector sits alongside the model selector');
+    await desktop.selectOption('#nsThinkingSelect', 'high');
 
     // Fuzzy cwd search from the text input (single source of truth).
     await desktop.fill('#newSessionCwd', '');
@@ -907,6 +910,7 @@ function writeRegistry(patch = {}) {
     check(asyncSpawnBody?.async === true, 'takeover spawn opts into asynchronous spawning');
     check(asyncSpawnBody?.cwd === CWD, `POST body carries the chosen cwd (got ${JSON.stringify(asyncSpawnBody?.cwd)})`);
     check(asyncSpawnBody?.model === undefined, 'default model omitted from POST body');
+    check(asyncSpawnBody?.thinking === 'high', 'POST body carries the chosen reasoning level');
     check(!(await desktop.evaluate(() => document.querySelector('.main').classList.contains('new-session-open'))),
       'takeover closes in favor of the provisional pane');
     check(await desktop.locator('.session-item.starting').textContent().then(t => t.includes('Starting session')),

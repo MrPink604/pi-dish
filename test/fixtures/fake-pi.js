@@ -91,6 +91,7 @@ if (process.env.PI_FIXTURE_NOREGISTER) {
         socketPath,
         name: 'tmux spawn',
         model: 'anthropic/claude-opus-4',
+        launchArgs: args,
         spawnToken: token,
       }));
     });

@@ -116,11 +116,14 @@ test('GET /api/models lists what the host pi reports, not the vendored CLI', asy
 });
 
 test('POST /api/sessions/new spawns a headless RPC pi and lists it active', async () => {
-  const { status, body } = await post('/api/sessions/new', {});
+  const { status, body } = await post('/api/sessions/new', { thinking: 'high' });
   assert.equal(status, 200, JSON.stringify(body));
   assert.ok(body.id, 'a session id is returned');
   assert.equal(Object.hasOwn(body, 'operationId'), false, 'ordinary blocking response stays backward-compatible');
   sessionId = body.id;
+  const start = readStarts().find(entry => entry.sessionFile.endsWith(`${sessionId}.jsonl`));
+  assert.deepEqual(start?.args.slice(start.args.indexOf('--thinking'), start.args.indexOf('--thinking') + 2),
+    ['--thinking', 'high'], 'reasoning level is forwarded to the pi CLI');
 
   const sess = await findActive(sessionId);
   assert.ok(sess, 'spawned session is in the active list');
@@ -132,6 +135,12 @@ test('POST /api/sessions/new spawns a headless RPC pi and lists it active', asyn
   // The fixture created a real session JSONL — the message reader sees it.
   const messages = await get(`/api/sessions/${sessionId}/messages`);
   assert.equal(messages.status, 200);
+});
+
+test('POST /api/sessions/new rejects an invalid reasoning level', async () => {
+  const { status, body } = await post('/api/sessions/new', { thinking: 'extreme' });
+  assert.equal(status, 400);
+  assert.match(body.error, /reasoning level/i);
 });
 
 test('source-aware spawn records advisory peer provenance', async () => {

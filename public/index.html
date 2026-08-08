@@ -394,10 +394,26 @@
             <div class="ns-tree" id="nsTree"></div>
           </div>
 
-          <div class="ns-section">
-            <label class="ns-label" for="nsModelSelect">Model</label>
-            <select id="nsModelSelect" class="ns-select" onchange="onNsModelChange(this.value)"></select>
-            <div class="ns-hidden-note" id="nsModelHidden"></div>
+          <div class="ns-section ns-choice-row">
+            <div class="ns-choice">
+              <label class="ns-label" for="nsModelSelect">Model</label>
+              <select id="nsModelSelect" class="ns-select" onchange="onNsModelChange(this.value)"></select>
+              <div class="ns-hidden-note" id="nsModelHidden"></div>
+            </div>
+            <div class="ns-choice">
+              <label class="ns-label" for="nsThinkingSelect">Reasoning level</label>
+              <select id="nsThinkingSelect" class="ns-select" onchange="onNsThinkingChange(this.value)">
+                <option value="">(default)</option>
+                <option value="off">Off</option>
+                <option value="minimal">Minimal</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="xhigh">Extra high</option>
+                <option value="max">Maximum</option>
+              </select>
+              <div class="ns-hidden-note" id="nsThinkingNote"></div>
+            </div>
           </div>
 
           <div class="ns-section new-session-target" id="newSessionTargetWrap" style="display:none">
