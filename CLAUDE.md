@@ -90,7 +90,8 @@ the others. Each has a header row (title, ⟳ where refresh makes sense, ✕),
 closes on Escape and on session switch, and hides the panes beneath via CSS
 `!important` (several carry JS-managed inline display). New surfaces of this
 kind should follow that pattern — a takeover pane, not a modal. Modals stay for small, focused interactions (session
-stats, settings, confirmations, the response-details popup); if a modal
+stats, settings, confirmations, the response-details popup, the
+related-sessions overflow); if a modal
 needs internal tabs or scrolls through several unrelated sections, it has
 outgrown modalhood.
 
@@ -148,7 +149,11 @@ provenance from `~/.pi/dish/session-provenance.json`. The sidecar is UI/audit
 enrichment only: it never grants ownership, cascade semantics, or lifecycle
 authority, and losing it must not affect session operation. The related chips
 under the session header force a full unfiltered list refresh before navigating
-to a target absent from the current Active/search result.
+to a target absent from the current Active/search result. Subagent fan-outs can
+relate a session to dozens of children, so the header caps the chips
+(`MAX_VISIBLE_RELATION_CHIPS`, singular lineage kinds first via `sortRelations`
+in helpers.js) and the "+N more" overflow chip opens a modal listing every
+grouped relation (groupRelations) with live dots and last-activity times.
 
 ## Session index (lib/session-index.js)
 

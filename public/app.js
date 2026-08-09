@@ -1534,6 +1534,8 @@ function filterModels(query) {
 
 function clearSessionRelations() {
   sessionRelationsSeq += 1;
+  sessionRelations = [];
+  closeRelationsModal();
   const el = document.getElementById('sessionRelations');
   if (!el) return;
   el.replaceChildren();
@@ -1547,32 +1549,125 @@ const RELATION_LABELS = {
   startedHere: 'Started here',
 };
 
+// Plural forms for the overflow modal's group headings.
+const RELATION_GROUP_LABELS = {
+  parent: 'Parent',
+  child: 'Children',
+  startedFrom: 'Started from',
+  startedHere: 'Started here',
+};
+
+// Subagent fan-outs can relate a session to dozens of children — the header
+// shows only this many chips (singular lineage links first, see
+// sortRelations), the rest go behind a "+N more" chip that opens the
+// relations modal.
+const MAX_VISIBLE_RELATION_CHIPS = 6;
+let sessionRelations = [];
+
+function createRelationChip(relation) {
+  const target = relation?.session;
+  if (!target?.id) return null;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'session-relation-chip';
+  button.title = `${RELATION_LABELS[relation.kind] || 'Related session'} · ${relation.source || 'session metadata'}`;
+  const kind = document.createElement('span');
+  kind.className = 'session-relation-kind';
+  kind.textContent = RELATION_LABELS[relation.kind] || 'Related';
+  const name = document.createElement('span');
+  name.className = 'session-relation-name';
+  name.textContent = target.name || target.id.slice(0, 8);
+  button.append(kind, name);
+  button.addEventListener('click', () => {
+    const sourceId = currentSession?.id;
+    const generation = sessionSelectionGeneration;
+    openRelatedSession(target.id, sourceId, generation);
+  });
+  return button;
+}
+
 function renderSessionRelations(relations) {
   const el = document.getElementById('sessionRelations');
   if (!el) return;
+  sessionRelations = sortRelations(relations);
   el.replaceChildren();
-  for (const relation of relations || []) {
-    const target = relation?.session;
-    if (!target?.id) continue;
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'session-relation-chip';
-    button.title = `${RELATION_LABELS[relation.kind] || 'Related session'} · ${relation.source || 'session metadata'}`;
-    const kind = document.createElement('span');
-    kind.className = 'session-relation-kind';
-    kind.textContent = RELATION_LABELS[relation.kind] || 'Related';
-    const name = document.createElement('span');
-    name.className = 'session-relation-name';
-    name.textContent = target.name || target.id.slice(0, 8);
-    button.append(kind, name);
-    button.addEventListener('click', () => {
-      const sourceId = currentSession?.id;
-      const generation = sessionSelectionGeneration;
-      openRelatedSession(target.id, sourceId, generation);
-    });
-    el.appendChild(button);
+  const visible = sessionRelations.slice(0, MAX_VISIBLE_RELATION_CHIPS);
+  for (const relation of visible) {
+    const chip = createRelationChip(relation);
+    if (chip) el.appendChild(chip);
+  }
+  const hiddenCount = sessionRelations.length - visible.length;
+  if (hiddenCount > 0) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'session-relation-chip session-relation-more';
+    more.title = `Show all ${sessionRelations.length} related sessions`;
+    const count = document.createElement('span');
+    count.className = 'session-relation-kind';
+    count.textContent = `+${hiddenCount}`;
+    const label = document.createElement('span');
+    label.className = 'session-relation-name';
+    label.textContent = 'more';
+    more.append(count, label);
+    more.addEventListener('click', openRelationsModal);
+    el.appendChild(more);
   }
   el.style.display = el.childElementCount ? '' : 'none';
+  // The indexing re-poll can grow the list while the modal is open.
+  const modal = document.getElementById('relationsModal');
+  if (modal && modal.style.display !== 'none') renderRelationsModal();
+}
+
+function openRelationsModal() {
+  if (!currentSession || !sessionRelations.length) return;
+  document.getElementById('relationsModal').style.display = 'flex';
+  renderRelationsModal();
+}
+
+function closeRelationsModal() {
+  const modal = document.getElementById('relationsModal');
+  if (modal) modal.style.display = 'none';
+}
+
+function renderRelationsModal() {
+  const body = document.getElementById('relationsBody');
+  if (!body) return;
+  body.replaceChildren();
+  const sourceId = currentSession?.id;
+  const generation = sessionSelectionGeneration;
+  for (const group of groupRelations(sessionRelations)) {
+    const title = document.createElement('div');
+    title.className = 'stats-share-title relation-group-title';
+    const label = RELATION_GROUP_LABELS[group.kind] || RELATION_LABELS[group.kind] || 'Related';
+    title.textContent = group.relations.length > 1 ? `${label} (${group.relations.length})` : label;
+    body.appendChild(title);
+    for (const relation of group.relations) {
+      const target = relation?.session;
+      if (!target?.id) continue;
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'relation-row';
+      row.title = target.cwd || target.id;
+      if (target.isActive) {
+        const dot = document.createElement('span');
+        dot.className = 'live-dot';
+        row.appendChild(dot);
+      }
+      const name = document.createElement('span');
+      name.className = 'relation-row-name';
+      name.textContent = target.name || target.id.slice(0, 8);
+      row.appendChild(name);
+      const meta = document.createElement('span');
+      meta.className = 'relation-row-meta';
+      meta.textContent = formatRelativeTime(target.lastActivity);
+      row.appendChild(meta);
+      row.addEventListener('click', () => {
+        closeRelationsModal();
+        openRelatedSession(target.id, sourceId, generation);
+      });
+      body.appendChild(row);
+    }
+  }
 }
 
 async function loadSessionRelations(sessionId, generation) {
@@ -7308,6 +7403,8 @@ document.addEventListener('keydown', function(e) {
     e.preventDefault(); closeResponseDetails();
   } else if (document.getElementById('settingsModal').style.display !== 'none') {
     e.preventDefault(); closeSettingsModal();
+  } else if (document.getElementById('relationsModal').style.display !== 'none') {
+    e.preventDefault(); closeRelationsModal();
   } else if (document.getElementById('treeModal').style.display !== 'none') {
     e.preventDefault(); closeTreeModal();
   } else if (document.getElementById('statsModal').style.display !== 'none') {

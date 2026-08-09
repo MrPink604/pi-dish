@@ -2193,6 +2193,54 @@ function writeRegistry(patch = {}) {
     await desktop.evaluate((id) => selectSession(id), registryState.sessionId);
     await desktop.waitForFunction((id) => currentSession?.id === id, registryState.sessionId);
 
+    // Relation chip overflow: a subagent fan-out caps the header chips and
+    // the "+N more" chip opens a modal listing every relation, grouped.
+    await desktop.route('**/api/sessions/*/related', async (route) => {
+      const relations = [{
+        kind: 'parent', source: 'pi-session-header',
+        session: { id: registryState.sessionId, name: 'overflow-parent', isActive: true, lastActivity: Date.now() },
+      }];
+      for (let i = 0; i < 9; i++) {
+        relations.push({
+          kind: 'child', source: 'pi-session-header',
+          session: { id: `overflow-child-${i}`, name: `overflow-child-${i}`, isActive: false, lastActivity: Date.now() - 60000 },
+        });
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ relations }) });
+    });
+    await desktop.evaluate((id) => selectSession(id), BETA_ID);
+    await desktop.waitForSelector('.session-relation-more', { timeout: 5000 });
+    check(await desktop.locator('#sessionRelations .session-relation-chip').count() === 7,
+      'header caps relation chips and appends the overflow chip');
+    check((await desktop.locator('#sessionRelations .session-relation-chip').first().textContent()).includes('Parent'),
+      'singular lineage chips stay visible ahead of the child fan-out');
+    check((await desktop.locator('.session-relation-more').textContent()).includes('+4'),
+      'overflow chip counts the hidden relations');
+    await desktop.click('.session-relation-more');
+    await desktop.waitForSelector('#relationsModal .relation-row', { timeout: 5000 });
+    check(await desktop.locator('#relationsModal .relation-row').count() === 10,
+      'overflow modal lists every relation');
+    check((await desktop.locator('#relationsModal').textContent()).includes('Children (9)'),
+      'overflow modal groups the children with a count');
+    check(await desktop.locator('#relationsModal .relation-row .live-dot').count() === 1,
+      'overflow modal marks the live relation');
+    await desktop.keyboard.press('Escape');
+    await desktop.waitForFunction(
+      () => document.getElementById('relationsModal').style.display === 'none',
+      null, { timeout: 3000 });
+    check(true, 'Escape closes the relations modal');
+    await desktop.click('.session-relation-more');
+    await desktop.waitForSelector('#relationsModal .relation-row', { timeout: 5000 });
+    await desktop.locator('#relationsModal .relation-row').first().click();
+    await desktop.waitForFunction((id) => currentSession?.id === id, registryState.sessionId, { timeout: 5000 });
+    check(true, 'overflow modal row navigates to the relation');
+    check(await desktop.locator('#relationsModal').evaluate((el) => el.style.display === 'none'),
+      'navigation closes the relations modal');
+    await desktop.unroute('**/api/sessions/*/related');
+    await desktop.evaluate((id) => selectSession(id), registryState.sessionId);
+    await desktop.waitForFunction((id) => currentSession?.id === id &&
+      !document.querySelector('.session-relation-more'), registryState.sessionId, { timeout: 5000 });
+
     await desktop.click('#tabActive');
     await desktop.waitForTimeout(200);
 

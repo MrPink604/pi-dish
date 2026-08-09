@@ -505,6 +505,42 @@ function partitionPinned(list, pinnedIds) {
 // form), so the grammar never eats a query that wasn't meant for it.
 // =========================================================================
 
+// Related-session chips: the header shows only a handful before overflowing,
+// so kinds are ranked by usefulness — the singular lineage links (parent,
+// startedFrom) first, then the potentially long child lists. Ordering is
+// stable within a kind (children keep the server's order).
+const RELATION_KIND_ORDER = { parent: 0, startedFrom: 1, child: 2, startedHere: 3 };
+
+function relationKindRank(kind) {
+  const rank = RELATION_KIND_ORDER[kind];
+  return rank === undefined ? 99 : rank;
+}
+
+function sortRelations(relations) {
+  return (relations || [])
+    .map((relation, index) => ({ relation, index }))
+    .sort((a, b) => (relationKindRank(a.relation && a.relation.kind) - relationKindRank(b.relation && b.relation.kind)) || (a.index - b.index))
+    .map(({ relation }) => relation);
+}
+
+/** Group relations by kind for the overflow modal, groups in rank order. */
+function groupRelations(relations) {
+  const groups = [];
+  const byKind = new Map();
+  for (const relation of relations || []) {
+    const kind = (relation && relation.kind) || 'related';
+    let group = byKind.get(kind);
+    if (!group) {
+      group = { kind, relations: [] };
+      byKind.set(kind, group);
+      groups.push(group);
+    }
+    group.relations.push(relation);
+  }
+  groups.sort((a, b) => relationKindRank(a.kind) - relationKindRank(b.kind));
+  return groups;
+}
+
 const QUERY_FIELDS = new Set(['name', 'cwd', 'model', 'id', 'is']);
 
 /** "7d"/"12h"/"2w" → ms span; ISO "YYYY-MM-DD" → ms epoch (local midnight); null otherwise. */
@@ -1099,6 +1135,7 @@ if (typeof module !== 'undefined' && module.exports) {
     groupByWorkspace, buildWorkspaceTree, collectTreeSessions, groupSessionsByDate,
     buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies,
     partitionPinned, applyLocalFilter, fuzzyMatch, fuzzyScore,
+    RELATION_KIND_ORDER, sortRelations, groupRelations,
     parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     modelMatchesPattern, isModelEnabled, pushPromptHistory, sanitizeMarkdownUrl,

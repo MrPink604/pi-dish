@@ -346,6 +346,32 @@ test('partitionPinnedFamilies pins and orders the whole family from any member i
     'confirmed cross-workspace lineage never aliases the parent pin');
 });
 
+test('sortRelations ranks singular lineage links ahead of child lists, stable within a kind', () => {
+  const rel = (kind, id) => ({ kind, session: { id } });
+  const input = [
+    rel('child', 'c1'), rel('child', 'c2'), rel('startedHere', 'sh1'),
+    rel('parent', 'p'), rel('startedFrom', 'sf'), rel('child', 'c3'), rel('mystery', 'm'),
+  ];
+  const sorted = H.sortRelations(input);
+  assert.deepEqual(sorted.map(r => r.session.id), ['p', 'sf', 'c1', 'c2', 'c3', 'sh1', 'm']);
+  assert.deepEqual(input.map(r => r.session.id), ['c1', 'c2', 'sh1', 'p', 'sf', 'c3', 'm'],
+    'input array is not mutated');
+  assert.deepEqual(H.sortRelations(undefined), []);
+  assert.deepEqual(H.sortRelations(null), []);
+});
+
+test('groupRelations groups by kind in rank order and skips nothing', () => {
+  const rel = (kind, id) => ({ kind, session: { id } });
+  const groups = H.groupRelations([
+    rel('child', 'c1'), rel('parent', 'p'), rel('child', 'c2'), rel('startedHere', 'sh'),
+  ]);
+  assert.deepEqual(groups.map(g => g.kind), ['parent', 'child', 'startedHere']);
+  assert.deepEqual(groups[1].relations.map(r => r.session.id), ['c1', 'c2']);
+  assert.deepEqual(H.groupRelations(undefined), []);
+  assert.equal(H.groupRelations([{ session: { id: 'x' } }])[0].kind, 'related',
+    'kind-less relations fall into a generic group');
+});
+
 test('partitionPinned splits in pinned order and skips unknown ids', () => {
   const list = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
   const [pinned, rest] = H.partitionPinned(list, ['c', 'gone', 'a']);

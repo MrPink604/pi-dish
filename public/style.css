@@ -959,6 +959,56 @@ body.sidebar-open {
   white-space: nowrap;
 }
 
+/* "+N more" overflow chip: dashed outline marks it as an expansion affordance
+   rather than a navigable session. */
+.session-relation-more {
+  flex-shrink: 0;
+  border-style: dashed;
+}
+
+/* Related-sessions overflow modal */
+.relations-body { overflow-y: auto; }
+
+.relation-group-title:not(:first-child) { margin-top: 12px; }
+
+.relation-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 4px;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.relation-row:hover,
+.relation-row:focus-visible {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.relation-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-bright);
+}
+
+.relation-row-meta {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 /* Editable session name */
 .editable-name {
   cursor: pointer;
