@@ -150,10 +150,13 @@ enrichment only: it never grants ownership, cascade semantics, or lifecycle
 authority, and losing it must not affect session operation. The related chips
 under the session header force a full unfiltered list refresh before navigating
 to a target absent from the current Active/search result. Subagent fan-outs can
-relate a session to dozens of children, so the header caps the chips
-(`MAX_VISIBLE_RELATION_CHIPS`, singular lineage kinds first via `sortRelations`
-in helpers.js) and the "+N more" overflow chip opens a modal listing every
-grouped relation (groupRelations) with live dots and last-activity times.
+relate a session to dozens of children, so the header shows only live child
+bubbles and fits them, plus singular lineage links, into one physical row.
+Closed children and live children that do not fit go into the "+N more"
+overflow chip; `isChildRelation` filters the child fan-out and
+`sortRelations` keeps the ordering stable, while active children get header
+priority. The modal still lists every grouped relation with live dots and
+last-activity times.
 
 ## Session index (lib/session-index.js)
 

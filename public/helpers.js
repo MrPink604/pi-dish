@@ -505,11 +505,12 @@ function partitionPinned(list, pinnedIds) {
 // form), so the grammar never eats a query that wasn't meant for it.
 // =========================================================================
 
-// Related-session chips: the header shows only a handful before overflowing,
-// so kinds are ranked by usefulness — the singular lineage links (parent,
-// startedFrom) first, then the potentially long child lists. Ordering is
-// stable within a kind (children keep the server's order).
+// Related-session chips use a stable kind order for the modal and for the
+// header's candidate list. Singular lineage links (parent, startedFrom) sort
+// before the potentially long child lists; children keep the server's order
+// within a kind.
 const RELATION_KIND_ORDER = { parent: 0, startedFrom: 1, child: 2, startedHere: 3 };
+const RELATION_CHILD_KINDS = new Set(['child', 'startedHere']);
 
 function relationKindRank(kind) {
   const rank = RELATION_KIND_ORDER[kind];
@@ -521,6 +522,10 @@ function sortRelations(relations) {
     .map((relation, index) => ({ relation, index }))
     .sort((a, b) => (relationKindRank(a.relation && a.relation.kind) - relationKindRank(b.relation && b.relation.kind)) || (a.index - b.index))
     .map(({ relation }) => relation);
+}
+
+function isChildRelation(relation) {
+  return RELATION_CHILD_KINDS.has(relation && relation.kind);
 }
 
 /** Group relations by kind for the overflow modal, groups in rank order. */
@@ -1135,7 +1140,7 @@ if (typeof module !== 'undefined' && module.exports) {
     groupByWorkspace, buildWorkspaceTree, collectTreeSessions, groupSessionsByDate,
     buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies,
     partitionPinned, applyLocalFilter, fuzzyMatch, fuzzyScore,
-    RELATION_KIND_ORDER, sortRelations, groupRelations,
+    RELATION_KIND_ORDER, sortRelations, isChildRelation, groupRelations,
     parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     modelMatchesPattern, isModelEnabled, pushPromptHistory, sanitizeMarkdownUrl,

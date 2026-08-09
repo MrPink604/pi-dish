@@ -360,6 +360,14 @@ test('sortRelations ranks singular lineage links ahead of child lists, stable wi
   assert.deepEqual(H.sortRelations(null), []);
 });
 
+test('isChildRelation treats native and pi-dish child lineage as child fan-outs', () => {
+  assert.equal(H.isChildRelation({ kind: 'child' }), true);
+  assert.equal(H.isChildRelation({ kind: 'startedHere' }), true);
+  assert.equal(H.isChildRelation({ kind: 'parent' }), false);
+  assert.equal(H.isChildRelation({ kind: 'startedFrom' }), false);
+  assert.equal(H.isChildRelation(null), false);
+});
+
 test('groupRelations groups by kind in rank order and skips nothing', () => {
   const rel = (kind, id) => ({ kind, session: { id } });
   const groups = H.groupRelations([

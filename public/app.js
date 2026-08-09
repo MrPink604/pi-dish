@@ -1557,12 +1557,13 @@ const RELATION_GROUP_LABELS = {
   startedHere: 'Started here',
 };
 
-// Subagent fan-outs can relate a session to dozens of children — the header
-// shows only this many chips (singular lineage links first, see
-// sortRelations), the rest go behind a "+N more" chip that opens the
-// relations modal.
-const MAX_VISIBLE_RELATION_CHIPS = 6;
+// Subagent fan-outs can relate a session to dozens of children. The header
+// fills one physical row with live child chips; closed children and any live
+// chips that do not fit go behind a "+N more" chip that opens the relations
+// modal. The fallback is only used if the header has no measurable width yet.
+const RELATION_FALLBACK_VISIBLE_CHIPS = 6;
 let sessionRelations = [];
+let relationResizeTimer = null;
 
 function createRelationChip(relation) {
   const target = relation?.session;
@@ -1586,37 +1587,92 @@ function createRelationChip(relation) {
   return button;
 }
 
+function createMoreRelationChip(hiddenCount) {
+  const more = document.createElement('button');
+  more.type = 'button';
+  more.className = 'session-relation-chip session-relation-more';
+  more.title = `Show ${hiddenCount} hidden related session${hiddenCount === 1 ? '' : 's'}`;
+  const count = document.createElement('span');
+  count.className = 'session-relation-kind';
+  count.textContent = `+${hiddenCount}`;
+  const label = document.createElement('span');
+  label.className = 'session-relation-name';
+  label.textContent = 'more';
+  more.append(count, label);
+  more.addEventListener('click', openRelationsModal);
+  return more;
+}
+
+// Pick the largest prefix that fits in one row, reserving room for the
+// overflow chip when any relation is hidden. The buttons are measured after
+// insertion so long/short child names naturally determine how many fit.
+function fitRelationChipCount(el, chips, totalCount) {
+  const available = el.clientWidth;
+  if (!available) return Math.min(chips.length, RELATION_FALLBACK_VISIBLE_CHIPS);
+
+  const style = getComputedStyle(el);
+  const gap = parseFloat(style.columnGap || style.gap || '0') || 0;
+  const moreProbe = createMoreRelationChip(totalCount);
+  el.replaceChildren(...chips, moreProbe);
+  const widths = chips.map(chip => chip.offsetWidth);
+  const prefixWidths = [0];
+  for (const width of widths) prefixWidths.push(prefixWidths[prefixWidths.length - 1] + width);
+
+  let chosen = 0;
+  for (let count = chips.length; count >= 0; count -= 1) {
+    const hiddenCount = totalCount - count;
+    let needed = prefixWidths[count] + Math.max(0, count - 1) * gap;
+    if (hiddenCount > 0) {
+      moreProbe.querySelector('.session-relation-kind').textContent = `+${hiddenCount}`;
+      needed += (count ? gap : 0) + moreProbe.offsetWidth;
+    }
+    if (needed <= available) {
+      chosen = count;
+      break;
+    }
+  }
+  return chosen;
+}
+
 function renderSessionRelations(relations) {
   const el = document.getElementById('sessionRelations');
   if (!el) return;
-  sessionRelations = sortRelations(relations);
+  // Keep all valid relations for the modal, but only live child relations are
+  // eligible for the header. Parent/started-from links remain useful even
+  // when those sessions are no longer active.
+  sessionRelations = sortRelations(relations).filter(relation => relation?.session?.id);
   el.replaceChildren();
-  const visible = sessionRelations.slice(0, MAX_VISIBLE_RELATION_CHIPS);
-  for (const relation of visible) {
-    const chip = createRelationChip(relation);
-    if (chip) el.appendChild(chip);
+  if (!sessionRelations.length) {
+    el.style.display = 'none';
+    return;
   }
-  const hiddenCount = sessionRelations.length - visible.length;
-  if (hiddenCount > 0) {
-    const more = document.createElement('button');
-    more.type = 'button';
-    more.className = 'session-relation-chip session-relation-more';
-    more.title = `Show all ${sessionRelations.length} related sessions`;
-    const count = document.createElement('span');
-    count.className = 'session-relation-kind';
-    count.textContent = `+${hiddenCount}`;
-    const label = document.createElement('span');
-    label.className = 'session-relation-name';
-    label.textContent = 'more';
-    more.append(count, label);
-    more.addEventListener('click', openRelationsModal);
-    el.appendChild(more);
-  }
-  el.style.display = el.childElementCount ? '' : 'none';
+  el.style.display = '';
+
+  const headerRelations = [
+    // Keep live child bubbles visible when the row is tight; parent/source
+    // links can still be reached from the overflow modal.
+    ...sessionRelations.filter(relation => isChildRelation(relation) && relation.session.isActive),
+    ...sessionRelations.filter(relation => !isChildRelation(relation)),
+  ];
+  const chips = headerRelations.map(createRelationChip).filter(Boolean);
+  const visibleCount = fitRelationChipCount(el, chips, sessionRelations.length);
+  const hiddenCount = sessionRelations.length - visibleCount;
+  el.replaceChildren(...chips.slice(0, visibleCount));
+  if (hiddenCount > 0) el.appendChild(createMoreRelationChip(hiddenCount));
+
   // The indexing re-poll can grow the list while the modal is open.
   const modal = document.getElementById('relationsModal');
   if (modal && modal.style.display !== 'none') renderRelationsModal();
 }
+
+window.addEventListener('resize', () => {
+  if (!sessionRelations.length) return;
+  clearTimeout(relationResizeTimer);
+  relationResizeTimer = setTimeout(() => {
+    const el = document.getElementById('sessionRelations');
+    if (currentSession && el?.style.display !== 'none') renderSessionRelations(sessionRelations);
+  }, 100);
+});
 
 function openRelationsModal() {
   if (!currentSession || !sessionRelations.length) return;

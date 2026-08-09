@@ -919,14 +919,16 @@ body.sidebar-open {
 
 .session-relations {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px;
   margin-top: 6px;
   max-width: min(680px, 65vw);
+  overflow: hidden;
 }
 
 .session-relation-chip {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   min-width: 0;
   max-width: 240px;
@@ -2384,8 +2386,7 @@ body.sidebar-open {
     margin-top: 0;
     padding-bottom: 2px;
     flex-wrap: nowrap;
-    overflow-x: auto;
-    overflow-y: hidden;
+    overflow: hidden;
     overscroll-behavior-inline: contain;
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
