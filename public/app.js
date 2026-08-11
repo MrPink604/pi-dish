@@ -6014,14 +6014,15 @@ async function monitorSessionSpawn(spawnId) {
 
 // Shared async-spawn kickoff (the workspace-header + button and the
 // new-session takeover): POST /new with async:true — `model` is a canonical
-// provider/id ref or undefined — then register the provisional row, open the
-// pending composer pane, and hand the wait for bridge readiness to
-// monitorSessionSpawn. Throws when the server rejects the request so callers
-// surface the message their own way (status line vs the takeover's inline
-// error).
-async function submitNewSession({ cwd, model, thinking, target, harness }) {
+// provider/id ref and `name` is an optional initial display name — then
+// register the provisional row, open the pending composer pane, and hand the
+// wait for bridge readiness to monitorSessionSpawn. Throws when the server
+// rejects the request so callers surface the message their own way (status
+// line vs the takeover's inline error).
+async function submitNewSession({ name, cwd, model, thinking, target, harness }) {
   const harnessId = harness || 'pi';
   const data = await apiSend('/api/sessions/new', {
+    name: name || undefined,
     cwd: cwd || undefined,
     model: model || undefined,
     thinking: thinking || undefined,
@@ -6138,6 +6139,9 @@ function openNewSessionView(opts = {}) {
   closeSkillsView();
   document.querySelector('.main').classList.add('new-session-open');
   nsPendingDraft = opts.draft || null;
+
+  const nameInput = document.getElementById('newSessionName');
+  if (nameInput) nameInput.value = '';
 
   // cwd input is the source of truth; prefill from a passed cwd, else last-used.
   const cwdInput = document.getElementById('newSessionCwd');
@@ -6345,6 +6349,7 @@ async function spawnNewSession() {
   const btn = document.getElementById('nsSpawnBtn');
   let target;
   try { target = selectedSpawnTarget(); } catch (e) { nsError(e.message); return; }
+  const name = (document.getElementById('newSessionName')?.value || '').trim();
   const cwd = (document.getElementById('newSessionCwd')?.value || '').trim();
   nsError('');
   if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
@@ -6352,7 +6357,7 @@ async function spawnNewSession() {
     if (cwd) localStorage.setItem('pi-dish-cwd', cwd);
     const model = document.getElementById('nsModelSelect')?.value || undefined;
     const thinking = document.getElementById('nsThinkingSelect')?.value || undefined;
-    await submitNewSession({ cwd, model, thinking, target, harness: selectedHarnessId() });
+    await submitNewSession({ name, cwd, model, thinking, target, harness: selectedHarnessId() });
     // Success: submitNewSession swapped in the provisional composer pane
     // (which closes this takeover); monitorSessionSpawn owns the rest.
   } catch (e) {

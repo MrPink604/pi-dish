@@ -386,6 +386,10 @@
         </div>
         <div class="new-session-body">
           <div class="ns-section">
+            <label class="ns-label" for="newSessionName">Session name <span class="ns-label-optional">(optional)</span></label>
+            <input type="text" id="newSessionName" class="cwd-input" placeholder="New Session" autocomplete="off">
+          </div>
+          <div class="ns-section">
             <label class="ns-label" for="nsHarnessSelect">Agent</label>
             <select id="nsHarnessSelect" class="ns-select" onchange="onNsHarnessChange(this.value)">
               <option value="pi">Pi</option>

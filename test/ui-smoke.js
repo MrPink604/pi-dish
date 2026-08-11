@@ -859,6 +859,7 @@ function writeRegistry(patch = {}) {
       'model select offers (default)');
     check(await desktop.locator('#nsThinkingSelect option').filter({ hasText: 'High' }).count() > 0,
       'reasoning level selector sits alongside the model selector');
+    await desktop.fill('#newSessionName', 'UI named session');
     await desktop.selectOption('#nsThinkingSelect', 'high');
 
     // Fuzzy cwd search from the text input (single source of truth).
@@ -908,6 +909,7 @@ function writeRegistry(patch = {}) {
     await desktop.click('#nsSpawnBtn');
     await desktop.waitForSelector('.session-item.starting');
     check(asyncSpawnBody?.async === true, 'takeover spawn opts into asynchronous spawning');
+    check(asyncSpawnBody?.name === 'UI named session', 'POST body carries the chosen session name');
     check(asyncSpawnBody?.cwd === CWD, `POST body carries the chosen cwd (got ${JSON.stringify(asyncSpawnBody?.cwd)})`);
     check(asyncSpawnBody?.model === undefined, 'default model omitted from POST body');
     check(asyncSpawnBody?.thinking === 'high', 'POST body carries the chosen reasoning level');

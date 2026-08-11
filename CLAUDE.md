@@ -338,8 +338,11 @@ write JSONL, signal processes, or require any particular subagent scheme.
 The sidebar footer is a single "+ New session" button that opens
 `#newSessionView` (`.main.new-session-open`, the usage-view `<main>`-level
 takeover pattern; `openNewSessionView`/`closeNewSessionView`). The cwd text
-input is the single source of truth (prefill/save `localStorage['pi-dish-cwd']`),
-typing shows fuzzy `/api/dirs` matches; below it a workspace quick-pick (distinct
+input is the single source of truth (prefill/save `localStorage['pi-dish-cwd']`).
+An optional session name is applied through the live session's rename command
+before the async spawn becomes ready; it is deliberately cleared whenever the
+takeover opens rather than persisted. Typing in the cwd input shows fuzzy
+`/api/dirs` matches; below it a workspace quick-pick (distinct
 known-session cwds) and a lazy hand-rolled directory tree rooted at `~` — every
 dir row has a chevron that fetches `/api/dirs/children` once (cached in the DOM,
 `(empty)`/`(unreadable)` leaves), a name click selects the cwd. No tree

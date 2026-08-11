@@ -4029,6 +4029,7 @@ img.msg-image {
 
 .ns-section { display: flex; flex-direction: column; gap: 8px; }
 .ns-label { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.ns-label-optional { font-weight: 400; }
 .ns-choice-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
 .ns-choice { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 

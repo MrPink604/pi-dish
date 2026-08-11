@@ -3560,7 +3560,7 @@ async function _spawnHarnessHeadlessTmux({ descriptor, args, cwd }) {
 // `pi --mode rpc` child (dies with this server). An explicit `target:
 // { type: 'tmux', socket, tmuxSession }` or `{ ..., newTmuxSession }` opens a
 // pi TUI in one of the user's own tmux sessions instead.
-async function createSession({ harness = 'pi', model, thinking, cwd, target }) {
+async function createSession({ harness = 'pi', name, model, thinking, cwd, target }) {
   const descriptor = getHarness(harness);
   if (!descriptor) {
     const err = new Error(`Unknown harness: ${harness}`); err.status = 400; throw err;
@@ -3569,25 +3569,37 @@ async function createSession({ harness = 'pi', model, thinking, cwd, target }) {
     cwd = path.join(process.env.HOME, cwd.slice(1).replace(/^\//, ''));
   }
   const args = descriptor.argv.new({ model, thinking });
+  let id;
   if (target && target.type === 'tmux') {
-    return spawnHarnessInTmux({ descriptor, target, args, cwd });
-  }
-  if (headlessTmuxEnabled(descriptor)) {
+    id = await spawnHarnessInTmux({ descriptor, target, args, cwd });
+  } else if (headlessTmuxEnabled(descriptor)) {
     try {
-      return await spawnHarnessHeadlessTmux({ descriptor, args, cwd });
+      id = await spawnHarnessHeadlessTmux({ descriptor, args, cwd });
     } catch (e) {
       if (!descriptor.rpcFallback || e.preventHeadlessFallback) throw e;
       headlessTmuxBroken = true;
       console.error('Headless tmux spawn failed — falling back to an RPC child:', e.message);
     }
   }
-  if (!descriptor.rpcFallback) {
+  if (!id && !descriptor.rpcFallback) {
     const err = new Error(`${descriptor.label} requires tmux and does not support RPC fallback.`);
     err.status = 400;
     throw err;
   }
-  const rpc = await createRPCSession({ model, thinking, cwd });
-  return rpc.id;
+  if (!id) {
+    const rpc = await createRPCSession({ model, thinking, cwd });
+    id = rpc.id;
+  }
+  if (name) {
+    const sess = await getLiveSession(id);
+    if (!sess || !liveSessionSupports(sess, 'rename')) {
+      const err = new Error(`${descriptor.label} does not support naming new sessions.`);
+      err.status = 409;
+      throw err;
+    }
+    await sess.setName(name);
+  }
+  return id;
 }
 
 // The browser can decouple its provisional "Starting…" row from the actual
@@ -3630,7 +3642,11 @@ function startSessionSpawn(options) {
 
 app.post('/api/sessions/new', async (req, res) => {
   const { harness = 'pi', model, thinking, cwd, target } = req.body || {};
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : req.body?.name;
   if (!getHarness(harness)) return res.status(400).json({ error: `Unknown harness: ${harness}` });
+  if (name !== undefined && (typeof name !== 'string' || !name)) {
+    return res.status(400).json({ error: 'Name must be a non-empty string' });
+  }
   if (thinking !== undefined && !['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(thinking)) {
     return res.status(400).json({ error: 'Invalid reasoning level' });
   }
@@ -3644,11 +3660,11 @@ app.post('/api/sessions/new', async (req, res) => {
     return res.status(400).json({ error: 'requestedBySessionId must identify an existing session' });
   }
   if (req.body?.async === true) {
-    const spawnId = startSessionSpawn({ harness, model, thinking, cwd, target, sourceSessionId });
+    const spawnId = startSessionSpawn({ harness, name, model, thinking, cwd, target, sourceSessionId });
     return res.status(202).json({ success: true, pending: true, spawnId });
   }
   try {
-    const id = await createSession({ harness, model, thinking, cwd, target });
+    const id = await createSession({ harness, name, model, thinking, cwd, target });
     let operationId = null;
     if (sourceSessionId) {
       const candidateOperationId = crypto.randomUUID();

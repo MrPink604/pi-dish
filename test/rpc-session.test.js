@@ -116,7 +116,7 @@ test('GET /api/models lists what the host pi reports, not the vendored CLI', asy
 });
 
 test('POST /api/sessions/new spawns a headless RPC pi and lists it active', async () => {
-  const { status, body } = await post('/api/sessions/new', { thinking: 'high' });
+  const { status, body } = await post('/api/sessions/new', { name: 'Named from creation', thinking: 'high' });
   assert.equal(status, 200, JSON.stringify(body));
   assert.ok(body.id, 'a session id is returned');
   assert.equal(Object.hasOwn(body, 'operationId'), false, 'ordinary blocking response stays backward-compatible');
@@ -128,6 +128,9 @@ test('POST /api/sessions/new spawns a headless RPC pi and lists it active', asyn
   const sess = await findActive(sessionId);
   assert.ok(sess, 'spawned session is in the active list');
   assert.equal(sess.isActive, true);
+  assert.equal(sess.name, 'Named from creation', 'the requested name is applied before creation completes');
+  assert.ok(readLog().some(c => c.type === 'set_session_name' && c.name === 'Named from creation'),
+    'creation names the session through the live RPC backend');
   assert.equal(sess.model, 'test/fake-model', 'model comes from get_state');
   assert.equal(sess.turnInProgress, false);
   assert.ok(sess.pid, 'the child pid is reported');
@@ -143,6 +146,12 @@ test('POST /api/sessions/new rejects an invalid reasoning level', async () => {
   assert.match(body.error, /reasoning level/i);
 });
 
+test('POST /api/sessions/new rejects a blank session name', async () => {
+  const { status, body } = await post('/api/sessions/new', { name: '   ' });
+  assert.equal(status, 400);
+  assert.match(body.error, /name/i);
+});
+
 test('source-aware spawn records advisory peer provenance', async () => {
   const spawned = await post('/api/sessions/new', { requestedBySessionId: sessionId });
   assert.equal(spawned.status, 200, JSON.stringify(spawned.body));
@@ -155,7 +164,11 @@ test('source-aware spawn records advisory peer provenance', async () => {
   const peerRelated = await get(`/api/sessions/${peerId}/related`);
   assert.ok(peerRelated.body.relations.some(r => r.kind === 'startedFrom' && r.session.id === sessionId));
 
-  const pending = await post('/api/sessions/new', { async: true, requestedBySessionId: sessionId });
+  const pending = await post('/api/sessions/new', {
+    async: true,
+    name: 'Named async peer',
+    requestedBySessionId: sessionId,
+  });
   assert.equal(pending.status, 202, JSON.stringify(pending.body));
   let operation;
   for (let i = 0; i < 80; i++) {
@@ -165,6 +178,8 @@ test('source-aware spawn records advisory peer provenance', async () => {
     await new Promise(resolve => setTimeout(resolve, 50));
   }
   assert.equal(operation?.status, 'ready', JSON.stringify(operation));
+  assert.equal((await findActive(operation.sessionId))?.name, 'Named async peer',
+    'an async spawn is not ready until its requested name is applied');
   const asyncRelated = await get(`/api/sessions/${operation.sessionId}/related`);
   assert.ok(asyncRelated.body.relations.some(r => r.kind === 'startedFrom' && r.session.id === sessionId),
     'async spawn persists the same advisory provenance');
