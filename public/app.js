@@ -768,6 +768,16 @@ async function performRowClose(id) {
   }
 }
 
+function renderHarnessBadge(harnessId, harnessLabel) {
+  const id = harnessId || 'pi';
+  const info = harnessBadgeInfo(id, harnessLabel);
+  const title = harnessLabel || info.label;
+  const icon = info.icon
+    ? `<img class="harness-badge-icon" src="${escapeHtml(info.icon)}" alt="">`
+    : '<span class="harness-badge-icon harness-badge-icon-fallback" aria-hidden="true">◆</span>';
+  return `<span class="harness-badge harness-badge-${escapeHtml(id)}" title="${escapeHtml(title)} harness" aria-label="${escapeHtml(title)} harness">${icon}<span>${escapeHtml(info.label)}</span></span>`;
+}
+
 function renderSessionItem(session, opts = {}) {
   const ctxClass = contextClass(session.contextPercent);
   const activeClass = currentSession?.id === session.id ? 'active' : '';
@@ -806,8 +816,7 @@ function renderSessionItem(session, opts = {}) {
   const closeBtn = session.isActive && sessionSupports(session, 'close')
     ? `<button class="session-close-btn${closeArmed ? ' confirm' : ''}" title="${closeArmed ? 'Tap again to close this session' : (session.harnessId === 'prime' ? 'Detach client' : 'Close session (transcript stays resumable)')}">${closeBusy ? '…' : closeArmed ? (session.harnessId === 'prime' ? 'detach?' : 'close?') : '✕'}</button>`
     : '';
-  const harnessBadge = session.harnessId && session.harnessId !== 'pi'
-    ? `<span class="harness-badge">${escapeHtml(session.harnessLabel || session.harnessId)}</span>` : '';
+  const harnessBadge = renderHarnessBadge(session.harnessId, session.harnessLabel);
   // Rows in the pinned section get a drag handle (reorder); pinned and
   // Recent-view rows get a cwd hint — they've left their workspace group,
   // so the group label isn't there.
@@ -863,11 +872,12 @@ function renderSessionFamily(node, opts = {}, depth = 0, rootId = node.session.i
 function renderPendingSessionItem(spawnId, spawn) {
   const cwd = spawn.cwd || '~';
   const label = spawn.harnessLabel || 'Pi';
+  const harnessBadge = renderHarnessBadge(spawn.harness, label);
   return `
     <div class="session-item starting${currentSessionSpawnId === spawnId ? ' active' : ''}" data-spawn-id="${escapeHtml(spawnId)}">
       <div class="session-item-header">
         <span class="session-item-status working" title="Starting session"></span>
-        <span class="session-item-name">Starting ${escapeHtml(label)}…</span>
+        <span class="session-item-name">Starting ${escapeHtml(label)}…</span>${harnessBadge}
         <span class="session-item-time">now</span>
       </div>
       <div class="session-item-meta">

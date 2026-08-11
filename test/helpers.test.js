@@ -940,3 +940,10 @@ test('sessionSupports preserves legacy defaults and honors explicit denial', () 
   assert.equal(H.sessionSupports({ capabilities: { close: false } }, 'close'), false);
   assert.equal(H.sessionSupports({ capabilities: { export: true } }, 'export'), true);
 });
+
+test('harnessBadgeInfo gives every agent harness a compact unique icon', () => {
+  assert.deepEqual(H.harnessBadgeInfo('pi'), { label: 'Pi', icon: 'vendor/harness-pi.svg' });
+  assert.deepEqual(H.harnessBadgeInfo('omp'), { label: 'OMP', icon: 'vendor/harness-omp.svg' });
+  assert.deepEqual(H.harnessBadgeInfo('prime'), { label: 'Prime', icon: 'vendor/harness-prime.svg' });
+  assert.deepEqual(H.harnessBadgeInfo('custom', 'Custom Agent'), { label: 'Custom Agent', icon: null });
+});

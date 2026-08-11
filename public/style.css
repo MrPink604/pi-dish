@@ -4066,6 +4066,54 @@ img.msg-image {
   white-space: nowrap;
 }
 
+.session-item .harness-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+  padding: 1px 5px 1px 2px;
+  border-color: color-mix(in srgb, var(--text-muted) 35%, transparent);
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-card) 82%, transparent);
+  line-height: 1;
+}
+
+.session-item .harness-badge-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+.session-item .harness-badge-prime {
+  border-color: color-mix(in srgb, #8b5cf6 55%, transparent);
+  color: color-mix(in srgb, #a78bfa 45%, var(--text));
+  background: color-mix(in srgb, #5b21b6 18%, var(--bg-card));
+}
+
+.session-item .harness-badge-prime .harness-badge-icon {
+  padding: 2px;
+  background: #5b21b6;
+}
+
+.session-item .harness-badge-omp {
+  border-color: color-mix(in srgb, #9b4dff 55%, transparent);
+  color: color-mix(in srgb, #ed4abf 45%, var(--text));
+}
+
+.session-item .harness-badge-pi {
+  border-color: color-mix(in srgb, var(--cyan) 45%, transparent);
+  color: color-mix(in srgb, var(--cyan) 55%, var(--text));
+}
+
+.session-item .harness-badge-icon-fallback {
+  display: inline-grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
 /* The "Run in" section is an .ns-section (flex column) toggled by JS via
    inline display; keep it left-aligned and full-width when shown. */
 .new-session-view .new-session-target { align-items: stretch; }

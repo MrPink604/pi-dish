@@ -213,6 +213,19 @@ function sessionSupports(session, capability) {
   return session?.capabilities?.[capability] !== false;
 }
 
+/** Compact sidebar identity for each supported agent harness. */
+function harnessBadgeInfo(harnessId, harnessLabel) {
+  const known = {
+    pi: { label: 'Pi', icon: 'vendor/harness-pi.svg' },
+    omp: { label: 'OMP', icon: 'vendor/harness-omp.svg' },
+    prime: { label: 'Prime', icon: 'vendor/harness-prime.svg' },
+  };
+  return known[harnessId] || {
+    label: harnessLabel || harnessId || 'Agent',
+    icon: null,
+  };
+}
+
 /** The searchable metadata text of a session — one definition for local
  * filtering and the server-side session search. */
 function sessionMetaText(session) {
@@ -1136,7 +1149,7 @@ if (typeof module !== 'undefined' && module.exports) {
     escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRuntime, formatRelativeTime, formatTime, formatDuration, formatTokSpeed,
     formatEstimatedCost, formatResponseMetadata,
     shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText, extractImageBlocks, messageHasVisibleText,
-    contextClass, sessionSupports, sessionMetaText, parseModelId, formatModelRef,
+    contextClass, sessionSupports, harnessBadgeInfo, sessionMetaText, parseModelId, formatModelRef,
     groupByWorkspace, buildWorkspaceTree, collectTreeSessions, groupSessionsByDate,
     buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies,
     partitionPinned, applyLocalFilter, fuzzyMatch, fuzzyScore,
