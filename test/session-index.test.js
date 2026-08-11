@@ -176,6 +176,39 @@ test('schema-3 zero-filled usage migrates through the bounded reindex backlog', 
   assert.equal(persisted.infos.get(file).usage.total.costs.input, null);
 });
 
+test('schema-5 ZAI plan usage is reindexed instead of remaining falsely free', async () => {
+  const file = writeSession([
+    userMsg('zai cost source'),
+    { type: 'message', timestamp: '2026-07-01T10:00:02.000Z', message: {
+      role: 'assistant', provider: 'zai', model: 'glm-5.2', content: [],
+      usage: { input: 400, output: 38, totalTokens: 438,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    } },
+  ]);
+  const stats = fs.statSync(file);
+  index.resetForTests();
+  fs.mkdirSync(indexDir, { recursive: true });
+  fs.appendFileSync(path.join(indexDir, 'meta.ndjson'), JSON.stringify({
+    f: file, m: stats.mtimeMs, s: stats.size, ver: 5,
+    v: {
+      name: 'stale free ZAI usage', messageCount: 1, lastActivity: '2026-07-01T10:00:02.000Z',
+      usage: { total: { calls: 1, costs: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } },
+    },
+  }) + '\n');
+  fs.appendFileSync(path.join(indexDir, 'text.ndjson'), JSON.stringify({
+    f: file, m: stats.mtimeMs, s: stats.size, ver: 1, nl: 1, t: 'zai cost source',
+  }) + '\n');
+
+  const first = withBudget(0, () => index.scanSessions([file]));
+  assert.equal(first.infos.has(file), false, 'schema-5 false-zero telemetry is not served');
+  assert.equal(first.indexing, true);
+  await waitFor(() => withBudget(0, () => index.scanSessions([file])).indexing === false,
+    'ZAI pricing schema migration');
+  const fresh = withBudget(0, () => index.scanSessions([file])).infos.get(file);
+  assert.equal(fresh.usage.total.costs.total, null);
+  assert.equal(fresh.usage.total.costUnavailable.total, 1);
+});
+
 test('versionless search text migrates through the bounded indexing backlog', async () => {
   const file = writeSession([userMsg('fresh searchable text')]);
   const stats = fs.statSync(file);

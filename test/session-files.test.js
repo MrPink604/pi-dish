@@ -361,6 +361,40 @@ test('indexed usage keeps all-known and explicit-zero costs numeric', () => {
     { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
 });
 
+test('indexed usage treats ZAI plan zeros as unpriced and drops empty failed retries', () => {
+  const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+  const content = [
+    { type: 'message', message: { role: 'assistant', provider: 'zai', model: 'glm-5.2',
+      stopReason: 'stop', content: [], usage: { input: 400, output: 38, reasoning: 12,
+        totalTokens: 438, cost: zeroCost } } },
+    { type: 'message', message: { role: 'assistant', provider: 'zai', model: 'glm-5.2-highspeed',
+      stopReason: 'error', content: [], usage: { input: 0, output: 0, totalTokens: 0,
+        cost: zeroCost } } },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n';
+
+  const usage = SF.buildIndexedUsageFromContent(content);
+  assert.equal(usage.total.calls, 1, 'zero-token provider retries are not usage calls');
+  assert.equal(usage.total.tokens.output, 38);
+  assert.deepEqual(usage.total.costs,
+    { input: null, output: null, cacheRead: null, cacheWrite: null, total: null });
+  assert.deepEqual(usage.total.costUnavailable,
+    { input: 1, output: 1, cacheRead: 1, cacheWrite: 1, total: 1 });
+  assert.equal(usage.models['zai/glm-5.2'].calls, 1);
+  assert.equal(usage.models['zai/glm-5.2-highspeed'], undefined);
+});
+
+test('session stats do not present ZAI Coding Plan usage as free', () => {
+  const file = writeSession([
+    { type: 'message', message: { role: 'assistant', provider: 'zai', model: 'glm-4.7',
+      content: [], usage: { input: 387, output: 11, totalTokens: 398,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } } },
+  ]);
+  const stats = SF.getSessionStats(file);
+  assert.equal(stats.cost, null);
+  assert.deepEqual(stats.costUnavailable,
+    { input: 1, output: 1, cacheRead: 1, cacheWrite: 1, total: 1 });
+});
+
 test('readSessionCwd reads the header line without loading the file', () => {
   const file = writeSession([
     { type: 'session', cwd: '/home/user/proj' },

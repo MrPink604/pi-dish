@@ -725,6 +725,7 @@ function getPreviousSessions(registered = listRegisteredSessions()) {
   const previous = [];
   let indexing = false;
   let discoveryTruncated = false;
+  let discoverySkipped = 0;
 
   try {
     const discovery = discoverHarnessSessions();
@@ -732,6 +733,7 @@ function getPreviousSessions(registered = listRegisteredSessions()) {
       !activeIds.has(routeSessionId(candidate.harnessId, candidate.nativeSessionId))));
     refreshSessionFileCache(discovery.candidates);
     discoveryTruncated = discovery.truncated;
+    discoverySkipped = discovery.skipped;
 
     const scan = sessionIndex.scanSessions(candidates);
     indexing = scan.indexing;
@@ -772,7 +774,7 @@ function getPreviousSessions(registered = listRegisteredSessions()) {
   }
 
   previous.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
-  return { previous, indexing, discoveryTruncated };
+  return { previous, indexing, discoveryTruncated, discoverySkipped };
 }
 
 function enumerateSessionCandidates(excludeIds = new Set()) {
@@ -874,9 +876,9 @@ app.get('/api/sessions', (req, res) => {
   const query = (req.query.q || '').trim().toLowerCase();
   const registered = listRegisteredSessions();
   let active = getActiveSessions(registered);
-  let previous = [], indexing = false, discoveryTruncated = false;
+  let previous = [], indexing = false, discoveryTruncated = false, discoverySkipped = 0;
   if (req.query.active !== '1') {
-    ({ previous, indexing, discoveryTruncated } = getPreviousSessions(registered));
+    ({ previous, indexing, discoveryTruncated, discoverySkipped } = getPreviousSessions(registered));
   }
   annotateSessionParents([...active, ...previous]);
 
@@ -884,7 +886,7 @@ app.get('/api/sessions', (req, res) => {
     active = filterSessionsByQuery(active, query);
     previous = filterSessionsByQuery(previous, query);
   }
-  res.json({ active, previous, indexing, discoveryTruncated });
+  res.json({ active, previous, indexing, discoveryTruncated, discoverySkipped });
 });
 
 function canonicalSessionPath(file) {
@@ -921,6 +923,7 @@ function buildSessionCatalog() {
     list, byId, byPath,
     indexing: historical.indexing,
     discoveryTruncated: historical.discoveryTruncated,
+    discoverySkipped: historical.discoverySkipped,
   };
 }
 
@@ -984,6 +987,7 @@ app.get('/api/sessions/:id/related', (req, res) => {
       relations,
       indexing: catalog.indexing,
       discoveryTruncated: catalog.discoveryTruncated,
+      discoverySkipped: catalog.discoverySkipped,
     });
   } catch (e) {
     const status = /Invalid session ID|Unknown harness/.test(e.message) ? 400 : 500;
@@ -1008,7 +1012,7 @@ app.get('/api/search', (req, res) => {
   const scopeQuery = String(req.query.scope || '').trim().toLowerCase();
   const registered = listRegisteredSessions();
   const active = getActiveSessions(registered);
-  const { previous, indexing } = getPreviousSessions(registered);
+  const { previous, indexing, discoveryTruncated, discoverySkipped } = getPreviousSessions(registered);
   const parsed = parseSessionQuery(query);
   const scopeParsed = parseSessionQuery(scopeQuery);
   const hasScope = scopeParsed.terms.length || scopeParsed.since !== null || scopeParsed.before !== null;
@@ -1042,6 +1046,8 @@ app.get('/api/search', (req, res) => {
     total: results.length,
     hiddenByScopes,
     indexing,
+    discoveryTruncated,
+    discoverySkipped,
   });
 });
 
@@ -1089,7 +1095,8 @@ app.get('/api/usage-summary', (req, res) => {
   const modelRefs = modelsRaw.split(',').map(s => s.trim()).filter(Boolean);
   if (modelRefs.length > 100) return res.status(400).json({ error: 'models filter lists too many models' });
   const modelFilter = modelRefs.length ? new Set(modelRefs) : null;
-  const candidates = enumerateSessionCandidates();
+  const discovery = discoverHarnessSessions();
+  const candidates = discovery.candidates;
   const scan = sessionIndex.scanSessions(candidates);
   const cutoff = range === 'all' ? null : localDay(Number(range) - 1);
   const totals = emptyUsage(), byModel = new Map(), byWorkspace = new Map(), bySession = new Map();
@@ -1200,7 +1207,7 @@ app.get('/api/usage-summary', (req, res) => {
   });
   const headlineCosts = Object.fromEntries(Object.entries(headlineUsage).map(([key, bucket]) => [key, bucket.costs.total]));
   const headlineCostUnavailable = Object.fromEntries(Object.entries(headlineUsage).map(([key, bucket]) => [key, bucket.costUnavailable.total]));
-  res.json({ range, sort, models: modelFilter ? [...modelFilter] : null, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort(compare).slice(0, 20) }, headlineCosts, headlineCostUnavailable, daily, unpricedModelCalls, indexing: scan.indexing, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
+  res.json({ range, sort, models: modelFilter ? [...modelFilter] : null, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort(compare).slice(0, 20) }, headlineCosts, headlineCostUnavailable, daily, unpricedModelCalls, indexing: scan.indexing, discoveryTruncated: discovery.truncated, discoverySkipped: discovery.skipped, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
 });
 
 // =========================================================================

@@ -292,6 +292,23 @@ test('stale native parent paths do not attach by basename alone', async () => {
   }
 });
 
+test('alien JSONL basenames are skipped without breaking sessions or usage APIs', async () => {
+  const alien = path.join(sessionDir, '2026-01-01T00-00-00+00-00_deadbeef.jsonl');
+  fs.writeFileSync(alien, JSON.stringify({ type: 'session', cwd: '/alien' }) + '\n');
+  try {
+    const listed = await get('/api/sessions');
+    assert.equal(listed.status, 200);
+    assert.equal(listed.body.discoverySkipped, 1);
+    assert.equal(listed.body.previous.some(session => session.sessionFile === alien), false);
+
+    const usage = await get('/api/usage-summary?days=all');
+    assert.equal(usage.status, 200);
+    assert.equal(usage.body.discoverySkipped, 1);
+  } finally {
+    fs.rmSync(alien, { force: true });
+  }
+});
+
 test('a newly ambiguous nested header id invalidates route lookup', async () => {
   const cached = await get(`/api/sessions/${NESTED_SESSION_ID}/messages?limit=10`);
   assert.equal(cached.status, 200);

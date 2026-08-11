@@ -84,3 +84,24 @@ test('generic session header ids are path-safe and duplicate ids are not routabl
   assert.equal(result.candidates.length, 0, 'unsafe and ambiguous native identities are omitted');
   assert.equal(findSessionCandidate(sessions, 'same', { allowPartial: false }).candidate, null);
 });
+
+test('invalid basename identities are skipped and warned once without aborting discovery', () => {
+  const sessions = path.join(root, 'sessions-invalid-basename');
+  const workspace = path.join(sessions, '--workspace--');
+  write(path.join(workspace, 'valid-session.jsonl'), { type: 'session', cwd: '/workspace' });
+  write(path.join(workspace, '2026-01-01T00-00-00+00-00_deadbeef.jsonl'), { type: 'session', cwd: '/workspace' });
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = message => warnings.push(message);
+  try {
+    const first = discoverSessionCandidates(sessions);
+    assert.deepEqual(first.candidates.map(c => c.id), ['valid-session']);
+    assert.equal(first.skipped, 1);
+    assert.equal(first.truncated, false);
+    assert.equal(discoverSessionCandidates(sessions).skipped, 1, 'each scan reports its skipped count');
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, 1, 'a repeatedly scanned alien file does not spam logs');
+  assert.match(warnings[0], /skipping invalid pi identity/);
+});
