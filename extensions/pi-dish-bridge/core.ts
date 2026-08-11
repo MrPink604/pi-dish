@@ -1327,7 +1327,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
             name: c.name,
             description: c.description || "",
             source: c.source,
-            path: c.sourceInfo?.path,
+            path: c.sourceInfo?.path as string | undefined,
             // Skills/templates and the explicitly emulated built-ins can be
             // invoked over the public bridge. Other host/extension commands
             // require their own TUI command context.

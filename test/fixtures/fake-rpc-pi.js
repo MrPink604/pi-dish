@@ -92,12 +92,19 @@ async function runTurn(message) {
   const slow = /^slow:/.test(message);
   const stepMs = slow ? 300 : 20;
   const steps = slow ? 4 : 2;
+  const started = {
+    role: 'assistant',
+    content: [],
+    timestamp: new Date().toISOString(),
+  };
+  out({ type: 'message_start', message: started });
+  let emitted = 0;
   for (let i = 1; i <= steps && !aborted; i++) {
-    out({ type: 'message_update', message: {
-      role: 'assistant',
-      content: [{ type: 'text', text: finalText.slice(0, Math.ceil((finalText.length * i) / steps)) }],
-      timestamp: new Date().toISOString(),
+    const end = Math.ceil((finalText.length * i) / steps);
+    out({ type: 'message_update', assistantMessageEvent: {
+      type: 'text_delta', contentIndex: 0, delta: finalText.slice(emitted, end),
     } });
+    emitted = end;
     await sleep(stepMs);
   }
 

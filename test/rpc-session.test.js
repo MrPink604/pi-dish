@@ -218,6 +218,8 @@ test('prompt round-trips: RPC events stream over SSE and land in the JSONL', asy
     await sse.waitFor(e => e.event === 'turn_start');
     const update = await sse.waitFor(e => e.event === 'message_update');
     assert.equal(update.data.message.role, 'assistant');
+    assert.ok(update.data.message.content[0].text.length > 0,
+      'Pi 0.84 delta-only updates are reassembled into full SSE messages');
     const end = await sse.waitFor(e => e.event === 'message_end');
     assert.equal(end.data.message.content[0].text, 'reply to: hello fixture');
     await sse.waitFor(e => e.event === 'turn_end');
@@ -320,8 +322,12 @@ test('a /compact issued while one runs is refused, not forwarded to pi', async (
   const before = readLog().filter(c => c.type === 'compact').length;
   // The fixture holds the compaction open ~150ms (compaction_start streamed,
   // response deferred) — long enough to prove the second command is gated.
+  const rpc = getRPCSession(sessionId);
+  const started = new Promise(resolve => {
+    const off = rpc.on('compaction_start', event => { off(); resolve(event); });
+  });
   const firstP = post(`/api/sessions/${sessionId}/command`, { message: '/compact' });
-  await new Promise(r => setTimeout(r, 40));
+  await started;
 
   // Mid-compaction the session list must say so (the client's sidebar dot
   // and SSE init frame read this flag).
