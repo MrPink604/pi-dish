@@ -39,7 +39,7 @@ const {
 } = require('./lib/session-files');
 const sessionIndex = require('./lib/session-index');
 const { discoverSessionCandidates, discoverHarnessSessions, findSessionCandidate } = require('./lib/session-discovery');
-const { encodeSessionKey, resolveSessionRoute, VERSION: SESSION_KEY_VERSION } = require('./lib/session-key');
+const { encodeSessionKey, resolveSessionRoute, canonicalSessionId, VERSION: SESSION_KEY_VERSION } = require('./lib/session-key');
 const { getHarness, listHarnesses, resolveLaunchSpec } = require('./lib/harnesses');
 const { inspectProcessAncestry } = require('./lib/process-identity');
 const sessionProvenance = require('./lib/session-provenance');
@@ -747,7 +747,7 @@ function getPreviousSessions(registered = listRegisteredSessions()) {
       // hyphenated project dir decodes to a bogus path — only trust it
       // when the decoded directory actually exists.
       let cwd = info.cwd;
-      if (!cwd && getHarness(harnessId)?.layout === 'nested') {
+      if (!cwd && harnessId === 'pi' && getHarness(harnessId)?.layout === 'nested') {
         const decoded = decodeDirToCwd(dirName);
         cwd = fs.existsSync(decoded) ? decoded : null;
       }
@@ -2058,7 +2058,26 @@ function inferSessionForPath(absPath) {
     .sort((a, b) => path.resolve(b.cwd).length - path.resolve(a.cwd).length);
   if (!candidates.length) return null;
   if (candidates[1] && path.resolve(candidates[1].cwd).length === path.resolve(candidates[0].cwd).length) return null;
-  return candidates[0].sessionId;
+  const identity = registryIdentity(candidates[0]);
+  return identity ? routeSessionId(identity.harnessId, identity.nativeSessionId) : null;
+}
+
+function canonicalKnownSessionId(value) {
+  const identity = routeIdentity(value);
+  if (!identity) return null;
+  const registered = listRegisteredSessions().some((entry) => {
+    const candidate = registryIdentity(entry);
+    return candidate?.harnessId === identity.harnessId
+      && candidate.nativeSessionId === identity.nativeSessionId;
+  });
+  const rpc = identity.harnessId === 'pi' && getRPCSession(value)?.id === identity.nativeSessionId;
+  const active = registered || rpc;
+  const historical = !active && enumerateSessionCandidates().some((candidate) =>
+    candidate.harnessId === identity.harnessId
+      && candidate.nativeSessionId === identity.nativeSessionId);
+  return active || historical
+    ? routeSessionId(identity.harnessId, identity.nativeSessionId)
+    : null;
 }
 
 function cleanAnchor(raw) {
@@ -2121,7 +2140,8 @@ app.post('/api/comments', (req, res) => {
     const page = pages.getPage(target.pageToken);
     sessionId = page?.sessionId || sessionId || inferSessionForPath(page.root);
   }
-  if (!sessionId || (!findSessionFile(sessionId) && !getRegisteredSession(sessionId))) {
+  sessionId = sessionId && canonicalKnownSessionId(sessionId);
+  if (!sessionId) {
     return res.status(404).json({ error: 'target session not found' });
   }
   res.status(201).json(comments.createComment({ sessionId, body, target }));
@@ -2184,7 +2204,9 @@ app.post('/api/comments/get', (req, res) => {
 app.post('/api/comments/:id/ack', (req, res) => {
   const existing = comments.getComment(req.params.id);
   if (!existing) return res.status(404).json({ error: 'comment not found' });
-  if (!req.body?.sessionId || req.body.sessionId !== existing.sessionId) {
+  let requestedSessionId = null;
+  try { requestedSessionId = canonicalSessionId(req.body?.sessionId); } catch {}
+  if (!requestedSessionId || requestedSessionId !== existing.sessionId) {
     return res.status(403).json({ error: 'comment belongs to a different session' });
   }
   const comment = comments.acknowledgeComment(req.params.id);
@@ -2248,10 +2270,8 @@ app.post('/api/pages', (req, res) => {
     if (!associatedSessionId) {
       return res.status(400).json({ error: 'sessionId must be a non-empty string (max 512 characters)' });
     }
-    // findSessionFile deliberately accepts partial route ids; persisted page
-    // associations must instead match the canonical JSONL basename exactly.
-    if (!sessionIsActive(associatedSessionId)
-        && !enumerateSessionCandidates().some(({ id }) => id === associatedSessionId)) {
+    associatedSessionId = canonicalKnownSessionId(associatedSessionId);
+    if (!associatedSessionId) {
       return res.status(404).json({ error: 'sessionId does not identify a known active or historical session' });
     }
   } else {
@@ -2263,7 +2283,9 @@ app.post('/api/pages', (req, res) => {
 
 app.get('/api/pages', (req, res) => {
   let list = pages.listPages();
-  if (req.query.sessionId) list = list.filter((p) => p.sessionId === req.query.sessionId);
+  let filterSessionId = null;
+  try { filterSessionId = req.query.sessionId && canonicalSessionId(req.query.sessionId); } catch {}
+  if (req.query.sessionId) list = list.filter((p) => p.sessionId === filterSessionId);
   res.json(list.map(({ token, ...entry }) => ({
     ...pagePayload(token, entry),
     missing: !fs.existsSync(entry.root),
@@ -2956,19 +2978,7 @@ app.post('/api/sessions/:id/close', async (req, res) => {
 
 app.get('/api/cwds', (req, res) => {
   try {
-    const cwdSet = new Set();
-    let dirs = [];
-    try { dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true }); } catch {}
-    for (const dir of dirs) {
-      if (!dir.isDirectory()) continue;
-      const dirPath = path.join(SESSIONS_DIR, dir.name);
-      let files = [];
-      try { files = fs.readdirSync(dirPath); } catch {}
-      const jsonlFile = files.find(f => f.endsWith('.jsonl'));
-      if (!jsonlFile) continue;
-      const cwd = readSessionCwd(path.join(dirPath, jsonlFile));
-      if (cwd) cwdSet.add(cwd);
-    }
+    const cwdSet = new Set(knownWorkspaceCwds());
     const home = os.homedir();
     const cwds = [...cwdSet].sort().map(c => ({
       path: c,

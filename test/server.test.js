@@ -26,6 +26,10 @@ process.env.TMUX_TMPDIR = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-test-tm
 const { encodeSessionKey } = require('../lib/session-key');
 
 const SESSION_ID = '2026-07-04T10-00-00-abcdef12';
+const OMP_SESSION_ID = 'omp-prefix-real';
+const OMP_ROUTE_ID = encodeSessionKey('omp', OMP_SESSION_ID);
+const ompCwd = path.join(tmpHome, 'workspace', 'omp-project');
+const ompSessionFile = path.join(tmpHome, '.omp', 'agent', 'sessions', 'project', `${OMP_SESSION_ID}.jsonl`);
 const TINY_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 const TINY_PNG = Buffer.from(TINY_PNG_BASE64, 'base64');
 const sessionDir = path.join(tmpHome, '.pi', 'agent', 'sessions', '--home-user-proj--');
@@ -230,19 +234,45 @@ test('GET /api/sessions lists the fixture session with derived metadata', async 
 });
 
 test('encoded alternative-harness routes never fall back to a partial native id', async () => {
-  const nativeId = 'omp-prefix-real';
   const ompDir = path.join(tmpHome, '.omp', 'agent', 'sessions', 'project');
   fs.mkdirSync(ompDir, { recursive: true });
-  fs.writeFileSync(path.join(ompDir, `${nativeId}.jsonl`), [
+  fs.mkdirSync(ompCwd, { recursive: true });
+  fs.writeFileSync(ompSessionFile, [
     { type: 'title', title: 'Exact OMP fixture' },
-    { type: 'session', id: nativeId, cwd: '/home/user/proj' },
+    { type: 'session', id: OMP_SESSION_ID, cwd: ompCwd },
   ].map(JSON.stringify).join('\n') + '\n');
 
-  const exact = await get(`/api/sessions/${encodeURIComponent(encodeSessionKey('omp', nativeId))}/stats`);
+  const exact = await get(`/api/sessions/${encodeURIComponent(OMP_ROUTE_ID)}/stats`);
   assert.equal(exact.status, 200, JSON.stringify(exact.body));
 
   const partial = await get(`/api/sessions/${encodeURIComponent(encodeSessionKey('omp', 'omp-prefix'))}/stats`);
   assert.equal(partial.status, 404, 'a canonical encoded route must not select a partial native-id match');
+});
+
+test('historical alternative-harness IDs associate pages and workspace choices canonically', async () => {
+  const artifact = path.join(ompCwd, 'omp-page.html');
+  fs.writeFileSync(artifact, '<p>OMP page</p>');
+  const published = await post('/api/pages', { path: artifact, sessionId: OMP_ROUTE_ID });
+  assert.equal(published.status, 200, JSON.stringify(published.body));
+  assert.equal(published.body.sessionId, OMP_ROUTE_ID);
+
+  const cwds = await get('/api/cwds');
+  assert.equal(cwds.status, 200);
+  assert.ok(cwds.body.some((entry) => entry.path === ompCwd), 'OMP session cwd is offered to launch controls');
+  await del(`/api/pages/${published.body.token}`);
+});
+
+test('alternative harnesses do not decode Pi workspace directory names as cwd', async () => {
+  const nativeId = 'omp-headerless-cwd';
+  const misleadingDir = path.join(tmpHome, '.omp', 'agent', 'sessions', '--tmp--');
+  fs.mkdirSync(misleadingDir, { recursive: true });
+  fs.writeFileSync(path.join(misleadingDir, `${nativeId}.jsonl`),
+    JSON.stringify({ type: 'message', message: { role: 'user', content: 'no cwd header' } }) + '\n');
+  const sessions = await get('/api/sessions');
+  const routeId = encodeSessionKey('omp', nativeId);
+  const listed = sessions.body.previous.find((entry) => entry.id === routeId);
+  assert.ok(listed, 'headerless OMP fixture is discoverable');
+  assert.equal(listed.cwd, null, 'existing /tmp is not fabricated from Pi directory-name conventions');
 });
 
 test('nested generic sessions use the core header id and remain fully addressable', async () => {
@@ -1166,10 +1196,30 @@ test('comments reject unanchored targets and unknown sessions/pages', async () =
     target: { kind: 'file', path: path.join(realCwd, 'README.md'), anchor: { type: 'text', quote: 'x' } },
   })).status, 404);
   assert.equal((await post('/api/comments', {
+    sessionId: REAL_CWD_ID.slice(0, -4), body: 'partial id',
+    target: { kind: 'file', path: path.join(realCwd, 'README.md'), anchor: { type: 'text', quote: 'x' } },
+  })).status, 404, 'comment creation does not persist a partial Pi route');
+  assert.equal((await post('/api/comments', {
     sessionId: REAL_CWD_ID, body: 'hello',
     target: { kind: 'page', pageToken: 'missing', anchor: { type: 'text', quote: 'x' } },
   })).status, 400);
   assert.equal((await post('/api/comments/get', { sessionId: REAL_CWD_ID, ids: [] })).status, 400);
+});
+
+test('encoded Pi aliases share the canonical raw Pi comment identity', async () => {
+  const alias = encodeSessionKey('pi', REAL_CWD_ID);
+  const created = await post('/api/comments', {
+    sessionId: alias, body: 'Alias identity comment.',
+    target: {
+      kind: 'file', path: path.join(realCwd, 'README.md'),
+      anchor: { type: 'text', quote: 'alpha' },
+    },
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.sessionId, REAL_CWD_ID, 'encoded Pi aliases persist as the legacy raw route');
+  assert.equal((await get(`/api/comments/count?sessionId=${alias}`)).body.total, 1);
+  assert.equal((await get(`/api/comments/count?sessionId=${REAL_CWD_ID}`)).body.total, 1);
+  assert.equal((await post(`/api/comments/${created.body.id}/ack`, { sessionId: alias })).status, 200);
 });
 
 test('POST /api/pages validates the root but imposes no path gate', async () => {
@@ -1230,6 +1280,45 @@ test('publishing without a sessionId infers the most specific containing cwd', a
     for (const id of [OUTER_ID, INNER_ID]) {
       fs.rmSync(path.join(registryDir, `${id}.json`), { force: true });
     }
+  }
+});
+
+test('inferred alternative-harness pages and comments keep the encoded harness identity', async () => {
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const socketPath = path.join(tmpHome, 'omp-infer-socket-stub');
+  fs.writeFileSync(socketPath, '');
+  const bridgeInstanceId = 'omp-infer-bridge';
+  fs.writeFileSync(path.join(registryDir, `${OMP_SESSION_ID}.json`), JSON.stringify({
+    protocolVersion: 2,
+    wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+    harnessId: 'omp', nativeSessionId: OMP_SESSION_ID, sessionId: OMP_SESSION_ID,
+    bridgeInstanceId, instanceId: bridgeInstanceId,
+    sessionFile: ompSessionFile, socketPath, pid: process.pid,
+    startTime: processIdentity(process.pid).startTime,
+    cwd: ompCwd, capabilities: {}, spawnToken: null,
+  }));
+  await new Promise(r => setTimeout(r, 600));
+
+  const artifact = path.join(ompCwd, 'inferred-omp.html');
+  fs.writeFileSync(artifact, '<p>inferred OMP artifact</p>');
+  try {
+    const page = await post('/api/pages', { path: artifact });
+    assert.equal(page.status, 200);
+    assert.equal(page.body.sessionId, OMP_ROUTE_ID);
+    const comment = await post('/api/comments', {
+      body: 'Keep this canonical.',
+      target: {
+        kind: 'page', pageToken: page.body.token,
+        anchor: { type: 'text', quote: 'OMP artifact' },
+      },
+    });
+    assert.equal(comment.status, 201, JSON.stringify(comment.body));
+    assert.equal(comment.body.sessionId, OMP_ROUTE_ID);
+    await post(`/api/comments/${comment.body.id}/ack`, { sessionId: OMP_ROUTE_ID });
+    await del(`/api/pages/${page.body.token}`);
+  } finally {
+    fs.rmSync(path.join(registryDir, `${OMP_SESSION_ID}.json`), { force: true });
   }
 });
 
@@ -1941,6 +2030,12 @@ test('POST /share is idempotent and 404s for an unknown session', async () => {
 
   const again = await post(`/api/sessions/${TREE_ID}/share`, {});
   assert.equal(again.body.token, first.body.token, 'same session reuses its token');
+
+  const piAlias = encodeSessionKey('pi', TREE_ID);
+  const throughAlias = await post(`/api/sessions/${piAlias}/share`, {});
+  assert.equal(throughAlias.body.token, first.body.token, 'encoded Pi alias reuses the raw Pi share identity');
+  const aliasState = await get(`/api/sessions/${piAlias}/share`);
+  assert.equal(aliasState.body.token, first.body.token);
 
   const missing = await post('/api/sessions/does-not-exist/share', {});
   assert.equal(missing.status, 404);

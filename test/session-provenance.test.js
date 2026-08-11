@@ -40,6 +40,16 @@ test('canonical alternative-harness routes persist as provenance identities', ()
   assert.deepEqual(provenance.getLaunchesFrom(source).map(entry => entry.sessionId), [child]);
 });
 
+test('encoded Pi aliases fold into the legacy raw Pi provenance identity', () => {
+  const sourceAlias = encodeSessionKey('pi', 'source-pi');
+  const childAlias = encodeSessionKey('pi', 'child-pi');
+  provenance.recordLaunch(childAlias, sourceAlias, 'operation-pi');
+  assert.equal(provenance.getLaunch('child-pi').sourceSessionId, 'source-pi');
+  assert.equal(provenance.getLaunch(childAlias).sourceSessionId, 'source-pi');
+  assert.deepEqual(provenance.getLaunchesFrom('source-pi').map(entry => entry.sessionId), ['child-pi']);
+  assert.deepEqual(provenance.getLaunchesFrom(sourceAlias).map(entry => entry.sessionId), ['child-pi']);
+});
+
 test('broken sidecars and invalid ids degrade safely', () => {
   const file = path.join(home, '.pi', 'dish', 'session-provenance.json');
   fs.writeFileSync(file, '{broken');
