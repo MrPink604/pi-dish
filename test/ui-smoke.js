@@ -859,6 +859,31 @@ function writeRegistry(patch = {}) {
       'model select offers (default)');
     check(await desktop.locator('#nsThinkingSelect option').filter({ hasText: 'High' }).count() > 0,
       'reasoning level selector sits alongside the model selector');
+
+    // Harness discovery is installation-dependent on the real host. Stub an
+    // installed alternative here and prove that selecting it survives model
+    // refresh and reaches the shared async launch request below.
+    await desktop.route('**/api/harnesses', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ harnesses: [
+          { id: 'pi', label: 'Pi', available: true },
+          { id: 'omp', label: 'Oh My Pi', available: true },
+          { id: 'prime', label: 'Prime Agent', available: false },
+        ] }),
+      });
+    });
+    await desktop.route('**/api/models?harness=omp', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+    });
+    await desktop.evaluate(() => localStorage.setItem('pi-dish-new-harness', 'omp'));
+    await desktop.evaluate(() => loadHarnesses());
+    await desktop.waitForFunction(() => document.querySelector('#nsHarnessSelect option[value="omp"]'));
+    check(await desktop.locator('#nsHarnessSelect option[value="prime"]').count() === 0,
+      'unavailable harnesses are omitted from the Agent selector');
+    check(await desktop.inputValue('#nsHarnessSelect') === 'omp',
+      'a saved installed alternative survives asynchronous harness discovery');
     await desktop.fill('#newSessionName', 'UI named session');
     await desktop.selectOption('#nsThinkingSelect', 'high');
 
@@ -911,12 +936,13 @@ function writeRegistry(patch = {}) {
     check(asyncSpawnBody?.async === true, 'takeover spawn opts into asynchronous spawning');
     check(asyncSpawnBody?.name === 'UI named session', 'POST body carries the chosen session name');
     check(asyncSpawnBody?.cwd === CWD, `POST body carries the chosen cwd (got ${JSON.stringify(asyncSpawnBody?.cwd)})`);
+    check(asyncSpawnBody?.harness === 'omp', 'POST body routes the spawn through the selected alternative harness');
     check(asyncSpawnBody?.model === undefined, 'default model omitted from POST body');
     check(asyncSpawnBody?.thinking === 'high', 'POST body carries the chosen reasoning level');
     check(!(await desktop.evaluate(() => document.querySelector('.main').classList.contains('new-session-open'))),
       'takeover closes in favor of the provisional pane');
-    check(await desktop.locator('.session-item.starting').textContent().then(t => t.includes('Starting Pi')),
-      'provisional starting row appears before registration');
+    check(await desktop.locator('.session-item.starting').textContent().then(t => t.includes('Starting Oh My Pi')),
+      'the provisional row identifies the selected harness before registration');
     check(await desktop.locator('.session-item.starting').evaluate((el) => el.classList.contains('active')) &&
       await desktop.locator('#sessionName').textContent() === 'Starting session…',
       'provisional session pane opens immediately');
@@ -972,6 +998,8 @@ function writeRegistry(patch = {}) {
     }, SESSION_ID);
     await desktop.unroute('**/api/sessions/new');
     await desktop.unroute('**/api/session-spawns/ui-spawn-1');
+    await desktop.unroute('**/api/models?harness=omp');
+    await desktop.unroute('**/api/harnesses');
 
     // 5. Rename propagates to the sidebar without a reload
     console.log('rename:');

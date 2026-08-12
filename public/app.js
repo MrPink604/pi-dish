@@ -6104,7 +6104,17 @@ async function loadHarnesses() {
     const res = await fetch('/api/harnesses');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    if (Array.isArray(data.harnesses) && data.harnesses.length) knownHarnesses = data.harnesses;
+    if (Array.isArray(data.harnesses) && data.harnesses.length) {
+      knownHarnesses = data.harnesses;
+      // The takeover can open while this startup request is in flight. Its
+      // Pi-only fallback must not erase a saved alternative once discovery
+      // confirms that harness is available. Reading here also respects a
+      // choice the user made while this request was pending.
+      const preferred = localStorage.getItem(HARNESS_KEY);
+      if (knownHarnesses.some(h => h?.id === preferred && h.available !== false)) {
+        newSessionHarness = preferred;
+      }
+    }
   } catch (_) {
     knownHarnesses = [{ id: 'pi', label: 'Pi', available: true }];
   }
