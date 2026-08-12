@@ -215,7 +215,7 @@ function sessionCapabilities(harnessId, bridgeCapabilities = {}, { active = fals
     commands: active ? advertised('commands') : pi,
     queueCancel: advertised('queueCancel'),
     tree: pi && (active ? advertised('treeNavigation') : true),
-    export: pi,
+    export: pi || harnessId === 'omp',
     // Client-only harnesses may only detach the exact tmux pane pi-dish
     // recorded when it launched that client.
     close: active && (closeMode === 'logical' || (closeMode === 'client-only' && closeAllowed)),
@@ -1944,12 +1944,12 @@ app.get('/api/sessions/:id/export', async (req, res) => {
   try {
     const session = findSessionSource(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
-    if (session.harnessId !== 'pi') {
-      return res.status(409).json({ error: 'HTML export is only supported for Pi sessions.' });
+    if (session.harnessId !== 'pi' && session.harnessId !== 'omp') {
+      return res.status(409).json({ error: 'HTML export is only supported for Pi and OMP sessions.' });
     }
     const sessionFile = session.file;
     const outPath = path.join(os.tmpdir(), `pi-dish-export-${req.params.id.slice(-12)}.html`);
-    const htmlPath = await piSDK.exportSessionHtml(sessionFile, outPath);
+    const htmlPath = await piSDK.exportSessionHtml(sessionFile, outPath, session.profileId);
     res.download(htmlPath, path.basename(sessionFile, '.jsonl') + '.html');
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1983,7 +1983,9 @@ async function serveSharedSession(req, res) {
   const share = shares.getShare(req.params.token);
   if (!share) return res.status(404).type('text/plain').send('Not found');
   const session = findSessionSource(share.sessionId);
-  if (!session || session.harnessId !== 'pi') return res.status(404).type('text/plain').send('Not found');
+  if (!session || (session.harnessId !== 'pi' && session.harnessId !== 'omp')) {
+    return res.status(404).type('text/plain').send('Not found');
+  }
   const sessionFile = session.file;
   try {
     const st = fs.statSync(sessionFile);
@@ -1994,7 +1996,7 @@ async function serveSharedSession(req, res) {
     } else {
       // Token is base64url (A-Za-z0-9_-), so it's already a safe basename.
       const outPath = path.join(os.tmpdir(), `pi-dish-share-${req.params.token}.html`);
-      htmlPath = await piSDK.exportSessionHtml(sessionFile, outPath);
+      htmlPath = await piSDK.exportSessionHtml(sessionFile, outPath, session.profileId);
       shareExportCache.set(req.params.token, { mtimeMs: st.mtimeMs, size: st.size, htmlPath });
     }
     res.type('html');
@@ -2007,8 +2009,8 @@ async function serveSharedSession(req, res) {
 app.post('/api/sessions/:id/share', (req, res) => {
   const session = findSessionSource(req.params.id);
   if (!session) return res.status(404).json({ error: 'Session not found' });
-  if (session.harnessId !== 'pi') {
-    return res.status(409).json({ error: 'Public HTML sharing is only supported for Pi sessions.' });
+  if (session.harnessId !== 'pi' && session.harnessId !== 'omp') {
+    return res.status(409).json({ error: 'Public HTML sharing is only supported for Pi and OMP sessions.' });
   }
   const token = shares.createShare(req.params.id);
   res.json(sharePayload(token));

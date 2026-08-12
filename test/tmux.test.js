@@ -136,7 +136,7 @@ test('OMP launch uses its wrapper descriptor and encoded cross-harness identity'
   assert.equal(session.harnessId, 'omp');
   assert.equal(session.sessionKey, body.id);
   assert.equal(session.capabilities.tree, false);
-  assert.equal(session.capabilities.export, false);
+  assert.equal(session.capabilities.export, true);
   assert.equal(session.capabilities.close, false);
 
   const messages = await get(`/api/sessions/${encodeURIComponent(body.id)}/messages`);

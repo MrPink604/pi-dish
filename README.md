@@ -172,8 +172,9 @@ back to native RPC. Their history is discovered from `~/.omp/agent/sessions/`
 and `~/.prime/agent/sessions/` respectively.
 
 The alternative-harness baseline deliberately omits private Pi features:
-queue cancellation, compaction, tree navigation/export, sharing, and inactive
-JSONL mutation are unavailable. OMP close is also unavailable. Prime's agent
+queue cancellation, compaction, tree navigation, and inactive JSONL mutation
+are unavailable. OMP supports read-only HTML export and sharing; Prime does
+not. OMP close is also unavailable. Prime's agent
 worker is resident, so “Detach client” first revalidates the launch token and
 the tmux pane process's exact PID/birth identity, proves the resident worker is
 outside that pane's process tree, then kills only the pane. If ancestry cannot

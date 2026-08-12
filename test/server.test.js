@@ -239,7 +239,9 @@ test('encoded alternative-harness routes never fall back to a partial native id'
   fs.mkdirSync(ompCwd, { recursive: true });
   fs.writeFileSync(ompSessionFile, [
     { type: 'title', title: 'Exact OMP fixture' },
-    { type: 'session', id: OMP_SESSION_ID, cwd: ompCwd },
+    { type: 'session', version: 3, id: OMP_SESSION_ID, cwd: ompCwd },
+    { type: 'message', id: 'omp-u1', parentId: null, message: { role: 'user', content: [{ type: 'text', text: 'OMP shared prompt' }] } },
+    { type: 'message', id: 'omp-a1', parentId: 'omp-u1', message: { role: 'assistant', content: [{ type: 'text', text: 'OMP shared answer' }] } },
   ].map(JSON.stringify).join('\n') + '\n');
 
   const exact = await get(`/api/sessions/${encodeURIComponent(OMP_ROUTE_ID)}/stats`);
@@ -2058,6 +2060,22 @@ test('GET /share/:token renders the exported HTML inline; unknown token 404s', a
 
   const unknown = await fetch(`${base}/share/nonexistent-token`);
   assert.equal(unknown.status, 404);
+});
+
+test('OMP sessions can create and render public share links', async () => {
+  const created = await post(`/api/sessions/${encodeURIComponent(OMP_ROUTE_ID)}/share`, {});
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+
+  const res = await fetch(`${base}${created.body.path}`);
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  const dataMatch = html.match(/id="session-data"[^>]*>([^<]+)</);
+  assert.ok(dataMatch, 'OMP export embeds session data');
+  const payload = JSON.parse(Buffer.from(dataMatch[1], 'base64').toString('utf8'));
+  assert.equal(payload.header.id, OMP_SESSION_ID);
+  assert.ok(payload.entries.some(entry => entry.id === 'omp-a1'), 'OMP transcript entries reach the export');
+  assert.equal(fs.readFileSync(ompSessionFile, 'utf8').split('\n')[0],
+    JSON.stringify({ type: 'title', title: 'Exact OMP fixture' }), 'sharing does not rewrite the OMP session');
 });
 
 test('GET/DELETE /share reflect and revoke the current share state', async () => {
