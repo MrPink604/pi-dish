@@ -41,6 +41,7 @@ const sessionIndex = require('./lib/session-index');
 const { discoverSessionCandidates, discoverHarnessSessions, findSessionCandidate } = require('./lib/session-discovery');
 const { encodeSessionKey, resolveSessionRoute, canonicalSessionId, VERSION: SESSION_KEY_VERSION } = require('./lib/session-key');
 const { getHarness, listHarnesses, resolveLaunchSpec } = require('./lib/harnesses');
+const { refreshHarnessPricing } = require('./lib/harness-pricing');
 const { inspectProcessAncestry } = require('./lib/process-identity');
 const sessionProvenance = require('./lib/session-provenance');
 const skillsLib = require('./lib/skills');
@@ -1080,7 +1081,7 @@ function readDishSettings() {
   try { const v = JSON.parse(fs.readFileSync(DISH_SETTINGS_FILE, 'utf8')); return v && typeof v === 'object' ? v : {}; } catch { return {}; }
 }
 
-app.get('/api/usage-summary', (req, res) => {
+app.get('/api/usage-summary', async (req, res) => {
   const range = String(req.query.days || '30');
   if (!['1', '7', '30', 'all'].includes(range)) return res.status(400).json({ error: 'days must be 1, 7, 30, or all' });
   const sort = String(req.query.sort || 'cost');
@@ -1095,6 +1096,7 @@ app.get('/api/usage-summary', (req, res) => {
   const modelRefs = modelsRaw.split(',').map(s => s.trim()).filter(Boolean);
   if (modelRefs.length > 100) return res.status(400).json({ error: 'models filter lists too many models' });
   const modelFilter = modelRefs.length ? new Set(modelRefs) : null;
+  await refreshHarnessPricing('omp');
   const discovery = discoverHarnessSessions();
   const candidates = discovery.candidates;
   const scan = sessionIndex.scanSessions(candidates);
@@ -1594,7 +1596,7 @@ app.get('/api/sessions/:id/messages/:messageId/images/:blockIndex', (req, res) =
   res.type(mimeType).send(Buffer.from(block.data, 'base64'));
 });
 
-app.get('/api/sessions/:id/messages', (req, res) => {
+app.get('/api/sessions/:id/messages', async (req, res) => {
   const sessionId = req.params.id;
   const isActive = !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId);
 
@@ -1605,6 +1607,7 @@ app.get('/api/sessions/:id/messages', (req, res) => {
       totalMessages: 0, firstIndex: null, lastIndex: null, hasMore: false,
     });
   }
+  if (sessionSource.harnessId === 'omp') await refreshHarnessPricing('omp');
 
   // Pagination: messages are indexed by their position in the displayable
   // message stream (0-based). `limit` defaults to 50. With no cursor we
@@ -1900,6 +1903,7 @@ app.get('/api/sessions/:id/stats', async (req, res) => {
   try {
     const session = findSessionSource(sessionId);
     if (!session) return res.status(404).json({ error: 'Session not found' });
+    if (session.harnessId === 'omp') await refreshHarnessPricing('omp');
 
     const { tokens, reasoningTokens, cost, costs, costUnavailable, responseTiming, userMessages, assistantMessages, toolCalls, toolResults, genMs, genOutput } =
       getSessionStats(session);
