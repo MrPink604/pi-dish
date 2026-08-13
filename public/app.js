@@ -410,7 +410,7 @@ function ensureAutocompleteContainer() {
 
 function showAutocomplete(matches) {
   showAutocompleteList(matches.map((cmd, i) => {
-    var icon = cmd.source === 'builtin' ? '⚙️' : cmd.source === 'extension' ? '🧩' : cmd.source === 'skill' ? '📚' : '📝';
+    var icon = cmd.source === 'builtin' || cmd.source === 'host' ? '⚙️' : cmd.source === 'extension' ? '🧩' : cmd.source === 'skill' ? '📚' : '📝';
     var active = i === 0 ? ' active' : '';
     var args = cmd.args ? ' <span class="autocomplete-args">' + escapeHtml(cmd.args) + '</span>' : '';
     return '<div class="autocomplete-item' + active + '" data-name="' + escapeHtml(cmd.name) + '">'

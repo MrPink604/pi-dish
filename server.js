@@ -2442,6 +2442,52 @@ async function reloadBridgeSession(sess, sessionId) {
   }
 }
 
+function parseHostBuiltin(descriptor, message) {
+  if (!descriptor?.hostBuiltins?.length) return null;
+  const trimmed = message.trim();
+  const separator = trimmed.search(/\s/);
+  const name = trimmed.slice(1, separator === -1 ? undefined : separator);
+  const command = descriptor.hostBuiltins.find(candidate => candidate.name === name);
+  if (!command) return null;
+  if (/[\x00-\x1f\x7f]/.test(trimmed)) {
+    const error = new Error(`Invalid arguments for /${name}.`);
+    error.statusCode = 400;
+    throw error;
+  }
+  const args = separator === -1 ? '' : trimmed.slice(separator).trim();
+  if (args && !command.allowedArgs?.includes(args)) {
+    const allowed = command.allowedArgs?.join(' or ');
+    const error = new Error(`Invalid arguments for /${name}${allowed ? `; expected ${allowed}` : ''}.`);
+    error.statusCode = 400;
+    throw error;
+  }
+  return { command, text: `/${name}${args ? ` ${args}` : ''}`, hasArgs: !!args };
+}
+
+async function ownedHostPane(sessionId, descriptor) {
+  if (!descriptor?.hostBuiltins?.length) return null;
+  const spawn = tmux.getSpawn(sessionId);
+  if (!spawn?.socket || !spawn.paneId) return null;
+  return await tmux.paneExists(spawn.socket, spawn.paneId) ? spawn : null;
+}
+
+async function runHostBuiltin(sessionId, descriptor, parsed) {
+  const pane = await ownedHostPane(sessionId, descriptor);
+  if (!pane) {
+    const error = new Error(`Host command /${parsed.command.name} requires a live pi-dish-owned ${descriptor.label} pane.`);
+    error.statusCode = 409;
+    throw error;
+  }
+  await tmux.sendKeys(pane.socket, pane.paneId, parsed.text);
+  if (parsed.hasArgs) {
+    // OMP's subcommand autocomplete consumes the first Enter after an exact
+    // argument such as "images". A second Enter submits the accepted command.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    await tmux.sendKeys(pane.socket, pane.paneId, '');
+  }
+  return { info: `Sent ${parsed.text} to the session’s owned tmux pane` };
+}
+
 // Execute a slash command against an active session.
 app.post('/api/sessions/:id/command', async (req, res) => {
   const { message, deliverAs } = req.body;
@@ -2452,6 +2498,12 @@ app.post('/api/sessions/:id/command', async (req, res) => {
     const sess = await getLiveSession(req.params.id);
     if (!sess) return res.status(404).json({ error: 'Session not active' });
     if (sess instanceof BridgeSession) {
+      const descriptor = getHarness(sess.harnessId);
+      const hostBuiltin = parseHostBuiltin(descriptor, message);
+      if (hostBuiltin) {
+        const result = await runHostBuiltin(req.params.id, descriptor, hostBuiltin);
+        return res.json({ success: true, info: result.info });
+      }
       const compactMatch = message.match(/^\/compact(?:\s+(.*))?\s*$/);
       if (compactMatch) {
         if (!liveSessionSupports(sess, 'compact')) {
@@ -3043,6 +3095,18 @@ function filterBridgeCommands(sess, commands) {
       && liveSessionSupports(sess, BRIDGE_COMMAND_CAPABILITIES[command.name])));
 }
 
+async function appendHostBuiltins(sessionId, sess, commands) {
+  const descriptor = getHarness(sess.harnessId);
+  if (!await ownedHostPane(sessionId, descriptor)) return commands;
+  const hostNames = new Set(descriptor.hostBuiltins.map(command => command.name));
+  return [
+    ...commands.filter(command => !hostNames.has(command.name)),
+    ...descriptor.hostBuiltins.map(({ allowedArgs, ...command }) => ({
+      ...command, source: 'host', supported: true,
+    })),
+  ];
+}
+
 app.get('/api/commands', async (req, res) => {
   try {
     const sessionId = req.query.sessionId;
@@ -3055,7 +3119,10 @@ app.get('/api/commands', async (req, res) => {
             return res.status(409).json({ error: 'This session does not support command discovery.' });
           }
           const data = await sess.getCommands();
-          if (data?.commands) return res.json(filterBridgeCommands(sess, data.commands));
+          if (data?.commands) {
+            const commands = filterBridgeCommands(sess, data.commands);
+            return res.json(await appendHostBuiltins(sessionId, sess, commands));
+          }
         } else if (sess) {
           const data = await sess.getCommands();
           const commands = [
