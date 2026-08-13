@@ -286,22 +286,34 @@ const MODEL_CONTEXT_WINDOWS = {
   'default': 200000,
 };
 
+const MODEL_THINKING_LEVELS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+
 function normalizeModel(model) {
   if (!model) return null;
   if (typeof model === 'string') {
     const { provider, id } = parseModelId(model);
-    return provider && id ? { id, name: id, provider, contextWindow: 0, reasoning: false, pricing: null, free: false } : null;
+    return provider && id ? {
+      id, name: id, provider, selector: `${provider}/${id}`, contextWindow: 0,
+      reasoning: false, thinking: null, pricing: null, free: false,
+    } : null;
   }
   const sourcePricing = model.pricing || model.cost;
   const pricing = sourcePricing && Number.isFinite(sourcePricing.input) && Number.isFinite(sourcePricing.output)
     ? Object.fromEntries(['input', 'output', 'cacheRead', 'cacheWrite'].filter(k => Number.isFinite(sourcePricing[k])).map(k => [k, sourcePricing[k]]))
     : null;
+  const id = model.id || model.modelId;
+  const provider = model.provider;
+  const thinking = Array.isArray(model.thinking)
+    ? model.thinking.filter(level => MODEL_THINKING_LEVELS.has(level))
+    : null;
   return {
-    id: model.id || model.modelId,
-    name: model.name || model.id || model.modelId,
-    provider: model.provider,
+    id,
+    name: model.name || id,
+    provider,
+    selector: model.selector || (provider && id ? `${provider}/${id}` : null),
     contextWindow: model.contextWindow || 0,
     reasoning: !!model.reasoning,
+    thinking,
     pricing,
     free: !!pricing && pricing.input === 0 && pricing.output === 0,
   };
@@ -2673,24 +2685,110 @@ function harnessCommandAvailable(descriptor) {
     .some(dir => dir && executable(path.join(dir, command)));
 }
 
-function runHarnessModelCommand(descriptor) {
+function resolveHarnessCwd(value) {
+  const home = process.env.HOME || os.homedir();
+  if (typeof value !== 'string' || !value.trim()) return process.cwd();
+  const trimmed = value.trim();
+  const expanded = trimmed === '~' ? home
+    : trimmed.startsWith('~/') ? path.join(home, trimmed.slice(2)) : trimmed;
+  return path.resolve(expanded);
+}
+
+function runHarnessJsonCommand(descriptor, commandArgs, { cwd } = {}) {
   const spec = harnessLaunchSpec(descriptor);
-  const args = [...spec.argv.slice(1), ...descriptor.argv.models];
+  const args = [...spec.argv.slice(1), ...commandArgs];
   return new Promise((resolve, reject) => {
     execFile(spec.argv[0], args, {
       env: { ...process.env, ...spec.env },
+      cwd: resolveHarnessCwd(cwd),
       timeout: 15_000,
       maxBuffer: 10 * 1024 * 1024,
     }, (error, stdout, stderr) => {
       if (error) return reject(new Error((stderr || error.message).trim()));
       try {
-        const parsed = JSON.parse(stdout.trim() || '[]');
-        resolve(normalizeModels(parsed.models || parsed));
+        resolve(JSON.parse(stdout.trim() || '{}'));
       } catch (parseError) {
-        reject(new Error(`Could not parse ${descriptor.label} model list: ${parseError.message}`));
+        reject(new Error(`Could not parse ${descriptor.label} command output: ${parseError.message}`));
       }
     });
   });
+}
+
+async function runHarnessModelCommand(descriptor, { cwd } = {}) {
+  const parsed = await runHarnessJsonCommand(descriptor, descriptor.argv.models, { cwd });
+  return normalizeModels(parsed.models || parsed);
+}
+
+// OMP loads dotenv files in this order after process.env: <cwd>/.env,
+// ~/.omp/agent/.env, ~/.omp/.env, ~/.env. We need only presence, so parse
+// names directly and discard each line's value without ever putting it in an
+// API object or log message.
+function dotenvPresentKeys(file) {
+  const keys = new Set();
+  let content;
+  try { content = fs.readFileSync(file, 'utf8'); } catch { return keys; }
+  for (const line of content.split(/\r?\n/)) {
+    const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (!match) continue;
+    let raw = match[2].trim();
+    if (!raw) continue;
+    if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+      raw = raw.slice(1, -1);
+    } else {
+      raw = raw.replace(/\s+#.*$/, '').trim();
+    }
+    if (raw) keys.add(match[1]);
+  }
+  return keys;
+}
+
+function providerCredentialKeys(descriptor, provider) {
+  if (Object.hasOwn(descriptor.providerCredentials || {}, provider)) {
+    return descriptor.providerCredentials[provider];
+  }
+  const conventional = String(provider || '').toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+  return conventional ? [`${conventional}_API_KEY`] : [];
+}
+
+function providerReadiness(descriptor, providers, cwd) {
+  const home = process.env.HOME || os.homedir();
+  const files = [
+    path.join(resolveHarnessCwd(cwd), '.env'),
+    path.join(home, '.omp', 'agent', '.env'),
+    path.join(home, '.omp', '.env'),
+    path.join(home, '.env'),
+  ];
+  const fileKeys = new Set();
+  for (const file of files) {
+    for (const key of dotenvPresentKeys(file)) fileKeys.add(key);
+  }
+  return Object.fromEntries([...new Set(providers)].map(provider => {
+    const keys = providerCredentialKeys(descriptor, provider);
+    // An explicitly empty key list denotes a keyless local provider. null
+    // means the provider has no environment-based readiness signal.
+    const present = Array.isArray(keys) && (keys.length === 0 || keys.some(key => !!process.env[key] || fileKeys.has(key)));
+    return [provider, present];
+  }));
+}
+
+function annotateProviderReadiness(descriptor, models, cwd) {
+  if (!descriptor.providerCredentials) return models;
+  const readiness = providerReadiness(descriptor, models.map(model => model.provider), cwd);
+  return models.map(model => ({ ...model, providerReady: readiness[model.provider] === true }));
+}
+
+async function readHarnessPilotConfig(descriptor, cwd) {
+  const keys = descriptor.pilotConfig;
+  if (!keys || typeof descriptor.argv.configGet !== 'function') return null;
+  const [rolesResult, thinkingResult] = await Promise.all([
+    runHarnessJsonCommand(descriptor, descriptor.argv.configGet(keys.modelRoles), { cwd }),
+    runHarnessJsonCommand(descriptor, descriptor.argv.configGet(keys.defaultThinkingLevel), { cwd }),
+  ]);
+  const defaultModel = typeof rolesResult?.value?.default === 'string'
+    ? rolesResult.value.default : null;
+  const defaultThinkingLevel = typeof thinkingResult?.value === 'string'
+    ? thinkingResult.value : null;
+  return { defaultModel, defaultThinkingLevel };
 }
 
 app.get('/api/harnesses', (_req, res) => {
@@ -2703,6 +2801,39 @@ app.get('/api/harnesses', (_req, res) => {
       closeMode: descriptor.closeMode,
     })),
   });
+});
+
+app.get('/api/harnesses/:id/readiness', async (req, res) => {
+  const descriptor = getHarness(req.params.id);
+  if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
+  if (!descriptor.providerCredentials || descriptor.modelCatalog !== 'command') {
+    return res.status(501).json({ error: `Provider readiness is not supported for ${descriptor.label}.` });
+  }
+  if (req.query.cwd !== undefined && typeof req.query.cwd !== 'string') {
+    return res.status(400).json({ error: 'cwd must be a string' });
+  }
+  try {
+    const models = await runHarnessModelCommand(descriptor, { cwd: req.query.cwd });
+    res.json({ providers: providerReadiness(descriptor, models.map(model => model.provider), req.query.cwd) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/harnesses/:id/config', async (req, res) => {
+  const descriptor = getHarness(req.params.id);
+  if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
+  if (!descriptor.pilotConfig) {
+    return res.status(501).json({ error: `Pilot config is not supported for ${descriptor.label}.` });
+  }
+  if (req.query.cwd !== undefined && typeof req.query.cwd !== 'string') {
+    return res.status(400).json({ error: 'cwd must be a string' });
+  }
+  try {
+    res.json(await readHarnessPilotConfig(descriptor, req.query.cwd));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get('/api/models', async (req, res) => {
@@ -2725,7 +2856,11 @@ app.get('/api/models', async (req, res) => {
     if (!descriptor) return res.status(400).json({ error: `Unknown harness: ${harnessId}` });
     if (descriptor.modelCatalog === 'command') {
       if (!harnessCommandAvailable(descriptor)) return res.status(503).json({ error: `${descriptor.label} is not installed.` });
-      return res.json(await runHarnessModelCommand(descriptor));
+      if (req.query.cwd !== undefined && typeof req.query.cwd !== 'string') {
+        return res.status(400).json({ error: 'cwd must be a string' });
+      }
+      const models = await runHarnessModelCommand(descriptor, { cwd: req.query.cwd });
+      return res.json(annotateProviderReadiness(descriptor, models, req.query.cwd));
     }
     if (descriptor.modelCatalog !== 'pi-sdk') {
       return res.status(501).json({ error: `New-session model discovery is not supported for ${descriptor.label}.` });
@@ -3649,6 +3784,28 @@ async function _spawnHarnessHeadlessTmux({ descriptor, args, cwd }) {
 // `pi --mode rpc` child (dies with this server). An explicit `target:
 // { type: 'tmux', socket, tmuxSession }` or `{ ..., newTmuxSession }` opens a
 // pi TUI in one of the user's own tmux sessions instead.
+async function validateHarnessPilotSelection(descriptor, { model, thinking, cwd }) {
+  if (descriptor.id !== 'omp' || (!model && !thinking)) return;
+  if (thinking && !model) {
+    const err = new Error('Choose an Oh My Pi model before overriding its thinking level.');
+    err.status = 400;
+    throw err;
+  }
+  const models = await runHarnessModelCommand(descriptor, { cwd });
+  const selected = models.find(entry => entry.selector === model || `${entry.provider}/${entry.id}` === model);
+  if (!selected) {
+    const err = new Error(`Model ${model} is not available from Oh My Pi in this working directory.`);
+    err.status = 400;
+    throw err;
+  }
+  if (thinking && !selected.thinking?.includes(thinking)) {
+    const valid = selected.thinking?.length ? selected.thinking.join(', ') : 'none';
+    const err = new Error(`Thinking level ${thinking} is not valid for ${model}; valid levels: ${valid}.`);
+    err.status = 400;
+    throw err;
+  }
+}
+
 async function createSession({ harness = 'pi', name, model, thinking, cwd, target }) {
   const descriptor = getHarness(harness);
   if (!descriptor) {
@@ -3732,9 +3889,16 @@ function startSessionSpawn(options) {
 app.post('/api/sessions/new', async (req, res) => {
   const { harness = 'pi', model, thinking, cwd, target } = req.body || {};
   const name = typeof req.body?.name === 'string' ? req.body.name.trim() : req.body?.name;
-  if (!getHarness(harness)) return res.status(400).json({ error: `Unknown harness: ${harness}` });
+  const descriptor = getHarness(harness);
+  if (!descriptor) return res.status(400).json({ error: `Unknown harness: ${harness}` });
   if (name !== undefined && (typeof name !== 'string' || !name)) {
     return res.status(400).json({ error: 'Name must be a non-empty string' });
+  }
+  if (model !== undefined && (typeof model !== 'string' || !model.trim())) {
+    return res.status(400).json({ error: 'Model must be a non-empty string' });
+  }
+  if (cwd !== undefined && typeof cwd !== 'string') {
+    return res.status(400).json({ error: 'cwd must be a string' });
   }
   if (thinking !== undefined && !['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(thinking)) {
     return res.status(400).json({ error: 'Invalid reasoning level' });
@@ -3747,6 +3911,11 @@ app.post('/api/sessions/new', async (req, res) => {
   if (sourceSessionId && !getRegisteredSession(sourceSessionId) && !getRPCSession(sourceSessionId)?.alive
       && !findSessionFile(sourceSessionId, { exact: true })) {
     return res.status(400).json({ error: 'requestedBySessionId must identify an existing session' });
+  }
+  try {
+    await validateHarnessPilotSelection(descriptor, { model, thinking, cwd });
+  } catch (e) {
+    return res.status(e.status || 500).json({ error: e.message });
   }
   if (req.body?.async === true) {
     const spawnId = startSessionSpawn({ harness, name, model, thinking, cwd, target, sourceSessionId });
@@ -3810,8 +3979,8 @@ function activeSessionClearsQuarantine(sessionId) {
   return true;
 }
 
-async function launchResumedSession({ descriptor, sessionFile, cwd, target }) {
-  const args = descriptor.argv.resume({ file: sessionFile });
+async function launchResumedSession({ descriptor, sessionFile, cwd, target, model }) {
+  const args = descriptor.argv.resume({ file: sessionFile, model });
   if (target && target.type === 'tmux') {
     try {
       const id = await spawnHarnessInTmux({ descriptor, target, args, cwd });
@@ -3848,6 +4017,10 @@ async function launchResumedSession({ descriptor, sessionFile, cwd, target }) {
 // child); with a tmux `target`, `pi --session <path>` in that window instead.
 app.post('/api/sessions/:id/resume', async (req, res) => {
   const requestedId = req.params.id;
+  const model = req.body?.model;
+  if (model !== undefined && (typeof model !== 'string' || !model.trim())) {
+    return res.status(400).json({ error: 'Model must be a non-empty string' });
+  }
 
   if (activeSessionClearsQuarantine(requestedId)) {
     return res.json({ success: true, id: requestedId, alreadyActive: true });
@@ -3856,6 +4029,9 @@ app.post('/api/sessions/:id/resume', async (req, res) => {
   const sessionSource = findSessionSource(requestedId);
   if (!sessionSource) return res.status(404).json({ error: 'Session file not found' });
   const descriptor = getHarness(sessionSource.harnessId);
+  if (model && descriptor.id !== 'omp') {
+    return res.status(400).json({ error: 'Resume model overrides are currently supported only for Oh My Pi sessions.' });
+  }
   let sessionFile;
   try {
     sessionFile = fs.realpathSync(sessionSource.file);
@@ -3947,7 +4123,13 @@ app.post('/api/sessions/:id/resume', async (req, res) => {
     cwd = process.env.HOME;
   }
 
-  const flight = launchResumedSession({ descriptor, sessionFile, cwd, target: req.body?.target });
+  try {
+    await validateHarnessPilotSelection(descriptor, { model, cwd });
+  } catch (e) {
+    return res.status(e.status || 500).json({ error: e.message });
+  }
+
+  const flight = launchResumedSession({ descriptor, sessionFile, cwd, target: req.body?.target, model });
   resumeFlights.set(sessionFile, flight);
   try {
     const result = await flight;

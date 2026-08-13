@@ -1434,6 +1434,7 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
   if (currentSession.isActive) {
     if (inputArea) inputArea.style.display = '';
     if (resumeBar) resumeBar.style.display = 'none';
+    resetResumeModelPicker();
     restorePromptState();
   } else {
     clearPromptComposer();
@@ -1443,6 +1444,7 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
       const cwdSpan = resumeBar.querySelector('.resume-cwd');
       if (cwdSpan) cwdSpan.textContent = currentSession.cwd || '~';
     }
+    loadResumeModelOptions(currentSession);
   }
   if (sessionActions) sessionActions.style.display = currentSession.isActive ? '' : 'none';
 
@@ -1479,13 +1481,62 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
 }
 
 // Resume a previous session
+let resumeModelsSeq = 0;
+
+function resetResumeModelPicker() {
+  resumeModelsSeq += 1;
+  const wrap = document.getElementById('resumeModelWrap');
+  const select = document.getElementById('resumeModelSelect');
+  if (wrap) wrap.style.display = 'none';
+  if (select) {
+    select.disabled = true;
+    select.innerHTML = '<option value="">Session model</option>';
+  }
+}
+
+async function loadResumeModelOptions(session) {
+  resetResumeModelPicker();
+  if (!session || session.harnessId !== 'omp') return;
+  const seq = resumeModelsSeq;
+  const wrap = document.getElementById('resumeModelWrap');
+  const select = document.getElementById('resumeModelSelect');
+  if (!wrap || !select) return;
+  wrap.style.display = 'flex';
+  select.title = 'Loading Oh My Pi models…';
+  try {
+    const res = await fetch(modelCatalogUrl('omp', session.cwd));
+    const models = await res.json();
+    if (!res.ok) throw new Error(models.error || `HTTP ${res.status}`);
+    if (seq !== resumeModelsSeq || currentSession?.id !== session.id) return;
+    const current = session.model && session.model !== 'unknown' ? ` (${session.model})` : '';
+    let html = `<option value="">Session model${escapeHtml(current)}</option>`;
+    for (const model of Array.isArray(models) ? models : []) {
+      const selector = model.selector || `${model.provider}/${model.id}`;
+      const missing = model.providerReady === false;
+      html += `<option value="${escapeHtml(selector)}"${missing ? ' disabled' : ''}>${escapeHtml(selector)}${missing ? ' — credential missing' : ''}</option>`;
+    }
+    select.innerHTML = html;
+    select.disabled = false;
+    select.title = 'Optionally override the model while resuming this OMP session';
+  } catch (e) {
+    if (seq !== resumeModelsSeq || currentSession?.id !== session.id) return;
+    select.disabled = true;
+    select.title = `Could not load Oh My Pi models: ${e.message}`;
+  }
+}
+
 async function resumeSession() {
   if (!currentSession) return;
   const target = savedResumeTarget();
+  const model = currentSession.harnessId === 'omp'
+    ? (document.getElementById('resumeModelSelect')?.value || undefined) : undefined;
   setStatus(target ? 'Resuming in tmux…' : 'Resuming session...', 'working');
 
   try {
-    const data = await apiSend(`/api/sessions/${encodeURIComponent(currentSession.id)}/resume`, target ? { target } : undefined);
+    const data = await apiSend(`/api/sessions/${encodeURIComponent(currentSession.id)}/resume`, {
+      ...(target ? { target } : {}),
+      ...(model ? { model } : {}),
+    });
     setStatus('Session resumed');
     // Reload sessions and re-select (it's now active); refreshSessions
     // keeps an in-flight All-tab search intact.
@@ -1502,19 +1553,27 @@ async function resumeSession() {
 
 let knownModels = [];
 let knownModelsHarnessId = null;
+let knownModelsCwd = null;
 let modelsSeq = 0; // drops out-of-order responses on fast session switches
 
-async function loadModels(sessionId, harnessId) {
+function modelCatalogUrl(harnessId, cwd) {
+  const params = new URLSearchParams({ harness: harnessId });
+  if (cwd) params.set('cwd', cwd);
+  return '/api/models?' + params.toString();
+}
+
+async function loadModels(sessionId, harnessId, cwd) {
   const requestedHarnessId = harnessId || (sessionId ? findSession(sessionId)?.harnessId : null) || 'pi';
   const seq = ++modelsSeq;
   try {
-    const qs = sessionId ? ('?sessionId=' + encodeURIComponent(sessionId))
-      : requestedHarnessId !== 'pi' ? ('?harness=' + encodeURIComponent(requestedHarnessId)) : '';
-    const res = await fetch('/api/models' + qs);
+    const url = sessionId ? ('/api/models?sessionId=' + encodeURIComponent(sessionId))
+      : requestedHarnessId !== 'pi' ? modelCatalogUrl(requestedHarnessId, cwd) : '/api/models';
+    const res = await fetch(url);
     const data = await res.json();
     if (seq !== modelsSeq) return; // superseded by a newer session's fetch
     knownModels = Array.isArray(data) ? data : [];
     knownModelsHarnessId = requestedHarnessId;
+    knownModelsCwd = sessionId ? null : (cwd || '');
     // Cache the last good catalog so the new-session takeover renders its
     // model select instantly before the background refresh lands.
     if (knownModels.length) {
@@ -1526,7 +1585,10 @@ async function loadModels(sessionId, harnessId) {
     refreshResponsePricingState();
   } catch (e) {
     console.error('Failed to load models:', e);
-    if (seq === modelsSeq) knownModels = [];
+    if (seq === modelsSeq) {
+      knownModels = [];
+      knownModelsCwd = null;
+    }
   }
 }
 
@@ -6089,6 +6151,13 @@ let newSessionThinking = ''; // '' = default (omit --thinking)
 const HARNESS_KEY = 'pi-dish-new-harness';
 let knownHarnesses = [{ id: 'pi', label: 'Pi', available: true }];
 let newSessionHarness = 'pi';
+let nsConfigSeq = 0;
+let nsPilotRefreshTimer = null;
+
+const NS_THINKING_LABELS = {
+  off: 'Off', minimal: 'Minimal', low: 'Low', medium: 'Medium',
+  high: 'High', xhigh: 'Extra high', max: 'Maximum',
+};
 
 function selectedHarnessId() {
   return document.getElementById('nsHarnessSelect')?.value || newSessionHarness || 'pi';
@@ -6119,6 +6188,7 @@ async function loadHarnesses() {
     knownHarnesses = [{ id: 'pi', label: 'Pi', available: true }];
   }
   renderNsHarnesses();
+  if (isNewSessionViewOpen()) onNsHarnessChange(selectedHarnessId());
 }
 
 function renderNsHarnesses() {
@@ -6139,12 +6209,59 @@ function onNsHarnessChange(value) {
     || (newSessionHarness === 'pi' ? localStorage.getItem('pi-dish-new-thinking') : '') || '';
   knownModels = [];
   knownModelsHarnessId = null;
+  knownModelsCwd = null;
   renderNsModel();
-  loadModels(undefined, newSessionHarness).then(() => { if (isNewSessionViewOpen()) renderNsModel(); });
+  refreshNsPilotOptions();
 }
 
 function isNewSessionViewOpen() {
   return document.querySelector('.main').classList.contains('new-session-open');
+}
+
+function nsCwdValue() {
+  return (document.getElementById('newSessionCwd')?.value || '').trim();
+}
+
+async function loadNsHarnessConfig(cwd = nsCwdValue()) {
+  const wrap = document.getElementById('nsHarnessConfig');
+  const values = document.getElementById('nsHarnessConfigValues');
+  const seq = ++nsConfigSeq;
+  if (!wrap || !values) return;
+  if (selectedHarnessId() !== 'omp') {
+    wrap.style.display = 'none';
+    return;
+  }
+  wrap.style.display = '';
+  values.textContent = 'Loading…';
+  try {
+    const params = new URLSearchParams();
+    if (cwd) params.set('cwd', cwd);
+    const res = await fetch('/api/harnesses/omp/config' + (params.size ? `?${params}` : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (seq !== nsConfigSeq || selectedHarnessId() !== 'omp') return;
+    values.textContent = `Model: ${data.defaultModel || 'auto-select'} · Thinking: ${data.defaultThinkingLevel || 'host default'}`;
+  } catch (e) {
+    if (seq !== nsConfigSeq || selectedHarnessId() !== 'omp') return;
+    values.textContent = `Defaults unavailable: ${e.message}`;
+  }
+}
+
+function refreshNsPilotOptions() {
+  if (!isNewSessionViewOpen()) return;
+  const harnessId = selectedHarnessId();
+  const cwd = nsCwdValue();
+  knownModelsCwd = null;
+  renderNsModel();
+  loadModels(undefined, harnessId, cwd).then(() => {
+    if (isNewSessionViewOpen() && selectedHarnessId() === harnessId) renderNsModel();
+  });
+  loadNsHarnessConfig(cwd);
+}
+
+function scheduleNsPilotRefresh() {
+  clearTimeout(nsPilotRefreshTimer);
+  nsPilotRefreshTimer = setTimeout(refreshNsPilotOptions, 300);
 }
 
 // opts.cwd prefills the working directory (without overwriting the saved
@@ -6178,6 +6295,7 @@ function openNewSessionView(opts = {}) {
     || (newSessionHarness === 'pi' ? localStorage.getItem('pi-dish-new-thinking') : '') || '';
   if (knownModelsHarnessId !== newSessionHarness) {
     knownModels = [];
+    knownModelsCwd = null;
     try {
       const cacheKey = `pi-dish-models-cache:${newSessionHarness}`;
       const cached = JSON.parse(localStorage.getItem(cacheKey)
@@ -6189,7 +6307,7 @@ function openNewSessionView(opts = {}) {
     } catch {}
   }
   renderNsModel();
-  loadModels(undefined, newSessionHarness).then(() => { if (isNewSessionViewOpen()) renderNsModel(); });
+  refreshNsPilotOptions();
 
   renderNsWorkspaces();
   initNsTree();
@@ -6197,6 +6315,8 @@ function openNewSessionView(opts = {}) {
 
 function closeNewSessionView() {
   document.querySelector('.main').classList.remove('new-session-open');
+  clearTimeout(nsPilotRefreshTimer);
+  nsConfigSeq += 1;
   hideCwdDropdown();
 }
 
@@ -6299,6 +6419,7 @@ function setNsCwd(pathValue) {
   const input = document.getElementById('newSessionCwd');
   if (input) input.value = pathValue;
   localStorage.setItem('pi-dish-cwd', pathValue);
+  scheduleNsPilotRefresh();
 }
 
 // --- Model select ---
@@ -6320,12 +6441,58 @@ function onNsThinkingChange(value) {
 function syncNsThinking() {
   const sel = document.getElementById('nsThinkingSelect');
   if (!sel) return;
-  const selectedModel = knownModels.find(m => m && `${m.provider}/${m.id}` === newSessionModel);
-  const unsupported = selectedModel?.reasoning === false;
-  sel.disabled = unsupported;
-  sel.value = unsupported ? '' : newSessionThinking;
+  const harnessId = selectedHarnessId();
+  const selectedRef = document.getElementById('nsModelSelect')?.value || '';
+  const selectedModel = knownModels.find(m => m && (m.selector || `${m.provider}/${m.id}`) === selectedRef);
   const note = document.getElementById('nsThinkingNote');
-  if (note) note.textContent = unsupported ? 'The selected model does not support reasoning' : '';
+  let levels = Object.keys(NS_THINKING_LABELS);
+  let disabled = selectedModel?.reasoning === false;
+  let noteText = disabled ? 'The selected model does not support configurable thinking' : '';
+
+  if (harnessId === 'omp') {
+    levels = selectedModel && Array.isArray(selectedModel.thinking) ? selectedModel.thinking : [];
+    disabled = !selectedModel || levels.length === 0;
+    if (!selectedModel) noteText = 'Select a model to choose an explicit thinking level';
+    else if (!levels.length) noteText = 'This model has no configurable thinking levels';
+    else noteText = `Valid for this model: ${levels.map(level => NS_THINKING_LABELS[level] || level).join(', ')}`;
+  }
+
+  sel.innerHTML = '<option value="">(default)</option>' + levels.map(level =>
+    `<option value="${level}">${NS_THINKING_LABELS[level] || level}</option>`).join('');
+  if (!levels.includes(newSessionThinking)) {
+    newSessionThinking = '';
+    localStorage.setItem(`pi-dish-new-thinking:${harnessId}`, '');
+    if (harnessId === 'pi') localStorage.setItem('pi-dish-new-thinking', '');
+  }
+  sel.disabled = disabled;
+  sel.value = disabled ? '' : newSessionThinking;
+  if (note) note.textContent = noteText;
+}
+
+function renderNsProviderReadiness(models) {
+  const wrap = document.getElementById('nsProviderReadiness');
+  if (!wrap) return;
+  if (selectedHarnessId() !== 'omp') {
+    wrap.style.display = 'none';
+    wrap.innerHTML = '';
+    return;
+  }
+  wrap.style.display = 'flex';
+  if (knownModelsCwd !== (nsCwdValue() || '')) {
+    wrap.textContent = 'Checking provider credentials…';
+    return;
+  }
+  const byProvider = new Map();
+  for (const model of models) {
+    if (!byProvider.has(model.provider)) byProvider.set(model.provider, model.providerReady === true);
+    else if (model.providerReady === true) byProvider.set(model.provider, true);
+  }
+  if (!byProvider.size) {
+    wrap.textContent = 'OMP reported no available models';
+    return;
+  }
+  wrap.innerHTML = [...byProvider].sort(([a], [b]) => a.localeCompare(b)).map(([provider, ready]) =>
+    `<span class="ns-provider-status ${ready ? 'ready' : 'missing'}">${escapeHtml(provider)}: credential ${ready ? 'present' : 'missing'}</span>`).join('');
 }
 
 function renderNsModel() {
@@ -6334,6 +6501,7 @@ function renderNsModel() {
   const models = Array.isArray(knownModels) ? knownModels : [];
   const enabled = models.filter(m => m && m.enabled !== false);
   const hidden = models.length - enabled.length;
+  const readinessFresh = selectedHarnessId() !== 'omp' || knownModelsCwd === (nsCwdValue() || '');
 
   const byProvider = {};
   enabled.forEach(m => { (byProvider[m.provider] = byProvider[m.provider] || []).push(m); });
@@ -6341,7 +6509,9 @@ function renderNsModel() {
   Object.keys(byProvider).sort().forEach(p => {
     html += `<optgroup label="${escapeHtml(p)}">`;
     byProvider[p].forEach(m => {
-      html += `<option value="${escapeHtml(m.provider + '/' + m.id)}">${escapeHtml(m.id)}</option>`;
+      const selector = m.selector || `${m.provider}/${m.id}`;
+      const missing = readinessFresh && m.providerReady === false;
+      html += `<option value="${escapeHtml(selector)}"${missing ? ' disabled' : ''}>${escapeHtml(m.name || m.id)}${missing ? ' — credential missing' : ''}</option>`;
     });
     html += '</optgroup>';
   });
@@ -6352,11 +6522,17 @@ function renderNsModel() {
   // list (session-scoped knownModels, or empty pre-cache), and clearing here
   // would lose the selection before the full-catalog refresh re-renders.
   // Spawning reads the select itself, so a never-restored model can't be sent.
-  sel.value = (newSessionModel && enabled.some(m => (m.provider + '/' + m.id) === newSessionModel))
+  sel.value = (newSessionModel && enabled.some(m =>
+    (m.selector || `${m.provider}/${m.id}`) === newSessionModel && (!readinessFresh || m.providerReady !== false)))
     ? newSessionModel : '';
 
   const note = document.getElementById('nsModelHidden');
-  if (note) note.textContent = hidden > 0 ? `${hidden} model${hidden === 1 ? '' : 's'} hidden (not enabled)` : '';
+  const unavailable = readinessFresh ? enabled.filter(model => model.providerReady === false).length : 0;
+  const notes = [];
+  if (hidden > 0) notes.push(`${hidden} model${hidden === 1 ? '' : 's'} hidden (not enabled)`);
+  if (unavailable > 0) notes.push(`${unavailable} model${unavailable === 1 ? '' : 's'} unavailable (provider credential missing)`);
+  if (note) note.textContent = notes.join(' · ');
+  renderNsProviderReadiness(enabled);
   syncNsThinking();
 }
 
@@ -6371,6 +6547,10 @@ async function spawnNewSession() {
   try { target = selectedSpawnTarget(); } catch (e) { nsError(e.message); return; }
   const name = (document.getElementById('newSessionName')?.value || '').trim();
   const cwd = (document.getElementById('newSessionCwd')?.value || '').trim();
+  if (selectedHarnessId() === 'omp' && knownModelsCwd !== (cwd || '')) {
+    nsError('Wait for the Oh My Pi model and credential check to finish.');
+    return;
+  }
   nsError('');
   if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
   try {
@@ -6443,6 +6623,7 @@ function renderCwdDropdown(query, dirs) {
       input.value = el.dataset.path;
       localStorage.setItem('pi-dish-cwd', el.dataset.path);
       dropdown.style.display = 'none';
+      scheduleNsPilotRefresh();
     });
   });
 }
@@ -6464,7 +6645,10 @@ function hideCwdDropdown() {
 
   cwdInput.addEventListener('focus', () => showCwdDropdown(cwdInput.value));
   cwdInput.addEventListener('input', () => showCwdDropdown(cwdInput.value));
-  cwdInput.addEventListener('blur', () => setTimeout(hideCwdDropdown, 150));
+  cwdInput.addEventListener('blur', () => {
+    setTimeout(hideCwdDropdown, 150);
+    scheduleNsPilotRefresh();
+  });
 
   cwdInput.addEventListener('keydown', (e) => {
     const dropdown = document.getElementById('cwdDropdown');
@@ -6482,6 +6666,7 @@ function hideCwdDropdown() {
         cwdInput.value = options[cwdDropdownIdx].dataset.path;
         localStorage.setItem('pi-dish-cwd', cwdInput.value);
         hideCwdDropdown();
+        scheduleNsPilotRefresh();
       } else {
         hideCwdDropdown();
         spawnNewSession();
