@@ -174,6 +174,8 @@ fs.writeFileSync(path.join(sessionDir, `${SKILLS_SESSION_ID}.jsonl`), [
 ].map(e => JSON.stringify(e)).join('\n') + '\n');
 
 const server = require('../server.js');
+const piSDK = require('../lib/pi-sdk');
+const tmux = require('../lib/tmux');
 const { invalidateRegistryCache } = require('../lib/bridge-session');
 const { processIdentity, processIdentityAlive } = require('../lib/process-identity');
 const sessionProvenance = require('../lib/session-provenance');
@@ -305,7 +307,7 @@ test('fresh live routes distinguish missing history, then use the session file b
 
     const tree = await get(`/api/sessions/${encodeURIComponent(routeId)}/tree`);
     assert.equal(tree.status, 409, JSON.stringify(tree.body));
-    assert.match(tree.body.error, /only supported for Pi/);
+    assert.match(tree.body.error, /no reachable live bridge for tree reads/i);
     await del(`/api/sessions/${encodeURIComponent(routeId)}/share`);
   } finally {
     fs.rmSync(registryPath, { force: true });
@@ -1534,6 +1536,7 @@ test('OMP command discovery advertises only bridge-executable commands and API a
     capabilities: {
       commands: true, compact: true, setModel: true, rename: true,
       setThinking: false, abort: true, queueCancel: false,
+      treeRead: true, treeNavigation: true,
     },
   };
   const advertised = [
@@ -1580,7 +1583,7 @@ test('OMP command discovery advertises only bridge-executable commands and API a
     const commands = await get(`/api/commands?sessionId=${encodeURIComponent(routeId)}`);
     assert.equal(commands.status, 200, JSON.stringify(commands.body));
     assert.deepEqual(commands.body.map(command => command.name),
-      ['compact', 'model', 'name', 'abort', 'skill:review', 'daily', 'dish-push']);
+      ['tree', 'compact', 'model', 'name', 'abort', 'skill:review', 'daily', 'dish-push']);
 
     const cancelled = await post(`/api/sessions/${encodeURIComponent(routeId)}/queue/cancel`, {});
     assert.equal(cancelled.status, 409, JSON.stringify(cancelled.body));
@@ -2182,6 +2185,156 @@ test('branch_summary entries surface in /messages as branchSummary role', async 
   const bs = body.messages.find(m => m.role === 'branchSummary');
   assert.ok(bs, 'branch summary appears in the message stream');
   assert.equal(bs.content[0].text, 'Explored **X**; conclusion Y.');
+});
+
+test('inactive OMP tree routes return capability errors without calling the Pi SDK', async () => {
+  const originalGetTree = piSDK.getSessionTree;
+  const originalBranch = piSDK.branchSession;
+  let sdkCalls = 0;
+  piSDK.getSessionTree = piSDK.branchSession = async () => {
+    sdkCalls++;
+    throw new Error('OMP file reached the Pi SDK');
+  };
+  try {
+    const tree = await get(`/api/sessions/${encodeURIComponent(OMP_ROUTE_ID)}/tree`);
+    assert.equal(tree.status, 409);
+    assert.match(tree.body.error, /inactive Oh My Pi session/i);
+
+    const navigate = await post(`/api/sessions/${encodeURIComponent(OMP_ROUTE_ID)}/branch`, { entryId: 'omp-u1' });
+    assert.equal(navigate.status, 409);
+    assert.match(navigate.body.error, /inactive Oh My Pi session/i);
+    assert.equal(sdkCalls, 0, 'no inactive OMP tree path may enter lib/pi-sdk.js');
+  } finally {
+    piSDK.getSessionTree = originalGetTree;
+    piSDK.branchSession = originalBranch;
+  }
+});
+
+test('live OMP tree routes use tree_read/tree_navigate and the transcript follows the bridge leaf', async () => {
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const socketPath = path.join(tmpHome, 'dish-omp-tree-test.sock');
+  const bridgeInstanceId = 'omp-tree-server-test';
+  const capabilities = { treeRead: true, treeNavigation: true };
+  const claim = {
+    protocolVersion: 2,
+    wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+    harnessId: 'omp',
+    nativeSessionId: OMP_SESSION_ID,
+    sessionId: OMP_SESSION_ID,
+    sessionFile: ompSessionFile,
+    bridgeInstanceId,
+    instanceId: bridgeInstanceId,
+    socketPath,
+    pid: process.pid,
+    startTime: processIdentity(process.pid).startTime,
+    spawnToken: null,
+    capabilities,
+    cwd: ompCwd,
+  };
+  let leafId = 'omp-a1';
+  let pendingNavigation = null;
+  const received = [];
+  const socks = [];
+  const bridge = net.createServer((sock) => {
+    socks.push(sock);
+    sock.write(JSON.stringify({ type: 'hello', ...claim, turnInProgress: false }) + '\n');
+    let buffer = '';
+    sock.on('data', (chunk) => {
+      buffer += chunk.toString();
+      let newline;
+      while ((newline = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
+        if (!line.trim()) continue;
+        const command = JSON.parse(line);
+        received.push(command);
+        if (command.command === 'tree_read') {
+          const activePathIds = leafId === 'omp-u1' ? ['omp-u1'] : ['omp-a1', 'omp-u1'];
+          sock.write(JSON.stringify({
+            type: 'response', id: command.id, command: command.command, success: true,
+            data: {
+              leafId,
+              activePathIds,
+              nodes: [
+                { id: 'omp-u1', parentId: null, type: 'message', role: 'user', text: 'OMP shared prompt', depth: 0, active: true, isLeaf: leafId === 'omp-u1', childCount: 1 },
+                { id: 'omp-a1', parentId: 'omp-u1', type: 'message', role: 'assistant', text: 'OMP shared answer', depth: 0, active: leafId === 'omp-a1', isLeaf: leafId === 'omp-a1', childCount: 0 },
+              ],
+            },
+          }) + '\n');
+        } else if (command.command === 'tree_navigate') {
+          // Real OMP cannot service this until the server types the internal
+          // bridge command into its TUI and OMP supplies a command context.
+          pendingNavigation = { sock, command };
+          sock.write(JSON.stringify({
+            type: 'event', event: 'tree_operation_queued',
+            data: { requestId: command.id, operation: 'navigate' },
+          }) + '\n');
+        } else {
+          sock.write(JSON.stringify({ type: 'response', id: command.id, command: command.command, success: false, error: `unknown command: ${command.command}` }) + '\n');
+        }
+      }
+    });
+  });
+  await new Promise((resolve) => bridge.listen(socketPath, resolve));
+  const registryPath = path.join(registryDir, 'omp-tree-server-test.json');
+  fs.writeFileSync(registryPath, JSON.stringify(claim));
+  invalidateRegistryCache();
+
+  const originalGetTree = piSDK.getSessionTree;
+  const originalBranch = piSDK.branchSession;
+  const originalFindPaneByPid = tmux.findPaneByPid;
+  const originalSendKeys = tmux.sendKeys;
+  let sdkCalls = 0;
+  const serviceCommands = [];
+  piSDK.getSessionTree = piSDK.branchSession = async () => {
+    sdkCalls++;
+    throw new Error('live OMP file reached the Pi SDK');
+  };
+  tmux.findPaneByPid = async () => ({ socket: '/fake/omp-tmux.sock', paneId: '%42' });
+  tmux.sendKeys = async (socket, paneId, text) => {
+    serviceCommands.push({ socket, paneId, text });
+    assert.ok(pendingNavigation, 'bridge operation was queued before command-context acquisition');
+    const { sock, command } = pendingNavigation;
+    pendingNavigation = null;
+    leafId = command.targetId;
+    sock.write(JSON.stringify({
+      type: 'response', id: command.id, command: command.command, success: true,
+      data: { editorText: 'OMP shared prompt', leafId },
+    }) + '\n');
+  };
+  try {
+    const tree = await get(`/api/sessions/${encodeURIComponent(OMP_ROUTE_ID)}/tree`);
+    assert.equal(tree.status, 200, JSON.stringify(tree.body));
+    assert.equal(tree.body.leafId, 'omp-a1');
+
+    const navigate = await post(`/api/sessions/${encodeURIComponent(OMP_ROUTE_ID)}/branch`, {
+      entryId: 'omp-u1', summarize: true, customInstructions: 'not supported by OMP',
+    });
+    assert.equal(navigate.status, 200, JSON.stringify(navigate.body));
+    assert.equal(navigate.body.editorText, 'OMP shared prompt');
+    const wireNavigate = received.find((command) => command.command === 'tree_navigate');
+    assert.ok(wireNavigate, 'server used OMP tree_navigate');
+    assert.equal(wireNavigate.targetId, 'omp-u1');
+    assert.equal(wireNavigate.summarize, true);
+    assert.equal(wireNavigate.customInstructions, undefined, 'unsupported OMP summary instructions stay off the wire');
+    assert.deepEqual(serviceCommands, [{
+      socket: '/fake/omp-tmux.sock', paneId: '%42', text: '/dish-tree-service',
+    }]);
+
+    const messages = await get(`/api/sessions/${encodeURIComponent(OMP_ROUTE_ID)}/messages`);
+    assert.equal(messages.status, 200, JSON.stringify(messages.body));
+    assert.deepEqual(messages.body.messages.map((message) => message.content?.[0]?.text), ['OMP shared prompt']);
+    assert.equal(sdkCalls, 0, 'no live OMP tree path may enter lib/pi-sdk.js');
+  } finally {
+    piSDK.getSessionTree = originalGetTree;
+    piSDK.branchSession = originalBranch;
+    tmux.findPaneByPid = originalFindPaneByPid;
+    tmux.sendKeys = originalSendKeys;
+    fs.rmSync(registryPath, { force: true });
+    invalidateRegistryCache();
+    for (const sock of socks) sock.destroy();
+    await new Promise((resolve) => bridge.close(resolve));
+  }
 });
 
 test('POST /branch on a live bridge session forwards navigate_tree', async () => {

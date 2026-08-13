@@ -32,6 +32,7 @@ const comments = require('./lib/comments');
 const {
   getSessionInfo: getSessionInfoRaw,
   readSessionMessages: readSessionMessagesRaw,
+  readSessionMessagesAtLeaf: readSessionMessagesAtLeafRaw,
   readSessionMessageById: readSessionMessageByIdRaw,
   getSessionStats: getSessionStatsRaw,
   readSessionCwd: readSessionCwdRaw,
@@ -188,6 +189,7 @@ function liveSessionHistoryPending(sessionId) {
 }
 function getSessionInfo(input) { return getSessionInfoRaw(sourceForRead(input)); }
 function readSessionMessages(input) { return readSessionMessagesRaw(sourceForRead(input)); }
+function readSessionMessagesAtLeaf(input, leafId) { return readSessionMessagesAtLeafRaw(sourceForRead(input), leafId); }
 function readSessionMessageById(input, id) { return readSessionMessageByIdRaw(sourceForRead(input), id); }
 function getSessionStats(input) { return getSessionStatsRaw(sourceForRead(input)); }
 function readSessionCwd(input) { return readSessionCwdRaw(sourceForRead(input)); }
@@ -223,7 +225,11 @@ function sessionCapabilities(harnessId, bridgeCapabilities = {}, { active = fals
     rename: active ? advertised('rename') : pi,
     commands: active ? advertised('commands') : pi,
     queueCancel: advertised('queueCancel'),
-    tree: pi && (active ? advertised('treeNavigation') : true),
+    tree: pi
+      ? (active ? advertised('treeNavigation') : true)
+      : harnessId === 'omp' && active
+        ? advertised('treeRead') && advertised('treeNavigation')
+        : false,
     export: pi || harnessId === 'omp',
     // Client-only harnesses may only detach the exact tmux pane pi-dish
     // recorded when it launched that client.
@@ -1652,7 +1658,23 @@ app.get('/api/sessions/:id/messages', async (req, res) => {
     if (liveUsage.percent != null) info.contextPercent = roundPercent(liveUsage.percent);
     if (liveUsage.contextWindow) info.contextWindow = liveUsage.contextWindow;
   }
-  const all = readSessionMessages(sessionSource);
+  let all;
+  // OMP's live ReadonlySessionManager owns the current leaf. A plain
+  // navigateTree may not append a JSONL anchor, so deriving the path from the
+  // physical last line can show the abandoned branch after navigation.
+  if (sessionSource.harnessId === 'omp' && isActive) {
+    try {
+      const sess = await getLiveSession(sessionId);
+      if (sess instanceof BridgeSession && liveSessionSupports(sess, 'treeRead')) {
+        const tree = await sess.readTree();
+        all = readSessionMessagesAtLeaf(sessionSource, tree.leafId ?? null);
+      }
+    } catch {
+      // Transcript history remains readable if a live bridge disappears
+      // between registry lookup and this request; only tree routes require it.
+    }
+  }
+  if (!all) all = readSessionMessages(sessionSource);
   const totalMessages = all.length;
   let startIdx, endIdx; // inclusive
   if (after != null) {
@@ -2549,11 +2571,47 @@ app.post('/api/sessions/:id/model', async (req, res) => {
 
 app.get('/api/sessions/:id/tree', async (req, res) => {
   try {
+    const identity = routeIdentity(req.params.id);
+    if (!identity) return res.status(400).json({ error: 'Invalid session ID' });
+    if (identity.harnessId === 'omp') {
+      // Resolve first: a definitive socket failure may prune a stale registry
+      // claim, but its fresh session file is still enough to distinguish an
+      // unsupported inactive tree read from an unknown session.
+      const source = findSessionSource(req.params.id);
+      let sess;
+      try {
+        sess = await getLiveSession(req.params.id);
+      } catch {
+        if (!source) return res.status(404).json({ error: 'Session not found' });
+        return res.status(409).json({ error: 'This Oh My Pi session has no reachable live bridge for tree reads.' });
+      }
+      if (!sess) {
+        if (!source) return res.status(404).json({ error: 'Session not found' });
+        return res.status(409).json({ error: 'Reading the tree of an inactive Oh My Pi session is not supported.' });
+      }
+      if (!liveSessionSupports(sess, 'treeRead')) {
+        return res.status(409).json({ error: 'This Oh My Pi session does not advertise live tree reads.' });
+      }
+      if (!(sess instanceof BridgeSession)) {
+        return res.status(409).json({ error: 'This Oh My Pi session has no live bridge connection for tree reads.' });
+      }
+      try {
+        return res.json(await sess.readTree());
+      } catch (e) {
+        if (/unknown command/i.test(e.message || '')) {
+          return res.status(409).json({ error: 'The Oh My Pi session is running an older pi-dish bridge; reload or restart it to enable tree reads.' });
+        }
+        if (/unavailable|does not expose/i.test(e.message || '')) {
+          return res.status(409).json({ error: e.message });
+        }
+        throw e;
+      }
+    }
+    if (identity.harnessId !== 'pi') {
+      return res.status(409).json({ error: 'Session tree reads are not supported for this harness.' });
+    }
     const session = findSessionSource(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
-    if (session.harnessId !== 'pi') {
-      return res.status(409).json({ error: 'Session tree navigation is only supported for Pi.' });
-    }
     const tree = await piSDK.getSessionTree(session.file);
     res.json(tree);
   } catch (e) {
@@ -2590,6 +2648,51 @@ async function navigateLiveTree(sessionId, sess, entryId, opts) {
   }
 }
 
+// OMP intentionally exposes branch/navigation only on command contexts, and
+// its public ExtensionAPI.sendUserMessage() bypasses extension-command
+// dispatch. Queue the bridge request first, then type the bridge's internal
+// service command into the exact live TUI pane so OMP creates a legal command
+// context to drain it. Sessions outside a locatable tmux pane retain live tree
+// reads but fail navigation precisely instead of falling back to the Pi SDK.
+async function navigateLiveOmpTree(sessionId, sess, entryId, opts) {
+  const pane = await locatePiPane(sessionId);
+  if (!pane) {
+    const error = new Error('Oh My Pi tree navigation requires a reachable tmux pane to acquire its command context.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const operation = sess.treeNavigate(entryId, opts);
+  // If send-keys fails, the bridge request will reject on its bounded
+  // acquisition timer. Attach a handler now so returning the trigger error
+  // cannot leave that later rejection unhandled.
+  operation.catch(() => {});
+  try {
+    await new Promise((resolve, reject) => {
+      let timer;
+      const cleanup = () => {
+        clearTimeout(timer);
+        sess.off('tree_operation_queued', onQueued);
+      };
+      const onQueued = (data) => {
+        if (data?.requestId !== operation.requestId) return;
+        cleanup();
+        resolve();
+      };
+      sess.on('tree_operation_queued', onQueued);
+      timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('bridge did not acknowledge the queued tree operation'));
+      }, 2000);
+    });
+    await tmux.sendKeys(pane.socket, pane.paneId, '/dish-tree-service');
+  } catch (cause) {
+    const error = new Error(`Oh My Pi tree navigation could not acquire its command context: ${cause.message}`);
+    error.statusCode = 409;
+    throw error;
+  }
+  return operation;
+}
+
 // Move the session leaf (pi's /tree), optionally summarizing the abandoned
 // branch. Live sessions must navigate inside the pi process — an external
 // SessionManager write would diverge from the agent's in-memory state — so
@@ -2605,8 +2708,8 @@ app.post('/api/sessions/:id/branch', async (req, res) => {
   try {
     const identity = routeIdentity(req.params.id);
     if (!identity) return res.status(400).json({ error: 'Invalid session ID' });
-    if (identity.harnessId !== 'pi') {
-      return res.status(409).json({ error: 'Session tree navigation is only supported for Pi.' });
+    if (identity.harnessId !== 'pi' && identity.harnessId !== 'omp') {
+      return res.status(409).json({ error: 'Session tree navigation is not supported for this harness.' });
     }
     const source = findSessionSource(req.params.id);
     const sess = await getLiveSession(req.params.id);
@@ -2618,7 +2721,9 @@ app.post('/api/sessions/:id/branch', async (req, res) => {
         return res.status(409).json({ error: 'This live session has no bridge connection — install the pi-dish-bridge extension to navigate its tree.' });
       }
       try {
-        const data = await navigateLiveTree(req.params.id, sess, entryId, opts);
+        const data = identity.harnessId === 'omp'
+          ? await navigateLiveOmpTree(req.params.id, sess, entryId, opts)
+          : await navigateLiveTree(req.params.id, sess, entryId, opts);
         return res.json({ success: true, editorText: data?.editorText });
       } catch (e) {
         if (/unknown command/i.test(e.message || '')) {
@@ -2630,10 +2735,19 @@ app.post('/api/sessions/:id/branch', async (req, res) => {
           // subscribe since the bridge loaded) and no prime path reached it.
           return res.status(409).json({ error: "pi hands out session control only inside command handlers and this session couldn't be primed remotely — send any prompt to it (or run /dish-push once in its TUI), then retry." });
         }
+        if (identity.harnessId === 'omp' && /timed out/i.test(e.message || '')) {
+          return res.status(504).json({ error: e.message });
+        }
+        if (identity.harnessId === 'omp' && /cancelled|unavailable|command context/i.test(e.message || '')) {
+          return res.status(409).json({ error: e.message });
+        }
         throw e;
       }
     }
     if (!source) return res.status(404).json({ error: 'Session not found' });
+    if (identity.harnessId === 'omp') {
+      return res.status(409).json({ error: 'Navigating the tree of an inactive Oh My Pi session is not supported.' });
+    }
     const result = await piSDK.branchSession(source.file, entryId, opts);
     res.json({ success: true, editorText: result.editorText });
   } catch (e) {
@@ -2909,6 +3023,7 @@ app.put('/api/models/enabled', async (req, res) => {
 
 const BRIDGE_COMMAND_CAPABILITIES = {
   compact: 'compact',
+  tree: 'treeNavigation',
   model: 'setModel',
   name: 'rename',
   thinking: 'setThinking',

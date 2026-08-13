@@ -233,6 +233,13 @@ export type BridgeDescriptor = {
   piLifecycleEvents?: boolean;
   publicCompactionEvents?: boolean;
   compactArgument?: (instructions: string) => any;
+  // OMP permits branch()/navigateTree() only while an extension command
+  // handler is executing. When enabled, socket requests are queued and an
+  // internal command services them instead of reusing a command context from
+  // an arbitrary socket callback.
+  treeCommandContext?: boolean;
+  treeCommandAcquireTimeoutMs?: number;
+  treeCommandOperationTimeoutMs?: number;
   // Resident harness daemons may not forward arbitrary client environment
   // variables. Launch-specific wrappers inject this value directly instead.
   spawnToken?: string;
@@ -248,6 +255,105 @@ function queueEntryText(entry: any): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) return content.filter((c: any) => c?.type === "text").map((c: any) => c.text).join("");
   return "";
+}
+
+function treeEntryText(content: any): string {
+  return typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content.filter((part: any) => part?.type === "text").map((part: any) => part.text).join("")
+      : "";
+}
+
+function treeEntryPreview(content: any, maxLength: number): string {
+  return treeEntryText(content).replace(/[\n\t]/g, " ").trim().slice(0, maxLength);
+}
+
+function treeToolSummary(name: string, args: any): string {
+  if (!args || typeof args !== "object") return "";
+  if (name === "Bash" || name === "bash") return typeof args.command === "string" ? args.command.split("\n")[0].slice(0, 60) : "";
+  if (["Read", "read", "Edit", "edit", "Write", "write"].includes(name)) return typeof args.path === "string" ? args.path : "";
+  const key = Object.keys(args)[0];
+  return key ? String(args[key]).slice(0, 40) : "";
+}
+
+// Public ReadonlySessionManager -> the compact tree shape consumed by the web
+// modal. This intentionally uses only getTree/getEntries/getLeafId: OMP tree
+// reads are safe in ordinary event/socket contexts, unlike tree mutations.
+function serializeSessionTree(sessionManager: any) {
+  if (!sessionManager || typeof sessionManager.getTree !== "function" ||
+      typeof sessionManager.getEntries !== "function" || typeof sessionManager.getLeafId !== "function") {
+    throw new Error("tree read unavailable: host does not expose the ReadonlySessionManager tree API");
+  }
+  const tree = sessionManager.getTree();
+  const entries = sessionManager.getEntries();
+  const leafId = sessionManager.getLeafId() ?? null;
+  if (!Array.isArray(tree) || !Array.isArray(entries)) {
+    throw new Error("tree read unavailable: host returned an invalid session tree");
+  }
+
+  const byId = new Map(entries.filter((entry: any) => entry?.id).map((entry: any) => [entry.id, entry]));
+  const activePathIds = new Set<string>();
+  let current = leafId;
+  while (typeof current === "string" && current && !activePathIds.has(current)) {
+    activePathIds.add(current);
+    const parent = (byId.get(current) as any)?.parentId;
+    current = typeof parent === "string" ? parent : null;
+  }
+
+  const nodes: any[] = [];
+  const flatten = (node: any, depth: number) => {
+    const entry = node?.entry;
+    if (!entry?.id || !Array.isArray(node.children)) {
+      throw new Error("tree read unavailable: host returned an invalid tree node");
+    }
+    const result: any = {
+      id: entry.id,
+      parentId: entry.parentId ?? null,
+      type: entry.type,
+      timestamp: entry.timestamp,
+      depth,
+      active: activePathIds.has(entry.id),
+      isLeaf: entry.id === leafId,
+      label: node.label ?? null,
+      childCount: node.children.length,
+    };
+    if (entry.type === "message") {
+      const message = entry.message || {};
+      result.role = message.role;
+      if (message.role === "user") {
+        result.text = treeEntryPreview(message.content, 120);
+      } else if (message.role === "assistant") {
+        result.text = treeEntryPreview(message.content, 120);
+        result.model = message.model;
+        result.stopReason = message.stopReason;
+        result.errorMessage = message.errorMessage;
+        if (Array.isArray(message.content)) {
+          result.toolCalls = message.content
+            .filter((part: any) => part?.type === "toolCall")
+            .map((part: any) => ({ id: part.id, name: part.name, args: treeToolSummary(part.name, part.arguments) }));
+        }
+      } else if (message.role === "toolResult") {
+        result.toolName = message.toolName;
+        result.toolCallId = message.toolCallId;
+        result.isError = !!message.isError;
+      }
+    } else if (entry.type === "compaction") {
+      result.tokensBefore = entry.tokensBefore;
+    } else if (entry.type === "model_change") {
+      const ref = typeof entry.model === "string" ? entry.model : "";
+      const slash = ref.indexOf("/");
+      result.modelId = entry.modelId ?? (slash >= 0 ? ref.slice(slash + 1) : ref);
+      result.provider = entry.provider ?? (slash >= 0 ? ref.slice(0, slash) : undefined);
+    } else if (entry.type === "branch_summary") {
+      result.summary = String(entry.summary || "").slice(0, 120);
+    }
+    nodes.push(result);
+    const childDepth = node.children.length > 1 ? depth + 1 : depth;
+    for (const child of node.children) flatten(child, childDepth);
+  };
+  for (const root of tree) flatten(root, 0);
+  return { nodes, leafId, activePathIds: [...activePathIds] };
 }
 
 export function createBridge(descriptor: BridgeDescriptor) {
@@ -280,12 +386,121 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // so every bridge command stashes its ctx for the socket handlers to
   // reuse. RPC sessions can be primed remotely (`prompt` with "/dish-prime"
   // goes through pi's command executor — the server does this on demand);
-  // TUI sessions have no remote path to a command context (pi.sendUserMessage
-  // deliberately skips command handling), so they need any /dish-* command
-  // run once in the TUI to enable remote tree navigation.
+  // upstream Pi TUI sessions need the captured private AgentSession self-prime
+  // below. OMP's public sendUserMessage() deliberately bypasses extension
+  // command handling, so pi-dish queues each operation over the socket and
+  // invokes the internal service command through the exact tmux pane.
   let commandCtx: any = null;
   function stashCommandCtx(ctx: any) {
     if (ctx && typeof ctx.navigateTree === "function") commandCtx = ctx;
+  }
+
+  const TREE_SERVICE_COMMAND = "dish-tree-service";
+  type PendingTreeOperation = {
+    kind: "navigate" | "branch";
+    targetId: string;
+    summarize: boolean;
+    editorText?: string;
+    resolve: (value: any) => void;
+    reject: (error: Error) => void;
+    acquireTimer: ReturnType<typeof setTimeout>;
+    settled: boolean;
+  };
+  const pendingTreeOperations: PendingTreeOperation[] = [];
+  const activeTreeOperations = new Set<PendingTreeOperation>();
+  let treeServiceRunning = false;
+
+  function rejectTreeOperation(operation: PendingTreeOperation, error: Error) {
+    if (operation.settled) return;
+    operation.settled = true;
+    clearTimeout(operation.acquireTimer);
+    activeTreeOperations.delete(operation);
+    const index = pendingTreeOperations.indexOf(operation);
+    if (index >= 0) pendingTreeOperations.splice(index, 1);
+    operation.reject(error);
+  }
+
+  async function runTreeOperationInCommand(operation: PendingTreeOperation, ctx: any): Promise<any> {
+    const operationName = operation.kind === "branch" ? "tree branch" : "tree navigation";
+    const method = operation.kind === "branch" ? ctx?.branch : ctx?.navigateTree;
+    if (typeof method !== "function") {
+      capabilities.treeNavigation = false;
+      writeRegistry();
+      throw new Error(`${operationName} unavailable: host command context does not expose ${operation.kind === "branch" ? "branch" : "navigateTree"}`);
+    }
+    // Fire before BridgeSession's 180s request deadline so callers receive
+    // this operation-specific error rather than a generic socket timeout.
+    const timeoutMs = descriptor.treeCommandOperationTimeoutMs ?? 170000;
+    let timer: ReturnType<typeof setTimeout>;
+    try {
+      const call = operation.kind === "branch"
+        ? Promise.resolve(method.call(ctx, operation.targetId))
+        : Promise.resolve(method.call(ctx, operation.targetId, { summarize: operation.summarize }));
+      const result = await Promise.race([
+        call,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`${operationName} timed out after ${timeoutMs}ms`)), timeoutMs);
+        }),
+      ]);
+      if ((result as any)?.cancelled) {
+        throw new Error(`${operationName} cancelled by ${descriptor.name}`);
+      }
+      refreshContextUsage(ctx);
+      writeRegistry();
+      let tree;
+      try { tree = serializeSessionTree(ctx.sessionManager); } catch {}
+      return { editorText: operation.editorText, leafId: tree?.leafId ?? null };
+    } finally {
+      clearTimeout(timer!);
+    }
+  }
+
+  async function servicePendingTreeOperations(ctx: any) {
+    // HTTP requests and tmux-triggered command handlers can overlap. Keep
+    // mutations strictly serialized; the first command handler drains work
+    // queued for later handlers too.
+    if (treeServiceRunning) return;
+    treeServiceRunning = true;
+    try {
+      while (pendingTreeOperations.length) {
+        const operation = pendingTreeOperations.shift()!;
+        if (operation.settled) continue;
+        clearTimeout(operation.acquireTimer);
+        activeTreeOperations.add(operation);
+        try {
+          const result = await runTreeOperationInCommand(operation, ctx);
+          if (!operation.settled) {
+            operation.settled = true;
+            activeTreeOperations.delete(operation);
+            operation.resolve(result);
+          }
+        } catch (error: any) {
+          if (!operation.settled) {
+            operation.settled = true;
+            activeTreeOperations.delete(operation);
+            operation.reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        }
+      }
+    } finally {
+      treeServiceRunning = false;
+    }
+  }
+
+  function queueTreeOperation(kind: "navigate" | "branch", targetId: string, summarize: boolean, editorText?: string) {
+    return new Promise((resolve, reject) => {
+      const acquireTimeoutMs = descriptor.treeCommandAcquireTimeoutMs ?? 5000;
+      const operationName = kind === "branch" ? "tree branch" : "tree navigation";
+      const operation = {
+        kind, targetId, summarize, editorText, resolve, reject,
+        acquireTimer: null as any,
+        settled: false,
+      } satisfies PendingTreeOperation;
+      operation.acquireTimer = setTimeout(() => {
+        rejectTreeOperation(operation, new Error(`${operationName} command context acquisition timed out after ${acquireTimeoutMs}ms`));
+      }, acquireTimeoutMs);
+      pendingTreeOperations.push(operation);
+    });
   }
 
   // Self-prime: the extension API alone has no remote path to a command
@@ -309,6 +524,19 @@ export function createBridge(descriptor: BridgeDescriptor) {
       stashCommandCtx(ctx);
     },
   });
+
+  if (descriptor.treeCommandContext) {
+    pi.registerCommand(TREE_SERVICE_COMMAND, {
+      // OMP has no public hidden-command flag. Keep this out of the bridge's
+      // command listing below and give it no user-facing description. The
+      // server invokes it through the session's tmux pane after queueing a
+      // socket operation; OMP's public sendUserMessage() deliberately skips
+      // extension-command dispatch and cannot be used to self-trigger it.
+      handler: async (_args: string, ctx: any) => {
+        await servicePendingTreeOperations(ctx);
+      },
+    });
+  }
 
   // Reload entrypoint: RPC sessions can invoke this via a plain `prompt`
   // command ("/dish-reload"); TUI sessions cannot (see commandCtx above).
@@ -802,6 +1030,12 @@ export function createBridge(descriptor: BridgeDescriptor) {
     sessionFile = null;
     cwd = null;
     commandCtx = null;
+    for (const operation of [...pendingTreeOperations]) {
+      rejectTreeOperation(operation, new Error("tree operation cancelled: session shut down"));
+    }
+    for (const operation of [...activeTreeOperations]) {
+      rejectTreeOperation(operation, new Error("tree operation cancelled: session shut down"));
+    }
     turnInProgress = false;
     if (compactionStuckTimer) { clearTimeout(compactionStuckTimer); compactionStuckTimer = null; }
     compacting = false;
@@ -1189,7 +1423,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
         extension_ui_response: "extensionUI",
         set_model: "setModel",
         set_thinking_level: "setThinking",
+        tree_read: "treeRead",
         navigate_tree: "treeNavigation",
+        tree_navigate: "treeNavigation",
+        branch: "treeNavigation",
         set_session_name: "rename",
       };
       const requiredCapability = commandCapabilities[cmd?.command];
@@ -1213,6 +1450,19 @@ export function createBridge(descriptor: BridgeDescriptor) {
           const result = await executeSlashCommand(`/compact${instructions ? ` ${instructions}` : ""}`);
           if (result.ok) respond(true, { info: result.info });
           else respond(false, undefined, result.error);
+          return;
+        }
+
+        case "tree_read": {
+          if (!lastCtx) return respond(false, undefined, "tree read unavailable: no active context");
+          try {
+            respond(true, serializeSessionTree((lastCtx as any).sessionManager));
+          } catch (error: any) {
+            capabilities.treeRead = false;
+            capabilities.treeNavigation = false;
+            writeRegistry();
+            respond(false, undefined, String(error?.message || error));
+          }
           return;
         }
 
@@ -1341,7 +1591,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
             if (command.name === "reload") return !!descriptor.selfPrime;
             return true;
           });
-          const commands = pi.getCommands().map((c) => ({
+          const commands = pi.getCommands()
+            .filter((c) => c.name !== TREE_SERVICE_COMMAND)
+            .map((c) => ({
             name: c.name,
             description: c.description || "",
             source: c.source,
@@ -1351,7 +1603,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
             // require their own TUI command context.
             supported: c.source === "skill" || c.source === "prompt"
               || (c.source === "extension" && c.name === "dish-push"),
-          }));
+            }));
           const discoveredNames = new Set(commands.map((command) => command.name));
           for (const command of emulated) {
             if (discoveredNames.has(command.name)) continue;
@@ -1405,7 +1657,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
           return;
         }
 
-        case "navigate_tree": {
+        case "navigate_tree":
+        case "tree_navigate":
+        case "branch": {
           // pi's /tree, remotely: move the session leaf to targetId,
           // optionally appending an LLM summary of the abandoned branch.
           // ctx.navigateTree does the heavy lifting in-process (summary via
@@ -1420,24 +1674,57 @@ export function createBridge(descriptor: BridgeDescriptor) {
           if (compacting || getCapturedSession()?.isCompacting) {
             return respond(false, undefined, "cannot navigate the tree while compaction is in progress");
           }
-          if (!commandCtx) await acquireCommandCtx();
-          if (!commandCtx) return respond(false, undefined, "no command context");
           const targetId = typeof cmd.targetId === "string" ? cmd.targetId : "";
           if (!targetId) return respond(false, undefined, "targetId required");
-          const target = lastCtx.sessionManager.getEntry(targetId);
+          const manager: any = (lastCtx as any).sessionManager;
+          if (!manager || typeof manager.getEntry !== "function") {
+            capabilities.treeRead = false;
+            capabilities.treeNavigation = false;
+            writeRegistry();
+            return respond(false, undefined, "tree navigation unavailable: host does not expose the ReadonlySessionManager entry API");
+          }
+          const target = manager.getEntry(targetId);
           if (!target) return respond(false, undefined, `entry not found: ${targetId}`);
           let editorText: string | undefined;
-          const textOf = (content: any): string =>
-            typeof content === "string"
-              ? content
-              : Array.isArray(content)
-                ? content.filter((c: any) => c?.type === "text").map((c: any) => c.text).join("")
-                : "";
           if (target.type === "message" && (target as any).message?.role === "user") {
-            editorText = textOf((target as any).message.content) || undefined;
+            editorText = treeEntryText((target as any).message.content) || undefined;
           } else if (target.type === "custom_message") {
-            editorText = textOf((target as any).content) || undefined;
+            editorText = treeEntryText((target as any).content) || undefined;
           }
+
+          const operation = cmd.command === "branch" ? "branch" : "navigate";
+          if (descriptor.treeCommandContext) {
+            try {
+              const pending = queueTreeOperation(operation, targetId, !!cmd.summarize, editorText);
+              // The server must not type the service command until this socket
+              // handler has queued the operation. A request-scoped event gives
+              // it an explicit barrier instead of relying on socket/tmux timing.
+              broadcast({
+                type: "event",
+                event: "tree_operation_queued",
+                data: { requestId: cmd.id, operation },
+              });
+              const data = await pending;
+              respond(true, data);
+            } catch (error: any) {
+              respond(false, undefined, String(error?.message || error));
+            }
+            return;
+          }
+
+          if (operation === "branch") {
+            if (!commandCtx) await acquireCommandCtx();
+            if (!commandCtx || typeof commandCtx.branch !== "function") return respond(false, undefined, "no command context");
+            const result = await commandCtx.branch(targetId);
+            if (result?.cancelled) return respond(false, undefined, "tree branch was cancelled");
+            refreshContextUsage();
+            writeRegistry();
+            respond(true, { editorText });
+            return;
+          }
+
+          if (!commandCtx) await acquireCommandCtx();
+          if (!commandCtx) return respond(false, undefined, "no command context");
           let result;
           for (let attempt = 0; ; attempt++) {
             try {
@@ -1489,13 +1776,23 @@ export function createBridge(descriptor: BridgeDescriptor) {
   pi.on("session_start", async (_event, ctx) => {
     wrapExtensionUI(ctx);
     lastCtx = ctx;
+    Object.assign(capabilities, descriptor.capabilities);
     if (descriptor.capabilities.compact) {
       capabilities.compact = typeof (ctx as any)?.compact === "function";
     }
     commandCtx = null; // any stashed command ctx predates this runner/session
+    const manager: any = (ctx as any)?.sessionManager;
+    if (capabilities.treeRead && (!manager || typeof manager.getTree !== "function" ||
+        typeof manager.getEntries !== "function" || typeof manager.getLeafId !== "function" ||
+        typeof manager.getEntry !== "function")) {
+      // Older hosts can still load the wrapper and use its baseline controls;
+      // they simply never advertise tree operations.
+      capabilities.treeRead = false;
+      capabilities.treeNavigation = false;
+    }
     refreshModel(ctx);
     refreshContextUsage(ctx);
-    const sf = ctx.sessionManager.getSessionFile();
+    const sf = typeof manager?.getSessionFile === "function" ? manager.getSessionFile() : null;
     if (!sf) return; // ephemeral, skip
     sessionFile = sf;
     // Session id derivation. Normal pi sessions (new, resumed, forked,
@@ -1515,8 +1812,8 @@ export function createBridge(descriptor: BridgeDescriptor) {
     let id = path.basename(sf, ".jsonl");
     if (id === "session") {
       const headerId =
-        typeof ctx.sessionManager.getSessionId === "function"
-          ? ctx.sessionManager.getSessionId()
+        typeof manager.getSessionId === "function"
+          ? manager.getSessionId()
           : null;
       // Header ids are free-form in pi (assertValidSessionId is not applied
       // to every loaded file), but the id lands in registryPath below — keep
@@ -1647,6 +1944,13 @@ export function createBridge(descriptor: BridgeDescriptor) {
     } catch (e) {
       console.error("[pi-dish-bridge] failed to anchor tree navigation:", e);
     }
+    refreshContextUsage(ctx);
+    writeRegistry();
+    broadcast({ type: "event", event: "session_tree", data: { newLeafId: event?.newLeafId ?? null } });
+  });
+  if (descriptor.treeCommandContext) pi.on("session_tree", (event: any, ctx: ExtensionContext) => {
+    wrapExtensionUI(ctx);
+    lastCtx = ctx ?? lastCtx;
     refreshContextUsage(ctx);
     writeRegistry();
     broadcast({ type: "event", event: "session_tree", data: { newLeafId: event?.newLeafId ?? null } });
