@@ -231,6 +231,10 @@ export type BridgeDescriptor = {
   getPrivateSession?: () => any;
   selfPrime?: boolean;
   piLifecycleEvents?: boolean;
+  // OMP keeps one extension runner alive while /new, /resume, fork, and
+  // handoff replace the session underneath it. Other known hosts either
+  // replace the runner or do not publish this event.
+  sessionSwitchEvents?: boolean;
   publicCompactionEvents?: boolean;
   compactArgument?: (instructions: string) => any;
   // OMP permits branch()/navigateTree() only while an extension command
@@ -244,6 +248,29 @@ export type BridgeDescriptor = {
   // variables. Launch-specific wrappers inject this value directly instead.
   spawnToken?: string;
 };
+
+function deriveSessionIdentity(ctx: ExtensionContext): { sessionFile: string; sessionId: string; cwd: string } | null {
+  const manager: any = (ctx as any)?.sessionManager;
+  const sessionFile = typeof manager?.getSessionFile === "function" ? manager.getSessionFile() : null;
+  if (!sessionFile) return null; // ephemeral, skip
+
+  // Normal sessions use their unique JSONL basename. pi-subagents-style
+  // explicit <run-N>/session.jsonl files are the exception: every basename
+  // is "session", so use the unique, path-safe header id when available.
+  let sessionId = path.basename(sessionFile, ".jsonl");
+  if (sessionId === "session") {
+    const headerId = typeof manager.getSessionId === "function" ? manager.getSessionId() : null;
+    if (
+      typeof headerId === "string" &&
+      headerId.length > 0 &&
+      headerId.length <= 200 &&
+      /^[A-Za-z0-9._:-]+$/.test(headerId)
+    ) {
+      sessionId = headerId;
+    }
+  }
+  return { sessionFile, sessionId, cwd: ctx.cwd };
+}
 
 // Extract the delivery-match text of a queued message the way AgentSession's
 // private _getUserMessageText does: a string is itself; otherwise join the
@@ -1813,43 +1840,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
     }
     refreshModel(ctx);
     refreshContextUsage(ctx);
-    const sf = typeof manager?.getSessionFile === "function" ? manager.getSessionFile() : null;
-    if (!sf) return; // ephemeral, skip
-    sessionFile = sf;
-    // Session id derivation. Normal pi sessions (new, resumed, forked,
-    // branched) name their files <timestamp>_<uuid>.jsonl — the basename IS
-    // the id pi-dish's historical scan and RPC sessions use, so those keep
-    // the basename (the header carries only the bare uuid; switching to it
-    // would split one session across live/historical listings and duplicate
-    // RPC entries). Same for /import and explicit --session <path> files,
-    // whose basenames are unique and match the historical identity.
-    // pi-subagents children are the exception: non-fork children run with
-    // explicit --session <run-N>/session.jsonl files whose basename is the
-    // generic "session" for every child while the header carries a unique
-    // uuid — deriving the id from that basename made all parallel children
-    // collide on one registry entry and one socket path, so they overwrote
-    // each other's listings and one child's exit unregistered the others.
-    // Only those get the header-derived id.
-    let id = path.basename(sf, ".jsonl");
-    if (id === "session") {
-      const headerId =
-        typeof manager.getSessionId === "function"
-          ? manager.getSessionId()
-          : null;
-      // Header ids are free-form in pi (assertValidSessionId is not applied
-      // to every loaded file), but the id lands in registryPath below — keep
-      // it inside REGISTRY_DIR by rejecting separators, traversal, and junk.
-      if (
-        typeof headerId === "string" &&
-        headerId.length > 0 &&
-        headerId.length <= 200 &&
-        /^[A-Za-z0-9._:-]+$/.test(headerId)
-      ) {
-        id = headerId;
-      }
-    }
-    sessionId = id;
-    cwd = ctx.cwd;
+    const identity = deriveSessionIdentity(ctx);
+    if (!identity) return;
+    ({ sessionFile, sessionId, cwd } = identity);
     const claimKey = `${descriptor.harnessId}:${instanceId}`;
     socketPath = socketPathFor(claimKey);
     registryPath = path.join(REGISTRY_DIR, `${descriptor.harnessId}-${instanceId}.json`);
@@ -1859,6 +1852,51 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
     writeRegistry();
     broadcast({ type: "event", event: "session_start", data: { sessionId, sessionFile, cwd } });
+  });
+
+  if (descriptor.sessionSwitchEvents) pi.on("session_switch" as any, (event: any, ctx: ExtensionContext) => {
+    wrapExtensionUI(ctx);
+    lastCtx = ctx ?? lastCtx;
+    commandCtx = null;
+
+    const identity = deriveSessionIdentity(ctx);
+    if (!identity) return;
+    const previousSessionId = sessionId;
+    const previousSessionFile = sessionFile;
+
+    // These values belong to the newly adopted session. Clear first so a host
+    // that temporarily cannot report one never leaves the old session's model
+    // or usage attached to the new identity.
+    modelId = null;
+    contextUsage = null;
+    refreshModel(ctx);
+    refreshContextUsage(ctx);
+    sessionName = null;
+    try { sessionName = (ctx as any)?.sessionManager?.getSessionName?.() ?? null; } catch {}
+    ({ sessionFile, sessionId, cwd } = identity);
+
+    // The registry and socket are instance-keyed, not session-keyed: update
+    // the claim in place so existing socket/SSE clients stay attached. The
+    // path may not exist yet for a fresh /new; publishing it is safe and lets
+    // history routes retain their established pre-first-flush 409 behavior.
+    writeRegistry();
+
+    // OMP's reload emits session_switch for the same identity. Refreshing the
+    // registry above is useful, but a wire event would make the browser bounce
+    // and reload an unchanged transcript.
+    if (!previousSessionId || sessionId === previousSessionId) return;
+    broadcast({
+      type: "event",
+      event: "session_switch",
+      data: {
+        sessionId,
+        sessionFile,
+        previousSessionId,
+        previousSessionFile: previousSessionFile ?? event?.previousSessionFile ?? null,
+        cwd,
+        reason: event?.reason,
+      },
+    });
   });
 
   pi.on("session_shutdown", async () => {

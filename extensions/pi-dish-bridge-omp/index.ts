@@ -9,6 +9,7 @@ export const bridgeDescriptor = {
     commands: true, reload: false, queueRead: false, queueCancel: false,
     treeRead: true, treeNavigation: true, extensionUI: true,
   },
+  sessionSwitchEvents: true,
   publicCompactionEvents: true,
   compactArgument: (instructions: string) => instructions,
   treeCommandContext: true,

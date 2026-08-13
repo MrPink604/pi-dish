@@ -2628,6 +2628,123 @@ test('session caches pick up JSONL appends (mtime/size revalidation)', async () 
 
 const { sseReader } = require('./sse-reader');
 
+test('OMP session_switch re-keys the owned pane, active route, history source, and old-route SSE', async () => {
+  const oldNativeId = 'omp-switch-old';
+  const newNativeId = 'omp-switch-new';
+  const oldRouteId = encodeSessionKey('omp', oldNativeId);
+  const newRouteId = encodeSessionKey('omp', newNativeId);
+  const switchDir = path.join(tmpHome, '.omp', 'agent', 'sessions', 'session-switch');
+  const oldFile = path.join(switchDir, `${oldNativeId}.jsonl`);
+  const newFile = path.join(switchDir, `${newNativeId}.jsonl`);
+  fs.mkdirSync(switchDir, { recursive: true });
+  fs.writeFileSync(oldFile, [
+    { type: 'title', title: 'Old switched session' },
+    { type: 'session', version: 3, id: oldNativeId, cwd: ompCwd },
+    { type: 'message', id: 'switch-old-u1', parentId: null, message: { role: 'user', content: 'old history marker' } },
+  ].map(JSON.stringify).join('\n') + '\n');
+  fs.writeFileSync(newFile, [
+    { type: 'title', title: 'New switched session' },
+    { type: 'session', version: 3, id: newNativeId, cwd: ompCwd },
+    { type: 'message', id: 'switch-new-u1', parentId: null, message: { role: 'user', content: 'new history marker' } },
+  ].map(JSON.stringify).join('\n') + '\n');
+
+  const socketPath = path.join(tmpHome, 'omp-session-switch.sock');
+  const identity = processIdentity(process.pid);
+  const instanceId = 'omp-session-switch-instance';
+  const baseClaim = {
+    protocolVersion: 2,
+    wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+    harnessId: 'omp', bridgeInstanceId: instanceId, instanceId,
+    socketPath, pid: identity.pid, startTime: identity.startTime,
+    cwd: ompCwd, spawnToken: null,
+    capabilities: { commands: true },
+  };
+  let claim = {
+    ...baseClaim,
+    nativeSessionId: oldNativeId, sessionId: oldNativeId, sessionFile: oldFile,
+  };
+  const bridgeSockets = new Set();
+  let bridgeConnectionCount = 0;
+  const bridge = net.createServer(sock => {
+    bridgeConnectionCount++;
+    bridgeSockets.add(sock);
+    sock.on('close', () => bridgeSockets.delete(sock));
+    sock.on('error', () => {});
+    sock.write(JSON.stringify({ type: 'hello', ...claim, turnInProgress: false }) + '\n');
+  });
+  await new Promise(resolve => bridge.listen(socketPath, resolve));
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const registryPath = path.join(registryDir, `omp-${instanceId}.json`);
+  fs.writeFileSync(registryPath, JSON.stringify(claim));
+  invalidateRegistryCache();
+
+  const originalPaneExists = tmux.paneExists;
+  const originalSendKeys = tmux.sendKeys;
+  const injected = [];
+  const stream = sseReader(`${base}/api/sessions/${encodeURIComponent(oldRouteId)}/stream`);
+  try {
+    await stream.waitFor(event => event.event === 'init');
+    tmux.recordSpawn(oldRouteId, {
+      socket: '/fake/omp-session-switch.sock', paneId: '%91', bridgeInstanceId: instanceId,
+    });
+    tmux.paneExists = async (socket, paneId) => socket === '/fake/omp-session-switch.sock' && paneId === '%91';
+    tmux.sendKeys = async (socket, paneId, text) => injected.push({ socket, paneId, text });
+
+    claim = {
+      ...baseClaim,
+      nativeSessionId: newNativeId, sessionId: newNativeId, sessionFile: newFile,
+    };
+    fs.writeFileSync(registryPath, JSON.stringify(claim));
+    for (const sock of bridgeSockets) sock.write(JSON.stringify({
+      type: 'event',
+      event: 'session_switch',
+      data: {
+        sessionId: newNativeId,
+        sessionFile: newFile,
+        previousSessionId: oldNativeId,
+        previousSessionFile: oldFile,
+        cwd: ompCwd,
+        reason: 'new',
+      },
+    }) + '\n');
+
+    const switchEvent = await stream.waitFor(event => event.event === 'session_switch');
+    assert.equal(switchEvent.data.sessionId, newRouteId);
+    assert.equal(switchEvent.data.previousSessionId, oldRouteId);
+    assert.equal(switchEvent.data.nativeSessionId, newNativeId);
+    assert.equal(tmux.getSpawn(oldRouteId), null);
+    assert.equal(tmux.getSpawn(newRouteId)?.paneId, '%91');
+
+    const listed = await get('/api/sessions');
+    assert.ok(listed.body.active.some(session => session.id === newRouteId), 'new route is active');
+    assert.ok(listed.body.previous.some(session => session.id === oldRouteId), 'old route remains historical');
+    assert.equal(listed.body.active.some(session => session.id === oldRouteId), false);
+
+    const newMessages = await get(`/api/sessions/${encodeURIComponent(newRouteId)}/messages`);
+    const oldMessages = await get(`/api/sessions/${encodeURIComponent(oldRouteId)}/messages`);
+    assert.match(JSON.stringify(newMessages.body.messages), /new history marker/);
+    assert.match(JSON.stringify(oldMessages.body.messages), /old history marker/);
+    assert.doesNotMatch(JSON.stringify(newMessages.body.messages), /old history marker/);
+    assert.equal(bridgeConnectionCount, 1, 'new route reuses the instance-keyed bridge connection');
+
+    const shake = await post(`/api/sessions/${encodeURIComponent(newRouteId)}/command`, { message: '/shake' });
+    assert.equal(shake.status, 200, JSON.stringify(shake.body));
+    assert.deepEqual(injected, [{ socket: '/fake/omp-session-switch.sock', paneId: '%91', text: '/shake' }]);
+  } finally {
+    stream.close();
+    tmux.paneExists = originalPaneExists;
+    tmux.sendKeys = originalSendKeys;
+    tmux.removeSpawn(oldRouteId);
+    tmux.removeSpawn(newRouteId);
+    fs.rmSync(registryPath, { force: true });
+    fs.rmSync(switchDir, { recursive: true, force: true });
+    invalidateRegistryCache();
+    for (const sock of bridgeSockets) sock.destroy();
+    await new Promise(resolve => bridge.close(resolve));
+  }
+});
+
 test('SSE replays remembered extension UI state to new connections', async () => {
   const BRIDGE_ID = '2026-07-04T13-00-00-eeff0011';
   const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');

@@ -402,6 +402,12 @@ function trackExtUIState(sess) {
   if (!sess || sess.extUIState) return sess;
   const state = { widgets: new Map(), statuses: new Map(), dialogs: new Map() };
   sess.extUIState = state;
+  sess.on('session_switch', (data) => {
+    state.widgets.clear();
+    state.statuses.clear();
+    state.dialogs.clear();
+    adoptBridgeSessionSwitch(sess, data);
+  });
   sess.on('extension_ui_request', (data) => {
     if (!data || !data.method) return;
     if (data.method === 'setWidget') {
@@ -420,6 +426,41 @@ function trackExtUIState(sess) {
     if (data?.id) state.dialogs.delete(data.id);
   });
   return sess;
+}
+
+function sessionSwitchRouteData(sess, data) {
+  const harnessId = sess?.harnessId || 'pi';
+  const nativeSessionId = data?.sessionId;
+  const previousNativeSessionId = data?.previousSessionId;
+  if (!nativeSessionId || !previousNativeSessionId) return null;
+  return {
+    ...data,
+    sessionId: routeSessionId(harnessId, nativeSessionId),
+    previousSessionId: routeSessionId(harnessId, previousNativeSessionId),
+    nativeSessionId,
+    previousNativeSessionId,
+  };
+}
+
+function adoptBridgeSessionSwitch(sess, data) {
+  const routed = sessionSwitchRouteData(sess, data);
+  if (!routed || routed.sessionId === routed.previousSessionId) return;
+  const spawn = tmux.getSpawn(routed.previousSessionId);
+  if (spawn && (!spawn.bridgeInstanceId || !sess.bridgeInstanceId || spawn.bridgeInstanceId === sess.bridgeInstanceId)) {
+    tmux.rekeySpawn(routed.previousSessionId, routed.sessionId, spawn);
+  }
+  // Registry identity changed in place; don't let the short scan cache keep
+  // reporting the old route. Runtime/diff snapshots are session-specific and
+  // must be recomputed rather than copied onto the new conversation.
+  invalidateRegistryCache();
+  runtimeCache.delete(routed.previousSessionId);
+  runtimeCache.delete(routed.sessionId);
+  diffSnapshots.delete(routed.previousSessionId);
+  diffSnapshots.delete(routed.sessionId);
+  for (const prefix of ['exact:', 'partial:']) {
+    sessionFileCache.delete(prefix + routed.previousSessionId);
+    sessionFileCache.delete(prefix + routed.sessionId);
+  }
 }
 
 /**
@@ -4430,6 +4471,13 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   // must re-render the transcript from the JSONL (the bridge anchors the new
   // leaf on disk before broadcasting this).
   sub('session_tree', (data) => send('session_tree', data || {}));
+  // Keep clients attached to the old route long enough to learn which route
+  // now owns the same pane. The central listener above has already re-keyed
+  // owned-pane state by the time this SSE listener runs.
+  sub('session_switch', (data) => {
+    const routed = sessionSwitchRouteData(sess, data);
+    if (routed && routed.sessionId !== routed.previousSessionId) send('session_switch', routed);
+  });
 
   sub('tool_execution_start', (data) => send('tool_execution_start', data));
   sub('tool_execution_update', (data) => send('tool_execution_update', data));
