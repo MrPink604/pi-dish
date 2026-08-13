@@ -248,6 +248,39 @@ test('prompt round-trips: RPC events stream over SSE and land in the JSONL', asy
   }
 });
 
+test('RPC SSE reconnect replays a running tool start and latest update', async () => {
+  const rpc = getRPCSession(sessionId);
+  rpc._handleMessage({ type: 'turn_start' });
+  rpc._handleMessage({
+    type: 'tool_execution_start', toolCallId: 'rpc-replay-tool',
+    toolName: 'Read', args: { path: 'README.md' }, startedAt: 456,
+  });
+  rpc._handleMessage({
+    type: 'tool_execution_update', toolCallId: 'rpc-replay-tool',
+    partialResult: { content: [{ type: 'text', text: 'partial read' }] },
+  });
+
+  const sse = sseReader(`${base}/api/sessions/${sessionId}/stream`);
+  try {
+    await sse.waitFor(e => e.event === 'init');
+    const start = await sse.waitFor(e => e.event === 'tool_execution_start' && e.data?.toolCallId === 'rpc-replay-tool');
+    const update = await sse.waitFor(e => e.event === 'tool_execution_update' && e.data?.toolCallId === 'rpc-replay-tool');
+    assert.equal(start.data.toolName, 'Read');
+    assert.deepEqual(start.data.args, { path: 'README.md' });
+    assert.equal(start.data.startedAt, 456);
+    assert.equal(update.data.partialResult.content[0].text, 'partial read');
+
+    rpc._handleMessage({
+      type: 'tool_execution_end', toolCallId: 'rpc-replay-tool', toolName: 'Read',
+      args: { path: 'README.md' }, result: { content: [{ type: 'text', text: 'done' }] }, isError: false,
+    });
+    await sse.waitFor(e => e.event === 'tool_execution_end' && e.data?.toolCallId === 'rpc-replay-tool');
+  } finally {
+    rpc._handleMessage({ type: 'turn_end' });
+    sse.close();
+  }
+});
+
 test('a prompt sent mid-turn is delivered with steer behavior', async () => {
   const sse = sseReader(`${base}/api/sessions/${sessionId}/stream`);
   try {

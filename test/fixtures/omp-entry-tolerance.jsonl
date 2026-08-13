@@ -1,0 +1,17 @@
+{"type":"title","title":"OMP tolerance fixture"}
+{"type":"session_init","timestamp":"2026-08-13T10:00:00.000Z"}
+{"type":"session","id":"omp-tolerance","cwd":"/tmp/omp-tolerance","timestamp":"2026-08-13T10:00:01.000Z"}
+{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"run background work"}]}}
+{"type":"message","id":"a-empty","message":{"role":"assistant","content":[]}}
+{"type":"custom_message","id":"interrupted","customType":"interrupted-thinking","content":"<system-notice>PRIVATE INTERRUPTED REASONING</system-notice>","display":false,"details":{"blockCount":1},"timestamp":"2026-08-13T10:00:02.000Z"}
+{"type":"message","id":"async-result","message":{"role":"custom","customType":"async-result","content":"Background job bg_123 has completed.","display":true,"details":{"jobs":[{"jobId":"bg_123","type":"bash","label":"slow build","durationMs":12000}]},"timestamp":1786615203000}}
+{"type":"custom_message","id":"future","customType":"future-notice","content":"A future visible OMP notice","display":true,"timestamp":"2026-08-13T10:00:04.000Z"}
+{"type":"custom_message","id":"hidden","customType":"internal-state","content":"PRIVATE INTERNAL STATE","display":false}
+{"type":"custom","customType":"tool_execution_start","data":{"toolCallId":"diagnostic"}}
+{"type":"custom","customType":"session_exit","data":{}}
+{"type":"reset_boundary","reason":"reset"}
+{"type":"mode_change","mode":"default"}
+{"type":"ttsr_injection","content":"internal"}
+{"type":"credential_pin","provider":"zai"}
+{"type":"label","label":"checkpoint"}
+{"type":"service_tier_change","tier":"standard"}

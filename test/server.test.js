@@ -2616,12 +2616,45 @@ test('SSE replays remembered extension UI state to new connections', async () =>
     await s1.waitFor(e => e.event === 'init');
     emit('extension_ui_request', { method: 'setWidget', widgetKey: 'procs', widgetLines: ['one', 'two'] });
     emit('extension_ui_request', { method: 'confirm', id: 'dlg1', title: 'Deploy?' });
+    emit('tool_execution_start', {
+      toolCallId: 'replay-tool', toolName: 'Bash', args: { command: 'sleep 12' }, startedAt: 123,
+    });
+    emit('tool_execution_update', {
+      toolCallId: 'replay-tool', partialResult: { content: [{ type: 'text', text: 'still running' }] },
+    });
+    emit('message_end', { message: {
+      role: 'custom', customType: 'interrupted-thinking',
+      content: 'private interrupted reasoning', display: false, timestamp: 124,
+    } });
+    emit('message_end', { message: {
+      role: 'custom', customType: 'private-host-state',
+      content: 'private host state', display: false, timestamp: 125,
+    } });
+    emit('message_end', { message: {
+      role: 'custom', customType: 'visible-sentinel',
+      content: 'visible custom notice', display: true, timestamp: 126,
+    } });
     await s1.waitFor(e => e.event === 'extension_ui_request' && e.data?.method === 'confirm');
+    await s1.waitFor(e => e.event === 'tool_execution_update' && e.data?.toolCallId === 'replay-tool');
+    const interrupted = await s1.waitFor(e =>
+      e.event === 'message_end' && e.data?.message?.customType === 'interrupted-thinking');
+    assert.deepEqual(interrupted.data.message.content, [], 'hidden interrupted reasoning is projected to a marker');
+    await s1.waitFor(e => e.event === 'message_end' && e.data?.message?.customType === 'visible-sentinel');
+    assert.equal(s1.events.some(e => e.data?.message?.customType === 'private-host-state'), false,
+      'other hidden custom messages are explicitly skipped');
     s1.close();
 
     // Second client connects with the bridge silent: the remembered widget
-    // and the still-pending dialog are replayed.
+    // and dialog plus the in-flight tool's start/latest update are replayed.
     const s2 = sseReader(`${base}/api/sessions/${BRIDGE_ID}/stream`);
+    const replayStart = await s2.waitFor(e => e.event === 'tool_execution_start' && e.data?.toolCallId === 'replay-tool');
+    const replayUpdate = await s2.waitFor(e => e.event === 'tool_execution_update' && e.data?.toolCallId === 'replay-tool');
+    assert.deepEqual(replayStart.data, {
+      toolCallId: 'replay-tool', toolName: 'Bash', args: { command: 'sleep 12' }, startedAt: 123,
+    });
+    assert.equal(replayUpdate.data.partialResult.content[0].text, 'still running');
+    assert.ok(s2.events.findIndex(e => e.event === 'init') <
+      s2.events.findIndex(e => e.event === 'tool_execution_start'), 'tool replay follows init');
     const widget = await s2.waitFor(e => e.event === 'extension_ui_request' && e.data?.method === 'setWidget');
     assert.deepEqual(widget.data.widgetLines, ['one', 'two']);
     assert.equal(widget.data.widgetKey, 'procs');
@@ -2629,8 +2662,13 @@ test('SSE replays remembered extension UI state to new connections', async () =>
 
     // Clearing the widget and resolving the dialog empties the replay set.
     // Wait for both on the open connection so the server has seen them.
+    emit('tool_execution_end', {
+      toolCallId: 'replay-tool', toolName: 'Bash', args: { command: 'sleep 12' },
+      result: { content: [{ type: 'text', text: 'done' }] }, isError: false,
+    });
     emit('extension_ui_request', { method: 'setWidget', widgetKey: 'procs', widgetLines: [] });
     emit('extension_ui_resolved', { id: 'dlg1' });
+    await s2.waitFor(e => e.event === 'tool_execution_end' && e.data?.toolCallId === 'replay-tool');
     await s2.waitFor(e => e.event === 'extension_ui_resolved');
     s2.close();
 
@@ -2642,6 +2680,8 @@ test('SSE replays remembered extension UI state to new connections', async () =>
     await s3.waitFor(e => e.event === 'extension_ui_request' && e.data?.method === 'notify');
     const extEvents = s3.events.filter(e => e.event === 'extension_ui_request');
     assert.equal(extEvents.length, 1, 'cleared widget / resolved dialog must not be replayed');
+    assert.equal(s3.events.some(e => e.event.startsWith('tool_execution_')), false,
+      'completed tools are absent from later reconnect snapshots');
     s3.close();
   } finally {
     fs.rmSync(path.join(registryDir, `${BRIDGE_ID}.json`), { force: true });

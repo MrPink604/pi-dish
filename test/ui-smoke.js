@@ -100,6 +100,19 @@ appendEntry({ type: 'message', message: { role: 'assistant', content: [
   { type: 'text', text: 'Wrote my notes to `findings.md` — compare with README.md at the root.' },
   { type: 'toolCall', id: 'fm1', name: 'write', arguments: { path: path.join(CWD, 'deep', 'nest', 'findings.md'), content: '# deep findings\n' } },
 ], timestamp: '2026-07-05T00:02:00.000Z' } });
+// OMP interruption/custom-message shapes: the empty assistant shell should
+// not render a ghost header, while the hidden interrupted reasoning becomes a
+// marker. Async and unknown visible custom types each get a subdued row.
+appendEntry({ type: 'message', message: { role: 'assistant', content: [], timestamp: '2026-07-05T00:02:01.000Z' } });
+appendEntry({ type: 'custom_message', customType: 'interrupted-thinking',
+  content: '<system-notice>private interrupted reasoning</system-notice>', display: false,
+  timestamp: '2026-07-05T00:02:02.000Z' });
+appendEntry({ type: 'message', message: { role: 'custom', customType: 'async-result',
+  content: 'Background job bg_hist completed', display: true,
+  details: { jobs: [{ jobId: 'bg_hist', type: 'bash', label: 'historical build', durationMs: 12000 }] },
+  timestamp: Date.parse('2026-07-05T00:02:03.000Z') } });
+appendEntry({ type: 'custom_message', customType: 'future-notice',
+  content: 'future custom content', display: true, timestamp: '2026-07-05T00:02:04.000Z' });
 
 // A second workspace with one (older) historical session — the sidebar
 // collapse/pin section needs two groups on the All tab.
@@ -414,6 +427,16 @@ function writeRegistry(patch = {}) {
     check(await initialAnswer.locator('del').count() === 1 &&
       await initialAnswer.locator('del').textContent() === 'intentional strike',
       'double tildes still render intentional strikethrough');
+    check(await desktop.locator('.message.custom-message.interrupted').count() === 1 &&
+      await desktop.locator('.message.custom-message.interrupted').textContent().then(t => t.includes('Interrupted')),
+      'interrupted-thinking renders a divider without its hidden reasoning');
+    check(!(await desktop.locator('#messages').textContent()).includes('private interrupted reasoning'),
+      'interrupted-thinking reasoning stays hidden');
+    check(await desktop.locator('.message.custom-message.async-result').count() === 1 &&
+      (await desktop.locator('.message.custom-message.async-result').textContent()).includes('Background job finished'),
+      'historical async-result renders a background-job-finished row');
+    check((await desktop.locator('.message.custom-message.generic').textContent()).includes('future notice'),
+      'unknown visible custom_message renders a generic row');
 
     // Tool-activity accordion: the historical tool turn folds into one
     // closed group holding the tool-only assistant message + tool result.
@@ -509,6 +532,55 @@ function writeRegistry(patch = {}) {
     await desktop.waitForTimeout(200);
     check(await desktop.locator('.session-item-status.working').count() === 0,
       'working dot cleared after the turn');
+
+    // Completion-only and post-turn background frames must upsert by id. A
+    // repeated start remains deduped, matching cumulative event snapshots.
+    console.log('tool panel completion/update upsert:');
+    emit('tool_execution_end', { toolCallId: 'completion-only', toolName: 'Bash',
+      args: { command: 'echo complete' }, result: { content: [{ type: 'text', text: 'complete output' }] }, isError: false });
+    await desktop.waitForSelector('details.live-tool-panel.complete[data-tool-call-id="completion-only"]', { timeout: 3000 });
+    check((await desktop.locator('[data-tool-call-id="completion-only"]').textContent()).includes('complete output'),
+      'completion-only end creates a finished panel');
+    await desktop.evaluate(() => removeDuplicatedLiveContent(document.getElementById('messages')));
+    emit('tool_execution_update', { toolCallId: 'completion-only', toolName: 'Bash',
+      args: { command: 'echo complete' }, partialResult: { content: [{ type: 'text', text: 'late background update' }] } });
+    await desktop.waitForSelector('details.live-tool-panel.running[data-tool-call-id="completion-only"]', { timeout: 3000 });
+    check((await desktop.locator('[data-tool-call-id="completion-only"]').textContent()).includes('late background update'),
+      'post-cleanup update recreates and reopens the panel');
+    emit('tool_execution_end', { toolCallId: 'completion-only', toolName: 'Bash',
+      args: { command: 'echo complete' }, result: { content: [{ type: 'text', text: 'late final output' }] }, isError: false });
+    await desktop.waitForSelector('details.live-tool-panel.complete[data-tool-call-id="completion-only"]', { timeout: 3000 });
+    check((await desktop.locator('[data-tool-call-id="completion-only"]').textContent()).includes('late final output'),
+      'late background end finalizes the recreated panel');
+    emit('tool_execution_start', { toolCallId: 'dedupe-start', toolName: 'Read', args: { path: 'README.md' } });
+    emit('tool_execution_start', { toolCallId: 'dedupe-start', toolName: 'Read', args: { path: 'README.md' } });
+    await desktop.waitForSelector('[data-tool-call-id="dedupe-start"]', { timeout: 3000 });
+    check(await desktop.locator('[data-tool-call-id="dedupe-start"]').count() === 1,
+      'repeated start for a known toolCallId stays deduped');
+    await desktop.evaluate(() => removeDuplicatedLiveContent(document.getElementById('messages')));
+
+    console.log('live async-result upsert:');
+    const liveAsync = { role: 'custom', customType: 'async-result', content: 'background result', display: true,
+      details: { jobs: [{ jobId: 'bg_live', type: 'bash', label: 'live build', durationMs: 2500 }] }, timestamp: Date.now() };
+    emit('message_update', { message: liveAsync });
+    emit('message_update', { message: liveAsync });
+    await desktop.waitForSelector('.message.custom-message.async-result[data-streaming="true"]', { timeout: 3000 });
+    check(await desktop.locator('.message.custom-message.async-result:not([data-msg-index])').count() === 1,
+      'cumulative live custom updates upsert one row');
+    emit('message_end', { message: liveAsync });
+    await desktop.waitForFunction(() => {
+      const rows = document.querySelectorAll('.message.custom-message.async-result:not([data-msg-index])');
+      return rows.length === 1 && !rows[0].hasAttribute('data-streaming');
+    }, { timeout: 3000 });
+    check(true, 'custom message_end finalizes the live async-result row');
+    emit('message_end', { message: { role: 'custom', customType: 'private-host-state',
+      content: 'hidden live custom content', display: false, timestamp: Date.now() } });
+    await desktop.waitForTimeout(100);
+    check(!(await desktop.locator('#messages').textContent()).includes('hidden live custom content'),
+      'unknown hidden live custom messages follow the documented skip');
+    await desktop.evaluate(() => {
+      document.querySelectorAll('.message.custom-message:not([data-msg-index])').forEach(el => el.remove());
+    });
 
     // Per-message tok/s: the fixture's timed assistant message shows its
     // generation speed in the header.
