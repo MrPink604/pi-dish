@@ -1699,6 +1699,41 @@ body.sidebar-open {
   border-top: 1px solid color-mix(in srgb, var(--warning) 15%, transparent);
 }
 
+/* OMP custom transcript notices. Async completions and future visible custom
+   types are quiet one-line rows; interruption is a divider and never exposes
+   the hidden reasoning stored in its JSONL custom_message body. */
+.message.custom-message {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 5px 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.custom-message-icon { color: var(--success); }
+.custom-message-label { font-weight: 500; white-space: nowrap; }
+.custom-message-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.7;
+}
+.message.custom-message .message-time { margin-left: auto; }
+.message.custom-message.generic { opacity: 0.75; }
+
+.message.custom-message.interrupted {
+  padding-inline: 0;
+  color: var(--warning);
+}
+.custom-message-divider {
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--warning) 28%, transparent);
+}
+
 /* Tool call — collapsible <details> with icon + summary */
 .tool-call {
   margin: 2px 0;

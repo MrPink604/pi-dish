@@ -4155,6 +4155,7 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.write(': connected\n\n');
+  res.flush?.();
 
   let sess;
   try {
@@ -4168,11 +4169,23 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
     return res.end();
   }
 
-  res.write(`event: init\ndata: ${JSON.stringify({ turnInProgress: !!sess.turnInProgress, compacting: !!sess.compacting })}\n\n`);
-
   const send = (event, data) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    // Even though compression explicitly excludes event streams above, flush
+    // every frame so a reconnecting phone can render replay/live state without
+    // waiting for another event to make the chunk observable.
+    res.flush?.();
   };
+  const messageForStream = (message) => {
+    if (message?.role !== 'custom') return message;
+    // interrupted-thinking content is hidden model reasoning. The client only
+    // needs its marker; visible custom messages (including async-result) pass
+    // through, while other hidden host state follows the documented skip.
+    if (message.customType === 'interrupted-thinking') return { ...message, content: [] };
+    return message.display === false ? null : message;
+  };
+
+  send('init', { turnInProgress: !!sess.turnInProgress, compacting: !!sess.compacting });
 
   const offs = [];
   const sub = (event, fn) => {
@@ -4202,7 +4215,7 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
     if (updateTimer) { clearTimeout(updateTimer); updateTimer = null; }
   };
   sub('message_update', (data) => {
-    const m = data?.message;
+    const m = messageForStream(data?.message);
     if (!m) return;
     pendingUpdate = m;
     if (!updateTimer) flushUpdate();
@@ -4215,16 +4228,19 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   sub('agent_end', () => { clearPendingUpdate(); send('agent_end', {}); });
 
   sub('message_end', (data) => {
-    const role = data?.message?.role;
+    const message = messageForStream(data?.message);
+    const role = message?.role;
     if (role === 'assistant') {
       clearPendingUpdate();
-      send('message_end', { message: data.message });
-    } else if (role === 'user') {
+      send('message_end', { message });
+    } else if (role === 'user' || role === 'custom') {
       // A steer/follow-up pi just delivered mid-turn — forward it so the client
       // can show it now instead of waiting for the turn_end JSONL catch-up.
+      // OMP also delivers completed background jobs as role:custom messages,
+      // including after the turn that launched them has already ended.
       // Don't touch the coalescer: a user message doesn't invalidate a pending
       // assistant delta.
-      send('message_end', { message: data.message });
+      send('message_end', { message });
     }
   });
 
@@ -4236,6 +4252,22 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   sub('tool_execution_start', (data) => send('tool_execution_start', data));
   sub('tool_execution_update', (data) => send('tool_execution_update', data));
   sub('tool_execution_end', (data) => send('tool_execution_end', data));
+  // Subscribe before taking the snapshot: a call that ends during replay is
+  // still forwarded, while one that started just before subscription is found
+  // in the session-owned map. Repeated starts are harmless client-side because
+  // live panels dedupe by toolCallId.
+  for (const [toolCallId, call] of sess.runningToolCalls || []) {
+    const common = {
+      toolCallId,
+      toolName: call.toolName,
+      args: call.args,
+      startedAt: call.startedAt,
+    };
+    send('tool_execution_start', common);
+    if (call.lastPartialResult != null) {
+      send('tool_execution_update', { ...common, partialResult: call.lastPartialResult });
+    }
+  }
   // setWidget/setStatus re-fire with unchanged content on every extension
   // tick (pi-processes: once per process output line) — skip exact repeats
   // per connection. Content-keyed: the request id changes on every emission.

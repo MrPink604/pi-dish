@@ -4573,9 +4573,16 @@ function renderMessageHtml(msg) {
   // than string-spliced into their output afterwards.
   const idxAttr = (msg.index != null) ? ` data-msg-index="${msg.index}"` : '';
   if (msg.role === 'user') return renderUserMessage(msg, time, idxAttr);
-  if (msg.role === 'assistant') return renderAssistantMessage(msg, time, { attrs: idxAttr });
+  if (msg.role === 'assistant') {
+    // OMP persists an empty assistant shell when thinking is interrupted. The
+    // following interrupted-thinking marker carries the useful UI; avoid a
+    // stray π header while preserving the message/index in the API.
+    if (Array.isArray(msg.content) && msg.content.length === 0 && !msg.errorMessage) return '';
+    return renderAssistantMessage(msg, time, { attrs: idxAttr });
+  }
   if (msg.role === 'toolResult') return renderToolResult(msg, time, idxAttr);
   if (msg.role === 'branchSummary') return renderBranchSummary(msg, time, idxAttr);
+  if (msg.role === 'custom') return renderCustomMessage(msg, time, idxAttr);
   return '';
 }
 
@@ -4976,6 +4983,65 @@ function renderBranchSummary(msg, time, attrs = '') {
   </div>`;
 }
 
+// OMP conversational custom messages. interrupted-thinking deliberately
+// carries hidden reasoning in JSONL; session-files strips that content and we
+// render only this divider. Visible unknown types get a subdued generic row so
+// future host additions cannot vanish without explanation.
+function renderCustomMessage(msg, time, attrs = '') {
+  const customType = msg.customType || 'custom-message';
+  const timestamp = msg.timestamp || Date.now();
+  if (customType === 'interrupted-thinking') {
+    return `<div${attrs} class="message custom-message interrupted" data-timestamp="${timestamp}">
+      <span class="custom-message-divider"></span><span class="custom-message-label">Interrupted</span>${time ? `<span class="message-time">${time}</span>` : ''}<span class="custom-message-divider"></span>
+    </div>`;
+  }
+
+  // Unknown hidden custom messages are internal model/session continuity.
+  // session-files applies the same explicit skip historically; enforce it
+  // here too because live bridge events do not pass through that decoder.
+  if (msg.display === false) return '';
+
+  if (customType === 'async-result') {
+    const jobs = Array.isArray(msg.details?.jobs) ? msg.details.jobs : [];
+    const names = jobs.map(job => job.label || job.jobId).filter(Boolean);
+    const duration = jobs.length === 1 && Number.isFinite(jobs[0].durationMs)
+      ? formatDuration(jobs[0].durationMs) : '';
+    const meta = [names.join(', '), duration].filter(Boolean).join(' · ');
+    return `<div${attrs} class="message custom-message async-result" data-timestamp="${timestamp}">
+      <span class="custom-message-icon">✓</span><span class="custom-message-label">Background job${jobs.length > 1 ? 's' : ''} finished</span>${meta ? `<span class="custom-message-meta">${escapeHtml(meta)}</span>` : ''}${time ? `<span class="message-time">${time}</span>` : ''}
+    </div>`;
+  }
+
+  const text = extractTextContent(msg.content);
+  const label = customType.replace(/[-_]+/g, ' ');
+  return `<div${attrs} class="message custom-message generic" data-timestamp="${timestamp}">
+    <span class="custom-message-icon">◇</span><span class="custom-message-label">${escapeHtml(label)}</span>${text ? `<span class="custom-message-meta">${escapeHtml(truncate(text.replace(/\s+/g, ' '), 240))}</span>` : ''}${time ? `<span class="message-time">${time}</span>` : ''}
+  </div>`;
+}
+
+function liveCustomMessageKey(message) {
+  const jobs = Array.isArray(message?.details?.jobs)
+    ? message.details.jobs.map(job => job.jobId).filter(Boolean).join(',') : '';
+  return `${message?.customType || 'custom-message'}:${message?.timestamp || jobs}`;
+}
+
+function upsertLiveCustomMessage(message, { streaming = false } = {}) {
+  const container = document.getElementById('messages');
+  if (!container) return;
+  const wasPinned = isPinnedToBottom(container);
+  const key = liveCustomMessageKey(message);
+  const existing = [...container.querySelectorAll('.message.custom-message[data-live-custom-key]')]
+    .find(el => el.dataset.liveCustomKey === key);
+  const attrs = ` data-live-custom-key="${escapeHtml(key)}"${streaming ? ' data-streaming="true"' : ''}`;
+  const tmp = document.createElement('template');
+  tmp.innerHTML = renderCustomMessage(message, formatTime(message.timestamp || Date.now()), attrs);
+  const el = tmp.content.firstElementChild;
+  if (!el) return;
+  if (existing) existing.replaceWith(el);
+  else container.appendChild(el);
+  if (wasPinned || followStream) scrollToBottom(container); else updateJumpButton(container);
+}
+
 // =========================================================================
 // Live Tool Panels (streaming tool execution)
 // =========================================================================
@@ -5022,28 +5088,60 @@ function buildLiveToolPanel(toolCallId, toolName, args, output, isError, isCompl
   '</details>';
 }
 
-function appendLiveToolPanel(data) {
+function appendLiveToolPanel(data, { completionOnly = false } = {}) {
   const { toolCallId, toolName, args } = data;
-  runningTools.set(toolCallId, toolName || 'tool');
+  if (!toolCallId) return null;
+  const existing = liveToolPanels.get(toolCallId);
+  const resolvedName = toolName || existing?.toolName || 'tool';
+  const resolvedArgs = args ?? existing?.args ?? {};
+  runningTools.set(toolCallId, resolvedName);
   updateWorkingIndicator();
-  if (liveToolPanels.has(toolCallId)) return; // already rendered
+  if (existing?.el?.isConnected && existing.el.classList.contains('running')) {
+    return existing; // cumulative/repeated starts never duplicate a panel
+  }
 
   const container = document.getElementById('messages');
-  if (!container) return;
+  if (!container) return null;
 
   const wasPinned = isPinnedToBottom(container);
-  const html = buildLiveToolPanel(toolCallId, toolName, args, '', false, false);
-  container.insertAdjacentHTML('beforeend', html);
+  const html = buildLiveToolPanel(toolCallId, resolvedName, resolvedArgs, '', false, false);
+  let el;
+  if (existing?.el?.isConnected) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    el = tmp.firstElementChild;
+    existing.el.replaceWith(el);
+  } else {
+    container.insertAdjacentHTML('beforeend', html);
+    el = container.lastElementChild;
+  }
 
-  const el = container.querySelector('[data-tool-call-id="' + toolCallId + '"]');
-  liveToolPanels.set(toolCallId, { el, startTime: Date.now() });
+  const parsedStartedAt = Number.isFinite(data.startedAt)
+    ? data.startedAt : (typeof data.startedAt === 'string' ? Date.parse(data.startedAt) : NaN);
+  const entry = {
+    el,
+    startTime: Number.isFinite(parsedStartedAt) ? parsedStartedAt : (completionOnly ? null : Date.now()),
+    toolName: resolvedName,
+    args: resolvedArgs,
+  };
+  liveToolPanels.set(toolCallId, entry);
   if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
+  return entry;
 }
 
 function updateLiveToolPanel(data) {
   const { toolCallId, partialResult } = data;
-  const entry = liveToolPanels.get(toolCallId);
-  if (!entry || !entry.el) return;
+  let entry = liveToolPanels.get(toolCallId);
+  if (!entry?.el?.isConnected || !entry.el.classList.contains('running')) {
+    // OMP may emit completion/background updates without a start, or after
+    // turn-end JSONL cleanup removed the original panel. Re-open by id.
+    entry = appendLiveToolPanel({
+      ...data,
+      toolName: data.toolName || entry?.toolName,
+      args: data.args ?? entry?.args,
+    });
+  }
+  if (!entry?.el) return;
 
   const output = getToolOutputText(partialResult);
   // Images derive idempotently from the latest partial result — the whole
@@ -5086,24 +5184,33 @@ function updateLiveToolPanel(data) {
 
 function finalizeLiveToolPanel(data) {
   const { toolCallId, toolName, args, result, isError } = data;
+  let entry = liveToolPanels.get(toolCallId);
+  if (!entry?.el?.isConnected) {
+    // Provider-resolved tools can legitimately be completion-only. The same
+    // path also recreates a background job panel after turn-end cleanup.
+    entry = appendLiveToolPanel(data, { completionOnly: true });
+  }
   runningTools.delete(toolCallId);
   updateWorkingIndicator();
-  applyMoodFromTool(toolName, args);
-  const entry = liveToolPanels.get(toolCallId);
-  if (!entry || !entry.el) return;
+  const resolvedName = toolName || entry?.toolName || 'tool';
+  const resolvedArgs = args ?? entry?.args ?? {};
+  applyMoodFromTool(resolvedName, resolvedArgs);
+  if (!entry?.el) return;
 
   const output = getToolOutputText(result);
   const imagesHtml = imageBlocksHtml(result && result.content, 'tool result image');
   const durationMs = entry.startTime ? (Date.now() - entry.startTime) : null;
 
   // Rebuild the panel in its final state
-  const newHtml = buildLiveToolPanel(toolCallId, toolName || 'tool', args, output, isError, true, durationMs, imagesHtml);
+  const newHtml = buildLiveToolPanel(toolCallId, resolvedName, resolvedArgs, output, isError, true, durationMs, imagesHtml);
   const tmp = document.createElement('div');
   tmp.innerHTML = newHtml;
   const newEl = tmp.firstElementChild;
 
   entry.el.replaceWith(newEl);
   entry.el = newEl;
+  entry.toolName = resolvedName;
+  entry.args = resolvedArgs;
 
   // Keep in map for dedup — will be cleaned up on turn_end
 }
@@ -5205,7 +5312,12 @@ function startMessageStream(sessionId, selectionGeneration = sessionSelectionGen
     addOwnedListener('message_update', (e) => {
       try {
         const { message } = JSON.parse(e.data);
-        if (!message || message.role !== 'assistant') return;
+        if (!message) return;
+        if (message.role === 'custom') {
+          upsertLiveCustomMessage(message, { streaming: true });
+          return;
+        }
+        if (message.role !== 'assistant') return;
         turnCleanupDone = false;
         if (!turnInProgress) setTurnInProgress(true);
         queueStreamingRender(message);
@@ -5240,8 +5352,19 @@ function startMessageStream(sessionId, selectionGeneration = sessionSelectionGen
           if (wasPinned || followStream) scrollToBottom(container); else updateJumpButton(container);
           return;
         }
+        if (message.role === 'custom') {
+          upsertLiveCustomMessage(message);
+          return;
+        }
         if (message.role !== 'assistant') return;
         cancelStreamingRender();
+        // OMP ends an interrupted thinking turn with an empty assistant shell
+        // before its interrupted-thinking custom marker. Keep the API entry
+        // but do not flash a ghost π header in the live transcript.
+        if (Array.isArray(message.content) && message.content.length === 0 && !message.errorMessage) {
+          container.querySelectorAll('.message.assistant[data-streaming="true"]').forEach(el => el.remove());
+          return;
+        }
         // Swap the streaming placeholder for the finalized render in place.
         // It stays un-indexed, so the turn_end JSONL catch-up replaces it
         // with the authoritative version (fetchNewMessagesSince strips all

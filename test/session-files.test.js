@@ -119,8 +119,9 @@ test('readSessionMessages returns the displayable stream in order', () => {
     assistantMsg('done'),
   ]);
   const all = SF.readSessionMessages(file);
-  assert.deepEqual(all.map(m => m.role), ['user', 'assistant', 'toolResult', 'user', 'assistant']);
+  assert.deepEqual(all.map(m => m.role), ['user', 'assistant', 'toolResult', 'user', 'custom', 'assistant']);
   assert.equal(all[3].content[0].text, 'injected', 'session-message custom entries render as user messages');
+  assert.equal(all[4].customType, 'other', 'unknown visible custom entries get a generic row');
 
   // The client renders tool name + error state from these message-level
   // fields, so the display stream must carry them through.
@@ -130,6 +131,40 @@ test('readSessionMessages returns the displayable stream in order', () => {
   assert.equal(toolResult.isError, true);
   // Plain messages don't grow spurious tool fields.
   assert.equal(all[1].toolName, undefined, 'non-toolResult messages have no toolName');
+});
+
+test('OMP entry tolerance renders async/interruption/unknown custom rows without leaking hidden state', () => {
+  const file = path.join(__dirname, 'fixtures', 'omp-entry-tolerance.jsonl');
+  const source = { file, profileId: 'omp-v1', profileVersion: 1, harnessId: 'omp' };
+  const info = SF.getSessionInfo(source);
+  assert.equal(info.name, 'OMP tolerance fixture');
+  assert.equal(info.messageCount, 1, 'bookkeeping and custom entries do not inflate user-message counts');
+  assert.equal(info.cwd, '/tmp/omp-tolerance');
+
+  const messages = SF.readSessionMessages(source);
+  assert.deepEqual(messages.map(message => [message.role, message.customType]), [
+    ['user', undefined],
+    ['assistant', undefined],
+    ['custom', 'interrupted-thinking'],
+    ['custom', 'async-result'],
+    ['custom', 'future-notice'],
+  ]);
+  assert.deepEqual(messages[1].content, [], 'empty aborted assistant messages remain parseable');
+  assert.deepEqual(messages[2].content, [], 'interrupted reasoning is projected only as a marker');
+  assert.equal(messages[3].details.jobs[0].jobId, 'bg_123');
+  assert.equal(messages[4].content, 'A future visible OMP notice', 'unknown visible custom types get a generic row');
+
+  const search = SF.buildSearchTextFromContent(fs.readFileSync(file, 'utf8'));
+  assert.ok(search.includes('background job bg_123'));
+  assert.ok(search.includes('future visible omp notice'));
+  assert.ok(!search.includes('private interrupted reasoning'));
+  assert.ok(!search.includes('private internal state'));
+
+  const stats = SF.getSessionStats(source);
+  assert.equal(stats.userMessages, 1);
+  assert.equal(stats.assistantMessages, 1, 'empty assistant is counted once; tolerance entries are not');
+  assert.equal(stats.toolCalls, 0);
+  assert.equal(stats.toolResults, 0);
 });
 
 test('readSessionMessages carries entry ids and assistant generation stats', () => {
@@ -229,7 +264,7 @@ test('buildSearchTextFromContent lowercases and caps message text', () => {
     userMsg('Find The NEEDLE here'),
     assistantMsg('HAYSTACK reply ' + 'x'.repeat(600)),
     { type: 'custom_message', customType: 'session-message', content: 'Injected NOTE' },
-    { type: 'custom_message', customType: 'internal', content: 'PRIVATE MARKER' },
+    { type: 'custom_message', customType: 'internal', content: 'PRIVATE MARKER', display: false },
     'not json',
   ].map(e => typeof e === 'string' ? e : JSON.stringify(e)).join('\n') + '\n';
   const text = SF.buildSearchTextFromContent(content);

@@ -184,6 +184,36 @@ test('tracks compacting state from the hello and compaction events', async () =>
   await new Promise((r) => server.close(r));
 });
 
+test('tracks running tools, including update-only phases, until a completion boundary', () => {
+  const sess = new BridgeSession({
+    sessionId: 'tool-state-session', socketPath: '/unused', pid: process.pid, cwd: tmpDir,
+  });
+  sess._handle({ type: 'event', event: 'tool_execution_start', data: {
+    toolCallId: 'tc1', toolName: 'Bash', args: { command: 'sleep 1' }, startedAt: 123,
+  } });
+  sess._handle({ type: 'event', event: 'tool_execution_update', data: {
+    toolCallId: 'tc1', partialResult: { content: [{ type: 'text', text: 'partial' }] },
+  } });
+  assert.deepEqual(sess.runningToolCalls.get('tc1'), {
+    toolName: 'Bash',
+    args: { command: 'sleep 1' },
+    startedAt: 123,
+    lastPartialResult: { content: [{ type: 'text', text: 'partial' }] },
+  });
+
+  sess._handle({ type: 'event', event: 'tool_execution_end', data: { toolCallId: 'tc1' } });
+  assert.equal(sess.runningToolCalls.has('tc1'), false, 'end removes the completed call');
+
+  sess._handle({ type: 'event', event: 'tool_execution_update', data: {
+    toolCallId: 'late', toolName: 'Bash', args: { command: 'jobs' },
+    partialResult: { content: [{ type: 'text', text: 'background output' }] },
+  } });
+  assert.equal(sess.runningToolCalls.get('late').toolName, 'Bash',
+    'a post-turn/update-only background phase is replayable');
+  sess._handle({ type: 'event', event: 'agent_end', data: {} });
+  assert.equal(sess.runningToolCalls.size, 0, 'agent_end clears orphaned running calls');
+});
+
 test('protocol-v2 connections reject a hello from a different registry claim', async () => {
   const socketPath = path.join(tmpDir, 'bridge-wrong-claim.sock');
   const server = net.createServer((sock) => {
