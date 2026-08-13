@@ -159,11 +159,19 @@ test('OMP resume selects its corpus and uses the descriptor resume path without 
   const routeId = encodeSessionKey('omp', nativeId);
 
   const resumed = await post(`/api/sessions/${encodeURIComponent(routeId)}/resume`, {
+    model: 'zai/glm-4.7-flash',
     target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
   });
   assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
   assert.equal(resumed.body.id, routeId);
   assert.ok(tmux.getSpawn(routeId));
+  const entries = fs.readdirSync(path.join(tmpHome, '.pi', 'dish', 'sessions'))
+    .map(name => JSON.parse(fs.readFileSync(path.join(tmpHome, '.pi', 'dish', 'sessions', name), 'utf8')));
+  const registry = entries.find(entry => entry.sessionId === nativeId);
+  assert.ok(registry, 'resumed OMP bridge registration is present');
+  assert.deepEqual(registry.launchArgs.slice(registry.launchArgs.indexOf('--model')), [
+    '--model', 'zai/glm-4.7-flash',
+  ], 'resume model override reaches omp argv');
 });
 
 test('alternate harness registration timeout cleans its pane and never falls back to RPC', { skip: !tmuxOk }, async () => {

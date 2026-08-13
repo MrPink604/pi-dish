@@ -28,6 +28,10 @@ test('harness descriptors keep alternate launches tmux-only and load thin wrappe
       '--extension', descriptor.wrapperEntrypoint, '--resume', '/tmp/session.jsonl',
     ]);
   }
+  assert.deepEqual(registry.omp.argv.resume({ file: '/tmp/session.jsonl', model: 'zai/glm-4.7-flash' }), [
+    '--extension', registry.omp.wrapperEntrypoint, '--resume', '/tmp/session.jsonl',
+    '--model', 'zai/glm-4.7-flash',
+  ]);
 });
 
 test('canonical identities round-trip strictly and legacy routes belong to Pi', () => {

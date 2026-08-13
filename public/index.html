@@ -264,6 +264,12 @@
             <span class="resume-cwd">~</span>
           </div>
           <div class="resume-actions">
+            <label class="resume-model" id="resumeModelWrap" for="resumeModelSelect" style="display:none">
+              <span>Resume with</span>
+              <select id="resumeModelSelect" class="ns-select" disabled>
+                <option value="">Session model</option>
+              </select>
+            </label>
             <button class="btn" id="inactiveStatsBtn" onclick="openStatsModal()">Stats</button>
             <button class="btn btn-primary" onclick="resumeSession()">Resume</button>
           </div>
@@ -410,9 +416,10 @@
               <label class="ns-label" for="nsModelSelect">Model</label>
               <select id="nsModelSelect" class="ns-select" onchange="onNsModelChange(this.value)"></select>
               <div class="ns-hidden-note" id="nsModelHidden"></div>
+              <div class="ns-readiness" id="nsProviderReadiness" style="display:none"></div>
             </div>
             <div class="ns-choice">
-              <label class="ns-label" for="nsThinkingSelect">Reasoning level</label>
+              <label class="ns-label" for="nsThinkingSelect">Thinking level</label>
               <select id="nsThinkingSelect" class="ns-select" onchange="onNsThinkingChange(this.value)">
                 <option value="">(default)</option>
                 <option value="off">Off</option>
@@ -425,6 +432,12 @@
               </select>
               <div class="ns-hidden-note" id="nsThinkingNote"></div>
             </div>
+          </div>
+
+          <div class="ns-config-readout" id="nsHarnessConfig" style="display:none">
+            <div class="ns-config-title">Oh My Pi defaults</div>
+            <div class="ns-config-values" id="nsHarnessConfigValues">Loading…</div>
+            <div class="ns-hidden-note">Used only when model or thinking stays at (default). This page cannot change OMP settings.</div>
           </div>
 
           <div class="ns-section new-session-target" id="newSessionTargetWrap" style="display:none">

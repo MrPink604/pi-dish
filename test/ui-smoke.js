@@ -874,8 +874,31 @@ function writeRegistry(patch = {}) {
         ] }),
       });
     });
-    await desktop.route('**/api/models?harness=omp', async (route) => {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+    const ompModels = [
+      {
+        provider: 'zai', id: 'glm-4.7-flash', selector: 'zai/glm-4.7-flash', name: 'GLM-4.7-Flash',
+        contextWindow: 200000, reasoning: true,
+        thinking: ['minimal', 'low', 'medium', 'high', 'xhigh'], providerReady: true,
+      },
+      {
+        provider: 'zai', id: 'glm-5.2', selector: 'zai/glm-5.2', name: 'GLM-5.2',
+        contextWindow: 1000000, reasoning: true, thinking: ['high', 'max'], providerReady: true,
+      },
+      {
+        provider: 'fixture-missing', id: 'offline-model', selector: 'fixture-missing/offline-model',
+        name: 'Offline Model', contextWindow: 100000, reasoning: true,
+        thinking: ['minimal', 'high'], providerReady: false,
+      },
+    ];
+    await desktop.route(/\/api\/models\?harness=omp(?:&|$)/, async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(ompModels) });
+    });
+    await desktop.route(/\/api\/harnesses\/omp\/config(?:\?|$)/, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ defaultModel: 'zai/glm-4.7-flash', defaultThinkingLevel: 'high' }),
+      });
     });
     await desktop.evaluate(() => localStorage.setItem('pi-dish-new-harness', 'omp'));
     await desktop.evaluate(() => loadHarnesses());
@@ -884,8 +907,24 @@ function writeRegistry(patch = {}) {
       'unavailable harnesses are omitted from the Agent selector');
     check(await desktop.inputValue('#nsHarnessSelect') === 'omp',
       'a saved installed alternative survives asynchronous harness discovery');
+    await desktop.waitForFunction(() =>
+      document.querySelector('#nsProviderReadiness')?.textContent.includes('zai: credential present'));
+    check(await desktop.locator('#nsModelSelect option[value="fixture-missing/offline-model"]:disabled').count() === 1,
+      'a model without a provider credential is visible but disabled');
+    check((await desktop.locator('#nsProviderReadiness').textContent()).includes('fixture-missing: credential missing'),
+      'provider readiness reports presence only');
+    check((await desktop.locator('#nsHarnessConfigValues').textContent()).includes('zai/glm-4.7-flash') &&
+      (await desktop.locator('#nsHarnessConfigValues').textContent()).includes('high'),
+      'curated OMP default model and thinking are shown read-only');
+
+    await desktop.selectOption('#nsModelSelect', 'zai/glm-5.2');
+    const restrictedLevels = await desktop.locator('#nsThinkingSelect option').evaluateAll(options =>
+      options.map(option => option.value));
+    check(JSON.stringify(restrictedLevels) === JSON.stringify(['', 'high', 'max']),
+      `restricted model offers only high/max thinking (got ${JSON.stringify(restrictedLevels)})`);
+    await desktop.selectOption('#nsModelSelect', 'zai/glm-4.7-flash');
     await desktop.fill('#newSessionName', 'UI named session');
-    await desktop.selectOption('#nsThinkingSelect', 'high');
+    await desktop.selectOption('#nsThinkingSelect', 'minimal');
 
     // Fuzzy cwd search from the text input (single source of truth).
     await desktop.fill('#newSessionCwd', '');
@@ -909,6 +948,7 @@ function writeRegistry(patch = {}) {
       null, { timeout: 5000 });
     await desktop.locator('.ns-tree-row').filter({ hasText: 'proj-alpha' }).first().click();
     check(await desktop.inputValue('#newSessionCwd') === CWD, 'selecting a tree dir sets the cwd input');
+    await desktop.waitForFunction((cwd) => knownModelsCwd === cwd, CWD, { timeout: 5000 });
 
     // Spawn: routed async round-trip (deterministic — no real pi child).
     // The POST opts into asynchronous spawning; the takeover closes
@@ -937,8 +977,8 @@ function writeRegistry(patch = {}) {
     check(asyncSpawnBody?.name === 'UI named session', 'POST body carries the chosen session name');
     check(asyncSpawnBody?.cwd === CWD, `POST body carries the chosen cwd (got ${JSON.stringify(asyncSpawnBody?.cwd)})`);
     check(asyncSpawnBody?.harness === 'omp', 'POST body routes the spawn through the selected alternative harness');
-    check(asyncSpawnBody?.model === undefined, 'default model omitted from POST body');
-    check(asyncSpawnBody?.thinking === 'high', 'POST body carries the chosen reasoning level');
+    check(asyncSpawnBody?.model === 'zai/glm-4.7-flash', 'POST body carries the chosen OMP model');
+    check(asyncSpawnBody?.thinking === 'minimal', 'POST body carries a thinking level valid for that model');
     check(!(await desktop.evaluate(() => document.querySelector('.main').classList.contains('new-session-open'))),
       'takeover closes in favor of the provisional pane');
     check(await desktop.locator('.session-item.starting').textContent().then(t => t.includes('Starting Oh My Pi')),
@@ -982,6 +1022,7 @@ function writeRegistry(patch = {}) {
       () => document.querySelector('.main').classList.contains('new-session-open'),
       null, { timeout: 5000 });
     await desktop.fill('#newSessionCwd', CWD);
+    await desktop.waitForFunction((cwd) => knownModelsCwd === cwd, CWD, { timeout: 5000 });
     await desktop.click('#nsSpawnBtn');
     await desktop.waitForSelector('.session-item.starting');
     const failedDraft = 'keep this after a startup failure';
@@ -998,7 +1039,8 @@ function writeRegistry(patch = {}) {
     }, SESSION_ID);
     await desktop.unroute('**/api/sessions/new');
     await desktop.unroute('**/api/session-spawns/ui-spawn-1');
-    await desktop.unroute('**/api/models?harness=omp');
+    await desktop.unroute(/\/api\/models\?harness=omp(?:&|$)/);
+    await desktop.unroute(/\/api\/harnesses\/omp\/config(?:\?|$)/);
     await desktop.unroute('**/api/harnesses');
 
     // 5. Rename propagates to the sidebar without a reload

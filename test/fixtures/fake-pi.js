@@ -17,6 +17,45 @@ const { processIdentity } = require('../../lib/process-identity');
 const home = process.env.HOME || os.homedir();
 const args = process.argv.slice(2);
 const harnessId = process.env.PI_FIXTURE_HARNESS || 'pi';
+
+// The OMP descriptor uses the same configured executable for short-lived
+// catalog/config reads and long-lived TUI launches. Speak those CLI surfaces
+// before entering the bridge-registration fixture below.
+if (harnessId === 'omp' && args[0] === 'models' && args.includes('--json')) {
+  const model = (provider, id, thinking, name = id) => ({
+    provider, id, selector: `${provider}/${id}`, name,
+    contextWindow: id === 'glm-5.2' ? 1000000 : 200000,
+    maxTokens: 32000, reasoning: Array.isArray(thinking) && thinking.length > 0,
+    thinking, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  });
+  fs.writeSync(1, JSON.stringify({ models: [
+    model('anthropic', 'claude-opus-4', ['low', 'high'], 'Claude Opus 4'),
+    model('zai', 'glm-4.7-flash', ['minimal', 'low', 'medium', 'high', 'xhigh'], 'GLM-4.7-Flash'),
+    model('zai', 'glm-5.2', ['high', 'max'], 'GLM-5.2'),
+    model('fixture-project', 'project-model', ['minimal']),
+    model('fixture-config', 'config-model', ['low']),
+    model('fixture-home', 'home-model', ['medium']),
+    model('fixture-process', 'process-model', ['high']),
+    model('fixture-missing', 'missing-model', null),
+    model('fixture-blank', 'blank-model', null),
+  ] }) + '\n');
+  process.exit(0);
+}
+
+if (harnessId === 'omp' && args[0] === 'config' && args[1] === 'get' && args.includes('--json')) {
+  const key = args[2];
+  const values = {
+    modelRoles: { key, value: { default: 'zai/glm-4.7-flash' }, type: 'record', description: '' },
+    defaultThinkingLevel: { key, value: 'high', type: 'enum', description: 'Reasoning depth' },
+  };
+  if (!values[key]) {
+    fs.writeSync(2, `Unknown setting: ${key}\n`);
+    process.exit(1);
+  }
+  fs.writeSync(1, JSON.stringify(values[key]) + '\n');
+  process.exit(0);
+}
+
 const extensionIndex = args.indexOf('--extension');
 let wrapperToken = '';
 if (extensionIndex >= 0 && args[extensionIndex + 1]) {

@@ -2623,8 +2623,22 @@ body.sidebar-open {
 
 .resume-actions {
   display: flex;
+  align-items: flex-end;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.resume-model {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.resume-model .ns-select {
+  max-width: 260px;
+  padding-block: 5px;
 }
 
 .resume-label {
@@ -4050,6 +4064,29 @@ img.msg-image {
 .ns-select:focus { border-color: var(--accent); }
 .ns-select:disabled { opacity: .55; cursor: not-allowed; }
 .ns-hidden-note { font-size: 11px; color: var(--text-muted); }
+.ns-readiness { display: flex; flex-wrap: wrap; gap: 5px; font-size: 11px; }
+.ns-provider-status {
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text-muted);
+}
+.ns-provider-status.ready {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 35%, var(--line));
+}
+.ns-provider-status.missing {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 35%, var(--line));
+}
+.ns-config-readout {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-card);
+}
+.ns-config-title { color: var(--text-bright); font-size: 12px; font-weight: 600; }
+.ns-config-values { margin: 4px 0; color: var(--text); font-family: var(--font-mono); font-size: 12px; }
 
 @media (max-width: 600px) {
   .ns-choice-row { grid-template-columns: 1fr; }
