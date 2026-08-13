@@ -1,0 +1,79 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-pricing-'));
+process.env.HOME = tmp;
+const fixture = path.join(__dirname, 'fixtures', 'fake-omp-models.js');
+process.env.PI_DISH_OMP_COMMAND = `env OMP_FIXTURE=1 ${process.execPath} ${fixture}`;
+
+const pricing = require('../lib/harness-pricing.js');
+const sessionFiles = require('../lib/session-files.js');
+
+test.after(() => {
+  delete process.env.PI_DISH_OMP_COMMAND;
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('OMP catalog command is cached, persisted, and prices tokens including cache reads', async () => {
+  const snapshot = await pricing.refreshHarnessPricing('omp', { force: true, now: 1_000_000 });
+  assert.ok(snapshot);
+  const cost = pricing.estimateUsageCost('omp', 'zai', 'glm-4.7-flash', {
+    input: 1_000_000, output: 500_000, cacheRead: 2_000_000, cacheWrite: 250_000,
+  });
+  assert.deepEqual(cost, { input: 0.6, output: 1.1, cacheRead: 0.22, cacheWrite: 0.2, total: 2.12 });
+  assert.equal(pricing.estimateUsageCost('omp', 'zai', 'unknown', { input: 10 }), undefined);
+  assert.equal(pricing.estimateUsageCost('pi', 'zai', 'glm-4.7-flash', { input: 1_000_000 }), undefined,
+    'Pi never reads the OMP catalog');
+  assert.ok(fs.existsSync(path.join(tmp, '.pi', 'dish', 'pricing', 'omp.json')));
+});
+
+test('stale last-known OMP catalog survives refresh failure; missing catalog stays unpriced', async () => {
+  pricing.resetForTests();
+  process.env.PI_DISH_OMP_COMMAND = path.join(tmp, 'missing-omp');
+  const stale = await pricing.refreshHarnessPricing('omp', {
+    now: 1_000_000 + pricing.CATALOG_MAX_AGE_MS + 1,
+  });
+  assert.ok(stale, 'a failed stale refresh retains the persisted snapshot');
+  assert.ok(Number.isFinite(pricing.estimateUsageCost('omp', null, 'zai/glm-4.7-flash', { input: 10 }).total),
+    'combined OMP selectors match provider/id catalog keys');
+
+  process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-pricing-missing-'));
+  pricing.resetForTests();
+  assert.equal(await pricing.refreshHarnessPricing('omp', { force: true }), null);
+  assert.equal(pricing.estimateUsageCost('omp', 'zai', 'glm-4.7-flash', { input: 10 }), undefined);
+});
+
+test('OMP session usage is catalog-priced while unknown models remain unavailable', async () => {
+  process.env.HOME = tmp;
+  pricing.resetForTests();
+  const candidate = { harnessId: 'omp', profileId: 'omp-v1', profileVersion: 1 };
+  const content = [
+    { type: 'model_change', model: 'zai/glm-4.7-flash' },
+    { type: 'message', message: { role: 'assistant', content: [], usage: {
+      input: 1_000_000, output: 500_000, cacheRead: 2_000_000, cacheWrite: 250_000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    } } },
+    { type: 'model_change', model: 'zai/not-in-catalog' },
+    { type: 'message', message: { role: 'assistant', content: [], usage: { input: 10, output: 2 } } },
+  ].map(JSON.stringify).join('\n') + '\n';
+  const usage = sessionFiles.buildIndexedUsageFromContent(content, candidate);
+  assert.equal(usage.models['zai/glm-4.7-flash'].costs.total, 2.12);
+  assert.equal(usage.models['zai/glm-4.7-flash'].costUnavailable.total, 0);
+  assert.equal(usage.models['zai/not-in-catalog'].costs.total, null);
+  assert.equal(usage.models['zai/not-in-catalog'].costUnavailable.total, 1);
+
+  const file = path.join(tmp, 'omp-usage.jsonl');
+  fs.writeFileSync(file, content);
+  const source = { ...candidate, file };
+  const messages = sessionFiles.readSessionMessages(source).filter(message => message.role === 'assistant');
+  assert.equal(messages[0].usage.cost.total, 2.12, 'per-response details use the OMP estimate');
+  assert.equal(messages[1].usage.cost, undefined, 'unknown per-response models do not become free');
+  const stats = sessionFiles.getSessionStats(source);
+  assert.equal(stats.cost, null, 'one unknown call keeps mixed session spend unavailable');
+  assert.equal(stats.costUnavailable.total, 1);
+});

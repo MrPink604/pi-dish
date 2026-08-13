@@ -86,7 +86,7 @@ function formatTokSpeed(outputTokens, durationMs) {
   return (rate >= 10 ? Math.round(rate) : Math.round(rate * 10) / 10) + ' tok/s';
 }
 
-/** Pi catalog estimate; deliberately never presented as a provider bill. */
+/** Harness-catalog estimate; deliberately never presented as a provider bill. */
 function formatEstimatedCost(value, digits = 4) {
   if (!Number.isFinite(value)) return 'Unavailable';
   if (value === 0) return '~$0';
