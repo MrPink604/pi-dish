@@ -582,6 +582,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // that keeps a failed compaction from swallowing every later prompt.
   let compacting = false;
   let compactionStuckTimer: ReturnType<typeof setTimeout> | null = null;
+  // Distinguishes compaction episodes so a stale resolution probe from one
+  // /compact can never release the gate a newer compaction raised.
+  let compactionGeneration = 0;
   const compactionQueue: Array<string | any[]> = [];
   const COMPACTION_STUCK_MS = 6 * 60 * 1000;
   // True once ensureSessionSubscription() is listening to the AgentSession's
@@ -1156,12 +1159,29 @@ export function createBridge(descriptor: BridgeDescriptor) {
       // outcome arrives via the AgentSession compaction events (or the
       // session_before_compact/session_compact fallback below). Older pi
       // returned a promise — report a rejection so the client isn't stuck.
+      const attempt = compactionGeneration;
       try {
         const argument = args
           ? (descriptor.compactArgument?.(args) ?? { customInstructions: args })
           : undefined;
-        ((lastCtx as any).compact(argument) as any)
-          ?.catch?.((e: any) => {
+        const invocation = (lastCtx as any).compact(argument) as any;
+        // Interactive OMP resolves this promise when compaction settles —
+        // success or failure alike — but reports failures only to its own TUI
+        // (executeCompaction catches the error, shows it, and resolves void),
+        // and "nothing to compact" throws before session_before_compact, so
+        // no extension event ever fires. Success emits session_compact before
+        // resolution and releases the gate; if this attempt's gate is still
+        // up shortly after resolution, the host swallowed a failure/cancel —
+        // release it instead of silently queueing prompts until the stuck net.
+        invocation?.then?.(() => {
+          setTimeout(() => {
+            if (!compacting || attempt !== compactionGeneration) return;
+            console.error("[pi-dish-bridge] compact settled without a compaction event; treating as host-reported failure");
+            broadcast({ type: "event", event: "compaction_end", data: { reason: "manual", errorMessage: "The harness finished without compacting (it may have refused, e.g. session too small); check the harness terminal for details." } });
+            endCompaction();
+          }, 1000);
+        });
+        invocation?.catch?.((e: any) => {
             console.error("[pi-dish-bridge] compact failed:", e?.message || e);
             // With the session subscription live the AgentSession's own
             // compaction_end (errorMessage) already reported and released.
@@ -1381,6 +1401,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       endCompaction();
     }, COMPACTION_STUCK_MS);
     if (compacting) return;
+    compactionGeneration++;
     compacting = true;
     writeRegistry();
   }

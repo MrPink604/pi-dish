@@ -7,7 +7,7 @@ const { spawn } = require('node:child_process');
 
 const { BridgeSession } = require('../lib/bridge-session');
 
-async function startFakeHost(hasCompact) {
+async function startFakeHost(hasCompact, { swallowOutcome = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-compact-'));
   const home = path.join(root, 'home');
   const socketDir = path.join(root, 'sockets');
@@ -24,6 +24,7 @@ async function startFakeHost(hasCompact) {
       FAKE_OMP_SESSION_FILE: sessionFile,
       FAKE_OMP_COMPACT_CALL: callFile,
       FAKE_OMP_HAS_COMPACT: hasCompact ? '1' : '0',
+      FAKE_OMP_COMPACT_SWALLOW: swallowOutcome ? '1' : '0',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -78,6 +79,33 @@ test('OMP bridge compact operation uses public ctx.compact and forwards lifecycl
     assert.equal(JSON.parse(fs.readFileSync(host.callFile, 'utf8')).instructions, 'retain decisions');
     assert.deepEqual(events.map(([name]) => name), ['start', 'end']);
     assert.equal(session.compacting, false);
+  } finally {
+    session.close();
+    await host.close();
+  }
+});
+
+test('OMP bridge releases the compaction gate when the host swallows a failure', async () => {
+  const host = await startFakeHost(true, { swallowOutcome: true });
+  const session = new BridgeSession(host.claim);
+  try {
+    await session.connect();
+    const events = [];
+    session.on('compaction_end', data => events.push(data));
+    const result = await session.compact('will be refused');
+    assert.match(result.info, /started/i);
+    // No session_before_compact/session_compact ever fires; the resolution
+    // probe must report the swallowed failure and release the gate.
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('compaction_end timeout')), 5000);
+      session.once('compaction_end', () => { clearTimeout(timer); resolve(); });
+    });
+    assert.match(events[0].errorMessage, /finished without compacting/i);
+    assert.equal(session.compacting, false);
+    // The gate is genuinely down: a new compact attempt reaches the host
+    // instead of being refused as already-in-progress.
+    const again = await session.compact();
+    assert.match(again.info, /started/i);
   } finally {
     session.close();
     await host.close();

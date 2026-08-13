@@ -41,6 +41,9 @@ const ctx: any = {
 if (process.env.FAKE_OMP_HAS_COMPACT === "1") {
   ctx.compact = async (instructions?: string) => {
     fs.writeFileSync(process.env.FAKE_OMP_COMPACT_CALL!, JSON.stringify({ instructions }));
+    // Interactive OMP catches compaction failures itself (TUI-only error) and
+    // resolves without emitting any session_before_compact/session_compact.
+    if (process.env.FAKE_OMP_COMPACT_SWALLOW === "1") return;
     await emit("session_before_compact", { reason: "manual" }, ctx);
     setTimeout(() => {
       emit("session_compact", {
