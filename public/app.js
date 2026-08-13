@@ -5459,6 +5459,20 @@ function startMessageStream(sessionId, selectionGeneration = sessionSelectionGen
         selectSession(sessionId, { forceTranscriptReload: true });
       }
     });
+    addOwnedListener('session_switch', (e) => {
+      let data;
+      try { data = JSON.parse(e.data); } catch { return; }
+      const nextId = data?.sessionId;
+      if (!nextId || nextId === sessionId) return;
+      // The route identifies a different transcript even though the pane and
+      // bridge socket stayed put. Never restore a prior DOM stash for that id:
+      // the session may have changed since it was last viewed.
+      transcriptCache.delete(nextId);
+      void loadSessions(undefined, { withPrevious: true }).then(() => {
+        if (!ownsSessionView(sessionId, selectionGeneration) || !findSession(nextId)) return;
+        selectSession(nextId, { forceTranscriptReload: true });
+      });
+    });
 
     addOwnedListener('auto_retry_start', (e) => {
       try {

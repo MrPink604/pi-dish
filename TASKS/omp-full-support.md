@@ -41,6 +41,17 @@ runtime. A real one-turn canary
 (`omp --model zai/glm-4.7-flash --thinking minimal -p "…"`) verified the
 end-to-end path in the reference orb.
 
+### In-pane session identity
+
+OMP keeps the same extension runner for `/new`, `/resume`, fork, and handoff,
+and emits `session_switch` instead of another `session_start`. pi-dish now
+adopts that new identity in place: the instance-keyed bridge socket and
+registry stay stable while history routing, pane ownership, SSE, and the web
+selection follow the new session. WS-G deliberately excluded `/handoff` from
+the curated web host commands because this identity gap made the originating
+route lose the pane. With switch adoption in place a follow-up may re-evaluate
+`/handoff`; adding it back to the web command allowlist is out of scope here.
+
 ## Workstreams
 
 Each workstream is one feature branch (`omp-compact`, `omp-tree`,

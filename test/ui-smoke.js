@@ -114,6 +114,17 @@ appendEntry({ type: 'message', message: { role: 'custom', customType: 'async-res
 appendEntry({ type: 'custom_message', customType: 'future-notice',
   content: 'future custom content', display: true, timestamp: '2026-07-05T00:02:04.000Z' });
 
+// Same-pane session-switch target. The fake bridge rewrites its stable
+// registry claim to this identity and emits session_switch so the browser's
+// follow logic is exercised against a distinct authoritative transcript.
+const SWITCH_ID = '2026-07-05T00-03-00-uiswitch';
+const switchFile = path.join(sessionDir, `${SWITCH_ID}.jsonl`);
+fs.writeFileSync(switchFile, [
+  { type: 'session', cwd: CWD, timestamp: '2026-07-05T00:03:00.000Z' },
+  { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'switched transcript question' }], timestamp: '2026-07-05T00:03:01.000Z' } },
+  { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'switched transcript answer' }], timestamp: '2026-07-05T00:03:02.000Z' } },
+].map((entry) => JSON.stringify(entry)).join('\n') + '\n');
+
 // A second workspace with one (older) historical session — the sidebar
 // collapse/pin section needs two groups on the All tab.
 const BETA_ID = '2026-07-04T00-00-00-uismoke2';
@@ -437,6 +448,46 @@ function writeRegistry(patch = {}) {
       'historical async-result renders a background-job-finished row');
     check((await desktop.locator('.message.custom-message.generic').textContent()).includes('future notice'),
       'unknown visible custom_message renders a generic row');
+
+    console.log('same-pane session switch:');
+    writeRegistry({
+      sessionId: SWITCH_ID,
+      sessionFile: switchFile,
+      name: 'switched smoke session',
+    });
+    emit('session_switch', {
+      sessionId: SWITCH_ID,
+      sessionFile: switchFile,
+      previousSessionId: SESSION_ID,
+      previousSessionFile: sessionFile,
+      cwd: CWD,
+      reason: 'new',
+    });
+    await desktop.waitForFunction((id) => currentSession?.id === id, SWITCH_ID, { timeout: 5000 });
+    await desktop.waitForFunction(() => document.getElementById('messages')?.textContent.includes('switched transcript answer'),
+      { timeout: 5000 });
+    check(!(await desktop.locator('#messages').textContent()).includes('existing answer'),
+      'new route renders only its own history, not the old transcript cache');
+    check(await desktop.evaluate(() => localStorage.getItem('pi-dish-session')) === SWITCH_ID,
+      'client follows session_switch to the new route');
+
+    writeRegistry({
+      sessionId: SESSION_ID,
+      sessionFile,
+      name: 'smoke session',
+    });
+    emit('session_switch', {
+      sessionId: SESSION_ID,
+      sessionFile,
+      previousSessionId: SWITCH_ID,
+      previousSessionFile: switchFile,
+      cwd: CWD,
+      reason: 'resume',
+    });
+    await desktop.waitForFunction((id) => currentSession?.id === id, SESSION_ID, { timeout: 5000 });
+    await desktop.waitForFunction(() => document.getElementById('messages')?.textContent.includes('existing answer'),
+      { timeout: 5000 });
+    check(true, 'client follows a resume switch back to the original route');
 
     // Tool-activity accordion: the historical tool turn folds into one
     // closed group holding the tool-only assistant message + tool result.
