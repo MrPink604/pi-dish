@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { encodeSessionKey, decodeSessionKey, resolveSessionRoute, VERSION } = require('../lib/session-key');
-const { registry } = require('../lib/harnesses');
+const { registry, resolveLaunchSpec } = require('../lib/harnesses');
 const { discoverSessionCandidates, discoverHarnessSessions } = require('../lib/session-discovery');
 const { getSessionInfo } = require('../lib/session-files');
 
@@ -32,6 +32,17 @@ test('harness descriptors keep alternate launches tmux-only and load thin wrappe
     '--extension', registry.omp.wrapperEntrypoint, '--resume', '/tmp/session.jsonl',
     '--model', 'zai/glm-4.7-flash',
   ]);
+});
+
+test('OMP launches skip the first-run setup wizard unless the configured command overrides it', () => {
+  // Default: the wizard would own TUI input a web pilot can never dismiss.
+  assert.equal(resolveLaunchSpec(registry.omp, {}).env.OMP_SKIP_SETUP, '1');
+  // An explicit assignment in PI_DISH_OMP_COMMAND wins over the default.
+  const overridden = resolveLaunchSpec(registry.omp, { PI_DISH_OMP_COMMAND: 'env OMP_SKIP_SETUP=0 omp' });
+  assert.equal(overridden.env.OMP_SKIP_SETUP, '0');
+  assert.deepEqual(overridden.argv, ['omp']);
+  // Other harnesses gain no stray env defaults.
+  assert.deepEqual(resolveLaunchSpec(registry.pi, {}).env, {});
 });
 
 test('canonical identities round-trip strictly and legacy routes belong to Pi', () => {
