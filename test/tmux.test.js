@@ -145,7 +145,7 @@ test('OMP launch uses its wrapper descriptor and encoded cross-harness identity'
   assert.equal(messages.body.session.name, 'OMP tmux spawn');
   const tree = await get(`/api/sessions/${encodeURIComponent(body.id)}/tree`);
   assert.equal(tree.status, 409);
-  assert.match(tree.body.error, /only supported for Pi/i);
+  assert.match(tree.body.error, /does not advertise live tree reads/i);
 });
 
 test('OMP resume selects its corpus and uses the descriptor resume path without RPC', { skip: !tmuxOk }, async () => {

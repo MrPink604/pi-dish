@@ -7,10 +7,11 @@ export const bridgeDescriptor = {
     prompt: true, steer: true, followUp: true, abort: true, compact: true,
     models: true, setModel: true, setThinking: true, rename: true,
     commands: true, reload: false, queueRead: false, queueCancel: false,
-    treeRead: false, treeNavigation: false, extensionUI: true,
+    treeRead: true, treeNavigation: true, extensionUI: true,
   },
   publicCompactionEvents: true,
   compactArgument: (instructions: string) => instructions,
+  treeCommandContext: true,
 } satisfies BridgeDescriptor;
 
 export function createHarnessBridge(spawnToken?: string) {

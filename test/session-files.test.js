@@ -201,6 +201,26 @@ test('readSessionMessages follows the active tree path, not file order', () => {
     'abandoned branch entries do not render; active path keeps file order');
 });
 
+test('readSessionMessagesAtLeaf follows a live leaf that is not the last JSONL entry', () => {
+  const tmsg = (id, parentId, role, text) => ({
+    type: 'message', id, parentId,
+    message: { role, content: [{ type: 'text', text }] },
+  });
+  const file = writeSession([
+    tmsg('e1', null, 'user', 'root'),
+    tmsg('e2', 'e1', 'assistant', 'shared answer'),
+    tmsg('e3', 'e2', 'user', 'abandoned prompt'),
+    tmsg('e4', 'e3', 'assistant', 'physical tip'),
+  ]);
+  const selected = SF.readSessionMessagesAtLeaf(file, 'e2');
+  assert.deepEqual(selected.map(message => message.content[0].text), ['root', 'shared answer']);
+  assert.deepEqual(SF.readSessionMessages(file).map(message => message.content[0].text),
+    ['root', 'shared answer', 'abandoned prompt', 'physical tip'],
+    'ordinary reads keep deriving the leaf from the physical file tip');
+  assert.throws(() => SF.readSessionMessagesAtLeaf(file, 'missing'),
+    /Session tree leaf not found: missing/);
+});
+
 test('readSessionMessages keeps every entry when the leaf is the last message', () => {
   const tmsg = (id, parentId, role, text) => ({
     type: 'message', id, parentId,

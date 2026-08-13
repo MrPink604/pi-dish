@@ -7799,12 +7799,18 @@ function selectTreeNode(entryId) {
   // Summarize default persists across uses — retrying a prompt wants it off,
   // the explore-then-return workflow wants it on every time.
   var summarize = localStorage.getItem('pi-dish-branch-summarize') === '1';
+  // OMP's public navigateTree API accepts { summarize } but has no custom
+  // instructions field. Keep the supported summary toggle and avoid showing
+  // an input the host would have to ignore.
+  var allowSummaryInstructions = currentSession.harnessId !== 'omp';
   document.getElementById('treeStatus').innerHTML =
     '<div class="branch-confirm">' +
       '<label class="branch-summarize-label"><input type="checkbox" id="branchSummarize"' + (summarize ? ' checked' : '') +
         ' onchange="toggleBranchInstructions()"> Summarize abandoned branch</label>' +
-      '<input type="text" id="branchInstructions" class="branch-instructions" placeholder="Summary instructions (optional)"' +
-        (summarize ? '' : ' style="display:none"') + '>' +
+      (allowSummaryInstructions
+        ? '<input type="text" id="branchInstructions" class="branch-instructions" placeholder="Summary instructions (optional)"' +
+          (summarize ? '' : ' style="display:none"') + '>'
+        : '') +
       '<span class="branch-confirm-btns">' +
         '<button class="btn-sm btn-branch" id="branchGoBtn" onclick="confirmBranch()">Branch from here</button>' +
         '<button class="btn-sm" onclick="cancelBranch()">Cancel</button>' +
