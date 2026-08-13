@@ -21,17 +21,24 @@ event pairing, terminal shell WebSocket AND the `?mode=tmux` TUI pane swap
 ## Gap 1 (P1): Fresh sessions are invisible to stats/export/share/tree routes
 
 `GET /stats`, `GET /export`, `POST /share` (and `GET /tree`) resolve the
-session through the historical discovery index. A freshly launched session —
-JSONL on disk, live in the registry, fully prompt-able — returns
-`{"error":"Session not found"}` / 404 until the index picks it up (it needs
-message entries and a rescan). Reproduced: new OMP session responded to
-rename/thinking/diff/messages but 404'd on stats/export/share; an older
-session from the same server boot worked on all of them.
+session through the historical discovery index. OMP 17.2.15 registers a
+freshly launched session and advertises its future `sessionFile`, but does not
+create the JSONL until the first prompt. In that pre-file window, persisted
+history routes must return a precise 409 (`Session has no persisted history
+yet`) rather than the misleading `Session not found` / 404; they must not
+initialize, mutate, or synthesize an OMP transcript.
 
-Fix: those routes should fall back to the live session's `sessionFile` (the
-`/api/sessions` aggregate already carries it) when the index lookup misses.
-Keep the OMP pi-sdk export gate exactly as is — this is a lookup fix, not an
-export-path change.
+After the first turn, the JSONL exists but is not necessarily indexed yet.
+During that post-first-turn/pre-index window, the session is live, registered,
+and fully promptable, but the same routes previously continued to 404 until an
+index rescan. Reproduced: a new OMP session responded to rename/thinking/diff/
+messages but 404'd on stats/export/share; an older session from the same server
+boot worked on all of them.
+
+Fix: those routes fall back to the live session's `sessionFile` (the
+`/api/sessions` aggregate already carries it) when the index lookup misses and
+the file exists. Keep the OMP pi-sdk export gate exactly as is — this is a
+lookup fix, not an export-path change.
 
 ## Gap 2 (P1): Aborts/interruptions render as nothing — transcript silently stops
 
