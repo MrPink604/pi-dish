@@ -1579,11 +1579,59 @@ test('OMP command discovery advertises only bridge-executable commands and API a
   fs.writeFileSync(registryPath, JSON.stringify(claim));
   invalidateRegistryCache();
 
+  const originalPaneExists = tmux.paneExists;
+  const originalSendKeys = tmux.sendKeys;
+  const injected = [];
   try {
+    const unownedCommands = await get(`/api/commands?sessionId=${encodeURIComponent(routeId)}`);
+    assert.equal(unownedCommands.status, 200, JSON.stringify(unownedCommands.body));
+    assert.deepEqual(unownedCommands.body.map(command => command.name),
+      ['tree', 'compact', 'model', 'name', 'abort', 'skill:review', 'daily', 'dish-push']);
+
+    tmux.recordSpawn(routeId, { socket: '/fake/owned-omp.sock', paneId: '%88' });
+    tmux.paneExists = async (socket, paneId) => socket === '/fake/owned-omp.sock' && paneId === '%88';
+    tmux.sendKeys = async (socket, paneId, text) => injected.push({ socket, paneId, text });
+
     const commands = await get(`/api/commands?sessionId=${encodeURIComponent(routeId)}`);
     assert.equal(commands.status, 200, JSON.stringify(commands.body));
     assert.deepEqual(commands.body.map(command => command.name),
-      ['tree', 'compact', 'model', 'name', 'abort', 'skill:review', 'daily', 'dish-push']);
+      ['tree', 'compact', 'model', 'name', 'abort', 'skill:review', 'daily', 'dish-push', 'shake']);
+    assert.deepEqual(commands.body.at(-1), {
+      name: 'shake',
+      description: 'Drop heavy content from context (tool results, large blocks, or images)',
+      args: '[images]',
+      source: 'host',
+      supported: true,
+    });
+
+    const shake = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/shake' });
+    assert.equal(shake.status, 200, JSON.stringify(shake.body));
+    const shakeImages = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/shake images' });
+    assert.equal(shakeImages.status, 200, JSON.stringify(shakeImages.body));
+    assert.deepEqual(injected, [
+      { socket: '/fake/owned-omp.sock', paneId: '%88', text: '/shake' },
+      { socket: '/fake/owned-omp.sock', paneId: '%88', text: '/shake images' },
+      { socket: '/fake/owned-omp.sock', paneId: '%88', text: '' },
+    ]);
+
+    const badArgs = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, {
+      message: '/shake images; touch /tmp/nope',
+    });
+    assert.equal(badArgs.status, 400, JSON.stringify(badArgs.body));
+    assert.match(badArgs.body.error, /invalid arguments/i);
+    assert.equal(injected.length, 3, 'invalid host arguments never reach tmux');
+
+    const notAllowlisted = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, {
+      message: '/handoff',
+    });
+    assert.equal(notAllowlisted.status, 200, JSON.stringify(notAllowlisted.body));
+    assert.equal(injected.length, 3, 'non-allowlisted commands stay on the bridge path');
+    assert.ok(received.some(command => command.command === 'run_command' && command.message === '/handoff'));
+
+    tmux.removeSpawn(routeId);
+    const noPane = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/shake' });
+    assert.equal(noPane.status, 409, JSON.stringify(noPane.body));
+    assert.match(noPane.body.error, /pi-dish-owned Oh My Pi pane/i);
 
     const cancelled = await post(`/api/sessions/${encodeURIComponent(routeId)}/queue/cancel`, {});
     assert.equal(cancelled.status, 409, JSON.stringify(cancelled.body));
@@ -1597,6 +1645,9 @@ test('OMP command discovery advertises only bridge-executable commands and API a
     assert.deepEqual(received.filter(command => command.command === 'set_model').map(command => command.model),
       ['zai/glm-4.7-flash', 'zai/glm-4.5-flash']);
   } finally {
+    tmux.paneExists = originalPaneExists;
+    tmux.sendKeys = originalSendKeys;
+    tmux.removeSpawn(routeId);
     fs.rmSync(registryPath, { force: true });
     invalidateRegistryCache();
     for (const sock of sockets) sock.destroy();
