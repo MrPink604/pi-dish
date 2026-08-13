@@ -231,6 +231,8 @@ export type BridgeDescriptor = {
   getPrivateSession?: () => any;
   selfPrime?: boolean;
   piLifecycleEvents?: boolean;
+  publicCompactionEvents?: boolean;
+  compactArgument?: (instructions: string) => any;
   // Resident harness daemons may not forward arbitrary client environment
   // variables. Launch-specific wrappers inject this value directly instead.
   spawnToken?: string;
@@ -338,6 +340,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
   let cwd: string | null = null;
   const clients = new Set<net.Socket>();
   const wrappedUIs = new WeakSet<object>();
+  // A wrapper may opt into an operation that is absent on an older host.
+  // Resolve that claim against the live public context before registration;
+  // alternative hosts must fail closed rather than throwing at extension load.
+  const capabilities = { ...descriptor.capabilities };
 
   let turnInProgress = false;
   // Compaction has no active turn (turn_start never fires), yet pi has aborted
@@ -754,7 +760,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       harnessId: descriptor.harnessId,
       bridgeInstanceId: instanceId,
       nativeSessionId: sessionId,
-      capabilities: descriptor.capabilities,
+      capabilities,
       sessionId,
       sessionFile,
       cwd,
@@ -830,7 +836,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       harnessId: descriptor.harnessId,
       bridgeInstanceId: instanceId,
       nativeSessionId: sessionId,
-      capabilities: descriptor.capabilities,
+      capabilities,
       sessionId,
       sessionFile,
       socketPath,
@@ -897,7 +903,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
     // --- Emulated built-ins ---
     if (name === "compact") {
-      if (!descriptor.capabilities.compact) {
+      if (!capabilities.compact) {
         return { ok: false, error: `/${name} is unavailable in the ${descriptor.name} public bridge profile.` };
       }
       if (!lastCtx) return { ok: false, error: "no active context" };
@@ -917,7 +923,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
       // session_before_compact/session_compact fallback below). Older pi
       // returned a promise — report a rejection so the client isn't stuck.
       try {
-        (lastCtx.compact(args ? { customInstructions: args } : undefined) as any)
+        const argument = args
+          ? (descriptor.compactArgument?.(args) ?? { customInstructions: args })
+          : undefined;
+        ((lastCtx as any).compact(argument) as any)
           ?.catch?.((e: any) => {
             console.error("[pi-dish-bridge] compact failed:", e?.message || e);
             // With the session subscription live the AgentSession's own
@@ -1168,6 +1177,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
     try {
       const commandCapabilities: Record<string, string> = {
+        compact: "compact",
         prompt: "prompt",
         steer: "steer",
         follow_up: "followUp",
@@ -1183,7 +1193,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         set_session_name: "rename",
       };
       const requiredCapability = commandCapabilities[cmd?.command];
-      if (requiredCapability && !descriptor.capabilities[requiredCapability]) {
+      if (requiredCapability && !capabilities[requiredCapability]) {
         respond(false, undefined,
           `unsupported command ${cmd.command}: ${descriptor.harnessId} wrapper does not advertise ${requiredCapability}`);
         return;
@@ -1197,6 +1207,14 @@ export function createBridge(descriptor: BridgeDescriptor) {
           refreshContextUsage();
           respond(true, stateSnapshot());
           return;
+
+        case "compact": {
+          const instructions = typeof cmd.instructions === "string" ? cmd.instructions.trim() : "";
+          const result = await executeSlashCommand(`/compact${instructions ? ` ${instructions}` : ""}`);
+          if (result.ok) respond(true, { info: result.info });
+          else respond(false, undefined, result.error);
+          return;
+        }
 
         case "prompt": {
           const content = buildUserContent(cmd);
@@ -1315,11 +1333,11 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
         case "get_commands": {
           const emulated = EMULATED_BUILTINS.filter((command) => {
-            if (command.name === "compact") return !!descriptor.capabilities.compact;
-            if (command.name === "model") return !!descriptor.capabilities.setModel;
-            if (command.name === "name") return !!descriptor.capabilities.rename;
-            if (command.name === "thinking") return !!descriptor.capabilities.setThinking;
-            if (command.name === "abort") return !!descriptor.capabilities.abort;
+            if (command.name === "compact") return !!capabilities.compact;
+            if (command.name === "model") return !!capabilities.setModel;
+            if (command.name === "name") return !!capabilities.rename;
+            if (command.name === "thinking") return !!capabilities.setThinking;
+            if (command.name === "abort") return !!capabilities.abort;
             if (command.name === "reload") return !!descriptor.selfPrime;
             return true;
           });
@@ -1471,6 +1489,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
   pi.on("session_start", async (_event, ctx) => {
     wrapExtensionUI(ctx);
     lastCtx = ctx;
+    if (descriptor.capabilities.compact) {
+      capabilities.compact = typeof (ctx as any)?.compact === "function";
+    }
     commandCtx = null; // any stashed command ctx predates this runner/session
     refreshModel(ctx);
     refreshContextUsage(ctx);
@@ -1559,7 +1580,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // internal AgentSession events (subscribing to them never fires). The
   // extension-facing pair is session_before_compact/session_compact;
   // translate onto the wire names the server and client already speak.
-  if (descriptor.piLifecycleEvents) pi.on("session_before_compact", (event: any, ctx: ExtensionContext) => {
+  if (descriptor.piLifecycleEvents || descriptor.publicCompactionEvents) pi.on("session_before_compact", (event: any, ctx: ExtensionContext) => {
     wrapExtensionUI(ctx);
     lastCtx = ctx ?? lastCtx;
     // Gate + stuck-timer net regardless of source; with the session
@@ -1572,7 +1593,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     // pre-compaction transcript) and an AbortSignal.
     broadcast({ type: "event", event: "compaction_start", data: { reason: event?.reason, willRetry: event?.willRetry } });
   });
-  if (descriptor.piLifecycleEvents) pi.on("session_compact", (event: any, ctx: ExtensionContext) => {
+  if (descriptor.piLifecycleEvents || descriptor.publicCompactionEvents) pi.on("session_compact", (event: any, ctx: ExtensionContext) => {
     wrapExtensionUI(ctx);
     lastCtx = ctx ?? lastCtx;
     refreshContextUsage(ctx);
