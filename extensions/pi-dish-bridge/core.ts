@@ -1472,6 +1472,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         set_model: "setModel",
         set_thinking_level: "setThinking",
         tree_read: "treeRead",
+        tree_leaf: "treeRead",
         navigate_tree: "treeNavigation",
         tree_navigate: "treeNavigation",
         branch: "treeNavigation",
@@ -1498,6 +1499,20 @@ export function createBridge(descriptor: BridgeDescriptor) {
           const result = await executeSlashCommand(`/compact${instructions ? ` ${instructions}` : ""}`);
           if (result.ok) respond(true, { info: result.info });
           else respond(false, undefined, result.error);
+          return;
+        }
+
+        case "tree_leaf": {
+          // Leaf-only tree read. The transcript endpoint needs just the live
+          // leaf id to pick the active branch; serializing the entire session
+          // tree (tree_read) costs O(session bytes) per request, which made
+          // long live OMP sessions crawl on every page/catch-up fetch.
+          if (!lastCtx) return respond(false, undefined, "tree leaf unavailable: no active context");
+          const manager = (lastCtx as any).sessionManager;
+          if (!manager || typeof manager.getLeafId !== "function") {
+            return respond(false, undefined, "tree leaf unavailable: session manager lacks getLeafId");
+          }
+          respond(true, { leafId: manager.getLeafId() ?? null });
           return;
         }
 

@@ -87,6 +87,52 @@ The implementation is considered successful when:
   metadata and does not generate full patch text for that summary;
 - the complete functional suites remain green.
 
+## August 2026: long live OMP sessions and the Usage page
+
+Opening a live OMP session with tens of MB of history, and the Usage page
+while such a session streamed, had four unprotected O(whole-file) costs:
+
+1. Every `/api/sessions/:id/messages` request for a live OMP session asked
+   the bridge for the full serialized session tree (`tree_read`) when only
+   the leaf id was needed, and `readSessionMessagesAtLeaf` re-read and
+   re-parsed the entire JSONL per request — the initial tail page, every
+   scroll-up page, and every catch-up each paid both costs.
+2. A changed session file was JSON-parsed four separate times (metadata,
+   usage, search text, skill mining) whenever the index refreshed it.
+3. Any append — one streaming turn — invalidated the whole file, so every
+   sidebar poll and usage refresh re-parsed all of it.
+4. Per-poll session metadata (`getSessionInfo`) bypassed the persistent index
+   entirely and re-parsed the file on every append.
+
+The fixes, in the same compatibility frame (transcript rendering, pagination,
+active-tree semantics, scroll behavior, streaming, and Usage output must not
+change):
+
+- `readSessionMessagesAtLeaf` now uses the mtime/size cache keyed by leaf id,
+  so one parse serves all pages and catch-ups until the file or leaf changes.
+- The bridge gained a `tree_leaf` RPC returning only the live leaf id; the
+  messages route prefers it and falls back to `tree_read` once per connection
+  for bridge extensions loaded before the command existed.
+- The session index parses a changed file once and feeds all four derivations
+  from the same entries array.
+- A file that only grew extends all index tables from just the appended byte
+  range (`tryExtendIndexEntry`), with continuity state (provider/model/cwd)
+  persisted alongside usage and skill records. Anything else — branch jumps,
+  rewrites, schema or pricing changes — still falls back to a full re-parse.
+- Server-side `getSessionInfo` is index-backed, returning the same public
+  shape (index-internal identity and usage fields are stripped).
+
+Regression contracts: the append-extension must be observationally identical
+to a full re-index for metadata, usage (totals, days, models, continuity),
+search text, and skill records; a zero-sync-budget scan proves structurally
+that an appended file was served by the extension; index-internal fields must
+not leak from `getSessionInfo`.
+
+Measured on a synthetic 28.1 MB / 15,002-entry OMP session: transcript
+requests after the first parse dropped from ~200 ms to ~0.02 ms; a scan or
+metadata poll after one appended turn dropped from ~240 ms (full four-way
+re-parse) to ~0.5 ms.
+
 ## Research basis
 
 The implementation follows the Express-maintained `compression` middleware

@@ -30,7 +30,6 @@ const shares = require('./lib/shares');
 const pages = require('./lib/pages');
 const comments = require('./lib/comments');
 const {
-  getSessionInfo: getSessionInfoRaw,
   readSessionMessages: readSessionMessagesRaw,
   readSessionMessagesAtLeaf: readSessionMessagesAtLeafRaw,
   readSessionMessageById: readSessionMessageByIdRaw,
@@ -187,7 +186,10 @@ function liveSessionHistoryPending(sessionId) {
   const file = rpc?.sessionFile || rpc?.state?.sessionFile;
   return !!rpc?.alive && (!file || !fs.existsSync(file));
 }
-function getSessionInfo(input) { return getSessionInfoRaw(sourceForRead(input)); }
+// Session metadata comes from the persistent index: for an actively
+// streaming session it extends in O(appended bytes) per poll instead of
+// re-parsing the whole multi-MB JSONL on every append.
+function getSessionInfo(input) { return sessionIndex.getSessionInfo(sourceForRead(input)); }
 function readSessionMessages(input) { return readSessionMessagesRaw(sourceForRead(input)); }
 function readSessionMessagesAtLeaf(input, leafId) { return readSessionMessagesAtLeafRaw(sourceForRead(input), leafId); }
 function readSessionMessageById(input, id) { return readSessionMessageByIdRaw(sourceForRead(input), id); }
@@ -387,6 +389,26 @@ function liveSessionSupports(sess, capability) {
   return sess.harnessId === 'pi'
     ? sess.capabilities?.[capability] !== false
     : sess.capabilities?.[capability] === true;
+}
+
+/**
+ * The live session's current tree leaf id (null for an empty tree). Prefers
+ * the leaf-only tree_leaf RPC — tree_read serializes the whole session tree,
+ * which cost O(session bytes) on every transcript page/catch-up request for
+ * long live OMP sessions. Bridge extensions loaded before tree_leaf existed
+ * answer "unknown command"; remember that per connection (a reconnect may be
+ * a newer extension) and fall back to the full tree read.
+ */
+async function liveTreeLeafId(sess) {
+  if (!sess.treeLeafUnsupported) {
+    try {
+      return (await sess.readTreeLeaf())?.leafId ?? null;
+    } catch (e) {
+      if (!/unknown command/i.test(String(e?.message || e))) throw e;
+      sess.treeLeafUnsupported = true;
+    }
+  }
+  return (await sess.readTree())?.leafId ?? null;
 }
 
 // Extension UI is per-session state, but SSE connections come and go with
@@ -1707,8 +1729,7 @@ app.get('/api/sessions/:id/messages', async (req, res) => {
     try {
       const sess = await getLiveSession(sessionId);
       if (sess instanceof BridgeSession && liveSessionSupports(sess, 'treeRead')) {
-        const tree = await sess.readTree();
-        all = readSessionMessagesAtLeaf(sessionSource, tree.leafId ?? null);
+        all = readSessionMessagesAtLeaf(sessionSource, await liveTreeLeafId(sess));
       }
     } catch {
       // Transcript history remains readable if a live bridge disappears

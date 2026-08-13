@@ -96,6 +96,10 @@ function readOperations(host) {
 test('OMP bridge serializes tree reads and runs navigate/branch only in command context', { skip: !bunAvailable }, async () => {
   const host = await startHost('normal');
   try {
+    // Leaf-only read: same leaf as the full tree, none of the O(session)
+    // serialization the transcript route used to pay per request.
+    assert.deepEqual(await host.session.readTreeLeaf(), { leafId: 'u2' });
+
     const before = await host.session.readTree();
     assert.equal(before.leafId, 'u2');
     assert.deepEqual(before.activePathIds, ['u2', 'a1', 'u1']);

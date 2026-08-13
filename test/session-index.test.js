@@ -367,6 +367,82 @@ test('skills.ndjson persists: a zero-budget scan serves mined activations from d
   assert.equal(index.getSkillActivations({ skill: SKILL, sinceMs: Date.parse('2027-01-01') }).length, 0);
 });
 
+test('append extension matches a full re-index (meta, usage, text, skills)', () => {
+  // The O(delta) extension (tryExtendIndexEntry) must be observationally
+  // identical to throwing the index away and re-parsing the whole file.
+  const SKILL = path.join(tmpHome, '.pi', 'agent', 'skills', 'eq', 'SKILL.md');
+  index.setSkillRoots([SKILL]);
+  const base = [
+    { type: 'session', id: 'sess-eq', cwd: '/home/u/proj', timestamp: '2026-07-01T09:00:00.000Z' },
+    { type: 'model_change', provider: 'anthropic', modelId: 'claude-a' },
+    userMsg('base question'),
+    { type: 'message', timestamp: '2026-07-01T10:00:02.000Z', message: {
+      role: 'assistant', content: [{ type: 'text', text: 'base answer' }],
+      usage: { input: 100, output: 20, cacheRead: 5, totalTokens: 12000 },
+    } },
+  ];
+  const delta = [
+    { type: 'model_change', provider: 'openai', modelId: 'gpt-b' },
+    userMsg('appended question'),
+    { type: 'message', timestamp: '2026-07-02T11:00:00.000Z', message: {
+      role: 'assistant', content: [{ type: 'text', text: 'appended answer' }],
+      usage: { input: 50, output: 9, totalTokens: 15000 },
+    } },
+    { type: 'message', timestamp: '2026-07-02T11:00:01.000Z', message: {
+      role: 'assistant', content: [
+        { type: 'toolCall', id: 'tc9', name: 'read', arguments: { path: SKILL, offset: 2, limit: 8 } },
+      ],
+      usage: { input: 1, output: 1, totalTokens: 15100 },
+    } },
+  ];
+
+  const fileA = writeSession(base);
+  index.scanSessions([fileA]);
+  fs.appendFileSync(fileA, delta.map(e => JSON.stringify(e)).join('\n') + '\n');
+  // Structural proof this went through the extension: a zero-budget scan is
+  // forbidden from re-parsing the file synchronously.
+  const extended = withBudget(0, () => index.scanSessions([fileA]));
+  assert.equal(extended.indexing, false, 'appended file served without sync budget');
+  const extInfo = extended.infos.get(fileA);
+
+  const fileB = writeSession(base.concat(delta));
+  const fullInfo = index.scanSessions([fileB]).infos.get(fileB);
+
+  for (const key of ['model', 'name', 'messageCount', 'contextTokens', 'cwd', 'sessionId', 'parentSession']) {
+    assert.deepEqual(extInfo[key], fullInfo[key], `info.${key} matches full re-index`);
+  }
+  assert.deepEqual(extInfo.usage, fullInfo.usage, 'usage (totals, days, models, continuity state) matches');
+  assert.equal(index.getSearchText(fileA), index.getSearchText(fileB), 'search text matches');
+
+  const stripSession = (r) => { const { sessionId, ...rest } = r; return rest; };
+  const recsA = index.getSkillActivations({ skill: SKILL }).filter(r => r.sessionId === path.basename(fileA, '.jsonl'));
+  const recsB = index.getSkillActivations({ skill: SKILL }).filter(r => r.sessionId === path.basename(fileB, '.jsonl'));
+  assert.equal(recsA.length, 1, 'appended skill activation mined through the extension');
+  assert.deepEqual(recsA.map(stripSession), recsB.map(stripSession), 'skill records match full re-index');
+});
+
+test('getSessionInfo serves the session-files shape and extends on append', () => {
+  const file = writeSession([
+    { type: 'session', id: 'sess-info', cwd: '/home/u/proj' },
+    { type: 'model_change', provider: 'anthropic', modelId: 'claude-a' },
+    userMsg('first'),
+  ]);
+  const before = index.getSessionInfo(file);
+  assert.deepEqual(before, sessionFiles.getSessionInfo(file), 'matches session-files on first index');
+
+  fs.appendFileSync(file, JSON.stringify(userMsg('second')) + '\n');
+  const after = index.getSessionInfo(file);
+  assert.deepEqual(after, sessionFiles.getSessionInfo(file), 'matches session-files after append');
+  assert.equal(after.messageCount, before.messageCount + 1);
+  // Index-internal fields must not leak into API responses that spread info.
+  for (const internal of ['usage', 'sessionKey', 'harnessId', 'nativeSessionId', 'profileId', 'profileVersion']) {
+    assert.ok(!(internal in after), `${internal} stripped from public info`);
+  }
+
+  assert.throws(() => index.getSessionInfo(path.join(sessionsDir, 'missing.jsonl')),
+    'unreadable file throws like session-files.getSessionInfo');
+});
+
 test('an index populated before skills mining re-mines its files (upgrade path)', () => {
   // A pre-skills pi-dish build left meta/text current but no skills entries.
   // The staleness check must treat those files as stale, or a machine with an
