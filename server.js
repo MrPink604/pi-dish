@@ -178,6 +178,13 @@ function resolveSessionCandidate(sessionId, { discover = true } = {}) {
   });
   return candidate ? rememberSessionSource(candidate) : null;
 }
+function liveSessionHistoryPending(sessionId) {
+  const registered = getRegisteredSession(sessionId);
+  if (registered) return !registered.sessionFile || !fs.existsSync(registered.sessionFile);
+  const rpc = getRPCSession(sessionId);
+  const file = rpc?.sessionFile || rpc?.state?.sessionFile;
+  return !!rpc?.alive && (!file || !fs.existsSync(file));
+}
 function getSessionInfo(input) { return getSessionInfoRaw(sourceForRead(input)); }
 function readSessionMessages(input) { return readSessionMessagesRaw(sourceForRead(input)); }
 function readSessionMessageById(input, id) { return readSessionMessageByIdRaw(sourceForRead(input), id); }
@@ -1765,21 +1772,25 @@ app.post('/api/sessions/:id/follow-up', async (req, res) => {
 // sessions have no remote queue-editing path.
 app.post('/api/sessions/:id/queue/cancel', async (req, res) => {
   const { kind, index, text } = req.body || {};
-  if ((kind !== 'steering' && kind !== 'followUp') || typeof text !== 'string' || !text) {
-    return res.status(400).json({ error: 'kind (steering|followUp) and non-empty text required' });
-  }
-  if (!Number.isInteger(index) || index < 0) {
-    return res.status(400).json({ error: 'index must be a non-negative integer' });
-  }
+  const validationError = (kind !== 'steering' && kind !== 'followUp')
+    || typeof text !== 'string' || !text
+    ? 'kind (steering|followUp) and non-empty text required'
+    : !Number.isInteger(index) || index < 0
+      ? 'index must be a non-negative integer'
+      : null;
   try {
     const sess = await getLiveSession(req.params.id);
-    if (!sess) return res.status(404).json({ error: 'Session not active' });
+    if (!sess) {
+      if (validationError) return res.status(400).json({ error: validationError });
+      return res.status(404).json({ error: 'Session not active' });
+    }
     if (!(sess instanceof BridgeSession)) {
       return res.status(501).json({ error: 'queue editing requires the pi-dish-bridge extension' });
     }
     if (!liveSessionSupports(sess, 'queueCancel')) {
       return res.status(409).json({ error: 'This session does not support queue cancellation.' });
     }
+    if (validationError) return res.status(400).json({ error: validationError });
     const result = await sess.cancelQueued(kind, index, text);
     res.json({ success: true, result });
   } catch (e) {
@@ -1899,7 +1910,12 @@ app.get('/api/sessions/:id/stats', async (req, res) => {
   const sessionId = req.params.id;
   try {
     const session = findSessionSource(sessionId);
-    if (!session) return res.status(404).json({ error: 'Session not found' });
+    if (!session) {
+      if (liveSessionHistoryPending(sessionId)) {
+        return res.status(409).json({ error: 'Session has no persisted history yet' });
+      }
+      return res.status(404).json({ error: 'Session not found' });
+    }
 
     const { tokens, reasoningTokens, cost, costs, costUnavailable, responseTiming, userMessages, assistantMessages, toolCalls, toolResults, genMs, genOutput } =
       getSessionStats(session);
@@ -1943,7 +1959,12 @@ app.get('/api/sessions/:id/stats', async (req, res) => {
 app.get('/api/sessions/:id/export', async (req, res) => {
   try {
     const session = findSessionSource(req.params.id);
-    if (!session) return res.status(404).json({ error: 'Session not found' });
+    if (!session) {
+      if (liveSessionHistoryPending(req.params.id)) {
+        return res.status(409).json({ error: 'Session has no persisted history yet' });
+      }
+      return res.status(404).json({ error: 'Session not found' });
+    }
     if (session.harnessId !== 'pi' && session.harnessId !== 'omp') {
       return res.status(409).json({ error: 'HTML export is only supported for Pi and OMP sessions.' });
     }
@@ -2008,7 +2029,12 @@ async function serveSharedSession(req, res) {
 
 app.post('/api/sessions/:id/share', (req, res) => {
   const session = findSessionSource(req.params.id);
-  if (!session) return res.status(404).json({ error: 'Session not found' });
+  if (!session) {
+    if (liveSessionHistoryPending(req.params.id)) {
+      return res.status(409).json({ error: 'Session has no persisted history yet' });
+    }
+    return res.status(404).json({ error: 'Session not found' });
+  }
   if (session.harnessId !== 'pi' && session.harnessId !== 'omp') {
     return res.status(409).json({ error: 'Public HTML sharing is only supported for Pi and OMP sessions.' });
   }
@@ -2457,8 +2483,8 @@ app.post('/api/sessions/:id/rename', async (req, res) => {
 });
 
 app.post('/api/sessions/:id/model', async (req, res) => {
-  const { modelId } = req.body;
-  if (!modelId) return res.status(400).json({ error: 'modelId required' });
+  const modelId = req.body?.modelId || req.body?.model;
+  if (!modelId) return res.status(400).json({ error: 'modelId or model required' });
   const { provider, id } = parseModelId(modelId);
   if (!provider || !id) return res.status(400).json({ error: `Invalid model ID: ${modelId}` });
   try {
@@ -2723,6 +2749,27 @@ app.put('/api/models/enabled', async (req, res) => {
   }
 });
 
+const BRIDGE_COMMAND_CAPABILITIES = {
+  compact: 'compact',
+  model: 'setModel',
+  name: 'rename',
+  thinking: 'setThinking',
+  abort: 'abort',
+  reload: 'reload',
+};
+
+function filterBridgeCommands(sess, commands) {
+  // Pi keeps its established full TUI list. Alternative harnesses fail
+  // closed: retain skills/templates and bridge commands explicitly marked as
+  // executable, plus built-ins pi-dish maps to an advertised bridge operation.
+  // Export/share stay out because their web-native controls preserve download
+  // and share-token semantics that a slash-command mapping would change.
+  if (sess.harnessId === 'pi') return commands;
+  return commands.filter((command) => command.supported === true
+    || (BRIDGE_COMMAND_CAPABILITIES[command.name]
+      && liveSessionSupports(sess, BRIDGE_COMMAND_CAPABILITIES[command.name])));
+}
+
 app.get('/api/commands', async (req, res) => {
   try {
     const sessionId = req.query.sessionId;
@@ -2735,7 +2782,7 @@ app.get('/api/commands', async (req, res) => {
             return res.status(409).json({ error: 'This session does not support command discovery.' });
           }
           const data = await sess.getCommands();
-          if (data?.commands) return res.json(data.commands);
+          if (data?.commands) return res.json(filterBridgeCommands(sess, data.commands));
         } else if (sess) {
           const data = await sess.getCommands();
           const commands = [

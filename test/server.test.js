@@ -251,6 +251,68 @@ test('encoded alternative-harness routes never fall back to a partial native id'
   assert.equal(partial.status, 404, 'a canonical encoded route must not select a partial native-id match');
 });
 
+test('fresh live routes distinguish missing history, then use the session file before indexing', async () => {
+  const nativeId = 'fresh-live-unindexed';
+  const routeId = encodeSessionKey('omp', nativeId);
+  const liveDir = path.join(tmpHome, 'live-only');
+  const sessionFile = path.join(liveDir, 'fresh.jsonl');
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  const socketPath = path.join(liveDir, 'socket-stub');
+  fs.mkdirSync(registryDir, { recursive: true });
+  fs.mkdirSync(liveDir, { recursive: true });
+  fs.writeFileSync(socketPath, 'registry reachability stub');
+  const identity = processIdentity(process.pid);
+  const registryPath = path.join(registryDir, `${nativeId}.json`);
+  fs.writeFileSync(registryPath, JSON.stringify({
+    protocolVersion: 2,
+    wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+    harnessId: 'omp', nativeSessionId: nativeId, sessionId: nativeId,
+    bridgeInstanceId: 'fresh-live-bridge', instanceId: 'fresh-live-bridge',
+    sessionFile, socketPath, cwd: liveDir,
+    pid: identity.pid, startTime: identity.startTime,
+    capabilities: {}, spawnToken: null,
+  }));
+  invalidateRegistryCache();
+
+  try {
+    for (const [method, suffix] of [['GET', 'stats'], ['GET', 'export'], ['POST', 'share']]) {
+      const response = await fetch(`${base}/api/sessions/${encodeURIComponent(routeId)}/${suffix}`, {
+        method,
+        headers: method === 'POST' ? { 'Content-Type': 'application/json' } : undefined,
+        body: method === 'POST' ? '{}' : undefined,
+      });
+      assert.equal(response.status, 409, `${method} /${suffix}`);
+      assert.deepEqual(await response.json(), { error: 'Session has no persisted history yet' });
+    }
+
+    fs.writeFileSync(sessionFile, [
+      { type: 'title', title: 'Fresh live OMP fixture' },
+      { type: 'session', version: 3, id: nativeId, cwd: liveDir },
+      { type: 'message', id: 'fresh-u1', parentId: null, message: { role: 'user', content: 'not indexed yet' } },
+    ].map(JSON.stringify).join('\n') + '\n');
+
+    const stats = await get(`/api/sessions/${encodeURIComponent(routeId)}/stats`);
+    assert.equal(stats.status, 200, JSON.stringify(stats.body));
+    assert.equal(stats.body.sessionFile, sessionFile);
+
+    const exported = await fetch(`${base}/api/sessions/${encodeURIComponent(routeId)}/export`);
+    assert.equal(exported.status, 200, await exported.text());
+    assert.match(exported.headers.get('content-type') || '', /text\/html/);
+
+    const shared = await post(`/api/sessions/${encodeURIComponent(routeId)}/share`, {});
+    assert.equal(shared.status, 200, JSON.stringify(shared.body));
+    assert.ok(shared.body.token);
+
+    const tree = await get(`/api/sessions/${encodeURIComponent(routeId)}/tree`);
+    assert.equal(tree.status, 409, JSON.stringify(tree.body));
+    assert.match(tree.body.error, /only supported for Pi/);
+    await del(`/api/sessions/${encodeURIComponent(routeId)}/share`);
+  } finally {
+    fs.rmSync(registryPath, { force: true });
+    invalidateRegistryCache();
+  }
+});
+
 test('historical alternative-harness IDs associate pages and workspace choices canonically', async () => {
   const artifact = path.join(ompCwd, 'omp-page.html');
   fs.writeFileSync(artifact, '<p>OMP page</p>');
@@ -1346,6 +1408,90 @@ test('the session list forwards the registry compacting flag', async () => {
     assert.equal(sess.turnInProgress, true);
   } finally {
     fs.rmSync(path.join(registryDir, `${ID}.json`), { force: true });
+  }
+});
+
+test('OMP command discovery advertises only bridge-executable commands and API aliases stay capability-first', async () => {
+  const nativeId = 'omp-command-filter';
+  const routeId = encodeSessionKey('omp', nativeId);
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  const socketPath = path.join(tmpHome, 'omp-command-filter.sock');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const identity = processIdentity(process.pid);
+  const claim = {
+    protocolVersion: 2,
+    wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+    harnessId: 'omp', nativeSessionId: nativeId, sessionId: nativeId,
+    bridgeInstanceId: 'omp-command-filter', instanceId: 'omp-command-filter',
+    sessionFile: ompSessionFile, socketPath, cwd: ompCwd,
+    pid: identity.pid, startTime: identity.startTime, spawnToken: null,
+    capabilities: {
+      commands: true, compact: true, setModel: true, rename: true,
+      setThinking: false, abort: true, queueCancel: false,
+    },
+  };
+  const advertised = [
+    ...['tree', 'fork', 'new', 'resume', 'session', 'settings', 'export', 'share', 'copy',
+      'login', 'logout', 'scoped-models', 'hotkeys', 'quit'].map(name =>
+      ({ name, source: 'builtin', supported: false })),
+    { name: 'compact', source: 'builtin', supported: false },
+    { name: 'model', source: 'builtin', supported: false },
+    { name: 'name', source: 'builtin', supported: false },
+    { name: 'thinking', source: 'builtin', supported: false },
+    { name: 'abort', source: 'builtin', supported: false },
+    { name: 'skill:review', source: 'skill', supported: true },
+    { name: 'daily', source: 'prompt', supported: true },
+    { name: 'dish-push', source: 'extension', supported: true },
+    { name: 'dish-prime', source: 'extension', supported: false },
+  ];
+  const received = [];
+  const sockets = new Set();
+  const bridge = net.createServer(sock => {
+    sockets.add(sock);
+    sock.on('close', () => sockets.delete(sock));
+    sock.write(JSON.stringify({ type: 'hello', ...claim }) + '\n');
+    let buffered = '';
+    sock.on('data', chunk => {
+      buffered += chunk;
+      let newline;
+      while ((newline = buffered.indexOf('\n')) !== -1) {
+        const line = buffered.slice(0, newline);
+        buffered = buffered.slice(newline + 1);
+        if (!line) continue;
+        const command = JSON.parse(line);
+        received.push(command);
+        const data = command.command === 'get_commands' ? { commands: advertised } : {};
+        sock.write(JSON.stringify({ type: 'response', id: command.id, success: true, data }) + '\n');
+      }
+    });
+  });
+  await new Promise(resolve => bridge.listen(socketPath, resolve));
+  const registryPath = path.join(registryDir, `${nativeId}.json`);
+  fs.writeFileSync(registryPath, JSON.stringify(claim));
+  invalidateRegistryCache();
+
+  try {
+    const commands = await get(`/api/commands?sessionId=${encodeURIComponent(routeId)}`);
+    assert.equal(commands.status, 200, JSON.stringify(commands.body));
+    assert.deepEqual(commands.body.map(command => command.name),
+      ['compact', 'model', 'name', 'abort', 'skill:review', 'daily', 'dish-push']);
+
+    const cancelled = await post(`/api/sessions/${encodeURIComponent(routeId)}/queue/cancel`, {});
+    assert.equal(cancelled.status, 409, JSON.stringify(cancelled.body));
+    assert.equal(cancelled.body.error, 'This session does not support queue cancellation.');
+    assert.equal(received.some(command => command.command === 'cancel_queued'), false);
+
+    const byModel = await post(`/api/sessions/${encodeURIComponent(routeId)}/model`, { model: 'zai/glm-4.7-flash' });
+    assert.equal(byModel.status, 200, JSON.stringify(byModel.body));
+    const byModelId = await post(`/api/sessions/${encodeURIComponent(routeId)}/model`, { modelId: 'zai/glm-4.5-flash' });
+    assert.equal(byModelId.status, 200, JSON.stringify(byModelId.body));
+    assert.deepEqual(received.filter(command => command.command === 'set_model').map(command => command.model),
+      ['zai/glm-4.7-flash', 'zai/glm-4.5-flash']);
+  } finally {
+    fs.rmSync(registryPath, { force: true });
+    invalidateRegistryCache();
+    for (const sock of sockets) sock.destroy();
+    await new Promise(resolve => bridge.close(resolve));
   }
 });
 
