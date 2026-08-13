@@ -1349,6 +1349,112 @@ test('the session list forwards the registry compacting flag', async () => {
   }
 });
 
+test('OMP /compact routes through the advertised bridge operation and rejects overlap', async () => {
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registryDir, { recursive: true });
+  fs.mkdirSync(path.dirname(ompSessionFile), { recursive: true });
+  if (!fs.existsSync(ompSessionFile)) {
+    fs.writeFileSync(ompSessionFile, [
+      { type: 'title', title: 'OMP compact route fixture' },
+      { type: 'session', version: 3, id: OMP_SESSION_ID, cwd: ompCwd },
+    ].map(JSON.stringify).join('\n') + '\n');
+  }
+  const socketPath = path.join(tmpHome, 'omp-compact-route.sock');
+  const identity = processIdentity(process.pid);
+  const claim = {
+    protocolVersion: 2,
+    wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+    harnessId: 'omp', nativeSessionId: OMP_SESSION_ID, sessionId: OMP_SESSION_ID,
+    sessionFile: ompSessionFile, cwd: ompCwd,
+    bridgeInstanceId: 'omp-compact-route', instanceId: 'omp-compact-route',
+    socketPath, pid: identity.pid, startTime: identity.startTime,
+    spawnToken: null,
+    capabilities: { compact: true, commands: true },
+  };
+  const received = [];
+  const bridgeSockets = new Set();
+  const bridge = net.createServer(sock => {
+    bridgeSockets.add(sock);
+    sock.on('close', () => bridgeSockets.delete(sock));
+    sock.write(JSON.stringify({ type: 'hello', ...claim, compacting: false }) + '\n');
+    sock.on('data', chunk => {
+      for (const line of chunk.toString().trim().split('\n')) {
+        if (!line) continue;
+        const command = JSON.parse(line);
+        received.push(command);
+        if (command.command !== 'compact') continue;
+        sock.write(JSON.stringify({ type: 'event', event: 'compaction_start', data: { reason: 'manual' } }) + '\n');
+        sock.write(JSON.stringify({ type: 'response', id: command.id, success: true, data: { info: 'Compaction started' } }) + '\n');
+        setTimeout(() => sock.write(JSON.stringify({
+          type: 'event', event: 'compaction_end', data: { reason: 'manual', result: { tokensBefore: 100 } },
+        }) + '\n'), 120);
+      }
+    });
+  });
+  await new Promise(resolve => bridge.listen(socketPath, resolve));
+  const registryPath = path.join(registryDir, 'omp-compact-route.json');
+  fs.writeFileSync(registryPath, JSON.stringify(claim));
+  invalidateRegistryCache();
+
+  try {
+    const first = await post(`/api/sessions/${encodeURIComponent(OMP_ROUTE_ID)}/command`, {
+      message: '/compact retain decisions',
+    });
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    const second = await post(`/api/sessions/${encodeURIComponent(OMP_ROUTE_ID)}/command`, { message: '/compact' });
+    assert.equal(second.status, 400, JSON.stringify(second.body));
+    assert.match(second.body.error, /already in progress/i);
+    assert.deepEqual(received.filter(command => command.command === 'compact').map(command => command.instructions),
+      ['retain decisions'], 'only one compact operation reaches the bridge');
+  } finally {
+    fs.rmSync(registryPath, { force: true });
+    invalidateRegistryCache();
+    for (const sock of bridgeSockets) sock.destroy();
+    await new Promise(resolve => bridge.close(resolve));
+  }
+});
+
+test('OMP /compact is denied when the live bridge does not advertise it', async () => {
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const socketPath = path.join(tmpHome, 'omp-no-compact-route.sock');
+  const identity = processIdentity(process.pid);
+  const claim = {
+    protocolVersion: 2,
+    wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+    harnessId: 'omp', nativeSessionId: OMP_SESSION_ID, sessionId: OMP_SESSION_ID,
+    sessionFile: ompSessionFile, cwd: ompCwd,
+    bridgeInstanceId: 'omp-no-compact-route', instanceId: 'omp-no-compact-route',
+    socketPath, pid: identity.pid, startTime: identity.startTime,
+    spawnToken: null,
+    capabilities: { compact: false, commands: true },
+  };
+  let commandCount = 0;
+  const bridgeSockets = new Set();
+  const bridge = net.createServer(sock => {
+    bridgeSockets.add(sock);
+    sock.on('close', () => bridgeSockets.delete(sock));
+    sock.write(JSON.stringify({ type: 'hello', ...claim }) + '\n');
+    sock.on('data', () => { commandCount++; });
+  });
+  await new Promise(resolve => bridge.listen(socketPath, resolve));
+  const registryPath = path.join(registryDir, 'omp-no-compact-route.json');
+  fs.writeFileSync(registryPath, JSON.stringify(claim));
+  invalidateRegistryCache();
+
+  try {
+    const result = await post(`/api/sessions/${encodeURIComponent(OMP_ROUTE_ID)}/command`, { message: '/compact' });
+    assert.equal(result.status, 409, JSON.stringify(result.body));
+    assert.match(result.body.error, /does not support compaction/i);
+    assert.equal(commandCount, 0, 'unsupported compact never reaches the bridge socket');
+  } finally {
+    fs.rmSync(registryPath, { force: true });
+    invalidateRegistryCache();
+    for (const sock of bridgeSockets) sock.destroy();
+    await new Promise(resolve => bridge.close(resolve));
+  }
+});
+
 test('GET /page with an unknown token is a bare 404', async () => {
   const res = await fetch(base + '/page/does-not-exist');
   assert.equal(res.status, 404);

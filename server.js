@@ -197,7 +197,7 @@ function sessionIdentityFields(harnessId, nativeSessionId) {
 
 function sessionCapabilities(harnessId, bridgeCapabilities = {}, { active = false, conflicted = false, closeAllowed = false } = {}) {
   if (conflicted) return Object.fromEntries([
-    'prompt', 'steer', 'followUp', 'abort', 'models', 'setModel', 'setThinking',
+    'prompt', 'steer', 'followUp', 'abort', 'compact', 'models', 'setModel', 'setThinking',
     'rename', 'commands', 'queueCancel', 'tree', 'export', 'close', 'resume',
   ].map(key => [key, false]));
   const pi = harnessId === 'pi';
@@ -208,6 +208,7 @@ function sessionCapabilities(harnessId, bridgeCapabilities = {}, { active = fals
     steer: advertised('steer'),
     followUp: advertised('followUp'),
     abort: advertised('abort'),
+    compact: advertised('compact'),
     models: active ? advertised('models') : pi,
     setModel: active ? advertised('setModel') : pi,
     setThinking: advertised('setThinking'),
@@ -2387,6 +2388,24 @@ app.post('/api/sessions/:id/command', async (req, res) => {
     const sess = await getLiveSession(req.params.id);
     if (!sess) return res.status(404).json({ error: 'Session not active' });
     if (sess instanceof BridgeSession) {
+      const compactMatch = message.match(/^\/compact(?:\s+(.*))?\s*$/);
+      if (compactMatch) {
+        if (!liveSessionSupports(sess, 'compact')) {
+          return res.status(409).json({ error: 'This session does not support compaction.' });
+        }
+        if (sess.compacting) throw new Error('Compaction already in progress — wait for it to finish.');
+        // Raise the server-side guard before the bridge event arrives so two
+        // concurrent HTTP requests cannot both pass it. compaction_end owns
+        // the normal reset; a rejected socket operation never started.
+        sess.compacting = true;
+        try {
+          const data = await sess.compact(compactMatch[1]?.trim() || undefined);
+          return res.json({ success: true, info: data?.info });
+        } catch (error) {
+          sess.compacting = false;
+          throw error;
+        }
+      }
       if (!liveSessionSupports(sess, 'commands')) {
         return res.status(409).json({ error: 'This session does not support remote commands.' });
       }
