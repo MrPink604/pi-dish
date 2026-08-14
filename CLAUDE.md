@@ -130,7 +130,11 @@ blocks to resource URLs; the indexed image route reads the authoritative cached
 message and returns binary bytes. This keeps base64 out of paginated JSON and
 lets `<img loading="lazy">` defer off-screen transcript images. Do not mutate
 the cached message array while projecting it. Live SSE images remain inline so
-a just-produced image can render before the JSONL catch-up.
+a just-produced image can render before the JSONL catch-up. OMP externalizes
+image bytes ≥1KB from its JSONL as `data: "blob:sha256:<hex>"` refs (raw bytes
+in `~/.omp/agent/blobs/<hex>`, the descriptor's `blobsPath`); the image route
+resolves those refs instead of base64-decoding them — live events are
+unaffected because OMP's session loader restores inline base64 in memory.
 
 ## Nested session discovery + related sessions
 

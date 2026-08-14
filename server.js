@@ -1662,6 +1662,21 @@ function messageForClient(sessionId, message, index) {
   return { ...message, ...(changed ? { content } : {}), index };
 }
 
+// OMP externalizes image bytes (≥1KB base64) out of the session JSONL into a
+// content-addressed blob store, leaving `data: "blob:sha256:<hex>"` refs in
+// the entry — decoding that ref as base64 yields garbage, not the image.
+// Resolve refs against the harness's blob store; the strict hex-only match
+// also keeps the file lookup traversal-safe. Returns null when the bytes are
+// unavailable (no store for this harness, or the blob was pruned).
+const BLOB_REF_RE = /^blob:sha256:([0-9a-f]{64})$/;
+function imageBlockBytes(session, block) {
+  const ref = BLOB_REF_RE.exec(block.data);
+  if (!ref) return Buffer.from(block.data, 'base64');
+  const blobsPath = getHarness(session.harnessId)?.blobsPath?.();
+  if (!blobsPath) return null;
+  try { return fs.readFileSync(path.join(blobsPath, ref[1])); } catch { return null; }
+}
+
 app.get('/api/sessions/:id/messages/:messageId/images/:blockIndex', (req, res) => {
   const messageId = req.params.messageId;
   const blockIndex = Number(req.params.blockIndex);
@@ -1680,9 +1695,11 @@ app.get('/api/sessions/:id/messages/:messageId/images/:blockIndex', (req, res) =
   if (!block || block.type !== 'image' || typeof block.data !== 'string' || !block.data) {
     return res.status(404).json({ error: 'Image not found' });
   }
+  const bytes = imageBlockBytes(session, block);
+  if (!bytes) return res.status(404).json({ error: 'Image not found' });
   const mimeType = /^image\/[A-Za-z0-9.+-]+$/.test(block.mimeType || '') ? block.mimeType : 'image/png';
   res.setHeader('Cache-Control', 'private, no-cache');
-  res.type(mimeType).send(Buffer.from(block.data, 'base64'));
+  res.type(mimeType).send(bytes);
 });
 
 app.get('/api/sessions/:id/messages', async (req, res) => {

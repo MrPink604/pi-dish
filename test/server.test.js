@@ -9,6 +9,7 @@
  */
 const test = require('node:test');
 const assert = require('node:assert');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
@@ -138,6 +139,27 @@ fs.writeFileSync(IMAGE_TREE_FILE, [
   { type: 'message', id: 'base0001', parentId: 'root0001', message: { role: 'assistant', content: [{ type: 'text', text: 'reading' }] } },
   { type: 'message', id: 'image001', parentId: 'base0001', message: { role: 'toolResult', content: [
     { type: 'image', data: TINY_PNG_BASE64, mimeType: 'image/png' },
+  ] } },
+].map(e => JSON.stringify(e)).join('\n') + '\n');
+
+// OMP blob-store fixture: OMP persists image bytes (≥1KB base64) outside the
+// JSONL as `data: "blob:sha256:<hex>"` refs, raw bytes content-addressed in
+// ~/.omp/agent/blobs/<hex>. The image resource route must serve those bytes
+// (decoding the ref as base64 yields garbage) and 404 on a missing blob.
+const OMP_BLOB_SESSION_ID = 'omp-blob-image';
+const OMP_BLOB_ROUTE_ID = encodeSessionKey('omp', OMP_BLOB_SESSION_ID);
+const TINY_PNG_SHA256 = crypto.createHash('sha256').update(TINY_PNG).digest('hex');
+const ompBlobsDir = path.join(tmpHome, '.omp', 'agent', 'blobs');
+fs.mkdirSync(ompBlobsDir, { recursive: true });
+fs.writeFileSync(path.join(ompBlobsDir, TINY_PNG_SHA256), TINY_PNG);
+const ompBlobSessionFile = path.join(tmpHome, '.omp', 'agent', 'sessions', 'project', `${OMP_BLOB_SESSION_ID}.jsonl`);
+fs.mkdirSync(path.dirname(ompBlobSessionFile), { recursive: true });
+fs.writeFileSync(ompBlobSessionFile, [
+  { type: 'session', version: 3, id: OMP_BLOB_SESSION_ID, cwd: '/home/user/proj' },
+  { type: 'message', id: 'blob-u1', parentId: null, message: { role: 'user', content: [{ type: 'text', text: 'screenshot the page' }] } },
+  { type: 'message', id: 'blob-t1', parentId: 'blob-u1', message: { role: 'toolResult', toolName: 'browser', content: [
+    { type: 'image', data: `blob:sha256:${TINY_PNG_SHA256}`, mimeType: 'image/png' },
+    { type: 'image', data: `blob:sha256:${'f'.repeat(64)}`, mimeType: 'image/png' },
   ] } },
 ].map(e => JSON.stringify(e)).join('\n') + '\n');
 
@@ -720,6 +742,24 @@ test('GET /messages moves historical image bytes to a cacheable resource', async
 
   const invalid = await fetch(`${base}/api/sessions/${SESSION_ID}/messages/%20/images/0`);
   assert.equal(invalid.status, 400, 'malformed entry ids are rejected');
+});
+
+test('OMP blob-store image refs resolve to the stored bytes', async () => {
+  const { body } = await get(`/api/sessions/${encodeURIComponent(OMP_BLOB_ROUTE_ID)}/messages`);
+  const images = body.messages.flatMap(m => (Array.isArray(m.content) ? m.content : []))
+    .filter(block => block.type === 'image');
+  assert.equal(images.length, 2);
+  assert.ok(images.every(block => block.url && block.data === undefined),
+    'blob refs are projected to resource URLs, never sent to the client as bogus base64');
+
+  const ok = await fetch(base + images[0].url);
+  assert.equal(ok.status, 200);
+  assert.equal(ok.headers.get('content-type'), 'image/png');
+  assert.deepEqual(Buffer.from(await ok.arrayBuffer()), TINY_PNG,
+    'bytes come from ~/.omp/agent/blobs, not from base64-decoding the ref');
+
+  const missing = await fetch(base + images[1].url);
+  assert.equal(missing.status, 404, 'a missing/pruned blob 404s instead of serving garbage bytes');
 });
 
 test('historical image resource stays stable after active branch navigation', async () => {
