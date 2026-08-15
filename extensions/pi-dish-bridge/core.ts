@@ -247,7 +247,27 @@ export type BridgeDescriptor = {
   // Resident harness daemons may not forward arbitrary client environment
   // variables. Launch-specific wrappers inject this value directly instead.
   spawnToken?: string;
+  // Wrapper hosts (OMP, …) embed pi's extension API, so the stock bridge from
+  // the wrapper's user-extension directory also loads inside their processes
+  // — where it must not register, because the wrapper's own dedicated bridge
+  // owns the session and a second generic-pi claim shows it twice in pi-dish.
+  standDownUnderForeignHost?: boolean;
 };
+
+// OMP stamps Symbol.for("omp.*") registry symbols on globalThis at boot and
+// runs as a bun executable named "omp"; either marker identifies the host
+// without depending on one internal symbol name. Detection is deliberately
+// conservative (plain pi under node never matches either signal).
+function foreignWrapperHost(): string | null {
+  try {
+    if (process.versions.bun && path.basename(process.argv[1] || "").replace(/\.exe$/, "") === "omp") return "omp";
+    for (const sym of Object.getOwnPropertySymbols(globalThis)) {
+      const key = Symbol.keyFor(sym);
+      if (typeof key === "string" && key.startsWith("omp.")) return "omp";
+    }
+  } catch {}
+  return null;
+}
 
 function deriveSessionIdentity(ctx: ExtensionContext): { sessionFile: string; sessionId: string; cwd: string } | null {
   const manager: any = (ctx as any)?.sessionManager;
@@ -385,6 +405,19 @@ function serializeSessionTree(sessionManager: any) {
 
 export function createBridge(descriptor: BridgeDescriptor) {
  return function (pi: ExtensionAPI) {
+  // The stock bridge rides along inside wrapper hosts that embed pi's
+  // extension API (OMP autoloads its user-extension directory). Their
+  // dedicated bridges own those sessions; a second generic-pi registration
+  // would double-book the session in pi-dish.
+  if (descriptor.standDownUnderForeignHost) {
+    const foreign = foreignWrapperHost();
+    if (foreign) {
+      try {
+        process.stderr.write(`[pi-dish-bridge] ${foreign} wrapper host detected — the stock Pi bridge stays inactive; the ${foreign} bridge owns this session.\n`);
+      } catch {}
+      return;
+    }
+  }
   // Validate/create before claiming the duplicate-load sentinel. A corrected
   // environment followed by /reload must not be blocked by a failed claim.
   ensureSocketDirectory();

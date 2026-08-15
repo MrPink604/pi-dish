@@ -13,4 +13,5 @@ export default createBridge({
   getPrivateSession: getPiPrivateSession,
   selfPrime: true,
   piLifecycleEvents: true,
+  standDownUnderForeignHost: true,
 });

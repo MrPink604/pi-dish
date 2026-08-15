@@ -337,6 +337,77 @@ test('fresh live routes distinguish missing history, then use the session file b
   }
 });
 
+test('a wrapper bridge claiming a session hides the stock pi bridge riding in the same process', async () => {
+  // OMP embeds pi's extension API, so the stock pi-dish-bridge from the
+  // wrapper's user-extension directory also loads and used to register the
+  // same session a second time as a plain pi session — one logical session
+  // listed twice, with the pi claim thrashing the session index.
+  const nativeId = 'wrapped-double-claim';
+  const ompRouteId = encodeSessionKey('omp', nativeId);
+  const liveDir = path.join(tmpHome, 'wrapped-live');
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(liveDir, { recursive: true });
+  fs.mkdirSync(registryDir, { recursive: true });
+  const socketOmp = path.join(liveDir, 'sock-omp');
+  const socketPi = path.join(liveDir, 'sock-pi');
+  fs.writeFileSync(socketOmp, 'stub');
+  fs.writeFileSync(socketPi, 'stub');
+  const identity = processIdentity(process.pid);
+  const ompEntry = {
+    protocolVersion: 2,
+    wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+    harnessId: 'omp', nativeSessionId: nativeId, sessionId: nativeId,
+    bridgeInstanceId: 'wrapped-omp-bridge', instanceId: 'wrapped-omp-bridge',
+    socketPath: socketOmp, cwd: liveDir,
+    pid: identity.pid, startTime: identity.startTime,
+    capabilities: {}, spawnToken: null,
+  };
+  const piEntry = {
+    sessionId: nativeId,
+    socketPath: socketPi,
+    cwd: liveDir,
+    pid: process.pid,
+  };
+  const ompRegistryPath = path.join(registryDir, 'omp-wrapped-double-claim.json');
+  const piRegistryPath = path.join(registryDir, 'pi-wrapped-double-claim.json');
+
+  fs.writeFileSync(piRegistryPath, JSON.stringify(piEntry));
+  invalidateRegistryCache();
+  try {
+    // Before the wrapper claims the process, the stock pi entry stands on
+    // its own (legacy shape, live pid) and is listed as a live pi session.
+    let active = await get('/api/sessions?active=1');
+    assert.ok(active.body.active.some((s) => s.harnessId === 'pi' && s.nativeSessionId === nativeId),
+      'lone stock bridge claim is listed');
+
+    // The wrapper's sessionFile matches the OMP corpus, not any pi session.
+    const sessionFile = path.join(tmpHome, '.omp', 'agent', 'sessions', '--tmp--', `${nativeId}.jsonl`);
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(sessionFile, [
+      { type: 'title', title: 'Wrapped session' },
+      { type: 'session', version: 3, id: nativeId, cwd: liveDir },
+    ].map(JSON.stringify).join('\n') + '\n');
+    fs.writeFileSync(piRegistryPath, JSON.stringify({ ...piEntry, sessionFile }));
+    fs.writeFileSync(ompRegistryPath, JSON.stringify({ ...ompEntry, sessionFile }));
+    invalidateRegistryCache();
+
+    active = await get('/api/sessions?active=1');
+    const claimed = active.body.active.filter((s) => s.nativeSessionId === nativeId);
+    assert.equal(claimed.length, 1, `exactly one row for the doubly-claimed session: ${JSON.stringify(claimed.map((s) => s.harnessId))}`);
+    assert.equal(claimed[0].harnessId, 'omp', 'the wrapper-specific claim wins');
+
+    // The shadowed bare pi route no longer resolves through the registry.
+    const bare = await get(`/api/sessions/${encodeURIComponent(nativeId)}/stats`);
+    assert.equal(bare.status, 404, 'shadowed generic-pi route must not address the wrapper session');
+    const viaWrapper = await get(`/api/sessions/${encodeURIComponent(ompRouteId)}/stats`);
+    assert.equal(viaWrapper.status, 200, 'wrapper route still resolves');
+  } finally {
+    fs.rmSync(ompRegistryPath, { force: true });
+    fs.rmSync(piRegistryPath, { force: true });
+    invalidateRegistryCache();
+  }
+});
+
 test('historical alternative-harness IDs associate pages and workspace choices canonically', async () => {
   const artifact = path.join(ompCwd, 'omp-page.html');
   fs.writeFileSync(artifact, '<p>OMP page</p>');
