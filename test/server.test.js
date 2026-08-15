@@ -387,7 +387,18 @@ test('a wrapper bridge claiming a session hides the stock pi bridge riding in th
       { type: 'title', title: 'Wrapped session' },
       { type: 'session', version: 3, id: nativeId, cwd: liveDir },
     ].map(JSON.stringify).join('\n') + '\n');
+
+    // A manually launched wrapper host has no wrapper bridge claim at all —
+    // only the stock bridge riding its user-extension directory. Its claim
+    // points into the OMP config tree, which a pi session can never own.
     fs.writeFileSync(piRegistryPath, JSON.stringify({ ...piEntry, sessionFile }));
+    invalidateRegistryCache();
+    active = await get('/api/sessions?active=1');
+    assert.ok(!active.body.active.some((s) => s.nativeSessionId === nativeId),
+      'a pi claim on a wrapper-corpus file is hidden even without a competing wrapper claim');
+    const orphanRoute = await get(`/api/sessions/${encodeURIComponent(nativeId)}/stats`);
+    assert.equal(orphanRoute.status, 404, 'the bare pi route must not address a wrapper-corpus session');
+
     fs.writeFileSync(ompRegistryPath, JSON.stringify({ ...ompEntry, sessionFile }));
     invalidateRegistryCache();
 

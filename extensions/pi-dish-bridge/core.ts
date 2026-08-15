@@ -254,13 +254,24 @@ export type BridgeDescriptor = {
   standDownUnderForeignHost?: boolean;
 };
 
-// OMP stamps Symbol.for("omp.*") registry symbols on globalThis at boot and
-// runs as a bun executable named "omp"; either marker identifies the host
-// without depending on one internal symbol name. Detection is deliberately
-// conservative (plain pi under node never matches either signal).
+// Identifying the OMP host from inside an extension is subtler than it
+// sounds — signals verified against the real host (bun 1.3.14 / OMP 17.3.0,
+// extension-loaded diagnostics):
+//   - process.execPath is the bun runtime, NOT an omp binary (omp is a bun
+//     script, not a compiled executable).
+//   - process.argv[1] is also NOT the omp shim path: the ~/.bun/bin/omp
+//     launcher re-execs bun against the global install, so argv[1] resolves
+//     to .../node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js. A future
+//     compiled omp executable would instead surface its own basename.
+//   - OMP's Symbol.for("omp.*") registry symbols exist in the bundle but are
+//     not stamped on globalThis by the time user extensions load.
+//   - PI_CODING_AGENT / PI_* env vars are plain-pi markers (pi sets them for
+//     children too) and cannot distinguish the host.
 function foreignWrapperHost(): string | null {
   try {
-    if (process.versions.bun && path.basename(process.argv[1] || "").replace(/\.exe$/, "") === "omp") return "omp";
+    const entry = process.argv[1] || "";
+    const base = path.basename(entry).replace(/\.exe$/, "").toLowerCase();
+    if (process.versions.bun && (base === "omp" || entry.includes("@oh-my-pi/"))) return "omp";
     for (const sym of Object.getOwnPropertySymbols(globalThis)) {
       const key = Symbol.keyFor(sym);
       if (typeof key === "string" && key.startsWith("omp.")) return "omp";
