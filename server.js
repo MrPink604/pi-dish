@@ -1713,7 +1713,12 @@ app.get('/api/sessions/:id/messages', async (req, res) => {
       totalMessages: 0, firstIndex: null, lastIndex: null, hasMore: false,
     });
   }
-  if (sessionSource.harnessId === 'omp') await refreshHarnessPricing('omp');
+  // Pricing is optional response metadata, not a transcript dependency. OMP's
+  // model catalog command can take seconds (and some versions only settle at
+  // our 15s timeout after already printing valid JSON), so refresh it in the
+  // background. Existing recorded/stale costs render now; the pricing
+  // revision invalidates the parse cache once a changed catalog lands.
+  if (sessionSource.harnessId === 'omp') void refreshHarnessPricing('omp');
 
   // Pagination: messages are indexed by their position in the displayable
   // message stream (0-based). `limit` defaults to 50. With no cursor we

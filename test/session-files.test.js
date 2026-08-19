@@ -256,6 +256,56 @@ test('readSessionMessagesAtLeaf follows a live leaf that is not the last JSONL e
     /Session tree leaf not found: missing/);
 });
 
+test('large snapcompact archives are projected without retaining frame payloads', () => {
+  const archiveMarker = 'snap-frame-marker-';
+  const entries = [
+    { type: 'session', version: 3, id: 'snap-session', cwd: '/p' },
+    { type: 'message', id: 'u1', parentId: null, message: {
+      role: 'user', content: [{ type: 'text', text: 'before snap' }],
+    } },
+    { type: 'message', id: 'a1', parentId: 'u1', message: {
+      role: 'assistant', content: [{ type: 'text', text: 'before answer' }],
+      usage: { input: 10, output: 2, cost: { total: 0.1 } },
+    } },
+    { type: 'compaction', id: 'c1', parentId: 'a1', timestamp: '2026-08-19T10:00:00.000Z',
+      summary: 'snapcompact archive', shortSummary: 'snap archive',
+      firstKeptEntryId: 'u1', tokensBefore: 150000,
+      details: { kind: 'snapcompact' }, fromExtension: false,
+      preserveData: { snapcompact: { frames: [{ data: archiveMarker + 'x'.repeat(70 * 1024) }] } } },
+    { type: 'message', id: 'u2', parentId: 'c1', message: {
+      role: 'user', content: [{ type: 'text', text: 'after snap' }],
+    } },
+  ];
+  const content = entries.map(JSON.stringify).join('\n') + '\n';
+  const parsed = SF.parseSessionEntries(content);
+  const compact = parsed.find(entry => entry.type === 'compaction');
+  assert.deepEqual(compact, {
+    type: 'compaction', id: 'c1', parentId: 'a1', timestamp: '2026-08-19T10:00:00.000Z',
+    summary: 'snapcompact archive', shortSummary: 'snap archive',
+    firstKeptEntryId: 'u1', tokensBefore: 150000,
+    details: { kind: 'snapcompact' }, fromExtension: false,
+  }, 'all semantic compaction fields survive without retaining base64 archive frames');
+  assert.ok(!JSON.stringify(parsed).includes(archiveMarker));
+
+  const file = path.join(tmpDir, `session-${fileSeq++}.jsonl`);
+  fs.writeFileSync(file, content);
+  assert.deepEqual(SF.readSessionMessagesAtLeaf(file, 'u2').map(message => message.content[0].text),
+    ['before snap', 'before answer', 'after snap']);
+  assert.equal(SF.getSessionInfo(file).contextTokens, 0, 'the projected compaction still resets context');
+  assert.equal(SF.getSessionStats(file).assistantMessages, 1, 'stats skip the archive and retain messages');
+  assert.ok(!SF.buildSearchTextFromContent(content).includes(archiveMarker));
+
+  const unusual = JSON.stringify({
+    type: 'compaction', id: 'unusual', parentId: null,
+    preserveData: { custom: archiveMarker + 'y'.repeat(70 * 1024) },
+    summary: 'field serialized after preserveData', tokensBefore: 42,
+  });
+  const unusualCompact = SF.parseSessionEntries(unusual)[0];
+  assert.equal(unusualCompact.summary, 'field serialized after preserveData');
+  assert.ok(unusualCompact.preserveData.custom.startsWith(archiveMarker),
+    'nonstandard field order falls back to full JSON parsing');
+});
+
 test('readSessionMessages keeps every entry when the leaf is the last message', () => {
   const tmsg = (id, parentId, role, text) => ({
     type: 'message', id, parentId,

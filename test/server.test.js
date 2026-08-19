@@ -10,6 +10,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const crypto = require('node:crypto');
+const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
@@ -198,6 +199,7 @@ fs.writeFileSync(path.join(sessionDir, `${SKILLS_SESSION_ID}.jsonl`), [
 const server = require('../server.js');
 const piSDK = require('../lib/pi-sdk');
 const tmux = require('../lib/tmux');
+const harnessPricing = require('../lib/harness-pricing');
 const { invalidateRegistryCache } = require('../lib/bridge-session');
 const { processIdentity, processIdentityAlive } = require('../lib/process-identity');
 const sessionProvenance = require('../lib/session-provenance');
@@ -2381,6 +2383,38 @@ test('inactive OMP tree routes return capability errors without calling the Pi S
     piSDK.getSessionTree = originalGetTree;
     piSDK.branchSession = originalBranch;
   }
+});
+
+test('OMP transcript loading does not wait for the optional pricing catalog', async (t) => {
+  fs.rmSync(path.join(tmpHome, '.pi', 'dish', 'pricing', 'omp.json'), { force: true });
+  harnessPricing.resetForTests();
+  let catalogCallback;
+  let catalogStartedResolve;
+  const catalogStarted = new Promise(resolve => { catalogStartedResolve = resolve; });
+  t.mock.method(childProcess, 'execFile', (_file, _args, _options, callback) => {
+    catalogCallback = callback;
+    catalogStartedResolve();
+    return {};
+  });
+
+  const request = get(`/api/sessions/${encodeURIComponent(OMP_ROUTE_ID)}/messages`);
+  await catalogStarted;
+  let timeout;
+  const raced = await Promise.race([
+    request.then(result => ({ result })),
+    new Promise(resolve => { timeout = setTimeout(() => resolve({ timedOut: true }), 500); }),
+  ]);
+  clearTimeout(timeout);
+  // Settle the background refresh before the mock is restored, including on
+  // an old/blocking implementation where the request lost the race.
+  catalogCallback(null, JSON.stringify({ models: [{
+    provider: 'zai', id: 'glm-test', cost: { input: 1, output: 2 },
+  }] }), '');
+  await harnessPricing.refreshHarnessPricing('omp');
+  const result = raced.result || await request;
+  assert.equal(raced.timedOut, undefined, 'transcript response was held behind catalog refresh');
+  assert.equal(result.status, 200);
+  assert.ok(result.body.messages.length > 0);
 });
 
 test('live OMP tree routes use tree_read/tree_navigate and the transcript follows the bridge leaf', async () => {

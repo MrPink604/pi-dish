@@ -133,6 +133,16 @@ requests after the first parse dropped from ~200 ms to ~0.02 ms; a scan or
 metadata poll after one appended turn dropped from ~240 ms (full four-way
 re-parse) to ~0.5 ms.
 
+Follow-up profiling with OMP's default snapcompact strategy found a separate
+cold-load cost: every compaction record can retain many megabytes of base64
+frame data in `preserveData`. Pi-dish does not display or index those frames,
+but it still JSON-parsed and retained every archive while deriving the active
+tree. Large OMP compaction records are now parsed through the last semantic
+compaction field while omitting only the trailing archive, with a full-parse
+fallback for nonstandard record ordering. Transcript loading also no longer
+awaits OMP's optional model-pricing catalog refresh; a slow or timing-out
+catalog command cannot hold the conversation pane behind pricing metadata.
+
 ## Research basis
 
 The implementation follows the Express-maintained `compression` middleware
