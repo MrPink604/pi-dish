@@ -162,9 +162,10 @@ if (process.env.PI_FIXTURE_NOREGISTER) {
             : capabilities,
           turnInProgress: false,
         }) + '\n');
-    // Answer commands like an *old* bridge: run_command is unknown. This is
-    // what lets tmux.test.js exercise the server's send-keys fallbacks —
-    // leaving commands unanswered would instead hang callers for the full
+    // Answer commands like an *old* bridge: command discovery works, but
+    // run_command is unknown. This lets tmux.test.js verify both discovery of
+    // pane-backed commands and the server's send-keys fallbacks — leaving
+    // commands unanswered would instead hang callers for the full
     // BridgeSession timeout.
     let buf = '';
     sock.on('data', (chunk) => {
@@ -174,9 +175,11 @@ if (process.env.PI_FIXTURE_NOREGISTER) {
         const line = buf.slice(0, i); buf = buf.slice(i + 1);
         let msg;
         try { msg = JSON.parse(line); } catch { continue; }
-        if (msg.id !== undefined) {
-          sock.write(JSON.stringify({ type: 'response', id: msg.id, success: false, error: `unknown command: ${msg.command}` }) + '\n');
-        }
+        if (msg.id === undefined) continue;
+        const response = msg.command === 'get_commands'
+          ? { type: 'response', id: msg.id, success: true, data: { commands: [] } }
+          : { type: 'response', id: msg.id, success: false, error: `unknown command: ${msg.command}` };
+        sock.write(JSON.stringify(response) + '\n');
       }
     });
     sock.on('error', () => {});

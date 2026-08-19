@@ -2497,7 +2497,7 @@ app.get('/page/:token/*', (req, res) => {
   servePage(req, res, true);
 });
 
-// /reload against a bridge session, with two Pi-only escape hatches:
+// /reload against a bridge session, with two escape hatches:
 // - Bridges that fire the reload in the same tick as their run_command
 //   response lose the response frame to their own socket teardown — a
 //   "socket closed" rejection on /reload specifically is the signature of a
@@ -2506,24 +2506,39 @@ app.get('/page/:token/*', (req, res) => {
 // - Bridges that can't run it at all (no emulated reload / no captured
 //   AgentSession — exactly the state a running TUI is in when its loaded
 //   bridge predates the current one) fall back to typing /reload into the
-//   Pi session's own tmux pane, when one can be located. That's also the only
-//   path that can upgrade an out-of-date Pi bridge from the UI. Alternate
-//   wrappers fail closed: their public API profile is the lifecycle authority.
+//   session's own tmux pane, when one can be located. Pi needs this to upgrade
+//   out-of-date bridges; OMP needs it because its public sendUserMessage API
+//   bypasses command dispatch; the pane executes the bridge's /dish-reload so
+//   OMP supplies the command context required by ctx.reload(). Other alternate
+//   wrappers still fail closed: their public API profile remains the lifecycle
+//   authority.
 async function reloadBridgeSession(sess, sessionId) {
-  try {
-    const data = await sess.runCommand('/reload');
-    return { info: data?.info || 'Reloading extensions…' };
-  } catch (e) {
-    if (/socket closed/i.test(e?.message || '')) return { info: 'Reloading extensions…' };
-    if (sess.harnessId !== 'pi') {
-      e.statusCode = 409;
-      throw e;
+  let bridgeError = null;
+  if (liveSessionSupports(sess, 'reload')) {
+    try {
+      const data = await sess.runCommand('/reload');
+      return { info: data?.info || 'Reloading extensions…' };
+    } catch (e) {
+      if (/socket closed/i.test(e?.message || '')) return { info: 'Reloading extensions…' };
+      bridgeError = e;
     }
-    const pane = await locatePiPane(sessionId);
-    if (!pane) throw e;
-    await tmux.sendKeys(pane.socket, pane.paneId, '/reload');
-    return { info: 'Sent /reload to the session’s tmux pane' };
   }
+  bridgeError ||= new Error('This session does not support remote extension reload.');
+  if (sess.harnessId !== 'pi' && sess.harnessId !== 'omp') {
+    bridgeError.statusCode = 409;
+    throw bridgeError;
+  }
+  const pane = await locatePiPane(sessionId);
+  if (!pane) {
+    bridgeError.statusCode = 409;
+    if (sess.harnessId === 'omp') {
+      bridgeError.message = 'Oh My Pi extension reload requires a reachable tmux pane.';
+    }
+    throw bridgeError;
+  }
+  const paneCommand = sess.harnessId === 'omp' ? '/dish-reload' : '/reload';
+  await tmux.sendKeys(pane.socket, pane.paneId, paneCommand);
+  return { info: 'Sent /reload to the session’s tmux pane' };
 }
 
 function parseHostBuiltin(descriptor, message) {
@@ -2610,9 +2625,6 @@ app.post('/api/sessions/:id/command', async (req, res) => {
         return res.status(409).json({ error: 'This session does not support remote commands.' });
       }
       if (message.trim() === '/reload') {
-        if (!liveSessionSupports(sess, 'reload')) {
-          return res.status(409).json({ error: 'This session does not support remote extension reload.' });
-        }
         const result = await reloadBridgeSession(sess, req.params.id);
         return res.json({ success: true, info: result.info });
       }
@@ -3181,13 +3193,29 @@ function filterBridgeCommands(sess, commands) {
 
 async function appendHostBuiltins(sessionId, sess, commands) {
   const descriptor = getHarness(sess.harnessId);
-  if (!await ownedHostPane(sessionId, descriptor)) return commands;
-  const hostNames = new Set(descriptor.hostBuiltins.map(command => command.name));
+  const available = [];
+  if (await ownedHostPane(sessionId, descriptor)) {
+    available.push(...descriptor.hostBuiltins.map(({ allowedArgs, ...command }) => ({
+      ...command, source: 'host', supported: true,
+    })));
+  }
+  // OMP's bridge capability stays false because its public API cannot invoke
+  // command handlers remotely. A reachable pane is the actual capability:
+  // the command route maps /reload to the bridge's /dish-reload command in
+  // that exact TUI, where OMP supplies a legal command context for ctx.reload.
+  if (sess.harnessId === 'omp' && await locatePiPane(sessionId)) {
+    available.push({
+      name: 'reload',
+      description: 'Reload the current Oh My Pi session/runtime state',
+      source: 'host',
+      supported: true,
+    });
+  }
+  if (!available.length) return commands;
+  const hostNames = new Set(available.map(command => command.name));
   return [
     ...commands.filter(command => !hostNames.has(command.name)),
-    ...descriptor.hostBuiltins.map(({ allowedArgs, ...command }) => ({
-      ...command, source: 'host', supported: true,
-    })),
+    ...available,
   ];
 }
 

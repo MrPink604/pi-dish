@@ -1643,7 +1643,7 @@ test('OMP /compact is denied when the live bridge does not advertise it', async 
   }
 });
 
-test('OMP command discovery advertises only bridge-executable commands and API aliases stay capability-first', async () => {
+test('OMP command discovery includes pane-backed host commands and API aliases stay capability-first', async () => {
   const nativeId = 'omp-command-filter';
   const routeId = encodeSessionKey('omp', nativeId);
   const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
@@ -1719,14 +1719,22 @@ test('OMP command discovery advertises only bridge-executable commands and API a
     const commands = await get(`/api/commands?sessionId=${encodeURIComponent(routeId)}`);
     assert.equal(commands.status, 200, JSON.stringify(commands.body));
     assert.deepEqual(commands.body.map(command => command.name),
-      ['tree', 'compact', 'model', 'name', 'abort', 'skill:review', 'daily', 'dish-push', 'shake']);
-    assert.deepEqual(commands.body.at(-1), {
-      name: 'shake',
-      description: 'Drop heavy content from context (tool results, large blocks, or images)',
-      args: '[images]',
-      source: 'host',
-      supported: true,
-    });
+      ['tree', 'compact', 'model', 'name', 'abort', 'skill:review', 'daily', 'dish-push', 'shake', 'reload']);
+    assert.deepEqual(commands.body.slice(-2), [
+      {
+        name: 'shake',
+        description: 'Drop heavy content from context (tool results, large blocks, or images)',
+        args: '[images]',
+        source: 'host',
+        supported: true,
+      },
+      {
+        name: 'reload',
+        description: 'Reload the current Oh My Pi session/runtime state',
+        source: 'host',
+        supported: true,
+      },
+    ]);
 
     const shake = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/shake' });
     assert.equal(shake.status, 200, JSON.stringify(shake.body));

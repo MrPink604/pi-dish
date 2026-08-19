@@ -248,9 +248,18 @@ finds (bridge $TMUX stamp → spawn placement → pid-ancestry walk — same
 order as `resolveRuntime`, stamps verified with `paneExists` first). The
 send-keys path is deliberate even though it appends to any draft sitting in
 the TUI composer: it is the only route that can upgrade a session running an
-*out-of-date* bridge from the UI. The integration test's reload canary
-asserts a marker extension really re-evaluates — keep it last in the file,
-it churns the bridge socket.
+*out-of-date* Pi bridge from the UI, and it is OMP's normal remote reload path
+because OMP's public `sendUserMessage()` bypasses command dispatch. For OMP,
+the web-facing `/reload` maps to the bridge's `/dish-reload` pane command, where
+OMP supplies the command context required by `ctx.reload()`. OMP keeps
+advertising bridge capability `reload: false`; `/api/commands` derives support
+from whether `locatePiPane()` can reach its TUI. Other alternate wrappers do
+not get this fallback. OMP 17.3's `ctx.reload()` reloads session/runtime state
+and emits a same-id `session_switch`; unlike Pi reload, it does not re-import
+explicit `--extension` modules, so updating the OMP bridge itself still needs
+a process restart. The Pi integration test's reload canary asserts a marker
+extension really re-evaluates — keep it last in the file, because it churns
+the bridge socket.
 
 Close + runtime location: `POST /api/sessions/:id/close` shuts a live
 session's pi down — RPC children via `RPCSession.kill()`, anything
@@ -953,7 +962,9 @@ select/resume). Two backends:
   tree navigation works on TUI sessions nobody has typed `/dish-*` into.
   The same primitive backs remote `/reload` on TUI sessions
   (`s.prompt("/dish-reload")`, fire-and-forget — reload tears the bridge
-  module down, so awaiting it would race the socket). The server keeps its
+  module down, so awaiting it would race the socket). OMP cannot use that
+  private self-prime path; its reachable tmux pane receives `/dish-reload`
+  directly. The server keeps its
   older prime fallbacks for bridges that predate self-priming (RPC
   `/dish-prime` via `rpc.prompt()`, send-keys into a recorded spawn pane);
   the 409 hint remains only for the no-capture edge (nothing has called

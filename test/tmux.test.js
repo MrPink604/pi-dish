@@ -374,7 +374,7 @@ test('/reload falls back to send-keys into the owning tmux pane when the bridge 
   assert.match(keys, /\/reload/, `send-keys /reload reached the pane (got: ${JSON.stringify(keys)})`);
 });
 
-test('/reload fails closed for alternate wrappers without typing into tmux', { skip: !tmuxOk }, async () => {
+test('/reload is discovered and sent into a reachable OMP tmux pane', { skip: !tmuxOk }, async () => {
   const created = await post('/api/sessions/new', {
     harness: 'omp',
     target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
@@ -389,12 +389,54 @@ test('/reload fails closed for alternate wrappers without typing into tmux', { s
   assert.ok(registry, 'matching OMP registry claim exists');
   fs.rmSync(`${registry.sessionFile}.keys`, { force: true });
 
+  const commands = await get(`/api/commands?sessionId=${encodeURIComponent(created.body.id)}`);
+  assert.equal(commands.status, 200, JSON.stringify(commands.body));
+  assert.ok(commands.body.some(command => command.name === 'reload'),
+    'pane-backed reload is included in OMP command discovery');
+
   const result = await post(`/api/sessions/${encodeURIComponent(created.body.id)}/command`, { message: '/reload' });
-  assert.equal(result.status, 409, JSON.stringify(result.body));
-  assert.match(result.body.error, /does not support remote extension reload/i);
-  await new Promise(resolve => setTimeout(resolve, 100));
-  assert.equal(fs.existsSync(`${registry.sessionFile}.keys`), false, 'no /reload keystrokes reached the alternate TUI');
-  assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true, 'the alternate pane remains untouched');
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.match(result.body.info || '', /tmux pane/i);
+  let keys = '';
+  for (let i = 0; i < 20; i++) {
+    try { keys = fs.readFileSync(`${registry.sessionFile}.keys`, 'utf8'); } catch {}
+    if (/\/dish-reload/.test(keys)) break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  assert.match(keys, /\/dish-reload/, `send-keys /dish-reload reached the OMP pane (got: ${JSON.stringify(keys)})`);
+  assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true, 'the OMP pane remains live');
+});
+
+test('/reload still fails closed for alternate wrappers without an explicit fallback', { skip: !tmuxOk }, async () => {
+  const created = await post('/api/sessions/new', {
+    harness: 'prime',
+    target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+  });
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  const spawn = tmux.getSpawn(created.body.id);
+  assert.ok(spawn, 'pi-dish owns the Prime pane');
+
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  const registryFile = fs.readdirSync(registryDir).find(name => {
+    const entry = JSON.parse(fs.readFileSync(path.join(registryDir, name), 'utf8'));
+    return entry.harnessId === 'prime' && entry.spawnToken === spawn.spawnToken;
+  });
+  assert.ok(registryFile, 'matching Prime registry claim exists');
+  const registryPath = path.join(registryDir, registryFile);
+  const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+  fs.rmSync(`${registry.sessionFile}.keys`, { force: true });
+
+  try {
+    const result = await post(`/api/sessions/${encodeURIComponent(created.body.id)}/command`, { message: '/reload' });
+    assert.equal(result.status, 409, JSON.stringify(result.body));
+    assert.match(result.body.error, /does not support remote extension reload/i);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(fs.existsSync(`${registry.sessionFile}.keys`), false, 'no /reload keystrokes reached the Prime TUI');
+    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true, 'the Prime pane remains untouched');
+  } finally {
+    try { process.kill(registry.pid, 'SIGTERM'); } catch {}
+    try { fs.unlinkSync(registryPath); } catch {}
+  }
 });
 
 test('POST /api/sessions/new rejects a socket outside the tmux tmpdir', { skip: !tmuxOk }, async () => {
