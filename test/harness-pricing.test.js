@@ -5,6 +5,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const childProcess = require('node:child_process');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-pricing-'));
 process.env.HOME = tmp;
@@ -30,6 +31,33 @@ test('OMP catalog command is cached, persisted, and prices tokens including cach
   assert.equal(pricing.estimateUsageCost('pi', 'zai', 'glm-4.7-flash', { input: 1_000_000 }), undefined,
     'Pi never reads the OMP catalog');
   assert.ok(fs.existsSync(path.join(tmp, '.pi', 'dish', 'pricing', 'omp.json')));
+});
+
+test('OMP catalog uses valid JSON already printed when the command times out', async t => {
+  const timeoutHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-pricing-timeout-'));
+  t.after(() => {
+    process.env.HOME = tmp;
+    pricing.resetForTests();
+    fs.rmSync(timeoutHome, { recursive: true, force: true });
+  });
+  process.env.HOME = timeoutHome;
+  pricing.resetForTests();
+  t.mock.method(childProcess, 'execFile', (_file, _args, options, callback) => {
+    assert.equal(options.timeout, 15_000);
+    const error = new Error('Command timed out');
+    error.killed = true;
+    error.signal = 'SIGTERM';
+    process.nextTick(() => callback(error, JSON.stringify({ models: [{
+      provider: 'anthropic', id: 'claude-test', cost: { input: 1, output: 2 },
+    }] }), ''));
+    return {};
+  });
+
+  const snapshot = await pricing.refreshHarnessPricing('omp', { force: true });
+  assert.equal(snapshot.models[0].id, 'claude-test');
+  assert.equal(pricing.estimateUsageCost('omp', 'anthropic', 'claude-test', {
+    input: 1_000_000, output: 1_000_000,
+  }).total, 3);
 });
 
 test('stale last-known OMP catalog survives refresh failure; missing catalog stays unpriced', async () => {
@@ -76,4 +104,30 @@ test('OMP session usage is catalog-priced while unknown models remain unavailabl
   const stats = sessionFiles.getSessionStats(source);
   assert.equal(stats.cost, null, 'one unknown call keeps mixed session spend unavailable');
   assert.equal(stats.costUnavailable.total, 1);
+});
+
+test('OMP session usage keeps recorded costs when catalog pricing is unavailable', () => {
+  const missingHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-pricing-recorded-'));
+  process.env.HOME = missingHome;
+  pricing.resetForTests();
+  try {
+    const candidate = { harnessId: 'omp', profileId: 'omp-v1', profileVersion: 1 };
+    const recorded = { input: 0.1, output: 0.2, cacheRead: 0.03, cacheWrite: 0.04, total: 0.37 };
+    const content = JSON.stringify({ type: 'message', message: {
+      role: 'assistant', provider: 'anthropic', model: 'claude-recorded', content: [],
+      usage: { input: 10, output: 5, cost: recorded },
+    } }) + '\n';
+
+    const usage = sessionFiles.buildIndexedUsageFromContent(content, candidate);
+    assert.deepEqual(usage.total.costs, recorded);
+    const file = path.join(missingHome, 'omp-recorded.jsonl');
+    fs.writeFileSync(file, content);
+    const messages = sessionFiles.readSessionMessages({ ...candidate, file });
+    assert.deepEqual(messages[0].usage.cost, recorded);
+    assert.equal(sessionFiles.getSessionStats({ ...candidate, file }).cost, recorded.total);
+  } finally {
+    process.env.HOME = tmp;
+    pricing.resetForTests();
+    fs.rmSync(missingHome, { recursive: true, force: true });
+  }
 });
