@@ -791,6 +791,48 @@ function writeRegistry(patch = {}) {
       'file selection persisted as one anchored comment');
     check(runCommandCount === 0, 'saving a comment did not initiate or queue an agent command');
 
+    // The saved comment must be visible straight away: an anchored mark over
+    // the quoted prose plus a count chip, and it stays editable until acked.
+    await desktop.waitForSelector('#fileViewBody mark.comment-mark', { timeout: 5000 });
+    check(await desktop.evaluate(() => document.querySelector('#fileViewBody mark.comment-mark')
+      .textContent.includes('hello from deep')), 'the saved comment re-anchors as a mark on its quote');
+    await desktop.waitForFunction(() => {
+      const chip = document.getElementById('fileViewComments');
+      return chip.style.display !== 'none' && chip.textContent === '💬 1';
+    }, { timeout: 5000 });
+    check(true, 'file view header chips the open comment count');
+
+    await desktop.click('#fileViewBody mark.comment-mark');
+    await desktop.waitForSelector('#commentBubble', { state: 'visible', timeout: 2000 });
+    check(await desktop.locator('#commentBubbleTitle').textContent() === 'Edit comment',
+      'clicking a mark opens the bubble in edit mode');
+    check(await desktop.locator('#commentBody').inputValue() === 'Make this finding more specific.',
+      'the editor prefills the saved body');
+    await desktop.fill('#commentBody', 'Name the exact function.');
+    await desktop.click('#commentSendBtn');
+    await desktop.waitForSelector('#commentBubble', { state: 'hidden', timeout: 5000 });
+    const editedComments = await desktop.evaluate(async (id) => {
+      const res = await fetch(`/api/comments/index?sessionId=${encodeURIComponent(id)}`);
+      return (await res.json()).comments.map((c) => c.bodyPreview);
+    }, SESSION_ID);
+    check(editedComments.length === 1 && editedComments[0] === 'Name the exact function.',
+      `editing rewrote the stored comment (got ${JSON.stringify(editedComments)})`);
+    await desktop.waitForSelector('#fileViewBody mark.comment-mark', { timeout: 5000 });
+
+    await desktop.click('#fileViewBody mark.comment-mark');
+    await desktop.waitForSelector('#commentBubble', { state: 'visible', timeout: 2000 });
+    await desktop.click('#commentDeleteBtn');
+    check(await desktop.locator('#commentDeleteBtn').textContent() === 'Delete?',
+      'the first Delete tap only arms the confirm');
+    await desktop.click('#commentDeleteBtn');
+    await desktop.waitForFunction(() =>
+      document.querySelectorAll('#fileViewBody mark.comment-mark').length === 0
+        && document.getElementById('fileViewComments').style.display === 'none',
+      { timeout: 5000 });
+    check(true, 'the second tap deletes the comment and clears its mark and chip');
+    check((await (await fetch(`${base}/api/comments/index?sessionId=${SESSION_ID}`)).json()).total === 0,
+      'the deleted comment left the agent-facing index');
+
     // Publish the viewed file as a page: 🌐 → link row → the public URL
     // serves the file content → unpublish clears it.
     await desktop.click('#fileViewPublish');
@@ -878,8 +920,15 @@ function writeRegistry(patch = {}) {
     await desktop.waitForSelector('#commentBubble', { state: 'hidden', timeout: 5000 });
     const diffComments = await (await fetch(`${base}/api/comments/index?sessionId=${SESSION_ID}`)).json();
     const diffComment = diffComments.comments.find((comment) => comment.target.kind === 'diff');
-    check(diffComments.total === 2 && diffComment?.target.anchor.newStart === 2,
+    check(diffComments.total === 1 && diffComment?.target.anchor.newStart === 2,
       'diff selection persisted with its new-side line anchor');
+    await desktop.waitForSelector('#diffViewBody .diff-line.comment-line', { timeout: 5000 });
+    check(await desktop.evaluate(() =>
+      [...document.querySelectorAll('#diffViewBody .diff-line.comment-line')]
+        .every((el) => el.textContent === '+two')),
+      'the diff comment tints exactly its anchored row');
+    check(await desktop.locator('#diffViewComments').textContent() === '💬 1',
+      'diff view header chips the open comment count');
     await desktop.keyboard.press('Escape');
     await desktop.waitForFunction(() => document.getElementById('messages').offsetParent !== null,
       { timeout: 2000 });
@@ -2334,6 +2383,11 @@ function writeRegistry(patch = {}) {
       'saved scope renders as an active chip');
     check(await desktop.evaluate(() => document.getElementById('filterInput').value) === '',
       'saving a scope clears the typed query it absorbed');
+    // The absorbed query must not leave a debounced search pending: firing
+    // after the clear, it would narrow the lists to an untyped query and only
+    // the next 10s poll would undo it.
+    await desktop.waitForFunction(() => listsQueriedFor === '', null, { timeout: 5000 });
+    check(true, 'the absorbed query leaves no server-filtered lists behind');
     // Both proj-beta sessions (the beta transcript and the ranking fixture
     // sharing its cwd) are hidden by the scope, and the note says so.
     await desktop.waitForFunction((betaId) =>
@@ -2586,10 +2640,12 @@ function writeRegistry(patch = {}) {
     check(await desktop.evaluate(() => localStorage.getItem('pi-dish-active-scopes')) === JSON.stringify(['Beta only']),
       'advanced-search active scope state remains device-local');
     await desktop.evaluate(() => openSearchView('boundary-contract'));
+    // Scope the note lookup to the takeover: the sidebar behind it renders
+    // its own `.scope-hidden-note` for the same active scope.
     await desktop.waitForFunction((id) =>
       document.querySelectorAll('.search-result').length === 1 &&
       document.querySelector(`.search-result[data-id="${id}"]`) &&
-      document.querySelector('.scope-hidden-note')?.textContent === '100 hidden by scopes',
+      document.querySelector('#searchViewBody .scope-hidden-note')?.textContent === '100 hidden by scopes',
       BETA_ID, { timeout: 10000 });
     check(!await desktop.evaluate(() =>
       document.querySelector('.search-count-line').textContent.includes('showing the 100 best matches')),

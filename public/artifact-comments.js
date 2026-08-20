@@ -12,6 +12,10 @@
   let selected = null;
   let selectedRange = null;
   let draftVersion = 0;
+  let editing = null;   // the open comment the card is editing, if any
+  let openComments = [];
+  let deleteArmed = false;
+  let deleteTimer = null;
   const host = document.createElement('div');
   host.id = 'pi-dish-comment-layer';
   host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none;';
@@ -34,6 +38,8 @@
         padding:7px 11px; color:CanvasText; background:Canvas; cursor:pointer }
       #send { color:white!important; border-color:#268bd2!important; background:#268bd2!important }
       #status { min-height:18px; margin-right:auto; align-self:center; font-size:12px; color:GrayText }
+      #del { color:GrayText }
+      #del.armed { color:#dc322f!important; border-color:#dc322f!important }
       #toast { display:none; position:fixed; left:50%; bottom:22px; transform:translateX(-50%);
         color:white; background:#073642; padding:8px 12px; border-radius:7px; box-shadow:0 3px 16px #0007;
         font-size:12px }
@@ -41,7 +47,7 @@
     <div id="card" role="dialog" aria-label="Add anchored comment">
       <div id="quote"></div>
       <textarea id="body" placeholder="What should the agent change?" maxlength="10000"></textarea>
-      <div id="actions"><span id="status"></span><button id="cancel" type="button">Cancel</button><button id="send" type="button">Save</button></div>
+      <div id="actions"><button id="del" type="button" hidden>Delete</button><span id="status"></span><button id="cancel" type="button">Cancel</button><button id="send" type="button">Save</button></div>
     </div>
     <div id="toast">Comment saved</div>`;
   document.documentElement.append(host);
@@ -115,6 +121,9 @@
     }
     selected = contextFor(range);
     selectedRange = range.cloneRange();
+    editing = null;
+    $('del').hidden = true;
+    disarmDelete();
     draftVersion += 1;
     quote.textContent = selected.quote;
     status.textContent = '';
@@ -145,39 +154,95 @@
     status.textContent = '';
     selected = null;
     selectedRange = null;
+    editing = null;
+    $('del').hidden = true;
+    disarmDelete();
     draftVersion += 1;
     window.getSelection()?.removeAllRanges();
+  }
+
+  function disarmDelete() {
+    clearTimeout(deleteTimer);
+    deleteArmed = false;
+    $('del').textContent = 'Delete';
+    $('del').classList.remove('armed');
   }
 
   $('cancel').addEventListener('click', close);
   $('send').addEventListener('click', async () => {
     const commentBody = body.value.trim();
-    if (!commentBody || !selected) return body.focus();
+    const submittedEdit = editing;
     const submittedSelection = selected;
+    if (!commentBody || (!submittedSelection && !submittedEdit)) return body.focus();
     const submittedVersion = draftVersion;
     $('send').disabled = true;
     status.textContent = 'Saving…';
     try {
-      const response = await fetch('/api/comments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body: commentBody, target: { kind: 'page', pageToken, anchor: submittedSelection } }),
-      });
+      const response = submittedEdit
+        ? await fetch(`/api/comments/${encodeURIComponent(submittedEdit.id)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: submittedEdit.sessionId, body: commentBody }),
+        })
+        : await fetch('/api/comments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ body: commentBody, target: { kind: 'page', pageToken, anchor: submittedSelection } }),
+        });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-      if (submittedVersion === draftVersion && selected === submittedSelection) {
+      if (submittedVersion === draftVersion
+          && (submittedEdit ? editing === submittedEdit : selected === submittedSelection)) {
         close();
         window.getSelection()?.removeAllRanges();
       }
-      const toast = $('toast');
-      toast.style.display = 'block';
-      setTimeout(() => { toast.style.display = 'none'; }, 1800);
+      toast(submittedEdit ? 'Comment updated' : 'Comment saved');
+      refreshComments();
     } catch (error) {
       if (submittedVersion === draftVersion) status.textContent = error.message;
     } finally {
       if (submittedVersion === draftVersion) $('send').disabled = false;
     }
   });
+
+  // Two-tap confirm, matching the app's delete idiom.
+  $('del').addEventListener('click', async () => {
+    const target = editing;
+    if (!target) return;
+    if (!deleteArmed) {
+      deleteArmed = true;
+      $('del').textContent = 'Delete?';
+      $('del').classList.add('armed');
+      deleteTimer = setTimeout(disarmDelete, 3000);
+      return;
+    }
+    const submittedVersion = draftVersion;
+    $('del').disabled = true;
+    status.textContent = 'Deleting…';
+    try {
+      const response = await fetch(`/api/comments/${encodeURIComponent(target.id)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: target.sessionId }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      if (submittedVersion === draftVersion) close();
+      toast('Comment deleted');
+      refreshComments();
+    } catch (error) {
+      if (submittedVersion === draftVersion) { status.textContent = error.message; disarmDelete(); }
+    } finally {
+      $('del').disabled = false;
+    }
+  });
+
+  function toast(text) {
+    const el = $('toast');
+    el.textContent = text;
+    el.style.display = 'block';
+    setTimeout(() => { el.style.display = 'none'; }, 1800);
+  }
   body.addEventListener('keydown', (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault();
@@ -187,4 +252,134 @@
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && card.style.display !== 'none') close();
   });
+
+  // --- Open comments, anchored back into the artifact ------------------
+  // Saved feedback stays visible on the page it was written on until the
+  // agent acknowledges it, and stays editable/deletable that whole time.
+  // The marks live in the artifact document, out of reach of the shadow
+  // stylesheet, so they get one attribute-scoped rule of their own.
+  const markStyle = document.createElement('style');
+  markStyle.setAttribute('data-pi-dish', '');
+  markStyle.textContent = 'mark[data-pi-dish-comment] { background: rgba(38,139,210,.16);'
+    + ' border-bottom: 1px dotted rgba(38,139,210,.75); color: inherit; cursor: pointer; }';
+  (document.head || document.documentElement).append(markStyle);
+
+  // A quote routinely spans several text nodes, so flatten the body into one
+  // string with per-node offsets, locate the quote, then wrap each covered
+  // node slice. Repeated quotes are scored against the anchor's context.
+  function textRuns() {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) => (node.parentElement?.closest('script, style, #pi-dish-comment-layer')
+        ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+    });
+    const runs = [];
+    let text = '';
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      runs.push({ node, start: text.length, end: text.length + node.textContent.length });
+      text += node.textContent;
+    }
+    return { runs, text };
+  }
+
+  function overlap(a, b, fromEnd) {
+    let n = 0;
+    while (n < a.length && n < b.length
+      && (fromEnd ? a[a.length - 1 - n] === b[b.length - 1 - n] : a[n] === b[n])) n++;
+    return n;
+  }
+
+  function markComment(comment) {
+    const anchor = comment.target?.anchor || {};
+    const quote = anchor.quote;
+    if (!quote) return;
+    const { runs, text } = textRuns();
+    const hits = [];
+    let from = 0;
+    let at;
+    while ((at = text.indexOf(quote, from)) !== -1) {
+      hits.push(at);
+      from = at + Math.max(1, quote.length);
+    }
+    if (!hits.length) return;
+    let start = hits[0];
+    if (hits.length > 1) {
+      const prefix = anchor.prefix || '';
+      const suffix = anchor.suffix || '';
+      let bestScore = -1;
+      for (const hit of hits) {
+        const score = overlap(text.slice(Math.max(0, hit - prefix.length), hit), prefix, true)
+          + overlap(text.slice(hit + quote.length, hit + quote.length + suffix.length), suffix, false);
+        if (score > bestScore) { bestScore = score; start = hit; }
+      }
+    }
+    const end = start + quote.length;
+    for (const run of runs) {
+      if (run.end <= start || run.start >= end) continue;
+      const source = run.node.textContent;
+      const sliceFrom = Math.max(0, start - run.start);
+      const sliceTo = Math.min(source.length, end - run.start);
+      if (sliceTo <= sliceFrom) continue;
+      const mark = document.createElement('mark');
+      mark.setAttribute('data-pi-dish-comment', comment.id);
+      mark.textContent = source.slice(sliceFrom, sliceTo);
+      const frag = document.createDocumentFragment();
+      if (sliceFrom > 0) frag.appendChild(document.createTextNode(source.slice(0, sliceFrom)));
+      frag.appendChild(mark);
+      if (sliceTo < source.length) frag.appendChild(document.createTextNode(source.slice(sliceTo)));
+      run.node.replaceWith(frag);
+    }
+  }
+
+  function renderMarks() {
+    document.querySelectorAll('mark[data-pi-dish-comment]').forEach((mark) => {
+      const parent = mark.parentNode;
+      mark.replaceWith(document.createTextNode(mark.textContent));
+      parent?.normalize();
+    });
+    for (const comment of openComments) markComment(comment);
+  }
+
+  // The page knows its own token, not the session behind it; the index
+  // hands back both. Any failure just leaves the artifact unmarked.
+  async function refreshComments() {
+    try {
+      const indexRes = await fetch(`/api/comments/index?pageToken=${encodeURIComponent(pageToken)}`);
+      if (!indexRes.ok) return;
+      const entries = (await indexRes.json()).comments || [];
+      if (!entries.length) { openComments = []; renderMarks(); return; }
+      const fullRes = await fetch('/api/comments/get', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: entries[0].sessionId, ids: entries.map((e) => e.id) }),
+      });
+      if (!fullRes.ok) return;
+      openComments = (await fullRes.json()).comments || [];
+      renderMarks();
+    } catch { /* an unmarked page still renders */ }
+  }
+
+  document.addEventListener('click', (event) => {
+    const mark = event.target.closest?.('mark[data-pi-dish-comment]');
+    if (!mark || window.getSelection()?.isCollapsed === false) return;
+    const comment = openComments.find((entry) => entry.id === mark.getAttribute('data-pi-dish-comment'));
+    if (!comment) return;
+    editing = comment;
+    selected = null;
+    selectedRange = document.createRange();
+    selectedRange.selectNodeContents(mark);
+    draftVersion += 1;
+    disarmDelete();
+    quote.textContent = comment.target?.anchor?.quote || '';
+    body.value = comment.body;
+    status.textContent = '';
+    $('send').disabled = false;
+    $('del').hidden = false;
+    card.style.display = 'block';
+    positionCard();
+    body.focus();
+    setTimeout(positionCard, 0);
+  });
+
+  refreshComments();
 })();

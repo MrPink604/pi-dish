@@ -478,12 +478,14 @@ Out-of-band review feedback for the current agent, created from selected text
 in the file viewer, selected hunk lines in the diff view, or selected prose in
 a published HTML artifact. Storage is `~/.pi/dish/comments.json`, using the
 same synchronous re-read + temp-file/rename pattern as pages/shares. Schema is
-`{ id, sessionId, body, target, createdAt, acknowledgedAt }`; target kinds are
+`{ id, sessionId, body, target, createdAt, acknowledgedAt }` (plus `updatedAt`
+once edited); target kinds are
 `file`, `diff`, and `page`, with a text quote/prefix/suffix or old/new line
 range anchor. There is deliberately no lifecycle beyond open (`null`) and
 acknowledged (timestamp).
 
-API: `POST /api/comments` and `POST /api/comments/:id/ack` (the
+API: `POST /api/comments`, `PATCH`/`DELETE /api/comments/:id`, and
+`POST /api/comments/:id/ack` (the
 session id is required in the ack body). Comment creation never calls a
 session prompt/command endpoint:
 the user explicitly tells the agent when to read comments. The vended skill
@@ -493,6 +495,22 @@ agent-selected `get <ids…>` groups (`POST /api/comments/get`); neither changes
 state or requires earlier comments to be acknowledged. `ack`, `count`, and
 `session` round out the CLI. It infers the active session by
 matching process ancestry to the bridge registry. No pi tool is registered.
+
+Open comments are visible where they were written, not filed away: the file
+viewer marks each anchored quote (`mark.comment-mark`, found by flattening the
+rendered DOM's text nodes so a quote may span several of them, with
+prefix/suffix scoring picking between repeats), the diff view tints the
+anchored rows (`.diff-line.comment-line`), published pages mark their own
+prose, and each view header carries a quiet `💬 N` chip whose popover lists
+every open comment — the fallback for one whose quote no longer anchors.
+Clicking a mark reopens the composer in edit mode: `PATCH /api/comments/:id`
+and `DELETE /api/comments/:id` (JSON `{ sessionId }`, same 404/403 guards as
+ack, plus 409 once acknowledged — an acknowledged comment is the agent's
+record of what it was told and stays immutable). Deletion is a two-tap arm.
+`GET /api/comments/index` also accepts `pageToken` and every entry carries
+`sessionId`, which is how the page overlay — which knows only its own token —
+reaches `/api/comments/get` and the edit routes; that's safe because `/api` is
+main-app only (the public share listener never mounts it).
 
 Main-server page responses inject `public/artifact-comments.js` into HTML
 roots/indexes. Its shadow-DOM selection UI posts page-token anchors; the

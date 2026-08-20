@@ -2396,6 +2396,10 @@ function commentIndexEntry(comment) {
   }
   return {
     id: comment.id,
+    // The page overlay reads the index with only a page token in hand and
+    // needs the session to fetch/edit/delete; /api is main-app only (the
+    // public share listener never mounts it), which is the trust boundary.
+    sessionId: comment.sessionId,
     createdAt: comment.createdAt,
     bodyPreview: comment.body.slice(0, 240),
     target: indexedTarget,
@@ -2407,8 +2411,13 @@ function commentIndexEntry(comment) {
 // Reading this index changes no comment state.
 app.get('/api/comments/index', (req, res) => {
   const sessionId = shortString(req.query.sessionId, 512);
-  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
-  const open = comments.listComments({ sessionId, state: 'open' });
+  // A published page knows its own token but not the session behind it, so
+  // the overlay scopes the index that way instead.
+  const pageToken = shortString(req.query.pageToken, 256);
+  if (!sessionId && !pageToken) {
+    return res.status(400).json({ error: 'sessionId or pageToken required' });
+  }
+  const open = comments.listComments({ sessionId, pageToken, state: 'open' });
   res.json({ comments: open.map(commentIndexEntry), total: open.length });
 });
 
@@ -2434,6 +2443,46 @@ app.post('/api/comments/get', (req, res) => {
   const selected = ids.map((id) => openById.get(id)).filter(Boolean);
   const missing = ids.filter((id) => !openById.has(id));
   res.json({ comments: selected, missing, total: selected.length, hasMore: false });
+});
+
+// Editing/deleting is the user's own correction path from the views the
+// comment was written in. Acknowledged comments are the agent's record and
+// stay immutable — a late edit would silently change what was acted on.
+function resolveOpenComment(req, res) {
+  const existing = comments.getComment(req.params.id);
+  if (!existing) {
+    res.status(404).json({ error: 'comment not found' });
+    return null;
+  }
+  let requestedSessionId = null;
+  try { requestedSessionId = canonicalSessionId(req.body?.sessionId); } catch {}
+  if (!requestedSessionId || requestedSessionId !== existing.sessionId) {
+    res.status(403).json({ error: 'comment belongs to a different session' });
+    return null;
+  }
+  if (existing.acknowledgedAt) {
+    res.status(409).json({ error: 'comment already acknowledged' });
+    return null;
+  }
+  return existing;
+}
+
+app.patch('/api/comments/:id', (req, res) => {
+  if (!resolveOpenComment(req, res)) return;
+  const rawBody = req.body?.body;
+  const body = typeof rawBody === 'string' ? shortString(rawBody.trim(), 10000) : null;
+  if (!body) return res.status(400).json({ error: 'comment body required (max 10000 characters)' });
+  const comment = comments.updateComment(req.params.id, body);
+  if (!comment) return res.status(409).json({ error: 'comment already acknowledged' });
+  res.json(comment);
+});
+
+app.delete('/api/comments/:id', (req, res) => {
+  if (!resolveOpenComment(req, res)) return;
+  if (!comments.deleteComment(req.params.id)) {
+    return res.status(409).json({ error: 'comment already acknowledged' });
+  }
+  res.json({ ok: true });
 });
 
 app.post('/api/comments/:id/ack', (req, res) => {

@@ -553,6 +553,11 @@ async function saveCurrentFilterAsScope() {
     // carries the filter, so leaving the text too would double-apply it.
     activeScopes.add(trimmed);
     localStorage.setItem('pi-dish-active-scopes', JSON.stringify([...activeScopes]));
+    // The absorbed query may still have a debounced search pending. Left to
+    // fire it would land *after* this clear, re-narrowing the lists to a
+    // query that is no longer typed until the next 10s poll undid it.
+    clearTimeout(filterDebounceTimer);
+    setSearchBusy(false);
     document.getElementById('filterInput').value = '';
     filterQuery = '';
     await persistSavedFilters(next);
@@ -3549,6 +3554,10 @@ let fileViewSelectionGeneration = 0;
 let anchoredCommentDraft = null;
 let commentAnchorRange = null;
 let commentDraftVersion = 0;
+let anchoredComments = [];        // open comments anchored in the open view
+let commentEditTarget = null;     // non-null while the bubble edits an existing comment
+let commentDeleteArmed = false;
+let commentDeleteTimer = null;
 
 function isFileViewOpen() {
   return document.getElementById('sessionView').classList.contains('file-open');
@@ -3625,6 +3634,8 @@ async function openFileViewer(mention) {
     // Same post-pass as the transcript: copy buttons, highlighting — and a
     // markdown file's own file references become clickable in turn.
     applyHighlight(body);
+    // Marks go on last, over the final DOM this produced.
+    refreshAnchoredComments();
   } catch (e) {
     if (!ownsFileView(sessionId, generation)) return;
     body.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
@@ -3644,6 +3655,7 @@ function closeFileView() {
   rawLink.style.display = 'none';
   rawLink.removeAttribute('href');
   closeCommentBubble();
+  setAnchoredComments([]);
   renderFilePageRow(null);
 }
 
@@ -3743,7 +3755,21 @@ function initCommentSelections() {
     if (isFileViewOpen()) setTimeout(() => captureFileCommentSelection(true), 0);
     else if (isDiffViewOpen()) setTimeout(() => captureDiffCommentSelection(true), 0);
   });
-  const reposition = () => positionCommentBubble();
+  // Clicking an existing mark (or a commented diff row) edits that comment.
+  // A drag that ends on one is a new selection, so only collapsed clicks count.
+  document.addEventListener('click', (event) => {
+    const row = event.target.closest?.('.comment-list-row');
+    if (row) return void focusAnchoredComment(row.dataset.commentId);
+    const marked = event.target.closest?.('mark.comment-mark, .diff-line.comment-line');
+    if (marked && window.getSelection()?.isCollapsed !== false) {
+      const comment = anchoredComments.find((entry) => entry.id === marked.dataset.commentId);
+      if (comment) return void openCommentEditor(comment, marked);
+    }
+    if (isCommentListPopoverOpen() && !event.target.closest?.('.view-comment-chip, .comment-list-popover')) {
+      closeCommentListPopover();
+    }
+  });
+  const reposition = () => { positionCommentBubble(); closeCommentListPopover(); };
   window.addEventListener('resize', reposition);
   window.visualViewport?.addEventListener('resize', reposition);
   window.visualViewport?.addEventListener('scroll', reposition);
@@ -3790,8 +3816,12 @@ function positionCommentBubble() {
 function openCommentBubble(draft, range, focusComposer = false) {
   if (!draft) return;
   anchoredCommentDraft = draft;
+  commentEditTarget = null;
   commentAnchorRange = range.cloneRange();
   commentDraftVersion += 1;
+  disarmCommentDelete();
+  document.getElementById('commentBubbleTitle').textContent = 'Comment for agent';
+  document.getElementById('commentDeleteBtn').style.display = 'none';
   document.getElementById('commentAnchorPreview').textContent = draft.quote;
   document.getElementById('commentBody').value = '';
   document.getElementById('commentStatus').textContent = '';
@@ -3808,9 +3838,12 @@ function openCommentBubble(draft, range, focusComposer = false) {
 function closeCommentBubble() {
   document.getElementById('commentBubble').style.display = 'none';
   document.getElementById('commentStatus').textContent = '';
+  document.getElementById('commentDeleteBtn').style.display = 'none';
   anchoredCommentDraft = null;
+  commentEditTarget = null;
   commentAnchorRange = null;
   commentDraftVersion += 1;
+  disarmCommentDelete();
 }
 
 function handleCommentKey(event) {
@@ -3821,8 +3854,9 @@ function handleCommentKey(event) {
 }
 
 async function submitAnchoredComment() {
-  if (!anchoredCommentDraft) return;
   const draft = anchoredCommentDraft;
+  const editing = commentEditTarget;
+  if (!draft && !editing) return;
   const draftVersion = commentDraftVersion;
   const body = document.getElementById('commentBody').value.trim();
   if (!body) return document.getElementById('commentBody').focus();
@@ -3830,27 +3864,345 @@ async function submitAnchoredComment() {
   button.disabled = true;
   document.getElementById('commentStatus').textContent = 'Saving…';
   try {
-    const response = await fetch('/api/comments', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: draft.sessionId,
-        body,
-        target: draft.target,
-      }),
-    });
+    const response = editing
+      ? await fetch(`/api/comments/${encodeURIComponent(editing.id)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: editing.sessionId, body }),
+      })
+      : await fetch('/api/comments', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: draft.sessionId, body, target: draft.target }),
+      });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-    if (draftVersion === commentDraftVersion && anchoredCommentDraft === draft) {
+    if (draftVersion === commentDraftVersion
+        && (editing ? commentEditTarget === editing : anchoredCommentDraft === draft)) {
       closeCommentBubble();
       window.getSelection()?.removeAllRanges();
     }
-    setStatus('Comment saved');
+    setStatus(editing ? 'Comment updated' : 'Comment saved');
+    // The point of saving is to see it: re-anchor immediately.
+    refreshAnchoredComments();
   } catch (error) {
     if (draftVersion === commentDraftVersion) {
       document.getElementById('commentStatus').textContent = error.message;
     }
   } finally {
     if (draftVersion === commentDraftVersion) button.disabled = false;
+  }
+}
+
+// --- Open comments rendered back into the file and diff views ---
+// A saved comment is not filed away: until the agent acknowledges it, it
+// stays visible where it was written (an anchored mark or a tinted diff row)
+// and stays editable/deletable. Acknowledged comments are the agent's record
+// and disappear from these views entirely — the server refuses to touch them.
+
+function setAnchoredComments(list) {
+  anchoredComments = list;
+  applyCommentMarks();
+  renderCommentCountChips();
+}
+
+// Comments are enrichment over the view: every failure path here degrades to
+// "no marks", never to a broken file/diff render.
+async function refreshAnchoredComments() {
+  const fileOpen = isFileViewOpen();
+  const diffOpen = !fileOpen && isDiffViewOpen();
+  if (!fileOpen && !diffOpen) return setAnchoredComments([]);
+  const sessionId = fileOpen ? fileViewSessionId : diffViewSessionId;
+  const generation = fileOpen ? fileViewGeneration : diffViewGeneration;
+  const filePath = fileViewAbsPath;
+  if (!sessionId || (fileOpen && !filePath)) return setAnchoredComments([]);
+  // The view can be closed, refreshed, or pointed at another file while these
+  // two round trips are in flight — same generation guard as the views.
+  const owns = () => (fileOpen
+    ? ownsFileView(sessionId, generation) && fileViewAbsPath === filePath
+    : ownsDiffView(sessionId, generation));
+  try {
+    const indexRes = await fetch(`/api/comments/index?sessionId=${encodeURIComponent(sessionId)}`);
+    const index = await indexRes.json();
+    if (!indexRes.ok || !owns()) return;
+    const ids = (index.comments || [])
+      .filter((entry) => (fileOpen
+        ? entry.target?.kind === 'file' && entry.target.path === filePath
+        : entry.target?.kind === 'diff'))
+      .map((entry) => entry.id);
+    if (!ids.length) return setAnchoredComments([]);
+    const fullRes = await fetch('/api/comments/get', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, ids }),
+    });
+    const full = await fullRes.json();
+    if (!fullRes.ok || !owns()) return;
+    setAnchoredComments(full.comments || []);
+  } catch { /* leave whatever marks are already up */ }
+}
+
+function applyCommentMarks() {
+  if (isFileViewOpen()) {
+    const root = document.getElementById('fileViewBody');
+    clearCommentMarks(root);
+    for (const comment of anchoredComments) {
+      if (comment.target?.kind === 'file') markCommentQuote(root, comment.target.anchor, comment.id);
+    }
+  } else if (isDiffViewOpen()) {
+    markDiffCommentLines();
+  }
+}
+
+function clearCommentMarks(root) {
+  root.querySelectorAll('mark.comment-mark').forEach((mark) => {
+    const parent = mark.parentNode;
+    mark.replaceWith(document.createTextNode(mark.textContent));
+    parent?.normalize();
+  });
+}
+
+// A rendered quote routinely spans several text nodes (markdown turns one
+// sentence into text + <code> + text), so markSearchTokens' per-node scan
+// can't find it. Flatten the subtree into one string with per-node offsets,
+// locate the quote there, then wrap the covered slice of each node.
+function collectTextRuns(root) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) => (node.parentElement?.closest('script, style')
+      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+  });
+  const runs = [];
+  let text = '';
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    runs.push({ node, start: text.length, end: text.length + node.textContent.length });
+    text += node.textContent;
+  }
+  return { runs, text };
+}
+
+function commonSuffixLength(a, b) {
+  let n = 0;
+  while (n < a.length && n < b.length && a[a.length - 1 - n] === b[b.length - 1 - n]) n++;
+  return n;
+}
+
+function commonPrefixLength(a, b) {
+  let n = 0;
+  while (n < a.length && n < b.length && a[n] === b[n]) n++;
+  return n;
+}
+
+// Repeated quotes are the normal case for short selections, so pick the
+// occurrence whose neighbours best match the anchor's recorded context.
+function findQuoteOffset(text, anchor) {
+  const quote = anchor?.quote;
+  if (!quote) return -1;
+  const hits = [];
+  let from = 0;
+  let at;
+  while ((at = text.indexOf(quote, from)) !== -1) {
+    hits.push(at);
+    from = at + Math.max(1, quote.length);
+  }
+  if (hits.length < 2) return hits.length ? hits[0] : -1;
+  const prefix = anchor.prefix || '';
+  const suffix = anchor.suffix || '';
+  let best = hits[0];
+  let bestScore = -1;
+  for (const hit of hits) {
+    const before = text.slice(Math.max(0, hit - prefix.length), hit);
+    const after = text.slice(hit + quote.length, hit + quote.length + suffix.length);
+    const score = commonSuffixLength(before, prefix) + commonPrefixLength(after, suffix);
+    if (score > bestScore) { bestScore = score; best = hit; }
+  }
+  return best;
+}
+
+function markCommentQuote(root, anchor, commentId) {
+  const quote = anchor?.quote;
+  if (!quote) return false;
+  const { runs, text } = collectTextRuns(root);
+  const start = findQuoteOffset(text, anchor);
+  if (start < 0) return false; // unanchorable — the chip list still reaches it
+  const end = start + quote.length;
+  let marked = false;
+  for (const run of runs) {
+    if (run.end <= start || run.start >= end) continue;
+    const from = Math.max(0, start - run.start);
+    const to = Math.min(run.node.textContent.length, end - run.start);
+    if (to <= from) continue;
+    const source = run.node.textContent;
+    const mark = document.createElement('mark');
+    mark.className = 'comment-mark';
+    mark.dataset.commentId = commentId;
+    mark.textContent = source.slice(from, to);
+    const frag = document.createDocumentFragment();
+    if (from > 0) frag.appendChild(document.createTextNode(source.slice(0, from)));
+    frag.appendChild(mark);
+    if (to < source.length) frag.appendChild(document.createTextNode(source.slice(to)));
+    // Replacing only this node keeps every other run reference (and the
+    // flattened offsets they were computed from) valid.
+    run.node.replaceWith(frag);
+    marked = true;
+  }
+  return marked;
+}
+
+function diffPatchFor(comment) {
+  const target = comment.target || {};
+  return [...document.querySelectorAll('#diffViewBody .diff-patch')].find((patch) =>
+    patch.dataset.repo === target.repo && patch.dataset.path === target.path) || null;
+}
+
+function markDiffCommentLines() {
+  document.querySelectorAll('#diffViewBody .diff-line.comment-line').forEach((line) => {
+    line.classList.remove('comment-line');
+    delete line.dataset.commentId;
+  });
+  for (const comment of anchoredComments) {
+    if (comment.target?.kind !== 'diff') continue;
+    const patch = diffPatchFor(comment);
+    if (!patch) continue;
+    const anchor = comment.target.anchor || {};
+    // renderDiffHtml writes an empty attribute for the side a line is absent
+    // from, and Number('') is 0 — an empty coordinate is no coordinate.
+    const lineNum = (value) => (value ? Number(value) : NaN);
+    const inRange = (value, from, to) => Number.isInteger(from) && Number.isInteger(to)
+      && Number.isInteger(value) && value >= from && value <= to;
+    for (const line of patch.querySelectorAll('.diff-line')) {
+      const hit = inRange(lineNum(line.dataset.newLine), anchor.newStart, anchor.newEnd)
+        || (!Number.isInteger(anchor.newStart)
+          && inRange(lineNum(line.dataset.oldLine), anchor.oldStart, anchor.oldEnd));
+      if (!hit) continue;
+      line.classList.add('comment-line');
+      line.dataset.commentId = comment.id;
+    }
+  }
+}
+
+function renderCommentCountChips() {
+  const fileChip = document.getElementById('fileViewComments');
+  const diffChip = document.getElementById('diffViewComments');
+  const active = isFileViewOpen() ? fileChip : isDiffViewOpen() ? diffChip : null;
+  for (const chip of [fileChip, diffChip]) {
+    if (!chip) continue;
+    if (chip !== active || !anchoredComments.length) { chip.style.display = 'none'; continue; }
+    chip.style.display = '';
+    chip.textContent = `💬 ${anchoredComments.length}`;
+  }
+  if (!anchoredComments.length) closeCommentListPopover();
+  else if (isCommentListPopoverOpen()) renderCommentListPopover();
+}
+
+function isCommentListPopoverOpen() {
+  return document.getElementById('commentListPopover').style.display !== 'none';
+}
+
+function closeCommentListPopover() {
+  document.getElementById('commentListPopover').style.display = 'none';
+}
+
+function toggleCommentListPopover(chip) {
+  if (isCommentListPopoverOpen()) return closeCommentListPopover();
+  if (!anchoredComments.length) return;
+  const popover = document.getElementById('commentListPopover');
+  renderCommentListPopover();
+  popover.style.display = 'block';
+  const rect = chip.getBoundingClientRect();
+  const width = popover.offsetWidth;
+  popover.style.left = `${Math.max(8, Math.min(innerWidth - width - 8, rect.left))}px`;
+  popover.style.top = `${rect.bottom + 6}px`;
+}
+
+function renderCommentListPopover() {
+  document.getElementById('commentListPopover').innerHTML = anchoredComments.map((comment) => {
+    const quote = (comment.target?.anchor?.quote || '').replace(/\s+/g, ' ').trim();
+    return `<button type="button" class="comment-list-row" data-comment-id="${escapeHtml(comment.id)}">`
+      + `<span class="comment-list-body">${escapeHtml(comment.body.slice(0, 160))}</span>`
+      + (quote ? `<span class="comment-list-quote">${escapeHtml(quote.slice(0, 90))}</span>` : '')
+      + '</button>';
+  }).join('');
+}
+
+async function focusAnchoredComment(id) {
+  const comment = anchoredComments.find((entry) => entry.id === id);
+  if (!comment) return;
+  closeCommentListPopover();
+  if (comment.target?.kind === 'diff') {
+    const details = diffPatchFor(comment)?.closest('details.diff-file');
+    if (details && !details.open) {
+      // The toggle event is async, so loading here wins the in-flight guard
+      // and we can render the marks once the patch really exists.
+      details.open = true;
+      await loadDeferredDiffPatch(details);
+      applyCommentMarks();
+    }
+  }
+  const mark = document.querySelector(`[data-comment-id="${CSS.escape(id)}"]`);
+  if (mark) mark.scrollIntoView({ block: 'center' });
+  openCommentEditor(comment, mark
+    || document.getElementById(isFileViewOpen() ? 'fileViewComments' : 'diffViewComments'));
+}
+
+function openCommentEditor(comment, anchorEl) {
+  if (!comment || !anchorEl) return;
+  const range = document.createRange();
+  range.selectNodeContents(anchorEl);
+  anchoredCommentDraft = null;
+  commentEditTarget = comment;
+  commentAnchorRange = range;
+  commentDraftVersion += 1;
+  disarmCommentDelete();
+  document.getElementById('commentBubbleTitle').textContent = 'Edit comment';
+  document.getElementById('commentAnchorPreview').textContent = comment.target?.anchor?.quote || '';
+  document.getElementById('commentBody').value = comment.body;
+  document.getElementById('commentStatus').textContent = '';
+  document.getElementById('commentSendBtn').disabled = false;
+  document.getElementById('commentDeleteBtn').style.display = '';
+  document.getElementById('commentBubble').style.display = 'block';
+  positionCommentBubble();
+  document.getElementById('commentBody').focus();
+  setTimeout(positionCommentBubble, 0);
+}
+
+function disarmCommentDelete() {
+  clearTimeout(commentDeleteTimer);
+  commentDeleteArmed = false;
+  const button = document.getElementById('commentDeleteBtn');
+  button.textContent = 'Delete';
+  button.classList.remove('armed');
+}
+
+// Two-tap confirm, same idiom as the sidebar's row-level session close.
+async function handleCommentDelete() {
+  if (!commentEditTarget) return;
+  const button = document.getElementById('commentDeleteBtn');
+  if (!commentDeleteArmed) {
+    commentDeleteArmed = true;
+    button.textContent = 'Delete?';
+    button.classList.add('armed');
+    commentDeleteTimer = setTimeout(disarmCommentDelete, 3000);
+    return;
+  }
+  const comment = commentEditTarget;
+  const draftVersion = commentDraftVersion;
+  button.disabled = true;
+  document.getElementById('commentStatus').textContent = 'Deleting…';
+  try {
+    const response = await fetch(`/api/comments/${encodeURIComponent(comment.id)}`, {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: comment.sessionId }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    if (draftVersion === commentDraftVersion) closeCommentBubble();
+    setStatus('Comment deleted');
+    refreshAnchoredComments();
+  } catch (error) {
+    if (draftVersion === commentDraftVersion) {
+      document.getElementById('commentStatus').textContent = error.message;
+      disarmCommentDelete();
+    }
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -4097,6 +4449,7 @@ function closeDiffView() {
   document.getElementById('btnDiff')?.classList.remove('active');
   document.getElementById('diffViewBody').innerHTML = '';
   closeCommentBubble();
+  setAnchoredComments([]);
 }
 
 async function loadDiffView() {
@@ -4121,6 +4474,7 @@ async function loadDiffView() {
         if (details.open) loadDeferredDiffPatch(details);
       });
     });
+    refreshAnchoredComments();
   } catch (e) {
     if (!ownsDiffView(sessionId, generation)) return;
     body.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
@@ -4212,6 +4566,7 @@ async function loadDeferredDiffPatch(details) {
     delete patch.dataset.deferred;
     delete patch.dataset.loading;
     delete patch.dataset.requestGeneration;
+    applyCommentMarks(); // the rows this patch just built may carry comments
   } catch (e) {
     if (!ownsDiffView(sessionId, viewGeneration) || !patch.isConnected ||
         patch.dataset.requestGeneration !== String(requestGeneration)) return;
@@ -7899,7 +8254,9 @@ function closeTreeModal() {
 
 document.addEventListener('keydown', function(e) {
   if (e.key !== 'Escape') return;
-  if (document.getElementById('commentBubble').style.display !== 'none') {
+  if (isCommentListPopoverOpen()) {
+    e.preventDefault(); closeCommentListPopover();
+  } else if (document.getElementById('commentBubble').style.display !== 'none') {
     e.preventDefault(); closeCommentBubble();
   } else if (document.getElementById('responseDetailsModal').style.display !== 'none') {
     e.preventDefault(); closeResponseDetails();

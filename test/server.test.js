@@ -233,8 +233,19 @@ const put = async (p, body) => {
   return { status: res.status, body: await res.json() };
 };
 
-const del = async (p) => {
-  const res = await fetch(base + p, { method: 'DELETE' });
+const patch = async (p, body) => {
+  const res = await fetch(base + p, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: await res.json() };
+};
+
+const del = async (p, body) => {
+  const res = await fetch(base + p, body === undefined ? { method: 'DELETE' } : {
+    method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
   return { status: res.status, body: await res.json() };
 };
 
@@ -1362,6 +1373,8 @@ test('comments support unpaginated indexing, selected reads, and acknowledgment'
   assert.equal(index.body.total, 2, 'the full open index is not gated by acknowledgment');
   assert.deepEqual(index.body.comments.map((c) => c.id), [first.body.id, second.body.id]);
   assert.equal(index.body.comments[0].bodyPreview, 'Clarify this heading.');
+  assert.equal(index.body.comments[0].sessionId, REAL_CWD_ID,
+    'index entries carry the session so a page overlay can read/edit them');
   assert.equal(index.body.comments[0].target.anchor.quotePreview, 'alpha');
   assert.equal(index.body.comments[0].target.anchor.prefix, undefined, 'index omits full anchor context');
 
@@ -1389,6 +1402,56 @@ test('comments support unpaginated indexing, selected reads, and acknowledgment'
   await post(`/api/comments/${second.body.id}/ack`, { sessionId: REAL_CWD_ID });
 });
 
+test('open comments are editable and deletable, acknowledged ones are not', async () => {
+  const target = {
+    kind: 'file', path: path.join(realCwd, 'README.md'), relPath: 'README.md',
+    anchor: { type: 'text', quote: 'alpha', prefix: '# ', suffix: '\n' },
+  };
+  const editable = await post('/api/comments', {
+    sessionId: REAL_CWD_ID, body: 'First wording.', target,
+  });
+  assert.equal(editable.status, 201);
+  assert.equal(editable.body.updatedAt, undefined, 'a fresh comment has no edit stamp');
+
+  assert.equal((await patch(`/api/comments/${editable.body.id}`,
+    { sessionId: SESSION_ID, body: 'hijacked' })).status, 403);
+  assert.equal((await patch('/api/comments/nope',
+    { sessionId: REAL_CWD_ID, body: 'ghost' })).status, 404);
+  assert.equal((await patch(`/api/comments/${editable.body.id}`,
+    { sessionId: REAL_CWD_ID, body: '   ' })).status, 400, 'an emptied body is not an edit');
+
+  const edited = await patch(`/api/comments/${editable.body.id}`,
+    { sessionId: REAL_CWD_ID, body: 'Second wording.' });
+  assert.equal(edited.status, 200);
+  assert.equal(edited.body.body, 'Second wording.');
+  assert.ok(edited.body.updatedAt >= edited.body.createdAt, 'an edit stamps updatedAt');
+  assert.equal((await post('/api/comments/get',
+    { sessionId: REAL_CWD_ID, ids: [editable.body.id] })).body.comments[0].body, 'Second wording.');
+
+  // Deleting drops it from the agent-facing inventory entirely.
+  const disposable = await post('/api/comments', {
+    sessionId: REAL_CWD_ID, body: 'Never mind.', target,
+  });
+  assert.equal((await del(`/api/comments/${disposable.body.id}`,
+    { sessionId: SESSION_ID })).status, 403);
+  assert.deepEqual((await del(`/api/comments/${disposable.body.id}`,
+    { sessionId: REAL_CWD_ID })).body, { ok: true });
+  const afterDelete = await get(`/api/comments/index?sessionId=${REAL_CWD_ID}`);
+  assert.ok(!afterDelete.body.comments.some((c) => c.id === disposable.body.id),
+    'a deleted comment leaves the open index');
+  assert.equal((await del(`/api/comments/${disposable.body.id}`,
+    { sessionId: REAL_CWD_ID })).status, 404);
+
+  // After acknowledgment the comment is the agent's record: frozen.
+  await post(`/api/comments/${editable.body.id}/ack`, { sessionId: REAL_CWD_ID });
+  const lateEdit = await patch(`/api/comments/${editable.body.id}`,
+    { sessionId: REAL_CWD_ID, body: 'Too late.' });
+  assert.equal(lateEdit.status, 409);
+  assert.equal(lateEdit.body.error, 'comment already acknowledged');
+  assert.equal((await del(`/api/comments/${editable.body.id}`,
+    { sessionId: REAL_CWD_ID })).status, 409);
+});
+
 test('published-page comments inherit the page session and artifact identity', async () => {
   const artifact = path.join(realCwd, 'commentable.html');
   fs.writeFileSync(artifact, '<p>Selected artifact prose</p>');
@@ -1406,7 +1469,18 @@ test('published-page comments inherit the page session and artifact identity', a
 
   const selected = await post('/api/comments/get', { sessionId: REAL_CWD_ID, ids: [created.body.id] });
   assert.deepEqual(selected.body.comments.map((c) => c.id), [created.body.id]);
+
+  // The page overlay only knows its own token; the index scopes on it and
+  // hands back the session the overlay needs for get/edit/delete.
+  const byToken = await get(`/api/comments/index?pageToken=${page.body.token}`);
+  assert.equal(byToken.status, 200);
+  assert.deepEqual(byToken.body.comments.map((c) => c.id), [created.body.id]);
+  assert.equal(byToken.body.comments[0].sessionId, REAL_CWD_ID);
+  assert.equal((await get('/api/comments/index?pageToken=missing')).body.total, 0);
+
   await post(`/api/comments/${created.body.id}/ack`, { sessionId: REAL_CWD_ID });
+  assert.equal((await get(`/api/comments/index?pageToken=${page.body.token}`)).body.total, 0,
+    'the page index tracks open comments only');
   await del(`/api/pages/${page.body.token}`);
 });
 
@@ -1427,6 +1501,7 @@ test('comments reject unanchored targets and unknown sessions/pages', async () =
     target: { kind: 'page', pageToken: 'missing', anchor: { type: 'text', quote: 'x' } },
   })).status, 400);
   assert.equal((await post('/api/comments/get', { sessionId: REAL_CWD_ID, ids: [] })).status, 400);
+  assert.equal((await get('/api/comments/index')).status, 400, 'the index must be scoped');
 });
 
 test('encoded Pi aliases share the canonical raw Pi comment identity', async () => {

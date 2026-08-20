@@ -4679,6 +4679,95 @@ img.msg-image {
   font-size: 11px;
 }
 
+/* Quiet until armed, then it wears the danger treatment the rest of the app
+   uses for destructive confirms. */
+.comment-delete-btn {
+  color: var(--text-muted);
+  background: none;
+  border: 1px solid var(--line);
+}
+
+.comment-delete-btn:hover { color: var(--error); border-color: var(--error-dim); filter: none; }
+
+.comment-delete-btn.armed {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  border-color: var(--error-dim);
+}
+
+/* Open comments anchored back into the file/diff views. Quiet enough to read
+   through — the point is "someone left a note here", not a highlighter. */
+mark.comment-mark {
+  color: inherit;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-bottom: 1px dotted var(--accent);
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.diff-line.comment-line {
+  cursor: pointer;
+  box-shadow: inset 2px 0 0 var(--accent);
+  /* Composes over the add/del row tints instead of replacing them. */
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--accent) 14%, transparent),
+    color-mix(in srgb, var(--accent) 14%, transparent));
+}
+
+.view-comment-chip {
+  flex: none;
+  padding: 2px 8px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  font: 11px/1.6 inherit;
+  white-space: nowrap;
+}
+
+.view-comment-chip:hover { color: var(--accent); border-color: var(--accent); }
+
+.comment-list-popover {
+  position: fixed;
+  z-index: 300;
+  width: min(340px, calc(100vw - 16px));
+  max-height: min(50dvh, 340px);
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 32px color-mix(in srgb, var(--bg-darker) 70%, transparent);
+}
+
+.comment-list-row {
+  display: block;
+  width: 100%;
+  padding: 7px 9px;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font: 12px/1.45 inherit;
+}
+
+.comment-list-row:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+.comment-list-body { display: block; overflow-wrap: anywhere; }
+
+.comment-list-quote {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px/1.4 var(--font-mono);
+}
+
 .diff-clean {
   color: var(--text-muted);
   font-size: 12px;
