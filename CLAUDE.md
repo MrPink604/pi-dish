@@ -182,7 +182,14 @@ the flag; the client shows "Indexing sessions…" and re-polls at 1s until it
 settles). `getSearchText` extends a grown file's text from the appended byte
 range only (in memory, not logged — streaming sessions churn too fast to
 persist per delta), so searching while a turn streams never re-reads a
-multi-MB file. Search results matched on content (not name/cwd/model/id)
+multi-MB file. What's indexed (`searchTextFromEntries`, session-files.js):
+prose up to 10K chars/message, tool results 500 (bulky, low recall value),
+and tool-call names + string args at 300/call with path/command args first —
+tool args are the recall keys coding sessions are found by, and they never
+appear in text blocks. A 1MB per-session bound is enforced on both the full
+build and the byte-range extension; changing extraction means bumping
+`TEXT_SCHEMA_VERSION` so stale entries rebuild through the normal bounded
+backlog. Search results matched on content (not name/cwd/model/id)
 carry a `searchSnippet` (`buildSnippet`/`highlightTokens` in helpers.js) so
 the client can show *why* a row matched. Tests prove persistence structurally:
 scans with `PI_DISH_INDEX_SYNC_BUDGET=0` can't parse, so whatever they serve

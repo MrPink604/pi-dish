@@ -332,7 +332,9 @@ test('readSessionMessages treats pre-tree files (no parentId) as linear', () => 
 test('buildSearchTextFromContent lowercases and caps message text', () => {
   const content = [
     userMsg('Find The NEEDLE here'),
-    assistantMsg('HAYSTACK reply ' + 'x'.repeat(600)),
+    assistantMsg('HAYSTACK reply ' + 'x'.repeat(11_000)),
+    { type: 'message', message: { role: 'toolResult', toolName: 'bash',
+      content: [{ type: 'text', text: 'BUILD OUTPUT ' + 'r'.repeat(600) }] } },
     { type: 'custom_message', customType: 'session-message', content: 'Injected NOTE' },
     { type: 'custom_message', customType: 'internal', content: 'PRIVATE MARKER', display: false },
     'not json',
@@ -341,8 +343,38 @@ test('buildSearchTextFromContent lowercases and caps message text', () => {
   assert.ok(text.includes('the needle'));
   assert.ok(text.includes('haystack'));
   assert.ok(text.includes('injected note'));
+  assert.ok(text.includes('x'.repeat(9_000)), 'long prose stays searchable well past the old 500');
+  assert.ok(!text.includes('x'.repeat(10_001)), 'prose capped at 10k chars per message');
+  assert.ok(text.includes('build output'));
+  assert.ok(!text.includes('r'.repeat(501)), 'tool results stay capped at 500 chars');
   assert.ok(!text.includes('private marker'), 'non-transcript custom entries are excluded');
-  assert.ok(!text.includes('x'.repeat(501)), 'per-message text capped at 500 chars');
+});
+
+test('buildSearchTextFromContent indexes tool-call names and string args', () => {
+  const content = [
+    userMsg('start'),
+    { type: 'message', message: { role: 'assistant', content: [
+      { type: 'toolCall', id: 't1', name: 'bash',
+        arguments: { command: 'grep RECALL_KEY lib/session-index.js' } },
+      { type: 'toolCall', id: 't2', name: 'edit',
+        arguments: { oldText: 'Q'.repeat(400), path: '/repo/DEEP-Needle.md', count: 3 } },
+    ] } },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n';
+  const text = SF.buildSearchTextFromContent(content);
+  assert.ok(text.includes('grep recall_key lib/session-index.js'), 'bash command lines are indexed');
+  assert.ok(text.includes('/repo/deep-needle.md'),
+    'path args outrank bulky args inside the per-call cap');
+  assert.ok(!text.includes('q'.repeat(400)), 'the per-call cap truncated the bulky arg');
+});
+
+test('buildSearchTextFromContent bounds a whole session\'s text', () => {
+  const entries = [];
+  for (let i = 0; i < 150; i++) entries.push(userMsg(`msg${i} ` + 'y'.repeat(9_000)));
+  const content = entries.map(e => JSON.stringify(e)).join('\n') + '\n';
+  const text = SF.buildSearchTextFromContent(content);
+  assert.ok(text.length <= SF.SEARCH_TEXT_SESSION_CAP);
+  assert.ok(text.includes('msg0'), 'early content survives');
+  assert.ok(!text.includes('msg149'), 'content past the session cap is dropped');
 });
 
 test('getSessionStats aggregates usage and revalidates on append', () => {

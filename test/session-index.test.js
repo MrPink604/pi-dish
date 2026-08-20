@@ -273,6 +273,53 @@ test('getSearchText extends from the appended byte range', () => {
     'missing file degrades to empty');
 });
 
+test('the byte-range extension honors the session text cap', () => {
+  const big = 'y'.repeat(9_000);
+  const entries = [];
+  for (let i = 0; i < 120; i++) entries.push(userMsg(`cap${i} ${big}`));
+  const file = writeSession(entries);
+  assert.ok(index.getSearchText(file).length <= sessionFiles.SEARCH_TEXT_SESSION_CAP);
+
+  fs.appendFileSync(file, JSON.stringify(userMsg('overflow_marker_zulu')) + '\n');
+  const extended = index.getSearchText(file);
+  assert.ok(extended.length <= sessionFiles.SEARCH_TEXT_SESSION_CAP,
+    'a streaming append cannot grow the text past the cap one delta at a time');
+  assert.ok(!extended.includes('overflow_marker_zulu'));
+
+  // Drop the ~1MB entry so later tests' live-size expectations for the
+  // shared text log hold.
+  fs.rmSync(file);
+  index.scanSessions([]);
+});
+
+test('a pre-v2 text entry is re-indexed to pick up tool-call args', () => {
+  const file = writeSession([
+    userMsg('plain prose'),
+    { type: 'message', message: { role: 'assistant', content: [
+      { type: 'toolCall', id: 't1', name: 'bash',
+        arguments: { command: 'grep migration_needle lib/x.js' } },
+    ] } },
+  ]);
+  assert.ok(index.getSearchText(file).includes('migration_needle'));
+  index.resetForTests(); // flush the logs so the downgrade below edits real state
+
+  // Rewrite this file's persisted text entry as a v1 line: no tool-call text,
+  // old schema version. The next scan must treat it as stale and re-derive.
+  const textLog = path.join(indexDir, 'text.ndjson');
+  fs.writeFileSync(textLog, fs.readFileSync(textLog, 'utf-8').split('\n').map(line => {
+    if (!line || !line.includes(JSON.stringify(file))) return line;
+    const obj = JSON.parse(line);
+    obj.ver = 1;
+    obj.t = 'plain prose';
+    return JSON.stringify(obj);
+  }).join('\n'));
+
+  index.resetForTests();
+  withBudget(1, () => index.scanSessions([file]));
+  assert.ok(index.getSearchText(file).includes('migration_needle'),
+    'the stale-version entry was rebuilt with the v2 extraction');
+});
+
 test('getSearchText rebuilds when an append changes the active tree branch', () => {
   const treeMsg = (id, parentId, role, text) => ({
     type: 'message', id, parentId,
