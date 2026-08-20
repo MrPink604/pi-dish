@@ -1144,6 +1144,69 @@ function tmuxPrefixSeq(prefix) {
   return null;
 }
 
+/**
+ * OMP's canonical model roles in the harness's own order, with the names its
+ * TUI uses. The stored record may also carry arbitrary custom role keys, so
+ * consumers must treat this as the labelled subset, not the whole vocabulary.
+ */
+const OMP_MODEL_ROLES = [
+  { key: 'default', name: 'Default', description: 'Main agent model' },
+  { key: 'smol', name: 'Fast', description: 'Fast/cheap model for lightweight tasks, summaries, and fallbacks' },
+  { key: 'slow', name: 'Thinking', description: 'Deep-reasoning model for thorough analysis' },
+  { key: 'vision', name: 'Vision', description: 'Vision-capable model for image inspection and descriptions' },
+  { key: 'plan', name: 'Architect', description: 'Planning/architecture mode' },
+  { key: 'designer', name: 'Designer', description: 'UI and design tasks' },
+  { key: 'commit', name: 'Commit', description: 'Commit message generation' },
+  { key: 'tiny', name: 'Tiny', description: 'Session titles and micro-classifiers (falls back to smol)' },
+  { key: 'task', name: 'Subtask', description: 'Default model for subagent tasks' },
+  { key: 'advisor', name: 'Advisor', description: 'Paired reviewer model that watches each turn' },
+];
+
+function modelRoleRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([, model]) => typeof model === 'string' && model));
+}
+
+/**
+ * Editor row model: canonical roles first (always shown, assigned or not),
+ * then custom keys present in the global record. `value` is the *global*
+ * assignment — the only one the editor may write — while `override` carries a
+ * differing effective value, which a project `.omp/config.yml` wins with in
+ * that cwd.
+ */
+function buildModelRoleRows(globalRoles, effectiveRoles) {
+  const global = modelRoleRecord(globalRoles);
+  const effective = modelRoleRecord(effectiveRoles);
+  const row = (key, name, description, custom) => {
+    const value = global[key] || '';
+    const effectiveValue = effective[key] || '';
+    return {
+      key, name, description, custom, value, effectiveValue,
+      override: effectiveValue && effectiveValue !== value ? effectiveValue : null,
+    };
+  };
+  const canonical = new Set(OMP_MODEL_ROLES.map(role => role.key));
+  return [
+    ...OMP_MODEL_ROLES.map(role => row(role.key, role.name, role.description, false)),
+    ...Object.keys(global).filter(key => !canonical.has(key)).sort()
+      .map(key => row(key, key, 'Custom role', true)),
+  ];
+}
+
+/** One quiet line of role assignments for the new-session readout. */
+function formatModelRoleSummary(roles, limit = 4) {
+  const record = modelRoleRecord(roles);
+  const order = OMP_MODEL_ROLES.map(role => role.key);
+  const rank = (key) => (order.indexOf(key) < 0 ? order.length : order.indexOf(key));
+  const entries = Object.keys(record)
+    .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
+    .map(key => `${key} ${record[key]}`);
+  if (!entries.length) return 'No roles assigned';
+  const shown = entries.slice(0, limit);
+  const rest = entries.length - shown.length;
+  return shown.join(' · ') + (rest > 0 ? ` · +${rest} more` : '');
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRuntime, formatRelativeTime, formatTime, formatDuration, formatTokSpeed,
@@ -1161,5 +1224,6 @@ if (typeof module !== 'undefined' && module.exports) {
     renderDiffHtml, diffStatusClass,
     shortModelName, niceTicks, formatUsageDay, aggregateUsageWeekly,
     tmuxPrefixSeq,
+    OMP_MODEL_ROLES, buildModelRoleRows, formatModelRoleSummary,
   };
 }

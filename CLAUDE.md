@@ -375,6 +375,33 @@ error and the takeover stays open. The workspace-header `+` button
 direct-spawns via `createSession(cwd)` (same async path, default model)
 without the takeover.
 
+### OMP model roles (GET/PUT `/api/harnesses/:id/model-roles`)
+
+OMP assigns a model per *role* (`default`, `smol`, `vision`, … — canonical set
+and user-facing copy in `OMP_MODEL_ROLES`, helpers.js; the record may also hold
+arbitrary custom keys, preserve them). The "Oh My Pi defaults" readout in the
+takeover summarizes them (`formatModelRoleSummary`) and opens `#modelRolesModal`
+— a small focused modal per the takeover/modal rule, Escape closes the modal
+only. Rows come from the pure `buildModelRoleRows(global, effective)`.
+
+The CLI semantics that shape the server side: `omp config get modelRoles` is the
+**merged project-over-global view for the cwd**, while `omp config set
+modelRoles <json>` replaces the whole record in the **global** config regardless
+of cwd (dotted sub-keys are unsupported, so it is always a whole-record write).
+A naive read(merged) → edit → set() would therefore copy a project's
+`.omp/config.yml` overrides into the global config permanently. So
+`readGlobalModelRoles` (server.js) runs the get with cwd set to a **freshly
+mkdtemp'd empty dir** — no project config to overlay, so merged == global — and
+the PUT patches *that* record. Don't "simplify" it back to reading the cwd.
+`GET /config` returns both (`modelRoles` effective + `globalModelRoles`); the
+editor's selects bind to global and show a per-row "project override" hint where
+the effective value differs. PUTs are serialized per harness
+(`queueModelRoleWrite`) because each one is a read-modify-write of one record.
+Values are stored verbatim (OMP resolves refs); the fake-pi fixture emulates the
+two-tier merge (`$HOME/.omp/agent/fake-config.json` global +
+`<cwd>/.omp/fake-project-roles.json` overlay) so the no-leak guarantee is
+testable without the real binary.
+
 ## Share links (lib/shares.js, /share/:token)
 
 Public read-only session traces. `lib/shares.js` persists

@@ -42,18 +42,43 @@ if (harnessId === 'omp' && args[0] === 'models' && args.includes('--json')) {
   process.exit(0);
 }
 
-if (harnessId === 'omp' && args[0] === 'config' && args[1] === 'get' && args.includes('--json')) {
+// OMP's global config lives under $HOME; a project `.omp/config.yml` overlays
+// it project-over-global for the invocation cwd only. Emulate both stores so
+// the server's empty-tmpdir global read is observable in tests.
+const fakeGlobalConfigFile = path.join(home, '.omp', 'agent', 'fake-config.json');
+const readJsonFile = (file) => {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return {}; }
+};
+
+if (harnessId === 'omp' && args[0] === 'config' && args.includes('--json')) {
   const key = args[2];
-  const values = {
-    modelRoles: { key, value: { default: 'zai/glm-4.7-flash' }, type: 'record', description: '' },
-    defaultThinkingLevel: { key, value: 'high', type: 'enum', description: 'Reasoning depth' },
-  };
-  if (!values[key]) {
-    fs.writeSync(2, `Unknown setting: ${key}\n`);
-    process.exit(1);
+  const baseRoles = { default: 'zai/glm-4.7-flash' };
+  const globalRoles = { ...baseRoles, ...(readJsonFile(fakeGlobalConfigFile).modelRoles || {}) };
+  if (args[1] === 'set') {
+    if (key !== 'modelRoles') {
+      fs.writeSync(2, `Setting is not writable: ${key}\n`);
+      process.exit(1);
+    }
+    const stored = readJsonFile(fakeGlobalConfigFile);
+    stored.modelRoles = JSON.parse(args[3]);
+    fs.mkdirSync(path.dirname(fakeGlobalConfigFile), { recursive: true });
+    fs.writeFileSync(fakeGlobalConfigFile, JSON.stringify(stored));
+    fs.writeSync(1, JSON.stringify({ key, value: stored.modelRoles, type: 'record' }) + '\n');
+    process.exit(0);
   }
-  fs.writeSync(1, JSON.stringify(values[key]) + '\n');
-  process.exit(0);
+  if (args[1] === 'get') {
+    const projectRoles = readJsonFile(path.join(process.cwd(), '.omp', 'fake-project-roles.json'));
+    const values = {
+      modelRoles: { key, value: { ...globalRoles, ...projectRoles }, type: 'record', description: '' },
+      defaultThinkingLevel: { key, value: 'high', type: 'enum', description: 'Reasoning depth' },
+    };
+    if (!values[key]) {
+      fs.writeSync(2, `Unknown setting: ${key}\n`);
+      process.exit(1);
+    }
+    fs.writeSync(1, JSON.stringify(values[key]) + '\n');
+    process.exit(0);
+  }
 }
 
 const extensionIndex = args.indexOf('--extension');

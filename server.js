@@ -3039,18 +3039,55 @@ function annotateProviderReadiness(descriptor, models, cwd) {
   return models.map(model => ({ ...model, providerReady: readiness[model.provider] === true }));
 }
 
+const MODEL_ROLE_KEY = /^[a-zA-Z][\w.-]{0,63}$/;
+const MODEL_ROLE_VALUE_MAX = 200;
+
+function sanitizeModelRoles(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value)
+    .filter(([, model]) => typeof model === 'string' && model.trim()));
+}
+
+// `config get modelRoles` returns the merged project-over-global view for the
+// cwd, while `config set modelRoles` rewrites the whole record in the *global*
+// config — so a read(merged) → edit → set() round trip would silently copy a
+// project's `.omp/config.yml` overrides into the global config. An empty temp
+// dir has no project config to overlay, so reading there yields global alone.
+async function readGlobalModelRoles(descriptor) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-global-'));
+  try {
+    const result = await runHarnessJsonCommand(
+      descriptor, descriptor.argv.configGet(descriptor.pilotConfig.modelRoles), { cwd: dir });
+    return sanitizeModelRoles(result?.value);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 async function readHarnessPilotConfig(descriptor, cwd) {
   const keys = descriptor.pilotConfig;
   if (!keys || typeof descriptor.argv.configGet !== 'function') return null;
-  const [rolesResult, thinkingResult] = await Promise.all([
+  const [rolesResult, thinkingResult, globalModelRoles] = await Promise.all([
     runHarnessJsonCommand(descriptor, descriptor.argv.configGet(keys.modelRoles), { cwd }),
     runHarnessJsonCommand(descriptor, descriptor.argv.configGet(keys.defaultThinkingLevel), { cwd }),
+    readGlobalModelRoles(descriptor),
   ]);
-  const defaultModel = typeof rolesResult?.value?.default === 'string'
-    ? rolesResult.value.default : null;
+  const modelRoles = sanitizeModelRoles(rolesResult?.value);
+  const defaultModel = typeof modelRoles.default === 'string' ? modelRoles.default : null;
   const defaultThinkingLevel = typeof thinkingResult?.value === 'string'
     ? thinkingResult.value : null;
-  return { defaultModel, defaultThinkingLevel };
+  return { defaultModel, defaultThinkingLevel, modelRoles, globalModelRoles };
+}
+
+// Every model-role write is a read-modify-write of one whole record, so two
+// concurrent PUTs would drop one another's patch. One chain per harness.
+const modelRoleWrites = new Map();
+function queueModelRoleWrite(harnessId, task) {
+  // The stored link is always failure-swallowed, so one failed write can't
+  // reject every queued one behind it.
+  const chained = (modelRoleWrites.get(harnessId) || Promise.resolve()).then(() => task());
+  modelRoleWrites.set(harnessId, chained.catch(() => {}));
+  return chained;
 }
 
 app.get('/api/harnesses', (_req, res) => {
@@ -3093,6 +3130,52 @@ app.get('/api/harnesses/:id/config', async (req, res) => {
   }
   try {
     res.json(await readHarnessPilotConfig(descriptor, req.query.cwd));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Patch role → model assignments in the harness's *global* config. Values are
+// stored verbatim: the harness resolves model refs itself, and a rewrite here
+// would only invent a second dialect.
+app.put('/api/harnesses/:id/model-roles', async (req, res) => {
+  const descriptor = getHarness(req.params.id);
+  if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
+  if (!descriptor.pilotConfig || typeof descriptor.argv.configSet !== 'function') {
+    return res.status(501).json({ error: `Model roles are not editable for ${descriptor.label}.` });
+  }
+  const { roles, cwd } = req.body || {};
+  if (cwd !== undefined && typeof cwd !== 'string') {
+    return res.status(400).json({ error: 'cwd must be a string' });
+  }
+  if (!roles || typeof roles !== 'object' || Array.isArray(roles)) {
+    return res.status(400).json({ error: 'roles must be an object mapping role names to model refs' });
+  }
+  const patch = Object.entries(roles);
+  if (!patch.length) return res.status(400).json({ error: 'roles must name at least one role' });
+  for (const [role, model] of patch) {
+    if (!MODEL_ROLE_KEY.test(role)) {
+      return res.status(400).json({ error: `Invalid role name: ${role}` });
+    }
+    if (model === null) continue;
+    if (typeof model !== 'string' || !model.trim() || model.length > MODEL_ROLE_VALUE_MAX) {
+      return res.status(400).json({ error: `Invalid model for role ${role}: expected null or a non-empty model ref of at most ${MODEL_ROLE_VALUE_MAX} characters` });
+    }
+  }
+  try {
+    res.json(await queueModelRoleWrite(descriptor.id, async () => {
+      const record = await readGlobalModelRoles(descriptor);
+      for (const [role, model] of patch) {
+        if (model === null) delete record[role]; else record[role] = model;
+      }
+      await runHarnessJsonCommand(descriptor,
+        descriptor.argv.configSet(descriptor.pilotConfig.modelRoles, JSON.stringify(record)));
+      const [globalModelRoles, effective] = await Promise.all([
+        readGlobalModelRoles(descriptor),
+        runHarnessJsonCommand(descriptor, descriptor.argv.configGet(descriptor.pilotConfig.modelRoles), { cwd }),
+      ]);
+      return { globalModelRoles, modelRoles: sanitizeModelRoles(effective?.value) };
+    }));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

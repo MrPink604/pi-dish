@@ -4122,6 +4122,52 @@ img.msg-image {
 }
 .ns-config-title { color: var(--text-bright); font-size: 12px; font-weight: 600; }
 .ns-config-values { margin: 4px 0; color: var(--text); font-family: var(--font-mono); font-size: 12px; }
+.ns-config-roles {
+  margin: 4px 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ns-config-actions { margin: 8px 0 6px; }
+
+/* Model-role editor. Rows collapse to a stacked, full-width layout on narrow
+   screens — this is a phone remote first. */
+.model-roles-modal { width: min(680px, calc(100vw - 24px)); max-height: min(760px, 90dvh); }
+.model-roles-body { padding: 8px 16px; overflow: auto; }
+.model-role-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.model-role-label { display: flex; flex-direction: column; gap: 2px; flex: 1 1 220px; min-width: 0; }
+.model-role-label strong { color: var(--text-bright); font-size: 13px; }
+.model-role-key { color: var(--cyan); font-family: var(--font-mono); font-size: 11px; }
+.model-role-label small { color: var(--text-muted); font-size: 11px; }
+.model-role-override { color: var(--warning); }
+.model-role-select {
+  flex: 0 1 300px;
+  max-width: 100%;
+  padding: 6px;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 12px;
+}
+.model-role-select:focus { outline: none; border-color: var(--accent); }
+.model-roles-error { color: var(--error); font-size: 11px; }
+
+@media (max-width: 600px) {
+  .model-role-row { gap: 6px; }
+  .model-role-select { flex: 1 1 100%; }
+}
 
 @media (max-width: 600px) {
   .ns-choice-row { grid-template-columns: 1fr; }

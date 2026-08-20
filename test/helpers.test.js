@@ -947,3 +947,52 @@ test('harnessBadgeInfo gives every agent harness a compact unique icon', () => {
   assert.deepEqual(H.harnessBadgeInfo('prime'), { label: 'Prime', icon: 'vendor/harness-prime.svg' });
   assert.deepEqual(H.harnessBadgeInfo('custom', 'Custom Agent'), { label: 'Custom Agent', icon: null });
 });
+
+test('OMP_MODEL_ROLES lists the canonical roles in harness order', () => {
+  assert.deepEqual(H.OMP_MODEL_ROLES.map(r => r.key),
+    ['default', 'smol', 'slow', 'vision', 'plan', 'designer', 'commit', 'tiny', 'task', 'advisor']);
+  assert.ok(H.OMP_MODEL_ROLES.every(r => r.name && r.description));
+});
+
+test('buildModelRoleRows keeps global values editable and flags project overrides', () => {
+  const rows = H.buildModelRoleRows(
+    { default: 'zai/glm-4.7', 'my-role': 'zai/glm-5.2' },
+    { default: 'zai/glm-4.7', vision: 'anthropic/claude-opus-4', 'my-role': 'zai/glm-5.2' },
+  );
+  assert.equal(rows.length, H.OMP_MODEL_ROLES.length + 1);
+
+  const def = rows.find(r => r.key === 'default');
+  assert.equal(def.value, 'zai/glm-4.7');
+  assert.equal(def.override, null, 'matching effective value is not an override');
+
+  // Effective-only values come from a project .omp/config.yml — the row still
+  // edits the (empty) global assignment.
+  const vision = rows.find(r => r.key === 'vision');
+  assert.equal(vision.value, '');
+  assert.equal(vision.override, 'anthropic/claude-opus-4');
+
+  const custom = rows.at(-1);
+  assert.deepEqual(
+    { key: custom.key, custom: custom.custom, value: custom.value, override: custom.override },
+    { key: 'my-role', custom: true, value: 'zai/glm-5.2', override: null });
+  assert.ok(rows.slice(0, H.OMP_MODEL_ROLES.length).every(r => r.custom === false));
+});
+
+test('buildModelRoleRows tolerates missing or malformed records', () => {
+  const rows = H.buildModelRoleRows(null, undefined);
+  assert.equal(rows.length, H.OMP_MODEL_ROLES.length);
+  assert.ok(rows.every(r => r.value === '' && r.override === null));
+  assert.equal(H.buildModelRoleRows({ default: 42, ok: 'zai/glm-5.2' }, ['x']).length,
+    H.OMP_MODEL_ROLES.length + 1, 'non-string values are dropped, arrays are not records');
+});
+
+test('formatModelRoleSummary orders canonically and truncates gracefully', () => {
+  assert.equal(H.formatModelRoleSummary({ smol: 'a/b', default: 'c/d' }), 'default c/d · smol a/b');
+  assert.equal(H.formatModelRoleSummary({}), 'No roles assigned');
+  assert.equal(H.formatModelRoleSummary(null), 'No roles assigned');
+  assert.equal(
+    H.formatModelRoleSummary({ default: 'a/b', smol: 'a/b', slow: 'a/b', vision: 'a/b', plan: 'a/b' }),
+    'default a/b · smol a/b · slow a/b · vision a/b · +1 more');
+  assert.equal(H.formatModelRoleSummary({ zeta: 'a/b', default: 'c/d' }, 2), 'default c/d · zeta a/b',
+    'custom keys sort after the canonical ones');
+});

@@ -6359,9 +6359,15 @@ function nsCwdValue() {
   return (document.getElementById('newSessionCwd')?.value || '').trim();
 }
 
+// Last successful /api/harnesses/omp/config payload; the roles editor reads
+// its global-vs-effective split from here rather than re-fetching.
+let nsHarnessConfig = null;
+
 async function loadNsHarnessConfig(cwd = nsCwdValue()) {
   const wrap = document.getElementById('nsHarnessConfig');
   const values = document.getElementById('nsHarnessConfigValues');
+  const roles = document.getElementById('nsHarnessRoles');
+  const editBtn = document.getElementById('nsEditRoles');
   const seq = ++nsConfigSeq;
   if (!wrap || !values) return;
   if (selectedHarnessId() !== 'omp') {
@@ -6370,6 +6376,8 @@ async function loadNsHarnessConfig(cwd = nsCwdValue()) {
   }
   wrap.style.display = '';
   values.textContent = 'Loading…';
+  if (roles) roles.textContent = '';
+  if (editBtn) editBtn.style.display = 'none';
   try {
     const params = new URLSearchParams();
     if (cwd) params.set('cwd', cwd);
@@ -6377,10 +6385,104 @@ async function loadNsHarnessConfig(cwd = nsCwdValue()) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     if (seq !== nsConfigSeq || selectedHarnessId() !== 'omp') return;
+    nsHarnessConfig = { ...data, cwd: cwd || '' };
     values.textContent = `Model: ${data.defaultModel || 'auto-select'} · Thinking: ${data.defaultThinkingLevel || 'host default'}`;
+    if (roles) roles.textContent = 'Roles: ' + formatModelRoleSummary(data.modelRoles);
+    if (editBtn) editBtn.style.display = '';
   } catch (e) {
     if (seq !== nsConfigSeq || selectedHarnessId() !== 'omp') return;
+    nsHarnessConfig = null;
     values.textContent = `Defaults unavailable: ${e.message}`;
+  }
+}
+
+// --- Model-role editor (modal over the new-session takeover) ---
+function modelRolesError(message) {
+  const el = document.getElementById('modelRolesError');
+  if (el) el.textContent = message || '';
+}
+
+function isModelRolesModalOpen() {
+  return document.getElementById('modelRolesModal')?.style.display === 'flex';
+}
+
+async function openModelRolesModal() {
+  if (!nsHarnessConfig) return;
+  document.getElementById('modelRolesModal').style.display = 'flex';
+  modelRolesError('');
+  renderModelRoles();
+  // The catalog is normally already loaded for this harness+cwd; fetch only
+  // when the takeover opened before the background refresh landed.
+  if (!Array.isArray(knownModels) || !knownModels.length) {
+    await loadModels(undefined, 'omp', nsHarnessConfig.cwd);
+    if (isModelRolesModalOpen()) renderModelRoles();
+  }
+}
+
+function closeModelRolesModal() {
+  document.getElementById('modelRolesModal').style.display = 'none';
+}
+
+function modelRoleOptions(value) {
+  const models = Array.isArray(knownModels) ? knownModels : [];
+  const known = models.map(m => m.selector || `${m.provider}/${m.id}`);
+  let html = `<option value=""${value ? '' : ' selected'}>(unset)</option>`;
+  // A global assignment the catalog doesn't list stays selectable: OMP may
+  // resolve refs this catalog can't (aliases, a provider added out of band).
+  if (value && !known.includes(value)) {
+    html += `<option value="${escapeHtml(value)}" selected>(current) ${escapeHtml(value)}</option>`;
+  }
+  models.forEach((m, i) => {
+    const selector = known[i];
+    // Not disabled: the user may add the provider key out of band.
+    const note = m.providerReady === false ? ' · no key' : '';
+    html += `<option value="${escapeHtml(selector)}"${selector === value ? ' selected' : ''}>${escapeHtml(selector)}${note}</option>`;
+  });
+  return html;
+}
+
+function renderModelRoles() {
+  const body = document.getElementById('modelRolesBody');
+  if (!body) return;
+  const rows = buildModelRoleRows(nsHarnessConfig?.globalModelRoles, nsHarnessConfig?.modelRoles);
+  body.innerHTML = rows.map(row => `<div class="model-role-row" data-role="${escapeHtml(row.key)}">
+      <div class="model-role-label">
+        <strong>${escapeHtml(row.name)}</strong>
+        <code class="model-role-key">${escapeHtml(row.key)}</code>
+        <small>${escapeHtml(row.description)}</small>
+        ${row.override ? `<small class="model-role-override">project override: ${escapeHtml(row.override)} (.omp/config.yml wins here)</small>` : ''}
+      </div>
+      <select class="model-role-select" data-role="${escapeHtml(row.key)}" data-initial="${escapeHtml(row.value)}">${modelRoleOptions(row.value)}</select>
+    </div>`).join('');
+}
+
+async function saveModelRoles() {
+  const btn = document.getElementById('modelRolesSave');
+  const selects = [...document.querySelectorAll('#modelRolesBody .model-role-select')];
+  const roles = {};
+  for (const select of selects) {
+    const value = select.value;
+    if (value === select.dataset.initial) continue;
+    roles[select.dataset.role] = value || null;
+  }
+  if (!Object.keys(roles).length) { closeModelRolesModal(); return; }
+  modelRolesError('');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  try {
+    const res = await fetch('/api/harnesses/omp/model-roles', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roles, cwd: nsHarnessConfig?.cwd || undefined }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    nsHarnessConfig = { ...nsHarnessConfig, ...data };
+    closeModelRolesModal();
+    loadNsHarnessConfig();
+  } catch (e) {
+    modelRolesError(e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
   }
 }
 
@@ -6452,6 +6554,7 @@ function openNewSessionView(opts = {}) {
 
 function closeNewSessionView() {
   document.querySelector('.main').classList.remove('new-session-open');
+  closeModelRolesModal();
   clearTimeout(nsPilotRefreshTimer);
   nsConfigSeq += 1;
   hideCwdDropdown();
@@ -7804,6 +7907,9 @@ document.addEventListener('keydown', function(e) {
     e.preventDefault(); closeCommentBubble();
   } else if (document.getElementById('responseDetailsModal').style.display !== 'none') {
     e.preventDefault(); closeResponseDetails();
+  } else if (isModelRolesModalOpen()) {
+    // Modal only — the new-session takeover underneath stays open.
+    e.preventDefault(); closeModelRolesModal();
   } else if (document.getElementById('settingsModal').style.display !== 'none') {
     e.preventDefault(); closeSettingsModal();
   } else if (document.getElementById('relationsModal').style.display !== 'none') {

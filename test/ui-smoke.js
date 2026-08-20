@@ -1016,11 +1016,33 @@ function writeRegistry(patch = {}) {
     await desktop.route(/\/api\/models\?harness=omp(?:&|$)/, async (route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(ompModels) });
     });
+    // Global roles are what the editor writes; the effective record carries a
+    // project override (vision) that must stay out of the global record.
+    let ompGlobalRoles = { default: 'zai/glm-4.7-flash', smol: 'zai/glm-5.2' };
     await desktop.route(/\/api\/harnesses\/omp\/config(?:\?|$)/, async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ defaultModel: 'zai/glm-4.7-flash', defaultThinkingLevel: 'high' }),
+        body: JSON.stringify({
+          defaultModel: 'zai/glm-4.7-flash', defaultThinkingLevel: 'high',
+          modelRoles: { ...ompGlobalRoles, vision: 'fixture-missing/offline-model' },
+          globalModelRoles: ompGlobalRoles,
+        }),
+      });
+    });
+    let modelRolesPatch = null;
+    await desktop.route('**/api/harnesses/omp/model-roles', async (route) => {
+      modelRolesPatch = route.request().postDataJSON();
+      for (const [role, value] of Object.entries(modelRolesPatch.roles || {})) {
+        if (value === null) delete ompGlobalRoles[role]; else ompGlobalRoles[role] = value;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          globalModelRoles: ompGlobalRoles,
+          modelRoles: { ...ompGlobalRoles, vision: 'fixture-missing/offline-model' },
+        }),
       });
     });
     await desktop.evaluate(() => localStorage.setItem('pi-dish-new-harness', 'omp'));
@@ -1038,7 +1060,42 @@ function writeRegistry(patch = {}) {
       'provider readiness reports presence only');
     check((await desktop.locator('#nsHarnessConfigValues').textContent()).includes('zai/glm-4.7-flash') &&
       (await desktop.locator('#nsHarnessConfigValues').textContent()).includes('high'),
-      'curated OMP default model and thinking are shown read-only');
+      'curated OMP default model and thinking are shown in the readout');
+    check((await desktop.locator('#nsHarnessRoles').textContent()).includes('default zai/glm-4.7-flash'),
+      'the readout summarizes the effective role assignments');
+
+    // Model-role editor: a modal over the takeover, initialized from the
+    // *global* record with the project override called out per row.
+    await desktop.click('#nsEditRoles');
+    await desktop.waitForSelector('#modelRolesModal .model-role-row');
+    check(await desktop.locator('.model-role-row').count() >= 10,
+      'every canonical OMP role gets a row');
+    check(await desktop.inputValue('.model-role-select[data-role="smol"]') === 'zai/glm-5.2',
+      'role selects initialize from the global record');
+    check(await desktop.inputValue('.model-role-select[data-role="vision"]') === '',
+      'a project-only assignment leaves the global select unset');
+    check((await desktop.locator('.model-role-row[data-role="vision"]').textContent()).includes('project override'),
+      'a differing effective value is flagged as a project override');
+    check((await desktop.locator('.model-role-row[data-role="plan"] option[value="fixture-missing/offline-model"]').textContent()).includes('no key'),
+      'a model without a provider credential is marked but stays selectable');
+    await desktop.keyboard.press('Escape');
+    check(await desktop.evaluate(() => document.getElementById('modelRolesModal').style.display === 'none') &&
+      await desktop.evaluate(() => document.querySelector('.main').classList.contains('new-session-open')),
+      'Escape closes the roles modal only, not the takeover underneath');
+
+    await desktop.click('#nsEditRoles');
+    await desktop.waitForSelector('#modelRolesModal .model-role-row');
+    await desktop.selectOption('.model-role-select[data-role="plan"]', 'zai/glm-5.2');
+    await desktop.selectOption('.model-role-select[data-role="smol"]', '');
+    await desktop.click('#modelRolesSave');
+    await desktop.waitForFunction(() =>
+      document.getElementById('modelRolesModal').style.display === 'none');
+    check(JSON.stringify(modelRolesPatch?.roles) === JSON.stringify({ smol: null, plan: 'zai/glm-5.2' }),
+      `saving PUTs only the changed roles (got ${JSON.stringify(modelRolesPatch?.roles)})`);
+    await desktop.waitForFunction(() =>
+      document.getElementById('nsHarnessRoles').textContent.includes('plan zai/glm-5.2'));
+    check(!(await desktop.locator('#nsHarnessRoles').textContent()).includes('smol'),
+      'the readout refreshes after a save');
 
     await desktop.selectOption('#nsModelSelect', 'zai/glm-5.2');
     const restrictedLevels = await desktop.locator('#nsThinkingSelect option').evaluateAll(options =>

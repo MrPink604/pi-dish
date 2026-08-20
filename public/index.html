@@ -437,7 +437,11 @@
           <div class="ns-config-readout" id="nsHarnessConfig" style="display:none">
             <div class="ns-config-title">Oh My Pi defaults</div>
             <div class="ns-config-values" id="nsHarnessConfigValues">Loading…</div>
-            <div class="ns-hidden-note">Used only when model or thinking stays at (default). This page cannot change OMP settings.</div>
+            <div class="ns-config-roles" id="nsHarnessRoles"></div>
+            <div class="ns-config-actions">
+              <button class="btn-small" id="nsEditRoles" style="display:none" onclick="openModelRolesModal()">Edit model roles</button>
+            </div>
+            <div class="ns-hidden-note">Used only when model or thinking stays at (default). Editing roles writes OMP's global config; a project <code>.omp/config.yml</code> still wins in its own directory.</div>
           </div>
 
           <div class="ns-section new-session-target" id="newSessionTargetWrap" style="display:none">
@@ -556,6 +560,17 @@
     <div class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
       <div class="modal-header"><h3 id="settingsTitle">Settings</h3><button class="btn-icon" onclick="closeSettingsModal()" title="Close (Esc)">✕</button></div>
       <div class="settings-body" id="settingsBody"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modelRolesModal" style="display:none" onclick="if(event.target===this)closeModelRolesModal()">
+    <div class="modal model-roles-modal" role="dialog" aria-modal="true" aria-labelledby="modelRolesTitle">
+      <div class="modal-header"><h3 id="modelRolesTitle">Oh My Pi model roles</h3><button class="btn-icon" onclick="closeModelRolesModal()" title="Close (Esc)">✕</button></div>
+      <div class="model-roles-body" id="modelRolesBody"></div>
+      <div class="modal-footer model-roles-footer">
+        <span class="model-roles-error" id="modelRolesError"></span>
+        <button class="btn-small" id="modelRolesSave" onclick="saveModelRoles()">Save</button>
+      </div>
     </div>
   </div>
 

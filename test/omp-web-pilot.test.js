@@ -90,6 +90,15 @@ test('OMP readiness checks process env and every documented dotenv location with
   assert.doesNotMatch(JSON.stringify(body), /API_KEY|project-value|agent-value|config-value|home-value|process-value/);
 });
 
+async function put(resource, body) {
+  const response = await fetch(base + resource, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return { status: response.status, body: await response.json() };
+}
+
 test('OMP config endpoint exposes only curated launch defaults', async () => {
   const query = new URLSearchParams({ cwd });
   const { status, body } = await get(`/api/harnesses/omp/config?${query}`);
@@ -97,7 +106,75 @@ test('OMP config endpoint exposes only curated launch defaults', async () => {
   assert.deepEqual(body, {
     defaultModel: 'zai/glm-4.7-flash',
     defaultThinkingLevel: 'high',
+    modelRoles: { default: 'zai/glm-4.7-flash' },
+    globalModelRoles: { default: 'zai/glm-4.7-flash' },
   });
+});
+
+test('OMP config endpoint separates a project overlay from the global record', async () => {
+  fs.mkdirSync(path.join(cwd, '.omp'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, '.omp', 'fake-project-roles.json'),
+    JSON.stringify({ vision: 'zai/glm-5.2' }));
+  const query = new URLSearchParams({ cwd });
+  const { status, body } = await get(`/api/harnesses/omp/config?${query}`);
+  assert.equal(status, 200);
+  assert.equal(body.modelRoles.vision, 'zai/glm-5.2');
+  assert.equal(Object.hasOwn(body.globalModelRoles, 'vision'), false);
+});
+
+test('OMP model-role PUT patches the global record without absorbing project overrides', async () => {
+  const patched = await put('/api/harnesses/omp/model-roles', {
+    cwd, roles: { default: 'zai/glm-5.2', smol: 'anthropic/claude-opus-4' },
+  });
+  assert.equal(patched.status, 200);
+  assert.deepEqual(patched.body.globalModelRoles, {
+    default: 'zai/glm-5.2', smol: 'anthropic/claude-opus-4',
+  });
+  // The project overlay still shadows `vision` in this cwd and — the no-leak
+  // guarantee — never got copied into the global record.
+  assert.equal(patched.body.modelRoles.vision, 'zai/glm-5.2');
+  assert.equal(Object.hasOwn(patched.body.globalModelRoles, 'vision'), false);
+
+  const reread = await get(`/api/harnesses/omp/config?${new URLSearchParams({ cwd })}`);
+  assert.equal(reread.body.globalModelRoles.default, 'zai/glm-5.2');
+  assert.equal(Object.hasOwn(reread.body.globalModelRoles, 'vision'), false);
+
+  const unset = await put('/api/harnesses/omp/model-roles', { cwd, roles: { smol: null } });
+  assert.equal(unset.status, 200);
+  assert.deepEqual(unset.body.globalModelRoles, { default: 'zai/glm-5.2' });
+
+  // Custom (non-canonical) role keys round-trip.
+  const custom = await put('/api/harnesses/omp/model-roles', { roles: { 'my-role': 'zai/glm-4.7-flash' } });
+  assert.equal(custom.status, 200);
+  assert.equal(custom.body.globalModelRoles['my-role'], 'zai/glm-4.7-flash');
+});
+
+test('OMP model-role PUT serializes concurrent read-modify-writes', async () => {
+  const [a, b] = await Promise.all([
+    put('/api/harnesses/omp/model-roles', { roles: { commit: 'zai/glm-4.7-flash' } }),
+    put('/api/harnesses/omp/model-roles', { roles: { tiny: 'zai/glm-5.2' } }),
+  ]);
+  assert.equal(a.status, 200);
+  assert.equal(b.status, 200);
+  const { body } = await get('/api/harnesses/omp/config');
+  assert.equal(body.globalModelRoles.commit, 'zai/glm-4.7-flash');
+  assert.equal(body.globalModelRoles.tiny, 'zai/glm-5.2');
+});
+
+test('OMP model-role PUT validates the patch and is unsupported for pi', async () => {
+  for (const roles of [null, 'default', ['default'], {}]) {
+    const { status } = await put('/api/harnesses/omp/model-roles', { roles });
+    assert.equal(status, 400);
+  }
+  assert.equal((await put('/api/harnesses/omp/model-roles', { roles: { '9bad': 'zai/glm-5.2' } })).status, 400);
+  assert.equal((await put('/api/harnesses/omp/model-roles', { roles: { default: '' } })).status, 400);
+  assert.equal((await put('/api/harnesses/omp/model-roles', { roles: { default: '  ' } })).status, 400);
+  assert.equal((await put('/api/harnesses/omp/model-roles', { roles: { default: 'x'.repeat(201) } })).status, 400);
+  assert.equal((await put('/api/harnesses/omp/model-roles', { roles: { default: 42 } })).status, 400);
+  assert.equal((await put('/api/harnesses/omp/model-roles', { cwd: 7, roles: { default: 'zai/glm-5.2' } })).status, 400);
+
+  assert.equal((await put('/api/harnesses/nope/model-roles', { roles: { default: 'x' } })).status, 404);
+  assert.equal((await put('/api/harnesses/pi/model-roles', { roles: { default: 'x' } })).status, 501);
 });
 
 test('OMP launch rejects a thinking level outside the selected model catalog entry', async () => {
