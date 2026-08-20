@@ -14,7 +14,7 @@ test('harness descriptors keep alternate launches tmux-only and load thin wrappe
   assert.deepEqual(registry.pi.argv.new({ model: 'provider/model', thinking: 'high' }), [
     '--model', 'provider/model', '--thinking', 'high',
   ]);
-  assert.equal(registry.omp.closeMode, 'unsupported');
+  assert.equal(registry.omp.closeMode, 'owned-pane');
   assert.equal(registry.prime.closeMode, 'client-only');
   for (const id of ['omp', 'prime']) {
     const descriptor = registry[id];

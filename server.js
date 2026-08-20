@@ -235,9 +235,10 @@ function sessionCapabilities(harnessId, bridgeCapabilities = {}, { active = fals
         ? advertised('treeRead') && advertised('treeNavigation')
         : false,
     export: pi || harnessId === 'omp',
-    // Client-only harnesses may only detach the exact tmux pane pi-dish
+    // Managed harnesses may only close/detach the exact tmux pane pi-dish
     // recorded when it launched that client.
-    close: active && (closeMode === 'logical' || (closeMode === 'client-only' && closeAllowed)),
+    close: active && (closeMode === 'logical'
+      || ((closeMode === 'owned-pane' || closeMode === 'client-only') && closeAllowed)),
     resume: !active,
   };
 }
@@ -272,6 +273,22 @@ function spawnAllowsClientDetach(spawn, registryEntry) {
   return ancestry.complete
     && sameProcessIdentity(ancestry.processes[0], workerIdentity)
     && !ancestry.processes.some(process => sameProcessIdentity(process, spawn.paneProcess));
+}
+
+function spawnAllowsOwnedPaneClose(spawn, registryEntry) {
+  if (!spawnMatchesRegistryClaim(spawn, registryEntry)) return false;
+  const agentIdentity = { pid: registryEntry.pid, startTime: registryEntry.startTime };
+  const ancestry = inspectProcessAncestry(agentIdentity);
+  return ancestry.complete
+    && sameProcessIdentity(ancestry.processes[0], agentIdentity)
+    && processIdentityAlive(spawn.paneProcess)
+    && ancestry.processes.some(ancestor => sameProcessIdentity(ancestor, spawn.paneProcess));
+}
+
+function spawnAllowsManagedClose(spawn, registryEntry, closeMode) {
+  if (closeMode === 'owned-pane') return spawnAllowsOwnedPaneClose(spawn, registryEntry);
+  if (closeMode === 'client-only') return spawnAllowsClientDetach(spawn, registryEntry);
+  return false;
 }
 
 // =========================================================================
@@ -724,6 +741,7 @@ function getActiveSessions(registered = listRegisteredSessions()) {
     const identity = registryIdentity(reg);
     const identityFields = sessionIdentityFields(identity.harnessId, identity.nativeSessionId);
     const ownedSpawn = tmux.getSpawn(routeId);
+    const closeMode = getHarness(identity.harnessId).closeMode;
     let info = {};
     let source = null;
     if (reg.sessionFile && fs.existsSync(reg.sessionFile)) {
@@ -740,9 +758,9 @@ function getActiveSessions(registered = listRegisteredSessions()) {
       capabilities: sessionCapabilities(identity.harnessId, reg.capabilities || {}, {
         active: true,
         conflicted,
-        closeAllowed: spawnAllowsClientDetach(ownedSpawn, reg),
+        closeAllowed: spawnAllowsManagedClose(ownedSpawn, reg, closeMode),
       }),
-      closeMode: getHarness(identity.harnessId).closeMode,
+      closeMode,
       conflicted,
       liveInstanceCount: instances.length,
       name: reg.name || info.name,
@@ -3467,14 +3485,12 @@ app.post('/api/sessions/:id/abort', async (req, res) => {
   }
 });
 
-// Close a live session: shut its pi process down (the JSONL stays resumable).
-// RPC children get RPCSession.kill(); anything bridge-registered — including
-// tmux TUIs pi-dish didn't spawn — gets SIGTERM to the registry pid. Both pi
-// modes treat SIGTERM as a graceful shutdown that runs extension cleanup, so
-// the bridge unlinks its own registry entry/socket and, in tmux, only pi dies
-// (the surrounding shell/window survives). Respond only once the process has
-// actually exited, so the next sessions poll can't show it as still live; no
-// SIGKILL escalation — a hung pi is for the user to inspect, not to lose.
+// Close a live session while keeping its JSONL resumable. Owned-pane harnesses
+// close only the exact tmux pane/process tree pi-dish launched. Client-only
+// harnesses detach only when their logical worker is proven independent. Pi
+// RPC children use RPCSession.kill(); bridge-registered Pi processes get a
+// graceful SIGTERM. Every path waits for the lifecycle action to complete
+// before responding, and none escalates to SIGKILL.
 app.post('/api/sessions/:id/close', async (req, res) => {
   const sessionId = req.params.id;
   const route = routeIdentity(sessionId);
@@ -3482,6 +3498,65 @@ app.post('/api/sessions/:id/close', async (req, res) => {
   const descriptor = getHarness(route.harnessId);
   if (!descriptor || descriptor.closeMode === 'unsupported') {
     return res.status(409).json({ error: `Closing ${descriptor?.label || route.harnessId} sessions is not supported; close the owning tmux client directly.` });
+  }
+  if (descriptor.closeMode === 'owned-pane') {
+    const routeId = routeSessionId(route.harnessId, route.nativeSessionId);
+    const reg = getRegisteredSession(routeId);
+    if (!reg) return res.status(409).json({ error: `${descriptor.label} has no single unambiguous live bridge instance to close.` });
+    const spawn = tmux.getSpawn(routeId);
+    if (!spawn?.socket || !spawn?.paneId) {
+      return res.status(409).json({ error: `This ${descriptor.label} session was not launched by pi-dish, so its tmux pane cannot be closed remotely.` });
+    }
+    if (!spawnMatchesRegistryClaim(spawn, reg)) {
+      tmux.removeSpawn(routeId, spawn);
+      return res.status(409).json({ error: `The recorded ${descriptor.label} pane no longer matches this live agent, so pi-dish will not close it.` });
+    }
+    const currentPaneProcess = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
+    if (!sameProcessIdentity(currentPaneProcess, spawn.paneProcess)) {
+      tmux.removeSpawn(routeId, spawn);
+      return res.status(409).json({ error: `The recorded ${descriptor.label} pane has exited or been replaced, so pi-dish will not close it.` });
+    }
+    if (!spawnAllowsOwnedPaneClose(spawn, reg)) {
+      return res.status(409).json({ error: `Could not prove that the live ${descriptor.label} agent belongs to the recorded tmux pane, so pi-dish will not close it.` });
+    }
+
+    // Re-read and socket-prove this exact bridge claim immediately before the
+    // destructive operation. A replacement agent must not inherit an older
+    // request's authority over its pane.
+    invalidateRegistryCache();
+    const freshReg = getRegisteredSession(routeId);
+    if (!freshReg || !sameRegistryClaim(freshReg, reg)) {
+      return res.status(409).json({ error: `The live ${descriptor.label} bridge changed while close was being authorized, so pi-dish will not kill the pane.` });
+    }
+    try {
+      await proveBridgeRegistryClaim(freshReg);
+    } catch (error) {
+      return res.status(409).json({ error: `The live ${descriptor.label} bridge could not re-prove its identity before close: ${error.message}` });
+    }
+    const finalPaneProcess = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
+    if (!sameProcessIdentity(finalPaneProcess, spawn.paneProcess)
+        || !spawnAllowsOwnedPaneClose(spawn, freshReg)) {
+      return res.status(409).json({ error: `The ${descriptor.label} pane ownership proof changed before close, so pi-dish will not kill the pane.` });
+    }
+    invalidateRegistryCache();
+    const killAuthorizedReg = getRegisteredSession(routeId);
+    if (!killAuthorizedReg || !sameRegistryClaim(killAuthorizedReg, freshReg)) {
+      return res.status(409).json({ error: `The live ${descriptor.label} bridge changed immediately before close, so pi-dish will not kill the pane.` });
+    }
+
+    const agentProcess = { pid: freshReg.pid, startTime: freshReg.startTime };
+    const timeout = Number(process.env.PI_DISH_CLOSE_TIMEOUT_MS) || 10000;
+    try {
+      await tmux.killPaneAndWait(spawn.socket, spawn.paneId, {
+        timeout,
+        knownProcesses: [agentProcess],
+      });
+      tmux.removeSpawn(routeId, spawn);
+      pruneRegisteredSession(freshReg);
+      return res.json({ success: true });
+    } catch (error) {
+      return res.status(500).json({ error: `Failed to close the owned ${descriptor.label} pane: ${error.message}` });
+    }
   }
   if (descriptor.closeMode === 'client-only') {
     // Some harnesses move the bridge into a resident worker. Their registry

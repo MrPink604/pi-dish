@@ -251,7 +251,7 @@ async function testOmp() {
   }, 'real OMP active session');
   assert.equal(active.harnessId, 'omp');
   assert.equal(active.capabilities.prompt, true);
-  assert.equal(active.capabilities.close, false);
+  assert.equal(active.capabilities.close, true);
   assert.equal(active.capabilities.queueCancel, false);
   assert.equal(active.capabilities.tree, false);
 
@@ -265,8 +265,12 @@ async function testOmp() {
   assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/thinking`, { level: 'low' })).status, 200);
   assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/command`, { message: '/dish-push' })).status, 200);
   const turn = await runStreamedTurn(id, 'pi-dish managed OMP integration canary');
+  const closeSpawn = tmux.getSpawn(id);
+  assert.ok(closeSpawn?.paneProcess?.startTime, 'real OMP close has an owned pane identity');
   const close = await post(`/api/sessions/${encodeURIComponent(id)}/close`);
-  assert.equal(close.status, 409, JSON.stringify(close.body));
+  assert.equal(close.status, 200, JSON.stringify(close.body));
+  assert.equal(await tmux.paneExists(closeSpawn.socket, closeSpawn.paneId), false);
+  assert.equal(tmux.getSpawn(id), null);
 
   // A fresh model-less OMP TUI does not create its JSONL until a real turn.
   // Resume a minimal current-format corpus through the actual OMP loader so

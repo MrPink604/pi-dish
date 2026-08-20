@@ -137,7 +137,8 @@ test('OMP launch uses its wrapper descriptor and encoded cross-harness identity'
   assert.equal(session.sessionKey, body.id);
   assert.equal(session.capabilities.tree, false);
   assert.equal(session.capabilities.export, true);
-  assert.equal(session.capabilities.close, false);
+  assert.equal(session.closeMode, 'owned-pane');
+  assert.equal(session.capabilities.close, true);
 
   const messages = await get(`/api/sessions/${encodeURIComponent(body.id)}/messages`);
   assert.equal(messages.status, 200, JSON.stringify(messages.body));
@@ -146,6 +147,107 @@ test('OMP launch uses its wrapper descriptor and encoded cross-harness identity'
   const tree = await get(`/api/sessions/${encodeURIComponent(body.id)}/tree`);
   assert.equal(tree.status, 409);
   assert.match(tree.body.error, /does not advertise live tree reads/i);
+});
+
+test('OMP close kills and verifies only its exact pi-dish-owned pane process tree', { skip: !tmuxOk }, async () => {
+  const created = await post('/api/sessions/new', {
+    harness: 'omp',
+    target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+  });
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  const spawn = tmux.getSpawn(created.body.id);
+  assert.ok(spawn?.paneProcess?.pid && spawn.paneProcess?.startTime);
+
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  const registryFile = fs.readdirSync(registryDir).find(name => {
+    const entry = JSON.parse(fs.readFileSync(path.join(registryDir, name), 'utf8'));
+    return entry.harnessId === 'omp' && entry.spawnToken === spawn.spawnToken;
+  });
+  assert.ok(registryFile, 'matching OMP registry claim exists');
+  const registryPath = path.join(registryDir, registryFile);
+  const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+
+  const sibling = await post('/api/sessions/new', {
+    harness: 'omp',
+    target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+  });
+  assert.equal(sibling.status, 200, JSON.stringify(sibling.body));
+  const siblingSpawn = tmux.getSpawn(sibling.body.id);
+  assert.ok(siblingSpawn);
+  const siblingRegistryFile = fs.readdirSync(registryDir).find(name => {
+    const entry = JSON.parse(fs.readFileSync(path.join(registryDir, name), 'utf8'));
+    return entry.harnessId === 'omp' && entry.spawnToken === siblingSpawn.spawnToken;
+  });
+  assert.ok(siblingRegistryFile, 'sibling OMP registry claim exists');
+  const siblingRegistryPath = path.join(registryDir, siblingRegistryFile);
+  const siblingRegistry = JSON.parse(fs.readFileSync(siblingRegistryPath, 'utf8'));
+
+  try {
+    const list = await get('/api/sessions?active=1');
+    const session = list.body.active.find(entry => entry.id === created.body.id);
+    assert.equal(session?.closeMode, 'owned-pane');
+    assert.equal(session?.capabilities.close, true);
+
+    const closed = await post(`/api/sessions/${encodeURIComponent(created.body.id)}/close`);
+    assert.equal(closed.status, 200, JSON.stringify(closed.body));
+    assert.deepEqual(closed.body, { success: true });
+    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), false);
+    assert.throws(() => process.kill(registry.pid, 0), 'the exact OMP process exited');
+    assert.equal(tmux.getSpawn(created.body.id), null, 'owned pane record was removed');
+    assert.equal(fs.existsSync(registryPath), false, 'closed bridge claim was pruned');
+    assert.equal(await tmux.paneExists(siblingSpawn.socket, siblingSpawn.paneId), true,
+      'the sibling OMP pane remains live');
+    assert.doesNotThrow(() => process.kill(siblingRegistry.pid, 0),
+      'the sibling OMP process remains live');
+  } finally {
+    if (await tmux.paneExists(spawn.socket, spawn.paneId)) {
+      await tmux.killPane(spawn.socket, spawn.paneId).catch(() => {});
+    }
+    try { process.kill(registry.pid, 'SIGTERM'); } catch {}
+    fs.rmSync(registryPath, { force: true });
+    await tmux.killPaneAndWait(siblingSpawn.socket, siblingSpawn.paneId, {
+      knownProcesses: [{ pid: siblingRegistry.pid, startTime: siblingRegistry.startTime }],
+    }).catch(() => {});
+    tmux.removeSpawn(sibling.body.id, siblingSpawn);
+    fs.rmSync(siblingRegistryPath, { force: true });
+  }
+});
+
+test('OMP close stays unavailable for a live pane pi-dish does not own', { skip: !tmuxOk }, async () => {
+  const created = await post('/api/sessions/new', {
+    harness: 'omp',
+    target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+  });
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  const spawn = tmux.getSpawn(created.body.id);
+  assert.ok(spawn);
+
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  const registryFile = fs.readdirSync(registryDir).find(name => {
+    const entry = JSON.parse(fs.readFileSync(path.join(registryDir, name), 'utf8'));
+    return entry.harnessId === 'omp' && entry.spawnToken === spawn.spawnToken;
+  });
+  assert.ok(registryFile);
+  const registryPath = path.join(registryDir, registryFile);
+  const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+
+  try {
+    assert.equal(tmux.removeSpawn(created.body.id, spawn), true, 'simulate an externally owned live pane');
+    const list = await get('/api/sessions?active=1');
+    const session = list.body.active.find(entry => entry.id === created.body.id);
+    assert.equal(session?.capabilities.close, false);
+
+    const refused = await post(`/api/sessions/${encodeURIComponent(created.body.id)}/close`);
+    assert.equal(refused.status, 409, JSON.stringify(refused.body));
+    assert.match(refused.body.error, /not launched by pi-dish/i);
+    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true, 'unowned pane remains live');
+    assert.doesNotThrow(() => process.kill(registry.pid, 0), 'unowned OMP process remains live');
+  } finally {
+    await tmux.killPaneAndWait(spawn.socket, spawn.paneId, {
+      knownProcesses: [{ pid: registry.pid, startTime: registry.startTime }],
+    }).catch(() => {});
+    fs.rmSync(registryPath, { force: true });
+  }
 });
 
 test('OMP resume selects its corpus and uses the descriptor resume path without RPC', { skip: !tmuxOk }, async () => {

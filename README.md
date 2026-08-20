@@ -174,13 +174,16 @@ and `~/.prime/agent/sessions/` respectively.
 The alternative-harness baseline deliberately omits private Pi features:
 queue cancellation, compaction, tree navigation, and inactive JSONL mutation
 are unavailable. OMP supports read-only HTML export and sharing; Prime does
-not. OMP close is also unavailable. Prime's agent
-worker is resident, so “Detach client” first revalidates the launch token and
-the tmux pane process's exact PID/birth identity, proves the resident worker is
-outside that pane's process tree, then kills only the pane. If ancestry cannot
-be proven, detach fails closed. It never signals or claims to stop the logical
-agent. In the pinned Prime 0.7.1 canary the worker remains a client descendant,
-so pi-dish disables/refuses detach rather than risking the worker.
+not. An OMP session launched by pi-dish can be closed remotely: pi-dish
+revalidates its launch token and exact tmux pane process identity, proves the
+live OMP process belongs to that pane, then kills the pane and waits for its
+captured process tree to exit. OMP sessions launched outside pi-dish remain
+uncloseable. Prime's agent worker is resident, so “Detach client” instead proves
+the worker is outside the owned pane's process tree before killing only the
+pane. If ancestry cannot be proven, either operation fails closed. Prime detach
+never signals or claims to stop the logical agent. In the pinned Prime 0.7.1
+canary the worker remains a client descendant, so pi-dish disables/refuses
+detach rather than risking the worker.
 
 Use `PI_DISH_OMP_COMMAND` or `PI_DISH_PRIME_COMMAND` when a CLI is not on
 `PATH`, analogous to `PI_DISH_PI_COMMAND` for Pi.

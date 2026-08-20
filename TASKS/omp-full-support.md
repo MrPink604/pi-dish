@@ -126,7 +126,8 @@ thinking level, and a *curated* config surface — not a full settings editor.
 
 - OMP queue read/cancel (no public API — revisit when OMP ships one)
 - OMP native RPC transport, RPC fallback
-- OMP logical close (`closeMode: 'unsupported'` stands)
+- Closing externally launched OMP sessions (only exact pi-dish-owned panes can
+  be closed)
 - Rendering `ctx.ui.custom()` components
 - OMP marketplace/plugin management
 - Full settings editor in the web UI

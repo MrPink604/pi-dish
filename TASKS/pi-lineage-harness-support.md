@@ -234,7 +234,7 @@ canary; **no** = unsafe or unavailable through the current implementation.
 | Commands | bridge or Pi RPC | bridge | bridge | Wrapper/bridge capability only for alternative harnesses |
 | Model-list CLI | `--list-models` | `models --json` | unavailable | Optional descriptor command; never a session transport |
 | Native RPC session transport | retained | out of scope | out of scope | Do not generalize `lib/rpc-session.js` to alternative harnesses |
-| Close pi-dish-managed work | existing owned process | unsupported | client pane only; logical worker close unsupported | Never equate Prime TUI exit with worker termination |
+| Close pi-dish-managed work | existing owned process | owned pane/process tree only | client pane only; logical worker close unsupported | Never equate Prime TUI exit with worker termination |
 | Prime RLM children / A2A graph | n/a | n/a | no | Explicitly later/out of scope |
 
 The RPC observations justify not building a generic RPC dialect: unknown
@@ -371,10 +371,11 @@ Leases fail closed across disconnect/restart. A destructive lease may be
 restored only from durable pi-dish creation evidence plus positive
 reconciliation with the exact host process. A fresh bridge with the same
 native id or path does not inherit an old lease. Otherwise the role downgrades
-to external/uncloseable. OMP logical close additionally requires a canary that
-proves the wrapper registry process is the owned tmux agent process. Prime gets
-only an owned-client lease: terminating its TUI client is not logical session
-close, and worker close remains unsupported.
+to external/uncloseable. OMP logical close requires the wrapper registry
+process to belong to the exact owned tmux pane, then waits for that pane's
+captured process tree to exit. Prime gets only an owned-client lease:
+terminating its TUI client is not logical session close, and worker close
+remains unsupported.
 
 Host identification order:
 
@@ -705,7 +706,8 @@ Prime RPC is permanently out of scope.
 2. Set `rpcFallback: false` for OMP/Prime. Registration timeout, uncertain
    resume, or cleanup failure must return a precise error/quarantine; never
    start a second RPC writer for the same file.
-3. Add OMP `omp` new/resume and `models --json`; keep logical close unsupported.
+3. Add OMP `omp` new/resume and `models --json`; allow close only for an exact
+   pi-dish-owned pane whose live wrapper process belongs to that pane.
 4. Add Prime `prime-agent` TUI new/resume and `model list`. Correlate its worker
    wrapper using expected harness plus spawn token, but record only an
    owned-client lease. Do not expose logical close or report TUI exit as worker
@@ -715,9 +717,9 @@ Prime RPC is permanently out of scope.
 
 **Exit criterion:** explicit new/resume/model-list flows work for OMP and Prime
 through tmux and their wrappers, with no alternative RPC process or duplicate
-event/dialog source. OMP close and Prime logical close remain unsupported;
-Prime can detach only its exact pi-dish-owned client pane, and resident or
-unrelated workers remain untouched.
+event/dialog source. OMP can close only its exact pi-dish-owned pane; Prime
+logical close remains unsupported and Prime can detach only its exact
+pi-dish-owned client pane. Resident or unrelated workers remain untouched.
 
 ### Phase 5 — Optional parity work
 
@@ -755,10 +757,10 @@ These are not prerequisites for useful support.
 6. **Wrapper protocol tests:** v1 conservative compatibility, v2 wrapper
    identity/capabilities, wrong-wrapper spawn rejection, instance-safe
    registry/socket identity, and unsupported-operation errors.
-7. **Lifecycle tests:** owned Pi process, unsupported OMP close, unverified
-   external wrapper, and Prime owned TUI client each permit only their declared
-   action. Verify that Prime TUI exit is never reported as worker/session
-   termination.
+7. **Lifecycle tests:** owned Pi process, owned and external OMP panes,
+   unverified external wrapper, and Prime owned TUI client each permit only
+   their declared action. Verify that an OMP close waits for its exact process
+   tree and Prime TUI exit is never reported as worker/session termination.
 8. **Real-host canary:** pinned OMP/Bun and Prime tests use an isolated local
    fake OpenAI Responses server to exercise real streamed turns without user
    credentials, in addition to launch/resume and lifecycle checks.
@@ -795,8 +797,9 @@ These are not prerequisites for useful support.
 - OMP's optional model-list command uses known descriptor CLI argv; Prime has
   no global model catalog. Live models and commands come from either wrapper.
 - No OMP/Prime path starts or falls back to native RPC.
-- OMP logical close is unavailable. Prime owns only its TUI client; logical
-  worker close is unavailable and unrelated daemon workers remain untouched.
+- OMP close is available only for the exact pane/process tree pi-dish launched.
+  Prime owns only its TUI client; logical worker close is unavailable and
+  unrelated daemon workers remain untouched.
 
 ## Risks
 
@@ -827,8 +830,9 @@ These are not prerequisites for useful support.
    routes now; legacy raw ids continue to mean upstream Pi.
 4. **Alternative transport:** harness-specific wrappers use tmux + bridge only;
    native RPC and RPC fallback remain upstream-Pi-only.
-5. **Lifecycle:** OMP close is unsupported. Prime close detaches only the exact
-   pi-dish-owned client pane and never signals its resident worker.
+5. **Lifecycle:** OMP close terminates only an exact pi-dish-owned pane and
+   verifies its captured process tree exited. Prime close detaches only the
+   exact pi-dish-owned client pane and never signals its resident worker.
 
 ## Out of scope for the baseline
 
