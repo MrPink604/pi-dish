@@ -7,6 +7,7 @@ const path = require('node:path');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-pilot-'));
 const cwd = path.join(home, 'project');
 const fixture = path.join(__dirname, 'fixtures', 'fake-pi.js');
+const modelEventsFile = path.join(home, 'model-events.log');
 fs.mkdirSync(path.join(home, '.omp', 'agent'), { recursive: true });
 fs.mkdirSync(path.join(home, '.omp'), { recursive: true });
 fs.mkdirSync(cwd, { recursive: true });
@@ -23,6 +24,8 @@ process.env.HOME = home;
 process.env.PORT = '0';
 process.env.TMUX_TMPDIR = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-pilot-tmux-'));
 process.env.PI_DISH_OMP_COMMAND = `env PI_FIXTURE_HARNESS=omp ${process.execPath} ${fixture}`;
+process.env.PI_FIXTURE_MODEL_EVENTS_FILE = modelEventsFile;
+process.env.PI_FIXTURE_MODELS_LINGER_MS = '1000';
 process.env.FIXTURE_PROCESS_API_KEY = 'process-value';
 
 const server = require('../server.js');
@@ -58,6 +61,11 @@ test('OMP catalog preserves selector and per-model thinking while annotating rea
   const { status, body } = await get(`/api/models?${query}`);
   assert.equal(status, 200);
 
+  const events = fs.readFileSync(modelEventsFile, 'utf8').trim().split('\n');
+  assert.equal(events.filter(event => event.startsWith('start ')).length, 1);
+  assert.equal(events.filter(event => event.startsWith('finish ')).length, 0,
+    'complete model JSON is accepted without waiting for a lingering CLI');
+
   const flash = body.find(model => model.selector === 'zai/glm-4.7-flash');
   assert.deepEqual(flash.thinking, ['minimal', 'low', 'medium', 'high', 'xhigh']);
   assert.equal(flash.providerReady, true);
@@ -76,6 +84,8 @@ test('OMP readiness checks process env and every documented dotenv location with
   const query = new URLSearchParams({ cwd });
   const { status, body } = await get(`/api/harnesses/omp/readiness?${query}`);
   assert.equal(status, 200);
+  assert.equal(fs.readFileSync(modelEventsFile, 'utf8').trim().split('\n').length, 1,
+    'readiness reuses the recent catalog instead of spawning OMP again');
   assert.deepEqual(body.providers, {
     anthropic: false,
     zai: true,
@@ -183,4 +193,6 @@ test('OMP launch rejects a thinking level outside the selected model catalog ent
   });
   assert.equal(invalid.status, 400);
   assert.match(invalid.body.error, /valid levels: high, max/i);
+  assert.equal(fs.readFileSync(modelEventsFile, 'utf8').trim().split('\n').length, 1,
+    'launch validation reuses the catalog loaded by the new-session view');
 });

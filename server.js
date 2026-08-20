@@ -2972,6 +2972,8 @@ app.post('/api/sessions/:id/branch', async (req, res) => {
 let modelsCache = null;
 let modelsCacheTime = 0;
 const MODELS_CACHE_TTL = 60000;
+const harnessModelsCache = new Map(); // resolved harness+cwd -> { models?, time?, inFlight? }
+const HARNESS_JSON_EXIT_GRACE_MS = 250;
 
 function setModelsCache(models) {
   modelsCache = models;
@@ -3022,29 +3024,74 @@ function resolveHarnessCwd(value) {
   return path.resolve(expanded);
 }
 
-function runHarnessJsonCommand(descriptor, commandArgs, { cwd } = {}) {
+function runHarnessJsonCommand(descriptor, commandArgs, { cwd, acceptCompleteJson = false } = {}) {
   const spec = harnessLaunchSpec(descriptor);
   const args = [...spec.argv.slice(1), ...commandArgs];
   return new Promise((resolve, reject) => {
-    execFile(spec.argv[0], args, {
+    let settled = false;
+    let completeJsonTimer = null;
+    let streamedStdout = '';
+    let child;
+    const settle = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(completeJsonTimer);
+      callback(value);
+    };
+    const acceptStreamedJson = () => {
+      if (!acceptCompleteJson || completeJsonTimer || !/[\r\n]\s*$/.test(streamedStdout)) return;
+      let parsed;
+      try { parsed = JSON.parse(streamedStdout.trim()); } catch { return; }
+      // OMP has already emitted the complete machine-readable response at
+      // this point. Give normal shutdown a short grace period, then stop a
+      // CLI whose extensions left the event loop alive instead of making the
+      // web pilot wait for the full process timeout.
+      completeJsonTimer = setTimeout(() => {
+        settle(resolve, parsed);
+        child.kill();
+      }, HARNESS_JSON_EXIT_GRACE_MS);
+    };
+    child = execFile(spec.argv[0], args, {
       env: { ...process.env, ...spec.env },
       cwd: resolveHarnessCwd(cwd),
       timeout: 15_000,
       maxBuffer: 10 * 1024 * 1024,
     }, (error, stdout, stderr) => {
-      if (error) return reject(new Error((stderr || error.message).trim()));
+      if (settled) return;
+      if (error) return settle(reject, new Error((stderr || error.message).trim()));
       try {
-        resolve(JSON.parse(stdout.trim() || '{}'));
+        settle(resolve, JSON.parse(stdout.trim() || '{}'));
       } catch (parseError) {
-        reject(new Error(`Could not parse ${descriptor.label} command output: ${parseError.message}`));
+        settle(reject, new Error(`Could not parse ${descriptor.label} command output: ${parseError.message}`));
       }
     });
+    if (acceptCompleteJson) {
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', chunk => {
+        if (streamedStdout.length <= 10 * 1024 * 1024) streamedStdout += chunk;
+        acceptStreamedJson();
+      });
+    }
   });
 }
 
 async function runHarnessModelCommand(descriptor, { cwd } = {}) {
-  const parsed = await runHarnessJsonCommand(descriptor, descriptor.argv.models, { cwd });
-  return normalizeModels(parsed.models || parsed);
+  const cacheKey = `${descriptor.id}\0${resolveHarnessCwd(cwd)}`;
+  const cached = harnessModelsCache.get(cacheKey);
+  if (cached && Object.hasOwn(cached, 'models')
+      && Date.now() - cached.time < MODELS_CACHE_TTL) return cached.models;
+  if (cached?.inFlight) return cached.inFlight;
+
+  const entry = cached || {};
+  entry.inFlight = runHarnessJsonCommand(
+    descriptor, descriptor.argv.models, { cwd, acceptCompleteJson: true },
+  ).then(parsed => {
+    entry.models = normalizeModels(parsed.models || parsed);
+    entry.time = Date.now();
+    return entry.models;
+  }).finally(() => { delete entry.inFlight; });
+  harnessModelsCache.set(cacheKey, entry);
+  return entry.inFlight;
 }
 
 // OMP loads dotenv files in this order after process.env: <cwd>/.env,

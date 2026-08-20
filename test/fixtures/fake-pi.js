@@ -22,6 +22,9 @@ const harnessId = process.env.PI_FIXTURE_HARNESS || 'pi';
 // catalog/config reads and long-lived TUI launches. Speak those CLI surfaces
 // before entering the bridge-registration fixture below.
 if (harnessId === 'omp' && args[0] === 'models' && args.includes('--json')) {
+  if (process.env.PI_FIXTURE_MODEL_EVENTS_FILE) {
+    fs.appendFileSync(process.env.PI_FIXTURE_MODEL_EVENTS_FILE, `start ${process.pid}\n`);
+  }
   const model = (provider, id, thinking, name = id) => ({
     provider, id, selector: `${provider}/${id}`, name,
     contextWindow: id === 'glm-5.2' ? 1000000 : 200000,
@@ -39,7 +42,18 @@ if (harnessId === 'omp' && args[0] === 'models' && args.includes('--json')) {
     model('fixture-missing', 'missing-model', null),
     model('fixture-blank', 'blank-model', null),
   ] }) + '\n');
-  process.exit(0);
+  const lingerMs = Number(process.env.PI_FIXTURE_MODELS_LINGER_MS) || 0;
+  if (lingerMs > 0) {
+    setTimeout(() => {
+      if (process.env.PI_FIXTURE_MODEL_EVENTS_FILE) {
+        fs.appendFileSync(process.env.PI_FIXTURE_MODEL_EVENTS_FILE, `finish ${process.pid}\n`);
+      }
+      process.exit(0);
+    }, lingerMs);
+  } else {
+    process.exit(0);
+  }
+  return;
 }
 
 // OMP's global config lives under $HOME; a project `.omp/config.yml` overlays

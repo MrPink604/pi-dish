@@ -6787,10 +6787,6 @@ async function spawnNewSession() {
   try { target = selectedSpawnTarget(); } catch (e) { nsError(e.message); return; }
   const name = (document.getElementById('newSessionName')?.value || '').trim();
   const cwd = (document.getElementById('newSessionCwd')?.value || '').trim();
-  if (selectedHarnessId() === 'omp' && knownModelsCwd !== (cwd || '')) {
-    nsError('Wait for the Oh My Pi model and credential check to finish.');
-    return;
-  }
   nsError('');
   if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
   try {

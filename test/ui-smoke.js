@@ -1151,6 +1151,10 @@ function writeRegistry(patch = {}) {
           : { status: 'starting', createdAt: Date.now() };
       await route.fulfill({ status: spawnResult === 'starting' ? 202 : 200, contentType: 'application/json', body: JSON.stringify(result) });
     });
+    // A cached catalog is enough to submit immediately. The server still
+    // validates explicit model/thinking values, while its in-flight catalog
+    // request also serves that validation.
+    await desktop.evaluate(() => { knownModelsCwd = null; });
     await desktop.click('#nsSpawnBtn');
     await desktop.waitForSelector('.session-item.starting');
     check(asyncSpawnBody?.async === true, 'takeover spawn opts into asynchronous spawning');
