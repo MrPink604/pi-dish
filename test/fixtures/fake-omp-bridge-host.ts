@@ -11,6 +11,13 @@ const pi: any = {
   },
   registerCommand() {},
   getCommands() { return []; },
+  getActiveTools() { return ["read"]; },
+  getAllTools() {
+    return [
+      { name: "read", description: "Read a file", parameters: { type: "object" } },
+      { name: "bash", description: "Run a command", parameters: { type: "object" } },
+    ];
+  },
   getThinkingLevel() { return "minimal"; },
   setThinkingLevel() {},
   setSessionName() {},
@@ -29,6 +36,7 @@ const ctx: any = {
   ui,
   cwd: process.cwd(),
   model: { provider: "zai", id: "glm-4.7-flash" },
+  getSystemPrompt() { return "effective fake OMP system prompt"; },
   getContextUsage() { return { tokens: 100, contextWindow: 200000, percent: 0.05 }; },
   sessionManager: {
     getSessionFile() { return sessionFile; },

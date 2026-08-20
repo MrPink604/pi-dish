@@ -185,6 +185,29 @@ so pi-dish disables/refuses detach rather than risking the worker.
 Use `PI_DISH_OMP_COMMAND` or `PI_DISH_PRIME_COMMAND` when a CLI is not on
 `PATH`, analogous to `PI_DISH_PI_COMMAND` for Pi.
 
+To make OMP's built-in `/share` publish its native live export through
+pi-dish instead of OMP's default share service, install the optional custom
+share hook:
+
+```bash
+mkdir -p ~/.omp/agent
+ln -s "$PWD/extensions/pi-dish-share-omp.mjs" ~/.omp/agent/share.mjs
+```
+
+OMP sessions launched by pi-dish inherit `PI_DISH_URL` automatically. For an
+OMP process launched elsewhere, set it to the reachable pi-dish server, for
+example `PI_DISH_URL=http://127.0.0.1:3333 omp`. OMP builds the HTML before it
+calls this hook, so the resulting pi-dish link preserves OMP's native viewer,
+effective system prompt, active tool list, and OMP-specific transcript entry
+types. Set `PI_DISH_SHARE_BASE_URL` on the pi-dish server when the returned
+link should use a different public origin.
+
+The share button in pi-dish also uses OMP's native renderer. While the OMP
+session is live, the bridge supplies the current system prompt and active tool
+descriptions to that export. An offline historical JSONL still renders all of
+its persisted OMP records natively, but cannot reconstruct runtime-only prompt
+or tool state that OMP did not write to the file.
+
 The current real-host compatibility canary is pinned to OMP 17.2.11 (which
 requires Bun 1.3.14+) and Prime Agent 0.7.1. See Development for the isolated
 install and test command.

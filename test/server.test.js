@@ -21,6 +21,7 @@ const zlib = require('node:zlib');
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-test-'));
 process.env.HOME = tmpHome;
 process.env.PORT = '0'; // random free port
+process.env.PI_DISH_OMP_COMMAND = `${process.execPath} ${path.join(__dirname, 'fixtures', 'fake-omp-export.js')}`;
 // The runtime pid-fallback (describeRuntime → findPaneByPid) scans every tmux
 // server under the tmpdir; point it at an empty temp dir so a tmux session
 // enclosing `npm test` can't leak into the runtime assertions below.
@@ -275,6 +276,38 @@ test('encoded alternative-harness routes never fall back to a partial native id'
 
   const partial = await get(`/api/sessions/${encodeURIComponent(encodeSessionKey('omp', 'omp-prefix'))}/stats`);
   assert.equal(partial.status, 404, 'a canonical encoded route must not select a partial native-id match');
+});
+
+test('OMP sibling-directory subagents are addressable and appear as session relations', async () => {
+  const childNativeId = 'omp-subagent-native-id';
+  const childRouteId = encodeSessionKey('omp', childNativeId);
+  const childFile = path.join(ompSessionFile.slice(0, -'.jsonl'.length), 'Explore.jsonl');
+  fs.mkdirSync(path.dirname(childFile), { recursive: true });
+  fs.writeFileSync(childFile, [
+    { type: 'title', title: 'Explore subagent' },
+    { type: 'session', version: 3, id: childNativeId, cwd: ompCwd },
+    { type: 'message', id: 'omp-sub-u1', parentId: null, message: {
+      role: 'user', content: [{ type: 'text', text: 'Inspect the OMP code' }],
+    } },
+  ].map(JSON.stringify).join('\n') + '\n');
+
+  const listed = await get('/api/sessions');
+  const child = listed.body.previous.find(session => session.id === childRouteId);
+  assert.ok(child, 'OMP subagent is listed under its native header id');
+  assert.equal(child.parentId, OMP_ROUTE_ID);
+  assert.equal(child.parentSource, 'omp-subsession-layout');
+  assert.equal(child.familyParentId, OMP_ROUTE_ID, 'same-workspace OMP subagent joins the sidebar family');
+
+  const childRelated = await get(`/api/sessions/${encodeURIComponent(childRouteId)}/related`);
+  assert.ok(childRelated.body.relations.some(relation =>
+    relation.kind === 'parent' && relation.source === 'omp-subsession-layout' && relation.session.id === OMP_ROUTE_ID));
+  const parentRelated = await get(`/api/sessions/${encodeURIComponent(OMP_ROUTE_ID)}/related`);
+  assert.ok(parentRelated.body.relations.some(relation =>
+    relation.kind === 'child' && relation.source === 'omp-subsession-layout' && relation.session.id === childRouteId));
+
+  const messages = await get(`/api/sessions/${encodeURIComponent(childRouteId)}/messages?limit=10`);
+  assert.equal(messages.status, 200);
+  assert.equal(messages.body.messages[0].content[0].text, 'Inspect the OMP code');
 });
 
 test('fresh live routes distinguish missing history, then use the session file before indexing', async () => {
@@ -2689,13 +2722,107 @@ test('OMP sessions can create and render public share links', async () => {
   const res = await fetch(`${base}${created.body.path}`);
   assert.equal(res.status, 200);
   const html = await res.text();
+  assert.ok(html.includes('Native OMP fixture export'), 'sharing uses the OMP renderer');
   const dataMatch = html.match(/id="session-data"[^>]*>([^<]+)</);
   assert.ok(dataMatch, 'OMP export embeds session data');
   const payload = JSON.parse(Buffer.from(dataMatch[1], 'base64').toString('utf8'));
   assert.equal(payload.header.id, OMP_SESSION_ID);
   assert.ok(payload.entries.some(entry => entry.id === 'omp-a1'), 'OMP transcript entries reach the export');
+  assert.ok(payload.entries.some(entry => entry.type === 'title'), 'OMP pre-header records are preserved');
   assert.equal(fs.readFileSync(ompSessionFile, 'utf8').split('\n')[0],
     JSON.stringify({ type: 'title', title: 'Exact OMP fixture' }), 'sharing does not rewrite the OMP session');
+});
+
+test('live OMP shares include the effective system prompt and active tools', async () => {
+  const socketPath = path.join(tmpHome, 'omp-share-snapshot.sock');
+  const identity = processIdentity(process.pid);
+  const instanceId = 'omp-share-snapshot';
+  const claim = {
+    protocolVersion: 2,
+    wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+    harnessId: 'omp', nativeSessionId: OMP_SESSION_ID, sessionId: OMP_SESSION_ID,
+    bridgeInstanceId: instanceId, instanceId,
+    sessionFile: ompSessionFile, socketPath, cwd: ompCwd,
+    pid: identity.pid, startTime: identity.startTime,
+    capabilities: { shareSnapshot: true }, spawnToken: null,
+  };
+  const sockets = new Set();
+  const bridge = net.createServer(sock => {
+    sockets.add(sock);
+    sock.on('close', () => sockets.delete(sock));
+    sock.write(JSON.stringify({ type: 'hello', ...claim }) + '\n');
+    let pending = '';
+    sock.on('data', chunk => {
+      pending += chunk;
+      for (;;) {
+        const newline = pending.indexOf('\n');
+        if (newline < 0) break;
+        const command = JSON.parse(pending.slice(0, newline));
+        pending = pending.slice(newline + 1);
+        if (command.command === 'share_snapshot') {
+          sock.write(JSON.stringify({
+            type: 'response', id: command.id, success: true,
+            data: {
+              systemPrompt: 'effective OMP system prompt',
+              tools: [{ name: 'read', description: 'Read a file' }],
+            },
+          }) + '\n');
+        }
+      }
+    });
+  });
+  await new Promise(resolve => bridge.listen(socketPath, resolve));
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const registryPath = path.join(registryDir, `${instanceId}.json`);
+  fs.writeFileSync(registryPath, JSON.stringify(claim));
+  invalidateRegistryCache();
+
+  try {
+    const created = await post(`/api/sessions/${encodeURIComponent(OMP_ROUTE_ID)}/share`, {});
+    const shared = await fetch(`${base}${created.body.path}`);
+    assert.equal(shared.status, 200);
+    const html = await shared.text();
+    const dataMatch = html.match(/id="session-data"[^>]*>([^<]+)</);
+    const payload = JSON.parse(Buffer.from(dataMatch[1], 'base64').toString('utf8'));
+    assert.equal(payload.systemPrompt, 'effective OMP system prompt');
+    assert.deepEqual(payload.tools, [{ name: 'read', description: 'Read a file' }]);
+  } finally {
+    fs.rmSync(registryPath, { force: true });
+    invalidateRegistryCache();
+    for (const sock of sockets) sock.destroy();
+    await new Promise(resolve => bridge.close(resolve));
+  }
+});
+
+test('OMP custom /share imports and serves its exact native live HTML', async () => {
+  const data = {
+    header: { type: 'session', id: 'live-omp-share' },
+    entries: [{ type: 'message', id: 'live-a1' }],
+    systemPrompt: 'effective live system prompt',
+    tools: [{ name: 'read', description: 'Read a file' }],
+  };
+  const encoded = Buffer.from(JSON.stringify(data)).toString('base64');
+  const html = `<!doctype html><html><body><h1>exact native OMP snapshot</h1><script id="session-data">${encoded}</script></body></html>`;
+  const imported = await fetch(`${base}/api/shares/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    body: html,
+  });
+  const result = await imported.json();
+  assert.equal(imported.status, 200, JSON.stringify(result));
+  assert.equal(result.path, `/share/${result.token}`);
+
+  const shared = await fetch(`${base}${result.path}`);
+  assert.equal(shared.status, 200);
+  assert.equal(await shared.text(), html, 'the live export is not reconstructed or altered');
+
+  const invalid = await fetch(`${base}/api/shares/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/html' },
+    body: '<html><h1>not an OMP export</h1></html>',
+  });
+  assert.equal(invalid.status, 400);
 });
 
 test('GET/DELETE /share reflect and revoke the current share state', async () => {

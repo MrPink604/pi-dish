@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { discoverSessionCandidates, findSessionCandidate, readSessionHeader } = require('../lib/session-discovery');
+const { registry } = require('../lib/harnesses');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-discovery-'));
 test.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -31,6 +32,32 @@ test('discovers traditional and nested generic Pi sessions with compatible ident
   assert.equal(child.depth, 3);
   assert.equal(readSessionHeader(child.file).parentSession, path.join(workspace, '2026-01-01_parent.jsonl'));
   assert.equal(findSessionCandidate(sessions, 'core-child', { allowPartial: false }).candidate.file, child.file);
+});
+
+test('discovers OMP sibling-directory subsessions without loosening Pi discovery', () => {
+  const sessions = path.join(root, 'sessions-omp-subagents');
+  const workspace = path.join(sessions, 'workspace');
+  const parent = path.join(workspace, 'root-session.jsonl');
+  const child = path.join(workspace, 'root-session', 'Explore.jsonl');
+  const grandchild = path.join(workspace, 'root-session', 'Explore', 'Helper.jsonl');
+  write(parent, { type: 'session', id: 'root-session', cwd: '/workspace' });
+  write(child, { type: 'session', id: 'omp-child-id', cwd: '/workspace' });
+  write(grandchild, { type: 'session', id: 'omp-grandchild-id', cwd: '/workspace' });
+  write(path.join(workspace, 'artifacts', 'events.jsonl'), {
+    type: 'session', id: 'not-under-a-session', cwd: '/workspace',
+  });
+
+  const omp = discoverSessionCandidates(sessions, { descriptor: registry.omp });
+  assert.deepEqual(omp.candidates.map(candidate => candidate.id), [
+    'root-session', 'omp-child-id', 'omp-grandchild-id',
+  ]);
+  assert.equal(omp.candidates.find(candidate => candidate.id === 'omp-child-id').parentSession, parent);
+  assert.equal(omp.candidates.find(candidate => candidate.id === 'omp-grandchild-id').parentSession, child);
+  assert.equal(omp.candidates.some(candidate => candidate.id === 'not-under-a-session'), false);
+
+  const pi = discoverSessionCandidates(sessions, { descriptor: registry.pi });
+  assert.deepEqual(pi.candidates.map(candidate => candidate.id), ['root-session'],
+    'arbitrarily named nested JSONLs remain excluded from Pi');
 });
 
 test('bounded discovery skips over-depth directories, symlinks, and reports caps', () => {

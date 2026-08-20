@@ -244,6 +244,9 @@ export type BridgeDescriptor = {
   treeCommandContext?: boolean;
   treeCommandAcquireTimeoutMs?: number;
   treeCommandOperationTimeoutMs?: number;
+  // OMP stores subagents at `<parent>/<agent>.jsonl`. Their local agent
+  // filename is not the globally unique session identity in the header.
+  nestedSubsessions?: boolean;
   // Resident harness daemons may not forward arbitrary client environment
   // variables. Launch-specific wrappers inject this value directly instead.
   spawnToken?: string;
@@ -280,16 +283,21 @@ function foreignWrapperHost(): string | null {
   return null;
 }
 
-function deriveSessionIdentity(ctx: ExtensionContext): { sessionFile: string; sessionId: string; cwd: string } | null {
+function deriveSessionIdentity(
+  ctx: ExtensionContext,
+  descriptor: BridgeDescriptor,
+): { sessionFile: string; sessionId: string; cwd: string } | null {
   const manager: any = (ctx as any)?.sessionManager;
   const sessionFile = typeof manager?.getSessionFile === "function" ? manager.getSessionFile() : null;
   if (!sessionFile) return null; // ephemeral, skip
 
   // Normal sessions use their unique JSONL basename. pi-subagents-style
-  // explicit <run-N>/session.jsonl files are the exception: every basename
-  // is "session", so use the unique, path-safe header id when available.
+  // explicit <run-N>/session.jsonl files and OMP sibling-directory subagents
+  // are exceptions: their basenames are generic/local agent handles, so use
+  // the unique, path-safe header id when available.
   let sessionId = path.basename(sessionFile, ".jsonl");
-  if (sessionId === "session") {
+  const nestedSubsession = descriptor.nestedSubsessions && fs.existsSync(`${path.dirname(sessionFile)}.jsonl`);
+  if (sessionId === "session" || nestedSubsession) {
     const headerId = typeof manager.getSessionId === "function" ? manager.getSessionId() : null;
     if (
       typeof headerId === "string" &&
@@ -1511,6 +1519,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         abort: "abort",
         get_available_models: "models",
         get_commands: "commands",
+        share_snapshot: "shareSnapshot",
         run_command: "commands",
         extension_ui_response: "extensionUI",
         set_model: "setModel",
@@ -1685,6 +1694,25 @@ export function createBridge(descriptor: BridgeDescriptor) {
           if (!lastCtx) return respond(false, undefined, "no active context");
           const models = await lastCtx.modelRegistry.getAvailable();
           respond(true, { models });
+          return;
+        }
+
+        case "share_snapshot": {
+          if (!lastCtx) return respond(false, undefined, "no active context");
+          try {
+            const active = new Set(pi.getActiveTools());
+            const tools = pi.getAllTools()
+              .filter((tool: any) => active.has(tool.name))
+              .map((tool: any) => ({ name: tool.name, description: tool.description || "" }));
+            respond(true, {
+              systemPrompt: lastCtx.getSystemPrompt(),
+              tools,
+            });
+          } catch (error: any) {
+            capabilities.shareSnapshot = false;
+            writeRegistry();
+            respond(false, undefined, String(error?.message || error));
+          }
           return;
         }
 
@@ -1887,6 +1915,11 @@ export function createBridge(descriptor: BridgeDescriptor) {
     if (descriptor.capabilities.compact) {
       capabilities.compact = typeof (ctx as any)?.compact === "function";
     }
+    if (descriptor.capabilities.shareSnapshot) {
+      capabilities.shareSnapshot = typeof (ctx as any)?.getSystemPrompt === "function"
+        && typeof (pi as any)?.getActiveTools === "function"
+        && typeof (pi as any)?.getAllTools === "function";
+    }
     commandCtx = null; // any stashed command ctx predates this runner/session
     const manager: any = (ctx as any)?.sessionManager;
     if (capabilities.treeRead && (!manager || typeof manager.getTree !== "function" ||
@@ -1899,7 +1932,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     }
     refreshModel(ctx);
     refreshContextUsage(ctx);
-    const identity = deriveSessionIdentity(ctx);
+    const identity = deriveSessionIdentity(ctx, descriptor);
     if (!identity) return;
     ({ sessionFile, sessionId, cwd } = identity);
     const claimKey = `${descriptor.harnessId}:${instanceId}`;
@@ -1918,7 +1951,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     lastCtx = ctx ?? lastCtx;
     commandCtx = null;
 
-    const identity = deriveSessionIdentity(ctx);
+    const identity = deriveSessionIdentity(ctx, descriptor);
     if (!identity) return;
     const previousSessionId = sessionId;
     const previousSessionFile = sessionFile;

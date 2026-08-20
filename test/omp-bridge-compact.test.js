@@ -7,14 +7,20 @@ const { spawn } = require('node:child_process');
 
 const { BridgeSession } = require('../lib/bridge-session');
 
-async function startFakeHost(hasCompact, { swallowOutcome = false } = {}) {
+async function startFakeHost(hasCompact, { swallowOutcome = false, nestedSubsession = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-compact-'));
   const home = path.join(root, 'home');
   const socketDir = path.join(root, 'sockets');
-  const sessionFile = path.join(root, 'fake-omp.jsonl');
+  const parentFile = path.join(root, 'fake-parent.jsonl');
+  const sessionFile = nestedSubsession
+    ? path.join(root, 'fake-parent', 'Explore.jsonl')
+    : path.join(root, 'fake-omp.jsonl');
   const callFile = path.join(root, 'compact-call.json');
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(socketDir, { recursive: true, mode: 0o700 });
+  if (nestedSubsession) {
+    fs.writeFileSync(parentFile, JSON.stringify({ type: 'session', id: 'fake-parent', cwd: root }) + '\n');
+  }
   const child = spawn('bun', [path.join(__dirname, 'fixtures', 'fake-omp-bridge-host.ts')], {
     cwd: path.resolve(__dirname, '..'),
     env: {
@@ -58,12 +64,27 @@ async function startFakeHost(hasCompact, { swallowOutcome = false } = {}) {
   };
 }
 
+test('OMP bridge uses a nested subagent header id instead of its local agent filename', async () => {
+  const host = await startFakeHost(false, { nestedSubsession: true });
+  try {
+    assert.equal(host.claim.nativeSessionId, 'fake-omp');
+    assert.equal(path.basename(host.claim.sessionFile), 'Explore.jsonl');
+  } finally {
+    await host.close();
+  }
+});
+
 test('OMP bridge compact operation uses public ctx.compact and forwards lifecycle events', async () => {
   const host = await startFakeHost(true);
   const session = new BridgeSession(host.claim);
   try {
     assert.equal(host.claim.capabilities.compact, true);
+    assert.equal(host.claim.capabilities.shareSnapshot, true);
     await session.connect();
+    assert.deepEqual(await session.getShareSnapshot(), {
+      systemPrompt: 'effective fake OMP system prompt',
+      tools: [{ name: 'read', description: 'Read a file' }],
+    });
     const commands = await session.getCommands();
     assert.equal(commands.commands.some(command => command.name === 'compact'), true,
       'compact control is advertised when the operation is available');

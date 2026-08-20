@@ -141,6 +141,7 @@ function rememberSessionSource(candidate) {
 }
 function sourceForIdentity(harnessId, nativeSessionId, file) {
   const descriptor = getHarness(harnessId);
+  const nestedParent = descriptor?.nestedSubsessions ? `${path.dirname(file)}.jsonl` : null;
   return rememberSessionSource({
     file,
     id: nativeSessionId,
@@ -149,6 +150,7 @@ function sourceForIdentity(harnessId, nativeSessionId, file) {
     harnessId,
     profileId: descriptor?.profileId || 'pi-v3',
     profileVersion: descriptor?.profileVersion || 1,
+    parentSession: nestedParent && fs.existsSync(nestedParent) ? nestedParent : null,
   });
 }
 function sourceForRead(input) {
@@ -693,6 +695,7 @@ function activeSessionEntry(v) {
     cwd: v.cwd || null,
     sessionFile: v.sessionFile || null,
     parentSession: v.parentSession || null,
+    parentSessionSource: v.parentSessionSource || null,
     pid: v.pid || null,
   };
 }
@@ -722,9 +725,10 @@ function getActiveSessions(registered = listRegisteredSessions()) {
     const identityFields = sessionIdentityFields(identity.harnessId, identity.nativeSessionId);
     const ownedSpawn = tmux.getSpawn(routeId);
     let info = {};
+    let source = null;
     if (reg.sessionFile && fs.existsSync(reg.sessionFile)) {
       try {
-        const source = sourceForIdentity(identity.harnessId, identity.nativeSessionId, reg.sessionFile);
+        source = sourceForIdentity(identity.harnessId, identity.nativeSessionId, reg.sessionFile);
         info = parseSessionFile(source);
       } catch {}
     }
@@ -755,7 +759,8 @@ function getActiveSessions(registered = listRegisteredSessions()) {
       compacting: reg.compacting,
       cwd: reg.cwd || info.cwd,
       sessionFile: reg.sessionFile,
-      parentSession: info.parentSession,
+      parentSession: info.parentSession || source?.parentSession,
+      parentSessionSource: !info.parentSession && source?.parentSession ? 'omp-subsession-layout' : null,
       pid: reg.pid,
     }));
     seen.add(routeId);
@@ -856,7 +861,8 @@ function getPreviousSessions(registered = listRegisteredSessions()) {
         isActive: false,
         cwd,
         sessionFile: file,
-        parentSession: info.parentSession || null,
+        parentSession: info.parentSession || candidate.parentSession || null,
+        parentSessionSource: !info.parentSession && candidate.parentSession ? 'omp-subsession-layout' : null,
       });
     }
   } catch (e) {
@@ -933,7 +939,8 @@ function filterSessionsByQuery(list, query) {
 // the result.
 // Relationship hints on list rows are presentation-only. They let the client
 // arrange same-workspace families without fetching /related for every row;
-// they never grant control authority. Native Pi lineage wins when both exist.
+// they never grant control authority. Native/structural lineage wins when
+// both it and pi-dish launch provenance exist.
 function annotateSessionParents(list) {
   const launches = sessionProvenance.readLaunches();
   const byCanonicalPath = new Map();
@@ -955,7 +962,7 @@ function annotateSessionParents(list) {
     const parentId = nativeParent || launchParent;
     session.parentId = parentId && parentId !== session.id ? parentId : null;
     session.parentSource = nativeParent
-      ? 'pi-session-header' : launchParent ? 'pi-dish-launch' : null;
+      ? (session.parentSessionSource || 'pi-session-header') : launchParent ? 'pi-dish-launch' : null;
     const parent = byId.get(session.parentId);
     session.familyParentId = parent && (parent.cwd || '~') === (session.cwd || '~')
       ? parent.id : null;
@@ -1017,8 +1024,9 @@ function buildSessionCatalog() {
   };
 }
 
-// Advisory relationships only: Pi's native parentSession header and
-// pi-dish-side launch provenance. Neither implies ownership or control rights.
+// Advisory relationships only: native parentSession headers, OMP's nested
+// subsession layout, and pi-dish-side launch provenance. None implies
+// ownership or control rights.
 app.get('/api/sessions/:id/related', (req, res) => {
   try {
     const catalog = buildSessionCatalog();
@@ -1038,7 +1046,8 @@ app.get('/api/sessions/:id/related', (req, res) => {
         lastActivity: info.lastActivity,
         isActive: false,
         sessionFile: candidate.file,
-        parentSession: info.parentSession,
+        parentSession: info.parentSession || candidate.parentSession,
+        parentSessionSource: !info.parentSession && candidate.parentSession ? 'omp-subsession-layout' : null,
       };
       catalog.byId.set(current.id, current);
       catalog.byPath.set(canonicalSessionPath(candidate.file), current);
@@ -1061,9 +1070,11 @@ app.get('/api/sessions/:id/related', (req, res) => {
       return catalog.byPath.get(canonicalSessionPath(parentPath)) || null;
     };
 
-    add('parent', 'pi-session-header', resolveParent(current));
+    add('parent', current.parentSessionSource || 'pi-session-header', resolveParent(current));
     for (const candidate of catalog.list) {
-      if (resolveParent(candidate)?.id === current.id) add('child', 'pi-session-header', candidate);
+      if (resolveParent(candidate)?.id === current.id) {
+        add('child', candidate.parentSessionSource || 'pi-session-header', candidate);
+      }
     }
 
     const launch = sessionProvenance.getLaunch(current.id);
@@ -2078,6 +2089,26 @@ app.get('/api/sessions/:id/stats', async (req, res) => {
   }
 });
 
+async function getOmpShareSnapshot(session) {
+  if (session?.profileId !== 'omp-v1') return undefined;
+  const registered = getRegisteredSession(apiIdForCandidate(session));
+  if (registered?.capabilities?.shareSnapshot !== true) return undefined;
+  try {
+    const live = await getLiveSession(apiIdForCandidate(session));
+    if (!(live instanceof BridgeSession) || !liveSessionSupports(live, 'shareSnapshot')) return undefined;
+    return await live.getShareSnapshot();
+  } catch {
+    // A native OMP JSONL export remains useful when an old or disconnected
+    // bridge cannot provide the live-only system prompt and tool catalog.
+    return undefined;
+  }
+}
+
+async function exportSessionHtml(session, outputPath, { shareSnapshot, snapshotResolved = false } = {}) {
+  if (!snapshotResolved) shareSnapshot = await getOmpShareSnapshot(session);
+  return piSDK.exportSessionHtml(session.file, outputPath, session.profileId, { shareSnapshot });
+}
+
 // Export any session (active or not) to a standalone HTML file.
 app.get('/api/sessions/:id/export', async (req, res) => {
   try {
@@ -2091,10 +2122,9 @@ app.get('/api/sessions/:id/export', async (req, res) => {
     if (session.harnessId !== 'pi' && session.harnessId !== 'omp') {
       return res.status(409).json({ error: 'HTML export is only supported for Pi and OMP sessions.' });
     }
-    const sessionFile = session.file;
     const outPath = path.join(os.tmpdir(), `pi-dish-export-${req.params.id.slice(-12)}.html`);
-    const htmlPath = await piSDK.exportSessionHtml(sessionFile, outPath, session.profileId);
-    res.download(htmlPath, path.basename(sessionFile, '.jsonl') + '.html');
+    const htmlPath = await exportSessionHtml(session, outPath);
+    res.download(htmlPath, path.basename(session.file, '.jsonl') + '.html');
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -2104,11 +2134,11 @@ app.get('/api/sessions/:id/export', async (req, res) => {
 // Public read-only share links
 // =========================================================================
 //
-// A share is a random token mapping to a sessionId (lib/shares.js). The
-// management API below is authed (main app only); the public GET /share/:token
-// renders the standalone HTML export inline and is mounted on both the main app
-// and the optional share listener (see startup). The route reveals nothing
-// about unknown/missing sessions — every miss is a bare 404.
+// A share is a random token referencing either a sessionId or an immutable
+// native HTML snapshot (lib/shares.js). The management API lives on the main
+// app only; public GET /share/:token is mounted on both the main app and the
+// optional share listener (see startup). The route reveals nothing about
+// unknown/missing shares — every miss is a bare 404.
 
 // { path, url } for a token. url is set only when PI_DISH_SHARE_BASE_URL is,
 // so operators behind a proxy can hand out an absolute link.
@@ -2119,13 +2149,19 @@ function sharePayload(token) {
   return { token, path: sharePath, url };
 }
 
-// Per-token export cache keyed on the JSONL's (mtimeMs, size), so repeated
-// hits on an unchanged session don't re-run the exporter.
+// Per-token export cache keyed on the JSONL's (mtimeMs, size) and live export
+// snapshot, so repeated hits on an unchanged session don't re-run the exporter.
 const shareExportCache = new Map();
 
 async function serveSharedSession(req, res) {
   const share = shares.getShare(req.params.token);
   if (!share) return res.status(404).type('text/plain').send('Not found');
+  if (share.kind === 'html') {
+    const htmlPath = shares.getShareHtmlPath(req.params.token);
+    if (!htmlPath) return res.status(404).type('text/plain').send('Not found');
+    res.type('html');
+    return res.sendFile(htmlPath);
+  }
   const session = findSessionSource(share.sessionId);
   if (!session || (session.harnessId !== 'pi' && session.harnessId !== 'omp')) {
     return res.status(404).type('text/plain').send('Not found');
@@ -2133,15 +2169,18 @@ async function serveSharedSession(req, res) {
   const sessionFile = session.file;
   try {
     const st = fs.statSync(sessionFile);
+    const shareSnapshot = await getOmpShareSnapshot(session);
+    const snapshotKey = shareSnapshot ? JSON.stringify(shareSnapshot) : null;
     const cached = shareExportCache.get(req.params.token);
     let htmlPath;
-    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size && fs.existsSync(cached.htmlPath)) {
+    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size
+      && cached.snapshotKey === snapshotKey && fs.existsSync(cached.htmlPath)) {
       htmlPath = cached.htmlPath;
     } else {
       // Token is base64url (A-Za-z0-9_-), so it's already a safe basename.
       const outPath = path.join(os.tmpdir(), `pi-dish-share-${req.params.token}.html`);
-      htmlPath = await piSDK.exportSessionHtml(sessionFile, outPath, session.profileId);
-      shareExportCache.set(req.params.token, { mtimeMs: st.mtimeMs, size: st.size, htmlPath });
+      htmlPath = await exportSessionHtml(session, outPath, { shareSnapshot, snapshotResolved: true });
+      shareExportCache.set(req.params.token, { mtimeMs: st.mtimeMs, size: st.size, snapshotKey, htmlPath });
     }
     res.type('html');
     res.sendFile(htmlPath);
@@ -2149,6 +2188,33 @@ async function serveSharedSession(req, res) {
     res.status(500).type('text/plain').send('Export failed');
   }
 }
+
+function validOmpShareHtml(html) {
+  if (typeof html !== 'string' || !html.includes('<html')) return false;
+  const match = html.match(/<script\b(?=[^>]*\bid=["']session-data["'])[^>]*>([\s\S]*?)<\/script>/i);
+  if (!match) return false;
+  try {
+    const data = JSON.parse(Buffer.from(match[1].trim(), 'base64').toString('utf8'));
+    return !!data?.header && Array.isArray(data.entries);
+  } catch {
+    return false;
+  }
+}
+
+// OMP's supported custom-share hook gives us the complete native HTML that
+// /share generated from the live session. Preserve that exact snapshot rather
+// than trying to reconstruct OMP-only metadata from historical JSONL.
+app.post('/api/shares/import', express.text({ type: 'text/html', limit: '20mb' }), (req, res) => {
+  if (!validOmpShareHtml(req.body)) {
+    return res.status(400).json({ error: 'Expected a standalone OMP HTML export' });
+  }
+  try {
+    const token = shares.createHtmlShare(req.body);
+    return res.json(sharePayload(token));
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
 
 app.post('/api/sessions/:id/share', (req, res) => {
   const session = findSessionSource(req.params.id);
