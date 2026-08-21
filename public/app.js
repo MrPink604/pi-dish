@@ -4254,6 +4254,7 @@ async function publishFileView() {
         path,
         sessionId,
         title: path.split('/').pop(),
+        renderer: 'file',
       }),
     });
     const data = await res.json();

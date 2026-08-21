@@ -23,6 +23,7 @@ const {
 } = require('./lib/bridge-session');
 const { searchFiles, searchHomeDirs, getDirChildren, completePath, isPathCompletionToken } = require('./lib/file-search');
 const { resolveFileMention, readFileForViewer } = require('./lib/file-mention');
+const { renderFilePage } = require('./lib/file-page');
 const { aggregateDiffs, getFilePatch, getDiffVersion } = require('./lib/git-diff');
 const terminal = require('./lib/terminal');
 const tmux = require('./lib/tmux');
@@ -2354,7 +2355,7 @@ function cleanCommentTarget(raw) {
   if (raw.kind === 'page') {
     const pageToken = shortString(raw.pageToken, 256);
     const page = pageToken && pages.getPage(pageToken);
-    if (!page) return null;
+    if (!page || page.renderer === 'file') return null;
     return {
       kind: 'page', pageToken, root: page.root,
       title: page.title || null, anchor,
@@ -2518,6 +2519,7 @@ function pagePayload(token, entry) {
     root: entry.root,
     title: entry.title || null,
     sessionId: entry.sessionId || null,
+    renderer: entry.renderer || null,
     createdAt: entry.createdAt,
   };
 }
@@ -2529,10 +2531,13 @@ function pagePayload(token, entry) {
 // rule would only be theater: an agent can copy any file into its cwd).
 // The public share listener never registers, only serves known tokens.
 app.post('/api/pages', (req, res) => {
-  const { path: rawPath, title, sessionId } = req.body || {};
+  const { path: rawPath, title, sessionId, renderer } = req.body || {};
   const hasSessionId = Object.prototype.hasOwnProperty.call(req.body || {}, 'sessionId');
   if (typeof rawPath !== 'string' || !rawPath) {
     return res.status(400).json({ error: 'path required' });
+  }
+  if (renderer != null && renderer !== 'file') {
+    return res.status(400).json({ error: 'renderer must be "file" when provided' });
   }
   if (!path.isAbsolute(rawPath)) {
     return res.status(400).json({ error: 'path must be absolute' });
@@ -2544,6 +2549,9 @@ app.post('/api/pages', (req, res) => {
   }
   if (!stat.isFile() && !stat.isDirectory()) {
     return res.status(400).json({ error: 'path must be a file or directory' });
+  }
+  if (renderer === 'file' && !stat.isFile()) {
+    return res.status(400).json({ error: 'the file renderer requires a file' });
   }
   if (stat.isDirectory() && !fs.existsSync(path.join(root, 'index.html'))) {
     return res.status(400).json({ error: 'directory pages need an index.html' });
@@ -2561,7 +2569,12 @@ app.post('/api/pages', (req, res) => {
   } else {
     associatedSessionId = inferSessionForPath(root);
   }
-  const token = pages.createPage({ root, title: title || null, sessionId: associatedSessionId || null });
+  const token = pages.createPage({
+    root,
+    title: title || null,
+    sessionId: associatedSessionId || null,
+    renderer: renderer || null,
+  });
   res.json(pagePayload(token, pages.getPage(token)));
 });
 
@@ -2600,6 +2613,32 @@ function sendPageFile(file, req, res, annotate) {
   });
 }
 
+function sendRenderedFilePage(entry, req, res, notFound) {
+  let file;
+  try { file = readFileForViewer(entry.root, { imageData: false }); } catch { return notFound(); }
+  if (file.error) {
+    return res.status(file.status || 415).type('text/plain').send('File cannot be previewed');
+  }
+  if (req.query.content != null) {
+    if (!file.image) return notFound();
+    const safeMime = file.image.mimeType !== 'image/svg+xml'
+      ? file.image.mimeType : 'text/plain; charset=utf-8';
+    res.setHeader('Cache-Control', 'public, no-cache');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return res.type(safeMime).sendFile(entry.root, (err) => { if (err) notFound(); });
+  }
+  res.setHeader('Cache-Control', 'public, no-cache');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'self'; img-src 'self' http: https:; base-uri 'none'; form-action 'none'");
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.type('html').send(renderFilePage({
+    token: req.params.token,
+    root: entry.root,
+    title: entry.title,
+    file,
+  }));
+}
+
 function servePage(req, res, annotate = false) {
   const entry = pages.getPage(req.params.token);
   if (!entry) return res.status(404).type('text/plain').send('Not found');
@@ -2612,6 +2651,7 @@ function servePage(req, res, annotate = false) {
 
   if (stat.isFile()) {
     if (rest) return notFound(); // a file page has no sub-paths
+    if (entry.renderer === 'file') return sendRenderedFilePage(entry, req, res, notFound);
     return sendPageFile(entry.root, req, res, annotate);
   }
   if (!rest) return res.redirect(302, `/page/${req.params.token}/`);
@@ -5039,11 +5079,10 @@ const server = app.listen(PORT, HOST, () => {
     .catch(() => {});
 });
 
-// Optional dedicated share listener: a second minimal app that serves ONLY
-// the public content routes — GET /share/:token and GET /page/:token[/*]
-// (everything else 404s) — so operators can expose public session traces and
-// published pages on their own port/host without opening the rest of the
-// API. Both stay available on the main app regardless.
+// Optional dedicated share listener: a second minimal app that serves only
+// public content routes and the two static stylesheets used by standalone
+// file pages. Everything else 404s, so exposing this listener does not open
+// the main app or API. All public routes remain on the main app too.
 if (process.env.PI_DISH_SHARE_PORT) {
   const shareApp = express();
   shareApp.get('/share/:token', serveSharedSession);
@@ -5054,6 +5093,9 @@ if (process.env.PI_DISH_SHARE_PORT) {
     req.params[0] = '/' + (req.params[0] || '');
     servePage(req, res);
   });
+  shareApp.get('/style.css', (req, res) => res.sendFile(path.join(__dirname, 'public', 'style.css')));
+  shareApp.get('/vendor/hljs-theme.min.css', (req, res) =>
+    res.sendFile(path.join(__dirname, 'public', 'vendor', 'hljs-theme.min.css')));
   shareApp.use((req, res) => res.status(404).type('text/plain').send('Not found'));
   const shareHost = process.env.PI_DISH_SHARE_HOST || HOST;
   const shareServer = shareApp.listen(process.env.PI_DISH_SHARE_PORT, shareHost, () => {

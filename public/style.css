@@ -3824,6 +3824,28 @@ img.msg-image {
 
 .file-view-img { max-width: 100%; display: block; margin: 0 auto; }
 
+/* A file published from the viewer uses the same reading surface as the
+   in-app takeover, but as the entire public document: no app chrome,
+   controls, scripts, or comment affordances. */
+body.standalone-file-page {
+  height: auto;
+  min-height: 100%;
+  overflow-y: auto;
+}
+
+.standalone-file-page > .file-view {
+  display: flex;
+  min-height: 100vh;
+}
+
+.standalone-file-page .file-view-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.standalone-file-page .file-view-body { overflow: visible; }
+
 /* Diff view — main-pane takeover (± header button): aggregate uncommitted
    changes across every git repo under the session cwd. `.diff-open` on the
    session view hides the transcript/composer; !important because several of

@@ -1243,6 +1243,74 @@ test('POST /api/pages publishes a file and /page/:token serves it live from disk
   assert.equal((await fetch(base + body.path)).status, 404);
 });
 
+test('file-viewer pages render as standalone read-only documents', async () => {
+  const viewedFile = path.join(realCwd, 'published-view.md');
+  fs.writeFileSync(viewedFile, [
+    '# Rendered file',
+    '',
+    'A **formatted** finding.',
+    '',
+    '```js',
+    'const answer = 42;',
+    '```',
+    '',
+    '<script>globalThis.pwned = true</script>',
+    '[unsafe](javascript:alert(1))',
+  ].join('\n'));
+
+  const published = await post('/api/pages', {
+    path: viewedFile,
+    sessionId: REAL_CWD_ID,
+    title: 'published-view.md',
+    renderer: 'file',
+  });
+  assert.equal(published.status, 200);
+  assert.equal(published.body.renderer, 'file');
+
+  const response = await fetch(base + published.body.path);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type'), /text\/html/);
+  assert.match(response.headers.get('content-security-policy'), /default-src 'none'/);
+  const html = await response.text();
+  assert.match(html, /<body class="standalone-file-page">/);
+  assert.match(html, /<h1>Rendered file<\/h1>/);
+  assert.match(html, /A <strong>formatted<\/strong> finding/);
+  assert.match(html, /class="hljs language-js"/);
+  assert.match(html, /&lt;script&gt;globalThis\.pwned = true&lt;\/script&gt;/);
+  assert.match(html, /href="#"/);
+  assert.doesNotMatch(html, /artifact-comments|commentBubble|app\.js/,
+    'the standalone renderer has no app or commenting UI');
+
+  // File-rendered pages are not valid page-comment targets, even through the
+  // trusted main API.
+  const comment = await post('/api/comments', {
+    body: 'This should not be accepted.',
+    target: {
+      kind: 'page', pageToken: published.body.token,
+      anchor: { type: 'text', quote: 'Rendered file' },
+    },
+  });
+  assert.equal(comment.status, 400);
+
+  // The view remains live from disk like every other published page.
+  fs.writeFileSync(viewedFile, '## Revised file\n');
+  assert.match(await (await fetch(base + published.body.path)).text(), /<h2>Revised file<\/h2>/);
+
+  const image = await post('/api/pages', {
+    path: path.join(realCwd, 'preview.png'),
+    sessionId: REAL_CWD_ID,
+    renderer: 'file',
+  });
+  const imageHtml = await (await fetch(base + image.body.path)).text();
+  const imageSrc = imageHtml.match(/<img[^>]+src="([^"]+)"/)[1].replace(/&amp;/g, '&');
+  const imageContent = await fetch(base + imageSrc);
+  assert.equal(imageContent.headers.get('content-type'), 'image/png');
+  assert.deepEqual(Buffer.from(await imageContent.arrayBuffer()), TINY_PNG);
+
+  await del(`/api/pages/${published.body.token}`);
+  await del(`/api/pages/${image.body.token}`);
+});
+
 test('POST /api/pages rejects malformed or unknown explicit sessionIds without creating a page', async () => {
   const artifact = path.join(realCwd, 'invalid-session-page.html');
   fs.writeFileSync(artifact, '<p>must not publish</p>');
@@ -2917,7 +2985,7 @@ test('GET/DELETE /share reflect and revoke the current share state', async () =>
   assert.deepEqual(revokedAgain.body, { revoked: false });
 });
 
-test('dedicated share listener serves only raw shared sessions and pages', async () => {
+test('dedicated share listener serves shared sessions, pages, and standalone file styles', async () => {
   const { spawn } = require('node:child_process');
   // Create a share on the main server (writes shares.json under tmpHome; the
   // child reads the same HOME).
@@ -2926,6 +2994,11 @@ test('dedicated share listener serves only raw shared sessions and pages', async
   const rawPage = '<!doctype html><h1>raw shared page</h1>';
   fs.writeFileSync(pageFile, rawPage);
   const page = await post('/api/pages', { path: pageFile, sessionId: REAL_CWD_ID });
+  const viewedFile = path.join(realCwd, 'share-listener-file.md');
+  fs.writeFileSync(viewedFile, '# shared rendered file\n');
+  const viewedPage = await post('/api/pages', {
+    path: viewedFile, sessionId: REAL_CWD_ID, renderer: 'file',
+  });
 
   // Grab a free port for the share listener.
   const sharePort = await new Promise((resolve) => {
@@ -2957,8 +3030,15 @@ test('dedicated share listener serves only raw shared sessions and pages', async
     assert.equal(pageRes.status, 200);
     assert.equal(await pageRes.text(), rawPage, 'share listener does not inject the comment overlay');
 
+    const viewedRes = await fetch(`${shareBase}/page/${viewedPage.body.token}`);
+    assert.equal(viewedRes.status, 200);
+    assert.match(await viewedRes.text(), /<h1>shared rendered file<\/h1>/);
+    assert.equal((await fetch(`${shareBase}/style.css`)).status, 200,
+      'standalone file pages can load their shared renderer styles');
+    assert.equal((await fetch(`${shareBase}/vendor/hljs-theme.min.css`)).status, 200);
+
     const notFound = await fetch(`${shareBase}/api/sessions`);
-    assert.equal(notFound.status, 404, 'the share listener exposes nothing but /share');
+    assert.equal(notFound.status, 404, 'the share listener does not expose the main API');
   } finally {
     child.kill();
     await new Promise(r => child.on('exit', r));

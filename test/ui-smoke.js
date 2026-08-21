@@ -833,15 +833,18 @@ function writeRegistry(patch = {}) {
     check((await (await fetch(`${base}/api/comments/index?sessionId=${SESSION_ID}`)).json()).total === 0,
       'the deleted comment left the agent-facing index');
 
-    // Publish the viewed file as a page: 🌐 → link row → the public URL
-    // serves the file content → unpublish clears it.
+    // Publish the viewed file as a page: 🌐 → link row → a standalone copy of
+    // the file renderer (without app/comment UI) → unpublish clears it.
     await desktop.click('#fileViewPublish');
     await desktop.waitForSelector('#fileViewPage .stats-share-link', { timeout: 5000 });
     const pageLink = await desktop.locator('#fileViewPage .stats-share-link').textContent();
     check(/\/page\/[A-Za-z0-9_-]+$/.test(pageLink), `publish shows a token link (got ${pageLink})`);
     const pageRes = await fetch(pageLink);
-    check(pageRes.status === 200 && (await pageRes.text()).includes('hello from deep'),
-      'published page serves the file content');
+    const publishedHtml = await pageRes.text();
+    check(pageRes.status === 200 && publishedHtml.includes('<h1>deep findings</h1>')
+      && publishedHtml.includes('standalone-file-page')
+      && !publishedHtml.includes('artifact-comments.js'),
+      'published page uses the standalone file renderer without comments');
 
     // Shared-artifacts badge: the page plus the share link created earlier.
     console.log('artifacts:');
