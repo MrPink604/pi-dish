@@ -262,7 +262,10 @@ because OMP's public `sendUserMessage()` bypasses command dispatch. For OMP,
 the web-facing `/reload` maps to the bridge's `/dish-reload` pane command, where
 OMP supplies the command context required by `ctx.reload()`. OMP keeps
 advertising bridge capability `reload: false`; `/api/commands` derives support
-from whether `locatePiPane()` can reach its TUI. Other alternate wrappers do
+from whether `locatePiPane()` can reach its TUI. The same reachable-pane rule
+gates OMP's curated pane-typed host commands (`hostBuiltins` in
+lib/harnesses.js — /shake, /retry, /fresh, /clear, each verified
+non-interactive in a real OMP TUI before listing). Other alternate wrappers do
 not get this fallback. OMP 17.3's `ctx.reload()` reloads session/runtime state
 and emits a same-id `session_switch`; unlike Pi reload, it does not re-import
 explicit `--extension` modules, so updating the OMP bridge itself still needs

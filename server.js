@@ -2736,17 +2736,21 @@ function parseHostBuiltin(descriptor, message) {
   return { command, text: `/${name}${args ? ` ${args}` : ''}`, hasArgs: !!args };
 }
 
-async function ownedHostPane(sessionId, descriptor) {
+// Host builtins execute by typing into the session's TUI pane. Like the
+// /reload fallback, the capability is a *reachable* pane (bridge tmux stamp,
+// recorded spawn placement, or pid walk — locatePiPane), not only a
+// pi-dish-owned one: sessions the user launched in their own tmux get the
+// same curated commands. The shared trade-off: send-keys appends to any
+// draft sitting in the TUI composer.
+async function hostBuiltinPane(sessionId, descriptor) {
   if (!descriptor?.hostBuiltins?.length) return null;
-  const spawn = tmux.getSpawn(sessionId);
-  if (!spawn?.socket || !spawn.paneId) return null;
-  return await tmux.paneExists(spawn.socket, spawn.paneId) ? spawn : null;
+  return locatePiPane(sessionId);
 }
 
 async function runHostBuiltin(sessionId, descriptor, parsed) {
-  const pane = await ownedHostPane(sessionId, descriptor);
+  const pane = await hostBuiltinPane(sessionId, descriptor);
   if (!pane) {
-    const error = new Error(`Host command /${parsed.command.name} requires a live pi-dish-owned ${descriptor.label} pane.`);
+    const error = new Error(`Host command /${parsed.command.name} requires a reachable ${descriptor.label} tmux pane.`);
     error.statusCode = 409;
     throw error;
   }
@@ -2757,7 +2761,7 @@ async function runHostBuiltin(sessionId, descriptor, parsed) {
     await new Promise(resolve => setTimeout(resolve, 50));
     await tmux.sendKeys(pane.socket, pane.paneId, '');
   }
-  return { info: `Sent ${parsed.text} to the session’s owned tmux pane` };
+  return { info: `Sent ${parsed.text} to the session’s tmux pane` };
 }
 
 // Execute a slash command against an active session.
@@ -3497,16 +3501,20 @@ function filterBridgeCommands(sess, commands) {
 async function appendHostBuiltins(sessionId, sess, commands) {
   const descriptor = getHarness(sess.harnessId);
   const available = [];
-  if (await ownedHostPane(sessionId, descriptor)) {
+  // One pane lookup covers both surfaces: the descriptor's curated host
+  // builtins and OMP's /reload. OMP's bridge reload capability stays false
+  // because its public API cannot invoke command handlers remotely — a
+  // reachable pane is the actual capability. The command route maps /reload
+  // to the bridge's /dish-reload command in that exact TUI, where OMP
+  // supplies a legal command context for ctx.reload.
+  const wantsPane = descriptor?.hostBuiltins?.length || sess.harnessId === 'omp';
+  const pane = wantsPane ? await locatePiPane(sessionId) : null;
+  if (pane && descriptor?.hostBuiltins?.length) {
     available.push(...descriptor.hostBuiltins.map(({ allowedArgs, ...command }) => ({
       ...command, source: 'host', supported: true,
     })));
   }
-  // OMP's bridge capability stays false because its public API cannot invoke
-  // command handlers remotely. A reachable pane is the actual capability:
-  // the command route maps /reload to the bridge's /dish-reload command in
-  // that exact TUI, where OMP supplies a legal command context for ctx.reload.
-  if (sess.harnessId === 'omp' && await locatePiPane(sessionId)) {
+  if (sess.harnessId === 'omp' && pane) {
     available.push({
       name: 'reload',
       description: 'Reload the current Oh My Pi session/runtime state',

@@ -1895,51 +1895,65 @@ test('OMP command discovery includes pane-backed host commands and API aliases s
     const commands = await get(`/api/commands?sessionId=${encodeURIComponent(routeId)}`);
     assert.equal(commands.status, 200, JSON.stringify(commands.body));
     assert.deepEqual(commands.body.map(command => command.name),
-      ['tree', 'compact', 'model', 'name', 'abort', 'skill:review', 'daily', 'dish-push', 'shake', 'reload']);
-    assert.deepEqual(commands.body.slice(-2), [
-      {
-        name: 'shake',
-        description: 'Drop heavy content from context (tool results, large blocks, or images)',
-        args: '[images]',
-        source: 'host',
-        supported: true,
-      },
-      {
-        name: 'reload',
-        description: 'Reload the current Oh My Pi session/runtime state',
-        source: 'host',
-        supported: true,
-      },
+      ['tree', 'compact', 'model', 'name', 'abort', 'skill:review', 'daily', 'dish-push',
+        'shake', 'retry', 'fresh', 'clear', 'reload']);
+    assert.deepEqual(commands.body.slice(-5).map(({ name, source, supported }) => ({ name, source, supported })), [
+      { name: 'shake', source: 'host', supported: true },
+      { name: 'retry', source: 'host', supported: true },
+      { name: 'fresh', source: 'host', supported: true },
+      { name: 'clear', source: 'host', supported: true },
+      { name: 'reload', source: 'host', supported: true },
     ]);
+    assert.equal(commands.body.find(command => command.name === 'shake').args, '[images]');
 
     const shake = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/shake' });
     assert.equal(shake.status, 200, JSON.stringify(shake.body));
     const shakeImages = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/shake images' });
     assert.equal(shakeImages.status, 200, JSON.stringify(shakeImages.body));
+    const retry = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/retry' });
+    assert.equal(retry.status, 200, JSON.stringify(retry.body));
     assert.deepEqual(injected, [
       { socket: '/fake/owned-omp.sock', paneId: '%88', text: '/shake' },
       { socket: '/fake/owned-omp.sock', paneId: '%88', text: '/shake images' },
       { socket: '/fake/owned-omp.sock', paneId: '%88', text: '' },
+      { socket: '/fake/owned-omp.sock', paneId: '%88', text: '/retry' },
     ]);
+    const retryArgs = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/retry now' });
+    assert.equal(retryArgs.status, 400, JSON.stringify(retryArgs.body));
+    assert.match(retryArgs.body.error, /invalid arguments/i);
 
     const badArgs = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, {
       message: '/shake images; touch /tmp/nope',
     });
     assert.equal(badArgs.status, 400, JSON.stringify(badArgs.body));
     assert.match(badArgs.body.error, /invalid arguments/i);
-    assert.equal(injected.length, 3, 'invalid host arguments never reach tmux');
+    assert.equal(injected.length, 4, 'invalid host arguments never reach tmux');
 
     const notAllowlisted = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, {
       message: '/handoff',
     });
     assert.equal(notAllowlisted.status, 200, JSON.stringify(notAllowlisted.body));
-    assert.equal(injected.length, 3, 'non-allowlisted commands stay on the bridge path');
+    assert.equal(injected.length, 4, 'non-allowlisted commands stay on the bridge path');
     assert.ok(received.some(command => command.command === 'run_command' && command.message === '/handoff'));
 
+    // A reachable-but-unowned pane (the bridge's own tmux stamp) is enough:
+    // host commands follow the /reload rule, not spawn ownership.
     tmux.removeSpawn(routeId);
+    fs.writeFileSync(registryPath, JSON.stringify({ ...claim, tmux: { socket: '/fake/stamped-omp.sock', pane: '%77' } }));
+    invalidateRegistryCache();
+    tmux.paneExists = async (socket, paneId) => socket === '/fake/stamped-omp.sock' && paneId === '%77';
+    const stampedCommands = await get(`/api/commands?sessionId=${encodeURIComponent(routeId)}`);
+    assert.equal(stampedCommands.status, 200, JSON.stringify(stampedCommands.body));
+    assert.ok(stampedCommands.body.some(command => command.name === 'retry' && command.source === 'host'));
+    const stampedRetry = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/retry' });
+    assert.equal(stampedRetry.status, 200, JSON.stringify(stampedRetry.body));
+    assert.deepEqual(injected.at(-1), { socket: '/fake/stamped-omp.sock', paneId: '%77', text: '/retry' });
+
+    fs.writeFileSync(registryPath, JSON.stringify(claim));
+    invalidateRegistryCache();
     const noPane = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/shake' });
     assert.equal(noPane.status, 409, JSON.stringify(noPane.body));
-    assert.match(noPane.body.error, /pi-dish-owned Oh My Pi pane/i);
+    assert.match(noPane.body.error, /reachable Oh My Pi tmux pane/i);
 
     const cancelled = await post(`/api/sessions/${encodeURIComponent(routeId)}/queue/cancel`, {});
     assert.equal(cancelled.status, 409, JSON.stringify(cancelled.body));
