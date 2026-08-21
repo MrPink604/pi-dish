@@ -39,6 +39,18 @@ function mockServer() {
       if (req.method === 'POST' && /^\/api\/sessions\/peer-1\/(rename|prompt|steer|follow-up|abort|resume|close)$/.test(req.url)) {
         res.end(JSON.stringify({ success: true })); return;
       }
+      if (req.method === 'GET' && req.url.startsWith('/api/search?')) {
+        res.end(JSON.stringify({
+          results: [
+            { id: 'hit-1', isActive: false, name: 'Torn tail fix', cwd: '/work/api',
+              lastActivity: '2026-08-01T10:00:00.000Z', matchCount: 3,
+              snippets: ['skip the torn tail\non load', 'reindex after the torn tail'] },
+            { id: 'hit-2', isActive: true, name: 'Follow-up', cwd: '/work/api',
+              lastActivity: '2026-08-10T09:00:00.000Z', matchCount: 0, snippets: [] },
+          ],
+          total: 25, indexing: true,
+        })); return;
+      }
       res.statusCode = 404; res.end(JSON.stringify({ error: 'not found' }));
     });
   });
@@ -81,6 +93,22 @@ test('peer-session CLI attributes spawn and uses semantic control routes', async
   assert.equal(JSON.parse(shown.stdout).messages[0].content[0].text, 'done');
   const listed = await run(['list', '--active'], base);
   assert.match(listed.stdout, /peer-1\s+active\s+Peer/);
+
+  const searched = await run(['search', 'torn', 'tail', 'cwd:/work/api'], base);
+  const searchReq = requests.find(r => r.url.startsWith('/api/search?'));
+  assert.equal(new URL(searchReq.url, base).searchParams.get('q'), 'torn tail cwd:/work/api',
+    'positional terms join into one grammar query');
+  assert.match(searched.stdout, /hit-1\tinactive\tTorn tail fix\t\/work\/api\t2026-08-01\t3 matches/);
+  assert.match(searched.stdout, /…skip the torn tail on load…/, 'snippets are shown with whitespace flattened');
+  assert.match(searched.stdout, /hit-2\tactive\t.*metadata match/);
+  assert.match(searched.stdout, /# 23 more results not shown/);
+  assert.match(searched.stdout, /index is still building/);
+
+  const searchedJson = await run(['search', 'torn', '--limit', '1', '--json'], base);
+  const parsed = JSON.parse(searchedJson.stdout);
+  assert.equal(parsed.results.length, 1, '--limit slices JSON results too');
+  assert.equal(parsed.results[0].id, 'hit-1');
+  assert.equal(parsed.total, 25);
 });
 
 test('peer-session CLI reports the canonical route for an alternative registry entry', async t => {

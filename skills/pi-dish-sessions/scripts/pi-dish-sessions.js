@@ -158,6 +158,27 @@ async function main() {
       return print({ ...operation, spawnId: data.spawnId, sessionId: id }, args.json);
     }
 
+    if (args.command === 'search') {
+      const query = args.positional.join(' ').trim();
+      if (!query) throw new Error('search needs a query');
+      const { data } = await request(base, `/api/search?q=${encodeURIComponent(query)}`);
+      const limit = Math.max(1, Math.min(100, Number.parseInt(args.limit || '20', 10) || 20));
+      const results = (data.results || []).slice(0, limit);
+      if (args.json) return print({ ...data, results }, true);
+      for (const session of results) {
+        const when = session.lastActivity ? String(session.lastActivity).slice(0, 10) : '';
+        const matches = session.matchCount ? `${session.matchCount} match${session.matchCount === 1 ? '' : 'es'}` : 'metadata match';
+        process.stdout.write(`${sessionLine(session)}\t${when}\t${matches}\n`);
+        for (const snippet of session.snippets || []) {
+          process.stdout.write(`    …${String(snippet).replace(/\s+/g, ' ').trim()}…\n`);
+        }
+      }
+      if (!results.length) process.stdout.write('No matches.\n');
+      if (data.total > results.length) process.stdout.write(`# ${data.total - results.length} more results not shown; refine the query or raise --limit.\n`);
+      if (data.indexing) process.stdout.write('# Session index is still building; results may be partial — retry shortly.\n');
+      return;
+    }
+
     const id = args.positional.shift();
     if (!id) throw new Error(`${args.command} needs a target session id`);
 
