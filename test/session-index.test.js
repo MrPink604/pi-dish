@@ -273,20 +273,23 @@ test('getSearchText extends from the appended byte range', () => {
     'missing file degrades to empty');
 });
 
-test('the byte-range extension honors the session text cap', () => {
-  const big = 'y'.repeat(9_000);
+test('the byte-range extension honors the session text cap, keeping the newest', () => {
+  const big = 'y'.repeat(99_000);
   const entries = [];
-  for (let i = 0; i < 120; i++) entries.push(userMsg(`cap${i} ${big}`));
+  for (let i = 0; i < 45; i++) entries.push(userMsg(`cap${i} ${big}`));
   const file = writeSession(entries);
-  assert.ok(index.getSearchText(file).length <= sessionFiles.SEARCH_TEXT_SESSION_CAP);
+  const built = index.getSearchText(file);
+  assert.ok(built.length <= sessionFiles.SEARCH_TEXT_SESSION_CAP);
+  assert.ok(!built.includes('cap0 '), 'the oldest text was evicted at build time');
 
   fs.appendFileSync(file, JSON.stringify(userMsg('overflow_marker_zulu')) + '\n');
   const extended = index.getSearchText(file);
   assert.ok(extended.length <= sessionFiles.SEARCH_TEXT_SESSION_CAP,
     'a streaming append cannot grow the text past the cap one delta at a time');
-  assert.ok(!extended.includes('overflow_marker_zulu'));
+  assert.ok(extended.includes('overflow_marker_zulu'),
+    'the appended (newest) turn is searchable; overflow evicts old text instead');
 
-  // Drop the ~1MB entry so later tests' live-size expectations for the
+  // Drop the cap-sized entry so later tests' live-size expectations for the
   // shared text log hold.
   fs.rmSync(file);
   index.scanSessions([]);

@@ -332,7 +332,7 @@ test('readSessionMessages treats pre-tree files (no parentId) as linear', () => 
 test('buildSearchTextFromContent lowercases and caps message text', () => {
   const content = [
     userMsg('Find The NEEDLE here'),
-    assistantMsg('HAYSTACK reply ' + 'x'.repeat(11_000)),
+    assistantMsg('HAYSTACK reply ' + 'x'.repeat(101_000)),
     { type: 'message', message: { role: 'toolResult', toolName: 'bash',
       content: [{ type: 'text', text: 'BUILD OUTPUT ' + 'r'.repeat(600) }] } },
     { type: 'custom_message', customType: 'session-message', content: 'Injected NOTE' },
@@ -343,8 +343,10 @@ test('buildSearchTextFromContent lowercases and caps message text', () => {
   assert.ok(text.includes('the needle'));
   assert.ok(text.includes('haystack'));
   assert.ok(text.includes('injected note'));
-  assert.ok(text.includes('x'.repeat(9_000)), 'long prose stays searchable well past the old 500');
-  assert.ok(!text.includes('x'.repeat(10_001)), 'prose capped at 10k chars per message');
+  // The 100K cap keeps the message's first 100_000 chars: the 15-char
+  // "HAYSTACK reply " prefix plus 99_985 of the x's.
+  assert.ok(text.includes('x'.repeat(99_985)), 'long pasted prose stays searchable');
+  assert.ok(!text.includes('x'.repeat(99_986)), 'prose capped at 100k chars per message');
   assert.ok(text.includes('build output'));
   assert.ok(!text.includes('r'.repeat(501)), 'tool results stay capped at 500 chars');
   assert.ok(!text.includes('private marker'), 'non-transcript custom entries are excluded');
@@ -367,14 +369,14 @@ test('buildSearchTextFromContent indexes tool-call names and string args', () =>
   assert.ok(!text.includes('q'.repeat(400)), 'the per-call cap truncated the bulky arg');
 });
 
-test('buildSearchTextFromContent bounds a whole session\'s text', () => {
+test('buildSearchTextFromContent bounds a whole session\'s text, keeping the newest', () => {
   const entries = [];
-  for (let i = 0; i < 150; i++) entries.push(userMsg(`msg${i} ` + 'y'.repeat(9_000)));
+  for (let i = 0; i < 50; i++) entries.push(userMsg(`msg${i} ` + 'y'.repeat(99_000)));
   const content = entries.map(e => JSON.stringify(e)).join('\n') + '\n';
   const text = SF.buildSearchTextFromContent(content);
   assert.ok(text.length <= SF.SEARCH_TEXT_SESSION_CAP);
-  assert.ok(text.includes('msg0'), 'early content survives');
-  assert.ok(!text.includes('msg149'), 'content past the session cap is dropped');
+  assert.ok(text.includes('msg49'), 'the newest turns survive — they are the recall targets');
+  assert.ok(!text.includes('msg0 '), 'overflow evicts the oldest text');
 });
 
 test('getSessionStats aggregates usage and revalidates on append', () => {
