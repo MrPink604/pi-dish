@@ -29,6 +29,7 @@ const terminal = require('./lib/terminal');
 const tmux = require('./lib/tmux');
 const hostIdentity = require('./lib/host-identity');
 const remoteHosts = require('./lib/remote-hosts');
+const fleetArtifacts = require('./lib/fleet-artifacts');
 const shares = require('./lib/shares');
 const pages = require('./lib/pages');
 const comments = require('./lib/comments');
@@ -278,10 +279,10 @@ app.use('/hosts/:name/api', (req, res) => {
   // An unknown or malformed name is a bare 404 — the fleet map is not a
   // discovery surface.
   if (!remote) return res.status(404).type('text/plain').send('Not found');
-  proxyToRemote(remote, req, res);
+  proxyToRemote(remote, req, res, fleetArtifactHook(remote, req));
 });
 
-function proxyToRemote(remote, req, res) {
+function proxyToRemote(remote, req, res, hook = null) {
   let settled = false;
   const fail = (reason) => {
     if (settled) return;
@@ -289,7 +290,10 @@ function proxyToRemote(remote, req, res) {
     res.status(502).json({ error: `Host ${remote.name} is unreachable`, host: remote.name, reason });
   };
 
-  remoteHosts.request(remote, { method: req.method, path: `/api${req.url}`, headers: req.headers })
+  // A hooked response is read, not relayed byte for byte, so the peer must
+  // not compress it.
+  const headers = hook ? { ...req.headers, 'accept-encoding': 'identity' } : req.headers;
+  remoteHosts.request(remote, { method: req.method, path: `/api${req.url}`, headers })
     .then((upstream) => {
       // Bounds time-to-first-byte only: a proxied SSE stream may then idle
       // for minutes, and an idle-socket timeout would cut it.
@@ -305,6 +309,11 @@ function proxyToRemote(remote, req, res) {
           if (HOP_BY_HOP_HEADERS.has(lower) || lower.startsWith('access-control-')) continue;
           res.setHeader(key, value);
         }
+        if (hook && String(peerRes.headers['content-type'] || '').includes('application/json')) {
+          // The body is about to change length (and may be rewritten).
+          res.removeHeader('Content-Length');
+          return relayHookedJson(peerRes, res, hook);
+        }
         // Content-Encoding passes through untouched (compression already
         // excludes /hosts/*), so an event stream arrives as the peer wrote it.
         if (String(peerRes.headers['content-type'] || '').startsWith('text/event-stream')) res.flushHeaders();
@@ -315,6 +324,230 @@ function proxyToRemote(remote, req, res) {
       req.pipe(upstream);
     })
     .catch((e) => fail(remoteHosts.errorCode(e)));
+}
+
+// =========================================================================
+// Fleet artifacts: shares and pages owned by a peer, served from this host
+// =========================================================================
+//
+// The hub is the fleet's public front door, but the content stays on the
+// owning host's disk (TASKS/multi-host.md block 7). ~/.pi/dish/fleet-artifacts
+// .json maps a token to the peer it lives on; /share and /page fall back to
+// streaming from that peer when their local registries miss. A mapping is
+// only ever created explicitly — an unmapped token never touches the fleet.
+
+// Buffering a proxied response is the documented exception to the byte-relay
+// rule and applies only to these two small JSON creation/revocation replies.
+const FLEET_ARTIFACT_BODY_LIMIT = 64 * 1024;
+const PROXY_SHARE_PATH_RE = /^\/sessions\/[^/]+\/share$/;
+const PROXY_PAGE_TOKEN_PATH_RE = /^\/pages\/([^/]+)$/;
+const PUBLIC_ARTIFACT_TIMEOUT_MS = 10_000;
+// A public artifact request is relayed as the browser sent it minus anything
+// that would leak the hub's origin/credentials into a peer's logs.
+const PUBLIC_FORWARD_HEADERS = ['accept', 'accept-language', 'range', 'if-none-match', 'if-modified-since', 'user-agent'];
+// Set by a hub fronting this host's page from a listener that has no /api to
+// answer the overlay (see serveFleetArtifact).
+const PAGE_COMMENTS_HEADER = 'x-pi-dish-page-comments';
+
+/** Absolute public URL for a hub-served path, or null (client builds it). */
+function publicUrlFor(publicPath) {
+  const base = process.env.PI_DISH_SHARE_BASE_URL;
+  return base ? base.replace(/\/+$/, '') + publicPath : null;
+}
+
+function fleetArtifactPayload(token, kind) {
+  const publicPath = kind === 'share' ? `/share/${token}` : `/page/${token}`;
+  return { token, path: publicPath, url: publicUrlFor(publicPath) };
+}
+
+/**
+ * Artifact bookkeeping for a proxied request, or null for everything else.
+ *
+ * A peer minting a share/page through this hub is the hub's cue to record
+ * where the token lives and to hand back *its own* public URL: the browser
+ * is on the hub, and the peer's PI_DISH_SHARE_BASE_URL describes a front
+ * door this reader may not have.
+ */
+function fleetArtifactHook(remote, req) {
+  const reqPath = req.url.split('?')[0];
+  const isShare = PROXY_SHARE_PATH_RE.test(reqPath);
+  const pageTokenMatch = PROXY_PAGE_TOKEN_PATH_RE.exec(reqPath);
+
+  // /shares/import is here too: an OMP session's share is a snapshot the peer
+  // minted from its live session, and it needs fronting like any other.
+  if (req.method === 'POST' && (isShare || reqPath === '/shares/import' || reqPath === '/pages')) {
+    const kind = reqPath === '/pages' ? 'page' : 'share';
+    return (status, body) => {
+      if (status < 200 || status >= 300) return body;
+      if (!body || typeof body !== 'object' || !fleetArtifacts.record(body.token, remote.name, kind)) return body;
+      return { ...body, ...fleetArtifactPayload(body.token, kind) };
+    };
+  }
+
+  if (req.method === 'DELETE' && (isShare || pageTokenMatch)) {
+    // A page revoke names its token in the path; a share revoke reports the
+    // token it removed (older peers don't — the serving path's 404 prune is
+    // the backstop for those).
+    const pathToken = pageTokenMatch ? decodeURIComponent(pageTokenMatch[1]) : null;
+    return (status, body) => {
+      if (status < 200 || status >= 300) return body;
+      const token = pathToken || (body && typeof body.token === 'string' ? body.token : null);
+      if (token) fleetArtifacts.remove(token, remote.name);
+      return body;
+    };
+  }
+
+  return null;
+}
+
+function relayHookedJson(peerRes, res, hook) {
+  let raw = '';
+  let relaying = false;
+  peerRes.setEncoding('utf8');
+  peerRes.on('data', (chunk) => {
+    if (relaying) return void res.write(chunk);
+    raw += chunk;
+    // Not the small artifact reply it claimed to be: stop interpreting.
+    if (raw.length > FLEET_ARTIFACT_BODY_LIMIT) {
+      relaying = true;
+      res.write(raw);
+      raw = '';
+    }
+  });
+  peerRes.on('error', () => { try { res.end(); } catch {} });
+  peerRes.on('end', () => {
+    if (relaying) return res.end();
+    let body;
+    try { body = JSON.parse(raw); } catch { return res.end(raw); }
+    let out = body;
+    try { out = hook(peerRes.statusCode, body); } catch { out = body; }
+    res.end(JSON.stringify(out === undefined ? body : out));
+  });
+  res.on('close', () => { try { peerRes.destroy(); } catch {} });
+}
+
+/**
+ * Which configured remote answers to a hostId. Fleet-map membership is the
+ * authorization (block 6's trust statement): only remotes this host already
+ * knows are ever probed, and an id nobody claims simply has no answer.
+ */
+async function findRemoteByHostId(hostId) {
+  const remotes = remoteHosts.listRemotes();
+  const probes = await Promise.all(remotes.map((remote) => Promise.race([
+    remoteHosts.probe(remote).catch(() => ({ reachable: false })),
+    new Promise((resolve) => setTimeout(() => resolve({ reachable: false }), HOSTS_PROBE_DEADLINE_MS).unref()),
+  ])));
+  const index = probes.findIndex((probe) => probe.reachable && probe.descriptor?.hostId === hostId);
+  return index >= 0 ? remotes[index] : null;
+}
+
+// An agent on a peer publishes locally, then asks the hub to front it. The
+// agent talks only to its own server (which proxies this call), so it never
+// needs the hub's address or credential.
+app.post('/api/fleet-artifacts', async (req, res) => {
+  const { token, kind, hostId } = req.body || {};
+  if (!fleetArtifacts.isValidToken(token)) {
+    return res.status(400).json({ error: 'token required (base64url, max 128 characters)' });
+  }
+  if (!fleetArtifacts.isValidKind(kind)) {
+    return res.status(400).json({ error: 'kind must be "share" or "page"' });
+  }
+  if (typeof hostId !== 'string' || !hostId || hostId.length > 256) {
+    return res.status(400).json({ error: 'hostId required' });
+  }
+  if (hostId === hostIdentity.getHostId()) {
+    return res.status(404).json({ error: 'hostId is this host, not one of its configured remotes' });
+  }
+  const remote = await findRemoteByHostId(hostId);
+  if (!remote) {
+    return res.status(404).json({ error: 'no configured, reachable remote has that hostId' });
+  }
+  if (!fleetArtifacts.record(token, remote.name, kind)) {
+    return res.status(400).json({ error: 'artifact could not be recorded' });
+  }
+  res.json({ ...fleetArtifactPayload(token, kind), host: remote.name });
+});
+
+app.get('/api/fleet-artifacts', (_req, res) => {
+  const artifacts = [];
+  for (const [host, entries] of Object.entries(fleetArtifacts.listByHost())) {
+    for (const entry of entries) artifacts.push({ ...entry, host, ...fleetArtifactPayload(entry.token, entry.kind) });
+  }
+  artifacts.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  res.json({ artifacts });
+});
+
+app.delete('/api/fleet-artifacts/:token', (req, res) => {
+  // Unmapping only ends public reachability through this hub; the artifact
+  // itself is the owning host's to revoke.
+  res.json({ revoked: fleetArtifacts.remove(req.params.token) });
+});
+
+/**
+ * Fallback for a /share or /page token this host doesn't own: stream it from
+ * the peer that does. Unmapped tokens never get here — the caller answers
+ * them as bare 404s without contacting anybody.
+ */
+function serveFleetArtifact(req, res, kind, { annotate = true } = {}) {
+  const token = req.params.token;
+  const notFound = () => { if (!res.headersSent) res.status(404).type('text/plain').send('Not found'); };
+  const mapping = fleetArtifacts.get(token);
+  if (!mapping || mapping.kind !== kind) return notFound();
+  const remote = remoteHosts.getRemote(mapping.host);
+  if (!remote) return notFound();
+
+  const rest = kind === 'page' ? (req.params[0] || (req.path.endsWith('/') ? '/' : '')) : '';
+  const documentRequest = kind === 'share' || rest === '' || rest === '/';
+  const queryAt = req.originalUrl.indexOf('?');
+  const query = queryAt >= 0 ? req.originalUrl.slice(queryAt) : '';
+  const peerPath = kind === 'share' ? `/share/${token}${query}` : `/page/${token}${rest}${query}`;
+
+  const headers = { 'accept-encoding': 'identity' };
+  for (const name of PUBLIC_FORWARD_HEADERS) {
+    if (req.headers[name] !== undefined) headers[name] = req.headers[name];
+  }
+  // The comment overlay's calls are relative, so they can only work where
+  // /api is mounted. Asking the owner to skip the injection keeps the public
+  // listener serving raw, non-commentable HTML as it does for local pages
+  // (an older peer ignores the header and its overlay simply stays inert).
+  if (kind === 'page' && !annotate) headers[PAGE_COMMENTS_HEADER] = 'off';
+
+  let settled = false;
+  const fail = () => {
+    if (settled) return;
+    settled = true;
+    res.status(502).type('text/plain').send('Host unavailable');
+  };
+
+  remoteHosts.request(remote, { method: req.method === 'HEAD' ? 'HEAD' : 'GET', path: peerPath, headers })
+    .then((upstream) => {
+      const timer = setTimeout(() => { try { upstream.destroy(); } catch {} fail(); }, PUBLIC_ARTIFACT_TIMEOUT_MS);
+      upstream.on('error', () => { clearTimeout(timer); fail(); });
+      upstream.on('response', (peerRes) => {
+        clearTimeout(timer);
+        if (settled) return peerRes.resume();
+        settled = true;
+        if (peerRes.statusCode === 404) {
+          // Revoked on the owner: the mapping is dead, and this reader gets
+          // the same bare 404 an unknown token gets. Only the token's own
+          // document proves that — a missing *asset* under a live page is
+          // the page's own 404, not the artifact's.
+          peerRes.resume();
+          if (documentRequest) fleetArtifacts.remove(token, mapping.host);
+          return notFound();
+        }
+        res.status(peerRes.statusCode);
+        for (const [key, value] of Object.entries(peerRes.headers)) {
+          const lower = key.toLowerCase();
+          if (HOP_BY_HOP_HEADERS.has(lower) || lower.startsWith('access-control-')) continue;
+          res.setHeader(key, value);
+        }
+        peerRes.pipe(res);
+        res.on('close', () => { try { peerRes.destroy(); } catch {} });
+      });
+      upstream.end();
+    })
+    .catch(fail);
 }
 
 app.get('/api/hosts', async (_req, res) => {
@@ -2433,9 +2666,7 @@ app.get('/api/sessions/:id/export', async (req, res) => {
 // so operators behind a proxy can hand out an absolute link.
 function sharePayload(token) {
   const sharePath = `/share/${token}`;
-  const base = process.env.PI_DISH_SHARE_BASE_URL;
-  const url = base ? base.replace(/\/+$/, '') + sharePath : null;
-  return { token, path: sharePath, url };
+  return { token, path: sharePath, url: publicUrlFor(sharePath) };
 }
 
 // Per-token export cache keyed on the JSONL's (mtimeMs, size) and live export
@@ -2444,7 +2675,8 @@ const shareExportCache = new Map();
 
 async function serveSharedSession(req, res) {
   const share = shares.getShare(req.params.token);
-  if (!share) return res.status(404).type('text/plain').send('Not found');
+  // A token this host doesn't own may still belong to a peer it fronts.
+  if (!share) return serveFleetArtifact(req, res, 'share');
   if (share.kind === 'html') {
     const htmlPath = shares.getShareHtmlPath(req.params.token);
     if (!htmlPath) return res.status(404).type('text/plain').send('Not found');
@@ -2524,7 +2756,9 @@ app.delete('/api/sessions/:id/share', (req, res) => {
   const existing = shares.getShareForSession(req.params.id);
   const revoked = shares.revokeShare(req.params.id);
   if (existing) shareExportCache.delete(existing.token);
-  res.json({ revoked });
+  // The token is reported so a hub fronting this session can drop its fleet
+  // mapping immediately instead of waiting to serve a 404.
+  res.json({ revoked, token: existing?.token || null });
 });
 
 app.get('/api/sessions/:id/share', (req, res) => {
@@ -2632,6 +2866,76 @@ function cleanCommentTarget(raw) {
     };
   }
   return null;
+}
+
+// Feedback on a page this host merely fronts belongs to the host whose agent
+// will read it. The overlay injected into a proxied page makes its calls
+// relative, so they land here; every one of them names its page token, which
+// is what routes them home. Anything without a token — or with one this host
+// owns or has never mapped — takes the normal local path.
+function fleetPageTokenFor(req) {
+  const candidates = [req.query?.pageToken, req.body?.pageToken, req.body?.target?.pageToken];
+  const token = candidates.find((value) => fleetArtifacts.isValidToken(value));
+  if (!token || pages.getPage(token)) return null;
+  const mapping = fleetArtifacts.get(token);
+  return mapping && mapping.kind === 'page' ? mapping : null;
+}
+
+app.use('/api/comments', (req, res, next) => {
+  const mapping = fleetPageTokenFor(req);
+  if (!mapping) return next();
+  const remote = remoteHosts.getRemote(mapping.host);
+  if (!remote) return next();
+  proxyCommentToOwner(remote, req, res);
+});
+
+// Comment payloads are small JSON both ways, and express has already parsed
+// the request body here — the same buffered exception the artifact creation
+// responses get, not a second byte relay.
+function proxyCommentToOwner(remote, req, res) {
+  const rest = req.url === '/' ? '' : req.url;
+  const payload = req.method === 'GET' || req.method === 'HEAD' ? null : JSON.stringify(req.body ?? {});
+  const headers = { accept: 'application/json', 'accept-encoding': 'identity' };
+  if (payload !== null) {
+    headers['content-type'] = 'application/json';
+    headers['content-length'] = String(Buffer.byteLength(payload));
+  }
+
+  let settled = false;
+  const fail = (reason) => {
+    if (settled) return;
+    settled = true;
+    res.status(502).json({ error: `Host ${remote.name} is unreachable`, host: remote.name, reason });
+  };
+
+  remoteHosts.request(remote, { method: req.method, path: `/api/comments${rest}`, headers })
+    .then((upstream) => {
+      const timer = setTimeout(() => { try { upstream.destroy(); } catch {} fail('timeout'); }, PROXY_RESPONSE_TIMEOUT_MS);
+      upstream.on('error', (e) => { clearTimeout(timer); fail(remoteHosts.errorCode(e)); });
+      upstream.on('response', (peerRes) => {
+        clearTimeout(timer);
+        if (settled) return peerRes.resume();
+        settled = true;
+        let raw = '';
+        let overflow = false;
+        peerRes.setEncoding('utf8');
+        peerRes.on('data', (chunk) => {
+          if (overflow) return;
+          raw += chunk;
+          if (raw.length <= FLEET_ARTIFACT_BODY_LIMIT) return;
+          overflow = true;
+          peerRes.destroy();
+          res.status(502).json({ error: `Host ${remote.name} returned an oversized comment response`, host: remote.name });
+        });
+        peerRes.on('end', () => {
+          if (!overflow) res.status(peerRes.statusCode).type('application/json').send(raw || '{}');
+        });
+        peerRes.on('error', () => { try { res.end(); } catch {} });
+      });
+      if (payload !== null) upstream.write(payload);
+      upstream.end();
+    })
+    .catch((e) => fail(remoteHosts.errorCode(e)));
 }
 
 app.post('/api/comments', (req, res) => {
@@ -2911,7 +3215,11 @@ function sendRenderedFilePage(entry, req, res, notFound) {
 
 function servePage(req, res, annotate = false) {
   const entry = pages.getPage(req.params.token);
-  if (!entry) return res.status(404).type('text/plain').send('Not found');
+  // A token this host doesn't own may still belong to a peer it fronts; the
+  // peer answers the redirect and injects its own comment overlay — except
+  // on the public listener, which asks the peer to leave it out (below).
+  if (!entry) return serveFleetArtifact(req, res, 'page', { annotate });
+  if (req.headers[PAGE_COMMENTS_HEADER] === 'off') annotate = false;
   const notFound = () => { if (!res.headersSent) res.status(404).type('text/plain').send('Not found'); };
   let stat;
   try { stat = fs.statSync(entry.root); } catch { return notFound(); }

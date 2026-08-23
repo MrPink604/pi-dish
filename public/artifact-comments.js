@@ -182,7 +182,9 @@
         ? await fetch(`/api/comments/${encodeURIComponent(submittedEdit.id)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId: submittedEdit.sessionId, body: commentBody }),
+          // pageToken travels on every call so a hub fronting this page can
+          // route it to the host that owns the comment (older servers ignore it).
+          body: JSON.stringify({ sessionId: submittedEdit.sessionId, body: commentBody, pageToken }),
         })
         : await fetch('/api/comments', {
           method: 'POST',
@@ -223,7 +225,7 @@
       const response = await fetch(`/api/comments/${encodeURIComponent(target.id)}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: target.sessionId }),
+        body: JSON.stringify({ sessionId: target.sessionId, pageToken }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
@@ -351,7 +353,7 @@
       const fullRes = await fetch('/api/comments/get', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: entries[0].sessionId, ids: entries.map((e) => e.id) }),
+        body: JSON.stringify({ sessionId: entries[0].sessionId, ids: entries.map((e) => e.id), pageToken }),
       });
       if (!fullRes.ok) return;
       openComments = (await fullRes.json()).comments || [];

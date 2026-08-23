@@ -477,6 +477,46 @@ collects everything shared from the session — its pages plus the share
 link — in one modal (open/copy/revoke); `refreshArtifacts` re-fetches on
 session select, turn end, and every publish/revoke path.
 
+## Fleet artifacts (lib/fleet-artifacts.js, /api/fleet-artifacts)
+
+A hub fronts the fleet's shares and pages, but the content is generated live
+from the **owning** host's disk, so the hub only keeps
+`~/.pi/dish/fleet-artifacts.json` (shares.js rules): `{ token: { host, kind,
+createdAt } }`, `host` being a remote *name* from the fleet map — a mapping is
+reachability, never authority. `/share/:token` and `/page/:token(/*)` check
+the local registries first and fall back to a stream proxy from the owner
+(`serveFleetArtifact`), on the main app **and** the `PI_DISH_SHARE_PORT`
+listener; that listener still mounts no `/api` and no `/hosts`. An unmapped
+token stays a bare, instant 404 — the hub never probes peers for tokens it
+wasn't told about. The owner's 404 on the token's own document (not on a
+missing asset under a live page) prunes the mapping lazily; `DELETE
+/api/fleet-artifacts/:token` ends public reachability without touching the
+owner's copy.
+
+Mappings are created two ways. Through the proxy: a 2xx JSON `POST
+/hosts/:name/api/sessions/:id/share` or `.../api/pages` is recorded and its
+`url` rewritten to *this* hub's public form (`PI_DISH_SHARE_BASE_URL` here,
+else null so the client builds from `location.origin` — the peer's own base
+URL describes a front door the reader may not have). Buffering those two
+small JSON replies (and the DELETEs that prune, which is why `DELETE
+/api/sessions/:id/share` reports its `token`) is the *only* exception to the
+proxy's byte-relay rule. For agents: `POST /api/fleet-artifacts {token, kind,
+hostId}` resolves the hostId against the hub's own remotes' probed
+descriptors — fleet-map membership is the authorization, and no arbitrary
+input is ever probed. The pages skill's `--via <hub>` / `PI_DISH_PUBLIC_VIA`
+drives that route through the agent's *own* server's `/hosts/<hub>` proxy, so
+an agent never holds a hub address or credential.
+
+Comments on a fronted page are the gotcha: the overlay is injected by the
+owner but its relative `/api/comments*` calls land on the hub. Every overlay
+call carries its `pageToken` (create in the target, the rest as an additive
+body/query field), and the hub routes any `/api/comments*` request whose
+token is fleet-mapped — and not a local page — to the owner, so feedback
+files where the session's agent will read it. Requests without a token behave
+exactly as before. The public listener has no `/api` to answer, so it asks
+the owner to skip the injection (`x-pi-dish-page-comments: off`) and keeps
+serving raw, non-commentable page HTML.
+
 ## Anchored comments (lib/comments.js, /api/comments)
 
 Out-of-band review feedback for the current agent, created from selected text

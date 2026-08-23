@@ -2989,14 +2989,16 @@ test('GET/DELETE /share reflect and revoke the current share state', async () =>
   assert.equal(state.body.token, created.body.token);
 
   const revoked = await del(`/api/sessions/${TREE_ID}/share`);
-  assert.deepEqual(revoked.body, { revoked: true });
+  // The revoked token rides along so a hub fronting this session can drop
+  // its fleet mapping without waiting to serve a 404.
+  assert.deepEqual(revoked.body, { revoked: true, token: created.body.token });
 
   const gone = await fetch(`${base}/share/${created.body.token}`);
   assert.equal(gone.status, 404, 'the token no longer resolves');
   const stateGone = await get(`/api/sessions/${TREE_ID}/share`);
   assert.equal(stateGone.status, 404, 'no share state after revoke');
   const revokedAgain = await del(`/api/sessions/${TREE_ID}/share`);
-  assert.deepEqual(revokedAgain.body, { revoked: false });
+  assert.deepEqual(revokedAgain.body, { revoked: false, token: null });
 });
 
 test('dedicated share listener serves shared sessions, pages, and standalone file styles', async () => {
