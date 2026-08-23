@@ -12,7 +12,7 @@ CLI=~/.pi/agent/skills/pi-dish-sessions/scripts/pi-dish-sessions.js
 node "$CLI" list
 ```
 
-`PI_DISH_URL` is inherited by sessions spawned through pi-dish and otherwise defaults to `http://127.0.0.1:3333`. The CLI identifies the current session from `PI_DISH_SESSION_ID`, process ancestry against the bridge registry, or an unambiguous live cwd. Use `--session <id>` when discovery is ambiguous.
+`PI_DISH_URL` is inherited by sessions spawned through pi-dish and otherwise defaults to `http://127.0.0.1:3333`. Set `PI_DISH_TOKEN` when the server requires a bearer token; the CLI sends it on every request. The CLI identifies the current session from `PI_DISH_SESSION_ID`, process ancestry against the bridge registry, or an unambiguous live cwd. Use `--session <id>` when discovery is ambiguous.
 
 ## Spawn an ordinary peer
 
@@ -39,6 +39,34 @@ node "$CLI" close <session-id>
 
 Use `--json` for machine-readable output. Destructive commands require an explicit target ID.
 
+## Other hosts in the fleet
+
+If this server knows about peer hosts, it re-serves them and `hosts` lists the
+fleet — name (`(self)` for this one), reachability (with the failure code when
+a host is down), label, and the capabilities worth acting on.
+
+```bash
+node "$CLI" hosts
+# (self)    reachable            hub     sessions,search,spawns,comments,pages
+# tycho     reachable            tycho   sessions,search,spawns,comments,pages,terminal
+# work      unreachable:ssh_auth_failed  work  -
+```
+
+`--host <name>` puts any session command on that host — everything else about
+the command is unchanged, and without it you stay local. Only names `hosts`
+lists work; an unknown one fails with the fleet's known names.
+
+```bash
+node "$CLI" list --active --host tycho
+node "$CLI" spawn --host tycho --cwd /home/me/api --name "reindex" \
+  --prompt "Reindex the corpus and report the timings" --json
+node "$CLI" follow-up --host tycho <session-id> "Then post the numbers here"
+```
+
+A cross-host spawn is still an ordinary spawn on that host; pi-dish records the
+calling session host-qualified in the target's advisory provenance sidecar.
+Session ids are host-local, so keep the `--host` with the id you got back.
+
 ## Search past sessions (memory recall)
 
 Every past session's transcript is indexed — prose, tool-call file paths, and
@@ -58,6 +86,8 @@ underneath. Query grammar: plain terms match content and metadata; `"quoted
 phrases"`; `-term` negation (metadata-only); `name:`/`cwd:`/`model:`/`id:`
 field terms; `since:`/`before:` on last activity (`7d`, `12h`, `2w`, or ISO
 dates); `is:active` for live sessions only.
+
+Indexes are host-local, so `--host <name>` searches that host's own corpus.
 
 Search finds the session; `show <id>` reads it. Distinct keywords beat
 repeating one keyword; if a first query misses, reformulate with other terms
