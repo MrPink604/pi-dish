@@ -3059,12 +3059,15 @@ function writeRegistry(patch = {}) {
     check(true, 'inactive session stats are accessible without resuming');
     await desktop.click('#statsModal .modal-header .btn-icon');
 
-    // 14. Host-aware client keys (TASKS/multi-host.md phase 1). This server
-    // serves no /api/host, so everything above exercised the bare-key path —
-    // drive the migration by hand to prove the composite path is lossless
-    // and that the live key helpers agree with what it wrote.
+    // 14. Host-aware client keys (TASKS/multi-host.md phase 1). The server
+    // answers /api/host, so live session state is already stamped with the
+    // real self hostId — seed bare legacy keys and re-drive the migration
+    // under that same id to prove it is lossless and that the live key
+    // helpers agree with what it wrote.
     console.log('host-aware client keys:');
     const keys = await desktop.evaluate((id) => {
+      const hostId = selfHost.hostId || 'ui-host';
+      if (!selfHost.hostId) selfHost = { hostId, base: '', label: null };
       localStorage.setItem('pi-dish-draft-' + id, 'bare draft');
       localStorage.setItem('pi-dish-history-' + id, JSON.stringify(['bare prompt']));
       localStorage.setItem('pi-dish-terminal-mode-' + id, 'tmux');
@@ -3078,13 +3081,13 @@ function writeRegistry(patch = {}) {
       pinnedSessions = readJSONPref('pi-dish-pinned-sessions', []);
       expandedSessionFamilies.clear();
       expandedSessionFamilies.add(id);
-      selfHost = { hostId: 'ui-host', base: '', label: null };
       migrateClientKeys();
-      const key = sessionKey('ui-host', id);
+      const key = sessionKey(hostId, id);
       const bareLeft = Object.keys(localStorage).filter((k) =>
         /^pi-dish-(draft|history|terminal-mode)-/.test(k) && !k.includes(' ') && !k.includes('spawn:'));
       return {
         key,
+        hostId,
         draft: localStorage.getItem('pi-dish-draft-' + key),
         history: localStorage.getItem('pi-dish-history-' + key),
         mode: localStorage.getItem('pi-dish-terminal-mode-' + key),
@@ -3111,8 +3114,8 @@ function writeRegistry(patch = {}) {
     check(keys.derivedDraftKey === 'pi-dish-draft-' + keys.key &&
       keys.derivedTerminalKey === 'pi-dish-terminal-mode-' + keys.key,
       'the live key helpers resolve to exactly what the migration wrote');
-    check(keys.stampedHost === 'ui-host', 'session state writers stamp the host onto new entries');
-    check(keys.migratedFlag === 'ui-host', 'migration is flagged so it runs once');
+    check(keys.stampedHost === keys.hostId, 'session state writers stamp the host onto new entries');
+    check(keys.migratedFlag === keys.hostId, 'migration is flagged so it runs once');
 
     check(errors.length === 0, errors.length ? `no page errors — got: ${errors.join(' | ')}` : 'no page errors');
   } catch (e) {
