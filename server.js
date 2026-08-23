@@ -27,6 +27,7 @@ const { renderFilePage } = require('./lib/file-page');
 const { aggregateDiffs, getFilePatch, getDiffVersion } = require('./lib/git-diff');
 const terminal = require('./lib/terminal');
 const tmux = require('./lib/tmux');
+const hostIdentity = require('./lib/host-identity');
 const shares = require('./lib/shares');
 const pages = require('./lib/pages');
 const comments = require('./lib/comments');
@@ -55,8 +56,9 @@ const {
 const app = express();
 const PORT = process.env.PORT || 3333;
 // Localhost-only by default; opt in to LAN/VPN exposure explicitly, e.g.
-// HOST=0.0.0.0 (all interfaces) or HOST=<tailscale ip>. There is no auth —
-// anything that can reach the port can drive agents with shell access.
+// HOST=0.0.0.0 (all interfaces) or HOST=<tailscale ip>. Auth is opt-in (see
+// the host identity / auth section below) — without a token, anything that
+// can reach the port can drive agents with shell access.
 const HOST = process.env.HOST || '127.0.0.1';
 
 // Compress static text and JSON responses over LAN links. Event streams are
@@ -75,12 +77,158 @@ app.use(compression({
 // Image attachments arrive as base64 in the prompt body — allow well past
 // the default 100kb (a few downscaled phone photos).
 app.use(express.json({ limit: '30mb' }));
+
+// =========================================================================
+// Host identity, opt-in auth, CORS
+// =========================================================================
+//
+// Everything here is off unless a token is configured, and with it off the
+// server behaves exactly as it always has (loopback/tailnet trust). With a
+// token set — PI_DISH_TOKEN or ~/.pi/dish/token, read once at startup —
+// every /api request needs `Authorization: Bearer <token>`. Deliberately
+// out of scope: the public surfaces. `/share/:token`, `/page/:token`, the
+// static bundle, and the whole PI_DISH_SHARE_PORT listener stay open, and
+// `GET /api/host` stays open so a client can identify a host it isn't
+// paired with yet.
+
+const PKG_VERSION = require('./package.json').version;
+
+function readAuthToken() {
+  const fromEnv = (process.env.PI_DISH_TOKEN || '').trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const fromFile = fs.readFileSync(path.join(os.homedir(), '.pi', 'dish', 'token'), 'utf8').trim();
+    if (fromFile) return fromFile;
+  } catch {}
+  return null;
+}
+
+const AUTH_TOKEN = readAuthToken();
+// Compare digests, not the tokens themselves: timingSafeEqual throws on a
+// length mismatch, which would leak the token's length.
+const AUTH_TOKEN_DIGEST = AUTH_TOKEN ? crypto.createHash('sha256').update(AUTH_TOKEN).digest() : null;
+
+function tokenMatches(candidate) {
+  if (!AUTH_TOKEN_DIGEST || typeof candidate !== 'string' || !candidate) return false;
+  return crypto.timingSafeEqual(crypto.createHash('sha256').update(candidate).digest(), AUTH_TOKEN_DIGEST);
+}
+
+function bearerToken(req) {
+  const m = /^Bearer\s+(.+)$/i.exec(req.headers.authorization || '');
+  return m ? m[1].trim() : null;
+}
+
+// EventSource can't set headers and the terminal WebSocket can't either, so
+// those two connections authenticate with a short-lived ticket minted over
+// the authed HTTP API. Multi-use within the TTL on purpose: EventSource
+// reconnects on its own with the same URL, and a single-use ticket would
+// turn every reconnect into a hard failure.
+const TICKET_TTL_MS = 60_000;
+const TICKET_PURPOSES = new Set(['stream', 'terminal']);
+const tickets = new Map(); // ticket -> { purpose, expiresAt }
+
+function mintTicket(purpose) {
+  const ticket = crypto.randomBytes(24).toString('base64url');
+  const expiresAt = Date.now() + TICKET_TTL_MS;
+  tickets.set(ticket, { purpose, expiresAt });
+  return { ticket, expiresAt };
+}
+
+function ticketValid(ticket, purpose) {
+  if (typeof ticket !== 'string' || !ticket) return false;
+  const entry = tickets.get(ticket);
+  if (!entry) return false;
+  if (entry.expiresAt <= Date.now()) { tickets.delete(ticket); return false; }
+  return entry.purpose === purpose;
+}
+
+const ticketSweeper = setInterval(() => {
+  const now = Date.now();
+  for (const [ticket, entry] of tickets) if (entry.expiresAt <= now) tickets.delete(ticket);
+}, TICKET_TTL_MS);
+ticketSweeper.unref();
+
+function allowedOrigins() {
+  const value = readDishSettings().allowedOrigins;
+  return Array.isArray(value) ? value.filter((o) => typeof o === 'string' && o) : [];
+}
+
+// CORS only ever travels with auth: echoing an allowlisted origin on an
+// unauthenticated API would let any page the browser visits on the same
+// network drive local agents. Same-origin clients (the bundled UI, and
+// later a hub's proxied peers) need none of this.
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+  if (!AUTH_TOKEN) return next();
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins().includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Vary', 'Origin');
+    res.header('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+    if (req.method === 'OPTIONS') return res.status(204).end();
+  }
   next();
 });
+
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Express routing is non-strict, so both spellings reach the same route.
+const STREAM_PATH_RE = /^\/sessions\/[^/]+\/stream\/?$/;
+const HOST_PATH_RE = /^\/host\/?$/;
+
+app.use('/api', (req, res, next) => {
+  if (!AUTH_TOKEN) return next();
+  if (req.method === 'OPTIONS') return next();          // preflights carry no Authorization
+  if (HOST_PATH_RE.test(req.path)) return next();       // descriptor is public by design
+  if (tokenMatches(bearerToken(req))) return next();
+  if (STREAM_PATH_RE.test(req.path) && ticketValid(req.query.ticket, 'stream')) return next();
+  res.status(401).json({ error: 'Unauthorized: bearer token required' });
+});
+
+// WebSocket upgrades bypass Express entirely (see the terminal handler at the
+// bottom of this file), so both gates are re-applied by hand: a ticket or a
+// bearer for authentication, plus an origin check — a browser will happily
+// open a cross-origin WebSocket, and unlike fetch it gets no CORS veto.
+function upgradeAuthorized(req, url) {
+  if (!AUTH_TOKEN) return true;
+  if (!tokenMatches(bearerToken(req)) && !ticketValid(url.searchParams.get('ticket'), 'terminal')) return false;
+  const origin = req.headers.origin;
+  if (!origin) return true;                             // non-browser clients send none
+  const host = req.headers.host || '';
+  if (origin === `http://${host}` || origin === `https://${host}`) return true;
+  return allowedOrigins().includes(origin);
+}
+
+// Absent means unsupported: a client hides what a host doesn't advertise, so
+// mixed-version fleets degrade per feature instead of breaking. Only list
+// what this build actually serves.
+function hostCapabilities() {
+  const caps = {
+    sessions: true, search: true, usage: true, spawns: true,
+    shares: true, pages: true, comments: true, skills: true, harnesses: true,
+  };
+  if (terminal.isTerminalEnabled()) caps.terminal = true;
+  if (tmux.isTmuxAvailable()) caps.tmux = true;
+  return caps;
+}
+
+app.get('/api/host', (_req, res) => {
+  res.json({
+    hostId: hostIdentity.getHostId(),
+    label: hostIdentity.getHostLabel(readDishSettings()),
+    version: PKG_VERSION,
+    capabilities: hostCapabilities(),
+  });
+});
+
+app.post('/api/auth/ticket', (req, res) => {
+  const purpose = req.body?.purpose;
+  if (!TICKET_PURPOSES.has(purpose)) return res.status(400).json({ error: "purpose must be 'stream' or 'terminal'" });
+  // No token configured: nothing to authenticate with, and the stream/WS
+  // routes accept everything — tell the client not to bother with tickets.
+  if (!AUTH_TOKEN) return res.json({ ticket: null });
+  res.json(mintTicket(purpose));
+});
 
 const SESSIONS_DIR = path.join(os.homedir(), '.pi', 'agent', 'sessions');
 const PI_SETTINGS_FILE = path.join(os.homedir(), '.pi', 'agent', 'settings.json');
@@ -5125,6 +5273,12 @@ if (terminal.isTerminalEnabled()) {
     const url = new URL(req.url || '', 'http://localhost');
     const match = TERMINAL_PATH_RE.exec(url.pathname);
     if (!match) return socket.destroy();
+    // The upgrade never reaches Express, so the /api gate and the CORS
+    // allowlist have to be re-applied here by hand.
+    if (!upgradeAuthorized(req, url)) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      return socket.destroy();
+    }
     const sessionId = decodeURIComponent(match[1]);
     // Only spawn shells for sessions pi-dish actually knows about.
     const known = getRegisteredSession(sessionId) || getRPCSession(sessionId) || findSessionFile(sessionId);
