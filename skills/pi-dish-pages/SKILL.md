@@ -19,10 +19,18 @@ refreshes; do not re-register.
 2. Register the **absolute** path with the pi-dish server:
 
    ```bash
-   PI_DISH_SESSION_ID="$(node ~/.pi/agent/skills/pi-dish-comments/scripts/pi-dish-comments.js session 2>/dev/null || true)"
+   node ~/.pi/agent/skills/pi-dish-pages/scripts/pi-dish-pages.js publish \
+     "$PWD/plan.html" --title "Refactor plan"
+   ```
+
+   The CLI discovers this session (via the comments skill, when installed) so
+   comments left on the page route back to this agent, and prints the link to
+   give the user. Add `--json` for the raw response. Equivalent curl:
+
+   ```bash
    curl -s -X POST "${PI_DISH_URL:-http://localhost:3333}/api/pages" \
      -H 'Content-Type: application/json' \
-     -d "{\"path\": \"$PWD/plan.html\", \"title\": \"Refactor plan\", \"sessionId\": \"$PI_DISH_SESSION_ID\"}"
+     -d "{\"path\": \"$PWD/plan.html\", \"title\": \"Refactor plan\"}"
    ```
 
    (`PI_DISH_URL` is set in sessions spawned by pi-dish; the default port is
@@ -39,6 +47,26 @@ refreshes; do not re-register.
    is correct — it resolves against whatever address the user browses
    pi-dish at; do not prefix it with localhost.
 
+## Publishing through a fleet hub
+
+In a multi-host fleet one host is the public front door (a hub). A page still
+lives on *this* host's disk; the hub only fronts it:
+
+```bash
+node ~/.pi/agent/skills/pi-dish-pages/scripts/pi-dish-pages.js publish \
+  "$PWD/plan.html" --title "Refactor plan" --via <hub>
+```
+
+`<hub>` is a remote name from this host's `remotes` (see `GET /api/hosts`);
+`PI_DISH_PUBLIC_VIA` sets a default so plain `publish` uses it. The call goes
+out through this server's own `/hosts/<hub>` proxy — never talk to a hub
+directly — and the CLI prints the hub link alongside the local one. Use the
+hub link when the user is reaching pi-dish from outside this host.
+
+If the hub is unreachable, is not in this host's fleet map, does not list this
+host in its own, or runs a pi-dish too old for fleet artifacts, the CLI says
+so and the local link still stands.
+
 ## Notes
 
 - Re-registering the same path returns the same token — the link is stable
@@ -47,6 +75,10 @@ refreshes; do not re-register.
   route back to this agent. If the comments skill is not installed, page
   publishing still works but artifact comments cannot wake the originating
   session automatically.
-- Unpublish with `curl -X DELETE "$PI_DISH_URL/api/pages/<token>"`.
+- Unpublish with `curl -X DELETE "$PI_DISH_URL/api/pages/<token>"`. That kills
+  the page everywhere, including through any hub. Removing only the hub's
+  mapping (`DELETE /api/fleet-artifacts/<token>` on the hub) ends public
+  reachability while the page stays live on this host.
 - Anyone who can reach the pi-dish server (and, if configured, its public
-  share listener) can view the page. Don't publish secrets.
+  share listener or a hub fronting it) can view the page. Don't publish
+  secrets.

@@ -353,6 +353,15 @@ only serves existing tokens (`/page/<token>` is available there alongside
 file mention in a transcript) has a 🌐 button, and the stats modal lists a
 session's pages with revoke.
 
+In a multi-host fleet, one host can front the others' pages and share links:
+publishing or sharing through its `/hosts/<name>` proxy (which is what the UI
+does when you're viewing a peer's session) records the token and hands back
+that host's own link, and `/share` + `/page` there stream the content from
+whichever host owns it. Agents do the same with the pages skill's `--via
+<hub>` (or a `PI_DISH_PUBLIC_VIA` default), always through their own server.
+Revoking on the owning host kills the link everywhere; `DELETE
+/api/fleet-artifacts/<token>` on the front-door host only stops it fronting.
+
 ### Anchored comments
 
 Select text in the file viewer, select lines in the uncommitted-diff view, or
