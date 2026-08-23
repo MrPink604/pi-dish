@@ -468,7 +468,7 @@ function writeRegistry(patch = {}) {
       { timeout: 5000 });
     check(!(await desktop.locator('#messages').textContent()).includes('existing answer'),
       'new route renders only its own history, not the old transcript cache');
-    check(await desktop.evaluate(() => localStorage.getItem('pi-dish-session')) === SWITCH_ID,
+    check(await desktop.evaluate(() => parseSessionKey(localStorage.getItem('pi-dish-session')).sessionId) === SWITCH_ID,
       'client follows session_switch to the new route');
 
     writeRegistry({
@@ -1243,7 +1243,7 @@ function writeRegistry(patch = {}) {
     { id: SESSION_ID, draft: startupDraft }, { timeout: 3000 });
     const migratedDraft = await desktop.evaluate(({ spawnId, sessionId }) => ({
       provisional: localStorage.getItem('pi-dish-draft-spawn:' + spawnId),
-      session: localStorage.getItem('pi-dish-draft-' + sessionId),
+      session: localStorage.getItem(draftKey(sessionId)),
     }), { spawnId: 'ui-spawn-1', sessionId: SESSION_ID });
     check(migratedDraft.provisional === null && migratedDraft.session === startupDraft &&
       !(await desktop.locator('#btnSend').isDisabled()),
@@ -1694,7 +1694,7 @@ function writeRegistry(patch = {}) {
     console.log('drafts & history:');
     await desktop.fill('#promptInput', 'unsent draft');
     await desktop.waitForTimeout(500); // debounced draft save
-    check(await desktop.evaluate((id) => localStorage.getItem('pi-dish-draft-' + id),
+    check(await desktop.evaluate((id) => localStorage.getItem(draftKey(id)),
       registryState.sessionId) === 'unsent draft', 'draft saved to localStorage');
     // Wipe the input without an input event, re-select the session: the
     // draft must come back.
@@ -1714,7 +1714,7 @@ function writeRegistry(patch = {}) {
     // Clean up so later sections start with an empty composer + no draft.
     await desktop.fill('#promptInput', '');
     await desktop.waitForTimeout(500);
-    check(await desktop.evaluate((id) => localStorage.getItem('pi-dish-draft-' + id),
+    check(await desktop.evaluate((id) => localStorage.getItem(draftKey(id)),
       registryState.sessionId) === null, 'clearing the box clears the draft');
 
     // 10. Extension UI scoping: widgets/statuses are per-session — cleared
@@ -1963,13 +1963,13 @@ function writeRegistry(patch = {}) {
       renderAttachmentStrip();
       const realApiSend = apiSend;
       window.__auditRealApiSend = realApiSend;
-      apiSend = (url, ...args) => {
+      apiSend = (host, url, ...args) => {
         if (url === `/api/sessions/${a}/prompt`) {
           return new Promise((resolve, reject) => {
             window.__rejectAuditPrompt = () => reject(new Error('audit send failure'));
           });
         }
-        return realApiSend(url, ...args);
+        return realApiSend(host, url, ...args);
       };
       window.__auditFailedPrompt = sendPrompt();
     }, { a: SESSION_ID, image: TINY_PNG });
@@ -2024,11 +2024,11 @@ function writeRegistry(patch = {}) {
       renderQueueStatus({ followUp: ['duplicate buffered prompt'] });
       const realApiSend = apiSend;
       window.__auditRealApiSend = realApiSend;
-      apiSend = (url, ...args) => {
+      apiSend = (host, url, ...args) => {
         if (url.endsWith('/queue/cancel')) {
           return new Promise((resolve) => { window.__resolveAuditQueueEdit = () => resolve({ success: true }); });
         }
-        return realApiSend(url, ...args);
+        return realApiSend(host, url, ...args);
       };
       const row = document.querySelector('.queue-item');
       window.__auditQueueAssociation = row.dataset.clientPromptId;
@@ -2072,9 +2072,9 @@ function writeRegistry(patch = {}) {
     await desktop.evaluate(async () => {
       const realApiSend = apiSend;
       window.__auditRealApiSend = realApiSend;
-      apiSend = async (url, body, ...args) => {
+      apiSend = async (host, url, body, ...args) => {
         if (url === '/api/models/enabled') { window.__auditEnabledBody = body; return { success: true }; }
-        return realApiSend(url, body, ...args);
+        return realApiSend(host, url, body, ...args);
       };
       knownModels = [
         { provider: 'audit', id: 'kept', enabled: true },
@@ -2174,7 +2174,8 @@ function writeRegistry(patch = {}) {
     check(JSON.stringify(familyIds) === JSON.stringify([registryState.sessionId, SKILL_SESSION_ID]),
       'expanded family keeps the parent first with its child directly beneath');
     check(await desktop.evaluate((id) =>
-      JSON.parse(localStorage.getItem('pi-dish-expanded-session-families') || '[]').includes(id), registryState.sessionId),
+      JSON.parse(localStorage.getItem('pi-dish-expanded-session-families') || '[]')
+        .some((key) => parseSessionKey(key).sessionId === id), registryState.sessionId),
       'family expansion persists device-locally');
     await desktop.click(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
     await desktop.waitForFunction((id) => !document.querySelector(`.session-item[data-id="${id}"]`), SKILL_SESSION_ID);
@@ -2272,7 +2273,8 @@ function writeRegistry(patch = {}) {
       .evaluateAll(rows => rows.map(row => row.dataset.id));
     check(JSON.stringify(draggedFamilyIds) === JSON.stringify([registryState.sessionId, SKILL_SESSION_ID]),
       'drag handle moves the expanded family as one block');
-    check(await desktop.evaluate(() => localStorage.getItem('pi-dish-pinned-sessions')) ===
+    check(JSON.stringify(await desktop.evaluate(() => JSON.parse(localStorage.getItem('pi-dish-pinned-sessions') || '[]')
+      .map((key) => parseSessionKey(key).sessionId))) ===
       JSON.stringify([BETA_ID, registryState.sessionId]), 'manual family order persisted to localStorage');
     // Collapse, then unpin both; the section disappears and families rejoin.
     await desktop.click(`.pinned-segment .session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
@@ -2286,7 +2288,8 @@ function writeRegistry(patch = {}) {
     await desktop.fill('#filterInput', 'use smoke skill');
     await desktop.waitForSelector(`.ranked-segment .session-item[data-id="${SKILL_SESSION_ID}"]`, { timeout: 5000 });
     await pinToggle(SKILL_SESSION_ID);
-    check(await desktop.evaluate(() => localStorage.getItem('pi-dish-pinned-sessions')) ===
+    check(JSON.stringify(await desktop.evaluate(() => JSON.parse(localStorage.getItem('pi-dish-pinned-sessions') || '[]')
+      .map((key) => parseSessionKey(key).sessionId))) ===
       JSON.stringify([SESSION_ID]), 'pinning a filtered child stores the stable parent family id');
     await desktop.fill('#filterInput', '');
     await desktop.waitForFunction((id) => document.querySelector('.pinned-segment .session-item')?.dataset.id === id,
@@ -2302,7 +2305,8 @@ function writeRegistry(patch = {}) {
     await desktop.fill('#filterInput', 'beta answer');
     await desktop.waitForSelector(`.ranked-segment .session-item[data-id="${BETA_ID}"]`, { timeout: 5000 });
     await pinToggle(BETA_ID);
-    check(await desktop.evaluate(() => localStorage.getItem('pi-dish-pinned-sessions')) ===
+    check(JSON.stringify(await desktop.evaluate(() => JSON.parse(localStorage.getItem('pi-dish-pinned-sessions') || '[]')
+      .map((key) => parseSessionKey(key).sessionId))) ===
       JSON.stringify([SESSION_ID, BETA_ID]), 'cross-workspace filtered child pins independently');
     await desktop.fill('#filterInput', '');
     await desktop.waitForFunction(() => document.querySelectorAll('.pinned-segment > .session-family-root').length === 2,
@@ -3054,6 +3058,61 @@ function writeRegistry(patch = {}) {
     await desktop.locator('#statsBody').getByText('Performance', { exact: true }).waitFor();
     check(true, 'inactive session stats are accessible without resuming');
     await desktop.click('#statsModal .modal-header .btn-icon');
+
+    // 14. Host-aware client keys (TASKS/multi-host.md phase 1). This server
+    // serves no /api/host, so everything above exercised the bare-key path —
+    // drive the migration by hand to prove the composite path is lossless
+    // and that the live key helpers agree with what it wrote.
+    console.log('host-aware client keys:');
+    const keys = await desktop.evaluate((id) => {
+      localStorage.setItem('pi-dish-draft-' + id, 'bare draft');
+      localStorage.setItem('pi-dish-history-' + id, JSON.stringify(['bare prompt']));
+      localStorage.setItem('pi-dish-terminal-mode-' + id, 'tmux');
+      localStorage.setItem('pi-dish-draft-spawn:keep-me', 'spawn draft');
+      localStorage.setItem('pi-dish-seen', JSON.stringify({ [id]: 'seen-at' }));
+      localStorage.setItem('pi-dish-pinned-sessions', JSON.stringify([id]));
+      localStorage.setItem('pi-dish-expanded-session-families', JSON.stringify([id]));
+      localStorage.setItem('pi-dish-session', id);
+      localStorage.removeItem('pi-dish-keys-migrated');
+      seenActivity = readJSONPref('pi-dish-seen', {});
+      pinnedSessions = readJSONPref('pi-dish-pinned-sessions', []);
+      expandedSessionFamilies.clear();
+      expandedSessionFamilies.add(id);
+      selfHost = { hostId: 'ui-host', base: '', label: null };
+      migrateClientKeys();
+      const key = sessionKey('ui-host', id);
+      const bareLeft = Object.keys(localStorage).filter((k) =>
+        /^pi-dish-(draft|history|terminal-mode)-/.test(k) && !k.includes(' ') && !k.includes('spawn:'));
+      return {
+        key,
+        draft: localStorage.getItem('pi-dish-draft-' + key),
+        history: localStorage.getItem('pi-dish-history-' + key),
+        mode: localStorage.getItem('pi-dish-terminal-mode-' + key),
+        spawnDraft: localStorage.getItem('pi-dish-draft-spawn:keep-me'),
+        seen: localStorage.getItem('pi-dish-seen'),
+        pinned: localStorage.getItem('pi-dish-pinned-sessions'),
+        expanded: localStorage.getItem('pi-dish-expanded-session-families'),
+        selected: localStorage.getItem('pi-dish-session'),
+        bareLeft,
+        derivedDraftKey: draftKey(id),
+        derivedTerminalKey: terminalModeKey(id),
+        stampedHost: stampSessionHost({ id: 'fresh' }).host,
+        migratedFlag: localStorage.getItem('pi-dish-keys-migrated'),
+      };
+    }, registryState.sessionId);
+    check(keys.draft === 'bare draft' && keys.history === '["bare prompt"]' && keys.mode === 'tmux',
+      'per-session drafts/history/terminal mode migrate to composite keys with their values');
+    check(keys.bareLeft.length === 0, `no bare per-session keys left behind (got ${keys.bareLeft.join(', ')})`);
+    check(keys.spawnDraft === 'spawn draft', 'spawn composer keys are left alone (never session ids)');
+    check(keys.seen === JSON.stringify({ [keys.key]: 'seen-at' }), 'seen map re-keys to host + session');
+    check(keys.pinned === JSON.stringify([keys.key]) && keys.expanded === JSON.stringify([keys.key]),
+      'pins and expanded families re-key to host + session');
+    check(keys.selected === keys.key, 'the restored-session key carries its host');
+    check(keys.derivedDraftKey === 'pi-dish-draft-' + keys.key &&
+      keys.derivedTerminalKey === 'pi-dish-terminal-mode-' + keys.key,
+      'the live key helpers resolve to exactly what the migration wrote');
+    check(keys.stampedHost === 'ui-host', 'session state writers stamp the host onto new entries');
+    check(keys.migratedFlag === 'ui-host', 'migration is flagged so it runs once');
 
     check(errors.length === 0, errors.length ? `no page errors — got: ${errors.join(' | ')}` : 'no page errors');
   } catch (e) {
