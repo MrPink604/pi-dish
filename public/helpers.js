@@ -565,7 +565,11 @@ function groupRelations(relations) {
   return groups;
 }
 
-const QUERY_FIELDS = new Set(['name', 'cwd', 'model', 'id', 'is']);
+// `host` is the one client-evaluated field: hosts are a client concept (the
+// client is the aggregator), so a server's own sessions carry neither
+// hostLabel nor host. Clients strip host terms with stripQueryField() before
+// querying any server and re-apply them locally.
+const QUERY_FIELDS = new Set(['name', 'cwd', 'model', 'id', 'is', 'host']);
 
 /** "7d"/"12h"/"2w" → ms span; ISO "YYYY-MM-DD" → ms epoch (local midnight); null otherwise. */
 function parseQueryDate(value, now) {
@@ -586,6 +590,30 @@ function parseQueryDate(value, now) {
   return null;
 }
 
+// Tokens are non-space runs, but a double-quoted span (optionally after a
+// -/field: prefix) keeps its spaces: -name:"two words", "two words". One
+// builder, so the parser and stripQueryField can never tokenize differently.
+function queryTokenRe() { return /(-?)([a-zA-Z]+:)?("([^"]*)"|\S+)/g; }
+
+/**
+ * The query minus every `field:`/`-field:` token (quoted values included),
+ * whitespace normalized. Used to drop client-only terms — `host:` — from a
+ * query before it reaches a server, which would match them against nothing
+ * and so filter everything out.
+ */
+function stripQueryField(query, field) {
+  if (!query) return '';
+  const want = String(field || '').toLowerCase();
+  const tokenRe = queryTokenRe();
+  const kept = [];
+  let m;
+  while ((m = tokenRe.exec(query)) !== null) {
+    const prefix = m[2] ? m[2].slice(0, -1).toLowerCase() : null;
+    if (prefix !== want) kept.push(m[0]);
+  }
+  return kept.join(' ');
+}
+
 /**
  * Parse a filter query → { terms: [{ neg, field, value }], since, before }.
  * `since`/`before` are ms epochs (null when absent); multiple occurrences
@@ -595,9 +623,7 @@ function parseQueryDate(value, now) {
 function parseSessionQuery(query, now = Date.now()) {
   const parsed = { terms: [], since: null, before: null };
   if (!query) return parsed;
-  // Tokens are non-space runs, but a double-quoted span (optionally after a
-  // -/field: prefix) keeps its spaces: -name:"two words", "two words".
-  const tokenRe = /(-?)([a-zA-Z]+:)?("([^"]*)"|\S+)/g;
+  const tokenRe = queryTokenRe();
   let m;
   while ((m = tokenRe.exec(query)) !== null) {
     const neg = m[1] === '-';
@@ -643,7 +669,12 @@ function evaluateSessionQuery(parsed, session, contentText) {
   const meta = sessionMetaText(session);
   for (const term of parsed.terms) {
     let hit;
-    if (term.field === 'is') {
+    if (term.field === 'host') {
+      // Client-only: the host's display label, falling back to its id. A
+      // server's sessions carry neither, so a positive host: term matches
+      // nothing there — which is exactly why clients strip these first.
+      hit = String(session.hostLabel || session.host || '').toLowerCase().includes(term.value);
+    } else if (term.field === 'is') {
       // Not a substring field: is:active tests liveness (anything else
       // simply never matches, so a typo can't silently mean "everything").
       hit = term.value === 'active' && !!session.isActive;
@@ -708,6 +739,19 @@ function applyLocalFilter(list, query) {
     .map(s => [s, scoreSessionMatch(parsed, s)])
     .sort((a, b) => b[1] - a[1] || new Date(b[0].lastActivity || 0) - new Date(a[0].lastActivity || 0))
     .map(([s]) => s);
+}
+
+/**
+ * Narrow a list by a query's `host:` terms alone — the client-side half of a
+ * query whose every other term a server already applied (host terms never
+ * reach one). Returns the list untouched when the query names no host.
+ */
+function applyHostTerms(list, query) {
+  if (!query) return list;
+  const terms = parseSessionQuery(query).terms.filter(t => t.field === 'host');
+  if (!terms.length) return list;
+  const parsed = { terms, since: null, before: null };
+  return list.filter(s => evaluateSessionQuery(parsed, s));
 }
 
 /** Simple fuzzy match: all chars of query appear in order in str; returns match indices or null */
@@ -1585,9 +1629,9 @@ if (typeof module !== 'undefined' && module.exports) {
     contextClass, sessionSupports, harnessBadgeInfo, sessionMetaText, parseModelId, formatModelRef,
     groupByWorkspace, buildWorkspaceTree, collectTreeSessions, groupSessionsByDate,
     buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies,
-    partitionPinned, applyLocalFilter, fuzzyMatch, fuzzyScore,
+    partitionPinned, applyLocalFilter, applyHostTerms, fuzzyMatch, fuzzyScore,
     RELATION_KIND_ORDER, sortRelations, isChildRelation, groupRelations,
-    parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch,
+    parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch, stripQueryField,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     sessionKey, parseSessionKey, sessionRefKey, normalizeHostBase, sanitizeHostCatalog,
     hostDisplayLabel, mergeHostEntries, mergeUsageSummaries,

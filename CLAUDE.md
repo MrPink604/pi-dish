@@ -543,7 +543,11 @@ exactly single-host pi-dish.
   `mergeUsageSummaries` (helpers.js — a single payload passes through
   untouched; per-host top-20 truncation makes merged deep tails
   approximate). Client storage that keys sessions uses composite keys with
-  a one-time flagged migration (`pi-dish-keys-migrated`).
+  a one-time flagged migration (`pi-dish-keys-migrated`). The `host:` filter
+  term is client-evaluated (`hostLabel`, stamped by the state writers,
+  falling back to the hostId) and `stripQueryField`'d out of every query and
+  scope before it goes on the wire — a server would match it against nothing
+  and answer empty; positive host terms prune the fan-out instead.
 - **Agents**: the peer-sessions skill talks to its *own* server only —
   `hosts` lists the fleet, `--host <name>` prefixes `/hosts/<name>` on any
   command, `PI_DISH_TOKEN` adds the bearer. Cross-host spawns attribute as
@@ -969,10 +973,11 @@ local-filter pass ranks on metadata alone.
 
 Filter queries speak one grammar everywhere (`parseSessionQuery` /
 `evaluateSessionQuery` in helpers.js, shared by `applyLocalFilter` and the
-server's `matchSessionQuery`): `-term` negation, `name:`/`cwd:`/`model:`/`id:`
-field terms, `since:`/`before:` bounds on lastActivity (`7d`/`12h`/`2w` or
-ISO dates), quoted phrases. Negations and field terms are **metadata-only by
-design** — only positive plain terms may match message content (and only they
+server's `matchSessionQuery`): `-term` negation,
+`name:`/`cwd:`/`model:`/`id:`/`host:` field terms, `since:`/`before:` bounds
+on lastActivity (`7d`/`12h`/`2w` or ISO dates), quoted phrases. `host:` is
+the one client-evaluated field (see the fleet section). Negations and field
+terms are **metadata-only by design** — only positive plain terms may match message content (and only they
 justify the content read + snippet), so `-subagent` can't hide a session whose
 transcript merely mentions the word. Unknown prefixes stay literal text.
 Saved filters ("scopes") are server-global `savedFilters` in
@@ -1004,7 +1009,8 @@ occur in their content; only positive plain terms ever trigger the content
 read. `is:active` is a grammar term (liveness test, not a substring; a typo'd
 `is:` value matches nothing). The facet row (date presets, workspace/model
 selects sourced from the sidebar's session lists — not from results, or
-picking one would empty the rest — and Active-only) is pure UI over the
+picking one would empty the rest — a host select from the client's host list
+when there is a fleet, and Active-only) is pure UI over the
 grammar: facets rewrite the visible query text, which stays the single source
 of truth. Active scopes filter results client-side with the same hidden-count
 note. Click-through closes the takeover, selects the session (after a full

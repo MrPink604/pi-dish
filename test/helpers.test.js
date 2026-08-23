@@ -497,6 +497,82 @@ test('evaluateSessionQuery: is:active tests liveness, not substrings', () => {
   assert.equal(q('is:banana', live), false); // typo can't mean "everything"
 });
 
+test('parseSessionQuery treats host: as a field term, negated and quoted alike', () => {
+  const p = H.parseSessionQuery('host:beelink -host:framework host:"work laptop" hostname:x');
+  assert.deepEqual(p.terms, [
+    { neg: false, field: 'host', value: 'beelink' },
+    { neg: true, field: 'host', value: 'framework' },
+    { neg: false, field: 'host', value: 'work laptop' },
+    { neg: false, field: null, value: 'hostname:x' }, // unknown prefix stays literal
+  ]);
+});
+
+test('evaluateSessionQuery: host: matches the label, falls back to the host id', () => {
+  const q = (str, s) => H.evaluateSessionQuery(H.parseSessionQuery(str), s);
+  const labelled = { name: 'x', cwd: '/a', model: 'm', id: 's1', host: 'uuid-1', hostLabel: 'beelink' };
+  const idOnly = { name: 'x', cwd: '/a', model: 'm', id: 's2', host: 'uuid-2' };
+  const hostless = { name: 'x', cwd: '/a', model: 'm', id: 's3' }; // a server's own view
+  assert.equal(q('host:beel', labelled), true); // case-insensitive substring, like every field
+  assert.equal(q('host:BEEL', labelled), true);
+  assert.equal(q('host:uuid-1', labelled), false); // the label wins where there is one
+  assert.equal(q('host:uuid-2', idOnly), true);
+  assert.equal(q('-host:beelink', labelled), false);
+  assert.equal(q('-host:beelink', idOnly), true);
+  // Server-side sessions carry neither field: a positive host term matches
+  // nothing there and a negated one everything — which is why clients strip
+  // host terms before querying a server at all.
+  assert.equal(q('host:beelink', hostless), false);
+  assert.equal(q('-host:beelink', hostless), true);
+});
+
+test('host: composes with is:active, since: and plain terms', () => {
+  const now = new Date('2026-07-21T12:00:00').getTime();
+  const s = { name: 'fix login', cwd: '/a', model: 'm', id: 's1', hostLabel: 'beelink', isActive: true, lastActivity: '2026-07-20T10:00:00' };
+  const q = (str) => H.evaluateSessionQuery(H.parseSessionQuery(str, now), s);
+  assert.equal(q('host:beelink is:active'), true);
+  assert.equal(q('host:other is:active'), false);
+  assert.equal(q('host:beelink -is:active'), false);
+  assert.equal(q('host:beelink since:7d login'), true);
+  assert.equal(q('host:beelink since:1d'), false);
+  // Field terms never score: a host-only query stays recency-ordered.
+  assert.equal(H.scoreSessionMatch(H.parseSessionQuery('host:beelink'), s), 0);
+  assert.deepEqual(H.positiveQueryTokens(H.parseSessionQuery('host:beelink login')), ['login'],
+    'host: never reaches content search');
+});
+
+test('stripQueryField removes a field\'s tokens and leaves the rest tokenized as parsed', () => {
+  const strip = (q) => H.stripQueryField(q, 'host');
+  assert.equal(strip('host:beelink login'), 'login');
+  assert.equal(strip('login -host:framework bug'), 'login bug');
+  assert.equal(strip('host:"work laptop" login'), 'login');
+  assert.equal(strip('-host:"work laptop"'), '');
+  assert.equal(strip('login bug'), 'login bug', 'field absent: untouched');
+  assert.equal(strip('name:sub cwd:api is:active since:7d'), 'name:sub cwd:api is:active since:7d');
+  assert.equal(strip('  host:a   login   '), 'login', 'whitespace normalizes');
+  assert.equal(strip(''), '');
+  assert.equal(strip('hostname:x host:a'), 'hostname:x', 'only the exact field is stripped');
+  assert.equal(H.stripQueryField('name:sub host:a login', 'name'), 'host:a login');
+  // The stripped query still parses to exactly the non-host terms.
+  const full = H.parseSessionQuery('login -host:framework "two words" is:active');
+  const rest = H.parseSessionQuery(strip('login -host:framework "two words" is:active'));
+  assert.deepEqual(rest.terms, full.terms.filter(t => t.field !== 'host'));
+});
+
+test('applyHostTerms filters on host terms alone, ignoring the rest of the query', () => {
+  const list = [
+    { id: 's1', name: 'alpha', hostLabel: 'beelink' },
+    { id: 's2', name: 'beta', hostLabel: 'framework' },
+    { id: 's3', name: 'gamma', host: 'uuid-3' },
+  ];
+  assert.deepEqual(H.applyHostTerms(list, 'host:beelink').map(s => s.id), ['s1']);
+  assert.deepEqual(H.applyHostTerms(list, '-host:beelink').map(s => s.id), ['s2', 's3']);
+  assert.deepEqual(H.applyHostTerms(list, 'host:uuid-3').map(s => s.id), ['s3']);
+  // Non-host terms are the server's job on this path — they must not narrow.
+  assert.deepEqual(H.applyHostTerms(list, 'host:beelink zzz name:nope').map(s => s.id), ['s1']);
+  assert.equal(H.applyHostTerms(list, 'zzz'), list);
+  assert.equal(H.applyHostTerms(list, ''), list);
+});
+
 test('buildSnippets returns multiple windows and a total occurrence count', () => {
   const text = 'alpha starts here. ' + 'padding words go between the occurrences to separate windows. '.repeat(3)
     + 'alpha again in the middle. ' + 'more padding words follow before the last one appears far away. '.repeat(3)
