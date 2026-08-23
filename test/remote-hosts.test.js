@@ -182,6 +182,16 @@ test('ssh forwards land on a per-remote socket under the dish run dir', () => {
       'user@box',
     ]);
   });
+
+  // A peer bound to a tailnet/LAN IP instead of loopback: the forward's far
+  // end must match the peer's actual bind address.
+  withHome({ remotes: [{ name: 'bee', sshDest: 'bee', remoteHost: '100.70.163.97' }] }, () => {
+    const argv = remoteHosts.sshArgv(remoteHosts.getRemote('bee'));
+    assert.equal(argv[argv.length - 2], `${remoteHosts.socketPathFor('bee')}:100.70.163.97:3333`);
+  });
+  withHome({ remotes: [{ name: 'bad', sshDest: 'bee', remoteHost: 'evil host' }] }, () => {
+    assert.equal(remoteHosts.getRemote('bad'), null);
+  });
 });
 
 test('ssh diagnostics are classified, never echoed', () => {
