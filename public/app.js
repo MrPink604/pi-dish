@@ -9353,12 +9353,29 @@ async function loadConfig() {
 let termState = null;
 let termCtrlLatch = false;
 
-function terminalFeatureAvailable() {
-  return !!(appConfig.terminal && typeof Terminal !== 'undefined');
+/**
+ * The terminal is a *per-host* feature: a session on a peer with
+ * PI_DISH_TERMINAL on is reachable from an entry host that has it off, and
+ * vice versa (the WS URL and ticket already follow the session's host). Gate
+ * on the owning host's advertised capabilities, falling back to this host's
+ * /api/config only for self — see hostSupportsTerminal in helpers.js.
+ */
+function sessionHostSupportsTerminal(session) {
+  return hostSupportsTerminal(hostEntryFor(session?.host), appConfig);
+}
+
+/** Same rule for the pi-tmux view button: tmux is the owning host's, too. */
+function sessionHostSupportsTmux(session) {
+  return hostSupportsCapability(hostEntryFor(session?.host), 'tmux', appConfig);
 }
 
 function updateTerminalButtons() {
-  const show = terminalFeatureAvailable() && currentSession?.isActive;
+  const supported = sessionHostSupportsTerminal(currentSession);
+  // Lazy assets: a load where no host offers a terminal still requests
+  // nothing, but selecting a capable host's session pulls xterm in before
+  // the user can click (openTerminal awaits the same one-shot promise).
+  if (supported) loadTerminalAssets().catch(() => {});
+  const show = supported && currentSession?.isActive;
   const btn = document.getElementById('btnTerminal');
   if (btn) btn.style.display = show ? '' : 'none';
   const row = document.getElementById('cpTerminalRow');
@@ -9458,10 +9475,15 @@ function toggleTerminal() {
 }
 
 async function openTerminal(mode) {
-  if (!terminalFeatureAvailable() || !currentSession || termState) return;
+  if (!currentSession || termState || !sessionHostSupportsTerminal(currentSession)) return;
   const session = currentSession;
   const sessionId = session.id;
   const selectionGeneration = sessionSelectionGeneration;
+  // Assets may still be in flight (or never requested, on a load whose first
+  // terminal-capable session is a remote one) — the promise is one-shot.
+  try { await loadTerminalAssets(); } catch { return; }
+  if (typeof Terminal === 'undefined') return;
+  if (termState || !ownsSessionView(sessionId, selectionGeneration)) return;
   // 'shell' (default) or 'tmux' (a grouped tmux client viewing the pane the
   // session's pi runs in). The last choice sticks per session.
   if (!mode) mode = localStorage.getItem(terminalModeKey(sessionId)) === 'tmux' ? 'tmux' : 'shell';
@@ -9619,7 +9641,7 @@ function closeTerminal() {
 function updateTerminalModeUI() {
   const btn = document.getElementById('termModeBtn');
   if (btn) {
-    const showBtn = !!(termState && appConfig.tmux && currentSession?.isActive);
+    const showBtn = !!(termState && sessionHostSupportsTmux(currentSession) && currentSession?.isActive);
     btn.style.display = showBtn ? '' : 'none';
     if (termState?.mode === 'tmux') {
       btn.textContent = '⇆ shell';

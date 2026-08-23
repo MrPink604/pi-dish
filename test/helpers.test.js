@@ -1128,6 +1128,38 @@ test('mergeHostEntries drops garbage bases instead of guessing', () => {
   assert.deepEqual(hosts.map(h => h.base), ['', 'http://ok:1']);
 });
 
+// --- per-host capability gating -------------------------------------------
+
+test('hostSupportsTerminal reads the owning host\'s advertised capabilities', () => {
+  const remote = (caps) => ({ hostId: 'tycho-id', base: 'http://tycho:3333', capabilities: caps });
+  assert.equal(H.hostSupportsTerminal(remote({ terminal: true, tmux: true }), { terminal: false }), true,
+    'a peer that advertises the terminal is usable from a terminal-less entry host');
+  assert.equal(H.hostSupportsTerminal(remote({ terminal: false }), { terminal: true }), false);
+  assert.equal(H.hostSupportsTerminal(remote({ sessions: true }), { terminal: true }), false,
+    'absent capability in an advertised set means unsupported');
+});
+
+test('hostSupportsTerminal falls back to /api/config for self only', () => {
+  const self = { hostId: 'self-id', base: '', self: true, capabilities: null };
+  assert.equal(H.hostSupportsTerminal(self, { terminal: true }), true,
+    'self before /api/host answers keeps single-host behavior');
+  assert.equal(H.hostSupportsTerminal(self, { terminal: false }), false);
+  assert.equal(H.hostSupportsTerminal({ base: '', capabilities: null }, { terminal: true }), true,
+    'the serving origin is self even without the flag');
+  assert.equal(H.hostSupportsTerminal({ ...self, capabilities: { sessions: true } }, { terminal: true }), false,
+    'self capabilities win over the config fallback once advertised');
+  assert.equal(H.hostSupportsTerminal({ hostId: 'old-id', base: 'http://old:3333' }, { terminal: true }), false,
+    'a remote of unknown build hides the button rather than serving a dead one');
+  assert.equal(H.hostSupportsTerminal(null, { terminal: true }), false,
+    'no entry at all (a host that left the list) is not this host');
+});
+
+test('hostSupportsCapability is the generic form behind it', () => {
+  assert.equal(H.hostSupportsCapability({ base: '', self: true, capabilities: { tmux: true } }, 'tmux', {}), true);
+  assert.equal(H.hostSupportsCapability({ base: '', self: true }, 'tmux', { tmux: true }), true);
+  assert.equal(H.hostSupportsCapability({ hostId: 'x', base: 'http://x:1' }, 'tmux', { tmux: true }), false);
+});
+
 // --- usage merging ---------------------------------------------------------
 
 function usageBucket(over = {}) {

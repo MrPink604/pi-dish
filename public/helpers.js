@@ -916,6 +916,30 @@ function mergeHostEntries(self, fleet, catalog) {
   return out;
 }
 
+/**
+ * Per-host feature gating. `capabilities` is the host's own advertisement
+ * (GET /api/host) and absent means unsupported: an advertised set that omits
+ * a feature hides the affordance rather than letting it die on connect.
+ * A host that advertised nothing at all (older build, or /api/host hasn't
+ * answered yet) is only trusted to the local /api/config when it is *this*
+ * host — a remote of unknown build stays hidden, because a dead button is
+ * worse than a missing one.
+ */
+function hostSupportsCapability(hostEntry, capability, config) {
+  const caps = hostEntry && hostEntry.capabilities;
+  if (caps && typeof caps === 'object') return caps[capability] === true;
+  const isSelf = !!hostEntry && (hostEntry.self === true || hostEntry.base === '');
+  return isSelf ? !!(config && config[capability]) : false;
+}
+
+/**
+ * Terminal gating for the host that owns the session on screen — the entry
+ * host's own PI_DISH_TERMINAL says nothing about a peer's.
+ */
+function hostSupportsTerminal(hostEntry, config) {
+  return hostSupportsCapability(hostEntry, 'terminal', config);
+}
+
 // --- Usage summary merging (multi-host) ----------------------------------
 // The usage view fans /api/usage-summary out to every reachable host and
 // merges the payloads here. Everything below mirrors the server's own
@@ -1591,6 +1615,7 @@ if (typeof module !== 'undefined' && module.exports) {
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     sessionKey, parseSessionKey, sessionRefKey, normalizeHostBase, sanitizeHostCatalog,
     hostDisplayLabel, mergeHostEntries, mergeUsageSummaries,
+    hostSupportsCapability, hostSupportsTerminal,
     modelMatchesPattern, isModelEnabled, pushPromptHistory, sanitizeMarkdownUrl,
     buildSnippet, buildSnippets, highlightTokens, looksLikeFilePath, findPathTokens,
     renderDiffHtml, diffStatusClass,

@@ -885,8 +885,18 @@ timer re-arms for the remaining silence). A `restart` WS frame kills and
 respawns the shell carrying attached sockets over (⟳ in the panel header;
 frame handlers look the terminal up per message, never close over it, so
 input follows the new PTY). Client side:
-xterm.js + fit addon (vendored, UMD globals, loaded only after `/api/config`
-enables the terminal — disabled app loads must not request them), theme built from the `:root`
+the feature is gated per **owning host**, not per entry host —
+`hostSupportsTerminal(entry, appConfig)` (helpers.js) reads the advertised
+`capabilities` of the host that owns `currentSession` (absent capability ⇒
+unsupported ⇒ button hidden, per the fleet rule), falling back to this host's
+`/api/config` only for self, so a peer's terminal is reachable from a
+terminal-less entry host and a peer that lacks one never shows a button whose
+WS connect would fail (the WS URL and ticket already follow the session's
+host). xterm.js + fit addon (vendored, UMD globals, loaded lazily: at boot
+when `/api/config` enables the terminal here, else the first time a
+terminal-capable host's session is selected; `openTerminal` awaits the same
+one-shot `terminalAssetsPromise`, and a load where *no* host offers a terminal
+must still request nothing), theme built from the `:root`
 tokens in `terminalTheme()`, mobile extra-keys bar with a ctrl latch that
 rewrites the next key in `term.onData`. The panel's top edge is a drag
 handle (`initTerminalResize`; pointer capture, so no document listeners;

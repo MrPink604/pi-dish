@@ -3225,6 +3225,22 @@ let remoteHost = null; // second pi-dish (multi-host section)
       (await multi.locator('#sessionHost').textContent()) === 'tycho',
       'the session header names the host');
 
+    // The terminal is the *owning* host's feature: this entry host runs with
+    // PI_DISH_TERMINAL=1 and the peer with it off, so the capabilities the
+    // peer advertises — not ours — decide whether the button can exist.
+    const termGating = await multi.evaluate(() => {
+      const [self, remote] = [effectiveHosts()[0], effectiveHosts().find((h) => !h.self)];
+      return {
+        self: hostSupportsTerminal(self, appConfig),
+        remote: hostSupportsTerminal(remote, appConfig),
+        remoteCaps: !!(remote && remote.capabilities),
+        button: document.getElementById('btnTerminal').style.display,
+      };
+    });
+    check(termGating.self === true && termGating.remoteCaps && termGating.remote === false
+      && termGating.button === 'none',
+      `terminal gating follows the session's host, not the entry host (got ${JSON.stringify(termGating)})`);
+
     // Unread bookkeeping is keyed host + session, so viewing a remote session
     // marks *that* host's entry and can never mask a local id that matches.
     await multi.evaluate(() => loadSessions(undefined, { withPrevious: true }));
