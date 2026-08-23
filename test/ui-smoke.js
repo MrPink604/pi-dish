@@ -3241,6 +3241,48 @@ let remoteHost = null; // second pi-dish (multi-host section)
       && termGating.button === 'none',
       `terminal gating follows the session's host, not the entry host (got ${JSON.stringify(termGating)})`);
 
+    // `host:` is client-evaluated: it narrows the merged list *and* prunes
+    // the fan-out, and it must never reach a server (which would match it
+    // against nothing and answer empty).
+    const listReqs = [];
+    const noteList = (r) => { if (/\/api\/sessions(\?|$)/.test(r.url())) listReqs.push(r.url()); };
+    multi.on('request', noteList);
+    await multi.evaluate(() => {
+      const input = document.getElementById('filterInput');
+      input.value = 'host:tycho';
+      onFilterInput();
+    });
+    await multi.waitForSelector(`.session-item[data-id="${SESSION_ID}"]`, { state: 'detached', timeout: 10000 });
+    check(await multi.locator(`.session-item[data-id="${REMOTE_SESSION_ID}"]`).count() === 1,
+      'host: keeps the named host\'s rows and drops the others');
+    await multi.waitForFunction(() => listsQueriedFor === 'host:tycho', { timeout: 10000 });
+    multi.off('request', noteList);
+    check(listReqs.length > 0 && listReqs.every((u) => u.startsWith(remoteBase)),
+      `host: prunes the fan-out to the named host (got ${JSON.stringify(listReqs)})`);
+    check(listReqs.every((u) => !/host(%3A|:)/i.test(u)),
+      `the host: term is stripped before the wire (got ${JSON.stringify(listReqs)})`);
+    await multi.evaluate(() => {
+      document.getElementById('filterInput').value = '';
+      onFilterInput();
+    });
+    await multi.waitForSelector(`.session-item[data-id="${SESSION_ID}"]`, { timeout: 10000 });
+
+    // The advanced-search host facet is pure UI over the same grammar: it
+    // writes the term into the visible query, which stays authoritative.
+    await multi.evaluate(() => openSearchView(''));
+    await multi.waitForSelector('#searchFacetHost', { timeout: 10000 });
+    const facetHosts = await multi.locator('#searchFacetHost option').allTextContents();
+    check(facetHosts.length === 3 && facetHosts.includes('tycho'),
+      `the host facet offers every known host (got ${JSON.stringify(facetHosts)})`);
+    await multi.selectOption('#searchFacetHost', 'tycho');
+    await multi.waitForFunction(() => document.getElementById('searchViewInput').value === 'host:tycho',
+      { timeout: 10000 });
+    await multi.waitForFunction((id) => [...document.querySelectorAll('.search-result')]
+      .every((r) => r.dataset.id !== id), SESSION_ID, { timeout: 10000 });
+    check(await multi.locator(`.search-result[data-id="${REMOTE_SESSION_ID}"]`).count() === 1,
+      'the host facet narrows the results to that host');
+    await multi.keyboard.press('Escape');
+
     // Unread bookkeeping is keyed host + session, so viewing a remote session
     // marks *that* host's entry and can never mask a local id that matches.
     await multi.evaluate(() => loadSessions(undefined, { withPrevious: true }));

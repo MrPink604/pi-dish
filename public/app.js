@@ -1042,8 +1042,26 @@ async function loadSessions(query, { withPrevious = sidebarTab === 'all' } = {})
   // Fan out, never Promise.all: one slow (or dead) host must not hold the
   // whole sidebar. Each host publishes the merged lists as its own response
   // lands, so the list fills progressively.
-  await Promise.allSettled(pollableHosts().map(host => loadHostSessions(host, query, withPrevious, seq)));
+  await Promise.allSettled(queryHosts(pollableHosts(), query).map(host => loadHostSessions(host, query, withPrevious, seq)));
   if (seq === loadSessionsSeq) setSearchBusy(false);
+}
+
+/**
+ * The hosts a query can possibly match — `host:` is client-evaluated, so a
+ * host no positive host term names is a wasted request. Pruning runs the
+ * same evaluator the rows will, over a stand-in session carrying the host's
+ * label/id, so the fan-out can't disagree with the filter. Negations never
+ * prune (they narrow a fan-out, they don't name one) — those hosts are
+ * fetched and filtered client-side like every other term.
+ */
+function queryHosts(hosts, query) {
+  if (!query) return hosts;
+  const terms = parseSessionQuery(query).terms.filter(t => t.field === 'host' && !t.neg);
+  if (!terms.length) return hosts;
+  const parsed = { terms, since: null, before: null };
+  return hosts.filter(host => evaluateSessionQuery(parsed, {
+    hostLabel: hostDisplayLabel(host), host: host.hostId || null,
+  }));
 }
 
 /**
@@ -1057,9 +1075,14 @@ async function loadHostSessions(host, query, withPrevious, seq) {
   const key = hostKeyOf(host);
   const hostSeq = (hostLoadSeq.get(key) || 0) + 1;
   hostLoadSeq.set(key, hostSeq);
+  // `host:` never goes on the wire: a server has no idea which host it is
+  // from a session's point of view, so it would match the term against
+  // nothing and answer with an empty list. It is applied client-side, in
+  // renderSessions/applyLocalFilter, over what comes back.
+  const wireQuery = stripQueryField(query, 'host');
   try {
     const params = new URLSearchParams();
-    if (query) params.set('q', query);
+    if (wireQuery) params.set('q', wireQuery);
     if (!withPrevious) params.set('active', '1');
     const qs = params.toString();
     const res = await apiFetch(host, '/api/sessions' + (qs ? '?' + qs : ''));
@@ -1119,9 +1142,10 @@ async function loadHostSessions(host, query, withPrevious, seq) {
       // yet, so its entries aren't host-stamped.
       if (fresh) markSessionSeen(currentSession, fresh.lastActivity);
     }
-    if (!query) {
+    if (!wireQuery) {
       // Prune this host's stale entries only: another host's sessions aren't
-      // gone, they're just not in this response.
+      // gone, they're just not in this response. A host-only query left the
+      // wire query empty, so this response is still the host's full list.
       const live = new Set(next.active.map(s => sessionKey(s.host || hostId, s.id)));
       for (const seenKey of Object.keys(seenActivity)) {
         if (parseSessionKey(seenKey).hostId !== hostId) continue;
@@ -1520,7 +1544,12 @@ function renderSessions() {
   // includes message content) is authoritative — re-filtering locally would
   // drop content-only matches, since the local pass is metadata-only. Until
   // that response lands, narrow locally so typing feels instant.
-  const queried = (filterQuery && listsQueriedFor === filterQuery) ? showing : applyLocalFilter(showing, filterQuery);
+  // `host:` is the exception: it never reached the server, so it is applied
+  // here on top of what the server-filtered lists came back with (the
+  // debounce-window applyLocalFilter path evaluates it inline).
+  const queried = (filterQuery && listsQueriedFor === filterQuery)
+    ? applyHostTerms(showing, filterQuery)
+    : applyLocalFilter(showing, filterQuery);
   // Active scopes apply client-side on top of whatever the query kept —
   // metadata/date-only by design, so they behave identically on both tabs.
   const sq = scopeQuery();
@@ -1742,7 +1771,13 @@ function findSession(id, host) {
  * state writers) because the wire payload has no idea which host served it.
  */
 function stampSessionHost(session, hostId = selfHost.hostId) {
-  if (session && !session.host && hostId) session.host = hostId;
+  if (!session) return session;
+  if (!session.host && hostId) session.host = hostId;
+  // …and the host's display label, so the client-evaluated `host:` filter
+  // term can match what the user actually reads in the UI. Re-derived on
+  // every write: a host can be relabelled while its sessions sit in state.
+  const label = hostLabelFor(session.host || hostId);
+  if (label) session.hostLabel = label;
   return session;
 }
 
@@ -2965,14 +3000,22 @@ function onSearchViewInput({ immediate = false } = {}) {
  * merge is a re-sort, with recency breaking ties exactly as it does locally.
  */
 function mergeSearchPayloads(entries, query) {
-  if (entries.length === 1 && !entries[0].host.hostId) return entries[0].payload;
+  // Every result carries its host id *and* label: `host:` is evaluated on
+  // this side (the servers never saw the term) and matches on the label.
+  const stampHost = (session, host) => ({
+    ...session,
+    ...(host.hostId ? { host: host.hostId } : {}),
+    ...(hostDisplayLabel(host) ? { hostLabel: hostDisplayLabel(host) } : {}),
+  });
+  if (entries.length === 1 && !entries[0].host.hostId) {
+    const { host, payload } = entries[0];
+    return { ...payload, results: (payload.results || []).map(s => stampHost(s, host)) };
+  }
   const parsed = parseSessionQuery(query);
   const results = [];
   let total = 0, hiddenByScopes = 0, indexing = false;
   for (const { host, payload } of entries) {
-    for (const session of payload.results || []) {
-      results.push(host.hostId ? { ...session, host: host.hostId } : session);
-    }
+    for (const session of payload.results || []) results.push(stampHost(session, host));
     total += Number(payload.total) || (payload.results || []).length;
     hiddenByScopes += Number(payload.hiddenByScopes) || 0;
     if (payload.indexing) indexing = true;
@@ -2991,11 +3034,16 @@ async function runSearchView() {
   if (body.childElementCount) body.classList.add('usage-refreshing');
   else body.innerHTML = '<div class="usage-state">Searching…</div>';
   try {
-    const params = new URLSearchParams({ q: query });
-    if (scope) params.set('scope', scope);
+    // `host:` stays on this side of the wire — in the query and in any
+    // active scope — or every server would answer with nothing. Positive
+    // host terms prune the fan-out instead; the rest is applied to the
+    // merged results below.
+    const params = new URLSearchParams({ q: stripQueryField(query, 'host') });
+    const wireScope = stripQueryField(scope, 'host');
+    if (wireScope) params.set('scope', wireScope);
     // Every host searches its own index and ranks with the same shared
     // scoreSessionMatch, so the merge is a plain re-sort on searchScore.
-    const hosts = fanoutHosts();
+    const hosts = queryHosts(queryHosts(fanoutHosts(), query), scope);
     const settled = await Promise.allSettled(hosts.map(async (host) => {
       const r = await apiFetch(host, '/api/search?' + params);
       if (r.status === 401) { noteHostBlocked(host); throw new Error('needs a token'); }
@@ -3008,8 +3056,19 @@ async function runSearchView() {
       if (result.status === 'rejected' && hosts[i] && !hosts[i].self) noteHostFailure(hosts[i], result.reason);
     });
     const ok = settled.filter(r => r.status === 'fulfilled').map(r => r.value);
-    if (!ok.length) throw settled[0]?.reason || new Error('no hosts answered');
-    const d = mergeSearchPayloads(ok, query);
+    // Every host pruned away is an answer, not a failure: the query named a
+    // host none of them is, so the result set is empty.
+    if (!ok.length && hosts.length) throw settled[0]?.reason || new Error('no hosts answered');
+    const d = ok.length
+      ? mergeSearchPayloads(ok, query)
+      : { results: [], total: 0, hiddenByScopes: 0, indexing: false };
+    // The client-only half of the grammar, applied to what came back: the
+    // query's remaining host terms (negations, and positives on a host that
+    // serves several labels), then any host term in an active scope.
+    d.results = applyHostTerms(d.results, query);
+    const inScope = applyHostTerms(d.results, scope);
+    d.hiddenByScopes += d.results.length - inScope.length;
+    d.results = inScope;
     d.hostErrors = hosts.filter((_, i) => settled[i].status === 'rejected').map(hostDisplayLabel);
     if (seq !== searchViewSeq || !isSearchViewOpen() ||
         query !== searchViewQuery.trim() || scope !== scopeQuery().trim()) return;
@@ -3045,6 +3104,7 @@ function searchFacetState() {
   return {
     cwd: val('cwd'),
     model: val('model'),
+    host: val('host'),
     activeOnly: parsed.terms.some(t => t.field === 'is' && !t.neg && t.value === 'active'),
     since: (searchViewQuery.match(/(?:^|\s)since:(\S+)/i) || [])[1] || '',
   };
@@ -3077,10 +3137,18 @@ function renderSearchFacetsHtml() {
   const modelOptions = ['<option value="">All models</option>',
     ...opts.models.map(m =>
       `<option value="${escapeHtml(m)}"${m.toLowerCase() === st.model ? ' selected' : ''}>${escapeHtml(m)}</option>`)].join('');
+  // The host facet exists only where there is a fleet to choose from, and
+  // its options come from the client's own host list — hosts are a client
+  // concept, so no result payload could source them.
+  const hostSelect = !isMultiHost() ? '' : `<select class="search-facet-select" id="searchFacetHost">${
+    ['<option value="">All hosts</option>', ...effectiveHosts().map(h => hostDisplayLabel(h)).filter(Boolean).map(label =>
+      `<option value="${escapeHtml(label)}"${label.toLowerCase() === st.host ? ' selected' : ''}>${escapeHtml(label)}</option>`)].join('')
+  }</select>`;
   return `<div class="search-facets">
     <div class="usage-ranges">${presets}</div>
     <select class="search-facet-select" id="searchFacetCwd">${cwdOptions}</select>
     <select class="search-facet-select" id="searchFacetModel">${modelOptions}</select>
+    ${hostSelect}
     <button class="scope-chip${st.activeOnly ? ' active' : ''}" id="searchFacetActive" title="is:active">Active only</button>
   </div>`;
 }
@@ -3124,6 +3192,8 @@ function renderSearchView(d, query = searchViewQuery) {
     setSearchToken('cwd', e.target.value || null));
   body.querySelector('#searchFacetModel').addEventListener('change', (e) =>
     setSearchToken('model', e.target.value || null));
+  body.querySelector('#searchFacetHost')?.addEventListener('change', (e) =>
+    setSearchToken('host', e.target.value || null));
   body.querySelector('#searchFacetActive').addEventListener('click', () =>
     setSearchToken('is', searchFacetState().activeOnly ? null : 'active'));
 }
