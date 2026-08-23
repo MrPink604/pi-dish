@@ -1,8 +1,17 @@
 # Task: Multi-host aggregation (scoping)
 
-**Priority:** P2 (scoping — not yet a buildable contract)
-**Status:** Scoped 2026-08-22 from t3code study (upstream @ 30be31195) + pi-dish
-API audit. Decision-shaped; open questions flagged inline.
+**Priority:** P2
+**Status:** Phases 1–4 **built and shipped 2026-08-22** (host identity/auth/
+tickets/CORS → client aggregation → fleet proxy + peer-sessions fleet flags →
+fleet artifacts; see the "Multi-host fleet" and "Fleet artifacts" sections of
+CLAUDE.md for the as-built law). E2E-verified against beelink over direct
+tailnet + ssh transports, including cross-host spawn/prompt/close and
+hub-served peer artifacts. Additions vs this scope during build: ssh remotes
+grew `remoteHost` (peers bound to a tailnet IP, not loopback), proxied
+share/page DELETEs prune hub mappings, and the public listener sends
+`x-pi-dish-page-comments: off` so owners skip the comment overlay on
+raw-served pages. Remaining: phase 5 recipes below, Android packaging.
+Originally scoped 2026-08-22 from the t3code study (upstream @ 30be31195).
 **Affects (eventually):** `server.js`, new `lib/remote-hosts.js`, `public/app.js`
 (fetch layer), `public/helpers.js`, docs.
 **Reference:** the t3code worktree used for the study was disposable; the

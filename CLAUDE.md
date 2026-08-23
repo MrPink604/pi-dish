@@ -477,6 +477,84 @@ collects everything shared from the session — its pages plus the share
 link — in one modal (open/copy/revoke); `refreshArtifacts` re-fetches on
 session select, turn end, and every publish/revoke path.
 
+## Multi-host fleet (TASKS/multi-host.md; lib/host-identity.js, lib/remote-hosts.js)
+
+One pane of glass over several pi-dish hosts, t3code-shaped: **the client is
+the aggregator** — no hub-side merged endpoints, no host↔host traffic ever.
+Wire session ids stay host-local; namespacing exists only in client keys
+(`sessionKey(hostId, id)`, NUL-joined). The invariant every change here is
+measured against: with no remotes configured and no token set, behavior is
+exactly single-host pi-dish.
+
+- **Identity**: `GET /api/host` (always unauthenticated) → `{ hostId, label,
+  version, capabilities }`. `hostId` is a uuid persisted once in
+  `~/.pi/dish/host-id`; `label` is settings `hostLabel` else hostname.
+  `capabilities` lists only what this build serves — **absent means
+  unsupported**, clients hide the affordance (version skew across a fleet is
+  the steady state, never version-sniff).
+- **Opt-in auth**: `PI_DISH_TOKEN` env or `~/.pi/dish/token`, resolved once
+  at startup. When set, `/api/*` and `/hosts/*` require `Authorization:
+  Bearer` (sha256-digest `timingSafeEqual` — digests, not tokens, so length
+  can't leak). EventSource/WebSocket can't send headers, so `POST
+  /api/auth/ticket {purpose:'stream'|'terminal'}` mints 60s **multi-use**
+  tickets (single-use would break EventSource auto-reconnect) accepted as
+  `?ticket=` by the SSE route and terminal upgrade only. Exempt: `GET
+  /api/host`, OPTIONS, static, `/share`, `/page`, the whole share-port
+  listener. CORS (`allowedOrigins` in settings.json, exact match) is emitted
+  **only when a token is configured** — CORS without auth would let any page
+  on the network drive agents; the WS upgrade re-applies both gates by hand
+  (browsers get no CORS veto on WebSockets). `settingsForClient` never
+  carries the token or allowlist; fleet/auth config is deliberately
+  file-level, not UI/API-editable.
+- **Fleet config** (`remotes` in `~/.pi/dish/settings.json`, re-read per
+  call, invalid entries skipped): `{ name, url, token? }` = direct HTTP
+  (peer token attached hub-side), or `{ name, sshDest, remotePort?,
+  remoteHost? }` = lazy long-lived `ssh -N -L <sock>:...` unix-socket
+  forward under 0700 `~/.pi/dish/run/` (system ssh binary, argv arrays,
+  BatchMode + ExitOnForwardFailure + keepalives). `remoteHost` (default
+  127.0.0.1) exists because real peers often bind a tailnet IP with nothing
+  on loopback. Names are path segments — `^[a-z0-9][a-z0-9-]{0,31}$`.
+  Probes memoize: 10s on success, `[3,4,8,16]s` ladder on failure; ssh
+  stderr is **classified to an enum and discarded** (it can carry keys),
+  and forwards are reaped on close/SIGINT/SIGTERM.
+- **Proxy**: `GET /api/hosts` = self entry + per-remote probe results
+  (parallel, bounded ~3s). `/hosts/:name/api/*` streams both directions
+  unbuffered (the only exception: the tiny JSON bodies the fleet-artifact
+  hook must read), strips caller `Authorization`/`host`/`origin`, attaches
+  the peer credential, and is excluded from compression and `express.json`
+  entirely. WS upgrades go through one dispatcher (`upgradeHandlers` —
+  every `'upgrade'` listener sees every socket, so handlers claim or pass);
+  the proxied terminal splices raw sockets and works with the hub's own
+  terminal feature off. Proxy failures answer 502 with the same classified
+  `reason` vocabulary `/api/hosts` uses.
+- **Client**: effective hosts = self + `/api/hosts` fleet entries (runtime
+  only) + user catalog (`localStorage['pi-dish-hosts']`, validated by
+  `sanitizeHostCatalog`), deduped by hostId — the same peer reachable two
+  ways is one host. All API touches go through `apiFetch(host, path)`;
+  sessions carry `host`, stamped only by the four state writers. Sidebar
+  polls fan out per host (`Promise.allSettled`, per-host sequence guards,
+  render as results land — never gate on the slowest host); an unreachable
+  host keeps its last list dimmed with an "unreachable" chip and degrades
+  only its own rows. 401 ⇒ `blocked`, never retried (re-enter the token in
+  the settings Hosts section). Workspace group keys are host-qualified
+  (same cwd on two hosts must not merge); host chips live on group headers
+  and flat rows, not every tree row. Search fans out and merges on
+  `searchScore` (shared scoring ⇒ comparable); usage merges through pure
+  `mergeUsageSummaries` (helpers.js — a single payload passes through
+  untouched; per-host top-20 truncation makes merged deep tails
+  approximate). Client storage that keys sessions uses composite keys with
+  a one-time flagged migration (`pi-dish-keys-migrated`).
+- **Agents**: the peer-sessions skill talks to its *own* server only —
+  `hosts` lists the fleet, `--host <name>` prefixes `/hosts/<name>` on any
+  command, `PI_DISH_TOKEN` adds the bearer. Cross-host spawns attribute as
+  `<hostId>:<sessionId>`; the server accepts well-formed host-qualified
+  caller ids **without local validation** (advisory provenance grants
+  nothing), and the CLI strip-and-retries once for older servers.
+- Mixed content is planned around, not fought: an HTTPS entry point can't
+  fetch plain-http hosts — either enter over http, put `tailscale serve`
+  /cloudflared in front of each host, or use the `/hosts` proxy (same
+  origin). See TASKS/multi-host.md for topology rationale.
+
 ## Fleet artifacts (lib/fleet-artifacts.js, /api/fleet-artifacts)
 
 A hub fronts the fleet's shares and pages, but the content is generated live
