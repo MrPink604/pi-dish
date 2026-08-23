@@ -346,6 +346,25 @@ test('partitionPinnedFamilies pins and orders the whole family from any member i
     'confirmed cross-workspace lineage never aliases the parent pin');
 });
 
+test('partitionPinnedFamilies matches pins by host + session key', () => {
+  const families = H.buildSessionFamilies([
+    { id: 'p', host: 'hostA', cwd: '/w', lastActivity: 1 },
+    { id: 'c', host: 'hostA', parentId: 'p', cwd: '/w', lastActivity: 2 },
+    { id: 'p', host: 'hostB', cwd: '/w2', lastActivity: 3 },
+  ]);
+  assert.deepEqual(H.partitionPinnedFamilies(families, ['hostA c'])[0]
+    .map(root => `${root.session.host} ${root.session.cwd}`), ['hostA /w']);
+  // a bare (unmigrated) pin does not reach into a host-stamped list
+  assert.equal(H.partitionPinnedFamilies(families, ['c'])[0].length, 0);
+
+  const fragment = H.buildSessionFamilies([
+    { id: 'c', host: 'hostA', parentId: 'p', familyParentId: 'p', cwd: '/w', lastActivity: 2 },
+  ]);
+  assert.deepEqual(H.partitionPinnedFamilies(fragment, ['hostA p'])[0]
+    .map(root => root.session.id), ['c'], 'missing parent aliases within its own host');
+  assert.equal(H.partitionPinnedFamilies(fragment, ['hostB p'])[0].length, 0);
+});
+
 test('sortRelations ranks singular lineage links ahead of child lists, stable within a kind', () => {
   const rel = (kind, id) => ({ kind, session: { id } });
   const input = [
@@ -624,6 +643,70 @@ test('isUnreadSession flags idle live sessions with activity newer than last see
   // the session on screen is not unread — unless the tab is hidden
   assert.equal(H.isUnreadSession(sess(), seenOld, 's1', true), false);
   assert.equal(H.isUnreadSession(sess(), seenOld, 's1', false), true);
+});
+
+test('isUnreadSession keys on host + session, so ids may collide across hosts', () => {
+  const sess = (host) => ({
+    id: 's1', host, isActive: true, turnInProgress: false,
+    lastActivity: '2026-07-05T10:00:00Z',
+  });
+  const seen = { 'hostA s1': '2026-07-05T10:00:00Z' };
+  assert.equal(H.isUnreadSession(sess('hostA'), seen, null, true), false);
+  assert.equal(H.isUnreadSession(sess('hostB'), seen, null, true), true,
+    "another host's same-id session has its own seen state");
+  // the current-session key is composite too
+  assert.equal(H.isUnreadSession(sess('hostA'), {}, 'hostA s1', true), false);
+  assert.equal(H.isUnreadSession(sess('hostA'), {}, 'hostB s1', true), true);
+});
+
+test('sessionKey/parseSessionKey round-trip and tolerate bare (pre-multi-host) ids', () => {
+  assert.equal(H.sessionKey('hostA', 's1'), 'hostA s1');
+  assert.deepEqual(H.parseSessionKey('hostA s1'), { hostId: 'hostA', sessionId: 's1' });
+  // a session id may itself contain spaces; only the first one separates
+  assert.deepEqual(H.parseSessionKey('hostA s 1'), { hostId: 'hostA', sessionId: 's 1' });
+  // no host id yet (GET /api/host unanswered, or an older server): bare form
+  assert.equal(H.sessionKey(null, 's1'), 's1');
+  assert.equal(H.sessionKey('', 's1'), 's1');
+  assert.deepEqual(H.parseSessionKey('s1'), { hostId: null, sessionId: 's1' });
+  assert.deepEqual(H.parseSessionKey(null), { hostId: null, sessionId: '' });
+  assert.equal(H.sessionRefKey({ id: 's1', host: 'hostA' }), 'hostA s1');
+  assert.equal(H.sessionRefKey({ id: 's1' }), 's1');
+  assert.equal(H.sessionRefKey(null), '');
+});
+
+test('normalizeHostBase yields a prefixable base and rejects garbage', () => {
+  assert.equal(H.normalizeHostBase('http://tycho:3333/'), 'http://tycho:3333');
+  assert.equal(H.normalizeHostBase('https://box.tail.ts.net'), 'https://box.tail.ts.net');
+  assert.equal(H.normalizeHostBase('  http://a.b:1/x/y/  '), 'http://a.b:1/x/y');
+  // hub-proxied peers are path bases on the serving origin
+  assert.equal(H.normalizeHostBase('/hosts/tycho/'), '/hosts/tycho');
+  // '' is the self host and stays ''
+  assert.equal(H.normalizeHostBase(''), '');
+  assert.equal(H.normalizeHostBase(null), '');
+  // no guessing: a scheme-less or malformed base is an error, not localhost
+  assert.equal(H.normalizeHostBase('tycho:3333'), null);
+  assert.equal(H.normalizeHostBase('garbage'), null);
+  assert.equal(H.normalizeHostBase('ftp://tycho'), null);
+  assert.equal(H.normalizeHostBase('http://a b'), null);
+  assert.equal(H.normalizeHostBase('/hosts/../etc'), null);
+});
+
+test('sanitizeHostCatalog drops broken entries instead of throwing', () => {
+  assert.deepEqual(H.sanitizeHostCatalog([
+    { hostId: 'a', label: 'Tycho', base: 'http://tycho:3333/', token: ' t ' },
+    { base: '/hosts/b' },
+    { hostId: 'c', base: 'nonsense' },      // unusable base
+    { hostId: 'a', base: 'http://dup:1' },  // duplicate host id
+    { base: '' },                           // self is implicit, never listed
+    null, 'x', 42,
+  ]), [
+    { base: 'http://tycho:3333', hostId: 'a', label: 'Tycho', token: 't' },
+    { base: '/hosts/b' },
+  ]);
+  assert.deepEqual(H.sanitizeHostCatalog(null), []);
+  assert.deepEqual(H.sanitizeHostCatalog('nope'), []);
+  assert.deepEqual(H.sanitizeHostCatalog([{ base: 'http://a:1', label: 7, token: 7 }]),
+    [{ base: 'http://a:1' }]);
 });
 
 test('normalizeMood keeps whichever part is present and flattens whitespace', () => {

@@ -1,3 +1,139 @@
+// =========================================================================
+// Hosts (TASKS/multi-host.md phase 1) — every API touch resolves a host
+// entry first, so a later phase can point this client at several pi-dish
+// servers at once. With an empty catalog every request resolves to the self
+// host (base '', no token) and the wire traffic is exactly what a
+// single-host client always sent.
+// =========================================================================
+const HOSTS_KEY = 'pi-dish-hosts';
+const KEYS_MIGRATED_KEY = 'pi-dish-keys-migrated';
+// Directly-added hosts (phase 2 owns the editor UI); self is always implicit.
+let hostCatalog = sanitizeHostCatalog(readJSONPref(HOSTS_KEY, []));
+// hostId stays null until GET /api/host answers — and forever on a server
+// too old to serve it, which is why every key path tolerates host-less keys.
+let selfHost = { hostId: null, base: '', label: null, version: null, capabilities: null };
+
+/** Catalog (or self) entry for a host id; unknown ids fall back to self. */
+function hostById(id) {
+  if (!id || id === selfHost.hostId) return selfHost;
+  return hostCatalog.find(h => h.hostId === id) || selfHost;
+}
+
+/** Accepts a host id, a host entry, or nothing (self). */
+function resolveHost(host) {
+  if (!host) return selfHost;
+  return typeof host === 'string' ? hostById(host) : host;
+}
+
+/** Host id owning a session id — self for pending/unknown ids. */
+function sessionHostId(id) {
+  if (id && currentSession && currentSession.id === id && currentSession.host) return currentSession.host;
+  return findSession(id)?.host || selfHost.hostId;
+}
+
+/**
+ * The one fetch entry point for /api paths. Nothing else in this file may
+ * call fetch() for the API: the host's base and bearer token are attached
+ * here, so a request can't accidentally go to the serving origin when the
+ * session lives elsewhere. Returns fetch's promise unchanged.
+ */
+function apiFetch(host, path, opts = {}) {
+  const entry = resolveHost(host);
+  if (!entry.token) return fetch(entry.base + path, opts);
+  return fetch(entry.base + path, {
+    ...opts,
+    headers: { ...(opts.headers || {}), Authorization: `Bearer ${entry.token}` },
+  });
+}
+
+/** ws(s) URL for a host path — scheme/authority come from the host's base. */
+function hostWsUrl(host, path) {
+  const base = resolveHost(host).base;
+  const localProto = location.protocol === 'https:' ? 'wss' : 'ws';
+  if (!base) return `${localProto}://${location.host}${path}`;
+  if (base.startsWith('/')) return `${localProto}://${location.host}${base}${path}`;
+  const url = new URL(base);
+  return `${url.protocol === 'https:' ? 'wss' : 'ws'}://${url.host}${url.pathname.replace(/\/+$/, '')}${path}`;
+}
+
+/**
+ * EventSource can't set headers and a bearer token must never sit in a URL,
+ * so a token host hands out a short single-purpose ticket per connect. Every
+ * (re)connect mints a fresh one — a remembered stream URL's ticket is spent
+ * or expired by the time a reconnect would reuse it.
+ */
+async function mintHostTicket(host, purpose) {
+  const data = await apiSend(host, '/api/auth/ticket', { purpose });
+  if (!data || !data.ticket) throw new Error('no ticket');
+  return data.ticket;
+}
+
+/**
+ * Identify the serving host. A 404 (or any failure) means an older server:
+ * hostId stays null, client keys stay bare, everything else is unaffected.
+ */
+async function loadHostIdentity() {
+  try {
+    // The one deliberate raw fetch: this call is what *defines* the self
+    // entry apiFetch would otherwise resolve against.
+    const res = await fetch('/api/host');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data || typeof data.hostId !== 'string' || !data.hostId) return;
+    selfHost = {
+      hostId: data.hostId,
+      base: '',
+      label: typeof data.label === 'string' ? data.label : null,
+      version: data.version || null,
+      capabilities: data.capabilities || null,
+    };
+    migrateClientKeys();
+  } catch {}
+}
+
+/**
+ * One-time rewrite of bare session-id client keys to composite ones, once
+ * this host's id is known. Lossless — values move, keys that already carry a
+ * host are left alone — and idempotent via the migrated flag. Everything
+ * here keeps working unmigrated: sessionKey(null, id) is the bare form.
+ */
+function migrateClientKeys() {
+  if (!selfHost.hostId) return;
+  try {
+    if (localStorage.getItem(KEYS_MIGRATED_KEY) === selfHost.hostId) return;
+    const isBare = (key) => parseSessionKey(key).hostId === null;
+    const compose = (id) => sessionKey(selfHost.hostId, id);
+    const prefixes = ['pi-dish-draft-', 'pi-dish-history-', 'pi-dish-terminal-mode-'];
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
+    for (const key of keys) {
+      const prefix = key && prefixes.find(pre => key.startsWith(pre));
+      if (!prefix) continue;
+      const owner = key.slice(prefix.length);
+      // Spawn composer keys are operation-local, never session ids.
+      if (!owner || owner.startsWith('spawn:') || !isBare(owner)) continue;
+      const value = localStorage.getItem(key);
+      localStorage.removeItem(key);
+      if (value !== null) localStorage.setItem(prefix + compose(owner), value);
+    }
+    const seenNext = {};
+    for (const [id, at] of Object.entries(seenActivity)) {
+      seenNext[isBare(id) ? compose(id) : id] = at;
+    }
+    seenActivity = seenNext;
+    localStorage.setItem('pi-dish-seen', JSON.stringify(seenActivity));
+    pinnedSessions = pinnedSessions.map(pin => (isBare(pin) ? compose(pin) : pin));
+    savePinnedSessions();
+    const families = [...expandedSessionFamilies].map(id => (isBare(id) ? compose(id) : id));
+    expandedSessionFamilies.clear();
+    for (const id of families) expandedSessionFamilies.add(id);
+    localStorage.setItem('pi-dish-expanded-session-families', JSON.stringify(families));
+    const selected = localStorage.getItem('pi-dish-session');
+    if (selected && isBare(selected)) localStorage.setItem('pi-dish-session', compose(selected));
+    localStorage.setItem(KEYS_MIGRATED_KEY, selfHost.hostId);
+  } catch {}
+}
+
 // Session state — `sessions` (the sidebar lists) and `currentSession` (a
 // detached copy of the selected entry) are only ever written by the state
 // functions in the "Session state writes" section: setSessionLists /
@@ -103,7 +239,7 @@ async function loadCommands(sessionId) {
   const seq = ++commandsSeq;
   try {
     const qs = sessionId ? ('?sessionId=' + encodeURIComponent(sessionId)) : '';
-    const res = await fetch('/api/commands' + qs);
+    const res = await apiFetch(sessionHostId(sessionId), '/api/commands' + qs);
     const data = await res.json();
     if (seq !== commandsSeq) return; // superseded by a newer session's fetch
     if (Array.isArray(data)) slashCommands = data;
@@ -114,6 +250,10 @@ async function loadCommands(sessionId) {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
+  // Who is serving us — and so which host stamps/keys the sessions below.
+  // Awaited before the first list load so client keys never straddle the
+  // bare/composite migration mid-render.
+  await loadHostIdentity();
   loadConfig(); // feature flags (terminal) — fire-and-forget
   loadThemes(); // theme picker options + refresh custom-theme tokens
   loadSpawnTargets(); // populate the "Run in" tmux selector (hidden if no tmux)
@@ -129,8 +269,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadModels();
   loadCommands();
   
-  // Restore previously selected session
-  const savedSessionId = localStorage.getItem('pi-dish-session');
+  // Restore previously selected session (the stored key may still be a bare
+  // id — an unmigrated profile, or a server without /api/host).
+  const savedSessionId = parseSessionKey(localStorage.getItem('pi-dish-session') || '').sessionId;
   if (savedSessionId) {
     const found = findSession(savedSessionId);
     if (found) selectSession(savedSessionId);
@@ -360,7 +501,7 @@ function handleAutocomplete(text) {
 // --- @file mentions ---
 const fileAcFetcher = debouncedFetcher(120,
   async (token) => {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(currentSession.id)}/files?q=${encodeURIComponent(token)}`);
+    const res = await apiFetch(currentSession.host, `/api/sessions/${encodeURIComponent(currentSession.id)}/files?q=${encodeURIComponent(token)}`);
     const data = await res.json();
     return res.ok ? data.files : null;
   },
@@ -497,7 +638,7 @@ let activeScopes = new Set(readJSONPref('pi-dish-active-scopes', []));
 
 async function loadSavedFilters() {
   try {
-    const res = await fetch('/api/settings');
+    const res = await apiFetch(null, '/api/settings');
     const data = await res.json();
     savedFilters = Array.isArray(data.savedFilters) ? data.savedFilters : [];
     localStorage.setItem('pi-dish-saved-filters-cache', JSON.stringify(savedFilters));
@@ -508,7 +649,7 @@ async function loadSavedFilters() {
 }
 
 async function persistSavedFilters(next) {
-  const res = await fetch('/api/settings', {
+  const res = await apiFetch(null, '/api/settings', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ savedFilters: next }),
   });
@@ -582,14 +723,15 @@ function renderScopeChips() {
 let seenActivity = {};
 seenActivity = readJSONPref('pi-dish-seen', {});
 
-function markSessionSeen(id, lastActivity) {
-  if (!id || !lastActivity) return;
-  seenActivity[id] = lastActivity;
+function markSessionSeen(session, lastActivity = session?.lastActivity) {
+  if (!session || !lastActivity) return;
+  seenActivity[sessionRefKey(session)] = lastActivity;
   localStorage.setItem('pi-dish-seen', JSON.stringify(seenActivity));
 }
 
 function isUnread(session) {
-  return isUnreadSession(session, seenActivity, currentSession?.id, !document.hidden);
+  return isUnreadSession(session, seenActivity,
+    currentSession ? sessionRefKey(currentSession) : null, !document.hidden);
 }
 
 // Unread count in the tab title — the "agent came back" signal when the
@@ -669,7 +811,7 @@ async function loadSessions(query, { withPrevious = sidebarTab === 'all' } = {})
     if (query) params.set('q', query);
     if (!withPrevious) params.set('active', '1');
     const qs = params.toString();
-    const res = await fetch('/api/sessions' + (qs ? '?' + qs : ''));
+    const res = await apiFetch(null, '/api/sessions' + (qs ? '?' + qs : ''));
     const data = await res.json();
     // A slower earlier request must not clobber a newer one's results (a
     // cold search can land after the warm search that superseded it).
@@ -718,11 +860,18 @@ async function loadSessions(query, { withPrevious = sidebarTab === 'all' } = {})
     if (currentSession && !document.hidden) {
       const fresh = next.active.find(s => s.id === currentSession.id)
         || next.previous.find(s => s.id === currentSession.id);
-      if (fresh) markSessionSeen(fresh.id, fresh.lastActivity);
+      // Key off the state copy: `next` hasn't been through a state writer
+      // yet, so its entries aren't host-stamped.
+      if (fresh) markSessionSeen(currentSession, fresh.lastActivity);
     }
     if (!query) {
-      for (const id of Object.keys(seenActivity)) {
-        if (!next.active.some(s => s.id === id)) delete seenActivity[id];
+      // Prune this host's stale entries only: another host's sessions aren't
+      // gone, they're just not in this response.
+      const host = selfHost.hostId || null;
+      const live = new Set(next.active.map(s => sessionKey(s.host || host, s.id)));
+      for (const key of Object.keys(seenActivity)) {
+        if (parseSessionKey(key).hostId !== host) continue;
+        if (!live.has(key)) delete seenActivity[key];
       }
     }
     setSessionLists(next);
@@ -763,7 +912,7 @@ async function performRowClose(id) {
   sessionCloseBusyId = id;
   renderSessions();
   try {
-    await apiSend(`/api/sessions/${encodeURIComponent(id)}/close`);
+    await apiSend(sessionHostId(id), `/api/sessions/${encodeURIComponent(id)}/close`);
     sessionCloseBusyId = null;
     await finishSessionClose(id);
   } catch (e) {
@@ -789,7 +938,7 @@ function renderSessionItem(session, opts = {}) {
   const inactiveClass = session.isActive ? '' : 'inactive';
   const familyNode = opts.familyNode || null;
   const hasChildren = !!familyNode?.children?.length;
-  const familyExpanded = hasChildren && expandedSessionFamilies.has(session.id);
+  const familyExpanded = hasChildren && expandedSessionFamilies.has(sessionRefKey(session));
   const statusSessions = hasChildren && !familyExpanded
     ? flattenSessionFamilies([familyNode]) : [session];
   // One dot, best signal wins: working (pulsing) > unread (accent) > live-in-All.
@@ -806,10 +955,9 @@ function renderSessionItem(session, opts = {}) {
   const displayName = session.name || 'Unnamed';
   const tokenDisplay = session.contextTokens ? `${formatTokens(session.contextTokens)} tok` : '';
   const timeAgo = formatRelativeTime(hasChildren ? familyNode.activity : session.lastActivity);
-  const familyRootId = opts.familyRootId || session.id;
-  const canonicalRootId = sidebarFamilyRootMap.get(familyRootId) || familyRootId;
+  const canonicalRootKey = canonicalFamilyKey(opts.familyRootKey || sessionRefKey(session));
   const isPinned = opts.familyPinned ?? pinnedSessions.some(pin =>
-    (sidebarFamilyRootMap.get(pin) || pin) === canonicalRootId);
+    canonicalFamilyKey(pin) === canonicalRootKey);
   const pinBtn = `<button class="session-pin-btn${isPinned ? ' pinned' : ''}" title="${isPinned ? 'Unpin family' : 'Pin family to top'}">📌</button>`;
   const familyToggle = hasChildren
     ? `<button class="session-family-toggle" data-family-id="${escapeHtml(session.id)}" aria-expanded="${familyExpanded}" aria-label="${familyExpanded ? 'Collapse' : 'Show'} ${familyNode.size - 1} child session${familyNode.size === 2 ? '' : 's'}" title="${familyExpanded ? 'Collapse' : 'Show'} ${familyNode.size - 1} child session${familyNode.size === 2 ? '' : 's'}"><span>${familyExpanded ? '▾' : '▸'}</span><small>${familyNode.size - 1}</small></button>`
@@ -855,11 +1003,14 @@ function renderSessionItem(session, opts = {}) {
   `;
 }
 
-function renderSessionFamily(node, opts = {}, depth = 0, rootId = node.session.id) {
-  const expanded = node.children.length > 0 && expandedSessionFamilies.has(node.session.id);
+function renderSessionFamily(node, opts = {}, depth = 0, rootId = node.session.id,
+  rootKey = sessionRefKey(node.session)) {
+  const expanded = node.children.length > 0 && expandedSessionFamilies.has(sessionRefKey(node.session));
   const row = renderSessionItem(node.session, {
     familyNode: node,
-    familyRootId: rootId,
+    // Carried down so a row never has to look its root's host back up: the
+    // sidebar renders thousands of rows and findSession is a linear scan.
+    familyRootKey: rootKey,
     familyDepth: depth,
     familyPinned: !!opts.pinnedFamily,
     pinnedRow: !!opts.pinnedFamily && depth === 0,
@@ -867,7 +1018,7 @@ function renderSessionFamily(node, opts = {}, depth = 0, rootId = node.session.i
   });
   const children = expanded
     ? `<div class="session-family-children">${node.children.map(child =>
-        renderSessionFamily(child, opts, depth + 1, rootId)).join('')}</div>`
+        renderSessionFamily(child, opts, depth + 1, rootId, rootKey)).join('')}</div>`
     : '';
   const classes = depth === 0 ? 'session-family session-family-root' : 'session-family session-family-child';
   const familyAttr = depth === 0 ? ` data-family-id="${escapeHtml(rootId)}"` : '';
@@ -904,13 +1055,33 @@ function toggleGroupCollapsed(cwd) {
   renderSessions();
 }
 
+/**
+ * Composite client key for a session id held by the sidebar's DOM/maps
+ * (which stay host-local wire ids). Unknown ids resolve to this host, which
+ * is what a not-yet-listed or just-spawned session is.
+ */
+function keyForSessionId(id) {
+  return sessionKey(sessionHostId(id), id);
+}
+
+/**
+ * Fold a session key onto its family root's key. Pins are stored per family
+ * root, while the render-time root map is keyed by host-local ids — phase 2,
+ * where the lists actually merge hosts, re-keys that map.
+ */
+function canonicalFamilyKey(key) {
+  const { hostId, sessionId } = parseSessionKey(key);
+  return sessionKey(hostId, sidebarFamilyRootMap.get(sessionId) || sessionId);
+}
+
 // Session families default collapsed to keep subagents quiet. Store only the
 // explicit expansions so newly discovered families also start collapsed.
 const expandedSessionFamilies = new Set(readJSONPref('pi-dish-expanded-session-families', []));
 
 function toggleSessionFamilyExpanded(id) {
-  if (expandedSessionFamilies.has(id)) expandedSessionFamilies.delete(id);
-  else expandedSessionFamilies.add(id);
+  const key = keyForSessionId(id);
+  if (expandedSessionFamilies.has(key)) expandedSessionFamilies.delete(key);
+  else expandedSessionFamilies.add(key);
   localStorage.setItem('pi-dish-expanded-session-families', JSON.stringify([...expandedSessionFamilies]));
   renderSessions();
 }
@@ -953,8 +1124,8 @@ function revealSessionInFamily(id) {
   roots.some(root => find(root, []));
   let changed = false;
   for (const ancestor of ancestors || []) {
-    if (!expandedSessionFamilies.has(ancestor.session.id)) {
-      expandedSessionFamilies.add(ancestor.session.id);
+    if (!expandedSessionFamilies.has(sessionRefKey(ancestor.session))) {
+      expandedSessionFamilies.add(sessionRefKey(ancestor.session));
       changed = true;
     }
   }
@@ -993,9 +1164,10 @@ function toggleSessionPinned(id, displayedRootId = id, renderedMemberIds = [id])
     const parentId = findSession(memberId)?.familyParentId;
     if (parentId && !visibleIds.has(parentId)) aliases.add(parentId);
   }
-  const wasPinned = pinnedSessions.some(pin => aliases.has(pin));
-  pinnedSessions = pinnedSessions.filter(pin => !aliases.has(pin));
-  if (!wasPinned) pinnedSessions.push(canonicalRoot);
+  const aliasKeys = new Set([...aliases].map(keyForSessionId));
+  const wasPinned = pinnedSessions.some(pin => aliasKeys.has(pin));
+  pinnedSessions = pinnedSessions.filter(pin => !aliasKeys.has(pin));
+  if (!wasPinned) pinnedSessions.push(keyForSessionId(canonicalRoot));
   savePinnedSessions();
   renderSessions();
 }
@@ -1037,7 +1209,7 @@ function initPinnedDrag() {
       pinnedDragActive = false;
       pinnedSessions = [...segment.children]
         .filter(el => el.classList.contains('session-family-root'))
-        .map(el => el.dataset.familyId);
+        .map(el => keyForSessionId(el.dataset.familyId));
       savePinnedSessions();
       renderSessions();
     };
@@ -1218,11 +1390,25 @@ function findSession(id) {
 // =========================================================================
 
 /**
+ * Every session in client state carries the id of the host it came from, so
+ * a session-scoped request or client key can be resolved back to its host
+ * without consulting anything else. Stamped here (and only here, in the four
+ * state writers) because the wire payload has no idea which host served it.
+ */
+function stampSessionHost(session, hostId = selfHost.hostId) {
+  if (session && !session.host && hostId) session.host = hostId;
+  return session;
+}
+
+/**
  * Replace the sidebar lists (poll / search result / explicit refresh) and
  * fold the fresh entry into `currentSession` so the header stays honest too
  * — polling used to update only the sidebar, leaving the header stale.
  */
-function setSessionLists(next) {
+function setSessionLists(next, hostId = selfHost.hostId) {
+  for (const list of [next.active, next.previous]) {
+    for (const session of list || []) stampSessionHost(session, hostId);
+  }
   sessions = next;
   if (currentSession) {
     const fresh = findSession(currentSession.id);
@@ -1240,7 +1426,7 @@ function setSessionLists(next) {
  */
 function setCurrentSession(id) {
   const entry = findSession(id);
-  currentSession = entry ? { ...entry } : null;
+  currentSession = entry ? stampSessionHost({ ...entry }) : null;
   return currentSession;
 }
 
@@ -1252,9 +1438,9 @@ function setCurrentSession(id) {
 function patchSession(id, patch) {
   for (const list of [sessions.active, sessions.previous]) {
     const s = list.find(s => s.id === id);
-    if (s) Object.assign(s, patch);
+    if (s) stampSessionHost(Object.assign(s, patch));
   }
-  if (currentSession?.id === id) Object.assign(currentSession, patch);
+  if (currentSession?.id === id) stampSessionHost(Object.assign(currentSession, patch));
   renderSessions();
   if (currentSession?.id === id) updateSessionHeader();
 }
@@ -1268,7 +1454,10 @@ function patchSession(id, patch) {
  */
 function mergeCurrentSession(id, fields) {
   if (!fields || currentSession?.id !== id) return;
+  const host = currentSession.host;
   Object.assign(currentSession, fields);
+  currentSession.host = host; // the wire payload never speaks about hosts
+  stampSessionHost(currentSession);
   updateSessionHeader();
 }
 
@@ -1423,8 +1612,8 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
   // per-session; clear them before the new session's projections arrive.
   clearExtensionUI();
   clearSessionRelations();
-  localStorage.setItem('pi-dish-session', id);
-  markSessionSeen(id, currentSession.lastActivity);
+  localStorage.setItem('pi-dish-session', sessionRefKey(currentSession));
+  markSessionSeen(currentSession);
   
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('sessionView').style.display = 'flex';
@@ -1509,7 +1698,7 @@ async function loadResumeModelOptions(session) {
   wrap.style.display = 'flex';
   select.title = 'Loading Oh My Pi models…';
   try {
-    const res = await fetch(modelCatalogUrl('omp', session.cwd));
+    const res = await apiFetch(session.host, modelCatalogUrl('omp', session.cwd));
     const models = await res.json();
     if (!res.ok) throw new Error(models.error || `HTTP ${res.status}`);
     if (seq !== resumeModelsSeq || currentSession?.id !== session.id) return;
@@ -1538,7 +1727,7 @@ async function resumeSession() {
   setStatus(target ? 'Resuming in tmux…' : 'Resuming session...', 'working');
 
   try {
-    const data = await apiSend(`/api/sessions/${encodeURIComponent(currentSession.id)}/resume`, {
+    const data = await apiSend(currentSession.host, `/api/sessions/${encodeURIComponent(currentSession.id)}/resume`, {
       ...(target ? { target } : {}),
       ...(model ? { model } : {}),
     });
@@ -1573,7 +1762,7 @@ async function loadModels(sessionId, harnessId, cwd) {
   try {
     const url = sessionId ? ('/api/models?sessionId=' + encodeURIComponent(sessionId))
       : requestedHarnessId !== 'pi' ? modelCatalogUrl(requestedHarnessId, cwd) : '/api/models';
-    const res = await fetch(url);
+    const res = await apiFetch(sessionHostId(sessionId), url);
     const data = await res.json();
     if (seq !== modelsSeq) return; // superseded by a newer session's fetch
     knownModels = Array.isArray(data) ? data : [];
@@ -1806,7 +1995,7 @@ function renderRelationsModal() {
 async function loadSessionRelations(sessionId, generation) {
   const seq = ++sessionRelationsSeq;
   try {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/related`);
+    const res = await apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/related`);
     const data = await res.json();
     if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
     if (seq !== sessionRelationsSeq || !ownsSessionView(sessionId, generation)) return;
@@ -1923,7 +2112,7 @@ async function selectThinkingLevel(level) {
   closeThinkingDropdown();
   if (!currentSession || !sessionSupports(currentSession, 'setThinking')) return;
   try {
-    const data = await apiSend(`/api/sessions/${encodeURIComponent(currentSession.id)}/thinking`, { level });
+    const data = await apiSend(currentSession.host, `/api/sessions/${encodeURIComponent(currentSession.id)}/thinking`, { level });
     // Pi clamps to what the model supports; trust the reported level.
     patchSession(currentSession.id, { thinkingLevel: data.level || level });
     setStatus('Thinking level: ' + currentSession.thinkingLevel);
@@ -2005,7 +2194,7 @@ async function runSessionSearch(query, { mode = 'message', closeIfEmpty = false 
   try {
     const params = new URLSearchParams({ q: query });
     if (mode !== 'message') params.set('mode', mode);
-    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/search?${params}`);
+    const res = await apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/search?${params}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     if (currentSession?.id !== sessionId) return;
@@ -2193,7 +2382,7 @@ async function renderPreferences() {
   };
   renderSavedFiltersList();
   try {
-    const r = await fetch('/api/settings'), s = await r.json();
+    const r = await apiFetch(null, '/api/settings'), s = await r.json();
     if (renderSeq !== settingsRenderSeq ) return;
     body.querySelector('#monthlyBudget').value = s.monthlyBudgetUsd ?? '';
     if (Array.isArray(s.savedFilters)) {
@@ -2208,7 +2397,7 @@ async function renderPreferences() {
   body.querySelector('#saveBudget').addEventListener('click', async () => {
     const input = body.querySelector('#monthlyBudget'), status = body.querySelector('#budgetStatus');
     const value = input.value.trim() === '' ? null : Number(input.value);
-    try { const r = await fetch('/api/settings', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ monthlyBudgetUsd:value }) }); const d = await r.json(); if (!r.ok) throw new Error(d.error); status.textContent = 'Saved for all devices.'; }
+    try { const r = await apiFetch(null, '/api/settings', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ monthlyBudgetUsd:value }) }); const d = await r.json(); if (!r.ok) throw new Error(d.error); status.textContent = 'Saved for all devices.'; }
     catch (e) { status.textContent = 'Save failed: ' + e.message; }
   });
 }
@@ -2269,7 +2458,7 @@ async function runSearchView() {
   try {
     const params = new URLSearchParams({ q: query });
     if (scope) params.set('scope', scope);
-    const r = await fetch('/api/search?' + params);
+    const r = await apiFetch(null, '/api/search?' + params);
     if (!r.ok) throw new Error(await r.json().then(d => d.error, () => null) || `HTTP ${r.status}`);
     const d = await r.json();
     if (seq !== searchViewSeq || !isSearchViewOpen() ||
@@ -2489,7 +2678,7 @@ async function loadSkillsDirectory() {
   if (!body.childElementCount) body.innerHTML = '<div class="usage-state">Loading skills…</div>';
   else body.classList.add('usage-refreshing');
   try {
-    const r = await fetch('/api/skills');
+    const r = await apiFetch(null, '/api/skills');
     if (!r.ok) throw new Error(await r.json().then(d => d.error, () => null) || `HTTP ${r.status}`);
     const d = await r.json();
     if (seq !== skillsSeq || !isSkillsViewOpen() || skillsDetailPath) return;
@@ -2611,7 +2800,7 @@ async function openSkillDetail(skillPath, { force = false } = {}) {
     body.innerHTML = '<div class="usage-state">Loading coverage…</div>';
   }
   try {
-    const r = await fetch('/api/skills/coverage?skill=' + encodeURIComponent(skillPath));
+    const r = await apiFetch(null, '/api/skills/coverage?skill=' + encodeURIComponent(skillPath));
     if (!r.ok) throw new Error(await r.json().then(d => d.error, () => null) || `HTTP ${r.status}`);
     const cov = await r.json();
     if (seq !== skillsSeq || !isSkillsViewOpen() || skillsDetailPath !== skillPath) return;
@@ -2878,7 +3067,7 @@ async function loadUsageView() {
   if (body.childElementCount) body.classList.add('usage-refreshing');
   else body.innerHTML = '<div class="usage-state">Loading estimated usage…</div>';
   try {
-    const r = await fetch('/api/usage-summary?days=' + requestedRange + '&sort=' + requestedSort +
+    const r = await apiFetch(null, '/api/usage-summary?days=' + requestedRange + '&sort=' + requestedSort +
       (requestedModels ? '&models=' + encodeURIComponent(requestedModels) : ''));
     // A stale server (or proxy) answers with an HTML error page — surface the
     // status instead of a JSON parse error.
@@ -3304,7 +3493,7 @@ async function refreshSessionSpend() {
   if (!badge) return;
   if (!showSessionSpend || !currentSession) { badge.style.display = 'none'; ++spendFetchSeq; return; }
   const id = currentSession.id, seq = ++spendFetchSeq;
-  try { const r = await fetch(`/api/sessions/${encodeURIComponent(id)}/stats`), s = await r.json(); if (seq !== spendFetchSeq || currentSession?.id !== id || !showSessionSpend) return; badge.textContent = formatEstimatedCost(s.costs?.total ?? s.cost); badge.style.display = ''; } catch { if (seq === spendFetchSeq) badge.style.display = 'none'; }
+  try { const r = await apiFetch(sessionHostId(id), `/api/sessions/${encodeURIComponent(id)}/stats`), s = await r.json(); if (seq !== spendFetchSeq || currentSession?.id !== id || !showSessionSpend) return; badge.textContent = formatEstimatedCost(s.costs?.total ?? s.cost); badge.style.display = ''; } catch { if (seq === spendFetchSeq) badge.style.display = 'none'; }
 }
 
 // --- Session stats modal ---
@@ -3342,7 +3531,7 @@ function openStatsModal() {
       );
     });
   }
-  fetch(`/api/sessions/${encodeURIComponent(sessionId)}/stats`)
+  apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/stats`)
     .then(r => r.json())
     .then(s => {
       if (!ownsStatsModal(sessionId, generation)) return;
@@ -3406,7 +3595,7 @@ function loadShareSection(sessionId, generation) {
   if (!sessionSupports(session, 'export')) { el.remove(); return; }
   el.innerHTML = '<div class="stats-share-title">Public share link</div>' +
     '<div class="stats-share-body">Loading…</div>';
-  fetch(`/api/sessions/${encodeURIComponent(sessionId)}/share`)
+  apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`)
     .then(r => (r.status === 404 ? null : r.json()))
     .then(share => renderShareSection(sessionId, share, generation))
     .catch(() => renderShareSection(sessionId, null, generation));
@@ -3422,7 +3611,7 @@ function renderShareSection(sessionId, share, generation) {
       '<button type="button" class="btn-small" id="shareCreateBtn">Create share link</button>' +
       '<div class="stats-share-hint">Anyone with the link can view this session read-only.</div>';
     bodyEl.querySelector('#shareCreateBtn').addEventListener('click', () => {
-      fetch(`/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'POST' })
+      apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'POST' })
         .then(r => r.json())
         .then(s => {
           if (!ownsStatsModal(sessionId, generation)) return;
@@ -3440,7 +3629,7 @@ function renderShareSection(sessionId, share, generation) {
     `<button type="button" class="stats-copy stats-share-link" data-copy="${escapeHtml(link)}" title="Click to copy">${escapeHtml(link)}</button>` +
     '<button type="button" class="btn-small btn-danger" id="shareRevokeBtn">Revoke</button>';
   bodyEl.querySelector('#shareRevokeBtn').addEventListener('click', () => {
-    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'DELETE' })
+    apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'DELETE' })
       .then(r => r.json())
       .then(() => {
         if (!ownsStatsModal(sessionId, generation)) return;
@@ -3463,11 +3652,11 @@ async function copyMessageShareLink(btn) {
   if (!entryId) return;
   const sessionId = currentSession.id;
   try {
-    let res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/share`);
+    let res = await apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`);
     let share = res.status === 404 ? null : await res.json();
     if (!share || share.error) {
       if (!confirm('No share link exists for this session yet — create one? Anyone with the link can view the whole session read-only.')) return;
-      res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'POST' });
+      res = await apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'POST' });
       share = await res.json();
       if (!res.ok) throw new Error(share.error || `HTTP ${res.status}`);
       refreshArtifacts(sessionId);
@@ -3520,7 +3709,7 @@ function renderCloseSection(sessionId, generation) {
     btn.disabled = true;
     btn.textContent = detach ? 'Detaching…' : 'Closing…';
     try {
-      await apiSend(`/api/sessions/${encodeURIComponent(sessionId)}/close`);
+      await apiSend(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/close`);
       if (!ownsStatsModal(sessionId, generation)) return;
       closeStatsModal();
       await finishSessionClose(sessionId);
@@ -3593,7 +3782,7 @@ async function openFileViewer(mention) {
   closeDiffView(); // the two takeover panes are mutually exclusive
   document.getElementById('sessionView').classList.add('file-open');
   try {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/file?path=${encodeURIComponent(mention)}`);
+    const res = await apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/file?path=${encodeURIComponent(mention)}`);
     const data = await res.json();
     if (!ownsFileView(sessionId, generation)) return;
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -3604,7 +3793,7 @@ async function openFileViewer(mention) {
     rawLink.style.display = '';
     document.getElementById('fileViewPublish').style.display = '';
     // Already published (by the agent or a previous click)? Show its link.
-    fetch('/api/pages')
+    apiFetch(sessionHostId(sessionId), '/api/pages')
       .then((r) => r.json())
       .then((list) => {
         if (!ownsFileView(sessionId, generation) || fileViewAbsPath !== data.path) return;
@@ -3865,11 +4054,11 @@ async function submitAnchoredComment() {
   document.getElementById('commentStatus').textContent = 'Saving…';
   try {
     const response = editing
-      ? await fetch(`/api/comments/${encodeURIComponent(editing.id)}`, {
+      ? await apiFetch(sessionHostId(editing.sessionId), `/api/comments/${encodeURIComponent(editing.id)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: editing.sessionId, body }),
       })
-      : await fetch('/api/comments', {
+      : await apiFetch(sessionHostId(draft.sessionId), '/api/comments', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: draft.sessionId, body, target: draft.target }),
       });
@@ -3920,7 +4109,7 @@ async function refreshAnchoredComments() {
     ? ownsFileView(sessionId, generation) && fileViewAbsPath === filePath
     : ownsDiffView(sessionId, generation));
   try {
-    const indexRes = await fetch(`/api/comments/index?sessionId=${encodeURIComponent(sessionId)}`);
+    const indexRes = await apiFetch(sessionHostId(sessionId), `/api/comments/index?sessionId=${encodeURIComponent(sessionId)}`);
     const index = await indexRes.json();
     if (!indexRes.ok || !owns()) return;
     const ids = (index.comments || [])
@@ -3929,7 +4118,7 @@ async function refreshAnchoredComments() {
         : entry.target?.kind === 'diff'))
       .map((entry) => entry.id);
     if (!ids.length) return setAnchoredComments([]);
-    const fullRes = await fetch('/api/comments/get', {
+    const fullRes = await apiFetch(sessionHostId(sessionId), '/api/comments/get', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId, ids }),
     });
@@ -4187,7 +4376,7 @@ async function handleCommentDelete() {
   button.disabled = true;
   document.getElementById('commentStatus').textContent = 'Deleting…';
   try {
-    const response = await fetch(`/api/comments/${encodeURIComponent(comment.id)}`, {
+    const response = await apiFetch(sessionHostId(comment.sessionId), `/api/comments/${encodeURIComponent(comment.id)}`, {
       method: 'DELETE', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: comment.sessionId }),
     });
@@ -4228,7 +4417,7 @@ function renderFilePageRow(page, sessionId, generation) {
     );
   });
   el.querySelector('#filePageRevoke').addEventListener('click', () => {
-    fetch(`/api/pages/${encodeURIComponent(page.token)}`, { method: 'DELETE' })
+    apiFetch(sessionHostId(sessionId), `/api/pages/${encodeURIComponent(page.token)}`, { method: 'DELETE' })
       .then(() => {
         if (!ownsFileView(sessionId, generation)) return;
         renderFilePageRow(null, sessionId, generation);
@@ -4247,7 +4436,7 @@ async function publishFileView() {
   const path = fileViewAbsPath;
   if (!ownsFileView(sessionId, generation)) return;
   try {
-    const res = await fetch('/api/pages', {
+    const res = await apiFetch(sessionHostId(sessionId), '/api/pages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -4273,7 +4462,7 @@ function loadPagesSection(sessionId, generation) {
   if (!ownsStatsModal(sessionId, generation)) return;
   const el = document.getElementById('statsPages');
   if (!el) return;
-  fetch(`/api/pages?sessionId=${encodeURIComponent(sessionId)}`)
+  apiFetch(sessionHostId(sessionId), `/api/pages?sessionId=${encodeURIComponent(sessionId)}`)
     .then((r) => r.json())
     .then((list) => {
       if (!ownsStatsModal(sessionId, generation)) return;
@@ -4290,7 +4479,7 @@ function loadPagesSection(sessionId, generation) {
       el.querySelectorAll('.stats-page-revoke').forEach((btn) => {
         btn.addEventListener('click', () => {
           const token = btn.closest('.stats-page-row').dataset.token;
-          fetch(`/api/pages/${encodeURIComponent(token)}`, { method: 'DELETE' })
+          apiFetch(sessionHostId(sessionId), `/api/pages/${encodeURIComponent(token)}`, { method: 'DELETE' })
             .then(() => {
               if (!ownsStatsModal(sessionId, generation)) return;
               loadPagesSection(sessionId, generation);
@@ -4319,8 +4508,8 @@ async function refreshArtifacts(sessionId) {
   const seq = ++artifactsSeq;
   try {
     const [pagesRes, shareRes] = await Promise.all([
-      fetch(`/api/pages?sessionId=${encodeURIComponent(sessionId)}`),
-      fetch(`/api/sessions/${encodeURIComponent(sessionId)}/share`),
+      apiFetch(sessionHostId(sessionId), `/api/pages?sessionId=${encodeURIComponent(sessionId)}`),
+      apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`),
     ]);
     const pages = pagesRes.ok ? await pagesRes.json() : [];
     const share = (shareRes.ok && shareRes.status !== 404) ? await shareRes.json() : null;
@@ -4395,7 +4584,7 @@ function renderArtifactsModal() {
     );
   }));
   body.querySelectorAll('.artifact-revoke').forEach((btn) => btn.addEventListener('click', () => {
-    fetch(`/api/pages/${encodeURIComponent(btn.dataset.token)}`, { method: 'DELETE' })
+    apiFetch(currentSession?.host, `/api/pages/${encodeURIComponent(btn.dataset.token)}`, { method: 'DELETE' })
       .then(() => refreshArtifacts(currentSession?.id))
       .catch((e) => setStatus('Failed to revoke: ' + e.message, 'error'));
   }));
@@ -4464,7 +4653,7 @@ async function loadDiffView() {
   closeCommentBubble();
   body.innerHTML = '<div class="loading">Loading…</div>';
   try {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/diff`);
+    const res = await apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/diff`);
     const data = await res.json();
     if (!ownsDiffView(sessionId, generation)) return;
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -4552,7 +4741,7 @@ async function loadDeferredDiffPatch(details) {
       path: patch.dataset.path,
       snapshot: patch.dataset.snapshot,
     });
-    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/diff/patch?${query}`);
+    const res = await apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/diff/patch?${query}`);
     const data = await res.json();
     if (!ownsDiffView(sessionId, viewGeneration) || !patch.isConnected ||
         patch.dataset.requestGeneration !== String(requestGeneration)) return;
@@ -4608,7 +4797,7 @@ async function commitRename() {
   nameEl.style.display = '';
   if (!newName || newName === currentSession.name || !currentSession.isActive) return;
   try {
-    await apiSend('/api/sessions/' + encodeURIComponent(currentSession.id) + '/rename', { name: newName });
+    await apiSend(currentSession.host, '/api/sessions/' + encodeURIComponent(currentSession.id) + '/rename', { name: newName });
     patchSession(currentSession.id, { name: newName });
   } catch (e) { setStatus('Rename failed: ' + e.message, 'error'); }
 }
@@ -4783,7 +4972,7 @@ function saveEnabledModels() {
   clearTimeout(saveEnabledTimer);
   saveEnabledTimer = setTimeout(async () => {
     try {
-      await apiSend('/api/models/enabled', { enabledIds }, 'PUT');
+      await apiSend(null, '/api/models/enabled', { enabledIds }, 'PUT');
     } catch (e) { setStatus('Failed to save model list: ' + e.message, 'error'); }
   }, 400);
 }
@@ -4803,7 +4992,7 @@ async function selectModel(fullModelId) {
   if (!currentSession || !sessionSupports(currentSession, 'setModel') || isSame) return;
   setStatus('Switching model...', 'working');
   try {
-    await apiSend('/api/sessions/' + encodeURIComponent(currentSession.id) + '/model', { modelId: fullModelId });
+    await apiSend(currentSession.host, '/api/sessions/' + encodeURIComponent(currentSession.id) + '/model', { modelId: fullModelId });
     patchSession(currentSession.id, { model: fullModelId });
     setStatus('Model switched to ' + fullModelId);
   } catch (e) { setStatus('Model switch failed: ' + e.message, 'error'); }
@@ -4962,7 +5151,7 @@ async function loadMessages(id, selectionGeneration = sessionSelectionGeneration
   // without a set_mood call doesn't wipe a mood set earlier in the session.
   setMoodIndicator('', '');
   try {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(id)}/messages?limit=${MESSAGE_PAGE_SIZE}`);
+    const res = await apiFetch(sessionHostId(id), `/api/sessions/${encodeURIComponent(id)}/messages?limit=${MESSAGE_PAGE_SIZE}`);
     const data = await res.json();
     // A newer selection may have superseded us while the fetch was in flight —
     // don't clobber its transcript/cursors with this stale response.
@@ -5019,7 +5208,7 @@ async function loadOlderMessages() {
   const anchorOffset = anchor ? anchor.getBoundingClientRect().top : 0;
 
   try {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages?limit=${MESSAGE_PAGE_SIZE}&before=${beforeIndex}`);
+    const res = await apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/messages?limit=${MESSAGE_PAGE_SIZE}&before=${beforeIndex}`);
     const data = await res.json();
     // The request belongs to the transcript that initiated it. A quick
     // session switch or same-session forced reload must not prepend those
@@ -5066,7 +5255,7 @@ async function fetchNewMessagesSince(sessionId, selectionGeneration = sessionSel
     return loadMessages(sessionId, selectionGeneration);
   }
   try {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages?after=${lastLoadedIndex}`);
+    const res = await apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/messages?after=${lastLoadedIndex}`);
     const data = await res.json();
     // Bail if the user switched sessions or force-reloaded this same session
     // while the catch-up was in flight.
@@ -5583,8 +5772,22 @@ function startMessageStream(sessionId, selectionGeneration = sessionSelectionGen
   if (messageStream) { messageStream.close(); messageStream = null; }
   if (!sessionId) return;
 
+  const host = resolveHost(sessionHostId(sessionId));
+  const path = `/api/sessions/${encodeURIComponent(sessionId)}/stream`;
+  if (!host.token) { openMessageStream(host.base + path, sessionId, selectionGeneration); return; }
+  // Token host: the ticket is minted per connect, never remembered — the
+  // reconnect path lands back here and mints a fresh one.
+  mintHostTicket(host, 'stream').then((ticket) => {
+    if (messageStream || !ownsSessionView(sessionId, selectionGeneration)) return;
+    openMessageStream(`${host.base}${path}?ticket=${encodeURIComponent(ticket)}`, sessionId, selectionGeneration);
+  }).catch(() => {
+    if (ownsSessionView(sessionId, selectionGeneration)) setStatus('Stream failed', 'error');
+  });
+}
+
+function openMessageStream(url, sessionId, selectionGeneration) {
   try {
-    const evtSource = new EventSource(`/api/sessions/${encodeURIComponent(sessionId)}/stream`);
+    const evtSource = new EventSource(url);
     messageStream = evtSource;
     const ownsStream = () => messageStream === evtSource && ownsSessionView(sessionId, selectionGeneration);
     const addOwnedListener = (event, listener) => evtSource.addEventListener(event, (e) => {
@@ -5958,8 +6161,14 @@ var historyIndex = -1;   // -1 = not browsing history
 var historyStash = '';   // in-progress text stashed while browsing
 var draftSaveTimer = null;
 
-function draftKey(id) { return `pi-dish-draft-${id}`; }
-function historyKey(id) { return `pi-dish-history-${id}`; }
+// Composer owners are session ids — namespaced per host, since two hosts can
+// hand out the same session id — or `spawn:<id>` operation keys, which are
+// server-process-local and never outlive a reload (cleared at boot).
+function composerOwnerKey(owner) {
+  return String(owner).startsWith('spawn:') ? owner : keyForSessionId(owner);
+}
+function draftKey(id) { return `pi-dish-draft-${composerOwnerKey(id)}`; }
+function historyKey(id) { return `pi-dish-history-${composerOwnerKey(id)}`; }
 
 function writeSessionDraft(sessionId, value) {
   if (!sessionId) return;
@@ -6189,7 +6398,7 @@ async function sendPrompt() {
     clearDraft(sessionId);
     setStatus('Running ' + message.split(' ')[0] + '...', 'working');
     try {
-      const data = await apiSend(`/api/sessions/${encodeURIComponent(sessionId)}/command`, { message });
+      const data = await apiSend(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/command`, { message });
       if (!ownsSessionView(sessionId, selectionGeneration)) return;
       setStatus(data.info || 'Done');
       refreshSessions();
@@ -6235,7 +6444,7 @@ async function sendPrompt() {
   setTurnInProgress(true);
 
   try {
-    const resp = await apiSend(`/api/sessions/${encodeURIComponent(sessionId)}/prompt`, images ? { message, images } : { message });
+    const resp = await apiSend(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/prompt`, images ? { message, images } : { message });
     const pending = pendingOptimisticPrompts.get(clientPromptId);
     if (pending) pending.status = resp?.result?.queued ? 'queued' : 'accepted';
     if (!ownsSessionView(sessionId, selectionGeneration)) return;
@@ -6400,7 +6609,7 @@ async function sendQueuedMessage(kind) {
   const body = steer ? { message } : { message, deliverAs: 'followUp' };
   if (images) body.images = images;
   try {
-    const resp = await apiSend(`/api/sessions/${encodeURIComponent(sessionId)}${steer ? '/steer' : '/prompt'}`, body);
+    const resp = await apiSend(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}${steer ? '/steer' : '/prompt'}`, body);
     if (!ownsSessionView(sessionId, selectionGeneration)) return;
     if (resp?.result?.queued) setStatus('Queued — will send when compaction finishes');
     else setStatus(steer ? 'Steered' : 'Queued for after this turn');
@@ -6481,7 +6690,7 @@ async function editQueuedMessage(btn) {
   // flight, so a remaining identical prompt keeps its own client id.
   if (clientPrompt) clientPrompt.status = 'cancelling';
   try {
-    await apiSend(`/api/sessions/${encodeURIComponent(sessionId)}/queue/cancel`, { kind, index, text });
+    await apiSend(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/queue/cancel`, { kind, index, text });
     if (clientPromptId) discardOptimisticPrompt(clientPromptId);
     restorePromptToSession(sessionId, text, null);
     // The follow-up queue_update reconciles the strip; no manual removal needed.
@@ -6504,7 +6713,7 @@ async function abortTurn() {
   abortingSessions.add(sessionId);
   setStatus('Stopping...', 'working');
   try {
-    await apiSend('/api/sessions/' + encodeURIComponent(sessionId) + '/abort');
+    await apiSend(sessionHostId(sessionId), '/api/sessions/' + encodeURIComponent(sessionId) + '/abort');
     // HTTP acknowledgement only means the abort request was accepted. Keep
     // the turn owned by the stream until turn_end/agent_end performs cleanup
     // and JSONL catch-up.
@@ -6521,7 +6730,7 @@ async function monitorSessionSpawn(spawnId) {
     for (;;) {
       let res;
       try {
-        res = await fetch(`/api/session-spawns/${encodeURIComponent(spawnId)}`);
+        res = await apiFetch(null, `/api/session-spawns/${encodeURIComponent(spawnId)}`);
       } catch {
         await new Promise(r => setTimeout(r, SESSION_SPAWN_POLL_MS));
         continue;
@@ -6586,7 +6795,7 @@ async function monitorSessionSpawn(spawnId) {
 // line vs the takeover's inline error).
 async function submitNewSession({ name, cwd, model, thinking, target, harness }) {
   const harnessId = harness || 'pi';
-  const data = await apiSend('/api/sessions/new', {
+  const data = await apiSend(null, '/api/sessions/new', {
     name: name || undefined,
     cwd: cwd || undefined,
     model: model || undefined,
@@ -6663,7 +6872,7 @@ function harnessLabel(harnessId) {
 
 async function loadHarnesses() {
   try {
-    const res = await fetch('/api/harnesses');
+    const res = await apiFetch(null, '/api/harnesses');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (Array.isArray(data.harnesses) && data.harnesses.length) {
@@ -6737,7 +6946,7 @@ async function loadNsHarnessConfig(cwd = nsCwdValue()) {
   try {
     const params = new URLSearchParams();
     if (cwd) params.set('cwd', cwd);
-    const res = await fetch('/api/harnesses/omp/config' + (params.size ? `?${params}` : ''));
+    const res = await apiFetch(null, '/api/harnesses/omp/config' + (params.size ? `?${params}` : ''));
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     if (seq !== nsConfigSeq || selectedHarnessId() !== 'omp') return;
@@ -6825,7 +7034,7 @@ async function saveModelRoles() {
   modelRolesError('');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
   try {
-    const res = await fetch('/api/harnesses/omp/model-roles', {
+    const res = await apiFetch(null, '/api/harnesses/omp/model-roles', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ roles, cwd: nsHarnessConfig?.cwd || undefined }),
@@ -6994,7 +7203,7 @@ async function toggleNsTreeNode(node, pathValue, depth) {
 
   let data;
   try {
-    const r = await fetch('/api/dirs/children?path=' + encodeURIComponent(pathValue));
+    const r = await apiFetch(null, '/api/dirs/children?path=' + encodeURIComponent(pathValue));
     data = await r.json();
   } catch { data = { dirs: [], error: 'failed' }; }
 
@@ -7167,7 +7376,7 @@ let cwdDropdownIdx = -1;
 
 async function loadKnownCwds() {
   try {
-    const res = await fetch('/api/cwds');
+    const res = await apiFetch(null, '/api/cwds');
     if (res.ok) knownCwds = await res.json();
   } catch {}
 }
@@ -7176,7 +7385,7 @@ async function loadKnownCwds() {
 // merged with a live filesystem search under ~ (server-side, /api/dirs).
 const cwdFetcher = debouncedFetcher(120,
   async (query) => {
-    const res = await fetch('/api/dirs?q=' + encodeURIComponent(query));
+    const res = await apiFetch(null, '/api/dirs?q=' + encodeURIComponent(query));
     return res.ok ? await res.json() : [];
   },
   (dirs, query) => renderCwdDropdown(query, dirs || []));
@@ -7300,7 +7509,7 @@ async function loadSpawnTargets() {
   if (!wrap || !input) return;
   let data;
   try {
-    const res = await fetch('/api/tmux/targets');
+    const res = await apiFetch(null, '/api/tmux/targets');
     data = await res.json();
   } catch { data = { available: false }; }
 
@@ -7446,13 +7655,13 @@ function savedResumeTarget() {
 // =========================================================================
 
 /**
- * POST/PUT a JSON body and parse the JSON reply. Throws Error(data.error) on
- * a non-2xx status so callers get the server's message without each
- * hand-rolling the res.ok / res.json().catch(() => ({})) dance (they used
- * to, with a slightly different fallback at every site).
+ * POST/PUT a JSON body to a host and parse the JSON reply. Throws
+ * Error(data.error) on a non-2xx status so callers get the server's message
+ * without each hand-rolling the res.ok / res.json().catch(() => ({})) dance
+ * (they used to, with a slightly different fallback at every site).
  */
-async function apiSend(path, body, method = 'POST') {
-  const res = await fetch(path, {
+async function apiSend(host, path, body, method = 'POST') {
+  const res = await apiFetch(host, path, {
     method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
@@ -8001,7 +8210,7 @@ const openExtDialogs = new Map(); // requestId -> overlay element
 
 function sendExtDialogResponse(requestId, response) {
   if (!currentSession) return;
-  apiSend(`/api/sessions/${encodeURIComponent(currentSession.id)}/ui-response`, { requestId, ...response })
+  apiSend(currentSession.host, `/api/sessions/${encodeURIComponent(currentSession.id)}/ui-response`, { requestId, ...response })
     .catch(e => setStatus('Dialog response failed: ' + e.message, 'error'));
   dismissExtDialog(requestId);
 }
@@ -8230,7 +8439,7 @@ async function openTreeModal() {
   if (!currentSession) return;
   setStatus('Loading tree...', 'working');
   try {
-    const res = await fetch('/api/sessions/' + encodeURIComponent(currentSession.id) + '/tree');
+    const res = await apiFetch(currentSession.host, '/api/sessions/' + encodeURIComponent(currentSession.id) + '/tree');
     if (!res.ok) throw new Error(await res.text());
     treeData = await res.json();
     treeToolCallMap.clear();
@@ -8437,7 +8646,7 @@ async function confirmBranch() {
   if (btn) { btn.disabled = true; btn.textContent = summarize ? 'Summarizing…' : 'Branching…'; }
   setStatus(summarize ? 'Summarizing abandoned branch…' : 'Branching...', 'working');
   try {
-    var data = await apiSend('/api/sessions/' + encodeURIComponent(currentSession.id) + '/branch',
+    var data = await apiSend(currentSession.host, '/api/sessions/' + encodeURIComponent(currentSession.id) + '/branch',
       { entryId, summarize, customInstructions });
     pendingBranchId = null;
     closeTreeModal();
@@ -8493,7 +8702,7 @@ function loadTerminalAssets() {
 
 async function loadConfig() {
   try {
-    const res = await fetch('/api/config');
+    const res = await apiFetch(null, '/api/config');
     appConfig = await res.json();
     if (appConfig.terminal) await loadTerminalAssets();
   } catch { /* feature stays hidden */ }
@@ -8529,7 +8738,7 @@ let availableThemes = [{ id: 'solarized', builtin: true }, { id: 'graphite', bui
 
 async function loadThemes() {
   try {
-    const res = await fetch('/api/themes');
+    const res = await apiFetch(null, '/api/themes');
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.themes) && data.themes.length) availableThemes = data.themes;
@@ -8598,6 +8807,11 @@ function terminalTheme() {
   };
 }
 
+// Per-session, host-namespaced; the panel size next to it is device-global.
+function terminalModeKey(sessionId) {
+  return 'pi-dish-terminal-mode-' + keyForSessionId(sessionId);
+}
+
 function toggleTerminal() {
   if (termState) closeTerminal();
   else openTerminal();
@@ -8610,7 +8824,7 @@ async function openTerminal(mode) {
   const selectionGeneration = sessionSelectionGeneration;
   // 'shell' (default) or 'tmux' (a grouped tmux client viewing the pane the
   // session's pi runs in). The last choice sticks per session.
-  if (!mode) mode = localStorage.getItem('pi-dish-terminal-mode-' + sessionId) === 'tmux' ? 'tmux' : 'shell';
+  if (!mode) mode = localStorage.getItem(terminalModeKey(sessionId)) === 'tmux' ? 'tmux' : 'shell';
 
   // Have the Nerd Font symbols ready before xterm first paints — otherwise
   // prompt icons flash as tofu until the lazy font load lands. Never block
@@ -8688,9 +8902,22 @@ function setTerminalStatus(text, cls) {
 function connectTerminalWS() {
   if (!termState) return;
   const state = termState;
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const host = resolveHost(sessionHostId(state.sessionId));
   const modeQ = state.mode === 'tmux' ? '?mode=tmux' : '';
-  const ws = new WebSocket(`${proto}://${location.host}/api/sessions/${encodeURIComponent(state.sessionId)}/terminal${modeQ}`);
+  const url = hostWsUrl(host, `/api/sessions/${encodeURIComponent(state.sessionId)}/terminal${modeQ}`);
+  if (!host.token) { openTerminalWS(state, url); return; }
+  // Same ticket rule as the SSE stream: minted per connect, never reused.
+  setTerminalStatus(state.attempts ? 'reconnecting…' : 'connecting…', 'reconnecting');
+  mintHostTicket(host, 'terminal').then((ticket) => {
+    if (termState !== state || state.closedByUser) return;
+    openTerminalWS(state, `${url}${modeQ ? '&' : '?'}ticket=${encodeURIComponent(ticket)}`);
+  }).catch(() => {
+    if (termState === state) setTerminalStatus('connect failed', 'error');
+  });
+}
+
+function openTerminalWS(state, url) {
+  const ws = new WebSocket(url);
   state.ws = ws;
   setTerminalStatus(state.attempts ? 'reconnecting…' : 'connecting…', 'reconnecting');
 
@@ -8774,8 +9001,8 @@ function switchTerminalMode() {
   if (!termState || !currentSession) return;
   const next = termState.mode === 'tmux' ? 'shell' : 'tmux';
   const id = termState.sessionId;
-  if (next === 'tmux') localStorage.setItem('pi-dish-terminal-mode-' + id, 'tmux');
-  else localStorage.removeItem('pi-dish-terminal-mode-' + id);
+  if (next === 'tmux') localStorage.setItem(terminalModeKey(id), 'tmux');
+  else localStorage.removeItem(terminalModeKey(id));
   closeTerminal();
   openTerminal(next);
 }

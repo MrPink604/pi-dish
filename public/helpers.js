@@ -455,12 +455,16 @@ function flattenSessionFamilies(families, out = []) {
   return out;
 }
 
-/** Split family roots by any pinned member, preserving manual family order. */
-function partitionPinnedFamilies(families, pinnedIds) {
-  if (!pinnedIds?.length) return [[], families || []];
+/**
+ * Split family roots by any pinned member, preserving manual family order.
+ * Pins are composite session keys (see sessionKey), so the index is built on
+ * keys too; host-less sessions key on their bare id and behave as before.
+ */
+function partitionPinnedFamilies(families, pinnedKeys) {
+  if (!pinnedKeys?.length) return [[], families || []];
   const rootByMember = new Map();
   const index = (node, root) => {
-    rootByMember.set(node.session.id, root);
+    rootByMember.set(sessionRefKey(node.session), root);
     for (const child of node.children) index(child, root);
   };
   for (const root of families || []) index(root, root);
@@ -470,13 +474,15 @@ function partitionPinnedFamilies(families, pinnedIds) {
   const rootsByMissingParent = new Map();
   for (const root of families || []) {
     const parentId = sessionFamilyParentId(root.session);
-    if (!parentId || rootByMember.has(parentId)) continue;
-    if (!rootsByMissingParent.has(parentId)) rootsByMissingParent.set(parentId, []);
-    rootsByMissingParent.get(parentId).push(root);
+    if (!parentId) continue;
+    const parentKey = sessionKey(root.session.host, parentId);
+    if (rootByMember.has(parentKey)) continue;
+    if (!rootsByMissingParent.has(parentKey)) rootsByMissingParent.set(parentKey, []);
+    rootsByMissingParent.get(parentKey).push(root);
   }
   const pinned = [];
   const pinnedRoots = new Set();
-  for (const id of pinnedIds) {
+  for (const id of pinnedKeys) {
     const matches = rootByMember.has(id)
       ? [rootByMember.get(id)] : (rootsByMissingParent.get(id) || []);
     for (const root of matches) {
@@ -741,15 +747,109 @@ function highlightFuzzy(str, indices) {
   return result;
 }
 
+// =========================================================================
+// Hosts (TASKS/multi-host.md) — one client may aggregate several pi-dish
+// hosts. Wire ids stay host-local; namespacing happens only in client keys.
+// =========================================================================
+
+/**
+ * Composite client key for a session. A session id is unique only within its
+ * host (generic session.jsonl header ids collide across machines), so every
+ * client-side map/list/localStorage key that names a session uses this form.
+ * A falsy host id yields the bare session id — the pre-multi-host shape,
+ * which is what the client still speaks before GET /api/host has answered
+ * and on servers too old to serve it.
+ */
+function sessionKey(hostId, sessionId) {
+  const id = sessionId == null ? '' : String(sessionId);
+  return hostId ? `${hostId} ${id}` : id;
+}
+
+/** Inverse of sessionKey; a key with no separator is a bare (host-less) id. */
+function parseSessionKey(key) {
+  const raw = key == null ? '' : String(key);
+  const sep = raw.indexOf(' ');
+  if (sep < 0) return { hostId: null, sessionId: raw };
+  return { hostId: raw.slice(0, sep), sessionId: raw.slice(sep + 1) };
+}
+
+/** Composite key of a session object in client state (writers stamp `host`). */
+function sessionRefKey(session) {
+  return sessionKey(session && session.host, session && session.id);
+}
+
+/**
+ * Normalize a catalog host base to something that can simply be prefixed to
+ * an "/api/..." path: an http(s) origin (plus optional path prefix, which is
+ * what the hub proxy's /hosts/<name> entries look like) with no trailing
+ * slash. '' is the self host and stays ''. Anything that isn't explicitly
+ * one of those forms is garbage and returns null rather than being guessed
+ * at — a mistyped base must fail loudly at add time, not silently resolve
+ * against the serving origin.
+ */
+function normalizeHostBase(input) {
+  if (input == null) return '';
+  const raw = String(input).trim();
+  if (!raw) return '';
+  if (/\s/.test(raw)) return null;
+  const segmentsOk = (path) => path.split('/').filter(Boolean)
+    .every(seg => seg !== '.' && seg !== '..' && /^[\w.~%\-]+$/.test(seg));
+  if (raw.startsWith('/')) {
+    if (!segmentsOk(raw)) return null;
+    return raw.replace(/\/+$/, '');
+  }
+  if (!/^https?:\/\//i.test(raw)) return null;
+  let url;
+  try { url = new URL(raw); } catch { return null; }
+  if (!url.hostname) return null;
+  const path = url.pathname.replace(/\/+$/, '');
+  if (!segmentsOk(path)) return null;
+  return url.origin + path;
+}
+
+/**
+ * Validate the localStorage host catalog. Broken entries are dropped, never
+ * thrown on: a corrupt catalog must degrade to "fewer hosts", not a client
+ * that won't boot. The self host is implicit (base ''), so entries without a
+ * reachable base are dropped too.
+ */
+function sanitizeHostCatalog(raw) {
+  const out = [];
+  const seen = new Set();
+  if (!Array.isArray(raw)) return out;
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    let base;
+    try { base = normalizeHostBase(item.base); } catch { continue; }
+    if (!base) continue;
+    const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+    const hostId = str(item.hostId);
+    const dedupe = hostId || base;
+    if (seen.has(dedupe)) continue;
+    seen.add(dedupe);
+    const entry = { base };
+    if (hostId) entry.hostId = hostId;
+    const label = str(item.label);
+    if (label) entry.label = label;
+    const token = str(item.token);
+    if (token) entry.token = token;
+    out.push(entry);
+  }
+  return out;
+}
+
 /**
  * Unread = a live, idle session whose last activity is newer than when the
  * user last had it on screen. The session being viewed right now (visibly)
  * is never unread; a working session shows the working indicator instead.
+ * Keys are composite (host + session), so `currentKey`/`seenMap` speak
+ * sessionKey form; host-less sessions degrade to bare ids.
  */
-function isUnreadSession(session, seenMap, currentId, viewingVisible) {
+function isUnreadSession(session, seenMap, currentKey, viewingVisible) {
   if (!session.isActive || session.turnInProgress) return false;
-  if (session.id === currentId && viewingVisible) return false;
-  const seen = seenMap[session.id];
+  const key = sessionRefKey(session);
+  if (key === currentKey && viewingVisible) return false;
+  const seen = seenMap[key];
   return !seen || new Date(session.lastActivity) > new Date(seen);
 }
 
@@ -1219,6 +1319,7 @@ if (typeof module !== 'undefined' && module.exports) {
     RELATION_KIND_ORDER, sortRelations, isChildRelation, groupRelations,
     parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
+    sessionKey, parseSessionKey, sessionRefKey, normalizeHostBase, sanitizeHostCatalog,
     modelMatchesPattern, isModelEnabled, pushPromptHistory, sanitizeMarkdownUrl,
     buildSnippet, buildSnippets, highlightTokens, looksLikeFilePath, findPathTokens,
     renderDiffHtml, diffStatusClass,
