@@ -1359,3 +1359,89 @@ test('mergeUsageSummaries reports indexing and discovery flags from any host', (
   assert.equal(merged.discoveryTruncated, true);
   assert.equal(merged.discoverySkipped, 4);
 });
+
+// --- host colors + section ordering (sidebar facelift) ---------------------
+
+test('assignHostColor rotates the chart slots by first-seen order', () => {
+  let order = [];
+  const colors = [];
+  for (const key of ['a', 'b', 'c', 'd', 'e', 'f', 'g']) {
+    const res = H.assignHostColor(order, key, {});
+    order = res.order;
+    colors.push(res.color);
+  }
+  assert.deepEqual(colors, [
+    'var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)',
+    'var(--chart-5)', 'var(--chart-1)', 'var(--chart-2)',
+  ]);
+  assert.deepEqual(order, ['a', 'b', 'c', 'd', 'e', 'f', 'g']);
+});
+
+test('assignHostColor keeps a host on its slot once assigned', () => {
+  const order = ['a', 'b', 'c'];
+  // Re-asking never reshuffles, and never grows the persisted order.
+  const again = H.assignHostColor(order, 'b', {});
+  assert.equal(again.color, 'var(--chart-2)');
+  assert.equal(again.appended, false, 'a known host is not re-appended');
+  assert.deepEqual(again.order, order);
+  assert.equal(H.assignHostColor(order, 'c', {}).color, 'var(--chart-3)');
+});
+
+test('assignHostColor lets a user override win, and reports it as custom', () => {
+  const order = ['a', 'b'];
+  const res = H.assignHostColor(order, 'b', { b: '#D33682' });
+  assert.equal(res.color, '#d33682');
+  assert.equal(res.custom, true);
+  // The slot is still held, so dropping the override returns the same auto color.
+  assert.equal(H.assignHostColor(order, 'b', {}).color, 'var(--chart-2)');
+});
+
+test('sanitizeHostColors keeps only #rrggbb values', () => {
+  assert.deepEqual(H.sanitizeHostColors({
+    a: '#268bd2', b: 'red', c: '#abc', d: 'javascript:alert(1)', e: 5, f: '#AABBCC',
+  }), { a: '#268bd2', f: '#aabbcc' });
+  assert.deepEqual(H.sanitizeHostColors(null), {});
+  assert.deepEqual(H.sanitizeHostColors(['#268bd2']), {});
+});
+
+test('sanitizeHostColorOrder dedupes and drops non-strings', () => {
+  assert.deepEqual(H.sanitizeHostColorOrder(['a', 'b', 'a', '', 3, null, 'c']), ['a', 'b', 'c']);
+  assert.deepEqual(H.sanitizeHostColorOrder('a'), []);
+});
+
+test('a corrupt color store degrades to auto rather than throwing', () => {
+  const res = H.assignHostColor('nonsense', 'a', 'nonsense');
+  assert.equal(res.color, 'var(--chart-1)');
+  assert.deepEqual(res.order, ['a']);
+});
+
+test('sortHostSections puts self first, then labels alphabetically', () => {
+  const hosts = [
+    { hostId: 'z', label: 'tycho' },
+    { hostId: 's', label: 'framework', self: true },
+    { hostId: 'a', name: 'Eros' },
+    { hostId: 'b', base: 'http://10.0.0.4:3333' },
+  ];
+  assert.deepEqual(H.sortHostSections(hosts).map(h => h.hostId), ['s', 'b', 'a', 'z']);
+  // Stable and non-mutating: the input order is untouched.
+  assert.equal(hosts[0].hostId, 'z');
+});
+
+test('sortHostSections breaks label ties on id so the order never jitters', () => {
+  const hosts = [{ hostId: 'b', label: 'pi' }, { hostId: 'a', label: 'pi' }];
+  assert.deepEqual(H.sortHostSections(hosts).map(h => h.hostId), ['a', 'b']);
+  assert.deepEqual(H.sortHostSections([]), []);
+});
+
+test('hostSectionKey namespaces the shared collapse store', () => {
+  assert.equal(H.hostSectionKey('abc'), 'host:abc');
+  assert.equal(H.hostSectionKey(null), 'host:self');
+});
+
+test('rgbStringToHex resolves computed colors for the color input', () => {
+  assert.equal(H.rgbStringToHex('rgb(38, 139, 210)'), '#268bd2');
+  assert.equal(H.rgbStringToHex('rgba(0, 0, 0, 0.5)'), '#000000');
+  assert.equal(H.rgbStringToHex('#268BD2'), '#268bd2');
+  assert.equal(H.rgbStringToHex('color(display-p3 1 0 0)'), null);
+  assert.equal(H.rgbStringToHex(null), null);
+});

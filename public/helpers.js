@@ -984,6 +984,89 @@ function hostSupportsTerminal(hostEntry, config) {
   return hostSupportsCapability(hostEntry, 'terminal', config);
 }
 
+// --- Host color coding (sidebar sections + chips) -------------------------
+// A fleet is a handful of machines, and "which host is this?" is a question
+// the eye should answer before the label is read - so hosts are color-coded.
+// Auto colors are the theme's chart slots (tokens, so they follow the theme;
+// the Theme section's no-raw-palette rule) assigned by first-seen order and
+// never reshuffled; a user override is a concrete hex, which is user data and
+// stored verbatim. None of this renders on a single host.
+
+const HOST_COLOR_SLOTS = 5;
+
+/** Keep only well-formed `#rrggbb` overrides - a corrupt map degrades to auto. */
+function sanitizeHostColors(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [key, value] of Object.entries(raw)) {
+    if (!key || typeof value !== 'string') continue;
+    if (/^#[0-9a-fA-F]{6}$/.test(value)) out[key] = value.toLowerCase();
+  }
+  return out;
+}
+
+/** The persisted first-seen order: a deduped list of host keys. */
+function sanitizeHostColorOrder(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const item of raw) {
+    if (typeof item !== 'string' || !item || seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+  }
+  return out;
+}
+
+/**
+ * Resolve one host's color. An override wins outright; otherwise the host
+ * takes the chart slot its position in `order` names, appending itself on
+ * first sight. Returns the (possibly extended) order rather than mutating it,
+ * plus `appended` so the caller knows when the order is worth persisting.
+ */
+function assignHostColor(order, key, overrides) {
+  const list = sanitizeHostColorOrder(order);
+  const map = sanitizeHostColors(overrides);
+  let index = list.indexOf(key);
+  const appended = !!key && index < 0;
+  if (appended) { list.push(key); index = list.length - 1; }
+  const auto = index < 0 ? 'var(--text-muted)' : `var(--chart-${(index % HOST_COLOR_SLOTS) + 1})`;
+  return { color: map[key] || auto, order: list, index, appended, custom: !!map[key] };
+}
+
+/**
+ * Order for the sidebar's host sections: this host first, then by display
+ * label. Deliberately not by recency - a heading that jumps around whenever
+ * another machine speaks is worse than a stale-looking one.
+ */
+function sortHostSections(hosts) {
+  return (Array.isArray(hosts) ? [...hosts] : []).sort((a, b) => {
+    if (!!a.self !== !!b.self) return a.self ? -1 : 1;
+    const byLabel = hostDisplayLabel(a).localeCompare(hostDisplayLabel(b), undefined, { sensitivity: 'base' });
+    if (byLabel) return byLabel;
+    return String(a.hostId || a.base || '').localeCompare(String(b.hostId || b.base || ''));
+  });
+}
+
+/** Collapse-store key for a host section (namespaced like `date:` buckets). */
+function hostSectionKey(hostKey) { return 'host:' + (hostKey || 'self'); }
+
+/**
+ * `rgb(1, 2, 3)` / `rgba(...)` -> `#010203`. `<input type="color">` needs a
+ * concrete hex, and a computed `var(--chart-N)` only ever comes back as rgb.
+ */
+function rgbStringToHex(value) {
+  if (typeof value !== 'string') return null;
+  if (/^#[0-9a-fA-F]{6}$/.test(value)) return value.toLowerCase();
+  const m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/.exec(value.trim());
+  if (!m) return null;
+  const part = (n) => {
+    const v = Math.max(0, Math.min(255, Math.round(Number(n))));
+    return v.toString(16).padStart(2, '0');
+  };
+  return '#' + part(m[1]) + part(m[2]) + part(m[3]);
+}
+
 // --- Usage summary merging (multi-host) ----------------------------------
 // The usage view fans /api/usage-summary out to every reachable host and
 // merges the payloads here. Everything below mirrors the server's own
@@ -1660,6 +1743,8 @@ if (typeof module !== 'undefined' && module.exports) {
     sessionKey, parseSessionKey, sessionRefKey, normalizeHostBase, sanitizeHostCatalog,
     hostDisplayLabel, mergeHostEntries, mergeUsageSummaries,
     hostSupportsCapability, hostSupportsTerminal,
+    HOST_COLOR_SLOTS, sanitizeHostColors, sanitizeHostColorOrder, assignHostColor,
+    sortHostSections, hostSectionKey, rgbStringToHex,
     modelMatchesPattern, isModelEnabled, pushPromptHistory, sanitizeMarkdownUrl,
     buildSnippet, buildSnippets, highlightTokens, looksLikeFilePath, findPathTokens,
     renderDiffHtml, diffStatusClass,

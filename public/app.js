@@ -346,10 +346,80 @@ function pruneHostCaches() {
   }
 }
 
+// --- Host colors ---------------------------------------------------------
+// Each host wears one color across the sidebar (section headings, chips), so
+// "which machine is this?" lands before the label is read. Auto colors come
+// from the theme's chart slots by first-seen order — tokens, so they follow
+// the theme, and an order that is persisted so they never reshuffle. A user
+// override is a concrete hex (user data, stored verbatim). Nothing here is
+// a status light: the tint is faint, and liveness stays the dots' job.
+const HOST_COLORS_KEY = 'pi-dish-host-colors';
+const HOST_COLOR_ORDER_KEY = 'pi-dish-host-color-order';
+let hostColorOverrides = sanitizeHostColors(readJSONPref(HOST_COLORS_KEY, {}));
+let hostColorOrder = sanitizeHostColorOrder(readJSONPref(HOST_COLOR_ORDER_KEY, []));
+
+/** Stable per-host key for colors: the host id, falling back to its list key. */
+function hostColorKey(hostId) {
+  if (hostId) return hostId;
+  const entry = hostEntryFor(null);
+  return (entry && (entry.hostId || entry.key)) || 'self';
+}
+
+/** A CSS color for one host — `var(--chart-N)` unless overridden with a hex. */
+function hostColorFor(hostId) {
+  const key = hostColorKey(hostId);
+  const { color, order, appended } = assignHostColor(hostColorOrder, key, hostColorOverrides);
+  if (appended) {
+    hostColorOrder = order;
+    try { localStorage.setItem(HOST_COLOR_ORDER_KEY, JSON.stringify(order)); } catch {}
+  }
+  return color;
+}
+
+/** True when this host's color came from the user, not the palette rotation. */
+function hostColorIsCustom(hostId) {
+  return Object.prototype.hasOwnProperty.call(hostColorOverrides, hostColorKey(hostId));
+}
+
+function setHostColorOverride(hostId, hex, { rows = true } = {}) {
+  const key = hostColorKey(hostId);
+  if (hex) hostColorOverrides[key] = hex;
+  else delete hostColorOverrides[key];
+  hostColorOverrides = sanitizeHostColors(hostColorOverrides);
+  try { localStorage.setItem(HOST_COLORS_KEY, JSON.stringify(hostColorOverrides)); } catch {}
+  if (rows) renderHostsSection();
+  renderSessions();
+}
+
 /**
- * The muted host chip. Deliberately no color coding: a host name is context,
- * not a status light — the only variation is the unreachable form, and even
- * that is a word, not an alarm. Renders nothing at all on a single host.
+ * A CSS color string → `#rrggbb`, via a throwaway probe element: an auto host
+ * color is `var(--chart-N)`, and `<input type="color">` can only hold a
+ * concrete hex. Falls back to null when the browser won't resolve it.
+ */
+function resolveColorToHex(color) {
+  const direct = rgbStringToHex(color);
+  if (direct) return direct;
+  const probe = document.createElement('span');
+  probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none';
+  probe.style.color = color;
+  document.body.appendChild(probe);
+  const computed = getComputedStyle(probe).color;
+  probe.remove();
+  return rgbStringToHex(computed);
+}
+
+/** The color dot a host wears in chips and section headings. */
+function hostDotHtml(hostId, className = 'host-chip-dot') {
+  return `<span class="${className}" style="--host-color:${escapeHtml(hostColorFor(hostId))}"></span>`;
+}
+
+/**
+ * The host chip: a color dot, the label, and a faint tint of the host's color
+ * on the hairline. Color-coded on purpose — across a fleet the color is what
+ * the eye sorts by — but kept calm: this is context, not a status light, and
+ * liveness stays the row dots' job. The unreachable form is the only
+ * variation, and it is a word plus dimming, never an alarm color. Renders
+ * nothing at all on a single host.
  */
 function hostChipHtml(hostId, { note = false } = {}) {
   if (!isMultiHost()) return '';
@@ -358,8 +428,8 @@ function hostChipHtml(hostId, { note = false } = {}) {
   const down = hostIsDown(entry);
   const label = hostDisplayLabel(entry);
   const title = label + (down ? ' — unreachable, showing last known sessions' : '');
-  return `<span class="host-chip${down ? ' offline' : ''}" title="${escapeHtml(title)}">` +
-    `${escapeHtml(label)}${down && note ? ' · unreachable' : ''}</span>`;
+  return `<span class="host-chip${down ? ' offline' : ''}" style="--host-color:${escapeHtml(hostColorFor(hostId))}" title="${escapeHtml(title)}">` +
+    `<span class="host-chip-dot"></span>${escapeHtml(label)}${down && note ? ' · unreachable' : ''}</span>`;
 }
 
 // Session state — `sessions` (the sidebar lists) and `currentSession` (a
@@ -638,6 +708,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const newBtn = e.target.closest('.workspace-new-btn');
     // The workspace's own host spawns it — never the picker's current choice.
     if (newBtn) { createSession(newBtn.dataset.path, newBtn.dataset.host || null); return; }
+    // Host sections share the collapse store (keys namespaced `host:` the way
+    // Recent buckets are `date:`), just not the workspace header's chrome.
+    const hostHeader = e.target.closest('.host-section-header');
+    if (hostHeader) { toggleGroupCollapsed(hostHeader.dataset.hostSection); return; }
     const header = e.target.closest('.workspace-group-header');
     if (header) { if (header.dataset.cwd) toggleGroupCollapsed(header.dataset.cwd); return; }
     const item = e.target.closest('.session-item');
@@ -1532,6 +1606,7 @@ let lastSessionListHtml = '';
 function renderSessions() {
   if (pinnedDragActive) return; // don't rebuild mid-drag; the drop re-renders
   sidebarFamilyRootMap = currentFamilyRootMap();
+  hostSectionsShown = null; // only the workspace view builds host sections
   const list = document.getElementById('sessionList');
   const { active, previous } = sessions;
   const showing = sidebarTab === 'active' ? active : [...active, ...previous];
@@ -1642,39 +1717,83 @@ function workspaceGroupKey(hostId, path) {
   return isMultiHost() && hostId ? sessionKey(hostId, path) : path;
 }
 
+// Host ids that got their own section in the current render — the offline
+// notes below are the fallback for hosts *without* one, so a down host is
+// never announced twice.
+let hostSectionsShown = null;
+
 /**
  * The workspace view. One host: exactly the tree it always built. Several:
- * one tree per host (so no cwd merges across machines), with the top-level
- * nodes interleaved by recency and each naming its host in the header.
+ * one **host section** per host — a prominent heading (color dot, label,
+ * count, reachability, collapse chevron) over that host's own workspace tree.
+ * Sections, not interleaved top-level nodes: a fleet is read machine-first,
+ * and a heading that names the host makes the per-node chips redundant.
+ * Order is self first then by label — stable, deliberately not recency, so
+ * the headings don't shuffle under the cursor.
  */
 function renderWorkspaceTrees(list) {
   if (!isMultiHost()) {
     const tree = buildWorkspaceTree(groupByWorkspace(list, collapsedGroups), collapsedGroups);
     return tree.map(node => renderWorkspaceNode(node)).join('');
   }
-  const tops = [];
-  for (const host of effectiveHosts()) {
+  hostSectionsShown = new Set();
+  let html = '';
+  for (const host of sortHostSections(effectiveHosts())) {
     const hostId = host.hostId || null;
     const mine = list.filter(s => (s.host || null) === hostId);
-    if (!mine.length) continue;
-    // A collapsed-set view over the host-qualified keys: groupByWorkspace and
-    // buildWorkspaceTree only ever ask `has(path)`, so no helper change.
-    const collapsedView = { has: (path) => collapsedGroups.has(workspaceGroupKey(hostId, path)) };
-    for (const node of buildWorkspaceTree(groupByWorkspace(mine, collapsedView), collapsedView)) {
-      const activity = collectTreeSessions(node)
-        .reduce((newest, s) => Math.max(newest, new Date(s.lastActivity || 0).getTime() || 0), 0);
-      tops.push({ node, hostId, activity, collapsed: collapsedGroups.has(workspaceGroupKey(hostId, node.path)) ? 1 : 0 });
+    const down = hostIsDown(host);
+    // A reachable host with nothing in the list is simply absent. A *down*
+    // one still gets its heading — with the state on it — so "where did that
+    // machine go?" is answered in place rather than in a footnote.
+    if (!mine.length && !down) continue;
+    hostSectionsShown.add(hostKeyOf(host));
+    const key = hostSectionKey(hostKeyOf(host));
+    const isCollapsed = collapsedGroups.has(key);
+    let body = '';
+    if (!isCollapsed) {
+      // A collapsed-set view over the host-qualified keys: groupByWorkspace and
+      // buildWorkspaceTree only ever ask `has(path)`, so no helper change.
+      const collapsedView = { has: (path) => collapsedGroups.has(workspaceGroupKey(hostId, path)) };
+      body = buildWorkspaceTree(groupByWorkspace(mine, collapsedView), collapsedView)
+        .map(node => renderWorkspaceNode(node, { hostId })).join('');
+      if (!mine.length) {
+        body = `<div class="host-section-empty">${escapeHtml(hostState(host) === 'blocked'
+          ? 'Enter this host’s token in Settings.' : 'Nothing cached from this host yet.')}</div>`;
+      }
     }
+    // Collapsing a section hides the whole machine, so the heading must not
+    // hide activity — same rule (and same signals) as a workspace node.
+    let headerDot = '';
+    if (isCollapsed && mine.length) {
+      if (mine.some(s => s.turnInProgress || s.compacting)) headerDot = '<span class="session-item-status working" title="Agent working"></span>';
+      else if (mine.some(isUnread)) headerDot = '<span class="session-item-status unread" title="New activity"></span>';
+    }
+    const stateNote = down
+      ? `<span class="host-section-state">${hostState(host) === 'blocked' ? 'needs a token' : 'unreachable'}</span>`
+      : '';
+    html += `<div class="host-section${isCollapsed ? ' collapsed' : ''}${down ? ' offline' : ''}" style="--host-color:${escapeHtml(hostColorFor(hostId))}">
+      <div class="host-section-header" data-host-section="${escapeHtml(key)}" title="${escapeHtml(hostDisplayLabel(host) + (down ? ' — showing last known sessions' : ''))}">
+        <span class="host-section-chevron">${isCollapsed ? '▸' : '▾'}</span>
+        ${hostDotHtml(hostId, 'host-section-dot')}
+        <span class="host-section-name">${escapeHtml(hostDisplayLabel(host))}</span>
+        ${stateNote}${headerDot}<span class="host-section-count">${mine.length}</span>
+      </div>
+      ${isCollapsed ? '' : `<div class="host-section-body">${body}</div>`}
+    </div>`;
   }
-  tops.sort((a, b) => a.collapsed - b.collapsed || b.activity - a.activity);
-  return tops.map(t => renderWorkspaceNode(t.node, { hostId: t.hostId, top: true })).join('');
+  return html;
 }
 
-/** Hosts that are down and have nothing cached to dim — one quiet line each. */
+/**
+ * Hosts that are down and have nothing to show in the current view — one
+ * quiet line each. In the workspace view their section heading already says
+ * it, so those are skipped.
+ */
 function hostOfflineNotesHtml() {
   if (!isMultiHost()) return '';
   return effectiveHosts().filter(host => {
     if (!hostIsDown(host)) return false;
+    if (hostSectionsShown && hostSectionsShown.has(hostKeyOf(host))) return false;
     const cache = hostSessionCache.get(hostKeyOf(host));
     return !cache || (!cache.active.length && !cache.previous.length);
   }).map(host => `<div class="host-offline-note">${escapeHtml(hostDisplayLabel(host))} — ${
@@ -1687,7 +1806,9 @@ function hostOfflineNotesHtml() {
  * .workspace-children, then this node's own sessions — folders before loose
  * sessions, file-manager style. Collapsing a node hides its whole subtree,
  * so the header must not hide activity: surface the best signal
- * (working > unread) from all descendant sessions as a header dot.
+ * (working > unread) from all descendant sessions as a header dot. Multi-host
+ * trees sit inside a .host-section whose heading names the machine, so no
+ * node header carries a host chip.
  */
 function renderWorkspaceNode(node, opts = {}) {
   const hostId = opts.hostId || null;
@@ -1710,7 +1831,6 @@ function renderWorkspaceNode(node, opts = {}) {
     <div class="workspace-group-header" data-cwd="${escapeHtml(groupKey)}">
       <span class="workspace-group-chevron">${isCollapsed ? '▸' : '▾'}</span>
       <span class="workspace-group-label" title="${escapeHtml(node.path)}">${escapeHtml(node.label)}</span>
-      ${opts.top ? hostChipHtml(hostId, { note: true }) : ''}
       ${headerDot}<span class="workspace-group-count">${node.count}</span>
       <button class="workspace-new-btn" data-path="${escapeHtml(node.path)}"${hostId ? ` data-host="${escapeHtml(hostId)}"` : ''} title="New session in ${escapeHtml(node.path)}">+</button>
     </div>
@@ -2434,6 +2554,9 @@ function updateSessionHeader() {
     const showHost = isMultiHost() && !!hostEntryFor(currentSession.host);
     hostEl.style.display = showHost ? '' : 'none';
     hostEl.className = 'badge host-badge' + (hostIdIsDown(currentSession.host) ? ' offline' : '');
+    // Same color the sidebar gave this host; the dot is a ::before, so the
+    // badge stays a textContent write.
+    hostEl.style.setProperty('--host-color', showHost ? hostColorFor(currentSession.host) : '');
     hostEl.textContent = showHost ? hostLabelFor(currentSession.host) : '';
   }
   const harnessEl = document.getElementById('sessionHarness');
@@ -2853,13 +2976,35 @@ function renderHostsSection() {
     const actions = [];
     if (state === 'blocked') actions.push(`<button class="btn-small host-token-btn" data-key="${escapeHtml(host.key)}">token?</button>`);
     if (host.source === 'user') actions.push(`<button class="btn-icon host-remove-btn" data-key="${escapeHtml(host.key)}" title="Remove host">✕</button>`);
+    // Color picker: `<input type="color">` only speaks concrete hex, so an
+    // auto (var(--chart-N)) color is resolved through a probe element first.
+    const hostId = host.hostId || null;
+    const custom = hostColorIsCustom(hostId);
+    const hex = resolveColorToHex(hostColorFor(hostId)) || '#888888';
+    const colorControls = isMultiHost() ? `
+      <input type="color" class="host-color-input" data-host="${escapeHtml(hostId || '')}"
+        value="${escapeHtml(hex)}" style="background:${escapeHtml(hex)}"
+        title="${custom ? 'Custom color for this host' : 'Automatic color — pick one to override it'}">
+      <button class="btn-icon host-color-reset${custom ? '' : ' hidden'}" data-host="${escapeHtml(hostId || '')}" title="Back to the automatic color">↺</button>` : '';
     return `<div class="host-row">
       <span class="host-dot ${escapeHtml(state)}" title="${escapeHtml(HOST_STATE_TITLES[state] || state)}"></span>
       <span class="host-row-name">${escapeHtml(hostDisplayLabel(host))}</span>
       <span class="host-row-detail" title="${escapeHtml(host.base || '')}">${escapeHtml(detail)}</span>
-      <span class="host-row-actions">${actions.join('')}</span>
+      <span class="host-row-actions">${colorControls}${actions.join('')}</span>
     </div>`;
   }).join('');
+  for (const input of list.querySelectorAll('.host-color-input')) {
+    // `input` fires continuously while the native picker is open — repaint the
+    // sidebar live, but don't rebuild this row out from under the open dialog.
+    input.addEventListener('input', () => {
+      input.style.background = input.value;
+      setHostColorOverride(input.dataset.host || null, input.value, { rows: false });
+    });
+    input.addEventListener('change', () => setHostColorOverride(input.dataset.host || null, input.value));
+  }
+  for (const btn of list.querySelectorAll('.host-color-reset')) {
+    btn.addEventListener('click', () => setHostColorOverride(btn.dataset.host || null, null));
+  }
   for (const btn of list.querySelectorAll('.host-remove-btn')) {
     btn.addEventListener('click', () => {
       hostCatalog = hostCatalog.filter(entry => (entry.hostId || entry.base) !== btn.dataset.key);
