@@ -113,6 +113,7 @@
             <input type="text" id="sessionNameInput" class="name-input" style="display:none"
               onblur="commitRename()" onkeydown="handleRenameKey(event)">
             <div class="session-meta session-meta-desktop">
+              <span class="badge host-badge" id="sessionHost" style="display:none"></span>
               <span class="badge harness-badge" id="sessionHarness" style="display:none"></span>
               <div class="model-selector" id="modelSelector">
                 <button class="badge badge-model" id="sessionModel" onclick="toggleModelDropdown()" title="Change model">model ▾</button>
@@ -398,6 +399,10 @@
           <div class="ns-section">
             <label class="ns-label" for="newSessionName">Session name <span class="ns-label-optional">(optional)</span></label>
             <input type="text" id="newSessionName" class="cwd-input" placeholder="New Session" autocomplete="off">
+          </div>
+          <div class="ns-section" id="nsHostRow" style="display:none">
+            <label class="ns-label" for="nsHostSelect">Host</label>
+            <select id="nsHostSelect" class="ns-select" onchange="onNsHostChange(this.value)"></select>
           </div>
           <div class="ns-section">
             <label class="ns-label" for="nsHarnessSelect">Agent</label>

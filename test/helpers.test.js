@@ -1079,3 +1079,175 @@ test('formatModelRoleSummary orders canonically and truncates gracefully', () =>
   assert.equal(H.formatModelRoleSummary({ zeta: 'a/b', default: 'c/d' }, 2), 'default c/d · zeta a/b',
     'custom keys sort after the canonical ones');
 });
+
+// =========================================================================
+// Multi-host (TASKS/multi-host.md phase 2) — the client is the aggregator,
+// so the merges it performs are pure functions with tests, not view code.
+// =========================================================================
+
+test('hostDisplayLabel prefers label, then fleet name, then the bare base', () => {
+  assert.equal(H.hostDisplayLabel({ label: 'tycho', name: 'x', base: 'http://a:1' }), 'tycho');
+  assert.equal(H.hostDisplayLabel({ name: 'tycho', base: '/hosts/tycho' }), 'tycho');
+  assert.equal(H.hostDisplayLabel({ base: 'http://10.0.0.4:3333' }), '10.0.0.4:3333');
+  assert.equal(H.hostDisplayLabel({ base: '' }), 'this host');
+  assert.equal(H.hostDisplayLabel(null), '');
+});
+
+test('mergeHostEntries puts self first and keys on hostId, then base', () => {
+  const hosts = H.mergeHostEntries(
+    { hostId: 'self-id', label: 'laptop', capabilities: { tmux: true } },
+    [{ name: 'tycho', base: '/hosts/tycho', kind: 'ssh', hostId: 'tycho-id', reachable: true },
+     { self: true, base: '', hostId: 'self-id' }],
+    [{ base: 'http://ganymede:3333/', label: 'ganymede', token: 'tok' }],
+  );
+  assert.deepEqual(hosts.map(h => h.key), ['self-id', 'tycho-id', 'http://ganymede:3333']);
+  assert.equal(hosts[0].self, true);
+  assert.equal(hosts[0].base, '', 'self is always the serving origin');
+  assert.equal(hosts[1].source, 'fleet');
+  assert.equal(hosts[2].token, 'tok', 'directly-added hosts carry their own token');
+  assert.equal(hosts.filter(h => h.hostId === 'self-id').length, 1,
+    'the fleet listing of ourselves folds into the self entry');
+});
+
+test('mergeHostEntries folds duplicates but keeps the fields only the loser had', () => {
+  const hosts = H.mergeHostEntries(
+    { hostId: 'self-id' },
+    [{ name: 'tycho', base: '/hosts/tycho', hostId: 'tycho-id' }],
+    [{ base: 'http://tycho:3333', hostId: 'tycho-id', token: 'tok', label: 'Tycho (direct)' }],
+  );
+  assert.equal(hosts.length, 2);
+  assert.equal(hosts[1].base, '/hosts/tycho', 'the same-origin proxy path wins the base');
+  assert.equal(hosts[1].token, 'tok', 'but the user-entered token is not lost');
+  assert.equal(hosts[1].label, 'Tycho (direct)');
+});
+
+test('mergeHostEntries drops garbage bases instead of guessing', () => {
+  const hosts = H.mergeHostEntries({ hostId: 'self-id' },
+    [{ name: 'bad', base: 'tycho:3333' }, null, { name: 'ok', base: 'http://ok:1' }],
+    [{ base: 'not a url' }, { nope: true }]);
+  assert.deepEqual(hosts.map(h => h.base), ['', 'http://ok:1']);
+});
+
+// --- usage merging ---------------------------------------------------------
+
+function usageBucket(over = {}) {
+  return {
+    tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, reasoning: 0 },
+    costs: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.3 },
+    costUnavailable: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    calls: 2, measured: 2, durationMs: 1000, slowestMs: 600,
+    ...over,
+  };
+}
+
+function usagePayload(over = {}) {
+  return {
+    range: '30', sort: 'cost', models: null,
+    totals: { ...usageBucket(), unpricedCalls: 0 },
+    groups: {
+      models: [{ key: 'anthropic/opus', provider: 'anthropic', model: 'opus', ...usageBucket(), priced: true, unpricedCalls: 0 }],
+      workspaces: [{ key: '/home/u/proj', ...usageBucket(), priced: true, unpricedCalls: 0 }],
+      sessions: [{ id: 's1', name: 'one', workspace: '/home/u/proj', ...usageBucket(), priced: true, unpricedCalls: 0 }],
+    },
+    headlineCosts: { today: 0.3, days7: 0.3, days30: 0.3, all: 0.3, month: 0.3 },
+    headlineCostUnavailable: { today: 0, days7: 0, days30: 0, all: 0, month: 0 },
+    daily: [{ day: '2026-08-21', ...usageBucket(), models: [{ ref: 'anthropic/opus', provider: 'anthropic', model: 'opus', calls: 2, cost: 0.3, costUnavailable: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, reasoning: 0 } }] }],
+    unpricedModelCalls: 0, indexing: false, discoveryTruncated: false, discoverySkipped: 0,
+    monthlyBudgetUsd: 50,
+    ...over,
+  };
+}
+
+test('mergeUsageSummaries of one host is exactly what that host sent', () => {
+  const payload = usagePayload();
+  assert.equal(H.mergeUsageSummaries([payload]), payload);
+  assert.equal(H.mergeUsageSummaries([{ hostId: 'a', summary: payload }]), payload);
+  assert.equal(H.mergeUsageSummaries([]), null);
+});
+
+test('mergeUsageSummaries sums totals, days, and per-model day buckets', () => {
+  const a = usagePayload();
+  const b = usagePayload({
+    daily: [
+      { day: '2026-08-20', ...usageBucket({ calls: 1 }), models: [{ ref: 'zai/glm', provider: 'zai', model: 'glm', calls: 1, cost: 0.5, costUnavailable: { total: 0 }, tokens: { input: 4, output: 4, cacheRead: 0, cacheWrite: 0, reasoning: 0 } }] },
+      { day: '2026-08-21', ...usageBucket(), models: [{ ref: 'anthropic/opus', provider: 'anthropic', model: 'opus', calls: 2, cost: 0.3, costUnavailable: { total: 0 }, tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, reasoning: 0 } }] },
+    ],
+  });
+  const merged = H.mergeUsageSummaries([
+    { hostId: 'host-a', hostLabel: 'laptop', summary: a },
+    { hostId: 'host-b', hostLabel: 'tycho', summary: b },
+  ]);
+
+  assert.equal(merged.totals.calls, 4);
+  assert.equal(merged.totals.tokens.input, 20);
+  assert.ok(Math.abs(merged.totals.costs.total - 0.6) < 1e-9);
+  assert.equal(merged.headlineCosts.month.toFixed(2), '0.60', 'KPI headlines sum');
+  assert.deepEqual(merged.daily.map(d => d.day), ['2026-08-20', '2026-08-21'], 'days merge chronologically');
+  const shared = merged.daily.find(d => d.day === '2026-08-21');
+  assert.equal(shared.calls, 4);
+  assert.equal(shared.models.length, 1, 'the same model ref on two hosts is one series');
+  assert.ok(Math.abs(shared.models[0].cost - 0.6) < 1e-9);
+  assert.equal(merged.range, '30');
+  assert.equal(merged.monthlyBudgetUsd, 50);
+});
+
+test('mergeUsageSummaries keeps per-host workspaces and sessions apart, merges models', () => {
+  const merged = H.mergeUsageSummaries([
+    { hostId: 'host-a', hostLabel: 'laptop', summary: usagePayload() },
+    { hostId: 'host-b', hostLabel: 'tycho', summary: usagePayload() },
+  ]);
+  assert.equal(merged.groups.workspaces.length, 2, 'the same path on two machines is two workspaces');
+  assert.deepEqual(merged.groups.workspaces.map(w => w.hostLabel), ['laptop', 'tycho']);
+  assert.equal(merged.groups.sessions.length, 2, 'session ids are only unique within a host');
+  assert.deepEqual(merged.groups.sessions.map(s => s.host), ['host-a', 'host-b']);
+  assert.equal(merged.groups.models.length, 1, 'a model ref means the same thing everywhere');
+  assert.equal(merged.groups.models[0].calls, 4);
+});
+
+test('mergeUsageSummaries propagates unavailable pricing as null, never as zero', () => {
+  const unpriced = usagePayload({
+    totals: { ...usageBucket({ costs: { input: null, output: null, cacheRead: null, cacheWrite: null, total: null }, costUnavailable: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 3 } }), unpricedCalls: 3 },
+    headlineCosts: { today: null, days7: null, days30: null, all: null, month: null },
+    headlineCostUnavailable: { today: 3, days7: 3, days30: 3, all: 3, month: 3 },
+    unpricedModelCalls: 3,
+  });
+  const merged = H.mergeUsageSummaries([
+    { hostId: 'host-a', summary: usagePayload() },
+    { hostId: 'host-b', summary: unpriced },
+  ]);
+  assert.equal(merged.totals.costs.total, null);
+  assert.equal(merged.totals.priced, false);
+  assert.equal(merged.totals.unpricedCalls, 3);
+  assert.equal(merged.headlineCosts.month, null);
+  assert.equal(merged.headlineCostUnavailable.month, 3);
+  assert.equal(merged.unpricedModelCalls, 3);
+});
+
+test('mergeUsageSummaries ranks merged groups by the requested metric', () => {
+  const small = usagePayload({
+    groups: {
+      models: [{ key: 'zai/glm', ...usageBucket({ costs: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 }, tokens: { input: 900, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 } }) }],
+      workspaces: [], sessions: [],
+    },
+  });
+  const byCost = H.mergeUsageSummaries([
+    { hostId: 'a', summary: usagePayload() }, { hostId: 'b', summary: small },
+  ]);
+  assert.deepEqual(byCost.groups.models.map(m => m.key), ['anthropic/opus', 'zai/glm']);
+
+  const byTokens = H.mergeUsageSummaries([
+    { hostId: 'a', summary: usagePayload({ sort: 'tokens' }) },
+    { hostId: 'b', summary: { ...small, sort: 'tokens' } },
+  ]);
+  assert.deepEqual(byTokens.groups.models.map(m => m.key), ['zai/glm', 'anthropic/opus']);
+});
+
+test('mergeUsageSummaries reports indexing and discovery flags from any host', () => {
+  const merged = H.mergeUsageSummaries([
+    { hostId: 'a', summary: usagePayload() },
+    { hostId: 'b', summary: usagePayload({ indexing: true, discoveryTruncated: true, discoverySkipped: 4 }) },
+  ]);
+  assert.equal(merged.indexing, true);
+  assert.equal(merged.discoveryTruncated, true);
+  assert.equal(merged.discoverySkipped, 4);
+});

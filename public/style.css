@@ -371,6 +371,64 @@ body.sidebar-open {
   border-style: dashed;
 }
 
+/* Multi-host presentation (TASKS/multi-host.md phase 2). A host name is
+   context, not a status light: the chip is the softer --line hairline with
+   muted text, and the only variation is the unreachable form — dimmer still,
+   never colored. None of this renders at all with a single host. */
+.host-chip {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.host-chip.offline {
+  border-style: dashed;
+  color: color-mix(in srgb, var(--text-muted) 70%, transparent);
+}
+
+/* Last-known rows from a host that stopped answering: readable, clearly not
+   live. The dimming is the whole signal — no badge on every row. */
+.session-item.stale-host { opacity: 0.55; }
+
+.host-offline-note {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.workspace-group-header .host-chip { margin-left: 2px; }
+
+/* A chip in the meta row costs horizontal space that row didn't have: keep it
+   on one line (the cwd ellipsizes as it already does) and stop the chip
+   stretching to a wrapped row's height. Scoped to chipped rows, so
+   single-host meta rows are untouched. */
+.session-item-meta.with-host {
+  align-items: center;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.host-badge {
+  border: 1px solid var(--line);
+  color: var(--text-muted);
+}
+
+.host-badge.offline { border-style: dashed; }
+
+.search-result-meta .host-chip { margin-right: 6px; }
+
+.usage-row-host {
+  margin-left: 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
 .scope-hidden-note {
   padding: 8px 12px;
   font-size: 11px;
@@ -3566,6 +3624,35 @@ img.msg-image {
 }
 .saved-filter-del { flex-shrink: 0; }
 .saved-filters-empty { color: var(--text-muted); }
+/* Hosts section of the settings modal — a short list plus one add form, so
+   it stays a section and never grows into a takeover. */
+.hosts-list { display: flex; flex-direction: column; gap: 4px; min-width: 260px; }
+.host-row { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+.host-row-name { color: var(--text); flex-shrink: 0; }
+.host-row-detail {
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.host-row-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.host-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--text-muted) 55%, transparent);
+}
+.host-dot.reachable { background: var(--success); }
+.host-dot.blocked { background: var(--warning); }
+.host-dot.backoff { background: color-mix(in srgb, var(--text-muted) 70%, transparent); }
+.host-add { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.host-add input { flex: 1 1 140px; min-width: 0; }
+.host-add-status { display: block; margin-top: 6px; color: var(--text-muted); font-size: 11px; }
+.host-add-status.error { color: var(--error); }
+
 .response-details-modal { width: min(540px, calc(100vw - 24px)); }
 .session-spend-badge { cursor: pointer; }
 

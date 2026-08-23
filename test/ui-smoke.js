@@ -368,6 +368,64 @@ const registerSession2 = () => fs.writeFileSync(path.join(registryDir, `${SESSIO
 
 // --- assertions ---------------------------------------------------------------
 let failures = 0;
+// --- a second pi-dish, on its own HOME (multi-host phase 2) ------------------
+// HOME is process-global, so the peer has to be a child process. It runs with
+// a token + an allowedOrigins entry for the main server's origin: that is the
+// only way a browser on origin A may call origin B's API at all, and it
+// exercises the token/CORS/ticket paths the fleet proxy doesn't need.
+const REMOTE_TOKEN = 'ui-smoke-remote-token';
+const REMOTE_SESSION_ID = '2026-07-06T00-00-00-uiremote1';
+const remoteHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-ui-remote-'));
+
+function writeRemoteFixture(mainOrigin) {
+  const dishDir = path.join(remoteHome, '.pi', 'dish');
+  fs.mkdirSync(dishDir, { recursive: true });
+  fs.writeFileSync(path.join(dishDir, 'token'), REMOTE_TOKEN);
+  fs.writeFileSync(path.join(dishDir, 'settings.json'),
+    JSON.stringify({ allowedOrigins: [mainOrigin], label: 'tycho' }));
+  const dir = path.join(remoteHome, '.pi', 'agent', 'sessions', '--remote--');
+  fs.mkdirSync(dir, { recursive: true });
+  // Deliberately the *same* cwd string as the main host's session: two
+  // machines sharing a path is two workspaces, and the sidebar must not
+  // merge them into one group.
+  fs.writeFileSync(path.join(dir, `${REMOTE_SESSION_ID}.jsonl`), [
+    { type: 'session', cwd: CWD, timestamp: '2026-07-06T00:00:00.000Z' },
+    { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'remote question' }], timestamp: '2026-07-06T00:00:01.000Z' } },
+    { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'remote host answer' }], timestamp: '2026-07-06T00:00:02.000Z' } },
+  ].map((entry) => JSON.stringify(entry)).join('\n') + '\n');
+}
+
+function startRemoteHost() {
+  const { spawn } = require('child_process');
+  const serverPath = path.join(__dirname, '..', 'server.js');
+  const child = spawn(process.execPath, ['-e',
+    `const s = require(${JSON.stringify(serverPath)});` +
+    "const say = () => console.log('PI_DISH_PORT=' + s.address().port);" +
+    's.listening ? say() : s.once(\'listening\', say);'], {
+    env: {
+      ...process.env,
+      HOME: remoteHome,
+      PORT: '0',
+      PI_DISH_TERMINAL: '',
+      PI_DISH_INDEX_SYNC_BUDGET: '1000',
+      TMUX_TMPDIR: fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-ui-remote-tmux-')),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return new Promise((resolve, reject) => {
+    let buffered = '';
+    const timer = setTimeout(() => reject(new Error('remote host did not start')), 30000);
+    child.stdout.on('data', (chunk) => {
+      buffered += chunk.toString();
+      const match = /PI_DISH_PORT=(\d+)/.exec(buffered);
+      if (!match) return;
+      clearTimeout(timer);
+      resolve({ child, base: `http://127.0.0.1:${match[1]}` });
+    });
+    child.on('exit', () => { clearTimeout(timer); reject(new Error('remote host exited: ' + buffered)); });
+  });
+}
+
 function check(cond, label) {
   if (cond) { console.log(`  ✔ ${label}`); }
   else { failures++; console.error(`  ✘ ${label}`); }
@@ -390,6 +448,8 @@ function writeRegistry(patch = {}) {
   registryState = { ...registryState, ...patch };
   fs.writeFileSync(path.join(registryDir, `${SESSION_ID}.json`), JSON.stringify(registryState));
 }
+
+let remoteHost = null; // second pi-dish (multi-host section)
 
 (async () => {
   await new Promise((r) => bridge.listen(socketPath, r));
@@ -3117,6 +3177,93 @@ function writeRegistry(patch = {}) {
     check(keys.stampedHost === keys.hostId, 'session state writers stamp the host onto new entries');
     check(keys.migratedFlag === keys.hostId, 'migration is flagged so it runs once');
 
+    // 15. Multi-host aggregation (TASKS/multi-host.md phase 2). A second
+    // pi-dish on its own HOME, added to this browser as a directly-added
+    // host: sessions merge with host chips, session-scoped traffic goes to
+    // the owning host, the new-session takeover re-points, and a host that
+    // stops answering degrades to its own dimmed rows.
+    console.log('multi-host:');
+    writeRemoteFixture(base);
+    remoteHost = await startRemoteHost();
+    const multi = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    watch(multi, 'multi-host');
+    await multi.addInitScript((entry) => {
+      localStorage.setItem('pi-dish-hosts', JSON.stringify([entry]));
+    }, { base: remoteHost.base, label: 'tycho', token: REMOTE_TOKEN });
+    const remoteBase = remoteHost.base;
+    const remoteRequests = [];
+    multi.on('request', (r) => { if (r.url().startsWith(remoteBase)) remoteRequests.push(r.url()); });
+    await multi.goto(base, { waitUntil: 'networkidle' });
+    await multi.click('#tabAll');
+    // Event-driven: drive the poll from the test rather than waiting out the
+    // 10s interval (and never widen a wait to catch a transient element).
+    await multi.evaluate(() => loadSessions(undefined, { withPrevious: true }));
+    await multi.waitForSelector(`.session-item[data-id="${REMOTE_SESSION_ID}"]`, { timeout: 15000 });
+    check(await multi.locator(`.session-item[data-id="${SESSION_ID}"]`).count() === 1,
+      'both hosts\' sessions are in one merged list');
+    const remoteRow = multi.locator(`.session-item[data-id="${REMOTE_SESSION_ID}"]`);
+    check((await remoteRow.getAttribute('data-host')) !== null,
+      'merged rows carry the host that served them');
+    const groupKeys = await multi.evaluate((cwd) => [...document.querySelectorAll('.workspace-group-header')]
+      .map((h) => h.dataset.cwd || '').filter((key) => key.endsWith(cwd)), CWD);
+    check(groupKeys.length === 2 && new Set(groupKeys).size === 2 && groupKeys.every((k) => k.includes(' ')),
+      `the same cwd on two hosts stays two host-qualified workspace groups (got ${JSON.stringify(groupKeys)})`);
+    // Only the trees' top-level headers name their host; nested nodes sit
+    // under one that already did.
+    const topChips = await multi.evaluate(() =>
+      [...document.querySelectorAll('#sessionList > .session-segment > .workspace-group-header .host-chip')]
+        .map((chip) => chip.textContent));
+    check(topChips.includes('tycho') && new Set(topChips).size === 2,
+      `each host's groups are chipped with its own name (got ${JSON.stringify(topChips)})`);
+
+    await multi.click(`.session-item[data-id="${REMOTE_SESSION_ID}"]`);
+    await multi.waitForFunction(() => document.getElementById('messages')?.textContent.includes('remote host answer'),
+      { timeout: 10000 });
+    check(remoteRequests.some((u) => u.includes(`/api/sessions/${REMOTE_SESSION_ID}/messages`)),
+      'the remote session\'s transcript is fetched from its own host');
+    check(await multi.locator('#sessionHost').isVisible() &&
+      (await multi.locator('#sessionHost').textContent()) === 'tycho',
+      'the session header names the host');
+
+    // Unread bookkeeping is keyed host + session, so viewing a remote session
+    // marks *that* host's entry and can never mask a local id that matches.
+    await multi.evaluate(() => loadSessions(undefined, { withPrevious: true }));
+    const seenKeys = await multi.evaluate((id) => {
+      const host = effectiveHosts().find((h) => !h.self);
+      return { keys: Object.keys(JSON.parse(localStorage.getItem('pi-dish-seen') || '{}')), want: host.hostId + ' ' + id };
+    }, REMOTE_SESSION_ID);
+    check(seenKeys.keys.includes(seenKeys.want),
+      `the seen map records the remote session under its own host (got ${JSON.stringify(seenKeys.keys)})`);
+
+    await multi.evaluate(() => openNewSessionView());
+    await multi.waitForSelector('#nsHostRow', { state: 'visible', timeout: 5000 });
+    const hostOptions = await multi.locator('#nsHostSelect option').allTextContents();
+    check(hostOptions.length === 2 && hostOptions.includes('tycho'),
+      `the new-session takeover offers both hosts (got ${JSON.stringify(hostOptions)})`);
+    await multi.keyboard.press('Escape');
+
+    // A host that stops answering keeps its last-known rows, dimmed — and
+    // degrades nothing else.
+    const remoteGone = new Promise((r) => remoteHost.child.once('exit', r));
+    remoteHost.child.kill('SIGKILL');
+    await remoteGone;
+    remoteHost = null;
+    await multi.evaluate(() => loadSessions(undefined, { withPrevious: true }));
+    await multi.waitForSelector(`.session-item[data-id="${REMOTE_SESSION_ID}"].stale-host`, { timeout: 15000 });
+    check(await multi.locator(`.session-item[data-id="${SESSION_ID}"]`).count() === 1 &&
+      await multi.locator(`.session-item[data-id="${SESSION_ID}"].stale-host`).count() === 0,
+      'the reachable host\'s rows are untouched by the dead one');
+    const offlineGroup = await multi.evaluate(() => {
+      const host = effectiveHosts().find((h) => !h.self);
+      const header = [...document.querySelectorAll('.workspace-group-header')]
+        .find((h) => (h.dataset.cwd || '').startsWith(host.hostId + ' '));
+      const chip = header?.querySelector('.host-chip');
+      return { state: hostState(host), text: chip?.textContent || null, offline: !!chip?.classList.contains('offline') };
+    });
+    check(offlineGroup.state === 'backoff' && offlineGroup.offline && offlineGroup.text.includes('unreachable'),
+      `the dead host's group says why its rows are stale (got ${JSON.stringify(offlineGroup)})`);
+    await multi.close();
+
     check(errors.length === 0, errors.length ? `no page errors — got: ${errors.join(' | ')}` : 'no page errors');
   } catch (e) {
     failures++;
@@ -3128,7 +3275,9 @@ function writeRegistry(patch = {}) {
     server.close();
     bridge.close();
     bridge2.close();
+    if (remoteHost) remoteHost.child.kill('SIGKILL');
     fs.rmSync(tmpHome, { recursive: true, force: true });
+    fs.rmSync(remoteHome, { recursive: true, force: true });
   }
 
   console.log(failures ? `\n${failures} failure(s)` : '\nall good');

@@ -839,6 +839,276 @@ function sanitizeHostCatalog(raw) {
 }
 
 /**
+ * Human label for a host entry: the server's own label if it gave one, else
+ * the fleet name, else the bare authority of its base. The self host has no
+ * base, so it says so rather than rendering an empty chip.
+ */
+function hostDisplayLabel(host) {
+  if (!host) return '';
+  if (host.label) return String(host.label);
+  if (host.name) return String(host.name);
+  if (!host.base) return 'this host';
+  return String(host.base).replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+}
+
+/**
+ * The effective host list: self, then the fleet entries a host advertises
+ * over GET /api/hosts (runtime only - never persisted), then the catalog of
+ * directly-added hosts from localStorage. Identity is `hostId` when known
+ * and the base otherwise, so the same host reached two ways (as a fleet
+ * remote and as a directly-added URL) is one row.
+ *
+ * First source wins on conflict - a host reached through the fleet proxy is
+ * same-origin, which is the connection least likely to be blocked - but a
+ * later duplicate still contributes fields the winner lacks (most usefully
+ * a user-entered token and label).
+ */
+function mergeHostEntries(self, fleet, catalog) {
+  const out = [];
+  const byId = new Map();
+  const byBase = new Map();
+  const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+
+  const absorb = (into, extra) => {
+    for (const key of ['label', 'name', 'token', 'version', 'capabilities', 'kind', 'error']) {
+      if (into[key] == null && extra[key] != null) into[key] = extra[key];
+    }
+    return into;
+  };
+
+  const push = (entry) => {
+    if (!entry) return;
+    const hostId = str(entry.hostId);
+    const base = typeof entry.base === 'string' ? entry.base : null;
+    if (base == null) return;
+    const existing = (hostId && byId.get(hostId)) || byBase.get(base);
+    if (existing) { absorb(existing, entry); return; }
+    const merged = { ...entry, base, hostId: hostId || null, key: hostId || base || 'self' };
+    if (hostId) byId.set(hostId, merged);
+    byBase.set(base, merged);
+    out.push(merged);
+  };
+
+  push({
+    hostId: self && self.hostId ? self.hostId : null,
+    base: '',
+    label: (self && self.label) || null,
+    version: (self && self.version) || null,
+    capabilities: (self && self.capabilities) || null,
+    source: 'self',
+    self: true,
+    reachable: true,
+  });
+  for (const entry of Array.isArray(fleet) ? fleet : []) {
+    if (!entry || typeof entry !== 'object' || entry.self) continue;
+    let base;
+    try { base = normalizeHostBase(entry.base); } catch { continue; }
+    if (base == null) continue;
+    push({
+      hostId: str(entry.hostId), base, label: str(entry.label), name: str(entry.name),
+      kind: str(entry.kind), version: entry.version || null,
+      capabilities: entry.capabilities || null,
+      reachable: entry.reachable !== false, error: str(entry.error),
+      source: 'fleet',
+    });
+  }
+  for (const entry of sanitizeHostCatalog(catalog)) push({ ...entry, source: 'user' });
+  return out;
+}
+
+// --- Usage summary merging (multi-host) ----------------------------------
+// The usage view fans /api/usage-summary out to every reachable host and
+// merges the payloads here. Everything below mirrors the server's own
+// aggregation rules exactly - in particular a cost is *null* (unavailable),
+// never 0, as soon as any contributing bucket lacks pricing.
+
+const USAGE_MERGE_COST_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'];
+const USAGE_MERGE_TOKEN_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'];
+
+function emptyMergedUsage() {
+  return {
+    tokens: Object.fromEntries(USAGE_MERGE_TOKEN_KEYS.map(k => [k, 0])),
+    costs: Object.fromEntries(USAGE_MERGE_COST_KEYS.map(k => [k, 0])),
+    costUnavailable: Object.fromEntries(USAGE_MERGE_COST_KEYS.map(k => [k, 0])),
+    calls: 0, measured: 0, durationMs: 0, slowestMs: 0,
+  };
+}
+
+function addMergedUsage(to, from) {
+  if (!from) return to;
+  for (const k of USAGE_MERGE_TOKEN_KEYS) to.tokens[k] += from.tokens?.[k] || 0;
+  for (const k of USAGE_MERGE_COST_KEYS) {
+    const unavailable = from.costUnavailable?.[k] || 0;
+    to.costUnavailable[k] += unavailable;
+    const value = from.costs?.[k];
+    if (unavailable || !Number.isFinite(value)) to.costs[k] = null;
+    else if (to.costs[k] !== null) to.costs[k] += value;
+  }
+  for (const k of ['calls', 'measured', 'durationMs']) to[k] += from[k] || 0;
+  to.slowestMs = Math.max(to.slowestMs, from.slowestMs || 0);
+  return to;
+}
+
+function pricedUsageFields(bucket) {
+  bucket.priced = Number.isFinite(bucket.costs?.total);
+  bucket.unpricedCalls = bucket.costUnavailable?.total || 0;
+  return bucket;
+}
+
+function usageDisplayTokens(tokens) {
+  return (tokens?.input || 0) + (tokens?.output || 0) + (tokens?.cacheRead || 0) + (tokens?.cacheWrite || 0);
+}
+
+/** The server's group comparator, so a merged list ranks like a local one. */
+function compareUsageBuckets(a, b, sort) {
+  if (sort === 'tokens') return usageDisplayTokens(b.tokens) - usageDisplayTokens(a.tokens) || b.calls - a.calls;
+  const aKnown = Number.isFinite(a.costs?.total), bKnown = Number.isFinite(b.costs?.total);
+  if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
+  return (bKnown ? b.costs.total - a.costs.total : 0) || b.calls - a.calls;
+}
+
+/**
+ * Merge per-host /api/usage-summary payloads into one view.
+ *
+ * `list` items are either a bare payload or `{ hostId, hostLabel, summary }`
+ * - the host is needed because a workspace path and a session id are only
+ * unique *within* a host, while a model ref means the same thing everywhere
+ * and so merges across hosts.
+ *
+ * A single payload passes through untouched, which is what keeps the
+ * single-host view exactly what the server sent.
+ *
+ * Approximation, deliberately accepted: each host truncates its group lists
+ * to its own top 20 before answering, so a workspace/model/session sitting
+ * just below the cut on several hosts can be under-counted (or missing) in
+ * the merged tail. Totals, headline KPIs, and the daily series are exact -
+ * they are whole-corpus aggregates on each host. Don't "fix" this with a
+ * hub-side merged endpoint; see TASKS/multi-host.md.
+ */
+function mergeUsageSummaries(list) {
+  const entries = (Array.isArray(list) ? list : [])
+    .map(item => (item && typeof item === 'object' && item.summary ? item : { summary: item }))
+    .filter(item => item.summary && typeof item.summary === 'object');
+  if (!entries.length) return null;
+  if (entries.length === 1) return entries[0].summary;
+
+  const first = entries[0].summary;
+  const sort = first.sort === 'tokens' ? 'tokens' : 'cost';
+  const totals = emptyMergedUsage();
+  let unpricedModelCalls = 0;
+  const headlineKeys = new Set();
+  const headlineCosts = {}, headlineCostUnavailable = {};
+  const days = new Map();          // day -> { bucket, models: Map(ref -> row) }
+  const models = new Map();        // ref -> bucket
+  const workspaces = new Map();    // host + cwd -> bucket
+  const sessionRows = new Map();   // host + id -> row
+  let indexing = false, discoveryTruncated = false, discoverySkipped = 0;
+  let monthlyBudgetUsd = null;
+
+  for (const { summary, hostId = null, hostLabel = null } of entries) {
+    addMergedUsage(totals, summary.totals);
+    unpricedModelCalls += summary.unpricedModelCalls || 0;
+    for (const [key, value] of Object.entries(summary.headlineCosts || {})) {
+      headlineKeys.add(key);
+      const unavailable = summary.headlineCostUnavailable?.[key] || 0;
+      headlineCostUnavailable[key] = (headlineCostUnavailable[key] || 0) + unavailable;
+      if (unavailable || !Number.isFinite(value)) headlineCosts[key] = null;
+      else if (headlineCosts[key] !== null) headlineCosts[key] = (headlineCosts[key] || 0) + value;
+    }
+    for (const day of summary.daily || []) {
+      if (!day || !day.day) continue;
+      let slot = days.get(day.day);
+      if (!slot) { slot = { bucket: emptyMergedUsage(), models: new Map() }; days.set(day.day, slot); }
+      addMergedUsage(slot.bucket, day);
+      for (const model of day.models || []) {
+        if (!model || !model.ref) continue;
+        let row = slot.models.get(model.ref);
+        if (!row) {
+          row = {
+            ref: model.ref, provider: model.provider, model: model.model, calls: 0, cost: 0,
+            costUnavailable: Object.fromEntries(USAGE_MERGE_COST_KEYS.map(k => [k, 0])),
+            tokens: Object.fromEntries(USAGE_MERGE_TOKEN_KEYS.map(k => [k, 0])),
+          };
+          slot.models.set(model.ref, row);
+        }
+        row.calls += model.calls || 0;
+        for (const k of USAGE_MERGE_TOKEN_KEYS) row.tokens[k] += model.tokens?.[k] || 0;
+        for (const k of USAGE_MERGE_COST_KEYS) row.costUnavailable[k] += model.costUnavailable?.[k] || 0;
+        if ((model.costUnavailable?.total || 0) || !Number.isFinite(model.cost)) row.cost = null;
+        else if (row.cost !== null) row.cost += model.cost;
+      }
+    }
+    for (const bucket of summary.groups?.models || []) {
+      if (!bucket || !bucket.key) continue;
+      let row = models.get(bucket.key);
+      if (!row) {
+        row = { key: bucket.key, provider: bucket.provider, model: bucket.model, ...emptyMergedUsage() };
+        models.set(bucket.key, row);
+      }
+      addMergedUsage(row, bucket);
+    }
+    for (const bucket of summary.groups?.workspaces || []) {
+      if (!bucket || bucket.key == null) continue;
+      // The same path on two machines is two workspaces - never fold them.
+      const key = hostId + ' ' + bucket.key;
+      let row = workspaces.get(key);
+      if (!row) {
+        row = { key: bucket.key, host: hostId, hostLabel, ...emptyMergedUsage() };
+        workspaces.set(key, row);
+      }
+      addMergedUsage(row, bucket);
+    }
+    for (const bucket of summary.groups?.sessions || []) {
+      if (!bucket || bucket.id == null) continue;
+      const key = hostId + ' ' + bucket.id;
+      let row = sessionRows.get(key);
+      if (!row) {
+        row = { ...bucket, host: hostId, hostLabel, ...emptyMergedUsage() };
+        sessionRows.set(key, row);
+      }
+      addMergedUsage(row, bucket);
+    }
+    if (summary.indexing) indexing = true;
+    if (summary.discoveryTruncated) discoveryTruncated = true;
+    discoverySkipped += Number(summary.discoverySkipped) || 0;
+    if (monthlyBudgetUsd == null && summary.monthlyBudgetUsd != null) monthlyBudgetUsd = summary.monthlyBudgetUsd;
+  }
+
+  pricedUsageFields(totals);
+  totals.unpricedCalls = unpricedModelCalls;
+  const daily = [...days.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .map(([day, slot]) => ({
+      day,
+      ...slot.bucket,
+      models: [...slot.models.values()].sort((a, b) =>
+        Number.isFinite(b.cost) - Number.isFinite(a.cost)
+        || (Number.isFinite(b.cost) ? b.cost - a.cost : 0) || b.calls - a.calls),
+    }));
+  const rank = (rows) => rows.map(pricedUsageFields)
+    .sort((a, b) => compareUsageBuckets(a, b, sort)).slice(0, 20);
+
+  return {
+    range: first.range,
+    sort: first.sort,
+    models: first.models || null,
+    totals,
+    groups: {
+      models: rank([...models.values()]),
+      workspaces: rank([...workspaces.values()]),
+      sessions: rank([...sessionRows.values()]),
+    },
+    headlineCosts: Object.fromEntries([...headlineKeys].map(k => [k, headlineCosts[k] ?? null])),
+    headlineCostUnavailable: Object.fromEntries([...headlineKeys].map(k => [k, headlineCostUnavailable[k] || 0])),
+    daily,
+    unpricedModelCalls,
+    indexing,
+    discoveryTruncated,
+    discoverySkipped,
+    monthlyBudgetUsd,
+  };
+}
+
+/**
  * Unread = a live, idle session whose last activity is newer than when the
  * user last had it on screen. The session being viewed right now (visibly)
  * is never unread; a working session shows the working indicator instead.
@@ -1320,6 +1590,7 @@ if (typeof module !== 'undefined' && module.exports) {
     parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     sessionKey, parseSessionKey, sessionRefKey, normalizeHostBase, sanitizeHostCatalog,
+    hostDisplayLabel, mergeHostEntries, mergeUsageSummaries,
     modelMatchesPattern, isModelEnabled, pushPromptHistory, sanitizeMarkdownUrl,
     buildSnippet, buildSnippets, highlightTokens, looksLikeFilePath, findPathTokens,
     renderDiffHtml, diffStatusClass,
