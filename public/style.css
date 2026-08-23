@@ -371,14 +371,19 @@ body.sidebar-open {
   border-style: dashed;
 }
 
-/* Multi-host presentation (TASKS/multi-host.md phase 2). A host name is
-   context, not a status light: the chip is the softer --line hairline with
-   muted text, and the only variation is the unreachable form — dimmer still,
-   never colored. None of this renders at all with a single host. */
+/* Multi-host presentation (TASKS/multi-host.md phase 2). Each host wears one
+   color — `--host-color`, set inline per element from the chart-slot rotation
+   or the user's override — so the machine reads before the label does. The
+   tint stays faint: this is context, not a status light, and liveness is
+   still the row dots' job. None of it renders at all with a single host. */
 .host-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   flex-shrink: 0;
-  padding: 0 5px;
-  border: 1px solid var(--line);
+  padding: 0 4px;
+  border: 1px solid color-mix(in srgb, var(--host-color, var(--text-muted)) 45%, transparent);
+  background: color-mix(in srgb, var(--host-color, var(--text-muted)) 9%, transparent);
   border-radius: 8px;
   color: var(--text-muted);
   font-size: 9px;
@@ -386,9 +391,102 @@ body.sidebar-open {
   white-space: nowrap;
 }
 
+.host-chip-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--host-color, var(--text-muted));
+}
+
 .host-chip.offline {
   border-style: dashed;
+  background: none;
   color: color-mix(in srgb, var(--text-muted) 70%, transparent);
+}
+
+.host-chip.offline .host-chip-dot {
+  background: color-mix(in srgb, var(--host-color, var(--text-muted)) 45%, transparent);
+}
+
+/* Host section — the top level of the sidebar's three-deep hierarchy
+   (host > workspace group > session row), so it is the only heading in
+   --text at full weight, and the only one with a rule above it. */
+.host-section + .host-section,
+.session-segment + .host-section {
+  border-top: 1px solid var(--line);
+}
+
+.host-section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 12px 4px;
+  user-select: none;
+  cursor: pointer;
+}
+
+.host-section-chevron {
+  font-size: 9px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  width: 10px;
+}
+
+.host-section-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--host-color, var(--text-muted));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--host-color, var(--text-muted)) 18%, transparent);
+}
+
+.host-section-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-section-header:hover .host-section-name {
+  color: var(--accent);
+}
+
+.host-section-state {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  color: var(--text-muted);
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 0 5px;
+  line-height: 14px;
+}
+
+.host-section-count {
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.6;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+/* No indent or rail on the body: in a 280px sidebar the width costs a line of
+   every session name, and the heading above already does the containing. */
+.host-section.offline .host-section-name { color: var(--text-muted); }
+.host-section.offline .host-section-dot { box-shadow: none; opacity: 0.7; }
+
+.host-section.collapsed .host-section-header { padding-bottom: 10px; }
+
+.host-section-empty {
+  padding: 2px 12px 8px 28px;
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 /* Last-known rows from a host that stopped answering: readable, clearly not
@@ -402,8 +500,6 @@ body.sidebar-open {
   text-align: center;
 }
 
-.workspace-group-header .host-chip { margin-left: 2px; }
-
 /* A chip in the meta row costs horizontal space that row didn't have: keep it
    on one line (the cwd ellipsizes as it already does) and stop the chip
    stretching to a wrapped row's height. Scoped to chipped rows, so
@@ -414,12 +510,26 @@ body.sidebar-open {
   overflow: hidden;
 }
 
+/* The session header's host badge wears the same color; the dot is a ::before
+   so the badge stays a plain textContent write. */
 .host-badge {
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--host-color, var(--text-muted)) 45%, transparent);
   color: var(--text-muted);
 }
 
+.host-badge::before {
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 4px;
+  border-radius: 50%;
+  vertical-align: middle;
+  background: var(--host-color, var(--text-muted));
+}
+
 .host-badge.offline { border-style: dashed; }
+.host-badge.offline::before { background: color-mix(in srgb, var(--host-color, var(--text-muted)) 45%, transparent); }
 
 .search-result-meta .host-chip { margin-right: 6px; }
 
@@ -3648,6 +3758,25 @@ img.msg-image {
 .host-dot.reachable { background: var(--success); }
 .host-dot.blocked { background: var(--warning); }
 .host-dot.backoff { background: color-mix(in srgb, var(--text-muted) 70%, transparent); }
+/* Per-host color: the swatch is the override editor, the ↺ drops back to the
+   automatic chart-slot color. Hidden rather than removed so the row's action
+   column doesn't jump as hosts gain and lose overrides. */
+.host-color-input {
+  width: 22px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  /* The chosen color is also painted as the element's own background (inline,
+     from the resolved hex): some engines don't paint the native swatch once
+     the control is restyled, and a blank square reads as a broken checkbox. */
+  cursor: pointer;
+}
+.host-color-input::-webkit-color-swatch-wrapper { padding: 2px; }
+.host-color-input::-webkit-color-swatch { border: none; border-radius: 2px; }
+.host-color-reset { font-size: 11px; }
+.host-color-reset.hidden { visibility: hidden; }
+
 .host-add { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .host-add input { flex: 1 1 140px; min-width: 0; }
 .host-add-status { display: block; margin-top: 6px; color: var(--text-muted); font-size: 11px; }

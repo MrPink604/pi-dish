@@ -3208,13 +3208,97 @@ let remoteHost = null; // second pi-dish (multi-host section)
       .map((h) => h.dataset.cwd || '').filter((key) => key.endsWith(cwd)), CWD);
     check(groupKeys.length === 2 && new Set(groupKeys).size === 2 && groupKeys.every((k) => k.includes(' ')),
       `the same cwd on two hosts stays two host-qualified workspace groups (got ${JSON.stringify(groupKeys)})`);
-    // Only the trees' top-level headers name their host; nested nodes sit
-    // under one that already did.
-    const topChips = await multi.evaluate(() =>
-      [...document.querySelectorAll('#sessionList > .session-segment > .workspace-group-header .host-chip')]
-        .map((chip) => chip.textContent));
-    check(topChips.includes('tycho') && new Set(topChips).size === 2,
-      `each host's groups are chipped with its own name (got ${JSON.stringify(topChips)})`);
+    // The workspace view is sectioned by host: one heading per machine, self
+    // first, each carrying its own color. The trees below name workspaces
+    // only — the heading above them already named the host.
+    const sections = await multi.evaluate(() => [...document.querySelectorAll('#sessionList > .host-section')]
+      .map((section) => ({
+        name: section.querySelector('.host-section-name')?.textContent || null,
+        key: section.querySelector('.host-section-header')?.dataset.hostSection || null,
+        color: section.style.getPropertyValue('--host-color'),
+        dot: getComputedStyle(section.querySelector('.host-section-dot')).backgroundColor,
+        count: section.querySelector('.host-section-count')?.textContent || null,
+      })));
+    const selfLabel = await multi.evaluate(() => hostDisplayLabel(effectiveHosts()[0]));
+    check(sections.length === 2 && sections[0].name === selfLabel && sections[1].name === 'tycho',
+      `the workspace view is sectioned by host, self first (got ${JSON.stringify(sections.map((s) => s.name))})`);
+    check(sections.every((s) => /^var\(--chart-\d\)$/.test(s.color)) &&
+      new Set(sections.map((s) => s.color)).size === 2 &&
+      new Set(sections.map((s) => s.dot)).size === 2,
+      `each host section wears its own chart-slot color (got ${JSON.stringify(sections.map((s) => [s.color, s.dot]))})`);
+    check(sections.every((s) => Number(s.count) > 0), `host headings count their sessions (got ${JSON.stringify(sections.map((s) => s.count))})`);
+    const chipsInTrees = await multi.evaluate(() =>
+      document.querySelectorAll('#sessionList .workspace-group-header .host-chip').length);
+    check(chipsInTrees === 0, `the heading names the host, so tree headers drop the chip (got ${chipsInTrees})`);
+
+    // Collapsing a section hides that host's whole tree and persists in the
+    // shared collapse store under its own `host:` namespace.
+    const remoteKey = sections[1].key;
+    await multi.evaluate(() => document.querySelectorAll('.host-section-header')[1].click());
+    const collapsed = await multi.evaluate(() => {
+      const section = document.querySelectorAll('#sessionList > .host-section')[1];
+      return {
+        klass: section.classList.contains('collapsed'),
+        body: section.querySelectorAll('.session-item').length,
+        stored: JSON.parse(localStorage.getItem('pi-dish-collapsed-groups') || '[]'),
+      };
+    });
+    check(collapsed.klass && collapsed.body === 0 && collapsed.stored.includes(remoteKey),
+      `collapsing a host section hides its tree and persists as ${remoteKey} (got ${JSON.stringify(collapsed)})`);
+    await multi.evaluate(() => document.querySelectorAll('.host-section-header')[1].click());
+    check(await multi.evaluate(() =>
+      document.querySelectorAll('#sessionList > .host-section')[1].querySelectorAll('.session-item').length > 0),
+      'expanding the host section brings its tree back');
+
+    // Recent view is a timeline, so it stays interleaved — the host is the
+    // row's colored chip there.
+    await multi.evaluate(() => toggleSidebarView());
+    const recentChips = await multi.evaluate(() => [...document.querySelectorAll('.session-item .host-chip')]
+      .map((chip) => ({
+        text: chip.textContent.trim(),
+        color: chip.style.getPropertyValue('--host-color'),
+        dot: !!chip.querySelector('.host-chip-dot'),
+      })));
+    const chipColors = [...new Set(recentChips.map((c) => `${c.text}=${c.color}`))];
+    check(recentChips.length > 0 && recentChips.every((c) => c.dot && c.color) && chipColors.length === 2,
+      `Recent rows carry a color-dotted host chip per host (got ${JSON.stringify(chipColors)})`);
+    check(await multi.evaluate(() => document.querySelectorAll('.host-section').length) === 0,
+      'the Recent view stays interleaved — no host sections');
+    await multi.evaluate(() => toggleSidebarView());
+
+    // The color picker in the settings Hosts section overrides the automatic
+    // color and repaints the sidebar without a reload.
+    await multi.evaluate(() => openSettingsModal());
+    await multi.waitForSelector('#hostsList .host-color-input', { timeout: 5000 });
+    const picked = await multi.evaluate(() => {
+      const inputs = [...document.querySelectorAll('#hostsList .host-color-input')];
+      const before = inputs.map((i) => i.value);
+      const remote = inputs[1];
+      remote.value = '#d33682';
+      remote.dispatchEvent(new Event('change', { bubbles: true }));
+      const section = [...document.querySelectorAll('#sessionList > .host-section')]
+        .find((s) => s.querySelector('.host-section-name').textContent === 'tycho');
+      return {
+        before,
+        stored: JSON.parse(localStorage.getItem('pi-dish-host-colors') || '{}'),
+        sectionColor: section.style.getPropertyValue('--host-color'),
+        reset: !document.querySelectorAll('#hostsList .host-color-reset')[1].classList.contains('hidden'),
+      };
+    });
+    check(picked.before.every((v) => /^#[0-9a-f]{6}$/.test(v)),
+      `auto colors resolve to concrete hex for the picker (got ${JSON.stringify(picked.before)})`);
+    check(picked.sectionColor === '#d33682' && Object.values(picked.stored).includes('#d33682') && picked.reset,
+      `a picked color overrides that host everywhere and offers a reset (got ${JSON.stringify(picked)})`);
+    const afterReset = await multi.evaluate(() => {
+      document.querySelectorAll('#hostsList .host-color-reset')[1].click();
+      const section = [...document.querySelectorAll('#sessionList > .host-section')]
+        .find((s) => s.querySelector('.host-section-name').textContent === 'tycho');
+      return { color: section.style.getPropertyValue('--host-color'),
+        stored: JSON.parse(localStorage.getItem('pi-dish-host-colors') || '{}') };
+    });
+    check(/^var\(--chart-\d\)$/.test(afterReset.color) && Object.keys(afterReset.stored).length === 0,
+      `reset returns the host to its automatic color (got ${JSON.stringify(afterReset)})`);
+    await multi.keyboard.press('Escape');
 
     await multi.click(`.session-item[data-id="${REMOTE_SESSION_ID}"]`);
     await multi.waitForFunction(() => document.getElementById('messages')?.textContent.includes('remote host answer'),
@@ -3253,15 +3337,21 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(await multi.locator(`.session-item[data-id="${SESSION_ID}"]`).count() === 1 &&
       await multi.locator(`.session-item[data-id="${SESSION_ID}"].stale-host`).count() === 0,
       'the reachable host\'s rows are untouched by the dead one');
-    const offlineGroup = await multi.evaluate(() => {
+    const offlineSection = await multi.evaluate(() => {
       const host = effectiveHosts().find((h) => !h.self);
-      const header = [...document.querySelectorAll('.workspace-group-header')]
-        .find((h) => (h.dataset.cwd || '').startsWith(host.hostId + ' '));
-      const chip = header?.querySelector('.host-chip');
-      return { state: hostState(host), text: chip?.textContent || null, offline: !!chip?.classList.contains('offline') };
+      const header = [...document.querySelectorAll('.host-section-header')]
+        .find((h) => h.dataset.hostSection === 'host:' + host.hostId);
+      const section = header?.closest('.host-section');
+      return {
+        state: hostState(host),
+        note: header?.querySelector('.host-section-state')?.textContent || null,
+        offline: !!section?.classList.contains('offline'),
+        rows: section ? section.querySelectorAll('.session-item.stale-host').length : 0,
+      };
     });
-    check(offlineGroup.state === 'backoff' && offlineGroup.offline && offlineGroup.text.includes('unreachable'),
-      `the dead host's group says why its rows are stale (got ${JSON.stringify(offlineGroup)})`);
+    check(offlineSection.state === 'backoff' && offlineSection.offline &&
+      offlineSection.note === 'unreachable' && offlineSection.rows > 0,
+      `the dead host's section heading says why its rows are stale (got ${JSON.stringify(offlineSection)})`);
     await multi.close();
 
     check(errors.length === 0, errors.length ? `no page errors — got: ${errors.join(' | ')}` : 'no page errors');

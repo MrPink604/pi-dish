@@ -537,8 +537,8 @@ exactly single-host pi-dish.
   host keeps its last list dimmed with an "unreachable" chip and degrades
   only its own rows. 401 ⇒ `blocked`, never retried (re-enter the token in
   the settings Hosts section). Workspace group keys are host-qualified
-  (same cwd on two hosts must not merge); host chips live on group headers
-  and flat rows, not every tree row. Search fans out and merges on
+  (same cwd on two hosts must not merge); the workspace view sections by
+  host and everything else chips (see Sidebar behavior). Search fans out and merges on
   `searchScore` (shared scoring ⇒ comparable); usage merges through pure
   `mergeUsageSummaries` (helpers.js — a single payload passes through
   untouched; per-host top-20 truncation makes merged deep tails
@@ -926,7 +926,35 @@ block sorts and enters Recent buckets by the newest activity anywhere below it.
 Families default collapsed, with explicit expansions persisted in
 `pi-dish-expanded-session-families`; search remains flat.
 Clicking a workspace group header collapses it — sessions hidden, group sunk
-below all expanded groups (ordering in `groupByWorkspace`, helpers.js). The 📌
+below all expanded groups (ordering in `groupByWorkspace`, helpers.js).
+
+Multi-host only, and nothing below renders on a single host: the workspace
+view groups into **host sections** (`.host-section`, `renderWorkspaceTrees`) —
+one prominent heading per host (color dot, label, count, an
+`unreachable`/`needs a token` note, collapse chevron) over that host's own
+tree, self first then by label (`sortHostSections`, deliberately not recency).
+A down host keeps its heading even with nothing to show, so
+`hostOfflineNotesHtml` only covers hosts *without* a section (Recent, search).
+Collapse shares the `pi-dish-collapsed-groups` store under a `host:<id>` key
+(namespaced like `date:`), keeps its position, and surfaces the best
+descendant signal on the heading. Inside a section the tree is exactly the
+single-host one, so no node header carries a host chip; chips stay on Recent,
+pinned, flat-search and spawn rows, and the Recent view stays interleaved
+(it's a timeline). Three levels are meant to read at a glance: host heading
+(13.5px/700, `--text`, hairline above) > workspace group header (11px mono,
+muted) > session row.
+
+Each host wears one color: `hostColorFor` resolves a `pi-dish-host-colors`
+`{hostId:'#rrggbb'}` override first, else a `var(--chart-N)` slot from
+first-seen order persisted in `pi-dish-host-color-order` (append-only, so
+colors never shuffle; tokens, so auto colors follow the theme —
+`assignHostColor` in helpers.js). It rides as an inline `--host-color` on
+chips and section headings, tinting a dot plus a `color-mix()` hairline; the
+tint stays faint because liveness is still the status dots' job. The settings
+Hosts rows carry the override editor: an `<input type="color">` seeded with
+the *resolved* hex (`resolveColorToHex` probes a throwaway element, since
+`var()` colors only come back as rgb) and a ↺ that deletes the override.
+The 📌
 on any family member pins the root and its descendants into the top "Pinned"
 section. A root drag handle moves the whole family block (works on touch), with
 move/up listeners on `document` because reinserting the wrapper releases pointer
