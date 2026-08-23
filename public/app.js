@@ -13,10 +13,10 @@ let hostCatalog = sanitizeHostCatalog(readJSONPref(HOSTS_KEY, []));
 // too old to serve it, which is why every key path tolerates host-less keys.
 let selfHost = { hostId: null, base: '', label: null, version: null, capabilities: null };
 
-/** Catalog (or self) entry for a host id; unknown ids fall back to self. */
+/** Effective-list (or self) entry for a host id; unknown ids fall back to self. */
 function hostById(id) {
   if (!id || id === selfHost.hostId) return selfHost;
-  return hostCatalog.find(h => h.hostId === id) || selfHost;
+  return effectiveHosts().find(h => h.hostId === id) || selfHost;
 }
 
 /** Accepts a host id, a host entry, or nothing (self). */
@@ -87,6 +87,7 @@ async function loadHostIdentity() {
       version: data.version || null,
       capabilities: data.capabilities || null,
     };
+    invalidateHosts();
     migrateClientKeys();
   } catch {}
 }
@@ -134,6 +135,233 @@ function migrateClientKeys() {
   } catch {}
 }
 
+// =========================================================================
+// Effective host list + per-host connection state (multi-host phase 2)
+// =========================================================================
+// Three sources feed one list (mergeHostEntries in helpers.js): this server
+// (always), the fleet it advertises over GET /api/hosts (runtime only, never
+// persisted — an older server 404s and we simply stay single-host), and the
+// directly-added hosts in the localStorage catalog. Everything downstream —
+// the poll fan-out, the sidebar's host chips, the new-session picker, the
+// settings section — reads effectiveHosts(), so "which hosts are there" has
+// exactly one answer. With only self in it, every branch below is a no-op
+// and the UI is byte-identical to the single-host one.
+
+let fleetHosts = [];                // GET /api/hosts entries (never persisted)
+let effectiveHostsCache = null;     // rebuilt whenever a source changes
+const hostConnState = new Map();    // host key -> { state, failures, retryAt, error }
+const hostSessionCache = new Map(); // host key -> last known { active, previous }
+const hostLoadSeq = new Map();      // host key -> per-host poll sequence guard
+const hostIndexing = new Map();     // host key -> server still backfilling its index
+// GET /api/host descriptors, by hostId. Runtime only: label/version/
+// capabilities belong to the host, not to this browser's catalog entry (the
+// catalog deliberately persists only base/id/label/token), so they are
+// overlaid onto the merged list instead of being written back into it.
+const hostDescriptors = new Map();
+
+// t3code's ladder: a transient failure retries soon and settles at 16s. Auth
+// failures never land here — they park in `blocked` (see noteHostBlocked).
+const HOST_BACKOFF_LADDER = [3000, 4000, 8000, 16000];
+
+function invalidateHosts() { effectiveHostsCache = null; }
+
+function effectiveHosts() {
+  if (!effectiveHostsCache) {
+    effectiveHostsCache = mergeHostEntries(selfHost, fleetHosts, hostCatalog);
+    for (const host of effectiveHostsCache) {
+      const descriptor = host.hostId && hostDescriptors.get(host.hostId);
+      if (!descriptor) continue;
+      for (const field of ['label', 'version', 'capabilities']) {
+        if (host[field] == null && descriptor[field] != null) host[field] = descriptor[field];
+      }
+    }
+  }
+  return effectiveHostsCache;
+}
+
+function hostKeyOf(host) { return (host && (host.key || host.hostId || host.base)) || 'self'; }
+function isMultiHost() { return effectiveHosts().length > 1; }
+function selfHostEntry() { return effectiveHosts()[0]; }
+
+/** Effective entry for a host id — null when nothing in the list claims it. */
+function hostEntryFor(hostId) {
+  const hosts = effectiveHosts();
+  if (!hostId) return hosts[0];
+  return hosts.find(h => h.hostId === hostId) || null;
+}
+
+function hostLabelFor(hostId) {
+  const entry = hostEntryFor(hostId);
+  return entry ? hostDisplayLabel(entry) : '';
+}
+
+/** reachable | connecting | backoff | blocked — one host's connection state. */
+function hostState(host) {
+  const entry = hostConnState.get(hostKeyOf(host));
+  if (entry) return entry.state;
+  if (host && host.self) return 'reachable';
+  // A fleet entry carries the serving host's own probe result until we poll it.
+  if (host && host.reachable === false) return 'backoff';
+  return 'connecting';
+}
+
+/** Down = its rows are last-known, not live (backoff or blocked). */
+function hostIsDown(host) {
+  const state = hostState(host);
+  return state === 'backoff' || state === 'blocked';
+}
+function hostIdIsDown(hostId) {
+  const entry = hostEntryFor(hostId);
+  return entry ? hostIsDown(entry) : false;
+}
+
+function noteHostReachable(host) {
+  const key = hostKeyOf(host);
+  const changed = hostConnState.get(key)?.state !== 'reachable';
+  hostConnState.set(key, { state: 'reachable', failures: 0, retryAt: 0, error: null });
+  if (changed) renderHostsSection();
+}
+
+/**
+ * A 401 is not a transient failure: retrying it just burns requests until a
+ * token is entered, so the host parks in `blocked` and the settings section
+ * grows a quiet "token?" affordance.
+ */
+function noteHostBlocked(host) {
+  hostConnState.set(hostKeyOf(host), { state: 'blocked', failures: 0, retryAt: 0, error: 'Unauthorized' });
+  renderHostsSection();
+}
+
+function noteHostFailure(host, error) {
+  const key = hostKeyOf(host);
+  const prev = hostConnState.get(key);
+  if (prev?.state === 'blocked') return;
+  const failures = (prev?.failures || 0) + 1;
+  const wait = HOST_BACKOFF_LADDER[Math.min(failures - 1, HOST_BACKOFF_LADDER.length - 1)];
+  hostConnState.set(key, {
+    state: 'backoff', failures, retryAt: Date.now() + wait,
+    error: error ? String(error.message || error) : null,
+  });
+  renderHostsSection();
+}
+
+/** Hosts a poll may talk to right now — self always, blocked never. */
+function pollableHosts() {
+  const now = Date.now();
+  return effectiveHosts().filter(host => {
+    if (host.self) return true;
+    const entry = hostConnState.get(hostKeyOf(host));
+    if (!entry) return true;
+    if (entry.state === 'blocked') return false;
+    return !entry.retryAt || entry.retryAt <= now;
+  });
+}
+
+/** Hosts whose data may be fetched for search/usage fan-out. */
+function fanoutHosts() {
+  return pollableHosts();
+}
+
+let hostFleetTimer = 0;
+const HOST_FLEET_REFRESH_MS = 60000;
+
+/**
+ * The fleet this server knows about. Runtime only: a peer list is the
+ * serving host's configuration, not this browser's, so it is re-read rather
+ * than cached in localStorage. Piggybacked on the sidebar poll at a much
+ * lower rate — reachability there costs the server real probes.
+ */
+async function loadHostFleet() {
+  hostFleetTimer = Date.now();
+  try {
+    const res = await apiFetch(null, '/api/hosts');
+    if (!res.ok) return; // older server: self only, exactly as before
+    const data = await res.json();
+    if (!Array.isArray(data?.hosts)) return;
+    fleetHosts = data.hosts.filter(h => h && !h.self);
+    const own = data.hosts.find(h => h && h.self);
+    if (own && own.label && !selfHost.label) selfHost = { ...selfHost, label: own.label };
+    invalidateHosts();
+    await identifyHosts();
+    pruneHostCaches();
+    renderHostsSection();
+    if (isNewSessionViewOpen()) renderNsHosts();
+    renderSessions();
+  } catch {}
+}
+
+/**
+ * Learn the hostId of any host that doesn't have one yet (a hand-seeded
+ * catalog entry, a fleet entry whose peer was unreachable when the server
+ * built the list). Identity is what stamps sessions, keys their client-side
+ * storage, and routes their session-scoped requests — a host without one
+ * would silently pool with self, so this runs before the first fan-out.
+ */
+async function identifyHosts() {
+  const unknown = effectiveHosts().filter(host => !host.self && !host.hostId && !hostIsDown(host));
+  if (!unknown.length) return;
+  await Promise.allSettled(unknown.map(async (host) => {
+    try {
+      const res = await apiFetch(host, '/api/host');
+      if (res.status === 401) { noteHostBlocked(host); return; }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data || typeof data.hostId !== 'string' || !data.hostId) return;
+      hostDescriptors.set(data.hostId, {
+        label: data.label || null, version: data.version || null, capabilities: data.capabilities || null,
+      });
+      // Update both the entry this pass is holding and the source it came
+      // from, so the next merge keeps the identity (and the catalog persists it).
+      host.hostId = data.hostId;
+      if (!host.label && data.label) host.label = data.label;
+      if (!host.version && data.version) host.version = data.version;
+      if (!host.capabilities && data.capabilities) host.capabilities = data.capabilities;
+      const source = host.source === 'user'
+        ? hostCatalog.find(entry => entry.base === host.base)
+        : fleetHosts.find(entry => normalizeHostBase(entry.base) === host.base);
+      if (source) {
+        source.hostId = data.hostId;
+        if (!source.label && data.label) source.label = data.label;
+        if (host.source === 'user') localStorage.setItem(HOSTS_KEY, JSON.stringify(hostCatalog));
+      }
+      noteHostReachable(host);
+      invalidateHosts();
+    } catch (e) {
+      noteHostFailure(host, e);
+    }
+  }));
+}
+
+function refreshHostFleetSoon() {
+  if (Date.now() - hostFleetTimer < HOST_FLEET_REFRESH_MS) return;
+  hostFleetTimer = Date.now();
+  void loadHostFleet();
+}
+
+/** Drop cached rows/state for hosts that left the effective list. */
+function pruneHostCaches() {
+  const live = new Set(effectiveHosts().map(hostKeyOf));
+  for (const map of [hostSessionCache, hostConnState, hostLoadSeq, hostIndexing]) {
+    for (const key of [...map.keys()]) if (!live.has(key)) map.delete(key);
+  }
+}
+
+/**
+ * The muted host chip. Deliberately no color coding: a host name is context,
+ * not a status light — the only variation is the unreachable form, and even
+ * that is a word, not an alarm. Renders nothing at all on a single host.
+ */
+function hostChipHtml(hostId, { note = false } = {}) {
+  if (!isMultiHost()) return '';
+  const entry = hostEntryFor(hostId);
+  if (!entry) return '';
+  const down = hostIsDown(entry);
+  const label = hostDisplayLabel(entry);
+  const title = label + (down ? ' — unreachable, showing last known sessions' : '');
+  return `<span class="host-chip${down ? ' offline' : ''}" title="${escapeHtml(title)}">` +
+    `${escapeHtml(label)}${down && note ? ' · unreachable' : ''}</span>`;
+}
+
 // Session state — `sessions` (the sidebar lists) and `currentSession` (a
 // detached copy of the selected entry) are only ever written by the state
 // functions in the "Session state writes" section: setSessionLists /
@@ -171,6 +399,7 @@ let showSessionSpend = localStorage.getItem(SESSION_SPEND_KEY) === '1';
 let responseDetailSeq = 0;
 const responseDetails = new Map();
 let usageRange = '30', usageTimer = null, usageData = null, usageChart = null, usageSelectedDay = null;
+let usageHostErrors = []; // hosts that did not answer the last fan-out
 let usageSort = localStorage.getItem('pi-dish-usage-sort') === 'tokens' ? 'tokens' : 'cost';
 let usageModelFilter = new Set(); // multi-select model refs; empty = all models
 let settingsRenderSeq = 0, usageFetchSeq = 0, spendFetchSeq = 0;
@@ -254,6 +483,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Awaited before the first list load so client keys never straddle the
   // bare/composite migration mid-render.
   await loadHostIdentity();
+  await loadHostFleet(); // peers this server knows about (404 on old servers)
+  await identifyHosts();  // and who the catalog's own entries actually are
   loadConfig(); // feature flags (terminal) — fire-and-forget
   loadThemes(); // theme picker options + refresh custom-theme tokens
   loadSpawnTargets(); // populate the "Run in" tmux selector (hidden if no tmux)
@@ -271,10 +502,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   // Restore previously selected session (the stored key may still be a bare
   // id — an unmigrated profile, or a server without /api/host).
-  const savedSessionId = parseSessionKey(localStorage.getItem('pi-dish-session') || '').sessionId;
-  if (savedSessionId) {
-    const found = findSession(savedSessionId);
-    if (found) selectSession(savedSessionId);
+  const saved = parseSessionKey(localStorage.getItem('pi-dish-session') || '');
+  if (saved.sessionId) {
+    const found = findSession(saved.sessionId, saved.hostId);
+    if (found) selectSession(saved.sessionId, { host: found.host || null });
   }
   
   const promptInput = document.getElementById('promptInput');
@@ -405,13 +636,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (e.target.closest('.session-drag-handle')) return;
     // The header's + spawns a session at the node's path — not a collapse toggle.
     const newBtn = e.target.closest('.workspace-new-btn');
-    if (newBtn) { createSession(newBtn.dataset.path); return; }
+    // The workspace's own host spawns it — never the picker's current choice.
+    if (newBtn) { createSession(newBtn.dataset.path, newBtn.dataset.host || null); return; }
     const header = e.target.closest('.workspace-group-header');
     if (header) { if (header.dataset.cwd) toggleGroupCollapsed(header.dataset.cwd); return; }
     const item = e.target.closest('.session-item');
     if (!item) return;
     if (item.classList.contains('starting')) showPendingSessionView(item.dataset.spawnId);
-    else selectSession(item.dataset.id);
+    else selectSession(item.dataset.id, { host: item.dataset.host || null });
     if (window.innerWidth <= 768) closeSidebar();
   });
 
@@ -429,7 +661,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   searchViewInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') onSearchViewInput({ immediate: true }); });
   document.getElementById('searchViewBody').addEventListener('click', (e) => {
     const card = e.target.closest('.search-result');
-    if (card) openSearchResult(card.dataset.id, card.dataset.contentMatches === '1');
+    if (card) openSearchResult(card.dataset.id, card.dataset.contentMatches === '1', card.dataset.host || null);
   });
 
   promptInput.addEventListener('blur', () => { setTimeout(hideAutocomplete, 200); });
@@ -806,35 +1038,57 @@ let listsQueriedFor = '';
 
 async function loadSessions(query, { withPrevious = sidebarTab === 'all' } = {}) {
   const seq = ++loadSessionsSeq;
+  setSearchBusy(true);
+  // Fan out, never Promise.all: one slow (or dead) host must not hold the
+  // whole sidebar. Each host publishes the merged lists as its own response
+  // lands, so the list fills progressively.
+  await Promise.allSettled(pollableHosts().map(host => loadHostSessions(host, query, withPrevious, seq)));
+  if (seq === loadSessionsSeq) setSearchBusy(false);
+}
+
+/**
+ * One host's slice of the poll. Guards are doubled on purpose: `seq` drops a
+ * whole superseded fan-out (the query changed), while the per-host sequence
+ * drops a slow response from *this* host that a newer poll already replaced.
+ * Failure is never fatal — the host keeps its last-known rows and its state
+ * moves to backoff/blocked, which is what dims them.
+ */
+async function loadHostSessions(host, query, withPrevious, seq) {
+  const key = hostKeyOf(host);
+  const hostSeq = (hostLoadSeq.get(key) || 0) + 1;
+  hostLoadSeq.set(key, hostSeq);
   try {
     const params = new URLSearchParams();
     if (query) params.set('q', query);
     if (!withPrevious) params.set('active', '1');
     const qs = params.toString();
-    const res = await apiFetch(null, '/api/sessions' + (qs ? '?' + qs : ''));
+    const res = await apiFetch(host, '/api/sessions' + (qs ? '?' + qs : ''));
+    if (res.status === 401) { noteHostBlocked(host); publishSessionLists(); return; }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    noteHostReachable(host);
     // A slower earlier request must not clobber a newer one's results (a
     // cold search can land after the warm search that superseded it).
-    if (seq !== loadSessionsSeq) return;
+    if (seq !== loadSessionsSeq || hostSeq !== hostLoadSeq.get(key)) return;
+    const cached = hostSessionCache.get(key) || { active: [], previous: [] };
     if (withPrevious) {
-      sessionIndexing = !!data.indexing;
+      hostIndexing.set(key, !!data.indexing);
       // While the index backfills the list is partial — re-poll quickly
       // until it settles instead of leaving the user a sparse list for the
       // next 10s poll to fix.
-      if (sessionIndexing && !indexingRefreshTimer) {
+      if (data.indexing && !indexingRefreshTimer) {
         indexingRefreshTimer = setTimeout(() => {
           indexingRefreshTimer = null;
           refreshSessions();
         }, 1000);
       }
     }
-    listsQueriedFor = query || '';
     let nextActive = data.active || [];
     if (!withPrevious) {
       // Active-only polls deliberately skip the historical scan, so they may
       // be unable to re-resolve a native parent path. Preserve the last full
       // list's advisory hint until the next full refresh can confirm/remove it.
-      const prior = new Map(sessions.active.map(session => [session.id, session]));
+      const prior = new Map(cached.active.map(session => [session.id, session]));
       nextActive = nextActive.map(session => {
         const old = prior.get(session.id);
         if (!old) return session;
@@ -851,13 +1105,14 @@ async function loadSessions(query, { withPrevious = sidebarTab === 'all' } = {})
     }
     const next = {
       active: nextActive,
-      previous: withPrevious ? (data.previous || []) : sessions.previous,
+      previous: withPrevious ? (data.previous || []) : cached.previous,
     };
+    const hostId = host.hostId || null;
     // Viewing a session (with the tab visible) counts as having seen its
     // latest activity — bookkeep against the fresh data *before*
     // setSessionLists renders the unread dots. Prune stale ids too, but
     // only from an unfiltered load: a search result is not the full list.
-    if (currentSession && !document.hidden) {
+    if (currentSession && !document.hidden && (currentSession.host || null) === hostId) {
       const fresh = next.active.find(s => s.id === currentSession.id)
         || next.previous.find(s => s.id === currentSession.id);
       // Key off the state copy: `next` hasn't been through a state writer
@@ -867,24 +1122,48 @@ async function loadSessions(query, { withPrevious = sidebarTab === 'all' } = {})
     if (!query) {
       // Prune this host's stale entries only: another host's sessions aren't
       // gone, they're just not in this response.
-      const host = selfHost.hostId || null;
-      const live = new Set(next.active.map(s => sessionKey(s.host || host, s.id)));
-      for (const key of Object.keys(seenActivity)) {
-        if (parseSessionKey(key).hostId !== host) continue;
-        if (!live.has(key)) delete seenActivity[key];
+      const live = new Set(next.active.map(s => sessionKey(s.host || hostId, s.id)));
+      for (const seenKey of Object.keys(seenActivity)) {
+        if (parseSessionKey(seenKey).hostId !== hostId) continue;
+        if (!live.has(seenKey)) delete seenActivity[seenKey];
       }
     }
-    setSessionLists(next);
+    hostSessionCache.set(key, next);
+    listsQueriedFor = query || '';
+    publishSessionLists();
   } catch (e) {
-    console.error('Failed to load sessions:', e);
-  } finally {
-    if (seq === loadSessionsSeq) setSearchBusy(false);
+    noteHostFailure(host, e);
+    if (host.self) console.error('Failed to load sessions:', e);
+    // Republish so the failing host's rows pick up their dimmed state; every
+    // other host's rows are untouched.
+    if (seq === loadSessionsSeq) publishSessionLists();
   }
+}
+
+/**
+ * Push the per-host caches through the one list writer. Hosts contribute
+ * independently, so a host that has never answered simply has no rows and a
+ * host that stopped answering keeps its last ones.
+ */
+function publishSessionLists() {
+  sessionIndexing = [...hostIndexing.values()].some(Boolean);
+  const parts = [];
+  for (const host of effectiveHosts()) {
+    const cache = hostSessionCache.get(hostKeyOf(host));
+    if (!cache) continue;
+    parts.push({ hostId: host.hostId || null, active: cache.active, previous: cache.previous });
+  }
+  setSessionLists(parts.length ? parts : [{ hostId: selfHost.hostId, active: [], previous: [] }]);
 }
 
 // Refresh the list, preserving an in-flight server-side search so a
 // background poll — or the sidebar refresh button — doesn't reset it.
-function refreshSessions() { return loadSessions(filterQuery || undefined); }
+function refreshSessions() {
+  // Fleet membership changes far more slowly than the session list, and the
+  // server probes real peers to answer — piggyback, don't poll it at 10s.
+  refreshHostFleetSoon();
+  return loadSessions(filterQuery || undefined);
+}
 
 // Row-level close (live rows): a quiet ✕ with a two-tap inline confirm —
 // first tap arms a danger-styled "close?" state that auto-reverts after ~3s,
@@ -975,6 +1254,11 @@ function renderSessionItem(session, opts = {}) {
   // so the group label isn't there.
   const dragHandle = opts.pinnedRow ? '<span class="session-drag-handle" title="Drag to reorder">⠿</span>' : '';
   const cwdHint = (opts.pinnedRow || opts.showCwd) ? `<span class="session-item-cwd">${escapeHtml(shortCwd(session.cwd || '~'))}</span>` : '';
+  // Rows that have left their workspace group (pinned, Recent, search) name
+  // their host too — in the workspace tree the group header carries it.
+  const hostChip = (opts.pinnedRow || opts.showCwd) ? hostChipHtml(session.host) : '';
+  // Rows served from a host that stopped answering are last-known, not live.
+  const staleHost = hostIdIsDown(session.host) ? ' stale-host' : '';
   // Server search attaches a snippet when a session matched on message
   // content the row's metadata doesn't show — render it so the match
   // doesn't look arbitrary. Only positive plain terms can cause a content
@@ -985,14 +1269,14 @@ function renderSessionItem(session, opts = {}) {
     : '';
 
   return `
-    <div class="session-item ${activeClass} ${inactiveClass}${closeBusy ? ' closing' : ''}" data-id="${escapeHtml(session.id)}">
+    <div class="session-item ${activeClass} ${inactiveClass}${closeBusy ? ' closing' : ''}${staleHost}" data-id="${escapeHtml(session.id)}"${session.host ? ` data-host="${escapeHtml(session.host)}"` : ''}>
       <div class="session-item-header">
         ${dragHandle}${familyToggle}${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>${harnessBadge}
         <span class="session-item-time">${timeAgo}</span>
         ${pinBtn}${closeBtn}
       </div>
-      <div class="session-item-meta">
-        ${cwdHint}
+      <div class="session-item-meta${hostChip ? ' with-host' : ''}">
+        ${hostChip}${cwdHint}
         <span class="session-item-model">${escapeHtml(session.model)}</span>
         <span class="session-item-context ${ctxClass}">${session.contextPercent}%</span>
         ${tokenDisplay ? `<span class="session-item-tokens">${tokenDisplay}</span>` : ''}
@@ -1037,7 +1321,7 @@ function renderPendingSessionItem(spawnId, spawn) {
         <span class="session-item-time">now</span>
       </div>
       <div class="session-item-meta">
-        <span class="session-item-cwd" title="${escapeHtml(cwd)}">${escapeHtml(shortCwd(cwd))}</span>
+        ${hostChipHtml(spawn.host)}<span class="session-item-cwd" title="${escapeHtml(cwd)}">${escapeHtml(shortCwd(cwd))}</span>
         <span>${spawn.target ? 'tmux' : 'headless'}</span>
       </div>
     </div>
@@ -1297,11 +1581,12 @@ function renderSessions() {
       // child moves the whole parent-first block instead of splitting it.
       html += groupSessionsByDate(restFamilies).map(renderDateBucket).join('');
     } else {
-      const rest = flattenSessionFamilies(restFamilies);
-      const tree = buildWorkspaceTree(groupByWorkspace(rest, collapsedGroups), collapsedGroups);
-      html += tree.map(renderWorkspaceNode).join('');
+      html += renderWorkspaceTrees(flattenSessionFamilies(restFamilies));
     }
   }
+  // A host that is down and has no cached rows would otherwise vanish
+  // silently. One quiet line, no retry button: the poll keeps trying.
+  html += hostOfflineNotesHtml();
   // Sessions a forgotten chip silently removed must stay discoverable — the
   // note is the audit trail for "why isn't my session in the list?".
   if (scopesHidden > 0) {
@@ -1318,6 +1603,56 @@ function renderSessions() {
 }
 
 /**
+ * Collapse-state key for a workspace node. With several hosts in the list the
+ * same cwd on two machines is two different workspaces (the doc's rule), so
+ * the key — and therefore the tree, the count, and the collapse state — is
+ * host-qualified. Single-host keys stay the bare path they have always been,
+ * which is what keeps existing collapse state valid.
+ */
+function workspaceGroupKey(hostId, path) {
+  return isMultiHost() && hostId ? sessionKey(hostId, path) : path;
+}
+
+/**
+ * The workspace view. One host: exactly the tree it always built. Several:
+ * one tree per host (so no cwd merges across machines), with the top-level
+ * nodes interleaved by recency and each naming its host in the header.
+ */
+function renderWorkspaceTrees(list) {
+  if (!isMultiHost()) {
+    const tree = buildWorkspaceTree(groupByWorkspace(list, collapsedGroups), collapsedGroups);
+    return tree.map(node => renderWorkspaceNode(node)).join('');
+  }
+  const tops = [];
+  for (const host of effectiveHosts()) {
+    const hostId = host.hostId || null;
+    const mine = list.filter(s => (s.host || null) === hostId);
+    if (!mine.length) continue;
+    // A collapsed-set view over the host-qualified keys: groupByWorkspace and
+    // buildWorkspaceTree only ever ask `has(path)`, so no helper change.
+    const collapsedView = { has: (path) => collapsedGroups.has(workspaceGroupKey(hostId, path)) };
+    for (const node of buildWorkspaceTree(groupByWorkspace(mine, collapsedView), collapsedView)) {
+      const activity = collectTreeSessions(node)
+        .reduce((newest, s) => Math.max(newest, new Date(s.lastActivity || 0).getTime() || 0), 0);
+      tops.push({ node, hostId, activity, collapsed: collapsedGroups.has(workspaceGroupKey(hostId, node.path)) ? 1 : 0 });
+    }
+  }
+  tops.sort((a, b) => a.collapsed - b.collapsed || b.activity - a.activity);
+  return tops.map(t => renderWorkspaceNode(t.node, { hostId: t.hostId, top: true })).join('');
+}
+
+/** Hosts that are down and have nothing cached to dim — one quiet line each. */
+function hostOfflineNotesHtml() {
+  if (!isMultiHost()) return '';
+  return effectiveHosts().filter(host => {
+    if (!hostIsDown(host)) return false;
+    const cache = hostSessionCache.get(hostKeyOf(host));
+    return !cache || (!cache.active.length && !cache.previous.length);
+  }).map(host => `<div class="host-offline-note">${escapeHtml(hostDisplayLabel(host))} — ${
+    hostState(host) === 'blocked' ? 'needs a token (Settings)' : 'unreachable'}</div>`).join('');
+}
+
+/**
  * One workspace-tree node → a .session-segment: header (collapse toggle via
  * data-cwd, the node's path prefix), child nodes nested in an indented
  * .workspace-children, then this node's own sessions — folders before loose
@@ -1325,8 +1660,10 @@ function renderSessions() {
  * so the header must not hide activity: surface the best signal
  * (working > unread) from all descendant sessions as a header dot.
  */
-function renderWorkspaceNode(node) {
-  const isCollapsed = collapsedGroups.has(node.path);
+function renderWorkspaceNode(node, opts = {}) {
+  const hostId = opts.hostId || null;
+  const groupKey = workspaceGroupKey(hostId, node.path);
+  const isCollapsed = collapsedGroups.has(groupKey);
   let headerDot = '';
   if (isCollapsed) {
     const all = collectTreeSessions(node);
@@ -1336,16 +1673,17 @@ function renderWorkspaceNode(node) {
   let body = '';
   if (!isCollapsed) {
     if (node.children.length) {
-      body = `<div class="workspace-children">${node.children.map(renderWorkspaceNode).join('')}</div>`;
+      body = `<div class="workspace-children">${node.children.map(child => renderWorkspaceNode(child, { hostId })).join('')}</div>`;
     }
     body += buildSessionFamilies(node.sessions || []).map(family => renderSessionFamily(family)).join('');
   }
   return `<div class="session-segment${isCollapsed ? ' collapsed' : ''}">
-    <div class="workspace-group-header" data-cwd="${escapeHtml(node.path)}">
+    <div class="workspace-group-header" data-cwd="${escapeHtml(groupKey)}">
       <span class="workspace-group-chevron">${isCollapsed ? '▸' : '▾'}</span>
       <span class="workspace-group-label" title="${escapeHtml(node.path)}">${escapeHtml(node.label)}</span>
+      ${opts.top ? hostChipHtml(hostId, { note: true }) : ''}
       ${headerDot}<span class="workspace-group-count">${node.count}</span>
-      <button class="workspace-new-btn" data-path="${escapeHtml(node.path)}" title="New session in ${escapeHtml(node.path)}">+</button>
+      <button class="workspace-new-btn" data-path="${escapeHtml(node.path)}"${hostId ? ` data-host="${escapeHtml(hostId)}"` : ''} title="New session in ${escapeHtml(node.path)}">+</button>
     </div>
     ${body}
   </div>`;
@@ -1379,8 +1717,16 @@ function renderDateBucket(bucket) {
   </div>`;
 }
 
-function findSession(id) {
-  return sessions.active.find(s => s.id === id) || sessions.previous.find(s => s.id === id);
+/**
+ * Wire ids stay host-local, so two hosts *can* hand out the same generic
+ * `session.jsonl` header id. Callers that know the host (every click path
+ * through a rendered row) pass it and get an unambiguous entry; callers that
+ * don't keep the old first-match behaviour.
+ */
+function findSession(id, host) {
+  const match = (s) => s.id === id && (!host || (s.host || null) === host);
+  return sessions.active.find(match) || sessions.previous.find(match)
+    || (host ? findSession(id) : undefined);
 }
 
 // =========================================================================
@@ -1406,10 +1752,20 @@ function stampSessionHost(session, hostId = selfHost.hostId) {
  * — polling used to update only the sidebar, leaving the header stale.
  */
 function setSessionLists(next, hostId = selfHost.hostId) {
-  for (const list of [next.active, next.previous]) {
-    for (const session of list || []) stampSessionHost(session, hostId);
+  // Two shapes, one writer: a single host's `{ active, previous }` (what a
+  // single-host client has always passed) or the multi-host poll's
+  // `[{ hostId, active, previous }, …]`. Stamping stays here — the wire
+  // payload has no idea which host served it — so the merge can't produce an
+  // unstamped session by taking a shortcut around the state writers.
+  const parts = Array.isArray(next)
+    ? next
+    : [{ hostId, active: next.active, previous: next.previous }];
+  const merged = { active: [], previous: [] };
+  for (const part of parts) {
+    for (const session of part.active || []) merged.active.push(stampSessionHost(session, part.hostId));
+    for (const session of part.previous || []) merged.previous.push(stampSessionHost(session, part.hostId));
   }
-  sessions = next;
+  sessions = merged;
   if (currentSession) {
     const fresh = findSession(currentSession.id);
     if (fresh) currentSession = { ...currentSession, ...fresh };
@@ -1424,8 +1780,8 @@ function setSessionLists(next, hostId = selfHost.hostId) {
  * (null when the id isn't in either list). Rendering is the caller's job:
  * selectSession re-renders everything it touches anyway.
  */
-function setCurrentSession(id) {
-  const entry = findSession(id);
+function setCurrentSession(id, host) {
+  const entry = findSession(id, host);
   currentSession = entry ? stampSessionHost({ ...entry }) : null;
   return currentSession;
 }
@@ -1569,11 +1925,11 @@ function showPendingSessionFailure(spawnId, message, spawn) {
   btn.title = message;
 }
 
-async function selectSession(id, { forceTranscriptReload = false } = {}) {
+async function selectSession(id, { forceTranscriptReload = false, host = null } = {}) {
   // Validate the target before tearing anything down: a stale id (a resume
   // racing a filtered refresh, a pruned session) must leave the current view
   // intact instead of stashing the transcript and then bailing on a blank pane.
-  if (!findSession(id)) return;
+  if (!findSession(id, host)) return;
   const selectionGeneration = ++sessionSelectionGeneration;
   loadingOlder = false;
   loadingOlderGeneration += 1;
@@ -1597,7 +1953,7 @@ async function selectSession(id, { forceTranscriptReload = false } = {}) {
   closeSkillsView();
   stashCurrentTranscript();
   if (forceTranscriptReload) transcriptCache.delete(id);
-  if (!setCurrentSession(id)) return;
+  if (!setCurrentSession(id, host)) return;
   revealSessionInFamily(id);
   // Tear down the previous session's stream up front, before the awaits below.
   // Left open, its in-flight turn_end/message_update events fire against the
@@ -1756,13 +2112,25 @@ function modelCatalogUrl(harnessId, cwd) {
   return '/api/models?' + params.toString();
 }
 
-async function loadModels(sessionId, harnessId, cwd) {
+/**
+ * localStorage key for a harness's model catalog snapshot. Catalogs are
+ * per host (a peer may have entirely different providers configured), so a
+ * remote host's cache is suffixed with its id; the self host keeps the
+ * historical bare keys.
+ */
+function modelsCacheKey(harnessId, hostId) {
+  const base = harnessId === 'pi' ? 'pi-dish-models-cache' : `pi-dish-models-cache:${harnessId}`;
+  return hostId && hostId !== selfHost.hostId ? `${base}@${hostId}` : base;
+}
+
+async function loadModels(sessionId, harnessId, cwd, host) {
   const requestedHarnessId = harnessId || (sessionId ? findSession(sessionId)?.harnessId : null) || 'pi';
+  const requestedHost = sessionId ? sessionHostId(sessionId) : (host === undefined ? null : host);
   const seq = ++modelsSeq;
   try {
     const url = sessionId ? ('/api/models?sessionId=' + encodeURIComponent(sessionId))
       : requestedHarnessId !== 'pi' ? modelCatalogUrl(requestedHarnessId, cwd) : '/api/models';
-    const res = await apiFetch(sessionHostId(sessionId), url);
+    const res = await apiFetch(requestedHost, url);
     const data = await res.json();
     if (seq !== modelsSeq) return; // superseded by a newer session's fetch
     knownModels = Array.isArray(data) ? data : [];
@@ -1772,8 +2140,7 @@ async function loadModels(sessionId, harnessId, cwd) {
     // model select instantly before the background refresh lands.
     if (knownModels.length) {
       try {
-        const key = requestedHarnessId === 'pi' ? 'pi-dish-models-cache' : `pi-dish-models-cache:${requestedHarnessId}`;
-        localStorage.setItem(key, JSON.stringify(knownModels));
+        localStorage.setItem(modelsCacheKey(requestedHarnessId, requestedHost), JSON.stringify(knownModels));
       } catch {}
     }
     refreshResponsePricingState();
@@ -2027,6 +2394,13 @@ function updateSessionHeader() {
 
   document.getElementById('sessionName').textContent = currentSession.name || 'Unnamed';
   document.getElementById('sessionMsgCount').textContent = `${currentSession.messageCount} msgs`;
+  const hostEl = document.getElementById('sessionHost');
+  if (hostEl) {
+    const showHost = isMultiHost() && !!hostEntryFor(currentSession.host);
+    hostEl.style.display = showHost ? '' : 'none';
+    hostEl.className = 'badge host-badge' + (hostIdIsDown(currentSession.host) ? ' offline' : '');
+    hostEl.textContent = showHost ? hostLabelFor(currentSession.host) : '';
+  }
   const harnessEl = document.getElementById('sessionHarness');
   const showHarness = currentSession.harnessId && currentSession.harnessId !== 'pi';
   harnessEl.style.display = showHarness ? '' : 'none';
@@ -2357,6 +2731,16 @@ async function renderPreferences() {
     <select id="responseMetadataMode"><option value="hidden">Hidden</option><option value="compact">Compact</option><option value="performance">Performance</option><option value="performance-cost">Performance + estimated cost</option></select></div>
     <label class="preference-row toggle-row"><span><strong>Show estimated session spend in desktop header</strong><small>Stored on this device; off by default.</small></span><input id="showSessionSpend" type="checkbox"></label>
     <div class="preference-row"><label for="monthlyBudget"><strong>Monthly budget warning (USD)</strong><small>Server-global: applies to every device. Estimates use each session harness's catalog pricing; blank clears.</small></label><div class="budget-save"><input id="monthlyBudget" type="number" min="0.01" step="0.01" placeholder="No warning"><button class="btn-small" id="saveBudget">Save</button></div><small id="budgetStatus"></small></div>
+    <div class="preference-row"><label><strong>Hosts</strong><small>Added hosts are stored on this device (with their token). Entries this server publishes — and this host itself — are read-only.</small></label>
+      <div class="hosts-list" id="hostsList"></div>
+      <div class="host-add">
+        <input id="addHostBase" class="cwd-input" type="text" placeholder="http://tycho:3333" spellcheck="false" autocomplete="off">
+        <input id="addHostLabel" class="cwd-input" type="text" placeholder="Label (optional)" autocomplete="off">
+        <input id="addHostToken" class="cwd-input" type="password" placeholder="Token (optional)" autocomplete="off">
+        <button class="btn-small" id="addHostBtn">Add host</button>
+      </div>
+      <small class="host-add-status" id="addHostStatus"></small>
+    </div>
     <div class="preference-row"><label><strong>Saved sidebar filters</strong><small>Server-global. Chips under the sidebar filter toggle these per device; type a query there and hit “+ save filter” to add one.</small></label><div id="savedFiltersList" class="saved-filters-list"></div></div>`;
   const mode = body.querySelector('#responseMetadataMode'); mode.value = responseMetadataMode;
   mode.addEventListener('change', () => {
@@ -2381,6 +2765,9 @@ async function renderPreferences() {
     }
   };
   renderSavedFiltersList();
+  renderHostsSection();
+  body.querySelector('#addHostBtn').addEventListener('click', addHostFromForm);
+  body.querySelector('#addHostBase').addEventListener('keydown', (e) => { if (e.key === 'Enter') addHostFromForm(); });
   try {
     const r = await apiFetch(null, '/api/settings'), s = await r.json();
     if (renderSeq !== settingsRenderSeq ) return;
@@ -2400,6 +2787,129 @@ async function renderPreferences() {
     try { const r = await apiFetch(null, '/api/settings', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ monthlyBudgetUsd:value }) }); const d = await r.json(); if (!r.ok) throw new Error(d.error); status.textContent = 'Saved for all devices.'; }
     catch (e) { status.textContent = 'Save failed: ' + e.message; }
   });
+}
+
+// --- Hosts (settings section, not a takeover: it is a short list plus one
+// add form). The catalog is device-local by design — a browser's own list of
+// machines it can reach, tokens included; fleet entries come from the
+// server's config and are shown read-only. ---------------------------------
+
+function saveHostCatalog() {
+  hostCatalog = sanitizeHostCatalog(hostCatalog);
+  localStorage.setItem(HOSTS_KEY, JSON.stringify(hostCatalog));
+  invalidateHosts();
+  pruneHostCaches();
+  renderHostsSection();
+  renderSessions();
+}
+
+const HOST_STATE_TITLES = {
+  reachable: 'Reachable', connecting: 'Not contacted yet',
+  backoff: 'Unreachable — retrying', blocked: 'Needs a token',
+};
+
+function renderHostsSection() {
+  const list = document.getElementById('hostsList');
+  if (!list) return; // settings modal isn't open
+  list.innerHTML = effectiveHosts().map(host => {
+    const state = hostState(host);
+    const version = host.version ? `v${host.version}` : '';
+    const detail = [host.self ? 'this server' : host.base, version].filter(Boolean).join(' · ');
+    const actions = [];
+    if (state === 'blocked') actions.push(`<button class="btn-small host-token-btn" data-key="${escapeHtml(host.key)}">token?</button>`);
+    if (host.source === 'user') actions.push(`<button class="btn-icon host-remove-btn" data-key="${escapeHtml(host.key)}" title="Remove host">✕</button>`);
+    return `<div class="host-row">
+      <span class="host-dot ${escapeHtml(state)}" title="${escapeHtml(HOST_STATE_TITLES[state] || state)}"></span>
+      <span class="host-row-name">${escapeHtml(hostDisplayLabel(host))}</span>
+      <span class="host-row-detail" title="${escapeHtml(host.base || '')}">${escapeHtml(detail)}</span>
+      <span class="host-row-actions">${actions.join('')}</span>
+    </div>`;
+  }).join('');
+  for (const btn of list.querySelectorAll('.host-remove-btn')) {
+    btn.addEventListener('click', () => {
+      hostCatalog = hostCatalog.filter(entry => (entry.hostId || entry.base) !== btn.dataset.key);
+      saveHostCatalog();
+    });
+  }
+  for (const btn of list.querySelectorAll('.host-token-btn')) {
+    btn.addEventListener('click', () => promptHostToken(btn.dataset.key));
+  }
+}
+
+/**
+ * Re-enter the token for a host that answered 401. Blocked hosts are never
+ * retried on their own, so this is also what un-parks one.
+ */
+function promptHostToken(key) {
+  const entry = hostCatalog.find(item => (item.hostId || item.base) === key);
+  if (!entry) {
+    hostStatus('That host comes from this server’s config — set its token there.');
+    return;
+  }
+  const token = prompt(`Token for ${hostDisplayLabel(entry)}`, '');
+  if (token === null) return;
+  entry.token = token.trim() || undefined;
+  hostConnState.delete(key);
+  saveHostCatalog();
+  refreshSessions();
+}
+
+function hostStatus(message, isError = false) {
+  const el = document.getElementById('addHostStatus');
+  if (el) {
+    el.textContent = message;
+    el.classList.toggle('error', !!isError);
+  }
+}
+
+/**
+ * Add a host by URL. Validated with a live GET <base>/api/host before it is
+ * saved — a mistyped base must fail here, not turn into a permanently
+ * failing row. The two failures worth naming are the ones a bare "failed to
+ * fetch" hides: mixed content, and a cross-origin host that hasn't
+ * allowlisted this page.
+ */
+async function addHostFromForm() {
+  const baseInput = document.getElementById('addHostBase');
+  const labelInput = document.getElementById('addHostLabel');
+  const tokenInput = document.getElementById('addHostToken');
+  const raw = (baseInput?.value || '').trim();
+  if (!raw) { hostStatus('Enter the host URL.', true); return; }
+  const base = normalizeHostBase(raw);
+  if (!base) { hostStatus('That is not a usable host URL.', true); return; }
+  if (location.protocol === 'https:' && base.startsWith('http://')) {
+    hostStatus('This page is https, so the browser will block plain-http hosts. Serve that host over https (tailscale serve) or open pi-dish over http.', true);
+    return;
+  }
+  const token = (tokenInput?.value || '').trim();
+  const label = (labelInput?.value || '').trim();
+  hostStatus('Checking…');
+  let descriptor;
+  try {
+    const res = await apiFetch({ base, token: token || null }, '/api/host');
+    if (res.status === 401) throw new Error('that host needs a token');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    descriptor = await res.json();
+    if (!descriptor || typeof descriptor.hostId !== 'string' || !descriptor.hostId) throw new Error('no host descriptor');
+  } catch (e) {
+    hostStatus(`Could not reach that host: ${e.message}. A host on another origin must allowlist this one (allowedOrigins in its settings).`, true);
+    return;
+  }
+  if (descriptor.hostId === selfHost.hostId) { hostStatus('That is this host.', true); return; }
+  hostDescriptors.set(descriptor.hostId, {
+    label: descriptor.label || null, version: descriptor.version || null,
+    capabilities: descriptor.capabilities || null,
+  });
+  hostCatalog = hostCatalog.filter(entry => entry.hostId !== descriptor.hostId && entry.base !== base);
+  hostCatalog.push({ base, hostId: descriptor.hostId, label: label || descriptor.label || null, token: token || null });
+  hostConnState.delete(descriptor.hostId);
+  saveHostCatalog();
+  if (baseInput) baseInput.value = '';
+  if (labelInput) labelInput.value = '';
+  if (tokenInput) tokenInput.value = '';
+  hostStatus(`Added ${hostDisplayLabel({ label, base })}.`);
+  refreshSessions();
+  renderNsHosts();
 }
 
 // --- Advanced search (main-pane takeover) ---
@@ -2448,6 +2958,31 @@ function onSearchViewInput({ immediate = false } = {}) {
   else searchViewTimer = setTimeout(runSearchView, 300);
 }
 
+/**
+ * Merge per-host /api/search payloads into one ranked list. Scores are
+ * directly comparable across hosts — ranking is the shared scoreSessionMatch
+ * and only the owning host can count its own transcript occurrences — so the
+ * merge is a re-sort, with recency breaking ties exactly as it does locally.
+ */
+function mergeSearchPayloads(entries, query) {
+  if (entries.length === 1 && !entries[0].host.hostId) return entries[0].payload;
+  const parsed = parseSessionQuery(query);
+  const results = [];
+  let total = 0, hiddenByScopes = 0, indexing = false;
+  for (const { host, payload } of entries) {
+    for (const session of payload.results || []) {
+      results.push(host.hostId ? { ...session, host: host.hostId } : session);
+    }
+    total += Number(payload.total) || (payload.results || []).length;
+    hiddenByScopes += Number(payload.hiddenByScopes) || 0;
+    if (payload.indexing) indexing = true;
+  }
+  results.sort((a, b) =>
+    (b.searchScore ?? scoreSessionMatch(parsed, b)) - (a.searchScore ?? scoreSessionMatch(parsed, a))
+    || new Date(b.lastActivity || 0) - new Date(a.lastActivity || 0));
+  return { results, total, hiddenByScopes, indexing };
+}
+
 async function runSearchView() {
   const seq = ++searchViewSeq;
   const query = searchViewQuery.trim();
@@ -2458,9 +2993,24 @@ async function runSearchView() {
   try {
     const params = new URLSearchParams({ q: query });
     if (scope) params.set('scope', scope);
-    const r = await apiFetch(null, '/api/search?' + params);
-    if (!r.ok) throw new Error(await r.json().then(d => d.error, () => null) || `HTTP ${r.status}`);
-    const d = await r.json();
+    // Every host searches its own index and ranks with the same shared
+    // scoreSessionMatch, so the merge is a plain re-sort on searchScore.
+    const hosts = fanoutHosts();
+    const settled = await Promise.allSettled(hosts.map(async (host) => {
+      const r = await apiFetch(host, '/api/search?' + params);
+      if (r.status === 401) { noteHostBlocked(host); throw new Error('needs a token'); }
+      if (!r.ok) throw new Error(await r.json().then(d => d.error, () => null) || `HTTP ${r.status}`);
+      const payload = await r.json();
+      noteHostReachable(host);
+      return { host, payload };
+    }));
+    settled.forEach((result, i) => {
+      if (result.status === 'rejected' && hosts[i] && !hosts[i].self) noteHostFailure(hosts[i], result.reason);
+    });
+    const ok = settled.filter(r => r.status === 'fulfilled').map(r => r.value);
+    if (!ok.length) throw settled[0]?.reason || new Error('no hosts answered');
+    const d = mergeSearchPayloads(ok, query);
+    d.hostErrors = hosts.filter((_, i) => settled[i].status === 'rejected').map(hostDisplayLabel);
     if (seq !== searchViewSeq || !isSearchViewOpen() ||
         query !== searchViewQuery.trim() || scope !== scopeQuery().trim()) return;
     searchViewRenderedQuery = query;
@@ -2550,12 +3100,12 @@ function renderSearchView(d, query = searchViewQuery) {
       ? `<span class="search-result-count">${s.matchCount} ${s.matchCount === 1 ? 'match' : 'matches'}</span>` : '';
     const snippets = (s.snippets || []).map(sn =>
       `<div class="search-result-snippet">${highlightTokens(sn, tokens)}</div>`).join('');
-    return `<div class="search-result" data-id="${escapeHtml(s.id)}" data-content-matches="${s.matchCount > 0 ? '1' : '0'}">
+    return `<div class="search-result" data-id="${escapeHtml(s.id)}"${s.host ? ` data-host="${escapeHtml(s.host)}"` : ''} data-content-matches="${s.matchCount > 0 ? '1' : '0'}">
       <div class="search-result-header">
         ${dot}<span class="search-result-name">${highlightTokens(s.name || 'Unnamed', tokens)}</span>
         ${count}<span class="search-result-time">${formatRelativeTime(s.lastActivity)}</span>
       </div>
-      <div class="search-result-meta">${escapeHtml(shortCwd(s.cwd || '~'))} · ${escapeHtml(s.model)}</div>
+      <div class="search-result-meta">${hostChipHtml(s.host)}${escapeHtml(shortCwd(s.cwd || '~'))} · ${escapeHtml(s.model)}</div>
       ${snippets}
     </div>`;
   }).join('');
@@ -2563,6 +3113,7 @@ function renderSearchView(d, query = searchViewQuery) {
   body.innerHTML = `
     ${renderSearchFacetsHtml()}
     ${d.indexing ? '<div class="usage-notice">History is indexing; results will refresh…</div>' : ''}
+    ${d.hostErrors?.length ? `<div class="usage-notice">Not searched: ${escapeHtml(d.hostErrors.join(', '))} did not answer.</div>` : ''}
     <div class="search-count-line">${shown.length === 1 ? '1 session' : `${shown.length} sessions`}${d.total > d.results.length ? ` — showing the ${d.results.length} ${tokens.length ? 'best matches' : 'most recent'}, narrow the query for the rest` : ''}</div>
     ${cards || '<div class="usage-state">No matching sessions.</div>'}
     ${scopesHidden > 0 ? `<div class="scope-hidden-note">${scopesHidden} hidden by scopes</div>` : ''}
@@ -2582,13 +3133,13 @@ function renderSearchView(d, query = searchViewQuery) {
  * had text terms — hand them to the in-session search so the reader lands on
  * the actual match instead of at the transcript's tail.
  */
-async function openSearchResult(id, hasContentMatches) {
+async function openSearchResult(id, hasContentMatches, host = null) {
   const tokens = positiveQueryTokens(parseSessionQuery(searchViewRenderedQuery));
   closeSearchView();
   // Search results span the whole corpus; the sidebar lists may be narrowed
   // (or Active-tab-only) right now, and selectSession validates against them.
-  if (!findSession(id)) await loadSessions(undefined, { withPrevious: true });
-  await selectSession(id);
+  if (!findSession(id, host)) await loadSessions(undefined, { withPrevious: true });
+  await selectSession(id, { host });
   if (tokens.length && hasContentMatches && currentSession?.id === id) {
     openSearch();
     const input = document.getElementById('searchInput');
@@ -3067,12 +3618,30 @@ async function loadUsageView() {
   if (body.childElementCount) body.classList.add('usage-refreshing');
   else body.innerHTML = '<div class="usage-state">Loading estimated usage…</div>';
   try {
-    const r = await apiFetch(null, '/api/usage-summary?days=' + requestedRange + '&sort=' + requestedSort +
-      (requestedModels ? '&models=' + encodeURIComponent(requestedModels) : ''));
-    // A stale server (or proxy) answers with an HTML error page — surface the
-    // status instead of a JSON parse error.
-    if (!r.ok) throw new Error(await r.json().then(d => d.error, () => null) || `HTTP ${r.status}`);
-    const d = await r.json();
+    const url = '/api/usage-summary?days=' + requestedRange + '&sort=' + requestedSort +
+      (requestedModels ? '&models=' + encodeURIComponent(requestedModels) : '');
+    // Fan out and merge client-side (mergeUsageSummaries): each host owns its
+    // own index and prices from its own model catalog, and there is
+    // deliberately no hub-side merged endpoint. One host answering is enough
+    // to render — the rest are named in a notice.
+    const hosts = fanoutHosts();
+    const settled = await Promise.allSettled(hosts.map(async (host) => {
+      const r = await apiFetch(host, url);
+      if (r.status === 401) { noteHostBlocked(host); throw new Error('needs a token'); }
+      // A stale server (or proxy) answers with an HTML error page — surface the
+      // status instead of a JSON parse error.
+      if (!r.ok) throw new Error(await r.json().then(d => d.error, () => null) || `HTTP ${r.status}`);
+      const summary = await r.json();
+      noteHostReachable(host);
+      return { hostId: host.hostId || null, hostLabel: hostDisplayLabel(host), summary };
+    }));
+    settled.forEach((result, i) => {
+      if (result.status === 'rejected' && hosts[i] && !hosts[i].self) noteHostFailure(hosts[i], result.reason);
+    });
+    const ok = settled.filter(r => r.status === 'fulfilled').map(r => r.value);
+    if (!ok.length) throw settled[0]?.reason || new Error('no hosts answered');
+    usageHostErrors = hosts.filter((_, i) => settled[i].status === 'rejected').map(hostDisplayLabel);
+    const d = mergeUsageSummaries(ok);
     if (stale()) return;
     usageData = d;
     renderUsageView(d);
@@ -3163,6 +3732,7 @@ function renderUsageView(d) {
     <div class="usage-kpis">${kpis}</div>
     ${budgetHtml}
     ${d.indexing ? '<div class="usage-notice">History is indexing; totals will refresh…</div>' : ''}
+    ${usageHostErrors.length ? `<div class="usage-notice">Not counted: ${escapeHtml(usageHostErrors.join(', '))} did not answer.</div>` : ''}
     <div class="usage-ranges">${ranges}${sortCtl}</div>
     ${(t.calls || 0) === 0 ? '<div class="usage-state">No usage in this range.</div>' : summary}
     ${filterNote}
@@ -3190,7 +3760,7 @@ function renderUsageView(d) {
   // transcript is visible underneath.
   body.querySelectorAll('[data-session-id]').forEach(row => row.addEventListener('click', () => {
     closeUsageView();
-    selectSession(row.dataset.sessionId);
+    selectSession(row.dataset.sessionId, { host: row.dataset.sessionHost || null });
   }));
   if (showChart) drawUsageChart();
   renderUsageDayDetail();
@@ -3404,10 +3974,15 @@ function usageGroupListHtml(title, rows, kind, metric) {
     const sub = kind === 'session' && x.workspace ? shortCwd(x.workspace) : '';
     const spend = x.priced === false ? 'pricing unavailable'
       : `${formatEstimatedCost(x.costs?.total)}${x.unpricedCalls ? ` + ${x.unpricedCalls} unpriced` : ''}`;
-    const attrs = kind === 'session' ? ` data-session-id="${escapeHtml(x.id)}" role="button" tabindex="0"` : '';
+    const attrs = kind === 'session'
+      ? ` data-session-id="${escapeHtml(x.id)}"${x.host ? ` data-session-host="${escapeHtml(x.host)}"` : ''} role="button" tabindex="0"`
+      : '';
+    // Merged rows keep their host: the same path (or session id) on two
+    // machines is two different rows.
+    const hostTag = isMultiHost() && x.hostLabel ? `<small class="usage-row-host">${escapeHtml(x.hostLabel)}</small>` : '';
     const detail = usageTokensTotal(x.tokens) > 0 ? ` · ${usageTokensDetail(x.tokens)}` : '';
     return `<div class="usage-row usage-bar-row${kind === 'session' ? ' clickable' : ''}"${attrs} title="${escapeHtml(x.key || x.name || x.id)}">
-      <span class="usage-row-name">${escapeHtml(name)}${sub ? `<small>${escapeHtml(sub)}</small>` : ''}</span>
+      <span class="usage-row-name">${escapeHtml(name)}${sub ? `<small>${escapeHtml(sub)}</small>` : ''}${hostTag}</span>
       <span class="usage-row-meta">${x.calls} calls · ${formatTokens(usageTokensTotal(x.tokens))} tok${detail} · ${escapeHtml(spend)}</span>
       <span class="usage-row-bar" style="width:${(val(x) / maxV * 100).toFixed(1)}%"></span>
     </div>`;
@@ -6725,12 +7300,12 @@ async function abortTurn() {
 
 const SESSION_SPAWN_POLL_MS = 250;
 
-async function monitorSessionSpawn(spawnId) {
+async function monitorSessionSpawn(spawnId, host = null) {
   try {
     for (;;) {
       let res;
       try {
-        res = await apiFetch(null, `/api/session-spawns/${encodeURIComponent(spawnId)}`);
+        res = await apiFetch(host, `/api/session-spawns/${encodeURIComponent(spawnId)}`);
       } catch {
         await new Promise(r => setTimeout(r, SESSION_SPAWN_POLL_MS));
         continue;
@@ -6749,7 +7324,7 @@ async function monitorSessionSpawn(spawnId) {
       // request before selecting the authoritative session row.
       for (;;) {
         await loadSessions();
-        if (findSession(data.sessionId)) {
+        if (findSession(data.sessionId, host)) {
           pendingSessionSpawns.delete(spawnId);
           renderSessions();
           const showingSpawn = currentSessionSpawnId === spawnId;
@@ -6761,7 +7336,7 @@ async function monitorSessionSpawn(spawnId) {
           // newer spawn) while this process was starting.
           if (showingSpawn) {
             setStatus('Session created');
-            selectSession(data.sessionId);
+            selectSession(data.sessionId, { host });
           }
           return;
         }
@@ -6793,9 +7368,9 @@ async function monitorSessionSpawn(spawnId) {
 // wait for bridge readiness to monitorSessionSpawn. Throws when the server
 // rejects the request so callers surface the message their own way (status
 // line vs the takeover's inline error).
-async function submitNewSession({ name, cwd, model, thinking, target, harness }) {
+async function submitNewSession({ name, cwd, model, thinking, target, harness, host = nsHostId() }) {
   const harnessId = harness || 'pi';
-  const data = await apiSend(null, '/api/sessions/new', {
+  const data = await apiSend(host, '/api/sessions/new', {
     name: name || undefined,
     cwd: cwd || undefined,
     model: model || undefined,
@@ -6807,6 +7382,7 @@ async function submitNewSession({ name, cwd, model, thinking, target, harness })
   if (!data.spawnId) throw new Error('Failed to start session');
   pendingSessionSpawns.set(data.spawnId, {
     cwd: cwd || '~', target: !!target, harness: harnessId, harnessLabel: harnessLabel(harnessId),
+    host: host || null,
   });
   // A stashed refine draft rides onto the provisional composer before
   // showPendingSessionView restores it (it never auto-sends).
@@ -6817,16 +7393,18 @@ async function submitNewSession({ name, cwd, model, thinking, target, harness })
   switchTab('active');
   showPendingSessionView(data.spawnId);
   if (window.innerWidth <= 768) closeSidebar();
-  void monitorSessionSpawn(data.spawnId);
+  void monitorSessionSpawn(data.spawnId, host || null);
   return data.spawnId;
 }
 
 // Direct spawn used by the workspace-header + button (explicit cwd, default
 // model). The full new-session takeover uses spawnNewSession() instead.
-async function createSession(cwd) {
+async function createSession(cwd, host = nsHostId()) {
   let target;
   try {
-    target = selectedSpawnTarget();
+    // The "Run in" choice belongs to the host it was listed from; spawning
+    // straight into another host's workspace goes headless.
+    target = host === nsHostId() ? selectedSpawnTarget() : null;
   } catch (e) { setStatus(e.message, 'error'); return; }
   try {
     setStatus(target ? 'Spawning in tmux…' : 'Creating session...', 'working');
@@ -6835,7 +7413,7 @@ async function createSession(cwd) {
       cwd = cwdInput ? cwdInput.value.trim() : '';
     }
     if (cwd) localStorage.setItem('pi-dish-cwd', cwd);
-    await submitNewSession({ cwd, target, harness: selectedHarnessId() });
+    await submitNewSession({ cwd, target, harness: selectedHarnessId(), host });
   } catch (e) { setStatus(`Error: ${e.message}`, 'error'); }
 }
 
@@ -6848,6 +7426,60 @@ async function createSession(cwd) {
 // the tmux "Run in" target. localStorage keys: pi-dish-cwd (chosen cwd),
 // pi-dish-new-model (chosen model), pi-dish-new-thinking (chosen reasoning
 // level), pi-dish-models-cache (catalog snapshot).
+// Which host the takeover configures and spawns on. Persisted (hostId), and
+// falls back to self whenever the saved host has left the list — a spawn must
+// never quietly land on a machine the user can no longer see.
+const NS_HOST_KEY = 'pi-dish-new-host';
+let newSessionHostId = localStorage.getItem(NS_HOST_KEY) || null;
+
+/** The takeover's current host entry — self unless a picker choice survives. */
+function nsHost() {
+  const chosen = newSessionHostId ? hostEntryFor(newSessionHostId) : null;
+  return chosen || selfHostEntry();
+}
+function nsHostId() { return nsHost().hostId || null; }
+function nsHostSupports(capability) {
+  const caps = nsHost().capabilities;
+  // Absent capabilities mean "unknown host build", not "unsupported": only an
+  // explicit advertisement that omits the flag hides a feature.
+  return !caps || caps[capability] === true;
+}
+
+/** Hosts worth offering: reachable ones (self always) — a picker of dead
+ * machines is noise, and one host means no picker at all. */
+function nsHostOptions() {
+  return effectiveHosts().filter(host => host.self || !hostIsDown(host));
+}
+
+function renderNsHosts() {
+  const row = document.getElementById('nsHostRow');
+  const sel = document.getElementById('nsHostSelect');
+  if (!row || !sel) return;
+  const options = nsHostOptions();
+  if (options.length < 2) { row.style.display = 'none'; return; }
+  row.style.display = '';
+  sel.innerHTML = options.map(host =>
+    `<option value="${escapeHtml(host.hostId || '')}">${escapeHtml(hostDisplayLabel(host))}</option>`).join('');
+  sel.value = nsHost().hostId || '';
+}
+
+function onNsHostChange(value) {
+  newSessionHostId = value || null;
+  if (newSessionHostId) localStorage.setItem(NS_HOST_KEY, newSessionHostId);
+  else localStorage.removeItem(NS_HOST_KEY);
+  // Everything under the picker is host-scoped: catalogs, directories, tmux
+  // targets and the harness list all belong to the machine being spawned on.
+  knownModels = [];
+  knownModelsCwd = null;
+  knownModelsHarnessId = null;
+  loadKnownCwds();
+  loadSpawnTargets();
+  loadHarnesses();
+  renderNsWorkspaces();
+  initNsTree();
+  onNsHarnessChange(selectedHarnessId());
+}
+
 let newSessionModel = ''; // '' = default (omit --model); else provider/id
 let newSessionThinking = ''; // '' = default (omit --thinking)
 const HARNESS_KEY = 'pi-dish-new-harness';
@@ -6872,7 +7504,7 @@ function harnessLabel(harnessId) {
 
 async function loadHarnesses() {
   try {
-    const res = await apiFetch(null, '/api/harnesses');
+    const res = await apiFetch(nsHostId(), '/api/harnesses');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (Array.isArray(data.harnesses) && data.harnesses.length) {
@@ -6946,7 +7578,7 @@ async function loadNsHarnessConfig(cwd = nsCwdValue()) {
   try {
     const params = new URLSearchParams();
     if (cwd) params.set('cwd', cwd);
-    const res = await apiFetch(null, '/api/harnesses/omp/config' + (params.size ? `?${params}` : ''));
+    const res = await apiFetch(nsHostId(), '/api/harnesses/omp/config' + (params.size ? `?${params}` : ''));
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     if (seq !== nsConfigSeq || selectedHarnessId() !== 'omp') return;
@@ -6979,7 +7611,7 @@ async function openModelRolesModal() {
   // The catalog is normally already loaded for this harness+cwd; fetch only
   // when the takeover opened before the background refresh landed.
   if (!Array.isArray(knownModels) || !knownModels.length) {
-    await loadModels(undefined, 'omp', nsHarnessConfig.cwd);
+    await loadModels(undefined, 'omp', nsHarnessConfig.cwd, nsHostId());
     if (isModelRolesModalOpen()) renderModelRoles();
   }
 }
@@ -7034,7 +7666,7 @@ async function saveModelRoles() {
   modelRolesError('');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
   try {
-    const res = await apiFetch(null, '/api/harnesses/omp/model-roles', {
+    const res = await apiFetch(nsHostId(), '/api/harnesses/omp/model-roles', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ roles, cwd: nsHarnessConfig?.cwd || undefined }),
@@ -7057,7 +7689,7 @@ function refreshNsPilotOptions() {
   const cwd = nsCwdValue();
   knownModelsCwd = null;
   renderNsModel();
-  loadModels(undefined, harnessId, cwd).then(() => {
+  loadModels(undefined, harnessId, cwd, nsHostId()).then(() => {
     if (isNewSessionViewOpen() && selectedHarnessId() === harnessId) renderNsModel();
   });
   loadNsHarnessConfig(cwd);
@@ -7083,6 +7715,8 @@ function openNewSessionView(opts = {}) {
 
   const nameInput = document.getElementById('newSessionName');
   if (nameInput) nameInput.value = '';
+
+  renderNsHosts();
 
   // cwd input is the source of truth; prefill from a passed cwd, else last-used.
   const cwdInput = document.getElementById('newSessionCwd');
@@ -7131,7 +7765,10 @@ function renderNsWorkspaces() {
   if (!wrap) return;
   const seen = new Set();
   const cwds = [];
+  const hostId = nsHostId();
   for (const s of [...sessions.active, ...sessions.previous]) {
+    // Another machine's paths are not quick-picks for this one.
+    if (isMultiHost() && (s.host || null) !== hostId) continue;
     if (s.cwd && !seen.has(s.cwd)) { seen.add(s.cwd); cwds.push(s.cwd); }
   }
   if (!cwds.length) { wrap.innerHTML = ''; return; }
@@ -7203,7 +7840,7 @@ async function toggleNsTreeNode(node, pathValue, depth) {
 
   let data;
   try {
-    const r = await apiFetch(null, '/api/dirs/children?path=' + encodeURIComponent(pathValue));
+    const r = await apiFetch(nsHostId(), '/api/dirs/children?path=' + encodeURIComponent(pathValue));
     data = await r.json();
   } catch { data = { dirs: [], error: 'failed' }; }
 
@@ -7376,7 +8013,7 @@ let cwdDropdownIdx = -1;
 
 async function loadKnownCwds() {
   try {
-    const res = await apiFetch(null, '/api/cwds');
+    const res = await apiFetch(nsHostId(), '/api/cwds');
     if (res.ok) knownCwds = await res.json();
   } catch {}
 }
@@ -7385,7 +8022,7 @@ async function loadKnownCwds() {
 // merged with a live filesystem search under ~ (server-side, /api/dirs).
 const cwdFetcher = debouncedFetcher(120,
   async (query) => {
-    const res = await apiFetch(null, '/api/dirs?q=' + encodeURIComponent(query));
+    const res = await apiFetch(nsHostId(), '/api/dirs?q=' + encodeURIComponent(query));
     return res.ok ? await res.json() : [];
   },
   (dirs, query) => renderCwdDropdown(query, dirs || []));
@@ -7488,7 +8125,8 @@ function hideCwdDropdown() {
 // fuzzy-filters the named tmux sessions listed below them.
 // =========================================================================
 // Each entry: { label, target, needsName, pinned }. target === null = headless.
-let spawnTargets = [{ label: 'pi-dish (headless)', target: null, pinned: true }];
+const SPAWN_HEADLESS = { label: 'pi-dish (headless)', target: null, pinned: true };
+let spawnTargets = [SPAWN_HEADLESS];
 let spawnChoiceKey = 'headless';
 let spawnDropdownIdx = -1;
 
@@ -7508,8 +8146,10 @@ async function loadSpawnTargets() {
   const input = document.getElementById('newSessionTarget');
   if (!wrap || !input) return;
   let data;
+  // A host that doesn't advertise tmux has no targets to offer — don't ask.
+  if (!nsHostSupports('tmux')) { wrap.style.display = 'none'; spawnTargets = [SPAWN_HEADLESS]; spawnChoiceKey = 'headless'; return; }
   try {
-    const res = await apiFetch(null, '/api/tmux/targets');
+    const res = await apiFetch(nsHostId(), '/api/tmux/targets');
     data = await res.json();
   } catch { data = { available: false }; }
 
