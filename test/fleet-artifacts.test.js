@@ -298,6 +298,39 @@ test('the hub serves the peer\'s page, its assets and its trailing-slash redirec
   assert.equal(missingAsset.status, 404);
 });
 
+test('a single-file page survives a slash-form fetch: redirect, no prune', async () => {
+  const file = path.join(peer.home, 'artifacts', 'solo.html');
+  fs.writeFileSync(file, '<!doctype html><html><body><p>solo file body</p></body></html>');
+  const page = await json(await fetch(`${peer.base}/api/pages`, authed(PEER_TOKEN, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: file, title: 'Solo' }),
+  })));
+  const mapped = await json(await fetch(`${hub.base}/api/fleet-artifacts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: page.token, kind: 'page', hostId: peerHostId }),
+  }));
+  assert.equal(mapped.host, 'peer');
+
+  // The owner 404s /page/<t>/ for a file root while /page/<t> is alive —
+  // the hub must not read that as a revocation.
+  const slashed = await fetch(`${hub.base}/page/${page.token}/`, { redirect: 'manual' });
+  assert.equal(slashed.status, 302);
+  assert.equal(slashed.headers.get('location'), `/page/${page.token}`);
+
+  const bare = await fetch(`${hub.base}/page/${page.token}`);
+  assert.equal(bare.status, 200);
+  assert.ok((await bare.text()).includes('solo file body'));
+
+  // A dead token's slash form still prunes: revoke on the owner first.
+  await fetch(`${peer.base}/api/pages/${page.token}`, authed(PEER_TOKEN, { method: 'DELETE' }));
+  const gone = await fetch(`${hub.base}/page/${page.token}/`);
+  assert.equal(gone.status, 404);
+  const after = await fetch(`${hub.base}/page/${page.token}`);
+  assert.equal(after.status, 404, 'mapping pruned once the bare form is dead too');
+});
+
 test('the hub\'s main app makes a fleet page commentable; its public listener does not', async () => {
   const onMain = await (await fetch(`${hub.base}/page/${pageToken}/`)).text();
   assert.ok(onMain.includes('artifact-comments.js'), 'the overlay is injected where /api can answer it');

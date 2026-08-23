@@ -531,9 +531,31 @@ function serveFleetArtifact(req, res, kind, { annotate = true } = {}) {
           // Revoked on the owner: the mapping is dead, and this reader gets
           // the same bare 404 an unknown token gets. Only the token's own
           // document proves that — a missing *asset* under a live page is
-          // the page's own 404, not the artifact's.
+          // the page's own 404, not the artifact's. And the slash spelling
+          // alone proves nothing: a single-file page root 404s `/page/t/`
+          // while `/page/t` is alive, so verify the bare form before
+          // pruning and send the reader there when it lives.
           peerRes.resume();
-          if (documentRequest) fleetArtifacts.remove(token, mapping.host);
+          if (!documentRequest) return notFound();
+          if (kind === 'page' && rest === '/') {
+            return remoteHosts.request(remote, { method: 'GET', path: `/page/${token}`, headers })
+              .then((check) => {
+                const checkTimer = setTimeout(() => { try { check.destroy(); } catch {} notFound(); }, PUBLIC_ARTIFACT_TIMEOUT_MS);
+                check.on('error', () => { clearTimeout(checkTimer); notFound(); });
+                check.on('response', (checkRes) => {
+                  clearTimeout(checkTimer);
+                  checkRes.resume();
+                  if (checkRes.statusCode === 404) {
+                    fleetArtifacts.remove(token, mapping.host);
+                    return notFound();
+                  }
+                  res.redirect(302, `/page/${token}${query}`);
+                });
+                check.end();
+              })
+              .catch(notFound);
+          }
+          fleetArtifacts.remove(token, mapping.host);
           return notFound();
         }
         res.status(peerRes.statusCode);
