@@ -202,39 +202,78 @@ Multi-host formalizes that instead of replacing it:
 - **SSH hop (block 5):** peers stay loopback-bound; no token needed on that
   path — ssh keys are the credential, same posture as t3code.
 
-### 5. Hub mode: SSH forwards + reverse proxy
+### 5. Fleet config + `/hosts/<name>` proxy (server-side, on any host)
 
-For the work case, and for any host a browser can't reach directly. The
-hub's server dials peers and re-serves them same-origin — the client just
-sees more catalog entries with `base: '/hosts/<name>'`.
+Originally scoped as "hub mode" for the work case; generalized because the
+same mechanism is what gives **agents** cross-host reach (block 6). Any
+host's server may know about peers and re-serve them under
+`/hosts/<name>/api/*`; "the hub" is simply whichever host a browser or
+tunnel happens to enter through. The client just sees extra catalog entries
+with `base: '/hosts/<name>'`.
 
-- Config `remotes` in `~/.pi/dish/settings.json`: `{ name, sshDest,
-  remotePort? }` — `sshDest` is anything `ssh` accepts, honoring
-  `~/.ssh/config` (jump hosts, keys, aliases). Use the **system ssh binary**
-  via long-lived `spawn` (argv arrays, lib/tmux.js rules) — no ssh2/native
-  dep (work-machine constraint), and it inherits agent/config for free.
-- Forward to a **Unix socket**, not a port: `ssh -N -o
+- Config `remotes` in `~/.pi/dish/settings.json`, two transport kinds:
+  - `{ name, url, token? }` — **direct**: plain `http.request` to a peer's
+    tailnet/LAN address, peer token attached server-side. No standing
+    connection at all; the everyday personal-fleet transport.
+  - `{ name, sshDest, remotePort? }` — **ssh**: for peers only reachable by
+    ssh (work). `sshDest` is anything `ssh` accepts, honoring
+    `~/.ssh/config` (jump hosts, keys, aliases). Use the **system ssh
+    binary** via long-lived `spawn` (argv arrays, lib/tmux.js rules) — no
+    ssh2/native dep (work-machine constraint), and it inherits agent/config
+    for free.
+- For ssh remotes, forward to a **Unix socket**, not a port: `ssh -N -o
   ExitOnForwardFailure=yes -o ServerAliveInterval=15 -L
   <rundir>/<name>.sock:127.0.0.1:<remotePort> <sshDest>`. No local port
   allocation, no other-user access on shared hosts (0700 dir).
 - `lib/remote-hosts.js`: per-remote supervisor — health probe is `GET
-  /api/host` through the socket; backoff ladder on failure (t3code's
-  `[3s,4s,8s,16s]`, reset after stable); never manage the remote process in
-  v1, just report "pi-dish not running on <name>" (a t3code-style stdin
+  /api/host` (through the socket for ssh, straight HTTP for direct);
+  backoff ladder on failure (t3code's `[3s,4s,8s,16s]`, reset after
+  stable); ssh forwards spawn lazily on first use, direct remotes need no
+  supervision beyond the probe. Never manage the remote *process* in v1,
+  just report "pi-dish not running on <name>" (a t3code-style stdin
   bootstrap that *starts* pi-dish remotely is a later nicety — all target
   hosts already run it).
-- Reverse proxy `/hosts/<name>/api/*` with node's raw `http.request` over
-  the socket (no proxy dep): stream bodies both ways unbuffered, forward
-  the `upgrade` event for the terminal WS by splicing sockets, and exclude
-  proxied SSE from compression (same identity-encoding assertion the local
-  stream route keeps). Strip hub auth before forwarding (peers are
-  loopback-trusted).
-- `GET /api/hosts` on the hub returns self + configured remotes with
-  reachability, so the client's catalog auto-populates.
-- N² check: hub mode is hub→N stars; a client may *also* add direct hosts.
-  Nothing ever connects host↔host.
+- Reverse proxy `/hosts/<name>/api/*` with node's raw `http.request` (no
+  proxy dep): stream bodies both ways unbuffered, forward the `upgrade`
+  event for the terminal WS by splicing sockets, and exclude proxied SSE
+  from compression (same identity-encoding assertion the local stream route
+  keeps). Strip caller auth before forwarding; attach the peer's token
+  (direct) or nothing (ssh — peers loopback-trusted).
+- `GET /api/hosts` returns self + configured remotes with reachability, so
+  browser catalogs and the peer-sessions skill both auto-discover the
+  fleet.
+- N² check: config may name every peer on every host (a small file, can be
+  one synced fleet map), but *connections* stay on-demand request/response
+  or lazy ssh forwards — no standing mesh, and hosts never gossip.
 
-### 6. Off-tailnet access (recipes, not code)
+### 6. Agent-facing cross-host control (peer-sessions skill)
+
+Agents never grow a host catalog of their own: an agent always talks to
+**its own host's** server on loopback, and the `/hosts/<name>` proxy is its
+door to the fleet. Every existing agent surface composes unchanged behind
+it — `GET /hosts/tycho/api/sessions`, `POST /hosts/tycho/api/sessions/new`,
+`.../:id/prompt|steer|follow-up|interrupt|close`, `/api/search`, comments,
+pages. No new agent-facing semantics, just a path prefix.
+
+- `skills/pi-dish-sessions/` gains `hosts` (list the fleet with
+  reachability, from `GET /api/hosts`) and a `--host <name>` flag on
+  list/search/spawn/show/prompt/steer/follow-up/interrupt/resume/close.
+  Default remains local. The comments CLI gets the same flag if
+  cross-host review flows turn out to matter.
+- Cross-host launch provenance stays **advisory**, per the existing rule:
+  the spawning agent's identity is recorded host-qualified
+  (`hostId:sessionId`) in the *target* host's provenance sidecar; related
+  chips can render a "from <host>" hint. No ownership, no cascade, no
+  lifecycle authority — same posture as today.
+- Trust statement (deliberate): any process that can reach a host's
+  loopback API can act on all of that host's configured remotes. That is
+  the existing trust model extended, not a new hole — a local agent
+  already fully controls local sessions, and the fleet map is the same
+  unix-level config that grants the browser hub path. If a host should
+  *not* be reachable by peers' agents, don't put it in their `remotes`
+  (authorization = fleet-map membership + per-host tokens).
+
+### 7. Off-tailnet access (recipes, not code)
 
 - **Hub behind Cloudflare Zero Trust:** `cloudflared` + Access in front of
   the hub (or any single host). Zero pi-dish changes — works today; Access
@@ -251,18 +290,51 @@ sees more catalog entries with `base: '/hosts/<name>'`.
   the two options above deliver the same reachability with none of the
   Ed25519/DPoP machinery. Revisit only if pi-dish grows accounts.
 
-### 7. Android
+### 8. Android
 
 Phase-last. The aggregating client makes this a packaging problem: TWA/
 Capacitor wrapper over the static UI with the host catalog, or just a PWA
 opened against any host. Native wrapper avoids mixed content entirely and
 could add per-host client certs later. No pi-dish server work required.
 
+## Where config lives
+
+Fleet topology and auth are **unix-host-level, deliberately**: per host,
+`~/.pi/dish/host-id` (generated), `~/.pi/dish/token` (optional), and
+`remotes` + `label` + `allowedOrigins` in `~/.pi/dish/settings.json`.
+Editing the fleet means editing files (or syncing one fleet map across
+hosts) — no fleet-editing UI in v1; the UI *reads* it (`/api/hosts`
+reachability, settings modal read-only display). The only browser-level
+config is the client's own catalog in localStorage (directly-added hosts +
+their tokens, for the no-hub tailnet case) and the usual device-local view
+prefs. Agents read nothing new: their fleet view comes from `GET
+/api/hosts` on loopback.
+
+## Search indexing and usage costs across hosts
+
+Each host's session index (`lib/session-index.js`) stays **strictly
+host-local** — built from, and colocated with, that host's own JSONL corpus.
+Nothing replicates: the work machine's thousands of sessions never leave
+it, index build/refresh cost lands on the machine that owns the files, and
+a host addition/removal has zero effect on other hosts' indexes. Queries
+fan out — sidebar search and the advanced-search takeover call each host's
+`/api/search` (directly or via `/hosts/<name>`) and merge on `searchScore`,
+which is comparable across hosts because ranking is the shared
+`scoreSessionMatch`; snippets ride each host's own results. Usage/costs
+likewise: `/api/usage-summary` per host, client sums totals and day/model
+buckets; the top-20 group truncation makes merged workspace/session tails
+approximate (label it). Cost estimates come from each host's own pi model
+catalog, so the same model could in principle price differently on a stale
+host — the existing "estimate, never billed spend" rule already covers
+presenting that honestly.
+
 ## Non-goals
 
 - Running the server (or any session logic) on a Worker.
-- Host↔host communication of any kind; cross-host session ops (move/
-  resume-elsewhere); merged spawning ("run on least-busy host").
+- Cross-host session *moves* (move/resume-elsewhere) and placement logic
+  ("run on least-busy host") — spawning on an **explicitly named** host is
+  in scope (block 6); choosing the host for you is not.
+- Cross-host index replication or a global search index — fan-out only.
 - Accounts, per-client tokens, scopes, token rotation, E2E crypto.
 - Hub-side merged endpoints (`/api/sessions?all-hosts`) — the client
   merges; don't build the same logic twice. (Note: this makes the *phone's
@@ -279,13 +351,15 @@ could add per-host client certs later. No pi-dish server work required.
 2. **Client aggregation:** host catalog UI in settings; multi-host sidebar
    poll with per-host state, host badges/grouping, offline-host dimming;
    host picker in new-session; merged search + usage.
-3. **Hub mode:** `lib/remote-hosts.js` (ssh socket forwards, supervisor),
-   `/hosts/<name>` proxy incl. WS upgrade + SSE, `/api/hosts`. This is the
-   work-machine unlock.
+3. **Fleet proxy + agent reach:** `lib/remote-hosts.js` (direct-url + ssh
+   transports, supervisor), `/hosts/<name>` proxy incl. WS upgrade + SSE,
+   `/api/hosts`, peer-sessions skill `hosts`/`--host`. This is the
+   work-machine unlock *and* the agent cross-host unlock.
 4. **Recipes/docs:** Zero Trust tunnel, tailscale serve, PWA/Android notes.
 
 Each phase is independently shippable; 1+2 alone solve the personal-tailnet
-case, 3 solves work, 4 is reachability polish.
+browsing case, 3 adds work hosts and agent-to-agent reach, 4 is
+reachability polish.
 
 ## Risks / gotchas (from both codebases)
 
