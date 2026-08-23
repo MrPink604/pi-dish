@@ -170,7 +170,12 @@ Audit result — the API splits cleanly:
   `/api/sessions/:id/*` routes — messages, stream (SSE), prompt/steer/
   follow-up, terminal WS, diff, files, tree/branch, stats, share, close.
   Only the *selected* session streams, so multi-host adds no standing
-  socket load.
+  socket load. File inspection is fully covered by this: the file viewer,
+  @-mention search, and the diff view are session-scoped, so the **owning
+  host** does the filesystem reads, runs its own fff, walks its own git
+  repos, and enforces the existing containment rules (cwd subtree +
+  tool-touched paths) against its own disk. The hub never touches a peer's
+  filesystem directly, and no path input crosses hosts un-gated.
 - **Host-scoped by an explicit picker:** new-session/resume flow (`/api/
   models`, `/api/tmux/targets`, `/api/dirs*`, `/api/sessions/new`) — the
   new-session takeover gains a host select (persisted like spawn target);
@@ -273,7 +278,47 @@ pages. No new agent-facing semantics, just a path prefix.
   *not* be reachable by peers' agents, don't put it in their `remotes`
   (authorization = fleet-map membership + per-host tokens).
 
-### 7. Off-tailnet access (recipes, not code)
+### 7. Artifacts through the hub (shares + pages for the whole fleet)
+
+The hub is the natural public front door (it's what sits behind the Zero
+Trust tunnel / `PI_DISH_SHARE_PORT`), but share exports and published
+pages are generated/served **live from the owning host's disk**. So the
+hub gets a small fleet-artifact registry, `~/.pi/dish/fleet-artifacts.json`
+(shares.js rules): `{ token: { host, kind: 'share'|'page' } }`.
+
+- **Serving:** hub `/share/:token` and `/page/:token(/*)` check local
+  registries first, then the fleet map → stream-proxy from the owner
+  (export caching stays on the owner, keyed on its JSONL mtime/size;
+  page assets stay contained by the owner's sendFile root). Unknown
+  tokens are bare 404s — **never probe peers for unknown tokens**; only
+  explicitly registered mappings resolve. The dedicated public listener
+  serves fleet-mapped `/share` + `/page` like local ones but still never
+  mounts `/api` or the `/hosts/*` proxy.
+- **Creating from the hub UI:** the stats-modal share section, artifacts
+  modal, and file-viewer 🌐 already operate on the viewed session — via
+  the proxy they hit the owning host (which mints its token as today,
+  idempotent per session); the hub records the mapping and **rewrites the
+  returned `url` to its own public base** (`PI_DISH_SHARE_BASE_URL` on the
+  hub governs handed-out URLs, not the owner's).
+- **Agent publishing with a public URL:** the pages skill registers
+  locally as today, then optionally (`--via <host>` or a
+  `PI_DISH_PUBLIC_VIA` default) calls the hub's mapping route through its
+  own server's `/hosts/<hub>` proxy and pastes the hub URL into chat.
+  Fleet-map membership authorizes this, like everything else in block 6.
+- **Revocation:** revoking on the owner kills the content everywhere (hub
+  proxy sees the 404 and lazily prunes its mapping); deleting the hub
+  mapping kills public reachability only. Both surfaces show which is
+  which.
+- **Comments gotcha (real):** commentable pages are main-app-served, and
+  `artifact-comments.js` is injected by the *owner* when the hub proxies
+  the page — but the overlay's relative `/api/comments*` calls then land
+  on the **hub's** origin, whose comment store doesn't know the page. The
+  hub must route comment API calls whose `pageToken` is fleet-mapped to
+  the owning host, so feedback lands where the session's agent will read
+  it. Without this, comments on hub-served peer pages silently file into
+  the wrong host.
+
+### 8. Off-tailnet access (recipes, not code)
 
 - **Hub behind Cloudflare Zero Trust:** `cloudflared` + Access in front of
   the hub (or any single host). Zero pi-dish changes — works today; Access
@@ -290,7 +335,7 @@ pages. No new agent-facing semantics, just a path prefix.
   the two options above deliver the same reachability with none of the
   Ed25519/DPoP machinery. Revisit only if pi-dish grows accounts.
 
-### 8. Android
+### 9. Android
 
 Phase-last. The aggregating client makes this a packaging problem: TWA/
 Capacitor wrapper over the static UI with the host catalog, or just a PWA
@@ -355,11 +400,14 @@ presenting that honestly.
    transports, supervisor), `/hosts/<name>` proxy incl. WS upgrade + SSE,
    `/api/hosts`, peer-sessions skill `hosts`/`--host`. This is the
    work-machine unlock *and* the agent cross-host unlock.
-4. **Recipes/docs:** Zero Trust tunnel, tailscale serve, PWA/Android notes.
+4. **Fleet artifacts:** hub artifact registry, `/share`+`/page` fleet
+   proxying with URL rewriting, pages-skill `--via`, pageToken-aware
+   comment routing. (Depends on 3.)
+5. **Recipes/docs:** Zero Trust tunnel, tailscale serve, PWA/Android notes.
 
 Each phase is independently shippable; 1+2 alone solve the personal-tailnet
-browsing case, 3 adds work hosts and agent-to-agent reach, 4 is
-reachability polish.
+browsing case, 3 adds work hosts and agent-to-agent reach, 4 makes the hub
+the fleet's public front door, 5 is reachability polish.
 
 ## Risks / gotchas (from both codebases)
 
