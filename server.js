@@ -5148,7 +5148,14 @@ app.post('/api/sessions/new', async (req, res) => {
   // bundled CLI identify itself without making the claim authoritative.
   const sourceSessionId = req.get('X-Pi-Dish-Session-Id')
     || req.body?.requestedBySessionId || req.body?.sourceSessionId || null;
-  if (sourceSessionId && !getRegisteredSession(sourceSessionId) && !getRPCSession(sourceSessionId)?.alive
+  // A host-qualified caller (`<hostId>:<sessionId>`, TASKS/multi-host.md
+  // block 6) names a session on another fleet host, which this host cannot
+  // verify — provenance is advisory and grants nothing, so a well-formed
+  // qualified id is recorded as-is while bare local ids stay validated.
+  const hostQualifiedSource = sourceSessionId
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:./i.test(sourceSessionId);
+  if (sourceSessionId && !hostQualifiedSource
+      && !getRegisteredSession(sourceSessionId) && !getRPCSession(sourceSessionId)?.alive
       && !findSessionFile(sourceSessionId, { exact: true })) {
     return res.status(400).json({ error: 'requestedBySessionId must identify an existing session' });
   }

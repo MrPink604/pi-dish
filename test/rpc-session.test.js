@@ -152,6 +152,24 @@ test('POST /api/sessions/new rejects a blank session name', async () => {
   assert.match(body.error, /name/i);
 });
 
+test('a bogus local caller id is rejected, a host-qualified one is advisory-accepted', async () => {
+  const rejected = await post('/api/sessions/new', { requestedBySessionId: 'no-such-session' });
+  assert.equal(rejected.status, 400);
+  assert.match(rejected.body.error, /must identify an existing session/);
+
+  // A fleet caller (TASKS/multi-host.md block 6) names a session this host
+  // cannot verify; provenance is advisory, so the spawn proceeds and the
+  // qualified id is recorded as-is.
+  const qualified = `aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa:${sessionId}`;
+  const spawned = await post('/api/sessions/new', { requestedBySessionId: qualified });
+  assert.equal(spawned.status, 200, JSON.stringify(spawned.body));
+  assert.ok(spawned.body.operationId, 'qualified attribution still records an operation');
+  const related = await get(`/api/sessions/${spawned.body.id}/related`);
+  assert.ok(related.body.relations.every(r => r.session?.id !== sessionId),
+    'a foreign-host id must not resolve to a local session of the same name');
+  await post(`/api/sessions/${encodeURIComponent(spawned.body.id)}/close`, {});
+});
+
 test('source-aware spawn records advisory peer provenance', async () => {
   const spawned = await post('/api/sessions/new', { requestedBySessionId: sessionId });
   assert.equal(spawned.status, 200, JSON.stringify(spawned.body));
