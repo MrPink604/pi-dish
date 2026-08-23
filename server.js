@@ -28,6 +28,7 @@ const { aggregateDiffs, getFilePatch, getDiffVersion } = require('./lib/git-diff
 const terminal = require('./lib/terminal');
 const tmux = require('./lib/tmux');
 const hostIdentity = require('./lib/host-identity');
+const remoteHosts = require('./lib/remote-hosts');
 const shares = require('./lib/shares');
 const pages = require('./lib/pages');
 const comments = require('./lib/comments');
@@ -68,6 +69,10 @@ app.use(compression({
   threshold: 1024,
   filter(req, res) {
     if (req.path.endsWith('/stream')) return false;
+    // Proxied peer responses are relayed byte for byte: the owning host
+    // already applied its own policy (including excluding its event
+    // streams), and re-compressing here would buffer them again.
+    if (req.path.startsWith('/hosts/')) return false;
     const type = String(res.getHeader('Content-Type') || '');
     if (type.startsWith('text/event-stream')) return false;
     return compression.filter(req, res);
@@ -76,7 +81,13 @@ app.use(compression({
 
 // Image attachments arrive as base64 in the prompt body — allow well past
 // the default 100kb (a few downscaled phone photos).
-app.use(express.json({ limit: '30mb' }));
+const parseJsonBody = express.json({ limit: '30mb' });
+app.use((req, res, next) => {
+  // Proxied requests are streamed to the peer untouched — parsing the body
+  // here would consume the stream and force a re-serialize.
+  if (req.path.startsWith('/hosts/')) return next();
+  parseJsonBody(req, res, next);
+});
 
 // =========================================================================
 // Host identity, opt-in auth, CORS
@@ -228,6 +239,117 @@ app.post('/api/auth/ticket', (req, res) => {
   // routes accept everything — tell the client not to bother with tickets.
   if (!AUTH_TOKEN) return res.json({ ticket: null });
   res.json(mintTicket(purpose));
+});
+
+// =========================================================================
+// Fleet: GET /api/hosts and the /hosts/<name> reverse proxy
+// =========================================================================
+//
+// Any host may know about peers (`remotes` in ~/.pi/dish/settings.json) and
+// re-serve them under /hosts/<name>/api — "the hub" is simply whichever host
+// a browser or an agent enters through (TASKS/multi-host.md block 5). The
+// proxy is a byte relay: it never interprets a peer's payloads, and this
+// host's own token never reaches a peer (lib/remote-hosts.js drops the
+// caller's Authorization and attaches the peer's, if any).
+
+// Inside the /hosts mount, req.path starts at the host name.
+const PROXY_STREAM_PATH_RE = /^\/[^/]+\/api\/sessions\/[^/]+\/stream\/?$/;
+const PROXY_TERMINAL_PATH_RE = /^\/hosts\/([^/]+)\/api\/sessions\/[^/]+\/terminal$/;
+const PROXY_RESPONSE_TIMEOUT_MS = 10_000;
+const HOSTS_PROBE_DEADLINE_MS = 3000;
+// Hop-by-hop headers node owns itself; Access-Control-* is dropped alongside
+// them because this host answers the browser with its own CORS policy.
+const HOP_BY_HOP_HEADERS = new Set([
+  'connection', 'keep-alive', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'proxy-authenticate',
+]);
+
+// The same gate /api gets: this host's bearer, or a ticket it minted itself
+// for the proxied SSE route. Peer credentials are never involved here.
+app.use('/hosts', (req, res, next) => {
+  if (!AUTH_TOKEN) return next();
+  if (req.method === 'OPTIONS') return next();
+  if (tokenMatches(bearerToken(req))) return next();
+  if (PROXY_STREAM_PATH_RE.test(req.path) && ticketValid(req.query.ticket, 'stream')) return next();
+  res.status(401).json({ error: 'Unauthorized: bearer token required' });
+});
+
+app.use('/hosts/:name/api', (req, res) => {
+  const remote = remoteHosts.getRemote(req.params.name);
+  // An unknown or malformed name is a bare 404 — the fleet map is not a
+  // discovery surface.
+  if (!remote) return res.status(404).type('text/plain').send('Not found');
+  proxyToRemote(remote, req, res);
+});
+
+function proxyToRemote(remote, req, res) {
+  let settled = false;
+  const fail = (reason) => {
+    if (settled) return;
+    settled = true;
+    res.status(502).json({ error: `Host ${remote.name} is unreachable`, host: remote.name, reason });
+  };
+
+  remoteHosts.request(remote, { method: req.method, path: `/api${req.url}`, headers: req.headers })
+    .then((upstream) => {
+      // Bounds time-to-first-byte only: a proxied SSE stream may then idle
+      // for minutes, and an idle-socket timeout would cut it.
+      const timer = setTimeout(() => { try { upstream.destroy(); } catch {} fail('timeout'); }, PROXY_RESPONSE_TIMEOUT_MS);
+      upstream.on('error', (e) => { clearTimeout(timer); fail(remoteHosts.errorCode(e)); });
+      upstream.on('response', (peerRes) => {
+        clearTimeout(timer);
+        if (settled) return peerRes.resume();
+        settled = true;
+        res.status(peerRes.statusCode);
+        for (const [key, value] of Object.entries(peerRes.headers)) {
+          const lower = key.toLowerCase();
+          if (HOP_BY_HOP_HEADERS.has(lower) || lower.startsWith('access-control-')) continue;
+          res.setHeader(key, value);
+        }
+        // Content-Encoding passes through untouched (compression already
+        // excludes /hosts/*), so an event stream arrives as the peer wrote it.
+        if (String(peerRes.headers['content-type'] || '').startsWith('text/event-stream')) res.flushHeaders();
+        peerRes.pipe(res);
+        res.on('close', () => { try { peerRes.destroy(); } catch {} });
+      });
+      req.on('aborted', () => { try { upstream.destroy(); } catch {} });
+      req.pipe(upstream);
+    })
+    .catch((e) => fail(remoteHosts.errorCode(e)));
+}
+
+app.get('/api/hosts', async (_req, res) => {
+  const remotes = remoteHosts.listRemotes();
+  // Probes are memoized and individually bounded; the race is the belt to
+  // that braces, so one wedged peer can never hold the fleet list open.
+  const probes = await Promise.all(remotes.map((remote) => Promise.race([
+    remoteHosts.probe(remote).catch(() => ({ reachable: false, error: 'unreachable' })),
+    new Promise((resolve) => setTimeout(() => resolve({ reachable: false, error: 'timeout' }), HOSTS_PROBE_DEADLINE_MS).unref()),
+  ])));
+
+  const hosts = [{
+    self: true,
+    name: null,
+    base: '',
+    hostId: hostIdentity.getHostId(),
+    label: hostIdentity.getHostLabel(readDishSettings()),
+    version: PKG_VERSION,
+    capabilities: hostCapabilities(),
+    reachable: true,
+  }];
+  remotes.forEach((remote, i) => {
+    const probe = probes[i] || {};
+    const entry = { name: remote.name, base: `/hosts/${remote.name}`, kind: remote.kind, reachable: !!probe.reachable };
+    if (probe.reachable && probe.descriptor) {
+      entry.hostId = probe.descriptor.hostId;
+      entry.label = probe.descriptor.label || remote.name;
+      entry.version = probe.descriptor.version;
+      entry.capabilities = probe.descriptor.capabilities;
+    } else {
+      entry.error = probe.error || 'unreachable';
+    }
+    hosts.push(entry);
+  });
+  res.json({ hosts });
 });
 
 const SESSIONS_DIR = path.join(os.homedir(), '.pi', 'agent', 'sessions');
@@ -5260,31 +5382,117 @@ if (process.env.PI_DISH_SHARE_PORT) {
   server.on('close', () => { try { shareServer.close(); } catch {} });
 }
 
+// ssh forwards are children of this process; nothing outlives the server.
+// The signal handlers exist because that is how a server actually stops
+// (`node --watch` restarts, Ctrl-C): without them every restart would strand
+// another `ssh -N` holding a connection to a work host. They reproduce the
+// default exit codes so nothing else observes a change.
+server.on('close', () => remoteHosts.shutdown());
+for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+  process.once(signal, () => { remoteHosts.shutdown(); process.exit(code); });
+}
+
+// WebSocket upgrades bypass Express, and two features want them: the local
+// terminal and the /hosts/<name> terminal proxy. Every 'upgrade' listener
+// sees every socket, so one dispatcher hands each socket to the first
+// handler that claims it and destroys whatever nothing claims (which is the
+// behavior a server with no handler at all has).
+const upgradeHandlers = [];
+server.on('upgrade', (req, socket, head) => {
+  let url;
+  try { url = new URL(req.url || '', 'http://localhost'); } catch { return socket.destroy(); }
+  for (const handle of upgradeHandlers) if (handle(req, socket, head, url)) return;
+  socket.destroy();
+});
+
+// Proxied terminals work even when this host's own terminal feature is off:
+// the PTY lives on the peer.
+upgradeHandlers.push((req, socket, head, url) => {
+  const match = PROXY_TERMINAL_PATH_RE.exec(url.pathname);
+  if (!match) return false;
+  const remote = remoteHosts.getRemote(match[1]);
+  if (!remote) {
+    socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+    socket.destroy();
+    return true;
+  }
+  // This host's gate, applied by hand exactly like the local terminal's —
+  // the peer's own credential is attached downstream, not the caller's.
+  if (!upgradeAuthorized(req, url)) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+    socket.destroy();
+    return true;
+  }
+  proxyUpgrade(remote, req, socket, head, url);
+  return true;
+});
+
+function proxyUpgrade(remote, req, socket, head, url) {
+  const teardown = () => { try { socket.destroy(); } catch {} };
+  const peerPath = url.pathname.slice(`/hosts/${remote.name}`.length) + url.search;
+
+  remoteHosts.request(remote, { method: 'GET', path: peerPath, headers: req.headers, upgrade: true })
+    .then((upstream) => {
+      upstream.on('error', teardown);
+      socket.on('error', teardown);
+      // A client that hangs up mid-handshake must not leave a half-open
+      // request against the peer.
+      socket.once('close', () => { try { upstream.destroy(); } catch {} });
+      upstream.on('upgrade', (peerRes, peerSocket, peerHead) => {
+        const lines = [`HTTP/1.1 ${peerRes.statusCode} ${peerRes.statusMessage || 'Switching Protocols'}`];
+        for (const [key, value] of Object.entries(peerRes.headers)) {
+          for (const one of Array.isArray(value) ? value : [value]) lines.push(`${key}: ${one}`);
+        }
+        socket.write(`${lines.join('\r\n')}\r\n\r\n`);
+        if (peerHead && peerHead.length) socket.write(peerHead);
+        if (head && head.length) peerSocket.write(head);
+        peerSocket.on('error', teardown);
+        peerSocket.on('close', teardown);
+        socket.on('close', () => { try { peerSocket.destroy(); } catch {} });
+        socket.pipe(peerSocket);
+        peerSocket.pipe(socket);
+      });
+      // The peer refused the handshake (auth, unknown session): relay its
+      // status so the client sees the peer's answer, not a dead socket.
+      upstream.on('response', (peerRes) => {
+        peerRes.resume();
+        socket.write(`HTTP/1.1 ${peerRes.statusCode} ${peerRes.statusMessage || ''}\r\n\r\n`);
+        socket.destroy();
+      });
+      upstream.end();
+    })
+    .catch(() => {
+      try { socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n'); } catch {}
+      teardown();
+    });
+}
+
 // WebSocket endpoint for the in-browser terminal (see lib/terminal.js).
 // Registered only when the feature flag is on — with it off, upgrade
-// requests get the default socket destroy, indistinguishable from a server
-// without the feature.
+// requests fall through the dispatcher to the default socket destroy,
+// indistinguishable from a server without the feature.
 if (terminal.isTerminalEnabled()) {
   const { WebSocketServer } = require('ws');
   const wss = new WebSocketServer({ noServer: true });
   const TERMINAL_PATH_RE = /^\/api\/sessions\/([^/]+)\/terminal$/;
 
-  server.on('upgrade', (req, socket, head) => {
-    const url = new URL(req.url || '', 'http://localhost');
+  upgradeHandlers.push((req, socket, head, url) => {
     const match = TERMINAL_PATH_RE.exec(url.pathname);
-    if (!match) return socket.destroy();
+    if (!match) return false;
     // The upgrade never reaches Express, so the /api gate and the CORS
     // allowlist have to be re-applied here by hand.
     if (!upgradeAuthorized(req, url)) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      return socket.destroy();
+      socket.destroy();
+      return true;
     }
     const sessionId = decodeURIComponent(match[1]);
     // Only spawn shells for sessions pi-dish actually knows about.
     const known = getRegisteredSession(sessionId) || getRPCSession(sessionId) || findSessionFile(sessionId);
     if (!known) {
       socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
-      return socket.destroy();
+      socket.destroy();
+      return true;
     }
     (async () => {
       // mode=tmux: instead of a shell at the cwd, attach a grouped tmux
@@ -5320,6 +5528,7 @@ if (terminal.isTerminalEnabled()) {
         }
       });
     })().catch(() => socket.destroy());
+    return true;
   });
 
   server.on('close', () => terminal.killAllTerminals());
