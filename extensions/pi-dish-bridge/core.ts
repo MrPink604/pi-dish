@@ -650,7 +650,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
   let sessionFile: string | null = null;
   let cwd: string | null = null;
   const clients = new Set<net.Socket>();
-  const wrappedUIs = new WeakSet<object>();
+  const wrappedUIs = new Map<object, Map<string, { original: unknown; wrapped: unknown }>>();
   // A wrapper may opt into an operation that is absent on an older host.
   // Resolve that claim against the live public context before registration;
   // alternative hosts must fail closed rather than throwing at extension load.
@@ -985,7 +985,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
   function wrapExtensionUI(ctx?: ExtensionContext | null) {
     const ui = ctx?.ui as any;
     if (!ui || wrappedUIs.has(ui)) return;
-    wrappedUIs.add(ui);
+    wrappedUIs.set(ui, new Map());
 
     const wrapFireAndForget = (name: string, makeReq: (...args: any[]) => any) => {
       const original = ui[name];
@@ -995,6 +995,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         try { emitExtensionUIRequest(makeReq(...args)); } catch {}
         return ret;
       };
+      wrappedUIs.get(ui)?.set(name, { original, wrapped: ui[name] });
     };
 
     wrapFireAndForget("notify", (message: string, type?: string) => ({ method: "notify", message, notifyType: type }));
@@ -1019,6 +1020,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         } catch {}
         return ret;
       };
+      wrappedUIs.get(ui)?.set("setWidget", { original: originalSetWidget, wrapped: ui.setWidget });
     }
 
     // OMP's native ask tool uses the same shared UI context as extensions but
@@ -1050,12 +1052,22 @@ export function createBridge(descriptor: BridgeDescriptor) {
         });
         dialogRequests.set(req.id, req);
         try { emitExtensionUIRequest(req); } catch {}
-        const local = Reflect.apply(originalAskDialog, this, [questions, options]);
+        let local: unknown;
+        try {
+          local = Reflect.apply(originalAskDialog, this, [questions, options]);
+        } catch (error) {
+          settle("tui-error");
+          throw error;
+        }
         return Promise.race([
-          Promise.resolve(local).then(value => { settle("tui"); return value; }),
+          Promise.resolve(local).then(
+            value => { settle("tui"); return value; },
+            error => { settle("tui-error"); throw error; },
+          ),
           remote.then(value => { settle("web"); return value; }),
         ]);
       };
+      wrappedUIs.get(ui)?.set("askDialog", { original: originalAskDialog, wrapped: ui.askDialog });
     }
 
     // Dialogs: broadcast the request and race the local TUI dialog against a
@@ -1086,12 +1098,22 @@ export function createBridge(descriptor: BridgeDescriptor) {
         });
         dialogRequests.set(req.id, req);
         try { emitExtensionUIRequest(req); } catch {}
-        const local = original.apply(this, args);
+        let local: unknown;
+        try {
+          local = original.apply(this, args);
+        } catch (error) {
+          settle("tui-error");
+          throw error;
+        }
         return Promise.race([
-          Promise.resolve(local).then((v) => { settle("tui"); return v; }),
-          remote.then((v) => { settle("web"); return v; }),
+          Promise.resolve(local).then(
+            (value) => { settle("tui"); return value; },
+            (error) => { settle("tui-error"); throw error; },
+          ),
+          remote.then((value) => { settle("web"); return value; }),
         ]);
       };
+      wrappedUIs.get(ui)?.set(name, { original, wrapped: ui[name] });
     };
 
     const valueResponse = (resp: any) => (resp?.cancelled ? undefined : resp?.value);
@@ -1213,6 +1235,17 @@ export function createBridge(descriptor: BridgeDescriptor) {
   }
 
   function cleanup() {
+    for (const [id, resolve] of pendingDialogs) {
+      try { resolve({ cancelled: true }); } catch {}
+      broadcast({ type: "event", event: "extension_ui_resolved", data: { id, source: "shutdown" } });
+    }
+    for (const [uiValue, methods] of wrappedUIs) {
+      const ui = uiValue as unknown as Record<string, unknown>;
+      for (const [name, method] of methods) {
+        if (ui[name] === method.wrapped) ui[name] = method.original;
+      }
+    }
+    wrappedUIs.clear();
     for (const c of clients) { try { c.destroy(); } catch {} }
     clients.clear();
     if (server) { try { server.close(); } catch {} server = null; }

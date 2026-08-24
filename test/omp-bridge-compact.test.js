@@ -21,6 +21,8 @@ async function startFakeHost(hasCompact, {
   swallowOutcome = false,
   nestedSubsession = false,
   askDialog = false,
+  askThrow = false,
+  checkUiRestore = false,
   nativeProjection = null,
 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-compact-'));
@@ -32,6 +34,7 @@ async function startFakeHost(hasCompact, {
     : path.join(root, 'fake-omp.jsonl');
   const callFile = path.join(root, 'compact-call.json');
   const askResultFile = path.join(root, 'ask-result.json');
+  const uiRestoreResultFile = path.join(root, 'ui-restore-result.json');
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(socketDir, { recursive: true, mode: 0o700 });
   if (nestedSubsession) {
@@ -48,6 +51,8 @@ async function startFakeHost(hasCompact, {
       FAKE_OMP_HAS_COMPACT: hasCompact ? '1' : '0',
       FAKE_OMP_COMPACT_SWALLOW: swallowOutcome ? '1' : '0',
       FAKE_OMP_ASK_RESULT: askDialog ? askResultFile : '',
+      FAKE_OMP_ASK_THROW: askThrow ? '1' : '0',
+      FAKE_OMP_UI_RESTORE_RESULT: checkUiRestore ? uiRestoreResultFile : '',
       FAKE_OMP_NATIVE_PROJECTION: nativeProjection ? JSON.stringify(nativeProjection) : '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -77,7 +82,10 @@ async function startFakeHost(hasCompact, {
     async close() {
       child.kill('SIGTERM');
       await new Promise(resolve => child.once('exit', resolve));
+      const uiRestored = fs.existsSync(uiRestoreResultFile)
+        ? JSON.parse(fs.readFileSync(uiRestoreResultFile, 'utf8')) : null;
       fs.rmSync(root, { recursive: true, force: true });
+      return { uiRestored };
     },
   };
 }
@@ -110,6 +118,35 @@ test('OMP bridge projects the native ask tool through extension UI', async () =>
     session.close();
     await host.close();
   }
+});
+
+test('OMP bridge retires an ask request when local presentation throws', async () => {
+  const host = await startFakeHost(false, { askDialog: true, askThrow: true });
+  const session = new BridgeSession(host.claim);
+  const requests = [];
+  session.on('extension_ui_request', request => requests.push(request));
+  try {
+    await session.connect();
+    await waitFor(() => fs.existsSync(host.askResultFile));
+    assert.deepEqual(JSON.parse(fs.readFileSync(host.askResultFile, 'utf8')), {
+      error: 'fake ask presentation failed',
+    });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(requests.some(request => request.method === 'ask'), false,
+      'failed ask is absent from bridge replay');
+  } finally {
+    session.close();
+    await host.close();
+  }
+});
+
+test('OMP bridge restores the shared UI context during extension shutdown', async () => {
+  const host = await startFakeHost(false, { checkUiRestore: true });
+  const session = new BridgeSession(host.claim);
+  await session.connect();
+  session.close();
+  const result = await host.close();
+  assert.equal(result.uiRestored, true, 'reload cannot accumulate another askDialog wrapper');
 });
 
 test('OMP bridge projects native todos, plan mode, and prewalk as extension UI', async () => {

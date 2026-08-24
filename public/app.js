@@ -6788,6 +6788,9 @@ function openMessageStream(url, sessionId, selectionGeneration) {
       try {
         const data = JSON.parse(e.data);
         turnCleanupDone = !data.turnInProgress;
+        if (!data.turnInProgress) {
+          for (const requestId of [...openExtDialogs.keys()]) dismissExtDialog(requestId);
+        }
         if (!data.turnInProgress) abortingSessions.delete(sessionId);
         // Both flags, independently: auto-compaction runs inside a turn
         // (both true), a TUI /compact has neither turn nor stream events yet
@@ -7036,6 +7039,7 @@ function openMessageStream(url, sessionId, selectionGeneration) {
       abortingSessions.delete(sessionId);
       setCompacting(false);
       setTurnInProgress(false);
+      for (const requestId of [...openExtDialogs.keys()]) dismissExtDialog(requestId);
       setStatus('Session ended');
       refreshSessions();
     });

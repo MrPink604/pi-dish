@@ -3220,7 +3220,13 @@ test('SSE replays remembered extension UI state to new connections', async () =>
   const bridgeSocks = [];
   const bridge = net.createServer((sock) => {
     bridgeSocks.push(sock);
-    sock.write(JSON.stringify({ type: 'hello', turnInProgress: false }) + '\n');
+    sock.write(
+      JSON.stringify({ type: 'hello', turnInProgress: false }) + '\n'
+      + JSON.stringify({ type: 'event', event: 'extension_ui_request', data: {
+        method: 'ask', id: 'stale-ask',
+        questions: [{ id: 'old', question: 'Already answered?', options: [{ label: 'Yes' }] }],
+      } }) + '\n',
+    );
   });
   await new Promise(r => bridge.listen(socketPath, r));
   fs.writeFileSync(path.join(registryDir, `${BRIDGE_ID}.json`), JSON.stringify({
@@ -3245,6 +3251,9 @@ test('SSE replays remembered extension UI state to new connections', async () =>
     // First client: receives live emissions (and causes the server to connect).
     const s1 = sseReader(`${base}/api/sessions/${BRIDGE_ID}/stream`);
     await s1.waitFor(e => e.event === 'init');
+    assert.equal(s1.events.some(e => e.data?.id === 'stale-ask'), false,
+      'idle ask replay is discarded before the first SSE subscriber attaches');
+    emit('turn_start', {});
     emit('extension_ui_request', { method: 'setWidget', widgetKey: 'procs', widgetLines: ['one', 'two'] });
     emit('extension_ui_request', { method: 'confirm', id: 'dlg1', title: 'Deploy?' });
     emit('extension_ui_request', {
@@ -3306,9 +3315,9 @@ test('SSE replays remembered extension UI state to new connections', async () =>
     });
     emit('extension_ui_request', { method: 'setWidget', widgetKey: 'procs', widgetLines: [] });
     emit('extension_ui_resolved', { id: 'dlg1' });
-    emit('extension_ui_resolved', { id: 'ask1' });
+    emit('turn_end', {});
     await s2.waitFor(e => e.event === 'tool_execution_end' && e.data?.toolCallId === 'replay-tool');
-    await s2.waitFor(e => e.event === 'extension_ui_resolved');
+    await s2.waitFor(e => e.event === 'extension_ui_resolved' && e.data?.id === 'ask1');
     s2.close();
 
     // Third client: nothing replayed. The sentinel notify proves we waited

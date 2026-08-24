@@ -984,6 +984,19 @@ function trackExtUIState(sess) {
   if (!sess) return sess;
   const state = sess.extUIState || { widgets: new Map(), statuses: new Map(), dialogs: new Map() };
   sess.extUIState = state;
+  const dismissAskDialogs = (source) => {
+    for (const [id, data] of state.dialogs) {
+      if (data?.method !== 'ask') continue;
+      state.dialogs.delete(id);
+      sess.emit('extension_ui_resolved', { id, source });
+      if (typeof sess.respondExtensionUI === 'function') {
+        Promise.resolve(sess.respondExtensionUI(id, { cancelled: true })).catch(() => {});
+      }
+    }
+  };
+  // A native ask tool can only wait during an active turn. A replayed ask on
+  // an idle OMP session is orphaned state from a failed/reloaded UI wrapper.
+  if (!sess.turnInProgress) dismissAskDialogs('idle');
   if (sess.extUIStateTracked) return sess;
   sess.extUIStateTracked = true;
   sess.on('session_switch', (data) => {
@@ -1009,6 +1022,8 @@ function trackExtUIState(sess) {
   sess.on('extension_ui_resolved', (data) => {
     if (data?.id) state.dialogs.delete(data.id);
   });
+  sess.on('turn_end', () => dismissAskDialogs('turn-end'));
+  sess.on('agent_end', () => dismissAskDialogs('agent-end'));
   return sess;
 }
 
@@ -5594,7 +5609,8 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   // unchanged re-emissions from double-rendering right after the replay.
   if (sess.extUIState) {
     const { widgets, statuses, dialogs } = sess.extUIState;
-    for (const data of [...widgets.values(), ...statuses.values(), ...dialogs.values()]) {
+    const replayDialogs = sess.turnInProgress ? [...dialogs.values()] : [];
+    for (const data of [...widgets.values(), ...statuses.values(), ...replayDialogs]) {
       if (data.method === 'setWidget' || data.method === 'setStatus') {
         lastExtUI.set(`${data.method}:${data.widgetKey || data.statusKey || 'default'}`, extUISig(data));
       }

@@ -32,11 +32,11 @@ const sessionFile = process.env.FAKE_OMP_SESSION_FILE!;
 fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
 fs.writeFileSync(sessionFile, JSON.stringify({ type: "session", id: "fake-omp", cwd: process.cwd() }) + "\n");
 
-const ui = {
-  askDialog() {
-    return Promise.withResolvers<unknown>().promise;
-  },
+const nativeAskDialog = () => {
+  if (process.env.FAKE_OMP_ASK_THROW === "1") throw new Error("fake ask presentation failed");
+  return Promise.withResolvers<unknown>().promise;
 };
+const ui = { askDialog: nativeAskDialog };
 const ctx: any = {
   ui,
   cwd: process.cwd(),
@@ -87,7 +87,7 @@ bridgeFactory(pi);
 await emit("session_start", {}, ctx);
 
 if (process.env.FAKE_OMP_ASK_RESULT) {
-  void ctx.ui.askDialog([
+  void Promise.resolve().then(() => ctx.ui.askDialog([
     {
       id: "deploy",
       question: "Deploy now?",
@@ -98,8 +98,12 @@ if (process.env.FAKE_OMP_ASK_RESULT) {
       ],
       recommended: 0,
     },
-  ]).then((result: unknown) => {
-    fs.writeFileSync(process.env.FAKE_OMP_ASK_RESULT!, JSON.stringify(result));
+  ])).then((result: unknown) => {
+    fs.writeFileSync(process.env.FAKE_OMP_ASK_RESULT!, JSON.stringify(result) ?? "null");
+  }, (error: unknown) => {
+    fs.writeFileSync(process.env.FAKE_OMP_ASK_RESULT!, JSON.stringify({
+      error: error instanceof Error ? error.message : String(error),
+    }));
   });
 }
 
@@ -109,12 +113,11 @@ for (let attempt = 0; attempt < 100; attempt++) {
   setTimeout(resolve, 20);
   await promise;
 }
-if (!fs.existsSync(registryDir) || !fs.readdirSync(registryDir).some(name => name.endsWith(".json"))) {
-  throw new Error("bridge registry was not written");
-}
-
 const shutdown = async () => {
   await emit("session_shutdown", {}, ctx);
+  if (process.env.FAKE_OMP_UI_RESTORE_RESULT) {
+    fs.writeFileSync(process.env.FAKE_OMP_UI_RESTORE_RESULT, JSON.stringify(ctx.ui.askDialog === nativeAskDialog));
+  }
   process.exit(0);
 };
 process.on("SIGTERM", shutdown);
