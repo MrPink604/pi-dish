@@ -998,6 +998,9 @@ test('telemetry formatters label compact response metadata and catalog estimates
   assert.equal(H.formatResponseMetadata({ usage: { output: 1200 } }, 'compact'), '1.2k out');
   assert.equal(H.formatEstimatedCost(undefined), 'Unavailable');
   assert.equal(H.formatEstimatedCost(0.00001), '~$0.000010', 'tiny response costs do not round to apparent zero');
+  assert.equal(H.formatUsageCost(700.92, 20), '~$700.92*');
+  assert.equal(H.formatUsageCost(700.92, 0), '~$700.92');
+  assert.equal(H.formatUsageCost(undefined, 20), 'Unavailable');
 });
 
 test('shortModelName strips providers, vendor prefixes, versions, and date stamps', () => {
@@ -1068,7 +1071,7 @@ test('aggregateUsageWeekly preserves component availability across mixed days', 
   };
   let week = H.aggregateUsageWeekly([known, partial])[0];
   assert.equal(week.costs.total, 0.2, 'known totals survive unknown components');
-  assert.equal(week.costs.input, null);
+  assert.equal(week.costs.input, 0, 'missing components leave their known subtotal intact');
   assert.equal(week.costUnavailable.input, 1);
   assert.equal(week.models[0].cost, 0.2, 'explicit-zero model cost remains part of a known sum');
 
@@ -1078,9 +1081,9 @@ test('aggregateUsageWeekly preserves component availability across mixed days', 
     models: [{ ref: 'free/model', calls: 1, cost: null, costUnavailable: { total: 1 }, tokens }],
   };
   week = H.aggregateUsageWeekly([known, partial, missingTotal])[0];
-  assert.equal(week.costs.total, null, 'a mixed week never exposes a partial total');
+  assert.equal(week.costs.total, 0.2, 'a mixed week exposes its marked known subtotal');
   assert.equal(week.costUnavailable.total, 1);
-  assert.equal(week.models[0].cost, null, 'the same all-known rule applies per model');
+  assert.equal(week.models[0].cost, 0.2, 'the same subtotal rule applies per model');
 });
 
 test('tmuxPrefixSeq maps tmux prefix notation to raw bytes', () => {
@@ -1445,21 +1448,21 @@ test('mergeUsageSummaries keeps per-host workspaces and sessions apart, merges m
   assert.equal(merged.groups.models[0].calls, 4);
 });
 
-test('mergeUsageSummaries propagates unavailable pricing as null, never as zero', () => {
-  const unpriced = usagePayload({
-    totals: { ...usageBucket({ costs: { input: null, output: null, cacheRead: null, cacheWrite: null, total: null }, costUnavailable: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 3 } }), unpricedCalls: 3 },
-    headlineCosts: { today: null, days7: null, days30: null, all: null, month: null },
+test('mergeUsageSummaries preserves known subtotals and unavailable counts', () => {
+  const partial = usagePayload({
+    totals: { ...usageBucket({ costs: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.4 }, costUnavailable: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 3 } }), unpricedCalls: 3 },
+    headlineCosts: { today: 0.4, days7: 0.4, days30: 0.4, all: 0.4, month: 0.4 },
     headlineCostUnavailable: { today: 3, days7: 3, days30: 3, all: 3, month: 3 },
     unpricedModelCalls: 3,
   });
   const merged = H.mergeUsageSummaries([
     { hostId: 'host-a', summary: usagePayload() },
-    { hostId: 'host-b', summary: unpriced },
+    { hostId: 'host-b', summary: partial },
   ]);
-  assert.equal(merged.totals.costs.total, null);
+  assert.ok(Math.abs(merged.totals.costs.total - 0.7) < 1e-9);
   assert.equal(merged.totals.priced, false);
   assert.equal(merged.totals.unpricedCalls, 3);
-  assert.equal(merged.headlineCosts.month, null);
+  assert.ok(Math.abs(merged.headlineCosts.month - 0.7) < 1e-9);
   assert.equal(merged.headlineCostUnavailable.month, 3);
   assert.equal(merged.unpricedModelCalls, 3);
 });

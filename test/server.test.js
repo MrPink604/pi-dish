@@ -2077,7 +2077,7 @@ test('GET /stats aggregates tokens, cost, and message counts from the JSONL', as
   assert.equal(body.totalMessages, 5);
   assert.deepEqual(body.tokens, { input: 300, output: 100, cacheRead: 10, cacheWrite: 5, total: 415 });
   assert.ok(Math.abs(body.cost - 0.05) < 1e-9);
-  assert.deepEqual(body.costs, { input: null, output: null, cacheRead: null, cacheWrite: null, total: 0.05 });
+  assert.deepEqual(body.costs, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.05 });
   assert.deepEqual(body.costUnavailable, { input: 2, output: 2, cacheRead: 2, cacheWrite: 2, total: 0 });
   assert.equal(body.reasoningTokens, 0);
   assert.deepEqual(body.responseTiming, { measured: 1, medianMs: 2000, slowestMs: 2000 });
@@ -2123,8 +2123,8 @@ test('usage summary preserves cost availability through every grouping and filte
     assert.equal(knownToday.totals.calls, 4);
     assert.ok(Math.abs(knownToday.totals.costs.total - 1.7) < 1e-9,
       'total stays known when every selected call reports it');
-    assert.equal(knownToday.totals.costs.input, null,
-      'a total-only call keeps the component aggregate unavailable');
+    assert.equal(knownToday.totals.costs.input, 0.5,
+      'a total-only call is omitted from the known component subtotal');
     assert.equal(knownToday.totals.costUnavailable.input, 1);
     assert.ok(Math.abs(knownToday.headlineCosts.today - baselineToday.headlineCosts.today - 1.7) < 1e-9);
     assert.ok(Math.abs(knownToday.headlineCosts.days7 - baselineToday.headlineCosts.days7 - 1.7) < 1e-9,
@@ -2139,12 +2139,12 @@ test('usage summary preserves cost availability through every grouping and filte
 
     const totalOnly = (await get(filterUrl('audit/total-only'))).body;
     assert.equal(totalOnly.totals.costs.total, 0.5);
-    assert.equal(totalOnly.totals.costs.input, null);
+    assert.equal(totalOnly.totals.costs.input, 0);
     assert.equal(totalOnly.totals.costUnavailable.input, 1);
 
     // Add a second mixed-model call which reports input cost but no total.
-    // Every aggregate containing it must become unavailable rather than
-    // exposing the first call's partial cost.
+    // Every aggregate keeps the first call's known subtotal and marks the
+    // second call unavailable.
     fs.appendFileSync(usageFile, JSON.stringify({
       type: 'message', timestamp: now.toISOString(), message: {
         role: 'assistant', provider: 'audit', model: 'mixed', content: [],
@@ -2154,31 +2154,31 @@ test('usage summary preserves cost availability through every grouping and filte
 
     const all = (await get(filterUrl(refs.join(',')))).body;
     assert.equal(all.totals.calls, 7);
-    assert.equal(all.totals.costs.total, null, 'range total is unavailable for mixed calls');
+    assert.ok(Math.abs(all.totals.costs.total - 7.7) < 1e-9, 'range keeps its known subtotal');
     assert.equal(all.totals.costUnavailable.total, 1);
     assert.equal(all.unpricedModelCalls, 1);
     const workspace = all.groups.workspaces.find(w => w.key === '/workspace/usage');
     const session = all.groups.sessions.find(s => s.id === usageId);
-    assert.equal(workspace.costs.total, null);
+    assert.ok(Math.abs(workspace.costs.total - 7.7) < 1e-9);
     assert.equal(workspace.unpricedCalls, 1);
     assert.equal(workspace.priced, false);
-    assert.equal(session.costs.total, null);
+    assert.ok(Math.abs(session.costs.total - 7.7) < 1e-9);
     assert.equal(session.unpricedCalls, 1);
 
     const mixed = all.groups.models.find(m => m.key === 'audit/mixed');
     assert.equal(mixed.calls, 2);
     assert.equal(mixed.costs.input, 0.2, 'a component reported by every mixed call remains known');
-    assert.equal(mixed.costs.output, null);
-    assert.equal(mixed.costs.total, null);
+    assert.equal(mixed.costs.output, 0.1);
+    assert.equal(mixed.costs.total, 0.2);
     assert.equal(mixed.costUnavailable.total, 1);
     assert.equal(mixed.priced, false);
 
     // The daily series spans the requested range and stacks per-model data.
     assert.equal(all.daily.some(d => d.day === 'unknown'), false, 'dateless usage stays out of daily series');
     const todayEntry = (await get(filterUrl(refs.join(','), '7'))).body.daily.at(-1);
-    assert.equal(todayEntry.costs.total, null);
+    assert.ok(Math.abs(todayEntry.costs.total - 1.7) < 1e-9);
     const mixedDay = todayEntry.models.find(m => m.ref === 'audit/mixed');
-    assert.equal(mixedDay.cost, null);
+    assert.equal(mixedDay.cost, 0.2);
     assert.equal(mixedDay.costUnavailable.total, 1);
     assert.ok(todayEntry.models.some(m => m.ref === 'audit/paid' && m.cost === 1),
       'daily model data keeps known totals beside unavailable ones');
@@ -2189,18 +2189,19 @@ test('usage summary preserves cost availability through every grouping and filte
     assert.ok(all.daily.length >= 11 && all.daily.length <= 365,
       'all-time daily spans from the earliest dated day, capped at a year');
     const afterMixedToday = (await get('/api/usage-summary?days=1')).body;
-    assert.equal(afterMixedToday.headlineCosts.today, null, 'headline becomes unavailable for a missing total');
+    assert.ok(Math.abs(afterMixedToday.headlineCosts.today - baselineToday.headlineCosts.today - 1.7) < 1e-9,
+      'headline preserves its known subtotal when one call lacks a total');
     assert.equal(afterMixedToday.headlineCostUnavailable.today - baselineToday.headlineCostUnavailable.today, 1);
 
     const invalid = await get('/api/usage-summary?days=2');
     assert.equal(invalid.status, 400);
 
-    // Cost sorting keeps known explicit zero ahead of unavailable totals;
-    // token sorting still follows the displayed token accounting.
+    // Cost sorting follows known subtotals; token sorting still follows the
+    // displayed token accounting.
     const modelPos = (body, ref) => body.groups.models.findIndex(m => m.key === ref);
     assert.ok(modelPos(all, 'audit/dateless-paid') < modelPos(all, 'audit/paid'));
-    assert.ok(modelPos(all, 'audit/free') < modelPos(all, 'audit/mixed'),
-      'known zero sorts ahead of unavailable cost');
+    assert.ok(modelPos(all, 'audit/mixed') < modelPos(all, 'audit/free'),
+      'a partial positive subtotal sorts ahead of explicit zero');
     const byTokens = (await get(filterUrl(refs.join(','), 'all', 'tokens'))).body;
     assert.equal(byTokens.sort, 'tokens');
     assert.ok(modelPos(byTokens, 'audit/paid') < modelPos(byTokens, 'audit/free'));
@@ -2233,7 +2234,7 @@ test('usage summary preserves cost availability through every grouping and filte
 
     const unavailable = (await get(filterUrl('audit/mixed'))).body;
     assert.equal(unavailable.totals.calls, 2);
-    assert.equal(unavailable.totals.costs.total, null);
+    assert.equal(unavailable.totals.costs.total, 0.2);
     assert.equal(unavailable.unpricedModelCalls, 1);
     assert.equal(unavailable.groups.sessions.find(s => s.id === usageId)?.unpricedCalls, 1);
 

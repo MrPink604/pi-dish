@@ -4006,6 +4006,7 @@ function usageTokensDetail(tokens) {
   return parts.join(' · ');
 }
 
+
 function renderUsageView(d) {
   const body = document.getElementById('usageViewBody');
   body.classList.remove('usage-refreshing');
@@ -4013,16 +4014,18 @@ function renderUsageView(d) {
   const hu = d.headlineCostUnavailable || {};
   const budget = d.monthlyBudgetUsd;
 
-  const kpis = [['Today', h.today], ['Last 7 days', h.days7], ['Last 30 days', h.days30], ['This month', h.month]]
-    .map(([k, v]) => `<div class="usage-kpi"><small>${k}</small><strong>${formatEstimatedCost(v)}</strong></div>`).join('');
+  const kpis = [['Today', 'today'], ['Last 7 days', 'days7'], ['Last 30 days', 'days30'], ['This month', 'month']]
+    .map(([label, key]) => `<div class="usage-kpi"${hu[key] ? ` title="${hu[key]} unpriced calls are omitted from this estimate"` : ''}><small>${label}</small><strong>${formatUsageCost(h[key], hu[key])}</strong></div>`).join('');
 
   let budgetHtml = '';
   if (budget) {
     if (Number.isFinite(h.month)) {
       const pct = Math.min(100, h.month / budget * 100);
       const cls = pct >= 100 ? ' over' : pct >= 80 ? ' warn' : '';
-      budgetHtml = `<div class="usage-budget${cls}"><div class="usage-budget-track"><div class="usage-budget-fill" style="width:${pct.toFixed(1)}%"></div></div><small>${formatEstimatedCost(h.month)} of ~$${Number(budget).toFixed(2)} monthly budget${pct >= 100 ? ' — over budget' : ''}</small></div>`;
-    } else {
+      const partial = hu.month ? ` · ${hu.month} unpriced calls omitted` : '';
+      budgetHtml = `<div class="usage-budget${cls}"><div class="usage-budget-track"><div class="usage-budget-fill" style="width:${pct.toFixed(1)}%"></div></div><small>${formatUsageCost(h.month, hu.month)} of ~$${Number(budget).toFixed(2)} monthly budget${partial}${pct >= 100 ? ' — over budget' : ''}</small></div>`;
+    }
+    else {
       budgetHtml = `<div class="usage-budget"><small>Budget tracking unavailable${hu.month ? ` — ${hu.month} calls have unavailable pricing` : ''}.</small></div>`;
     }
   }
@@ -4032,7 +4035,7 @@ function renderUsageView(d) {
   const sortCtl = `<span class="usage-sort"><small>Show</small>${[['cost', 'Cost'], ['tokens', 'Tokens']]
     .map(([v, l]) => `<button class="usage-range-btn${usageSort === v ? ' active' : ''}" data-sort="${v}">${l}</button>`).join('')}</span>`;
 
-  const summary = `<div class="usage-total-line"><strong>${formatEstimatedCost(t.costs?.total)}</strong> · ${t.calls || 0} calls · ${formatTokens(usageTokensTotal(t.tokens))} tokens in ${USAGE_RANGE_LABELS[d.range] || 'the selected range'}</div>` +
+  const summary = `<div class="usage-total-line"><strong>${formatUsageCost(t.costs?.total, t.costUnavailable?.total)}</strong> · ${t.calls || 0} calls · ${formatTokens(usageTokensTotal(t.tokens))} tokens in ${USAGE_RANGE_LABELS[d.range] || 'the selected range'}</div>` +
     `<div class="usage-token-line">${formatTokens(t.tokens?.input)} in · ${formatTokens(t.tokens?.output)} out · cache ${formatCacheStat(t.tokens?.cacheRead, t.tokens?.cacheWrite, t.tokens?.input)}</div>`;
   const filterNote = usageModelFilter.size
     ? `<div class="usage-filter-note">Filtered to ${[...usageModelFilter].map(r => `<b title="${escapeHtml(r)}">${escapeHtml(shortModelName(r))}</b>`).join(', ')}<button class="usage-range-btn" data-clear-models>✕ clear</button></div>`
@@ -4072,7 +4075,7 @@ function renderUsageView(d) {
       ${usageGroupListHtml('Workspaces', d.groups?.workspaces, 'workspace', metric)}
       ${usageGroupListHtml('Sessions', d.groups?.sessions, 'session', metric)}
     </div>
-    ${d.unpricedModelCalls ? `<div class="usage-notice">${d.unpricedModelCalls} call${d.unpricedModelCalls === 1 ? '' : 's'} ${d.unpricedModelCalls === 1 ? 'has' : 'have'} unavailable pricing; affected spend totals are unavailable rather than shown as $0.</div>` : ''}
+    ${d.unpricedModelCalls ? `<div class="usage-notice">* Known priced usage only; ${d.unpricedModelCalls} call${d.unpricedModelCalls === 1 ? '' : 's'} ${d.unpricedModelCalls === 1 ? 'has' : 'have'} unavailable pricing and ${d.unpricedModelCalls === 1 ? 'is' : 'are'} omitted.</div>` : ''}
   `;
   body.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => setUsageRange(b.dataset.range)));
   body.querySelectorAll('[data-sort]').forEach(b => b.addEventListener('click', () => setUsageSort(b.dataset.sort)));
@@ -4149,7 +4152,7 @@ function drawUsageChart() {
 
     const x = margin.left + band * i + (band - barW) / 2;
     const label = (b.days > 1 ? `Week of ${formatUsageDay(b.day)}` : formatUsageDay(b.day, 'long')) + ': ' +
-      (metric === 'cost' ? formatEstimatedCost(b.costs?.total)
+      (metric === 'cost' ? formatUsageCost(b.costs?.total, b.costUnavailable?.total)
         : metric === 'tokens' ? `${formatTokens(usageTokensTotal(b.tokens))} tokens`
         : `${b.calls} calls`);
     const seg = [];
@@ -4217,7 +4220,7 @@ function renderUsageDayDetail() {
     : formatUsageDay(bucket.day, 'long');
   const tok = bucket.tokens || {};
   const stats = [
-    ['Estimated spend', formatEstimatedCost(bucket.costs?.total)],
+    ['Estimated spend', formatUsageCost(bucket.costs?.total, bucket.costUnavailable?.total)],
     ['Calls', String(bucket.calls || 0)],
     ['Tokens in / out', `${formatTokens(tok.input)} / ${formatTokens(tok.output)}`],
     ['Cache', formatCacheStat(tok.cacheRead, tok.cacheWrite, tok.input)],
@@ -4229,7 +4232,7 @@ function renderUsageDayDetail() {
   const rows = (bucket.models || []).map(m => {
     const meta = [`${m.calls} calls`, `${formatTokens(usageTokensTotal(m.tokens))} tok`];
     if (usageTokensTotal(m.tokens) > 0) meta.push(usageTokensDetail(m.tokens));
-    if (metric === 'cost') meta.push(formatEstimatedCost(m.cost));
+    if (metric === 'cost') meta.push(formatUsageCost(m.cost, m.costUnavailable?.total));
     return `
     <div class="usage-row" title="${escapeHtml(m.ref)}">
       <i class="swatch ${slotFor(m.ref)}"></i>
@@ -4273,8 +4276,7 @@ function usageModelShareHtml(d, metric, seriesRefs) {
   const rowHtml = (m, on) => {
     const share = on && total > 0 ? val(m) / total : 0;
     const pct = share > 0 ? (share * 100 < 1 ? (share * 100).toFixed(1) : Math.round(share * 100)) + '%' : '—';
-    const spend = m.priced === false ? 'pricing unavailable'
-      : `${formatEstimatedCost(m.costs?.total)}${m.unpricedCalls ? ` + ${m.unpricedCalls} unpriced` : ''}`;
+    const spend = `${formatUsageCost(m.costs?.total, m.unpricedCalls)}${m.unpricedCalls ? ` · ${m.unpricedCalls} unpriced` : ''}`;
     const detail = usageTokensTotal(m.tokens) > 0 ? ` · ${usageTokensDetail(m.tokens)}` : '';
     return `<div class="usage-row model-toggle${filtered ? (on ? ' on' : ' off') : ''}" data-model-ref="${escapeHtml(m.key)}" role="button" tabindex="0" aria-pressed="${on}" title="${escapeHtml(m.key)} — click to toggle model filter">
       <i class="swatch ${on ? slotFor(m.key) : 'soff'}"></i>
@@ -4301,8 +4303,7 @@ function usageGroupListHtml(title, rows, kind, metric) {
   const items = list.map(x => {
     const name = kind === 'workspace' ? shortCwd(x.key) : (x.name || x.id);
     const sub = kind === 'session' && x.workspace ? shortCwd(x.workspace) : '';
-    const spend = x.priced === false ? 'pricing unavailable'
-      : `${formatEstimatedCost(x.costs?.total)}${x.unpricedCalls ? ` + ${x.unpricedCalls} unpriced` : ''}`;
+    const spend = `${formatUsageCost(x.costs?.total, x.unpricedCalls)}${x.unpricedCalls ? ` · ${x.unpricedCalls} unpriced` : ''}`;
     const attrs = kind === 'session'
       ? ` data-session-id="${escapeHtml(x.id)}"${x.host ? ` data-session-host="${escapeHtml(x.host)}"` : ''} role="button" tabindex="0"`
       : '';
@@ -4342,7 +4343,7 @@ function showUsageTooltip(bucket, e) {
   head.textContent = bucket.days > 1 ? `Week of ${formatUsageDay(bucket.day)} · ${bucket.days} days` : formatUsageDay(bucket.day, 'long');
   const total = document.createElement('div');
   total.className = 'tt-total';
-  total.textContent = metric === 'cost' ? `${formatEstimatedCost(bucket.costs?.total)} · ${bucket.calls || 0} calls`
+  total.textContent = metric === 'cost' ? `${formatUsageCost(bucket.costs?.total, bucket.costUnavailable?.total)} · ${bucket.calls || 0} calls`
     : metric === 'tokens' ? `${formatTokens(usageTokensTotal(bucket.tokens))} tokens · ${bucket.calls || 0} calls`
     : `${bucket.calls} calls`;
   el.append(head, total);
@@ -4397,7 +4398,7 @@ async function refreshSessionSpend() {
   if (!badge) return;
   if (!showSessionSpend || !currentSession) { badge.style.display = 'none'; ++spendFetchSeq; return; }
   const id = currentSession.id, seq = ++spendFetchSeq;
-  try { const r = await apiFetch(sessionHostId(id), `/api/sessions/${encodeURIComponent(id)}/stats`), s = await r.json(); if (seq !== spendFetchSeq || currentSession?.id !== id || !showSessionSpend) return; badge.textContent = formatEstimatedCost(s.costs?.total ?? s.cost); badge.style.display = ''; } catch { if (seq === spendFetchSeq) badge.style.display = 'none'; }
+  try { const r = await apiFetch(sessionHostId(id), `/api/sessions/${encodeURIComponent(id)}/stats`), s = await r.json(); if (seq !== spendFetchSeq || currentSession?.id !== id || !showSessionSpend) return; badge.textContent = formatUsageCost(s.costs?.total ?? s.cost, s.costUnavailable?.total); badge.style.display = ''; } catch { if (seq === spendFetchSeq) badge.style.display = 'none'; }
 }
 
 // --- Session stats modal ---
@@ -4462,8 +4463,8 @@ function openStatsModal() {
         s.reasoningTokens ? ['Reasoning', formatTokens(s.reasoningTokens)] : null,
         ['Cache', formatCacheStat(s.tokens?.cacheRead, s.tokens?.cacheWrite, s.tokens?.input)],
         ['__section', 'Estimated spend'],
-        ['Estimated total', formatEstimatedCost(s.costs?.total ?? s.cost)],
-        ['Components', `input ${formatEstimatedCost(s.costs?.input)} · output ${formatEstimatedCost(s.costs?.output)} · cache read ${formatEstimatedCost(s.costs?.cacheRead)} · write ${formatEstimatedCost(s.costs?.cacheWrite)}`],
+        ['Estimated total', formatUsageCost(s.costs?.total ?? s.cost, s.costUnavailable?.total)],
+        ['Components', `input ${formatUsageCost(s.costs?.input, s.costUnavailable?.input)} · output ${formatUsageCost(s.costs?.output, s.costUnavailable?.output)} · cache read ${formatUsageCost(s.costs?.cacheRead, s.costUnavailable?.cacheRead)} · write ${formatUsageCost(s.costs?.cacheWrite, s.costUnavailable?.cacheWrite)}`],
         ['__section', 'Location'],
         s.runtime ? ['Running in', formatRuntime(s.runtime)] : null,
         ['cwd', s.cwd || '—', !!s.cwd],

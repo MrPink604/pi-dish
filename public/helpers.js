@@ -94,6 +94,12 @@ function formatEstimatedCost(value, digits = 4) {
   return `~$${value.toFixed(precision)}`;
 }
 
+/** Known catalog-priced subtotal; `*` means one or more calls were omitted. */
+function formatUsageCost(value, unavailable = 0) {
+  const formatted = formatEstimatedCost(value);
+  return Number.isFinite(value) && unavailable ? `${formatted}*` : formatted;
+}
+
 /** Compact metadata label for an authoritative, indexed assistant response. */
 function formatResponseMetadata(msg, mode = 'compact') {
   if (!msg || mode === 'hidden') return null;
@@ -1138,9 +1144,9 @@ function rgbStringToHex(value) {
 
 // --- Usage summary merging (multi-host) ----------------------------------
 // The usage view fans /api/usage-summary out to every reachable host and
-// merges the payloads here. Everything below mirrors the server's own
-// aggregation rules exactly - in particular a cost is *null* (unavailable),
-// never 0, as soon as any contributing bucket lacks pricing.
+// merges the payloads here. Costs retain the known subtotal while
+// costUnavailable counts the calls omitted from it; the renderer marks those
+// partial estimates instead of presenting them as complete or free.
 
 const USAGE_MERGE_COST_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'];
 const USAGE_MERGE_TOKEN_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'];
@@ -1172,11 +1178,11 @@ function addMergedUsage(to, from) {
   if (!from) return to;
   for (const k of USAGE_MERGE_TOKEN_KEYS) to.tokens[k] += from.tokens?.[k] || 0;
   for (const k of USAGE_MERGE_COST_KEYS) {
-    const unavailable = from.costUnavailable?.[k] || 0;
-    to.costUnavailable[k] += unavailable;
+    to.costUnavailable[k] += from.costUnavailable?.[k] || 0;
     const value = from.costs?.[k];
-    if (unavailable || !Number.isFinite(value)) to.costs[k] = null;
-    else if (to.costs[k] !== null) to.costs[k] += value;
+    if (Number.isFinite(value)) {
+      to.costs[k] = (Number.isFinite(to.costs[k]) ? to.costs[k] : 0) + value;
+    }
   }
   for (const k of ['calls', 'measured', 'durationMs']) to[k] += from[k] || 0;
   to.slowestMs = Math.max(to.slowestMs, from.slowestMs || 0);
@@ -1184,8 +1190,8 @@ function addMergedUsage(to, from) {
 }
 
 function pricedUsageFields(bucket) {
-  bucket.priced = Number.isFinite(bucket.costs?.total);
   bucket.unpricedCalls = bucket.costUnavailable?.total || 0;
+  bucket.priced = !bucket.unpricedCalls;
   return bucket;
 }
 
@@ -1244,10 +1250,11 @@ function mergeUsageSummaries(list) {
     unpricedModelCalls += summary.unpricedModelCalls || 0;
     for (const [key, value] of Object.entries(summary.headlineCosts || {})) {
       headlineKeys.add(key);
-      const unavailable = summary.headlineCostUnavailable?.[key] || 0;
-      headlineCostUnavailable[key] = (headlineCostUnavailable[key] || 0) + unavailable;
-      if (unavailable || !Number.isFinite(value)) headlineCosts[key] = null;
-      else if (headlineCosts[key] !== null) headlineCosts[key] = (headlineCosts[key] || 0) + value;
+      headlineCostUnavailable[key] = (headlineCostUnavailable[key] || 0) +
+        (summary.headlineCostUnavailable?.[key] || 0);
+      if (Number.isFinite(value)) {
+        headlineCosts[key] = (Number.isFinite(headlineCosts[key]) ? headlineCosts[key] : 0) + value;
+      }
     }
     for (const day of summary.daily || []) {
       if (!day || !day.day) continue;
@@ -1268,8 +1275,9 @@ function mergeUsageSummaries(list) {
         row.calls += model.calls || 0;
         for (const k of USAGE_MERGE_TOKEN_KEYS) row.tokens[k] += model.tokens?.[k] || 0;
         for (const k of USAGE_MERGE_COST_KEYS) row.costUnavailable[k] += model.costUnavailable?.[k] || 0;
-        if ((model.costUnavailable?.total || 0) || !Number.isFinite(model.cost)) row.cost = null;
-        else if (row.cost !== null) row.cost += model.cost;
+        if (Number.isFinite(model.cost)) {
+          row.cost = (Number.isFinite(row.cost) ? row.cost : 0) + model.cost;
+        }
       }
     }
     for (const bucket of summary.groups?.models || []) {
@@ -1706,19 +1714,19 @@ function aggregateUsageWeekly(daily) {
       agg.calls += d.calls || 0;
       for (const k of tokenKeys) agg.tokens[k] += d.tokens?.[k] || 0;
       for (const k of costKeys) {
-        const unavailable = d.costUnavailable?.[k] || 0;
-        agg.costUnavailable[k] += unavailable;
+        agg.costUnavailable[k] += d.costUnavailable?.[k] || 0;
         const value = d.costs?.[k];
-        if (unavailable || !Number.isFinite(value)) agg.costs[k] = null;
-        else if (agg.costs[k] !== null) agg.costs[k] += value;
+        if (Number.isFinite(value)) {
+          agg.costs[k] = (Number.isFinite(agg.costs[k]) ? agg.costs[k] : 0) + value;
+        }
       }
       for (const dm of d.models || []) {
         const t = models.get(dm.ref) || { ref: dm.ref, provider: dm.provider, model: dm.model, calls: 0, cost: 0, costUnavailable: { total: 0 }, tokens: Object.fromEntries(tokenKeys.map(k => [k, 0])) };
         t.calls += dm.calls || 0;
-        const unavailable = dm.costUnavailable?.total || 0;
-        t.costUnavailable.total += unavailable;
-        if (unavailable || !Number.isFinite(dm.cost)) t.cost = null;
-        else if (t.cost !== null) t.cost += dm.cost;
+        t.costUnavailable.total += dm.costUnavailable?.total || 0;
+        if (Number.isFinite(dm.cost)) {
+          t.cost = (Number.isFinite(t.cost) ? t.cost : 0) + dm.cost;
+        }
         for (const k of tokenKeys) t.tokens[k] += dm.tokens?.[k] || 0;
         models.set(dm.ref, t);
       }
@@ -1814,7 +1822,7 @@ function formatModelRoleSummary(roles, limit = 4) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRuntime, formatRelativeTime, formatTime, formatDuration, formatTokSpeed,
-    formatEstimatedCost, formatResponseMetadata,
+    formatEstimatedCost, formatUsageCost, formatResponseMetadata,
     shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText, extractImageBlocks, messageHasVisibleText,
     contextClass, sessionSupports, harnessBadgeInfo, sessionMetaText, parseModelId, formatModelRef,
     groupByWorkspace, buildWorkspaceTree, collectTreeSessions, groupSessionsByDate,

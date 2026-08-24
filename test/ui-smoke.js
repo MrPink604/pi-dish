@@ -2810,24 +2810,25 @@ let remoteHost = null; // second pi-dish (multi-host section)
       [...document.querySelectorAll('#usageViewBody .usage-row.model-toggle')]
         .some((r) => r.textContent.includes('100 in / 45 out') && r.textContent.includes('15% cached'))),
       'model rows carry in/out and cached-share breakdowns');
-    check(await desktop.evaluate(() =>
-      document.querySelector('.usage-total-line strong')?.textContent === 'Unavailable'),
-      'mixed usage total is labeled unavailable');
+    check(await desktop.evaluate(() => {
+      const value = document.querySelector('.usage-total-line strong')?.textContent || '';
+      return value.startsWith('~$') && value.endsWith('*');
+    }), 'mixed usage total shows its marked known subtotal');
     check(await desktop.evaluate(() =>
       [...document.querySelectorAll('#usageViewBody .usage-row.model-toggle')]
-        .some((r) => r.textContent.includes('pricing unavailable'))),
-      'models with missing totals say pricing unavailable');
+        .some((r) => r.textContent.includes('unpriced') && r.textContent.includes('*'))),
+      'partially priced model rows show their subtotal and unpriced count');
     check(await desktop.evaluate(() =>
       document.querySelector('#usageViewBody .usage-notice')?.textContent
-        .includes('affected spend totals are unavailable rather than shown as $0')),
-      'usage notice explains that unavailable pricing makes affected spend totals unavailable');
+        .includes('Known priced usage only')),
+      'usage notice explains the partial-estimate marker');
     await desktop.waitForSelector('#usageChart svg', { timeout: 5000 });
     check(await desktop.locator('#usageChart .usage-col').count() >= 2,
       'stacked daily chart renders one column per bucket');
     check(await desktop.locator('#usageChart text.tick').count() >= 4,
       'chart draws axis tick labels');
-    check((await desktop.locator('#usageChart svg').getAttribute('aria-label')).startsWith('Calls'),
-      'unavailable cost falls back to call-count chart geometry');
+    check((await desktop.locator('#usageChart svg').getAttribute('aria-label')).startsWith('Estimated spend'),
+      'a positive known subtotal keeps cost chart geometry');
     // Event-driven: while the session index is still settling, the view
     // repolls at 1s and each re-render can shift the chart's day axis (the
     // 'all' range starts at the earliest *indexed* day), so a bucket index

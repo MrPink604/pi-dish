@@ -1724,11 +1724,11 @@ function addUsage(to, from) {
   if (!from) return to;
   for (const k of Object.keys(to.tokens)) to.tokens[k] += from.tokens?.[k] || 0;
   for (const k of USAGE_COST_KEYS) {
-    const unavailable = from.costUnavailable?.[k] || 0;
-    to.costUnavailable[k] += unavailable;
+    to.costUnavailable[k] += from.costUnavailable?.[k] || 0;
     const value = from.costs?.[k];
-    if (unavailable || !Number.isFinite(value)) to.costs[k] = null;
-    else if (to.costs[k] !== null) to.costs[k] += value;
+    if (Number.isFinite(value)) {
+      to.costs[k] = (Number.isFinite(to.costs[k]) ? to.costs[k] : 0) + value;
+    }
   }
   for (const k of ['calls', 'measured', 'durationMs']) to[k] += from[k] || 0;
   to.slowestMs = Math.max(to.slowestMs, from.slowestMs || 0);
@@ -1757,7 +1757,7 @@ app.get('/api/usage-summary', async (req, res) => {
   const modelRefs = modelsRaw.split(',').map(s => s.trim()).filter(Boolean);
   if (modelRefs.length > 100) return res.status(400).json({ error: 'models filter lists too many models' });
   const modelFilter = modelRefs.length ? new Set(modelRefs) : null;
-  await refreshHarnessPricing('omp');
+  await Promise.all(['pi', 'omp'].map(harnessId => refreshHarnessPricing(harnessId)));
   const discovery = discoverHarnessSessions();
   const candidates = discovery.candidates;
   const scan = sessionIndex.scanSessions(candidates);
@@ -1816,14 +1816,14 @@ app.get('/api/usage-summary', async (req, res) => {
   }
   let unpricedModelCalls = 0;
   for (const [ref, b] of byModel) {
-    b.priced = Number.isFinite(b.costs.total);
+    b.priced = !b.costUnavailable.total;
     b.unpricedCalls = b.costUnavailable.total;
     // The bottom-of-view notice reflects the filtered totals; the facet list
     // keeps every model's own unavailable annotation.
     if (!modelFilter || modelFilter.has(ref)) unpricedModelCalls += b.unpricedCalls;
   }
   for (const bucket of [...byWorkspace.values(), ...bySession.values()]) {
-    bucket.priced = Number.isFinite(bucket.costs.total);
+    bucket.priced = !bucket.costUnavailable.total;
     bucket.unpricedCalls = bucket.costUnavailable.total;
   }
   totals.unpricedCalls = unpricedModelCalls;
@@ -2285,12 +2285,14 @@ app.get('/api/sessions/:id/messages', async (req, res) => {
       totalMessages: 0, firstIndex: null, lastIndex: null, hasMore: false,
     });
   }
-  // Pricing is optional response metadata, not a transcript dependency. OMP's
-  // model catalog command can take seconds (and some versions only settle at
-  // our 15s timeout after already printing valid JSON), so refresh it in the
-  // background. Existing recorded/stale costs render now; the pricing
-  // revision invalidates the parse cache once a changed catalog lands.
-  if (sessionSource.harnessId === 'omp') void refreshHarnessPricing('omp');
+  // Pricing is optional response metadata, not a transcript dependency.
+  // Refresh in the background: existing recorded/stale costs render now and
+  // the pricing revision invalidates the parse cache when a changed Pi or OMP
+  // catalog lands. OMP's command may only settle at its 15s timeout after
+  // already printing valid JSON, so transcript delivery never awaits it.
+  if (sessionSource.harnessId === 'pi' || sessionSource.harnessId === 'omp') {
+    void refreshHarnessPricing(sessionSource.harnessId);
+  }
 
   // Pagination: messages are indexed by their position in the displayable
   // message stream (0-based). `limit` defaults to 50. With no cursor we
@@ -2610,7 +2612,9 @@ app.get('/api/sessions/:id/stats', async (req, res) => {
       }
       return res.status(404).json({ error: 'Session not found' });
     }
-    if (session.harnessId === 'omp') await refreshHarnessPricing('omp');
+    if (session.harnessId === 'pi' || session.harnessId === 'omp') {
+      await refreshHarnessPricing(session.harnessId);
+    }
 
     const { tokens, reasoningTokens, cost, costs, costUnavailable, responseTiming, userMessages, assistantMessages, toolCalls, toolResults, genMs, genOutput } =
       getSessionStats(session);

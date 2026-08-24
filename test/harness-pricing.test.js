@@ -12,6 +12,7 @@ process.env.HOME = tmp;
 const fixture = path.join(__dirname, 'fixtures', 'fake-omp-models.js');
 process.env.PI_DISH_OMP_COMMAND = `env OMP_FIXTURE=1 ${process.execPath} ${fixture}`;
 
+const piSDK = require('../lib/pi-sdk.js');
 const pricing = require('../lib/harness-pricing.js');
 const sessionFiles = require('../lib/session-files.js');
 
@@ -31,6 +32,52 @@ test('OMP catalog command is cached, persisted, and prices tokens including cach
   assert.equal(pricing.estimateUsageCost('pi', 'zai', 'glm-4.7-flash', { input: 1_000_000 }), undefined,
     'Pi never reads the OMP catalog');
   assert.ok(fs.existsSync(path.join(tmp, '.pi', 'dish', 'pricing', 'omp.json')));
+});
+
+test('Pi registry rates are cached and backfill zero-cost JSONL usage', async t => {
+  process.env.HOME = tmp;
+  pricing.resetForTests();
+  let loads = 0;
+  t.mock.method(piSDK, 'getPricingModels', async () => {
+    loads++;
+    return [
+      { provider: 'zai', id: 'glm-5.2', cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 } },
+      { provider: 'zai', id: 'glm-5.3', cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    ];
+  });
+
+  const snapshot = await pricing.refreshHarnessPricing('pi', { force: true, now: 2_000_000 });
+  assert.ok(snapshot);
+  await pricing.refreshHarnessPricing('pi', { now: 2_000_001 });
+  assert.equal(loads, 1, 'a fresh persisted rate card avoids another registry load');
+  assert.ok(fs.existsSync(path.join(tmp, '.pi', 'dish', 'pricing', 'pi.json')));
+  assert.deepEqual(pricing.estimateUsageCost('pi', 'zai', 'glm-5.2', {
+    input: 1_000_000, output: 500_000, cacheRead: 2_000_000, cacheWrite: 250_000,
+  }), { input: 1.4, output: 2.2, cacheRead: 0.52, cacheWrite: 0, total: 4.12 });
+  assert.equal(pricing.estimateUsageCost('pi', 'zai', 'glm-5.3', { input: 1_000_000 }), undefined,
+    'zero-rate ZAI subscription entries remain unpriced rather than free');
+
+  const candidate = { harnessId: 'pi', profileId: 'pi-v1', profileVersion: 1 };
+  const content = [
+    { type: 'message', message: { role: 'assistant', provider: 'zai', model: 'glm-5.2', content: [], usage: {
+      input: 1_000_000, output: 500_000, cacheRead: 2_000_000, cacheWrite: 250_000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    } } },
+    { type: 'message', message: { role: 'assistant', provider: 'zai', model: 'glm-5.3', content: [], usage: {
+      input: 100, output: 10, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    } } },
+  ].map(JSON.stringify).join('\n') + '\n';
+  const usage = sessionFiles.buildIndexedUsageFromContent(content, candidate);
+  assert.equal(usage.total.costs.total, 4.12);
+  assert.equal(usage.total.costUnavailable.total, 1);
+  assert.equal(usage.models['zai/glm-5.3'].costs.total, 0);
+  assert.equal(usage.models['zai/glm-5.3'].costUnavailable.total, 1);
+
+  const file = path.join(tmp, 'pi-usage.jsonl');
+  fs.writeFileSync(file, content);
+  const messages = sessionFiles.readSessionMessages({ ...candidate, file }).filter(message => message.role === 'assistant');
+  assert.equal(messages[0].usage.cost.total, 4.12);
+  assert.equal(messages[1].usage.cost, undefined);
 });
 
 test('OMP catalog uses valid JSON already printed when the command times out', async t => {
@@ -92,7 +139,7 @@ test('OMP session usage is catalog-priced while unknown models remain unavailabl
   const usage = sessionFiles.buildIndexedUsageFromContent(content, candidate);
   assert.equal(usage.models['zai/glm-4.7-flash'].costs.total, 2.12);
   assert.equal(usage.models['zai/glm-4.7-flash'].costUnavailable.total, 0);
-  assert.equal(usage.models['zai/not-in-catalog'].costs.total, null);
+  assert.equal(usage.models['zai/not-in-catalog'].costs.total, 0);
   assert.equal(usage.models['zai/not-in-catalog'].costUnavailable.total, 1);
 
   const file = path.join(tmp, 'omp-usage.jsonl');
@@ -102,7 +149,7 @@ test('OMP session usage is catalog-priced while unknown models remain unavailabl
   assert.equal(messages[0].usage.cost.total, 2.12, 'per-response details use the OMP estimate');
   assert.equal(messages[1].usage.cost, undefined, 'unknown per-response models do not become free');
   const stats = sessionFiles.getSessionStats(source);
-  assert.equal(stats.cost, null, 'one unknown call keeps mixed session spend unavailable');
+  assert.equal(stats.cost, 2.12, 'known subtotal survives an unknown call');
   assert.equal(stats.costUnavailable.total, 1);
 });
 

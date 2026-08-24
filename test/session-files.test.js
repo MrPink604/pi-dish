@@ -407,7 +407,7 @@ test('getSessionStats aggregates usage and revalidates on append', () => {
   assert.equal(SF.getSessionStats(file).userMessages, 2, 'size/mtime change invalidates');
 });
 
-test('getSessionStats requires every call to report each cost component', () => {
+test('getSessionStats preserves known component subtotals and unavailable counts', () => {
   const file = writeSession([
     assistantMsg('total only', { cost: { total: 0.4 } }),
     assistantMsg('partial', { cost: { input: 0.1, total: 0.2 } }),
@@ -417,10 +417,10 @@ test('getSessionStats requires every call to report each cost component', () => 
   ]);
   const stats = SF.getSessionStats(file);
   assert.ok(Math.abs(stats.cost - 0.6) < 1e-9, 'a total remains known when every call reports total');
-  assert.equal(stats.costs.input, null, 'partial component sums are not exposed as authoritative');
-  assert.equal(stats.costs.output, null);
-  assert.equal(stats.costs.cacheRead, null);
-  assert.equal(stats.costs.cacheWrite, null);
+  assert.equal(stats.costs.input, 0.1);
+  assert.equal(stats.costs.output, 0);
+  assert.equal(stats.costs.cacheRead, 0);
+  assert.equal(stats.costs.cacheWrite, 0);
   assert.ok(Math.abs(stats.costs.total - 0.6) < 1e-9);
   assert.deepEqual(stats.costUnavailable, {
     input: 1, output: 2, cacheRead: 2, cacheWrite: 2, total: 0,
@@ -428,7 +428,7 @@ test('getSessionStats requires every call to report each cost component', () => 
 
   fs.appendFileSync(file, JSON.stringify(assistantMsg('missing total', { cost: { input: 0.3 } })) + '\n');
   const mixed = SF.getSessionStats(file);
-  assert.equal(mixed.costs.total, null, 'one unavailable total invalidates a mixed-call total');
+  assert.ok(Math.abs(mixed.costs.total - 0.6) < 1e-9, 'an unavailable call does not destroy the known subtotal');
   assert.equal(mixed.costUnavailable.total, 1);
 });
 
@@ -471,7 +471,7 @@ test('indexed usage groups local days and model changes without retaining messag
   assert.equal(usage.total.tokens.reasoning, 2);
   assert.equal(usage.total.costs.total, 0.13);
   assert.deepEqual(usage.total.costs, {
-    input: null, output: null, cacheRead: null, cacheWrite: null, total: 0.13,
+    input: 0.02, output: 0.04, cacheRead: 0, cacheWrite: 0, total: 0.13,
   });
   assert.deepEqual(usage.total.costUnavailable, {
     input: 2, output: 2, cacheRead: 3, cacheWrite: 3, total: 0,
@@ -515,7 +515,7 @@ test('indexed usage treats ZAI plan zeros as unpriced and drops empty failed ret
   assert.equal(usage.total.calls, 1, 'zero-token provider retries are not usage calls');
   assert.equal(usage.total.tokens.output, 38);
   assert.deepEqual(usage.total.costs,
-    { input: null, output: null, cacheRead: null, cacheWrite: null, total: null });
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
   assert.deepEqual(usage.total.costUnavailable,
     { input: 1, output: 1, cacheRead: 1, cacheWrite: 1, total: 1 });
   assert.equal(usage.models['zai/glm-5.2'].calls, 1);
@@ -529,7 +529,7 @@ test('session stats do not present ZAI Coding Plan usage as free', () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } } },
   ]);
   const stats = SF.getSessionStats(file);
-  assert.equal(stats.cost, null);
+  assert.equal(stats.cost, 0);
   assert.deepEqual(stats.costUnavailable,
     { input: 1, output: 1, cacheRead: 1, cacheWrite: 1, total: 1 });
 });

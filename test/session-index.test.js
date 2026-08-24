@@ -166,14 +166,14 @@ test('schema-3 zero-filled usage migrates through the bounded reindex backlog', 
     'cost availability schema migration');
   const fresh = withBudget(0, () => index.scanSessions([file])).infos.get(file);
   assert.deepEqual(fresh.usage.total.costs,
-    { input: null, output: null, cacheRead: null, cacheWrite: null, total: 0.25 });
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.25 });
   assert.deepEqual(fresh.usage.total.costUnavailable,
     { input: 1, output: 1, cacheRead: 1, cacheWrite: 1, total: 0 });
 
   index.resetForTests();
   const persisted = withBudget(0, () => index.scanSessions([file]));
   assert.equal(persisted.indexing, false, 'rebuilt current-schema metadata persists');
-  assert.equal(persisted.infos.get(file).usage.total.costs.input, null);
+  assert.equal(persisted.infos.get(file).usage.total.costs.input, 0);
 });
 
 test('schema-5 ZAI plan usage is reindexed instead of remaining falsely free', async () => {
@@ -205,7 +205,7 @@ test('schema-5 ZAI plan usage is reindexed instead of remaining falsely free', a
   await waitFor(() => withBudget(0, () => index.scanSessions([file])).indexing === false,
     'ZAI pricing schema migration');
   const fresh = withBudget(0, () => index.scanSessions([file])).infos.get(file);
-  assert.equal(fresh.usage.total.costs.total, null);
+  assert.equal(fresh.usage.total.costs.total, 0);
   assert.equal(fresh.usage.total.costUnavailable.total, 1);
 });
 
