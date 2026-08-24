@@ -544,14 +544,41 @@ exactly single-host pi-dish.
   polls fan out per host (`Promise.allSettled`, per-host sequence guards,
   render as results land — never gate on the slowest host); an unreachable
   host keeps its last list dimmed with an "unreachable" chip and degrades
-  only its own rows. 401 ⇒ `blocked`, never retried (re-enter the token in
-  the settings Hosts section). Workspace group keys are host-qualified
+  only its own rows. Every fan-out request carries a deadline
+  (`apiFetch(host, path, { timeoutMs })` → `AbortSignal.timeout`,
+  feature-detected; sessions/search/usage 20s, `/api/hosts` 10s, `/api/host`
+  8s) — a sleeping tailnet peer black-holes TCP, and an undeadlined request
+  there holds one of the origin's six HTTP/1.1 connections for minutes while
+  everything queues behind it. Streams, transcripts and file reads never pass
+  one. Polls are single-flight per host (`hostLoadInflight`): an identical
+  query arriving while one is in flight joins it instead of stacking a second
+  request against an already-slow host, and the joiner refreshes the
+  in-flight `ctx` so the response is guarded by the *newest* sequence rather
+  than dropped as stale (no new `hostSeq` — that would invalidate the read
+  already on the wire). Connection state is the pure `hostConnReduce`
+  (helpers.js, unit-tested): the `[3,4,8,16]s` ladder, `blocked` sticky
+  (401 ⇒ `blocked`, never retried — re-enter the token in the settings Hosts
+  section), and a 30s reset hysteresis, so a *flapping* host keeps climbing
+  the ladder instead of resetting it every cycle. app.js only maps events
+  onto it and re-renders the Hosts section when `state`/`error` actually
+  changed. A fleet entry the server already probed `reachable:false` seeds
+  that state on load (`seedHostConnFromFleet`, never overwriting a state this
+  client observed itself), so a page load no longer pays one full hang per
+  sleeping peer before its own backoff exists. Workspace group keys are host-qualified
   (same cwd on two hosts must not merge); the workspace view sections by
   host and everything else chips (see Sidebar behavior). Search fans out and merges on
   `searchScore` (shared scoring ⇒ comparable); usage merges through pure
   `mergeUsageSummaries` (helpers.js — a single payload passes through
   untouched; per-host top-20 truncation makes merged deep tails
-  approximate). Client storage that keys sessions uses composite keys with
+  approximate). Both views render **progressively**: each host folds into an
+  accumulator and re-renders the whole (idempotent) view as it settles, so
+  the slowest peer never gates the fastest one's results, with the still-out
+  hosts named in a quiet `usage-notice` beside the "did not answer" one.
+  `applyHostTerms` and the scope accounting run on every partial render — a
+  partial result must not bypass the grammar — and the final settle keeps
+  today's behavior exactly (error state only when no host answered,
+  `indexing` repolls armed there). On one host the first settle is the final
+  render, so nothing above shows. Client storage that keys sessions uses composite keys with
   a one-time flagged migration (`pi-dish-keys-migrated`). The `host:` filter
   term is client-evaluated (`hostLabel`, stamped by the state writers,
   falling back to the hostId) and `stripQueryField`'d out of every query and

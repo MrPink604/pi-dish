@@ -984,6 +984,75 @@ function hostSupportsTerminal(hostEntry, config) {
   return hostSupportsCapability(hostEntry, 'terminal', config);
 }
 
+// --- Host connection state (fan-out backoff) -----------------------------
+// One host's connection state is a small state machine the fan-out reads
+// before it spends a request: `reachable | backoff | blocked`. It lives here,
+// pure, because it is the piece worth testing - app.js only maps events onto
+// it and decides when the change is worth a re-render.
+
+// t3code's ladder: a transient failure retries soon and settles at 16s. Auth
+// failures never land here - they park in `blocked`.
+const HOST_BACKOFF_LADDER = [3000, 4000, 8000, 16000];
+// How long a host must stay reachable before its ladder position is forgiven.
+// Without the hysteresis a host that flaps (answers one poll, hangs the next)
+// resets to the first rung every cycle and is retried at 3s forever.
+const HOST_BACKOFF_RESET_MS = 30000;
+
+/**
+ * Next connection state for one host. `prev` is its current record (null when
+ * nothing is known), `event` is `'success'`, `'blocked'`, `{type:'failure',
+ * error}` or `{type:'seed-down', error}`, and `now` is injected so the
+ * hysteresis is testable. Returns `prev` itself when the event changes
+ * nothing, so callers can skip work by identity.
+ *
+ * - failure climbs the ladder and never demotes `blocked` (a 401 is not
+ *   transient: retrying it burns requests until a token is entered).
+ * - success is only *fully* trusted after HOST_BACKOFF_RESET_MS of unbroken
+ *   reachability; before that the host is reachable but keeps its rung, so a
+ *   host that flaps keeps climbing instead of resetting every cycle.
+ * - seed-down is the serving host's own probe result (a fleet entry with
+ *   `reachable:false`) and applies only to a host this client has not
+ *   observed itself, so a real observation is never overwritten.
+ */
+function hostConnReduce(prev, event, now) {
+  const at = Number.isFinite(now) ? now : Date.now();
+  const kind = typeof event === 'string' ? event : (event && event.type) || '';
+  const state = prev && typeof prev === 'object' ? prev : null;
+  const errText = (value) => {
+    if (value == null) return null;
+    const text = String((typeof value === 'object' && value.message) || value);
+    return text || null;
+  };
+  const eventError = event && typeof event === 'object' ? errText(event.error) : null;
+
+  if (kind === 'blocked') {
+    if (state && state.state === 'blocked') return state;
+    return { state: 'blocked', failures: 0, retryAt: 0, error: 'Unauthorized', reachableSince: 0 };
+  }
+  if (kind === 'success') {
+    const since = state && state.state === 'reachable' && state.reachableSince ? state.reachableSince : at;
+    const forgiven = at - since >= HOST_BACKOFF_RESET_MS;
+    return {
+      state: 'reachable',
+      failures: forgiven ? 0 : (state && state.failures) || 0,
+      retryAt: 0,
+      error: null,
+      reachableSince: since,
+    };
+  }
+  if (kind === 'failure') {
+    if (state && state.state === 'blocked') return state;
+    const failures = ((state && state.failures) || 0) + 1;
+    const wait = HOST_BACKOFF_LADDER[Math.min(failures - 1, HOST_BACKOFF_LADDER.length - 1)];
+    return { state: 'backoff', failures, retryAt: at + wait, error: eventError, reachableSince: 0 };
+  }
+  if (kind === 'seed-down') {
+    if (state) return state;
+    return { state: 'backoff', failures: 1, retryAt: at + HOST_BACKOFF_LADDER[0], error: eventError, reachableSince: 0 };
+  }
+  return state;
+}
+
 // --- Host color coding (sidebar sections + chips) -------------------------
 // A fleet is a handful of machines, and "which host is this?" is a question
 // the eye should answer before the label is read - so hosts are color-coded.
@@ -1743,6 +1812,7 @@ if (typeof module !== 'undefined' && module.exports) {
     sessionKey, parseSessionKey, sessionRefKey, normalizeHostBase, sanitizeHostCatalog,
     hostDisplayLabel, mergeHostEntries, mergeUsageSummaries,
     hostSupportsCapability, hostSupportsTerminal,
+    HOST_BACKOFF_LADDER, HOST_BACKOFF_RESET_MS, hostConnReduce,
     HOST_COLOR_SLOTS, sanitizeHostColors, sanitizeHostColorOrder, assignHostColor,
     sortHostSections, hostSectionKey, rgbStringToHex,
     modelMatchesPattern, isModelEnabled, pushPromptHistory, sanitizeMarkdownUrl,
