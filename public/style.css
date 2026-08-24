@@ -3316,33 +3316,46 @@ body.sidebar-open {
 }
 
 /* Interactive dialog modal (select / confirm / input / editor) */
-/* Interactive dialogs (select / confirm / input / editor / ask) dock into
-   the session's input area instead of a page-wide overlay: expanded they
-   take over the chat box, minimized they collapse to a bar and the composer
-   comes back. Scoped to the visible session, so the sidebar stays usable. */
+/* Interactive dialogs (select / confirm / input / editor / ask) dock as cards
+   above the session's chat box instead of a page-wide overlay: the
+   transcript and composer stay usable, minimized cards collapse to a bar.
+   Scoped to the visible session, so the sidebar stays usable. */
+/* Cards cap their own height; the question body scrolls while the title and
+   action footer stay pinned. The dock's cap is a backstop for the rare case
+   of several pending dialogs at once. */
 .ext-ui-dialog-dock {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-bottom: 8px;
-}
-
-.input-area.ext-dialog-takeover #promptInput,
-.input-area.ext-dialog-takeover .input-actions,
-.input-area.ext-dialog-takeover .attachment-strip {
-  display: none;
+  max-height: min(70vh, 620px);
+  overflow-y: auto;
 }
 
 .ext-ui-dialog-modal {
   position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 14px 16px;
   width: 100%;
-  max-height: 60vh;
-  overflow-y: auto;
+  max-height: min(35vh, 300px);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+.ext-ui-dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.ext-ui-dialog-foot {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  padding-top: 4px;
 }
 
 .ext-ui-dialog-head {
@@ -3391,6 +3404,9 @@ body.sidebar-open {
 }
 
 .ext-ui-dialog-modal.minimized .ext-ui-dialog-body {
+  display: none;
+}
+.ext-ui-dialog-modal.minimized .ext-ui-dialog-foot {
   display: none;
 }
 .ext-ui-dialog-modal.minimized .ext-ui-dialog-head .ext-ui-dialog-title {

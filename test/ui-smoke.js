@@ -1818,9 +1818,10 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(await desktop.locator('.ext-ui-widget').count() === 1, 'switch-back replays only session 1 widget');
     check(await desktop.locator('.ext-ui-status-badge').textContent() === '2 running',
       'status badge replayed on switch-back');
-    // 10b. Extension dialogs dock into the chat box (no page-wide overlay),
-    // background to a slim bar, and survive session switches with their
-    // in-progress selection intact. Session 1 is selected here.
+    // 10b. Extension dialogs dock above the chat box (no page-wide overlay,
+    // no composer takeover), background to a slim bar, absorb host
+    // re-emissions of the same payload, and survive session switches with
+    // their in-progress selection intact. Session 1 is selected here.
     console.log('extension dialog dock:');
     emit('turn_start', {});
     emit('extension_ui_request', {
@@ -1830,17 +1831,24 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.waitForSelector('#extUiDialogs .ext-ui-dialog-modal', { timeout: 5000 });
     check(await desktop.locator('.ext-ui-dialog-overlay').count() === 0, 'no page-wide overlay rendered');
     check(await desktop.evaluate(() =>
-      document.querySelector('.input-area').classList.contains('ext-dialog-takeover') &&
-      getComputedStyle(document.getElementById('promptInput')).display === 'none'),
-      'expanded dialog takes over the chat box');
+      !document.querySelector('.input-area').classList.contains('ext-dialog-takeover') &&
+      getComputedStyle(document.getElementById('promptInput')).display !== 'none'),
+      'composer stays usable while the dialog is expanded');
+    // Re-emission of the same payload under a fresh id must not stack cards.
+    emit('extension_ui_request', {
+      method: 'ask', id: 'dlg-ask-1-reemit',
+      questions: [{ id: 'release', question: 'Which release channel?', options: [{ label: 'Stable' }, { label: 'Beta' }] }],
+    });
+    await desktop.waitForTimeout(300);
+    check(await desktop.locator('#extUiDialogs .ext-ui-dialog-modal').count() === 1,
+      're-emitted ask payload does not stack a duplicate card');
     await desktop.click('.ext-ui-ask-option[data-option-index="1"]');
     check(await desktop.locator('.ext-ui-ask-option.selected').count() === 1, 'option click selects in place');
     // Background it: composer comes back, bar stays.
     await desktop.click('.ext-ui-dialog-min');
     check(await desktop.evaluate(() =>
-      document.querySelector('#extUiDialogs .ext-ui-dialog-modal').classList.contains('minimized') &&
-      !document.querySelector('.input-area').classList.contains('ext-dialog-takeover')),
-      'minimizing backgrounds the dialog and restores the composer');
+      document.querySelector('#extUiDialogs .ext-ui-dialog-modal').classList.contains('minimized')),
+      'minimizing backgrounds the dialog to a slim bar');
     // Switch away: the stashed dialog leaves the DOM with its session.
     await desktop.click(`.session-item[data-id="${SESSION2_ID}"]`);
     await desktop.waitForFunction(() => !document.getElementById('extUiDialogs'), { timeout: 5000 });
@@ -1864,8 +1872,8 @@ let remoteHost = null; // second pi-dish (multi-host section)
       lastUIResponse?.value?.results?.[0]?.selectedOptions?.[0] === 'Beta',
       `submit posts the picked option to the bridge (got ${JSON.stringify(lastUIResponse)})`);
     check(await desktop.evaluate(() =>
-      !document.querySelector('.input-area').classList.contains('ext-dialog-takeover')),
-      'composer restored after submit');
+      getComputedStyle(document.getElementById('promptInput')).display !== 'none'),
+      'composer usable after submit');
     // Resolved-elsewhere dismisses the docked card (TUI won the race).
     emit('extension_ui_request', { method: 'confirm', id: 'dlg-cf-1', title: 'Deploy now?' });
     await desktop.waitForSelector('#extUiDialogs .ext-ui-dialog-modal', { timeout: 5000 });

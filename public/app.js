@@ -9263,14 +9263,36 @@ function showExtStatus(key, text) {
 }
 
 // Interactive dialogs: extensions block on select/confirm/input/editor/ask.
-// Instead of a page-wide modal, the dialog docks into the owning session's
-// input area: expanded it takes over the chat box (the session is blocked on
-// an answer anyway), minimized it backgrounds to a slim bar so the composer
-// and the sidebar stay usable. The answer POSTs back and the session
+// The dialog docks as a card above the owning session's chat box — the
+// transcript, composer, and sidebar all stay usable — and a minimize button
+// backgrounds it to a slim bar. The answer POSTs back and the session
 // unblocks. For TUI sessions the same dialog is also on screen in the
 // terminal — whoever answers first wins (the server tells us via
 // extension_ui_resolved).
-const openExtDialogs = new Map(); // requestId -> { el, sessionId, minimized }
+const openExtDialogs = new Map(); // requestId -> { el, sessionId, minimized, sig }
+
+// Content signature for re-emission dedupe: some hosts re-invoke the dialog
+// primitive (fresh request id each time) while one is already open. Identity
+// is the payload, not the id.
+function extDialogSig(req) {
+  try {
+    if (req.method === 'ask') return 'ask:' + JSON.stringify(req.questions || []);
+    return `${req.method}:${JSON.stringify([req.title, req.message, req.options, req.placeholder, req.prefill])}`;
+  } catch {
+    return null;
+  }
+}
+
+// An identical dialog already docked (or stashed) for this session absorbs
+// the re-emission; the new request id is left for turn-end cleanup.
+function findDuplicateExtDialog(req, sessionId) {
+  const sig = extDialogSig(req);
+  if (sig === null) return null;
+  for (const entry of openExtDialogs.values()) {
+    if (entry.sessionId === sessionId && entry.sig === sig) return entry;
+  }
+  return null;
+}
 
 function getExtDialogDock() {
   const inputArea = document.querySelector('.input-area');
@@ -9285,12 +9307,10 @@ function getExtDialogDock() {
   return dock;
 }
 
-// Hide the composer while any docked dialog is expanded; drop the dock once
-// it empties.
+// Drop the dock element once it empties. The composer stays put either way —
+// the dock sits above it like an extension widget and caps its own height.
 function updateExtDialogDock() {
   const dock = document.getElementById('extUiDialogs');
-  const expanded = !!dock && [...dock.children].some(el => !el.classList.contains('minimized'));
-  document.querySelector('.input-area')?.classList.toggle('ext-dialog-takeover', expanded);
   if (dock && !dock.children.length) dock.remove();
 }
 
@@ -9332,7 +9352,7 @@ function dismissExtDialog(requestId) {
 
 // Shared chrome: title row with minimize (background) and close (cancel),
 // then the per-method body, then the label shown while minimized.
-function buildExtDialogCard(requestId, { title, bodyHtml, collapsedLabel, onClose }) {
+function buildExtDialogCard(requestId, { title, bodyHtml, footerHtml, collapsedLabel, onClose }) {
   const card = document.createElement('div');
   card.className = 'ext-ui-dialog-modal ext-ui-docked-dialog';
   card.innerHTML = `
@@ -9342,6 +9362,7 @@ function buildExtDialogCard(requestId, { title, bodyHtml, collapsedLabel, onClos
       <button class="ext-ui-dialog-close" title="Dismiss (cancel)">×</button>
     </div>
     <div class="ext-ui-dialog-body">${bodyHtml}</div>
+    ${footerHtml ? `<div class="ext-ui-dialog-foot">${footerHtml}</div>` : ''}
     <div class="ext-ui-dialog-collapsed-label">${escapeHtml(collapsedLabel)}</div>`;
   card.querySelector('.ext-ui-dialog-min').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -9364,6 +9385,11 @@ function showExtAskDialog(req, sessionId) {
   const existing = openExtDialogs.get(req.id);
   if (existing) {
     dockExtDialog(existing);
+    return;
+  }
+  const duplicate = findDuplicateExtDialog(req, sessionId);
+  if (duplicate) {
+    dockExtDialog(duplicate);
     return;
   }
   const questions = Array.isArray(req.questions)
@@ -9410,6 +9436,8 @@ function showExtAskDialog(req, sessionId) {
         </section>`;
       }).join('')}
     </div>
+    `,
+    footerHtml: `
     <div class="ext-ui-dialog-actions">
       <button class="ext-ui-dialog-btn" data-action="chat">Chat about this</button>
       <button class="ext-ui-dialog-btn primary" data-action="submit-ask">Submit</button>
@@ -9502,7 +9530,7 @@ function showExtAskDialog(req, sessionId) {
     sendExtDialogResponse(req.id, { value: { kind: 'submit', results } });
   });
 
-  const entry = { el: card, sessionId, minimized: false };
+  const entry = { el: card, sessionId, minimized: false, sig: extDialogSig(req) };
   openExtDialogs.set(req.id, entry);
   dockExtDialog(entry);
   card.querySelector('.ext-ui-ask-option, .ext-ui-ask-custom')?.focus();
@@ -9513,6 +9541,11 @@ function showExtDialog(req, sessionId) {
   const existing = openExtDialogs.get(req.id);
   if (existing) {
     dockExtDialog(existing);
+    return;
+  }
+  const duplicate = findDuplicateExtDialog(req, sessionId);
+  if (duplicate) {
+    dockExtDialog(duplicate);
     return;
   }
 
@@ -9575,7 +9608,7 @@ function showExtDialog(req, sessionId) {
     });
   });
 
-  const entry = { el: card, sessionId, minimized: false };
+  const entry = { el: card, sessionId, minimized: false, sig: extDialogSig(req) };
   openExtDialogs.set(req.id, entry);
   dockExtDialog(entry);
   const field = card.querySelector('.ext-ui-dialog-input, .ext-ui-dialog-editor');
