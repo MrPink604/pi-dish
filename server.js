@@ -5533,9 +5533,9 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
   // this session's widgets/statuses/pending dialogs instead of waiting for
   // the next live emission. Seeding the dedupe signatures keeps the bridge's
   // unchanged re-emissions from double-rendering right after the replay.
+  const replayDialogs = sess.extUIState && sess.turnInProgress ? [...sess.extUIState.dialogs.values()] : [];
   if (sess.extUIState) {
-    const { widgets, statuses, dialogs } = sess.extUIState;
-    const replayDialogs = sess.turnInProgress ? [...dialogs.values()] : [];
+    const { widgets, statuses } = sess.extUIState;
     for (const data of [...widgets.values(), ...statuses.values(), ...replayDialogs]) {
       if (data.method === 'setWidget' || data.method === 'setStatus') {
         lastExtUI.set(`${data.method}:${data.widgetKey || data.statusKey || 'default'}`, extUISig(data));
@@ -5543,6 +5543,10 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
       send('extension_ui_request', data);
     }
   }
+  // Authoritative pending-dialog list, sent after the replay burst so the
+  // client can prune dialogs it stashed for this session that were answered
+  // (or dismissed as stale) while it was viewing another session.
+  send('extension_ui_state', { dialogs: replayDialogs.map(data => data.id).filter(Boolean) });
   // Replay the last-known queue so a client that just (re)connected — e.g. one
   // that switched sessions — shows pending steers/follow-ups without waiting
   // for the next queue_update. RPCSessions have no queueState (fine).

@@ -3316,15 +3316,21 @@ body.sidebar-open {
 }
 
 /* Interactive dialog modal (select / confirm / input / editor) */
-.ext-ui-dialog-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+/* Interactive dialogs (select / confirm / input / editor / ask) dock into
+   the session's input area instead of a page-wide overlay: expanded they
+   take over the chat box, minimized they collapse to a bar and the composer
+   comes back. Scoped to the visible session, so the sidebar stays usable. */
+.ext-ui-dialog-dock {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  padding: 16px;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.input-area.ext-dialog-takeover #promptInput,
+.input-area.ext-dialog-takeover .input-actions,
+.input-area.ext-dialog-takeover .attachment-strip {
+  display: none;
 }
 
 .ext-ui-dialog-modal {
@@ -3332,16 +3338,71 @@ body.sidebar-open {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 18px;
+  padding: 14px 16px;
   width: 100%;
-  max-width: 440px;
-  max-height: 80vh;
+  max-height: 60vh;
   overflow-y: auto;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
 }
 
-.ext-ui-ask-modal {
-  max-width: 680px;
+.ext-ui-dialog-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ext-ui-dialog-head .ext-ui-dialog-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.ext-ui-dialog-min,
+.ext-ui-dialog-close {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.ext-ui-dialog-min:hover,
+.ext-ui-dialog-close:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.ext-ui-dialog-collapsed-label {
+  display: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ext-ui-dialog-modal.minimized {
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.ext-ui-dialog-modal.minimized .ext-ui-dialog-body {
+  display: none;
+}
+.ext-ui-dialog-modal.minimized .ext-ui-dialog-head .ext-ui-dialog-title {
+  display: none;
+}
+
+.ext-ui-dialog-modal.minimized .ext-ui-dialog-min {
+  transform: rotate(90deg);
+}
+
+.ext-ui-dialog-modal.minimized .ext-ui-dialog-collapsed-label {
+  display: block;
 }
 
 .ext-ui-ask-questions {
@@ -3378,7 +3439,6 @@ body.sidebar-open {
 
 .ext-ui-dialog-modal .ext-ui-dialog-title {
   font-size: 14px;
-  padding-right: 24px;
 }
 
 .ext-ui-dialog-message {
@@ -3515,18 +3575,6 @@ body.sidebar-open {
 .ext-ui-dialog-editor {
   font-family: var(--font-mono);
   resize: vertical;
-}
-
-.ext-ui-dialog-close {
-  position: absolute;
-  top: 10px;
-  right: 12px;
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  font-size: 18px;
-  cursor: pointer;
-  line-height: 1;
 }
 
 /* Jump-to-bottom button (appears when scrolled away during streaming) */
@@ -5177,8 +5225,7 @@ mark.comment-mark {
     padding: 8px 10px;
   }
 
-  .ext-ui-widget,
-  .ext-ui-dialog {
+  .ext-ui-widget {
     margin-left: 12px;
     margin-right: 12px;
   }

@@ -6787,9 +6787,8 @@ function openMessageStream(url, sessionId, selectionGeneration) {
       try {
         const data = JSON.parse(e.data);
         turnCleanupDone = !data.turnInProgress;
-        if (!data.turnInProgress) {
-          for (const requestId of [...openExtDialogs.keys()]) dismissExtDialog(requestId);
-        }
+        // Stale dialogs for this session are pruned by the extension_ui_state
+        // event that follows the connect replay — no per-init sweep needed.
         if (!data.turnInProgress) abortingSessions.delete(sessionId);
         // Both flags, independently: auto-compaction runs inside a turn
         // (both true), a TUI /compact has neither turn nor stream events yet
@@ -6952,7 +6951,7 @@ function openMessageStream(url, sessionId, selectionGeneration) {
     });
 
     addOwnedListener('extension_ui_request', (e) => {
-      try { handleExtensionUI(JSON.parse(e.data)); } catch (err) { console.error('extension_ui_request error:', err); }
+      try { handleExtensionUI(JSON.parse(e.data), sessionId); } catch (err) { console.error('extension_ui_request error:', err); }
     });
 
     addOwnedListener('queue_update', (e) => {
@@ -6962,6 +6961,18 @@ function openMessageStream(url, sessionId, selectionGeneration) {
     // Dialog answered elsewhere (TUI or another browser) — dismiss ours.
     addOwnedListener('extension_ui_resolved', (e) => {
       try { dismissExtDialog(JSON.parse(e.data).id); } catch {}
+    });
+    // Authoritative list of this session's pending dialogs, sent on (re)connect
+    // after the replay burst. Prunes stashed dialogs that were answered or
+    // dismissed while we were away (or orphaned by an idle session), without
+    // touching other sessions' dialogs.
+    addOwnedListener('extension_ui_state', (e) => {
+      try {
+        const pending = new Set(JSON.parse(e.data).dialogs || []);
+        for (const [requestId, entry] of [...openExtDialogs]) {
+          if (entry.sessionId === sessionId && !pending.has(requestId)) dismissExtDialog(requestId);
+        }
+      } catch {}
     });
 
     addOwnedListener('compaction_start', () => {
@@ -7038,7 +7049,9 @@ function openMessageStream(url, sessionId, selectionGeneration) {
       abortingSessions.delete(sessionId);
       setCompacting(false);
       setTurnInProgress(false);
-      for (const requestId of [...openExtDialogs.keys()]) dismissExtDialog(requestId);
+      for (const [requestId, entry] of [...openExtDialogs]) {
+        if (entry.sessionId === sessionId) dismissExtDialog(requestId);
+      }
       setStatus('Session ended');
       refreshSessions();
     });
@@ -9043,7 +9056,7 @@ const extUIState = {
 };
 
 // Extension UI is per-session: wipe the previous session's widgets, status
-// badges, and dialog overlays when switching. The server replays the new
+// badges, and docked dialogs when switching. The server replays the new
 // session's remembered state once the stream connects, so elements come back
 // when switching to a session that has them.
 function clearExtensionUI() {
@@ -9051,8 +9064,11 @@ function clearExtensionUI() {
   extUIState.widgets.clear();
   for (const badge of extUIState.statuses.values()) badge.remove();
   extUIState.statuses.clear();
-  for (const overlay of openExtDialogs.values()) overlay.remove();
-  openExtDialogs.clear();
+  // Dialogs are stashed, not destroyed: detaching keeps in-progress
+  // selections/inputs intact, the stream replay re-docks them when switching
+  // back, and extension_ui_state drops any resolved in the meantime.
+  for (const entry of openExtDialogs.values()) entry.el.remove();
+  updateExtDialogDock();
 }
 
 function getToastContainer() {
@@ -9066,7 +9082,7 @@ function getToastContainer() {
   return el;
 }
 
-function handleExtensionUI(req) {
+function handleExtensionUI(req, sessionId) {
   // Extension strings arrive styled for the terminal (theme.fg ANSI codes) —
   // strip them everywhere up front instead of per render site.
   if (Array.isArray(req.widgetLines)) req.widgetLines = req.widgetLines.map(stripAnsi);
@@ -9119,10 +9135,10 @@ function handleExtensionUI(req) {
     case 'confirm':
     case 'input':
     case 'editor':
-      showExtDialog(req);
+      showExtDialog(req, sessionId);
       break;
     case 'ask':
-      showExtAskDialog(req);
+      showExtAskDialog(req, sessionId);
       break;
     default:
       // Unknown method — show as a generic toast so it's not silently lost
@@ -9246,27 +9262,110 @@ function showExtStatus(key, text) {
   extUIState.statuses.set(key, badge);
 }
 
-// Interactive dialogs: extensions block on select/confirm/input/editor. We
-// render a real modal and POST the answer back; the session unblocks. For TUI
-// sessions the same dialog is also on screen in the terminal — whoever
-// answers first wins (the server tells us via extension_ui_resolved).
-const openExtDialogs = new Map(); // requestId -> overlay element
+// Interactive dialogs: extensions block on select/confirm/input/editor/ask.
+// Instead of a page-wide modal, the dialog docks into the owning session's
+// input area: expanded it takes over the chat box (the session is blocked on
+// an answer anyway), minimized it backgrounds to a slim bar so the composer
+// and the sidebar stay usable. The answer POSTs back and the session
+// unblocks. For TUI sessions the same dialog is also on screen in the
+// terminal — whoever answers first wins (the server tells us via
+// extension_ui_resolved).
+const openExtDialogs = new Map(); // requestId -> { el, sessionId, minimized }
+
+function getExtDialogDock() {
+  const inputArea = document.querySelector('.input-area');
+  if (!inputArea) return null;
+  let dock = document.getElementById('extUiDialogs');
+  if (!dock) {
+    dock = document.createElement('div');
+    dock.id = 'extUiDialogs';
+    dock.className = 'ext-ui-dialog-dock';
+    inputArea.insertBefore(dock, document.getElementById('attachmentStrip'));
+  }
+  return dock;
+}
+
+// Hide the composer while any docked dialog is expanded; drop the dock once
+// it empties.
+function updateExtDialogDock() {
+  const dock = document.getElementById('extUiDialogs');
+  const expanded = !!dock && [...dock.children].some(el => !el.classList.contains('minimized'));
+  document.querySelector('.input-area')?.classList.toggle('ext-dialog-takeover', expanded);
+  if (dock && !dock.children.length) dock.remove();
+}
+
+function dockExtDialog(entry) {
+  const dock = getExtDialogDock();
+  if (!dock) return;
+  if (entry.el.parentNode !== dock) dock.appendChild(entry.el);
+  entry.el.classList.toggle('minimized', entry.minimized);
+  updateExtDialogDock();
+}
+
+function setExtDialogMinimized(requestId, minimized) {
+  const entry = openExtDialogs.get(requestId);
+  if (!entry) return;
+  entry.minimized = minimized;
+  entry.el.classList.toggle('minimized', minimized);
+  updateExtDialogDock();
+  if (!minimized) {
+    entry.el.querySelector('.ext-ui-ask-option, .ext-ui-dialog-option, .ext-ui-dialog-input, .ext-ui-dialog-editor')?.focus();
+  }
+}
 
 function sendExtDialogResponse(requestId, response) {
-  if (!currentSession) return;
-  apiSend(currentSession.host, `/api/sessions/${encodeURIComponent(currentSession.id)}/ui-response`, { requestId, ...response })
+  const entry = openExtDialogs.get(requestId);
+  const sessionId = entry?.sessionId || currentSession?.id;
+  if (!sessionId) return;
+  apiSend(currentSession?.host, `/api/sessions/${encodeURIComponent(sessionId)}/ui-response`, { requestId, ...response })
     .catch(e => setStatus('Dialog response failed: ' + e.message, 'error'));
   dismissExtDialog(requestId);
 }
 
 function dismissExtDialog(requestId) {
-  const overlay = openExtDialogs.get(requestId);
-  if (overlay) overlay.remove();
+  const entry = openExtDialogs.get(requestId);
+  if (!entry) return;
+  entry.el.remove();
   openExtDialogs.delete(requestId);
+  updateExtDialogDock();
 }
 
-function showExtAskDialog(req) {
-  if (!req.id || openExtDialogs.has(req.id)) return;
+// Shared chrome: title row with minimize (background) and close (cancel),
+// then the per-method body, then the label shown while minimized.
+function buildExtDialogCard(requestId, { title, bodyHtml, collapsedLabel, onClose }) {
+  const card = document.createElement('div');
+  card.className = 'ext-ui-dialog-modal ext-ui-docked-dialog';
+  card.innerHTML = `
+    <div class="ext-ui-dialog-head">
+      <div class="ext-ui-dialog-title">${escapeHtml(title)}</div>
+      <button class="ext-ui-dialog-min" title="Background — keep the composer usable and answer later">–</button>
+      <button class="ext-ui-dialog-close" title="Dismiss (cancel)">×</button>
+    </div>
+    <div class="ext-ui-dialog-body">${bodyHtml}</div>
+    <div class="ext-ui-dialog-collapsed-label">${escapeHtml(collapsedLabel)}</div>`;
+  card.querySelector('.ext-ui-dialog-min').addEventListener('click', (e) => {
+    e.stopPropagation();
+    setExtDialogMinimized(requestId, true);
+  });
+  card.querySelector('.ext-ui-dialog-close').addEventListener('click', (e) => {
+    e.stopPropagation();
+    onClose();
+  });
+  card.addEventListener('click', () => {
+    if (openExtDialogs.get(requestId)?.minimized) setExtDialogMinimized(requestId, false);
+  });
+  return card;
+}
+
+function showExtAskDialog(req, sessionId) {
+  if (!req.id) return;
+  // Replayed request for a dialog we still hold (e.g. switch-back): re-dock
+  // the live element so in-progress selections survive.
+  const existing = openExtDialogs.get(req.id);
+  if (existing) {
+    dockExtDialog(existing);
+    return;
+  }
   const questions = Array.isArray(req.questions)
     ? req.questions.filter(question => question && typeof question === 'object' && typeof question.id === 'string')
     : [];
@@ -9275,12 +9374,13 @@ function showExtAskDialog(req) {
     return;
   }
 
-  const overlay = document.createElement('div');
-  overlay.className = 'ext-ui-dialog-overlay';
-  const card = document.createElement('div');
-  card.className = 'ext-ui-dialog-modal ext-ui-ask-modal';
-  card.innerHTML = `
-    <div class="ext-ui-dialog-title">${questions.length === 1 ? 'Question' : `${questions.length} questions`}</div>
+  const card = buildExtDialogCard(req.id, {
+    title: questions.length === 1 ? 'Question' : `${questions.length} questions`,
+    collapsedLabel: questions.length === 1
+      ? `Question pending: ${questions[0].question || ''}`
+      : `${questions.length} questions pending — click to answer`,
+    onClose: () => sendExtDialogResponse(req.id, { cancelled: true }),
+    bodyHtml: `
     <div class="ext-ui-ask-questions">
       ${questions.map((question, questionIndex) => {
         const options = Array.isArray(question.options) ? question.options : [];
@@ -9313,9 +9413,9 @@ function showExtAskDialog(req) {
     <div class="ext-ui-dialog-actions">
       <button class="ext-ui-dialog-btn" data-action="chat">Chat about this</button>
       <button class="ext-ui-dialog-btn primary" data-action="submit-ask">Submit</button>
-    </div>
-    <button class="ext-ui-dialog-close" title="Dismiss (cancel)">×</button>`;
-  overlay.appendChild(card);
+    </div>`,
+  });
+  card.classList.add('ext-ui-ask-modal');
 
   const selections = questions.map(() => new Set());
   card.querySelectorAll('.ext-ui-ask-option').forEach(button => {
@@ -9401,26 +9501,22 @@ function showExtAskDialog(req) {
     }
     sendExtDialogResponse(req.id, { value: { kind: 'submit', results } });
   });
-  card.querySelector('.ext-ui-dialog-close').addEventListener('click', () => {
-    sendExtDialogResponse(req.id, { cancelled: true });
-  });
 
-  document.body.appendChild(overlay);
-  openExtDialogs.set(req.id, overlay);
+  const entry = { el: card, sessionId, minimized: false };
+  openExtDialogs.set(req.id, entry);
+  dockExtDialog(entry);
   card.querySelector('.ext-ui-ask-option, .ext-ui-ask-custom')?.focus();
 }
 
-function showExtDialog(req) {
-  if (!req.id || openExtDialogs.has(req.id)) return;
-
-  const overlay = document.createElement('div');
-  overlay.className = 'ext-ui-dialog-overlay';
-
-  const card = document.createElement('div');
-  card.className = 'ext-ui-dialog-modal';
+function showExtDialog(req, sessionId) {
+  if (!req.id) return;
+  const existing = openExtDialogs.get(req.id);
+  if (existing) {
+    dockExtDialog(existing);
+    return;
+  }
 
   let bodyHtml = '';
-  if (req.title) bodyHtml += `<div class="ext-ui-dialog-title">${escapeHtml(req.title)}</div>`;
   if (req.message) bodyHtml += `<div class="ext-ui-dialog-message">${escapeHtml(req.message)}</div>`;
 
   if (req.method === 'select') {
@@ -9452,9 +9548,13 @@ function showExtDialog(req) {
     </div>`;
   }
 
-  bodyHtml += `<button class="ext-ui-dialog-close" title="Dismiss (cancel)">×</button>`;
-  card.innerHTML = bodyHtml;
-  overlay.appendChild(card);
+  const title = req.title || { select: 'Select', confirm: 'Confirm', input: 'Input', editor: 'Editor' }[req.method] || 'Dialog';
+  const card = buildExtDialogCard(req.id, {
+    title,
+    bodyHtml,
+    collapsedLabel: `${title} pending — click to answer`,
+    onClose: () => sendExtDialogResponse(req.id, { cancelled: true }),
+  });
 
   card.querySelectorAll('.ext-ui-dialog-option').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -9474,12 +9574,10 @@ function showExtDialog(req) {
       }
     });
   });
-  card.querySelector('.ext-ui-dialog-close').addEventListener('click', () => {
-    sendExtDialogResponse(req.id, { cancelled: true });
-  });
 
-  document.body.appendChild(overlay);
-  openExtDialogs.set(req.id, overlay);
+  const entry = { el: card, sessionId, minimized: false };
+  openExtDialogs.set(req.id, entry);
+  dockExtDialog(entry);
   const field = card.querySelector('.ext-ui-dialog-input, .ext-ui-dialog-editor');
   if (field) field.focus();
 }

@@ -238,6 +238,8 @@ let runCommandCount = 0;
 function setQueue(q) { liveQueue = q; emit('queue_update', liveQueue); }
 
 function handleCommand(sock, msg) {
+  // Dialog answer from the web UI (bridge-session command form).
+  if (msg.command === 'extension_ui_response') { lastUIResponse = msg; return respond(sock, msg.id, {}); }
   switch (msg.command) {
     case 'get_available_models':
       return respond(sock, msg.id, { models: [
@@ -281,6 +283,7 @@ function handleCommand(sock, msg) {
 }
 
 let lastPrompt = null;
+let lastUIResponse = null;
 let fakeCompacting = false;
 let bufferedPrompt = null;
 function flushBufferedPrompt() {
@@ -1815,6 +1818,62 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(await desktop.locator('.ext-ui-widget').count() === 1, 'switch-back replays only session 1 widget');
     check(await desktop.locator('.ext-ui-status-badge').textContent() === '2 running',
       'status badge replayed on switch-back');
+    // 10b. Extension dialogs dock into the chat box (no page-wide overlay),
+    // background to a slim bar, and survive session switches with their
+    // in-progress selection intact. Session 1 is selected here.
+    console.log('extension dialog dock:');
+    emit('turn_start', {});
+    emit('extension_ui_request', {
+      method: 'ask', id: 'dlg-ask-1',
+      questions: [{ id: 'release', question: 'Which release channel?', options: [{ label: 'Stable' }, { label: 'Beta' }] }],
+    });
+    await desktop.waitForSelector('#extUiDialogs .ext-ui-dialog-modal', { timeout: 5000 });
+    check(await desktop.locator('.ext-ui-dialog-overlay').count() === 0, 'no page-wide overlay rendered');
+    check(await desktop.evaluate(() =>
+      document.querySelector('.input-area').classList.contains('ext-dialog-takeover') &&
+      getComputedStyle(document.getElementById('promptInput')).display === 'none'),
+      'expanded dialog takes over the chat box');
+    await desktop.click('.ext-ui-ask-option[data-option-index="1"]');
+    check(await desktop.locator('.ext-ui-ask-option.selected').count() === 1, 'option click selects in place');
+    // Background it: composer comes back, bar stays.
+    await desktop.click('.ext-ui-dialog-min');
+    check(await desktop.evaluate(() =>
+      document.querySelector('#extUiDialogs .ext-ui-dialog-modal').classList.contains('minimized') &&
+      !document.querySelector('.input-area').classList.contains('ext-dialog-takeover')),
+      'minimizing backgrounds the dialog and restores the composer');
+    // Switch away: the stashed dialog leaves the DOM with its session.
+    await desktop.click(`.session-item[data-id="${SESSION2_ID}"]`);
+    await desktop.waitForFunction(() => !document.getElementById('extUiDialogs'), { timeout: 5000 });
+    check(true, 'dialog stashed on session switch');
+    // Switch back: replay re-docks the live element, selection preserved.
+    await desktop.click(`.session-item[data-id="${registryState.sessionId}"]`);
+    await desktop.waitForSelector('#extUiDialogs .ext-ui-dialog-modal', { timeout: 5000 });
+    check(await desktop.evaluate(() =>
+      document.querySelector('#extUiDialogs .ext-ui-dialog-modal').classList.contains('minimized')),
+      'dialog re-docked still backgrounded after switch-back');
+    check(await desktop.locator('.ext-ui-ask-option.selected').count() === 1,
+      'selection survives the session switch');
+    // Expand via the bar and submit: the answer posts to the session.
+    await desktop.click('#extUiDialogs .ext-ui-dialog-modal');
+    await desktop.waitForFunction(() =>
+      !document.querySelector('#extUiDialogs .ext-ui-dialog-modal').classList.contains('minimized'), { timeout: 5000 });
+    await desktop.click('[data-action="submit-ask"]');
+    await desktop.waitForFunction(() => !document.getElementById('extUiDialogs'), { timeout: 5000 });
+    check(lastUIResponse?.requestId === 'dlg-ask-1' &&
+      lastUIResponse?.value?.kind === 'submit' &&
+      lastUIResponse?.value?.results?.[0]?.selectedOptions?.[0] === 'Beta',
+      `submit posts the picked option to the bridge (got ${JSON.stringify(lastUIResponse)})`);
+    check(await desktop.evaluate(() =>
+      !document.querySelector('.input-area').classList.contains('ext-dialog-takeover')),
+      'composer restored after submit');
+    // Resolved-elsewhere dismisses the docked card (TUI won the race).
+    emit('extension_ui_request', { method: 'confirm', id: 'dlg-cf-1', title: 'Deploy now?' });
+    await desktop.waitForSelector('#extUiDialogs .ext-ui-dialog-modal', { timeout: 5000 });
+    emit('extension_ui_resolved', { id: 'dlg-cf-1' });
+    await desktop.waitForFunction(() => !document.getElementById('extUiDialogs'), { timeout: 5000 });
+    check(true, 'extension_ui_resolved dismisses the docked dialog');
+    emit('turn_end', {});
+    await desktop.waitForTimeout(300);
 
     // 10a. Selection/transcript ownership. Hold A's tail response, fully
     // select B, then release A: A must not reopen its stream or touch B's pane.
