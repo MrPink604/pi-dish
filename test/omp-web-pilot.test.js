@@ -12,13 +12,6 @@ fs.mkdirSync(path.join(home, '.omp', 'agent'), { recursive: true });
 fs.mkdirSync(path.join(home, '.omp'), { recursive: true });
 fs.mkdirSync(cwd, { recursive: true });
 
-fs.writeFileSync(path.join(cwd, '.env'), [
-  'export FIXTURE_PROJECT_API_KEY="project-value"',
-  'FIXTURE_BLANK_API_KEY=""',
-].join('\n') + '\n');
-fs.writeFileSync(path.join(home, '.omp', 'agent', '.env'), 'ZAI_API_KEY=agent-value\n');
-fs.writeFileSync(path.join(home, '.omp', '.env'), 'FIXTURE_CONFIG_API_KEY=config-value\n');
-fs.writeFileSync(path.join(home, '.env'), 'FIXTURE_HOME_API_KEY=home-value\n');
 
 process.env.HOME = home;
 process.env.PORT = '0';
@@ -26,7 +19,6 @@ process.env.TMUX_TMPDIR = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-pil
 process.env.PI_DISH_OMP_COMMAND = `env PI_FIXTURE_HARNESS=omp ${process.execPath} ${fixture}`;
 process.env.PI_FIXTURE_MODEL_EVENTS_FILE = modelEventsFile;
 process.env.PI_FIXTURE_MODELS_LINGER_MS = '1000';
-process.env.FIXTURE_PROCESS_API_KEY = 'process-value';
 
 const server = require('../server.js');
 let base;
@@ -56,7 +48,7 @@ async function post(resource, body) {
   return { status: response.status, body: await response.json() };
 }
 
-test('OMP catalog preserves selector and per-model thinking while annotating readiness', async () => {
+test('OMP catalog preserves the command\'s authoritative availability list', async () => {
   const query = new URLSearchParams({ harness: 'omp', cwd });
   const { status, body } = await get(`/api/models?${query}`);
   assert.equal(status, 200);
@@ -68,37 +60,18 @@ test('OMP catalog preserves selector and per-model thinking while annotating rea
 
   const flash = body.find(model => model.selector === 'zai/glm-4.7-flash');
   assert.deepEqual(flash.thinking, ['minimal', 'low', 'medium', 'high', 'xhigh']);
-  assert.equal(flash.providerReady, true);
+  assert.equal(Object.hasOwn(flash, 'providerReady'), false);
   assert.equal(flash.contextWindow, 200000);
 
   const restricted = body.find(model => model.selector === 'zai/glm-5.2');
   assert.deepEqual(restricted.thinking, ['high', 'max']);
-  assert.equal(restricted.providerReady, true);
+  assert.equal(Object.hasOwn(restricted, 'providerReady'), false);
 
-  const missing = body.find(model => model.provider === 'fixture-missing');
-  assert.equal(missing.providerReady, false);
-  assert.equal(Object.hasOwn(missing, 'credential'), false);
+  const commandListed = body.find(model => model.provider === 'fixture-missing');
+  assert.ok(commandListed);
+  assert.equal(Object.hasOwn(commandListed, 'providerReady'), false);
 });
 
-test('OMP readiness checks process env and every documented dotenv location without values', async () => {
-  const query = new URLSearchParams({ cwd });
-  const { status, body } = await get(`/api/harnesses/omp/readiness?${query}`);
-  assert.equal(status, 200);
-  assert.equal(fs.readFileSync(modelEventsFile, 'utf8').trim().split('\n').length, 1,
-    'readiness reuses the recent catalog instead of spawning OMP again');
-  assert.deepEqual(body.providers, {
-    anthropic: false,
-    zai: true,
-    'fixture-project': true,
-    'fixture-config': true,
-    'fixture-home': true,
-    'fixture-process': true,
-    'fixture-missing': false,
-    'fixture-blank': false,
-  });
-  assert.ok(Object.values(body.providers).every(value => typeof value === 'boolean'));
-  assert.doesNotMatch(JSON.stringify(body), /API_KEY|project-value|agent-value|config-value|home-value|process-value/);
-});
 
 async function put(resource, body) {
   const response = await fetch(base + resource, {

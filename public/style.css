@@ -4478,21 +4478,6 @@ body.standalone-file-page {
 .ns-select:focus { border-color: var(--accent); }
 .ns-select:disabled { opacity: .55; cursor: not-allowed; }
 .ns-hidden-note { font-size: 11px; color: var(--text-muted); }
-.ns-readiness { display: flex; flex-wrap: wrap; gap: 5px; font-size: 11px; }
-.ns-provider-status {
-  padding: 2px 7px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  color: var(--text-muted);
-}
-.ns-provider-status.ready {
-  color: var(--success);
-  border-color: color-mix(in srgb, var(--success) 35%, var(--line));
-}
-.ns-provider-status.missing {
-  color: var(--warning);
-  border-color: color-mix(in srgb, var(--warning) 35%, var(--line));
-}
 .ns-config-readout {
   padding: 10px 12px;
   border: 1px solid var(--line);

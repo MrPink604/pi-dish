@@ -2294,8 +2294,7 @@ async function loadResumeModelOptions(session) {
     let html = `<option value="">Session model${escapeHtml(current)}</option>`;
     for (const model of Array.isArray(models) ? models : []) {
       const selector = model.selector || `${model.provider}/${model.id}`;
-      const missing = model.providerReady === false;
-      html += `<option value="${escapeHtml(selector)}"${missing ? ' disabled' : ''}>${escapeHtml(selector)}${missing ? ' — credential missing' : ''}</option>`;
+      html += `<option value="${escapeHtml(selector)}">${escapeHtml(selector)}</option>`;
     }
     select.innerHTML = html;
     select.disabled = false;
@@ -8046,9 +8045,7 @@ function modelRoleOptions(value) {
   }
   models.forEach((m, i) => {
     const selector = known[i];
-    // Not disabled: the user may add the provider key out of band.
-    const note = m.providerReady === false ? ' · no key' : '';
-    html += `<option value="${escapeHtml(selector)}"${selector === value ? ' selected' : ''}>${escapeHtml(selector)}${note}</option>`;
+    html += `<option value="${escapeHtml(selector)}"${selector === value ? ' selected' : ''}>${escapeHtml(selector)}</option>`;
   });
   return html;
 }
@@ -8326,31 +8323,6 @@ function syncNsThinking() {
   if (note) note.textContent = noteText;
 }
 
-function renderNsProviderReadiness(models) {
-  const wrap = document.getElementById('nsProviderReadiness');
-  if (!wrap) return;
-  if (selectedHarnessId() !== 'omp') {
-    wrap.style.display = 'none';
-    wrap.innerHTML = '';
-    return;
-  }
-  wrap.style.display = 'flex';
-  if (knownModelsCwd !== (nsCwdValue() || '')) {
-    wrap.textContent = 'Checking provider credentials…';
-    return;
-  }
-  const byProvider = new Map();
-  for (const model of models) {
-    if (!byProvider.has(model.provider)) byProvider.set(model.provider, model.providerReady === true);
-    else if (model.providerReady === true) byProvider.set(model.provider, true);
-  }
-  if (!byProvider.size) {
-    wrap.textContent = 'OMP reported no available models';
-    return;
-  }
-  wrap.innerHTML = [...byProvider].sort(([a], [b]) => a.localeCompare(b)).map(([provider, ready]) =>
-    `<span class="ns-provider-status ${ready ? 'ready' : 'missing'}">${escapeHtml(provider)}: credential ${ready ? 'present' : 'missing'}</span>`).join('');
-}
 
 function renderNsModel() {
   const sel = document.getElementById('nsModelSelect');
@@ -8358,7 +8330,6 @@ function renderNsModel() {
   const models = Array.isArray(knownModels) ? knownModels : [];
   const enabled = models.filter(m => m && m.enabled !== false);
   const hidden = models.length - enabled.length;
-  const readinessFresh = selectedHarnessId() !== 'omp' || knownModelsCwd === (nsCwdValue() || '');
 
   const byProvider = {};
   enabled.forEach(m => { (byProvider[m.provider] = byProvider[m.provider] || []).push(m); });
@@ -8367,8 +8338,7 @@ function renderNsModel() {
     html += `<optgroup label="${escapeHtml(p)}">`;
     byProvider[p].forEach(m => {
       const selector = m.selector || `${m.provider}/${m.id}`;
-      const missing = readinessFresh && m.providerReady === false;
-      html += `<option value="${escapeHtml(selector)}"${missing ? ' disabled' : ''}>${escapeHtml(m.name || m.id)}${missing ? ' — credential missing' : ''}</option>`;
+      html += `<option value="${escapeHtml(selector)}">${escapeHtml(m.name || m.id)}</option>`;
     });
     html += '</optgroup>';
   });
@@ -8380,16 +8350,14 @@ function renderNsModel() {
   // would lose the selection before the full-catalog refresh re-renders.
   // Spawning reads the select itself, so a never-restored model can't be sent.
   sel.value = (newSessionModel && enabled.some(m =>
-    (m.selector || `${m.provider}/${m.id}`) === newSessionModel && (!readinessFresh || m.providerReady !== false)))
-    ? newSessionModel : '';
+    (m.selector || `${m.provider}/${m.id}`) === newSessionModel)) ? newSessionModel : '';
 
   const note = document.getElementById('nsModelHidden');
-  const unavailable = readinessFresh ? enabled.filter(model => model.providerReady === false).length : 0;
-  const notes = [];
-  if (hidden > 0) notes.push(`${hidden} model${hidden === 1 ? '' : 's'} hidden (not enabled)`);
-  if (unavailable > 0) notes.push(`${unavailable} model${unavailable === 1 ? '' : 's'} unavailable (provider credential missing)`);
-  if (note) note.textContent = notes.join(' · ');
-  renderNsProviderReadiness(enabled);
+  if (note) {
+    note.textContent = hidden > 0
+      ? `${hidden} model${hidden === 1 ? '' : 's'} hidden (not enabled)`
+      : '';
+  }
   syncNsThinking();
 }
 

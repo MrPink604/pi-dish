@@ -27,8 +27,10 @@ stabilized public APIs that unblock most of these. Verified against OMP
 | queue cancel | none (abort is not queue cancellation) | Keep disabled |
 | custom extension UI | `ctx.ui.custom()` explicitly does not serialize; dialog primitives (select/confirm/input/editor/notify) do | Keep dialog subset only |
 
-Provider config: OMP stores credentials in `~/.omp/agent/agent.db` and reads
-env from `<cwd>/.env`, `~/.omp/agent/.env`, `~/.omp/.env`, `~/.env`. Z.ai is a
+Provider config: OMP resolves credentials from `~/.omp/agent/agent.db`, env,
+dotenv files, custom config, and keyless providers. `omp models --json` applies
+that logic and returns only authenticated or keyless providers, so its catalog
+is the authority; pi-dish must not infer readiness from env alone. Z.ai is a
 first-class provider: id `zai`, env `ZAI_API_KEY`, models `zai/glm-4.5` …
 `zai/glm-5.2` (verified live via `omp models --json`). Settings are YAML at
 `~/.omp/agent/config.yml`, introspectable via `omp config list --json`,
@@ -109,9 +111,9 @@ thinking level, and a *curated* config surface — not a full settings editor.
    `lib/harnesses.js`), thinking levels from the selected model's catalog entry
    (e.g. `glm-5.2` supports only `high`/`max` — the picker must not offer
    invalid levels).
-2. Provider readiness: surface which providers are usable (presence-only check
-   of env/`.env` keys, e.g. `ZAI_API_KEY` — never display values). Gray out or
-   annotate models whose provider has no credential.
+2. Catalog authority: treat `omp models --json` as the usable model list. OMP
+   already checks its credential database, env/config sources, custom
+   providers, and keyless providers; every returned model stays selectable.
 3. Curated config: read `omp config list --json` / `omp config get --json`
    server-side and expose a small allowlisted subset relevant to piloting
    (default model, default thinking level). No arbitrary settings writes from
@@ -119,8 +121,8 @@ thinking level, and a *curated* config surface — not a full settings editor.
    mechanism.
 4. Resume flow: resuming an OMP session from history from the web must work
    with a model override.
-5. Tests: server unit tests for the catalog/readiness endpoints; UI smoke for
-   the picker states (no credential, invalid thinking level, live launch).
+5. Tests: server unit tests for catalog passthrough; UI smoke for pre-spawn
+   selection, invalid thinking levels, and live launch.
 
 ## Out of scope (unchanged from lineage task)
 
@@ -143,9 +145,8 @@ Never commit it, never echo it into logs. Prefer `zai/glm-4.7-flash` with
 
 - OMP sessions support compact, tree read, and tree navigation from the web,
   capability-gated and verified against a pinned OMP/Bun pair with real turns.
-- A user can open pi-dish, pick OMP + a Z.ai model + a valid thinking level,
-  see provider readiness, launch, steer, compact, branch, and resume — all
-  from the browser.
+- A user can open pi-dish, pick any model returned by OMP with a valid thinking
+  level, launch, steer, compact, branch, and resume — all from the browser.
 - Queue controls remain hidden for OMP with a precise capability story.
 - `npm test` green; lineage canary extended or documented for the new
   capabilities.

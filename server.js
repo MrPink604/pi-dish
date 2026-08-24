@@ -3841,63 +3841,6 @@ async function runHarnessModelCommand(descriptor, { cwd } = {}) {
   return entry.inFlight;
 }
 
-// OMP loads dotenv files in this order after process.env: <cwd>/.env,
-// ~/.omp/agent/.env, ~/.omp/.env, ~/.env. We need only presence, so parse
-// names directly and discard each line's value without ever putting it in an
-// API object or log message.
-function dotenvPresentKeys(file) {
-  const keys = new Set();
-  let content;
-  try { content = fs.readFileSync(file, 'utf8'); } catch { return keys; }
-  for (const line of content.split(/\r?\n/)) {
-    const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-    if (!match) continue;
-    let raw = match[2].trim();
-    if (!raw) continue;
-    if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
-      raw = raw.slice(1, -1);
-    } else {
-      raw = raw.replace(/\s+#.*$/, '').trim();
-    }
-    if (raw) keys.add(match[1]);
-  }
-  return keys;
-}
-
-function providerCredentialKeys(descriptor, provider) {
-  if (Object.hasOwn(descriptor.providerCredentials || {}, provider)) {
-    return descriptor.providerCredentials[provider];
-  }
-  const conventional = String(provider || '').toUpperCase().replace(/[^A-Z0-9]+/g, '_');
-  return conventional ? [`${conventional}_API_KEY`] : [];
-}
-
-function providerReadiness(descriptor, providers, cwd) {
-  const home = process.env.HOME || os.homedir();
-  const files = [
-    path.join(resolveHarnessCwd(cwd), '.env'),
-    path.join(home, '.omp', 'agent', '.env'),
-    path.join(home, '.omp', '.env'),
-    path.join(home, '.env'),
-  ];
-  const fileKeys = new Set();
-  for (const file of files) {
-    for (const key of dotenvPresentKeys(file)) fileKeys.add(key);
-  }
-  return Object.fromEntries([...new Set(providers)].map(provider => {
-    const keys = providerCredentialKeys(descriptor, provider);
-    // An explicitly empty key list denotes a keyless local provider. null
-    // means the provider has no environment-based readiness signal.
-    const present = Array.isArray(keys) && (keys.length === 0 || keys.some(key => !!process.env[key] || fileKeys.has(key)));
-    return [provider, present];
-  }));
-}
-
-function annotateProviderReadiness(descriptor, models, cwd) {
-  if (!descriptor.providerCredentials) return models;
-  const readiness = providerReadiness(descriptor, models.map(model => model.provider), cwd);
-  return models.map(model => ({ ...model, providerReady: readiness[model.provider] === true }));
-}
 
 const MODEL_ROLE_KEY = /^[a-zA-Z][\w.-]{0,63}$/;
 const MODEL_ROLE_VALUE_MAX = 200;
@@ -3962,22 +3905,6 @@ app.get('/api/harnesses', (_req, res) => {
   });
 });
 
-app.get('/api/harnesses/:id/readiness', async (req, res) => {
-  const descriptor = getHarness(req.params.id);
-  if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
-  if (!descriptor.providerCredentials || descriptor.modelCatalog !== 'command') {
-    return res.status(501).json({ error: `Provider readiness is not supported for ${descriptor.label}.` });
-  }
-  if (req.query.cwd !== undefined && typeof req.query.cwd !== 'string') {
-    return res.status(400).json({ error: 'cwd must be a string' });
-  }
-  try {
-    const models = await runHarnessModelCommand(descriptor, { cwd: req.query.cwd });
-    res.json({ providers: providerReadiness(descriptor, models.map(model => model.provider), req.query.cwd) });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
 
 app.get('/api/harnesses/:id/config', async (req, res) => {
   const descriptor = getHarness(req.params.id);
@@ -4064,8 +3991,7 @@ app.get('/api/models', async (req, res) => {
       if (req.query.cwd !== undefined && typeof req.query.cwd !== 'string') {
         return res.status(400).json({ error: 'cwd must be a string' });
       }
-      const models = await runHarnessModelCommand(descriptor, { cwd: req.query.cwd });
-      return res.json(annotateProviderReadiness(descriptor, models, req.query.cwd));
+      return res.json(await runHarnessModelCommand(descriptor, { cwd: req.query.cwd }));
     }
     if (descriptor.modelCatalog !== 'pi-sdk') {
       return res.status(501).json({ error: `New-session model discovery is not supported for ${descriptor.label}.` });

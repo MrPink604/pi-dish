@@ -1113,13 +1113,15 @@ let remoteHost = null; // second pi-dish (multi-host section)
       {
         provider: 'zai', id: 'glm-4.7-flash', selector: 'zai/glm-4.7-flash', name: 'GLM-4.7-Flash',
         contextWindow: 200000, reasoning: true,
-        thinking: ['minimal', 'low', 'medium', 'high', 'xhigh'], providerReady: true,
+        thinking: ['minimal', 'low', 'medium', 'high', 'xhigh'],
       },
       {
         provider: 'zai', id: 'glm-5.2', selector: 'zai/glm-5.2', name: 'GLM-5.2',
-        contextWindow: 1000000, reasoning: true, thinking: ['high', 'max'], providerReady: true,
+        contextWindow: 1000000, reasoning: true, thinking: ['high', 'max'],
       },
       {
+        // Older pi-dish hosts and cached catalogs may retain this obsolete
+        // annotation. OMP's command catalog is authoritative regardless.
         provider: 'fixture-missing', id: 'offline-model', selector: 'fixture-missing/offline-model',
         name: 'Offline Model', contextWindow: 100000, reasoning: true,
         thinking: ['minimal', 'high'], providerReady: false,
@@ -1165,11 +1167,12 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(await desktop.inputValue('#nsHarnessSelect') === 'omp',
       'a saved installed alternative survives asynchronous harness discovery');
     await desktop.waitForFunction(() =>
-      document.querySelector('#nsProviderReadiness')?.textContent.includes('zai: credential present'));
-    check(await desktop.locator('#nsModelSelect option[value="fixture-missing/offline-model"]:disabled').count() === 1,
-      'a model without a provider credential is visible but disabled');
-    check((await desktop.locator('#nsProviderReadiness').textContent()).includes('fixture-missing: credential missing'),
-      'provider readiness reports presence only');
+      document.querySelector('#nsModelSelect option[value="fixture-missing/offline-model"]'));
+    check(await desktop.locator('#nsModelSelect option[value="fixture-missing/offline-model"]:disabled').count() === 0,
+      'every OMP command-catalog model is selectable before spawn');
+    await desktop.selectOption('#nsModelSelect', 'fixture-missing/offline-model');
+    check(await desktop.inputValue('#nsModelSelect') === 'fixture-missing/offline-model',
+      'obsolete credential metadata cannot block pre-spawn model selection');
     check((await desktop.locator('#nsHarnessConfigValues').textContent()).includes('zai/glm-4.7-flash') &&
       (await desktop.locator('#nsHarnessConfigValues').textContent()).includes('high'),
       'curated OMP default model and thinking are shown in the readout');
@@ -1188,8 +1191,8 @@ let remoteHost = null; // second pi-dish (multi-host section)
       'a project-only assignment leaves the global select unset');
     check((await desktop.locator('.model-role-row[data-role="vision"]').textContent()).includes('project override'),
       'a differing effective value is flagged as a project override');
-    check((await desktop.locator('.model-role-row[data-role="plan"] option[value="fixture-missing/offline-model"]').textContent()).includes('no key'),
-      'a model without a provider credential is marked but stays selectable');
+    check((await desktop.locator('.model-role-row[data-role="plan"] option[value="fixture-missing/offline-model"]').textContent())
+      === 'fixture-missing/offline-model', 'role models use the authoritative OMP catalog without credential guesses');
     await desktop.keyboard.press('Escape');
     check(await desktop.evaluate(() => document.getElementById('modelRolesModal').style.display === 'none') &&
       await desktop.evaluate(() => document.querySelector('.main').classList.contains('new-session-open')),
