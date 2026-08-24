@@ -221,6 +221,94 @@ test('probing an unconfigured name reports unknown_host without a request', asyn
   });
 });
 
+// --- reachability breaker -------------------------------------------------
+//
+// A sleeping tailscale peer black-holes the TCP connect instead of refusing
+// it, so every proxied request would otherwise burn the whole first-byte
+// timer. The cached probe result is what lets the proxy answer instantly, and
+// the proxy's own failed dials feed the same cache.
+
+async function withHomeAsync(settings, fn) {
+  const home = makeHome();
+  writeSettings(home, settings);
+  const previous = process.env.HOME;
+  process.env.HOME = home;
+  try { return await fn(home); } finally { process.env.HOME = previous; }
+}
+
+/** Runs fn with Date.now() advanceable, so ladder slots need no real waiting. */
+async function withFakeClock(fn) {
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  try { return await fn((ms) => { offset += ms; }); } finally { Date.now = realNow; }
+}
+
+/** The slot the breaker is currently holding, i.e. which ladder rung it is on. */
+function heldSlot(name) {
+  const state = remoteHosts.reachability(name);
+  return state ? state.until - state.at : null;
+}
+
+test('reachability() is a pure cache read that expires on the ladder', async () => {
+  await withHomeAsync({ remotes: [{ name: 'peer', url: 'http://127.0.0.1:1/' }] }, async () => {
+    await withFakeClock(async (advance) => {
+      // Nothing has been probed or dialed yet: no opinion, and asking for one
+      // must not dial.
+      assert.equal(remoteHosts.reachability('peer'), null);
+      assert.equal(remoteHosts.reachability('nobody'), null);
+
+      remoteHosts.noteTransportFailure('peer', 'timeout');
+      const down = remoteHosts.reachability('peer');
+      assert.equal(down.reachable, false);
+      assert.equal(down.error, 'timeout');
+      assert.equal(down.until - down.at, remoteHosts.BACKOFF_LADDER[0]);
+
+      advance(remoteHosts.BACKOFF_LADDER[0] - 1);
+      assert.equal(remoteHosts.reachability('peer').reachable, false);
+      // Past the slot the breaker simply stops answering: the next request
+      // dials for real, which is the whole recovery mechanism.
+      advance(2);
+      assert.equal(remoteHosts.reachability('peer'), null);
+
+      remoteHosts.noteTransportFailure('peer', 'connection_refused');
+      assert.equal(heldSlot('peer'), remoteHosts.BACKOFF_LADDER[1], 'a second failure climbs a rung');
+    });
+  });
+});
+
+test('a flapping peer climbs the ladder; only sustained health resets it', async () => {
+  const up = http.createServer((req, res) => {
+    if (req.url !== '/api/host') { res.writeHead(404); return res.end(); }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ hostId: '11111111-2222-3333-4444-555555555555', label: 'flapper', version: PKG_VERSION, capabilities: {} }));
+  });
+  closables.push(up);
+  await new Promise((resolve) => up.listen(0, '127.0.0.1', resolve));
+  const port = up.address().port;
+
+  await withHomeAsync({ remotes: [{ name: 'flapper', url: `http://127.0.0.1:${port}` }] }, async () => {
+    await withFakeClock(async (advance) => {
+      remoteHosts.noteTransportFailure('flapper', 'timeout');
+      remoteHosts.noteTransportFailure('flapper', 'timeout');
+      assert.equal(heldSlot('flapper'), remoteHosts.BACKOFF_LADDER[1]);
+
+      assert.equal((await remoteHosts.probe('flapper', { force: true })).reachable, true);
+      advance(1000);
+      assert.equal((await remoteHosts.probe('flapper', { force: true })).reachable, true);
+      // Up for one second, then down again: the ladder must remember.
+      remoteHosts.noteTransportFailure('flapper', 'timeout');
+      assert.equal(heldSlot('flapper'), remoteHosts.BACKOFF_LADDER[2], 'a brief recovery must not forgive the failures');
+
+      assert.equal((await remoteHosts.probe('flapper', { force: true })).reachable, true);
+      advance(remoteHosts.STABLE_RESET_MS + 1000);
+      assert.equal((await remoteHosts.probe('flapper', { force: true })).reachable, true);
+      remoteHosts.noteTransportFailure('flapper', 'timeout');
+      assert.equal(heldSlot('flapper'), remoteHosts.BACKOFF_LADDER[0], 'sustained health starts the ladder over');
+    });
+  });
+});
+
 // --- fleet over real servers ---------------------------------------------
 
 let hub;        // no token: the everyday loopback/tailnet posture
@@ -528,4 +616,39 @@ test('a hub token gates /hosts/* exactly like /api/*', async () => {
   assert.equal(stream.headers.get('content-encoding'), null);
   assert.equal((await fetch(`${gated.base}/hosts/peer/api/sessions?ticket=${ticket}`)).status, 401);
   assert.equal((await fetch(`${gated.base}/hosts/peer/api/sessions/nope/stream?ticket=not-a-ticket`)).status, 401);
+});
+
+test('the proxy trips a breaker on a down peer and re-dials when the slot expires', async () => {
+  // Its own hub, so the ladder position is exactly what this test put there.
+  const port = await freePort();          // nothing listening yet
+  const home = makeHome();
+  writeSettings(home, { remotes: [{ name: 'flap', url: `http://127.0.0.1:${port}` }] });
+  const breakerHub = await boot(home);
+
+  const started = Date.now();
+  const first = await fetch(`${breakerHub.base}/hosts/flap/api/sessions`);
+  assert.equal(first.status, 502);
+  const body = await first.json();
+  assert.equal(body.host, 'flap');
+  assert.equal(body.reason, 'connection_refused');
+
+  // The peer comes up immediately - and is still refused, because the answer
+  // now comes from the cached failure rather than a dial.
+  const peerUp = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ awake: true }));
+  });
+  closables.push(peerUp);
+  await new Promise((resolve) => peerUp.listen(port, '127.0.0.1', resolve));
+
+  const shorted = await fetch(`${breakerHub.base}/hosts/flap/api/sessions`);
+  assert.equal(shorted.status, 502, 'a known-down peer is not dialed again inside its slot');
+  assert.equal((await shorted.json()).reason, 'connection_refused');
+
+  // Nothing else expires the breaker: the ladder slot does.
+  const elapsed = Date.now() - started;
+  await new Promise((r) => setTimeout(r, Math.max(0, remoteHosts.BACKOFF_LADDER[0] - elapsed) + 400));
+  const recovered = await fetch(`${breakerHub.base}/hosts/flap/api/sessions`);
+  assert.equal(recovered.status, 200);
+  assert.deepEqual(await recovered.json(), { awake: true });
 });

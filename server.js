@@ -284,11 +284,26 @@ app.use('/hosts/:name/api', (req, res) => {
 
 function proxyToRemote(remote, req, res, hook = null) {
   let settled = false;
-  const fail = (reason) => {
-    if (settled) return;
+  const unreachable = (reason) => {
     settled = true;
     res.status(502).json({ error: `Host ${remote.name} is unreachable`, host: remote.name, reason });
   };
+  const fail = (reason) => {
+    if (settled) return;
+    // Every fail() here is transport-class (the dial rejected, the socket
+    // errored, or nothing arrived inside the first-byte window) — an HTTP
+    // answer from the peer, 401 and 500 included, leaves via 'response'. So
+    // this is real traffic telling the breaker what a probe would have.
+    remoteHosts.noteTransportFailure(remote, reason);
+    unreachable(reason);
+  };
+
+  // A peer already known down within its backoff slot answers instantly. A
+  // sleeping tailscale machine black-holes the connect rather than refusing
+  // it, so dialing anyway costs the whole first-byte timer on every request;
+  // the slot expiring (3-16s) is what re-dials, no other machinery needed.
+  const known = remoteHosts.reachability(remote);
+  if (known && !known.reachable) return unreachable(known.error || 'unreachable');
 
   // A hooked response is read, not relayed byte for byte, so the peer must
   // not compress it.

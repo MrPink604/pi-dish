@@ -516,7 +516,16 @@ exactly single-host pi-dish.
   on loopback. Names are path segments — `^[a-z0-9][a-z0-9-]{0,31}$`.
   Probes memoize: 10s on success, `[3,4,8,16]s` ladder on failure; ssh
   stderr is **classified to an enum and discarded** (it can carry keys),
-  and forwards are reaped on close/SIGINT/SIGTERM.
+  and forwards are reaped on close/SIGINT/SIGTERM. The proxy's own transport
+  failures feed the same memo (`noteTransportFailure` — a peer HTTP status,
+  401 or 500 included, is not a transport failure and never does), and a
+  peer cached as down short-circuits to an instant 502 instead of dialing
+  (`reachability()`, a pure cache read): a sleeping tailscale machine
+  black-holes the connect, so every request would otherwise burn the full
+  10s first-byte timer. The slot expiring is the only recovery machinery.
+  Success only clears the failure count after `STABLE_RESET_MS` (30s) of
+  continuous reachability — a flapper must keep climbing the ladder, not
+  reset it to the 3s rung on every brief recovery.
 - **Proxy**: `GET /api/hosts` = self entry + per-remote probe results
   (parallel, bounded ~3s). `/hosts/:name/api/*` streams both directions
   unbuffered (the only exception: the tiny JSON bodies the fleet-artifact
