@@ -3246,6 +3246,10 @@ test('SSE replays remembered extension UI state to new connections', async () =>
     await s1.waitFor(e => e.event === 'init');
     emit('extension_ui_request', { method: 'setWidget', widgetKey: 'procs', widgetLines: ['one', 'two'] });
     emit('extension_ui_request', { method: 'confirm', id: 'dlg1', title: 'Deploy?' });
+    emit('extension_ui_request', {
+      method: 'ask', id: 'ask1',
+      questions: [{ id: 'release', question: 'Which release?', options: [{ label: 'Stable' }] }],
+    });
     emit('tool_execution_start', {
       toolCallId: 'replay-tool', toolName: 'Bash', args: { command: 'sleep 12' }, startedAt: 123,
     });
@@ -3265,6 +3269,7 @@ test('SSE replays remembered extension UI state to new connections', async () =>
       content: 'visible custom notice', display: true, timestamp: 126,
     } });
     await s1.waitFor(e => e.event === 'extension_ui_request' && e.data?.method === 'confirm');
+    await s1.waitFor(e => e.event === 'extension_ui_request' && e.data?.method === 'ask');
     await s1.waitFor(e => e.event === 'tool_execution_update' && e.data?.toolCallId === 'replay-tool');
     const interrupted = await s1.waitFor(e =>
       e.event === 'message_end' && e.data?.message?.customType === 'interrupted-thinking');
@@ -3289,6 +3294,8 @@ test('SSE replays remembered extension UI state to new connections', async () =>
     assert.deepEqual(widget.data.widgetLines, ['one', 'two']);
     assert.equal(widget.data.widgetKey, 'procs');
     await s2.waitFor(e => e.event === 'extension_ui_request' && e.data?.id === 'dlg1');
+    const ask = await s2.waitFor(e => e.event === 'extension_ui_request' && e.data?.id === 'ask1');
+    assert.equal(ask.data.questions[0].question, 'Which release?');
 
     // Clearing the widget and resolving the dialog empties the replay set.
     // Wait for both on the open connection so the server has seen them.
@@ -3298,6 +3305,7 @@ test('SSE replays remembered extension UI state to new connections', async () =>
     });
     emit('extension_ui_request', { method: 'setWidget', widgetKey: 'procs', widgetLines: [] });
     emit('extension_ui_resolved', { id: 'dlg1' });
+    emit('extension_ui_resolved', { id: 'ask1' });
     await s2.waitFor(e => e.event === 'tool_execution_end' && e.data?.toolCallId === 'replay-tool');
     await s2.waitFor(e => e.event === 'extension_ui_resolved');
     s2.close();

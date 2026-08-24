@@ -9002,6 +9002,25 @@ function handleExtensionUI(req) {
   // strip them everywhere up front instead of per render site.
   if (Array.isArray(req.widgetLines)) req.widgetLines = req.widgetLines.map(stripAnsi);
   if (Array.isArray(req.options)) req.options = req.options.map(o => typeof o === 'string' ? stripAnsi(o) : o);
+  if (Array.isArray(req.questions)) {
+    req.questions = req.questions.map(question => {
+      if (!question || typeof question !== 'object') return question;
+      return {
+        ...question,
+        question: typeof question.question === 'string' ? stripAnsi(question.question) : question.question,
+        header: typeof question.header === 'string' ? stripAnsi(question.header) : question.header,
+        options: Array.isArray(question.options) ? question.options.map(option => {
+          if (!option || typeof option !== 'object') return option;
+          return {
+            ...option,
+            label: typeof option.label === 'string' ? stripAnsi(option.label) : option.label,
+            description: typeof option.description === 'string' ? stripAnsi(option.description) : option.description,
+            preview: typeof option.preview === 'string' ? stripAnsi(option.preview) : option.preview,
+          };
+        }) : [],
+      };
+    });
+  }
   for (const f of ['message', 'statusText', 'title', 'text', 'prefill', 'placeholder']) {
     if (typeof req[f] === 'string') req[f] = stripAnsi(req[f]);
   }
@@ -9031,8 +9050,10 @@ function handleExtensionUI(req) {
     case 'confirm':
     case 'input':
     case 'editor':
-      // We can't respond to dialogs, so show them as read-only info cards
       showExtDialog(req);
+      break;
+    case 'ask':
+      showExtAskDialog(req);
       break;
     default:
       // Unknown method — show as a generic toast so it's not silently lost
@@ -9175,6 +9196,151 @@ function dismissExtDialog(requestId) {
   openExtDialogs.delete(requestId);
 }
 
+function showExtAskDialog(req) {
+  if (!req.id || openExtDialogs.has(req.id)) return;
+  const questions = Array.isArray(req.questions)
+    ? req.questions.filter(question => question && typeof question === 'object' && typeof question.id === 'string')
+    : [];
+  if (!questions.length) {
+    showExtToast('Ask dialog had no valid questions', 'warning');
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'ext-ui-dialog-overlay';
+  const card = document.createElement('div');
+  card.className = 'ext-ui-dialog-modal ext-ui-ask-modal';
+  card.innerHTML = `
+    <div class="ext-ui-dialog-title">${questions.length === 1 ? 'Question' : `${questions.length} questions`}</div>
+    <div class="ext-ui-ask-questions">
+      ${questions.map((question, questionIndex) => {
+        const options = Array.isArray(question.options) ? question.options : [];
+        return `<section class="ext-ui-ask-question" data-question-index="${questionIndex}">
+          ${question.header ? `<div class="ext-ui-ask-header">${escapeHtml(question.header)}</div>` : ''}
+          <div class="ext-ui-ask-prompt">${escapeHtml(question.question || '')}</div>
+          <div class="ext-ui-dialog-options">
+            ${options.map((option, optionIndex) => {
+              const normalized = typeof option === 'string' ? { label: option } : option || {};
+              const recommended = question.recommended === optionIndex;
+              return `<button type="button" class="ext-ui-dialog-option ext-ui-ask-option${recommended ? ' recommended' : ''}"
+                data-question-index="${questionIndex}" data-option-index="${optionIndex}" aria-pressed="false">
+                <span class="ext-ui-ask-marker">${question.multi ? '☐' : '○'}</span>
+                <span class="ext-ui-ask-option-copy">
+                  <span class="ext-ui-ask-option-label">${escapeHtml(normalized.label || '')}${recommended ? ' <span class="ext-ui-ask-recommended">Recommended</span>' : ''}</span>
+                  ${normalized.description ? `<span class="ext-ui-ask-option-description">${escapeHtml(normalized.description)}</span>` : ''}
+                  ${normalized.preview ? `<pre class="ext-ui-ask-option-preview">${escapeHtml(normalized.preview)}</pre>` : ''}
+                </span>
+              </button>`;
+            }).join('')}
+          </div>
+          <input class="ext-ui-dialog-input ext-ui-ask-custom" data-question-index="${questionIndex}"
+            type="text" placeholder="Other (type your own)">
+          <input class="ext-ui-dialog-input ext-ui-ask-note" data-question-index="${questionIndex}"
+            type="text" placeholder="Optional note">
+          <div class="ext-ui-ask-error" hidden>Choose an option or enter your own answer.</div>
+        </section>`;
+      }).join('')}
+    </div>
+    <div class="ext-ui-dialog-actions">
+      <button class="ext-ui-dialog-btn" data-action="chat">Chat about this</button>
+      <button class="ext-ui-dialog-btn primary" data-action="submit-ask">Submit</button>
+    </div>
+    <button class="ext-ui-dialog-close" title="Dismiss (cancel)">×</button>`;
+  overlay.appendChild(card);
+
+  const selections = questions.map(() => new Set());
+  card.querySelectorAll('.ext-ui-ask-option').forEach(button => {
+    button.addEventListener('click', () => {
+      const questionIndex = Number(button.dataset.questionIndex);
+      const optionIndex = Number(button.dataset.optionIndex);
+      const question = questions[questionIndex];
+      if (!question || !Number.isInteger(optionIndex)) return;
+      const selected = selections[questionIndex];
+      if (question.multi) {
+        if (selected.has(optionIndex)) selected.delete(optionIndex);
+        else selected.add(optionIndex);
+      } else {
+        selected.clear();
+        selected.add(optionIndex);
+      }
+      card.querySelectorAll(`.ext-ui-ask-option[data-question-index="${questionIndex}"]`).forEach(candidate => {
+        const index = Number(candidate.dataset.optionIndex);
+        const active = selected.has(index);
+        candidate.classList.toggle('selected', active);
+        candidate.setAttribute('aria-pressed', active ? 'true' : 'false');
+        candidate.querySelector('.ext-ui-ask-marker').textContent = question.multi
+          ? (active ? '☑' : '☐')
+          : (active ? '●' : '○');
+      });
+      const custom = card.querySelector(`.ext-ui-ask-custom[data-question-index="${questionIndex}"]`);
+      if (!question.multi && custom) custom.value = '';
+      card.querySelector(`.ext-ui-ask-question[data-question-index="${questionIndex}"] .ext-ui-ask-error`)?.setAttribute('hidden', '');
+    });
+  });
+
+  card.querySelectorAll('.ext-ui-ask-custom').forEach(input => {
+    input.addEventListener('input', () => {
+      const questionIndex = Number(input.dataset.questionIndex);
+      const question = questions[questionIndex];
+      if (!question || question.multi || !input.value.trim()) return;
+      selections[questionIndex].clear();
+      card.querySelectorAll(`.ext-ui-ask-option[data-question-index="${questionIndex}"]`).forEach(candidate => {
+        candidate.classList.remove('selected');
+        candidate.setAttribute('aria-pressed', 'false');
+        candidate.querySelector('.ext-ui-ask-marker').textContent = '○';
+      });
+    });
+  });
+
+  card.querySelector('[data-action="chat"]').addEventListener('click', () => {
+    sendExtDialogResponse(req.id, { value: { kind: 'chat' } });
+  });
+  card.querySelector('[data-action="submit-ask"]').addEventListener('click', () => {
+    let invalid = null;
+    const results = questions.map((question, questionIndex) => {
+      const options = Array.isArray(question.options) ? question.options : [];
+      const customField = card.querySelector(`.ext-ui-ask-custom[data-question-index="${questionIndex}"]`);
+      const noteField = card.querySelector(`.ext-ui-ask-note[data-question-index="${questionIndex}"]`);
+      const customInput = customField?.value.trim() || undefined;
+      const note = noteField?.value.trim() || undefined;
+      const selectedOptions = [...selections[questionIndex]]
+        .sort((a, b) => a - b)
+        .map(index => {
+          const option = options[index];
+          return typeof option === 'string' ? option : option?.label;
+        })
+        .filter(label => typeof label === 'string');
+      if (!question.multi && selectedOptions.length === 0 && customInput === undefined) {
+        const section = card.querySelector(`.ext-ui-ask-question[data-question-index="${questionIndex}"]`);
+        section?.querySelector('.ext-ui-ask-error')?.removeAttribute('hidden');
+        invalid ||= section;
+      }
+      return {
+        id: question.id,
+        question: question.question || '',
+        options: options.map(option => typeof option === 'string' ? option : option?.label || ''),
+        multi: question.multi === true,
+        selectedOptions,
+        ...(customInput !== undefined ? { customInput } : {}),
+        ...(note !== undefined ? { note } : {}),
+      };
+    });
+    if (invalid) {
+      invalid.scrollIntoView({ block: 'nearest' });
+      invalid.querySelector('.ext-ui-ask-option, .ext-ui-ask-custom')?.focus();
+      return;
+    }
+    sendExtDialogResponse(req.id, { value: { kind: 'submit', results } });
+  });
+  card.querySelector('.ext-ui-dialog-close').addEventListener('click', () => {
+    sendExtDialogResponse(req.id, { cancelled: true });
+  });
+
+  document.body.appendChild(overlay);
+  openExtDialogs.set(req.id, overlay);
+  card.querySelector('.ext-ui-ask-option, .ext-ui-ask-custom')?.focus();
+}
+
 function showExtDialog(req) {
   if (!req.id || openExtDialogs.has(req.id)) return;
 
@@ -9190,9 +9356,14 @@ function showExtDialog(req) {
 
   if (req.method === 'select') {
     bodyHtml += '<div class="ext-ui-dialog-options">' +
-      (req.options || []).map((opt, i) =>
-        `<button class="ext-ui-dialog-option" data-value="${escapeHtml(opt)}">${escapeHtml(opt)}</button>`
-      ).join('') + '</div>';
+      (req.options || []).map((opt, i) => {
+        const label = typeof opt === 'string' ? opt : opt?.label || '';
+        const description = typeof opt === 'object' && opt?.description
+          ? `<span class="ext-ui-ask-option-description">${escapeHtml(opt.description)}</span>` : '';
+        return `<button class="ext-ui-dialog-option" data-option-index="${i}">
+          <span class="ext-ui-ask-option-label">${escapeHtml(label)}</span>${description}
+        </button>`;
+      }).join('') + '</div>';
   } else if (req.method === 'confirm') {
     bodyHtml += `<div class="ext-ui-dialog-actions">
       <button class="ext-ui-dialog-btn primary" data-action="yes">Yes</button>
@@ -9217,7 +9388,10 @@ function showExtDialog(req) {
   overlay.appendChild(card);
 
   card.querySelectorAll('.ext-ui-dialog-option').forEach(btn => {
-    btn.addEventListener('click', () => sendExtDialogResponse(req.id, { value: btn.dataset.value }));
+    btn.addEventListener('click', () => {
+      const option = (req.options || [])[Number(btn.dataset.optionIndex)];
+      sendExtDialogResponse(req.id, { value: typeof option === 'string' ? option : option?.label || '' });
+    });
   });
   card.querySelectorAll('.ext-ui-dialog-btn').forEach(btn => {
     btn.addEventListener('click', () => {

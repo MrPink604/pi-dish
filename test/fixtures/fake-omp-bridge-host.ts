@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { createHarnessBridge } from "../../extensions/pi-dish-bridge-omp/index.ts";
+import { createBridge } from "../../extensions/pi-dish-bridge/core.js";
+import { bridgeDescriptor, createHarnessBridge } from "../../extensions/pi-dish-bridge-omp/index.js";
 
 const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
 const pi: any = {
@@ -31,7 +32,11 @@ const sessionFile = process.env.FAKE_OMP_SESSION_FILE!;
 fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
 fs.writeFileSync(sessionFile, JSON.stringify({ type: "session", id: "fake-omp", cwd: process.cwd() }) + "\n");
 
-const ui = {};
+const ui = {
+  askDialog() {
+    return Promise.withResolvers<unknown>().promise;
+  },
+};
 const ctx: any = {
   ui,
   cwd: process.cwd(),
@@ -62,13 +67,47 @@ if (process.env.FAKE_OMP_HAS_COMPACT === "1") {
   };
 }
 
-createHarnessBridge("fake-spawn-token")(pi);
+const nativeProjection = process.env.FAKE_OMP_NATIVE_PROJECTION
+  ? JSON.parse(process.env.FAKE_OMP_NATIVE_PROJECTION)
+  : null;
+const projectionListeners = new Set<(projection: unknown) => void>();
+const bridgeFactory = nativeProjection
+  ? createBridge({
+      ...bridgeDescriptor,
+      nativeProjection: {
+        get: () => nativeProjection,
+        subscribe(listener: (projection: unknown) => void) {
+          projectionListeners.add(listener);
+          return () => projectionListeners.delete(listener);
+        },
+      },
+    })
+  : createHarnessBridge("fake-spawn-token");
+bridgeFactory(pi);
 await emit("session_start", {}, ctx);
+
+if (process.env.FAKE_OMP_ASK_RESULT) {
+  void ctx.ui.askDialog([
+    {
+      id: "deploy",
+      question: "Deploy now?",
+      header: "Release",
+      options: [
+        { label: "Yes", description: "Ship the current build." },
+        { label: "No", description: "Keep it staged." },
+      ],
+      recommended: 0,
+    },
+  ]).then((result: unknown) => {
+    fs.writeFileSync(process.env.FAKE_OMP_ASK_RESULT!, JSON.stringify(result));
+  });
+}
 
 const registryDir = path.join(process.env.HOME!, ".pi", "dish", "sessions");
 for (let attempt = 0; attempt < 100; attempt++) {
-  if (fs.existsSync(registryDir) && fs.readdirSync(registryDir).some(name => name.endsWith(".json"))) break;
-  await Bun.sleep(20);
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, 20);
+  await promise;
 }
 if (!fs.existsSync(registryDir) || !fs.readdirSync(registryDir).some(name => name.endsWith(".json"))) {
   throw new Error("bridge registry was not written");

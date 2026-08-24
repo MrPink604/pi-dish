@@ -978,12 +978,14 @@ async function liveTreeLeafId(sess) {
 // its state when *our* socket connects, which happens once per session.
 // Attached once per session object; the state dies with the connection,
 // matching the bridge-side replay on reconnect.
-const EXT_UI_DIALOG_METHODS = new Set(['select', 'confirm', 'input', 'editor']);
+const EXT_UI_DIALOG_METHODS = new Set(['select', 'confirm', 'input', 'editor', 'ask']);
 
 function trackExtUIState(sess) {
-  if (!sess || sess.extUIState) return sess;
-  const state = { widgets: new Map(), statuses: new Map(), dialogs: new Map() };
+  if (!sess) return sess;
+  const state = sess.extUIState || { widgets: new Map(), statuses: new Map(), dialogs: new Map() };
   sess.extUIState = state;
+  if (sess.extUIStateTracked) return sess;
+  sess.extUIStateTracked = true;
   sess.on('session_switch', (data) => {
     state.widgets.clear();
     state.statuses.clear();

@@ -1,4 +1,5 @@
 import { createBridge, PUBLIC_EVENT_PROFILE, type BridgeDescriptor } from "../pi-dish-bridge/core.js";
+import { getOmpNativeProjection, subscribeOmpNativeProjection } from "./native-state.js";
 
 export const bridgeDescriptor = {
   harnessId: "omp", name: "Oh My Pi", hostVersion: "public-api", wrapperVersion: "0.1.0",
@@ -14,6 +15,10 @@ export const bridgeDescriptor = {
   publicCompactionEvents: true,
   compactArgument: (instructions: string) => instructions,
   treeCommandContext: true,
+  nativeProjection: {
+    get: getOmpNativeProjection,
+    subscribe: subscribeOmpNativeProjection,
+  },
 } satisfies BridgeDescriptor;
 
 export function createHarnessBridge(spawnToken?: string) {

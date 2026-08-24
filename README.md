@@ -66,9 +66,10 @@ Rules of thumb:
 - **Slash commands** — `/compact`, `/model`, `/name`, skills, prompt
   templates, and more, routed to the session instead of the model (support
   matrix below).
-- **Extension UI** — pi extension dialogs (select/confirm/input/editor)
-  render as real modals you can answer from the browser; widgets and status
-  badges render natively.
+- **Extension UI** — pi extension dialogs (select/confirm/input/editor) and
+  OMP's native multi-question `ask` form render as real browser modals;
+  extension widgets/status badges plus OMP todos, plan mode, and prewalk state
+  render natively.
 - **Session controls** — model switcher (mirrors pi's scoped-models
   settings), thinking-level toggle, session rename, response performance and
   estimated-spend details, HTML export via pi's own exporter, session tree for
@@ -170,6 +171,12 @@ resident worker can reload or recover its extension later.
 OMP and Prime use the shared public-extension bridge and never start or fall
 back to native RPC. Their history is discovered from `~/.omp/agent/sessions/`
 and `~/.prime/agent/sessions/` respectively.
+
+OMP's `ask` tool uses the same UI context OMP gives extensions, so the wrapper
+races its browser form against the local TUI form and the first answer wins.
+OMP's exported `AgentSession` getters drive bridge-owned `Todos`, `planmode`,
+and `prewalk` projections; they are capability-detected, so an older OMP keeps
+ordinary bridge behavior instead of failing extension load.
 
 The alternative-harness baseline deliberately omits private Pi features:
 queue cancellation, compaction, tree navigation, and inactive JSONL mutation

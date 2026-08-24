@@ -214,6 +214,31 @@ test('tracks running tools, including update-only phases, until a completion bou
   assert.equal(sess.runningToolCalls.size, 0, 'agent_end clears orphaned running calls');
 });
 
+test('captures extension UI replay before server listeners attach', () => {
+  const sess = new BridgeSession({
+    sessionId: 'ui-state-session', socketPath: '/unused', pid: process.pid, cwd: tmpDir,
+  });
+  sess._handle({ type: 'event', event: 'extension_ui_request', data: {
+    method: 'setWidget', widgetKey: 'Todos', widgetLines: ['[>] Verify browser'],
+  } });
+  sess._handle({ type: 'event', event: 'extension_ui_request', data: {
+    method: 'setStatus', statusKey: 'planmode', statusText: 'Plan mode · parallel',
+  } });
+  sess._handle({ type: 'event', event: 'extension_ui_request', data: {
+    method: 'ask', id: 'ask-1', questions: [{ id: 'q', question: 'Continue?' }],
+  } });
+
+  assert.deepEqual(sess.extUIState.widgets.get('Todos').widgetLines, ['[>] Verify browser']);
+  assert.equal(sess.extUIState.statuses.get('planmode').statusText, 'Plan mode · parallel');
+  assert.equal(sess.extUIState.dialogs.get('ask-1').method, 'ask');
+
+  sess._handle({ type: 'event', event: 'extension_ui_resolved', data: { id: 'ask-1' } });
+  assert.equal(sess.extUIState.dialogs.has('ask-1'), false);
+  sess._handle({ type: 'event', event: 'session_switch', data: {} });
+  assert.equal(sess.extUIState.widgets.size, 0);
+  assert.equal(sess.extUIState.statuses.size, 0);
+});
+
 test('protocol-v2 connections reject a hello from a different registry claim', async () => {
   const socketPath = path.join(tmpDir, 'bridge-wrong-claim.sock');
   const server = net.createServer((sock) => {

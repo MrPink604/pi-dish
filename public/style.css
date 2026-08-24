@@ -3300,6 +3300,42 @@ body.sidebar-open {
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
 }
 
+.ext-ui-ask-modal {
+  max-width: 680px;
+}
+
+.ext-ui-ask-questions {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 12px;
+}
+
+.ext-ui-ask-question + .ext-ui-ask-question {
+  border-top: 1px solid var(--border);
+  padding-top: 18px;
+}
+
+.ext-ui-ask-header {
+  display: inline-block;
+  margin-bottom: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ext-ui-ask-prompt {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: pre-wrap;
+}
+
 .ext-ui-dialog-modal .ext-ui-dialog-title {
   font-size: 14px;
   padding-right: 24px;
@@ -3333,6 +3369,71 @@ body.sidebar-open {
 .ext-ui-dialog-option:hover {
   border-color: var(--accent);
   background: var(--bg-hover);
+}
+
+.ext-ui-ask-option {
+  display: flex;
+  gap: 9px;
+}
+
+.ext-ui-ask-option.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-hover));
+}
+
+.ext-ui-ask-marker {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-family: var(--font-mono);
+}
+
+.ext-ui-ask-option-copy,
+.ext-ui-ask-option-label,
+.ext-ui-ask-option-description {
+  display: block;
+}
+
+.ext-ui-ask-option-copy {
+  min-width: 0;
+}
+
+.ext-ui-ask-option-description {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.ext-ui-ask-option-preview {
+  max-height: 140px;
+  margin: 8px 0 0;
+  padding: 8px;
+  overflow: auto;
+  border-radius: 4px;
+  background: var(--bg-darker);
+  color: var(--text-muted);
+  font: 11px/1.45 var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.ext-ui-ask-recommended {
+  margin-left: 5px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.ext-ui-ask-note {
+  margin-top: 6px;
+}
+
+.ext-ui-ask-error {
+  margin-top: 6px;
+  color: var(--error);
+  font-size: 12px;
 }
 
 .ext-ui-dialog-actions {

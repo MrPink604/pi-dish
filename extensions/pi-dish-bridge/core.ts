@@ -229,6 +229,10 @@ export type BridgeDescriptor = {
   eventProfile: readonly string[];
   capabilities: Record<string, boolean>;
   getPrivateSession?: () => any;
+  nativeProjection?: {
+    get: () => unknown;
+    subscribe: (listener: (projection: unknown) => void) => (() => void);
+  };
   selfPrime?: boolean;
   piLifecycleEvents?: boolean;
   // OMP keeps one extension runner alive while /new, /resume, fork, and
@@ -680,6 +684,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // when the instance is available.
   let lastQueue: { steering: string[]; followUp: string[] } = { steering: [], followUp: [] };
   let queueUnsub: (() => void) | null = null;
+  let nativeProjectionUnsub: (() => void) | null = null;
   let modelId: string | null = null;
   let contextUsage: { tokens: number | null; contextWindow: number; percent: number | null } | null = null;
   let sessionName: string | null = null;
@@ -868,6 +873,79 @@ export function createBridge(descriptor: BridgeDescriptor) {
     ensureSocketOwnership();
   }
 
+  function renderNativeTodoLines(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    const lines: string[] = [];
+    const markerByStatus: Record<string, string> = {
+      pending: "[ ]",
+      in_progress: "[>]",
+      completed: "[x]",
+      abandoned: "[-]",
+      blocked: "[!]",
+    };
+    for (const phaseValue of value) {
+      if (!phaseValue || typeof phaseValue !== "object") continue;
+      const phase = phaseValue as Record<string, unknown>;
+      if (typeof phase.name !== "string" || !Array.isArray(phase.tasks)) continue;
+      const tasks = phase.tasks.filter(task => !!task && typeof task === "object") as Array<Record<string, unknown>>;
+      const closed = tasks.filter(task => task.status === "completed" || task.status === "abandoned").length;
+      lines.push(`${phase.name}  ${closed}/${tasks.length}`);
+      for (const task of tasks) {
+        if (typeof task.content !== "string") continue;
+        const status = typeof task.status === "string" ? task.status : "pending";
+        const blocker = status === "blocked" && typeof task.blocker === "string" ? ` — ${task.blocker}` : "";
+        lines.push(`  ${markerByStatus[status] ?? "[ ]"} ${task.content}${blocker}`);
+      }
+    }
+    return lines;
+  }
+
+  function projectNativeState(value: unknown): void {
+    const projection = value && typeof value === "object" ? value as Record<string, unknown> : {};
+    emitExtensionUIRequest({
+      method: "setWidget",
+      widgetKey: "Todos",
+      widgetLines: renderNativeTodoLines(projection.todos),
+      widgetPlacement: "aboveEditor",
+    });
+
+    const plan = projection.planMode && typeof projection.planMode === "object"
+      ? projection.planMode as Record<string, unknown> : null;
+    const planText = plan?.enabled === true
+      ? `Plan mode${typeof plan.workflow === "string" ? ` · ${plan.workflow}` : ""}`
+      : undefined;
+    emitExtensionUIRequest({ method: "setStatus", statusKey: "planmode", statusText: planText });
+
+    const prewalk = projection.prewalk && typeof projection.prewalk === "object"
+      ? projection.prewalk as Record<string, unknown> : null;
+    const target = prewalk?.target && typeof prewalk.target === "object"
+      ? prewalk.target as Record<string, unknown> : null;
+    const targetName = target && typeof target.provider === "string" && typeof target.id === "string"
+      ? `${target.provider}/${target.id}` : null;
+    const thinking = typeof prewalk?.thinkingLevel === "string" ? ` · ${prewalk.thinkingLevel}` : "";
+    emitExtensionUIRequest({
+      method: "setStatus",
+      statusKey: "prewalk",
+      statusText: targetName ? `Prewalk → ${targetName}${thinking}` : undefined,
+    });
+  }
+
+  function refreshNativeProjection(): void {
+    try { projectNativeState(descriptor.nativeProjection?.get()); } catch {}
+  }
+
+  function attachNativeProjection(): void {
+    if (nativeProjectionUnsub) {
+      try { nativeProjectionUnsub(); } catch {}
+      nativeProjectionUnsub = null;
+    }
+    if (!descriptor.nativeProjection) return;
+    try {
+      nativeProjectionUnsub = descriptor.nativeProjection.subscribe(projectNativeState);
+    } catch {}
+    refreshNativeProjection();
+  }
+
   // Re-broadcast current UI state to connected clients on demand. The
   // `forced` flag tells the pi-dish server to bypass its per-connection
   // content dedup — without it an unchanged widget would be swallowed.
@@ -940,6 +1018,43 @@ export function createBridge(descriptor: BridgeDescriptor) {
           }
         } catch {}
         return ret;
+      };
+    }
+
+    // OMP's native ask tool uses the same shared UI context as extensions but
+    // prefers the richer askDialog primitive. Intercept it directly so the web
+    // can answer the native tool without reducing multi-question forms to a
+    // sequence of lossy select dialogs.
+    const originalAskDialog = ui.askDialog;
+    if (typeof originalAskDialog === "function") {
+      ui.askDialog = function (questions: unknown, options?: { timeout?: number }) {
+        const req = {
+          method: "ask",
+          id: crypto.randomUUID(),
+          questions,
+          timeout: options?.timeout,
+        };
+        let settled = false;
+        const settle = (source: string) => {
+          if (settled) return;
+          settled = true;
+          pendingDialogs.delete(req.id);
+          dialogRequests.delete(req.id);
+          broadcast({ type: "event", event: "extension_ui_resolved", data: { id: req.id, source } });
+        };
+        const remote = new Promise<unknown>((resolve) => {
+          pendingDialogs.set(req.id, response => {
+            if (response?.cancelled) resolve(undefined);
+            else resolve(response?.value);
+          });
+        });
+        dialogRequests.set(req.id, req);
+        try { emitExtensionUIRequest(req); } catch {}
+        const local = Reflect.apply(originalAskDialog, this, [questions, options]);
+        return Promise.race([
+          Promise.resolve(local).then(value => { settle("tui"); return value; }),
+          remote.then(value => { settle("web"); return value; }),
+        ]);
       };
     }
 
@@ -1123,6 +1238,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     compacting = false;
     compactionQueue.length = 0;
     if (queueUnsub) { try { queueUnsub(); } catch {} queueUnsub = null; }
+    if (nativeProjectionUnsub) { try { nativeProjectionUnsub(); } catch {} nativeProjectionUnsub = null; }
     compactionEventsLive = false;
     lastQueue = { steering: [], followUp: [] };
     contextUsage = null;
@@ -1941,6 +2057,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
     bindSocket();
     ensureSessionSubscription();
+    attachNativeProjection();
 
     writeRegistry();
     broadcast({ type: "event", event: "session_start", data: { sessionId, sessionFile, cwd } });
@@ -1966,6 +2083,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     sessionName = null;
     try { sessionName = (ctx as any)?.sessionManager?.getSessionName?.() ?? null; } catch {}
     ({ sessionFile, sessionId, cwd } = identity);
+    refreshNativeProjection();
 
     // The registry and socket are instance-keyed, not session-keyed: update
     // the claim in place so existing socket/SSE clients stay attached. The
