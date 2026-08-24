@@ -123,35 +123,35 @@ desktop app for some reason.
 
 ## Setup
 
-pi-dish discovers running pi sessions through a small bridge extension that
-registers each session and exposes a control socket. Symlink it once into
-your global pi extensions dir:
+pi-dish discovers running sessions through bridge extensions that register
+each agent and expose a control socket. The installer reconciles the runtime
+dependencies, Pi bridge, OMP bridge, and every bundled skill:
 
 ```bash
 git clone https://github.com/MrPink604/pi-dish
 cd pi-dish
-npm install
-mkdir -p ~/.pi/agent/extensions ~/.pi/agent/skills
-ln -s "$PWD/extensions/pi-dish-bridge" ~/.pi/agent/extensions/pi-dish-bridge
-ln -s "$PWD/skills/pi-dish-pages" ~/.pi/agent/skills/pi-dish-pages
-ln -s "$PWD/skills/pi-dish-comments" ~/.pi/agent/skills/pi-dish-comments
-ln -s "$PWD/skills/pi-dish-sessions" ~/.pi/agent/skills/pi-dish-sessions
-ln -s "$PWD/skills/pi-dish-skill-refine" ~/.pi/agent/skills/pi-dish-skill-refine
+./install.sh
 ```
 
-The skill symlinks are optional. `pi-dish-pages` teaches agents to publish
-HTML artifacts, `pi-dish-comments` gives them a small CLI-backed inbox for
-anchored feedback, and `pi-dish-sessions` lets an agent spawn and interact
-with ordinary peer Pi sessions through the existing server controls. Ask an agent
-to "publish the plan as a page" and you get back a link; see "Published
-pages" below. `pi-dish-skill-refine` is the default methodology the Skills
-view's "✎ Refine with an agent" button drafts against — symlink it so that
-button leads with `/skill:pi-dish-skill-refine`; without it the button falls
-back to referencing the skill's markdown by absolute path (and
-`PI_DISH_REFINE` / the `refine` dish setting override it entirely).
+The bridge links land in `~/.pi/agent/extensions/pi-dish-bridge` and
+`~/.omp/agent/extensions/pi-dish-bridge-omp`. Every directory under
+`skills/` is linked into both agents' default `skills/` directories.
+`PI_AGENT_DIR` and `OMP_AGENT_DIR` override those destinations for an isolated
+install, and `./install.sh --links-only` skips `npm ci`.
 
-Symlink, don't copy — a stale copied bridge loaded alongside the current one
-races for the session socket.
+`pi-dish-pages` teaches agents to publish HTML artifacts,
+`pi-dish-comments` gives them a small CLI-backed inbox for anchored feedback,
+and `pi-dish-sessions` lets an agent spawn and interact with ordinary peer Pi
+sessions through the existing server controls. Ask an agent to "publish the
+plan as a page" and you get back a link; see "Published pages" below.
+`pi-dish-skill-refine` is the default methodology the Skills view's
+"✎ Refine with an agent" button drafts against.
+
+The installer always symlinks rather than copying, so pulling the checkout
+updates every installed bridge and skill in place. It refuses to replace a
+real file or directory at any managed destination; remove or relocate that
+conflict explicitly, then rerun it. A stale copied bridge loaded alongside
+the current one can race for the session socket.
 
 ### Oh My Pi and Prime Agent
 
@@ -161,8 +161,9 @@ thin wrappers are:
 - `extensions/pi-dish-bridge-omp/index.ts`
 - `extensions/pi-dish-bridge-prime/index.ts`
 
-For a session launched outside pi-dish, pass that wrapper with the harness's
-`--extension` option. Managed launches pass a generated module under
+OMP launched outside pi-dish loads the installed default wrapper
+automatically. Prime still needs its wrapper passed with `--extension`.
+Managed launches pass a generated module under
 `~/.pi/dish/launch-wrappers/` instead; it imports the same thin wrapper and
 embeds the one-launch correlation token. This matters for Prime because its
 resident daemon forwards extension paths to workers but does not forward
@@ -281,8 +282,10 @@ ln -s "$PWD/extensions/mood.ts" ~/.pi/agent/extensions/mood.ts
 
 ### Upgrading
 
-After pulling changes: `npm install`, restart the server, and `/reload` any
-running pi sessions so they pick up the new bridge.
+After pulling changes, run `./install.sh`, restart the server, and `/reload`
+running Pi or OMP sessions so they load the updated bridge. A tmux-managed
+server can be reconciled with `scripts/pi-dish-tmux.sh restart`; it uses the
+`pi-dish` session and `server` window by default.
 
 ### Peer session control
 
