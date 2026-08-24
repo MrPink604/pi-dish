@@ -6,6 +6,7 @@ runner="$root/scripts/supervise-tailnet.sh"
 session=${PI_DISH_TMUX_SESSION:-pi-dish}
 window=${PI_DISH_TMUX_WINDOW:-server}
 env_file=${PI_DISH_ENV_FILE:-"$HOME/.config/pi-dish/env"}
+legacy_root=${PI_DISH_LEGACY_ROOT:-}
 target="=$session:=$window"
 
 require_tmux() {
@@ -25,12 +26,12 @@ server_pids() {
 
   for proc_dir in /proc/[0-9]*; do
     cwd=$(readlink -- "$proc_dir/cwd" 2>/dev/null) || continue
-    [[ $cwd == "$root" ]] || continue
+    [[ $cwd == "$root" || (-n $legacy_root && $cwd == "$legacy_root") ]] || continue
     argv=()
     mapfile -d '' -t argv < "$proc_dir/cmdline" 2>/dev/null || true
     ((${#argv[@]} >= 2)) || continue
     [[ ${argv[0]##*/} == node ]] || continue
-    [[ ${argv[1]} == server.js || ${argv[1]} == "$root/server.js" ]] || continue
+    [[ ${argv[1]} == server.js || ${argv[1]} == "$cwd/server.js" ]] || continue
     printf '%s\n' "${proc_dir##*/}"
   done
 }
