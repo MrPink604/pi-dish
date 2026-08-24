@@ -174,6 +174,60 @@ test('boot a peer, a counting remote and two hubs that know about them', async (
   hubPub = await boot(hubPubHome, { PI_DISH_SHARE_BASE_URL: HUB_BASE_URL });
 });
 
+// --- session export through the hub proxy --------------------------------
+
+test('a session export downloads through the proxy, and only through it', async () => {
+  // The bug this pins: the id is host-local, so the hub's *own* export route
+  // knows nothing about a peer's session. A client that builds the URL from
+  // location.origin instead of the owning host's base lands here.
+  const bare = await fetch(`${hub.base}/api/sessions/${PEER_SESSION_ID}/export`);
+  assert.equal(bare.status, 404, 'a peer session id does not resolve on the hub');
+
+  const res = await fetch(`${hub.base}/hosts/peer/api/sessions/${PEER_SESSION_ID}/export`);
+  assert.equal(res.status, 200);
+  // The attachment disposition has to survive the hop or the browser renders
+  // the export instead of saving it, and the filename is lost.
+  assert.match(res.headers.get('content-disposition') || '', /^attachment;/);
+  assert.match(res.headers.get('content-disposition') || '', new RegExp(`filename="?${PEER_SESSION_ID}\\.html"?`));
+  assert.match(res.headers.get('content-type') || '', /text\/html/);
+  // Relayed byte for byte: whatever encoding the peer chose is what arrives.
+  // The hub adds none of its own (/hosts/* is excluded from compression), so
+  // a body well over 1KB is not compressed twice.
+  const direct = await fetch(`${peer.base}/api/sessions/${PEER_SESSION_ID}/export`, authed(PEER_TOKEN));
+  assert.equal(direct.status, 200);
+  assert.equal(res.headers.get('content-encoding'), direct.headers.get('content-encoding'));
+  await direct.arrayBuffer();
+
+  const html = await res.text();
+  assert.ok(html.length > 1024, 'a real export, not an error page');
+  assert.ok(html.includes('<html'), 'the peer\'s standalone export came through');
+  const payload = Buffer.from(html.match(/id="session-data"[^>]*>([^<]+)</)[1], 'base64').toString('utf8');
+  assert.ok(payload.includes('peer fixture answer'), 'the content is the peer session, not a hub session');
+
+  // Export is not an artifact: nothing public was created, so the
+  // fleet-artifact hook must not have recorded a mapping for it.
+  const { artifacts } = await json(await fetch(`${hub.base}/api/fleet-artifacts`));
+  assert.equal(artifacts.length, 0, 'exporting publishes nothing');
+});
+
+test('a proxied export is gated by the hub token like any other /hosts path', async () => {
+  // Same gate as /api/*: this is why the client cannot use a plain navigation
+  // for a token host — a navigation carries no Authorization header.
+  const gatedHome = makeHome();
+  writeSettings(gatedHome, { hostLabel: 'gated', remotes: [{ name: 'peer', url: `http://127.0.0.1:${peer.port}`, token: PEER_TOKEN }] });
+  const HUB_TOKEN = 'hub-token-export-0123456789';
+  fs.writeFileSync(path.join(gatedHome, '.pi', 'dish', 'token'), `${HUB_TOKEN}\n`);
+  const gated = await boot(gatedHome);
+
+  const path_ = `/hosts/peer/api/sessions/${PEER_SESSION_ID}/export`;
+  assert.equal((await fetch(`${gated.base}${path_}`)).status, 401);
+
+  const ok = await fetch(`${gated.base}${path_}`, authed(HUB_TOKEN));
+  assert.equal(ok.status, 200);
+  assert.match(ok.headers.get('content-disposition') || '', /^attachment;/);
+  assert.ok((await ok.text()).includes('<html'));
+});
+
 // --- shares created through the hub proxy --------------------------------
 
 let shareToken;

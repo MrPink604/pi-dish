@@ -58,8 +58,9 @@ Themes: built-ins are `[data-theme]` override blocks in style.css (solarized
 default + graphite); user themes are flat `{"--token": "value"}` JSON files
 in `~/.pi/dish/themes/`, served by `GET /api/themes` (keys gated to custom
 properties, values to color-ish strings, broken files skipped) and applied
-as inline custom properties over the default palette. The picker is the
-select in the sidebar header; the choice + custom tokens are cached in
+as inline custom properties over the default palette. The picker is a select
+in the settings modal (it left the sidebar header, which was out of room for
+icons); the choice + custom tokens are cached in
 localStorage and re-applied pre-paint by an inline `<head>` script in
 index.html (no theme flash), then refreshed from the server after boot.
 `applyTheme` also re-derives the open terminal's xterm theme
@@ -202,7 +203,8 @@ came from disk.
 Assistant response metadata is intentionally quiet and configurable from the
 global gear. The display mode and optional desktop session-spend badge are
 device-local (`pi-dish-response-metadata`, `pi-dish-show-session-spend` in
-localStorage); the monthly budget warning is server-global in
+localStorage), as are the theme and the sidebar's context readout
+(`pi-dish-sidebar-context-metric`); the monthly budget warning is server-global in
 `~/.pi/dish/settings.json`. Compact is the default and shows effective output
 tok/s. Performance modes may add response time and estimated cost; clicking a
 label always opens the detailed token/cache/timing/cost projection regardless
@@ -540,7 +542,18 @@ exactly single-host pi-dish.
   only) + user catalog (`localStorage['pi-dish-hosts']`, validated by
   `sanitizeHostCatalog`), deduped by hostId — the same peer reachable two
   ways is one host. All API touches go through `apiFetch(host, path)`;
-  sessions carry `host`, stamped only by the four state writers. Sidebar
+  sessions carry `host`, stamped only by the four state writers. A *download*
+  is the one API touch that isn't a fetch: session export
+  (`exportSession`) resolves the owning host and navigates to
+  `host.base + path`, because a bare path would resolve against the hub's
+  origin, where a peer's host-local session id doesn't exist. It stays a
+  navigation while the host needs no bearer — that streams the attachment to
+  disk (a long transcript exports to tens of MB) and is what a tokenless
+  cross-origin peer requires, since CORS is only emitted with a token. A token
+  host has no choice but `apiFetch` + `downloadBlob`, naming the file with
+  `filenameFromContentDisposition` (helpers.js — the header comes off the wire,
+  so it is reduced to a bare basename). Any new download must follow that
+  split, never `window.open` of a bare path. Sidebar
   polls fan out per host (`Promise.allSettled`, per-host sequence guards,
   render as results land — never gate on the slowest host); an unreachable
   host keeps its last list dimmed with an "unreachable" chip and degrades
@@ -958,6 +971,27 @@ fixtures write an empty `.zshrc`; test markers use arithmetic
 
 ## Sidebar behavior (public/app.js)
 
+Each row is a **three-row card** (`renderSessionItem`): title + last activity;
+model + context; host chip + harness badge + cwd. The model is `shortModelName`
+(bare slug, full ref in the `title`), and the context readout is *one* number —
+percent, or absolute tokens when `pi-dish-sidebar-context-metric` says so — with
+the warning/critical color still derived from the percent either way. The
+message count and the old percent-plus-tokens double readout are deliberately
+gone: the card is scanned, not read. The host chip and cwd keep their existing
+gating (pinned/Recent/search rows only — inside the workspace tree the group and
+host-section headers already carry both).
+
+The sidebar header is down to four icons — usage, skills, settings, refresh.
+The theme picker moved into the settings modal and the all-sessions search
+moved into the filter row next to the input it extends (the `.searching`
+spinner's `right` offset has to clear both trailing buttons). The right edge is
+a drag handle (`initSidebarResize`, `#sidebarResizeHandle`): pointer capture
+like the terminal handle, width persisted in **px** in
+`pi-dish-sidebar-width` (px not %, since useful sidebar width is a function of
+the titles in it, not the viewport), clamped to [220px, half the viewport],
+double-click to reset, and hidden + overridden at the mobile breakpoint where
+the drawer owns its own width.
+
 The session list defaults to the **Active** filter (live sessions only, count
 badge in the tab). The **All** tab merges active + historical sessions, grouped
 by workspace cwd; historical ones get the `.session-item.inactive` dimming.
@@ -1195,6 +1229,10 @@ so the outside-click closer must treat detached targets as inside.
   switch cannot prepend one session's history into another.
 
 ## Tree navigation / branch summaries (tree modal, POST /branch)
+
+The tree modal has no session-header button: `/tree` typed in the composer
+opens it (`sendPrompt` intercepts the command), and the mobile control panel
+keeps a row — `#cpTreeRow`, gated on harness `tree` support.
 
 `POST /api/sessions/:id/branch` drives pi's `/tree` remotely: move the leaf
 to `entryId`, optionally (`summarize: true`) generating an LLM summary of the

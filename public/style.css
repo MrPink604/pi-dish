@@ -118,6 +118,37 @@ body.sidebar-open {
   border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
+  position: relative; /* anchors .sidebar-resize to the right edge */
+}
+
+/* Drag-to-resize edge. Wider than the hairline it sits on so it's grabbable,
+   but invisible until pointed at — the border stays the only thing drawn.
+   touch-action:none or mobile browsers claim the gesture for scrolling
+   (same reason as the terminal handle). */
+.sidebar-resize {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 7px;
+  height: 100%;
+  z-index: 5;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.sidebar-resize::after {
+  content: '';
+  position: absolute;
+  inset: 0 3px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.sidebar-resize:hover::after,
+.sidebar-resize.dragging::after {
+  opacity: 0.55;
 }
 
 .sidebar-header {
@@ -131,27 +162,6 @@ body.sidebar-open {
   display: flex;
   align-items: center;
   gap: 2px;
-}
-
-/* Theme picker — reads as quiet text until pointed at. */
-.theme-select {
-  max-width: 100px;
-  padding: 3px 2px;
-  font-size: 11px;
-  font-family: inherit;
-  color: var(--text-muted);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  outline: none;
-  cursor: pointer;
-}
-
-.theme-select:hover,
-.theme-select:focus {
-  color: var(--text);
-  border-color: var(--border);
-  background: var(--bg-card);
 }
 
 /* The π in the wordmark, the assistant turn marker, and the empty state all
@@ -274,7 +284,7 @@ body.sidebar-open {
 .sidebar-filter.searching::after {
   content: '';
   position: absolute;
-  right: 50px; /* inside the input — clear of the view-toggle button */
+  right: 84px; /* inside the input — clear of the search + view-toggle buttons */
   top: 50%;
   width: 12px;
   height: 12px;
@@ -325,10 +335,18 @@ body.sidebar-open {
   gap: 6px;
 }
 
-.view-toggle {
+.view-toggle,
+.filter-search-btn {
   flex-shrink: 0;
   border: 1px solid var(--border);
   border-radius: 6px;
+}
+
+/* The all-sessions search moved out of the header icon row and next to the
+   thing it extends: the filter box. */
+.filter-search-btn {
+  display: flex;
+  align-items: center;
 }
 
 /* Saved-filter scopes: toggle chips under the filter box. Active chips keep
@@ -500,14 +518,10 @@ body.sidebar-open {
   text-align: center;
 }
 
-/* A chip in the meta row costs horizontal space that row didn't have: keep it
-   on one line (the cwd ellipsizes as it already does) and stop the chip
-   stretching to a wrapped row's height. Scoped to chipped rows, so
-   single-host meta rows are untouched. */
-.session-item-meta.with-host {
-  align-items: center;
-  white-space: nowrap;
-  overflow: hidden;
+/* A host chip costs horizontal space the tag row has to give up somewhere:
+   the cwd is the one thing there that can ellipsize, so it does. */
+.session-item-tags.with-host .session-item-cwd {
+  max-width: 30%;
 }
 
 /* The session header's host badge wears the same color; the dot is a ::before
@@ -831,7 +845,7 @@ body.sidebar-open {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
 }
 
 .session-item-name {
@@ -874,28 +888,43 @@ body.sidebar-open {
   50% { opacity: 0.5; }
 }
 
+/* Row 2: what the session is running and how full it is. Two facts, so they
+   read at a glance — the message count and the second context number were
+   noise the eye had to step over. */
 .session-item-meta {
   display: flex;
+  align-items: baseline;
   gap: 8px;
+  min-width: 0;
   font-size: 11px;
   color: var(--text-muted);
 }
 
 .session-item-model {
-  max-width: 100px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .session-item-context {
   font-family: var(--font-mono);
+  flex-shrink: 0;
+  margin-left: auto; /* pinned right so the column scans vertically */
 }
 
-.session-item-tokens {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  opacity: 0.7;
+/* Row 3: where the session lives — host, harness, and (off its workspace
+   group) cwd. Badges, not text, so rows 1–2 keep the reading weight. */
+.session-item-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .session-item-context.high {
@@ -2533,9 +2562,20 @@ body.sidebar-open {
     font-size: 15px;
   }
 
-  .session-item-meta {
+  .session-item-meta,
+  .session-item-tags {
     font-size: 12px;
     gap: 8px;
+  }
+
+  /* The drawer is a fixed-width overlay — an inline px width from a desktop
+     session must not follow it here, and there is nothing to grab anyway. */
+  .sidebar {
+    width: 88% !important;
+  }
+
+  .sidebar-resize {
+    display: none;
   }
 
   .main {

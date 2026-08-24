@@ -2219,8 +2219,71 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // Collapsing a child hides its sessions and sinks it below its expanded
     // sibling; collapsing the prefix node hides the whole subtree. Pinning
     // sessions floats them into a drag-reorderable section at the top.
-    console.log('sidebar tree collapse & pin:');
+    console.log('session card layout & sidebar chrome:');
     await desktop.click('#tabAll');
+    await desktop.waitForSelector(`.session-item[data-id="${registryState.sessionId}"] .session-item-tags`, { timeout: 5000 });
+    {
+      const rowSel = `.session-item[data-id="${registryState.sessionId}"]`;
+      // Three rows, in order: title+activity, model+context, host/harness.
+      const rows = await desktop.locator(rowSel).evaluate((el) =>
+        [...el.children].map((c) => c.className));
+      check(rows[0] === 'session-item-header' && rows[1] === 'session-item-meta' &&
+        rows[2].startsWith('session-item-tags'), `card is three rows in order (got ${JSON.stringify(rows)})`);
+      // The model reads as the bare slug; the full ref stays in the title.
+      const model = desktop.locator(`${rowSel} .session-item-model`);
+      check(await model.textContent() === 'smoke-model' &&
+        !(await model.textContent()).includes('/'), 'row 2 shows the model without its provider');
+      check(await desktop.locator(`${rowSel} .session-item-meta`).textContent()
+        .then((t) => !/msgs/.test(t)), 'the message count is gone from the card');
+      check(await desktop.locator(`${rowSel} .session-item-tags .harness-badge`).count() === 1,
+        'row 3 carries the harness badge');
+      check(await desktop.locator(`${rowSel} .session-item-header .harness-badge`).count() === 0,
+        'the title row is left to the title');
+      // Context readout is a device preference: percent by default, absolute
+      // tokens on request, and the percent-derived warning color survives.
+      const pct = await desktop.locator(`${rowSel} .session-item-context`).textContent();
+      check(/%$/.test(pct), `row 2 defaults to percent of context (got ${pct})`);
+      await desktop.evaluate(() => {
+        localStorage.setItem('pi-dish-sidebar-context-metric', 'tokens');
+        sidebarContextMetric = 'tokens';
+        renderSessions();
+      });
+      const tok = await desktop.locator(`${rowSel} .session-item-context`).textContent();
+      check(/tok$/.test(tok), `the token metric replaces the percent (got ${tok})`);
+      await desktop.evaluate(() => {
+        localStorage.setItem('pi-dish-sidebar-context-metric', 'percent');
+        sidebarContextMetric = 'percent';
+        renderSessions();
+      });
+    }
+    // The header icon row lost the theme picker and the all-sessions search;
+    // the search sits with the filter box it extends.
+    check(await desktop.locator('.sidebar-header select').count() === 0,
+      'the theme picker has left the sidebar header');
+    check(await desktop.locator('.sidebar-filter .filter-search-btn').count() === 1,
+      'the all-sessions search lives in the filter row');
+    // The session header no longer spends an icon on /tree.
+    check(await desktop.locator('#btnTree').count() === 0, 'the tree button is gone from the session header');
+    {
+      // Drag-to-resize: wider than the default, clamped, and persisted in px.
+      const before = await desktop.locator('#sidebar').evaluate((el) => el.offsetWidth);
+      const box = await desktop.locator('#sidebarResizeHandle').boundingBox();
+      await desktop.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await desktop.mouse.down();
+      await desktop.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2, { steps: 6 });
+      await desktop.mouse.up();
+      const after = await desktop.locator('#sidebar').evaluate((el) => el.offsetWidth);
+      const stored = await desktop.evaluate(() => localStorage.getItem('pi-dish-sidebar-width'));
+      check(after === before + 120 && String(after) === stored,
+        `dragging the edge widens the sidebar and persists it (got ${before}→${after}, stored ${stored})`);
+      // Double-click resets to the stylesheet default.
+      await desktop.dblclick('#sidebarResizeHandle');
+      check(await desktop.locator('#sidebar').evaluate((el) => el.offsetWidth) === before &&
+        await desktop.evaluate(() => localStorage.getItem('pi-dish-sidebar-width')) === null,
+        'double-clicking the handle restores the default width');
+    }
+
+    console.log('sidebar tree collapse & pin:');
     await desktop.waitForSelector(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`, { timeout: 5000 });
     check(await desktop.locator(`.session-item[data-id="${SKILL_SESSION_ID}"]`).count() === 0,
       'same-workspace child session is grouped under its parent and collapsed by default');

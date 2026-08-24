@@ -503,6 +503,10 @@ const SESSION_SPEND_KEY = 'pi-dish-show-session-spend';
 const RESPONSE_MODES = new Set(['hidden', 'compact', 'performance', 'performance-cost']);
 let responseMetadataMode = RESPONSE_MODES.has(localStorage.getItem(RESPONSE_MODE_KEY)) ? localStorage.getItem(RESPONSE_MODE_KEY) : 'compact';
 let showSessionSpend = localStorage.getItem(SESSION_SPEND_KEY) === '1';
+// Which context number the sidebar rows carry. Device-local like the other
+// display preferences — it's a reading habit, not a fleet-wide setting.
+const CONTEXT_METRIC_KEY = 'pi-dish-sidebar-context-metric';
+let sidebarContextMetric = localStorage.getItem(CONTEXT_METRIC_KEY) === 'tokens' ? 'tokens' : 'percent';
 let responseDetailSeq = 0;
 const responseDetails = new Map();
 let usageRange = '30', usageTimer = null, usageData = null, usageChart = null, usageSelectedDay = null;
@@ -606,6 +610,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadSavedFilters(); // …then the server copy replaces them
   initTerminalKeybar();
   initTerminalResize();
+  initSidebarResize();
   initCommentSelections();
   // Full fetch: restoring the saved session may need the historical list.
   await loadSessions(undefined, { withPrevious: true });
@@ -1394,7 +1399,15 @@ function renderSessionItem(session, opts = {}) {
     liveDot = '<span class="live-dot" title="Active session family"></span>';
   }
   const displayName = session.name || 'Unnamed';
-  const tokenDisplay = session.contextTokens ? `${formatTokens(session.contextTokens)} tok` : '';
+  // One context readout, not three: percent or absolute tokens per the device
+  // setting (tokens falls back to percent when the session has no token
+  // count). The colour still comes from the percent — that's the warning.
+  const ctxText = sidebarContextMetric === 'tokens' && session.contextTokens
+    ? `${formatTokens(session.contextTokens)} tok`
+    : `${session.contextPercent}%`;
+  const ctxTitle = session.contextTokens
+    ? `${session.contextPercent}% of context · ${formatTokens(session.contextTokens)} tokens`
+    : `${session.contextPercent}% of context`;
   const timeAgo = formatRelativeTime(hasChildren ? familyNode.activity : session.lastActivity);
   const canonicalRootKey = canonicalFamilyKey(opts.familyRootKey || sessionRefKey(session));
   const isPinned = opts.familyPinned ?? pinnedSessions.some(pin =>
@@ -1433,16 +1446,16 @@ function renderSessionItem(session, opts = {}) {
   return `
     <div class="session-item ${activeClass} ${inactiveClass}${closeBusy ? ' closing' : ''}${staleHost}" data-id="${escapeHtml(session.id)}"${session.host ? ` data-host="${escapeHtml(session.host)}"` : ''}>
       <div class="session-item-header">
-        ${dragHandle}${familyToggle}${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>${harnessBadge}
+        ${dragHandle}${familyToggle}${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>
         <span class="session-item-time">${timeAgo}</span>
         ${pinBtn}${closeBtn}
       </div>
-      <div class="session-item-meta${hostChip ? ' with-host' : ''}">
-        ${hostChip}${cwdHint}
-        <span class="session-item-model">${escapeHtml(session.model)}</span>
-        <span class="session-item-context ${ctxClass}">${session.contextPercent}%</span>
-        ${tokenDisplay ? `<span class="session-item-tokens">${tokenDisplay}</span>` : ''}
-        <span>${session.messageCount} msgs</span>
+      <div class="session-item-meta">
+        <span class="session-item-model" title="${escapeHtml(session.model || '')}">${escapeHtml(shortModelName(session.model))}</span>
+        <span class="session-item-context ${ctxClass}" title="${escapeHtml(ctxTitle)}">${escapeHtml(ctxText)}</span>
+      </div>
+      <div class="session-item-tags${hostChip ? ' with-host' : ''}">
+        ${hostChip}${harnessBadge}${cwdHint}
       </div>
       ${snippetLine}
     </div>
@@ -2627,7 +2640,10 @@ function updateSessionHeader() {
   const showHarness = currentSession.harnessId && currentSession.harnessId !== 'pi';
   harnessEl.style.display = showHarness ? '' : 'none';
   harnessEl.textContent = showHarness ? (currentSession.harnessLabel || currentSession.harnessId) : '';
-  document.getElementById('btnTree').style.display = sessionSupports(currentSession, 'tree') ? '' : 'none';
+  // The tree has no header button any more (type /tree in the composer); the
+  // mobile control panel keeps its row, so it still follows harness support.
+  const cpTree = document.getElementById('cpTreeRow');
+  if (cpTree) cpTree.style.display = sessionSupports(currentSession, 'tree') ? '' : 'none';
   document.getElementById('btnExport').style.display = sessionSupports(currentSession, 'export') ? '' : 'none';
 
   const nameEl = document.getElementById('sessionName');
@@ -2949,7 +2965,11 @@ function closeSettingsModal() {
 async function renderPreferences() {
   const renderSeq = ++settingsRenderSeq;
   const body = document.getElementById('settingsBody');
-  body.innerHTML = `<div class="preference-row"><label for="responseMetadataMode"><strong>Response metadata</strong><small>Stored on this device. “Effective speed” includes time to first token and JSONL append.</small></label>
+  body.innerHTML = `<div class="preference-row"><label for="settingsTheme"><strong>Theme</strong><small>Stored on this device. Built-ins plus any token files in <code>~/.pi/dish/themes/</code>.</small></label>
+    <select id="settingsTheme"></select></div>
+    <div class="preference-row"><label for="sidebarContextMetric"><strong>Session list context readout</strong><small>Stored on this device. Which number each sidebar row shows for context use.</small></label>
+    <select id="sidebarContextMetric"><option value="percent">Percent of context</option><option value="tokens">Token count</option></select></div>
+    <div class="preference-row"><label for="responseMetadataMode"><strong>Response metadata</strong><small>Stored on this device. “Effective speed” includes time to first token and JSONL append.</small></label>
     <select id="responseMetadataMode"><option value="hidden">Hidden</option><option value="compact">Compact</option><option value="performance">Performance</option><option value="performance-cost">Performance + estimated cost</option></select></div>
     <label class="preference-row toggle-row"><span><strong>Show estimated session spend in desktop header</strong><small>Stored on this device; off by default.</small></span><input id="showSessionSpend" type="checkbox"></label>
     <div class="preference-row"><label for="monthlyBudget"><strong>Monthly budget warning (USD)</strong><small>Server-global: applies to every device. Estimates use each session harness's catalog pricing; blank clears.</small></label><div class="budget-save"><input id="monthlyBudget" type="number" min="0.01" step="0.01" placeholder="No warning"><button class="btn-small" id="saveBudget">Save</button></div><small id="budgetStatus"></small></div>
@@ -2968,6 +2988,15 @@ async function renderPreferences() {
   mode.addEventListener('change', () => {
     responseMetadataMode = RESPONSE_MODES.has(mode.value) ? mode.value : 'compact';
     localStorage.setItem(RESPONSE_MODE_KEY, responseMetadataMode); updateRenderedResponseMetadata();
+  });
+  const themeSel = body.querySelector('#settingsTheme');
+  renderThemeSelect(themeSel);
+  themeSel.addEventListener('change', () => applyTheme(themeSel.value));
+  const ctxMetric = body.querySelector('#sidebarContextMetric'); ctxMetric.value = sidebarContextMetric;
+  ctxMetric.addEventListener('change', () => {
+    sidebarContextMetric = ctxMetric.value === 'tokens' ? 'tokens' : 'percent';
+    localStorage.setItem(CONTEXT_METRIC_KEY, sidebarContextMetric);
+    renderSessions();
   });
   const spend = body.querySelector('#showSessionSpend'); spend.checked = showSessionSpend;
   spend.addEventListener('change', () => { showSessionSpend = spend.checked; localStorage.setItem(SESSION_SPEND_KEY, showSessionSpend ? '1' : '0'); refreshSessionSpend(); });
@@ -5672,9 +5701,61 @@ async function loadDeferredDiffPatch(details) {
 }
 
 // --- Export ---
-function exportSession() {
+//
+// The export is a Content-Disposition attachment, and the session may live on
+// any host in the fleet — so this cannot be a window.open() of a *bare* path.
+// A bare path resolves against location.origin, i.e. the hub, where a peer's
+// session id does not exist.
+//
+// It stays a navigation whenever the owning host needs no bearer, which keeps
+// the single-host behaviour byte for byte (the attachment streams straight to
+// disk instead of through a blob in memory — a long transcript exports to tens
+// of MB) and works for a peer too, since the /hosts/<name> proxy relays
+// Content-Disposition untouched. A navigation cannot carry an Authorization
+// header, so a token host — and only a token host — goes through apiFetch and
+// saves the bytes by hand. That split is also what CORS wants: a cross-origin
+// peer only emits CORS headers when it has a token configured, so the
+// tokenless case *must* be the navigation.
+//
+// Neither path takes a deadline: the exporter runs over the whole session
+// before the first byte.
+async function exportSession() {
   if (!currentSession) return;
-  window.open(`/api/sessions/${encodeURIComponent(currentSession.id)}/export`, '_blank');
+  const session = currentSession;
+  const host = resolveHost(session.host);
+  const path = `/api/sessions/${encodeURIComponent(session.id)}/export`;
+  if (!host.token) { window.open(host.base + path, '_blank'); return; }
+
+  setStatus('Exporting session…', 'working');
+  try {
+    const res = await apiFetch(host, path);
+    if (!res.ok) {
+      let message = `HTTP ${res.status}`;
+      try { message = (await res.json()).error || message; } catch { /* not JSON */ }
+      throw new Error(message);
+    }
+    const fallback = `${(session.name || session.id).replace(/[^\w.-]+/g, '-')}.html`;
+    downloadBlob(await res.blob(),
+      filenameFromContentDisposition(res.headers.get('Content-Disposition'), fallback));
+    setStatus('Session exported');
+  } catch (e) {
+    setStatus('Export failed: ' + e.message, 'error');
+  }
+}
+
+/** Save already-fetched bytes to disk under `name`. */
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoked late on purpose: revoking in the same tick cancels the save in
+  // some browsers, which read the blob only after the click is handled.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 // --- Inline rename ---
@@ -9912,8 +9993,7 @@ async function loadThemes() {
   if (saved && saved !== 'solarized') applyTheme(saved);
 }
 
-function renderThemeSelect() {
-  const sel = document.getElementById('themeSelect');
+function renderThemeSelect(sel = document.getElementById('settingsTheme')) {
   if (!sel) return;
   const cur = localStorage.getItem('pi-dish-theme') || 'solarized';
   sel.innerHTML = availableThemes.map((t) =>
@@ -10230,6 +10310,60 @@ function termKeybarPress(key) {
 // 45%/52% defaults. Pointer capture keeps the drag on the handle — no
 // document-level listeners needed (the handle is never reinserted mid-drag,
 // unlike the pinned-session rows).
+// Sidebar width — session titles are long and wide monitors have room, so the
+// right edge is a drag handle. Persisted in px (unlike the terminal's %: the
+// sidebar's useful width is a function of the text in it, not of the viewport)
+// and applied as an inline width over the --sidebar-width default. Pointer
+// capture keeps the drag on the handle, so no document-level listeners; the
+// mobile breakpoint hides the handle and overrides the width in CSS.
+const SIDEBAR_WIDTH_KEY = 'pi-dish-sidebar-width';
+const SIDEBAR_WIDTH_MIN = 220;
+
+function clampSidebarWidth(px) {
+  // Never let the drag eat the reading column: half the viewport is the cap.
+  return Math.round(Math.min(Math.max(SIDEBAR_WIDTH_MIN, px), Math.max(SIDEBAR_WIDTH_MIN, window.innerWidth * 0.5)));
+}
+
+function applySavedSidebarWidth() {
+  const sidebar = document.getElementById('sidebar');
+  if (!sidebar) return;
+  const saved = parseFloat(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+  sidebar.style.width = Number.isFinite(saved) ? clampSidebarWidth(saved) + 'px' : '';
+}
+
+function initSidebarResize() {
+  const handle = document.getElementById('sidebarResizeHandle');
+  const sidebar = document.getElementById('sidebar');
+  if (!handle || !sidebar) return;
+  applySavedSidebarWidth();
+  handle.addEventListener('dblclick', () => {
+    localStorage.removeItem(SIDEBAR_WIDTH_KEY);
+    sidebar.style.width = '';
+  });
+  handle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = sidebar.offsetWidth;
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add('dragging');
+    const onMove = (ev) => {
+      sidebar.style.width = clampSidebarWidth(startWidth + (ev.clientX - startX)) + 'px';
+    };
+    const onUp = () => {
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
+      handle.classList.remove('dragging');
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebar.offsetWidth));
+      // The terminal is sized off the pane the sidebar just took width from.
+      fitTerminal();
+    };
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  });
+}
+
 function initTerminalResize() {
   const handle = document.getElementById('terminalResizeHandle');
   const panel = document.getElementById('terminalPanel');

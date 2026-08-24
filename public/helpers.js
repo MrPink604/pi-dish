@@ -1819,6 +1819,49 @@ function formatModelRoleSummary(roles, limit = 4) {
   return shown.join(' · ') + (rest > 0 ? ` · +${rest} more` : '');
 }
 
+/**
+ * Filename for a downloaded attachment: the one the response names in its
+ * Content-Disposition, else `fallback`. RFC 5987 `filename*` wins over the
+ * plain `filename`, matching what browsers do for a real navigation.
+ *
+ * The value arrives over the wire, and on a fleet that wire ends at a *peer* —
+ * a fleet mapping is reachability, never authority — so it is reduced to a
+ * bare basename with no separators, traversal or control characters before
+ * it can reach an <a download>.
+ */
+function filenameFromContentDisposition(header, fallback) {
+  const clean = (raw) => {
+    if (typeof raw !== 'string') return '';
+    const base = raw.replace(/\\/g, '/').split('/').pop()
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u001f\u007f]/g, '').trim();
+    return base === '.' || base === '..' ? '' : base;
+  };
+  const value = typeof header === 'string' ? header : '';
+  const extended = value.match(/;\s*filename\*\s*=\s*([^;]+)/i);
+  if (extended) {
+    // charset'language'percent-encoded-value
+    const parts = extended[1].trim().match(/^[^']*'[^']*'(.*)$/);
+    if (parts) {
+      try {
+        const decoded = clean(decodeURIComponent(parts[1]));
+        if (decoded) return decoded;
+      } catch { /* a malformed encoding just falls through to `filename` */ }
+    }
+  }
+  const quoted = value.match(/;\s*filename\s*=\s*"((?:[^"\\]|\\.)*)"/i);
+  if (quoted) {
+    const decoded = clean(quoted[1].replace(/\\(.)/g, '$1'));
+    if (decoded) return decoded;
+  }
+  const bare = value.match(/;\s*filename\s*=\s*([^;"][^;]*)/i);
+  if (bare) {
+    const decoded = clean(bare[1]);
+    if (decoded) return decoded;
+  }
+  return fallback;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRuntime, formatRelativeTime, formatTime, formatDuration, formatTokSpeed,
@@ -1841,7 +1884,7 @@ if (typeof module !== 'undefined' && module.exports) {
     buildSnippet, buildSnippets, highlightTokens, looksLikeFilePath, findPathTokens,
     renderDiffHtml, diffStatusClass,
     shortModelName, niceTicks, formatUsageDay, aggregateUsageWeekly,
-    tmuxPrefixSeq,
+    tmuxPrefixSeq, filenameFromContentDisposition,
     OMP_MODEL_ROLES, buildModelRoleRows, formatModelRoleSummary,
   };
 }

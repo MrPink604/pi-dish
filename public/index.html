@@ -40,13 +40,6 @@
       <div class="sidebar-header">
         <h1><span class="wordmark-pi">π</span>-dish</h1>
         <div class="sidebar-header-actions">
-          <select id="themeSelect" class="theme-select" onchange="applyTheme(this.value)" title="Theme"></select>
-          <button class="btn-icon" onclick="openSearchView(filterQuery || undefined)" title="Search all sessions" aria-label="Search all sessions">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-              <circle cx="11" cy="11" r="7"/>
-              <path d="M21 21l-4.35-4.35"/>
-            </svg>
-          </button>
           <button class="btn-icon" onclick="openUsageView()" title="Usage and spend" aria-label="Usage and spend">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <path d="M5 20v-8M12 20V5M19 20v-5"/>
@@ -55,7 +48,8 @@
           </button>
           <button class="btn-icon" onclick="openSkillsView()" title="Skills" aria-label="Skills">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 3l7 4v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V7z"/>
+              <path d="M12 7c-1.6-1.6-3.9-2.5-6-2.5H3v13h3c2.1 0 4.4.9 6 2.5 1.6-1.6 3.9-2.5 6-2.5h3v-13h-3c-2.1 0-4.4.9-6 2.5z"/>
+              <path d="M12 7v13"/>
             </svg>
           </button>
           <button class="btn-icon global-settings-btn" onclick="openSettingsModal()" title="Settings" aria-label="Settings">⚙</button>
@@ -75,6 +69,12 @@
       
       <div class="sidebar-filter">
         <input type="text" class="filter-input" id="filterInput" placeholder="Filter sessions..." oninput="onFilterInput()">
+        <button class="btn-icon filter-search-btn" onclick="openSearchView(filterQuery || undefined)" title="Search all sessions (full text)" aria-label="Search all sessions">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <circle cx="11" cy="11" r="7"/>
+            <path d="M21 21l-4.35-4.35"/>
+          </svg>
+        </button>
         <button class="btn-icon view-toggle" id="viewToggle" onclick="toggleSidebarView()"></button>
       </div>
       <div class="scope-chips" id="scopeChips"></div>
@@ -86,6 +86,7 @@
       <div class="sidebar-footer">
         <button class="btn" onclick="openNewSessionView()">+ New session</button>
       </div>
+      <div class="sidebar-resize" id="sidebarResizeHandle" role="separator" aria-orientation="vertical" aria-label="Resize session list" title="Drag to resize (double-click to reset)"></div>
     </aside>
 
     <!-- Main Content -->
@@ -157,12 +158,6 @@
                 <path d="M12 13v10"/>
               </svg>
               <span class="artifact-count" id="artifactCount"></span>
-            </button>
-            <button class="btn-icon" id="btnTree" onclick="openTreeModal()" title="Session tree">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="12" r="2"/>
-                <path d="M6 7v10M6 12h10"/>
-              </svg>
             </button>
             <button class="btn-icon" id="btnExport" onclick="exportSession()" title="Export session as HTML">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -309,7 +304,7 @@
               <span class="cp-label">Shared artifacts</span>
               <span class="cp-value" id="artifactCountMobile"></span>
             </button>
-            <button class="cp-row" onclick="closeControlPanel(); openTreeModal()" title="Session tree">
+            <button class="cp-row" id="cpTreeRow" onclick="closeControlPanel(); openTreeModal()" title="Session tree">
               <span class="cp-label">Session tree</span>
               <span class="cp-value">⑂</span>
             </button>

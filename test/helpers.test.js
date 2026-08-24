@@ -1581,3 +1581,34 @@ test('rgbStringToHex resolves computed colors for the color input', () => {
   assert.equal(H.rgbStringToHex('color(display-p3 1 0 0)'), null);
   assert.equal(H.rgbStringToHex(null), null);
 });
+
+test('filenameFromContentDisposition names the export download', () => {
+  const F = H.filenameFromContentDisposition;
+  // What express's res.download() actually sends.
+  assert.equal(F('attachment; filename="2026-08-22T11-00-00-artfix01.html"', 'fb'),
+    '2026-08-22T11-00-00-artfix01.html');
+  assert.equal(F('attachment; filename=bare.html', 'fb'), 'bare.html');
+  // RFC 5987 wins over the ASCII-safe fallback express sends alongside it.
+  assert.equal(F("attachment; filename=\"cafe.html\"; filename*=UTF-8''caf%C3%A9.html", 'fb'), 'café.html');
+  assert.equal(F('inline; FileName="Mixed.html"', 'fb'), 'Mixed.html');
+  assert.equal(F('attachment; filename="quo\\"ted.html"', 'fb'), 'quo"ted.html');
+
+  // No usable name of its own falls back to the caller's.
+  assert.equal(F('attachment', 'fb'), 'fb');
+  assert.equal(F('', 'fb'), 'fb');
+  assert.equal(F(null, 'fb'), 'fb');
+  assert.equal(F(undefined, 'fb'), 'fb');
+  assert.equal(F('attachment; filename=""', 'fb'), 'fb');
+  // A malformed percent-encoding falls through to `filename`, it doesn't throw.
+  assert.equal(F("attachment; filename=\"ok.html\"; filename*=UTF-8''%E0%A4%A", 'fb'), 'ok.html');
+
+  // The value comes off the wire — on a fleet, from a peer. It can only ever
+  // become a bare basename: no separators, no traversal, no control chars.
+  assert.equal(F('attachment; filename="../../etc/passwd"', 'fb'), 'passwd');
+  assert.equal(F('attachment; filename="/abs/path.html"', 'fb'), 'path.html');
+  assert.equal(F('attachment; filename="C:\\\\Windows\\\\evil.html"', 'fb'), 'evil.html');
+  assert.equal(F("attachment; filename*=UTF-8''%2e%2e%2f%2e%2e%2fpasswd", 'fb'), 'passwd');
+  assert.equal(F('attachment; filename="a\u0000b\u001fc.html"', 'fb'), 'abc.html');
+  assert.equal(F('attachment; filename=".."', 'fb'), 'fb');
+  assert.equal(F('attachment; filename="/"', 'fb'), 'fb');
+});
