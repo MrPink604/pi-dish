@@ -294,6 +294,11 @@ function fanoutHosts() {
 }
 
 let hostFleetTimer = 0;
+// The controls are usable before async initialization finishes. Fan-out
+// views wait on this first catalog load so an early click cannot capture
+// self as the whole fleet and then remain permanently under-counted.
+let resolveHostFleetReady;
+const hostFleetReady = new Promise(resolve => { resolveHostFleetReady = resolve; });
 const HOST_FLEET_REFRESH_MS = 60000;
 
 /**
@@ -585,9 +590,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Who is serving us — and so which host stamps/keys the sessions below.
   // Awaited before the first list load so client keys never straddle the
   // bare/composite migration mid-render.
-  await loadHostIdentity();
-  await loadHostFleet(); // peers this server knows about (404 on old servers)
-  await identifyHosts();  // and who the catalog's own entries actually are
+  try {
+    await loadHostIdentity();
+    await loadHostFleet(); // peers this server knows about (404 on old servers)
+    await identifyHosts();  // and who the catalog's own entries actually are
+  } finally {
+    resolveHostFleetReady();
+  }
   loadConfig(); // feature flags (terminal) — fire-and-forget
   loadThemes(); // theme picker options + refresh custom-theme tokens
   loadSpawnTargets(); // populate the "Run in" tmux selector (hidden if no tmux)
@@ -3914,30 +3923,36 @@ async function loadUsageView() {
   if (body.childElementCount) body.classList.add('usage-refreshing');
   else body.innerHTML = '<div class="usage-state">Loading estimated usage…</div>';
   try {
+    await hostFleetReady;
+    if (stale()) return;
     const url = '/api/usage-summary?days=' + requestedRange + '&sort=' + requestedSort +
       (requestedModels ? '&models=' + encodeURIComponent(requestedModels) : '');
     // Fan out and merge client-side (mergeUsageSummaries): each host owns its
     // own index and prices from its own model catalog, and there is
-    // deliberately no hub-side merged endpoint. One host answering is enough
-    // to render — the rest are named in a notice while they are still out,
-    // and again if they never answer. On one host the first settle is the
-    // final render, exactly as before.
+    // deliberately no hub-side merged endpoint. Near-simultaneous answers
+    // are coalesced so a healthy fleet's first paint is already complete;
+    // genuinely slow hosts still produce a progressive partial render and
+    // stay named in its notice. On one host the first settle is final.
     const hosts = fanoutHosts();
     const status = hosts.map(() => 'pending');
     const entries = new Array(hosts.length);
     const reasons = new Array(hosts.length);
     let rendered = null;
     const render = () => {
+      if (stale()) return;
       const ok = entries.filter((entry, i) => status[i] === 'ok' && entry);
       if (!ok.length) return;
       usageHostErrors = hosts.filter((_, i) => status[i] === 'error').map(hostDisplayLabel);
       usageHostPending = hosts.filter((_, i) => status[i] === 'pending').map(hostDisplayLabel);
       const d = mergeUsageSummaries(ok);
-      if (stale()) return;
       usageData = d;
       rendered = d;
       renderUsageView(d);
     };
+    // A hub's healthy same-origin proxy responses usually land a few
+    // milliseconds apart. Debounce those into one complete first paint
+    // without making an actually slow peer hold the useful partial view.
+    const queueRender = createFanoutRenderQueue(status, render);
     await Promise.all(hosts.map(async (host, i) => {
       try {
         const r = await apiFetch(host, url, { timeoutMs: 20000 });
@@ -3954,7 +3969,7 @@ async function loadUsageView() {
         reasons[i] = e;
         if (!host.self) noteHostFailure(host, e);
       }
-      render();
+      queueRender();
     }));
     if (!status.some(s => s === 'ok')) throw reasons.find(Boolean) || new Error('no hosts answered');
     if (stale() || !rendered) return;

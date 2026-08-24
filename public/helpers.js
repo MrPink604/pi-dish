@@ -1145,6 +1145,20 @@ function rgbStringToHex(value) {
 const USAGE_MERGE_COST_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'];
 const USAGE_MERGE_TOKEN_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'];
 
+/**
+ * Coalesce a burst of healthy fan-out responses into one complete render.
+ * If a peer is genuinely slow, the delayed call still publishes the useful
+ * partial result; the final settlement always renders synchronously.
+ */
+function createFanoutRenderQueue(states, render, delayMs = 100) {
+  let timer = null;
+  return () => {
+    clearTimeout(timer);
+    if (states.every(state => state !== 'pending')) render();
+    else timer = setTimeout(render, delayMs);
+  };
+}
+
 function emptyMergedUsage() {
   return {
     tokens: Object.fromEntries(USAGE_MERGE_TOKEN_KEYS.map(k => [k, 0])),
@@ -1810,7 +1824,7 @@ if (typeof module !== 'undefined' && module.exports) {
     parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch, stripQueryField,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     sessionKey, parseSessionKey, sessionRefKey, normalizeHostBase, sanitizeHostCatalog,
-    hostDisplayLabel, mergeHostEntries, mergeUsageSummaries,
+    hostDisplayLabel, mergeHostEntries, mergeUsageSummaries, createFanoutRenderQueue,
     hostSupportsCapability, hostSupportsTerminal,
     HOST_BACKOFF_LADDER, HOST_BACKOFF_RESET_MS, hostConnReduce,
     HOST_COLOR_SLOTS, sanitizeHostColors, sanitizeHostColorOrder, assignHostColor,

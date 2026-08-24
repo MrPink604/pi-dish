@@ -1374,6 +1374,31 @@ function usagePayload(over = {}) {
   };
 }
 
+test('createFanoutRenderQueue coalesces fast hosts but publishes a slow partial', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+
+  const fast = ['ok', 'pending'];
+  const fastRenders = [];
+  const queueFast = H.createFanoutRenderQueue(fast, () => fastRenders.push([...fast]));
+  queueFast();
+  t.mock.timers.tick(50);
+  fast[1] = 'ok';
+  queueFast();
+  assert.deepEqual(fastRenders, [['ok', 'ok']], 'the complete fleet is the first paint');
+  t.mock.timers.tick(100);
+  assert.equal(fastRenders.length, 1, 'the canceled partial timer cannot repaint');
+
+  const slow = ['ok', 'pending'];
+  const slowRenders = [];
+  const queueSlow = H.createFanoutRenderQueue(slow, () => slowRenders.push([...slow]));
+  queueSlow();
+  t.mock.timers.tick(100);
+  assert.deepEqual(slowRenders, [['ok', 'pending']], 'a genuinely slow peer does not block partial data');
+  slow[1] = 'ok';
+  queueSlow();
+  assert.deepEqual(slowRenders, [['ok', 'pending'], ['ok', 'ok']], 'final settlement renders synchronously');
+});
+
 test('mergeUsageSummaries of one host is exactly what that host sent', () => {
   const payload = usagePayload();
   assert.equal(H.mergeUsageSummaries([payload]), payload);
