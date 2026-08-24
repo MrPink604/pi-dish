@@ -1236,6 +1236,114 @@ test('hostSupportsCapability is the generic form behind it', () => {
   assert.equal(H.hostSupportsCapability({ hostId: 'x', base: 'http://x:1' }, 'tmux', { tmux: true }), false);
 });
 
+// --- host connection state (fan-out backoff) -------------------------------
+
+const T0 = 1_000_000; // any fixed "now": the reducer takes it as an argument
+
+test('hostConnReduce climbs the backoff ladder one rung per failure', () => {
+  const fail = (prev, at) => H.hostConnReduce(prev, { type: 'failure', error: new Error('EHOSTUNREACH') }, at);
+  let s = fail(null, T0);
+  assert.equal(s.state, 'backoff');
+  assert.equal(s.failures, 1);
+  assert.equal(s.retryAt, T0 + 3000);
+  assert.equal(s.error, 'EHOSTUNREACH');
+  s = fail(s, T0);
+  assert.deepEqual([s.failures, s.retryAt], [2, T0 + 4000]);
+  s = fail(s, T0);
+  assert.deepEqual([s.failures, s.retryAt], [3, T0 + 8000]);
+  s = fail(s, T0);
+  assert.deepEqual([s.failures, s.retryAt], [4, T0 + 16000]);
+  // The last rung is the ceiling — a host down for an hour is still retried
+  // every 16s, not once a day.
+  s = fail(s, T0);
+  assert.deepEqual([s.failures, s.retryAt], [5, T0 + 16000]);
+});
+
+test('hostConnReduce takes the failure error as text, from Error or string', () => {
+  assert.equal(H.hostConnReduce(null, { type: 'failure', error: 'boom' }, T0).error, 'boom');
+  assert.equal(H.hostConnReduce(null, { type: 'failure', error: new Error('nope') }, T0).error, 'nope');
+  assert.equal(H.hostConnReduce(null, { type: 'failure' }, T0).error, null);
+});
+
+test('hostConnReduce success clears the error but keeps the rung until it settles', () => {
+  const down = H.hostConnReduce(H.hostConnReduce(null, { type: 'failure', error: 'x' }, T0),
+    { type: 'failure', error: 'x' }, T0);
+  assert.equal(down.failures, 2);
+  const up = H.hostConnReduce(down, 'success', T0 + 100);
+  assert.equal(up.state, 'reachable');
+  assert.equal(up.error, null);
+  assert.equal(up.retryAt, 0);
+  // Hysteresis: a host that answers one poll has not proven anything yet, so
+  // the ladder position survives - a flapping host keeps climbing.
+  assert.equal(up.failures, 2);
+  assert.equal(up.reachableSince, T0 + 100);
+});
+
+test('hostConnReduce forgives the ladder only after 30s of unbroken reachability', () => {
+  const down = H.hostConnReduce(null, { type: 'failure', error: 'x' }, T0);
+  const up = H.hostConnReduce(down, 'success', T0);
+  // One millisecond short of the window: still carrying the rung.
+  const almost = H.hostConnReduce(up, 'success', T0 + 29_999);
+  assert.equal(almost.failures, 1);
+  assert.equal(almost.reachableSince, T0, 'the clock starts at the transition, not at every poll');
+  // On the boundary it resets.
+  const settled = H.hostConnReduce(up, 'success', T0 + 30_000);
+  assert.equal(settled.failures, 0);
+  assert.equal(settled.reachableSince, T0);
+});
+
+test('hostConnReduce restarts the hysteresis clock after a flap', () => {
+  let s = H.hostConnReduce(null, 'success', T0);
+  s = H.hostConnReduce(s, { type: 'failure', error: 'flap' }, T0 + 10_000);
+  assert.equal(s.failures, 1);
+  s = H.hostConnReduce(s, 'success', T0 + 20_000);
+  // 20s after the first success, but only just back up: not forgiven.
+  assert.equal(s.failures, 1);
+  assert.equal(s.reachableSince, T0 + 20_000);
+  s = H.hostConnReduce(s, { type: 'failure', error: 'flap' }, T0 + 25_000);
+  assert.deepEqual([s.state, s.failures, s.retryAt], ['backoff', 2, T0 + 25_000 + 4000]);
+});
+
+test('hostConnReduce blocked is sticky: neither failure nor success demotes it', () => {
+  const blocked = H.hostConnReduce(null, 'blocked', T0);
+  assert.deepEqual(
+    { state: blocked.state, failures: blocked.failures, retryAt: blocked.retryAt, error: blocked.error },
+    { state: 'blocked', failures: 0, retryAt: 0, error: 'Unauthorized' });
+  // A failure while blocked is a no-op, identity included (callers skip the
+  // re-render on it).
+  assert.equal(H.hostConnReduce(blocked, { type: 'failure', error: 'timeout' }, T0 + 5), blocked);
+  assert.equal(H.hostConnReduce(blocked, 'blocked', T0 + 5), blocked);
+  // Only a real success (the token was entered) can leave it.
+  assert.equal(H.hostConnReduce(blocked, 'success', T0 + 5).state, 'reachable');
+});
+
+test('hostConnReduce blocked replaces a backoff state outright', () => {
+  const down = H.hostConnReduce(null, { type: 'failure', error: 'x' }, T0);
+  const blocked = H.hostConnReduce(down, 'blocked', T0 + 1);
+  assert.deepEqual([blocked.state, blocked.failures, blocked.retryAt], ['blocked', 0, 0]);
+});
+
+test('hostConnReduce seed-down only applies to a host with no state at all', () => {
+  const seeded = H.hostConnReduce(null, { type: 'seed-down', error: 'ssh: connect timed out' }, T0);
+  assert.deepEqual(
+    [seeded.state, seeded.failures, seeded.retryAt, seeded.error],
+    ['backoff', 1, T0 + 3000, 'ssh: connect timed out']);
+  // Everything this client observed itself outranks the server's probe.
+  for (const prev of [
+    H.hostConnReduce(null, 'success', T0),
+    H.hostConnReduce(null, 'blocked', T0),
+    H.hostConnReduce(null, { type: 'failure', error: 'mine' }, T0),
+  ]) {
+    assert.equal(H.hostConnReduce(prev, { type: 'seed-down', error: 'theirs' }, T0 + 1), prev);
+  }
+});
+
+test('hostConnReduce ignores an unknown event instead of inventing a state', () => {
+  const up = H.hostConnReduce(null, 'success', T0);
+  assert.equal(H.hostConnReduce(up, 'nonsense', T0), up);
+  assert.equal(H.hostConnReduce(null, 'nonsense', T0), null);
+});
+
 // --- usage merging ---------------------------------------------------------
 
 function usageBucket(over = {}) {

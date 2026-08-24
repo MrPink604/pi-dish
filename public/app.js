@@ -39,11 +39,28 @@ function sessionHostId(id) {
  */
 function apiFetch(host, path, opts = {}) {
   const entry = resolveHost(host);
-  if (!entry.token) return fetch(entry.base + path, opts);
+  const init = withFetchTimeout(opts);
+  if (!entry.token) return fetch(entry.base + path, init);
   return fetch(entry.base + path, {
-    ...opts,
-    headers: { ...(opts.headers || {}), Authorization: `Bearer ${entry.token}` },
+    ...init,
+    headers: { ...(init.headers || {}), Authorization: `Bearer ${entry.token}` },
   });
+}
+
+/**
+ * `opts.timeoutMs` for the fan-out paths only. A sleeping tailnet peer
+ * black-holes TCP: with no deadline that request holds one of the origin's
+ * six HTTP/1.1 connections for minutes and everything queued behind it reads
+ * as sitewide lag. Streams, transcripts and file reads are legitimately long
+ * and never pass it. Feature-detected, because an old phone browser without
+ * AbortSignal.timeout must keep working exactly as before; a caller-supplied
+ * signal always wins.
+ */
+function withFetchTimeout(opts) {
+  const { timeoutMs, ...init } = opts;
+  if (!timeoutMs || init.signal) return init;
+  if (typeof AbortSignal === 'undefined' || typeof AbortSignal.timeout !== 'function') return init;
+  return { ...init, signal: AbortSignal.timeout(timeoutMs) };
 }
 
 /** ws(s) URL for a host path — scheme/authority come from the host's base. */
@@ -149,9 +166,10 @@ function migrateClientKeys() {
 
 let fleetHosts = [];                // GET /api/hosts entries (never persisted)
 let effectiveHostsCache = null;     // rebuilt whenever a source changes
-const hostConnState = new Map();    // host key -> { state, failures, retryAt, error }
+const hostConnState = new Map();    // host key -> a hostConnReduce record (helpers.js)
 const hostSessionCache = new Map(); // host key -> last known { active, previous }
 const hostLoadSeq = new Map();      // host key -> per-host poll sequence guard
+const hostLoadInflight = new Map(); // host key -> the poll already in flight
 const hostIndexing = new Map();     // host key -> server still backfilling its index
 // GET /api/host descriptors, by hostId. Runtime only: label/version/
 // capabilities belong to the host, not to this browser's catalog entry (the
@@ -159,9 +177,10 @@ const hostIndexing = new Map();     // host key -> server still backfilling its 
 // overlaid onto the merged list instead of being written back into it.
 const hostDescriptors = new Map();
 
-// t3code's ladder: a transient failure retries soon and settles at 16s. Auth
-// failures never land here — they park in `blocked` (see noteHostBlocked).
-const HOST_BACKOFF_LADDER = [3000, 4000, 8000, 16000];
+// The ladder, its reset hysteresis and the transitions themselves live in
+// helpers.js (hostConnReduce, HOST_BACKOFF_LADDER) — pure and unit-tested.
+// Everything here only maps events onto it and decides when a change is
+// worth a re-render.
 
 function invalidateHosts() { effectiveHostsCache = null; }
 
@@ -215,34 +234,46 @@ function hostIdIsDown(hostId) {
   return entry ? hostIsDown(entry) : false;
 }
 
-function noteHostReachable(host) {
+/**
+ * Apply one connection event to a host's state. The re-render is gated on a
+ * *visible* change: a host that has been down for an hour reaches this on
+ * every 10s poll, and re-rendering the settings section each time is pure
+ * churn. The ladder position moves silently underneath.
+ */
+function noteHostConn(host, event) {
   const key = hostKeyOf(host);
-  const changed = hostConnState.get(key)?.state !== 'reachable';
-  hostConnState.set(key, { state: 'reachable', failures: 0, retryAt: 0, error: null });
-  if (changed) renderHostsSection();
+  const prev = hostConnState.get(key) || null;
+  const next = hostConnReduce(prev, event, Date.now());
+  if (next === prev) return;
+  hostConnState.set(key, next);
+  if (!prev || prev.state !== next.state || prev.error !== next.error) renderHostsSection();
 }
+
+function noteHostReachable(host) { noteHostConn(host, 'success'); }
 
 /**
  * A 401 is not a transient failure: retrying it just burns requests until a
  * token is entered, so the host parks in `blocked` and the settings section
  * grows a quiet "token?" affordance.
  */
-function noteHostBlocked(host) {
-  hostConnState.set(hostKeyOf(host), { state: 'blocked', failures: 0, retryAt: 0, error: 'Unauthorized' });
-  renderHostsSection();
-}
+function noteHostBlocked(host) { noteHostConn(host, 'blocked'); }
 
-function noteHostFailure(host, error) {
-  const key = hostKeyOf(host);
-  const prev = hostConnState.get(key);
-  if (prev?.state === 'blocked') return;
-  const failures = (prev?.failures || 0) + 1;
-  const wait = HOST_BACKOFF_LADDER[Math.min(failures - 1, HOST_BACKOFF_LADDER.length - 1)];
-  hostConnState.set(key, {
-    state: 'backoff', failures, retryAt: Date.now() + wait,
-    error: error ? String(error.message || error) : null,
-  });
-  renderHostsSection();
+function noteHostFailure(host, error) { noteHostConn(host, { type: 'failure', error }); }
+
+/**
+ * The serving host has already probed its fleet, so a peer it reports as
+ * unreachable starts in backoff instead of costing this page load one full
+ * hang before the client has any state of its own. Seeding is deliberately
+ * one-way: it never overwrites a state this client observed itself.
+ */
+function seedHostConnFromFleet() {
+  const now = Date.now();
+  for (const host of effectiveHosts()) {
+    if (host.self || host.reachable !== false) continue;
+    const key = hostKeyOf(host);
+    if (hostConnState.has(key)) continue;
+    hostConnState.set(key, hostConnReduce(null, { type: 'seed-down', error: host.error || 'unreachable' }, now));
+  }
 }
 
 /** Hosts a poll may talk to right now — self always, blocked never. */
@@ -274,7 +305,7 @@ const HOST_FLEET_REFRESH_MS = 60000;
 async function loadHostFleet() {
   hostFleetTimer = Date.now();
   try {
-    const res = await apiFetch(null, '/api/hosts');
+    const res = await apiFetch(null, '/api/hosts', { timeoutMs: 10000 });
     if (!res.ok) return; // older server: self only, exactly as before
     const data = await res.json();
     if (!Array.isArray(data?.hosts)) return;
@@ -282,6 +313,7 @@ async function loadHostFleet() {
     const own = data.hosts.find(h => h && h.self);
     if (own && own.label && !selfHost.label) selfHost = { ...selfHost, label: own.label };
     invalidateHosts();
+    seedHostConnFromFleet();
     await identifyHosts();
     pruneHostCaches();
     renderHostsSection();
@@ -302,7 +334,7 @@ async function identifyHosts() {
   if (!unknown.length) return;
   await Promise.allSettled(unknown.map(async (host) => {
     try {
-      const res = await apiFetch(host, '/api/host');
+      const res = await apiFetch(host, '/api/host', { timeoutMs: 8000 });
       if (res.status === 401) { noteHostBlocked(host); return; }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -341,7 +373,7 @@ function refreshHostFleetSoon() {
 /** Drop cached rows/state for hosts that left the effective list. */
 function pruneHostCaches() {
   const live = new Set(effectiveHosts().map(hostKeyOf));
-  for (const map of [hostSessionCache, hostConnState, hostLoadSeq, hostIndexing]) {
+  for (const map of [hostSessionCache, hostConnState, hostLoadSeq, hostLoadInflight, hostIndexing]) {
     for (const key of [...map.keys()]) if (!live.has(key)) map.delete(key);
   }
 }
@@ -470,6 +502,7 @@ let responseDetailSeq = 0;
 const responseDetails = new Map();
 let usageRange = '30', usageTimer = null, usageData = null, usageChart = null, usageSelectedDay = null;
 let usageHostErrors = []; // hosts that did not answer the last fan-out
+let usageHostPending = []; // hosts the current fan-out is still waiting on
 let usageSort = localStorage.getItem('pi-dish-usage-sort') === 'tokens' ? 'tokens' : 'cost';
 let usageModelFilter = new Set(); // multi-select model refs; empty = all models
 let settingsRenderSeq = 0, usageFetchSeq = 0, spendFetchSeq = 0;
@@ -1145,28 +1178,50 @@ function queryHosts(hosts, query) {
  * Failure is never fatal — the host keeps its last-known rows and its state
  * moves to backoff/blocked, which is what dims them.
  */
-async function loadHostSessions(host, query, withPrevious, seq) {
+function loadHostSessions(host, query, withPrevious, seq) {
   const key = hostKeyOf(host);
-  const hostSeq = (hostLoadSeq.get(key) || 0) + 1;
-  hostLoadSeq.set(key, hostSeq);
   // `host:` never goes on the wire: a server has no idea which host it is
   // from a session's point of view, so it would match the term against
   // nothing and answer with an empty list. It is applied client-side, in
   // renderSessions/applyLocalFilter, over what comes back.
   const wireQuery = stripQueryField(query, 'host');
+  // Single-flight: the 10s poll must not stack a second identical request on
+  // a host that has not answered the first. Joining can't be a plain await,
+  // though — the in-flight response guards hold the *originator's* sequence
+  // and would drop a response the joiner is waiting for — so the guards read
+  // a mutable ctx that the joiner refreshes. No new hostSeq is allocated:
+  // joining is not a new request, and a new one would invalidate the read
+  // already on the wire. A different query (or withPrevious) is a different
+  // request and still issues its own; the guards drop whichever loses.
+  const inflight = hostLoadInflight.get(key);
+  if (inflight && inflight.wireQuery === wireQuery && inflight.withPrevious === withPrevious) {
+    inflight.ctx.seq = seq;
+    inflight.ctx.query = query || '';
+    return inflight.promise;
+  }
+  const ctx = { seq, query: query || '', hostSeq: (hostLoadSeq.get(key) || 0) + 1 };
+  hostLoadSeq.set(key, ctx.hostSeq);
+  const promise = runHostSessionsLoad(host, key, wireQuery, withPrevious, ctx).finally(() => {
+    if (hostLoadInflight.get(key)?.promise === promise) hostLoadInflight.delete(key);
+  });
+  hostLoadInflight.set(key, { promise, wireQuery, withPrevious, ctx });
+  return promise;
+}
+
+async function runHostSessionsLoad(host, key, wireQuery, withPrevious, ctx) {
   try {
     const params = new URLSearchParams();
     if (wireQuery) params.set('q', wireQuery);
     if (!withPrevious) params.set('active', '1');
     const qs = params.toString();
-    const res = await apiFetch(host, '/api/sessions' + (qs ? '?' + qs : ''));
+    const res = await apiFetch(host, '/api/sessions' + (qs ? '?' + qs : ''), { timeoutMs: 20000 });
     if (res.status === 401) { noteHostBlocked(host); publishSessionLists(); return; }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     noteHostReachable(host);
     // A slower earlier request must not clobber a newer one's results (a
     // cold search can land after the warm search that superseded it).
-    if (seq !== loadSessionsSeq || hostSeq !== hostLoadSeq.get(key)) return;
+    if (ctx.seq !== loadSessionsSeq || ctx.hostSeq !== hostLoadSeq.get(key)) return;
     const cached = hostSessionCache.get(key) || { active: [], previous: [] };
     if (withPrevious) {
       hostIndexing.set(key, !!data.indexing);
@@ -1227,14 +1282,14 @@ async function loadHostSessions(host, query, withPrevious, seq) {
       }
     }
     hostSessionCache.set(key, next);
-    listsQueriedFor = query || '';
+    listsQueriedFor = ctx.query;
     publishSessionLists();
   } catch (e) {
     noteHostFailure(host, e);
     if (host.self) console.error('Failed to load sessions:', e);
     // Republish so the failing host's rows pick up their dimmed state; every
     // other host's rows are untouched.
-    if (seq === loadSessionsSeq) publishSessionLists();
+    if (ctx.seq === loadSessionsSeq) publishSessionLists();
   }
 }
 
@@ -3178,48 +3233,73 @@ async function runSearchView() {
   const body = document.getElementById('searchViewBody');
   if (body.childElementCount) body.classList.add('usage-refreshing');
   else body.innerHTML = '<div class="usage-state">Searching…</div>';
-  try {
-    // `host:` stays on this side of the wire — in the query and in any
-    // active scope — or every server would answer with nothing. Positive
-    // host terms prune the fan-out instead; the rest is applied to the
-    // merged results below.
-    const params = new URLSearchParams({ q: stripQueryField(query, 'host') });
-    const wireScope = stripQueryField(scope, 'host');
-    if (wireScope) params.set('scope', wireScope);
-    // Every host searches its own index and ranks with the same shared
-    // scoreSessionMatch, so the merge is a plain re-sort on searchScore.
-    const hosts = queryHosts(queryHosts(fanoutHosts(), query), scope);
-    const settled = await Promise.allSettled(hosts.map(async (host) => {
-      const r = await apiFetch(host, '/api/search?' + params);
-      if (r.status === 401) { noteHostBlocked(host); throw new Error('needs a token'); }
-      if (!r.ok) throw new Error(await r.json().then(d => d.error, () => null) || `HTTP ${r.status}`);
-      const payload = await r.json();
-      noteHostReachable(host);
-      return { host, payload };
-    }));
-    settled.forEach((result, i) => {
-      if (result.status === 'rejected' && hosts[i] && !hosts[i].self) noteHostFailure(hosts[i], result.reason);
-    });
-    const ok = settled.filter(r => r.status === 'fulfilled').map(r => r.value);
-    // Every host pruned away is an answer, not a failure: the query named a
-    // host none of them is, so the result set is empty.
-    if (!ok.length && hosts.length) throw settled[0]?.reason || new Error('no hosts answered');
+  // `host:` stays on this side of the wire — in the query and in any
+  // active scope — or every server would answer with nothing. Positive
+  // host terms prune the fan-out instead; the rest is applied to the
+  // merged results below.
+  const params = new URLSearchParams({ q: stripQueryField(query, 'host') });
+  const wireScope = stripQueryField(scope, 'host');
+  if (wireScope) params.set('scope', wireScope);
+  // Every host searches its own index and ranks with the same shared
+  // scoreSessionMatch, so the merge is a plain re-sort on searchScore.
+  const hosts = queryHosts(queryHosts(fanoutHosts(), query), scope);
+  const stale = () => seq !== searchViewSeq || !isSearchViewOpen() ||
+    query !== searchViewQuery.trim() || scope !== scopeQuery().trim();
+  // Render as each host lands: a fleet's slowest peer must not decide when
+  // the fastest one's results become readable. renderSearchView is a full
+  // idempotent render, and on one host the first settle *is* the final one —
+  // single-host behavior is unchanged, hint and all.
+  const status = hosts.map(() => 'pending');
+  const payloads = new Array(hosts.length);
+  const reasons = new Array(hosts.length);
+  let rendered = null;
+  const render = () => {
+    if (stale()) return;
+    const ok = hosts.map((host, i) => (status[i] === 'ok' ? { host, payload: payloads[i] } : null)).filter(Boolean);
     const d = ok.length
       ? mergeSearchPayloads(ok, query)
       : { results: [], total: 0, hiddenByScopes: 0, indexing: false };
     // The client-only half of the grammar, applied to what came back: the
     // query's remaining host terms (negations, and positives on a host that
-    // serves several labels), then any host term in an active scope.
+    // serves several labels), then any host term in an active scope. Every
+    // partial render goes through it — partial results must not bypass the
+    // grammar for even one frame.
     d.results = applyHostTerms(d.results, query);
     const inScope = applyHostTerms(d.results, scope);
     d.hiddenByScopes += d.results.length - inScope.length;
     d.results = inScope;
-    d.hostErrors = hosts.filter((_, i) => settled[i].status === 'rejected').map(hostDisplayLabel);
-    if (seq !== searchViewSeq || !isSearchViewOpen() ||
-        query !== searchViewQuery.trim() || scope !== scopeQuery().trim()) return;
+    d.hostErrors = hosts.filter((_, i) => status[i] === 'error').map(hostDisplayLabel);
+    d.hostPending = hosts.filter((_, i) => status[i] === 'pending').map(hostDisplayLabel);
     searchViewRenderedQuery = query;
+    rendered = d;
     renderSearchView(d, query);
-    if (d.indexing) searchViewRepollTimer = setTimeout(() => { if (isSearchViewOpen()) runSearchView(); }, 1000);
+  };
+  try {
+    await Promise.all(hosts.map(async (host, i) => {
+      try {
+        const r = await apiFetch(host, '/api/search?' + params, { timeoutMs: 20000 });
+        if (r.status === 401) { noteHostBlocked(host); throw new Error('needs a token'); }
+        if (!r.ok) throw new Error(await r.json().then(d => d.error, () => null) || `HTTP ${r.status}`);
+        payloads[i] = await r.json();
+        status[i] = 'ok';
+        noteHostReachable(host);
+      } catch (e) {
+        status[i] = 'error';
+        reasons[i] = e;
+        if (!host.self) noteHostFailure(host, e);
+      }
+      // Until one host has answered there is nothing to show: keep the
+      // previous render (or "Searching…") instead of flashing an empty list.
+      if (status.some(s => s === 'ok')) render();
+    }));
+    if (!status.some(s => s === 'ok')) {
+      // Every host pruned away is an answer, not a failure: the query named a
+      // host none of them is, so the result set is empty.
+      if (hosts.length) throw reasons.find(Boolean) || new Error('no hosts answered');
+      render();
+    }
+    if (stale() || !rendered) return;
+    if (rendered.indexing) searchViewRepollTimer = setTimeout(() => { if (isSearchViewOpen()) runSearchView(); }, 1000);
   } catch (e) {
     if (seq !== searchViewSeq || !isSearchViewOpen()) return;
     body.classList.remove('usage-refreshing');
@@ -3327,6 +3407,7 @@ function renderSearchView(d, query = searchViewQuery) {
     ${renderSearchFacetsHtml()}
     ${d.indexing ? '<div class="usage-notice">History is indexing; results will refresh…</div>' : ''}
     ${d.hostErrors?.length ? `<div class="usage-notice">Not searched: ${escapeHtml(d.hostErrors.join(', '))} did not answer.</div>` : ''}
+    ${d.hostPending?.length ? `<div class="usage-notice">Still searching ${escapeHtml(d.hostPending.join(', '))}…</div>` : ''}
     <div class="search-count-line">${shown.length === 1 ? '1 session' : `${shown.length} sessions`}${d.total > d.results.length ? ` — showing the ${d.results.length} ${tokens.length ? 'best matches' : 'most recent'}, narrow the query for the rest` : ''}</div>
     ${cards || '<div class="usage-state">No matching sessions.</div>'}
     ${scopesHidden > 0 ? `<div class="scope-hidden-note">${scopesHidden} hidden by scopes</div>` : ''}
@@ -3838,29 +3919,46 @@ async function loadUsageView() {
     // Fan out and merge client-side (mergeUsageSummaries): each host owns its
     // own index and prices from its own model catalog, and there is
     // deliberately no hub-side merged endpoint. One host answering is enough
-    // to render — the rest are named in a notice.
+    // to render — the rest are named in a notice while they are still out,
+    // and again if they never answer. On one host the first settle is the
+    // final render, exactly as before.
     const hosts = fanoutHosts();
-    const settled = await Promise.allSettled(hosts.map(async (host) => {
-      const r = await apiFetch(host, url);
-      if (r.status === 401) { noteHostBlocked(host); throw new Error('needs a token'); }
-      // A stale server (or proxy) answers with an HTML error page — surface the
-      // status instead of a JSON parse error.
-      if (!r.ok) throw new Error(await r.json().then(d => d.error, () => null) || `HTTP ${r.status}`);
-      const summary = await r.json();
-      noteHostReachable(host);
-      return { hostId: host.hostId || null, hostLabel: hostDisplayLabel(host), summary };
+    const status = hosts.map(() => 'pending');
+    const entries = new Array(hosts.length);
+    const reasons = new Array(hosts.length);
+    let rendered = null;
+    const render = () => {
+      const ok = entries.filter((entry, i) => status[i] === 'ok' && entry);
+      if (!ok.length) return;
+      usageHostErrors = hosts.filter((_, i) => status[i] === 'error').map(hostDisplayLabel);
+      usageHostPending = hosts.filter((_, i) => status[i] === 'pending').map(hostDisplayLabel);
+      const d = mergeUsageSummaries(ok);
+      if (stale()) return;
+      usageData = d;
+      rendered = d;
+      renderUsageView(d);
+    };
+    await Promise.all(hosts.map(async (host, i) => {
+      try {
+        const r = await apiFetch(host, url, { timeoutMs: 20000 });
+        if (r.status === 401) { noteHostBlocked(host); throw new Error('needs a token'); }
+        // A stale server (or proxy) answers with an HTML error page — surface the
+        // status instead of a JSON parse error.
+        if (!r.ok) throw new Error(await r.json().then(d => d.error, () => null) || `HTTP ${r.status}`);
+        const summary = await r.json();
+        entries[i] = { hostId: host.hostId || null, hostLabel: hostDisplayLabel(host), summary };
+        status[i] = 'ok';
+        noteHostReachable(host);
+      } catch (e) {
+        status[i] = 'error';
+        reasons[i] = e;
+        if (!host.self) noteHostFailure(host, e);
+      }
+      render();
     }));
-    settled.forEach((result, i) => {
-      if (result.status === 'rejected' && hosts[i] && !hosts[i].self) noteHostFailure(hosts[i], result.reason);
-    });
-    const ok = settled.filter(r => r.status === 'fulfilled').map(r => r.value);
-    if (!ok.length) throw settled[0]?.reason || new Error('no hosts answered');
-    usageHostErrors = hosts.filter((_, i) => settled[i].status === 'rejected').map(hostDisplayLabel);
-    const d = mergeUsageSummaries(ok);
-    if (stale()) return;
-    usageData = d;
-    renderUsageView(d);
-    if (d.indexing) usageTimer = setTimeout(() => { if (isUsageViewOpen()) loadUsageView(); }, 1000);
+    if (!status.some(s => s === 'ok')) throw reasons.find(Boolean) || new Error('no hosts answered');
+    if (stale() || !rendered) return;
+    if (rendered.indexing) usageTimer = setTimeout(() => { if (isUsageViewOpen()) loadUsageView(); }, 1000);
   } catch (e) {
     if (stale()) return;
     body.classList.remove('usage-refreshing');
@@ -3948,6 +4046,7 @@ function renderUsageView(d) {
     ${budgetHtml}
     ${d.indexing ? '<div class="usage-notice">History is indexing; totals will refresh…</div>' : ''}
     ${usageHostErrors.length ? `<div class="usage-notice">Not counted: ${escapeHtml(usageHostErrors.join(', '))} did not answer.</div>` : ''}
+    ${usageHostPending.length ? `<div class="usage-notice">Still counting ${escapeHtml(usageHostPending.join(', '))}…</div>` : ''}
     <div class="usage-ranges">${ranges}${sortCtl}</div>
     ${(t.calls || 0) === 0 ? '<div class="usage-state">No usage in this range.</div>' : summary}
     ${filterNote}
