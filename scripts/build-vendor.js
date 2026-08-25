@@ -30,6 +30,22 @@ fs.copyFileSync(
   path.join(outDir, 'marked.min.js'),
 );
 
+// --- katex: copy browser bundle, css, and fonts ---
+fs.copyFileSync(
+  path.join(root, 'node_modules', 'katex', 'dist', 'katex.min.js'),
+  path.join(outDir, 'katex.min.js'),
+);
+fs.copyFileSync(
+  path.join(root, 'node_modules', 'katex', 'dist', 'katex.min.css'),
+  path.join(outDir, 'katex.min.css'),
+);
+const fontsIn = path.join(root, 'node_modules', 'katex', 'dist', 'fonts');
+const fontsOut = path.join(outDir, 'fonts');
+fs.mkdirSync(fontsOut, { recursive: true });
+for (const font of fs.readdirSync(fontsIn)) {
+  fs.copyFileSync(path.join(fontsIn, font), path.join(fontsOut, font));
+}
+
 // --- xterm.js: ships browser UMD builds, just copy them ---
 fs.copyFileSync(
   path.join(root, 'node_modules', '@xterm', 'xterm', 'lib', 'xterm.js'),

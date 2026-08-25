@@ -1748,6 +1748,34 @@ body.sidebar-open {
   font-weight: 600;
 }
 
+/* LaTeX math rendering */
+.markdown-body .math-block {
+  margin: 8px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.markdown-body .katex-display {
+  margin: 8px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 0;
+}
+
+.markdown-body .katex {
+  font-size: 1.05em;
+  text-rendering: auto;
+}
+
+.markdown-body .math-error {
+  background: var(--bg-darker);
+  color: var(--error);
+  padding: 4px 8px;
+  border-radius: 4px;
+  margin: 4px 0;
+  font-size: 0.9em;
+}
+
 .message.error .message-content {
   border-left: 3px solid var(--error);
 }

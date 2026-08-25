@@ -1612,3 +1612,61 @@ test('filenameFromContentDisposition names the export download', () => {
   assert.equal(F('attachment; filename=".."', 'fb'), 'fb');
   assert.equal(F('attachment; filename="/"', 'fb'), 'fb');
 });
+
+test('createMathExtensions renders LaTeX block math with KaTeX', () => {
+  const { Marked } = require('marked');
+  const katex = require('katex');
+  const marked = new Marked({
+    breaks: true,
+    gfm: true,
+    extensions: H.createMathExtensions(katex),
+  });
+
+  const sample = `And the residual is the interesting part:
+$$\\text{added cost} = 39.4\\ \\text{ns/call} \\qquad \\text{profiler attributes to ring submit} = 42\\ \\text{ns/call}$$
+Those match. **The transport now accounts for essentially 100% of what remains**`;
+  const html = marked.parse(sample);
+  assert.ok(html.includes('class="math-block"'), 'wraps display math in math-block');
+  assert.ok(html.includes('class="katex-display"'), 'renders katex-display');
+  assert.ok(html.includes('added'), 'contains math text');
+  assert.ok(html.includes('<strong>The transport now accounts for essentially 100% of what remains</strong>'), 'markdown bold preserved');
+});
+
+test('createMathExtensions renders LaTeX inline math with KaTeX', () => {
+  const { Marked } = require('marked');
+  const katex = require('katex');
+  const marked = new Marked({
+    breaks: true,
+    gfm: true,
+    extensions: H.createMathExtensions(katex),
+  });
+
+  const inline = 'Inline $x^2 + y^2 = z^2$ formula and \\(E = mc^2\\).';
+  const html = marked.parse(inline);
+  assert.ok(html.includes('class="katex"'), 'renders inline katex');
+  assert.ok(!html.includes('class="math-block"'), 'inline math is not wrapped in math-block');
+});
+
+test('createMathExtensions preserves plain currency and code blocks', () => {
+  const { Marked } = require('marked');
+  const katex = require('katex');
+  const marked = new Marked({
+    breaks: true,
+    gfm: true,
+    extensions: H.createMathExtensions(katex),
+  });
+
+  const currency = 'Costs between $10 and $20 for item $5.';
+  const currencyHtml = marked.parse(currency);
+  assert.ok(!currencyHtml.includes('class="katex"'), 'currency is not treated as math');
+  assert.ok(currencyHtml.includes('$10 and $20'), 'currency text preserved');
+
+  const escaped = 'Price: \\$100.';
+  const escapedHtml = marked.parse(escaped);
+  assert.ok(!escapedHtml.includes('class="katex"'), 'escaped dollar is not math');
+
+  const code = 'Check `$VAR` and:\n```bash\n$echo $PATH\n```';
+  const codeHtml = marked.parse(code);
+  assert.ok(codeHtml.includes('<code>$VAR</code>'), 'inline code with $ intact');
+  assert.ok(codeHtml.includes('$echo $PATH'), 'code block with $ intact');
+});

@@ -9648,6 +9648,7 @@ function showExtDialog(req, sessionId) {
     walkTokens(token) {
       if (token.type === 'link' || token.type === 'image') token.href = sanitizeMarkdownUrl(token.href);
     },
+    extensions: typeof createMathExtensions === 'function' ? createMathExtensions() : [],
   });
 })();
 
@@ -9708,7 +9709,7 @@ function linkifyFilePaths(root) {
     body.dataset.linkified = '1';
     const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
       acceptNode(n) {
-        return n.parentElement && !n.parentElement.closest('code, a, pre, .file-link')
+        return n.parentElement && !n.parentElement.closest('code, a, pre, .file-link, .katex, .math-block')
           ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       },
     });
