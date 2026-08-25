@@ -131,3 +131,32 @@ test('peer-session CLI reports the canonical route for an alternative registry e
   const result = await execFileAsync(process.execPath, [cli, 'session'], { env });
   assert.equal(result.stdout.trim(), encodeSessionKey('prime', 'prime-native'));
 });
+test('peer-session CLI attach command lists active tmux entries with --json', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-session-attach-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const registry = path.join(home, '.pi', 'dish', 'sessions');
+  const sockets = path.join(home, '.pi', 'dish', 'sockets');
+  fs.mkdirSync(registry, { recursive: true });
+  fs.mkdirSync(sockets, { recursive: true });
+
+  const sockPath = path.join(sockets, 'test.sock');
+  fs.writeFileSync(sockPath, '');
+  fs.writeFileSync(path.join(registry, 'pi-test.json'), JSON.stringify({
+    sessionId: 'session-xyz',
+    pid: process.pid,
+    name: 'refactor-auth',
+    cwd: '/work/app',
+    model: 'anthropic/claude-3-5-sonnet',
+    socketPath: sockPath,
+    tmux: { socket: '/tmp/tmux-test', pane: '%42' },
+    updatedAt: new Date().toISOString(),
+  }));
+
+  const env = { ...process.env, HOME: home };
+  const res = await execFileAsync(process.execPath, [cli, 'attach', '--json'], { env });
+  const entries = JSON.parse(res.stdout);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].name, 'refactor-auth');
+  assert.equal(entries[0].socket, '/tmp/tmux-test');
+  assert.equal(entries[0].pane, '%42');
+});

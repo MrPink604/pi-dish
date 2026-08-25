@@ -63,6 +63,115 @@ function registryEntries() {
     } catch { return []; }
   });
 }
+function activeTmuxEntries() {
+  const entries = registryEntries();
+  const seen = new Set();
+  const result = [];
+  for (const entry of entries) {
+    if (!entry.tmux?.socket || !entry.tmux?.pane) continue;
+    const key = `${entry.tmux.socket}#${entry.tmux.pane}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    let winName = null;
+    try {
+      winName = execFileSync('tmux', ['-S', entry.tmux.socket, 'display-message', '-p', '-t', entry.tmux.pane, '#{window_name}'], { encoding: 'utf8', timeout: 1000 }).trim() || null;
+    } catch {}
+
+    const harness = entry.wrapper?.name || entry.harnessId || 'Pi';
+    const name = entry.name || winName || 'Unnamed';
+    const state = entry.turnInProgress ? 'working' : (entry.compacting ? 'compacting' : 'idle');
+    const cwd = entry.cwd ? entry.cwd.replace(os.homedir(), '~') : '';
+    const model = entry.model || '';
+    const routeId = registryRouteId(entry);
+
+    result.push({
+      harness,
+      name,
+      state,
+      cwd,
+      model,
+      socket: entry.tmux.socket,
+      pane: entry.tmux.pane,
+      sessionId: entry.sessionId,
+      routeId,
+      pid: entry.pid,
+      updatedAt: entry.updatedAt || null,
+    });
+  }
+  result.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  return result;
+}
+
+function commandExists(cmd) {
+  try {
+    execFileSync('which', [cmd], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function attachToTmux(socket, pane) {
+  const isInsideTmux = Boolean(process.env.TMUX);
+  const currentTmuxSocket = isInsideTmux ? process.env.TMUX.split(',')[0] : null;
+
+  try {
+    execFileSync('tmux', ['-S', socket, 'select-window', '-t', pane], { stdio: 'ignore', timeout: 2000 });
+    execFileSync('tmux', ['-S', socket, 'select-pane', '-t', pane], { stdio: 'ignore', timeout: 2000 });
+  } catch {}
+
+  if (isInsideTmux && currentTmuxSocket && path.resolve(currentTmuxSocket) === path.resolve(socket)) {
+    execFileSync('tmux', ['-S', socket, 'switch-client', '-t', pane], { stdio: 'inherit' });
+  } else {
+    const env = { ...process.env };
+    delete env.TMUX;
+    delete env.TMUX_PANE;
+    const { spawnSync } = require('node:child_process');
+    spawnSync('tmux', ['-S', socket, 'attach-session', '-t', pane], { stdio: 'inherit', env });
+  }
+}
+
+function pickSessionWithFzf(entries) {
+  const { spawn } = require('node:child_process');
+  return new Promise((resolve, reject) => {
+    const fzf = spawn('fzf', [
+      '--exit-0',
+      '--delimiter=\t',
+      '--with-nth=1',
+      '--preview-window=right:60%:wrap',
+      '--preview', 'tmux -S {2} capture-pane -ep -t {3} 2>/dev/null',
+      '--header=Enter: attach | Esc: cancel',
+      '--prompt=Pi-Dish Session > ',
+    ], { stdio: ['pipe', 'pipe', 'inherit'] });
+
+    let stdout = '';
+    fzf.stdout.on('data', chunk => { stdout += chunk.toString(); });
+    fzf.on('close', code => {
+      if (code !== 0 || !stdout.trim()) return resolve(null);
+      const parts = stdout.trim().split('\t');
+      const socket = parts[1];
+      const pane = parts[2];
+      const match = entries.find(e => e.socket === socket && e.pane === pane);
+      resolve(match || { socket, pane });
+    });
+    fzf.on('error', err => {
+      if (err.code === 'ENOENT') resolve(null);
+      else reject(err);
+    });
+
+    for (const e of entries) {
+      const tag = `[${e.harness}]`.padEnd(10);
+      const title = e.name.padEnd(28);
+      const state = `(${e.state})`.padEnd(11);
+      const cwd = e.cwd ? `${e.cwd}` : '';
+      const model = e.model ? `[${e.model}]` : '';
+      const display = `${tag} ${title} ${state} ${cwd}  ${model}`.trim();
+      fzf.stdin.write(`${display}\t${e.socket}\t${e.pane}\t${e.sessionId}\n`);
+    }
+    fzf.stdin.end();
+  });
+}
 
 function registryRouteId(entry) {
   const harnessId = entry?.wrapper?.harnessId || entry?.harnessId || 'pi';
@@ -215,6 +324,36 @@ async function main() {
   try {
     if (args.command === 'session' || args.command === 'self') {
       print(discoverSession(args.session), args.json);
+      return;
+    }
+    if (args.command === 'attach') {
+      const targetQuery = args.positional.join(' ').trim();
+      const entries = activeTmuxEntries();
+      if (!entries.length) {
+        throw new Error('no active tmux-managed pi-dish sessions found');
+      }
+
+      let selected = null;
+      if (targetQuery) {
+        selected = entries.find(e => e.sessionId === targetQuery || e.routeId === targetQuery || e.name?.toLowerCase() === targetQuery.toLowerCase())
+          || entries.find(e => e.name?.toLowerCase().includes(targetQuery.toLowerCase()) || e.cwd?.toLowerCase().includes(targetQuery.toLowerCase()));
+        if (!selected) throw new Error(`no active session matches "${targetQuery}"`);
+      } else {
+        if (!process.stdout.isTTY || !commandExists('fzf')) {
+          if (args.json) return print(entries, true);
+          for (let i = 0; i < entries.length; i++) {
+            const e = entries[i];
+            process.stdout.write(`[${i + 1}] ${e.harness}\t${e.name}\t${e.state}\t${e.cwd}\t${e.socket} ${e.pane}\n`);
+          }
+          return;
+        }
+
+        selected = await pickSessionWithFzf(entries);
+        if (!selected) return;
+      }
+
+      if (args.json) return print(selected, true);
+      attachToTmux(selected.socket, selected.pane);
       return;
     }
 

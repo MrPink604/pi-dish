@@ -711,14 +711,15 @@ test('overlapping resume requests share the first target and launch one process'
   const hiddenSocket = path.join(tmuxTmp, 'pi-dish');
   const paneCount = (socket, target) => {
     try {
-      return execFileSync('tmux', ['-S', socket, 'list-panes', '-s', '-t', target, '-F', '#{pane_id}'], { encoding: 'utf8' })
+      const args = target ? ['list-panes', '-s', '-t', target, '-F', '#{pane_id}'] : ['list-panes', '-a', '-F', '#{pane_id}'];
+      return execFileSync('tmux', ['-S', socket, ...args], { encoding: 'utf8' })
         .split('\n').filter(Boolean).length;
     } catch {
       return 0;
     }
   };
   const workBefore = paneCount(TMUX_SOCKET, 'work');
-  const hiddenBefore = paneCount(hiddenSocket, 'headless');
+  const hiddenBefore = paneCount(hiddenSocket);
   process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_REGISTER_DELAY_MS=500 ${process.execPath} ${FIXTURE}`;
   try {
     // The explicit target arrives first. The overlapping target-less request
@@ -739,7 +740,7 @@ test('overlapping resume requests share the first target and launch one process'
     assert.equal(path.resolve(tmux.getSpawn(id).socket), path.resolve(TMUX_SOCKET),
       'the first explicit target wins deterministically');
     assert.equal(paneCount(TMUX_SOCKET, 'work'), workBefore + 1, 'exactly one explicit pane launched');
-    assert.equal(paneCount(hiddenSocket, 'headless'), hiddenBefore, 'no hidden fallback pane launched');
+    assert.equal(paneCount(hiddenSocket), hiddenBefore, 'no hidden fallback pane launched');
   } finally {
     process.env.PI_DISH_PI_COMMAND = `${process.execPath} ${FIXTURE}`;
   }
@@ -754,8 +755,9 @@ test('explicit tmux resume timeout quarantines its pane until the writer is gone
   const hiddenSocket = path.join(tmuxTmp, 'pi-dish');
   const paneIds = (socket, target) => {
     try {
+      const args = target ? ['list-panes', '-s', '-t', target, '-F', '#{pane_id}'] : ['list-panes', '-a', '-F', '#{pane_id}'];
       return new Set(execFileSync(
-        'tmux', ['-S', socket, 'list-panes', '-s', '-t', target, '-F', '#{pane_id}'],
+        'tmux', ['-S', socket, ...args],
         { encoding: 'utf8' },
       ).split('\n').filter(Boolean));
     } catch {
@@ -763,7 +765,7 @@ test('explicit tmux resume timeout quarantines its pane until the writer is gone
     }
   };
   const workBefore = paneIds(TMUX_SOCKET, 'work');
-  const hiddenBefore = paneIds(hiddenSocket, 'headless');
+  const hiddenBefore = paneIds(hiddenSocket);
   const rpcFixture = path.join(__dirname, 'fixtures', 'fake-rpc-pi.js');
   const rpcStarts = path.join(tmpHome, 'explicit-timeout-rpc-starts.jsonl');
   const router = `if [ "$1" = "--mode" ]; then exec ${process.execPath} ${rpcFixture} "$@"; else exec ${process.execPath} ${FIXTURE} "$@"; fi`;
@@ -790,7 +792,7 @@ test('explicit tmux resume timeout quarantines its pane until the writer is gone
     assert.match(blocked.body.error, /previous explicit tmux resume timed out/i);
     assert.equal(paneIds(TMUX_SOCKET, 'work').size, workBefore.size + 1,
       'retry starts no second explicit pane');
-    assert.equal(paneIds(hiddenSocket, 'headless').size, hiddenBefore.size,
+    assert.equal(paneIds(hiddenSocket).size, hiddenBefore.size,
       'retry starts no hidden pane');
     assert.equal(fs.existsSync(rpcStarts), false, 'retry starts no RPC writer');
 
@@ -839,7 +841,7 @@ test('a registration landing during the final timeout sleep is accepted', { skip
 
 // --- Durable headless sessions: no target → hidden tmux session -------------
 
-test('POST /api/sessions/new with no target spawns into the hidden headless tmux session', { skip: !tmuxOk }, async () => {
+test('POST /api/sessions/new with no target spawns into an independent hidden tmux session', { skip: !tmuxOk }, async () => {
   const { status, body } = await post('/api/sessions/new', { model: 'anthropic/claude-opus-4' });
   assert.equal(status, 200, JSON.stringify(body));
 
@@ -847,7 +849,8 @@ test('POST /api/sessions/new with no target spawns into the hidden headless tmux
   assert.ok(spawn, 'placement persisted like any tmux spawn');
   assert.equal(path.basename(spawn.socket), 'pi-dish', 'lands on the dedicated pi-dish socket');
   const loc = await tmux.paneLocation(spawn.socket, spawn.paneId);
-  assert.equal(loc.tmuxSession, 'headless', 'pane lives in the hidden headless session');
+  assert.ok(loc.tmuxSession, 'pane lives in a named independent session');
+  assert.notEqual(loc.tmuxSession, 'headless', 'not stuck in a generic monolithic session');
 
   // The property the feature exists for: pi is not a child of this server
   // process, so a server restart can't take it down. (An RPC child's ppid
@@ -858,16 +861,15 @@ test('POST /api/sessions/new with no target spawns into the hidden headless tmux
   assert.notEqual(ppid, process.pid, 'spawned pi is not a child of the pi-dish server');
 });
 
-test('a second headless spawn reuses the hidden session as a new window', { skip: !tmuxOk }, async () => {
+test('a second headless spawn creates a separate independent session on the pi-dish server', { skip: !tmuxOk }, async () => {
   const { status, body } = await post('/api/sessions/new', {});
   assert.equal(status, 200, JSON.stringify(body));
   const socket = tmux.getSpawn(body.id).socket;
   const sessions = execFileSync('tmux', ['-S', socket, 'list-sessions', '-F', '#{session_name}'], { encoding: 'utf8' })
     .split('\n').filter(Boolean);
-  assert.deepEqual(sessions, ['headless'], 'still exactly one hidden session');
-  const panes = execFileSync('tmux', ['-S', socket, 'list-panes', '-s', '-t', 'headless', '-F', '#{pane_id}'], { encoding: 'utf8' })
-    .split('\n').filter(Boolean);
-  assert.ok(panes.length >= 2, `both headless spawns share the session (got ${panes.length} panes)`);
+  assert.ok(sessions.length >= 2, `each headless spawn gets its own session (got ${sessions.length} sessions)`);
+  const loc = await tmux.paneLocation(socket, tmux.getSpawn(body.id).paneId);
+  assert.ok(sessions.includes(loc.tmuxSession));
 });
 
 test('hidden tmux timeout removes the pane before starting RPC fallback', { skip: !tmuxOk }, async () => {
@@ -878,7 +880,7 @@ test('hidden tmux timeout removes the pane before starting RPC fallback', { skip
 
   const hiddenSocket = path.join(tmuxTmp, 'pi-dish');
   const countHiddenPanes = () => execFileSync(
-    'tmux', ['-S', hiddenSocket, 'list-panes', '-s', '-t', 'headless', '-F', '#{pane_id}'],
+    'tmux', ['-S', hiddenSocket, 'list-panes', '-a', '-F', '#{pane_id}'],
     { encoding: 'utf8' },
   ).split('\n').filter(Boolean).length;
   const before = countHiddenPanes();
@@ -1150,4 +1152,29 @@ test('paneExists rejects an exit-0 empty target field and prune removes that sta
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+test('POST /api/sessions/new with name sets the tmux window title', { skip: !tmuxOk }, async () => {
+  const { status, body } = await post('/api/sessions/new', {
+    name: 'refactor-auth-flow',
+    target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+  const spawn = tmux.getSpawn(body.id);
+  assert.ok(spawn);
+  const loc = await tmux.paneLocation(TMUX_SOCKET, spawn.paneId);
+  assert.equal(loc?.windowName, 'refactor-auth-flow');
+});
+
+test('POST /api/sessions/:id/rename updates the tmux window title', { skip: !tmuxOk }, async () => {
+  const { status, body } = await post('/api/sessions/new', {
+    target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+  });
+  assert.equal(status, 200);
+  const renameRes = await post(`/api/sessions/${encodeURIComponent(body.id)}/rename`, {
+    name: 'investigate-memory-leak',
+  });
+  assert.equal(renameRes.status, 200);
+  const spawn = tmux.getSpawn(body.id);
+  const loc = await tmux.paneLocation(TMUX_SOCKET, spawn.paneId);
+  assert.equal(loc?.windowName, 'investigate-memory-leak');
 });

@@ -3485,9 +3485,15 @@ app.post('/api/sessions/:id/rename', async (req, res) => {
         return res.status(409).json({ error: 'This session does not support renaming.' });
       }
       await sess.setName(name);
+      const reg = getRegisteredSession(req.params.id);
+      const spawn = tmux.getSpawn(req.params.id);
+      const socket = reg?.tmux?.socket || spawn?.socket;
+      const pane = reg?.tmux?.pane || spawn?.paneId;
+      if (socket && pane) {
+        await tmux.renameWindow(socket, pane, name).catch(() => {});
+      }
       return res.json({ success: true });
     }
-    // Inactive session: append a session_info entry to the JSONL directly.
     const session = findSessionSource(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
     if (session.harnessId !== 'pi') {
@@ -4789,7 +4795,7 @@ function injectLaunchWrapper(descriptor, args, wrapperPath) {
 // the window, and wait up to 30s for the session to register. The window is
 // left open on timeout for the user to inspect. `args` are pi's CLI args
 // (a TUI launch — never --mode rpc). Returns the registered session id.
-async function spawnHarnessInTmux({ descriptor, target, args, cwd, hidden }) {
+async function spawnHarnessInTmux({ descriptor, target, args, cwd, name, hidden }) {
   if (!tmux.isTmuxAvailable()) {
     const err = new Error('tmux is not available on this host'); err.status = 400; throw err;
   }
@@ -4829,6 +4835,7 @@ async function spawnHarnessInTmux({ descriptor, target, args, cwd, hidden }) {
       socket,
       tmuxSession: target.tmuxSession,
       newTmuxSessionName: target.newTmuxSession,
+      windowName: name || target.windowName || null,
       cwd: cwd || env.HOME,
       command,
       env,
@@ -4967,8 +4974,26 @@ async function spawnHarnessInTmux({ descriptor, target, args, cwd, hidden }) {
 // 30s registration timeout on every spawn would be brutal). One failed
 // registration flips the path off until the server restarts.
 const HEADLESS_TMUX_SERVER = 'pi-dish';
-const HEADLESS_TMUX_SESSION = 'headless';
 let headlessTmuxBroken = false;
+
+function sanitizeTmuxSessionName(rawName) {
+  if (!rawName) return null;
+  const sanitized = String(rawName)
+    .replace(/[.:\s]+/g, '-')
+    .replace(/[^a-zA-Z0-9_-]+/g, '')
+    .slice(0, 48);
+  return sanitized || null;
+}
+
+async function generateHeadlessSessionName(socket, descriptor, preferredName) {
+  const base = sanitizeTmuxSessionName(preferredName) || `${descriptor.id}-${crypto.randomBytes(4).toString('hex')}`;
+  let candidate = base;
+  let counter = 1;
+  while (await tmux.hasSession(socket, candidate)) {
+    candidate = `${base}-${counter++}`;
+  }
+  return candidate;
+}
 
 function headlessTmuxEnabled(descriptor = getHarness('pi')) {
   const mode = process.env.PI_DISH_HEADLESS || '';
@@ -4992,15 +5017,14 @@ function spawnHarnessHeadlessTmux(opts) {
   return run;
 }
 
-async function _spawnHarnessHeadlessTmux({ descriptor, args, cwd }) {
+async function _spawnHarnessHeadlessTmux({ descriptor, args, cwd, name }) {
   // tmux won't create its tmpdir for -S sockets (only for -L); 0700 matches
   // what tmux itself would create.
   fs.mkdirSync(tmux.tmuxTmpdir(), { recursive: true, mode: 0o700 });
   const socket = path.join(tmux.tmuxTmpdir(), HEADLESS_TMUX_SERVER);
-  const target = (await tmux.hasSession(socket, HEADLESS_TMUX_SESSION))
-    ? { socket, tmuxSession: HEADLESS_TMUX_SESSION }
-    : { socket, newTmuxSession: HEADLESS_TMUX_SESSION };
-  return spawnHarnessInTmux({ descriptor, target, args, cwd, hidden: true });
+  const sessionName = await generateHeadlessSessionName(socket, descriptor, name);
+  const target = { socket, newTmuxSession: sessionName };
+  return spawnHarnessInTmux({ descriptor, target, args, cwd, name, hidden: true });
 }
 
 // Spawn a fresh session. Default ("headless"): a hidden tmux window when the
@@ -5041,10 +5065,10 @@ async function createSession({ harness = 'pi', name, model, thinking, cwd, targe
   const args = descriptor.argv.new({ model, thinking });
   let id;
   if (target && target.type === 'tmux') {
-    id = await spawnHarnessInTmux({ descriptor, target, args, cwd });
+    id = await spawnHarnessInTmux({ descriptor, target, args, cwd, name });
   } else if (headlessTmuxEnabled(descriptor)) {
     try {
-      id = await spawnHarnessHeadlessTmux({ descriptor, args, cwd });
+      id = await spawnHarnessHeadlessTmux({ descriptor, args, cwd, name });
     } catch (e) {
       if (!descriptor.rpcFallback || e.preventHeadlessFallback) throw e;
       headlessTmuxBroken = true;
@@ -5210,11 +5234,11 @@ function activeSessionClearsQuarantine(sessionId) {
   return true;
 }
 
-async function launchResumedSession({ descriptor, sessionFile, cwd, target, model }) {
+async function launchResumedSession({ descriptor, sessionFile, cwd, name, target, model }) {
   const args = descriptor.argv.resume({ file: sessionFile, model });
   if (target && target.type === 'tmux') {
     try {
-      const id = await spawnHarnessInTmux({ descriptor, target, args, cwd });
+      const id = await spawnHarnessInTmux({ descriptor, target, args, cwd, name });
       return { id };
     } catch (e) {
       if (e.resumeUncertain) uncertainExplicitResumes.set(sessionFile, e.resumeUncertain);
@@ -5223,7 +5247,7 @@ async function launchResumedSession({ descriptor, sessionFile, cwd, target, mode
   }
   if (headlessTmuxEnabled(descriptor)) {
     try {
-      const id = await spawnHarnessHeadlessTmux({ descriptor, args, cwd });
+      const id = await spawnHarnessHeadlessTmux({ descriptor, args, cwd, name });
       return { id };
     } catch (e) {
       if (!descriptor.rpcFallback || e.preventHeadlessFallback) {
@@ -5360,7 +5384,8 @@ app.post('/api/sessions/:id/resume', async (req, res) => {
     return res.status(e.status || 500).json({ error: e.message });
   }
 
-  const flight = launchResumedSession({ descriptor, sessionFile, cwd, target: req.body?.target, model });
+  const name = sessionSource.name || null;
+  const flight = launchResumedSession({ descriptor, sessionFile, cwd, name, target: req.body?.target, model });
   resumeFlights.set(sessionFile, flight);
   try {
     const result = await flight;

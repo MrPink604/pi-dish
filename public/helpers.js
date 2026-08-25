@@ -62,8 +62,9 @@ function formatRuntime(r) {
   if (r.kind === 'tmux') {
     // The hidden headless placement (dedicated pi-dish socket) reads as
     // "headless" to the user — the tmux part is plumbing worth a hint only.
-    if (r.server === 'pi-dish' && r.tmuxSession === 'headless') {
-      return `headless (hidden tmux — survives restarts)${pid}`;
+    if (r.server === 'pi-dish') {
+      const sess = r.tmuxSession && r.tmuxSession !== 'headless' ? ` · ${r.tmuxSession}` : '';
+      return `headless (hidden tmux — survives restarts)${sess}${pid}`;
     }
     let where = `tmux ${r.server || '?'}`;
     if (r.tmuxSession) {

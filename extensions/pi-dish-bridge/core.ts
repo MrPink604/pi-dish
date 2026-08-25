@@ -1,6 +1,7 @@
 // Type-only dependency: alternate wrappers execute this core without loading
 // upstream Pi's AgentSession implementation at runtime.
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as cp from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
@@ -763,6 +764,22 @@ export function createBridge(descriptor: BridgeDescriptor) {
     } catch {}
   }
 
+  let lastSyncedTmuxTitle: string | null = null;
+  function syncTmuxTitle(title: string | null): void {
+    if (!title || !TMUX_LOCATION?.socket || !TMUX_LOCATION?.pane) return;
+    const sanitized = String(title).replace(/[\r\n\t]+/g, " ").trim().slice(0, 80);
+    if (!sanitized || sanitized === lastSyncedTmuxTitle) return;
+    lastSyncedTmuxTitle = sanitized;
+    const sessionSafe = sanitized.replace(/[.:\s]+/g, "-").replace(/[^a-zA-Z0-9_-]+/g, "").slice(0, 48);
+    try {
+      cp.execFile("tmux", ["-S", TMUX_LOCATION.socket, "rename-window", "-t", TMUX_LOCATION.pane, sanitized], { timeout: 2000 }, () => {});
+      cp.execFile("tmux", ["-S", TMUX_LOCATION.socket, "select-pane", "-t", TMUX_LOCATION.pane, "-T", sanitized], { timeout: 2000 }, () => {});
+      if (sessionSafe) {
+        cp.execFile("tmux", ["-S", TMUX_LOCATION.socket, "rename-session", "-t", TMUX_LOCATION.pane, sessionSafe], { timeout: 2000 }, () => {});
+      }
+    } catch {}
+  }
+
   const uiState = {
     widgets: new Map<string, any>(),
     statuses: new Map<string, any>(),
@@ -897,6 +914,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       }
     } else if (req.method === "setTitle") {
       uiState.title = req;
+      if (req.title) syncTmuxTitle(req.title);
     } else if (req.method === "set_editor_text") {
       uiState.editorText = req;
     }
@@ -1486,6 +1504,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       if (!args) return { ok: false, error: "usage: /name <session name>" };
       await pi.setSessionName(args);
       sessionName = args;
+      syncTmuxTitle(sessionName);
       writeRegistry();
       return { ok: true, info: `Session renamed` };
     }
@@ -2064,6 +2083,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
           if (!cmd.name) return respond(false, undefined, "name required");
           await pi.setSessionName(cmd.name);
           sessionName = cmd.name;
+          syncTmuxTitle(sessionName);
           writeRegistry();
           respond(true);
           return;
@@ -2101,6 +2121,8 @@ export function createBridge(descriptor: BridgeDescriptor) {
     }
     refreshModel(ctx);
     refreshContextUsage(ctx);
+    try { sessionName = (ctx as any)?.sessionManager?.getSessionName?.() ?? sessionName; } catch {}
+    if (sessionName) syncTmuxTitle(sessionName);
     const identity = deriveSessionIdentity(ctx, descriptor);
     if (!identity) return;
     ({ sessionFile, sessionId, cwd } = identity);
@@ -2135,6 +2157,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     refreshContextUsage(ctx);
     sessionName = null;
     try { sessionName = (ctx as any)?.sessionManager?.getSessionName?.() ?? null; } catch {}
+    if (sessionName) syncTmuxTitle(sessionName);
     ({ sessionFile, sessionId, cwd } = identity);
     refreshNativeProjection();
 
@@ -2178,11 +2201,25 @@ export function createBridge(descriptor: BridgeDescriptor) {
       } else if (ev === "turn_end" || ev === "agent_end") {
         turnInProgress = false;
         refreshContextUsage(ctx);
+        try {
+          const name = (ctx as any)?.sessionManager?.getSessionName?.() ?? null;
+          if (name && name !== sessionName) {
+            sessionName = name;
+            syncTmuxTitle(sessionName);
+          }
+        } catch {}
         writeRegistry();
       } else if (ev === "message_end") {
         // Usage data lands with the assistant message; keep the registry fresh
         // so the session list shows accurate context numbers mid-turn too.
         refreshContextUsage(ctx);
+        try {
+          const name = (ctx as any)?.sessionManager?.getSessionName?.() ?? null;
+          if (name && name !== sessionName) {
+            sessionName = name;
+            syncTmuxTitle(sessionName);
+          }
+        } catch {}
         writeRegistry();
       } else if (ev === "model_select") {
         modelId = formatModel(event?.model) ?? modelId;

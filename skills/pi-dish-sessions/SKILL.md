@@ -27,6 +27,7 @@ Optional flags: `--model provider/id`, `--no-wait`, `--url URL`, `--session ID`.
 
 ```bash
 node "$CLI" list --active
+node "$CLI" attach [session-or-query]
 node "$CLI" show <session-id> --limit 20
 node "$CLI" related <session-id>
 node "$CLI" send <session-id> "Run the tests"

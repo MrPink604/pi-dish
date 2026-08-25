@@ -215,9 +215,14 @@ if (process.env.PI_FIXTURE_NOREGISTER) {
         let msg;
         try { msg = JSON.parse(line); } catch { continue; }
         if (msg.id === undefined) continue;
-        const response = msg.command === 'get_commands'
-          ? { type: 'response', id: msg.id, success: true, data: { commands: [] } }
-          : { type: 'response', id: msg.id, success: false, error: `unknown command: ${msg.command}` };
+        let response;
+        if (msg.command === 'get_commands') {
+          response = { type: 'response', id: msg.id, success: true, data: { commands: [] } };
+        } else if (msg.command === 'set_session_name') {
+          response = { type: 'response', id: msg.id, success: true };
+        } else {
+          response = { type: 'response', id: msg.id, success: false, error: `unknown command: ${msg.command}` };
+        }
         sock.write(JSON.stringify(response) + '\n');
       }
     });
