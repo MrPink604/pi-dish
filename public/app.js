@@ -768,6 +768,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (window.innerWidth <= 768) closeSidebar();
   });
 
+  // Right-click (and Android's long-press, which dispatches the same event)
+  // on a row opens the copy-a-ref menu. Provisional spawn rows have no
+  // session behind them yet, so they keep the browser's own menu.
+  document.getElementById('sessionList').addEventListener('contextmenu', (e) => {
+    const item = e.target.closest('.session-item[data-id]');
+    if (!item) return;
+    const session = findSession(item.dataset.id, item.dataset.host || null);
+    if (!session) return;
+    e.preventDefault();
+    openSessionMenu(session, e.clientX, e.clientY);
+  });
+
   initPinnedDrag();
 
   document.getElementById('scopeChips').addEventListener('click', (e) => {
@@ -1678,6 +1690,97 @@ function initPinnedDrag() {
   });
 }
 
+// =========================================================================
+// Session row context menu — the copy-a-ref affordance.
+//
+// A ref is the short handle a session is pasted into another agent's prompt
+// as (helpers.js `sessionRef`). Right-click is the whole gesture: Android
+// long-press dispatches `contextmenu` too, so phones get this for free and
+// there is deliberately no separate long-press machinery to keep in sync.
+//
+// One element, created on first use and reused. It is torn down by anything
+// that could move the row out from under it — outside click, Escape, a scroll
+// in any container, a resize, and a session-list re-render.
+// =========================================================================
+let sessionMenuEl = null;
+let sessionMenuTimer = null;
+
+/** The ref for a session, resolved against the host that actually owns it. */
+function sessionRefFor(session) {
+  return sessionRef(session, hostEntryFor(session?.host || null));
+}
+
+function isSessionMenuOpen() {
+  return !!sessionMenuEl && sessionMenuEl.style.display !== 'none';
+}
+
+function closeSessionMenu() {
+  clearTimeout(sessionMenuTimer);
+  if (sessionMenuEl) sessionMenuEl.style.display = 'none';
+}
+
+function ensureSessionMenu() {
+  if (sessionMenuEl) return sessionMenuEl;
+  const el = document.createElement('div');
+  el.id = 'sessionMenu';
+  el.className = 'context-menu';
+  el.style.display = 'none';
+  document.body.appendChild(el);
+  el.addEventListener('click', (e) => {
+    const item = e.target.closest('.context-menu-item');
+    if (item) copyFromSessionMenu(item);
+  });
+  // Scroll doesn't bubble, so the capture phase is the only way to hear a
+  // scroll in whichever container the row happens to live in.
+  document.addEventListener('scroll', () => { if (isSessionMenuOpen()) closeSessionMenu(); }, true);
+  window.addEventListener('resize', () => { if (isSessionMenuOpen()) closeSessionMenu(); });
+  sessionMenuEl = el;
+  return el;
+}
+
+function openSessionMenu(session, x, y) {
+  const el = ensureSessionMenu();
+  const ref = sessionRefFor(session);
+  // The ref is short enough to read, so it doubles as the row's own preview;
+  // the full id is not, and stays behind its label.
+  el.innerHTML = [
+    ['Copy session ref', ref, ref],
+    ['Copy session id', session.id, ''],
+  ].map(([label, value, preview]) => `
+    <button type="button" class="context-menu-item" data-copy="${escapeHtml(value)}">
+      <span class="context-menu-label">${escapeHtml(label)}</span>
+      ${preview ? `<span class="context-menu-value">${escapeHtml(preview)}</span>` : ''}
+    </button>`).join('');
+  el.style.display = 'block';
+  // Measure at the origin, then clamp — a menu opened near the right or
+  // bottom edge must stay whole rather than extend the page.
+  el.style.left = '0px';
+  el.style.top = '0px';
+  const { offsetWidth: w, offsetHeight: h } = el;
+  el.style.left = `${Math.max(8, Math.min(x, window.innerWidth - w - 8))}px`;
+  el.style.top = `${Math.max(8, Math.min(y, window.innerHeight - h - 8))}px`;
+  // The detached-target rule matters here too: copying re-renders the menu's
+  // innards, and the click that did it must not read as "outside".
+  armOutsideClickClose(['sessionMenu'], closeSessionMenu, isSessionMenuOpen);
+}
+
+/** Copy an item's value, confirm quietly in place, then dismiss. */
+function copyFromSessionMenu(item) {
+  const label = item.querySelector('.context-menu-label');
+  copyTextToClipboard(item.dataset.copy || '').then(
+    () => {
+      if (label) label.textContent = 'Copied';
+      item.classList.add('copied');
+      clearTimeout(sessionMenuTimer);
+      sessionMenuTimer = setTimeout(closeSessionMenu, 700);
+    },
+    () => {
+      closeSessionMenu();
+      setStatus('Copy failed (clipboard blocked)', 'error');
+    },
+  );
+}
+
 let lastSessionListHtml = '';
 
 function renderSessions() {
@@ -1777,6 +1880,9 @@ function renderSessions() {
   // The 10s poll usually changes nothing — skip the DOM churn (and touch/hover
   // state loss) when the rendered HTML would be identical.
   if (html !== lastSessionListHtml) {
+    // The rows the menu was anchored to are gone; a menu pointing at a
+    // recycled row would copy the wrong session's ref.
+    closeSessionMenu();
     list.innerHTML = html;
     lastSessionListHtml = html;
   }
@@ -4441,6 +4547,9 @@ function ownsStatsModal(sessionId, generation) {
 function openStatsModal() {
   if (!currentSession) return;
   const sessionId = currentSession.id;
+  // Resolved now, while the selection is certainly this session — the stats
+  // response lands a round-trip later.
+  const ref = sessionRefFor(currentSession);
   const generation = ++statsModalGeneration;
   statsModalSessionId = sessionId;
   const modal = document.getElementById('statsModal');
@@ -4477,6 +4586,9 @@ function openStatsModal() {
       // click-to-copy button (paths, handy for jumping to the file in a shell).
       const rows = [
         ['__section', 'Summary'],
+        // The pasteable handle for this session, click-to-copy like the paths
+        // below it — the modal-side twin of the sidebar row's context menu.
+        ['Ref', ref, !!ref],
         ['Model', s.model || '—'],
         ['Thinking', s.thinkingLevel || '—'],
         ['Context', (cu.tokens != null ? formatTokens(cu.tokens) : '—') +
@@ -9793,7 +9905,11 @@ function closeTreeModal() {
 
 document.addEventListener('keydown', function(e) {
   if (e.key !== 'Escape') return;
-  if (isCommentListPopoverOpen()) {
+  // The floating row menu is the shallowest surface open — it goes first, and
+  // it alone, so Escape never dismisses it *and* the modal underneath.
+  if (isSessionMenuOpen()) {
+    e.preventDefault(); closeSessionMenu();
+  } else if (isCommentListPopoverOpen()) {
     e.preventDefault(); closeCommentListPopover();
   } else if (document.getElementById('commentBubble').style.display !== 'none') {
     e.preventDefault(); closeCommentBubble();

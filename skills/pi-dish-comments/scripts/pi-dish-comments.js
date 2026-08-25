@@ -1,13 +1,32 @@
 #!/usr/bin/env node
-const fs = require('node:fs');
+'use strict';
+/**
+ * pi-dish-comments — read and acknowledge the anchored review comments the
+ * user left for this session in the pi-dish UI.
+ *
+ * The plumbing (session discovery, HTTP) lives in
+ * skills/lib/pi-dish-client.js. Skills are installed by symlinking each skill
+ * directory into ~/.pi/agent/skills/, and Node resolves requires through the
+ * realpath, so this relative path reaches the pi-dish repo's own copy even
+ * when invoked through the link.
+ */
 const path = require('node:path');
-const os = require('node:os');
-const { execFileSync } = require('node:child_process');
 
-function fail(message) {
-  process.stderr.write(`pi-dish-comments: ${message}\n`);
-  process.exitCode = 1;
+let core;
+try {
+  core = require(path.join(__dirname, '..', '..', 'lib', 'pi-dish-client.js'));
+} catch (e) {
+  process.stderr.write(
+    'pi-dish-comments: could not load the shared pi-dish client library '
+    + `(${e && e.message ? e.message : e}).\n`
+    + 'Install the skills by symlinking the skill directories from the pi-dish repo '
+    + '(run ./install.sh in the pi-dish checkout) so this script sits next to skills/lib/.\n',
+  );
+  process.exit(1);
 }
+
+const { makeFail, defaultBase, discoverSession, request, jsonInit } = core;
+const fail = makeFail('pi-dish-comments');
 
 function parseArgs(argv) {
   const args = { command: argv[0] || 'list', ids: [] };
@@ -20,96 +39,6 @@ function parseArgs(argv) {
     else args.ids.push(arg);
   }
   return args;
-}
-
-function parentPid(pid) {
-  try {
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-    const match = stat.match(/^\d+ \([\s\S]*\) \S (\d+) /);
-    return match ? Number(match[1]) : null;
-  } catch {
-    // macOS has no /proc; keep the same discovery contract via ps without
-    // involving a shell. (The cwd fallback below still works if ps is absent.)
-    try {
-      const value = execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8' }).trim();
-      return /^\d+$/.test(value) ? Number(value) : null;
-    } catch {
-      return null;
-    }
-  }
-}
-
-function ancestorPids() {
-  const result = new Set();
-  let pid = process.pid;
-  while (pid && !result.has(pid)) {
-    result.add(pid);
-    pid = parentPid(pid);
-  }
-  return result;
-}
-
-function pidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    return e.code === 'EPERM';
-  }
-}
-
-function registryEntries() {
-  const dir = path.join(os.homedir(), '.pi', 'dish', 'sessions');
-  let names;
-  try { names = fs.readdirSync(dir); } catch { return []; }
-  return names.filter((name) => name.endsWith('.json')).flatMap((name) => {
-    try {
-      const entry = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
-      if (!entry?.sessionId) return [];
-      // Mirror the server's scanRegistry liveness rules (minus its pruning
-      // side effects — this CLI only reads): a crashed pi leaves its entry
-      // behind, and a dead session must not win cwd fallback or inflate the
-      // "N live sessions" count in the ambiguity error.
-      if (entry.socketPath && !fs.existsSync(entry.socketPath)) return [];
-      if (Number.isInteger(entry.pid) && !pidAlive(entry.pid)) return [];
-      return [entry];
-    } catch {
-      return [];
-    }
-  });
-}
-
-function registryRouteId(entry) {
-  const harnessId = entry?.wrapper?.harnessId || entry?.harnessId || 'pi';
-  const nativeSessionId = entry?.nativeSessionId || entry?.sessionId;
-  if (harnessId === 'pi') return nativeSessionId;
-  return '~sk1_' + Buffer.from(JSON.stringify([harnessId, nativeSessionId]), 'utf8').toString('base64url');
-}
-
-function discoverSession(explicit) {
-  if (explicit) return explicit;
-  if (process.env.PI_DISH_SESSION_ID) return process.env.PI_DISH_SESSION_ID;
-  const entries = registryEntries();
-  const ancestors = ancestorPids();
-  const byPid = entries.filter((entry) => Number.isInteger(entry.pid) && ancestors.has(entry.pid));
-  if (byPid.length === 1) return registryRouteId(byPid[0]);
-  if (byPid.length > 1) {
-    byPid.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
-    return registryRouteId(byPid[0]);
-  }
-  const cwd = path.resolve(process.cwd());
-  const byCwd = entries.filter((entry) => entry.cwd && path.resolve(entry.cwd) === cwd);
-  if (byCwd.length === 1) return registryRouteId(byCwd[0]);
-  if (!entries.length) throw new Error('no live pi-dish bridge sessions found');
-  throw new Error(`could not identify this session; pass --session <id> (${entries.length} live sessions)`);
-}
-
-async function request(base, pathname, init) {
-  const response = await fetch(new URL(pathname, base), init);
-  let result;
-  try { result = await response.json(); } catch { result = null; }
-  if (!response.ok) throw new Error(result?.error || `HTTP ${response.status}`);
-  return result;
 }
 
 function lineLabel(anchor) {
@@ -159,7 +88,7 @@ function printIndex(result) {
 async function main() {
   let args;
   try { args = parseArgs(process.argv.slice(2)); } catch (error) { return fail(error.message); }
-  const base = args.url || process.env.PI_DISH_URL || 'http://127.0.0.1:3333';
+  const base = defaultBase(args.url);
   let sessionId;
   try { sessionId = discoverSession(args.session); } catch (error) { return fail(error.message); }
 
@@ -169,17 +98,14 @@ async function main() {
       return;
     }
     if (args.command === 'list') {
-      const result = await request(base, `/api/comments/index?sessionId=${encodeURIComponent(sessionId)}`);
+      const { data: result } = await request(base, `/api/comments/index?sessionId=${encodeURIComponent(sessionId)}`);
       if (args.json) process.stdout.write(JSON.stringify(result, null, 2) + '\n');
       else printIndex(result);
       return;
     }
     if (args.command === 'get') {
       if (!args.ids.length) throw new Error('get needs at least one comment id');
-      const result = await request(base, '/api/comments/get', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, ids: args.ids }),
-      });
+      const { data: result } = await request(base, '/api/comments/get', jsonInit({ sessionId, ids: args.ids }));
       if (args.json) process.stdout.write(JSON.stringify(result, null, 2) + '\n');
       else {
         printBatch(result);
@@ -188,7 +114,7 @@ async function main() {
       return;
     }
     if (args.command === 'count') {
-      const result = await request(base, `/api/comments/count?sessionId=${encodeURIComponent(sessionId)}`);
+      const { data: result } = await request(base, `/api/comments/count?sessionId=${encodeURIComponent(sessionId)}`);
       if (args.json) process.stdout.write(JSON.stringify(result, null, 2) + '\n');
       else process.stdout.write(String(result.total) + '\n');
       return;
@@ -197,10 +123,7 @@ async function main() {
       if (!args.ids.length) throw new Error('ack needs at least one comment id');
       const acknowledged = [];
       for (const id of args.ids) {
-        await request(base, `/api/comments/${encodeURIComponent(id)}/ack`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId }),
-        });
+        await request(base, `/api/comments/${encodeURIComponent(id)}/ack`, jsonInit({ sessionId }));
         acknowledged.push(id);
       }
       if (args.json) process.stdout.write(JSON.stringify({ acknowledged }, null, 2) + '\n');

@@ -12,6 +12,9 @@ const INSTALL = path.join(ROOT, 'install.sh');
 const SKILLS = fs.readdirSync(path.join(ROOT, 'skills'), { withFileTypes: true })
   .filter(entry => entry.isDirectory())
   .map(entry => entry.name)
+  // Mirror install.sh: only directories carrying a SKILL.md are skills;
+  // skills/lib is the shared CLI core and must not be linked.
+  .filter(name => fs.existsSync(path.join(ROOT, 'skills', name, 'SKILL.md')))
   .sort();
 
 function isolatedAgentDirs(t) {
@@ -56,6 +59,10 @@ test('installer links the correct bridge and every skill into Pi and OMP', t => 
         path.join(ROOT, 'skills', skill),
       );
     }
+    assert.ok(
+      !fs.existsSync(path.join(agentDir, 'skills', 'lib')),
+      'the shared CLI core (skills/lib) must not be linked as a skill',
+    );
   }
 
   const repeated = runInstall(dirs);

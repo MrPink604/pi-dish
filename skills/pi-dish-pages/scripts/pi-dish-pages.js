@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+'use strict';
 /**
  * Publish an HTML artifact through the local pi-dish server, optionally
  * asking a fleet hub to front it publicly (TASKS/multi-host.md block 7).
@@ -6,16 +7,31 @@
  * The agent only ever talks to its own host on loopback: `--via <hub>` goes
  * out through this server's /hosts/<hub> proxy, so no hub address or
  * credential lives in the agent's environment.
+ *
+ * The plumbing (session discovery, HTTP) lives in
+ * skills/lib/pi-dish-client.js. Skills are installed by symlinking each skill
+ * directory into ~/.pi/agent/skills/, and Node resolves requires through the
+ * realpath, so this relative path reaches the pi-dish repo's own copy even
+ * when invoked through the link.
  */
 const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
-const { execFileSync } = require('node:child_process');
 
-function fail(message) {
-  process.stderr.write(`pi-dish-pages: ${message}\n`);
-  process.exitCode = 1;
+let core;
+try {
+  core = require(path.join(__dirname, '..', '..', 'lib', 'pi-dish-client.js'));
+} catch (e) {
+  process.stderr.write(
+    'pi-dish-pages: could not load the shared pi-dish client library '
+    + `(${e && e.message ? e.message : e}).\n`
+    + 'Install the skills by symlinking the skill directories from the pi-dish repo '
+    + '(run ./install.sh in the pi-dish checkout) so this script sits next to skills/lib/.\n',
+  );
+  process.exit(1);
 }
+
+const { makeFail, defaultBase, discoverSessionQuietly, request, hostPath, jsonInit } = core;
+const fail = makeFail('pi-dish-pages');
 
 function parseArgs(argv) {
   const args = { command: argv[0] || 'publish', rest: [] };
@@ -32,43 +48,13 @@ function parseArgs(argv) {
   return args;
 }
 
-async function request(base, pathname, init) {
-  const response = await fetch(new URL(pathname, base), init);
-  let result;
-  try { result = await response.json(); } catch { result = null; }
-  if (!response.ok) {
-    const error = new Error(result?.error || `HTTP ${response.status}`);
-    error.status = response.status;
-    throw error;
-  }
-  return result;
-}
-
-// The comments CLI already knows how to identify this session; borrow it when
-// it's installed so page comments route back to this agent. A page still
-// publishes fine without it.
-function discoverSession(explicit) {
-  if (explicit) return explicit;
-  if (process.env.PI_DISH_SESSION_ID) return process.env.PI_DISH_SESSION_ID;
-  const cli = path.join(os.homedir(), '.pi', 'agent', 'skills', 'pi-dish-comments', 'scripts', 'pi-dish-comments.js');
-  if (!fs.existsSync(cli)) return null;
-  try {
-    const id = execFileSync(process.execPath, [cli, 'session'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    return id || null;
-  } catch {
-    return null;
-  }
-}
-
 async function publishViaHub(base, hub, page) {
-  const host = await request(base, '/api/host');
+  const { data: host } = await request(base, '/api/host');
   if (!host?.hostId) throw new Error('this server did not report a hostId (upgrade pi-dish)');
   try {
-    return await request(base, `/hosts/${encodeURIComponent(hub)}/api/fleet-artifacts`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: page.token, kind: 'page', hostId: host.hostId }),
-    });
+    const { data } = await request(base, hostPath(hub, '/api/fleet-artifacts'),
+      jsonInit({ token: page.token, kind: 'page', hostId: host.hostId }));
+    return data;
   } catch (error) {
     if (error.status === 404) {
       throw new Error(`hub "${hub}" did not accept the mapping — check it is in this host's remotes, `
@@ -89,19 +75,19 @@ async function main() {
   const abs = path.resolve(target);
   if (!fs.existsSync(abs)) return fail(`no such file or directory: ${abs}`);
 
-  const base = args.url || process.env.PI_DISH_URL || 'http://127.0.0.1:3333';
+  const base = defaultBase(args.url);
   const via = args.via || process.env.PI_DISH_PUBLIC_VIA || null;
 
-  // An absent sessionId lets the server infer one from the path; sending an
-  // explicit null is an error, not a shrug.
-  const sessionId = discoverSession(args.session);
+  // Page comments route back to the session that published the artifact, so
+  // identify it the same way the comments CLI does. Discovery failing is a
+  // shrug, not an error: an absent sessionId lets the server infer one from
+  // the path, while sending an explicit null would be rejected.
+  const sessionId = discoverSessionQuietly(args.session);
   let page;
   try {
-    page = await request(base, '/api/pages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: abs, title: args.title || null, ...(sessionId ? { sessionId } : {}) }),
-    });
+    const { data } = await request(base, '/api/pages',
+      jsonInit({ path: abs, title: args.title || null, ...(sessionId ? { sessionId } : {}) }));
+    page = data;
   } catch (error) {
     return fail(`could not publish ${abs}: ${error.message}`);
   }

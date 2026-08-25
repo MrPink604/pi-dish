@@ -71,6 +71,9 @@ link_path "$root/extensions/pi-dish-bridge-omp" \
 
 for skill in "$root"/skills/*; do
   [[ -d $skill ]] || continue
+  # skills/lib is the shared CLI core the skill scripts require via realpath,
+  # not a skill — linking it would plant a SKILL.md-less dir in the registry.
+  [[ -f $skill/SKILL.md ]] || continue
   name=${skill##*/}
   link_path "$skill" "$pi_agent_dir/skills/$name"
   link_path "$skill" "$omp_agent_dir/skills/$name"

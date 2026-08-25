@@ -1172,6 +1172,41 @@ test('hostDisplayLabel prefers label, then fleet name, then the bare base', () =
   assert.equal(H.hostDisplayLabel(null), '');
 });
 
+test('sessionRef renders the bare id prefix for this host', () => {
+  const session = { id: '2026-07-05T00-00-00-uismoke1' };
+  assert.equal(H.sessionRef(session, null), '2026-07-');
+  assert.equal(H.sessionRef(session, undefined), '2026-07-');
+  // The self entry from mergeHostEntries: base '' and self true, and it
+  // carries a hostId — which must NOT turn a local session into `uuid:id`.
+  assert.equal(H.sessionRef(session, { self: true, base: '', hostId: 'self-id' }), '2026-07-');
+  assert.equal(H.sessionRef(session, { base: '', hostId: 'self-id' }), '2026-07-');
+});
+
+test('sessionRef qualifies with the fleet name when the host has one', () => {
+  const session = { id: 'abcdefghijklmnop' };
+  assert.equal(H.sessionRef(session, { name: 'tycho', base: '/hosts/tycho', hostId: 'tycho-id' }),
+    'tycho/abcdefgh');
+  // A name beats a hostId — it is the form the peer-sessions CLI takes.
+  assert.equal(H.sessionRef(session, { name: 'tycho' }), 'tycho/abcdefgh');
+});
+
+test('sessionRef falls back to hostId plus the full id for an unnamed host', () => {
+  const session = { id: 'abcdefghijklmnop' };
+  assert.equal(H.sessionRef(session, { hostId: 'host-uuid', base: 'http://ganymede:3333' }),
+    'host-uuid:abcdefghijklmnop');
+});
+
+test('sessionRef degrades to the bare prefix rather than throwing', () => {
+  // A host entry with neither a name nor an identity can only be addressed
+  // as if it were local — a bad ref is recoverable, a crashed menu is not.
+  assert.equal(H.sessionRef({ id: 'abcdefghijklmnop' }, { base: 'http://x:1' }), 'abcdefgh');
+  assert.equal(H.sessionRef({ id: 'short' }, null), 'short');
+  assert.equal(H.sessionRef('abcdefghijklmnop', null), 'abcdefgh');
+  assert.equal(H.sessionRef(null, null), '');
+  assert.equal(H.sessionRef({}, { name: 'tycho' }), '');
+  assert.equal(H.sessionRef({ id: 42 }, null), '');
+});
+
 test('mergeHostEntries puts self first and keys on hostId, then base', () => {
   const hosts = H.mergeHostEntries(
     { hostId: 'self-id', label: 'laptop', capabilities: { tmux: true } },

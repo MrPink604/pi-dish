@@ -350,15 +350,49 @@ fuzzy-filters the named tmux sessions below ("new session…" reveals a name
 input); the choice persists in `localStorage['pi-dish-spawn-target']` and is
 reused for resume when still valid.
 
-## Agent peer-session control
+## Agent peer-session control, session refs, agent docs
 
 The optional `skills/pi-dish-sessions/` CLI gives Pi agents an ergonomic client
-for the existing server controls: list/spawn/show/related, prompt/steer/follow-up,
-interrupt, resume, and graceful close. It identifies the caller using the same
-registry/process-ancestry strategy as the comments CLI and sends that identity
-only as advisory launch provenance. It does not implement delegation policies,
-write JSONL, signal processes, or require any particular subagent scheme.
-`POST /api/sessions/:id/follow-up` is the stable semantic follow-up route.
+for the existing server controls: list/spawn/show/read/related, prompt/steer/
+follow-up, interrupt, resume, and graceful close, plus transcript search. It
+identifies the caller using the same registry/process-ancestry strategy as the
+comments CLI and sends that identity only as advisory launch provenance. It
+does not implement delegation policies, write JSONL, signal processes, or
+require any particular subagent scheme. `POST /api/sessions/:id/follow-up` is
+the stable semantic follow-up route.
+
+**Session refs**: every CLI command taking a session id takes a ref — full id,
+unique ≥4-char prefix, host-qualified `name/prefix` (fleet name → hostId
+exact/≥8-prefix → label), or the machine-produced provenance form
+`hostId:fullId` (exact-only by design: server prefix matching must not retarget
+a stale recorded id). `GET /api/sessions/resolve?id=` backs them: exact → 200,
+unique prefix → 200 (the verbatim `/api/sessions` list entry), ambiguous → 409
+with ≤10 candidates, else 404; registered before the `/api/sessions/:id`
+routes so the literal segment can't be captured, active entry wins an id
+collision. The CLI goes capability-first (a host's `/api/hosts` entry must
+advertise `resolve`; absent — including an unreadable fleet — means
+client-side list+prefix fallback, which is what keeps refs working on older
+fleet hosts), and only then treats a bodied error as the host's verdict.
+`search --all-hosts` fans out per reachable `search`-capable host with
+per-host timeouts and merges client-side on `searchScore` (scored-zero stays
+above the unscored tail), naming unanswering hosts — the fleet's
+client-is-the-aggregator invariant applies to the CLI too; never add a
+server-side merged endpoint for it.
+
+**Agent docs**: the server ships its own agent-facing docs (`docs/agent/*.md`
+→ `GET /api/agent-docs` list + `/api/agent-docs/:topic` as text/markdown) so a
+mixed-version fleet reads the *running* host's docs, not a stale skill file;
+the `^[a-z0-9-]{1,64}$` topic gate is also the traversal gate — nothing that
+fails it is ever path-joined. Capabilities advertise `resolve` and `docs`.
+SKILL.md stays a hot-path primer on purpose: depth lives in the CLI's
+`--help`/`help <cmd>` (driven by the same command-spec table as parsing, so
+they can't drift) and in the server docs via the `docs` command.
+
+**Shared CLI core**: `skills/lib/pi-dish-client.js` holds the discovery/HTTP/
+ref plumbing all three skill CLIs require via `../../lib/` — resolved through
+the symlink's realpath, so skills must be installed by symlinking the skill
+dirs from the repo (install.sh does; it links only dirs carrying a SKILL.md,
+so `skills/lib` never lands in the registry as a bogus skill).
 
 ## New-session takeover (public/app.js)
 
@@ -1048,6 +1082,15 @@ while a drag is live so the 10s poll can't rebuild the list mid-drag. Live rows 
 visible on touch) with a two-tap inline confirm — the armed/busy state lives
 in module vars (`sessionCloseConfirmId`), so a poll re-render restores an
 armed confirm instead of clearing it; the ~3s revert clears it.
+Right-click/long-press on a session row opens a small context menu (one lazy
+`#sessionMenu`, dismissed on outside click/Escape/scroll and by real list
+re-renders — `closeSessionMenu()` sits inside `renderSessions`' html-changed
+guard so the idle poll can't kill it): "Copy session ref" / "Copy session id"
+via `copyTextToClipboard`. The ref comes from the pure `sessionRef(session,
+host)` in helpers.js — bare `id8` for self (the self host entry carries a
+`hostId` too, so the self check must come first), `name/id8` for a named fleet
+host, `hostId:fullId` otherwise — and the stats modal shows the same ref as
+its first Summary row.
 Each item shows one status dot, best signal first: pulsing green
 (`.session-item-status.working`, turn in progress), accent blue
 (`.session-item-status.unread`, activity since the session was last on

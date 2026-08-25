@@ -5224,6 +5224,52 @@ mark.comment-mark {
   font: 11px/1.4 var(--font-mono);
 }
 
+/* Session-row context menu (right-click / Android long-press in the sidebar).
+   Same fixed-popover chrome as the comment list — it is the same kind of
+   object — with the copyable value in mono, because a ref is a handle you
+   paste somewhere, not prose. */
+.context-menu {
+  position: fixed;
+  z-index: 320;
+  min-width: 200px;
+  max-width: min(340px, calc(100vw - 16px));
+  padding: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 32px color-mix(in srgb, var(--bg-darker) 70%, transparent);
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  padding: 7px 9px;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font: 12px/1.45 inherit;
+}
+
+.context-menu-item:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+.context-menu-item.copied { color: var(--success-bright); }
+
+.context-menu-value {
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px/1.4 var(--font-mono);
+}
+
+.context-menu-item.copied .context-menu-value { color: inherit; }
+
 .diff-clean {
   color: var(--text-muted);
   font-size: 12px;

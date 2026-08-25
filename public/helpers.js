@@ -903,6 +903,32 @@ function hostDisplayLabel(host) {
 }
 
 /**
+ * The pasteable handle for a session — what the sidebar's "Copy session ref"
+ * and the stats modal put on the clipboard, and what an agent CLI takes back.
+ * Three forms, ordered by what the reader on the other end can resolve:
+ *
+ *   `2026-07-0`           a session on this host (an id prefix the server resolves)
+ *   `tycho/2026-07-0`     a session on a host the fleet map names
+ *   `<hostId>:<full id>`  a host known only by identity (added by URL, unnamed)
+ *
+ * The bare prefix stays the single-host form, so a fleet-less pi-dish never
+ * shows fleet syntax at all. An unnamed host can't be addressed by name, so
+ * it falls back to its uuid — paired with the *full* id, because a prefix is
+ * only safe where something can expand it, and nothing here can speak for a
+ * corpus this client merely proxies to.
+ */
+function sessionRef(session, host) {
+  const id = typeof session === 'string' ? session : (session && session.id) || '';
+  if (typeof id !== 'string' || !id) return '';
+  const short = id.slice(0, 8);
+  if (!host || typeof host !== 'object') return short;
+  if (host.self === true || host.base === '') return short;
+  if (host.name) return `${host.name}/${short}`;
+  if (host.hostId) return `${host.hostId}:${id}`;
+  return short;
+}
+
+/**
  * The effective host list: self, then the fleet entries a host advertises
  * over GET /api/hosts (runtime only - never persisted), then the catalog of
  * directly-added hosts from localStorage. Identity is `hostId` when known
@@ -1975,7 +2001,7 @@ if (typeof module !== 'undefined' && module.exports) {
     parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch, stripQueryField,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     sessionKey, parseSessionKey, sessionRefKey, normalizeHostBase, sanitizeHostCatalog,
-    hostDisplayLabel, mergeHostEntries, mergeUsageSummaries, createFanoutRenderQueue,
+    hostDisplayLabel, sessionRef, mergeHostEntries, mergeUsageSummaries, createFanoutRenderQueue,
     hostSupportsCapability, hostSupportsTerminal,
     HOST_BACKOFF_LADDER, HOST_BACKOFF_RESET_MS, hostConnReduce,
     HOST_COLOR_SLOTS, sanitizeHostColors, sanitizeHostColorOrder, assignHostColor,

@@ -218,6 +218,7 @@ function hostCapabilities() {
   const caps = {
     sessions: true, search: true, usage: true, spawns: true,
     shares: true, pages: true, comments: true, skills: true, harnesses: true,
+    resolve: true, docs: true,
   };
   if (terminal.isTerminalEnabled()) caps.terminal = true;
   if (tmux.isTmuxAvailable()) caps.tmux = true;
@@ -1560,6 +1561,42 @@ app.get('/api/sessions', (req, res) => {
     previous = filterSessionsByQuery(previous, query);
   }
   res.json({ active, previous, indexing, discoveryTruncated, discoverySkipped });
+});
+
+// Session refs: resolve a short id prefix to one full list entry. Registered
+// ahead of every /api/sessions/:id route so the literal path can never be
+// captured as an id. The candidate set is exactly what GET /api/sessions
+// serves (buildSessionCatalog = active + historical, each already carrying
+// its withContext treatment); an active entry wins a collision with a
+// historical one of the same id.
+app.get('/api/sessions/resolve', (req, res) => {
+  const ref = String(req.query.id ?? '').trim();
+  if (!ref) return res.status(400).json({ error: 'id is required' });
+  if (ref.length < 4) return res.status(400).json({ error: 'id prefix must be at least 4 characters' });
+
+  const catalog = buildSessionCatalog();
+  annotateSessionParents(catalog.list); // list rows carry lineage hints; keep the shape identical
+  const byId = new Map();
+  for (const session of catalog.list) if (!byId.has(session.id)) byId.set(session.id, session); // active first
+
+  const exact = byId.get(ref);
+  if (exact) return res.json({ session: exact });
+
+  const matches = [...byId.values()].filter((session) => session.id.startsWith(ref));
+  if (matches.length === 1) return res.json({ session: matches[0] });
+  if (matches.length > 1) {
+    return res.status(409).json({
+      error: 'ambiguous session id prefix',
+      matches: matches.slice(0, 10).map((session) => ({
+        id: session.id,
+        name: session.name,
+        cwd: session.cwd || null,
+        lastActivity: session.lastActivity,
+        isActive: !!session.isActive,
+      })),
+    });
+  }
+  res.status(404).json({ error: 'Session not found' });
 });
 
 function canonicalSessionPath(file) {
@@ -4432,6 +4469,72 @@ app.get('/api/cwds', (req, res) => {
 // loaded — a missing native binary must hide the button, not break the UI.
 app.get('/api/config', (req, res) => {
   res.json({ terminal: terminal.isTerminalEnabled(), tmux: tmux.isTmuxAvailable() });
+});
+
+// =========================================================================
+// Agent docs: GET /api/agent-docs, GET /api/agent-docs/:topic
+// =========================================================================
+//
+// The server ships the agent-facing documentation for the API this build
+// actually serves, so an agent in a mixed-version fleet reads the *running*
+// host's docs instead of whatever a vended skill file was pinned to. Sourced
+// from the app's own tree, never HOME.
+
+const AGENT_DOCS_DIR = path.join(__dirname, 'docs', 'agent');
+// This shape gate is also the path-traversal gate: nothing that fails it is
+// ever joined into a filesystem path.
+const AGENT_DOC_TOPIC_RE = /^[a-z0-9-]{1,64}$/;
+const AGENT_DOC_DESCRIPTION_MAX = 160;
+
+function agentDocSummary(markdown) {
+  const lines = markdown.split('\n');
+  let title = '';
+  let i = 0;
+  for (; i < lines.length; i++) {
+    const heading = /^#\s+(.*\S)\s*$/.exec(lines[i]);
+    if (heading) { title = heading[1]; i++; break; }
+  }
+  let description = '';
+  for (; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line || line.startsWith('#')) continue;
+    description = line;
+    break;
+  }
+  if (description.length > AGENT_DOC_DESCRIPTION_MAX) {
+    description = description.slice(0, AGENT_DOC_DESCRIPTION_MAX - 1).trimEnd() + '\u2026';
+  }
+  return { title, description };
+}
+
+app.get('/api/agent-docs', (req, res) => {
+  let files;
+  try {
+    files = fs.readdirSync(AGENT_DOCS_DIR).filter((f) => f.endsWith('.md')).sort();
+  } catch {
+    return res.json({ topics: [] }); // no docs shipped is not an error
+  }
+  const topics = [];
+  for (const file of files) {
+    const name = file.slice(0, -'.md'.length);
+    if (!AGENT_DOC_TOPIC_RE.test(name)) continue;
+    try {
+      topics.push({ name, ...agentDocSummary(fs.readFileSync(path.join(AGENT_DOCS_DIR, file), 'utf-8')) });
+    } catch {}
+  }
+  res.json({ topics });
+});
+
+app.get('/api/agent-docs/:topic', (req, res) => {
+  const topic = req.params.topic;
+  if (!AGENT_DOC_TOPIC_RE.test(topic)) return res.status(404).json({ error: 'Unknown docs topic' });
+  let markdown;
+  try {
+    markdown = fs.readFileSync(path.join(AGENT_DOCS_DIR, `${topic}.md`), 'utf-8');
+  } catch {
+    return res.status(404).json({ error: 'Unknown docs topic' });
+  }
+  res.type('text/markdown; charset=utf-8').send(markdown);
 });
 
 // Themes: the two built-ins (defined in style.css) plus any user-supplied

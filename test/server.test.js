@@ -3467,3 +3467,137 @@ test('GET /api/skills/coverage validates the skill path', async () => {
   assert.equal((await get('/api/skills/coverage?skill=' + encodeURIComponent('/not/a/skill.txt'))).status, 400);
   assert.equal((await get('/api/skills/coverage?skill=' + encodeURIComponent('/nope/SKILL.md'))).status, 404);
 });
+
+// =========================================================================
+// Session refs (GET /api/sessions/resolve) and agent docs
+// =========================================================================
+
+// Two historical fixtures sharing a >=4-char id prefix, plus one whose prefix
+// is unique — written here so the ambiguity is explicit rather than an
+// accident of the other fixtures' timestamp-shaped names.
+const RESOLVE_AMBIGUOUS_A = 'resolvedup-aaaa1111';
+const RESOLVE_AMBIGUOUS_B = 'resolvedup-bbbb2222';
+const RESOLVE_UNIQUE = 'resolveuniq-cccc3333';
+const writeResolveFixture = (id, text) => fs.writeFileSync(path.join(sessionDir, `${id}.jsonl`), [
+  { type: 'session', cwd: '/home/user/proj', timestamp: '2026-07-04T15:00:00.000Z' },
+  { type: 'message', message: { role: 'user', content: [{ type: 'text', text }], timestamp: '2026-07-04T15:00:01.000Z' } },
+].map(e => JSON.stringify(e)).join('\n') + '\n');
+
+// The index backfills asynchronously over a stale corpus, so wait for the
+// rows rather than assuming the first list call sees them.
+const waitForSessions = async (ids, tries = 60) => {
+  for (let i = 0; i < tries; i++) {
+    const { body } = await get('/api/sessions');
+    const have = new Set([...body.active, ...body.previous].map(s => s.id));
+    if (ids.every(id => have.has(id))) return;
+    await new Promise(r => setTimeout(r, 50));
+  }
+  throw new Error(`sessions never appeared in the list: ${ids.join(', ')}`);
+};
+
+test('GET /api/sessions/resolve resolves exact ids and unique prefixes', async () => {
+  writeResolveFixture(RESOLVE_UNIQUE, 'unique ref fixture');
+  await waitForSessions([SESSION_ID, RESOLVE_UNIQUE]);
+
+  const exact = await get(`/api/sessions/resolve?id=${encodeURIComponent(SESSION_ID)}`);
+  assert.equal(exact.status, 200, JSON.stringify(exact.body));
+  assert.equal(exact.body.session.id, SESSION_ID);
+  // The literal path must not be captured by a parameterized /:id route.
+  assert.notEqual(exact.body.session.id, 'resolve');
+
+  const prefix = await get('/api/sessions/resolve?id=resolveuniq');
+  assert.equal(prefix.status, 200, JSON.stringify(prefix.body));
+  const session = prefix.body.session;
+  assert.equal(session.id, RESOLVE_UNIQUE);
+  // Full list-entry shape, with the same withContext treatment /api/sessions gives.
+  assert.equal(session.name, 'unique ref fixture');
+  assert.equal(session.cwd, '/home/user/proj');
+  assert.equal(session.isActive, false);
+  assert.equal(typeof session.model, 'string');
+  assert.equal(typeof session.contextPercent, 'number');
+  assert.equal(typeof session.messageCount, 'number');
+  assert.ok('lastActivity' in session && 'sessionKey' in session && 'harnessId' in session);
+  // Not merely "a session-ish object": the exact row /api/sessions serves.
+  const listed = (await get('/api/sessions')).body.previous.find(s => s.id === RESOLVE_UNIQUE);
+  assert.deepEqual(session, listed, 'resolve returns the /api/sessions list entry verbatim');
+});
+
+test('GET /api/sessions/resolve reports ambiguous prefixes with candidates', async () => {
+  writeResolveFixture(RESOLVE_AMBIGUOUS_A, 'ambiguous ref fixture A');
+  writeResolveFixture(RESOLVE_AMBIGUOUS_B, 'ambiguous ref fixture B');
+  await waitForSessions([RESOLVE_AMBIGUOUS_A, RESOLVE_AMBIGUOUS_B]);
+
+  const { status, body } = await get('/api/sessions/resolve?id=resolvedup');
+  assert.equal(status, 409, JSON.stringify(body));
+  assert.match(body.error, /ambiguous/);
+  assert.ok(Array.isArray(body.matches));
+  assert.ok(body.matches.length <= 10, 'candidate list is capped');
+  const ids = body.matches.map(m => m.id);
+  assert.ok(ids.includes(RESOLVE_AMBIGUOUS_A) && ids.includes(RESOLVE_AMBIGUOUS_B));
+  for (const match of body.matches) {
+    assert.deepEqual(Object.keys(match).sort(), ['cwd', 'id', 'isActive', 'lastActivity', 'name']);
+  }
+
+  // An exact id wins outright even when it is also a prefix of others.
+  const exactWins = await get(`/api/sessions/resolve?id=${encodeURIComponent(RESOLVE_AMBIGUOUS_A)}`);
+  assert.equal(exactWins.status, 200);
+  assert.equal(exactWins.body.session.id, RESOLVE_AMBIGUOUS_A);
+});
+
+test('GET /api/sessions/resolve rejects unknown and too-short refs', async () => {
+  const unknown = await get('/api/sessions/resolve?id=nosuchsessionprefix');
+  assert.equal(unknown.status, 404);
+  assert.ok(unknown.body.error);
+
+  const short = await get('/api/sessions/resolve?id=res');
+  assert.equal(short.status, 400);
+  assert.ok(short.body.error);
+
+  const missing = await get('/api/sessions/resolve');
+  assert.equal(missing.status, 400);
+  assert.ok(missing.body.error);
+});
+
+test('GET /api/agent-docs lists the shipped topics with titles and descriptions', async () => {
+  const { status, body } = await get('/api/agent-docs');
+  assert.equal(status, 200);
+  const names = body.topics.map(t => t.name);
+  for (const topic of ['fleet', 'refs', 'search', 'sessions']) {
+    assert.ok(names.includes(topic), `${topic} topic is served`);
+  }
+  assert.deepEqual(names, [...names].sort(), 'topics are sorted by name');
+  for (const topic of body.topics) {
+    assert.ok(topic.title && topic.title.length > 0, `${topic.name} has a title`);
+    assert.ok(!topic.title.startsWith('#'), 'the title is the heading text, not the markup');
+    assert.ok(topic.description && topic.description.length > 0, `${topic.name} has a description`);
+    assert.ok(topic.description.length <= 161, 'descriptions are truncated');
+  }
+  assert.equal(body.topics.find(t => t.name === 'refs').title, 'Session refs');
+});
+
+test('GET /api/agent-docs/:topic serves markdown and gates the topic name', async () => {
+  const res = await fetch(`${base}/api/agent-docs/refs`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type') || '', /text\/markdown/);
+  const markdown = await res.text();
+  assert.ok(markdown.includes('Session refs'), 'the refs doc is served verbatim');
+
+  assert.equal((await get('/api/agent-docs/nosuchtopic')).status, 404);
+
+  // The topic shape gate is the traversal gate: nothing outside [a-z0-9-]
+  // reaches a path join.
+  for (const attempt of ['..%2frefs', '..%2F..%2Fpackage', 'REFS', 'refs.md', '%2e%2e%2f%2e%2e%2fpackage']) {
+    const traversal = await fetch(`${base}/api/agent-docs/${attempt}`);
+    assert.equal(traversal.status, 404, `${attempt} must 404`);
+    const text = await traversal.text();
+    assert.ok(!text.includes('"dependencies"'), `${attempt} must not serve file content`);
+    assert.ok(!text.includes('Session refs'), `${attempt} must not serve doc content`);
+  }
+});
+
+test('GET /api/host advertises the resolve and docs capabilities', async () => {
+  const { status, body } = await get('/api/host');
+  assert.equal(status, 200);
+  assert.equal(body.capabilities.resolve, true);
+  assert.equal(body.capabilities.docs, true);
+});

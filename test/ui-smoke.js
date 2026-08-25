@@ -729,6 +729,34 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // (The export itself rejects this id-less shorthand fixture —
     // server.test.js proves the targetId anchor contract on a valid session.)
 
+    // Sidebar row context menu: right-click (the event Android's long-press
+    // also dispatches) offers the pasteable session ref. Single host, so the
+    // ref is the bare 8-character id prefix — no fleet syntax anywhere.
+    console.log('session ref menu:');
+    const expectedRef = SESSION_ID.slice(0, 8);
+    await desktop.click('.session-item', { button: 'right' });
+    await desktop.waitForSelector('#sessionMenu', { state: 'visible', timeout: 2000 });
+    const menuItems = await desktop.locator('#sessionMenu .context-menu-item').allTextContents();
+    check(menuItems.length === 2 && menuItems[0].includes('Copy session ref'),
+      `context menu offers the ref item (got ${JSON.stringify(menuItems)})`);
+    check(menuItems[0].includes(expectedRef),
+      `ref item previews the bare id prefix (got ${JSON.stringify(menuItems[0])})`);
+    check(await desktop.locator('#sessionMenu .context-menu-item').nth(1)
+      .getAttribute('data-copy') === SESSION_ID, 'the second item copies the full session id');
+    await desktop.keyboard.press('Escape');
+    await desktop.waitForSelector('#sessionMenu', { state: 'hidden', timeout: 2000 });
+    check(true, 'context menu dismisses on Escape');
+    // Reopened: copying confirms in place and the menu closes itself after.
+    await desktop.click('.session-item', { button: 'right' });
+    await desktop.waitForSelector('#sessionMenu', { state: 'visible', timeout: 2000 });
+    await desktop.click('#sessionMenu .context-menu-item');
+    await desktop.waitForFunction(() =>
+      !!document.querySelector('#sessionMenu .context-menu-item.copied'), { timeout: 2000 });
+    check(await desktop.evaluate(() => navigator.clipboard.readText()) === expectedRef,
+      'ref landed on the clipboard');
+    await desktop.waitForSelector('#sessionMenu', { state: 'hidden', timeout: 3000 });
+    check(true, 'context menu dismisses itself after a copy');
+
     // Stats modal: the session-file / cwd rows are click-to-copy buttons.
     await desktop.click('#sessionContext');
     await desktop.waitForSelector('#statsModal .stats-copy', { timeout: 2000 });
@@ -736,6 +764,8 @@ let remoteHost = null; // second pi-dish (multi-host section)
     const statsText = await desktop.locator('#statsBody').textContent();
     check(/30 tok\/s avg/.test(statsText),
       'stats modal shows the session average speed');
+    check(statsText.includes(`Ref${expectedRef}`),
+      `stats modal carries the session ref row (got ${JSON.stringify(statsText.slice(0, 40))})`);
     check(statsText.includes('Estimated totalUnavailable') && statsText.includes('input Unavailable'),
       'mixed session stats do not format incomplete costs as zero');
     // Scope to the table — the share section (created by the message-link
