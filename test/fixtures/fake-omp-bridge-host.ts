@@ -24,8 +24,27 @@ const pi: any = {
   setSessionName() {},
 };
 
+function createHandlerContext(ctx: any) {
+  const baseUI = ctx.ui;
+  const delegated = new Map<PropertyKey, unknown>();
+  const handlerUI = new Proxy(baseUI, {
+    get(target, property) {
+      const cached = delegated.get(property);
+      if (cached) return cached;
+      const value = Reflect.get(target, property, target);
+      if (typeof value !== "function") return value;
+      // OMP gives each extension handler a fresh Proxy whose methods delegate
+      // to the shared UI target. Assignment still writes through to that target.
+      const delegate = value.bind(target);
+      delegated.set(property, delegate);
+      return delegate;
+    },
+  });
+  return { ...ctx, ui: handlerUI };
+}
+
 async function emit(event: string, data: any, ctx: any) {
-  for (const handler of handlers.get(event) || []) await handler(data, ctx);
+  for (const handler of handlers.get(event) || []) await handler(data, createHandlerContext(ctx));
 }
 
 const sessionFile = process.env.FAKE_OMP_SESSION_FILE!;
@@ -87,6 +106,11 @@ bridgeFactory(pi);
 await emit("session_start", {}, ctx);
 
 if (process.env.FAKE_OMP_ASK_RESULT) {
+  // Exercise several event-scoped UI proxies before the native tool reaches
+  // the shared UI. A bridge must not add another wrapper for each proxy.
+  for (let index = 0; index < 8; index++) {
+    await emit("tool_execution_update", { toolCallId: `warmup-${index}`, toolName: "read" }, ctx);
+  }
   void Promise.resolve().then(() => ctx.ui.askDialog([
     {
       id: "deploy",

@@ -651,6 +651,41 @@ export function createBridge(descriptor: BridgeDescriptor) {
   let cwd: string | null = null;
   const clients = new Set<net.Socket>();
   const wrappedUIs = new Map<object, Map<string, { original: unknown; wrapped: unknown }>>();
+  const UI_METHOD_WRAPPER = Symbol("pi-dish-ui-method-wrapper");
+
+  // OMP creates a fresh Proxy around the shared UI object for every extension
+  // handler. Reading proxy.method returns a new handler-scoped delegate, while
+  // assigning proxy.method writes through to the shared target. Wrapping the
+  // value returned by ordinary property access therefore builds another layer
+  // on every event and eventually overflows the stack (most visibly in ask).
+  // Own property descriptors pass through OMP's Proxy and expose the stable
+  // target method, which lets us recognize an already-installed bridge wrapper.
+  function underlyingUIMethod(ui: Record<string, unknown>, name: string): unknown {
+    try {
+      const property = Reflect.getOwnPropertyDescriptor(ui, name);
+      if (property && "value" in property) return property.value;
+    } catch {}
+    return ui[name];
+  }
+
+  function installUIWrapper(
+    ui: Record<string, unknown>,
+    name: string,
+    build: (original: (...args: any[]) => any) => (...args: any[]) => any,
+  ): void {
+    const original = underlyingUIMethod(ui, name);
+    if (typeof original !== "function" || (original as any)[UI_METHOD_WRAPPER]) return;
+    const wrapped = build(original as (...args: any[]) => any);
+    Object.defineProperty(wrapped, UI_METHOD_WRAPPER, { value: true });
+    try { ui[name] = wrapped; } catch { return; }
+    if (underlyingUIMethod(ui, name) !== wrapped) return;
+    let methods = wrappedUIs.get(ui);
+    if (!methods) {
+      methods = new Map();
+      wrappedUIs.set(ui, methods);
+    }
+    methods.set(name, { original, wrapped });
+  }
   // A wrapper may opt into an operation that is absent on an older host.
   // Resolve that claim against the live public context before registration;
   // alternative hosts must fail closed rather than throwing at extension load.
@@ -983,19 +1018,15 @@ export function createBridge(descriptor: BridgeDescriptor) {
   const dialogRequests = new Map<string, any>();
 
   function wrapExtensionUI(ctx?: ExtensionContext | null) {
-    const ui = ctx?.ui as any;
-    if (!ui || wrappedUIs.has(ui)) return;
-    wrappedUIs.set(ui, new Map());
+    const ui = ctx?.ui as Record<string, unknown> | undefined;
+    if (!ui) return;
 
     const wrapFireAndForget = (name: string, makeReq: (...args: any[]) => any) => {
-      const original = ui[name];
-      if (typeof original !== "function") return;
-      ui[name] = function (...args: any[]) {
+      installUIWrapper(ui, name, original => function (this: unknown, ...args: any[]) {
         const ret = original.apply(this, args);
         try { emitExtensionUIRequest(makeReq(...args)); } catch {}
         return ret;
-      };
-      wrappedUIs.get(ui)?.set(name, { original, wrapped: ui[name] });
+      });
     };
 
     wrapFireAndForget("notify", (message: string, type?: string) => ({ method: "notify", message, notifyType: type }));
@@ -1004,71 +1035,63 @@ export function createBridge(descriptor: BridgeDescriptor) {
     wrapFireAndForget("setEditorText", (text: string) => ({ method: "set_editor_text", text }));
     wrapFireAndForget("pasteToEditor", (text: string) => ({ method: "set_editor_text", text }));
 
-    const originalSetWidget = ui.setWidget;
-    if (typeof originalSetWidget === "function") {
-      ui.setWidget = function (key: string, content: any, options?: any) {
-        const ret = originalSetWidget.apply(this, arguments as any);
-        try {
-          if (content === undefined || Array.isArray(content)) {
-            emitExtensionUIRequest({
-              method: "setWidget",
-              widgetKey: key,
-              widgetLines: content,
-              widgetPlacement: options?.placement,
-            });
-          }
-        } catch {}
-        return ret;
-      };
-      wrappedUIs.get(ui)?.set("setWidget", { original: originalSetWidget, wrapped: ui.setWidget });
-    }
+    installUIWrapper(ui, "setWidget", originalSetWidget => function (this: unknown, key: string, content: any, options?: any) {
+      const ret = originalSetWidget.apply(this, arguments as any);
+      try {
+        if (content === undefined || Array.isArray(content)) {
+          emitExtensionUIRequest({
+            method: "setWidget",
+            widgetKey: key,
+            widgetLines: content,
+            widgetPlacement: options?.placement,
+          });
+        }
+      } catch {}
+      return ret;
+    });
 
     // OMP's native ask tool uses the same shared UI context as extensions but
     // prefers the richer askDialog primitive. Intercept it directly so the web
     // can answer the native tool without reducing multi-question forms to a
     // sequence of lossy select dialogs.
-    const originalAskDialog = ui.askDialog;
-    if (typeof originalAskDialog === "function") {
-      ui.askDialog = function (questions: unknown, options?: { timeout?: number }) {
-        const req = {
-          method: "ask",
-          id: crypto.randomUUID(),
-          questions,
-          timeout: options?.timeout,
-        };
-        let settled = false;
-        const settle = (source: string) => {
-          if (settled) return;
-          settled = true;
-          pendingDialogs.delete(req.id);
-          dialogRequests.delete(req.id);
-          broadcast({ type: "event", event: "extension_ui_resolved", data: { id: req.id, source } });
-        };
-        const remote = new Promise<unknown>((resolve) => {
-          pendingDialogs.set(req.id, response => {
-            if (response?.cancelled) resolve(undefined);
-            else resolve(response?.value);
-          });
-        });
-        dialogRequests.set(req.id, req);
-        try { emitExtensionUIRequest(req); } catch {}
-        let local: unknown;
-        try {
-          local = Reflect.apply(originalAskDialog, this, [questions, options]);
-        } catch (error) {
-          settle("tui-error");
-          throw error;
-        }
-        return Promise.race([
-          Promise.resolve(local).then(
-            value => { settle("tui"); return value; },
-            error => { settle("tui-error"); throw error; },
-          ),
-          remote.then(value => { settle("web"); return value; }),
-        ]);
+    installUIWrapper(ui, "askDialog", originalAskDialog => function (this: unknown, questions: unknown, options?: { timeout?: number }) {
+      const req = {
+        method: "ask",
+        id: crypto.randomUUID(),
+        questions,
+        timeout: options?.timeout,
       };
-      wrappedUIs.get(ui)?.set("askDialog", { original: originalAskDialog, wrapped: ui.askDialog });
-    }
+      let settled = false;
+      const settle = (source: string) => {
+        if (settled) return;
+        settled = true;
+        pendingDialogs.delete(req.id);
+        dialogRequests.delete(req.id);
+        broadcast({ type: "event", event: "extension_ui_resolved", data: { id: req.id, source } });
+      };
+      const remote = new Promise<unknown>((resolve) => {
+        pendingDialogs.set(req.id, response => {
+          if (response?.cancelled) resolve(undefined);
+          else resolve(response?.value);
+        });
+      });
+      dialogRequests.set(req.id, req);
+      try { emitExtensionUIRequest(req); } catch {}
+      let local: unknown;
+      try {
+        local = Reflect.apply(originalAskDialog, this, [questions, options]);
+      } catch (error) {
+        settle("tui-error");
+        throw error;
+      }
+      return Promise.race([
+        Promise.resolve(local).then(
+          value => { settle("tui"); return value; },
+          error => { settle("tui-error"); throw error; },
+        ),
+        remote.then(value => { settle("web"); return value; }),
+      ]);
+    });
 
     // Dialogs: broadcast the request and race the local TUI dialog against a
     // remote answer from a connected pi-dish client. Whichever side answers
@@ -1080,9 +1103,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       makeReq: (...args: any[]) => any,
       mapResponse: (resp: any) => any,
     ) => {
-      const original = ui[name];
-      if (typeof original !== "function") return;
-      ui[name] = function (...args: any[]) {
+      installUIWrapper(ui, name, original => function (this: unknown, ...args: any[]) {
         const req = makeReq(...args);
         req.id = crypto.randomUUID();
         let settled = false;
@@ -1112,8 +1133,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
           ),
           remote.then((value) => { settle("web"); return value; }),
         ]);
-      };
-      wrappedUIs.get(ui)?.set(name, { original, wrapped: ui[name] });
+      });
     };
 
     const valueResponse = (resp: any) => (resp?.cancelled ? undefined : resp?.value);
@@ -1242,7 +1262,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     for (const [uiValue, methods] of wrappedUIs) {
       const ui = uiValue as unknown as Record<string, unknown>;
       for (const [name, method] of methods) {
-        if (ui[name] === method.wrapped) ui[name] = method.original;
+        if (underlyingUIMethod(ui, name) === method.wrapped) ui[name] = method.original;
       }
     }
     wrappedUIs.clear();

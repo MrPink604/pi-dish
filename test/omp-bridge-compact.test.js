@@ -99,6 +99,8 @@ test('OMP bridge projects the native ask tool through extension UI', async () =>
     await session.connect();
     const request = await waitFor(() => requests.find(candidate => candidate.method === 'ask'));
     assert.equal(request.questions[0].question, 'Deploy now?');
+    assert.equal(requests.filter(candidate => candidate.method === 'ask').length, 1,
+      'transient OMP handler proxies do not accumulate ask wrappers');
     assert.equal(request.questions[0].options[0].description, 'Ship the current build.');
 
     const answer = {
