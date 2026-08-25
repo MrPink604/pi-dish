@@ -288,6 +288,8 @@ After pulling changes, run `./install.sh`, restart the server, and `/reload`
 running Pi or OMP sessions so they load the updated bridge. A tmux-managed
 server can be reconciled with `scripts/pi-dish-tmux.sh restart`; it uses the
 `pi-dish` session and `server` window by default.
+The manager always targets the default tmux server, even when invoked from
+inside a pane attached to another socket.
 
 ### Peer session control
 

@@ -7,6 +7,10 @@ session=${PI_DISH_TMUX_SESSION:-pi-dish}
 window=${PI_DISH_TMUX_WINDOW:-server}
 env_file=${PI_DISH_ENV_FILE:-"$HOME/.config/pi-dish/env"}
 legacy_root=${PI_DISH_LEGACY_ROOT:-}
+# Always manage the default tmux server. Callers inside another tmux server
+# otherwise inherit its socket through TMUX and inspect or mutate the wrong one.
+unset TMUX
+
 target="=$session:=$window"
 
 require_tmux() {
