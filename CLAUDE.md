@@ -612,7 +612,14 @@ exactly single-host pi-dish.
   host has no choice but `apiFetch` + `downloadBlob`, naming the file with
   `filenameFromContentDisposition` (helpers.js — the header comes off the wire,
   so it is reduced to a bare basename). Any new download must follow that
-  split, never `window.open` of a bare path. Sidebar
+  split, never `window.open` of a bare path. The other non-fetch API touches
+  are element-driven: `<img src>` for transcript and file-viewer images, the
+  file viewer's Raw `<a href>`. Those resolve through `hostAssetUrl(host,
+  path)` for the same reason — a resource URL the messages/file route emitted
+  is relative to the *owning* host, and rendered verbatim it 404s against a
+  hub with no such session. Token hosts stay unauthenticated there (an
+  element sends no header and the 60s ticket outlives neither a lazy image nor
+  a reopened tab), exactly as they are on a self host today. Sidebar
   polls fan out per host (`Promise.allSettled`, per-host sequence guards,
   render as results land — never gate on the slowest host); an unreachable
   host keeps its last list dimmed with an "unreachable" chip and degrades

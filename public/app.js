@@ -48,6 +48,21 @@ function apiFetch(host, path, opts = {}) {
 }
 
 /**
+ * The `<img src>` / `<a href>` counterpart to apiFetch: a host-relative /api
+ * path (or a resource URL the owning host emitted, which is the same thing)
+ * resolved against that host's base. Element-driven requests never pass
+ * through apiFetch, so rendering one of these verbatim points the browser at
+ * the serving origin — every remote session's transcript images and file
+ * links then 404 against a hub that has no such session. Token hosts stay
+ * unauthenticated here exactly as window.open'd exports do: an element
+ * carries no Authorization header, and a 60s ticket outlives neither a lazy
+ * image nor a reopened tab.
+ */
+function hostAssetUrl(host, path) {
+  return resolveHost(host).base + path;
+}
+
+/**
  * `opts.timeoutMs` for the fan-out paths only. A sleeping tailnet peer
  * black-holes TCP: with no deadline that request holds one of the origin's
  * six HTTP/1.1 connections for minutes and everything queued behind it reads
@@ -4976,7 +4991,8 @@ async function openFileViewer(mention) {
     title.textContent = data.path.split('/').pop();
     fileViewAbsPath = data.path;
     fileViewRelPath = data.relPath;
-    rawLink.href = `/api/sessions/${encodeURIComponent(sessionId)}/file/content?path=${encodeURIComponent(data.path)}&v=${data.mtime}-${data.size}`;
+    rawLink.href = hostAssetUrl(sessionHostId(sessionId),
+      `/api/sessions/${encodeURIComponent(sessionId)}/file/content?path=${encodeURIComponent(data.path)}&v=${data.mtime}-${data.size}`);
     rawLink.style.display = '';
     document.getElementById('fileViewPublish').style.display = '';
     // Already published (by the agent or a previous click)? Show its link.
@@ -4992,7 +5008,9 @@ async function openFileViewer(mention) {
     pathEl.textContent = `${shortCwd(data.path)} · ${kb}${data.truncated ? ' · truncated preview' : ''}`;
     pathEl.title = data.path;
     if (data.image) {
-      const src = data.image.url || `data:${data.image.mimeType};base64,${data.image.data}`;
+      const src = data.image.url
+        ? hostAssetUrl(sessionHostId(sessionId), data.image.url)
+        : `data:${data.image.mimeType};base64,${data.image.data}`;
       body.innerHTML = `<img class="file-view-img" src="${escapeHtml(src)}" decoding="async" alt="">`;
       return;
     }
@@ -6553,11 +6571,18 @@ async function fetchNewMessagesSince(sessionId, selectionGeneration = sessionSel
 // and the data before dropping them into the attribute — well-formed base64
 // has no HTML-special chars so escaping is a no-op for it, but malformed data
 // must not be able to break out of the src attribute.
+//
+// Resource URLs (everything but small live-streamed inline base64) are
+// relative to the host that owns the session, and every caller here renders
+// into the transcript of the selected one — so that is the host to resolve
+// against, not the serving origin.
 function imageBlocksHtml(content, alt = 'image') {
   const images = extractImageBlocks(content);
   if (!images.length) return '';
   const imgs = images.map(img => {
-    const src = img.url || `data:${img.mimeType};base64,${img.data}`;
+    const src = img.url
+      ? hostAssetUrl(currentSession?.host, img.url)
+      : `data:${img.mimeType};base64,${img.data}`;
     const loading = img.url ? ' loading="lazy" decoding="async"' : '';
     return `<img class="msg-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"${loading}>`;
   }).join('');
