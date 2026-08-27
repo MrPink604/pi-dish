@@ -62,7 +62,10 @@ Rules of thumb:
   badge shows elapsed time and the currently running tool.
 - **Prompting** — send prompts, steer mid-run, or queue follow-ups. Paste or
   attach images (downscaled client-side, phone photos are huge). Per-session
-  drafts and prompt history (ArrowUp), `@file` fuzzy autocomplete.
+  drafts and prompt history (ArrowUp), `@file` fuzzy autocomplete, and `#`
+  fuzzy autocomplete over your sessions — picking one inserts its ref, and the
+  agent receives it as a resolved handle it can read or message rather than an
+  opaque id.
 - **Slash commands** — `/compact`, `/model`, `/name`, skills, prompt
   templates, and more, routed to the session instead of the model (support
   matrix below).

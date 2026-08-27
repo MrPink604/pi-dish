@@ -29,6 +29,7 @@ const path = require('node:path');
 const { spawn, execFileSync } = require('node:child_process');
 
 const { sseReader } = require('./sse-reader');
+const { splitSessionRefContext } = require('../public/helpers');
 
 // Deliberately long HOME: the default bridge socket path exceeds the
 // conservative cross-platform sun_path limit. The explicit short override
@@ -58,7 +59,10 @@ const QUEUE_IMAGE_B = {
 // canary-ing the bundled — usually older — copy instead of the host.
 const { getPiLaunchSpec } = require('../lib/rpc-session.js');
 const piSpec = getPiLaunchSpec();
-const piEnv = { ...process.env, ...piSpec.env };
+// TMUX/TMUX_PANE are dropped: the bridge stamps them into its registry entry
+// and renames that window after the session, which would rename the pane
+// running the test suite.
+const piEnv = { ...process.env, ...piSpec.env, TMUX: '', TMUX_PANE: '' };
 
 let piOk = !process.env.PI_DISH_SKIP_INTEGRATION;
 let hostPiVersion = null;
@@ -414,6 +418,34 @@ test('prompt round-trip: real agent turn → bridge events → SSE → JSONL', {
     stream.close();
   }
 });
+
+// The fake LLM echoes the user turn back verbatim, so the assistant reply is
+// literal proof of what the model was handed — the only way to show that a
+// `#ref` typed in the composer arrives as a resolved handle rather than a
+// bare string.
+test('a #ref in a prompt reaches the model as a resolved <session-refs> block',
+  { skip: !piOk, timeout: 60000 }, async () => {
+    const ref = sessionId.slice(0, 8);
+    const stream = sseReader(`${base}/api/sessions/${sessionId}/stream`);
+    try {
+      await stream.waitFor((e) => e.event === 'init');
+      const { status, body } = await post(`/api/sessions/${sessionId}/prompt`, { message: `read #${ref} first` });
+      assert.equal(status, 200, JSON.stringify(body));
+
+      const end = await stream.waitFor((e) => e.event === 'message_end' && e.data?.message?.role === 'assistant', 20000);
+      const seen = end.data.message.content.filter((b) => b.type === 'text').map((b) => b.text).join('')
+        .replace(/^echo: /, '');
+      assert.match(seen, /pi-dish-sessions skill CLI/, 'the block names the verbs');
+      const { text, refs } = splitSessionRefContext(seen);
+      assert.equal(text, `read #${ref} first`, 'the prompt text itself is untouched');
+      assert.equal(refs.length, 1);
+      assert.equal(refs[0].ref, ref);
+      assert.equal(refs[0].isActive, true, 'the live session resolved as live');
+      await stream.waitFor((e) => e.event === 'turn_end', 20000);
+    } finally {
+      stream.close();
+    }
+  });
 
 test('steering queue cancellation preserves duplicate index and image identity', { skip: !piOk, timeout: 60000 }, async () => {
   const stream = sseReader(`${base}/api/sessions/${sessionId}/stream`);

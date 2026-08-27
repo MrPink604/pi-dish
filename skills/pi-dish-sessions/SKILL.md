@@ -1,6 +1,6 @@
 ---
 name: pi-dish-sessions
-description: Spawn, message, and read ordinary peer Pi sessions through the pi-dish server, and search every past session transcript — locally or across the whole host fleet. Use when work should run in a separate durable Pi process, when another session needs a prompt, steer, follow-up, interrupt, resume, or graceful termination, when the user hands you a session ref (like "tycho/8f3ab2c1" or a short id) and says to read or talk to that session, or when prior sessions may already hold the answer (how something was fixed or built before, where a file was touched, what a past investigation concluded).
+description: Spawn, message, and read ordinary peer Pi sessions through the pi-dish server, and search every past session transcript — locally or across the whole host fleet. Use when work should run in a separate durable Pi process, when another session needs a prompt, steer, follow-up, interrupt, resume, or graceful termination, when a prompt carries a session ref or a `#ref` mention (like "#tycho/8f3ab2c1") or a `<session-refs>` block and you need to read or talk to that session, or when prior sessions may already hold the answer (how something was fixed or built before, where a file was touched, what a past investigation concluded).
 ---
 
 # Pi-dish peer sessions
@@ -26,6 +26,11 @@ unique id prefix (≥4 chars, e.g. `8f3ab2c1`), or a host-qualified form
 (`tycho/8f3ab2c1` — no `--host` needed). Users copy refs from the pi-dish
 UI; treat a pasted short id as a ref, and `resolve <ref>` to see what it
 points at.
+
+A prompt written in the pi-dish composer can carry `#ref` mentions, and the
+server appends a `<session-refs>` block listing each one with its name, host
+and cwd. Those are live handles, not citations: `read` the session before
+reasoning about what it did, and `send`/`steer`/`follow-up` to talk to it.
 
 ## Hot path
 

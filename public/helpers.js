@@ -903,6 +903,25 @@ function hostDisplayLabel(host) {
 }
 
 /**
+ * The shortest id prefix of at least `minLen` characters that no peer id
+ * shares, falling back to the whole id. A blind 8-character slice is fine
+ * for a uuid and useless for a timestamp corpus, where three sessions
+ * started the same day all begin `2026-08-`; the owning server rejects an
+ * ambiguous prefix, so a ref built without looking at the corpus can simply
+ * fail to resolve. Every caller that *has* the corpus should widen with it.
+ */
+function uniqueSessionPrefix(id, peerIds, minLen = 8) {
+  const self = String(id == null ? '' : id);
+  if (!self) return '';
+  const peers = (peerIds || []).filter((peer) => peer && peer !== self);
+  for (let len = Math.min(minLen, self.length); len < self.length; len++) {
+    const candidate = self.slice(0, len);
+    if (!peers.some((peer) => String(peer).startsWith(candidate))) return candidate;
+  }
+  return self;
+}
+
+/**
  * The pasteable handle for a session — what the sidebar's "Copy session ref"
  * and the stats modal put on the clipboard, and what an agent CLI takes back.
  * Three forms, ordered by what the reader on the other end can resolve:
@@ -916,16 +935,201 @@ function hostDisplayLabel(host) {
  * it falls back to its uuid — paired with the *full* id, because a prefix is
  * only safe where something can expand it, and nothing here can speak for a
  * corpus this client merely proxies to.
+ *
+ * `prefix` overrides the default 8-character slice; pass one from
+ * `uniqueSessionPrefix` wherever the same-host sessions are known.
  */
-function sessionRef(session, host) {
+function sessionRef(session, host, prefix) {
   const id = typeof session === 'string' ? session : (session && session.id) || '';
   if (typeof id !== 'string' || !id) return '';
-  const short = id.slice(0, 8);
+  const short = typeof prefix === 'string' && prefix ? prefix : id.slice(0, 8);
   if (!host || typeof host !== 'object') return short;
   if (host.self === true || host.base === '') return short;
   if (host.name) return `${host.name}/${short}`;
   if (host.hostId) return `${host.hostId}:${id}`;
   return short;
+}
+
+// =========================================================================
+// `#ref` session mentions
+//
+// A ref is only a string, and a model reading "8f3ab2c1" in a prompt has no
+// reason to believe it addresses anything. Two halves fix that: the
+// composer's `#` picker inserts exactly the ref `sessionRef` produces, and
+// the send routes append one `<session-refs>` block naming what each token
+// points at and which verbs act on it. The block is what makes the handle
+// legible — the skill catalog in the system prompt describes the CLI but
+// never says "this token in front of you is a live session".
+//
+// The block is *appended*, never substituted: the user's own text keeps the
+// short `#ref` they typed, and the UI hides the block behind chips
+// (splitSessionRefContext). Everything that compares a sent prompt against
+// its echo has to strip it first — see consumePendingSelfEcho in app.js.
+// =========================================================================
+
+/** A `#ref` in prompt text. The ref charset is the docs/agent/refs.md
+ *  grammar (`8f3ab2c1`, `tycho/8f3ab2c1`, `<hostId>:<fullId>`); the 4-char
+ *  minimum is the server's shortest resolvable prefix, which also keeps
+ *  `#1`-style tokens out. A markdown heading can't match (a space is not in
+ *  the charset, and `##` fails the leading alphanumeric), and neither can a
+ *  `#` glued to a word — the leading boundary is required. Backticks are
+ *  deliberately not boundaries, so a ref quoted as code stays inert. */
+const SESSION_REF_TOKEN_RE = /(?:^|[\s(\[{<"'])#([A-Za-z0-9][A-Za-z0-9._:/-]{3,})/g;
+
+/** Distinct `#ref` tokens, in order of first appearance. */
+function parseSessionRefTokens(text) {
+  const out = [];
+  if (!text) return out;
+  const seen = new Set();
+  SESSION_REF_TOKEN_RE.lastIndex = 0;
+  let match;
+  while ((match = SESSION_REF_TOKEN_RE.exec(String(text))) !== null) {
+    // Only '.' and ':' can end a ref by accident — a full stop after the
+    // token, or a stray separator. '-' and '_' are never punctuation here:
+    // an 8-char prefix of a timestamp id really is "2026-08-", and trimming
+    // it would silently rewrite the ref the picker wrote.
+    const ref = match[1].replace(/[.:/]+$/, '');
+    if (ref.length < 4 || seen.has(ref)) continue;
+    seen.add(ref);
+    out.push({ token: '#' + ref, ref });
+  }
+  return out;
+}
+
+const SESSION_REF_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Split a ref into host part and session part — the pure half of the CLI's
+ * parser (skills/lib/pi-dish-client.js `parseRef`), same three forms and the
+ * same return shape. `hostIdForm` marks the machine-produced
+ * `<hostId>:<fullId>`, whose id is whole and must never prefix-match: a
+ * partial expansion could retarget a recorded ref at a different session.
+ */
+function parseSessionRefParts(raw) {
+  const ref = String(raw == null ? '' : raw).trim();
+  if (!ref) return null;
+  const slash = ref.indexOf('/');
+  if (slash !== -1) {
+    const hostPart = ref.slice(0, slash);
+    const id = ref.slice(slash + 1);
+    return hostPart && id ? { hostPart, hostIdForm: false, id } : null;
+  }
+  const colon = ref.indexOf(':');
+  if (colon > 0) {
+    const head = ref.slice(0, colon);
+    const rest = ref.slice(colon + 1);
+    if (SESSION_REF_UUID_RE.test(head) && rest) return { hostPart: head, hostIdForm: true, id: rest };
+  }
+  return { hostPart: null, hostIdForm: false, id: ref };
+}
+
+const SESSION_REF_BLOCK_RE = /\n*<session-refs>\n([\s\S]*?)\n<\/session-refs>[ \t]*$/;
+
+// Names the thing and the verbs. Deliberately not the skill body: repeating
+// ~1.5KB of SKILL.md on every prompt buys nothing the catalog entry and these
+// four lines don't already give, and it would repeat per message.
+const SESSION_REF_PREAMBLE = [
+  'The message above references other pi-dish sessions by `#ref`. Each is a real',
+  'peer session, not a label: use the pi-dish-sessions skill CLI to read its',
+  'transcript (`read <ref>`) or to message it (`send` / `steer` / `follow-up`',
+  '<ref>). Never guess what a referenced session holds — read it.',
+].join('\n');
+
+/** One `key=value | ...` field. The separators and the angle brackets that
+ *  delimit the block are the only characters a value may not carry. */
+function sessionRefField(value) {
+  return String(value == null ? '' : value).replace(/[\r\n|<>]+/g, ' ').trim().slice(0, 200);
+}
+
+/** The `<session-refs>` block for resolved entries, '' when none resolved. */
+function formatSessionRefContext(entries) {
+  const rows = [];
+  for (const entry of entries || []) {
+    const ref = sessionRefField(entry && entry.ref);
+    if (!ref) continue;
+    const fields = [`ref=${ref}`];
+    const name = sessionRefField(entry.name);
+    if (name) fields.push(`name=${name}`);
+    const host = sessionRefField(entry.host);
+    if (host) fields.push(`host=${host}`);
+    if (entry.isActive != null) fields.push(`active=${entry.isActive ? 'yes' : 'no'}`);
+    const cwd = sessionRefField(entry.cwd);
+    if (cwd) fields.push(`cwd=${cwd}`);
+    rows.push('- ' + fields.join(' | '));
+  }
+  if (!rows.length) return '';
+  return `<session-refs>\n${SESSION_REF_PREAMBLE}\n${rows.join('\n')}\n</session-refs>`;
+}
+
+/** Prompt text plus its ref block. Unresolvable tokens contribute nothing —
+ *  a `#ref` that names no session is left as the prose it probably was. */
+function appendSessionRefContext(text, entries) {
+  const body = String(text == null ? '' : text);
+  const block = formatSessionRefContext(entries);
+  if (!block) return body;
+  return body ? `${body}\n\n${block}` : block;
+}
+
+/** Inverse of appendSessionRefContext: the text as typed plus the parsed
+ *  entries, for rendering chips and for comparing a prompt to its echo. */
+function splitSessionRefContext(text) {
+  const body = String(text == null ? '' : text);
+  const match = body.match(SESSION_REF_BLOCK_RE);
+  if (!match) return { text: body, refs: [] };
+  const refs = [];
+  for (const line of match[1].split('\n')) {
+    if (!line.startsWith('- ref=')) continue;
+    const entry = {};
+    for (const field of line.slice(2).split(' | ')) {
+      const eq = field.indexOf('=');
+      if (eq > 0) entry[field.slice(0, eq)] = field.slice(eq + 1);
+    }
+    if (!entry.ref) continue;
+    refs.push({
+      ref: entry.ref,
+      name: entry.name || '',
+      host: entry.host || '',
+      cwd: entry.cwd || '',
+      isActive: entry.active === 'yes',
+    });
+  }
+  return { text: body.slice(0, match.index).replace(/\s+$/, ''), refs };
+}
+
+/**
+ * Rank sessions for the composer's `#` picker: a fuzzy subsequence match on
+ * the name (what a human remembers), falling back to cwd and then to an id
+ * prefix so a pasted ref finds its own session. Live sessions outrank
+ * historical ones at equal score — a ref is usually aimed at something
+ * running — and recency breaks the rest. An empty query is "most recent".
+ */
+function searchSessionsForRef(list, query, limit = 8) {
+  const q = String(query == null ? '' : query).trim();
+  const lower = q.toLowerCase();
+  const rows = [];
+  for (const session of list || []) {
+    if (!session || !session.id) continue;
+    let score = 0;
+    let indices = null;
+    if (q) {
+      const name = String(session.name || '');
+      indices = fuzzyMatch(q, name);
+      if (indices) {
+        score = 1000 + fuzzyScore(indices, name);
+      } else {
+        const cwd = String(session.cwd || '');
+        const cwdIndices = fuzzyMatch(q, cwd);
+        if (cwdIndices) score = 500 + fuzzyScore(cwdIndices, cwd);
+        else if (String(session.id).toLowerCase().startsWith(lower)) score = 250;
+        else continue;
+      }
+    }
+    rows.push({ session, score, indices });
+  }
+  rows.sort((a, b) => b.score - a.score
+    || (b.session.isActive ? 1 : 0) - (a.session.isActive ? 1 : 0)
+    || new Date(b.session.lastActivity || 0) - new Date(a.session.lastActivity || 0));
+  return rows.slice(0, Math.max(0, limit));
 }
 
 /**
@@ -2001,7 +2205,9 @@ if (typeof module !== 'undefined' && module.exports) {
     parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch, stripQueryField,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     sessionKey, parseSessionKey, sessionRefKey, normalizeHostBase, sanitizeHostCatalog,
-    hostDisplayLabel, sessionRef, mergeHostEntries, mergeUsageSummaries, createFanoutRenderQueue,
+    hostDisplayLabel, sessionRef, uniqueSessionPrefix, mergeHostEntries, mergeUsageSummaries, createFanoutRenderQueue,
+    parseSessionRefTokens, parseSessionRefParts, formatSessionRefContext,
+    appendSessionRefContext, splitSessionRefContext, searchSessionsForRef,
     hostSupportsCapability, hostSupportsTerminal,
     HOST_BACKOFF_LADDER, HOST_BACKOFF_RESET_MS, hostConnReduce,
     HOST_COLOR_SLOTS, sanitizeHostColors, sanitizeHostColorOrder, assignHostColor,

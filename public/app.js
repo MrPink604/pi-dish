@@ -827,6 +827,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         () => setStatus('Copy failed (clipboard blocked)', 'error'),
       );
     });
+    // Open the session a #ref chip names. Cross-host chips carry the host in
+    // the ref, so the lookup — not the click — decides which host to switch to.
+    messagesEl.addEventListener('click', (e) => {
+      const chip = e.target.closest('.session-ref-chip');
+      if (!chip) return;
+      const ref = chip.getAttribute('data-session-ref') || '';
+      const session = sessionMatchingRef(ref);
+      if (!session) { setStatus(`No session here matches ${ref}`, 'error'); return; }
+      selectSession(session.id, { host: session.host || null });
+    });
   }
 
   // Restore focus mode (hide tool calls/results) preference
@@ -842,7 +852,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 // =========================================================================
 // Autocomplete — slash commands at the start of the input, @file mentions
 // anywhere (fuzzy file search under the session cwd via fff; @/abs, @~/ and
-// @../ tokens get shell-style path completion anywhere on the filesystem).
+// @../ tokens get shell-style path completion anywhere on the filesystem),
+// and #session refs anywhere (fuzzy search over the sessions this client
+// already holds — no fetch, the sidebar list is the index).
 // =========================================================================
 
 function handleAutocomplete(text) {
@@ -853,6 +865,10 @@ function handleAutocomplete(text) {
   const caret = input.selectionStart ?? text.length;
   const at = text.slice(0, caret).match(/(?:^|\s)@([^\s@]*)$/);
   if (at && currentSession) { queueFileAutocomplete(at[1]); return; }
+  // #token ending at the caret → session ref. `# ` (a markdown heading) can't
+  // reach here: the token charset excludes the space.
+  const hash = text.slice(0, caret).match(/(?:^|\s)#([^\s#]*)$/);
+  if (hash && currentSession) { showSessionRefAutocomplete(hash[1]); return; }
 
   if (!text.startsWith('/')) { hideAutocomplete(); return; }
   var spaceIdx = text.indexOf(' ');
@@ -901,6 +917,126 @@ function acceptFileMention(relPath, isDir) {
   input.focus();
   input.setSelectionRange(pos, pos);
   if (isDir) input.dispatchEvent(new Event('input'));
+}
+
+// --- #session refs ---
+// The picker is local: every session this client can address is already in
+// `sessions` (the fleet is aggregated client-side), so ranking them is a sort,
+// not a round trip. Knowing the whole corpus is also what lets the picker
+// write a ref that resolves — see uniqueSessionPrefix.
+
+function allKnownSessions() {
+  return [...sessions.active, ...sessions.previous];
+}
+
+function sessionHostIdOf(session) {
+  return (session && session.host) || selfHost.hostId;
+}
+
+function sessionRefCandidates() {
+  const all = allKnownSessions();
+  return currentSession ? all.filter(s => s.id !== currentSession.id) : all;
+}
+
+/** Ids sharing a session's host — the only ones a prefix has to beat. */
+function sameHostSessionIds(session) {
+  const hostId = sessionHostIdOf(session);
+  return allKnownSessions().filter(s => sessionHostIdOf(s) === hostId).map(s => s.id);
+}
+
+/**
+ * The ref to insert for `session` while composing into `target`. A ref is
+ * resolved by the *target's* server, so it must read from that server's point
+ * of view, not this client's: same host is a bare prefix, and a cross-host ref
+ * takes the name-independent `hostId:fullId` form — except when the target is
+ * this client's own host, whose fleet names are exactly the ones this client
+ * knows and can therefore write.
+ */
+function composerSessionRef(session, target) {
+  const sessionHost = sessionHostIdOf(session);
+  const targetHost = sessionHostIdOf(target);
+  const prefix = uniqueSessionPrefix(session.id, sameHostSessionIds(session));
+  if (sessionHost === targetHost) return prefix;
+  if (targetHost === selfHost.hostId) {
+    const entry = hostEntryFor(sessionHost);
+    if (entry && entry.name) return `${entry.name}/${prefix}`;
+  }
+  return `${sessionHost}:${session.id}`;
+}
+
+function showSessionRefAutocomplete(token) {
+  const rows = searchSessionsForRef(sessionRefCandidates(), token, 8);
+  if (!rows.length) { hideAutocomplete(); return; }
+  showAutocompleteList(rows.map(({ session, indices }, i) => {
+    const ref = composerSessionRef(session, currentSession);
+    const name = session.name || session.id.slice(0, 8);
+    const desc = [
+      isMultiHost() ? hostLabelFor(session.host) : '',
+      ref,
+      shortCwd(session.cwd || ''),
+    ].filter(Boolean).join(' · ');
+    return `<div class="autocomplete-item${i === 0 ? ' active' : ''}" data-session-ref="${escapeHtml(ref)}">
+      <span class="autocomplete-icon session-ref-dot${session.isActive ? ' live' : ''}">●</span>
+      <span class="autocomplete-name">${indices ? highlightFuzzy(name, indices) : escapeHtml(name)}</span>
+      <span class="autocomplete-desc">${escapeHtml(desc)}</span>
+    </div>`;
+  }).join(''));
+}
+
+/** Replace the #token at the caret with the chosen ref. */
+function acceptSessionRefMention(ref) {
+  const input = document.getElementById('promptInput');
+  const caret = input.selectionStart ?? input.value.length;
+  const m = input.value.slice(0, caret).match(/(?:^|\s)#([^\s#]*)$/);
+  hideAutocomplete();
+  if (!m) return;
+  const start = caret - m[1].length - 1; // include the '#'
+  const insert = ref + ' ';
+  input.value = input.value.slice(0, start) + '#' + insert + input.value.slice(caret);
+  const pos = start + 1 + insert.length;
+  input.focus();
+  input.setSelectionRange(pos, pos);
+  input.dispatchEvent(new Event('input')); // resize, save the draft, close
+}
+
+/** The session a ref addresses, resolved the way its owning server would. */
+function sessionMatchingRef(ref) {
+  const parts = parseSessionRefParts(ref);
+  if (!parts) return null;
+  const onHost = allKnownSessions().filter((session) => {
+    const hostId = sessionHostIdOf(session);
+    if (!parts.hostPart) return hostId === selfHost.hostId;
+    if (parts.hostIdForm) return hostId === parts.hostPart;
+    if (parts.hostPart.toLowerCase() === 'self') return hostId === selfHost.hostId;
+    const entry = hostEntryFor(hostId);
+    return !!entry && String(entry.name || '').toLowerCase() === parts.hostPart.toLowerCase();
+  });
+  const exact = onHost.find(s => s.id === parts.id);
+  if (exact || parts.hostIdForm) return exact || null;
+  const matches = onHost.filter(s => s.id.startsWith(parts.id));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+/**
+ * Metadata for the `#ref` tokens in a prompt, sent alongside it. The target's
+ * server resolves its own sessions itself; these hints exist so a *peer's*
+ * session can still be named in the block, since this client is the only
+ * party that aggregates the fleet.
+ */
+function sessionRefHints(message) {
+  const hints = [];
+  for (const { ref } of parseSessionRefTokens(message)) {
+    const session = sessionMatchingRef(ref);
+    if (!session) continue;
+    hints.push({
+      ref,
+      name: session.name || '',
+      host: hostLabelFor(session.host) || '',
+      cwd: session.cwd || '',
+      isActive: !!session.isActive,
+    });
+  }
+  return hints;
 }
 
 function ensureAutocompleteContainer() {
@@ -953,8 +1089,10 @@ function moveAutocomplete(delta) {
 
 function acceptAutocomplete(el) {
   const file = el.getAttribute('data-file');
-  if (file != null) acceptFileMention(file, el.hasAttribute('data-dir'));
-  else acceptAutocompleteByName(el.getAttribute('data-name'));
+  if (file != null) { acceptFileMention(file, el.hasAttribute('data-dir')); return; }
+  const ref = el.getAttribute('data-session-ref');
+  if (ref != null) { acceptSessionRefMention(ref); return; }
+  acceptAutocompleteByName(el.getAttribute('data-name'));
 }
 
 function acceptAutocompleteByName(name) {
@@ -1705,9 +1843,13 @@ function initPinnedDrag() {
 let sessionMenuEl = null;
 let sessionMenuTimer = null;
 
-/** The ref for a session, resolved against the host that actually owns it. */
+/** The ref for a session, resolved against the host that actually owns it and
+ *  widened past every same-host sibling that shares its prefix — a copied ref
+ *  that names three sessions is one the owning server refuses. */
 function sessionRefFor(session) {
-  return sessionRef(session, hostEntryFor(session?.host || null));
+  if (!session || !session.id) return '';
+  return sessionRef(session, hostEntryFor(session.host || null),
+    uniqueSessionPrefix(session.id, sameHostSessionIds(session)));
 }
 
 function isSessionMenuOpen() {
@@ -6434,12 +6576,31 @@ function messageLinkBtnHtml(msg) {
     </svg></button>`;
 }
 
+// The <session-refs> block the send routes append is context for the model,
+// not for the reader: the transcript hides it and shows one chip per ref,
+// which opens the session it names. Optimistic bubbles carry the same entries
+// on `msg.sessionRefs` — the server's copy only arrives with the echo, and by
+// then the echo has been suppressed.
+function sessionRefChipsHtml(refs) {
+  if (!refs || !refs.length) return '';
+  const chips = refs.map((entry) => {
+    const session = sessionMatchingRef(entry.ref);
+    const label = entry.name || session?.name || entry.ref;
+    const live = (session ? session.isActive : entry.isActive) ? ' live' : '';
+    const title = [entry.ref, entry.host, entry.cwd].filter(Boolean).join(' · ');
+    return `<button type="button" class="session-ref-chip${live}" data-session-ref="${escapeHtml(entry.ref)}" title="${escapeHtml(title)}">
+      <span class="session-ref-dot">●</span>${escapeHtml(label)}</button>`;
+  }).join('');
+  return `<div class="session-ref-chips">${chips}</div>`;
+}
+
 function renderUserMessage(msg, time, attrs = '') {
-  const text = extractTextContent(msg.content);
+  const { text, refs } = splitSessionRefContext(extractTextContent(msg.content));
   const imagesHtml = imageBlocksHtml(msg.content, 'attached image');
+  const chipsHtml = sessionRefChipsHtml(msg.sessionRefs || refs);
   return `<div${attrs} class="message user">
     <div class="message-header"><span class="message-role user">❯</span>${time ? `<span class="message-time">${time}</span>` : ''}${messageLinkBtnHtml(msg)}</div>
-    <div class="message-content user-content">${text ? `<div class="markdown-body">${formatMarkdown(text)}</div>` : ''}${imagesHtml}</div>
+    <div class="message-content user-content">${text ? `<div class="markdown-body">${formatMarkdown(text)}</div>` : ''}${imagesHtml}${chipsHtml}</div>
   </div>`;
 }
 
@@ -7465,9 +7626,12 @@ function discardOptimisticPrompt(clientPromptId) {
   pending.element?.remove();
 }
 
+// The composer never sends the <session-refs> block — the server appends it —
+// so every echoed prompt has to be compared with the block stripped back off.
 function consumePendingSelfEcho(sessionId, message) {
+  const text = splitSessionRefContext(message).text;
   for (const [clientPromptId, pending] of pendingOptimisticPrompts) {
-    if (pending.sessionId !== sessionId || pending.message !== message) continue;
+    if (pending.sessionId !== sessionId || pending.message !== text) continue;
     pendingOptimisticPrompts.delete(clientPromptId);
     return true;
   }
@@ -7530,6 +7694,7 @@ async function sendPrompt() {
   recordPrompt(message, sessionId);
   clearDraft(sessionId);
   const images = takePendingImages();
+  const refs = sessionRefHints(message);
   setStatus('Sending...', 'working');
 
   const container = document.getElementById('messages');
@@ -7541,7 +7706,7 @@ async function sendPrompt() {
   const clientPromptId = nextClientPromptId();
   const template = document.createElement('template');
   template.innerHTML = renderUserMessage({
-    role: 'user', content: optimisticContent, timestamp: Date.now()
+    role: 'user', content: optimisticContent, timestamp: Date.now(), sessionRefs: refs,
   }, formatTime(Date.now()), ` data-client-prompt-id="${clientPromptId}"`);
   const optimisticElement = template.content.firstElementChild;
   container.appendChild(optimisticElement);
@@ -7558,7 +7723,9 @@ async function sendPrompt() {
   setTurnInProgress(true);
 
   try {
-    const resp = await apiSend(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/prompt`, images ? { message, images } : { message });
+    const body = images ? { message, images } : { message };
+    if (refs.length) body.refs = refs;
+    const resp = await apiSend(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/prompt`, body);
     const pending = pendingOptimisticPrompts.get(clientPromptId);
     if (pending) pending.status = resp?.result?.queued ? 'queued' : 'accepted';
     if (!ownsSessionView(sessionId, selectionGeneration)) return;
@@ -7722,6 +7889,8 @@ async function sendQueuedMessage(kind) {
 
   const body = steer ? { message } : { message, deliverAs: 'followUp' };
   if (images) body.images = images;
+  const refs = sessionRefHints(message);
+  if (refs.length) body.refs = refs;
   try {
     const resp = await apiSend(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}${steer ? '/steer' : '/prompt'}`, body);
     if (!ownsSessionView(sessionId, selectionGeneration)) return;
@@ -7757,7 +7926,10 @@ function renderQueueStatus(data) {
   }
   const rows = [];
   const associated = new Set();
-  const row = (kind, label, text, index) => {
+  // pi's queue holds what the server sent, block and all; the strip and the
+  // composer only ever deal in the text as it was typed.
+  const row = (kind, label, raw, index) => {
+    const text = splitSessionRefContext(raw).text;
     let clientPromptId = null;
     for (const [id, pending] of pendingOptimisticPrompts) {
       if (associated.has(id) || pending.sessionId !== currentSession?.id ||
@@ -7794,7 +7966,13 @@ async function editQueuedMessage(btn) {
   if (!row) return;
   const kind = row.dataset.kind;
   const index = Number(row.dataset.index);
-  const text = row.querySelector('.queue-item-text')?.textContent || '';
+  // Cancelling keys on pi's own queue entry, so it needs the text pi holds —
+  // the rendered row shows the stripped form. lastQueueData is the same
+  // snapshot the row was rendered from.
+  const raw = (lastQueueData?.[kind] || [])[index];
+  const text = typeof raw === 'string' && raw
+    ? raw
+    : (row.querySelector('.queue-item-text')?.textContent || '');
   const clientPromptId = row.dataset.clientPromptId || null;
   if (!text) return;
   const clientPrompt = clientPromptId ? pendingOptimisticPrompts.get(clientPromptId) : null;
@@ -7806,7 +7984,7 @@ async function editQueuedMessage(btn) {
   try {
     await apiSend(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/queue/cancel`, { kind, index, text });
     if (clientPromptId) discardOptimisticPrompt(clientPromptId);
-    restorePromptToSession(sessionId, text, null);
+    restorePromptToSession(sessionId, splitSessionRefContext(text).text, null);
     // The follow-up queue_update reconciles the strip; no manual removal needed.
   } catch (e) {
     if (clientPrompt && pendingOptimisticPrompts.has(clientPromptId)) {

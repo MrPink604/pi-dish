@@ -54,6 +54,7 @@ const {
   sessionMetaText, parseModelId, formatModelRef, buildSnippet, buildSnippets,
   parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch,
 } = require('./public/helpers');
+const { expandSessionRefs } = require('./lib/session-refs');
 
 const app = express();
 const PORT = process.env.PORT || 3333;
@@ -1563,6 +1564,22 @@ app.get('/api/sessions', (req, res) => {
   res.json({ active, previous, indexing, discoveryTruncated, discoverySkipped });
 });
 
+// The one prefix-resolution rule for refs, shared by GET /api/sessions/resolve
+// and the `#ref` prompt expansion so a ref can't mean two things depending on
+// which door it came through: exact id wins (an active entry wins a collision
+// with a historical one of the same id), then a unique prefix. `exactOnly`
+// serves the machine-produced `<hostId>:<fullId>` form, whose id is whole —
+// expanding a prefix there could retarget a recorded ref.
+function resolveRefInCatalog(catalog, ref, exactOnly = false) {
+  const byId = new Map();
+  for (const session of catalog.list) if (!byId.has(session.id)) byId.set(session.id, session); // active first
+  const exact = byId.get(ref);
+  if (exact) return { session: exact, matches: [exact] };
+  if (exactOnly) return { session: null, matches: [] };
+  const matches = [...byId.values()].filter((session) => session.id.startsWith(ref));
+  return { session: matches.length === 1 ? matches[0] : null, matches };
+}
+
 // Session refs: resolve a short id prefix to one full list entry. Registered
 // ahead of every /api/sessions/:id route so the literal path can never be
 // captured as an id. The candidate set is exactly what GET /api/sessions
@@ -1576,23 +1593,17 @@ app.get('/api/sessions/resolve', (req, res) => {
 
   const catalog = buildSessionCatalog();
   annotateSessionParents(catalog.list); // list rows carry lineage hints; keep the shape identical
-  const byId = new Map();
-  for (const session of catalog.list) if (!byId.has(session.id)) byId.set(session.id, session); // active first
-
-  const exact = byId.get(ref);
-  if (exact) return res.json({ session: exact });
-
-  const matches = [...byId.values()].filter((session) => session.id.startsWith(ref));
-  if (matches.length === 1) return res.json({ session: matches[0] });
+  const { session, matches } = resolveRefInCatalog(catalog, ref);
+  if (session) return res.json({ session });
   if (matches.length > 1) {
     return res.status(409).json({
       error: 'ambiguous session id prefix',
-      matches: matches.slice(0, 10).map((session) => ({
-        id: session.id,
-        name: session.name,
-        cwd: session.cwd || null,
-        lastActivity: session.lastActivity,
-        isActive: !!session.isActive,
+      matches: matches.slice(0, 10).map((match) => ({
+        id: match.id,
+        name: match.name,
+        cwd: match.cwd || null,
+        lastActivity: match.lastActivity,
+        isActive: !!match.isActive,
       })),
     });
   }
@@ -2458,6 +2469,21 @@ function sanitizeImages(images) {
     .map((i) => ({ type: 'image', data: i.data, mimeType: i.mimeType }));
 }
 
+// The dependency bundle for lib/session-refs.js. Cheap to build — the catalog
+// is only read once a prompt actually carries a `#ref` — so the routes can
+// hand one over unconditionally.
+function sessionRefDeps() {
+  let catalog = null;
+  return {
+    selfHostId: hostIdentity.getHostId(),
+    resolveLocal: (id, exactOnly) => {
+      if (!catalog) catalog = buildSessionCatalog();
+      return resolveRefInCatalog(catalog, id, exactOnly).session;
+    },
+    fleetNames: () => remoteHosts.listRemotes().map((remote) => remote.name),
+  };
+}
+
 app.post('/api/sessions/:id/prompt', async (req, res) => {
   const { message, deliverAs } = req.body;
   const images = sanitizeImages(req.body.images);
@@ -2474,7 +2500,7 @@ app.post('/api/sessions/:id/prompt', async (req, res) => {
     }
     const opts = deliverAs ? { deliverAs } : {};
     if (images.length) opts.images = images;
-    const result = await sess.prompt(message || '', opts);
+    const result = await sess.prompt(expandSessionRefs(message, req.body.refs, sessionRefDeps()), opts);
     res.json({ success: true, result });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -2489,7 +2515,9 @@ app.post('/api/sessions/:id/steer', async (req, res) => {
     const sess = await getLiveSession(req.params.id);
     if (!sess) return res.status(404).json({ error: 'Session not active' });
     if (!liveSessionSupports(sess, 'steer')) return res.status(409).json({ error: 'This session does not support steering.' });
-    const result = await sess.steer(message || '', images.length ? { images } : {});
+    const result = await sess.steer(
+      expandSessionRefs(message, req.body.refs, sessionRefDeps()),
+      images.length ? { images } : {});
     res.json({ success: true, result });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -2508,7 +2536,7 @@ app.post('/api/sessions/:id/follow-up', async (req, res) => {
     if (!liveSessionSupports(sess, 'followUp')) return res.status(409).json({ error: 'This session does not support follow-ups.' });
     const opts = { deliverAs: 'followUp' };
     if (images.length) opts.images = images;
-    const result = await sess.prompt(message || '', opts);
+    const result = await sess.prompt(expandSessionRefs(message, req.body.refs, sessionRefDeps()), opts);
     res.json({ success: true, result });
   } catch (e) {
     res.status(500).json({ error: e.message });

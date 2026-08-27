@@ -379,6 +379,31 @@ above the unscored tail), naming unanswering hosts — the fleet's
 client-is-the-aggregator invariant applies to the CLI too; never add a
 server-side merged endpoint for it.
 
+**`#ref` mentions**: a ref is only a string, and a model reading `8f3ab2c1` in
+a prompt has no reason to treat it as a handle — the skill catalog describes
+the CLI but never says "this token is a live session". So the composer's `#`
+picker (fuzzy over the client's own session list, no fetch — the fleet is
+aggregated client-side) inserts a ref, and `/prompt`, `/steer` and
+`/follow-up` append one `<session-refs>` block naming what each token resolved
+to and which verbs act on it (`lib/session-refs.js`; grammar, block format and
+`splitSessionRefContext` in helpers.js, shared with the browser). The block is
+*appended*, never substituted — the user's text keeps the short token — and
+deliberately carries no transcript content: it hands over a handle, not a
+summary. Rules that follow from that:
+- Anything comparing a sent prompt to its echo must strip the block first
+  (`consumePendingSelfEcho`, the queue strip, `editQueuedMessage` — which
+  still cancels with the *raw* text, because that is pi's own queue key).
+- A token that resolves to nothing is left alone, so `#include` stays prose.
+  This is why unfleeted host parts are dropped rather than guessed at.
+- Local refs resolve against this host's catalog through the same
+  `resolveRefInCatalog` as `GET /api/sessions/resolve`. Peer sessions arrive
+  as untrusted client `refs` hints (clamped by `sanitizeRefHint`, never
+  allowed to shadow a local resolution) — the aggregator invariant again: the
+  server must not fan out to peers on the send path.
+- The picker writes the ref from the *target session's* point of view, not the
+  client's: same host is a bare prefix, cross-host is `hostId:fullId` unless
+  the target is this client's own host, whose fleet names it can speak.
+
 **Agent docs**: the server ships its own agent-facing docs (`docs/agent/*.md`
 → `GET /api/agent-docs` list + `/api/agent-docs/:topic` as text/markdown) so a
 mixed-version fleet reads the *running* host's docs, not a stale skill file;
@@ -1197,6 +1222,11 @@ so the outside-click closer must treat detached targets as inside.
   both handle it). `express.json` limit is raised to 30mb for this. User
   messages render image blocks as thumbnails with a tap-to-zoom lightbox
   (`img.msg-image`, delegation on document).
+- **Autocomplete**: `/` slash commands at the start, `@` file mentions (fetched
+  per keystroke from `/api/sessions/:id/files`), `#` session refs (resolved
+  locally against `sessions`). One dropdown, one accept path
+  (`acceptAutocomplete` dispatches on the row's `data-file` / `data-session-ref`
+  / `data-name`); see the `#ref` mentions paragraph for what a ref becomes.
 - **Drafts**: the in-progress prompt persists per session
   (`pi-dish-draft-<id>` in localStorage, debounced from the input listener),
   restored by `restorePromptState()` on session select, cleared on send.
@@ -1305,6 +1335,22 @@ select/resume). Two backends:
   `/dish-prime` via `rpc.prompt()`, send-keys into a recorded spawn pane);
   the 409 hint remains only for the no-capture edge (nothing has called
   `prompt`/`subscribe` since the bridge loaded).
+- **Live OMP sessions** need the same command context, and OMP only ever
+  builds one for an extension command or an extension *shortcut* — its
+  public `sendUserMessage()` forwards the text as a prompt instead of
+  dispatching the command, so the bridge cannot self-prime. `navigateLiveOmpTree`
+  queues the operation over the socket, waits for the bridge's
+  `tree_operation_queued` event, then triggers the drain **in the session's
+  tmux pane**. The trigger is a keypress (`tmux send-keys C-M-S-F12`),
+  translated by `tmuxKeyForChord` from the `treeServiceShortcut` chord the
+  bridge advertises in its registry entry. Typing `/dish-tree-service`
+  instead — what pi-dish did until 2026-08 — concatenates with whatever the
+  user left unsent in the TUI composer, so OMP sends *that line to the
+  model* and navigation 504s; only a bridge too old to advertise a chord
+  still gets the typed command. The queued operation and the pane handoff
+  race each other: a bridge that refuses outright (turn in progress,
+  unknown entry) never acknowledges, and its precise error must win over
+  the 2s acknowledgement timeout. Live-state refusals answer 409, not 500.
 - **Inactive sessions** go through the SDK (`branchSession` in pi-sdk.js).
   The summary bills to the session's own model (last `model_change`, else
   the last assistant message's provider/model) with auth from
