@@ -230,7 +230,16 @@ fixed headline windows; the range presets scope everything below them. The
 Cost/Tokens toggle is the whole view's metric — it re-ranks the breakdowns
 server-side (`sort=`, groups are truncated to the top 20 there) *and* drives
 what the chart, tooltip, and day detail plot; don't regress it to a
-list-only sort. Model rows are a multi-select filter (`models=` refs on the
+list-only sort.
+Every cost surface also pivots into the four attribution buckets (`costs`
+subtotals: read = uncached input, cached read, output, cache write —
+`USAGE_COST_BUCKETS` in app.js, semantic `--cost-*` palette slots beside
+`--chart-N`): a Spend-by-bucket section under the totals, a Models/Cost
+buckets stack toggle on the cost chart (client-side re-pivot of the same
+payload, device-local `pi-dish-usage-stack`), per-bucket cells in the day
+detail, and breakdown tooltips on KPI tiles and group rows. KPI tiles read
+`headlineCostsByBucket`, the per-component twin of `headlineCosts` —
+`mergeUsageSummaries` must keep summing it per component. Model rows are a multi-select filter (`models=` refs on the
 same endpoint): totals, daily series, and the workspace/session groups are
 rebuilt server-side from the per-session `usage.models` day buckets (the
 truncated groups can't be filtered client-side), while `groups.models`

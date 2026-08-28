@@ -48,6 +48,14 @@
   --chart-4: var(--warning);
   --chart-5: var(--error);
   --chart-other: color-mix(in srgb, var(--text-muted) 45%, var(--bg-card));
+  /* Cost attribution buckets (usage view): fixed semantic slots, parallel to
+     the categorical chart palette — uncached reads blue, their cached
+     fraction cyan, generated output orange, cache writes yellow. Semantic,
+     never rank-assigned, so every bucket view agrees on colors. */
+  --cost-read: var(--chart-1);
+  --cost-cached: var(--chart-3);
+  --cost-output: var(--chart-2);
+  --cost-write: var(--chart-4);
 }
 
 /* Alternate theme: a neutral dark for people who don't share the solarized
@@ -4945,6 +4953,10 @@ body.standalone-file-page {
 .seg.s4, .swatch.s4, .tt-key.s4, .usage-share-bar .s4 { fill: var(--chart-4); background: var(--chart-4); }
 .seg.s5, .swatch.s5, .tt-key.s5, .usage-share-bar .s5 { fill: var(--chart-5); background: var(--chart-5); }
 .seg.sother, .swatch.sother, .tt-key.sother, .usage-share-bar .sother { fill: var(--chart-other); background: var(--chart-other); }
+.seg.c1, .swatch.c1, .tt-key.c1, .usage-share-bar .c1 { fill: var(--cost-read); background: var(--cost-read); }
+.seg.c2, .swatch.c2, .tt-key.c2, .usage-share-bar .c2 { fill: var(--cost-cached); background: var(--cost-cached); }
+.seg.c3, .swatch.c3, .tt-key.c3, .usage-share-bar .c3 { fill: var(--cost-output); background: var(--cost-output); }
+.seg.c4, .swatch.c4, .tt-key.c4, .usage-share-bar .c4 { fill: var(--cost-write); background: var(--cost-write); }
 
 .usage-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; }
 .usage-legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text); }

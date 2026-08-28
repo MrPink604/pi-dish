@@ -2127,6 +2127,11 @@ test('usage summary preserves cost availability through every grouping and filte
       'a total-only call is omitted from the known component subtotal');
     assert.equal(knownToday.totals.costUnavailable.input, 1);
     assert.ok(Math.abs(knownToday.headlineCosts.today - baselineToday.headlineCosts.today - 1.7) < 1e-9);
+    // The per-bucket twin tracks each component: paid (0.4 in / 0.6 out) plus
+    // mixed (0.1 / 0.1); the total-only call lands in neither.
+    assert.ok(Math.abs(knownToday.headlineCostsByBucket.today.input - baselineToday.headlineCostsByBucket.today.input - 0.5) < 1e-9);
+    assert.ok(Math.abs(knownToday.headlineCostsByBucket.today.output - baselineToday.headlineCostsByBucket.today.output - 0.7) < 1e-9);
+    assert.ok(Math.abs(knownToday.headlineCostsByBucket.today.total - baselineToday.headlineCostsByBucket.today.total - 1.7) < 1e-9);
     assert.ok(Math.abs(knownToday.headlineCosts.days7 - baselineToday.headlineCosts.days7 - 1.7) < 1e-9,
       'old and dateless usage stay out of the recent headline');
 

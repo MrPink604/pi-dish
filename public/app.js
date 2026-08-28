@@ -528,6 +528,9 @@ let usageRange = '30', usageTimer = null, usageData = null, usageChart = null, u
 let usageHostErrors = []; // hosts that did not answer the last fan-out
 let usageHostPending = []; // hosts the current fan-out is still waiting on
 let usageSort = localStorage.getItem('pi-dish-usage-sort') === 'tokens' ? 'tokens' : 'cost';
+// Chart stacking pivot: by model (identity) or by cost bucket (read/cached/
+// output/cache write). Client-side only — same payload, no refetch.
+let usageStack = localStorage.getItem('pi-dish-usage-stack') === 'buckets' ? 'buckets' : 'models';
 let usageModelFilter = new Set(); // multi-select model refs; empty = all models
 let settingsRenderSeq = 0, usageFetchSeq = 0, spendFetchSeq = 0;
 
@@ -4188,6 +4191,12 @@ function setUsageSort(sort) {
   localStorage.setItem('pi-dish-usage-sort', sort);
   loadUsageView();
 }
+function setUsageStack(stack) {
+  if (usageStack === stack) return;
+  usageStack = stack;
+  localStorage.setItem('pi-dish-usage-stack', stack);
+  if (usageData) renderUsageView(usageData);
+}
 
 // Model filter (multi-select): clicking rows in the Models section toggles
 // refs in/out. Applied server-side — the workspace/session groups only exist
@@ -4278,6 +4287,20 @@ function usageMetricValue(bucket, metric) {
   return bucket.calls || 0;
 }
 const USAGE_METRIC_LABELS = { cost: 'Estimated spend', tokens: 'Tokens', calls: 'Calls' };
+// Cost attribution buckets, in legend/stack order: prompt-side reads split
+// into uncached input and cached reads, then generation and cache writes.
+const USAGE_COST_BUCKETS = [
+  ['input', 'Read', 'c1'],
+  ['cacheRead', 'Cached read', 'c2'],
+  ['output', 'Output', 'c3'],
+  ['cacheWrite', 'Cache write', 'c4'],
+];
+// Compact per-bucket cost list for titles and detail rows; null when nothing
+// is priced so callers can fall back to the total-only display.
+function usageCostBreakdown(costs) {
+  if (!costs || !Number.isFinite(costs.total)) return null;
+  return USAGE_COST_BUCKETS.map(([key, label]) => `${label} ${formatEstimatedCost(costs[key])}`).join(' · ');
+}
 function usageModelValue(m, metric) {
   if (metric === 'cost') return Number.isFinite(m.cost) ? m.cost : 0;
   if (metric === 'tokens') return usageTokensTotal(m.tokens);
@@ -4305,8 +4328,14 @@ function renderUsageView(d) {
   const hu = d.headlineCostUnavailable || {};
   const budget = d.monthlyBudgetUsd;
 
+  const hbb = d.headlineCostsByBucket || {};
   const kpis = [['Today', 'today'], ['Last 7 days', 'days7'], ['Last 30 days', 'days30'], ['This month', 'month']]
-    .map(([label, key]) => `<div class="usage-kpi"${hu[key] ? ` title="${hu[key]} unpriced calls are omitted from this estimate"` : ''}><small>${label}</small><strong>${formatUsageCost(h[key], hu[key])}</strong></div>`).join('');
+    .map(([label, key]) => {
+      // Hover pivots the window's spend into its four cost buckets.
+      const title = [usageCostBreakdown(hbb[key]),
+        hu[key] ? `${hu[key]} unpriced calls are omitted from this estimate` : null].filter(Boolean).join('\n');
+      return `<div class="usage-kpi"${title ? ` title="${escapeHtml(title)}"` : ''}><small>${label}</small><strong>${formatUsageCost(h[key], hu[key])}</strong></div>`;
+    }).join('');
 
   let budgetHtml = '';
   if (budget) {
@@ -4321,11 +4350,6 @@ function renderUsageView(d) {
     }
   }
 
-  const ranges = USAGE_RANGES
-    .map(([v, l]) => `<button class="usage-range-btn${usageRange === v ? ' active' : ''}" data-range="${v}">${l}</button>`).join('');
-  const sortCtl = `<span class="usage-sort"><small>Show</small>${[['cost', 'Cost'], ['tokens', 'Tokens']]
-    .map(([v, l]) => `<button class="usage-range-btn${usageSort === v ? ' active' : ''}" data-sort="${v}">${l}</button>`).join('')}</span>`;
-
   const summary = `<div class="usage-total-line"><strong>${formatUsageCost(t.costs?.total, t.costUnavailable?.total)}</strong> · ${t.calls || 0} calls · ${formatTokens(usageTokensTotal(t.tokens))} tokens in ${USAGE_RANGE_LABELS[d.range] || 'the selected range'}</div>` +
     `<div class="usage-token-line">${formatTokens(t.tokens?.input)} in · ${formatTokens(t.tokens?.output)} out · cache ${formatCacheStat(t.tokens?.cacheRead, t.tokens?.cacheWrite, t.tokens?.input)}</div>`;
   const filterNote = usageModelFilter.size
@@ -4336,6 +4360,10 @@ function renderUsageView(d) {
   // breakdown bars all plot it: tokens when that toggle is chosen, else
   // spend, else calls when nothing in range carries a cost.
   const metric = usageSort === 'tokens' ? 'tokens' : Number.isFinite(t.costs?.total) && t.costs.total > 0 ? 'cost' : 'calls';
+  const ranges = USAGE_RANGES
+    .map(([v, l]) => `<button class="usage-range-btn${usageRange === v ? ' active' : ''}" data-range="${v}">${l}</button>`).join('');
+  const sortCtl = `<span class="usage-sort"><small>Show</small>${[['cost', 'Cost'], ['tokens', 'Tokens']]
+    .map(([v, l]) => `<button class="usage-range-btn${usageSort === v ? ' active' : ''}" data-sort="${v}">${l}</button>`).join('')}</span>`;
   // Chart model: series slots follow the range's top *active* models (server
   // sort order; the model filter narrows the palette to the selected refs) so
   // the chart, its legend, and the model-share section all agree on colors.
@@ -4343,8 +4371,14 @@ function renderUsageView(d) {
   const daily = d.daily || [];
   const buckets = daily.length > 90 ? aggregateUsageWeekly(daily) : daily;
   const seriesRefs = activeModels.slice(0, 5).map(m => m.key);
-  usageChart = { buckets, seriesRefs, metric, activeModelCount: activeModels.length };
+  usageChart = { buckets, seriesRefs, metric, activeModelCount: activeModels.length, stack: metric === 'cost' ? usageStack : 'models' };
   const showChart = d.range !== '1' && buckets.length > 1 && (t.calls || 0) > 0;
+  // The stack pivot only exists when the chart plots spend: bucket stacking
+  // of a token/call chart would be a second, different metric.
+  const stackCtl = showChart && metric === 'cost'
+    ? `<span class="usage-sort"><small>Stack</small>${[['models', 'Models'], ['buckets', 'Cost buckets']]
+      .map(([v, l]) => `<button class="usage-range-btn${usageChart.stack === v ? ' active' : ''}" data-stack="${v}">${l}</button>`).join('')}</span>`
+    : '';
   const chartSection = showChart
     ? `<section class="usage-section"><h4>${USAGE_METRIC_LABELS[metric]} per ${buckets === daily ? 'day' : 'week'}</h4><div class="usage-chart" id="usageChart"></div></section>`
     : '';
@@ -4356,9 +4390,10 @@ function renderUsageView(d) {
     ${d.indexing ? '<div class="usage-notice">History is indexing; totals will refresh…</div>' : ''}
     ${usageHostErrors.length ? `<div class="usage-notice">Not counted: ${escapeHtml(usageHostErrors.join(', '))} did not answer.</div>` : ''}
     ${usageHostPending.length ? `<div class="usage-notice">Still counting ${escapeHtml(usageHostPending.join(', '))}…</div>` : ''}
-    <div class="usage-ranges">${ranges}${sortCtl}</div>
+    <div class="usage-ranges">${ranges}${sortCtl}${stackCtl}</div>
     ${(t.calls || 0) === 0 ? '<div class="usage-state">No usage in this range.</div>' : summary}
     ${filterNote}
+    ${usageBucketShareHtml(t)}
     ${chartSection}
     <div id="usageDayDetail"></div>
     ${usageModelShareHtml(d, metric, seriesRefs)}
@@ -4370,6 +4405,7 @@ function renderUsageView(d) {
   `;
   body.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => setUsageRange(b.dataset.range)));
   body.querySelectorAll('[data-sort]').forEach(b => b.addEventListener('click', () => setUsageSort(b.dataset.sort)));
+  body.querySelectorAll('[data-stack]').forEach(b => b.addEventListener('click', () => setUsageStack(b.dataset.stack)));
   body.querySelector('[data-clear-models]')?.addEventListener('click', clearUsageModelFilter);
   body.querySelectorAll('[data-model-ref]').forEach(row => {
     row.addEventListener('click', () => toggleUsageModelFilter(row.dataset.modelRef));
@@ -4395,6 +4431,7 @@ function drawUsageChart() {
   const holder = document.getElementById('usageChart');
   if (!holder || !usageChart) return;
   const { buckets, seriesRefs, metric } = usageChart;
+  const stackBuckets = usageChart.stack === 'buckets';
   const width = Math.max(280, holder.clientWidth || 0);
   const max = Math.max(...buckets.map(b => usageMetricValue(b, metric)));
   const { step, top, ticks } = niceTicks(max);
@@ -4430,16 +4467,25 @@ function drawUsageChart() {
   for (let i = 0; i < n; i++) {
     const b = buckets[i];
     const total = usageMetricValue(b, metric);
-    const byRef = new Map((b.models || []).map(m => [m.ref, m]));
     const segs = [];
-    let known = 0;
-    seriesRefs.forEach((ref, s) => {
-      const v = byRef.has(ref) ? usageModelValue(byRef.get(ref), metric) : 0;
-      known += v;
-      if (v > 0) segs.push({ cls: 's' + (s + 1), v });
-    });
-    const other = Math.max(0, total - known);
-    if (other > 0) { segs.push({ cls: 'sother', v: other }); anyOther = true; }
+    if (stackBuckets) {
+      // Bucket mode: the four cost components sum exactly to the known
+      // subtotal the bar plots, so there is no folded "other" tail.
+      USAGE_COST_BUCKETS.forEach(([key, , cls]) => {
+        const v = Number.isFinite(b.costs?.[key]) ? b.costs[key] : 0;
+        if (v > 0) segs.push({ cls, v });
+      });
+    } else {
+      const byRef = new Map((b.models || []).map(m => [m.ref, m]));
+      let known = 0;
+      seriesRefs.forEach((ref, s) => {
+        const v = byRef.has(ref) ? usageModelValue(byRef.get(ref), metric) : 0;
+        known += v;
+        if (v > 0) segs.push({ cls: 's' + (s + 1), v });
+      });
+      const other = Math.max(0, total - known);
+      if (other > 0) { segs.push({ cls: 'sother', v: other }); anyOther = true; }
+    }
 
     const x = margin.left + band * i + (band - barW) / 2;
     const label = (b.days > 1 ? `Week of ${formatUsageDay(b.day)}` : formatUsageDay(b.day, 'long')) + ': ' +
@@ -4466,9 +4512,11 @@ function drawUsageChart() {
     parts.push(`<g class="usage-col${b.day === usageSelectedDay ? ' selected' : ''}" data-i="${i}" tabindex="0" role="button" aria-label="${escapeHtml(label)}"><rect class="hit" x="${margin.left + band * i}" y="${margin.top}" width="${band.toFixed(2)}" height="${plotH}"/>${seg.join('')}</g>`);
   }
 
-  const legendItems = seriesRefs.map((ref, i) =>
-    `<span class="usage-legend-item" title="${escapeHtml(ref)}"><i class="swatch s${i + 1}"></i>${escapeHtml(shortModelName(ref))}</span>`);
-  if (anyOther || (usageChart.activeModelCount || 0) > seriesRefs.length)
+  const legendItems = stackBuckets
+    ? USAGE_COST_BUCKETS.map(([, label, cls]) => `<span class="usage-legend-item"><i class="swatch ${cls}"></i>${escapeHtml(label)}</span>`)
+    : seriesRefs.map((ref, i) =>
+      `<span class="usage-legend-item" title="${escapeHtml(ref)}"><i class="swatch s${i + 1}"></i>${escapeHtml(shortModelName(ref))}</span>`);
+  if (!stackBuckets && (anyOther || (usageChart.activeModelCount || 0) > seriesRefs.length))
     legendItems.push('<span class="usage-legend-item"><i class="swatch sother"></i>other</span>');
 
   holder.innerHTML = `<svg width="${width}" height="${height}" role="img" aria-label="${USAGE_METRIC_LABELS[metric]} per ${buckets[0]?.days > 1 ? 'week' : 'day'}">${parts.join('')}</svg>` +
@@ -4515,6 +4563,10 @@ function renderUsageDayDetail() {
     ['Calls', String(bucket.calls || 0)],
     ['Tokens in / out', `${formatTokens(tok.input)} / ${formatTokens(tok.output)}`],
     ['Cache', formatCacheStat(tok.cacheRead, tok.cacheWrite, tok.input)],
+    // Per-bucket spend keeps the day detail pivoted like the range totals.
+    ...(Number.isFinite(bucket.costs?.total)
+      ? USAGE_COST_BUCKETS.map(([key, label]) => [label, formatEstimatedCost(bucket.costs[key])])
+      : []),
   ].map(([k, v]) => `<div><small>${k}</small><strong>${v}</strong></div>`).join('');
   const slotFor = ref => {
     const i = (usageChart?.seriesRefs || []).indexOf(ref);
@@ -4537,6 +4589,26 @@ function renderUsageDayDetail() {
     ${rows || '<small class="usage-empty">No usage this day.</small>'}
   </section>`;
   holder.querySelector('[data-close-day]').addEventListener('click', () => toggleUsageDay(usageSelectedDay));
+}
+
+// Part-to-whole share of the range total across the four cost buckets: one
+// stacked bar plus per-bucket amounts, so every cost view answers "where did
+// the spend go" (read vs cached read vs output vs cache write) without a
+// hover. Follows the model filter through `totals`; unpriced calls stay out
+// of the bar and are named in the heading, like the total line's `*`.
+function usageBucketShareHtml(t) {
+  if (!Number.isFinite(t.costs?.total) || t.costs.total <= 0) return '';
+  const total = t.costs.total, unpriced = t.costUnavailable?.total || 0;
+  const segs = [], legend = [];
+  for (const [key, label, cls] of USAGE_COST_BUCKETS) {
+    const v = Number.isFinite(t.costs[key]) ? t.costs[key] : 0;
+    const share = v / total;
+    if (share > 0.004) segs.push(`<span class="${cls}" style="flex-grow:${(share * 1000).toFixed(1)}" title="${escapeHtml(label)}"></span>`);
+    legend.push(`<span class="usage-legend-item"><i class="swatch ${cls}"></i>${escapeHtml(label)} <b>${formatEstimatedCost(v)}</b> <small>${Math.round(share * 100)}%</small></span>`);
+  }
+  return `<section class="usage-section"><h4>Spend by bucket${unpriced ? ` <small class="usage-hint">${unpriced} unpriced call${unpriced === 1 ? '' : 's'} omitted</small>` : ''}</h4>
+    <div class="usage-share-bar">${segs.join('')}</div>
+    <div class="usage-legend">${legend.join('')}</div></section>`;
 }
 
 // Part-to-whole share of the range by model: one horizontal stacked bar
@@ -4569,7 +4641,8 @@ function usageModelShareHtml(d, metric, seriesRefs) {
     const pct = share > 0 ? (share * 100 < 1 ? (share * 100).toFixed(1) : Math.round(share * 100)) + '%' : '—';
     const spend = `${formatUsageCost(m.costs?.total, m.unpricedCalls)}${m.unpricedCalls ? ` · ${m.unpricedCalls} unpriced` : ''}`;
     const detail = usageTokensTotal(m.tokens) > 0 ? ` · ${usageTokensDetail(m.tokens)}` : '';
-    return `<div class="usage-row model-toggle${filtered ? (on ? ' on' : ' off') : ''}" data-model-ref="${escapeHtml(m.key)}" role="button" tabindex="0" aria-pressed="${on}" title="${escapeHtml(m.key)} — click to toggle model filter">
+    const breakdown = usageCostBreakdown(m.costs);
+    return `<div class="usage-row model-toggle${filtered ? (on ? ' on' : ' off') : ''}" data-model-ref="${escapeHtml(m.key)}" role="button" tabindex="0" aria-pressed="${on}" title="${escapeHtml([m.key, breakdown].filter(Boolean).join('\n'))} — click to toggle model filter">
       <i class="swatch ${on ? slotFor(m.key) : 'soff'}"></i>
       <span class="usage-row-name">${escapeHtml(shortModelName(m.model || m.key))}<small>${escapeHtml(m.provider || '')}</small></span>
       <span class="usage-row-meta">${pct} · ${m.calls} calls · ${formatTokens(usageTokensTotal(m.tokens))} tok${detail} · ${escapeHtml(spend)}</span>
@@ -4602,7 +4675,8 @@ function usageGroupListHtml(title, rows, kind, metric) {
     // machines is two different rows.
     const hostTag = isMultiHost() && x.hostLabel ? `<small class="usage-row-host">${escapeHtml(x.hostLabel)}</small>` : '';
     const detail = usageTokensTotal(x.tokens) > 0 ? ` · ${usageTokensDetail(x.tokens)}` : '';
-    return `<div class="usage-row usage-bar-row${kind === 'session' ? ' clickable' : ''}"${attrs} title="${escapeHtml(x.key || x.name || x.id)}">
+    const breakdown = usageCostBreakdown(x.costs);
+    return `<div class="usage-row usage-bar-row${kind === 'session' ? ' clickable' : ''}"${attrs} title="${escapeHtml([x.key || x.name || x.id, breakdown].filter(Boolean).join('\n'))}">
       <span class="usage-row-name">${escapeHtml(name)}${sub ? `<small>${escapeHtml(sub)}</small>` : ''}${hostTag}</span>
       <span class="usage-row-meta">${x.calls} calls · ${formatTokens(usageTokensTotal(x.tokens))} tok${detail} · ${escapeHtml(spend)}</span>
       <span class="usage-row-bar" style="width:${(val(x) / maxV * 100).toFixed(1)}%"></span>
@@ -4638,18 +4712,24 @@ function showUsageTooltip(bucket, e) {
     : metric === 'tokens' ? `${formatTokens(usageTokensTotal(bucket.tokens))} tokens · ${bucket.calls || 0} calls`
     : `${bucket.calls} calls`;
   el.append(head, total);
-  const seriesRefs = usageChart?.seriesRefs || [];
-  const byRef = new Map((bucket.models || []).map(m => [m.ref, m]));
   const rows = [];
-  seriesRefs.forEach((ref, i) => {
-    const m = byRef.get(ref);
-    if (m) rows.push(['s' + (i + 1), shortModelName(ref), usageModelValue(m, metric)]);
-  });
-  let otherV = 0, extra = 0;
-  for (const m of bucket.models || []) {
-    if (!seriesRefs.includes(m.ref)) { otherV += usageModelValue(m, metric); extra++; }
+  if (usageChart?.stack === 'buckets' && metric === 'cost') {
+    USAGE_COST_BUCKETS.forEach(([key, label, cls]) => {
+      rows.push([cls, label, Number.isFinite(bucket.costs?.[key]) ? bucket.costs[key] : 0]);
+    });
+  } else {
+    const seriesRefs = usageChart?.seriesRefs || [];
+    const byRef = new Map((bucket.models || []).map(m => [m.ref, m]));
+    seriesRefs.forEach((ref, i) => {
+      const m = byRef.get(ref);
+      if (m) rows.push(['s' + (i + 1), shortModelName(ref), usageModelValue(m, metric)]);
+    });
+    let otherV = 0, extra = 0;
+    for (const m of bucket.models || []) {
+      if (!seriesRefs.includes(m.ref)) { otherV += usageModelValue(m, metric); extra++; }
+    }
+    if (extra) rows.push(['sother', `other (${extra} model${extra > 1 ? 's' : ''})`, otherV]);
   }
-  if (extra) rows.push(['sother', `other (${extra} model${extra > 1 ? 's' : ''})`, otherV]);
   for (const [cls, name, v] of rows) {
     const row = document.createElement('div');
     row.className = 'tt-row';

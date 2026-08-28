@@ -1517,6 +1517,8 @@ function usagePayload(over = {}) {
       sessions: [{ id: 's1', name: 'one', workspace: '/home/u/proj', ...usageBucket(), priced: true, unpricedCalls: 0 }],
     },
     headlineCosts: { today: 0.3, days7: 0.3, days30: 0.3, all: 0.3, month: 0.3 },
+    headlineCostsByBucket: Object.fromEntries(['today', 'days7', 'days30', 'all', 'month']
+      .map(k => [k, { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.3 }])),
     headlineCostUnavailable: { today: 0, days7: 0, days30: 0, all: 0, month: 0 },
     daily: [{ day: '2026-08-21', ...usageBucket(), models: [{ ref: 'anthropic/opus', provider: 'anthropic', model: 'opus', calls: 2, cost: 0.3, costUnavailable: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, reasoning: 0 } }] }],
     unpricedModelCalls: 0, indexing: false, discoveryTruncated: false, discoverySkipped: 0,
@@ -1574,6 +1576,9 @@ test('mergeUsageSummaries sums totals, days, and per-model day buckets', () => {
   assert.equal(merged.totals.tokens.input, 20);
   assert.ok(Math.abs(merged.totals.costs.total - 0.6) < 1e-9);
   assert.equal(merged.headlineCosts.month.toFixed(2), '0.60', 'KPI headlines sum');
+  assert.ok(Math.abs(merged.headlineCostsByBucket.month.total - 0.6) < 1e-9 &&
+    Math.abs(merged.headlineCostsByBucket.month.input - 0.2) < 1e-9,
+    'headline cost buckets sum per component');
   assert.deepEqual(merged.daily.map(d => d.day), ['2026-08-20', '2026-08-21'], 'days merge chronologically');
   const shared = merged.daily.find(d => d.day === '2026-08-21');
   assert.equal(shared.calls, 4);

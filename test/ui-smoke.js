@@ -2992,6 +2992,34 @@ let remoteHost = null; // second pi-dish (multi-host section)
       'chart draws axis tick labels');
     check((await desktop.locator('#usageChart svg').getAttribute('aria-label')).startsWith('Estimated spend'),
       'a positive known subtotal keeps cost chart geometry');
+    // Cost bucket pivot: the range totals break into read/cached/output/
+    // cache-write, and the stack toggle re-pivots the chart itself.
+    check(await desktop.evaluate(() => {
+      const items = [...document.querySelectorAll('#usageViewBody .usage-section .usage-share-bar + .usage-legend .usage-legend-item')]
+        .map(el => el.textContent);
+      return ['Read', 'Cached read', 'Output', 'Cache write'].every(label =>
+        items.some(text => text.includes(label) && text.includes('~$')));
+    }), 'spend-by-bucket section prices all four cost buckets');
+    check(await desktop.evaluate(() =>
+      [...document.querySelectorAll('#usageViewBody .usage-kpi')]
+        .some(k => (k.getAttribute('title') || '').includes('Cached read'))),
+      'KPI tiles pivot their window spend into buckets on hover');
+    check(await desktop.evaluate(() =>
+      [...document.querySelectorAll('#usageViewBody .usage-row.model-toggle')]
+        .some(r => (r.getAttribute('title') || '').includes('Cache write'))),
+      'model rows carry their bucket breakdown in the tooltip');
+    await desktop.click('[data-stack="buckets"]');
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('#usageChart .usage-legend-item')].some(el => el.textContent === 'Cached read') &&
+      document.querySelector('#usageChart .seg.c2, #usageChart .seg.c1, #usageChart .seg.c3') !== null,
+      null, { timeout: 5000 });
+    check(await desktop.evaluate(() => localStorage.getItem('pi-dish-usage-stack') === 'buckets'),
+      'bucket stacking re-pivots the chart and persists device-locally');
+    await desktop.click('[data-stack="models"]');
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('#usageChart .usage-legend-item')].some(el => el.textContent.includes('smoke-model')),
+      null, { timeout: 5000 });
+    check(true, 'model stacking restores the per-model legend');
     // Event-driven: while the session index is still settling, the view
     // repolls at 1s and each re-render can shift the chart's day axis (the
     // 'all' range starts at the earliest *indexed* day), so a bucket index

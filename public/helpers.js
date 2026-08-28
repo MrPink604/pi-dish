@@ -1469,6 +1469,7 @@ function mergeUsageSummaries(list) {
   let unpricedModelCalls = 0;
   const headlineKeys = new Set();
   const headlineCosts = {}, headlineCostUnavailable = {};
+  const headlineCostsByBucket = {};
   const days = new Map();          // day -> { bucket, models: Map(ref -> row) }
   const models = new Map();        // ref -> bucket
   const workspaces = new Map();    // host + cwd -> bucket
@@ -1486,6 +1487,12 @@ function mergeUsageSummaries(list) {
       if (Number.isFinite(value)) {
         headlineCosts[key] = (Number.isFinite(headlineCosts[key]) ? headlineCosts[key] : 0) + value;
       }
+    }
+    for (const [key, costs] of Object.entries(summary.headlineCostsByBucket || {})) {
+      headlineKeys.add(key);
+      const row = headlineCostsByBucket[key] ||
+        (headlineCostsByBucket[key] = Object.fromEntries(USAGE_MERGE_COST_KEYS.map(k => [k, 0])));
+      for (const k of USAGE_MERGE_COST_KEYS) if (Number.isFinite(costs?.[k])) row[k] += costs[k];
     }
     for (const day of summary.daily || []) {
       if (!day || !day.day) continue;
@@ -1571,6 +1578,7 @@ function mergeUsageSummaries(list) {
       sessions: rank([...sessionRows.values()]),
     },
     headlineCosts: Object.fromEntries([...headlineKeys].map(k => [k, headlineCosts[k] ?? null])),
+    headlineCostsByBucket: Object.fromEntries([...headlineKeys].map(k => [k, headlineCostsByBucket[k] || null])),
     headlineCostUnavailable: Object.fromEntries([...headlineKeys].map(k => [k, headlineCostUnavailable[k] || 0])),
     daily,
     unpricedModelCalls,

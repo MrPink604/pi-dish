@@ -85,7 +85,10 @@ Rules of thumb:
   device-local metadata density controls and click-through token/cache/cost
   details. The global Settings → Usage view summarizes estimated spend by
   day, model, workspace, and session, with an optional server-wide monthly
-  warning. Spend is estimated from each session harness's cached model-catalog
+  warning, and pivots every cost into read (uncached), cached read, output,
+  and cache-write buckets — a Spend-by-bucket section, a Models/Cost-buckets
+  chart stack toggle, and breakdown tooltips on the KPI tiles and rows.
+  Spend is estimated from each session harness's cached model-catalog
   pricing, not provider billing; an asterisk marks the known subtotal when
   calls with unavailable pricing were omitted, and their count is shown.
 - **Reading tools** — in-session search (Ctrl+F, auto-pages older messages
