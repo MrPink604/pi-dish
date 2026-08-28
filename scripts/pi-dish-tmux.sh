@@ -24,27 +24,49 @@ managed_window_exists() {
   tmux has-session -t "$target" 2>/dev/null
 }
 
-server_pids() {
+# A running instance is a supervisor plus the node server it keeps alive. Both
+# are found by scanning /proc rather than by tmux window: a supervisor started
+# against a different tmux socket - or none at all - respawns the server every
+# few seconds just the same, and one left behind by `stop` busy-loops on
+# EADDRINUSE for as long as the replacement instance lives.
+service_pids() {
   local proc_dir cwd
   local -a argv
 
   for proc_dir in /proc/[0-9]*; do
-    cwd=$(readlink -- "$proc_dir/cwd" 2>/dev/null) || continue
-    [[ $cwd == "$root" || (-n $legacy_root && $cwd == "$legacy_root") ]] || continue
     argv=()
     mapfile -d '' -t argv < "$proc_dir/cmdline" 2>/dev/null || true
     ((${#argv[@]} >= 2)) || continue
+    # A supervisor is identified by the script it runs, which is already
+    # root-scoped; its cwd is not load-bearing. Matching argv[1] exactly also
+    # keeps the tmux server that launched it (runner at a later argv slot) out.
+    if [[ ${argv[1]} == "$runner" ||
+          (-n $legacy_root && ${argv[1]} == "$legacy_root/scripts/supervise-tailnet.sh") ]]; then
+      printf 'supervisor %s\n' "${proc_dir##*/}"
+      continue
+    fi
+    cwd=$(readlink -- "$proc_dir/cwd" 2>/dev/null) || continue
+    [[ $cwd == "$root" || (-n $legacy_root && $cwd == "$legacy_root") ]] || continue
     [[ ${argv[0]##*/} == node ]] || continue
     [[ ${argv[1]} == server.js || ${argv[1]} == "$cwd/server.js" ]] || continue
-    printf '%s\n' "${proc_dir##*/}"
+    printf 'server %s\n' "${proc_dir##*/}"
   done
 }
 
-stop_server_processes() {
-  local pid alive
-  local -a pids=()
+stop_service_processes() {
+  local kind pid alive
+  local -a supervisors=() servers=() pids=()
 
-  mapfile -t pids < <(server_pids)
+  while read -r kind pid; do
+    case $kind in
+      supervisor) supervisors+=("$pid") ;;
+      server) servers+=("$pid") ;;
+    esac
+  done < <(service_pids)
+
+  # Supervisors first: killing a server while its supervisor lives only buys a
+  # restart a few seconds later.
+  pids=("${supervisors[@]}" "${servers[@]}")
   ((${#pids[@]})) || return 0
 
   kill -TERM "${pids[@]}" 2>/dev/null || true
@@ -66,7 +88,7 @@ stop_service() {
   if managed_window_exists; then
     tmux kill-window -t "$target"
   fi
-  stop_server_processes
+  stop_service_processes
 }
 
 load_endpoint() {

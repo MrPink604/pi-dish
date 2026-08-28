@@ -30,6 +30,19 @@ PI_DISH_TERMINAL=${PI_DISH_TERMINAL:-1}
 PATH="$HOME/.local/bin:$PATH"
 export HOST PORT PI_DISH_TERMINAL PATH
 
+# One server per endpoint. Whoever holds the lock owns HOST:PORT; a duplicate
+# launch - a supervisor left behind on another tmux socket, a second checkout,
+# a hand-run launcher - exits 3 instead of spinning on EADDRINUSE. The fd
+# survives the exec below, so the lock is held exactly as long as the server
+# runs, and is released by the kernel however it dies.
+lock_file="${XDG_RUNTIME_DIR:-/tmp}/pi-dish-${HOST//[^[:alnum:]._-]/_}-$PORT.lock"
+exec {lock_fd}>"$lock_file"
+if ! flock -n "$lock_fd"; then
+  printf 'run-tailnet.sh: %s:%s is already served by another pi-dish (%s); not starting\n' \
+    "$HOST" "$PORT" "$lock_file" >&2
+  exit 3
+fi
+
 printf 'pi-dish -> http://%s:%s (terminal %s)\n' \
   "$HOST" "$PORT" "$([[ $PI_DISH_TERMINAL == 1 ]] && printf enabled || printf disabled)"
 if [[ -n ${PI_DISH_SHARE_PORT:-} ]]; then
