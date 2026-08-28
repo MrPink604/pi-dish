@@ -127,21 +127,37 @@ wait_until_healthy() {
 }
 
 start_service() {
+  local bootstrap_session= rc=0
+
+  # Starting the default tmux server sources its plugins. tmux-continuum then
+  # restores saved sessions after a short delay and can replace a server pane
+  # created immediately here. Keep a disposable session alive while that
+  # one-time restore settles, then reconcile the managed window afterward.
+  if ! tmux list-sessions >/dev/null 2>&1; then
+    bootstrap_session="${session}-bootstrap-$$"
+    tmux new-session -d -s "$bootstrap_session" -n bootstrap 'sleep 30'
+    sleep "${PI_DISH_TMUX_STARTUP_DELAY:-2}"
+  fi
+
   if managed_window_exists && healthy; then
     printf 'pi-dish is already healthy at http://%s:%s in tmux %s:%s\n' \
       "$HOST" "$PORT" "$session" "$window"
-    return 0
+  else
+    stop_service
+    if tmux has-session -t "=$session" 2>/dev/null; then
+      tmux new-window -d -t "=$session:" -n "$window" -c "$root" \
+        -e "PI_DISH_ENV_FILE=$env_file" "$runner"
+    else
+      tmux new-session -d -s "$session" -n "$window" -c "$root" \
+        -e "PI_DISH_ENV_FILE=$env_file" "$runner"
+    fi
+    wait_until_healthy || rc=$?
   fi
 
-  stop_service
-  if tmux has-session -t "=$session" 2>/dev/null; then
-    tmux new-window -d -t "=$session:" -n "$window" -c "$root" \
-      -e "PI_DISH_ENV_FILE=$env_file" "$runner"
-  else
-    tmux new-session -d -s "$session" -n "$window" -c "$root" \
-      -e "PI_DISH_ENV_FILE=$env_file" "$runner"
+  if [[ -n $bootstrap_session ]]; then
+    tmux kill-session -t "=$bootstrap_session" 2>/dev/null || true
   fi
-  wait_until_healthy
+  return "$rc"
 }
 
 require_tmux
