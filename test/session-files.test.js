@@ -10,10 +10,25 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const SF = require('../lib/session-files.js');
-
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-sf-'));
 test.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+// Hermetic pricing: statCached defaults sessions to the pi harness, whose
+// catalog estimate reads ~/.pi/dish/pricing/pi.json — the host's real rate
+// card drifts (upstream catalogs now carry real zai API rates) and used to
+// re-price these fixtures. Pin HOME and seed the scenario under test: ZAI
+// Coding Plan entries with deliberate zero rates (unpriced, never free),
+// every other selector missing from the catalog.
+process.env.HOME = tmpDir;
+fs.mkdirSync(path.join(tmpDir, '.pi', 'dish', 'pricing'), { recursive: true });
+fs.writeFileSync(path.join(tmpDir, '.pi', 'dish', 'pricing', 'pi.json'), JSON.stringify({
+  updatedAt: Date.now(),
+  models: ['glm-4.7', 'glm-5.2', 'glm-5.2-highspeed'].map(id => ({
+    provider: 'zai', id, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  })),
+}) + '\n');
+
+const SF = require('../lib/session-files.js');
 
 let fileSeq = 0;
 function writeSession(entries) {
