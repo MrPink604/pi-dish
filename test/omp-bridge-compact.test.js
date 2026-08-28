@@ -45,6 +45,10 @@ async function startFakeHost(hasCompact, {
     env: {
       ...process.env,
       HOME: home,
+      // See omp-tree-bridge.test.js: a fake host must not adopt (and rename)
+      // the tmux pane running the tests.
+      TMUX: '',
+      TMUX_PANE: '',
       PI_DISH_SOCKET_DIR: socketDir,
       FAKE_OMP_SESSION_FILE: sessionFile,
       FAKE_OMP_COMPACT_CALL: callFile,

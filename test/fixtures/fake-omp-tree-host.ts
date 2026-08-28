@@ -21,6 +21,9 @@ fs.writeFileSync(sessionFile, [
 
 let leafId: string | null = "u2";
 let insideCommand = false;
+// Which trigger produced the command context servicing an operation: OMP's
+// TUI builds one for an extension command and one per extension shortcut.
+let trigger: "command" | "shortcut" | null = null;
 
 function tree() {
   const nodes = new Map(entries.map((entry) => [entry.id, { entry, children: [] as any[] }]));
@@ -61,7 +64,7 @@ const plainContext: any = {
 };
 
 function logOperation(value: any) {
-  fs.appendFileSync(operationLog, JSON.stringify(value) + "\n");
+  fs.appendFileSync(operationLog, JSON.stringify({ ...value, trigger }) + "\n");
 }
 
 const commandContext: any = {
@@ -84,6 +87,7 @@ if (mode === "missing-command-api") delete commandContext.navigateTree;
 
 const eventHandlers = new Map<string, Function[]>();
 const commands = new Map<string, any>();
+const shortcuts = new Map<string, any>();
 const fakePi: any = {
   on(event: string, handler: Function) {
     const handlers = eventHandlers.get(event) || [];
@@ -92,6 +96,9 @@ const fakePi: any = {
   },
   registerCommand(name: string, options: any) {
     commands.set(name, { name, source: "extension", ...options });
+  },
+  registerShortcut(chord: string, options: any) {
+    shortcuts.set(chord, { chord, ...options });
   },
   // Match OMP 17.2.15: this public API forwards a user prompt with command
   // expansion disabled, so it cannot be used to invoke our own extension
@@ -124,23 +131,45 @@ const descriptor: BridgeDescriptor = {
   treeCommandOperationTimeoutMs: Number(process.env.FAKE_OMP_TREE_OPERATION_TIMEOUT_MS) || 100,
 };
 
+// Hosts that predate extension shortcuts leave pi-dish on the typed command.
+if (mode === "no-shortcut") delete fakePi.registerShortcut;
+
 createBridge(descriptor)(fakePi);
 for (const handler of eventHandlers.get("session_start") || []) {
   await handler({ type: "session_start" }, plainContext);
 }
 
+// SIGUSR1 stands in for the legacy trigger: pi-dish typing the service
+// command into the pane. SIGUSR2 stands in for the shortcut keypress, which
+// OMP's TUI services with a command context of its own.
 process.on("SIGUSR1", () => {
   if (mode === "acquisition-timeout") return;
   const command = commands.get("dish-tree-service");
   if (!command) return;
   queueMicrotask(async () => {
     insideCommand = true;
+    trigger = "command";
     try {
       await command.handler("", commandContext);
     } finally {
       insideCommand = false;
+      trigger = null;
     }
   });
+});
+
+process.on("SIGUSR2", () => {
+  const shortcut = shortcuts.get("ctrl+alt+shift+f12");
+  if (!shortcut) return;
+  insideCommand = true;
+  trigger = "shortcut";
+  try {
+    shortcut.handler(commandContext);
+  } finally {
+    // The host never awaits a shortcut handler; the bridge must settle each
+    // operation itself. Clear the markers once its microtasks have drained.
+    queueMicrotask(() => { insideCommand = false; trigger = null; });
+  }
 });
 
 process.on("SIGTERM", async () => {

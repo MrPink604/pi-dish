@@ -3684,12 +3684,35 @@ async function navigateLiveTree(sessionId, sess, entryId, opts) {
   }
 }
 
+// The tmux key chord a bridge advertises for its tree service, translated to
+// a tmux send-keys key name. Only F-keys are accepted: they are inert in a
+// TUI and, unlike a name tmux fails to resolve, can never be delivered as
+// literal text into the session's composer.
+const TMUX_CHORD_MODIFIERS = { ctrl: 'C-', alt: 'M-', shift: 'S-' };
+function tmuxKeyForChord(chord) {
+  if (typeof chord !== 'string' || !chord) return null;
+  const parts = chord.toLowerCase().split('+');
+  const base = parts.pop();
+  if (!/^f([1-9]|1[0-2])$/.test(base)) return null;
+  if (parts.some((part) => !TMUX_CHORD_MODIFIERS[part])) return null;
+  const prefix = Object.keys(TMUX_CHORD_MODIFIERS)
+    .filter((modifier) => parts.includes(modifier))
+    .map((modifier) => TMUX_CHORD_MODIFIERS[modifier])
+    .join('');
+  return `${prefix}${base.toUpperCase()}`;
+}
+
 // OMP intentionally exposes branch/navigation only on command contexts, and
 // its public ExtensionAPI.sendUserMessage() bypasses extension-command
-// dispatch. Queue the bridge request first, then type the bridge's internal
-// service command into the exact live TUI pane so OMP creates a legal command
-// context to drain it. Sessions outside a locatable tmux pane retain live tree
-// reads but fail navigation precisely instead of falling back to the Pi SDK.
+// dispatch. Queue the bridge request first, then trigger the bridge's
+// internal tree service in the exact live TUI pane so OMP creates a legal
+// command context to drain it. The trigger is the bridge's registered
+// shortcut, not its command name: send-keys of "/dish-tree-service"
+// concatenates with whatever the user left in the TUI composer, and OMP then
+// sends that line to the model instead of running the command. Only a bridge
+// too old to advertise a chord still gets the typed command. Sessions outside
+// a locatable tmux pane retain live tree reads but fail navigation precisely
+// instead of falling back to the Pi SDK.
 async function navigateLiveOmpTree(sessionId, sess, entryId, opts) {
   const pane = await locatePiPane(sessionId);
   if (!pane) {
@@ -3697,35 +3720,40 @@ async function navigateLiveOmpTree(sessionId, sess, entryId, opts) {
     error.statusCode = 409;
     throw error;
   }
+  const chordKey = tmuxKeyForChord(getRegisteredSession(sessionId)?.treeServiceShortcut);
   const operation = sess.treeNavigate(entryId, opts);
-  // If send-keys fails, the bridge request will reject on its bounded
-  // acquisition timer. Attach a handler now so returning the trigger error
-  // cannot leave that later rejection unhandled.
+  // Either promise may reject while the other is being awaited below; both
+  // are settled here so a losing rejection is never unhandled.
   operation.catch(() => {});
-  try {
-    await new Promise((resolve, reject) => {
-      let timer;
-      const cleanup = () => {
-        clearTimeout(timer);
-        sess.off('tree_operation_queued', onQueued);
-      };
-      const onQueued = (data) => {
-        if (data?.requestId !== operation.requestId) return;
-        cleanup();
-        resolve();
-      };
-      sess.on('tree_operation_queued', onQueued);
-      timer = setTimeout(() => {
-        cleanup();
-        reject(new Error('bridge did not acknowledge the queued tree operation'));
-      }, 2000);
-    });
-    await tmux.sendKeys(pane.socket, pane.paneId, '/dish-tree-service');
-  } catch (cause) {
+  const handoff = new Promise((resolve, reject) => {
+    let timer;
+    const cleanup = () => {
+      clearTimeout(timer);
+      sess.off('tree_operation_queued', onQueued);
+    };
+    const onQueued = (data) => {
+      if (data?.requestId !== operation.requestId) return;
+      cleanup();
+      resolve();
+    };
+    sess.on('tree_operation_queued', onQueued);
+    timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('bridge did not acknowledge the queued tree operation'));
+    }, 2000);
+  }).then(() => (chordKey
+    ? tmux.sendKey(pane.socket, pane.paneId, chordKey)
+    : tmux.sendKeys(pane.socket, pane.paneId, '/dish-tree-service')
+  )).catch((cause) => {
     const error = new Error(`Oh My Pi tree navigation could not acquire its command context: ${cause.message}`);
     error.statusCode = 409;
     throw error;
-  }
+  });
+  handoff.catch(() => {});
+  // A bridge that refuses outright (turn in progress, unknown entry) never
+  // acknowledges a queued operation. Race the two so its precise error wins
+  // instead of being masked by the acknowledgement timeout.
+  await Promise.race([operation, handoff]);
   return operation;
 }
 
@@ -3770,6 +3798,11 @@ app.post('/api/sessions/:id/branch', async (req, res) => {
           // is now the rare case where no capture exists (no prompt or
           // subscribe since the bridge loaded) and no prime path reached it.
           return res.status(409).json({ error: "pi hands out session control only inside command handlers and this session couldn't be primed remotely — send any prompt to it (or run /dish-push once in its TUI), then retry." });
+        }
+        // Refusals about live session state are the caller's to act on
+        // (wait for the turn, or abort it) — not server faults.
+        if (/turn is in progress|compaction is in progress|entry not found/i.test(e.message || '')) {
+          return res.status(409).json({ error: e.message });
         }
         if (identity.harnessId === 'omp' && /timed out/i.test(e.message || '')) {
           return res.status(504).json({ error: e.message });

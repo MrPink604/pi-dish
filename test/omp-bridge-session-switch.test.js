@@ -37,6 +37,10 @@ async function startHost(profile) {
     env: {
       ...process.env,
       HOME: home,
+      // See omp-tree-bridge.test.js: a fake host must not adopt (and rename)
+      // the tmux pane running the tests.
+      TMUX: '',
+      TMUX_PANE: '',
       PI_DISH_SOCKET_DIR: path.join(root, 'sockets'),
       FAKE_SWITCH_PROFILE: profile,
       FAKE_SWITCH_OLD_FILE: oldFile,

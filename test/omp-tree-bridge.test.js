@@ -40,6 +40,11 @@ async function startHost(mode) {
     env: {
       ...process.env,
       HOME: home,
+      // The bridge stamps $TMUX/$TMUX_PANE into its registry entry and renames
+      // that window after the session — inheriting them would rename the pane
+      // running the test suite.
+      TMUX: '',
+      TMUX_PANE: '',
       PI_DISH_SOCKET_DIR: path.join(home, 'sockets'),
       FAKE_OMP_TREE_MODE: mode,
       FAKE_OMP_TREE_LOG: log,
@@ -67,8 +72,12 @@ async function startHost(mode) {
       session,
       async serviceTree() {
         // BridgeSession writes the socket request synchronously, but allow the
-        // fake host's event loop to enqueue it before simulating the TUI
-        // dispatch of /dish-tree-service.
+        // fake host's event loop to enqueue it before simulating the keypress
+        // pi-dish sends into the pane.
+        await delay(25);
+        child.kill('SIGUSR2');
+      },
+      async serviceTreeByCommand() {
         await delay(25);
         child.kill('SIGUSR1');
       },
@@ -118,9 +127,11 @@ test('OMP bridge serializes tree reads and runs navigate/branch only in command 
     assert.equal(branched.leafId, 'u1');
 
     assert.deepEqual(readOperations(host), [
-      { operation: 'navigate', targetId: 'a1', summarize: true, insideCommand: true },
-      { operation: 'branch', entryId: 'u1', insideCommand: true },
+      { operation: 'navigate', targetId: 'a1', summarize: true, insideCommand: true, trigger: 'shortcut' },
+      { operation: 'branch', entryId: 'u1', insideCommand: true, trigger: 'shortcut' },
     ]);
+    assert.equal(host.entry.treeServiceShortcut, 'ctrl+alt+shift+f12',
+      'the registry advertises the chord pi-dish presses instead of typing the command');
     const commands = await host.session.getCommands();
     assert.equal(commands.commands.some((command) => command.name === 'dish-tree-service'), false,
       'the internal service command is not advertised to pi-dish clients');
@@ -149,7 +160,7 @@ test('OMP bridge maps command-context acquisition and operation timeouts to dist
       await host.serviceTree();
       await assert.rejects(operation, /tree navigation timed out after 100ms/);
       assert.deepEqual(readOperations(host), [
-        { operation: 'navigate', targetId: 'a1', summarize: false, insideCommand: true },
+        { operation: 'navigate', targetId: 'a1', summarize: false, insideCommand: true, trigger: 'shortcut' },
       ]);
     } finally {
       await host.stop();
@@ -208,4 +219,21 @@ test('OMP bridge capability-gates missing read and command-context APIs', { skip
       await host.stop();
     }
   });
+});
+
+// A host without extension shortcuts (or a bridge predating them) advertises
+// no chord, and pi-dish falls back to typing the service command.
+test('OMP bridge without shortcut support keeps the typed service command', { skip: !bunAvailable }, async () => {
+  const host = await startHost('no-shortcut');
+  try {
+    assert.equal(host.entry.treeServiceShortcut, null);
+    const operation = host.session.treeNavigate('a1');
+    await host.serviceTreeByCommand();
+    assert.equal((await operation).leafId, 'a1');
+    assert.deepEqual(readOperations(host), [
+      { operation: 'navigate', targetId: 'a1', summarize: false, insideCommand: true, trigger: 'command' },
+    ]);
+  } finally {
+    await host.stop();
+  }
 });

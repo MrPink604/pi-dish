@@ -2748,6 +2748,108 @@ test('live OMP tree routes use tree_read/tree_navigate and the transcript follow
   }
 });
 
+// The trigger a live OMP session actually gets: a keypress. Typing the
+// service command concatenates with an unsent TUI draft, and OMP then sends
+// that line to the model instead of running the command — so a bridge that
+// advertises a chord must never be reached with send-keys text.
+test('live OMP tree navigation presses the advertised service chord and surfaces bridge refusals', async () => {
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const socketPath = path.join(tmpHome, 'dish-omp-chord-test.sock');
+  const bridgeInstanceId = 'omp-chord-server-test';
+  const claim = {
+    protocolVersion: 2,
+    wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+    harnessId: 'omp',
+    nativeSessionId: OMP_SESSION_ID,
+    sessionId: OMP_SESSION_ID,
+    sessionFile: ompSessionFile,
+    bridgeInstanceId,
+    instanceId: bridgeInstanceId,
+    socketPath,
+    pid: process.pid,
+    startTime: processIdentity(process.pid).startTime,
+    spawnToken: null,
+    capabilities: { treeRead: true, treeNavigation: true },
+    cwd: ompCwd,
+    treeServiceShortcut: 'ctrl+alt+shift+f12',
+  };
+  // 'refuse' answers immediately without ever acknowledging a queued
+  // operation, exactly as the bridge does mid-turn or for an unknown entry.
+  let mode = 'service';
+  let pendingNavigation = null;
+  const socks = [];
+  const bridge = net.createServer((sock) => {
+    socks.push(sock);
+    sock.write(JSON.stringify({ type: 'hello', ...claim, turnInProgress: false }) + '\n');
+    let buffer = '';
+    sock.on('data', (chunk) => {
+      buffer += chunk.toString();
+      let newline;
+      while ((newline = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
+        if (!line.trim()) continue;
+        const command = JSON.parse(line);
+        if (command.command !== 'tree_navigate') continue;
+        if (mode === 'refuse') {
+          sock.write(JSON.stringify({
+            type: 'response', id: command.id, command: command.command,
+            success: false, error: 'cannot navigate the tree while a turn is in progress',
+          }) + '\n');
+          continue;
+        }
+        pendingNavigation = { sock, command };
+        sock.write(JSON.stringify({
+          type: 'event', event: 'tree_operation_queued',
+          data: { requestId: command.id, operation: 'navigate' },
+        }) + '\n');
+      }
+    });
+  });
+  await new Promise((resolve) => bridge.listen(socketPath, resolve));
+  const registryPath = path.join(registryDir, 'omp-chord-server-test.json');
+  fs.writeFileSync(registryPath, JSON.stringify(claim));
+  invalidateRegistryCache();
+
+  const originalFindPaneByPid = tmux.findPaneByPid;
+  const originalSendKeys = tmux.sendKeys;
+  const originalSendKey = tmux.sendKey;
+  const typed = [];
+  const pressed = [];
+  tmux.findPaneByPid = async () => ({ socket: '/fake/omp-tmux.sock', paneId: '%42' });
+  tmux.sendKeys = async (socket, paneId, text) => { typed.push({ socket, paneId, text }); };
+  tmux.sendKey = async (socket, paneId, key) => {
+    pressed.push({ socket, paneId, key });
+    const { sock, command } = pendingNavigation;
+    pendingNavigation = null;
+    sock.write(JSON.stringify({
+      type: 'response', id: command.id, command: command.command, success: true,
+      data: { editorText: 'OMP shared prompt', leafId: command.targetId },
+    }) + '\n');
+  };
+  try {
+    const navigate = await post(`/api/sessions/${encodeURIComponent(OMP_ROUTE_ID)}/branch`, { entryId: 'omp-u1' });
+    assert.equal(navigate.status, 200, JSON.stringify(navigate.body));
+    assert.deepEqual(pressed, [{ socket: '/fake/omp-tmux.sock', paneId: '%42', key: 'C-M-S-F12' }]);
+    assert.deepEqual(typed, [], 'no text is ever typed into a pane whose bridge advertises a chord');
+
+    mode = 'refuse';
+    const refused = await post(`/api/sessions/${encodeURIComponent(OMP_ROUTE_ID)}/branch`, { entryId: 'omp-u1' });
+    assert.equal(refused.status, 409, JSON.stringify(refused.body));
+    assert.equal(refused.body.error, 'cannot navigate the tree while a turn is in progress',
+      'a bridge refusal wins over the acknowledgement timeout that would otherwise mask it');
+    assert.equal(pressed.length, 1, 'a refused operation never reaches the pane');
+  } finally {
+    tmux.findPaneByPid = originalFindPaneByPid;
+    tmux.sendKeys = originalSendKeys;
+    tmux.sendKey = originalSendKey;
+    fs.rmSync(registryPath, { force: true });
+    invalidateRegistryCache();
+    for (const sock of socks) sock.destroy();
+    await new Promise((resolve) => bridge.close(resolve));
+  }
+});
+
 test('POST /branch on a live bridge session forwards navigate_tree', async () => {
   const BRIDGE_ID = '2026-07-04T15-00-00-treelive';
   const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');

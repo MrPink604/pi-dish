@@ -245,7 +245,11 @@ export type BridgeDescriptor = {
   // OMP permits branch()/navigateTree() only while an extension command
   // handler is executing. When enabled, socket requests are queued and an
   // internal command services them instead of reusing a command context from
-  // an arbitrary socket callback.
+  // an arbitrary socket callback. Registered extension *shortcuts* get the
+  // same command context (the host TUI builds one per keypress), so the
+  // service is also bound to a key chord — pi-dish presses it instead of
+  // typing the command, which would append to whatever the user has in the
+  // composer and get sent to the model.
   treeCommandContext?: boolean;
   treeCommandAcquireTimeoutMs?: number;
   treeCommandOperationTimeoutMs?: number;
@@ -473,13 +477,23 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // upstream Pi TUI sessions need the captured private AgentSession self-prime
   // below. OMP's public sendUserMessage() deliberately bypasses extension
   // command handling, so pi-dish queues each operation over the socket and
-  // invokes the internal service command through the exact tmux pane.
+  // triggers the internal service through the exact tmux pane — by pressing
+  // the service shortcut, never by typing the command name.
   let commandCtx: any = null;
   function stashCommandCtx(ctx: any) {
     if (ctx && typeof ctx.navigateTree === "function") commandCtx = ctx;
   }
 
   const TREE_SERVICE_COMMAND = "dish-tree-service";
+  // Shortcut handlers receive a full command context, and a keypress cannot
+  // disturb the composer: typing "/dish-tree-service" into a pane whose
+  // composer already holds a draft concatenates with it and OMP sends the
+  // result to the model. F12 with every modifier is inert in a TUI and is
+  // encodable by tmux send-keys; pi-dish reads the chord from the registry.
+  const TREE_SERVICE_SHORTCUT = "ctrl+alt+shift+f12";
+  // Null until the host accepts the registration — the registry entry only
+  // advertises a chord pi-dish can actually press.
+  let treeServiceShortcut: string | null = null;
   type PendingTreeOperation = {
     kind: "navigate" | "branch";
     targetId: string;
@@ -612,14 +626,26 @@ export function createBridge(descriptor: BridgeDescriptor) {
   if (descriptor.treeCommandContext) {
     pi.registerCommand(TREE_SERVICE_COMMAND, {
       // OMP has no public hidden-command flag. Keep this out of the bridge's
-      // command listing below and give it no user-facing description. The
-      // server invokes it through the session's tmux pane after queueing a
-      // socket operation; OMP's public sendUserMessage() deliberately skips
-      // extension-command dispatch and cannot be used to self-trigger it.
+      // command listing below and give it no user-facing description. Kept
+      // for hosts whose shortcut registration is unavailable (and for manual
+      // recovery); the shortcut below is the trigger pi-dish actually uses.
       handler: async (_args: string, ctx: any) => {
         await servicePendingTreeOperations(ctx);
       },
     });
+    // Feature-detected: upstream Pi's ExtensionAPI has no registerShortcut,
+    // and only a host that hands shortcut handlers a command context can
+    // service navigation this way. Advertised through the registry so the
+    // server presses the chord instead of typing the command name.
+    if ("registerShortcut" in pi && typeof pi.registerShortcut === "function") {
+      pi.registerShortcut(TREE_SERVICE_SHORTCUT, {
+        description: "pi-dish remote tree navigation service",
+        // Invoked without await by the host: servicePendingTreeOperations
+        // settles every operation itself and never rejects.
+        handler: (ctx: unknown) => { void servicePendingTreeOperations(ctx); },
+      });
+      treeServiceShortcut = TREE_SERVICE_SHORTCUT;
+    }
   }
 
   // Reload entrypoint: RPC sessions can invoke this via a plain `prompt`
@@ -1261,6 +1287,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       compacting,
       spawnToken: descriptor.spawnToken ?? SPAWN_TOKEN ?? null,
       tmux: TMUX_LOCATION,
+      treeServiceShortcut,
     };
     const sig = JSON.stringify(entry);
     if (sig === lastRegistrySig) return;
