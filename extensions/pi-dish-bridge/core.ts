@@ -1007,6 +1007,47 @@ export function createBridge(descriptor: BridgeDescriptor) {
       statusKey: "prewalk",
       statusText: targetName ? `Prewalk → ${targetName}${thinking}` : undefined,
     });
+
+    emitExtensionUIRequest({ method: "setStatus", statusKey: "goal", statusText: renderGoalStatus(projection.goal) });
+    emitExtensionUIRequest({ method: "setStatus", statusKey: "advisor", statusText: renderAdvisorStatus(projection.advisor) });
+  }
+
+  // Goal mode: one terse line, cleared once the goal is finished or dropped —
+  // a completed goal is history, not status. Projection values arrive as
+  // untrusted unknowns, so every field is checked before it is read.
+  function renderGoalStatus(value: unknown): string | undefined {
+    const state = value && typeof value === "object" ? value as Record<string, unknown> : null;
+    if (state?.enabled !== true) return undefined;
+    const goal = state.goal && typeof state.goal === "object" ? state.goal as Record<string, unknown> : null;
+    if (!goal) return undefined;
+    const status = typeof goal.status === "string" ? goal.status : "active";
+    if (status === "complete" || status === "dropped") return undefined;
+    const objective = typeof goal.objective === "string" ? goal.objective.replace(/\s+/g, " ").trim() : "";
+    const label = objective.length > 60 ? `${objective.slice(0, 59)}…` : (objective || "goal");
+    const paused = status === "paused" ? " · paused" : "";
+    const budget = typeof goal.tokenBudget === "number" && Number.isFinite(goal.tokenBudget) && goal.tokenBudget > 0
+      ? ` · ${formatCompactCount(goal.tokensUsed)}/${formatCompactCount(goal.tokenBudget)} tok`
+      : "";
+    return `Goal · ${label}${paused}${budget}`;
+  }
+
+  // Advisor: on/off plus the one failure mode worth a status line — configured
+  // but with no model resolved, where nothing is actually watching.
+  function renderAdvisorStatus(value: unknown): string | undefined {
+    const advisor = value && typeof value === "object" ? value as Record<string, unknown> : null;
+    if (advisor?.enabled !== true) return undefined;
+    if (advisor.active !== true) return "Advisor · no model";
+    const overview = advisor.overview && typeof advisor.overview === "object"
+      ? advisor.overview as Record<string, unknown> : null;
+    const count = Array.isArray(overview?.advisors) ? overview.advisors.length : 0;
+    return count > 1 ? `Advisor on · ${count} advisors` : "Advisor on";
+  }
+
+  function formatCompactCount(value: unknown): string {
+    const count = typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0;
+    if (count < 1000) return String(Math.round(count));
+    const scaled = count < 1_000_000 ? count / 1000 : count / 1_000_000;
+    return `${scaled.toFixed(1).replace(/\.0$/, "")}${count < 1_000_000 ? "K" : "M"}`;
   }
 
   function refreshNativeProjection(): void {

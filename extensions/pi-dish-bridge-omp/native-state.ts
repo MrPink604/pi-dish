@@ -2,6 +2,8 @@ export type OmpNativeProjection = {
   todos: unknown[];
   planMode: unknown | null;
   prewalk: unknown | null;
+  goal: unknown | null;
+  advisor: { enabled: boolean; active: boolean; overview: unknown | null } | null;
 };
 
 type HostSession = Record<PropertyKey, unknown>;
@@ -14,6 +16,7 @@ type ObserverState = {
     todos?: HostMethod;
     planMode?: HostMethod;
     prewalk?: HostMethod;
+    goal?: HostMethod;
   };
 };
 
@@ -48,11 +51,28 @@ function readProjection(session: HostSession): OmpNativeProjection {
     if (!reader) return fallback;
     try { return Reflect.apply(reader, session, []); } catch { return fallback; }
   };
+  // The advisor accessors are pure reads OMP never routes state changes
+  // through, so they are called straight off the session instead of being
+  // captured — nothing here can re-enter publish(). Each is feature-detected
+  // on its own: an OMP too old for one of them still projects the rest.
+  const read = (name: string): unknown => {
+    const method = session[name];
+    if (typeof method !== "function") return undefined;
+    try { return Reflect.apply(method as HostMethod, session, []); } catch { return undefined; }
+  };
   const todos = call(state.readers.todos, []);
+  const advisorEnabled = read("isAdvisorEnabled");
   return {
     todos: Array.isArray(todos) ? todos : [],
     planMode: call(state.readers.planMode, null),
     prewalk: call(state.readers.prewalk, null),
+    // getGoalModeState() returns undefined until a goal exists.
+    goal: call(state.readers.goal, null) ?? null,
+    advisor: typeof advisorEnabled === "boolean" ? {
+      enabled: advisorEnabled,
+      active: read("isAdvisorActive") === true,
+      overview: read("getAdvisorStatusOverview") ?? null,
+    } : null,
   };
 }
 
@@ -88,21 +108,39 @@ function patchAgentSession(AgentSession: { prototype: HostSession }): void {
   capture("getTodoPhases", "todos");
   capture("getPlanModeState", "planMode");
   capture("getPrewalkState", "prewalk");
+  // OMP reads goal state on every status-line render and writes it on every
+  // mode transition, so capturing both keeps the projection fresh without a
+  // poller of our own.
+  capture("getGoalModeState", "goal");
   capture("setTodoPhases");
   capture("setPlanModeState");
+  capture("setGoalModeState");
+  capture("setAdvisorEnabled");
+  capture("toggleAdvisorEnabled");
+  capture("applyAdvisorConfigs");
   capture("subscribe");
 }
 
 // Runtime plugin boundary: OMP's standalone executable provides this package,
-// while pi-dish's fake lineage hosts intentionally do not install it. Keep the
-// optional host module runtime-selected so those hosts can exercise the wrapper.
-const OMP_HOST_PACKAGE = "@oh-my-pi/pi-coding-agent";
+// while pi-dish's fake lineage hosts intentionally do not install it — the
+// dynamic import stays inside try/catch so those hosts can exercise the
+// wrapper. The specifier MUST be a string literal: OMP's extension loader
+// statically rewrites literal bare pi-package specifiers to its bundled
+// modules, and a variable specifier falls through to plain filesystem
+// resolution, which cannot find the package and silently disabled the whole
+// projection in real sessions.
 try {
-  const host: unknown = await import(OMP_HOST_PACKAGE);
+  const host: unknown = await import("@oh-my-pi/pi-coding-agent");
   if (host && typeof host === "object" && "AgentSession" in host && isHostConstructor(host.AgentSession)) {
     patchAgentSession(host.AgentSession);
   }
 } catch {}
+
+// Exported for pi-dish's fake OMP host, which cannot install OMP's package and
+// so patches a stand-in AgentSession class with the same prototype shape.
+export function patchOmpAgentSession(AgentSession: unknown): void {
+  if (isHostConstructor(AgentSession)) patchAgentSession(AgentSession);
+}
 
 export function getOmpNativeProjection(): OmpNativeProjection | null {
   return state.current ? readProjection(state.current) : null;

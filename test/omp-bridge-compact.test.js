@@ -188,6 +188,9 @@ test('OMP bridge projects native todos, plan mode, and prewalk as extension UI',
     assert.equal(requests.find(request => request.statusKey === 'planmode').statusText, 'Plan mode · parallel');
     assert.equal(requests.find(request => request.statusKey === 'prewalk').statusText,
       'Prewalk → zai/glm-5.2 · high');
+    // A projection from an OMP without goal/advisor accessors degrades to no
+    // status at all rather than an empty one.
+    assert.equal(requests.some(request => request.statusKey === 'goal' || request.statusKey === 'advisor'), false);
   } finally {
     session.close();
     await host.close();

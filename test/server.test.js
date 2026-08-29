@@ -1894,17 +1894,22 @@ test('OMP command discovery includes pane-backed host commands and API aliases s
 
     const commands = await get(`/api/commands?sessionId=${encodeURIComponent(routeId)}`);
     assert.equal(commands.status, 200, JSON.stringify(commands.body));
+    const hostNames = ['shake', 'retry', 'fresh', 'clear', 'advisor', 'prewalk', 'fast',
+      'extended-context', 'vision', 'computer', 'loop', 'goal', 'guided-goal', 'reload'];
     assert.deepEqual(commands.body.map(command => command.name),
       ['tree', 'compact', 'model', 'name', 'abort', 'skill:review', 'daily', 'dish-push',
-        'shake', 'retry', 'fresh', 'clear', 'reload']);
-    assert.deepEqual(commands.body.slice(-5).map(({ name, source, supported }) => ({ name, source, supported })), [
-      { name: 'shake', source: 'host', supported: true },
-      { name: 'retry', source: 'host', supported: true },
-      { name: 'fresh', source: 'host', supported: true },
-      { name: 'clear', source: 'host', supported: true },
-      { name: 'reload', source: 'host', supported: true },
-    ]);
+        ...hostNames]);
+    assert.deepEqual(
+      commands.body.slice(-hostNames.length).map(({ name, source, supported }) => ({ name, source, supported })),
+      hostNames.map(name => ({ name, source: 'host', supported: true })));
     assert.equal(commands.body.find(command => command.name === 'shake').args, '[images]');
+    assert.equal(commands.body.find(command => command.name === 'guided-goal').args, '<rough objective>');
+    // The descriptor's validation rules stay server-side.
+    for (const command of commands.body) {
+      assert.deepEqual(Object.keys(command).filter(key =>
+        ['allowedArgs', 'blockedArgs', 'freeArgs', 'requireArgs'].includes(key)), [],
+      `internal arg rules leaked on /${command.name}`);
+    }
 
     const shake = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/shake' });
     assert.equal(shake.status, 200, JSON.stringify(shake.body));
@@ -1935,6 +1940,47 @@ test('OMP command discovery includes pane-backed host commands and API aliases s
     assert.equal(notAllowlisted.status, 200, JSON.stringify(notAllowlisted.body));
     assert.equal(injected.length, 4, 'non-allowlisted commands stay on the bridge path');
     assert.ok(received.some(command => command.command === 'run_command' && command.message === '/handoff'));
+
+    // Free-arg host commands accept arbitrary single-line text, but the bare
+    // and TUI-only sub-forms are refused before anything reaches the pane.
+    const send = (message) => post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message });
+    const goalBare = await send('/goal');
+    assert.equal(goalBare.status, 400, JSON.stringify(goalBare.body));
+    assert.match(goalBare.body.error, /requires arguments/i);
+    for (const args of ['drop', 'drop it all', 'set', 'budget']) {
+      const blocked = await send(`/goal ${args}`);
+      assert.equal(blocked.status, 400, `${args}: ${JSON.stringify(blocked.body)}`);
+      assert.match(blocked.body.error, /only available in the Oh My Pi terminal UI/i);
+    }
+    const goalNewline = await send('/goal ship it\nrm -rf /');
+    assert.equal(goalNewline.status, 400, JSON.stringify(goalNewline.body));
+    assert.match(goalNewline.body.error, /invalid arguments/i);
+    const advisorBad = await send('/advisor sometimes');
+    assert.equal(advisorBad.status, 400, JSON.stringify(advisorBad.body));
+    assert.match(advisorBad.body.error, /expected on or off or status or dump or dump raw/);
+    const prewalkArgs = await send('/prewalk soon');
+    assert.equal(prewalkArgs.status, 400, JSON.stringify(prewalkArgs.body));
+    assert.equal(injected.length, 4, 'rejected host arguments never reach tmux');
+
+    for (const message of ['/goal ship the release notes', '/goal set write the docs',
+      '/goal budget 50000', '/guided-goal make the tests fast', '/advisor dump raw']) {
+      const accepted = await send(message);
+      assert.equal(accepted.status, 200, `${message}: ${JSON.stringify(accepted.body)}`);
+    }
+    const bare = await send('/prewalk');
+    assert.equal(bare.status, 200, JSON.stringify(bare.body));
+    assert.deepEqual(injected.slice(4).map(entry => entry.text), [
+      // Every arg'd form needs the second Enter past OMP's autocomplete; the
+      // bare form submits on the first.
+      '/goal ship the release notes', '',
+      '/goal set write the docs', '',
+      '/goal budget 50000', '',
+      '/guided-goal make the tests fast', '',
+      '/advisor dump raw', '',
+      '/prewalk',
+    ]);
+    assert.ok(injected.slice(4).every(entry =>
+      entry.socket === '/fake/owned-omp.sock' && entry.paneId === '%88'));
 
     // A reachable-but-unowned pane (the bridge's own tmux stamp) is enough:
     // host commands follow the /reload rule, not spawn ownership.

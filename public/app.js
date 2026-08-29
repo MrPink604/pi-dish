@@ -6891,6 +6891,89 @@ function renderBranchSummary(msg, time, attrs = '') {
   </div>`;
 }
 
+// OMP advisor notes — a second model passively reviewing each turn. The JSONL
+// entry carries structured notes in details.notes and an <advisory> XML
+// rendering of the same thing in content; prefer the structure, fall back to
+// unwrapping the XML so an older/odder producer still reads as prose.
+const ADVISOR_SEVERITIES = ['nit', 'concern', 'blocker'];
+
+function advisoryTagAttr(rawAttrs, name) {
+  const m = new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`, 'i').exec(rawAttrs || '');
+  return m ? m[1].trim() : '';
+}
+
+function normalizeAdvisorSeverity(value) {
+  const sev = String(value || '').trim().toLowerCase();
+  return ADVISOR_SEVERITIES.includes(sev) ? sev : '';
+}
+
+// Split an <advisory ...>note</advisory> batch into notes. Anything that isn't
+// wrapped (or is only half-wrapped) survives as a single unwrapped note rather
+// than leaking raw tags into the card.
+function parseAdvisoryContent(text) {
+  const notes = [];
+  const re = /<advisory\b([^>]*)>([\s\S]*?)<\/advisory>/gi;
+  let m;
+  while ((m = re.exec(text))) {
+    const note = m[2].trim();
+    if (note) notes.push({ note, severity: advisoryTagAttr(m[1], 'severity'), advisor: advisoryTagAttr(m[1], 'advisor') });
+  }
+  if (notes.length) return notes;
+  const bare = String(text || '').replace(/<\/?advisory\b[^>]*>/gi, '').trim();
+  return bare ? [{ note: bare }] : [];
+}
+
+function advisorNotesFrom(msg) {
+  const structured = Array.isArray(msg.details?.notes) ? msg.details.notes : null;
+  const notes = (structured && structured.length ? structured : parseAdvisoryContent(extractTextContent(msg.content)))
+    .map(n => ({
+      note: typeof n === 'string' ? n : String(n?.note || ''),
+      severity: normalizeAdvisorSeverity(typeof n === 'string' ? '' : n?.severity),
+      advisor: typeof n === 'string' ? '' : String(n?.advisor || '').trim(),
+    }))
+    .filter(n => n.note);
+  return notes;
+}
+
+// A batch may name its advisor only on the XML wrapper (multi-advisor
+// rosters), so fall back to that when the structured notes carry no name.
+function advisoryBatchName(msg) {
+  const m = /<advisory\b([^>]*)>/i.exec(extractTextContent(msg.content));
+  return m ? advisoryTagAttr(m[1], 'advisor') : '';
+}
+
+function advisorSeverityChip(severity) {
+  if (!severity) return '';
+  return `<span class="advisor-severity sev-${severity}">${escapeHtml(severity)}</span>`;
+}
+
+// A quiet card, not a boxed callout: hairline left accent tinted by the worst
+// severity in the batch, notes rendered as markdown (they carry `code` spans).
+// Conversation content, so it stays visible in focus mode.
+function renderAdvisorMessage(msg, time, attrs, timestamp) {
+  const notes = advisorNotesFrom(msg);
+  if (!notes.length) return '';
+  const worst = ADVISOR_SEVERITIES.filter(s => notes.some(n => n.severity === s)).pop() || '';
+  const names = [...new Set(notes.map(n => n.advisor).filter(Boolean))];
+  const name = names.length === 1 ? names[0] : (names.length ? '' : advisoryBatchName(msg));
+  const single = notes.length === 1;
+  const rows = notes.map(n => `<div class="advisor-note">
+        ${single ? '' : advisorSeverityChip(n.severity)}${!single && !name && n.advisor ? `<span class="advisor-note-name">${escapeHtml(n.advisor)}</span>` : ''}
+        <div class="markdown-body">${formatMarkdown(n.note)}</div>
+      </div>`).join('');
+  return `<div${attrs} class="message custom-message advisor${worst ? ` sev-${worst}` : ''}" data-timestamp="${timestamp}">
+    <div class="advisor-card">
+      <div class="advisor-header">
+        <span class="advisor-icon">◈</span>
+        <span class="advisor-label">Advisor${name ? ` · ${escapeHtml(name)}` : ''}</span>
+        ${single ? advisorSeverityChip(notes[0].severity) : `<span class="advisor-count">${notes.length} notes</span>`}
+        ${time ? `<span class="message-time">${time}</span>` : ''}
+      </div>
+      <div class="advisor-notes">${rows}</div>
+    </div>
+  </div>`;
+}
+
 // OMP conversational custom messages. interrupted-thinking deliberately
 // carries hidden reasoning in JSONL; session-files strips that content and we
 // render only this divider. Visible unknown types get a subdued generic row so
@@ -6919,6 +7002,8 @@ function renderCustomMessage(msg, time, attrs = '') {
       <span class="custom-message-icon">✓</span><span class="custom-message-label">Background job${jobs.length > 1 ? 's' : ''} finished</span>${meta ? `<span class="custom-message-meta">${escapeHtml(meta)}</span>` : ''}${time ? `<span class="message-time">${time}</span>` : ''}
     </div>`;
   }
+
+  if (customType === 'advisor') return renderAdvisorMessage(msg, time, attrs, timestamp);
 
   const text = extractTextContent(msg.content);
   const label = customType.replace(/[-_]+/g, ' ');

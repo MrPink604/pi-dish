@@ -3432,7 +3432,26 @@ function parseHostBuiltin(descriptor, message) {
     throw error;
   }
   const args = separator === -1 ? '' : trimmed.slice(separator).trim();
-  if (args && !command.allowedArgs?.includes(args)) {
+  if (!args && command.requireArgs) {
+    const error = new Error(`/${name} requires arguments${command.args ? `; expected ${command.args}` : ''}.`);
+    error.statusCode = 400;
+    throw error;
+  }
+  // Blocked sub-forms are checked before free args are accepted: they are the
+  // spellings that open a TUI overlay, which a remote pilot cannot answer. A
+  // bare string blocks the sub-command and everything under it; `exact` blocks
+  // only the argument-less form, whose arg'd spelling completes in place.
+  const blockedEntry = command.blockedArgs?.find((entry) => {
+    const value = typeof entry === 'string' ? entry : entry.arg;
+    return args === value || (!entry.exact && args.startsWith(`${value} `));
+  });
+  if (blockedEntry) {
+    const blocked = typeof blockedEntry === 'string' ? blockedEntry : blockedEntry.arg;
+    const error = new Error(`/${name} ${blocked} is only available in the ${descriptor.label} terminal UI.`);
+    error.statusCode = 400;
+    throw error;
+  }
+  if (args && !command.freeArgs && !command.allowedArgs?.includes(args)) {
     const allowed = command.allowedArgs?.join(' or ');
     const error = new Error(`Invalid arguments for /${name}${allowed ? `; expected ${allowed}` : ''}.`);
     error.statusCode = 400;
@@ -4180,9 +4199,12 @@ async function appendHostBuiltins(sessionId, sess, commands) {
   const wantsPane = descriptor?.hostBuiltins?.length || sess.harnessId === 'omp';
   const pane = wantsPane ? await locatePiPane(sessionId) : null;
   if (pane && descriptor?.hostBuiltins?.length) {
-    available.push(...descriptor.hostBuiltins.map(({ allowedArgs, ...command }) => ({
-      ...command, source: 'host', supported: true,
-    })));
+    // allowedArgs/blockedArgs/freeArgs/requireArgs are server-side validation
+    // rules; clients only need the name, description and arg hint.
+    available.push(...descriptor.hostBuiltins.map(
+      ({ allowedArgs, blockedArgs, freeArgs, requireArgs, ...command }) => ({
+        ...command, source: 'host', supported: true,
+      })));
   }
   if (sess.harnessId === 'omp' && pane) {
     available.push({

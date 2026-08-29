@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createBridge } from "../../extensions/pi-dish-bridge/core.js";
 import { bridgeDescriptor, createHarnessBridge } from "../../extensions/pi-dish-bridge-omp/index.js";
+import { patchOmpAgentSession } from "../../extensions/pi-dish-bridge-omp/native-state.js";
 
 const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
 const pi: any = {
@@ -84,6 +85,56 @@ if (process.env.FAKE_OMP_HAS_COMPACT === "1") {
       }, ctx);
     }, 80);
   };
+}
+
+// The fake host cannot install OMP's package, so native-state's prototype
+// patch is pointed at a stand-in carrying the same AgentSession methods the
+// bridge observes in a real OMP process. State moves only through the setters
+// OMP itself calls on a transition, so the capture wiring is what publishes.
+class FakeOmpAgentSession {
+  todos: unknown[] = [];
+  planMode: unknown = null;
+  goal: unknown = undefined;
+  advisor: { enabled: boolean; active: boolean; advisors: Array<{ name: string; status: string }> } =
+    { enabled: false, active: false, advisors: [] };
+  getTodoPhases() { return this.todos; }
+  setTodoPhases(phases: unknown[]) { this.todos = phases; }
+  getPlanModeState() { return this.planMode; }
+  setPlanModeState(state: unknown) { this.planMode = state; }
+  getGoalModeState() { return this.goal; }
+  setGoalModeState(state: unknown) { this.goal = state; }
+  isAdvisorEnabled() { return this.advisor.enabled; }
+  isAdvisorActive() { return this.advisor.enabled && this.advisor.active; }
+  getAdvisorStatusOverview() {
+    return { configured: this.advisor.advisors.length > 0, advisors: this.advisor.advisors };
+  }
+  setAdvisorEnabled(enabled: boolean) { this.advisor.enabled = enabled; return this.isAdvisorActive(); }
+  subscribe() { return () => {}; }
+}
+
+const stepFile = process.env.FAKE_OMP_NATIVE_STEP_FILE || "";
+let nativeSession: FakeOmpAgentSession | null = null;
+if (stepFile) {
+  patchOmpAgentSession(FakeOmpAgentSession);
+  nativeSession = new FakeOmpAgentSession();
+  let appliedSeq: number | null = null;
+  setInterval(() => {
+    if (!fs.existsSync(stepFile)) return;
+    let step: any;
+    try { step = JSON.parse(fs.readFileSync(stepFile, "utf8")); } catch { return; }
+    if (!step || step.seq === appliedSeq) return;
+    appliedSeq = step.seq;
+    const session = nativeSession!;
+    if ("todos" in step) session.setTodoPhases(step.todos);
+    if ("planMode" in step) session.setPlanModeState(step.planMode);
+    if ("goal" in step) session.setGoalModeState(step.goal ?? undefined);
+    if ("advisor" in step) {
+      session.advisor.active = step.advisor?.active === true;
+      session.advisor.advisors = step.advisor?.advisors ?? [];
+      session.setAdvisorEnabled(step.advisor?.enabled === true);
+    }
+    fs.writeFileSync(`${stepFile}.ack`, String(step.seq));
+  }, 20);
 }
 
 const nativeProjection = process.env.FAKE_OMP_NATIVE_PROJECTION

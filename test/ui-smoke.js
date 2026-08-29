@@ -692,6 +692,40 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.waitForTimeout(100);
     check(!(await desktop.locator('#messages').textContent()).includes('hidden live custom content'),
       'unknown hidden live custom messages follow the documented skip');
+
+    console.log('advisor notes:');
+    emit('message_end', { message: { role: 'custom', customType: 'advisor', display: true, attribution: 'agent',
+      content: '<advisory severity="concern" guidance="weigh, don\'t blindly obey">\nThe `retryAll` loop has no ceiling.\n</advisory>',
+      details: { notes: [{ note: 'The `retryAll` loop has no ceiling.', severity: 'concern' }] },
+      timestamp: Date.now() } });
+    await desktop.waitForSelector('.message.custom-message.advisor.sev-concern', { timeout: 3000 });
+    const advisorCard = desktop.locator('.message.custom-message.advisor.sev-concern').first();
+    check(await advisorCard.locator('.advisor-severity.sev-concern').textContent() === 'concern',
+      'advisor card shows its severity chip');
+    check((await advisorCard.locator('.advisor-label').textContent()).trim() === 'Advisor',
+      'unnamed advisor renders the bare label');
+    check(await advisorCard.locator('.advisor-note .markdown-body code').count() === 1
+      && !(await advisorCard.textContent()).includes('<advisory'),
+      'advisor note renders as markdown with the XML wrapper stripped');
+    // Advisor notes are conversation context (like branch summaries), so focus
+    // mode must leave them on screen.
+    await desktop.evaluate(() => document.getElementById('messages').classList.add('focus-mode'));
+    check(await advisorCard.isVisible(), 'advisor card survives focus mode');
+    await desktop.evaluate(() => document.getElementById('messages').classList.remove('focus-mode'));
+    // A named multi-note batch: one card, one chip per note, worst severity on
+    // the card. Only content is supplied, so the <advisory> parse path runs.
+    emit('message_end', { message: { role: 'custom', customType: 'advisor', display: true, attribution: 'agent',
+      content: '<advisory severity="nit" advisor="security">Prefer `const` here.</advisory>\n'
+        + '<advisory severity="blocker" advisor="security">The token is logged in plaintext.</advisory>',
+      timestamp: Date.now() + 1 } });
+    await desktop.waitForSelector('.message.custom-message.advisor.sev-blocker', { timeout: 3000 });
+    const advisorBatch = desktop.locator('.message.custom-message.advisor.sev-blocker').first();
+    check((await advisorBatch.locator('.advisor-label').textContent()).includes('security'),
+      'named advisor renders its name in the header');
+    check(await advisorBatch.locator('.advisor-note').count() === 2
+      && await advisorBatch.locator('.advisor-note .advisor-severity.sev-nit').count() === 1
+      && await advisorBatch.locator('.advisor-note .advisor-severity.sev-blocker').count() === 1,
+      'a multi-note batch is one card with a chip per note');
     await desktop.evaluate(() => {
       document.querySelectorAll('.message.custom-message:not([data-msg-index])').forEach(el => el.remove());
     });

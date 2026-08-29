@@ -1967,6 +1967,87 @@ body.sidebar-open {
   background: color-mix(in srgb, var(--warning) 28%, transparent);
 }
 
+/* Advisor notes — a second model's passive review of the turn. Conversation
+   context, not tool noise, so focus mode leaves it visible (like the branch
+   summary). Deliberately not a boxed callout: a hairline left accent tinted by
+   the batch's worst severity, everything else carried by the severity chip. */
+.message.custom-message.advisor {
+  --advisor-accent: var(--text-muted);
+  display: block;
+  padding: 0;
+  color: var(--text);
+}
+.message.custom-message.advisor.sev-nit { --advisor-accent: var(--text-muted); }
+.message.custom-message.advisor.sev-concern { --advisor-accent: var(--warning); }
+.message.custom-message.advisor.sev-blocker { --advisor-accent: var(--error); }
+
+.advisor-card {
+  margin: 8px 0;
+  padding: 5px 0 6px 12px;
+  border-left: 2px solid color-mix(in srgb, var(--advisor-accent) 45%, transparent);
+  background: color-mix(in srgb, var(--advisor-accent) 4%, transparent);
+}
+
+.advisor-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.advisor-icon { color: var(--advisor-accent); }
+/* The label stays neutral even on a blocker — severity is the chip's and the
+   rail's job, and a red "Advisor" would read as an error banner. */
+.advisor-label {
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+}
+.advisor-count { font-size: 11px; opacity: 0.75; }
+
+.advisor-severity {
+  --sev-color: var(--text-muted);
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--sev-color) 32%, transparent);
+  background: color-mix(in srgb, var(--sev-color) 12%, transparent);
+  color: var(--sev-color);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.advisor-severity.sev-nit { --sev-color: var(--text-muted); }
+.advisor-severity.sev-concern { --sev-color: var(--warning); }
+.advisor-severity.sev-blocker { --sev-color: var(--error); }
+
+.advisor-notes {
+  margin-top: 5px;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.advisor-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.advisor-note > .markdown-body { flex: 1; min-width: 0; }
+.advisor-note > .advisor-severity { margin-top: 2px; }
+.advisor-note-name {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.advisor-note + .advisor-note {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
 /* Tool call — collapsible <details> with icon + summary */
 .tool-call {
   margin: 2px 0;
