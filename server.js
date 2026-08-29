@@ -4980,6 +4980,35 @@ function injectLaunchWrapper(descriptor, args, wrapperPath) {
   return injected;
 }
 
+// install.sh links the harness bridge into the host agent's own extension
+// discovery dir, where it loads into every session — including ones pi-dish
+// didn't spawn. When that link resolves to *this* repo's bridge, spawns omit
+// the --extension wrapper entirely: the spawn token already rides the
+// PI_DISH_SPAWN_TOKEN env var, and a second explicitly-loaded copy would only
+// exercise the bridge's duplicate-load sentinel. The realpath must match
+// strictly — a link into some other checkout may predate env-token support,
+// so it keeps the wrapper (the sentinel makes that safe).
+function discoveryBridgeInstalled(descriptor) {
+  if (!descriptor.wrapperEntrypoint || typeof descriptor.discoveryExtensionsDir !== 'function') return false;
+  const bridgeDir = path.dirname(descriptor.wrapperEntrypoint);
+  try {
+    const installed = fs.realpathSync(path.join(descriptor.discoveryExtensionsDir(), path.basename(bridgeDir)));
+    return installed === fs.realpathSync(bridgeDir);
+  } catch {
+    return false;
+  }
+}
+
+function stripLaunchWrapperArgs(descriptor, args) {
+  const index = args.indexOf(descriptor.wrapperEntrypoint);
+  // The entrypoint always follows its --extension flag in the descriptor's
+  // argv builders; anything else means the args weren't built from them.
+  if (index < 1 || !args[index - 1].startsWith('-')) {
+    throw bridgeSocketConfigError(`${descriptor.label} launch args do not contain its wrapper entrypoint flag`);
+  }
+  return [...args.slice(0, index - 1), ...args.slice(index + 1)];
+}
+
 // Build the tmux child argv+env from the same launch spec RPC uses (so a
 // PI_DISH_PI_COMMAND wrapper or a simple `pi` alias's env carries over), open
 // the window, and wait up to 30s for the session to register. The window is
@@ -5016,8 +5045,11 @@ async function spawnHarnessInTmux({ descriptor, target, args, cwd, name, hidden 
 
   const token = crypto.randomBytes(16).toString('hex');
   env.PI_DISH_SPAWN_TOKEN = token;
-  const wrapperPath = materializeLaunchWrapper(descriptor, token);
-  const command = [...spec.argv, ...injectLaunchWrapper(descriptor, args, wrapperPath)];
+  const discoveryInstalled = discoveryBridgeInstalled(descriptor);
+  const wrapperPath = discoveryInstalled ? null : materializeLaunchWrapper(descriptor, token);
+  const command = [...spec.argv, ...(discoveryInstalled
+    ? stripLaunchWrapperArgs(descriptor, args)
+    : injectLaunchWrapper(descriptor, args, wrapperPath))];
 
   let paneId;
   try {

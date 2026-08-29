@@ -120,6 +120,42 @@ test('POST /api/sessions/new with a tmux target spawns and returns the registere
   assert.ok(panes.includes(spawn.paneId), 'pi pane exists in the session');
 });
 
+test('OMP spawn omits the launch wrapper when the discovery bridge is installed', { skip: !tmuxOk }, async () => {
+  // install.sh links the bridge into OMP's extension discovery dir; a spawn
+  // must then rely on discovery + the PI_DISH_SPAWN_TOKEN env instead of
+  // injecting a second copy via --extension.
+  const extDir = path.join(tmpHome, '.omp', 'agent', 'extensions');
+  fs.mkdirSync(extDir, { recursive: true });
+  const link = path.join(extDir, 'pi-dish-bridge-omp');
+  fs.symlinkSync(path.join(__dirname, '..', 'extensions', 'pi-dish-bridge-omp'), link);
+  try {
+    const { status, body } = await post('/api/sessions/new', {
+      harness: 'omp',
+      target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+    });
+    assert.equal(status, 200, JSON.stringify(body));
+    const spawn = tmux.getSpawn(body.id);
+    assert.ok(spawn?.spawnToken, 'spawn token recorded');
+
+    const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+    const registryFile = fs.readdirSync(registryDir).find(name => {
+      const entry = JSON.parse(fs.readFileSync(path.join(registryDir, name), 'utf8'));
+      return entry.harnessId === 'omp' && entry.spawnToken === spawn.spawnToken;
+    });
+    assert.ok(registryFile, 'session registered via the env spawn token');
+    const registry = JSON.parse(fs.readFileSync(path.join(registryDir, registryFile), 'utf8'));
+    assert.ok(!registry.launchArgs.includes('--extension'),
+      `launch args carry no --extension: ${JSON.stringify(registry.launchArgs)}`);
+
+    const wrapperDir = path.join(tmpHome, '.pi', 'dish', 'launch-wrappers');
+    const wrappers = fs.existsSync(wrapperDir)
+      ? fs.readdirSync(wrapperDir).filter(name => name.includes(spawn.spawnToken)) : [];
+    assert.deepEqual(wrappers, [], 'no launch wrapper was materialized for this token');
+  } finally {
+    fs.rmSync(link, { force: true });
+  }
+});
+
 test('OMP launch uses its wrapper descriptor and encoded cross-harness identity', { skip: !tmuxOk }, async () => {
   const { status, body } = await post('/api/sessions/new', {
     harness: 'omp',

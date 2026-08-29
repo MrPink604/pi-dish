@@ -349,6 +349,21 @@ to 30s, `PI_DISH_SPAWN_TIMEOUT_MS` override for tests). On timeout a
 user-targeted window is left open (don't kill it) and the error hints the
 bridge must be installed; hidden headless panes are killed instead.
 
+Wrapper-token harnesses (OMP, Prime) normally get a generated
+`~/.pi/dish/launch-wrappers/<harness>-<token>.ts` injected in place of the
+descriptor's `wrapperEntrypoint`. For OMP, install.sh also links the bridge
+into `~/.omp/agent/extensions/` where OMP's own extension discovery loads it
+into **every** session (symlinked dirs are explicitly supported; the bridge's
+host-package import must stay a *literal* specifier — OMP's loader only
+rewrites literals to its bundled modules, and a variable specifier silently
+killed the whole native projection once). When that link realpaths to this
+repo's bridge, `discoveryBridgeInstalled` makes spawns strip the
+`--extension` pair entirely — the token still correlates via the
+`PI_DISH_SPAWN_TOKEN` env, which the bridge falls back to. The match is
+strictly realpath-equal: a link into a different checkout keeps the wrapper
+(the bridge's duplicate-load sentinel makes the resulting double-load safe,
+so mixed states during a fleet rollout degrade gracefully).
+
 `spawnInTmux` new-windows with `-d`: the user may be attached to the target
 session, and a remote spawn must not switch their current window.
 `isSocketAllowed()` rejects any socket not directly under the tmux tmpdir (the
