@@ -239,7 +239,11 @@ buckets stack toggle on the cost chart (client-side re-pivot of the same
 payload, device-local `pi-dish-usage-stack`), per-bucket cells in the day
 detail, and breakdown tooltips on KPI tiles and group rows. KPI tiles read
 `headlineCostsByBucket`, the per-component twin of `headlineCosts` —
-`mergeUsageSummaries` must keep summing it per component. Model rows are a multi-select filter (`models=` refs on the
+`mergeUsageSummaries` must keep summing it per component. Older entries and
+mixed-version hosts can carry a known total without component costs; every
+bucket visualization includes that positive remainder as muted
+**Unattributed** spend rather than drawing a bar/share that does not add up.
+Model rows are a multi-select filter (`models=` refs on the
 same endpoint): totals, daily series, and the workspace/session groups are
 rebuilt server-side from the per-session `usage.models` day buckets (the
 truncated groups can't be filtered client-side), while `groups.models`

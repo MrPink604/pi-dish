@@ -131,7 +131,12 @@ if (stepFile) {
     if ("advisor" in step) {
       session.advisor.active = step.advisor?.active === true;
       session.advisor.advisors = step.advisor?.advisors ?? [];
-      session.setAdvisorEnabled(step.advisor?.enabled === true);
+      if (step.advisor?.readOnly) {
+        session.advisor.enabled = step.advisor?.enabled === true;
+        session.getAdvisorStatusOverview();
+      } else {
+        session.setAdvisorEnabled(step.advisor?.enabled === true);
+      }
     }
     fs.writeFileSync(`${stepFile}.ack`, String(step.seq));
   }, 20);

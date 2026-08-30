@@ -87,7 +87,8 @@ Rules of thumb:
   day, model, workspace, and session, with an optional server-wide monthly
   warning, and pivots every cost into read (uncached), cached read, output,
   and cache-write buckets — a Spend-by-bucket section, a Models/Cost-buckets
-  chart stack toggle, and breakdown tooltips on the KPI tiles and rows.
+  chart stack toggle, and breakdown tooltips on the KPI tiles and rows. Known
+  legacy totals without a component split remain visible as Unattributed.
   Spend is estimated from each session harness's cached model-catalog
   pricing, not provider billing; an asterisk marks the known subtotal when
   calls with unavailable pricing were omitted, and their count is shown.

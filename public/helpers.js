@@ -1430,6 +1430,16 @@ function usageDisplayTokens(tokens) {
   return (tokens?.input || 0) + (tokens?.output || 0) + (tokens?.cacheRead || 0) + (tokens?.cacheWrite || 0);
 }
 
+/** Known spend that cannot be assigned to a component. Older session entries
+ * may record only cost.total; mixed-version fleet payloads can do the same.
+ * Returning the remainder keeps bucket charts and shares equal to the total. */
+function usageUnattributedCost(costs) {
+  if (!Number.isFinite(costs?.total)) return 0;
+  const attributed = ['input', 'output', 'cacheRead', 'cacheWrite']
+    .reduce((sum, key) => sum + (Number.isFinite(costs[key]) ? costs[key] : 0), 0);
+  return Math.max(0, costs.total - attributed);
+}
+
 /** The server's group comparator, so a merged list ranks like a local one. */
 function compareUsageBuckets(a, b, sort) {
   if (sort === 'tokens') return usageDisplayTokens(b.tokens) - usageDisplayTokens(a.tokens) || b.calls - a.calls;
@@ -2214,6 +2224,7 @@ if (typeof module !== 'undefined' && module.exports) {
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
     sessionKey, parseSessionKey, sessionRefKey, normalizeHostBase, sanitizeHostCatalog,
     hostDisplayLabel, sessionRef, uniqueSessionPrefix, mergeHostEntries, mergeUsageSummaries, createFanoutRenderQueue,
+    usageUnattributedCost,
     parseSessionRefTokens, parseSessionRefParts, formatSessionRefContext,
     appendSessionRefContext, splitSessionRefContext, searchSessionsForRef,
     hostSupportsCapability, hostSupportsTerminal,

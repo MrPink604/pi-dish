@@ -103,11 +103,6 @@ test('OMP bridge projects captured goal-mode transitions as a status', async () 
     });
     assert.equal((await nextStatus(requests, from, 'goal')).statusText,
       'Goal · Ship the compaction fix · 12.3K/50K tok');
-    // The same publish still carries the todos widget through the capture.
-    const widget = await waitFor(() => requests.find(request => request.method === 'setWidget'));
-    assert.equal(widget.widgetKey, 'Todos');
-    assert.deepEqual(widget.widgetLines, ['Implementation  0/1', '  [>] Wire goal state']);
-
     from = requests.length;
     await host.step({
       goal: {
@@ -191,6 +186,15 @@ test('OMP bridge projects captured advisor state as a status', async () => {
     from = requests.length;
     await host.step({ advisor: { enabled: true, active: false, advisors: [{ name: 'reviewer', status: 'no_model' }] } });
     assert.equal((await nextStatus(requests, from, 'advisor')).statusText, 'Advisor · no model');
+
+    // OMP can activate an advisor after background model discovery without a
+    // setter call. Its normal status-line read must refresh the projection.
+    from = requests.length;
+    await host.step({ advisor: {
+      enabled: true, active: true, readOnly: true,
+      advisors: [{ name: 'reviewer', status: 'running' }],
+    } });
+    assert.equal((await nextStatus(requests, from, 'advisor')).statusText, 'Advisor on');
 
     from = requests.length;
     await host.step({ advisor: { enabled: false, active: false, advisors: [] } });

@@ -767,14 +767,17 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // also dispatches) offers the pasteable session ref. Single host, so the
     // ref is the bare 8-character id prefix — no fleet syntax anywhere.
     console.log('session ref menu:');
-    const expectedRef = SESSION_ID.slice(0, 8);
+    const expectedRefPrefix = SESSION_ID.slice(0, 8);
     await desktop.click('.session-item', { button: 'right' });
     await desktop.waitForSelector('#sessionMenu', { state: 'visible', timeout: 2000 });
     const menuItems = await desktop.locator('#sessionMenu .context-menu-item').allTextContents();
     check(menuItems.length === 2 && menuItems[0].includes('Copy session ref'),
       `context menu offers the ref item (got ${JSON.stringify(menuItems)})`);
-    check(menuItems[0].includes(expectedRef),
+    check(menuItems[0].includes(expectedRefPrefix),
       `ref item previews the bare id prefix (got ${JSON.stringify(menuItems[0])})`);
+    const copiedRef = await desktop.locator('#sessionMenu .context-menu-item').first().getAttribute('data-copy');
+    check(copiedRef.startsWith(expectedRefPrefix),
+      `ref widens its prefix only as far as same-host collisions require (got ${JSON.stringify(copiedRef)})`);
     check(await desktop.locator('#sessionMenu .context-menu-item').nth(1)
       .getAttribute('data-copy') === SESSION_ID, 'the second item copies the full session id');
     await desktop.keyboard.press('Escape');
@@ -786,7 +789,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.click('#sessionMenu .context-menu-item');
     await desktop.waitForFunction(() =>
       !!document.querySelector('#sessionMenu .context-menu-item.copied'), { timeout: 2000 });
-    check(await desktop.evaluate(() => navigator.clipboard.readText()) === expectedRef,
+    check(await desktop.evaluate(() => navigator.clipboard.readText()) === copiedRef,
       'ref landed on the clipboard');
     await desktop.waitForSelector('#sessionMenu', { state: 'hidden', timeout: 3000 });
     check(true, 'context menu dismisses itself after a copy');
@@ -798,10 +801,10 @@ let remoteHost = null; // second pi-dish (multi-host section)
     const statsText = await desktop.locator('#statsBody').textContent();
     check(/30 tok\/s avg/.test(statsText),
       'stats modal shows the session average speed');
-    check(statsText.includes(`Ref${expectedRef}`),
+    check(statsText.includes(`Ref${copiedRef}`),
       `stats modal carries the session ref row (got ${JSON.stringify(statsText.slice(0, 40))})`);
-    check(statsText.includes('Estimated totalUnavailable') && statsText.includes('input Unavailable'),
-      'mixed session stats do not format incomplete costs as zero');
+    check(statsText.includes('Estimated total~$0.0010*') && statsText.includes('input ~$0*'),
+      'mixed session stats preserve a known subtotal and mark omitted spend with the partial-estimate suffix');
     // Scope to the table — the share section (created by the message-link
     // step above) renders its own .stats-copy after it.
     const fileBtn = desktop.locator('.stats-table .stats-copy').last();
@@ -3032,8 +3035,9 @@ let remoteHost = null; // second pi-dish (multi-host section)
       const items = [...document.querySelectorAll('#usageViewBody .usage-section .usage-share-bar + .usage-legend .usage-legend-item')]
         .map(el => el.textContent);
       return ['Read', 'Cached read', 'Output', 'Cache write'].every(label =>
-        items.some(text => text.includes(label) && text.includes('~$')));
-    }), 'spend-by-bucket section prices all four cost buckets');
+        items.some(text => text.includes(label) && text.includes('~$'))) &&
+        items.some(text => text.includes('Unattributed') && text.includes('~$'));
+    }), 'spend-by-bucket section prices all four cost buckets and preserves total-only remainder');
     check(await desktop.evaluate(() =>
       [...document.querySelectorAll('#usageViewBody .usage-kpi')]
         .some(k => (k.getAttribute('title') || '').includes('Cached read'))),
@@ -3042,10 +3046,15 @@ let remoteHost = null; // second pi-dish (multi-host section)
       [...document.querySelectorAll('#usageViewBody .usage-row.model-toggle')]
         .some(r => (r.getAttribute('title') || '').includes('Cache write'))),
       'model rows carry their bucket breakdown in the tooltip');
+    // Index refreshes replace the controls and chart wholesale. Wait until
+    // that background work is done before exercising a click-driven pivot;
+    // otherwise the assertion races a render from an older request.
+    await desktop.waitForFunction(() => usageData && !usageData.indexing, null, { timeout: 10000 });
     await desktop.click('[data-stack="buckets"]');
     await desktop.waitForFunction(() =>
       [...document.querySelectorAll('#usageChart .usage-legend-item')].some(el => el.textContent === 'Cached read') &&
-      document.querySelector('#usageChart .seg.c2, #usageChart .seg.c1, #usageChart .seg.c3') !== null,
+      [...document.querySelectorAll('#usageChart .usage-legend-item')].some(el => el.textContent === 'Unattributed') &&
+      document.querySelector('#usageChart .seg.sother') !== null,
       null, { timeout: 5000 });
     check(await desktop.evaluate(() => localStorage.getItem('pi-dish-usage-stack') === 'buckets'),
       'bucket stacking re-pivots the chart and persists device-locally');
@@ -3534,6 +3543,23 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(await multi.locator('#sessionHost').isVisible() &&
       (await multi.locator('#sessionHost').textContent()) === 'tycho',
       'the session header names the host');
+
+    const remoteRefResolution = await multi.evaluate((remoteId) => {
+      const bare = sessionMatchingRef(remoteId.slice(0, 12));
+      // A same-id session on another host is still a valid picker candidate;
+      // only the current host+id pair is excluded.
+      const shadow = { ...currentSession, host: selfHost.hostId };
+      sessions.previous.push(shadow);
+      const candidates = sessionRefCandidates().filter((s) => s.id === remoteId)
+        .map((s) => sessionHostIdOf(s));
+      sessions.previous.pop();
+      return { bareHost: bare?.host || null, currentHost: currentSession.host, candidates };
+    }, REMOTE_SESSION_ID);
+    check(remoteRefResolution.bareHost === remoteRefResolution.currentHost,
+      `a bare transcript #ref resolves on its owning remote host (got ${JSON.stringify(remoteRefResolution)})`);
+    check(remoteRefResolution.candidates.length === 1 &&
+      remoteRefResolution.candidates[0] !== remoteRefResolution.currentHost,
+      'the ref picker excludes only the current host+session pair when ids collide');
 
     // The terminal is the *owning* host's feature: this entry host runs with
     // PI_DISH_TERMINAL=1 and the peer with it off, so the capabilities the

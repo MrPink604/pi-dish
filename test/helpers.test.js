@@ -1588,6 +1588,15 @@ test('mergeUsageSummaries sums totals, days, and per-model day buckets', () => {
   assert.equal(merged.monthlyBudgetUsd, 50);
 });
 
+test('usageUnattributedCost preserves known totals without a component split', () => {
+  assert.equal(H.usageUnattributedCost({ total: 1.7 }), 1.7);
+  assert.ok(Math.abs(H.usageUnattributedCost({
+    input: 0.4, output: 0.6, cacheRead: 0.1, cacheWrite: 0.2, total: 1.7,
+  }) - 0.4) < 1e-9);
+  assert.equal(H.usageUnattributedCost({ input: 1, output: 1, total: 2 }), 0);
+  assert.equal(H.usageUnattributedCost({ total: null }), 0);
+});
+
 test('mergeUsageSummaries keeps per-host workspaces and sessions apart, merges models', () => {
   const merged = H.mergeUsageSummaries([
     { hostId: 'host-a', hostLabel: 'laptop', summary: usagePayload() },

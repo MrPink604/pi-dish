@@ -4988,11 +4988,11 @@ function injectLaunchWrapper(descriptor, args, wrapperPath) {
 // exercise the bridge's duplicate-load sentinel. The realpath must match
 // strictly — a link into some other checkout may predate env-token support,
 // so it keeps the wrapper (the sentinel makes that safe).
-function discoveryBridgeInstalled(descriptor) {
+function discoveryBridgeInstalled(descriptor, env = process.env) {
   if (!descriptor.wrapperEntrypoint || typeof descriptor.discoveryExtensionsDir !== 'function') return false;
   const bridgeDir = path.dirname(descriptor.wrapperEntrypoint);
   try {
-    const installed = fs.realpathSync(path.join(descriptor.discoveryExtensionsDir(), path.basename(bridgeDir)));
+    const installed = fs.realpathSync(path.join(descriptor.discoveryExtensionsDir(env), path.basename(bridgeDir)));
     return installed === fs.realpathSync(bridgeDir);
   } catch {
     return false;
@@ -5045,7 +5045,10 @@ async function spawnHarnessInTmux({ descriptor, target, args, cwd, name, hidden 
 
   const token = crypto.randomBytes(16).toString('hex');
   env.PI_DISH_SPAWN_TOKEN = token;
-  const discoveryInstalled = discoveryBridgeInstalled(descriptor);
+  // The configured command may carry harness-specific environment overrides
+  // (notably OMP_AGENT_DIR). Discovery must be checked where the child will
+  // actually look, not against the server's default agent directory.
+  const discoveryInstalled = discoveryBridgeInstalled(descriptor, { ...process.env, ...env });
   const wrapperPath = discoveryInstalled ? null : materializeLaunchWrapper(descriptor, token);
   const command = [...spec.argv, ...(discoveryInstalled
     ? stripLaunchWrapperArgs(descriptor, args)

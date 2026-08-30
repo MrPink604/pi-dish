@@ -953,7 +953,9 @@ function sessionHostIdOf(session) {
 
 function sessionRefCandidates() {
   const all = allKnownSessions();
-  return currentSession ? all.filter(s => s.id !== currentSession.id) : all;
+  if (!currentSession) return all;
+  const currentHost = sessionHostIdOf(currentSession);
+  return all.filter(s => s.id !== currentSession.id || sessionHostIdOf(s) !== currentHost);
 }
 
 /** Ids sharing a session's host — the only ones a prefix has to beat. */
@@ -1018,14 +1020,16 @@ function acceptSessionRefMention(ref) {
 }
 
 /** The session a ref addresses, resolved the way its owning server would. */
-function sessionMatchingRef(ref) {
+function sessionMatchingRef(ref, localHostId = currentSession ? sessionHostIdOf(currentSession) : selfHost.hostId) {
   const parts = parseSessionRefParts(ref);
   if (!parts) return null;
   const onHost = allKnownSessions().filter((session) => {
     const hostId = sessionHostIdOf(session);
-    if (!parts.hostPart) return hostId === selfHost.hostId;
+    // Bare and self/ refs are local to the server that owns the transcript,
+    // which is not necessarily the browser's serving host.
+    if (!parts.hostPart) return hostId === localHostId;
     if (parts.hostIdForm) return hostId === parts.hostPart;
-    if (parts.hostPart.toLowerCase() === 'self') return hostId === selfHost.hostId;
+    if (parts.hostPart.toLowerCase() === 'self') return hostId === localHostId;
     const entry = hostEntryFor(hostId);
     return !!entry && String(entry.name || '').toLowerCase() === parts.hostPart.toLowerCase();
   });
@@ -4299,7 +4303,10 @@ const USAGE_COST_BUCKETS = [
 // is priced so callers can fall back to the total-only display.
 function usageCostBreakdown(costs) {
   if (!costs || !Number.isFinite(costs.total)) return null;
-  return USAGE_COST_BUCKETS.map(([key, label]) => `${label} ${formatEstimatedCost(costs[key])}`).join(' · ');
+  const parts = USAGE_COST_BUCKETS.map(([key, label]) => `${label} ${formatEstimatedCost(costs[key])}`);
+  const unattributed = usageUnattributedCost(costs);
+  if (unattributed > 1e-12) parts.push(`Unattributed ${formatEstimatedCost(unattributed)}`);
+  return parts.join(' · ');
 }
 function usageModelValue(m, metric) {
   if (metric === 'cost') return Number.isFinite(m.cost) ? m.cost : 0;
@@ -4469,12 +4476,17 @@ function drawUsageChart() {
     const total = usageMetricValue(b, metric);
     const segs = [];
     if (stackBuckets) {
-      // Bucket mode: the four cost components sum exactly to the known
-      // subtotal the bar plots, so there is no folded "other" tail.
       USAGE_COST_BUCKETS.forEach(([key, , cls]) => {
         const v = Number.isFinite(b.costs?.[key]) ? b.costs[key] : 0;
         if (v > 0) segs.push({ cls, v });
       });
+      // Older recordings can carry a known total with no component split.
+      // Keep that spend visible instead of drawing a mysteriously short bar.
+      const unattributed = usageUnattributedCost(b.costs);
+      if (unattributed > 1e-12) {
+        segs.push({ cls: 'sother', v: unattributed });
+        anyOther = true;
+      }
     } else {
       const byRef = new Map((b.models || []).map(m => [m.ref, m]));
       let known = 0;
@@ -4516,7 +4528,9 @@ function drawUsageChart() {
     ? USAGE_COST_BUCKETS.map(([, label, cls]) => `<span class="usage-legend-item"><i class="swatch ${cls}"></i>${escapeHtml(label)}</span>`)
     : seriesRefs.map((ref, i) =>
       `<span class="usage-legend-item" title="${escapeHtml(ref)}"><i class="swatch s${i + 1}"></i>${escapeHtml(shortModelName(ref))}</span>`);
-  if (!stackBuckets && (anyOther || (usageChart.activeModelCount || 0) > seriesRefs.length))
+  if (stackBuckets && anyOther)
+    legendItems.push('<span class="usage-legend-item"><i class="swatch sother"></i>Unattributed</span>');
+  else if (!stackBuckets && (anyOther || (usageChart.activeModelCount || 0) > seriesRefs.length))
     legendItems.push('<span class="usage-legend-item"><i class="swatch sother"></i>other</span>');
 
   holder.innerHTML = `<svg width="${width}" height="${height}" role="img" aria-label="${USAGE_METRIC_LABELS[metric]} per ${buckets[0]?.days > 1 ? 'week' : 'day'}">${parts.join('')}</svg>` +
@@ -4565,7 +4579,11 @@ function renderUsageDayDetail() {
     ['Cache', formatCacheStat(tok.cacheRead, tok.cacheWrite, tok.input)],
     // Per-bucket spend keeps the day detail pivoted like the range totals.
     ...(Number.isFinite(bucket.costs?.total)
-      ? USAGE_COST_BUCKETS.map(([key, label]) => [label, formatEstimatedCost(bucket.costs[key])])
+      ? [
+          ...USAGE_COST_BUCKETS.map(([key, label]) => [label, formatEstimatedCost(bucket.costs[key])]),
+          ...(usageUnattributedCost(bucket.costs) > 1e-12
+            ? [['Unattributed', formatEstimatedCost(usageUnattributedCost(bucket.costs))]] : []),
+        ]
       : []),
   ].map(([k, v]) => `<div><small>${k}</small><strong>${v}</strong></div>`).join('');
   const slotFor = ref => {
@@ -4605,6 +4623,12 @@ function usageBucketShareHtml(t) {
     const share = v / total;
     if (share > 0.004) segs.push(`<span class="${cls}" style="flex-grow:${(share * 1000).toFixed(1)}" title="${escapeHtml(label)}"></span>`);
     legend.push(`<span class="usage-legend-item"><i class="swatch ${cls}"></i>${escapeHtml(label)} <b>${formatEstimatedCost(v)}</b> <small>${Math.round(share * 100)}%</small></span>`);
+  }
+  const unattributed = usageUnattributedCost(t.costs);
+  if (unattributed > 1e-12) {
+    const share = unattributed / total;
+    if (share > 0.004) segs.push(`<span class="sother" style="flex-grow:${(share * 1000).toFixed(1)}" title="Unattributed"></span>`);
+    legend.push(`<span class="usage-legend-item"><i class="swatch sother"></i>Unattributed <b>${formatEstimatedCost(unattributed)}</b> <small>${Math.round(share * 100)}%</small></span>`);
   }
   return `<section class="usage-section"><h4>Spend by bucket${unpriced ? ` <small class="usage-hint">${unpriced} unpriced call${unpriced === 1 ? '' : 's'} omitted</small>` : ''}</h4>
     <div class="usage-share-bar">${segs.join('')}</div>
@@ -4717,6 +4741,8 @@ function showUsageTooltip(bucket, e) {
     USAGE_COST_BUCKETS.forEach(([key, label, cls]) => {
       rows.push([cls, label, Number.isFinite(bucket.costs?.[key]) ? bucket.costs[key] : 0]);
     });
+    const unattributed = usageUnattributedCost(bucket.costs);
+    if (unattributed > 1e-12) rows.push(['sother', 'Unattributed', unattributed]);
   } else {
     const seriesRefs = usageChart?.seriesRefs || [];
     const byRef = new Map((bucket.models || []).map(m => [m.ref, m]));

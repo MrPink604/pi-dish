@@ -17,6 +17,9 @@ type ObserverState = {
     planMode?: HostMethod;
     prewalk?: HostMethod;
     goal?: HostMethod;
+    advisorEnabled?: HostMethod;
+    advisorActive?: HostMethod;
+    advisorOverview?: HostMethod;
   };
 };
 
@@ -51,17 +54,11 @@ function readProjection(session: HostSession): OmpNativeProjection {
     if (!reader) return fallback;
     try { return Reflect.apply(reader, session, []); } catch { return fallback; }
   };
-  // The advisor accessors are pure reads OMP never routes state changes
-  // through, so they are called straight off the session instead of being
-  // captured — nothing here can re-enter publish(). Each is feature-detected
-  // on its own: an OMP too old for one of them still projects the rest.
-  const read = (name: string): unknown => {
-    const method = session[name];
-    if (typeof method !== "function") return undefined;
-    try { return Reflect.apply(method as HostMethod, session, []); } catch { return undefined; }
-  };
+  // The stored methods are the originals, not the publication wrappers.
+  // Calling them here therefore cannot re-enter publish(). Each accessor is
+  // feature-detected on its own: an OMP too old for one still projects the rest.
   const todos = call(state.readers.todos, []);
-  const advisorEnabled = read("isAdvisorEnabled");
+  const advisorEnabled = call(state.readers.advisorEnabled, undefined);
   return {
     todos: Array.isArray(todos) ? todos : [],
     planMode: call(state.readers.planMode, null),
@@ -70,8 +67,8 @@ function readProjection(session: HostSession): OmpNativeProjection {
     goal: call(state.readers.goal, null) ?? null,
     advisor: typeof advisorEnabled === "boolean" ? {
       enabled: advisorEnabled,
-      active: read("isAdvisorActive") === true,
-      overview: read("getAdvisorStatusOverview") ?? null,
+      active: call(state.readers.advisorActive, false) === true,
+      overview: call(state.readers.advisorOverview, null) ?? null,
     } : null,
   };
 }
@@ -90,10 +87,16 @@ function publish(session: HostSession): void {
 
 function patchAgentSession(AgentSession: { prototype: HostSession }): void {
   const proto = AgentSession.prototype;
-  if (proto[PATCHED_KEY]) return;
+  const alreadyPatched = proto[PATCHED_KEY] === true;
   proto[PATCHED_KEY] = true;
 
   const capture = (name: string, readerKey?: keyof ObserverState["readers"]) => {
+    // State survives extension reloads. Readers already present point at the
+    // unwrapped host methods and must not be replaced with an older wrapper
+    // (that would recurse through publish). A previously patched prototype may
+    // still need newly added readers, while its existing setters need no wrap.
+    if (readerKey && state.readers[readerKey]) return;
+    if (!readerKey && alreadyPatched) return;
     const candidate = proto[name];
     if (typeof candidate !== "function") return;
     const original = candidate as HostMethod;
@@ -112,6 +115,13 @@ function patchAgentSession(AgentSession: { prototype: HostSession }): void {
   // mode transition, so capturing both keeps the projection fresh without a
   // poller of our own.
   capture("getGoalModeState", "goal");
+  // Advisor runtime status can change after model discovery without going
+  // through a setter. OMP's status line reads this overview on render; wrap
+  // the read as a publication trigger while readProjection calls the stored
+  // original methods to avoid recursion.
+  capture("isAdvisorEnabled", "advisorEnabled");
+  capture("isAdvisorActive", "advisorActive");
+  capture("getAdvisorStatusOverview", "advisorOverview");
   capture("setTodoPhases");
   capture("setPlanModeState");
   capture("setGoalModeState");
