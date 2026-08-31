@@ -300,8 +300,10 @@ function streamTurn(userText, images) {
   // Real pi echoes the prompt as a user message_start/message_end right after
   // turn_start (agent-core runAgentLoop). The client must suppress this echo —
   // it already rendered the prompt optimistically on send.
-  emit('message_start', { message: { role: 'user', content: userContent, timestamp: now() } });
-  emit('message_end', { message: { role: 'user', content: userContent, timestamp: now() } });
+  const echoedUser = { role: 'user', content: userContent, timestamp: now() };
+  emit('message_start', { message: echoedUser });
+  emit('message_end', { message: echoedUser });
+  emit('message_end', { message: echoedUser }); // OMP may repeat the completed event
   // Tool phase first: live panel appears mid-turn, then the JSONL catch-up
   // after turn_end must replace it with a collapsed .tool-group.
   const toolArgs = { command: 'echo hi' };
@@ -328,6 +330,9 @@ function streamTurn(userText, images) {
         appendEntry({ type: 'message', message: done });
         emit('message_end', { message: done });
         emit('turn_end', {});
+        // OMP can repeat the completed event after the turn boundary. The
+        // browser must not append it beside the authoritative JSONL render.
+        setTimeout(() => emit('message_end', { message: done }), 100);
       }
     }, 60);
   }, 150);
@@ -627,6 +632,11 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(finals.some(t => t.includes('Streamed reply with')), 'final assistant message rendered');
     check(await desktop.locator('.message.assistant[data-streaming="true"]').count() === 0,
       'streaming placeholder cleaned up');
+    await desktop.waitForTimeout(200); // let the simulated late OMP repeat land
+    check(await desktop.evaluate(() =>
+      [...document.querySelectorAll('.message.assistant')]
+        .filter(el => el.textContent.includes('Streamed reply with')).length === 1),
+      'repeated assistant completion remains a single rendered response');
     // The JSONL catch-up supersedes the live panel and folds this turn's
     // tool activity into a second collapsed group.
     check(await desktop.locator('details.live-tool-panel').count() === 0,
@@ -652,9 +662,13 @@ let remoteHost = null; // second pi-dish (multi-host section)
     console.log('tool panel completion/update upsert:');
     emit('tool_execution_end', { toolCallId: 'completion-only', toolName: 'Bash',
       args: { command: 'echo complete' }, result: { content: [{ type: 'text', text: 'complete output' }] }, isError: false });
+    emit('tool_execution_end', { toolCallId: 'completion-only', toolName: 'Bash',
+      args: { command: 'echo complete' }, result: { content: [{ type: 'text', text: 'complete output' }] }, isError: false });
     await desktop.waitForSelector('details.live-tool-panel.complete[data-tool-call-id="completion-only"]', { timeout: 3000 });
     check((await desktop.locator('[data-tool-call-id="completion-only"]').textContent()).includes('complete output'),
       'completion-only end creates a finished panel');
+    check(await desktop.locator('[data-tool-call-id="completion-only"]').count() === 1,
+      'repeated tool completion stays a single panel');
     await desktop.evaluate(() => removeDuplicatedLiveContent(document.getElementById('messages')));
     emit('tool_execution_update', { toolCallId: 'completion-only', toolName: 'Bash',
       args: { command: 'echo complete' }, partialResult: { content: [{ type: 'text', text: 'late background update' }] } });
@@ -681,6 +695,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.waitForSelector('.message.custom-message.async-result[data-streaming="true"]', { timeout: 3000 });
     check(await desktop.locator('.message.custom-message.async-result:not([data-msg-index])').count() === 1,
       'cumulative live custom updates upsert one row');
+    emit('message_end', { message: liveAsync });
     emit('message_end', { message: liveAsync });
     await desktop.waitForFunction(() => {
       const rows = document.querySelectorAll('.message.custom-message.async-result:not([data-msg-index])');

@@ -7268,6 +7268,10 @@ function openMessageStream(url, sessionId, selectionGeneration) {
       if (ownsStream()) listener(e);
     });
     let turnCleanupDone = false;
+    // OMP can deliver the same completed message event more than once. Keep
+    // completion rendering idempotent for the whole turn, including a late
+    // repeat after turn_end's JSONL catch-up has installed the indexed copy.
+    const seenMessageEnds = new Set();
 
     evtSource.onopen = () => { if (ownsStream()) setStatus(''); };
 
@@ -7307,6 +7311,7 @@ function openMessageStream(url, sessionId, selectionGeneration) {
     });
 
     addOwnedListener('turn_start', () => {
+      seenMessageEnds.clear();
       turnCleanupDone = false;
       setTurnInProgress(true);
     });
@@ -7353,6 +7358,7 @@ function openMessageStream(url, sessionId, selectionGeneration) {
           return;
         }
         if (message.role !== 'assistant') return;
+        if (turnCleanupDone) seenMessageEnds.clear();
         turnCleanupDone = false;
         if (!turnInProgress) setTurnInProgress(true);
         queueStreamingRender(message);
@@ -7365,6 +7371,16 @@ function openMessageStream(url, sessionId, selectionGeneration) {
         if (!message) return;
         const container = document.getElementById('messages');
         if (!container) return;
+        const messageKey = JSON.stringify([
+          message.role,
+          message.timestamp ?? null,
+          message.content ?? null,
+          message.errorMessage ?? null,
+          message.customType ?? null,
+          message.details ?? null,
+        ]);
+        if (seenMessageEnds.has(messageKey)) return;
+        seenMessageEnds.add(messageKey);
         if (message.role === 'user') {
           // pi echoes every user message it processes — including the prompt
           // this client just rendered optimistically in sendMessage. Skip that
