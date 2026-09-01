@@ -113,6 +113,30 @@ appendEntry({ type: 'message', message: { role: 'custom', customType: 'async-res
   timestamp: Date.parse('2026-07-05T00:02:03.000Z') } });
 appendEntry({ type: 'custom_message', customType: 'future-notice',
   content: 'future custom content', display: true, timestamp: '2026-07-05T00:02:04.000Z' });
+// Diagram fences: one tagged ```mermaid, one the agent forgot to tag (the
+// common case — an untagged `flowchart LR` block used to read as a wall of
+// source). Labels stay free of path-looking tokens so the file-mention
+// linkifier has nothing to claim in here.
+appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: [
+  'Target architecture:',
+  '',
+  '```mermaid',
+  'flowchart LR',
+  '  subgraph prod["prod orchestrator"]',
+  '    O[Consumer<br/>base rate]',
+  '  end',
+  '  O --> P[EUP processor]',
+  '  P -->|authority call| A[PCP authority]',
+  '```',
+  '',
+  'And the handshake, untagged:',
+  '',
+  '```',
+  'sequenceDiagram',
+  '  Dish->>Bridge: prompt',
+  '  Bridge-->>Dish: turn_end',
+  '```',
+].join('\n') }], timestamp: '2026-07-05T00:02:05.000Z' } });
 
 // Same-pane session-switch target. The fake bridge rewrites its stable
 // registry claim to this identity and emits session_switch so the browser's
@@ -583,6 +607,10 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(imgSrc === `/api/sessions/${SESSION_ID}/messages/ui-img1/images/1`,
       `historical image URL uses its stable JSONL entry id (got ${imgSrc})`);
     check(await historicalImage.getAttribute('loading') === 'lazy', 'historical image opts into native lazy loading');
+    // loading="lazy" means the fetch is viewport-driven: bring it on screen
+    // (as a reader would) before asserting it decoded, or content appended
+    // below it silently defers the load forever.
+    await historicalImage.scrollIntoViewIfNeeded();
     await desktop.waitForFunction(() => {
       const img = document.querySelector('.message.tool-result img.msg-image');
       return img?.complete && img.naturalWidth === 1;
@@ -645,7 +673,8 @@ let remoteHost = null; // second pi-dish (multi-host section)
       'streamed turn tool activity folded into its own group');
     // The fenced block in the reply gets wrapped + given a copy button by the
     // highlight post-pass; clicking must land the code text on the clipboard.
-    const codeBlock = desktop.locator('.message.assistant[data-msg-index] .code-block');
+    // Diagram fences are .code-block too — they're counted in their own section.
+    const codeBlock = desktop.locator('.message.assistant[data-msg-index] .code-block:not(.diagram-block)');
     check(await codeBlock.count() === 1, 'fenced code block got a copy button wrapper');
     await codeBlock.locator('.code-copy-btn').click();
     await desktop.waitForFunction(() =>
@@ -656,6 +685,52 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.waitForTimeout(200);
     check(await desktop.locator('.session-item-status.working').count() === 0,
       'working dot cleared after the turn');
+
+    // Diagram fences (mermaid): the tagged block and the untagged one an agent
+    // forgot to label both render to SVG; the source stays one tap away, the
+    // copy button still copies source (not markup), and the zoom overlay opens
+    // at the diagram's own scale. mermaid is a lazy 3.5MB vendor script, so the
+    // wait is generous.
+    console.log('diagrams:');
+    await desktop.waitForFunction(() =>
+      document.querySelectorAll('.diagram-block[data-diagram-state="rendered"] svg').length === 2,
+      null, { timeout: 30000 });
+    check(true, 'tagged and sniffed diagram fences both rendered to SVG');
+    const diagram = desktop.locator('.diagram-block').first();
+    check((await diagram.locator('svg').textContent()).includes('EUP processor'),
+      'flowchart node labels rendered inside the SVG');
+    check(!(await diagram.locator('pre').isVisible()),
+      'diagram source hidden behind the rendered SVG');
+    // The block's copy button still yields source, not SVG markup — and it
+    // reaches it through .code-block, from a delegation on document.
+    await diagram.locator('.code-copy-btn').click();
+    await desktop.waitForFunction(() =>
+      document.querySelector('.diagram-block .code-copy-btn').textContent === '✓',
+      null, { timeout: 3000 });
+    const copiedDiagram = await desktop.evaluate(() => navigator.clipboard.readText());
+    check(copiedDiagram.startsWith('flowchart LR'),
+      `copy button yields the mermaid source (got ${JSON.stringify(copiedDiagram.slice(0, 20))})`);
+    await diagram.locator('.diagram-source-btn').click();
+    check(await diagram.locator('pre').isVisible() &&
+      !(await diagram.locator('.diagram-render').isVisible()),
+      'source toggle swaps the SVG for the mermaid source');
+    await diagram.locator('.diagram-source-btn').click();
+    check(!(await diagram.locator('pre').isVisible()), 'toggling back returns to the diagram');
+    await diagram.locator('.diagram-zoom-btn').click();
+    await desktop.waitForSelector('.diagram-lightbox .diagram-stage svg', { timeout: 3000 });
+    const zoomed = await desktop.evaluate(() => ({
+      width: document.querySelector('.diagram-lightbox .diagram-stage svg').getBoundingClientRect().width,
+      label: document.querySelector('.diagram-zoom-label').textContent,
+    }));
+    check(zoomed.width > 0 && /^\d+%$/.test(zoomed.label),
+      `zoom overlay shows the diagram at a stated scale (got ${JSON.stringify(zoomed)})`);
+    await desktop.locator('.diagram-zoom-bar button[title="Zoom in"]').click();
+    check(await desktop.evaluate(() =>
+      document.querySelector('.diagram-lightbox .diagram-stage svg').getBoundingClientRect().width) > zoomed.width,
+      'zoom-in enlarges the diagram');
+    await desktop.keyboard.press('Escape');
+    check(await desktop.locator('.diagram-lightbox').count() === 0,
+      'Escape closes the zoom overlay');
 
     // Completion-only and post-turn background frames must upsert by id. A
     // repeated start remains deduped, matching cumulative event snapshots.

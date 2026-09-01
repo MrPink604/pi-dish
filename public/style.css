@@ -4042,6 +4042,99 @@ img.msg-image {
   .code-copy-btn { opacity: 0.6; } /* always visible on touch devices */
 }
 
+/* Rendered diagrams (mermaid). The source <pre> is never removed — it sits
+   behind the SVG so copy, search and comment anchoring keep working — so
+   visibility is a CSS concern: source shows until an SVG lands, and again
+   whenever the reader asks for it or the render failed. The controls appear
+   only once there is a diagram to control. */
+.diagram-block[data-diagram-state='rendered']:not(.diagram-source) > pre { display: none; }
+.diagram-block.diagram-source > .diagram-render { display: none; }
+.diagram-block:not([data-diagram-state='rendered']) .diagram-btn { display: none; }
+
+.diagram-render {
+  background: var(--bg-darker);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow-x: auto;
+  padding: 12px;
+  text-align: center;
+}
+
+.diagram-render svg { max-width: 100%; height: auto; }
+
+.diagram-error {
+  color: var(--warning);
+  font-size: 12px;
+  padding: 2px 0 6px;
+}
+
+/* One actions row for the diagram controls plus the block's copy button,
+   which drops its own absolute positioning in here. */
+.diagram-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+  z-index: 1;
+}
+
+.diagram-actions .code-copy-btn { position: static; top: auto; right: auto; }
+
+.diagram-btn {
+  background: var(--bg-darker);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px 6px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.diagram-block:hover .diagram-btn { opacity: 1; }
+.diagram-btn:hover { color: var(--text); }
+
+@media (hover: none) {
+  .diagram-btn { opacity: 0.6; } /* always visible on touch devices */
+}
+
+/* Zoom overlay: a scrollable stage at the diagram's own scale, since a wide
+   flowchart is unreadable shrunk into the reading column. */
+.diagram-lightbox { flex-direction: column; gap: 8px; padding: 12px; }
+.diagram-lightbox .diagram-zoom-bar, .diagram-lightbox .diagram-stage { cursor: default; }
+
+.diagram-zoom-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.diagram-zoom-bar .diagram-btn { opacity: 1; font-size: 14px; padding: 6px 10px; }
+
+.diagram-zoom-label {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-width: 46px;
+  text-align: center;
+}
+
+.diagram-stage {
+  flex: 1 1 auto;
+  align-self: stretch;
+  overflow: auto;
+  background: var(--bg-darker);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.diagram-stage svg { display: block; margin: 0 auto; }
+
 /* Stats modal */
 .stats-modal { max-width: 560px; width: 100%; }
 

@@ -1701,6 +1701,79 @@ function sanitizeMarkdownUrl(url) {
 }
 
 /**
+ * Diagram fences. Agents emit mermaid regularly (```mermaid) and just as often
+ * forget the language tag, leaving the reader a wall of `flowchart LR` source.
+ * `diagramKindForFence` decides whether a fenced block is diagram source the
+ * viewer should render: the language tag when it names one, else a sniff of
+ * the source's own declaration line — but only for a fence whose tag claims
+ * nothing about code (untagged, plaintext-ish, or `uml`).
+ *
+ * The sniff is anchored on mermaid's diagram declarations rather than "does it
+ * parse", because the renderer is a lazily loaded ~1MB vendor script: a prose
+ * fence must not pull it in. A false positive still degrades safely — the
+ * render fails and the code block stays on screen.
+ */
+const MERMAID_FENCE_LANGS = new Set(['mermaid', 'mmd']);
+const DIAGRAM_SNIFF_LANGS = new Set(['', 'text', 'txt', 'plain', 'plaintext', 'diagram', 'uml']);
+// mermaid v11 diagram declarations. The single-word families (`graph`,
+// `flowchart`, `pie`) are pinned tighter than a bare keyword so prose opening
+// "graph shows…" or "pie chart of…" doesn't read as a diagram.
+const MERMAID_DECLARATIONS = [
+  /^(?:graph|flowchart(?:-elk)?)\s+(?:TB|TD|BT|RL|LR)\b/,
+  /^(?:sequenceDiagram|classDiagram(?:-v2)?|stateDiagram(?:-v2)?|erDiagram|journey|gantt|mindmap|timeline|kanban|zenuml|quadrantChart|requirementDiagram|gitGraph|architecture-beta|block-beta|packet(?:-beta)?|radar-beta|sankey-beta|treemap(?:-beta)?|xychart-beta|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment)\b/,
+  /^pie(?:\s+(?:title|showData)\b|\s*$)/,
+];
+
+/**
+ * The line that declares a mermaid diagram's type: the first meaningful line
+ * after optional YAML front matter (`--- title: … ---`), `%%{init}%%`
+ * directives and `%%` comments. '' when there is none.
+ */
+function mermaidDeclarationLine(text) {
+  const lines = String(text == null ? '' : text).split('\n');
+  let i = 0;
+  if (lines[0] !== undefined && lines[0].trim() === '---') {
+    const end = lines.findIndex((l, idx) => idx > 0 && l.trim() === '---');
+    if (end > 0) i = end + 1;
+  }
+  for (; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line || line.startsWith('%%')) continue;
+    return line;
+  }
+  return '';
+}
+
+function looksLikeMermaid(text) {
+  const decl = mermaidDeclarationLine(text);
+  return !!decl && MERMAID_DECLARATIONS.some((re) => re.test(decl));
+}
+
+/** 'mermaid' when this fence should render as a diagram, else null. */
+function diagramKindForFence(lang, source) {
+  const tag = String(lang == null ? '' : lang).trim().toLowerCase().split(/[\s,:;]/)[0];
+  if (MERMAID_FENCE_LANGS.has(tag)) return 'mermaid';
+  if (!DIAGRAM_SNIFF_LANGS.has(tag)) return null;
+  return looksLikeMermaid(source) ? 'mermaid' : null;
+}
+
+/**
+ * Relative-luminance test on a `#rgb`/`#rrggbb` string. The diagram renderer
+ * derives its own shades from the theme's colors and needs to be told which
+ * direction to go; every built-in theme is dark, but a user theme file
+ * (~/.pi/dish/themes/*.json) may not be. Unparseable input reads as dark,
+ * matching the default palette.
+ */
+function isDarkColorHex(hex) {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex == null ? '' : hex).trim());
+  if (!m) return true;
+  const h = m[1].length === 3 ? m[1].replace(/./g, (c) => c + c) : m[1];
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+  const lin = (c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b) < 0.5;
+}
+
+/**
  * Marked extensions for LaTeX math rendering via KaTeX.
  * Supports:
  * - Block math: $$...$$ and \[...\] (multiline or single-line)
@@ -2232,6 +2305,7 @@ if (typeof module !== 'undefined' && module.exports) {
     HOST_COLOR_SLOTS, sanitizeHostColors, sanitizeHostColorOrder, assignHostColor,
     sortHostSections, hostSectionKey, rgbStringToHex,
     modelMatchesPattern, isModelEnabled, pushPromptHistory, sanitizeMarkdownUrl, createMathExtensions,
+    diagramKindForFence, looksLikeMermaid, mermaidDeclarationLine, isDarkColorHex,
     buildSnippet, buildSnippets, highlightTokens, looksLikeFilePath, findPathTokens,
     renderDiffHtml, diffStatusClass,
     shortModelName, niceTicks, formatUsageDay, aggregateUsageWeekly,

@@ -1832,3 +1832,74 @@ test('createMathExtensions preserves plain currency and code blocks', () => {
   assert.ok(codeHtml.includes('<code>$VAR</code>'), 'inline code with $ intact');
   assert.ok(codeHtml.includes('$echo $PATH'), 'code block with $ intact');
 });
+
+test('diagramKindForFence renders tagged mermaid fences', () => {
+  const flow = 'flowchart LR\n  A[one] --> B[two]';
+  assert.equal(H.diagramKindForFence('mermaid', flow), 'mermaid');
+  assert.equal(H.diagramKindForFence('mmd', flow), 'mermaid');
+  assert.equal(H.diagramKindForFence('MERMAID', flow), 'mermaid', 'tag is case-insensitive');
+  // A tagged fence is taken at its word — mermaid gets to report the error.
+  assert.equal(H.diagramKindForFence('mermaid', 'not a diagram at all'), 'mermaid');
+});
+
+test('diagramKindForFence sniffs untagged fences agents forgot to label', () => {
+  // The real shape from an agent's architecture write-up: LR flowchart with
+  // subgraphs and HTML labels, in a fence with no language tag.
+  const untagged = [
+    'flowchart LR',
+    '  subgraph prod["prod orchestrator"]',
+    '    O[Consumer<br/>base 0.5% checkout]',
+    '  end',
+    '  O --> P',
+  ].join('\n');
+  assert.equal(H.diagramKindForFence('', untagged), 'mermaid');
+  assert.equal(H.diagramKindForFence(null, untagged), 'mermaid');
+  assert.equal(H.diagramKindForFence('text', untagged), 'mermaid', 'plaintext tag claims nothing');
+  assert.equal(H.diagramKindForFence('uml', 'classDiagram\n  Foo <|-- Bar'), 'mermaid');
+
+  // Every other mermaid family a coding agent reaches for.
+  for (const src of [
+    'sequenceDiagram\n  A->>B: hi',
+    'classDiagram\n  class Foo',
+    'stateDiagram-v2\n  [*] --> Idle',
+    'erDiagram\n  A ||--o{ B : has',
+    'gantt\n  title Rollout',
+    'gitGraph:\n  commit',
+    'mindmap\n  root((core))',
+    'C4Context\n  Person(a, "A")',
+    'pie title Spend\n  "a" : 10',
+    '---\ntitle: Framed\n---\nflowchart TD\n  A --> B',
+    '%%{init: {"theme":"base"}}%%\ngraph TD\n  A --> B',
+  ]) {
+    assert.equal(H.diagramKindForFence('', src), 'mermaid', `sniffed: ${src.split('\n')[0]}`);
+  }
+});
+
+test('diagramKindForFence leaves code and prose fences alone', () => {
+  // A tagged code fence is never sniffed, even when its first line could pass.
+  assert.equal(H.diagramKindForFence('js', 'flowchart LR\n  A --> B'), null);
+  assert.equal(H.diagramKindForFence('bash', 'graph TD'), null);
+  // Prose that merely opens with a diagram-ish word: the renderer is a ~1MB
+  // lazy download, so these must not trigger it.
+  assert.equal(H.diagramKindForFence('', 'graph shows the two spikes'), null);
+  assert.equal(H.diagramKindForFence('', 'pie chart of the spend'), null);
+  assert.equal(H.diagramKindForFence('', 'flowchart of the release process'), null);
+  assert.equal(H.diagramKindForFence('', 'const answer = 42;'), null);
+  assert.equal(H.diagramKindForFence('', ''), null);
+});
+
+test('mermaidDeclarationLine skips front matter, directives and comments', () => {
+  assert.equal(H.mermaidDeclarationLine('---\ntitle: x\n---\n\nflowchart LR'), 'flowchart LR');
+  assert.equal(H.mermaidDeclarationLine('%% a comment\n%%{init: {}}%%\nerDiagram'), 'erDiagram');
+  assert.equal(H.mermaidDeclarationLine('\n\n'), '');
+  // An unterminated front-matter marker is not front matter.
+  assert.equal(H.mermaidDeclarationLine('---\nflowchart LR'), '---');
+});
+
+test('isDarkColorHex judges theme backgrounds', () => {
+  assert.equal(H.isDarkColorHex('#00212b'), true, 'solarized base03');
+  assert.equal(H.isDarkColorHex('#101215'), true, 'graphite');
+  assert.equal(H.isDarkColorHex('#fdf6e3'), false, 'solarized light');
+  assert.equal(H.isDarkColorHex('#fff'), false, 'shorthand hex');
+  assert.equal(H.isDarkColorHex('nonsense'), true, 'unparseable reads as dark');
+});

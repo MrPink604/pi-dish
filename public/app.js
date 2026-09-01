@@ -740,6 +740,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     const btn = e.target.closest('.msg-link-btn');
     if (btn) copyMessageShareLink(btn);
   });
+
+  // Fenced-block controls: copy source, and for diagram fences the
+  // source/diagram toggle and the zoom overlay. Delegated on document because
+  // code blocks appear in the transcript *and* the file viewer, and both
+  // re-render often.
+  document.addEventListener('click', (e) => {
+    const copy = e.target.closest('.code-copy-btn');
+    if (copy) {
+      const code = copy.closest('.code-block')?.querySelector('pre code');
+      copyTextToClipboard(code ? code.textContent : '').then(
+        () => { copy.textContent = '✓'; setTimeout(() => { copy.textContent = '⧉'; }, 1200); },
+        () => setStatus('Copy failed (clipboard blocked)', 'error'),
+      );
+      return;
+    }
+    const block = e.target.closest('.diagram-block');
+    if (!block) return;
+    if (e.target.closest('.diagram-source-btn')) toggleDiagramSource(block);
+    else if (e.target.closest('.diagram-zoom-btn')) openDiagramLightbox(block);
+  });
   
   // Periodic refresh must preserve an in-flight server search, or the list
   // resets to unfiltered mid-search.
@@ -835,16 +855,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       maybeLoadOlderMessages(messagesEl);
     }, { passive: true });
     messagesEl.addEventListener('mousedown', cancelFollow, { passive: true });
-    // Copy a fenced code block's text (delegated — messages re-render often).
-    messagesEl.addEventListener('click', (e) => {
-      const btn = e.target.closest('.code-copy-btn');
-      if (!btn) return;
-      const code = btn.parentElement.querySelector('pre code');
-      copyTextToClipboard(code ? code.textContent : '').then(
-        () => { btn.textContent = '✓'; setTimeout(() => { btn.textContent = '⧉'; }, 1200); },
-        () => setStatus('Copy failed (clipboard blocked)', 'error'),
-      );
-    });
     // Open the session a #ref chip names. Cross-host chips carry the host in
     // the ref, so the lookup — not the click — decides which host to switch to.
     messagesEl.addEventListener('click', (e) => {
@@ -10185,12 +10195,14 @@ function formatMarkdown(text) {
   return html;
 }
 
-// Post-render pass over final markdown: syntax-highlight fenced code blocks
-// and give each one a copy button. Runs after final renders only — streaming
-// re-renders skip it to stay cheap — and must stay idempotent (it re-runs on
-// every append/prepend). The wrapper div keeps the button pinned while the
-// <pre> scrolls horizontally (an absolutely positioned child of the <pre>
-// would scroll away with the overflowing content).
+// Post-render pass over final markdown: syntax-highlight fenced code blocks,
+// give each one a copy button, and turn diagram fences into rendered
+// diagrams. Runs after final renders only — streaming re-renders skip it to
+// stay cheap (and half a diagram is not parseable anyway) — and must stay
+// idempotent (it re-runs on every append/prepend). The wrapper div keeps the
+// button pinned while the <pre> scrolls horizontally (an absolutely
+// positioned child of the <pre> would scroll away with the overflowing
+// content).
 function applyHighlight(el) {
   const root = el || document.getElementById('messages');
   if (!root) return;
@@ -10206,10 +10218,24 @@ function applyHighlight(el) {
       pre.replaceWith(wrap);
       wrap.append(btn, pre);
     }
+    const kind = diagramKindForFence(fenceLanguage(code), code.textContent);
+    if (kind) {
+      prepareDiagramBlock(pre && pre.parentElement, kind);
+      // hljs has no mermaid grammar in the common bundle, so highlighting the
+      // source view would only be auto-detection noise.
+      code.dataset.highlighted = 'diagram';
+    }
     if (typeof hljs === 'undefined' || code.dataset.highlighted) return;
     try { hljs.highlightElement(code); } catch (e) {}
   });
+  renderDiagrams(root);
   linkifyFilePaths(root);
+}
+
+/** The fence's declared language, from marked's `language-x` class. */
+function fenceLanguage(code) {
+  const cls = [...code.classList].find((c) => c.startsWith('language-'));
+  return cls ? cls.slice('language-'.length) : '';
 }
 
 // Mark file mentions clickable: inline code spans and tool-call summaries
@@ -10231,7 +10257,9 @@ function linkifyFilePaths(root) {
     body.dataset.linkified = '1';
     const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
       acceptNode(n) {
-        return n.parentElement && !n.parentElement.closest('code, a, pre, .file-link, .katex, .math-block')
+        // .diagram-render holds an SVG: a <span> spliced into an SVG <text>
+        // renders nothing, so a linkified label would silently vanish.
+        return n.parentElement && !n.parentElement.closest('code, a, pre, .file-link, .katex, .math-block, .diagram-render')
           ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       },
     });
@@ -10255,6 +10283,285 @@ function linkifyFilePaths(root) {
       node.replaceWith(frag);
     }
   });
+}
+
+/**
+ * Lazily pull a vendored asset into <head>. The heavy vendor bundles (xterm,
+ * mermaid) are loaded on demand rather than from index.html, so a phone that
+ * never opens a terminal or reads a diagram never downloads them.
+ */
+function loadVendorAsset(tag, attrs) {
+  return new Promise((resolve, reject) => {
+    const el = document.createElement(tag);
+    Object.assign(el, attrs);
+    el.onload = resolve;
+    el.onerror = () => reject(new Error(`Failed to load ${attrs.src || attrs.href}`));
+    document.head.appendChild(el);
+  });
+}
+
+// =========================================================================
+// Diagrams (mermaid)
+//
+// Agents write mermaid — flowcharts, sequence/class/state diagrams, ER, gantt
+// — into fenced blocks, and before this the reader got the source. Rendering
+// lives in the same final-render post-pass as highlighting: never mid-stream
+// (a half-streamed diagram doesn't parse), always idempotent, and the source
+// <pre> is never removed — it stays in the DOM behind the SVG, which keeps the
+// copy button, focus mode, in-session search and anchored comments working off
+// the same text they always did.
+//
+// mermaid.min.js is 3.5MB (~1MB gzipped), so it is vendored but *lazy*: no
+// transcript without a diagram ever downloads it, matching the xterm rule.
+// =========================================================================
+
+let mermaidPromise = null;
+let diagramSeq = 0;
+
+function loadMermaid() {
+  if (mermaidPromise) return mermaidPromise;
+  mermaidPromise = loadVendorAsset('script', { src: 'vendor/mermaid.min.js' }).then(() => {
+    if (typeof mermaid === 'undefined') throw new Error('mermaid did not load');
+    mermaid.initialize(mermaidConfig());
+    return mermaid;
+  }).catch((err) => {
+    mermaidPromise = null; // a dropped LAN connection must not be permanent
+    throw err;
+  });
+  return mermaidPromise;
+}
+
+/**
+ * mermaid config derived from the live theme tokens, the way terminalTheme()
+ * derives xterm's palette. Tokens are resolved to concrete hex first: several
+ * are color-mix() over another token, and mermaid does color math (lighten,
+ * darken, contrast) on whatever it is handed.
+ */
+function mermaidConfig() {
+  const css = getComputedStyle(document.documentElement);
+  const hex = (name, fallback) => resolveColorToHex(css.getPropertyValue(name).trim()) || fallback;
+  const bg = hex('--bg-darker', '#00212b');
+  const card = hex('--bg-card', '#073642');
+  const hover = hex('--bg-hover', '#0b4354');
+  const text = hex('--text-bright', '#dbe5e6');
+  const muted = hex('--text-muted', '#6f8b93');
+  const border = hex('--accent-dim', '#1c6ba3');
+  const line = hex('--border', '#11475a');
+  return {
+    startOnLoad: false,
+    // The SVG is written into transcript DOM, so mermaid's own sanitizer is
+    // what keeps diagram-authored HTML labels (<br>, <b>) inert.
+    securityLevel: 'strict',
+    // A failed render must leave the code block standing, not mermaid's own
+    // error graphic.
+    suppressErrorRendering: true,
+    theme: 'base',
+    fontFamily: getComputedStyle(document.body).fontFamily,
+    flowchart: { htmlLabels: true, useMaxWidth: true },
+    themeVariables: {
+      darkMode: isDarkColorHex(bg),
+      background: bg,
+      primaryColor: card,
+      primaryTextColor: text,
+      primaryBorderColor: border,
+      secondaryColor: hover,
+      secondaryTextColor: text,
+      tertiaryColor: bg,
+      tertiaryTextColor: text,
+      lineColor: muted,
+      textColor: text,
+      mainBkg: card,
+      nodeBorder: border,
+      clusterBkg: bg,
+      clusterBorder: line,
+      titleColor: text,
+      edgeLabelBackground: bg,
+      labelBoxBkgColor: card,
+      labelBoxBorderColor: border,
+      actorBkg: card,
+      actorBorder: border,
+      actorTextColor: text,
+      signalColor: muted,
+      signalTextColor: text,
+      noteBkgColor: hover,
+      noteBorderColor: border,
+      noteTextColor: text,
+      fontSize: '14px',
+    },
+  };
+}
+
+/**
+ * Equip a wrapped code block for diagram rendering: the source/zoom controls
+ * join the copy button in one actions row. Idempotent — `data-diagram` is the
+ * marker, and CSS keeps the controls hidden until an SVG actually lands.
+ */
+function prepareDiagramBlock(block, kind) {
+  if (!block || block.dataset.diagram) return;
+  block.dataset.diagram = kind;
+  block.classList.add('diagram-block');
+  const actions = document.createElement('div');
+  actions.className = 'diagram-actions';
+  const source = document.createElement('button');
+  source.className = 'diagram-btn diagram-source-btn';
+  source.title = 'Show diagram source';
+  source.textContent = '</>';
+  const zoom = document.createElement('button');
+  zoom.className = 'diagram-btn diagram-zoom-btn';
+  zoom.title = 'Zoom diagram';
+  zoom.textContent = '⤢';
+  actions.append(source, zoom);
+  const copy = block.querySelector('.code-copy-btn');
+  if (copy) actions.append(copy);
+  block.prepend(actions);
+}
+
+/**
+ * Render every diagram block under `root` that hasn't been rendered yet.
+ * Fire-and-forget: the code block stays on screen until the SVG replaces it,
+ * so a slow (or absent) renderer never blanks content.
+ */
+function renderDiagrams(root) {
+  const blocks = [...root.querySelectorAll('.diagram-block:not([data-diagram-state])')];
+  if (!blocks.length) return;
+  for (const block of blocks) block.dataset.diagramState = 'loading';
+  loadMermaid().then(
+    (m) => { for (const block of blocks) renderDiagramBlock(m, block); },
+    () => { for (const block of blocks) setDiagramError(block, 'diagram renderer unavailable'); },
+  );
+}
+
+async function renderDiagramBlock(m, block) {
+  const code = block.querySelector('pre code');
+  if (!code) { block.dataset.diagramState = 'error'; return; }
+  // The SVG is taller than its source, so a reader sitting at the bottom of a
+  // live feed must be carried down with it.
+  const feed = document.getElementById('messages');
+  const pinned = feed && feed.contains(block) && isPinnedToBottom(feed);
+  try {
+    // mermaid measures text in a throwaway element it appends to <body>, so
+    // this works for a block inside a closed tool group or a cached
+    // (detached) transcript fragment.
+    const { svg } = await m.render(`pi-dish-diagram-${++diagramSeq}`, code.textContent);
+    let figure = block.querySelector('.diagram-render');
+    if (!figure) {
+      figure = document.createElement('div');
+      figure.className = 'diagram-render';
+      block.insertBefore(figure, block.querySelector('pre'));
+    }
+    // mermaid sanitized this string (securityLevel strict). Diagram `click`
+    // interactions are deliberately left unbound — bindFunctions() would wire
+    // diagram-authored callbacks and link navigation into the app.
+    figure.innerHTML = svg;
+    block.querySelector('.diagram-error')?.remove();
+    block.classList.remove('diagram-failed');
+    block.dataset.diagramState = 'rendered';
+    if (pinned) scrollToBottom(feed);
+  } catch (err) {
+    // mermaid's message is a multi-line parser dump; its first line ("Parse
+    // error on line 2:") is the only part worth a quiet note.
+    setDiagramError(block, String((err && err.message) || err).split('\n')[0].replace(/:\s*$/, ''));
+  }
+}
+
+/** Keep the source visible and say why it stayed source. */
+function setDiagramError(block, message) {
+  block.dataset.diagramState = 'error';
+  block.classList.add('diagram-failed');
+  let note = block.querySelector('.diagram-error');
+  if (!note) {
+    note = document.createElement('div');
+    note.className = 'diagram-error';
+    block.insertBefore(note, block.querySelector('pre'));
+  }
+  note.textContent = `⚠ ${message}`;
+}
+
+function toggleDiagramSource(block) {
+  const showing = block.classList.toggle('diagram-source');
+  const btn = block.querySelector('.diagram-source-btn');
+  if (btn) {
+    btn.textContent = showing ? '▦' : '</>';
+    btn.title = showing ? 'Show diagram' : 'Show diagram source';
+  }
+}
+
+/**
+ * Zoom a rendered diagram. Inside the reading column a wide flowchart shrinks
+ * to unreadable, so the overlay shows the SVG at its own size in a scrollable
+ * stage with explicit zoom steps — a phone has no wheel, and pinch-zoom inside
+ * a fixed overlay is not dependable.
+ */
+function openDiagramLightbox(block) {
+  const svg = block.querySelector('.diagram-render svg');
+  if (!svg) return;
+  const box = svg.viewBox && svg.viewBox.baseVal;
+  const rect = svg.getBoundingClientRect();
+  const baseW = (box && box.width) || rect.width || 800;
+  const baseH = (box && box.height) || rect.height || 600;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'lightbox-overlay diagram-lightbox';
+  const bar = document.createElement('div');
+  bar.className = 'diagram-zoom-bar';
+  const stage = document.createElement('div');
+  stage.className = 'diagram-stage';
+  const clone = svg.cloneNode(true);
+  clone.removeAttribute('style'); // mermaid's own max-width fights the zoom
+  clone.removeAttribute('width');
+  clone.removeAttribute('height');
+  stage.appendChild(clone);
+  overlay.append(bar, stage);
+  document.body.appendChild(overlay);
+
+  const fitScale = () => Math.min(1, (stage.clientWidth - 24) / baseW, (stage.clientHeight - 24) / baseH) || 1;
+  let scale = fitScale();
+  const label = document.createElement('span');
+  label.className = 'diagram-zoom-label';
+  const apply = () => {
+    clone.style.width = `${Math.round(baseW * scale)}px`;
+    clone.style.height = `${Math.round(baseH * scale)}px`;
+    label.textContent = `${Math.round(scale * 100)}%`;
+  };
+  const step = (factor) => { scale = Math.min(8, Math.max(0.1, scale * factor)); apply(); };
+  const button = (text, title, onClick) => {
+    const b = document.createElement('button');
+    b.className = 'diagram-btn';
+    b.textContent = text;
+    b.title = title;
+    b.addEventListener('click', onClick);
+    return b;
+  };
+  bar.append(
+    button('−', 'Zoom out', () => step(1 / 1.25)),
+    label,
+    button('+', 'Zoom in', () => step(1.25)),
+    button('⤾', 'Fit to screen', () => { scale = fitScale(); apply(); }),
+    button('✕', 'Close', () => overlay.remove()),
+  );
+  apply();
+  // Backdrop only — clicks on the diagram itself are for panning/selection.
+  overlay.addEventListener('click', (e) => { if (e.target === overlay || e.target === stage) overlay.remove(); });
+}
+
+/**
+ * Theme change: diagram colors are baked into each SVG at render time, so
+ * re-initialize mermaid and re-render what's on screen — plus the retained
+ * transcripts, which are restored without another applyHighlight pass.
+ */
+function refreshDiagramTheme() {
+  if (!mermaidPromise) return; // nothing rendered yet; the next load reads the new tokens
+  mermaidPromise.then((m) => {
+    m.initialize(mermaidConfig());
+    const roots = [document, ...[...transcriptCache.values()].map((entry) => entry.fragment)];
+    for (const root of roots) {
+      root.querySelectorAll('.diagram-block[data-diagram-state]').forEach((block) => {
+        block.querySelector('.diagram-render')?.remove();
+        delete block.dataset.diagramState;
+      });
+      renderDiagrams(root);
+    }
+  }).catch(() => {});
 }
 
 // navigator.clipboard only exists in secure contexts — a phone hitting the
@@ -10315,9 +10622,12 @@ function closeTreeModal() {
 
 document.addEventListener('keydown', function(e) {
   if (e.key !== 'Escape') return;
-  // The floating row menu is the shallowest surface open — it goes first, and
-  // it alone, so Escape never dismisses it *and* the modal underneath.
-  if (isSessionMenuOpen()) {
+  // A lightbox (image or diagram zoom) floats above every modal — it goes
+  // first, and it alone, so Escape never dismisses it *and* what's underneath.
+  const lightbox = document.querySelector('.lightbox-overlay');
+  if (lightbox) {
+    e.preventDefault(); lightbox.remove();
+  } else if (isSessionMenuOpen()) {
     e.preventDefault(); closeSessionMenu();
   } else if (isCommentListPopoverOpen()) {
     e.preventDefault(); closeCommentListPopover();
@@ -10532,25 +10842,17 @@ async function confirmBranch() {
 let appConfig = { terminal: false };
 let terminalAssetsPromise = null;
 
-function loadTerminalAsset(tag, attrs) {
-  return new Promise((resolve, reject) => {
-    const el = document.createElement(tag);
-    Object.assign(el, attrs);
-    el.onload = resolve;
-    el.onerror = () => reject(new Error(`Failed to load ${attrs.src || attrs.href}`));
-    document.head.appendChild(el);
-  });
-}
+// The vendor asset loader lives with the diagrams (see loadVendorAsset).
 
 function loadTerminalAssets() {
   if (terminalAssetsPromise) return terminalAssetsPromise;
   terminalAssetsPromise = (async () => {
-    const css = loadTerminalAsset('link', { rel: 'stylesheet', href: 'vendor/xterm.css' });
+    const css = loadVendorAsset('link', { rel: 'stylesheet', href: 'vendor/xterm.css' });
     await Promise.all([
       css,
-      loadTerminalAsset('script', { src: 'vendor/xterm.js' }),
+      loadVendorAsset('script', { src: 'vendor/xterm.js' }),
     ]);
-    await loadTerminalAsset('script', { src: 'vendor/xterm-addon-fit.js' });
+    await loadVendorAsset('script', { src: 'vendor/xterm-addon-fit.js' });
   })();
   return terminalAssetsPromise;
 }
@@ -10645,6 +10947,8 @@ function applyTheme(id) {
   renderThemeSelect();
   // The terminal bakes token colors in at open time — re-derive live.
   if (termState?.term) termState.term.options.theme = terminalTheme();
+  // Diagram SVGs bake their colors in at render time — re-render them too.
+  refreshDiagramTheme();
 }
 
 // xterm theme from the :root Solarized tokens; the handful of ANSI slots the

@@ -38,6 +38,33 @@ falls back to `execCommand('copy')` because `navigator.clipboard` doesn't
 exist on insecure origins (phones hit the server over plain LAN http — a
 clipboard-only button silently no-ops there).
 
+`mermaid` is vendored the same way but **lazily loaded**: `mermaid.min.js` is
+3.5MB (the self-contained IIFE build — the `.esm` one splits into chunks a
+plain `<script>` can't resolve), so `loadVendorAsset()` pulls it in on the
+first diagram a transcript actually holds, exactly like the xterm bundles. A
+session with no diagrams downloads nothing. `applyHighlight()` decides what is
+a diagram via `diagramKindForFence()` (helpers.js): a `mermaid`/`mmd` fence,
+or — because agents routinely forget the tag — an untagged/plaintext fence
+whose first meaningful line is a mermaid diagram declaration. Tagged *code*
+fences are never sniffed, and the sniff is anchored on declarations rather
+than "does it parse" so prose can't trigger the download. Rendering rules
+worth keeping: the source `<pre>` is never removed (it stays behind the SVG,
+so copy, in-session search and anchored comments keep working off the same
+text, and a failed parse just leaves the code block plus a quiet `⚠` note);
+`securityLevel: 'strict'` is what sanitizes diagram-authored HTML labels, and
+`bindFunctions()` is deliberately never called, so diagram `click` statements
+stay inert; colors come from the theme tokens resolved to concrete hex
+(`mermaidConfig()` — mermaid does color math on them), which is why
+`applyTheme()` re-renders every diagram, on screen and in the retained
+transcript fragments. The `⤢` zoom overlay exists because a wide flowchart is
+unreadable inside the reading column: it shows the SVG at its own scale in a
+scrollable stage with explicit zoom steps (a phone has no wheel).
+
+PlantUML (`@startuml`) is *not* rendered: it needs a PlantUML server or the
+Java jar, i.e. a network dependency or a 12MB runtime, which the offline-LAN
+rule above rules out. Mermaid's `classDiagram`/`sequenceDiagram`/
+`stateDiagram` cover the UML shapes agents actually emit.
+
 Static text and JSON responses pass through Express's `compression`
 middleware (1KB threshold). `/api/sessions/:id/stream` is explicitly excluded:
 compressor buffering adds SSE latency unless every event is flushed. Keep the
@@ -1308,6 +1335,14 @@ so the outside-click closer must treat detached targets as inside.
   `.message.assistant.no-text` (tool-only turns — without that class their
   empty header rows linger as stray markers). Both the static renderer and the
   streaming renderer maintain `no-text`.
+- **Diagram fences** render to SVG in the same `applyHighlight` post-pass (see
+  the frontend-libraries section for the detection/theming rules). A diagram
+  block is still a `.code-block` — anything counting code blocks must exclude
+  `.diagram-block` — and it carries one `.diagram-actions` row: `</>` swaps SVG
+  for source, `⤢` opens the zoom overlay, and the block's copy button still
+  copies the source. The same pass runs in the file viewer, so a `.md` file's
+  fences and a whole `.mmd` file both render there. The fenced-block click
+  delegation lives on `document` (not `#messages`) for exactly that reason.
 - **Clickable file mentions / viewer** (`lib/file-mention.js`, `GET
   /api/sessions/:id/file?path=`): agents write findings.md deep in the tree
   and refer to it by bare filename — `linkifyFilePaths()` (runs inside

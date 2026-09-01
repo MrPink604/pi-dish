@@ -16,6 +16,8 @@
  *   public/vendor/xterm.js           — @xterm/xterm UMD build (browser terminal)
  *   public/vendor/xterm.css          — its stylesheet
  *   public/vendor/xterm-addon-fit.js — @xterm/addon-fit UMD build
+ *   public/vendor/mermaid.min.js     — mermaid IIFE build (diagram rendering,
+ *                                      loaded lazily on the first diagram)
  */
 const fs = require('fs');
 const path = require('path');
@@ -45,6 +47,14 @@ fs.mkdirSync(fontsOut, { recursive: true });
 for (const font of fs.readdirSync(fontsIn)) {
   fs.copyFileSync(path.join(fontsIn, font), path.join(fontsOut, font));
 }
+
+// --- mermaid: dist/mermaid.min.js is a self-contained IIFE that assigns
+// globalThis.mermaid (the .esm build splits into chunks that a plain <script>
+// can't resolve). 3.5MB, so app.js loads it lazily on the first diagram. ---
+fs.copyFileSync(
+  path.join(root, 'node_modules', 'mermaid', 'dist', 'mermaid.min.js'),
+  path.join(outDir, 'mermaid.min.js'),
+);
 
 // --- xterm.js: ships browser UMD builds, just copy them ---
 fs.copyFileSync(
@@ -114,4 +124,4 @@ out += `window.hljs = __req(".", ${id(entry)});\n`;
 out += '})();\n';
 
 fs.writeFileSync(path.join(outDir, 'highlight.js'), out);
-console.log(`vendor bundle written: ${modules.size} hljs modules, marked, hljs theme css`);
+console.log(`vendor bundle written: ${modules.size} hljs modules, marked, katex, xterm, mermaid, hljs theme css`);
