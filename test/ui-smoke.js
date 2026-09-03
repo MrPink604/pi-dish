@@ -501,6 +501,12 @@ let remoteHost = null; // second pi-dish (multi-host section)
   const server = require('../server.js');
   if (!server.listening) await new Promise((r) => server.once('listening', r));
   const base = `http://127.0.0.1:${server.address().port}`;
+  // Warm the harness pricing catalogs now, minutes before the usage-view
+  // section needs them: the first /api/usage-summary blocks on
+  // refreshHarnessPricing, which spawns `omp models --json`, and on a fresh
+  // HOME that cold start has been measured at ~11s here (under 1s warm) —
+  // more than the section's 5s wait. Fire-and-forget; the result is unused.
+  fetch(`${base}/api/usage-summary?days=30`).then((r) => r.arrayBuffer()).catch(() => {});
 
   const { chromium } = require('playwright');
   const executablePath = process.env.CHROME_BIN || '/opt/google/chrome/chrome';

@@ -10470,10 +10470,22 @@ function renderDiagrams(root) {
   const blocks = [...root.querySelectorAll('.diagram-block:not([data-diagram-state])')];
   if (!blocks.length) return;
   for (const block of blocks) block.dataset.diagramState = 'loading';
-  loadMermaid().then(
-    (m) => { for (const block of blocks) renderDiagramBlock(m, block); },
-    () => { for (const block of blocks) setDiagramError(block, 'diagram renderer unavailable'); },
-  );
+  // Deferred a task, never started inside the render pass that found the
+  // blocks. mermaid.render() does its parsing and layout in heavy chunks
+  // between awaits, so once mermaid is loaded a render started here would run
+  // in the same microtask checkpoint as the transcript load's own
+  // continuations (loadMessages → selectSession → whatever awaits them),
+  // paying the diagram layout before the text paints. It also broke the
+  // browser smoke: a CDP `awaitPromise` holds the awaited promise only weakly
+  // once it settles, and a GC in that checkpoint reported it "collected"
+  // (Playwright's "Execution context was destroyed") while the app's own
+  // chain completed fine. A task boundary separates the two.
+  setTimeout(() => {
+    loadMermaid().then(
+      (m) => { for (const block of blocks) renderDiagramBlock(m, block); },
+      () => { for (const block of blocks) setDiagramError(block, 'diagram renderer unavailable'); },
+    );
+  }, 0);
 }
 
 async function renderDiagramBlock(m, block) {

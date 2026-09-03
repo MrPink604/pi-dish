@@ -59,6 +59,16 @@ stay inert; colors come from the theme tokens resolved to concrete hex
 transcript fragments. The `⤢` zoom overlay exists because a wide flowchart is
 unreadable inside the reading column: it shows the SVG at its own scale in a
 scrollable stage with explicit zoom steps (a phone has no wheel).
+`renderDiagrams()` starts the render a **task later** (`setTimeout` 0), never
+inside the render pass that found the blocks: `mermaid.render()` parses and
+lays out in heavy chunks between awaits, so once mermaid is loaded a render
+started inline shares the microtask checkpoint with the transcript load's own
+continuations (`loadMessages` → `selectSession`) and pays the layout before
+the text paints. It also broke the browser smoke — a CDP `awaitPromise` holds
+the awaited promise only weakly once it settles, and a GC in that checkpoint
+reported it "collected" (Playwright's "Execution context was destroyed, most
+likely because of a navigation" with no navigation) while the app's own chain
+completed fine. Keep the task boundary.
 
 PlantUML (`@startuml`) is *not* rendered: it needs a PlantUML server or the
 Java jar, i.e. a network dependency or a 12MB runtime, which the offline-LAN
