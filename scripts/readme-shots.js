@@ -18,6 +18,9 @@ const OUT = process.argv[2] || path.join(REPO, 'docs', 'screenshots');
 fs.mkdirSync(OUT, { recursive: true });
 
 // --- temp HOME ----------------------------------------------------------------
+// The operator's deployment env would bind this server off-box and fight the
+// running share listener (see test/test-env.js).
+require('../test/test-env').applyTestEnv();
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-shots-'));
 process.env.HOME = tmpHome;
 process.env.PORT = '0';

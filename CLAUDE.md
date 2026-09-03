@@ -1072,7 +1072,29 @@ feed) clears it; programmatic or layout-driven scroll shifts must not.
 
 ## Tests (test/)
 
-`npm test` runs the node:test suites (`test/*.test.js`):
+`npm test` is `scripts/run-tests.js`: it re-spawns `node --test test/*.test.js`
+through `sanitizeTestEnv` (`test/test-env.js`) instead of running the runner
+directly. The suites are normally started from the shell that also runs the
+real deployment (`scripts/pi-dish-tmux.sh` exports `HOST`, `PORT`,
+`PI_DISH_SHARE_PORT`, `PI_DISH_URL`, a token…), and inheriting that binds the
+test server to a tailnet address while suites fetch loopback, or collides its
+share listener with the live one — ~150 tests failing as `fetch failed` /
+`EADDRINUSE`, none of it real. So every `PI_DISH_*` var is stripped except
+host-binary/opt-out knobs (`PI_DISH_*_COMMAND`, `PI_DISH_SKIP_INTEGRATION`,
+`PI_DISH_REAL_*`), `HOST`/`PORT` are pinned to `127.0.0.1:0`, and a
+user-installed `bun` (`$BUN_INSTALL/bin`, `~/.bun/bin`) is put on `PATH` when
+nothing named bun is resolvable — a non-login shell otherwise fails the whole
+OMP-bridge fixture with `spawn bun ENOENT`. Sanitizing happens once, in the
+parent: not via `NODE_OPTIONS`, which would re-enter it inside spawned
+pi/omp children and strip the bridge's own `PI_DISH_SOCKET_DIR`/
+`PI_DISH_SPAWN_TOKEN`. Suites set the knobs they want *after* that, as they
+always did; `test/test-env.test.js` defends the rules, and the in-process
+boots (`test/ui-smoke.js`, `scripts/readme-shots.js`,
+`scripts/test-real-lineage-harnesses.js`) call `applyTestEnv()` first.
+Extra args pass through: `npm test -- test/server.test.js`,
+`npm test -- --test-name-pattern=subagent`.
+
+The suites (`test/*.test.js`):
 - `test/server.test.js` — boots `server.js` with `HOME` pointed at a temp dir
   containing a fixture JSONL and exercises session listing, message
   pagination (`limit`/`before`/`after`), `/search`, `/stats`, request

@@ -21,6 +21,10 @@ const path = require('node:path');
 const { processIdentity } = require('../lib/process-identity');
 
 // --- temp HOME with one live fixture session ---------------------------------
+// Same first move as `npm test`: drop the operator's deployment out of the
+// environment (HOST would bind this server to their tailnet address, the
+// share port would collide with the running one) before setting our own.
+require('./test-env').applyTestEnv();
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-ui-'));
 process.env.HOME = tmpHome;
 process.env.PORT = '0';

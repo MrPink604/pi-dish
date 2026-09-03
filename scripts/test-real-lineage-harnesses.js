@@ -47,6 +47,9 @@ const primeDaemon = path.join(root, 'prime-daemon.sock');
 for (const dir of [home, tmuxDir, work, socketDir]) fs.mkdirSync(dir, { recursive: true });
 fs.chmodSync(socketDir, 0o700);
 
+// Drop the operator's deployment env (HOST/PORT/share port) before pinning
+// this run's own — see test/test-env.js.
+require('../test/test-env').applyTestEnv();
 const originalPath = process.env.PATH || '';
 process.env.PATH = [bunBinDir, path.dirname(ompBin), path.dirname(primeBin), originalPath].join(path.delimiter);
 process.env.HOME = home;
