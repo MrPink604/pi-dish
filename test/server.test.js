@@ -346,6 +346,88 @@ test('OMP sibling-directory subagents are addressable and appear as session rela
   assert.equal(messages.body.messages[0].content[0].text, 'Inspect the OMP code');
 });
 
+test('live subagent sessions surface under their live parent on the Active tab', async () => {
+  // OMP runs subagents inside the parent process, where only one bridge
+  // registers — so a working subagent is never in the registry and used to be
+  // invisible on the Active tab. Liveness is the absence of a trailing
+  // session_exit entry.
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const socket = path.join(tmpHome, 'omp-live-subagents.sock');
+  fs.writeFileSync(socket, 'stub');
+  const identity = processIdentity(process.pid);
+  const registryPath = path.join(registryDir, 'omp-live-subagents.json');
+  const childDir = ompSessionFile.slice(0, -'.jsonl'.length);
+  const runningId = 'omp-subagent-running';
+  const disposedId = 'omp-subagent-disposed';
+  const runningRoute = encodeSessionKey('omp', runningId);
+  const disposedRoute = encodeSessionKey('omp', disposedId);
+  const subagent = (id, tail = []) => [
+    { type: 'title', title: `${id} subagent` },
+    { type: 'session', version: 3, id, cwd: ompCwd },
+    { type: 'message', id: `${id}-u1`, parentId: null, message: {
+      role: 'user', content: [{ type: 'text', text: 'do the delegated thing' }],
+    } },
+    ...tail,
+  ].map(JSON.stringify).join('\n') + '\n';
+
+  fs.mkdirSync(childDir, { recursive: true });
+  fs.writeFileSync(path.join(childDir, 'Running.jsonl'), subagent(runningId));
+  fs.writeFileSync(path.join(childDir, 'Disposed.jsonl'), subagent(disposedId, [
+    { type: 'custom', customType: 'session_exit', id: 'exit-1', parentId: `${disposedId}-u1`,
+      data: { reason: 'dispose', kind: 'normal', recordedAt: new Date().toISOString() } },
+  ]));
+  fs.writeFileSync(registryPath, JSON.stringify({
+    protocolVersion: 2,
+    wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+    harnessId: 'omp', nativeSessionId: OMP_SESSION_ID, sessionId: OMP_SESSION_ID,
+    bridgeInstanceId: 'omp-live-subagents', instanceId: 'omp-live-subagents',
+    socketPath: socket, cwd: ompCwd, sessionFile: ompSessionFile,
+    pid: identity.pid, startTime: identity.startTime,
+    capabilities: {}, spawnToken: null,
+  }));
+  invalidateRegistryCache();
+  try {
+    const activeOnly = await get('/api/sessions?active=1');
+    assert.deepEqual(activeOnly.body.previous, [], 'the historical scan is still skipped');
+    const children = activeOnly.body.children.map(session => session.id);
+    assert.ok(children.includes(runningRoute), `running subagent is served: ${JSON.stringify(children)}`);
+    assert.ok(!children.includes(disposedRoute), 'a disposed subagent is history, not an active row');
+
+    const running = activeOnly.body.children.find(session => session.id === runningRoute);
+    assert.equal(running.subagentLive, true);
+    assert.equal(running.isActive, false, 'its parent owns it — pi-dish cannot drive it');
+    assert.equal(running.capabilities.prompt, false);
+    assert.equal(running.capabilities.resume, false, 'resuming would append to a file the parent holds');
+    assert.equal(running.familyParentId, OMP_ROUTE_ID, 'nests under the live parent in the sidebar');
+    assert.equal(running.name, 'Running',
+      'the row is labelled by its agent handle, not the shared delegation prompt');
+
+    const full = await get('/api/sessions');
+    assert.deepEqual(full.body.children, [], 'a full list already carries them in previous');
+    const fullRunning = full.body.previous.find(session => session.id === runningRoute);
+    assert.equal(fullRunning.subagentLive, true, 'the All tab marks the same row live');
+    assert.equal(fullRunning.capabilities.resume, false);
+    const fullDisposed = full.body.previous.find(session => session.id === disposedRoute);
+    assert.ok(fullDisposed, 'the disposed subagent stays in history');
+    assert.ok(!fullDisposed.subagentLive);
+    assert.equal(fullDisposed.capabilities.resume, true);
+
+    // The capability flag is advice a stale client can ignore; the route is
+    // the guarantee. Resuming would put a second harness process on a file
+    // the parent keeps appending to.
+    const refused = await post(`/api/sessions/${encodeURIComponent(runningRoute)}/resume`, {});
+    assert.equal(refused.status, 409, JSON.stringify(refused.body));
+    assert.match(refused.body.error, /subagent still loaded in its parent/);
+  } finally {
+    fs.rmSync(registryPath, { force: true });
+    fs.rmSync(path.join(childDir, 'Running.jsonl'), { force: true });
+    fs.rmSync(path.join(childDir, 'Disposed.jsonl'), { force: true });
+    invalidateRegistryCache();
+    await get('/api/sessions');
+  }
+});
+
 test('fresh live routes distinguish missing history, then use the session file before indexing', async () => {
   const nativeId = 'fresh-live-unindexed';
   const routeId = encodeSessionKey('omp', nativeId);

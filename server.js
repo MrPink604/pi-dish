@@ -39,10 +39,11 @@ const {
   readSessionMessageById: readSessionMessageByIdRaw,
   getSessionStats: getSessionStatsRaw,
   readSessionCwd: readSessionCwdRaw,
+  readSessionTailEntry,
   decodeDirToCwd,
 } = require('./lib/session-files');
+const { discoverSessionCandidates, discoverHarnessSessions, findSessionCandidate, discoverSubsessionCandidates } = require('./lib/session-discovery');
 const sessionIndex = require('./lib/session-index');
-const { discoverSessionCandidates, discoverHarnessSessions, findSessionCandidate } = require('./lib/session-discovery');
 const { encodeSessionKey, resolveSessionRoute, canonicalSessionId, VERSION: SESSION_KEY_VERSION } = require('./lib/session-key');
 const { getHarness, listHarnesses, resolveLaunchSpec } = require('./lib/harnesses');
 const { refreshHarnessPricing } = require('./lib/harness-pricing');
@@ -1432,7 +1433,7 @@ function getPreviousSessions(registered = listRegisteredSessions()) {
         closeMode: getHarness(harnessId).closeMode,
         profileId: candidate.profileId,
         profileVersion: candidate.profileVersion,
-        name: info.name || id.slice(0, 8),
+        name: subsessionLabel(candidate) || info.name || id.slice(0, 8),
         model: info.model || 'unknown',
         contextPercent: info.contextPercent || 0,
         contextTokens: info.contextTokens || 0,
@@ -1451,6 +1452,113 @@ function getPreviousSessions(registered = listRegisteredSessions()) {
 
   previous.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
   return { previous, indexing, discoveryTruncated, discoverySkipped };
+}
+
+/**
+ * The subagent sessions still loaded *inside* a live session's process.
+ *
+ * OMP runs a subagent as a full session of its own, persisted beside its
+ * parent (`<parent>/<agent>.jsonl`), but only one bridge registers per
+ * process — so a working subagent is invisible to the registry and would
+ * only ever surface as a dimmed historical row on the All tab. It is a live
+ * agent, so the Active tab has to show it under its parent.
+ *
+ * Liveness comes from the harness's terminal exit entry: OMP appends one when
+ * it disposes a session — parking a kept-alive subagent included — so a file
+ * whose *last* entry isn't that marker still belongs to a session the parent
+ * holds. That is "live", not "working": an idle subagent awaiting a follow-up
+ * looks the same on disk, and no observable event says which is which, so
+ * these rows never claim a turn is in progress. Only the live parents' own
+ * directories are read — never the corpus, which is the point of `active=1`.
+ */
+function liveSubsessionCandidates(active) {
+  const claimed = new Set(active.map(session => session.id));
+  const out = [];
+  for (const session of active) {
+    const descriptor = getHarness(session.harnessId);
+    // Without a declared exit marker liveness is unknowable, and listing
+    // every past subagent would bury the tab in history.
+    if (!descriptor?.nestedSubsessions || !descriptor.sessionExitCustomType || !session.sessionFile) continue;
+    let candidates;
+    try { candidates = discoverSubsessionCandidates(session.sessionFile, { descriptor }); } catch { continue; }
+    for (const candidate of candidates) {
+      const routeId = apiIdForCandidate(candidate);
+      // Already listed in its own right, or already reached through another
+      // live parent (a live session nested under a live session shares the
+      // subtree below it).
+      if (claimed.has(routeId)) continue;
+      let tail;
+      // The candidate list is a readdir snapshot: a file can be gone, or its
+      // mount with it, before this read. One vanished subagent must not 500
+      // the whole sidebar poll.
+      try { tail = readSessionTailEntry(candidate); } catch { continue; }
+      if (tail?.type === 'custom' && tail.customType === descriptor.sessionExitCustomType) continue;
+      claimed.add(routeId);
+      out.push(rememberSessionSource(candidate));
+    }
+  }
+  return out;
+}
+
+/**
+ * A nested subsession's file basename is its agent handle — OMP names the
+ * file after the agent it ran (`RefsAndSearch.jsonl`, `__advisor.jsonl`),
+ * while its title entry is empty and its first user message is the same wall
+ * of delegation boilerplate for every sibling in a fan-out. The handle is the
+ * only thing that tells one child row from another.
+ *
+ * `parentSession` on a candidate means exactly "found beside a parent JSONL",
+ * which both candidate producers (discovery and sourceForIdentity) set the
+ * same way. A generic `session.jsonl` is excluded: that basename is a
+ * convention, not a name.
+ */
+function subsessionLabel(candidate) {
+  if (!candidate?.parentSession || typeof candidate.file !== 'string') return null;
+  const handle = path.basename(candidate.file, '.jsonl');
+  return handle === 'session' ? null : handle;
+}
+
+// A real fan-out is dozens of agents (OMP's own concurrency cap is 32), so a
+// larger set means something pathological; the cap also bounds the one
+// genuinely expensive case — after a restart the index has never seen a
+// mid-flight subagent, and the first poll pays a full parse per child. Rows
+// past the cap arrive on the next poll, by which point the earlier ones are
+// (mtimeMs, size) cache hits.
+const SUBSESSION_ROW_CAP = 64;
+
+/** Live-subagent list rows, shaped exactly like historical rows. */
+function subsessionSessionRows(candidates) {
+  const rows = [];
+  for (const candidate of candidates) {
+    if (rows.length >= SUBSESSION_ROW_CAP) break;
+    let info;
+    // Same tolerance as getActiveSessions: a file that vanished since the
+    // walk must not take the whole list down with it.
+    try { info = parseSessionFile(candidate); } catch { continue; }
+    rows.push({
+      ...sessionIdentityFields(candidate.harnessId, candidate.nativeSessionId),
+      // Not controllable: pi-dish has no socket to a session its parent owns —
+      // and never resumable while it is loaded there, or a second process
+      // would append to the same JSONL behind the parent's back.
+      capabilities: { ...sessionCapabilities(candidate.harnessId, {}, { active: false }), resume: false },
+      closeMode: getHarness(candidate.harnessId).closeMode,
+      profileId: candidate.profileId,
+      profileVersion: candidate.profileVersion,
+      name: subsessionLabel(candidate) || info.name || candidate.id.slice(0, 8),
+      model: info.model || 'unknown',
+      contextPercent: info.contextPercent || 0,
+      contextTokens: info.contextTokens || 0,
+      messageCount: info.messageCount || 0,
+      lastActivity: info.lastActivity,
+      isActive: false,
+      subagentLive: true,
+      cwd: info.cwd,
+      sessionFile: candidate.file,
+      parentSession: info.parentSession || candidate.parentSession || null,
+      parentSessionSource: !info.parentSession && candidate.parentSession ? 'omp-subsession-layout' : null,
+    });
+  }
+  return rows;
 }
 
 function enumerateSessionCandidates(excludeIds = new Set()) {
@@ -1516,7 +1624,10 @@ function filterSessionsByQuery(list, query) {
 
 // `active=1` skips the historical-tree scan entirely — the sidebar's Active
 // tab polls every 10s and would otherwise stat every JSONL just to discard
-// the result.
+// the result. It still answers with `children`: the subagent sessions running
+// inside those live sessions, which no registry can report (see
+// liveSubsessionCandidates). On a full list they are already in `previous`,
+// so they are stamped there instead of sent twice.
 // Relationship hints on list rows are presentation-only. They let the client
 // arrange same-workspace families without fetching /related for every row;
 // they never grant control authority. Native/structural lineage wins when
@@ -1582,21 +1693,33 @@ app.get('/api/sessions', (req, res) => {
   const registered = listRegisteredSessions();
   let active = getActiveSessions(registered);
   let previous = [], indexing = false, discoveryTruncated = false, discoverySkipped = 0;
-  if (req.query.active !== '1') {
+  const liveSubsessions = liveSubsessionCandidates(active);
+  let children = [];
+  if (req.query.active === '1') {
+    children = subsessionSessionRows(liveSubsessions);
+  } else {
     ({ previous, indexing, discoveryTruncated, discoverySkipped } = getPreviousSessions(registered));
+    const liveIds = new Set(liveSubsessions.map(apiIdForCandidate));
+    for (const session of previous) {
+      if (!liveIds.has(session.id)) continue;
+      session.subagentLive = true;
+      session.capabilities = { ...session.capabilities, resume: false };
+    }
   }
-  annotateSessionParents([...active, ...previous]);
-  annotateSessionRoutines([...active, ...previous]);
+  annotateSessionParents([...active, ...previous, ...children]);
+  annotateSessionRoutines([...active, ...previous, ...children]);
 
   if (query) {
     active = filterSessionsByQuery(active, query);
     previous = filterSessionsByQuery(previous, query);
+    children = filterSessionsByQuery(children, query);
   }
   if (req.query.view === 'client') {
     active = active.map(sessionForClient);
     previous = previous.map(sessionForClient);
+    children = children.map(sessionForClient);
   }
-  res.json({ active, previous, indexing, discoveryTruncated, discoverySkipped });
+  res.json({ active, previous, children, indexing, discoveryTruncated, discoverySkipped });
 });
 
 // The one prefix-resolution rule for refs, shared by GET /api/sessions/resolve
@@ -1700,7 +1823,7 @@ app.get('/api/sessions/:id/related', (req, res) => {
         sessionKey: candidate.sessionKey,
         harnessId: candidate.harnessId,
         nativeSessionId: candidate.nativeSessionId,
-        name: info.name || candidate.nativeSessionId.slice(0, 8),
+        name: subsessionLabel(candidate) || info.name || candidate.nativeSessionId.slice(0, 8),
         cwd: info.cwd,
         model: info.model,
         lastActivity: info.lastActivity,
@@ -2417,6 +2540,10 @@ app.get('/api/sessions/:id/messages', async (req, res) => {
   const routeId = apiIdForCandidate(sessionSource);
   const identity = sessionIdentityFields(sessionSource.harnessId, sessionSource.nativeSessionId);
   const info = parseSessionFile(sessionSource);
+  // Same label the sidebar row carries, or header and sidebar disagree the
+  // moment a subagent transcript is opened.
+  const label = subsessionLabel(sessionSource);
+  if (label) info.name = label;
   // Overlay live context usage when the session can report it.
   const liveUsage = getLiveContextUsage(sessionId);
   if (liveUsage) {
@@ -5576,6 +5703,17 @@ app.post('/api/sessions/:id/resume', async (req, res) => {
   invalidateRegistryCache();
   if (activeSessionClearsQuarantine(sessionId)) {
     return res.json({ success: true, id: sessionId, alreadyActive: true });
+  }
+
+  // A subagent's JSONL belongs to the live session that runs it (see
+  // liveSubsessionCandidates). Resuming it would put a second harness process
+  // on a file the parent keeps appending to — the one refusal the
+  // capabilities flag alone cannot enforce, since a client may be stale.
+  if (liveSubsessionCandidates(getActiveSessions()).some(candidate =>
+    apiIdForCandidate(candidate) === sessionId)) {
+    return res.status(409).json({
+      error: 'This session is a subagent still loaded in its parent session; its parent owns the transcript. Close or finish the parent session before resuming it.',
+    });
   }
 
   const uncertainExplicit = uncertainExplicitResumes.get(sessionFile);

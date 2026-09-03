@@ -4,7 +4,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { discoverSessionCandidates, findSessionCandidate, readSessionHeader } = require('../lib/session-discovery');
+const {
+  discoverSessionCandidates, discoverSubsessionCandidates, findSessionCandidate, readSessionHeader,
+} = require('../lib/session-discovery');
 const { registry } = require('../lib/harnesses');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-discovery-'));
@@ -131,4 +133,47 @@ test('invalid basename identities are skipped and warned once without aborting d
   }
   assert.equal(warnings.length, 1, 'a repeatedly scanned alien file does not spam logs');
   assert.match(warnings[0], /skipping invalid pi identity/);
+});
+
+test('subsession discovery mirrors the corpus walk within one session subtree', () => {
+  // The Active tab's live-subagent rows come from this walk, so it has to
+  // agree with the corpus walk on identity, symlinks and ambiguity — a row it
+  // emits that route lookup then refuses would 404 on click.
+  const sessions = path.join(root, 'sessions-subsessions');
+  const workspace = path.join(sessions, 'workspace');
+  const parent = path.join(workspace, 'root-session.jsonl');
+  write(parent, { type: 'session', id: 'root-session', cwd: '/workspace' });
+  write(path.join(workspace, 'root-session', 'Explore.jsonl'), { type: 'session', id: 'sub-explore', cwd: '/workspace' });
+  write(path.join(workspace, 'root-session', 'Explore', 'Helper.jsonl'), { type: 'session', id: 'sub-helper', cwd: '/workspace' });
+  write(path.join(workspace, 'root-session', 'notes.txt.jsonl'), { type: 'message', id: 'not-a-header' });
+  write(path.join(workspace, 'other-session.jsonl'), { type: 'session', id: 'other-session', cwd: '/workspace' });
+
+  const found = discoverSubsessionCandidates(parent, { descriptor: registry.omp });
+  assert.deepEqual(found.map(candidate => candidate.id).sort(), ['sub-explore', 'sub-helper'],
+    'only the parent’s own subtree, and only real session headers');
+  assert.equal(found.every(candidate => candidate.harnessId === 'omp' && candidate.nativeSessionId === candidate.id), true);
+  assert.equal(found.find(candidate => candidate.id === 'sub-explore').parentSession, parent);
+
+  assert.deepEqual(discoverSubsessionCandidates(parent, { descriptor: registry.pi }), [],
+    'a harness without nested subsessions has none');
+
+  // A copied/restored tree: two files claim one header id, so neither routes.
+  write(path.join(workspace, 'root-session', 'Copy.jsonl'), { type: 'session', id: 'sub-explore', cwd: '/workspace' });
+  assert.deepEqual(discoverSubsessionCandidates(parent, { descriptor: registry.omp }).map(c => c.id), ['sub-helper'],
+    'ambiguous header ids are omitted rather than routed arbitrarily');
+  fs.rmSync(path.join(workspace, 'root-session', 'Copy.jsonl'));
+
+  // A symlinked agent directory would enumerate files outside the root.
+  const outside = path.join(root, 'subsession-outside');
+  write(path.join(outside, 'Sneaky.jsonl'), { type: 'session', id: 'sub-outside', cwd: '/workspace' });
+  write(path.join(workspace, 'root-session', 'Linked.jsonl'), { type: 'session', id: 'sub-linked', cwd: '/workspace' });
+  let linked = false;
+  try { fs.symlinkSync(outside, path.join(workspace, 'root-session', 'Linked'), 'dir'); linked = true; } catch {}
+  const afterLink = discoverSubsessionCandidates(parent, { descriptor: registry.omp }).map(c => c.id);
+  assert.equal(afterLink.includes('sub-linked'), true, 'the file itself is still a session');
+  if (linked) assert.equal(afterLink.includes('sub-outside'), false, 'symlinked agent directories are not followed');
+
+  assert.equal(discoverSubsessionCandidates(parent, { descriptor: registry.omp, maxFiles: 1 }).length, 1);
+  assert.deepEqual(discoverSubsessionCandidates(parent, { descriptor: registry.omp, maxDepth: 1 }).map(c => c.id).sort(),
+    ['sub-explore', 'sub-linked'], 'depth bounds the subtree walk');
 });

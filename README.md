@@ -453,9 +453,13 @@ pi has no API to dismiss it programmatically.
 - **Active sessions** come from the bridge extension's registry files in
   `~/.pi/dish/sessions/`. The server only connects to a session's Unix
   socket while someone is actually viewing it.
-- **Historical sessions** are scanned from `~/.pi/agent/sessions/` (pi's own
-  JSONL store), with mtime/size-keyed caches so the 10s sidebar poll never
-  re-parses unchanged files.
+- **Live subagents** have no registry entry of their own — OMP runs them as
+  full sessions inside the parent's process — so they are found by a bounded
+  scan of each live session's own artifact directory and shown, read-only,
+  nested under their parent.
+- **Historical sessions** are scanned from the harness session stores
+  (`~/.pi/agent/sessions/`, `~/.omp/agent/sessions/`, …), with mtime/size-keyed
+  caches so the 10s sidebar poll never re-parses unchanged files.
 - **Streaming** is SSE end to end: bridge socket → server (which coalesces
   `message_update` deltas, ~50ms window, each carries the full message so
   far) → an incremental block-level renderer that only touches changed

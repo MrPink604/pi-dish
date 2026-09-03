@@ -1455,7 +1455,11 @@ async function runHostSessionsLoad(host, key, wireQuery, withPrevious, ctx) {
     }
     const next = {
       active: nextActive,
-      previous: withPrevious ? (data.previous || []) : cached.previous,
+      // Live subagents are historical rows the Active tab still has to show
+      // (see mergeLiveSubagents): on an active-only poll they arrive as
+      // `children` and fold into the kept `previous` list; a full list
+      // already carries them, stamped by the server.
+      previous: withPrevious ? (data.previous || []) : mergeLiveSubagents(cached.previous, data.children),
     };
     const hostId = host.hostId || null;
     // Viewing a session (with the tab visible) counts as having seen its
@@ -1489,6 +1493,26 @@ async function runHostSessionsLoad(host, key, wireQuery, withPrevious, ctx) {
     // other host's rows are untouched.
     if (ctx.seq === loadSessionsSeq) publishSessionLists();
   }
+}
+
+/**
+ * Fold an active-only poll's `children` (the subagent sessions running inside
+ * the live sessions — see the server's liveSubsessionCandidates) into the
+ * historical list the Active tab keeps. They are historical rows in every
+ * other respect, so they live in `previous` and only `subagentLive` marks
+ * them as belonging on the Active tab; clearing that flag on rows the server
+ * no longer reports is what makes a finished subagent leave the tab without
+ * waiting for a full refresh.
+ */
+function mergeLiveSubagents(previous, children) {
+  const fresh = new Map((children || []).map(session => [session.id, session]));
+  const merged = (previous || []).map(session => {
+    const live = fresh.get(session.id);
+    if (live) { fresh.delete(session.id); return { ...session, ...live }; }
+    return session.subagentLive ? { ...session, subagentLive: false } : session;
+  });
+  for (const session of fresh.values()) merged.push(session);
+  return merged;
 }
 
 /**
@@ -1565,15 +1589,19 @@ function renderHarnessBadge(harnessId, harnessLabel) {
 function renderSessionItem(session, opts = {}) {
   const ctxClass = contextClass(session.contextPercent);
   const activeClass = currentSession?.id === session.id ? 'active' : '';
-  const inactiveClass = session.isActive ? '' : 'inactive';
+  // A live subagent has no bridge of its own (its parent's process owns it),
+  // so `isActive` is false — but it is a running session, not history, and
+  // must not read as dimmed.
+  const inactiveClass = session.isActive || session.subagentLive ? '' : 'inactive';
   const familyNode = opts.familyNode || null;
   const hasChildren = !!familyNode?.children?.length;
   const familyExpanded = hasChildren && expandedSessionFamilies.has(sessionRefKey(session));
   const statusSessions = hasChildren && !familyExpanded
     ? flattenSessionFamilies([familyNode]) : [session];
-  // One dot, best signal wins: working (pulsing) > unread (accent) > live-in-All.
-  // A collapsed parent aggregates its descendants so hiding rows never hides
-  // the fact that a child is working or has unread activity.
+  // One dot, best signal wins: working (pulsing) > unread (accent) >
+  // live-in-All > live subagent. A collapsed parent aggregates its
+  // descendants so hiding rows never hides the fact that a child is working,
+  // has unread activity, or is still running inside it.
   let liveDot = '';
   if (statusSessions.some(s => s.compacting || s.turnInProgress)) {
     liveDot = '<span class="session-item-status working" title="Session family working"></span>';
@@ -1581,6 +1609,10 @@ function renderSessionItem(session, opts = {}) {
     liveDot = '<span class="session-item-status unread" title="New activity in session family"></span>';
   } else if (sidebarTab === 'all' && statusSessions.some(s => s.isActive)) {
     liveDot = '<span class="live-dot" title="Active session family"></span>';
+  } else if (statusSessions.some(s => s.subagentLive)) {
+    // Deliberately the static dot: the file says the session is still loaded
+    // in its parent, never whether it is mid-turn.
+    liveDot = '<span class="live-dot" title="Subagent still loaded in its parent session"></span>';
   }
   const displayName = session.name || 'Unnamed';
   // One context readout, not three: percent or absolute tokens per the device
@@ -1970,7 +2002,13 @@ function renderSessions() {
   hostSectionsShown = null; // only the workspace view builds host sections
   const list = document.getElementById('sessionList');
   const { active, previous } = sessions;
-  const showing = sidebarTab === 'active' ? active : [...active, ...previous];
+  // A live subagent runs inside a live session's process, so it belongs on
+  // the Active tab even though it is a historical row everywhere else (its
+  // parent owns it; pi-dish has no socket to it). The count badge stays a
+  // count of *controllable* sessions.
+  const showing = sidebarTab === 'active'
+    ? [...active, ...previous.filter(session => session.subagentLive)]
+    : [...active, ...previous];
   const pending = [...pendingSessionSpawns.entries()];
 
   const countEl = document.getElementById('countActive');
@@ -2513,12 +2551,26 @@ async function selectSession(id, { forceTranscriptReload = false, host = null } 
   } else {
     clearPromptComposer();
     if (inputArea) inputArea.style.display = 'none';
+    // A live subagent's transcript belongs to the session running it, so
+    // resuming would put a second harness process on a file that process
+    // keeps appending to. The bar keeps the read-only label and Stats; only
+    // the Resume affordance goes.
+    const resumable = sessionSupports(currentSession, 'resume');
     if (resumeBar) {
       resumeBar.style.display = '';
       const cwdSpan = resumeBar.querySelector('.resume-cwd');
       if (cwdSpan) cwdSpan.textContent = currentSession.cwd || '~';
+      const label = resumeBar.querySelector('.resume-label');
+      if (label) {
+        label.textContent = resumable
+          ? 'Read-only — session is inactive'
+          : 'Read-only — a live session owns this transcript';
+      }
+      const resumeBtn = resumeBar.querySelector('#resumeSessionBtn');
+      if (resumeBtn) resumeBtn.style.display = resumable ? '' : 'none';
     }
-    loadResumeModelOptions(currentSession);
+    if (resumable) loadResumeModelOptions(currentSession);
+    else resetResumeModelPicker();
   }
   if (sessionActions) sessionActions.style.display = currentSession.isActive ? '' : 'none';
 

@@ -2,10 +2,12 @@
 
 Web/phone remote control for pi coding-agent sessions. Express server (`server.js`)
 + vanilla JS frontend (`public/`), plus an Electron shell (`electron/`) that loads
-the same server. Sessions are discovered two ways: live sessions via the
+the same server. Sessions are discovered three ways: live sessions via the
 pi-dish-bridge extension registry (`~/.pi/dish/sessions/*.json`, one Unix socket
-per session), historical sessions by scanning JSONL files under
-`~/.pi/agent/sessions/`.
+per session), historical sessions by scanning the harness session stores
+(`~/.pi/agent/sessions/`, `~/.omp/agent/sessions/`, …), and the subagents
+running inside a live session, which register nothing of their own (see the
+nested-discovery section).
 
 ## Run
 
@@ -197,6 +199,27 @@ bridge's live identity rule. Conflicting generic files claiming the same header
 id are omitted as ambiguous rather than routed arbitrarily. Traversal never follows symlink directories and
 is depth/file/entry capped; `/api/sessions` exposes `discoveryTruncated` when the cap
 is reached. All historical route lookup goes through the same discovery path.
+
+A subagent OMP runs is a full session of its own inside the parent's process
+(`<parent>/<agent>.jsonl`), and only one bridge registers per process — so a
+*working* subagent is never in the registry. `liveSubsessionCandidates`
+(server.js) surfaces them anyway: for each active session whose harness sets
+`nestedSubsessions`, `discoverSubsessionCandidates` walks that one session's
+own directory (never the corpus — that is what `active=1` exists to avoid) and
+`readSessionTailEntry` decides liveness from the *last* JSONL entry. The
+harness declares the terminal marker (`sessionExitCustomType`, OMP's
+`session_exit`); no marker means liveness is unknowable and nothing is
+surfaced. Never grep the file for the marker: a transcript that discusses one
+contains the string, and a revived session appends past its own exit. The rows
+are `isActive:false` with `resume:false` — the parent owns the file, so
+resuming would put a second process on it — and carry `subagentLive` plus
+their agent handle as `name` (`subsessionLabel`: OMP names the file after the
+agent, its title is empty, and every sibling's first message is the same
+delegation boilerplate). `GET /api/sessions?active=1` serves them as
+`children`; a full list already has them in `previous`, stamped there instead
+of sent twice. "Live" is not "working": an idle kept-alive subagent looks
+identical on disk, so these rows never claim a turn is in progress (static
+dot, no `turnInProgress`).
 
 `GET /api/sessions/:id/related` resolves native `parentSession` paths only
 against the discovered corpus and combines them with advisory pi-dish launch
@@ -1222,6 +1245,15 @@ Polls on the Active tab request `?active=1` — the server skips the historical
 session-tree scan and the client keeps its previously fetched `previous` list.
 Cold load does the same; it fetches history only when restoring a saved
 inactive session or when the user opens All.
+The Active tab also shows the **live subagents** of those sessions (see the
+nested-discovery section): they arrive as the response's `children`,
+`mergeLiveSubagents` folds them into the kept `previous` list — they are
+historical rows in every other respect — and `renderSessions` admits the
+`subagentLive` ones on that tab, undimmed with the static live dot. Clearing
+the flag on rows the server stops reporting is what retires a finished
+subagent without waiting for a full refresh; a fleet host too old to send
+`children` simply contributes none. The count badge stays a count of
+*controllable* sessions.
 Every browser list request also sends `view=client`, which removes raw
 session-file, native-route/profile, and unresolved-parent metadata from the
 wire while keeping the default API shape intact for CLI/API consumers; older

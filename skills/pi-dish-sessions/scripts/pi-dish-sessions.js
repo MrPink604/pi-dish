@@ -317,7 +317,11 @@ function hostLine(host) {
 }
 
 function sessionLine(session) {
-  const state = session.isActive ? (session.turnInProgress || session.compacting ? 'working' : 'active') : 'inactive';
+  // `subagent` is a session another live session runs: it has a transcript to
+  // read but no socket to drive, so it is neither active nor plain history.
+  const state = session.isActive
+    ? (session.turnInProgress || session.compacting ? 'working' : 'active')
+    : session.subagentLive ? 'subagent' : 'inactive';
   return `${session.id}\t${state}\t${session.name || 'Unnamed'}\t${session.cwd || ''}`;
 }
 
@@ -715,7 +719,12 @@ async function main() {
       const qs = args.active ? '?active=1' : '';
       const { data } = await api(base, hostFlag, `/api/sessions${qs}`);
       if (args.json) return print(data, true);
-      for (const session of [...(data.active || []), ...(data.previous || [])]) process.stdout.write(sessionLine(session) + '\n');
+      // `children` is what `--active` returns for subagents running inside a
+      // live session: real sessions with transcripts, absent from `previous`
+      // on that request (and already in it on a full list).
+      for (const session of [...(data.active || []), ...(data.children || []), ...(data.previous || [])]) {
+        process.stdout.write(sessionLine(session) + '\n');
+      }
       if (data.indexing) process.stdout.write('# Session index is still building; repeat list for more.\n');
       if (data.discoveryTruncated) process.stdout.write('# Nested session discovery reached its safety limit.\n');
       return;
