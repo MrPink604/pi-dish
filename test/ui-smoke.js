@@ -88,7 +88,7 @@ appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text'
 // Entry id + response timing (start = message.timestamp ms epoch, end =
 // entry timestamp): 45 output tokens in 1.5s → the header shows "30 tok/s"
 // and the 🔗 button deep-links ?targetId=ui-a1.
-appendEntry({ type: 'message', id: 'ui-a1', timestamp: '2026-07-05T00:00:02.000Z', message: { role: 'assistant', provider: 'test', model: 'smoke-model', stopReason: 'stop', content: [{ type: 'text', text: 'existing **answer** with ~literal tildes~ and ~~intentional strike~~' }], timestamp: Date.parse('2026-07-05T00:00:00.500Z'), usage: { input: 100, output: 45, reasoning: 5, cacheRead: 20, cacheWrite: 10, cost: { total: 0.001005 } } } });
+appendEntry({ type: 'message', id: 'ui-a1', timestamp: '2026-07-05T00:00:02.000Z', message: { role: 'assistant', provider: 'test', model: 'smoke-model', stopReason: 'stop', content: [{ type: 'text', text: 'existing **answer** with inline math $x^2$, ~literal tildes~, and ~~intentional strike~~' }], timestamp: Date.parse('2026-07-05T00:00:00.500Z'), usage: { input: 100, output: 45, reasoning: 5, cacheRead: 20, cacheWrite: 10, cost: { total: 0.001005 } } } });
 // A historical turn with tool activity — must fold into a closed .tool-group.
 appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'check the readme' }], timestamp: '2026-07-05T00:00:03.000Z' } });
 appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'hist1', name: 'Read', arguments: { path: 'README.md' } }], timestamp: '2026-07-05T00:00:04.000Z' } });
@@ -535,6 +535,14 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.goto(base, { waitUntil: 'networkidle' });
     await desktop.waitForSelector('.session-item');
     check(await desktop.locator('.session-item').count() === 1, 'live session listed under Active');
+    const coldResources = await desktop.evaluate(() =>
+      performance.getEntriesByType('resource').map(entry => new URL(entry.name).pathname));
+    check(!coldResources.some(pathname =>
+      /\/vendor\/(?:katex|highlight|hljs-theme|xterm)/.test(pathname)),
+    'cold page transfers no transcript/terminal vendor assets');
+    check(!coldResources.some(pathname =>
+      /^\/api\/(?:cwds|tmux\/targets|harnesses|models|commands)$/.test(pathname)),
+    'cold page skips new-session and composer catalogs');
     await desktop.click('.session-item');
     await desktop.waitForSelector('.message.assistant');
     check(await desktop.locator('.message .markdown-body strong').first().textContent() === 'answer',
@@ -542,6 +550,8 @@ let remoteHost = null; // second pi-dish (multi-host section)
     const initialAnswer = desktop.locator('.message.assistant', {
       has: desktop.locator('[data-entry-id="ui-a1"]'),
     });
+    check(await initialAnswer.locator('.katex').count() === 1,
+      'selecting a session loads KaTeX before transcript hydration');
     check((await initialAnswer.locator('.markdown-body').textContent()).includes('~literal tildes~'),
       'single tildes remain literal text');
     check(await initialAnswer.locator('del').count() === 1 &&
@@ -693,6 +703,10 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // Diagram fences are .code-block too — they're counted in their own section.
     const codeBlock = desktop.locator('.message.assistant[data-msg-index] .code-block:not(.diagram-block)');
     check(await codeBlock.count() === 1, 'fenced code block got a copy button wrapper');
+    await desktop.waitForFunction(() =>
+      document.querySelector('.code-block:not(.diagram-block) code')?.classList.contains('hljs'),
+    { timeout: 5000 });
+    check(true, 'first fenced code block lazily loads syntax highlighting');
     await codeBlock.locator('.code-copy-btn').click();
     await desktop.waitForFunction(() =>
       [...document.querySelectorAll('.code-copy-btn')].some(b => b.textContent === '✓'), { timeout: 2000 });

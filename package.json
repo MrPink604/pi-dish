@@ -26,8 +26,7 @@
       "server.js",
       "lib/**/*",
       "public/**/*",
-      "electron/**/*",
-      "node_modules/**/*"
+      "electron/**/*"
     ],
     "directories": {
       "output": "dist"
@@ -50,22 +49,22 @@
     "email": "pi-dish@localhost"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "^0.84.3",
+    "@earendil-works/pi-coding-agent": "^0.84.4",
     "@ff-labs/fff-node": "^0.9.6",
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/xterm": "^6.0.0",
     "compression": "^1.8.1",
     "express": "^4.18.2",
     "highlight.js": "^11.9.0",
     "katex": "^0.18.4",
     "marked": "^12.0.1",
-    "mermaid": "^11.17.2",
     "node-pty": "^1.1.0",
     "ws": "^8.21.0"
   },
   "devDependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "electron": "^33.0.0",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "mermaid": "^11.17.2"
   },
   "allowScripts": {
     "node-pty@1.1.0": true

@@ -153,3 +153,45 @@ support informed the diff split, although the first implementation keeps one
 authoritative aggregate snapshot so patch metadata and content cannot drift
 within an open pane. Browser script deferral is used only where execution
 order and DOM-ready behavior remain deterministic.
+
+## September 2026: cold-load and package audit
+
+A fleet cold load was spending most of its startup work on surfaces the
+default Active view did not show. Four hosts returned 814 KB of decoded
+session-list JSON (82 KB compressed) and the local full-corpus request took
+118 ms; the equivalent active-only responses totaled 37 KB and the local
+request took 9 ms. The client now starts active-only, falls back to a full
+list only for a saved inactive session, and loads history when All opens.
+Browser list requests also use `view=client`, which strips server-only route
+identity, profile, source-path, and raw-parent fields while preserving the
+default API response for other consumers.
+
+The cold page no longer preloads new-session catalogs, tmux targets, slash
+commands, model catalogs, KaTeX, highlight.js, or xterm. Each is requested by
+the surface that consumes it; session selection gates transcript hydration on
+KaTeX, while terminal open and fenced-code rendering retain one-shot asset
+promises so concurrent callers do not duplicate downloads. This removes 286
+KB of compressed JavaScript/CSS from an empty cold load when terminal support
+is enabled (80 KB KaTeX, 122 KB xterm, and 85 KB highlight.js), plus the unused
+API calls and tmux enumeration.
+
+On the same cache-disabled four-host reload, total wire bytes fell from 632 KB
+to 256 KB (59.5%), first contentful paint from 136 ms to 68 ms, and the load
+event from 145 ms to 89 ms. The local full-list client projection is 198 KB
+decoded versus 327 KB for the default API shape (39% smaller); the active-only
+projection is 9.5 KB versus 13.9 KB (32% smaller).
+
+KaTeX's checked-in font directory was 1.08 MB, of which 260 KB was WOFF2.
+The vendor build now removes stale outputs and copies WOFF2 only. Chrome 108+
+and Electron are the supported browser floor, so the 816 KB of WOFF/TTF
+fallbacks increased build/package I/O without serving a client.
+
+Mermaid and xterm are build inputs only: the running server serves their
+checked-in vendor files and never imports their npm packages. They now live in
+`devDependencies`, and Electron packaging relies on electron-builder's
+production-dependency collection instead of an explicit `node_modules/**/*`
+glob. The three direct package directories occupy 94.6 MB in a development
+install; they are absent from the production dependency graph and the built
+desktop archive, which keeps only their vendored browser outputs.
+Server-rendered file pages still import marked,
+highlight.js, and KaTeX, so those remain production dependencies.

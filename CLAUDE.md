@@ -30,9 +30,15 @@ LAN may have no internet, and a silently missing CDN `marked` used to degrade
 markdown to a crude regex fallback. `scripts/build-vendor.js` copies marked's
 UMD build and wraps highlight.js's CJS `lib/common` into a browser bundle
 (the npm package ships no browser build). Re-run it after bumping either
-dependency. Note marked v12 removed the `highlight` option — code blocks are
-highlighted post-render via `applyHighlight()` (final renders only, never
-during streaming). The same pass wraps each fenced block in `.code-block` and
+dependency. KaTeX's bundle and stylesheet load only when a session is selected,
+before its transcript renders. The vendor build retains only KaTeX's WOFF2
+fonts — supported clients are modern Chrome/Electron, and shipping the WOFF/TTF
+fallbacks triples packaged font bytes without changing what they request. Note
+marked v12 removed the
+`highlight` option — code blocks are highlighted post-render via
+`applyHighlight()` (final renders only, never during streaming). The
+highlight bundle and theme load on the first fenced code block rather than at
+boot. The same pass wraps each fenced block in `.code-block` and
 injects its copy button; copying goes through `copyTextToClipboard()`, which
 falls back to `execCommand('copy')` because `navigator.clipboard` doesn't
 exist on insecure origins (phones hit the server over plain LAN http — a
@@ -69,6 +75,12 @@ the awaited promise only weakly once it settles, and a GC in that checkpoint
 reported it "collected" (Playwright's "Execution context was destroyed, most
 likely because of a navigation" with no navigation) while the app's own chain
 completed fine. Keep the task boundary.
+
+`mermaid` and the xterm packages are build-time inputs in `devDependencies`;
+the running server uses their checked-in `public/vendor` outputs. Electron
+Builder already collects the production dependency graph, so do not restore a
+blanket `node_modules/**/*` entry to `build.files` — it repackages these large
+browser-only source trees beside their bundles.
 
 PlantUML (`@startuml`) is *not* rendered: it needs a PlantUML server or the
 Java jar, i.e. a network dependency or a 12MB runtime, which the offline-LAN
@@ -110,8 +122,9 @@ slots it before the timestamp; hidden on `.no-text` tool-only messages,
 whose headers live inside tool groups).
 
 The hljs theme is base16 solarized-dark, vendored as
-`vendor/hljs-theme.min.css`; `style.css` overrides its `code.hljs` background
-so code blocks keep the darker `--bg-darker` panel. The mobile hamburger is
+`vendor/hljs-theme.min.css` and loaded with highlight.js on the first fenced
+code block; `style.css` overrides its `code.hljs` background so code blocks
+keep the darker `--bg-darker` panel. The mobile hamburger is
 part of the layout (`.header-menu-btn` in the session header,
 `.empty-menu-btn` over the empty state) — don't reintroduce a fixed floating
 button; it clipped over content.
@@ -1156,11 +1169,10 @@ unsupported ⇒ button hidden, per the fleet rule), falling back to this host's
 `/api/config` only for self, so a peer's terminal is reachable from a
 terminal-less entry host and a peer that lacks one never shows a button whose
 WS connect would fail (the WS URL and ticket already follow the session's
-host). xterm.js + fit addon (vendored, UMD globals, loaded lazily: at boot
-when `/api/config` enables the terminal here, else the first time a
-terminal-capable host's session is selected; `openTerminal` awaits the same
-one-shot `terminalAssetsPromise`, and a load where *no* host offers a terminal
-must still request nothing), theme built from the `:root`
+host). xterm.js + fit addon are vendored UMD globals and loaded only when the
+user opens a terminal; `openTerminal` awaits the one-shot
+`terminalAssetsPromise`. Merely enabling terminal support or selecting a
+terminal-capable session transfers no xterm assets. Its theme is built from the `:root`
 tokens in `terminalTheme()`, mobile extra-keys bar with a ctrl latch that
 rewrites the next key in `term.onData`. The panel's top edge is a drag
 handle (`initTerminalResize`; pointer capture, so no document listeners;
@@ -1207,9 +1219,13 @@ The session list defaults to the **Active** filter (live sessions only, count
 badge in the tab). The **All** tab merges active + historical sessions, grouped
 by workspace cwd; historical ones get the `.session-item.inactive` dimming.
 Polls on the Active tab request `?active=1` — the server skips the historical
-session-tree scan and the client keeps its previously fetched `previous` list
-(the initial load always fetches both, so restoring a saved historical session
-still works).
+session-tree scan and the client keeps its previously fetched `previous` list.
+Cold load does the same; it fetches history only when restoring a saved
+inactive session or when the user opens All.
+Every browser list request also sends `view=client`, which removes raw
+session-file, native-route/profile, and unresolved-parent metadata from the
+wire while keeping the default API shape intact for CLI/API consumers; older
+fleet hosts safely ignore the additive parameter.
 Within a workspace node, child folders render before the node's own sessions
 (file-manager order, `renderWorkspaceNode`). Session list rows carry advisory
 `parentId`/`parentSource` hints resolved from native `parentSession` first, then

@@ -278,6 +278,24 @@ test('GET /api/sessions lists the fixture session with derived metadata', async 
   assert.equal(sess.messageCount, 2); // user messages only
 });
 
+test('GET /api/sessions client view omits server-only routing metadata', async () => {
+  const { status, body } = await get('/api/sessions?view=client');
+  assert.equal(status, 200);
+  const sess = body.previous.find(s => s.id === SESSION_ID);
+  assert.ok(sess, 'fixture session should be listed in the client view');
+  assert.equal(sess.name, 'hello alpha');
+  assert.equal(typeof sess.capabilities, 'object');
+  for (const field of [
+    'sessionKey', 'nativeSessionId', 'profileId', 'profileVersion',
+    'sessionFile', 'parentSession', 'parentSessionSource', 'pid',
+  ]) {
+    assert.equal(field in sess, false, `${field} is not a browser list field`);
+  }
+  const nested = body.previous.find(s => s.id === NESTED_SESSION_ID);
+  assert.equal(nested.parentId, SESSION_ID, 'resolved lineage remains available to the sidebar');
+  assert.equal(nested.familyParentId, SESSION_ID);
+});
+
 test('encoded alternative-harness routes never fall back to a partial native id', async () => {
   const ompDir = path.join(tmpHome, '.omp', 'agent', 'sessions', 'project');
   fs.mkdirSync(ompDir, { recursive: true });
@@ -3577,10 +3595,14 @@ test('GET /api/config reports terminal disabled without PI_DISH_TERMINAL=1', asy
   assert.equal(body.terminal, false);
 });
 
-test('terminal-disabled startup omits xterm assets and compresses large static text', async () => {
+test('startup omits feature assets and compresses large static text', async () => {
   const html = await (await fetch(base + '/')).text();
   assert.doesNotMatch(html, /vendor\/xterm(?:-addon-fit)?\.(?:js|css)/,
-    'feature-gated terminal assets must not be part of the initial document');
+    'terminal assets must not be part of the initial document');
+  assert.doesNotMatch(html, /vendor\/(?:highlight\.js|hljs-theme\.min\.css)/,
+    'syntax-highlighting assets must not be part of the initial document');
+  assert.doesNotMatch(html, /vendor\/katex\.min\.(?:js|css)/,
+    'math-rendering assets must not be part of the initial document');
 
   const identity = await rawGet('/app.js', { 'Accept-Encoding': 'identity' });
   const gzip = await rawGet('/app.js', { 'Accept-Encoding': 'gzip' });

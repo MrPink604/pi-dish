@@ -21,14 +21,10 @@
   <link rel="stylesheet" href="style.css">
   <!-- Vendored (see scripts/build-vendor.js) — no CDN so the UI works on
        LAN-only clients and markdown rendering never silently degrades. -->
-  <link rel="stylesheet" href="vendor/hljs-theme.min.css">
-  <link rel="stylesheet" href="vendor/katex.min.css">
-  <!-- Ordered deferred scripts preserve the marked → katex → helpers → app dependency
-       chain without blocking HTML parsing. Terminal assets are loaded by
-       app.js only when /api/config enables that feature. -->
+  <!-- Ordered deferred scripts preserve the marked → helpers → app dependency
+       chain without blocking HTML parsing. Math, syntax highlighting,
+       diagrams, and terminal assets are loaded on first use. -->
   <script src="vendor/marked.min.js" defer></script>
-  <script src="vendor/katex.min.js" defer></script>
-  <script src="vendor/highlight.js" defer></script>
   <script src="helpers.js" defer></script>
   <script src="app.js" defer></script>
 </head>

@@ -623,8 +623,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   loadConfig(); // feature flags (terminal) — fire-and-forget
   loadThemes(); // theme picker options + refresh custom-theme tokens
-  loadSpawnTargets(); // populate the "Run in" tmux selector (hidden if no tmux)
-  loadHarnesses();
   updateViewToggle();
   renderScopeChips(); // cached definitions paint immediately…
   loadSavedFilters(); // …then the server copy replaces them
@@ -632,14 +630,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   initTerminalResize();
   initSidebarResize();
   initCommentSelections();
-  // Full fetch: restoring the saved session may need the historical list.
-  await loadSessions(undefined, { withPrevious: true });
-  loadModels();
-  loadCommands();
-  
-  // Restore previously selected session (the stored key may still be a bare
-  // id — an unmigrated profile, or a server without /api/host).
+  // The default Active view needs only live rows. Fetch history only when a
+  // saved inactive session must be restored; opening All fetches it on demand.
   const saved = parseSessionKey(localStorage.getItem('pi-dish-session') || '');
+  await loadSessions();
+  if (saved.sessionId && !findSession(saved.sessionId, saved.hostId)) {
+    await loadSessions(undefined, { withPrevious: true });
+  }
   if (saved.sessionId) {
     const found = findSession(saved.sessionId, saved.hostId);
     if (found) selectSession(saved.sessionId, { host: found.host || null });
@@ -1411,6 +1408,9 @@ async function runHostSessionsLoad(host, key, wireQuery, withPrevious, ctx) {
     const params = new URLSearchParams();
     if (wireQuery) params.set('q', wireQuery);
     if (!withPrevious) params.set('active', '1');
+    // Browser list rows do not need server routing/file-system metadata.
+    // Older fleet hosts ignore the additive query parameter.
+    params.set('view', 'client');
     const qs = params.toString();
     const res = await apiFetch(host, '/api/sessions' + (qs ? '?' + qs : ''), { timeoutMs: 20000 });
     if (res.status === 401) { noteHostBlocked(host); publishSessionLists(); return; }
@@ -2475,6 +2475,9 @@ async function selectSession(id, { forceTranscriptReload = false, host = null } 
   stashCurrentTranscript();
   if (forceTranscriptReload) transcriptCache.delete(id);
   if (!setCurrentSession(id, host)) return;
+  // Math rendering is transcript-only. Start its one-shot load while the
+  // synchronous session chrome is updated, then gate markdown hydration on it.
+  const mathAssetsReady = loadMathAssets().catch(() => {});
   revealSessionInFamily(id);
   // Tear down the previous session's stream up front, before the awaits below.
   // Left open, its in-flight turn_end/message_update events fire against the
@@ -2541,6 +2544,8 @@ async function selectSession(id, { forceTranscriptReload = false, host = null } 
     loadModels(id, currentSession.harnessId);
     loadCommands(id); // refresh autocomplete with this session's commands
   }
+  await mathAssetsReady;
+  if (!ownsSessionView(id, selectionGeneration)) return;
   await loadMessages(id, selectionGeneration);
   if (!ownsSessionView(id, selectionGeneration)) return;
   
@@ -8373,6 +8378,11 @@ async function submitNewSession({ name, cwd, model, thinking, target, harness, h
 async function createSession(cwd, host = nsHostId()) {
   let target;
   try {
+    // Keep boot cheap: direct workspace spawns load their persisted harness
+    // and tmux choice only when the user actually asks to spawn.
+    if (cwd !== undefined && host === nsHostId()) {
+      await Promise.all([loadSpawnTargets(), loadHarnesses()]);
+    }
     // The "Run in" choice belongs to the host it was listed from; spawning
     // straight into another host's workspace goes headless.
     target = host === nsHostId() ? selectedSpawnTarget() : null;
@@ -8687,6 +8697,13 @@ function openNewSessionView(opts = {}) {
   if (nameInput) nameInput.value = '';
 
   renderNsHosts();
+  // These catalogs only serve this takeover. Paint cached/default controls
+  // immediately, then replace them as their host-scoped requests settle.
+  void loadKnownCwds().then(() => {
+    if (isNewSessionViewOpen()) renderNsWorkspaces();
+  });
+  void loadSpawnTargets();
+  void loadHarnesses();
 
   // cwd input is the source of truth; prefill from a passed cwd, else last-used.
   const cwdInput = document.getElementById('newSessionCwd');
@@ -8715,7 +8732,6 @@ function openNewSessionView(opts = {}) {
     } catch {}
   }
   renderNsModel();
-  refreshNsPilotOptions();
 
   renderNsWorkspaces();
   initNsTree();
@@ -9074,8 +9090,6 @@ function hideCwdDropdown() { nsCwdAutocomplete?.hide(); }
   const dropdown = document.getElementById('cwdDropdown');
   if (!cwdInput || !dropdown) return;
   if (saved) cwdInput.value = saved;
-
-  loadKnownCwds();
 
   nsCwdAutocomplete = createCwdAutocomplete({
     input: cwdInput,
@@ -10251,6 +10265,7 @@ function formatMarkdown(text) {
 function applyHighlight(el) {
   const root = el || document.getElementById('messages');
   if (!root) return;
+  const pendingHighlight = [];
   root.querySelectorAll('.markdown-body pre code').forEach(code => {
     const pre = code.closest('pre');
     if (pre && !pre.parentElement.classList.contains('code-block')) {
@@ -10270,9 +10285,21 @@ function applyHighlight(el) {
       // source view would only be auto-detection noise.
       code.dataset.highlighted = 'diagram';
     }
-    if (typeof hljs === 'undefined' || code.dataset.highlighted) return;
+    if (code.dataset.highlighted) return;
+    if (typeof hljs === 'undefined') {
+      pendingHighlight.push(code);
+      return;
+    }
     try { hljs.highlightElement(code); } catch (e) {}
   });
+  if (pendingHighlight.length) {
+    loadHighlightAssets().then(() => {
+      for (const code of pendingHighlight) {
+        if (code.dataset.highlighted) continue;
+        try { hljs.highlightElement(code); } catch (e) {}
+      }
+    }).catch(() => {});
+  }
   renderDiagrams(root);
   linkifyFilePaths(root);
 }
@@ -10331,9 +10358,8 @@ function linkifyFilePaths(root) {
 }
 
 /**
- * Lazily pull a vendored asset into <head>. The heavy vendor bundles (xterm,
- * mermaid) are loaded on demand rather than from index.html, so a phone that
- * never opens a terminal or reads a diagram never downloads them.
+ * Lazily pull a vendored asset into <head>. Heavy or feature-specific vendor
+ * bundles are loaded only when the corresponding surface is used.
  */
 function loadVendorAsset(tag, attrs) {
   return new Promise((resolve, reject) => {
@@ -10343,6 +10369,32 @@ function loadVendorAsset(tag, attrs) {
     el.onerror = () => reject(new Error(`Failed to load ${attrs.src || attrs.href}`));
     document.head.appendChild(el);
   });
+}
+
+
+let mathAssetsPromise = null;
+function loadMathAssets() {
+  if (mathAssetsPromise) return mathAssetsPromise;
+  mathAssetsPromise = Promise.all([
+    loadVendorAsset('link', { rel: 'stylesheet', href: 'vendor/katex.min.css' }),
+    loadVendorAsset('script', { src: 'vendor/katex.min.js' }),
+  ]).catch((err) => {
+    mathAssetsPromise = null;
+    throw err;
+  });
+  return mathAssetsPromise;
+}
+let highlightAssetsPromise = null;
+function loadHighlightAssets() {
+  if (highlightAssetsPromise) return highlightAssetsPromise;
+  highlightAssetsPromise = Promise.all([
+    loadVendorAsset('link', { rel: 'stylesheet', href: 'vendor/hljs-theme.min.css' }),
+    loadVendorAsset('script', { src: 'vendor/highlight.js' }),
+  ]).then(() => hljs).catch((err) => {
+    highlightAssetsPromise = null;
+    throw err;
+  });
+  return highlightAssetsPromise;
 }
 
 // =========================================================================
@@ -10920,7 +10972,6 @@ async function loadConfig() {
   try {
     const res = await apiFetch(null, '/api/config');
     appConfig = await res.json();
-    if (appConfig.terminal) await loadTerminalAssets();
   } catch { /* feature stays hidden */ }
   updateTerminalButtons();
   updateRoutinesButton();
@@ -10948,10 +10999,6 @@ function sessionHostSupportsTmux(session) {
 
 function updateTerminalButtons() {
   const supported = sessionHostSupportsTerminal(currentSession);
-  // Lazy assets: a load where no host offers a terminal still requests
-  // nothing, but selecting a capable host's session pulls xterm in before
-  // the user can click (openTerminal awaits the same one-shot promise).
-  if (supported) loadTerminalAssets().catch(() => {});
   const show = supported && currentSession?.isActive;
   const btn = document.getElementById('btnTerminal');
   if (btn) btn.style.display = show ? '' : 'none';

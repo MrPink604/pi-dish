@@ -1564,6 +1564,19 @@ function annotateSessionRoutines(list) {
   }
 }
 
+// The browser list uses public presentation/control fields only. Keep the
+// default response unchanged for API/CLI consumers that inspect provenance or
+// file-system metadata; `view=client` avoids transferring and retaining it on
+// every sidebar poll.
+function sessionForClient(session) {
+  const {
+    sessionKey, nativeSessionId, profileId, profileVersion,
+    sessionFile, parentSession, parentSessionSource, pid,
+    ...client
+  } = session;
+  return client;
+}
+
 app.get('/api/sessions', (req, res) => {
   const query = (req.query.q || '').trim().toLowerCase();
   const registered = listRegisteredSessions();
@@ -1578,6 +1591,10 @@ app.get('/api/sessions', (req, res) => {
   if (query) {
     active = filterSessionsByQuery(active, query);
     previous = filterSessionsByQuery(previous, query);
+  }
+  if (req.query.view === 'client') {
+    active = active.map(sessionForClient);
+    previous = previous.map(sessionForClient);
   }
   res.json({ active, previous, indexing, discoveryTruncated, discoverySkipped });
 });

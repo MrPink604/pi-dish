@@ -13,6 +13,7 @@
  *                                      (the npm package ships no browser build)
  *   public/vendor/hljs-theme.min.css — highlight.js theme (solarized dark,
  *                                      matching the app palette)
+ *   public/vendor/fonts/*.woff2     — modern KaTeX fonts only
  *   public/vendor/xterm.js           — @xterm/xterm UMD build (browser terminal)
  *   public/vendor/xterm.css          — its stylesheet
  *   public/vendor/xterm-addon-fit.js — @xterm/addon-fit UMD build
@@ -37,15 +38,18 @@ fs.copyFileSync(
   path.join(root, 'node_modules', 'katex', 'dist', 'katex.min.js'),
   path.join(outDir, 'katex.min.js'),
 );
-fs.copyFileSync(
-  path.join(root, 'node_modules', 'katex', 'dist', 'katex.min.css'),
-  path.join(outDir, 'katex.min.css'),
-);
+const katexCss = fs.readFileSync(
+  path.join(root, 'node_modules', 'katex', 'dist', 'katex.min.css'), 'utf8')
+  .replace(/,url\(([^)]*\.woff)\) format\("woff"\),url\(([^)]*\.ttf)\) format\("truetype"\)/g, '');
+fs.writeFileSync(path.join(outDir, 'katex.min.css'), katexCss);
 const fontsIn = path.join(root, 'node_modules', 'katex', 'dist', 'fonts');
 const fontsOut = path.join(outDir, 'fonts');
+// Remove fallback formats left by an older build; modern supported browsers
+// use WOFF2, so packaging WOFF and TTF triples build size for no runtime gain.
+fs.rmSync(fontsOut, { recursive: true, force: true });
 fs.mkdirSync(fontsOut, { recursive: true });
 for (const font of fs.readdirSync(fontsIn)) {
-  fs.copyFileSync(path.join(fontsIn, font), path.join(fontsOut, font));
+  if (font.endsWith('.woff2')) fs.copyFileSync(path.join(fontsIn, font), path.join(fontsOut, font));
 }
 
 // --- mermaid: dist/mermaid.min.js is a self-contained IIFE that assigns
@@ -124,4 +128,4 @@ out += `window.hljs = __req(".", ${id(entry)});\n`;
 out += '})();\n';
 
 fs.writeFileSync(path.join(outDir, 'highlight.js'), out);
-console.log(`vendor bundle written: ${modules.size} hljs modules, marked, katex, xterm, mermaid, hljs theme css`);
+console.log(`vendor bundle written: ${modules.size} hljs modules, marked, katex (woff2), xterm, mermaid, hljs theme css`);
