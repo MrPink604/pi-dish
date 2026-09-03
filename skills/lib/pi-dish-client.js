@@ -107,6 +107,22 @@ function registryRouteId(entry) {
 }
 
 /**
+ * The harness a route id belongs to: an encoded key names it, a bare id is a
+ * legacy raw Pi id. `null` means the id cannot answer the question (a
+ * truncated or malformed key), so callers must ask instead of guessing.
+ */
+function sessionHarnessId(routeId) {
+  const raw = String(routeId || '');
+  if (!raw) return null;
+  if (!raw.startsWith('~sk1_')) return 'pi';
+  try {
+    const tuple = JSON.parse(Buffer.from(raw.slice(5), 'base64url').toString('utf8'));
+    if (!Array.isArray(tuple) || typeof tuple[0] !== 'string' || !tuple[0]) return null;
+    return tuple[0];
+  } catch { return null; }
+}
+
+/**
  * Identify the session this CLI is running inside: explicit flag, env stamp,
  * then process ancestry against the bridge registry, then a unique cwd match.
  */
@@ -593,7 +609,7 @@ module.exports = {
   // output
   makeFail, print,
   // discovery
-  parentPid, ancestorPids, pidAlive, registryEntries, registryRouteId,
+  parentPid, ancestorPids, pidAlive, registryEntries, registryRouteId, sessionHarnessId,
   discoverSession, discoverSessionQuietly,
   // http
   TOKEN, defaultBase, request, requestText, hostPath, api, unknownHostError, jsonInit,

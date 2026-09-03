@@ -46,6 +46,11 @@ node "$CLI" spawn --cwd "$PWD" --name "investigation" \
 node "$CLI" resume <ref>                                   # revive an inactive session
 ```
 
+A spawned peer runs the same harness as the session spawning it (Pi from Pi,
+OMP from OMP), so it has the same tools and skills you do. Pass
+`--harness pi|omp|prime` to cross over deliberately; the spawn result names
+the harness it launched.
+
 Search treats the session corpus as long-term memory: before re-deriving a
 fix, config, or investigation, check whether a prior session already did it.
 If a first query misses, reformulate with terms you'd expect *in the

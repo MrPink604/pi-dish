@@ -27,6 +27,13 @@ function mockServer() {
       if (req.method === 'GET' && req.url === '/api/session-spawns/spawn-1') {
         res.end(JSON.stringify({ status: 'ready', sessionId: 'peer-1' })); return;
       }
+      if (req.method === 'GET' && req.url === '/api/harnesses') {
+        res.end(JSON.stringify({ harnesses: [
+          { id: 'pi', label: 'Pi', available: true },
+          { id: 'omp', label: 'Oh My Pi', available: true },
+          { id: 'prime', label: 'Prime', available: false },
+        ] })); return;
+      }
       if (req.method === 'GET' && (req.url === '/api/sessions' || req.url === '/api/sessions?active=1')) {
         res.end(JSON.stringify({ active: [{ id: 'peer-1', isActive: true, name: 'Peer', cwd: '/work' }], previous: [] })); return;
       }
@@ -74,6 +81,7 @@ test('peer-session CLI attributes spawn and uses semantic control routes', async
   const create = requests.find(r => r.url === '/api/sessions/new');
   assert.equal(create.body.requestedBySessionId, 'source-1');
   assert.equal(create.body.cwd, '/work');
+  assert.equal(create.body.harness, 'pi', 'a bare Pi caller id inherits the Pi harness');
   assert.equal(create.source, 'source-1');
   assert.ok(requests.some(r => r.url === '/api/sessions/peer-1/rename'));
   assert.ok(requests.some(r => r.url === '/api/sessions/peer-1/prompt' && r.body.message === 'Investigate'));
@@ -109,6 +117,38 @@ test('peer-session CLI attributes spawn and uses semantic control routes', async
   assert.equal(parsed.results.length, 1, '--limit slices JSON results too');
   assert.equal(parsed.results[0].id, 'hit-1');
   assert.equal(parsed.total, 25);
+});
+
+// A peer spawned from an OMP session must be an OMP session: the harness comes
+// from the caller's own identity, never the HTTP route's Pi default.
+test('peer-session CLI spawns the caller\'s own harness and honours --harness', async t => {
+  const { server, requests } = mockServer();
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const ompCaller = encodeSessionKey('omp', 'omp-native');
+  const asOmp = (args) => execFileAsync(process.execPath, [cli, ...args, '--url', base], {
+    env: { ...process.env, PI_DISH_SESSION_ID: ompCaller },
+  });
+
+  const spawned = await asOmp(['spawn', '--cwd', '/work', '--json']);
+  assert.equal(JSON.parse(spawned.stdout).harness, 'omp', 'the spawn result names the harness launched');
+  assert.equal(requests.filter(r => r.url === '/api/sessions/new').at(-1).body.harness, 'omp');
+
+  await asOmp(['spawn', '--harness', 'pi', '--json']);
+  assert.equal(requests.filter(r => r.url === '/api/sessions/new').at(-1).body.harness, 'pi',
+    '--harness crosses harnesses deliberately');
+
+  await assert.rejects(() => asOmp(['spawn', '--harness', 'prime']), (e) => {
+    assert.match(e.stderr, /harness "prime" is not installed.*available: pi, omp/);
+    return true;
+  }, 'a harness the host lacks fails before launching');
+  await assert.rejects(() => asOmp(['spawn', '--harness', 'nope']), (e) => {
+    assert.match(e.stderr, /unknown harness "nope" \(available: pi, omp\)/);
+    return true;
+  });
+  assert.equal(requests.filter(r => r.url === '/api/sessions/new').length, 2,
+    'rejected harnesses never reach the spawn route');
 });
 
 test('peer-session CLI reports the canonical route for an alternative registry entry', async t => {

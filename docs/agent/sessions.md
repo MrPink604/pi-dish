@@ -37,10 +37,13 @@ harness-specific formats that raw JSONL reads get wrong.
 
 ## Lifecycle
 
-- `spawn --cwd DIR [--name N] [--model provider/id] [--prompt "..."]` —
-  spawns an ordinary, durable Pi process (not a subagent). `--no-wait`
-  returns the spawn id immediately. Launch provenance is recorded in an
-  advisory sidecar so the UI can navigate between related sessions; it
+- `spawn --cwd DIR [--name N] [--harness ID] [--model provider/id]
+  [--prompt "..."]` — spawns an ordinary, durable agent process (not a
+  subagent). The harness defaults to the one the calling session runs on, so
+  an OMP session spawns OMP and a Pi session spawns Pi; `--harness` crosses
+  over, and the target host is checked for that harness before launching.
+  `--no-wait` returns the spawn id immediately. Launch provenance is recorded
+  in an advisory sidecar so the UI can navigate between related sessions; it
   grants no ownership or lifecycle authority.
 - `interrupt <ref>` — abort the current turn; the session stays live.
 - `resume <ref>` — bring an inactive JSONL session back as a live process.

@@ -28,7 +28,7 @@ try {
 const {
   makeFail, print, defaultBase, discoverSession, request, api, jsonInit,
   requestText, fleetHosts, hostSupports, entryForHostName, resolveSessionRef,
-  mergeSearchResults, renderTranscript, registryEntries, registryRouteId,
+  mergeSearchResults, renderTranscript, registryEntries, registryRouteId, sessionHarnessId,
 } = core;
 
 const fail = makeFail('pi-dish-sessions');
@@ -105,11 +105,12 @@ const COMMANDS = [
   },
   {
     name: 'spawn',
-    usage: 'spawn [--cwd DIR] [--name NAME] [--model REF] [--prompt TEXT] [--no-wait] [--host NAME] [--json]',
+    usage: 'spawn [--cwd DIR] [--name NAME] [--harness ID] [--model REF] [--prompt TEXT] [--no-wait] [--host NAME] [--json]',
     summary: 'Start an ordinary, durable session (not a subagent) and optionally give it its first prompt.',
     flags: [
       ['--cwd DIR', 'working directory for the new session'],
       ['--name NAME', 'rename the session once it is live'],
+      ['--harness ID', 'coding agent to run (default: the harness this session itself runs on)'],
       ['--model REF', 'canonical provider/id model ref (default: the host default)'],
       ['--prompt TEXT', 'first prompt, sent once the session is ready'],
       ['--no-wait', 'return the spawn id immediately instead of waiting for readiness'],
@@ -274,7 +275,7 @@ function commandHelp(name) {
 // Argument parsing
 // =========================================================================
 
-const VALUE_FLAGS = new Set(['--url', '--session', '--cwd', '--model', '--name', '--prompt', '--limit', '--host', '--before']);
+const VALUE_FLAGS = new Set(['--url', '--session', '--cwd', '--harness', '--model', '--name', '--prompt', '--limit', '--host', '--before']);
 const BOOL_FLAGS = new Set(['--json', '--active', '--no-wait', '--thinking', '--all-hosts']);
 
 function parseArgs(argv) {
@@ -344,6 +345,29 @@ async function qualifyCaller(base, sessionId) {
     const { data } = await request(base, '/api/host');
     return data?.hostId ? `${data.hostId}:${sessionId}` : sessionId;
   } catch { return sessionId; }
+}
+
+// A peer spawned from an OMP session should be an OMP session: the harness is
+// inherited from the caller, not defaulted to Pi (the HTTP route's own default,
+// kept for the web UI's explicit selection). `--harness` overrides. The target
+// host is asked what it actually has, so a missing harness fails here naming
+// the alternatives instead of dying inside a launch.
+async function resolveSpawnHarness(base, host, explicit, callerSessionId) {
+  const wanted = explicit || sessionHarnessId(callerSessionId);
+  if (!wanted) throw new Error(`could not tell which harness ${callerSessionId} runs; pass --harness <id>`);
+  let harnesses;
+  try { ({ data: { harnesses } = {} } = await api(base, host, '/api/harnesses')); }
+  catch { return wanted; } // Older host without the route: let it validate.
+  if (!Array.isArray(harnesses) || !harnesses.length) return wanted;
+  const match = harnesses.find((entry) => entry.id === wanted);
+  const usable = harnesses.filter((entry) => entry.available !== false).map((entry) => entry.id);
+  const where = host ? ` on ${host}` : '';
+  if (!match) throw new Error(`unknown harness "${wanted}"${where} (available: ${usable.join(', ') || 'none'})`);
+  if (match.available === false) {
+    throw new Error(`harness "${wanted}" is not installed${where}`
+      + `${explicit ? '' : ' (inherited from this session)'}; available: ${usable.join(', ') || 'none'}`);
+  }
+  return wanted;
 }
 
 async function createSpawn(base, host, body, callerId) {
@@ -702,17 +726,18 @@ async function main() {
       // Advisory launch provenance, unchanged: a cross-host spawn qualifies the
       // caller with this host's id so the target's sidecar records who asked.
       const callerId = hostFlag ? await qualifyCaller(base, sourceSessionId) : sourceSessionId;
-      const body = { async: true, requestedBySessionId: callerId };
+      const harness = await resolveSpawnHarness(base, hostFlag, args.harness, sourceSessionId);
+      const body = { async: true, requestedBySessionId: callerId, harness };
       if (args.cwd) body.cwd = args.cwd;
       if (args.model) body.model = args.model;
       const { data } = await createSpawn(base, hostFlag, body, callerId);
-      if (args.no_wait) return print(data, args.json);
+      if (args.no_wait) return print({ ...data, harness }, args.json);
       const operation = await pollSpawn(base, hostFlag, data.spawnId);
       if (operation.status === 'error') throw new Error(operation.error || 'session spawn failed');
       const id = operation.sessionId;
       if (args.name) await api(base, hostFlag, `/api/sessions/${encodeURIComponent(id)}/rename`, jsonInit({ name: args.name }));
       if (args.prompt) await api(base, hostFlag, `/api/sessions/${encodeURIComponent(id)}/prompt`, jsonInit({ message: args.prompt }));
-      return print({ ...operation, spawnId: data.spawnId, sessionId: id, ...(hostFlag ? { host: hostFlag } : {}) }, args.json);
+      return print({ ...operation, spawnId: data.spawnId, sessionId: id, harness, ...(hostFlag ? { host: hostFlag } : {}) }, args.json);
     }
 
     if (spec.name === 'search') {

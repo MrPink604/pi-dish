@@ -435,6 +435,16 @@ does not implement delegation policies, write JSONL, signal processes, or
 require any particular subagent scheme. `POST /api/sessions/:id/follow-up` is
 the stable semantic follow-up route.
 
+**Spawn harness**: `POST /api/sessions/new` defaults `harness` to `pi` (the web
+UI always selects one explicitly), so the CLI resolves it instead of relying on
+that default: `--harness` if given, else the harness decoded from the caller's
+own route id (`~sk1_` key → that harness, bare id → legacy Pi). An agent
+spawning a peer gets its own harness — its tools and skills — rather than a Pi
+session it did not ask for. The resolved id is validated against the target
+host's `/api/harnesses` first, so an uninstalled or misspelled harness fails
+naming the alternatives instead of inside a launch, and the spawn result echoes
+`harness`.
+
 **Session refs**: every CLI command taking a session id takes a ref — full id,
 unique ≥4-char prefix, host-qualified `name/prefix` (fleet name → hostId
 exact/≥8-prefix → label), or the machine-produced provenance form
