@@ -643,6 +643,12 @@ Agents learn this flow from the vended skill (`skills/pi-dish-pages/`,
 symlinked into `~/.pi/agent/skills/` per the README) — the server sets
 `PI_DISH_URL` in its own env at listen time so RPC children inherit it, and
 tmux spawns get it via `-e`; the skill falls back to localhost:3333.
+That value is derived from the **bound** address, not from a fixed loopback
+URL: `HOST=<tailnet ip>` listens on that address only, so children handed
+`http://127.0.0.1:<port>` would get ECONNREFUSED on their first call (the
+same asymmetry `remoteHost` exists for in the hosts section). Only a
+wildcard bind (`0.0.0.0`/`::`) advertises loopback; an operator-provided
+`PI_DISH_URL` always wins.
 Content is served **live from disk** — edits show on refresh — and
 re-publishing the same path reuses its token (`createPage` is idempotent per
 resolved root). A root may be one file or a directory (index.html required;

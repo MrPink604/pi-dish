@@ -21,6 +21,13 @@ const zlib = require('node:zlib');
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-test-'));
 process.env.HOME = tmpHome;
 process.env.PORT = '0'; // random free port
+// A shell spawned by a running pi-dish inherits that server's HOST/PORT and
+// PI_DISH_* env, which otherwise decides what this suite's own server binds,
+// advertises and enables. Pin the bind address and drop every inherited
+// value the tests assert defaults for.
+process.env.HOST = '127.0.0.1';
+for (const key of ['PI_DISH_URL', 'PI_DISH_SHARE_PORT', 'PI_DISH_SHARE_HOST',
+  'PI_DISH_SHARE_BASE_URL', 'PI_DISH_TERMINAL']) delete process.env[key];
 process.env.PI_DISH_OMP_COMMAND = `${process.execPath} ${path.join(__dirname, 'fixtures', 'fake-omp-export.js')}`;
 // The runtime pid-fallback (describeRuntime → findPaneByPid) scans every tmux
 // server under the tmpdir; point it at an empty temp dir so a tmux session
@@ -2031,6 +2038,49 @@ test('GET /page with an unknown token is a bare 404', async () => {
 
 test('the server exports PI_DISH_URL for spawned agents (pi-dish-pages skill)', () => {
   assert.equal(process.env.PI_DISH_URL, base);
+});
+
+// A tailnet/LAN bind (HOST=<tailscale ip>) listens on that address only, so
+// the URL handed to spawned agents must be the bound address — a hardcoded
+// loopback URL is refused by the kernel and every skill CLI call fails.
+test('PI_DISH_URL follows a non-loopback bind address', async () => {
+  const { spawn } = require('node:child_process');
+  const os = require('node:os');
+  const canBind = (host) => new Promise((resolve) => {
+    const probe = net.createServer();
+    probe.once('error', () => resolve(false));
+    probe.listen(0, host, () => probe.close(() => resolve(true)));
+  });
+  const ipv4 = Object.values(os.networkInterfaces()).flat()
+    .find(nic => nic && nic.family === 'IPv4' && !nic.internal)?.address;
+  let host = null;
+  for (const candidate of ['::1', ipv4]) {
+    if (candidate && await canBind(candidate)) { host = candidate; break; }
+  }
+  if (!host) return; // no non-loopback-shaped address on this machine
+
+  const child = spawn(process.execPath, [
+    '-e',
+    "const s = require(process.argv[1]);"
+    + " const done = () => { console.log('PI_DISH_URL=' + process.env.PI_DISH_URL); process.exit(0); };"
+    + " s.listening ? done() : s.once('listening', done);",
+    path.join(__dirname, '..', 'server.js'),
+  ], {
+    env: {
+      ...process.env, HOME: tmpHome, HOST: host, PORT: '0',
+      PI_DISH_URL: '', PI_DISH_SHARE_PORT: '',
+    },
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  let out = '';
+  child.stdout.on('data', chunk => { out += chunk; });
+  await new Promise(resolve => child.on('exit', resolve));
+
+  const reported = out.split('\n').find(line => line.startsWith('PI_DISH_URL='))?.slice('PI_DISH_URL='.length);
+  const authority = host.includes(':') ? `[${host}]` : host;
+  assert.ok(reported, `child reported a URL (stdout: ${out})`);
+  assert.match(reported, new RegExp(`^http://${authority.replace(/[[\]./]/g, '\\$&')}:\\d+$`),
+    `spawned agents get the bound address, not loopback (got ${reported})`);
 });
 
 test('PUT /api/models/enabled persists pi scoped models in settings.json', async () => {

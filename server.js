@@ -6150,11 +6150,19 @@ function findSessionFile(sessionId, options) {
 piSDK.getAvailableModels().then(setModelsCache).catch(() => {});
 
 const server = app.listen(PORT, HOST, () => {
-  // Loopback URL for agents running on this machine (the pi-dish-pages
-  // skill curls it). Children spawned by pi-dish inherit process.env (RPC)
-  // or get it via tmux -e; respect an operator-provided value.
+  // Base URL for agents running on this machine (skill CLIs and the
+  // pi-dish-pages hook fetch it). Children spawned by pi-dish inherit
+  // process.env (RPC) or get it via tmux -e; respect an operator-provided
+  // value. HOST is a *bind* address, so loopback is only reachable when we
+  // bound loopback or a wildcard: with HOST=<tailscale ip> nothing listens on
+  // 127.0.0.1 and every spawned session's first call fails to connect.
+  // Advertise the address we actually accept connections on.
   if (!process.env.PI_DISH_URL) {
-    process.env.PI_DISH_URL = `http://127.0.0.1:${server.address().port}`;
+    const bound = server.address();
+    const wildcard = !bound.address || bound.address === '0.0.0.0' || bound.address === '::';
+    const reachable = wildcard ? '127.0.0.1' : bound.address;
+    const authority = reachable.includes(':') ? `[${reachable}]` : reachable;
+    process.env.PI_DISH_URL = `http://${authority}:${bound.port}`;
   }
   console.log(`pi-dish running at http://${HOST}:${PORT}`);
   if (HOST === '127.0.0.1') {
