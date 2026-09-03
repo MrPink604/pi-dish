@@ -408,6 +408,30 @@ ancestry; `--session <id>` is available for ambiguous cases. A comment has
 only two states: open and acknowledged. Acknowledging it closes it—there are
 no replies, threads, assignments, or resolution workflow.
 
+### Routines
+
+The clock icon in the sidebar header opens Routines: named session templates
+(agent, working directory, model, prompt) that run on a cron schedule, on
+demand, or from any script that can reach the server:
+
+```bash
+curl -s -X POST localhost:3333/api/routines/nightly-review/invoke \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"gh-webhook","input":{"pr":42}}'
+```
+
+Every run is an ordinary session stamped with the routine's name, so its
+transcript, cost and duration show up everywhere sessions do and
+`routine:nightly-review` finds them in the sidebar filter and full search.
+The routine view keeps the prompt's version history and a table of every
+run (trigger, prompt version, status, session). One-shot routines close
+their session when the turn ends; "continue" routines keep reusing one
+session. An invoke that arrives while a run is in progress is skipped,
+steered into the running session, or queued as a follow-up, per routine.
+There is no scripting, chaining, or outbound notification: the event source
+lives outside pi-dish and polls the invocation it started. Agents read the
+contract from `/api/agent-docs/routines`.
+
 ## Slash command support
 
 | Command type | TUI session (bridge) | pi-dish-spawned session (RPC) |

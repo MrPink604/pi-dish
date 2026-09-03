@@ -237,11 +237,11 @@ test('search --all-hosts works on a fleet of one', async () => {
 
 test('docs lists the topics this server actually ships', async () => {
   const { stdout } = await run(['docs']);
-  for (const topic of ['refs', 'sessions', 'search', 'fleet']) {
+  for (const topic of ['refs', 'sessions', 'search', 'fleet', 'routines']) {
     assert.match(stdout, new RegExp(`^${topic} — `, 'm'), `${topic} is listed`);
   }
   const parsed = JSON.parse((await run(['docs', '--json'])).stdout);
-  assert.deepEqual(parsed.topics.map((t) => t.name).sort(), ['fleet', 'refs', 'search', 'sessions']);
+  assert.deepEqual(parsed.topics.map((t) => t.name).sort(), ['fleet', 'refs', 'routines', 'search', 'sessions']);
 });
 
 test('docs <topic> prints the raw markdown', async () => {

@@ -48,6 +48,8 @@ const { getHarness, listHarnesses, resolveLaunchSpec } = require('./lib/harnesse
 const { refreshHarnessPricing } = require('./lib/harness-pricing');
 const { inspectProcessAncestry } = require('./lib/process-identity');
 const sessionProvenance = require('./lib/session-provenance');
+const routinesStore = require('./lib/routines');
+const { createRoutineRunner } = require('./lib/routine-runner');
 const skillsLib = require('./lib/skills');
 const {
   isModelEnabled, extractTextContent, THINKING_LEVEL_NAMES,
@@ -219,7 +221,7 @@ function hostCapabilities() {
   const caps = {
     sessions: true, search: true, usage: true, spawns: true,
     shares: true, pages: true, comments: true, skills: true, harnesses: true,
-    resolve: true, docs: true,
+    resolve: true, docs: true, routines: true,
   };
   if (terminal.isTerminalEnabled()) caps.terminal = true;
   if (tmux.isTmuxAvailable()) caps.tmux = true;
@@ -1547,6 +1549,21 @@ function annotateSessionParents(list) {
   }
 }
 
+// Routine provenance on list rows, the same presentation-only contract as the
+// parent hints above: a session says which routine produced it so `routine:`
+// queries and the sidebar chip work, and nothing more follows from it.
+function annotateSessionRoutines(list) {
+  const bySession = routinesStore.invocationsBySessionId();
+  if (!bySession.size) return;
+  for (const session of list) {
+    const invocation = bySession.get(session.id);
+    if (!invocation) continue;
+    session.routine = invocation.routineName;
+    session.routineId = invocation.routineId;
+    session.routineInvocationId = invocation.id;
+  }
+}
+
 app.get('/api/sessions', (req, res) => {
   const query = (req.query.q || '').trim().toLowerCase();
   const registered = listRegisteredSessions();
@@ -1556,6 +1573,7 @@ app.get('/api/sessions', (req, res) => {
     ({ previous, indexing, discoveryTruncated, discoverySkipped } = getPreviousSessions(registered));
   }
   annotateSessionParents([...active, ...previous]);
+  annotateSessionRoutines([...active, ...previous]);
 
   if (query) {
     active = filterSessionsByQuery(active, query);
@@ -1593,6 +1611,7 @@ app.get('/api/sessions/resolve', (req, res) => {
 
   const catalog = buildSessionCatalog();
   annotateSessionParents(catalog.list); // list rows carry lineage hints; keep the shape identical
+  annotateSessionRoutines(catalog.list);
   const { session, matches } = resolveRefInCatalog(catalog, ref);
   if (session) return res.json({ session });
   if (matches.length > 1) {
@@ -1738,6 +1757,10 @@ app.get('/api/search', (req, res) => {
   const registered = listRegisteredSessions();
   const active = getActiveSessions(registered);
   const { previous, indexing, discoveryTruncated, discoverySkipped } = getPreviousSessions(registered);
+  // Advanced search builds its own list rather than reusing /api/sessions', so
+  // the routine stamp has to be applied here too or `routine:` would match in
+  // the sidebar and nowhere else.
+  annotateSessionRoutines([...active, ...previous]);
   const parsed = parseSessionQuery(query);
   const scopeParsed = parseSessionQuery(scopeQuery);
   const hasScope = scopeParsed.terms.length || scopeParsed.since !== null || scopeParsed.before !== null;
@@ -4280,33 +4303,39 @@ app.post('/api/sessions/:id/abort', async (req, res) => {
 // RPC children use RPCSession.kill(); bridge-registered Pi processes get a
 // graceful SIGTERM. Every path waits for the lifecycle action to complete
 // before responding, and none escalates to SIGKILL.
-app.post('/api/sessions/:id/close', async (req, res) => {
-  const sessionId = req.params.id;
+// The close body is guard-heavy and order-sensitive (each destructive step
+// re-proves the exact registry claim it was authorized against), so it lives
+// here as one function returning the response it would have sent: the route
+// below and the routine runner's oneShot auto-close share it verbatim rather
+// than growing a second, subtly different close path.
+const closeResult = (status, body) => ({ status, body });
+
+async function closeSessionById(sessionId) {
   const route = routeIdentity(sessionId);
-  if (!route) return res.status(400).json({ error: 'Invalid session ID' });
+  if (!route) return closeResult(400, { error: 'Invalid session ID' });
   const descriptor = getHarness(route.harnessId);
   if (!descriptor || descriptor.closeMode === 'unsupported') {
-    return res.status(409).json({ error: `Closing ${descriptor?.label || route.harnessId} sessions is not supported; close the owning tmux client directly.` });
+    return closeResult(409, { error: `Closing ${descriptor?.label || route.harnessId} sessions is not supported; close the owning tmux client directly.` });
   }
   if (descriptor.closeMode === 'owned-pane') {
     const routeId = routeSessionId(route.harnessId, route.nativeSessionId);
     const reg = getRegisteredSession(routeId);
-    if (!reg) return res.status(409).json({ error: `${descriptor.label} has no single unambiguous live bridge instance to close.` });
+    if (!reg) return closeResult(409, { error: `${descriptor.label} has no single unambiguous live bridge instance to close.` });
     const spawn = tmux.getSpawn(routeId);
     if (!spawn?.socket || !spawn?.paneId) {
-      return res.status(409).json({ error: `This ${descriptor.label} session was not launched by pi-dish, so its tmux pane cannot be closed remotely.` });
+      return closeResult(409, { error: `This ${descriptor.label} session was not launched by pi-dish, so its tmux pane cannot be closed remotely.` });
     }
     if (!spawnMatchesRegistryClaim(spawn, reg)) {
       tmux.removeSpawn(routeId, spawn);
-      return res.status(409).json({ error: `The recorded ${descriptor.label} pane no longer matches this live agent, so pi-dish will not close it.` });
+      return closeResult(409, { error: `The recorded ${descriptor.label} pane no longer matches this live agent, so pi-dish will not close it.` });
     }
     const currentPaneProcess = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
     if (!sameProcessIdentity(currentPaneProcess, spawn.paneProcess)) {
       tmux.removeSpawn(routeId, spawn);
-      return res.status(409).json({ error: `The recorded ${descriptor.label} pane has exited or been replaced, so pi-dish will not close it.` });
+      return closeResult(409, { error: `The recorded ${descriptor.label} pane has exited or been replaced, so pi-dish will not close it.` });
     }
     if (!spawnAllowsOwnedPaneClose(spawn, reg)) {
-      return res.status(409).json({ error: `Could not prove that the live ${descriptor.label} agent belongs to the recorded tmux pane, so pi-dish will not close it.` });
+      return closeResult(409, { error: `Could not prove that the live ${descriptor.label} agent belongs to the recorded tmux pane, so pi-dish will not close it.` });
     }
 
     // Re-read and socket-prove this exact bridge claim immediately before the
@@ -4315,22 +4344,22 @@ app.post('/api/sessions/:id/close', async (req, res) => {
     invalidateRegistryCache();
     const freshReg = getRegisteredSession(routeId);
     if (!freshReg || !sameRegistryClaim(freshReg, reg)) {
-      return res.status(409).json({ error: `The live ${descriptor.label} bridge changed while close was being authorized, so pi-dish will not kill the pane.` });
+      return closeResult(409, { error: `The live ${descriptor.label} bridge changed while close was being authorized, so pi-dish will not kill the pane.` });
     }
     try {
       await proveBridgeRegistryClaim(freshReg);
     } catch (error) {
-      return res.status(409).json({ error: `The live ${descriptor.label} bridge could not re-prove its identity before close: ${error.message}` });
+      return closeResult(409, { error: `The live ${descriptor.label} bridge could not re-prove its identity before close: ${error.message}` });
     }
     const finalPaneProcess = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
     if (!sameProcessIdentity(finalPaneProcess, spawn.paneProcess)
         || !spawnAllowsOwnedPaneClose(spawn, freshReg)) {
-      return res.status(409).json({ error: `The ${descriptor.label} pane ownership proof changed before close, so pi-dish will not kill the pane.` });
+      return closeResult(409, { error: `The ${descriptor.label} pane ownership proof changed before close, so pi-dish will not kill the pane.` });
     }
     invalidateRegistryCache();
     const killAuthorizedReg = getRegisteredSession(routeId);
     if (!killAuthorizedReg || !sameRegistryClaim(killAuthorizedReg, freshReg)) {
-      return res.status(409).json({ error: `The live ${descriptor.label} bridge changed immediately before close, so pi-dish will not kill the pane.` });
+      return closeResult(409, { error: `The live ${descriptor.label} bridge changed immediately before close, so pi-dish will not kill the pane.` });
     }
 
     const agentProcess = { pid: freshReg.pid, startTime: freshReg.startTime };
@@ -4342,9 +4371,9 @@ app.post('/api/sessions/:id/close', async (req, res) => {
       });
       tmux.removeSpawn(routeId, spawn);
       pruneRegisteredSession(freshReg);
-      return res.json({ success: true });
+      return closeResult(200, { success: true });
     } catch (error) {
-      return res.status(500).json({ error: `Failed to close the owned ${descriptor.label} pane: ${error.message}` });
+      return closeResult(500, { error: `Failed to close the owned ${descriptor.label} pane: ${error.message}` });
     }
   }
   if (descriptor.closeMode === 'client-only') {
@@ -4354,19 +4383,19 @@ app.post('/api/sessions/:id/close', async (req, res) => {
     // owns.
     const routeId = routeSessionId(route.harnessId, route.nativeSessionId);
     const reg = getRegisteredSession(routeId);
-    if (!reg) return res.status(409).json({ error: `${descriptor.label} has no single unambiguous live bridge instance to detach.` });
+    if (!reg) return closeResult(409, { error: `${descriptor.label} has no single unambiguous live bridge instance to detach.` });
     const spawn = tmux.getSpawn(routeId);
     if (!spawn?.socket || !spawn?.paneId) {
-      return res.status(409).json({ error: `This ${descriptor.label} client was not launched by pi-dish, so no owned tmux pane can be detached.` });
+      return closeResult(409, { error: `This ${descriptor.label} client was not launched by pi-dish, so no owned tmux pane can be detached.` });
     }
     if (!spawnMatchesRegistryClaim(spawn, reg)) {
       tmux.removeSpawn(routeId, spawn);
-      return res.status(409).json({ error: `The recorded ${descriptor.label} client no longer matches this live agent, so pi-dish will not detach it.` });
+      return closeResult(409, { error: `The recorded ${descriptor.label} client no longer matches this live agent, so pi-dish will not detach it.` });
     }
     const currentPaneProcess = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
     if (!sameProcessIdentity(currentPaneProcess, spawn.paneProcess)) {
       tmux.removeSpawn(routeId, spawn);
-      return res.status(409).json({ error: `The recorded ${descriptor.label} client pane has exited or been replaced. The logical agent may still be running.` });
+      return closeResult(409, { error: `The recorded ${descriptor.label} client pane has exited or been replaced. The logical agent may still be running.` });
     }
     const workerIdentity = { pid: reg.pid, startTime: reg.startTime };
     const workerAncestry = inspectProcessAncestry(workerIdentity);
@@ -4374,10 +4403,10 @@ app.post('/api/sessions/:id/close', async (req, res) => {
         || !sameProcessIdentity(workerAncestry.processes[0], workerIdentity)
         || !processIdentityAlive(currentPaneProcess)
         || !processIdentityAlive(workerIdentity)) {
-      return res.status(409).json({ error: `Could not prove that the live ${descriptor.label} worker is independent of the owned client pane, so pi-dish will not detach it.` });
+      return closeResult(409, { error: `Could not prove that the live ${descriptor.label} worker is independent of the owned client pane, so pi-dish will not detach it.` });
     }
     if (workerAncestry.processes.some(process => sameProcessIdentity(process, currentPaneProcess))) {
-      return res.status(409).json({ error: `The live ${descriptor.label} worker is still in the owned client pane’s process tree, so detaching it could stop the logical agent.` });
+      return closeResult(409, { error: `The live ${descriptor.label} worker is still in the owned client pane’s process tree, so detaching it could stop the logical agent.` });
     }
     // Destructive authority is claim-specific. Re-read and socket-prove the
     // exact worker immediately before kill-pane, then repeat every process
@@ -4385,12 +4414,12 @@ app.post('/api/sessions/:id/close', async (req, res) => {
     invalidateRegistryCache();
     const freshReg = getRegisteredSession(routeId);
     if (!freshReg || !sameRegistryClaim(freshReg, reg)) {
-      return res.status(409).json({ error: `The live ${descriptor.label} bridge changed while detach was being authorized, so pi-dish will not kill the pane.` });
+      return closeResult(409, { error: `The live ${descriptor.label} bridge changed while detach was being authorized, so pi-dish will not kill the pane.` });
     }
     try {
       await proveBridgeRegistryClaim(freshReg);
     } catch (error) {
-      return res.status(409).json({ error: `The live ${descriptor.label} bridge could not re-prove its identity before detach: ${error.message}` });
+      return closeResult(409, { error: `The live ${descriptor.label} bridge could not re-prove its identity before detach: ${error.message}` });
     }
     const finalPaneProcess = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
     const finalWorkerIdentity = { pid: freshReg.pid, startTime: freshReg.startTime };
@@ -4401,12 +4430,12 @@ app.post('/api/sessions/:id/close', async (req, res) => {
         || !finalWorkerAncestry.complete
         || !sameProcessIdentity(finalWorkerAncestry.processes[0], finalWorkerIdentity)
         || finalWorkerAncestry.processes.some(process => sameProcessIdentity(process, finalPaneProcess))) {
-      return res.status(409).json({ error: `The ${descriptor.label} client/worker ownership proof changed before detach, so pi-dish will not kill the pane.` });
+      return closeResult(409, { error: `The ${descriptor.label} client/worker ownership proof changed before detach, so pi-dish will not kill the pane.` });
     }
     invalidateRegistryCache();
     const killAuthorizedReg = getRegisteredSession(routeId);
     if (!killAuthorizedReg || !sameRegistryClaim(killAuthorizedReg, freshReg)) {
-      return res.status(409).json({ error: `The live ${descriptor.label} bridge changed immediately before detach, so pi-dish will not kill the pane.` });
+      return closeResult(409, { error: `The live ${descriptor.label} bridge changed immediately before detach, so pi-dish will not kill the pane.` });
     }
     try {
       await tmux.killPane(spawn.socket, spawn.paneId);
@@ -4415,7 +4444,7 @@ app.post('/api/sessions/:id/close', async (req, res) => {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
       if (await tmux.paneExists(spawn.socket, spawn.paneId)) {
-        return res.status(500).json({ error: `The owned ${descriptor.label} client pane did not exit; the logical agent was not signaled.` });
+        return closeResult(500, { error: `The owned ${descriptor.label} client pane did not exit; the logical agent was not signaled.` });
       }
       tmux.removeSpawn(routeId, spawn);
       invalidateRegistryCache();
@@ -4430,9 +4459,9 @@ app.post('/api/sessions/:id/close', async (req, res) => {
           logicalSessionActive = false;
         }
       }
-      return res.json({ success: true, detached: true, logicalSessionActive });
+      return closeResult(200, { success: true, detached: true, logicalSessionActive });
     } catch (e) {
-      return res.status(500).json({ error: `Failed to detach the owned ${descriptor.label} client pane: ${e.message}` });
+      return closeResult(500, { error: `Failed to detach the owned ${descriptor.label} client pane: ${e.message}` });
     }
   }
   const rpc = getRPCSession(sessionId);
@@ -4464,20 +4493,20 @@ app.post('/api/sessions/:id/close', async (req, res) => {
           // future attempt to reconnect to its listener.
           legacyBridge.close();
           invalidateRegistryCache();
-          return res.status(409).json({
+          return closeResult(409, {
             error: 'Refusing to close this legacy bridge entry because its live handshake did not prove the registered session and PID. Refresh or reload the bridge, then retry.',
           });
         }
         identity = processIdentity(reg.pid);
       } catch (e) {
         pruneUnreachableRegisteredSession(reg, e);
-        return res.status(409).json({
+        return closeResult(409, {
           error: `Refusing to signal legacy registry pid ${reg.pid} without a successful bridge identity handshake: ${e.message}. Reload or upgrade that pi bridge, then retry.`,
         });
       }
       if (!identity) {
         pruneRegisteredSession(reg);
-        return res.status(409).json({
+        return closeResult(409, {
           error: `Refusing to signal legacy registry pid ${reg.pid} because its exact process identity could not be verified. Reload or upgrade that pi bridge, then retry.`,
         });
       }
@@ -4488,7 +4517,7 @@ app.post('/api/sessions/:id/close', async (req, res) => {
     // not inherit an earlier request's authorization to signal its PID.
     const fresh = refreshRegisteredSession(sessionId);
     if (!fresh || !sameRegistryClaim(reg, fresh)) {
-      return res.status(409).json({
+      return closeResult(409, {
         error: 'The bridge registry identity changed while closing; no process was signaled. Refresh the session and retry.',
       });
     }
@@ -4496,7 +4525,7 @@ app.post('/api/sessions/:id/close', async (req, res) => {
     if (hasBirthMarker) {
       identity = { pid: Number(reg.pid), startTime: String(reg.startTime) };
     } else if (!legacyBridge?.alive) {
-      return res.status(409).json({
+      return closeResult(409, {
         error: 'The legacy bridge disconnected before its process could be signaled; no process was signaled. Reload or upgrade the bridge, then retry.',
       });
     }
@@ -4506,7 +4535,7 @@ app.post('/api/sessions/:id/close', async (req, res) => {
     // different starttime and is never signaled.
     if (!processIdentityAlive(identity)) {
       pruneRegisteredSession(reg);
-      return res.status(409).json({
+      return closeResult(409, {
         error: `The registered pi identity for pid ${reg.pid} is stale; no process was signaled. The stale registry claim was discarded.`,
       });
     }
@@ -4514,12 +4543,12 @@ app.post('/api/sessions/:id/close', async (req, res) => {
       process.kill(reg.pid, 'SIGTERM');
     } catch (e) {
       if (e.code !== 'ESRCH') {
-        return res.status(500).json({ error: `Failed to signal pi (pid ${reg.pid}): ${e.message}` });
+        return closeResult(500, { error: `Failed to signal pi (pid ${reg.pid}): ${e.message}` });
       }
     }
     exited = () => !processIdentityAlive(identity);
   } else {
-    return res.status(404).json({ error: 'Session not active' });
+    return closeResult(404, { error: 'Session not active' });
   }
 
   const timeoutMs = Number(process.env.PI_DISH_CLOSE_TIMEOUT_MS) || 10000;
@@ -4530,11 +4559,16 @@ app.post('/api/sessions/:id/close', async (req, res) => {
       // the registry memo serve the dead session as live for another 500ms.
       if (reg) pruneRegisteredSession(reg);
       else invalidateRegistryCache();
-      return res.json({ success: true });
+      return closeResult(200, { success: true });
     }
     await new Promise((r) => setTimeout(r, 150));
   }
-  res.status(500).json({ error: `pi did not exit within ${Math.round(timeoutMs / 1000)}s — it may be stuck; check the process directly` });
+  return closeResult(500, { error: `pi did not exit within ${Math.round(timeoutMs / 1000)}s — it may be stuck; check the process directly` });
+}
+
+app.post('/api/sessions/:id/close', async (req, res) => {
+  const { status, body } = await closeSessionById(req.params.id);
+  res.status(status).json(body);
 });
 
 app.get('/api/cwds', (req, res) => {
@@ -5623,6 +5657,230 @@ app.post('/api/sessions/:id/resume', async (req, res) => {
   }
 });
 
+// =========================================================================
+// Routines: /api/routines, /api/routine-invocations
+// =========================================================================
+//
+// A routine is a session *template* and an invocation is a session: each run
+// stamps its session with routine provenance, so transcript, cost, duration
+// and outcome all come from the existing session index and views rather than
+// a second history system. Everything destructive or spawn-shaped is reached
+// through the same helpers the session routes use — nothing here knows what a
+// harness is beyond its descriptor and the live session's capabilities.
+
+// Resume a session through the same headless dispatch POST /resume takes
+// (hidden tmux when available, else an RPC child), sharing its in-flight map
+// so a routine and a user resuming the same JSONL cannot start two writers.
+async function resumeSessionHeadless(sessionId) {
+  if (sessionIsActive(sessionId)) return { id: sessionId };
+  const sessionSource = findSessionSource(sessionId);
+  if (!sessionSource) throw new Error('Session file not found');
+  const descriptor = getHarness(sessionSource.harnessId);
+  if (!descriptor) throw new Error(`Unknown harness: ${sessionSource.harnessId}`);
+  const sessionFile = fs.realpathSync(sessionSource.file);
+  const routeId = routeSessionId(sessionSource.harnessId, sessionSource.nativeSessionId);
+  invalidateRegistryCache();
+  if (sessionIsActive(routeId)) return { id: routeId };
+
+  const existing = resumeFlights.get(sessionFile);
+  if (existing) return existing;
+
+  let cwd = readSessionCwd({ ...sessionSource, file: sessionFile });
+  if (cwd && !fs.existsSync(cwd)) cwd = process.env.HOME;
+  const flight = launchResumedSession({
+    descriptor, sessionFile, cwd, name: sessionSource.name || null, target: undefined, model: undefined,
+  });
+  resumeFlights.set(sessionFile, flight);
+  try {
+    return await flight;
+  } finally {
+    if (resumeFlights.get(sessionFile) === flight) resumeFlights.delete(sessionFile);
+  }
+}
+
+function escapeInvocationAttr(value) {
+  return String(value).replace(/[&<>"]/g, (ch) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+}
+
+/**
+ * The routine's prompt, plus the caller's input as an appended block — never
+ * substituted into the prompt (the `<session-refs>` rule): there is no
+ * templating language here, the agent reads the block. `#ref` tokens then
+ * expand exactly as they would from the composer.
+ */
+function composeRoutinePrompt(routine, invocation) {
+  let text = routine.prompt;
+  if (invocation && invocation.input !== null && invocation.input !== undefined) {
+    const source = invocation.source ? ` source="${escapeInvocationAttr(invocation.source)}"` : '';
+    text += `\n\n<invocation-input${source} invocation="${invocation.id}">\n`
+      + `${JSON.stringify(invocation.input, null, 2)}\n</invocation-input>`;
+  }
+  return expandSessionRefs(text, [], sessionRefDeps());
+}
+
+const routineRunner = createRoutineRunner({
+  store: routinesStore,
+  createSession: ({ harness, model, thinking, cwd }) => createSession({ harness, model, thinking, cwd }),
+  resumeSession: resumeSessionHeadless,
+  getLiveSession,
+  closeSession: closeSessionById,
+  composePrompt: composeRoutinePrompt,
+  isTurnInProgress: (sess) => !!sess?.turnInProgress,
+  supports: liveSessionSupports,
+});
+
+function expandRoutineCwd(cwd) {
+  return typeof cwd === 'string' && cwd.startsWith('~')
+    ? path.join(os.homedir(), cwd.slice(1).replace(/^\//, '')) : cwd;
+}
+
+// Model/thinking/cwd go through the same pilot validation POST /api/sessions/new
+// applies, so a routine can't persist a selection its harness would refuse at
+// spawn time.
+async function validateRoutinePilot({ harness, model, thinking, cwd }) {
+  const descriptor = getHarness(harness || 'pi');
+  if (!descriptor) {
+    const err = new Error(`Unknown harness: ${harness}`); err.status = 400; throw err;
+  }
+  await validateHarnessPilotSelection(descriptor, { model, thinking, cwd: expandRoutineCwd(cwd) });
+}
+
+function routineStats(routine, invocations) {
+  const mine = invocations.filter((entry) => entry.routineId === routine.id);
+  return {
+    invocations: mine.length,
+    running: mine.filter((entry) => entry.status === 'starting' || entry.status === 'running').length,
+    lastInvocation: mine[0] || null,   // the ledger is newest-first
+    nextRunAt: routineRunner.nextRunAt(routine),
+  };
+}
+
+/** List rows carry everything but the version history, which can be large. */
+function routineSummary(routine, invocations) {
+  const { versions, ...rest } = routine;
+  return { ...rest, stats: routineStats(routine, invocations) };
+}
+
+function routineErrorResponse(res, error) {
+  const payload = { error: error.message };
+  if (error.invocation) payload.invocation = error.invocation;
+  if (error.retryAfterSec !== undefined) {
+    payload.retryAfterSec = error.retryAfterSec;
+    payload.lastInvocation = error.lastInvocation || null;
+  }
+  return res.status(error.status || 500).json(payload);
+}
+
+app.get('/api/routines', (req, res) => {
+  const invocations = routinesStore.readInvocations();
+  res.json({ routines: routinesStore.listRoutines().map((routine) => routineSummary(routine, invocations)) });
+});
+
+app.post('/api/routines', async (req, res) => {
+  const input = req.body || {};
+  try {
+    await validateRoutinePilot(input);
+    res.status(201).json({ routine: routinesStore.createRoutine(input) });
+  } catch (error) {
+    routineErrorResponse(res, error);
+  }
+});
+
+app.get('/api/routines/:id', (req, res) => {
+  const routine = routinesStore.getRoutine(req.params.id);
+  if (!routine) return res.status(404).json({ error: 'Routine not found' });
+  res.json({ routine });
+});
+
+app.put('/api/routines/:id', async (req, res) => {
+  const existing = routinesStore.getRoutine(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Routine not found' });
+  const patch = req.body || {};
+  try {
+    await validateRoutinePilot({
+      harness: patch.harness ?? existing.harness,
+      model: patch.model === undefined ? existing.model : patch.model,
+      thinking: patch.thinking === undefined ? existing.thinking : patch.thinking,
+      cwd: patch.cwd ?? existing.cwd,
+    });
+    res.json({ routine: routinesStore.updateRoutine(existing.id, patch) });
+  } catch (error) {
+    routineErrorResponse(res, error);
+  }
+});
+
+// The ledger is deliberately retained: it outlives the definition (that is why
+// invocations denormalize the routine name), and the sessions the routine
+// produced are untouched.
+app.delete('/api/routines/:id', (req, res) => {
+  const existing = routinesStore.getRoutine(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Routine not found' });
+  routinesStore.deleteRoutine(existing.id);
+  res.json({ success: true, invocations: routinesStore.countInvocations(existing.id) });
+});
+
+app.post('/api/routines/:id/invoke', async (req, res) => {
+  const routine = routinesStore.getRoutine(req.params.id);
+  if (!routine) return res.status(404).json({ error: 'Routine not found' });
+  const body = req.body || {};
+  const input = body.input === undefined ? null : body.input;
+  if (routinesStore.serializedInputSize(input) > routinesStore.MAX_INPUT_BYTES) {
+    return res.status(413).json({ error: `input must serialize to at most ${routinesStore.MAX_INPUT_BYTES} bytes` });
+  }
+  let source = null;
+  if (body.source !== undefined && body.source !== null) {
+    if (typeof body.source !== 'string' || body.source.length > routinesStore.MAX_SOURCE) {
+      return res.status(400).json({ error: `source must be a string of at most ${routinesStore.MAX_SOURCE} characters` });
+    }
+    // Control characters would break the invocation-input block's framing.
+    if (/[\u0000-\u001f\u007f]/.test(body.source)) {
+      return res.status(400).json({ error: 'source must not contain control characters' });
+    }
+    source = body.source || null;
+  }
+  try {
+    const invocation = routineRunner.invoke(routine, { trigger: 'invoke', source, input });
+    if (req.query.wait === '1') {
+      // Bounded: a spawn still starting after a minute is returned as it
+      // stands rather than holding the caller's connection open.
+      const settled = await routineRunner.waitForInvocation(invocation.id, 60000);
+      return res.json({ invocation: settled || invocation });
+    }
+    res.status(202).json({ invocation });
+  } catch (error) {
+    routineErrorResponse(res, error);
+  }
+});
+
+const ROUTINE_INVOCATION_PAGE_MAX = 200;
+
+app.get('/api/routines/:id/invocations', (req, res) => {
+  const routine = routinesStore.getRoutine(req.params.id);
+  if (!routine) return res.status(404).json({ error: 'Routine not found' });
+  const requested = Number(req.query.limit);
+  const limit = Number.isFinite(requested) && requested > 0
+    ? Math.min(Math.floor(requested), ROUTINE_INVOCATION_PAGE_MAX) : 50;
+  const before = Number(req.query.before);
+  const invocations = routinesStore.listInvocations({
+    routineId: routine.id,
+    limit: limit + 1,
+    before: Number.isFinite(before) ? before : null,
+  });
+  const page = invocations.slice(0, limit);
+  res.json({
+    invocations: page,
+    nextBefore: invocations.length > limit ? page[page.length - 1].startedAt : null,
+  });
+});
+
+app.get('/api/routine-invocations/:id', (req, res) => {
+  const invocation = routinesStore.getInvocation(req.params.id);
+  if (!invocation) return res.status(404).json({ error: 'Invocation not found' });
+  res.json({ invocation });
+});
+
+
 // SSE — proxy events from the bridge socket. `message_update` fires for every
 // streaming delta with the full message payload; forwarding each one floods
 // slow (phone) connections, so we coalesce per connection: forward immediately
@@ -5909,6 +6167,12 @@ const server = app.listen(PORT, HOST, () => {
   skillsLib.getSkillFilePaths({ cwds: knownWorkspaceCwds() })
     .then(paths => sessionIndex.setSkillRoots(paths))
     .catch(() => {});
+  // Routines: reconcile the ledger against what actually survived the restart
+  // (nothing is caught up — a missed minute stays missed), then arm the
+  // unref'd 30s scheduler tick.
+  routineRunner.recoverAfterRestart()
+    .catch((e) => console.error(`Routine restart recovery failed: ${e.message}`));
+  routineRunner.start();
 });
 
 // Optional dedicated share listener: a second minimal app that serves only

@@ -54,6 +54,14 @@
               <path d="M12 7v13"/>
             </svg>
           </button>
+          <!-- Routines: hidden until some effective host advertises the
+               `routines` capability (fleet rule — absent means unsupported). -->
+          <button class="btn-icon" id="btnRoutines" style="display:none" onclick="openRoutinesView()" title="Routines" aria-label="Routines">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="9"/>
+              <path d="M12 7.5V12l3 1.8"/>
+            </svg>
+          </button>
           <button class="btn-icon global-settings-btn" onclick="openSettingsModal()" title="Settings" aria-label="Settings">⚙</button>
           <button class="btn-icon" onclick="refreshSessions()" title="Refresh">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -480,6 +488,35 @@
           <div class="skills-header-inner" id="skillsViewHeader"></div>
         </div>
         <div class="skills-view-body" id="skillsViewBody"></div>
+      </div>
+
+      <!-- Routines view: a main-pane takeover (usage-view pattern) — named,
+           reusable session templates with a cadence and an invocation
+           ledger. List column + detail pane on desktop; on mobile the list
+           swaps to the detail with a ‹ back control. Opened from the sidebar
+           header clock; mutually exclusive with the other takeovers.
+           See TASKS/routines.md. -->
+      <div class="routines-view" id="routinesView">
+        <div class="usage-view-header">
+          <button class="menu-btn" onclick="toggleSidebar()" aria-label="Open session list">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M3 12h18M3 6h18M3 18h18"/>
+            </svg>
+          </button>
+          <span class="usage-view-title">Routines</span>
+          <span class="usage-view-note">Session templates with a schedule and an invocation ledger</span>
+          <button class="btn-icon" onclick="refreshRoutinesView()" title="Refresh">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 12a9 9 0 11-2.636-6.364"/>
+              <path d="M21 3v6h-6"/>
+            </svg>
+          </button>
+          <button class="btn-icon" onclick="closeRoutinesView()" title="Close (Esc)">✕</button>
+        </div>
+        <div class="routines-view-body">
+          <div class="routines-list" id="routinesList"></div>
+          <div class="routines-detail" id="routinesDetail"></div>
+        </div>
       </div>
     </main>
   </div>

@@ -337,6 +337,7 @@ async function loadHostFleet() {
     await identifyHosts();
     pruneHostCaches();
     renderHostsSection();
+    updateRoutinesButton();
     if (isNewSessionViewOpen()) renderNsHosts();
     renderSessions();
   } catch {}
@@ -618,6 +619,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await identifyHosts();  // and who the catalog's own entries actually are
   } finally {
     resolveHostFleetReady();
+    updateRoutinesButton(); // capability-gated sidebar icon
   }
   loadConfig(); // feature flags (terminal) — fire-and-forget
   loadThemes(); // theme picker options + refresh custom-theme tokens
@@ -1606,6 +1608,11 @@ function renderSessionItem(session, opts = {}) {
     ? `<button class="session-close-btn${closeArmed ? ' confirm' : ''}" title="${closeArmed ? 'Tap again to close this session' : (session.harnessId === 'prime' ? 'Detach client' : 'Close session (transcript stays resumable)')}">${closeBusy ? '…' : closeArmed ? (session.harnessId === 'prime' ? 'detach?' : 'close?') : '✕'}</button>`
     : '';
   const harnessBadge = renderHarnessBadge(session.harnessId, session.harnessLabel);
+  // Provenance stamp from the routine ledger (server-side, presentation only,
+  // like the parent hints): this session is one routine's run.
+  const routineChip = session.routine
+    ? `<span class="routine-chip" title="Started by the &quot;${escapeHtml(session.routine)}&quot; routine">⏱ ${escapeHtml(session.routine)}</span>`
+    : '';
   // Rows in the pinned section get a drag handle (reorder); pinned and
   // Recent-view rows get a cwd hint — they've left their workspace group,
   // so the group label isn't there.
@@ -1637,7 +1644,7 @@ function renderSessionItem(session, opts = {}) {
         <span class="session-item-context ${ctxClass}" title="${escapeHtml(ctxTitle)}">${escapeHtml(ctxText)}</span>
       </div>
       <div class="session-item-tags${hostChip ? ' with-host' : ''}">
-        ${hostChip}${harnessBadge}${cwdHint}
+        ${hostChip}${harnessBadge}${routineChip}${cwdHint}
       </div>
       ${snippetLine}
     </div>
@@ -2355,6 +2362,7 @@ function showPendingSessionView(spawnId) {
   closeSearchView();
   closeNewSessionView(); // the provisional pane replaces the takeover
   closeSkillsView();
+  closeRoutinesView();
   stashCurrentTranscript();
   setCurrentSession(null);
   currentSessionSpawnId = spawnId;
@@ -2463,6 +2471,7 @@ async function selectSession(id, { forceTranscriptReload = false, host = null } 
   closeSearchView();
   closeNewSessionView();
   closeSkillsView();
+  closeRoutinesView();
   stashCurrentTranscript();
   if (forceTranscriptReload) transcriptCache.delete(id);
   if (!setCurrentSession(id, host)) return;
@@ -3488,6 +3497,7 @@ function openSearchView(initialQuery) {
   closeUsageView(); // takeovers are mutually exclusive
   closeNewSessionView();
   closeSkillsView();
+  closeRoutinesView();
   if (typeof initialQuery === 'string') searchViewQuery = initialQuery;
   const input = document.getElementById('searchViewInput');
   input.value = searchViewQuery;
@@ -3784,6 +3794,7 @@ function openSkillsView() {
   closeUsageView(); // takeovers are mutually exclusive
   closeSearchView();
   closeNewSessionView();
+  closeRoutinesView();
   document.querySelector('.main').classList.add('skills-open');
   skillsDetailPath = null;
   loadSkillsDirectory();
@@ -4177,6 +4188,7 @@ function openUsageView() {
   closeSearchView(); // takeovers are mutually exclusive
   closeNewSessionView();
   closeSkillsView();
+  closeRoutinesView();
   if (isUsageViewOpen()) return;
   document.querySelector('.main').classList.add('usage-open');
   loadUsageView();
@@ -8667,6 +8679,7 @@ function openNewSessionView(opts = {}) {
   closeUsageView(); // takeovers are mutually exclusive
   closeSearchView();
   closeSkillsView();
+  closeRoutinesView();
   document.querySelector('.main').classList.add('new-session-open');
   nsPendingDraft = opts.draft || null;
 
@@ -8869,13 +8882,16 @@ function syncNsThinking() {
 }
 
 
-function renderNsModel() {
-  const sel = document.getElementById('nsModelSelect');
-  if (!sel) return;
-  const models = Array.isArray(knownModels) ? knownModels : [];
-  const enabled = models.filter(m => m && m.enabled !== false);
-  const hidden = models.length - enabled.length;
-
+/**
+ * Option markup for a model select: enabled models grouped by provider under
+ * a "(default)" row (which omits `model` entirely), plus how many the host's
+ * scoped-models setting hid. Shared by the new-session takeover and the
+ * routines editor so both speak the same catalog vocabulary — neither one
+ * sets `selected` here; callers assign `.value` after inserting the HTML.
+ */
+function modelSelectOptionsHtml(models) {
+  const list = Array.isArray(models) ? models : [];
+  const enabled = list.filter(m => m && m.enabled !== false);
   const byProvider = {};
   enabled.forEach(m => { (byProvider[m.provider] = byProvider[m.provider] || []).push(m); });
   let html = '<option value="">(default)</option>';
@@ -8887,6 +8903,17 @@ function renderNsModel() {
     });
     html += '</optgroup>';
   });
+  return { html, enabled, hidden: list.length - enabled.length };
+}
+
+function modelHiddenNote(hidden) {
+  return hidden > 0 ? `${hidden} model${hidden === 1 ? '' : 's'} hidden (not enabled)` : '';
+}
+
+function renderNsModel() {
+  const sel = document.getElementById('nsModelSelect');
+  if (!sel) return;
+  const { html, enabled, hidden } = modelSelectOptionsHtml(knownModels);
   sel.innerHTML = html;
 
   // Show the saved selection when the rendered list has it; else display
@@ -8898,11 +8925,7 @@ function renderNsModel() {
     (m.selector || `${m.provider}/${m.id}`) === newSessionModel)) ? newSessionModel : '';
 
   const note = document.getElementById('nsModelHidden');
-  if (note) {
-    note.textContent = hidden > 0
-      ? `${hidden} model${hidden === 1 ? '' : 's'} hidden (not enabled)`
-      : '';
-  }
+  if (note) note.textContent = modelHiddenNote(hidden);
   syncNsThinking();
 }
 
@@ -8937,7 +8960,6 @@ async function spawnNewSession() {
 // CWD autocomplete
 // =========================================================================
 let knownCwds = []; // [{path, short}]
-let cwdDropdownIdx = -1;
 
 async function loadKnownCwds() {
   try {
@@ -8946,103 +8968,126 @@ async function loadKnownCwds() {
   } catch {}
 }
 
-// Fuzzy-find the starting directory: known session cwds (starred, boosted)
-// merged with a live filesystem search under ~ (server-side, /api/dirs).
-const cwdFetcher = debouncedFetcher(120,
-  async (query) => {
-    const res = await apiFetch(nsHostId(), '/api/dirs?q=' + encodeURIComponent(query));
-    return res.ok ? await res.json() : [];
-  },
-  (dirs, query) => renderCwdDropdown(query, dirs || []));
+/**
+ * The cwd combobox, as a factory: fuzzy /api/dirs matches on the *chosen*
+ * host merged with already-known session cwds (starred, score-boosted).
+ * Factored out of the new-session takeover so the routines editor's working
+ * directory field is literally the same control instead of a second copy
+ * that drifts. Callers own the DOM elements and what a pick means; `hostId`
+ * is a function because the host can change under a live control.
+ */
+function createCwdAutocomplete({
+  input, dropdown, hostId = () => nsHostId(), known = () => [],
+  onPick = () => {}, onSubmit = null, onBlur = null,
+}) {
+  let activeIdx = -1;
 
-function showCwdDropdown(query) { cwdFetcher.fire(query); }
+  const fetcher = debouncedFetcher(120,
+    async (query) => {
+      const res = await apiFetch(hostId(), '/api/dirs?q=' + encodeURIComponent(query));
+      return res.ok ? await res.json() : [];
+    },
+    (dirs, query) => render(query, dirs || []));
 
-function renderCwdDropdown(query, dirs) {
-  const dropdown = document.getElementById('cwdDropdown');
-  if (!dropdown) return;
+  function render(query, dirs) {
+    const seen = new Set();
+    let results = [];
+    for (const c of [...known().map(c => ({ ...c, known: true })), ...dirs]) {
+      if (seen.has(c.short)) continue;
+      seen.add(c.short);
+      if (!query) { results.push({ ...c, indices: [] }); continue; }
+      const indices = fuzzyMatch(query, c.short);
+      if (!indices) continue;
+      results.push({ ...c, indices, score: fuzzyScore(indices, c.short) + (c.known ? 5 : 0) });
+    }
+    if (query) results.sort((a, b) => b.score - a.score);
+    results = results.slice(0, 15);
 
-  const seen = new Set();
-  let results = [];
-  for (const c of [...knownCwds.map(c => ({ ...c, known: true })), ...dirs]) {
-    if (seen.has(c.short)) continue;
-    seen.add(c.short);
-    if (!query) { results.push({ ...c, indices: [] }); continue; }
-    const indices = fuzzyMatch(query, c.short);
-    if (!indices) continue;
-    results.push({ ...c, indices, score: fuzzyScore(indices, c.short) + (c.known ? 5 : 0) });
-  }
-  if (query) results.sort((a, b) => b.score - a.score);
-  results = results.slice(0, 15);
+    if (results.length === 0) { dropdown.style.display = 'none'; return; }
 
-  if (results.length === 0) { dropdown.style.display = 'none'; return; }
+    activeIdx = -1;
+    dropdown.innerHTML = results.map((c) =>
+      `<div class="cwd-option" data-path="${escapeHtml(c.short)}">${c.known ? '<span class="cwd-known">★</span>' : ''}${highlightFuzzy(c.short, c.indices)}</div>`
+    ).join('');
+    dropdown.style.display = 'block';
 
-  cwdDropdownIdx = -1;
-  dropdown.innerHTML = results.map((c) =>
-    `<div class="cwd-option" data-path="${escapeHtml(c.short)}">${c.known ? '<span class="cwd-known">★</span>' : ''}${highlightFuzzy(c.short, c.indices)}</div>`
-  ).join('');
-  dropdown.style.display = 'block';
-
-  dropdown.querySelectorAll('.cwd-option').forEach(el => {
-    el.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      const input = document.getElementById('newSessionCwd');
-      input.value = el.dataset.path;
-      localStorage.setItem('pi-dish-cwd', el.dataset.path);
-      dropdown.style.display = 'none';
-      scheduleNsPilotRefresh();
+    dropdown.querySelectorAll('.cwd-option').forEach(el => {
+      el.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        pick(el.dataset.path);
+      });
     });
+  }
+
+  function pick(pathValue) {
+    input.value = pathValue;
+    hide();
+    onPick(pathValue);
+  }
+
+  function show(query) { fetcher.fire(query); }
+
+  function hide() {
+    fetcher.cancel(); // invalidate any in-flight dir search
+    dropdown.style.display = 'none';
+    activeIdx = -1;
+  }
+
+  input.addEventListener('focus', () => show(input.value));
+  input.addEventListener('input', () => show(input.value));
+  input.addEventListener('blur', () => {
+    setTimeout(hide, 150);
+    if (onBlur) onBlur();
   });
-}
-
-function hideCwdDropdown() {
-  cwdFetcher.cancel(); // invalidate any in-flight dir search
-  const dropdown = document.getElementById('cwdDropdown');
-  if (dropdown) dropdown.style.display = 'none';
-}
-
-// Wire up the cwd input
-(function() {
-  const saved = localStorage.getItem('pi-dish-cwd');
-  const cwdInput = document.getElementById('newSessionCwd');
-  if (!cwdInput) return;
-  if (saved) cwdInput.value = saved;
-
-  loadKnownCwds();
-
-  cwdInput.addEventListener('focus', () => showCwdDropdown(cwdInput.value));
-  cwdInput.addEventListener('input', () => showCwdDropdown(cwdInput.value));
-  cwdInput.addEventListener('blur', () => {
-    setTimeout(hideCwdDropdown, 150);
-    scheduleNsPilotRefresh();
-  });
-
-  cwdInput.addEventListener('keydown', (e) => {
-    const dropdown = document.getElementById('cwdDropdown');
-    if (!dropdown || dropdown.style.display === 'none') {
-      if (e.key === 'Enter') { e.preventDefault(); spawnNewSession(); }
+  input.addEventListener('keydown', (e) => {
+    if (dropdown.style.display === 'none') {
+      if (e.key === 'Enter' && onSubmit) { e.preventDefault(); onSubmit(); }
       return;
     }
     const options = dropdown.querySelectorAll('.cwd-option');
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
-      cwdDropdownIdx = moveActiveItem(options, cwdDropdownIdx, e.key === 'ArrowDown' ? 1 : -1);
+      activeIdx = moveActiveItem(options, activeIdx, e.key === 'ArrowDown' ? 1 : -1);
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      if (cwdDropdownIdx >= 0 && options[cwdDropdownIdx]) {
-        cwdInput.value = options[cwdDropdownIdx].dataset.path;
-        localStorage.setItem('pi-dish-cwd', cwdInput.value);
-        hideCwdDropdown();
-        scheduleNsPilotRefresh();
-      } else {
-        hideCwdDropdown();
-        spawnNewSession();
-      }
+      if (activeIdx >= 0 && options[activeIdx]) pick(options[activeIdx].dataset.path);
+      else { hide(); if (onSubmit) onSubmit(); }
     } else if (e.key === 'Escape') {
       // Close the dropdown only — don't let Escape bubble to the takeover's
       // global Escape-to-close handler while a suggestion list is open.
       e.stopPropagation();
-      hideCwdDropdown();
+      hide();
     }
+  });
+
+  return { show, hide };
+}
+
+// The new-session takeover's instance; the wrapper keeps its one outside
+// call site (closeNewSessionView) reading the same.
+let nsCwdAutocomplete = null;
+function hideCwdDropdown() { nsCwdAutocomplete?.hide(); }
+
+(function() {
+  const saved = localStorage.getItem('pi-dish-cwd');
+  const cwdInput = document.getElementById('newSessionCwd');
+  const dropdown = document.getElementById('cwdDropdown');
+  if (!cwdInput || !dropdown) return;
+  if (saved) cwdInput.value = saved;
+
+  loadKnownCwds();
+
+  nsCwdAutocomplete = createCwdAutocomplete({
+    input: cwdInput,
+    dropdown,
+    hostId: () => nsHostId(),
+    known: () => knownCwds,
+    onPick: (pathValue) => {
+      localStorage.setItem('pi-dish-cwd', pathValue);
+      scheduleNsPilotRefresh();
+    },
+    onBlur: () => scheduleNsPilotRefresh(),
+    onSubmit: () => spawnNewSession(),
   });
 })();
 
@@ -10648,6 +10693,8 @@ document.addEventListener('keydown', function(e) {
     e.preventDefault(); closeStatsModal();
   } else if (document.getElementById('artifactsModal').style.display !== 'none') {
     e.preventDefault(); closeArtifactsModal();
+  } else if (isRoutinesViewOpen()) {
+    e.preventDefault(); routinesViewEscape();
   } else if (isSkillsViewOpen()) {
     e.preventDefault(); skillsViewEscape();
   } else if (isNewSessionViewOpen()) {
@@ -10864,6 +10911,7 @@ async function loadConfig() {
     if (appConfig.terminal) await loadTerminalAssets();
   } catch { /* feature stays hidden */ }
   updateTerminalButtons();
+  updateRoutinesButton();
 }
 
 // { term, fitAddon, ws, sessionId, reconnectTimer, attempts, closedByUser, exited }
@@ -11352,4 +11400,1059 @@ function initTerminalKeybar() {
     e.preventDefault();
     termKeybarPress(btn.dataset.termkey);
   });
+}
+
+// =========================================================================
+// Routines takeover (main-pane, usage-view pattern)
+// =========================================================================
+// A routine is a session template; an invocation is a session. This surface
+// edits the template (name, harness/cwd/model/thinking, schedule, prompt) and
+// reads the ledger of runs it produced — the transcript, cost and duration of
+// each run stay where every other session's do. See TASKS/routines.md.
+//
+// Fleet: GET /api/routines fans out per capable host exactly like the usage
+// view (Promise.allSettled, 20s deadlines, progressive render). Every routine
+// carries the host it lives on and every subsequent call for it goes through
+// apiFetch(routine.host, …) — the client is the aggregator, there is no
+// hub-side merged endpoint. On a single host none of the host chrome renders.
+
+let routinesList = [];            // [{ ...RoutineSummary, host, hostLabel }]
+let routinesHostErrors = [];      // labels of hosts that didn't answer
+let routinesHostPending = [];     // labels still outstanding during a partial render
+let routinesSeq = 0;
+let routinesListError = '';
+// Selection is (host, id) — two hosts may legitimately hold the same name.
+let routineSelKey = null;
+let routineSelected = null;       // GET /api/routines/:id (carries `versions`)
+let routineCreating = false;      // detail pane holds a blank create form
+let routineFormBaseline = null;   // JSON snapshot for the dirty guard
+let routineFormError = '';
+let routineDeleteArmed = false;
+let routineBusy = false;          // a save/invoke/delete is in flight
+let routineInvocations = [];
+let routineInvocationsNextBefore = null;
+let routineInvocationsInflight = false;
+let routineInvocationsTimer = null;
+let routineVersionFilter = null;  // clicking a version row filters the table
+let routineVersionShown = null;   // which version's prompt is expanded inline
+let routineNotice = '';           // transient success line under the actions
+// Per (host|harness|cwd) model catalogs. Deliberately *not* the global
+// knownModels: that one belongs to the session header and the new-session
+// takeover, and a routine's catalog is a different harness/cwd/host triple.
+const routineModelCatalogs = new Map();
+const routineHarnessCatalogs = new Map();
+let routineModelSeq = 0;
+let routineCwdAutocomplete = null;
+let routineCreateHostId = null;   // host picked in the create form
+
+const ROUTINE_CRON_PRESETS = [
+  ['', 'No schedule (manual only)'],
+  ['0 * * * *', 'Every hour'],
+  ['0 9 * * *', 'Daily at 09:00'],
+  ['0 9 * * 1-5', 'Weekdays at 09:00'],
+  ['0 9 * * 1', 'Weekly, Monday 09:00'],
+];
+const ROUTINE_ON_BUSY = [
+  ['skip', 'Skip the run'],
+  ['steer', 'Steer the running turn'],
+  ['followUp', 'Queue as a follow-up'],
+];
+const ROUTINE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+function routineKey(host, id) { return sessionKey(host || null, id); }
+
+/** Hosts that advertise `routines`. Absent capability = unsupported. */
+function routinesCapableHosts() {
+  return fanoutHosts().filter(host => hostSupportsCapability(host, 'routines', appConfig));
+}
+
+function anyHostSupportsRoutines() {
+  return effectiveHosts().some(host => hostSupportsCapability(host, 'routines', appConfig));
+}
+
+/** The sidebar icon exists only where the feature does. */
+function updateRoutinesButton() {
+  const btn = document.getElementById('btnRoutines');
+  if (!btn) return;
+  const supported = anyHostSupportsRoutines();
+  btn.style.display = supported ? '' : 'none';
+  if (!supported && isRoutinesViewOpen()) closeRoutinesView();
+}
+
+function isRoutinesViewOpen() {
+  return document.querySelector('.main').classList.contains('routines-open');
+}
+
+function openRoutinesView() {
+  closeSidebar();
+  closeUsageView(); // takeovers are mutually exclusive
+  closeSearchView();
+  closeNewSessionView();
+  closeSkillsView();
+  if (isRoutinesViewOpen()) return;
+  document.querySelector('.main').classList.add('routines-open');
+  // Re-opening restores the last selection (and its poll); with none, the
+  // detail pane is the placeholder and the phone starts on the list. The form
+  // is only repainted when the pane doesn't already hold it, so closing and
+  // reopening the takeover can't silently discard an unsaved edit.
+  if (!routineSelected && !routineCreating) backToRoutinesList();
+  if (!document.getElementById('routinesDetail')?.querySelector('#rtName')) renderRoutineDetail();
+  loadRoutinesView();
+  if (routineSelected) {
+    loadRoutineInvocations({ reset: true });
+    startRoutineInvocationPoll();
+  }
+}
+
+function closeRoutinesView() {
+  document.querySelector('.main').classList.remove('routines-open');
+  stopRoutineInvocationPoll();
+}
+
+function refreshRoutinesView() {
+  loadRoutinesView();
+  if (routineSelected) loadRoutineInvocations({ reset: true });
+}
+
+/** Mobile back-out: Escape leaves the detail before it leaves the takeover. */
+function routinesViewEscape() {
+  const view = document.getElementById('routinesView');
+  if (view && view.classList.contains('detail-open') && window.matchMedia('(max-width: 768px)').matches) {
+    backToRoutinesList();
+    return true;
+  }
+  closeRoutinesView();
+  return true;
+}
+
+function backToRoutinesList() {
+  document.getElementById('routinesView')?.classList.remove('detail-open');
+}
+
+// --- list (fleet fan-out) ------------------------------------------------
+
+async function loadRoutinesView() {
+  const seq = ++routinesSeq;
+  const stale = () => seq !== routinesSeq || !isRoutinesViewOpen();
+  const listEl = document.getElementById('routinesList');
+  if (listEl && !listEl.childElementCount) listEl.innerHTML = '<div class="usage-state">Loading routines…</div>';
+  await hostFleetReady;
+  if (stale()) return;
+
+  const hosts = routinesCapableHosts();
+  if (!hosts.length) {
+    routinesList = [];
+    routinesListError = 'No reachable host offers routines.';
+    renderRoutinesList();
+    return;
+  }
+  const status = hosts.map(() => 'pending');
+  const entries = new Array(hosts.length);
+  const reasons = new Array(hosts.length);
+  const render = () => {
+    if (stale()) return;
+    if (!status.some((s, i) => s === 'ok' && entries[i])) return;
+    routinesHostErrors = hosts.filter((_, i) => status[i] === 'error').map(hostDisplayLabel);
+    routinesHostPending = hosts.filter((_, i) => status[i] === 'pending').map(hostDisplayLabel);
+    routinesListError = '';
+    routinesList = entries.flat().filter(Boolean);
+    renderRoutinesList();
+  };
+  const queueRender = createFanoutRenderQueue(status, render);
+  await Promise.allSettled(hosts.map(async (host, i) => {
+    try {
+      const res = await apiFetch(host, '/api/routines', { timeoutMs: 20000 });
+      if (res.status === 401) { noteHostBlocked(host); throw new Error('needs a token'); }
+      if (!res.ok) throw new Error(await res.json().then(d => d.error, () => null) || `HTTP ${res.status}`);
+      const data = await res.json();
+      entries[i] = (Array.isArray(data?.routines) ? data.routines : []).map(r => ({
+        ...r, host: host.hostId || null, hostLabel: hostDisplayLabel(host),
+      }));
+      status[i] = 'ok';
+      noteHostReachable(host);
+    } catch (e) {
+      status[i] = 'error';
+      reasons[i] = e;
+      if (!host.self) noteHostFailure(host, e);
+    }
+    queueRender();
+  }));
+  if (stale()) return;
+  if (!status.some(s => s === 'ok')) {
+    routinesList = [];
+    routinesListError = (reasons.find(Boolean) || new Error('no hosts answered')).message;
+    renderRoutinesList();
+  }
+}
+
+function routineStatusClass(status) {
+  if (status === 'starting' || status === 'running') return 'working';
+  if (status === 'completed') return 'ok';
+  if (status === 'errored' || status === 'interrupted') return 'bad';
+  return 'muted';
+}
+
+/** "in 3h" / "in 12m" — the schedule line's forward-looking twin. */
+function formatRoutineCountdown(ts) {
+  if (!ts) return '';
+  const diff = new Date(ts).getTime() - Date.now();
+  if (!Number.isFinite(diff)) return '';
+  if (diff <= 0) return 'due now';
+  const m = Math.round(diff / 60000);
+  if (m < 60) return `in ${Math.max(1, m)}m`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `in ${h}h`;
+  return `in ${Math.round(h / 24)}d`;
+}
+
+function routineScheduleLine(routine) {
+  const cron = routine.schedule?.cron;
+  if (!cron) return '<span class="rt-sched muted">manual only</span>';
+  if (routine.enabled === false) {
+    return `<span class="rt-sched paused"><code>${escapeHtml(cron)}</code> · paused</span>`;
+  }
+  const next = formatRoutineCountdown(routine.stats?.nextRunAt);
+  return `<span class="rt-sched"><code>${escapeHtml(cron)}</code>${next ? ` · ${escapeHtml(next)}` : ''}</span>`;
+}
+
+function renderRoutinesList() {
+  const el = document.getElementById('routinesList');
+  if (!el) return;
+  const notices = [
+    routinesHostErrors.length ? `<div class="usage-notice">Not listed: ${escapeHtml(routinesHostErrors.join(', '))} did not answer.</div>` : '',
+    routinesHostPending.length ? `<div class="usage-notice">Still loading ${escapeHtml(routinesHostPending.join(', '))}…</div>` : '',
+  ].join('');
+
+  const sorted = routinesList.slice().sort((a, b) =>
+    (b.stats?.lastInvocation?.startedAt || 0) - (a.stats?.lastInvocation?.startedAt || 0) ||
+    String(a.name || '').localeCompare(String(b.name || '')));
+
+  const rows = sorted.map(r => {
+    const key = routineKey(r.host, r.id);
+    const last = r.stats?.lastInvocation || null;
+    const dot = `<span class="rt-dot ${last ? routineStatusClass(last.status) : 'none'}" title="${escapeHtml(last ? last.status : 'never run')}"></span>`;
+    const lastLine = last
+      ? `${dot}${escapeHtml(last.status)} · ${escapeHtml(formatRelativeTime(last.startedAt))}`
+      : `${dot}never run`;
+    const count = r.stats?.invocations || 0;
+    return `<div class="rt-row${routineSelKey === key ? ' selected' : ''}" data-routine="${escapeHtml(r.id)}" data-host="${escapeHtml(r.host || '')}">
+      <div class="rt-row-top">
+        <span class="rt-name">${escapeHtml(r.name || r.id)}</span>
+        ${hostChipHtml(r.host)}
+      </div>
+      <div class="rt-row-sched">${routineScheduleLine(r)}</div>
+      <div class="rt-row-meta">${escapeHtml(r.mode === 'continue' ? 'continue' : 'one-shot')} · on busy ${escapeHtml(r.onBusy || 'skip')}</div>
+      <div class="rt-row-last">${lastLine}<span class="rt-count">${count} run${count === 1 ? '' : 's'}</span></div>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="rt-list-head">
+      <button class="btn-small" id="rtNewBtn" onclick="startRoutineCreate()">+ New routine</button>
+    </div>
+    ${notices}
+    ${routinesListError ? `<div class="usage-state">${escapeHtml(routinesListError)}</div>` : ''}
+    ${rows || (routinesListError ? '' : '<div class="usage-state">No routines yet.</div>')}`;
+
+  el.querySelectorAll('.rt-row').forEach(row => {
+    row.addEventListener('click', () => selectRoutine(row.dataset.host || null, row.dataset.routine));
+  });
+}
+
+// --- selection + detail --------------------------------------------------
+
+function routineFormDirty() {
+  if (!routineFormBaseline) return false;
+  const now = readRoutineForm();
+  return now && JSON.stringify(now) !== routineFormBaseline;
+}
+
+/** The unsaved-changes guard the spec asks for: a plain confirm, once. */
+function confirmLeaveRoutineForm() {
+  if (!routineFormDirty()) return true;
+  return confirm('This routine has unsaved changes. Discard them?');
+}
+
+async function selectRoutine(host, id) {
+  const key = routineKey(host, id);
+  if (routineSelKey === key && routineSelected) {
+    document.getElementById('routinesView')?.classList.add('detail-open');
+    return;
+  }
+  if (!confirmLeaveRoutineForm()) return;
+  routineSelKey = key;
+  routineCreating = false;
+  routineSelected = null;
+  routineFormBaseline = null;
+  routineFormError = '';
+  routineNotice = '';
+  routineDeleteArmed = false;
+  routineVersionFilter = null;
+  routineVersionShown = null;
+  routineInvocations = [];
+  routineInvocationsNextBefore = null;
+  stopRoutineInvocationPoll();
+  renderRoutinesList();
+  document.getElementById('routinesView')?.classList.add('detail-open');
+  const detail = document.getElementById('routinesDetail');
+  if (detail) detail.innerHTML = '<div class="usage-state">Loading routine…</div>';
+  try {
+    const res = await apiFetch(host, `/api/routines/${encodeURIComponent(id)}`);
+    if (!res.ok) throw new Error(await res.json().then(d => d.error, () => null) || `HTTP ${res.status}`);
+    const data = await res.json();
+    if (routineSelKey !== key) return;
+    routineSelected = { ...(data.routine || data), host: host || null };
+    renderRoutineDetail();
+    loadRoutineInvocations({ reset: true });
+    startRoutineInvocationPoll();
+  } catch (e) {
+    if (routineSelKey !== key) return;
+    if (detail) detail.innerHTML = `<div class="usage-state">Could not load routine: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function startRoutineCreate() {
+  if (!confirmLeaveRoutineForm()) return;
+  const hosts = routinesCapableHosts();
+  const host = hosts.find(h => h.self) || hosts[0];
+  routineSelKey = null;
+  routineSelected = null;
+  routineCreating = true;
+  routineFormError = '';
+  routineNotice = '';
+  routineDeleteArmed = false;
+  routineVersionFilter = null;
+  routineVersionShown = null;
+  routineInvocations = [];
+  routineInvocationsNextBefore = null;
+  stopRoutineInvocationPoll();
+  routineCreateHostId = host ? (host.hostId || null) : null;
+  renderRoutinesList();
+  document.getElementById('routinesView')?.classList.add('detail-open');
+  renderRoutineDetail();
+}
+
+/** The host the detail pane's calls go to — the routine's, or the create pick. */
+function routineFormHostId() {
+  return routineCreating ? routineCreateHostId : (routineSelected?.host ?? null);
+}
+
+/**
+ * Known cwds for the form's host, taken from the client's own session lists.
+ * The new-session takeover's /api/cwds cache belongs to *its* host; deriving
+ * from `sessions` keeps a peer's routine from suggesting this machine's paths.
+ */
+function routineKnownCwds() {
+  const hostId = routineFormHostId();
+  const seen = new Set();
+  const out = [];
+  for (const s of [...sessions.active, ...sessions.previous]) {
+    if (isMultiHost() && (s.host || null) !== hostId) continue;
+    if (!s.cwd || seen.has(s.cwd)) continue;
+    seen.add(s.cwd);
+    out.push({ path: s.cwd, short: shortCwd(s.cwd) });
+  }
+  return out;
+}
+
+async function loadRoutineHarnesses(hostId) {
+  const key = String(hostId || '');
+  if (routineHarnessCatalogs.has(key)) return routineHarnessCatalogs.get(key);
+  let list = [{ id: 'pi', label: 'Pi', available: true }];
+  try {
+    const res = await apiFetch(hostId, '/api/harnesses');
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data?.harnesses) && data.harnesses.length) list = data.harnesses;
+    }
+  } catch {}
+  routineHarnessCatalogs.set(key, list);
+  return list;
+}
+
+async function loadRoutineModels(hostId, harnessId, cwd) {
+  const key = `${hostId || ''}|${harnessId}|${cwd || ''}`;
+  if (routineModelCatalogs.has(key)) return routineModelCatalogs.get(key);
+  const seq = ++routineModelSeq;
+  let models = [];
+  try {
+    const url = harnessId !== 'pi' ? modelCatalogUrl(harnessId, cwd) : '/api/models';
+    const res = await apiFetch(hostId, url);
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data)) models = data;
+    }
+  } catch {}
+  if (seq !== routineModelSeq) return models;
+  routineModelCatalogs.set(key, models);
+  return models;
+}
+
+/** Current form values, normalized to the wire shape the routes take. */
+function readRoutineForm() {
+  const detail = document.getElementById('routinesDetail');
+  if (!detail || !detail.querySelector('#rtName')) return null;
+  const val = (id) => (detail.querySelector('#' + id)?.value ?? '').trim();
+  const minInterval = parseInt(detail.querySelector('#rtMinInterval')?.value, 10);
+  return {
+    name: val('rtName'),
+    description: val('rtDescription'),
+    harness: val('rtHarness') || 'pi',
+    cwd: val('rtCwd'),
+    model: val('rtModel'),
+    thinking: val('rtThinking'),
+    cron: val('rtCron'),
+    enabled: !!detail.querySelector('#rtEnabled')?.checked,
+    mode: detail.querySelector('input[name="rtMode"]:checked')?.value || 'oneShot',
+    onBusy: val('rtOnBusy') || 'skip',
+    minIntervalSec: Number.isFinite(minInterval) && minInterval > 0 ? minInterval : 0,
+    prompt: detail.querySelector('#rtPrompt')?.value ?? '',
+  };
+}
+
+function routineFormDefaults() {
+  if (routineSelected) {
+    return {
+      name: routineSelected.name || '',
+      description: routineSelected.description || '',
+      harness: routineSelected.harness || 'pi',
+      cwd: routineSelected.cwd || '',
+      model: routineSelected.model || '',
+      thinking: routineSelected.thinking || '',
+      cron: routineSelected.schedule?.cron || '',
+      enabled: routineSelected.enabled !== false,
+      mode: routineSelected.mode === 'continue' ? 'continue' : 'oneShot',
+      onBusy: routineSelected.onBusy || 'skip',
+      minIntervalSec: routineSelected.minIntervalSec || 0,
+      prompt: routineSelected.prompt || '',
+    };
+  }
+  return {
+    name: '', description: '', harness: 'pi',
+    cwd: localStorage.getItem('pi-dish-cwd') || '',
+    model: '', thinking: '', cron: '', enabled: true,
+    mode: 'oneShot', onBusy: 'skip', minIntervalSec: 0, prompt: '',
+  };
+}
+
+function renderRoutineDetail() {
+  const el = document.getElementById('routinesDetail');
+  if (!el) return;
+  if (!routineSelected && !routineCreating) {
+    el.innerHTML = '<div class="usage-state">Select a routine, or create one.</div>';
+    return;
+  }
+  const v = routineFormDefaults();
+  const hosts = routinesCapableHosts();
+  const hostRow = (routineCreating && hosts.length > 1)
+    ? `<label class="rt-field">
+         <span class="ns-label">Host</span>
+         <select class="ns-select" id="rtHost">${hosts.map(h =>
+           `<option value="${escapeHtml(h.hostId || '')}"${(h.hostId || null) === routineCreateHostId ? ' selected' : ''}>${escapeHtml(hostDisplayLabel(h))}</option>`).join('')}</select>
+       </label>`
+    : '';
+
+  const presets = ROUTINE_CRON_PRESETS.map(([value, label]) =>
+    `<option value="${escapeHtml(value)}"${value === v.cron ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('');
+  const onBusy = ROUTINE_ON_BUSY.map(([value, label]) =>
+    `<option value="${escapeHtml(value)}"${value === v.onBusy ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('');
+  const thinking = ['<option value="">(default)</option>'].concat(ROUTINE_THINKING_LEVELS.map(level =>
+    `<option value="${level}"${level === v.thinking ? ' selected' : ''}>${escapeHtml(NS_THINKING_LABELS[level] || level)}</option>`)).join('');
+
+  el.innerHTML = `
+    <div class="rt-detail-head">
+      <button class="rt-back" onclick="backToRoutinesList()">‹ Routines</button>
+      <h2 class="rt-detail-title">${escapeHtml(routineCreating ? 'New routine' : (routineSelected.name || routineSelected.id))}</h2>
+      ${routineCreating ? '' : hostChipHtml(routineSelected.host)}
+      ${routineCreating ? '' : `<span class="rt-version-badge">v${routineSelected.promptVersion || 1}</span>`}
+    </div>
+
+    <div class="rt-form">
+      ${hostRow}
+      <div class="rt-field-row">
+        <label class="rt-field">
+          <span class="ns-label">Name</span>
+          <input type="text" class="cwd-input" id="rtName" value="${escapeHtml(v.name)}"
+            placeholder="nightly-review" spellcheck="false" autocomplete="off">
+        </label>
+        <label class="rt-field">
+          <span class="ns-label">Agent</span>
+          <select class="ns-select" id="rtHarness"><option value="${escapeHtml(v.harness)}">${escapeHtml(v.harness)}</option></select>
+        </label>
+      </div>
+
+      <label class="rt-field">
+        <span class="ns-label">Description <span class="ns-label-optional">(optional)</span></span>
+        <input type="text" class="cwd-input" id="rtDescription" value="${escapeHtml(v.description)}"
+          placeholder="What this routine is for" autocomplete="off">
+      </label>
+
+      <label class="rt-field">
+        <span class="ns-label">Working directory</span>
+        <div class="cwd-input-wrap">
+          <input type="text" class="cwd-input" id="rtCwd" value="${escapeHtml(v.cwd)}" placeholder="~" spellcheck="false" autocomplete="off">
+          <div class="cwd-dropdown" id="rtCwdDropdown"></div>
+        </div>
+      </label>
+
+      <div class="rt-field-row">
+        <label class="rt-field">
+          <span class="ns-label">Model</span>
+          <select class="ns-select" id="rtModel"><option value="">(default)</option></select>
+          <span class="ns-hidden-note" id="rtModelNote"></span>
+        </label>
+        <label class="rt-field">
+          <span class="ns-label">Thinking level</span>
+          <select class="ns-select" id="rtThinking">${thinking}</select>
+        </label>
+      </div>
+
+      <div class="rt-field-row">
+        <label class="rt-field">
+          <span class="ns-label">Schedule (cron, local time)</span>
+          <input type="text" class="cwd-input" id="rtCron" value="${escapeHtml(v.cron)}"
+            placeholder="0 9 * * 1-5" spellcheck="false" autocomplete="off">
+        </label>
+        <label class="rt-field">
+          <span class="ns-label">Preset</span>
+          <select class="ns-select" id="rtCronPreset">${presets}<option value="__custom" ${ROUTINE_CRON_PRESETS.some(([p]) => p === v.cron) ? '' : 'selected'}>Custom…</option></select>
+        </label>
+      </div>
+      <label class="rt-check">
+        <input type="checkbox" id="rtEnabled"${v.enabled ? ' checked' : ''}>
+        <span>Schedule armed <small>— unchecking pauses the cadence; Run now and the invoke route keep working</small></span>
+      </label>
+
+      <div class="rt-field">
+        <span class="ns-label">Mode</span>
+        <label class="rt-radio"><input type="radio" name="rtMode" value="oneShot"${v.mode === 'oneShot' ? ' checked' : ''}>
+          <span>One-shot <small>— every run spawns a fresh session and closes it when the turn ends</small></span></label>
+        <label class="rt-radio"><input type="radio" name="rtMode" value="continue"${v.mode === 'continue' ? ' checked' : ''}>
+          <span>Continue <small>— reuse this routine's last session (resuming it if needed); never auto-closed</small></span></label>
+      </div>
+
+      <div class="rt-field-row">
+        <label class="rt-field">
+          <span class="ns-label">When the routine is busy</span>
+          <select class="ns-select" id="rtOnBusy">${onBusy}</select>
+          <span class="ns-hidden-note">Scheduled ticks always skip; this applies to invokes.</span>
+        </label>
+        <label class="rt-field">
+          <span class="ns-label">Minimum interval (seconds)</span>
+          <input type="number" class="cwd-input" id="rtMinInterval" min="0" step="1" value="${escapeHtml(String(v.minIntervalSec))}">
+          <span class="ns-hidden-note">Invokes closer together than this are rejected with 429.</span>
+        </label>
+      </div>
+
+      <label class="rt-field">
+        <span class="ns-label">Prompt</span>
+        <textarea class="rt-prompt" id="rtPrompt" rows="12" spellcheck="false" placeholder="What this routine asks the agent to do">${escapeHtml(v.prompt)}</textarea>
+        <span class="ns-hidden-note">Saving a changed prompt appends a new version. <code>#refs</code> resolve like they do in the composer; an invoke's <code>input</code> is appended as an <code>&lt;invocation-input&gt;</code> block.</span>
+      </label>
+
+      <div class="rt-actions">
+        <span class="rt-error" id="rtError">${escapeHtml(routineFormError)}</span>
+        <span class="rt-notice" id="rtNotice">${escapeHtml(routineNotice)}</span>
+        ${routineCreating ? '' : `<button class="btn-small btn-danger" id="rtDeleteBtn" onclick="deleteRoutine()">${routineDeleteArmed ? 'Delete?' : 'Delete'}</button>`}
+        ${routineCreating ? '' : '<button class="btn" id="rtRunBtn" onclick="runRoutineNow()">Run now</button>'}
+        <button class="btn btn-primary" id="rtSaveBtn" onclick="saveRoutine()">${routineCreating ? 'Create routine' : 'Save'}</button>
+      </div>
+    </div>
+
+    ${routineCreating ? '' : renderRoutineInvokeBox()}
+    ${routineCreating ? '' : renderRoutineVersions()}
+    ${routineCreating ? '' : '<div class="rt-invocations" id="rtInvocations"></div>'}`;
+
+  wireRoutineForm(v);
+  if (!routineCreating) renderRoutineInvocations();
+}
+
+function wireRoutineForm(values) {
+  const el = document.getElementById('routinesDetail');
+  if (!el) return;
+
+  const hostSel = el.querySelector('#rtHost');
+  if (hostSel) hostSel.addEventListener('change', () => {
+    routineCreateHostId = hostSel.value || null;
+    // Everything under the picker is host-scoped — harnesses, catalogs, dirs.
+    const harness = el.querySelector('#rtHarness')?.value || values.harness;
+    const model = el.querySelector('#rtModel')?.value || '';
+    refreshRoutineHarnessOptions(harness).then(() => refreshRoutineModelOptions(model));
+  });
+
+  const harnessSel = el.querySelector('#rtHarness');
+  if (harnessSel) harnessSel.addEventListener('change', () => refreshRoutineModelOptions(''));
+
+  const cwdInput = el.querySelector('#rtCwd');
+  const cwdDropdown = el.querySelector('#rtCwdDropdown');
+  if (cwdInput && cwdDropdown) {
+    routineCwdAutocomplete = createCwdAutocomplete({
+      input: cwdInput,
+      dropdown: cwdDropdown,
+      hostId: () => routineFormHostId(),
+      known: () => routineKnownCwds(),
+      onPick: () => refreshRoutineModelOptions(),
+      onBlur: () => refreshRoutineModelOptions(),
+    });
+  }
+
+  const preset = el.querySelector('#rtCronPreset');
+  const cron = el.querySelector('#rtCron');
+  if (preset && cron) {
+    preset.addEventListener('change', () => {
+      if (preset.value === '__custom') return;
+      cron.value = preset.value;
+    });
+    // Typing a custom expression must not leave a stale preset label claiming it.
+    cron.addEventListener('input', () => {
+      const match = ROUTINE_CRON_PRESETS.some(([p]) => p === cron.value.trim());
+      preset.value = match ? cron.value.trim() : '__custom';
+    });
+  }
+
+  // The catalogs are fetched, so the selects only reach their saved values
+  // asynchronously. The dirty baseline therefore comes from the *defaults*
+  // object rather than from the DOM — same keys, same order — so the guard
+  // is correct from the first frame and a slow catalog can't rebaseline an
+  // edit the user already made.
+  routineFormBaseline = JSON.stringify(values);
+  refreshRoutineHarnessOptions(values.harness).then(() => refreshRoutineModelOptions(values.model));
+}
+
+async function refreshRoutineHarnessOptions(preferred) {
+  const sel = document.getElementById('rtHarness');
+  if (!sel) return;
+  const hostId = routineFormHostId();
+  const list = await loadRoutineHarnesses(hostId);
+  if (document.getElementById('rtHarness') !== sel) return;
+  const available = list.filter(h => h && h.available !== false);
+  const want = preferred || sel.value || 'pi';
+  sel.innerHTML = available.map(h =>
+    `<option value="${escapeHtml(h.id)}">${escapeHtml(h.label || h.id)}</option>`).join('')
+    || `<option value="${escapeHtml(want)}">${escapeHtml(want)}</option>`;
+  // A routine may name a harness this host no longer reports; keep it rather
+  // than silently rewriting the record on the next save.
+  if (!available.some(h => h.id === want)) {
+    sel.insertAdjacentHTML('afterbegin', `<option value="${escapeHtml(want)}">${escapeHtml(want)}</option>`);
+  }
+  sel.value = want;
+}
+
+async function refreshRoutineModelOptions(preferred) {
+  const sel = document.getElementById('rtModel');
+  if (!sel) return;
+  const want = preferred !== undefined ? preferred : sel.value;
+  const hostId = routineFormHostId();
+  const harnessId = document.getElementById('rtHarness')?.value || 'pi';
+  const cwd = (document.getElementById('rtCwd')?.value || '').trim();
+  const models = await loadRoutineModels(hostId, harnessId, cwd);
+  if (document.getElementById('rtModel') !== sel) return;
+  const { html, enabled, hidden } = modelSelectOptionsHtml(models);
+  sel.innerHTML = html;
+  // A saved ref the catalog doesn't list stays selectable — the record is
+  // authoritative, and a model can disappear from a catalog for credential
+  // reasons that say nothing about what this routine should run.
+  if (want && !enabled.some(m => (m.selector || `${m.provider}/${m.id}`) === want)) {
+    sel.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(want)}">${escapeHtml(want)}</option>`);
+  }
+  sel.value = want || '';
+  const note = document.getElementById('rtModelNote');
+  if (note) note.textContent = modelHiddenNote(hidden);
+}
+
+// --- invoke box ----------------------------------------------------------
+
+/**
+ * The invoke URL for the *owning* host, absolute so the curl works from
+ * anywhere: a fleet peer reached through this hub keeps its /hosts/<name>
+ * proxy prefix, because that is the address the reader can actually reach.
+ */
+function routineInvokeUrl(routine) {
+  const base = resolveHost(routine.host).base || '';
+  const path = `/api/routines/${encodeURIComponent(routine.id)}/invoke`;
+  try { return new URL(base + path, location.origin).href; } catch { return base + path; }
+}
+
+function routineInvokeCurl(routine) {
+  const authed = !!resolveHost(routine.host).token;
+  return [
+    `curl -X POST '${routineInvokeUrl(routine)}' \\`,
+    "  -H 'Content-Type: application/json' \\",
+    ...(authed ? ['  -H "Authorization: Bearer $PI_DISH_TOKEN" \\'] : []),
+    `  -d '{"source":"my-script","input":{"note":"anything JSON"}}'`,
+  ].join('\n');
+}
+
+function renderRoutineInvokeBox() {
+  const curl = routineInvokeCurl(routineSelected);
+  return `<details class="rt-box" open>
+    <summary>Invoke from a script</summary>
+    <pre class="rt-curl" id="rtCurl">${escapeHtml(curl)}</pre>
+    <div class="rt-box-actions">
+      <button class="btn-small" onclick="copyRoutineCurl()">Copy</button>
+      <span class="ns-hidden-note">The optional <code>input</code> JSON is appended to the prompt as an <code>&lt;invocation-input&gt;</code> block. Add <code>?wait=1</code> to block until the run leaves <code>starting</code>.</span>
+    </div>
+  </details>`;
+}
+
+function copyRoutineCurl() {
+  if (!routineSelected) return;
+  copyTextToClipboard(routineInvokeCurl(routineSelected));
+  setStatus('Invoke command copied');
+}
+
+// --- prompt versions -----------------------------------------------------
+
+function renderRoutineVersions() {
+  const versions = Array.isArray(routineSelected?.versions) ? routineSelected.versions.slice().reverse() : [];
+  if (!versions.length) return '';
+  const rows = versions.map(entry => {
+    const active = routineVersionFilter === entry.version;
+    const shown = routineVersionShown === entry.version;
+    return `<div class="rt-version${active ? ' filtered' : ''}">
+      <div class="rt-version-row" data-version="${entry.version}">
+        <span class="rt-version-num">v${entry.version}</span>
+        <span class="rt-version-when" title="${escapeHtml(new Date(entry.savedAt).toLocaleString())}">${escapeHtml(formatRelativeTime(entry.savedAt))}</span>
+        ${entry.version === (routineSelected.promptVersion || 1) ? '<span class="rt-version-current">current</span>' : ''}
+        <span class="rt-version-hint">${active ? 'filtering runs' : 'click to filter runs'}</span>
+        <button class="btn-small rt-version-view" data-view="${entry.version}">${shown ? 'hide' : 'view'}</button>
+        <button class="btn-small rt-version-restore" data-restore="${entry.version}">restore</button>
+      </div>
+      ${shown ? `<pre class="rt-version-text">${escapeHtml(entry.prompt || '')}</pre>` : ''}
+    </div>`;
+  }).join('');
+  return `<details class="rt-box" id="rtVersions"${routineVersionFilter || routineVersionShown ? ' open' : ''}>
+    <summary>Prompt versions (${versions.length})</summary>
+    ${rows}
+    <div class="ns-hidden-note">Restoring only writes the text back into the editor — saving it then creates a <em>new</em> version.</div>
+  </details>`;
+}
+
+// Delegated so the versions block can be re-rendered freely.
+document.addEventListener('click', (e) => {
+  const view = e.target.closest('.rt-version-view');
+  if (view) {
+    const version = Number(view.dataset.view);
+    routineVersionShown = routineVersionShown === version ? null : version;
+    rerenderRoutineVersions();
+    return;
+  }
+  const restore = e.target.closest('.rt-version-restore');
+  if (restore) {
+    const version = Number(restore.dataset.restore);
+    const entry = (routineSelected?.versions || []).find(v => v.version === version);
+    const textarea = document.getElementById('rtPrompt');
+    if (entry && textarea) {
+      textarea.value = entry.prompt || '';
+      routineNotice = `Restored v${version} into the editor — save to make it the new version.`;
+      const notice = document.getElementById('rtNotice');
+      if (notice) notice.textContent = routineNotice;
+    }
+    return;
+  }
+  const row = e.target.closest('.rt-version-row');
+  if (row && document.getElementById('rtVersions')?.contains(row)) {
+    const version = Number(row.dataset.version);
+    routineVersionFilter = routineVersionFilter === version ? null : version;
+    rerenderRoutineVersions();
+    renderRoutineInvocations();
+  }
+});
+
+function rerenderRoutineVersions() {
+  const existing = document.getElementById('rtVersions');
+  if (!existing) return;
+  existing.outerHTML = renderRoutineVersions();
+}
+
+// --- invocations ---------------------------------------------------------
+
+function stopRoutineInvocationPoll() {
+  clearInterval(routineInvocationsTimer);
+  routineInvocationsTimer = null;
+}
+
+function startRoutineInvocationPoll() {
+  stopRoutineInvocationPoll();
+  routineInvocationsTimer = setInterval(() => {
+    if (!isRoutinesViewOpen() || !routineSelected) { stopRoutineInvocationPoll(); return; }
+    loadRoutineInvocations({ reset: true, quiet: true });
+  }, 10000);
+}
+
+async function loadRoutineInvocations({ reset = false, quiet = false } = {}) {
+  if (!routineSelected) return;
+  if (routineInvocationsInflight) return; // single-flight
+  routineInvocationsInflight = true;
+  const key = routineSelKey;
+  const before = reset ? null : routineInvocationsNextBefore;
+  try {
+    const params = new URLSearchParams({ limit: '50' });
+    if (before) params.set('before', String(before));
+    const res = await apiFetch(routineSelected.host,
+      `/api/routines/${encodeURIComponent(routineSelected.id)}/invocations?${params}`, { timeoutMs: 20000 });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (key !== routineSelKey) return;
+    const list = Array.isArray(data?.invocations) ? data.invocations : [];
+    routineInvocations = reset ? list : routineInvocations.concat(list);
+    routineInvocationsNextBefore = data?.nextBefore ?? null;
+    renderRoutineInvocations();
+    // The poll only asks for this routine's runs, so patch its list row's
+    // last-run line from the page rather than re-fanning out over the fleet
+    // every 10s. The run *count* still comes from the next full list load.
+    if (reset) {
+      const row = routinesList.find(r => routineKey(r.host, r.id) === key);
+      if (row && row.stats) {
+        row.stats.lastInvocation = list[0] || null;
+        renderRoutinesList();
+      }
+    }
+  } catch (e) {
+    if (!quiet && key === routineSelKey) {
+      const el = document.getElementById('rtInvocations');
+      if (el) el.innerHTML = `<div class="usage-state">Could not load runs: ${escapeHtml(e.message)}</div>`;
+    }
+  } finally {
+    routineInvocationsInflight = false;
+  }
+}
+
+function routineInvocationDetail(inv) {
+  const parts = [];
+  if (inv.skipReason) parts.push(`skipped: ${inv.skipReason}`);
+  if (inv.error) parts.push(inv.error);
+  if (inv.closeError) parts.push(`close: ${inv.closeError}`);
+  if (!parts.length && inv.summary) parts.push(inv.summary);
+  return parts.join(' · ');
+}
+
+/**
+ * Label for a run's session cell. Every run of a routine spawns on the same
+ * day, so the app's usual 8-character ref is all date and distinguishes
+ * nothing here — prefer the session's own name when this client has it.
+ */
+function routineSessionLabel(sessionId) {
+  const known = findSession(sessionId, routineSelected?.host || null);
+  if (known && known.name) return truncate(known.name, 28, '…');
+  // Pi's ids lead with a timestamp, so the app's usual first-8 ref would read
+  // "2026-09-" on every row; the distinguishing part is the tail. Uuid-shaped
+  // ids (OMP) keep the familiar leading form.
+  return /^\d{4}-\d\d-\d\d/.test(sessionId) ? sessionId.slice(-8) : sessionId.slice(0, 8);
+}
+
+function renderRoutineInvocations() {
+  const el = document.getElementById('rtInvocations');
+  if (!el) return;
+  const filtered = routineVersionFilter
+    ? routineInvocations.filter(inv => inv.version === routineVersionFilter)
+    : routineInvocations;
+
+  const rows = filtered.map(inv => {
+    const trigger = inv.trigger + (inv.source ? ` (${inv.source})` : '');
+    const started = inv.startedAt
+      ? `<span title="${escapeHtml(new Date(inv.startedAt).toLocaleString())}">${escapeHtml(formatRelativeTime(inv.startedAt))}</span>`
+      : '—';
+    const duration = Number.isFinite(inv.durationMs) ? formatDuration(inv.durationMs) : '—';
+    const session = inv.sessionId
+      ? `<a class="rt-session-link" data-session="${escapeHtml(inv.sessionId)}" data-host="${escapeHtml(routineSelected?.host || '')}" title="${escapeHtml(inv.sessionId)}">${escapeHtml(routineSessionLabel(inv.sessionId))}</a>`
+      : '—';
+    const detail = routineInvocationDetail(inv);
+    return `<tr data-invocation="${escapeHtml(inv.id)}">
+      <td class="rt-num">v${escapeHtml(String(inv.version ?? ''))}</td>
+      <td>${escapeHtml(trigger)}</td>
+      <td>${escapeHtml(inv.delivery || '')}</td>
+      <td><span class="rt-dot ${routineStatusClass(inv.status)}"></span>${escapeHtml(inv.status || '')}</td>
+      <td>${started}</td>
+      <td class="rt-num">${escapeHtml(duration)}</td>
+      <td>${session}</td>
+      <td class="rt-detail-cell" title="${escapeHtml(detail)}">${escapeHtml(detail)}</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="rt-invocations-head">
+      <h3>Runs${routineVersionFilter ? ` <span class="rt-filter-chip">v${routineVersionFilter} only <button class="rt-filter-clear" onclick="clearRoutineVersionFilter()">✕</button></span>` : ''}</h3>
+    </div>
+    ${filtered.length ? `<div class="rt-table-wrap"><table class="rt-table">
+      <thead><tr><th>Ver</th><th>Trigger</th><th>Delivery</th><th>Status</th><th>Started</th><th>Duration</th><th>Session</th><th>Detail</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`
+      : '<div class="usage-state">No runs yet.</div>'}
+    ${routineInvocationsNextBefore ? '<button class="btn-small rt-load-more" onclick="loadMoreRoutineInvocations()">Load more</button>' : ''}`;
+
+  el.querySelectorAll('.rt-session-link').forEach(link => {
+    link.addEventListener('click', () => openRoutineSession(link.dataset.session, link.dataset.host || null));
+  });
+}
+
+function clearRoutineVersionFilter() {
+  routineVersionFilter = null;
+  rerenderRoutineVersions();
+  renderRoutineInvocations();
+}
+
+function loadMoreRoutineInvocations() {
+  loadRoutineInvocations({ reset: false });
+}
+
+/**
+ * Click-through to the run's session — the advanced-search pattern: the
+ * sidebar lists may be Active-only or narrowed by a filter right now, and
+ * selectSession validates against them.
+ */
+async function openRoutineSession(sessionId, host) {
+  if (!sessionId) return;
+  closeRoutinesView();
+  if (!findSession(sessionId, host)) await loadSessions(undefined, { withPrevious: true });
+  await selectSession(sessionId, { host });
+}
+
+// --- mutations -----------------------------------------------------------
+
+function routineFormBody(values) {
+  return {
+    name: values.name,
+    description: values.description,
+    harness: values.harness,
+    cwd: values.cwd,
+    // Explicit null, not undefined: JSON.stringify drops undefined keys, and
+    // a PUT is a partial update — a dropped key would leave the old model in
+    // place instead of clearing it back to the harness default.
+    model: values.model || null,
+    thinking: values.thinking || null,
+    prompt: values.prompt,
+    schedule: values.cron ? { cron: values.cron } : null,
+    enabled: values.enabled,
+    mode: values.mode,
+    onBusy: values.onBusy,
+    minIntervalSec: values.minIntervalSec,
+  };
+}
+
+function setRoutineFormError(message) {
+  routineFormError = message || '';
+  const el = document.getElementById('rtError');
+  if (el) el.textContent = routineFormError;
+}
+
+function setRoutineNotice(message) {
+  routineNotice = message || '';
+  const el = document.getElementById('rtNotice');
+  if (el) el.textContent = routineNotice;
+}
+
+async function saveRoutine() {
+  if (routineBusy) return;
+  const values = readRoutineForm();
+  if (!values) return;
+  const btn = document.getElementById('rtSaveBtn');
+  const creating = routineCreating;
+  const hostId = routineFormHostId();
+  setRoutineFormError('');
+  setRoutineNotice('');
+  routineBusy = true;
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  try {
+    const path = creating ? '/api/routines' : `/api/routines/${encodeURIComponent(routineSelected.id)}`;
+    const res = await apiFetch(hostId, path, {
+      method: creating ? 'POST' : 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(routineFormBody(values)),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    const saved = data.routine || data;
+    routineCreating = false;
+    routineSelected = { ...saved, host: hostId };
+    routineSelKey = routineKey(hostId, saved.id);
+    routineVersionShown = null;
+    renderRoutineDetail();
+    setRoutineNotice(creating ? 'Routine created.' : `Saved (v${saved.promptVersion || 1}).`);
+    await loadRoutinesView();
+    if (creating) {
+      routineInvocations = [];
+      routineInvocationsNextBefore = null;
+      startRoutineInvocationPoll();
+    }
+    loadRoutineInvocations({ reset: true });
+  } catch (e) {
+    setRoutineFormError(e.message);
+  } finally {
+    routineBusy = false;
+    if (btn) { btn.disabled = false; btn.textContent = creating ? 'Create routine' : 'Save'; }
+  }
+}
+
+async function runRoutineNow() {
+  if (routineBusy || !routineSelected) return;
+  const btn = document.getElementById('rtRunBtn');
+  setRoutineFormError('');
+  setRoutineNotice('');
+  routineBusy = true;
+  if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+  try {
+    const res = await apiFetch(routineSelected.host,
+      `/api/routines/${encodeURIComponent(routineSelected.id)}/invoke`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: 'pi-dish-ui' }),
+      });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      // 409 busy / 429 rate-limited carry their own useful shapes.
+      const extra = res.status === 429 && data.retryAfterSec ? ` (retry in ${data.retryAfterSec}s)` : '';
+      throw new Error((data.error || `HTTP ${res.status}`) + extra);
+    }
+    setRoutineNotice('Run started.');
+    await loadRoutineInvocations({ reset: true });
+    loadRoutinesView(); // the row's run count and last-run line just changed
+  } catch (e) {
+    setRoutineFormError(e.message);
+  } finally {
+    routineBusy = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Run now'; }
+  }
+}
+
+let routineDeleteArmTimer = null;
+
+async function deleteRoutine() {
+  if (routineBusy || !routineSelected) return;
+  const btn = document.getElementById('rtDeleteBtn');
+  if (!routineDeleteArmed) {
+    // Two-tap arm, like the sidebar's row-level close.
+    routineDeleteArmed = true;
+    if (btn) btn.textContent = 'Delete?';
+    clearTimeout(routineDeleteArmTimer);
+    routineDeleteArmTimer = setTimeout(() => {
+      routineDeleteArmed = false;
+      const live = document.getElementById('rtDeleteBtn');
+      if (live) live.textContent = 'Delete';
+    }, 3000);
+    return;
+  }
+  clearTimeout(routineDeleteArmTimer);
+  routineDeleteArmed = false;
+  routineBusy = true;
+  if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+  try {
+    const res = await apiFetch(routineSelected.host,
+      `/api/routines/${encodeURIComponent(routineSelected.id)}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    stopRoutineInvocationPoll();
+    routineSelected = null;
+    routineSelKey = null;
+    routineFormBaseline = null;
+    routineInvocations = [];
+    backToRoutinesList();
+    renderRoutineDetail();
+    await loadRoutinesView();
+  } catch (e) {
+    routineBusy = false;
+    setRoutineFormError(e.message);
+    if (btn) { btn.disabled = false; btn.textContent = 'Delete'; }
+    return;
+  }
+  routineBusy = false;
 }

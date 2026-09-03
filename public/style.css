@@ -5853,3 +5853,304 @@ mark.comment-mark {
   .terminal-panel { flex-basis: 52%; }
   .terminal-keybar { display: flex; }
 }
+
+/* --- Routines view (main-pane takeover, .main.routines-open) --------------
+   Session templates with a cadence + the ledger of runs they produced. Two
+   columns on desktop (list | detail); on phones the list swaps to the detail
+   with a ‹ back control. Status dots reuse the sidebar's vocabulary — pulsing
+   green while a run is live, static green when it completed, --error when it
+   did not, muted for a skip — so a routine's health reads the same way a
+   session's does. See TASKS/routines.md. */
+.routines-view { display: none; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.main.routines-open .routines-view { display: flex; }
+.main.routines-open .empty-state,
+.main.routines-open .session-view { display: none !important; }
+
+.routines-view-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.routines-list {
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 10px 10px 24px;
+  min-height: 0;
+}
+
+.rt-list-head { margin-bottom: 10px; }
+.rt-list-head .btn-small { width: 100%; }
+
+.rt-row {
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+
+.rt-row:hover { background: var(--bg-hover); }
+.rt-row.selected { background: var(--bg-card); border-color: var(--border); }
+
+.rt-row-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.rt-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rt-row-sched, .rt-row-meta, .rt-row-last {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.rt-row-sched code { font-family: var(--font-mono); font-size: 11px; color: var(--text); }
+.rt-sched.muted, .rt-sched.paused { color: var(--text-muted); }
+.rt-sched.paused code { color: var(--text-muted); }
+.rt-count { margin-left: auto; }
+
+/* One dot vocabulary, shared by the list rows and the runs table. */
+.rt-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+  margin-right: 5px;
+  background: var(--text-muted);
+}
+.rt-dot.working { background: var(--success); animation: pulse 1.5s infinite; }
+.rt-dot.ok { background: var(--success); }
+.rt-dot.bad { background: var(--error); }
+.rt-dot.muted { background: color-mix(in srgb, var(--text-muted) 60%, transparent); }
+.rt-dot.none { background: none; border: 1px solid var(--line); }
+
+.routines-detail {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px 20px 48px;
+  min-height: 0;
+}
+
+.rt-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.rt-detail-title { font-size: 15px; font-weight: 600; color: var(--text-bright); }
+
+.rt-back {
+  display: none; /* desktop keeps both columns on screen */
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.rt-version-badge {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1px 7px;
+}
+
+.rt-form { display: flex; flex-direction: column; gap: 14px; max-width: 720px; }
+.rt-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.rt-field-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.rt-field .cwd-input, .rt-field .ns-select { width: 100%; }
+
+.rt-check, .rt-radio {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+.rt-check small, .rt-radio small { color: var(--text-muted); }
+.rt-check input, .rt-radio input { margin-top: 2px; flex-shrink: 0; }
+
+.rt-prompt {
+  width: 100%;
+  min-height: 220px;
+  resize: vertical;
+  padding: 10px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg-darker);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+}
+.rt-prompt:focus { border-color: var(--accent); }
+
+.rt-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rt-error { font-size: 12px; color: var(--error); }
+.rt-notice { flex: 1; font-size: 12px; color: var(--text-muted); }
+
+/* Collapsible sub-panels (invoke curl, prompt versions) */
+.rt-box {
+  margin-top: 20px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 12px;
+  max-width: 720px;
+}
+.rt-box > summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  list-style: none;
+}
+.rt-box > summary::-webkit-details-marker { display: none; }
+.rt-box > summary::before { content: '▸ '; color: var(--text-muted); }
+.rt-box[open] > summary::before { content: '▾ '; }
+
+.rt-curl {
+  margin: 10px 0 8px;
+  padding: 10px;
+  background: var(--bg-darker);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.rt-box-actions { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+.rt-box-actions .ns-hidden-note { flex: 1; min-width: 220px; }
+
+.rt-version { border-top: 1px solid var(--line); }
+.rt-version:first-of-type { border-top: none; }
+.rt-version-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.rt-version.filtered { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.rt-version-num { font-family: var(--font-mono); color: var(--text); font-weight: 600; }
+.rt-version-current { color: var(--success-bright); font-size: 11px; }
+.rt-version-hint { flex: 1; font-size: 11px; }
+.rt-version-view, .rt-version-restore { background: var(--bg-hover); color: var(--text); }
+.rt-version-text {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  background: var(--bg-darker);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.rt-invocations { margin-top: 24px; }
+.rt-invocations-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.rt-invocations-head h3 { font-size: 13px; font-weight: 600; color: var(--text-bright); }
+.rt-filter-chip {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1px 4px 1px 7px;
+}
+.rt-filter-clear { background: none; border: none; color: var(--text-muted); cursor: pointer; font: inherit; }
+
+/* Wide tables scroll inside their own container, never the page body. */
+.rt-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
+.rt-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.rt-table th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.rt-table td {
+  padding: 7px 10px;
+  border-top: 1px solid var(--line);
+  color: var(--text);
+  white-space: nowrap;
+}
+.rt-table tbody tr:first-child td { border-top: none; }
+.rt-table .rt-num { font-family: var(--font-mono); color: var(--text-muted); }
+.rt-table .rt-detail-cell {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+.rt-session-link { color: var(--accent); cursor: pointer; font-family: var(--font-mono); }
+.rt-session-link:hover { text-decoration: underline; }
+.rt-load-more { margin-top: 10px; }
+
+/* Sidebar provenance chip: this session is one routine's run. Same chip
+   family as the host chip and harness badge it sits beside. */
+.routine-chip {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+  border-radius: 8px;
+  color: color-mix(in srgb, var(--warning) 55%, var(--text-muted));
+  font-size: 9px;
+  line-height: 14px;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Routines on phones: one column at a time. Lives after the base rules so
+   the same-specificity cascade lands on this side. */
+@media (max-width: 768px) {
+  .routines-view-body { grid-template-columns: minmax(0, 1fr); }
+  .routines-list { border-right: none; }
+  .routines-detail { display: none; }
+  .routines-view.detail-open .routines-list { display: none; }
+  .routines-view.detail-open .routines-detail { display: block; }
+  .rt-back { display: inline; }
+  .rt-field-row { grid-template-columns: minmax(0, 1fr); }
+  .routines-detail { padding: 12px 12px 40px; }
+}

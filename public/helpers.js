@@ -576,7 +576,11 @@ function groupRelations(relations) {
 // client is the aggregator), so a server's own sessions carry neither
 // hostLabel nor host. Clients strip host terms with stripQueryField() before
 // querying any server and re-apply them locally.
-const QUERY_FIELDS = new Set(['name', 'cwd', 'model', 'id', 'is', 'host']);
+// `routine` rides the generic session[field] substring path: a session stamped
+// with routine provenance answers `routine:nightly` and `-routine:nightly`
+// everywhere the grammar is spoken. Deliberately absent from sessionMetaText —
+// a plain term must not match a routine name.
+const QUERY_FIELDS = new Set(['name', 'cwd', 'model', 'id', 'is', 'host', 'routine']);
 
 /** "7d"/"12h"/"2w" → ms span; ISO "YYYY-MM-DD" → ms epoch (local midnight); null otherwise. */
 function parseQueryDate(value, now) {

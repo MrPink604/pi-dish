@@ -539,6 +539,61 @@ two-tier merge (`$HOME/.omp/agent/fake-config.json` global +
 `<cwd>/.omp/fake-project-roles.json` overlay) so the no-leak guarantee is
 testable without the real binary.
 
+## Routines (lib/routines.js, lib/cron.js, lib/routine-runner.js, /api/routines)
+
+Named, reusable launch specs with a cadence and/or an invoke endpoint, plus an
+invocation ledger — contract in `TASKS/routines.md`. The framing that keeps it
+small: **a routine is a session template and an invocation is a session.**
+Each run stamps its session (`session.routine` = name, `routineId`,
+`routineInvocationId`, presentation-only like the parent hints —
+`annotateSessionRoutines` beside `annotateSessionParents`), so transcript,
+cost and duration come from the existing index/views and `routine:<name>` is
+just one more `QUERY_FIELDS` entry (the routine name deliberately stays out of
+`sessionMetaText`). There is no second history system, no DAG/chaining
+between routines, no outbound callbacks (calm-design rule — callers poll the
+invocation or the session stream), and no scripts: the event source that
+calls `POST /api/routines/:id/invoke` lives outside pi-dish.
+
+Storage is `~/.pi/dish/routines.json` + `routine-invocations.json` (dish-store
+rules, ledger newest-first capped at 5000; both are display/ledger data, never
+control authority). The prompt is versioned cheaply — `versions` appends only
+when a PUT changes the prompt text, capped at 50 with the current version
+always kept — and each invocation stamps the version it ran; that's the whole
+"loop engineering" affordance (compare runs across prompt edits), no diff UI.
+The invoke `input` JSON rides as an appended `<invocation-input>` block (the
+`<session-refs>` rule: appended, never substituted, no templating), then
+through `expandSessionRefs` so `#ref`s in a routine prompt still resolve.
+
+Runner (`createRoutineRunner(deps)`, deps injected so tests drive it without
+spawn paths): `oneShot` mode spawns fresh via `createSession` (no name; then a
+best-effort rename only when the live session advertises `rename`), delivers,
+observes `turn_end`/`agent_end`/`message_end`/session-gone, and closes after
+`PI_DISH_ROUTINE_CLOSE_GRACE_MS` through `closeSessionById` — the `/close`
+route body extracted verbatim so every ownership guard still applies; a
+refused close (Prime `client-only`, an unprovable OMP pane) records
+`closeError` and never escalates. `continue` mode reuses the last
+invocation's session (live → prompt when idle, else resume headlessly, else
+spawn) and never auto-closes. Busy = an invocation in `starting`/`running`:
+scheduled ticks always skip; invokes follow `onBusy` (`skip` → 409,
+`steer`/`followUp` → delivered into the running session through the same
+capability checks as `/steer` and `/follow-up`, completing at the *next*
+`turn_end` — an approximation, documented as such). `minIntervalSec` → 429
+without a ledger entry (a storm must not fill the ledger with its own
+rejections). Scheduler: 30s unref'd tick evaluating the **current minute**
+only, `lastScheduledMinute` persisted so a restart can't double-fire, missed
+minutes never caught up. Restart recovery marks `starting` runs errored and
+re-attaches to live `running` ones. Never branch on `harness === 'pi'` here —
+descriptors and `liveSessionSupports` only. Gotcha found while building it:
+`RPCSession._emit` iterated the live listener array, so a listener that
+unsubscribed inside its callback skipped its neighbour — it now iterates a
+copy, like EventEmitter.
+
+Client: the Routines main-pane takeover (`.main.routines-open`, fifth
+sidebar-header icon, hidden when no host advertises `routines`) — routine
+list | editor + invoke curl + versions + invocations table, fan-out per
+capable host per the fleet rules. Sessions carrying `routine` wear a `⏱ name`
+chip in the sidebar row. Agent-facing contract: `docs/agent/routines.md`.
+
 ## Share links (lib/shares.js, /share/:token)
 
 Public read-only session traces. `lib/shares.js` persists

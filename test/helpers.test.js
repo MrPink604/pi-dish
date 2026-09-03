@@ -540,6 +540,33 @@ test('host: composes with is:active, since: and plain terms', () => {
     'host: never reaches content search');
 });
 
+test('routine: is a field term over the session\'s routine stamp', () => {
+  const p = H.parseSessionQuery('routine:nightly -routine:hourly routines:x');
+  assert.deepEqual(p.terms, [
+    { neg: false, field: 'routine', value: 'nightly' },
+    { neg: true, field: 'routine', value: 'hourly' },
+    { neg: false, field: null, value: 'routines:x' }, // unknown prefix stays literal
+  ]);
+
+  const q = (str, s) => H.evaluateSessionQuery(H.parseSessionQuery(str), s);
+  const stamped = { name: 'x', cwd: '/a', model: 'm', id: 's1', routine: 'nightly-review' };
+  const plain = { name: 'x', cwd: '/a', model: 'm', id: 's2' };
+  assert.equal(q('routine:nightly-review', stamped), true);
+  assert.equal(q('routine:NIGHTLY', stamped), true, 'case-insensitive substring, like every field');
+  assert.equal(q('routine:other', stamped), false);
+  assert.equal(q('-routine:nightly-review', stamped), false);
+  assert.equal(q('-routine:nightly-review', plain), true);
+  assert.equal(q('routine:nightly-review', plain), false, 'an unstamped session never matches');
+
+  // The routine name is deliberately absent from sessionMetaText, so a plain
+  // term must not find a session by the routine that produced it.
+  assert.equal(q('nightly-review', stamped), false);
+  assert.equal(H.scoreSessionMatch(H.parseSessionQuery('routine:nightly-review'), stamped), 0,
+    'field terms filter, they never score');
+  assert.deepEqual(H.positiveQueryTokens(H.parseSessionQuery('routine:nightly login')), ['login'],
+    'routine: never reaches content search');
+});
+
 test('stripQueryField removes a field\'s tokens and leaves the rest tokenized as parsed', () => {
   const strip = (q) => H.stripQueryField(q, 'host');
   assert.equal(strip('host:beelink login'), 'login');
