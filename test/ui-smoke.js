@@ -3813,15 +3813,83 @@ let remoteHost = null; // second pi-dish (multi-host section)
     console.log('multi-host:');
     writeRemoteFixture(base);
     remoteHost = await startRemoteHost();
+    const remoteDescriptor = await fetch(remoteHost.base + '/api/host').then(r => r.json());
     const multi = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     watch(multi, 'multi-host');
     await multi.addInitScript((entry) => {
       localStorage.setItem('pi-dish-hosts', JSON.stringify([entry]));
-    }, { base: remoteHost.base, label: 'tycho', token: REMOTE_TOKEN });
+    }, { base: remoteHost.base, hostId: remoteDescriptor.hostId, label: 'tycho', token: REMOTE_TOKEN });
     const remoteBase = remoteHost.base;
     const remoteRequests = [];
     multi.on('request', (r) => { if (r.url().startsWith(remoteBase)) remoteRequests.push(r.url()); });
     await multi.goto(base, { waitUntil: 'networkidle' });
+    // A normal reload retains the host id, not its capabilities. Recovery
+    // must still be configurable on the peer, never accidentally on self.
+    await multi.evaluate(() => openSettingsModal());
+    await multi.waitForSelector(`#recoverySettingsHost option[value="${remoteDescriptor.hostId}"]`, { state: 'attached' });
+    await multi.selectOption('#recoverySettingsHost', remoteDescriptor.hostId);
+    await multi.waitForFunction(() => !document.getElementById('saveRecoveryMode').disabled);
+    const localRecoveryBefore = await fetch(base + '/api/settings').then(r => r.json());
+    await multi.selectOption('#recoveryMode', 'restore');
+    await multi.click('#saveRecoveryMode');
+    await multi.waitForFunction(() => document.getElementById('recoverySettingsStatus').textContent.startsWith('Saved on'));
+    const remoteRecovery = await fetch(remoteHost.base + '/api/settings', {
+      headers: { Authorization: 'Bearer ' + REMOTE_TOKEN },
+    }).then(r => r.json());
+    const localRecoveryAfter = await fetch(base + '/api/settings').then(r => r.json());
+    check(remoteRecovery.recoveryMode === 'restore' && localRecoveryAfter.recoveryMode === localRecoveryBefore.recoveryMode,
+      'recovery settings on a saved remote host persist there without changing the entry host');
+    await multi.click('#openRecoveryReport');
+    await multi.waitForFunction(() => document.getElementById('recoveryViewBody').textContent.includes('No recorded sessions'));
+    check(await multi.inputValue('#recoveryReportHost') === remoteDescriptor.hostId &&
+      (await multi.textContent('#recoveryViewBody')).includes('Restore open sessions'),
+      'the recovery report follows the selected remote host');
+    await multi.keyboard.press('Escape');
+
+    // A peer upgraded/discovered after the modal opened joins the picker
+    // without wiping a mode the user is still editing on another host.
+    let advertisesRecovery = false;
+    const descriptorRoute = async route => route.fulfill({
+      json: { ...remoteDescriptor, capabilities: { ...remoteDescriptor.capabilities, recovery: advertisesRecovery } },
+    });
+    await multi.route(remoteHost.base + '/api/host', descriptorRoute);
+    await multi.evaluate(() => loadHostFleet());
+    await multi.evaluate(() => openSettingsModal());
+    await multi.waitForFunction(() => !document.getElementById('saveRecoveryMode').disabled);
+    await multi.selectOption('#recoveryMode', 'continue');
+    check(await multi.locator(`#recoverySettingsHost option[value="${remoteDescriptor.hostId}"]`).count() === 0 &&
+      (await multi.textContent('#recoveryUnavailableHosts')).includes('tycho'),
+      'an older peer is named with upgrade guidance instead of silently omitted');
+    advertisesRecovery = true;
+    await multi.evaluate(() => loadHostFleet());
+    check(await multi.locator(`#recoverySettingsHost option[value="${remoteDescriptor.hostId}"]`).count() === 1 &&
+      await multi.inputValue('#recoveryMode') === 'continue',
+      'a capability refresh adds a remote recovery host without discarding an unsaved selection');
+    await multi.unroute(remoteHost.base + '/api/host', descriptorRoute);
+    // Discover the same peer through the entrypoint's real proxy. The
+    // browser must dedupe it and save through that owning-host route.
+    const beforeFleetSettings = JSON.parse(fs.readFileSync(dishSettingsFile, 'utf8'));
+    fs.writeFileSync(dishSettingsFile, JSON.stringify({
+      ...beforeFleetSettings,
+      remotes: [{ name: 'tycho', url: remoteHost.base, token: REMOTE_TOKEN }],
+    }));
+    await multi.evaluate(() => loadHostFleet());
+    await multi.selectOption('#recoverySettingsHost', remoteDescriptor.hostId);
+    await multi.waitForFunction(() => !document.getElementById('saveRecoveryMode').disabled);
+    await multi.selectOption('#recoveryMode', 'off');
+    const [proxySave] = await Promise.all([
+      multi.waitForResponse(r => r.url() === base + '/hosts/tycho/api/settings' && r.request().method() === 'PUT'),
+      multi.click('#saveRecoveryMode'),
+    ]);
+    const proxiedRecovery = await fetch(remoteHost.base + '/api/settings', {
+      headers: { Authorization: 'Bearer ' + REMOTE_TOKEN },
+    }).then(r => r.json());
+    check(proxySave.ok() && proxiedRecovery.recoveryMode === 'off' &&
+      await multi.locator(`#recoverySettingsHost option[value="${remoteDescriptor.hostId}"]`).count() === 1,
+      'a fleet peer is configured through the main entrypoint proxy and appears only once');
+    fs.writeFileSync(dishSettingsFile, JSON.stringify(beforeFleetSettings));
+    await multi.evaluate(() => loadHostFleet());
+    await multi.keyboard.press('Escape');
     await multi.click('#tabAll');
     // Event-driven: drive the poll from the test rather than waiting out the
     // 10s interval (and never widen a wait to catch a transient element).

@@ -326,7 +326,13 @@ how much you'll enjoy them:
 
 ### Session recovery
 
-Settings → **Session recovery** configures the selected host, for all devices:
+Settings → **Session recovery** configures the selected host, for all devices.
+Use the **Host** picker at your main entrypoint to configure any connected
+pi-dish, including fleet-proxied and browser-added hosts; saves and reports
+go to that host, not the entrypoint. Opening Settings refreshes the fleet,
+and newly discovered/upgraded hosts join the picker without discarding an
+unsaved mode selection. Hosts without recovery support are named below the
+controls with availability or upgrade guidance.
 
 - **Off** (default): no automatic restoration.
 - **Restore open sessions**: reopen eligible saved sessions without prompting.

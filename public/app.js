@@ -334,7 +334,7 @@ async function loadHostFleet() {
     if (own && own.label && !selfHost.label) selfHost = { ...selfHost, label: own.label };
     invalidateHosts();
     seedHostConnFromFleet();
-    await identifyHosts();
+    await identifyHosts(true);
     pruneHostCaches();
     renderHostsSection();
     updateRoutinesButton();
@@ -345,16 +345,17 @@ async function loadHostFleet() {
 }
 
 /**
- * Learn the hostId of any host that doesn't have one yet (a hand-seeded
- * catalog entry, a fleet entry whose peer was unreachable when the server
- * built the list). Identity is what stamps sessions, keys their client-side
- * storage, and routes their session-scoped requests — a host without one
- * would silently pool with self, so this runs before the first fan-out.
+ * Learn missing identities and refresh direct-host descriptors. The browser
+ * persists ids but not capabilities, so a known id still needs /api/host
+ * after a reload. Fleet descriptors already arrive in /api/hosts.
+ * Identity stamps sessions, keys client storage, and routes session-scoped
+ * requests, so this runs before the first fan-out.
  */
-async function identifyHosts() {
-  const unknown = effectiveHosts().filter(host => !host.self && !host.hostId && !hostIsDown(host));
-  if (!unknown.length) return;
-  await Promise.allSettled(unknown.map(async (host) => {
+async function identifyHosts(refresh = false) {
+  const pending = pollableHosts().filter(host => !host.self &&
+    (!host.hostId || (host.source === 'user' && (refresh || !hostDescriptors.has(host.hostId)))));
+  if (!pending.length) return;
+  await Promise.allSettled(pending.map(async (host) => {
     try {
       const res = await apiFetch(host, '/api/host', { timeoutMs: 8000 });
       if (res.status === 401) { noteHostBlocked(host); return; }
@@ -3418,34 +3419,68 @@ function recoveryHostOptions(hosts) {
   return hosts.map(host => `<option value="${escapeHtml(host.hostId || '')}">${escapeHtml(hostDisplayLabel(host))}</option>`).join('');
 }
 
+// Refresh only the options, not the form: a fleet poll must not discard an
+// unsaved mode selection. Losing the selected host invalidates its requests.
+function refreshRecoveryHosts() {
+  const hosts = recoveryCapableHosts();
+  const options = recoveryHostOptions(hosts);
+  for (const id of ['recoverySettingsHost', 'recoveryReportHost']) {
+    const select = document.getElementById(id);
+    if (!select || (id === 'recoveryReportHost' && !isRecoveryViewOpen())) continue;
+    const previous = select.value;
+    if (select.innerHTML !== options) {
+      select.innerHTML = options;
+      select.value = selectRecoveryHost(hosts, previous)?.hostId || '';
+    }
+    select.disabled = !hosts.length;
+    if (select.value !== previous) select.dispatchEvent(new Event('change'));
+  }
+  const unavailable = document.getElementById('recoveryUnavailableHosts');
+  if (unavailable) {
+    const missing = effectiveHosts().filter(host => !hostSupportsCapability(host, 'recovery', appConfig));
+    unavailable.textContent = missing.map(host => {
+      const reason = hostIsDown(host) ? 'unreachable or needs a token' :
+        host.capabilities ? 'update and restart pi-dish to enable recovery' : 'capabilities not yet available';
+      return hostDisplayLabel(host) + ': ' + reason + '.';
+    }).join(' ');
+    unavailable.hidden = !missing.length;
+  }
+}
+
 async function renderRecoveryPreferences() {
   const section = document.getElementById('recoveryPreferences');
   if (!section) return;
   await hostFleetReady;
   if (!section.isConnected) return;
-  const hosts = recoveryCapableHosts();
-  if (!hosts.length) return;
   section.hidden = false;
   section.innerHTML = `<label for="recoveryMode"><strong>Session recovery</strong><small>Saved on the selected host for all devices. Runs whenever its server is launched; no boot-service setup is required. Restore opens sessions idle. Continue may incur model cost and perform external actions; tool execution is not exactly-once.</small></label>
     <div class="recovery-controls">
-      <label for="recoverySettingsHost">Host</label><select id="recoverySettingsHost">${recoveryHostOptions(hosts)}</select>
+      <label for="recoverySettingsHost">Host</label><select id="recoverySettingsHost"></select>
       <select id="recoveryMode" disabled aria-label="Recovery mode"><option value="off">Off</option><option value="restore">Restore open sessions</option><option value="continue">Restore and continue interrupted work</option></select>
       <div class="recovery-actions"><button class="btn-small" id="saveRecoveryMode" disabled>Save</button><button class="btn-small" id="openRecoveryReport">Recovery report</button></div>
       <small id="recoverySettingsStatus" role="status"></small>
+      <small id="recoveryUnavailableHosts" role="status" hidden></small>
     </div>`;
   const hostSelect = section.querySelector('#recoverySettingsHost');
   const mode = section.querySelector('#recoveryMode');
   const save = section.querySelector('#saveRecoveryMode');
   const status = section.querySelector('#recoverySettingsStatus');
-  hostSelect.value = selectRecoveryHost(hosts, currentSession?.host)?.hostId || '';
+  const report = section.querySelector('#openRecoveryReport');
+  hostSelect.innerHTML = recoveryHostOptions(recoveryCapableHosts());
+  hostSelect.value = selectRecoveryHost(recoveryCapableHosts(), currentSession?.host)?.hostId || '';
   let seq = 0;
-  const selectedHost = () => hosts.find(host => (host.hostId || '') === hostSelect.value);
+  const selectedHost = () => recoveryCapableHosts().find(host => (host.hostId || '') === hostSelect.value);
   const owns = request => section.isConnected && seq === request &&
     document.getElementById('settingsModal').style.display !== 'none';
   const load = async () => {
     const request = ++seq, host = selectedHost();
+    mode.disabled = save.disabled = report.disabled = true;
+    if (!host) {
+      status.textContent = 'No connected host currently advertises recovery support.';
+      return;
+    }
     recoveryHostId = host.hostId;
-    mode.disabled = save.disabled = true;
+    report.disabled = false;
     status.textContent = 'Loading host setting…';
     try {
       const res = await apiFetch(host, '/api/settings', { timeoutMs: 20000 });
@@ -3460,9 +3495,13 @@ async function renderRecoveryPreferences() {
     }
   };
   hostSelect.addEventListener('change', load);
-  section.querySelector('#openRecoveryReport').addEventListener('click', () => openRecoveryView(selectedHost().hostId));
+  report.addEventListener('click', () => {
+    const host = selectedHost();
+    if (host) openRecoveryView(host.hostId);
+  });
   save.addEventListener('click', async () => {
     const host = selectedHost(), value = mode.value;
+    if (!host) return;
     if (value === 'continue' && !confirm('On future server launches, continue interrupted work automatically? This may incur cost and repeat external actions. Tool execution is not exactly-once.')) return;
     const request = ++seq;
     mode.disabled = save.disabled = true;
@@ -3477,6 +3516,9 @@ async function renderRecoveryPreferences() {
     }
   });
   load();
+  refreshRecoveryHosts();
+  // Opening settings re-reads the fleet, including upgrades since page load.
+  void loadHostFleet();
 }
 
 function isRecoveryViewOpen() {
@@ -3599,6 +3641,7 @@ const HOST_STATE_TITLES = {
 };
 
 function renderHostsSection() {
+  refreshRecoveryHosts();
   const list = document.getElementById('hostsList');
   if (!list) return; // settings modal isn't open
   list.innerHTML = effectiveHosts().map(host => {

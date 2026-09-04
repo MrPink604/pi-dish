@@ -436,7 +436,13 @@ Routine reconciliation runs after recovery and preserves the invocation rather
 than spawning a second run or treating restored-idle work as completed.
 
 Settings exposes host-scoped controls and a separate `.main.recovery-open`
-report takeover. `/api/recovery` reports outcomes and truncation;
+report takeover. The main entrypoint routes settings/report actions to the
+selected owning host, including fleet proxies and browser-added peers.
+`identifyHosts` must fetch capabilities even for a saved direct host with a
+known id: the browser persists identity but not its descriptor. Opening
+Settings refreshes the fleet; `refreshRecoveryHosts` updates only the pickers
+and unavailable-host guidance, not unsaved mode edits. `/api/recovery`
+reports outcomes and truncation;
 `PUT /api/sessions/:id/recovery` sets exclusion, and `/api/recovery/retry`
 explicitly restores idle, never replays an uncertain prompt. Continuation is
 best effort, not exactly-once side effects; changed/unverifiable transcripts
