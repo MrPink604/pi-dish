@@ -413,6 +413,32 @@ const registerSession2 = () => fs.writeFileSync(path.join(registryDir, `${SESSIO
   contextUsage: { tokens: 100, contextWindow: 100000, percent: 0.1 },
 }));
 
+// --- fake transcription endpoint (speech to text) ----------------------------
+// The server relays the recorded audio here as OpenAI-shaped multipart; the
+// browser only ever sees /api/stt. The `stt` block in the temp HOME's
+// settings.json is what makes the host advertise the capability at all, and
+// settings are re-read per call, so blanking it mid-run hides the button.
+const sttRequests = [];
+const sttEndpoint = require('node:http').createServer(async (req, res) => {
+  try {
+    const form = await new Response(require('node:stream').Readable.toWeb(req), {
+      headers: { 'content-type': req.headers['content-type'] },
+    }).formData();
+    const file = form.get('file');
+    sttRequests.push({ filename: file && file.name, size: file && file.size, model: form.get('model') });
+  } catch (e) {
+    sttRequests.push({ error: e.message });
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ text: 'transcribed hello' }));
+});
+const dishSettingsFile = path.join(tmpHome, '.pi', 'dish', 'settings.json');
+function writeSttSettings(block) {
+  const current = fs.existsSync(dishSettingsFile) ? JSON.parse(fs.readFileSync(dishSettingsFile, 'utf8')) : {};
+  if (block) current.stt = block; else delete current.stt;
+  fs.writeFileSync(dishSettingsFile, JSON.stringify(current, null, 2) + '\n');
+}
+
 // --- assertions ---------------------------------------------------------------
 let failures = 0;
 // --- a second pi-dish, on its own HOME (multi-host phase 2) ------------------
@@ -501,6 +527,11 @@ let remoteHost = null; // second pi-dish (multi-host section)
 (async () => {
   await new Promise((r) => bridge.listen(socketPath, r));
   writeRegistry();
+  await new Promise((r) => sttEndpoint.listen(0, '127.0.0.1', r));
+  writeSttSettings({
+    url: `http://127.0.0.1:${sttEndpoint.address().port}/v1/audio/transcriptions`,
+    model: 'whisper-1',
+  });
 
   const server = require('../server.js');
   if (!server.listening) await new Promise((r) => server.once('listening', r));
@@ -514,7 +545,13 @@ let remoteHost = null; // second pi-dish (multi-host section)
 
   const { chromium } = require('playwright');
   const executablePath = process.env.CHROME_BIN || '/opt/google/chrome/chrome';
-  const browser = await chromium.launch({ executablePath, headless: true });
+  const browser = await chromium.launch({
+    executablePath,
+    headless: true,
+    // Dictation section: a synthetic mic device, auto-granted, so
+    // getUserMedia + MediaRecorder run for real without hardware.
+    args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
+  });
   const errors = [];
   const watch = (page, tag) => {
     page.on('pageerror', (e) => errors.push(`${tag} pageerror: ${e.message}`));
@@ -1630,6 +1667,62 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(true, 'lightbox opens on image tap');
     await desktop.click('.lightbox-overlay');
     check(await desktop.locator('.lightbox-overlay').count() === 0, 'lightbox dismissed on tap');
+
+    // 7a. Dictation: the composer mic records through MediaRecorder, POSTs the
+    // bytes to /api/stt (which relays them to the fake endpoint above) and
+    // drops the transcript at the caret. It gets its own page because the
+    // second half blanks the host's stt config and reloads — the capability
+    // is read at boot, and `desktop` carries state later sections rely on.
+    console.log('speech to text:');
+    const dictation = await browser.newPage({
+      viewport: { width: 1280, height: 800 },
+      permissions: ['microphone'],
+    });
+    watch(dictation, 'dictation');
+    await dictation.goto(base, { waitUntil: 'networkidle' });
+    await dictation.waitForSelector('.session-item');
+    await dictation.click('.session-item');
+    await dictation.waitForSelector('.message.assistant');
+    await dictation.waitForSelector('#btnMic', { state: 'visible', timeout: 5000 });
+    check(await dictation.locator('#btnMic').getAttribute('aria-disabled') === null,
+      'mic is enabled on a configured host over a secure origin (127.0.0.1)');
+    await dictation.fill('#promptInput', 'note: ');
+    await dictation.click('#btnMic');
+    await dictation.waitForSelector('#btnMic.recording', { timeout: 5000 });
+    check(true, 'clicking the mic starts recording');
+    // Long enough that the encoder emits a container worth transcribing (a
+    // sub-1KB blob is treated as "nothing was recorded").
+    await dictation.waitForTimeout(1500);
+    await dictation.click('#btnMic');
+    await dictation.waitForFunction(
+      () => document.getElementById('promptInput').value.includes('transcribed hello'),
+      { timeout: 20000 });
+    check(true, 'the transcript lands in the composer');
+    check((await dictation.inputValue('#promptInput')).startsWith('note: transcribed hello'),
+      'it is inserted at the caret, keeping what was already typed');
+    check(sttRequests.length === 1 && /^audio\.[a-z0-9]+$/.test(sttRequests[0].filename || '') &&
+      sttRequests[0].model === 'whisper-1',
+      `the endpoint saw one named audio upload with the configured model (got ${JSON.stringify(sttRequests)})`);
+    check(await dictation.locator('#btnMic.recording').count() === 0 &&
+      await dictation.locator('#btnMic.busy').count() === 0, 'the mic returns to idle');
+    check(await dictation.locator('#composerNote').isVisible() === false,
+      'a successful take leaves no composer note behind');
+    await dictation.fill('#promptInput', '');
+
+    // Settings are re-read per call, so dropping the block un-advertises the
+    // capability and the button goes away on the next load.
+    writeSttSettings(null);
+    // Not networkidle: the saved session is restored on load and its SSE
+    // stream keeps a connection open forever, so the page never goes idle.
+    await dictation.reload({ waitUntil: 'domcontentloaded' });
+    await dictation.waitForSelector('.session-item');
+    await dictation.click('.session-item');
+    await dictation.waitForSelector('.message.assistant');
+    await dictation.waitForFunction(
+      () => document.getElementById('btnMic')?.style.display === 'none', { timeout: 5000 });
+    check(await dictation.locator('#btnMic').isVisible() === false,
+      'the mic is hidden once no host advertises stt');
+    await dictation.close();
 
     // 8. Queue strip: steering a message during a turn surfaces it in the
     // always-visible strip; Edit pulls it back out of pi's queue and into the
@@ -3929,6 +4022,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     server.close();
     bridge.close();
     bridge2.close();
+    sttEndpoint.close();
     if (remoteHost) remoteHost.child.kill('SIGKILL');
     // Spawned RPC children are live handles: without this the process hangs.
     try {

@@ -3938,6 +3938,72 @@ button.badge-context {
 
 .queue-item-edit:hover { color: var(--text); border-color: var(--accent); }
 
+/* Composer note: a quiet strip above the prompt box for a composer-side
+   failure worth explaining (mic permission, an insecure origin, a
+   transcription error). Same treatment as the queue strip; unlike it, the
+   text is a sentence, so it wraps. */
+.composer-note {
+  margin-top: 4px;
+  padding: 5px 6px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: var(--bg-darker);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.composer-note-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.composer-note-dismiss {
+  flex: none;
+  padding: 0 4px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.composer-note-dismiss:hover { color: var(--text); }
+
+/* Dictation button. The base .badge-tool-btn is display:none (mobile-only
+   tool buttons); app.js sets the inline display when a host advertises stt,
+   so this rule only carries the shape. */
+#btnMic {
+  align-items: center;
+  justify-content: center;
+  /* Hold-to-talk on touch: without this the browser claims the gesture for
+     scrolling and the pointerup never arrives. */
+  touch-action: none;
+  user-select: none;
+}
+
+/* Visible but not usable here (insecure origin, no MediaRecorder): the tap
+   still lands, and shows the reason in the composer note. */
+#btnMic.unavailable {
+  opacity: 0.45;
+  cursor: help;
+}
+
+#btnMic.recording {
+  color: var(--error);
+  border-color: var(--error);
+  background: color-mix(in srgb, var(--error) 18%, transparent);
+  animation: pulse 1.5s infinite;
+}
+
+#btnMic.busy {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* Pending image attachments above the prompt box */
 .attachment-strip {
   display: flex;

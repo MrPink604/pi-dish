@@ -338,6 +338,7 @@ async function loadHostFleet() {
     pruneHostCaches();
     renderHostsSection();
     updateRoutinesButton();
+    updateMicButton(); // a peer may be the only host with a transcription endpoint
     if (isNewSessionViewOpen()) renderNsHosts();
     renderSessions();
   } catch {}
@@ -620,12 +621,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   } finally {
     resolveHostFleetReady();
     updateRoutinesButton(); // capability-gated sidebar icon
+    updateMicButton();      // …and the capability-gated composer mic
   }
   loadConfig(); // feature flags (terminal) — fire-and-forget
   loadThemes(); // theme picker options + refresh custom-theme tokens
   updateViewToggle();
   renderScopeChips(); // cached definitions paint immediately…
   loadSavedFilters(); // …then the server copy replaces them
+  initMicButton();
   initTerminalKeybar();
   initTerminalResize();
   initSidebarResize();
@@ -673,7 +676,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (e.ctrlKey) { e.preventDefault(); sendSteer(); }
       else { e.preventDefault(); sendPrompt(); }
     }
-    if (e.key === 'Escape' && !autocompleteVisible && turnInProgress) { e.preventDefault(); abortTurn(); }
+    // While dictating, Escape cancels the recording (handled by the document
+    // listener) — it must not also abort the turn.
+    if (e.key === 'Escape' && !autocompleteVisible && !isRecording() && turnInProgress) { e.preventDefault(); abortTurn(); }
   });
 
   // Global Ctrl+C to abort
@@ -2448,6 +2453,7 @@ function showPendingSessionView(spawnId) {
   document.getElementById('sessionSpendBadge').style.display = 'none';
   updateThinkingBadges();
   updateTerminalButtons();
+  updateMicButton();
 
   oldestLoadedIndex = null;
   lastLoadedIndex = null;
@@ -2498,6 +2504,10 @@ async function selectSession(id, { forceTranscriptReload = false, host = null } 
   // the marks before moving the current transcript into its short-lived DOM
   // cache so revisiting restores clean, already-finalized message nodes.
   cancelStreamingRender();
+  // A recording belongs to the composer it was started from — switching away
+  // discards it and releases the mic rather than dictating into a new session.
+  cancelRecording();
+  hideComposerNote();
   closeSearch();
   // The diff and file views show the previous session's workspace — close them
   // before stashing: their takeover CSS display:nones #messages, whose
@@ -3024,6 +3034,7 @@ function updateSessionHeader() {
 
   updateThinkingBadges();
   updateTerminalButtons();
+  updateMicButton();
 }
 
 // --- Thinking level selector (levels come from helpers.THINKING_LEVEL_NAMES) ---
@@ -7740,6 +7751,274 @@ function openImageLightbox(src) {
   document.body.appendChild(overlay);
 }
 
+// --- Composer notes ------------------------------------------------------
+//
+// A quiet one-line strip above the prompt box for composer-side failures the
+// reader can act on: a denied microphone, an insecure origin, a transcription
+// error. Not setStatus(), which is a transient badge — these want to stay put
+// until dismissed, and some of them are a paragraph long. textContent only.
+
+function showComposerNote(text) {
+  const el = document.getElementById('composerNote');
+  if (!el) return;
+  el.textContent = '';
+  const span = document.createElement('span');
+  span.className = 'composer-note-text';
+  span.textContent = String(text || '');
+  const dismiss = document.createElement('button');
+  dismiss.type = 'button';
+  dismiss.className = 'composer-note-dismiss';
+  dismiss.title = 'Dismiss';
+  dismiss.textContent = '✕';
+  dismiss.addEventListener('click', hideComposerNote);
+  el.appendChild(span);
+  el.appendChild(dismiss);
+  el.style.display = '';
+}
+
+function hideComposerNote() {
+  const el = document.getElementById('composerNote');
+  if (!el) return;
+  el.style.display = 'none';
+  el.textContent = '';
+}
+
+// --- Speech to text (composer mic) ---------------------------------------
+//
+// Batch dictation, deliberately not streaming: hold (or click) to record,
+// release to transcribe, and the transcript lands at the caret for review —
+// it never sends itself. The bytes go to this server's /api/stt, which holds
+// the endpoint and its key (lib/stt.js); the browser never sees either.
+
+let micRecorder = null;    // the live MediaRecorder, or null
+let micStream = null;      // its MediaStream, so the tracks can be released
+let micChunks = [];
+let micStartedAt = 0;
+let micTimer = null;       // 1s status ticker
+let micBusy = false;       // transcription in flight
+let micStarting = false;   // getUserMedia in flight (double-tap guard)
+let micCancelled = false;  // Escape / session switch: discard on stop
+let micPointerType = '';   // last pointerdown: touch is hold-to-talk
+
+const MIC_MAX_MS = 5 * 60 * 1000;
+// First supported wins. Chrome/Firefox land on webm/opus, iOS Safari on mp4;
+// an empty result means "let the browser pick", which every one of these
+// endpoints can still sniff from the filename the server derives.
+const MIC_MIME_CANDIDATES = [
+  'audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/ogg',
+];
+
+/**
+ * Transcription isn't session-scoped — any capable host can do it — so unlike
+ * the terminal this gates on the *fleet*, not the session's owning host. Self
+ * sorts first in effectiveHosts(), so a local endpoint always wins.
+ */
+function sttHostFor() {
+  return effectiveHosts().find(host => hostSupportsCapability(host, 'stt', appConfig)) || null;
+}
+
+/** Why the mic can't run in *this* browser/origin (helpers.js), or null. */
+function micUnavailableReason() {
+  return sttUnavailableReason({
+    isSecureContext: !!window.isSecureContext,
+    hasGetUserMedia: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
+    hasMediaRecorder: typeof window.MediaRecorder === 'function',
+    origin: location.origin,
+  });
+}
+
+function isRecording() { return !!micRecorder; }
+
+/**
+ * Three states, in order: no capable host hides the button entirely; a
+ * capable host the browser can't serve keeps it visible but `aria-disabled`
+ * and explains itself on tap — never a real `disabled` attribute, which
+ * swallows the tap and leaves a phone with no way to read the reason, since
+ * `title` never shows on touch.
+ */
+function updateMicButton() {
+  const btn = document.getElementById('btnMic');
+  if (!btn) return;
+  if (!sttHostFor()) {
+    btn.style.display = 'none';
+    return;
+  }
+  const reason = micUnavailableReason();
+  btn.style.display = 'inline-flex';
+  btn.classList.toggle('unavailable', !!reason);
+  if (reason) btn.setAttribute('aria-disabled', 'true');
+  else btn.removeAttribute('aria-disabled');
+  btn.classList.toggle('recording', isRecording());
+  btn.classList.toggle('busy', micBusy);
+  btn.textContent = isRecording() ? '⏺' : micBusy ? '…' : '🎙';
+  btn.title = reason ? reason.message
+    : isRecording() ? 'Stop recording'
+    : micBusy ? 'Transcribing…'
+    : 'Dictate (speech to text)';
+}
+
+function initMicButton() {
+  const btn = document.getElementById('btnMic');
+  if (!btn) return;
+  btn.addEventListener('pointerdown', (e) => {
+    micPointerType = e.pointerType || 'mouse';
+    const reason = micUnavailableReason();
+    if (reason) { showComposerNote(reason.message); return; }
+    // Touch is hold-to-talk: a phone user holds the button and speaks, and
+    // releasing anywhere (up/cancel/leave) ends the take.
+    if (micPointerType === 'touch') {
+      e.preventDefault();
+      try { btn.setPointerCapture(e.pointerId); } catch {}
+      startRecording();
+    }
+  });
+  const releaseHold = (e) => {
+    if ((e.pointerType || micPointerType) === 'touch' && isRecording()) stopRecording();
+  };
+  btn.addEventListener('pointerup', releaseHold);
+  btn.addEventListener('pointercancel', releaseHold);
+  btn.addEventListener('pointerleave', releaseHold);
+  // Mouse/pen (and keyboard activation) toggle instead: holding a mouse
+  // button down to dictate is nobody's habit on a desktop.
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    const held = micPointerType === 'touch';
+    micPointerType = '';
+    if (held) return;
+    const reason = micUnavailableReason();
+    if (reason) { showComposerNote(reason.message); return; }
+    if (micBusy) return;
+    if (isRecording()) stopRecording(); else startRecording();
+  });
+}
+
+function updateMicStatus() {
+  if (!isRecording()) return;
+  const elapsed = Date.now() - micStartedAt;
+  if (elapsed >= MIC_MAX_MS) { stopRecording(); return; }
+  setStatus(`Recording ${formatDuration(elapsed)}`);
+}
+
+async function startRecording() {
+  if (micRecorder || micBusy || micStarting) return;
+  const reason = micUnavailableReason();
+  if (reason) { showComposerNote(reason.message); return; }
+  hideComposerNote();
+  micStarting = true;
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    micStarting = false;
+    const name = e && e.name;
+    if (name === 'NotAllowedError') {
+      showComposerNote("Microphone access was denied. Allow the microphone for this site in the browser's site settings and try again.");
+    } else if (name === 'NotFoundError') {
+      showComposerNote('No microphone found.');
+    } else {
+      showComposerNote(`Microphone error: ${name || 'unknown'}`);
+    }
+    return;
+  }
+  micStarting = false;
+  const mimeType = MIC_MIME_CANDIDATES.find(t =>
+    typeof MediaRecorder.isTypeSupported === 'function' && MediaRecorder.isTypeSupported(t));
+  let recorder;
+  try {
+    recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+  } catch {
+    try { recorder = new MediaRecorder(stream); }
+    catch (e) {
+      stream.getTracks().forEach(t => t.stop());
+      showComposerNote(`Microphone error: ${(e && e.name) || 'unknown'}`);
+      return;
+    }
+  }
+  micStream = stream;
+  micRecorder = recorder;
+  micChunks = [];
+  micCancelled = false;
+  micStartedAt = Date.now();
+  recorder.addEventListener('dataavailable', (e) => { if (e.data && e.data.size) micChunks.push(e.data); });
+  recorder.addEventListener('stop', () => finishRecording(recorder));
+  recorder.start();
+  micTimer = setInterval(updateMicStatus, 1000);
+  updateMicStatus();
+  updateMicButton();
+}
+
+function stopRecording() {
+  if (!micRecorder) return;
+  try { micRecorder.stop(); } catch { releaseMic(); updateMicButton(); }
+}
+
+/** Escape / session switch: keep the bytes nowhere and let the mic go. */
+function cancelRecording() {
+  if (!micRecorder) return;
+  micCancelled = true;
+  stopRecording();
+  setStatus('');
+}
+
+function releaseMic() {
+  if (micTimer) { clearInterval(micTimer); micTimer = null; }
+  if (micStream) { try { micStream.getTracks().forEach(t => t.stop()); } catch {} micStream = null; }
+  micRecorder = null;
+}
+
+function finishRecording(recorder) {
+  const cancelled = micCancelled;
+  const chunks = micChunks;
+  micChunks = [];
+  micCancelled = false;
+  releaseMic();
+  updateMicButton();
+  if (cancelled) { setStatus(''); return; }
+  const mime = (recorder && recorder.mimeType) || 'audio/webm';
+  const blob = new Blob(chunks, { type: mime });
+  // A tap that never became a take: an empty container still weighs a few
+  // hundred bytes, so size is the only honest "did anything land" signal.
+  if (blob.size < 1024) { setStatus(''); showComposerNote('Nothing was recorded.'); return; }
+  transcribeRecording(blob, mime);
+}
+
+async function transcribeRecording(blob, mime) {
+  const host = sttHostFor();
+  if (!host) { setStatus(''); return; }
+  micBusy = true;
+  updateMicButton();
+  setStatus('Transcribing…');
+  try {
+    const res = await apiFetch(host, '/api/stt', {
+      method: 'POST', headers: { 'Content-Type': mime }, body: blob,
+    });
+    let data = null;
+    try { data = await res.json(); } catch {}
+    if (!res.ok) throw new Error((data && data.error) || `Transcription failed (HTTP ${res.status})`);
+    const text = String((data && data.text) || '').trim();
+    if (!text) { showComposerNote('No speech detected.'); return; }
+    insertTranscript(text);
+  } catch (e) {
+    showComposerNote((e && e.message) || 'Transcription failed');
+  } finally {
+    micBusy = false;
+    setStatus('');
+    updateMicButton();
+  }
+}
+
+/** Land the transcript at the caret; the reader edits and sends it. */
+function insertTranscript(text) {
+  const input = document.getElementById('promptInput');
+  if (!input) return;
+  const { value, caret } = insertAtCaret(input.value, input.selectionStart, input.selectionEnd, text);
+  input.value = value;
+  try { input.setSelectionRange(caret, caret); } catch {}
+  // Draft persistence and autosize both hang off the input event.
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.focus();
+}
+
 // --- Prompt drafts & history --------------------------------------------
 
 var promptHistory = [];  // sent prompts for the current session (oldest first)
@@ -10783,6 +11062,9 @@ function closeTreeModal() {
 
 document.addEventListener('keydown', function(e) {
   if (e.key !== 'Escape') return;
+  // A live microphone capture outranks every overlay: Escape gets the hardware
+  // released (and the take discarded) before it dismisses any chrome.
+  if (isRecording()) { e.preventDefault(); cancelRecording(); updateMicButton(); return; }
   // A lightbox (image or diagram zoom) floats above every modal — it goes
   // first, and it alone, so Escape never dismisses it *and* what's underneath.
   const lightbox = document.querySelector('.lightbox-overlay');
@@ -11027,6 +11309,7 @@ async function loadConfig() {
   } catch { /* feature stays hidden */ }
   updateTerminalButtons();
   updateRoutinesButton();
+  updateMicButton();
 }
 
 // { term, fitAddon, ws, sessionId, reconnectTimer, attempts, closedByUser, exited }

@@ -1414,6 +1414,51 @@ test('hostSupportsCapability is the generic form behind it', () => {
   assert.equal(H.hostSupportsCapability({ hostId: 'x', base: 'http://x:1' }, 'tmux', { tmux: true }), false);
 });
 
+// --- speech to text (composer mic) -----------------------------------------
+
+test('sttUnavailableReason reports the first blocking condition, secure origin first', () => {
+  const ok = { isSecureContext: true, hasGetUserMedia: true, hasMediaRecorder: true, origin: 'http://pi:3333' };
+  assert.equal(H.sttUnavailableReason(ok), null);
+
+  // A phone on plain LAN http: the browser withholds the mic entirely, so the
+  // missing APIs below are a symptom — report the cause and its workaround.
+  const insecure = H.sttUnavailableReason({ ...ok, isSecureContext: false, hasGetUserMedia: false, hasMediaRecorder: false });
+  assert.equal(insecure.code, 'insecure');
+  assert.match(insecure.message, /http:\/\/pi:3333/);
+  assert.match(insecure.message, /unsafely-treat-insecure-origin-as-secure/);
+  assert.match(insecure.message, /iOS Safari/);
+
+  assert.deepEqual(H.sttUnavailableReason({ ...ok, hasGetUserMedia: false }),
+    { code: 'no-getusermedia', message: 'This browser exposes no microphone API.' });
+  assert.deepEqual(H.sttUnavailableReason({ ...ok, hasMediaRecorder: false }),
+    { code: 'no-recorder', message: "This browser can't record audio (no MediaRecorder)." });
+
+  // Called with nothing known: still a reason, never a crash.
+  assert.equal(H.sttUnavailableReason().code, 'insecure');
+  assert.match(H.sttUnavailableReason({ isSecureContext: false }).message, /this origin/);
+});
+
+test('insertAtCaret pads only where the neighbours would run into the text', () => {
+  assert.deepEqual(H.insertAtCaret('', 0, 0, 'hello'), { value: 'hello', caret: 5 });
+  // Mid-word on both sides: one space each way, caret after the insert.
+  assert.deepEqual(H.insertAtCaret('abcd', 2, 2, 'X'), { value: 'ab X cd', caret: 4 });
+  // Existing whitespace is never doubled.
+  assert.deepEqual(H.insertAtCaret('ab cd', 3, 3, 'X'), { value: 'ab X cd', caret: 4 });
+  assert.deepEqual(H.insertAtCaret('ab\ncd', 3, 3, 'X'), { value: 'ab\nX cd', caret: 4 });
+  assert.deepEqual(H.insertAtCaret('ab ', 3, 3, 'X'), { value: 'ab X', caret: 4 });
+  assert.deepEqual(H.insertAtCaret('hello', 5, 5, 'there'), { value: 'hello there', caret: 11 });
+  assert.deepEqual(H.insertAtCaret('hello', 0, 0, 'well'), { value: 'well hello', caret: 4 });
+
+  // A selection is replaced, and the padding is judged against what remains.
+  assert.deepEqual(H.insertAtCaret('one two three', 4, 7, 'ZZZ'), { value: 'one ZZZ three', caret: 7 });
+  // Backwards / out-of-range offsets are normalized rather than trusted.
+  assert.deepEqual(H.insertAtCaret('one two', 7, 4, 'ZZZ'), { value: 'one ZZZ', caret: 7 });
+  assert.deepEqual(H.insertAtCaret('abc', 99, 99, 'X'), { value: 'abc X', caret: 5 });
+  assert.deepEqual(H.insertAtCaret('abc', -5, -5, 'X'), { value: 'X abc', caret: 1 });
+  // Nothing transcribed: the selection still goes, but no stray padding.
+  assert.deepEqual(H.insertAtCaret('abcd', 1, 3, ''), { value: 'ad', caret: 1 });
+});
+
 // --- host connection state (fan-out backoff) -------------------------------
 
 const T0 = 1_000_000; // any fixed "now": the reducer takes it as an argument

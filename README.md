@@ -274,6 +274,56 @@ To open it from your phone at `http://<your-machine>:3333` you need one of
 the `HOST` overrides above, or a reverse proxy in front of the localhost
 bind (see the security section; you did read the security section?).
 
+### Speech to text (bring your own endpoint)
+
+Dictation into the composer, off by default. pi-dish runs no model of its
+own: you point it at an endpoint that speaks OpenAI's transcription shape
+and it relays the recording there. Configure it in
+`~/.pi/dish/settings.json`:
+
+```json
+{
+  "stt": {
+    "url": "https://api.groq.com/openai/v1/audio/transcriptions",
+    "apiKey": "gsk_…",
+    "model": "whisper-large-v3-turbo",
+    "language": "en"
+  }
+}
+```
+
+`apiKey`, `model` (default `whisper-1`) and `language` are optional; each
+field can also come from the environment, which wins over the file:
+`PI_DISH_STT_URL`, `PI_DISH_STT_API_KEY`, `PI_DISH_STT_MODEL`,
+`PI_DISH_STT_LANGUAGE`. It is deliberately file-level config — the URL and
+key never travel to a browser, and the settings API can't write them.
+
+A 🎙 appears in the composer wherever a host advertises the feature. Click
+to start and click to stop on a desktop; hold to talk on a phone. Escape
+cancels. The transcript lands at the caret for you to read and edit — it is
+never sent for you. Recording is batch, not streaming: you get one request
+per take, which is what every one of these endpoints actually offers.
+
+Servers that speak this shape: OpenAI, Groq, Mistral, Azure OpenAI (use the
+full deployment URL including `?api-version=…`), and the self-hosted
+[speaches](https://github.com/speaches-ai/speaches), LocalAI and vLLM.
+whisper.cpp's `whisper-server` accepts the same fields on `/inference`, but
+build/run it with `--convert` (it wants WAV otherwise, and browsers record
+webm/opus). Anything else — Deepgram, AssemblyAI, ElevenLabs — works through
+[LiteLLM](https://github.com/BerriAI/litellm) as an OpenAI-shaped shim.
+
+**Browsers only hand out the microphone on a secure origin.** `localhost`
+and `127.0.0.1` count; a phone on `http://192.168.1.20:3333` does not, and
+the button will say so instead of failing silently. Options, in order of
+how much you'll enjoy them:
+
+- Serve pi-dish over https — `tailscale serve`, cloudflared, or a
+  self-signed cert (see [Public share links](#public-share-links) for the
+  same tunnels).
+- Chrome, desktop and Android: add the origin at
+  `chrome://flags/#unsafely-treat-insecure-origin-as-secure` and relaunch.
+- iOS Safari has no override at all. It needs https.
+
 ### Optional: the mood extension
 
 You may notice the web UI has special-cased support for a `set_mood` tool

@@ -1135,6 +1135,10 @@ The suites (`test/*.test.js`):
   mtime/size caches in `lib/session-files.js`.
 - `test/file-mention.test.js` — unit tests for `lib/file-mention.js`
   (mention → path resolution through tool calls, containment, viewer reads).
+- `test/stt.test.js` — unit tests for `lib/stt.js` (config resolution and its
+  env overrides, the MIME→filename map, upstream error shapes, and
+  `transcribe` against a `fetchImpl` stub: multipart parts, bearer
+  presence/absence, classified transport failures).
 
 Shared test helpers that aren't suites (e.g. `test/sse-reader.js`) live
 outside the `*.test.js` glob.
@@ -1466,6 +1470,63 @@ so the outside-click closer must treat detached targets as inside.
   composer (appended with a blank line if the composer already holds different
   text); the follow-up `queue_update` reconciles the strip. See the queue
   paragraph under the streaming pipeline for the bridge-side mechanics.
+
+## Speech to text (lib/stt.js, POST /api/stt)
+
+Dictation into the composer, **bring your own endpoint**: pi-dish never runs
+a model. The user configures anything speaking OpenAI's transcription shape
+(`POST <url>` multipart `file`/`model`/`response_format`/optional `language`,
+bearer auth, `{ "text": … }` back) — OpenAI, Groq, Mistral, Azure OpenAI,
+speaches, LocalAI, vLLM, whisper.cpp's `/inference`, or LiteLLM shimming
+Deepgram et al. The browser records and posts raw bytes to `/api/stt`; the
+server holds the URL and key and builds the multipart request. It is a proxy,
+not a direct browser→endpoint call, for four reasons: the key stays off
+phones, no upstream needs a CORS policy for a LAN origin, a whisper box
+listening only on the host's loopback stays reachable, and the config is
+per-host like everything else in the fleet.
+
+Config is `settings.stt` in `~/.pi/dish/settings.json`
+(`{ url, apiKey?, model?, language? }`) with per-field env overrides
+(`PI_DISH_STT_URL`/`_API_KEY`/`_MODEL`/`_LANGUAGE`) winning; `resolveSttConfig`
+returns null — unconfigured — unless the url parses as http(s), defaults the
+model to `whisper-1`, and drops a `language` that isn't BCP-47-ish rather
+than forwarding a typo into an upstream 400. Like the token and
+`allowedOrigins`, it is **file-level only**: `settingsForClient` never carries
+it and `PUT /api/settings` writes only the two keys it names, so an `stt` key
+in a body is ignored. What is advertised is a boolean —
+`hostCapabilities().stt` and `/api/config`'s `stt` — so a fleet where exactly
+one host has a whisper box behind it shows the button everywhere and relays
+there (`sttHostFor()` takes the first capable host in `effectiveHosts()`;
+transcription isn't session-scoped, unlike the terminal's owning-host rule).
+`upstreamErrorMessage` digs a message out of the three common envelopes, and
+transport failures are **classified to a word** (`timeout`/`refused`/`dns`/
+`tls`/`network`) because a raw fetch error can carry the URL and this string
+is rendered in the browser. The MIME→filename map exists because these
+endpoints sniff the container from the upload's *filename*: an unmapped type
+is a 415 here rather than an opaque upstream rejection, and the `;codecs=…`
+parameter is stripped first. The route checks the type before the body — the
+route-level `express.raw({ type: ['audio/*','video/webm'], limit:'25mb' })`
+only claims those types, so anything else never becomes a Buffer and would
+otherwise read as a missing body. Under `/api`, so the bearer gate applies;
+`/hosts/:name/api/stt` is an unhooked byte relay.
+
+Client gating is a three-rung ladder (`updateMicButton`): no capable host
+hides `#btnMic` entirely; a capable host the *browser* can't serve keeps it
+visible but `aria-disabled` + `.unavailable`, explaining itself in
+`#composerNote` on tap. Never a real `disabled` attribute — it swallows the
+tap, and `title` never shows on touch, so a phone would have no way to read
+the reason. The reason itself is the pure `sttUnavailableReason` (helpers.js):
+secure context first, then getUserMedia, then MediaRecorder. The
+secure-origin case is the same class of failure as `navigator.clipboard`
+being absent over LAN http, and it names the workaround (https, or Chrome's
+`#unsafely-treat-insecure-origin-as-secure`; iOS Safari has no override).
+Desktop clicks toggle, touch is hold-to-talk (pointer capture +
+`touch-action: none`), Escape and session switch cancel and release the mic,
+and there is deliberately **no global shortcut** (calm-design rule). Batch,
+never streaming: one request per take, which is all these endpoints offer.
+The transcript goes in at the caret via the pure `insertAtCaret` (single
+spaces only where the neighbours would collide) and **never auto-sends** —
+recognition errors are the user's to fix before the agent sees them.
 
 ## Message view (public/app.js)
 

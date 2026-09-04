@@ -1225,6 +1225,55 @@ function hostSupportsTerminal(hostEntry, config) {
   return hostSupportsCapability(hostEntry, 'terminal', config);
 }
 
+// --- Speech to text (composer mic) ---------------------------------------
+
+/**
+ * Why the mic can't run *here*, independent of whether a host offers the
+ * feature. Browsers gate getUserMedia on a secure context, and a phone
+ * reaching pi-dish over plain LAN http is not one — the same class of
+ * failure as navigator.clipboard being absent there, and worth explaining
+ * rather than silently disabling, because the workaround is a browser
+ * setting the user can actually apply. Checked in escalating order: no point
+ * reporting a missing API that the insecure origin is withholding.
+ */
+function sttUnavailableReason({ isSecureContext, hasGetUserMedia, hasMediaRecorder, origin } = {}) {
+  if (!isSecureContext) {
+    const where = origin || 'this origin';
+    return {
+      code: 'insecure',
+      message: `Microphone needs a secure origin. This page is on ${where}, so the browser withholds the mic. ` +
+        `Open pi-dish over https or localhost, or in Chrome (desktop and Android) add ${where} at ` +
+        'chrome://flags/#unsafely-treat-insecure-origin-as-secure and relaunch. ' +
+        'iOS Safari has no override — use https (tailscale serve, cloudflared, or a self-signed cert).',
+    };
+  }
+  if (!hasGetUserMedia) return { code: 'no-getusermedia', message: 'This browser exposes no microphone API.' };
+  if (!hasMediaRecorder) return { code: 'no-recorder', message: "This browser can't record audio (no MediaRecorder)." };
+  return null;
+}
+
+/**
+ * Drop `text` into `value` at the caret (replacing any selection), padding
+ * with single spaces only where the neighbours would otherwise run into it.
+ * Pure so the spacing rule is testable; app.js applies the result and the
+ * caret to the textarea.
+ */
+function insertAtCaret(value, selectionStart, selectionEnd, text) {
+  const source = typeof value === 'string' ? value : '';
+  const insert = typeof text === 'string' ? text : '';
+  const max = source.length;
+  let start = Number.isFinite(selectionStart) ? Math.max(0, Math.min(max, selectionStart)) : max;
+  let end = Number.isFinite(selectionEnd) ? Math.max(0, Math.min(max, selectionEnd)) : start;
+  if (end < start) [start, end] = [end, start];
+  const before = source.slice(0, start);
+  const after = source.slice(end);
+  if (!insert) return { value: before + after, caret: before.length };
+  const prefix = before && !/\s$/.test(before) ? ' ' : '';
+  const suffix = after && !/^\s/.test(after) ? ' ' : '';
+  const middle = prefix + insert + suffix;
+  return { value: before + middle + after, caret: before.length + prefix.length + insert.length };
+}
+
 // --- Host connection state (fan-out backoff) -----------------------------
 // One host's connection state is a small state machine the fan-out reads
 // before it spends a request: `reachable | backoff | blocked`. It lives here,
@@ -2305,6 +2354,7 @@ if (typeof module !== 'undefined' && module.exports) {
     parseSessionRefTokens, parseSessionRefParts, formatSessionRefContext,
     appendSessionRefContext, splitSessionRefContext, searchSessionsForRef,
     hostSupportsCapability, hostSupportsTerminal,
+    sttUnavailableReason, insertAtCaret,
     HOST_BACKOFF_LADDER, HOST_BACKOFF_RESET_MS, hostConnReduce,
     HOST_COLOR_SLOTS, sanitizeHostColors, sanitizeHostColorOrder, assignHostColor,
     sortHostSections, hostSectionKey, rgbStringToHex,

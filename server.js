@@ -33,6 +33,7 @@ const fleetArtifacts = require('./lib/fleet-artifacts');
 const shares = require('./lib/shares');
 const pages = require('./lib/pages');
 const comments = require('./lib/comments');
+const stt = require('./lib/stt');
 const {
   readSessionMessages: readSessionMessagesRaw,
   readSessionMessagesAtLeaf: readSessionMessagesAtLeafRaw,
@@ -226,6 +227,9 @@ function hostCapabilities() {
   };
   if (terminal.isTerminalEnabled()) caps.terminal = true;
   if (tmux.isTmuxAvailable()) caps.tmux = true;
+  // Speech to text is only offered where an endpoint is actually configured;
+  // a fleet may have exactly one host with a whisper box behind it.
+  if (stt.resolveSttConfig(readDishSettings())) caps.stt = true;
   return caps;
 }
 
@@ -2406,6 +2410,10 @@ function sanitizeSavedFilters(value) {
   return out;
 }
 
+// An allowlist, not a redaction: credential-bearing blocks (`remotes`, the
+// `stt` endpoint + key, `allowedOrigins`) are deliberately file-level config
+// and never travel to a client, in either direction — PUT below writes only
+// the two keys it names, so an `stt` key in a request body is ignored.
 function settingsForClient(settings = readDishSettings()) {
   return {
     monthlyBudgetUsd: settings.monthlyBudgetUsd ?? null,
@@ -4733,7 +4741,46 @@ app.get('/api/cwds', (req, res) => {
 // opt-in (PI_DISH_TERMINAL=1) and additionally requires node-pty to have
 // loaded — a missing native binary must hide the button, not break the UI.
 app.get('/api/config', (req, res) => {
-  res.json({ terminal: terminal.isTerminalEnabled(), tmux: tmux.isTmuxAvailable() });
+  res.json({
+    terminal: terminal.isTerminalEnabled(),
+    tmux: tmux.isTmuxAvailable(),
+    // A boolean only: the endpoint URL and its key are server-side config and
+    // never travel to a client (see settingsForClient).
+    stt: !!stt.resolveSttConfig(readDishSettings()),
+  });
+});
+
+// =========================================================================
+// Speech to text: POST /api/stt (lib/stt.js)
+// =========================================================================
+//
+// The browser records audio and posts the raw bytes here; the server holds
+// the endpoint and its key and relays a multipart transcription request. It
+// is a proxy rather than a direct browser→endpoint call for four reasons: the
+// key stays off phones, no upstream needs a CORS policy for the LAN origin, a
+// self-hosted whisper box that only listens on the host's loopback is still
+// reachable, and the configuration is per-host like every other fleet
+// setting. Sitting under /api, it inherits the bearer gate; the
+// /hosts/:name/api/stt proxy relays the bytes untouched.
+const parseAudioBody = express.raw({ type: ['audio/*', 'video/webm'], limit: '25mb' });
+
+app.post('/api/stt', parseAudioBody, async (req, res) => {
+  const config = stt.resolveSttConfig(readDishSettings());
+  if (!config) return res.status(503).json({ error: 'Speech-to-text is not configured on this host' });
+  // Type before body: the raw parser above only claims audio/* and
+  // video/webm, so anything else never becomes a Buffer at all and would
+  // otherwise be reported as a missing body rather than a wrong format.
+  const contentType = req.headers['content-type'] || '';
+  if (!stt.sttFilename(contentType)) {
+    return res.status(415).json({ error: `unsupported audio type ${stt.baseMimeType(contentType) || 'unknown'}` });
+  }
+  if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'audio body required' });
+  try {
+    const { text } = await stt.transcribe(config, { bytes: req.body, contentType });
+    res.json({ text });
+  } catch (e) {
+    res.status(e.status || 502).json({ error: e.message });
+  }
 });
 
 // =========================================================================

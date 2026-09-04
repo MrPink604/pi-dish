@@ -2485,6 +2485,124 @@ test('saved filters persist server-globally and update independently of the budg
   assert.equal('savedFilters' in JSON.parse(fs.readFileSync(settingsFile, 'utf8')), false);
 });
 
+// --- speech to text ------------------------------------------------------
+//
+// settings.json is re-read per call, so these write the `stt` block in and
+// restore the previous contents afterwards.
+
+const DISH_SETTINGS_FILE = path.join(tmpHome, '.pi', 'dish', 'settings.json');
+
+function withSttSettings(block) {
+  fs.mkdirSync(path.dirname(DISH_SETTINGS_FILE), { recursive: true });
+  const before = fs.existsSync(DISH_SETTINGS_FILE) ? fs.readFileSync(DISH_SETTINGS_FILE, 'utf8') : null;
+  const settings = before ? JSON.parse(before) : {};
+  if (block) settings.stt = block; else delete settings.stt;
+  fs.writeFileSync(DISH_SETTINGS_FILE, JSON.stringify(settings, null, 2) + '\n');
+  return () => {
+    if (before === null) fs.rmSync(DISH_SETTINGS_FILE, { force: true });
+    else fs.writeFileSync(DISH_SETTINGS_FILE, before);
+  };
+}
+
+const postAudio = async (p, contentType, body) => {
+  const res = await fetch(base + p, { method: 'POST', headers: { 'Content-Type': contentType }, body });
+  return { status: res.status, body: await res.json() };
+};
+
+test('speech to text is invisible and refused while unconfigured', async () => {
+  const restore = withSttSettings(null);
+  try {
+    assert.equal((await get('/api/config')).body.stt, false);
+    assert.equal('stt' in (await get('/api/host')).body.capabilities, false,
+      'absent capability is how a client knows not to show the mic');
+    const refused = await postAudio('/api/stt', 'audio/webm', Buffer.alloc(2048, 1));
+    assert.equal(refused.status, 503);
+    assert.match(refused.body.error, /not configured/);
+  } finally { restore(); }
+});
+
+test('POST /api/stt relays audio to the configured endpoint and keeps its credentials server-side', async () => {
+  const seen = [];
+  const upstream = http.createServer(async (req, res) => {
+    const form = await new Response(require('node:stream').Readable.toWeb(req), {
+      headers: { 'content-type': req.headers['content-type'] },
+    }).formData();
+    const file = form.get('file');
+    seen.push({
+      authorization: req.headers.authorization,
+      filename: file.name,
+      fileType: file.type,
+      fileSize: file.size,
+      model: form.get('model'),
+      responseFormat: form.get('response_format'),
+      language: form.get('language'),
+    });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ text: 'hello world' }));
+  });
+  await new Promise(r => upstream.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${upstream.address().port}/v1/audio/transcriptions`;
+  const restore = withSttSettings({ url, apiKey: 'sk-super-secret', model: 'whisper-large-v3-turbo', language: 'en' });
+  try {
+    const audio = Buffer.alloc(4096, 9);
+    assert.deepEqual(await postAudio('/api/stt', 'audio/webm;codecs=opus', audio),
+      { status: 200, body: { text: 'hello world' } });
+    assert.deepEqual(seen, [{
+      authorization: 'Bearer sk-super-secret',
+      filename: 'audio.webm',
+      fileType: 'audio/webm',
+      fileSize: audio.length,
+      model: 'whisper-large-v3-turbo',
+      responseFormat: 'json',
+      language: 'en',
+    }]);
+
+    assert.equal((await get('/api/config')).body.stt, true);
+    assert.equal((await get('/api/host')).body.capabilities.stt, true);
+
+    // The endpoint and its key are file-level config: neither ever reaches a
+    // client, and the settings API can't be talked into storing them either.
+    for (const p of ['/api/settings', '/api/config']) {
+      const serialized = JSON.stringify((await get(p)).body);
+      assert.equal(serialized.includes(url), false, `${p} leaks the stt url`);
+      assert.equal(serialized.includes('sk-super-secret'), false, `${p} leaks the stt key`);
+    }
+    await put('/api/settings', { stt: { url: 'http://evil.example/t', apiKey: 'injected' } });
+    assert.equal(JSON.parse(fs.readFileSync(DISH_SETTINGS_FILE, 'utf8')).stt.url, url,
+      'PUT /api/settings ignores an stt key in the body');
+  } finally {
+    restore();
+    await new Promise(r => upstream.close(r));
+  }
+});
+
+test('POST /api/stt reports an upstream failure and validates its own body', async () => {
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: 'bad key' } }));
+  });
+  await new Promise(r => upstream.listen(0, '127.0.0.1', r));
+  const restore = withSttSettings({ url: `http://127.0.0.1:${upstream.address().port}/v1/audio/transcriptions`, apiKey: 'nope' });
+  try {
+    const failed = await postAudio('/api/stt', 'audio/webm', Buffer.alloc(2048, 3));
+    assert.equal(failed.status, 502);
+    assert.match(failed.body.error, /401/);
+    assert.match(failed.body.error, /bad key/);
+
+    const empty = await postAudio('/api/stt', 'audio/webm', Buffer.alloc(0));
+    assert.equal(empty.status, 400);
+    assert.match(empty.body.error, /audio body required/);
+
+    // Sent as raw text so express.json doesn't eat the body first.
+    const wrongType = await postAudio('/api/stt', 'text/plain', 'not audio at all');
+    assert.equal(wrongType.status, 415);
+    assert.match(wrongType.body.error, /unsupported audio type text\/plain/);
+  } finally {
+    restore();
+    await new Promise(r => upstream.close(r));
+  }
+});
+
 test('POST endpoints validate input and reject inactive sessions', async () => {
   // Bad thinking level is rejected before any session lookup
   const badLevel = await post(`/api/sessions/${SESSION_ID}/thinking`, { level: 'ultra' });

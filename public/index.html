@@ -320,11 +320,18 @@
             </button>
           </div>
           <div class="queue-panel" id="queuePanel" style="display:none"></div>
+          <!-- Quiet one-line explanations for composer-side failures the user
+               can act on (mic permission, an insecure origin, a transcription
+               error). Filled with textContent only. -->
+          <div class="composer-note" id="composerNote" style="display:none"></div>
           <div class="attachment-strip" id="attachmentStrip" style="display:none"></div>
           <textarea id="promptInput" placeholder="Send a message..." rows="2"></textarea>
           <input type="file" id="imageFileInput" accept="image/*" multiple style="display:none">
           <div class="input-actions">
             <button class="badge badge-tool-btn" id="btnAttach" onclick="document.getElementById('imageFileInput').click()" title="Attach images">📎</button>
+            <!-- Dictation. No inline onclick: desktop toggles on click while
+                 touch is hold-to-talk, so app.js binds the pointer handlers. -->
+            <button class="badge badge-tool-btn" id="btnMic" style="display:none" title="Dictate (speech to text)">🎙</button>
             <button class="badge badge-context" id="sessionContextBar" onclick="openStatsModal()" title="Session stats">0%</button>
             <span class="status" id="status"></span>
             <span class="badge badge-working" id="sessionWorkingMobile"><span class="spinner-dot"></span><span class="spinner-text"></span></span>
