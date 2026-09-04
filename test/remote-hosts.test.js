@@ -239,9 +239,9 @@ async function withHomeAsync(settings, fn) {
 /** Runs fn with Date.now() advanceable, so ladder slots need no real waiting. */
 async function withFakeClock(fn) {
   const realNow = Date.now;
-  let offset = 0;
-  Date.now = () => realNow() + offset;
-  try { return await fn((ms) => { offset += ms; }); } finally { Date.now = realNow; }
+  let now = realNow();
+  Date.now = () => now;
+  try { return await fn((ms) => { now += ms; }); } finally { Date.now = realNow; }
 }
 
 /** The slot the breaker is currently holding, i.e. which ladder rung it is on. */

@@ -2,7 +2,7 @@ import { createBridge, PI_EVENT_PROFILE } from "./core.js";
 import { getPiPrivateSession } from "./pi-private.js";
 
 export default createBridge({
-  harnessId: "pi", name: "Pi", hostVersion: "0.84.x", wrapperVersion: "0.2.0",
+  harnessId: "pi", name: "Pi", hostVersion: "0.85.x", wrapperVersion: "0.2.0",
   eventProfile: PI_EVENT_PROFILE,
   capabilities: {
     prompt: true, steer: true, followUp: true, abort: true, compact: true,

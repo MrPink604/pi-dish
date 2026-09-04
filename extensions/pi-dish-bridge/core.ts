@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createSessionObserver } from "../../lib/session-recovery.js";
 
 // Exact process-birth identity for registry consumers. A PID alone can be
 // reused after this pi exits; Linux proc field 22 is stable for this process's
@@ -884,6 +885,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
             followUp: Array.isArray(event.followUp) ? [...event.followUp] : [],
           };
           broadcastQueue();
+        } else if (event?.type === "agent_end") {
+          // The private stream adds willRetry, omitted by Pi's public event.
+          recoveryObserver.event("agent_end", event);
         } else if (event?.type === "compaction_start") {
           beginCompaction();
           broadcast({ type: "event", event: "compaction_start", data: { reason: event.reason } });
@@ -903,7 +907,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
           // Manual compaction emits this inside compact(), before its finally
           // reconnects the agent — defer the gate release so flushed prompts
           // don't start a turn mid-reconnect.
-          setTimeout(endCompaction, 0);
+          const observer = recoveryObserver;
+          setTimeout(() => {
+            if (observer === recoveryObserver) endCompaction(event);
+          }, 0);
         }
       });
       if (typeof unsub === "function") {
@@ -1242,6 +1249,34 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // runs from writeRegistry, i.e. on every turn/message event, and the old
   // copy never re-checks, so one reclaim wins durably.
   const instanceId = crypto.randomUUID();
+  let recoverySuppressedByWrapper = false;
+  function makeRecoveryObserver() {
+    return createSessionObserver({
+      waitsForSettled: !!descriptor.piLifecycleEvents,
+      // All extension factories run before session_start. A dedicated wrapper
+      // owns observations even when its host also loaded the stock Pi bridge.
+      canWrite: () => {
+        if (descriptor.harnessId === "pi" &&
+          (g[Symbol.for("pi-dish-bridge.loaded.omp")] || g[Symbol.for("pi-dish-bridge.loaded.prime")])) {
+          recoverySuppressedByWrapper = true;
+        }
+        return !recoverySuppressedByWrapper;
+      },
+      snapshot: () => {
+        if (!sessionId || !sessionFile || !cwd) return null;
+        // An embedded OMP subagent never owns an independently recoverable
+        // process. Keep its transcript out even if a host loads extensions in it.
+        if (descriptor.nestedSubsessions && fs.existsSync(`${path.dirname(sessionFile)}.jsonl`)) return null;
+        return {
+          harnessId: descriptor.harnessId, nativeSessionId: sessionId,
+          sessionFile, cwd, name: sessionName, model: modelId,
+          thinkingLevel: getThinkingLevel(), pid: process.pid,
+          startTime: PROCESS_START_TIME, instanceId,
+        };
+      },
+    });
+  }
+  let recoveryObserver = makeRecoveryObserver();
   let ownershipProbe = false;
   let lastOwnershipProbe = 0;
 
@@ -1312,6 +1347,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       harnessId: descriptor.harnessId,
       bridgeInstanceId: instanceId,
       nativeSessionId: sessionId,
+      recoveryObservation: true,
       capabilities,
       sessionId,
       sessionFile,
@@ -1341,6 +1377,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
   }
 
   function cleanup() {
+    recoveryObserver.dispose();
     for (const [id, resolve] of pendingDialogs) {
       try { resolve({ cancelled: true }); } catch {}
       broadcast({ type: "event", event: "extension_ui_resolved", data: { id, source: "shutdown" } });
@@ -1737,16 +1774,18 @@ export function createBridge(descriptor: BridgeDescriptor) {
     }, COMPACTION_STUCK_MS);
     if (compacting) return;
     compactionGeneration++;
+    recoveryObserver.event("compaction_start");
     compacting = true;
     writeRegistry();
   }
 
   // Clear the compaction gate and flush. Idempotent: the compaction_end
   // paths and the stuck-timer net can all call it.
-  function endCompaction(): void {
+  function endCompaction(outcome: { aborted?: boolean; errorMessage?: string; willRetry?: boolean; unknown?: boolean } = { unknown: true }): void {
     if (compactionStuckTimer) { clearTimeout(compactionStuckTimer); compactionStuckTimer = null; }
     if (!compacting) return;
     compacting = false;
+    recoveryObserver.event("compaction_end", outcome);
     writeRegistry();
     flushCompactionQueue();
   }
@@ -2201,6 +2240,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     bindSocket();
     ensureSessionSubscription();
     attachNativeProjection();
+    recoveryObserver.initialize();
 
     writeRegistry();
     broadcast({ type: "event", event: "session_start", data: { sessionId, sessionFile, cwd } });
@@ -2215,6 +2255,11 @@ export function createBridge(descriptor: BridgeDescriptor) {
     if (!identity) return;
     const previousSessionId = sessionId;
     const previousSessionFile = sessionFile;
+    if (previousSessionId !== identity.sessionId || previousSessionFile !== identity.sessionFile) {
+      recoveryObserver.event("retire");
+      recoveryObserver.dispose();
+      recoveryObserver = makeRecoveryObserver();
+    }
 
     // These values belong to the newly adopted session. Clear first so a host
     // that temporarily cannot report one never leaves the old session's model
@@ -2227,6 +2272,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     try { sessionName = (ctx as any)?.sessionManager?.getSessionName?.() ?? null; } catch {}
     if (sessionName) syncTmuxTitle(sessionName);
     ({ sessionFile, sessionId, cwd } = identity);
+    recoveryObserver.initialize();
     refreshNativeProjection();
 
     // The registry and socket are instance-keyed, not session-keyed: update
@@ -2254,15 +2300,22 @@ export function createBridge(descriptor: BridgeDescriptor) {
   });
 
   pi.on("session_shutdown", async () => {
+    recoveryObserver.event("shutdown");
     broadcast({ type: "event", event: "session_shutdown", data: {} });
     cleanup();
   });
 
+  // Pi's whole-run boundary includes retries, post-run auto-compaction and
+  // queued continuations. Older hosts without this event remain uncertain.
+  if (descriptor.piLifecycleEvents) pi.on("agent_settled", () => {
+    recoveryObserver.event("agent_settled");
+  });
   for (const ev of descriptor.eventProfile) {
     pi.on(ev as any, (event: any, ctx: ExtensionContext) => {
       wrapExtensionUI(ctx);
       lastCtx = ctx ?? lastCtx;
       refreshModel(ctx);
+      recoveryObserver.event(ev, event);
       if (ev === "turn_start") {
         turnInProgress = true;
         writeRegistry();
@@ -2339,7 +2392,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
     // This event fires synchronously inside pi's compact(), before its finally
     // reconnects the agent. Defer the gate release + queue flush a tick so the
     // replayed prompts don't start a turn mid-reconnect.
-    setTimeout(endCompaction, 0);
+    const observer = recoveryObserver;
+    setTimeout(() => {
+      if (observer === recoveryObserver) endCompaction(event);
+    }, 0);
   });
 
   // Tree navigation (pi's /tree — from the TUI, the web UI, or an extension).

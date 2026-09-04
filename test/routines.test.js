@@ -551,6 +551,42 @@ test('restart recovery reconciles starting, live-idle, live-working and gone run
   assert.deepEqual(closed, ['live-idle'], 'continue mode is still never auto-closed');
 });
 
+test('restored idle and uncertain routine sessions stay interrupted rather than auto-closing', async () => {
+  const routine = store.createRoutine(definition());
+  const { runner, sessions, closed, created, resumed } = harness({
+    recoveryOutcome: id => ({ status: id === 'restored' ? 'restored' : 'needs-review', reason: 'Inspect interrupted work' }),
+  });
+  const invocations = ['restored', 'uncertain'].map(id => {
+    sessions.set(id, new FakeSession(id));
+    const invocation = store.createInvocation({ routine, trigger: 'invoke', status: 'starting' });
+    store.updateInvocation(invocation.id, { status: 'running', sessionId: id });
+    return invocation;
+  });
+  await runner.recoverAfterRestart();
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.deepEqual(invocations.map(invocation => store.getInvocation(invocation.id).status), ['interrupted', 'interrupted']);
+  assert.deepEqual(closed, []);
+  assert.deepEqual(created, []);
+  assert.deepEqual(resumed, []);
+});
+
+test('continued recovery observes the existing routine invocation without creating a new one', async () => {
+  const routine = store.createRoutine(definition({ mode: 'continue' }));
+  const { runner, sessions, created, resumed } = harness({ recoveryOutcome: () => ({ status: 'continued' }) });
+  const live = new FakeSession('recovered');
+  live.turnInProgress = true;
+  sessions.set(live.id, live);
+  const invocation = store.createInvocation({ routine, trigger: 'invoke', status: 'starting' });
+  store.updateInvocation(invocation.id, { status: 'running', sessionId: live.id });
+  await runner.recoverAfterRestart();
+  live.endTurn('reconciled external state');
+  assert.equal(store.getInvocation(invocation.id).status, 'completed');
+  assert.equal(store.countInvocations(routine.id), 1);
+  assert.deepEqual(created, []);
+  assert.deepEqual(resumed, []);
+  assert.deepEqual(live.prompts, []);
+});
+
 test('input larger than the cap is refused before anything is recorded', () => {
   const routine = store.createRoutine(definition());
   const { runner } = harness();

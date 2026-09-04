@@ -38,6 +38,23 @@ bridge validates it without changing its permissions. The bridge-owned default
 `~/.pi/dish/sockets/` is different: if an older release created it as `0755`,
 the bridge automatically tightens that owned directory to `0700`.
 
+## Recovery observations
+
+The bridge also maintains private, durable lifecycle observations under
+`~/.pi/dish/recovery/observations/`, independently of server availability.
+These are separate from the disposable live registry. Stream deltas do not
+write checkpoints; persisted message/run boundaries do. Pi's `agent_settled`
+is the whole-run completion boundary, not individual `turn_end` events.
+Unverifiable completion, compaction and generic shutdown retain uncertainty.
+
+The server owns recovery policy, exclusions and delivery attempts in separate
+control files. Loading a session alone preserves its previous observation so
+restoration cannot erase evidence of interrupted work. A new run or shutdown
+updates it. RPC fallback yields observation ownership to a recording bridge;
+parent-owned OMP subagents never become independent recovery candidates.
+See [Session recovery](../../README.md#session-recovery) for configuration and
+the manual-review boundaries. Recovery does not configure host autostart.
+
 ## What crosses the bridge
 
 | Call | Web rendering | Notes |

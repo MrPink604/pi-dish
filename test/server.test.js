@@ -2452,7 +2452,8 @@ test('server-global telemetry settings preserve unrelated fields and validate bu
   fs.writeFileSync(settingsFile, JSON.stringify({ keep: 'yes' }));
 
   const saved = await put('/api/settings', { monthlyBudgetUsd: 25.5 });
-  assert.deepEqual(saved, { status: 200, body: { monthlyBudgetUsd: 25.5, savedFilters: [] } });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.monthlyBudgetUsd, 25.5);
   assert.deepEqual(await get('/api/settings'), saved);
   assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).keep, 'yes');
 
@@ -2460,7 +2461,7 @@ test('server-global telemetry settings preserve unrelated fields and validate bu
     assert.equal((await put('/api/settings', { monthlyBudgetUsd: value })).status, 400);
   }
   const cleared = await put('/api/settings', { monthlyBudgetUsd: null });
-  assert.deepEqual(cleared.body, { monthlyBudgetUsd: null, savedFilters: [] });
+  assert.equal(cleared.body.monthlyBudgetUsd, null);
   assert.equal('monthlyBudgetUsd' in JSON.parse(fs.readFileSync(settingsFile, 'utf8')), false);
 });
 
@@ -2469,7 +2470,9 @@ test('saved filters persist server-globally and update independently of the budg
   await put('/api/settings', { monthlyBudgetUsd: 10 });
   const filters = [{ name: 'No subagents', query: '-name:subagent' }, { name: 'This week', query: 'since:7d' }];
   const saved = await put('/api/settings', { savedFilters: filters });
-  assert.deepEqual(saved, { status: 200, body: { monthlyBudgetUsd: 10, savedFilters: filters } });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.monthlyBudgetUsd, 10);
+  assert.deepEqual(saved.body.savedFilters, filters);
   assert.deepEqual((await get('/api/settings')).body.savedFilters, filters);
   // A budget-only PUT must not clobber the filters (and vice versa).
   await put('/api/settings', { monthlyBudgetUsd: null });
@@ -2601,6 +2604,22 @@ test('POST /api/stt reports an upstream failure and validates its own body', asy
     restore();
     await new Promise(r => upstream.close(r));
   }
+});
+
+test('recovery mode and exclusions are partial host settings with validated values', async () => {
+  await put('/api/settings', { monthlyBudgetUsd: 20, recoveryMode: 'continue' });
+  await put('/api/settings', { monthlyBudgetUsd: 30 });
+  const settings = await get('/api/settings');
+  assert.equal(settings.body.recoveryMode, 'continue');
+  assert.equal(settings.body.monthlyBudgetUsd, 30);
+  assert.equal((await put('/api/settings', { recoveryMode: 'replay', monthlyBudgetUsd: 100 })).status, 400);
+  assert.equal((await get('/api/settings')).body.monthlyBudgetUsd, 30);
+  assert.equal((await get('/api/recovery')).body.mode, 'continue');
+  assert.equal((await get('/api/host')).body.capabilities.recovery, true);
+  assert.equal((await put(`/api/sessions/${SESSION_ID}/recovery`, { excluded: 'yes' })).status, 400);
+  assert.deepEqual((await put(`/api/sessions/${SESSION_ID}/recovery`, { excluded: true })).body, { excluded: true });
+  assert.deepEqual((await put(`/api/sessions/${SESSION_ID}/recovery`, { excluded: false })).body, { excluded: false });
+  await put('/api/settings', { recoveryMode: 'off', monthlyBudgetUsd: null });
 });
 
 test('POST endpoints validate input and reject inactive sessions', async () => {

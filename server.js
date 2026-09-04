@@ -43,7 +43,7 @@ const {
   readSessionTailEntry,
   decodeDirToCwd,
 } = require('./lib/session-files');
-const { discoverSessionCandidates, discoverHarnessSessions, findSessionCandidate, discoverSubsessionCandidates } = require('./lib/session-discovery');
+const { discoverSessionCandidates, discoverHarnessSessions, findSessionCandidate, discoverSubsessionCandidates, readSessionHeader } = require('./lib/session-discovery');
 const sessionIndex = require('./lib/session-index');
 const { encodeSessionKey, resolveSessionRoute, canonicalSessionId, VERSION: SESSION_KEY_VERSION } = require('./lib/session-key');
 const { getHarness, listHarnesses, resolveLaunchSpec } = require('./lib/harnesses');
@@ -52,6 +52,8 @@ const { inspectProcessAncestry } = require('./lib/process-identity');
 const sessionProvenance = require('./lib/session-provenance');
 const routinesStore = require('./lib/routines');
 const { createRoutineRunner } = require('./lib/routine-runner');
+const recoveryStore = require('./lib/session-recovery');
+const { createRecoveryRunner, recoveryMode } = require('./lib/recovery-runner');
 const skillsLib = require('./lib/skills');
 const {
   isModelEnabled, extractTextContent, THINKING_LEVEL_NAMES,
@@ -223,7 +225,7 @@ function hostCapabilities() {
   const caps = {
     sessions: true, search: true, usage: true, spawns: true,
     shares: true, pages: true, comments: true, skills: true, harnesses: true,
-    resolve: true, docs: true, routines: true,
+    resolve: true, docs: true, routines: true, recovery: true,
   };
   if (terminal.isTerminalEnabled()) caps.terminal = true;
   if (tmux.isTmuxAvailable()) caps.tmux = true;
@@ -2419,11 +2421,12 @@ function sanitizeSavedFilters(value) {
 // An allowlist, not a redaction: credential-bearing blocks (`remotes`, the
 // `stt` endpoint + key, `allowedOrigins`) are deliberately file-level config
 // and never travel to a client, in either direction — PUT below writes only
-// the two keys it names, so an `stt` key in a request body is ignored.
+// allowlisted keys, so an `stt` key in a request body is ignored.
 function settingsForClient(settings = readDishSettings()) {
   return {
     monthlyBudgetUsd: settings.monthlyBudgetUsd ?? null,
     savedFilters: sanitizeSavedFilters(settings.savedFilters) || [],
+    recoveryMode: recoveryMode(settings.recoveryMode),
   };
 }
 
@@ -2442,6 +2445,12 @@ app.put('/api/settings', (req, res) => {
     const filters = sanitizeSavedFilters(body.savedFilters);
     if (!filters) return res.status(400).json({ error: 'savedFilters must be up to 50 { name, query } entries with unique non-empty names (≤60 chars) and queries (≤500 chars)' });
     if (filters.length === 0) delete settings.savedFilters; else settings.savedFilters = filters;
+  }
+  if ('recoveryMode' in body) {
+    if (!['off', 'restore', 'continue'].includes(body.recoveryMode)) {
+      return res.status(400).json({ error: 'recoveryMode must be off, restore, or continue' });
+    }
+    settings.recoveryMode = body.recoveryMode;
   }
   try {
     fs.mkdirSync(path.dirname(DISH_SETTINGS_FILE), { recursive: true });
@@ -4468,7 +4477,7 @@ app.post('/api/sessions/:id/abort', async (req, res) => {
 // than growing a second, subtly different close path.
 const closeResult = (status, body) => ({ status, body });
 
-async function closeSessionById(sessionId) {
+async function performSessionClose(sessionId) {
   const route = routeIdentity(sessionId);
   if (!route) return closeResult(400, { error: 'Invalid session ID' });
   const descriptor = getHarness(route.harnessId);
@@ -4722,6 +4731,39 @@ async function closeSessionById(sessionId) {
     await new Promise((r) => setTimeout(r, 150));
   }
   return closeResult(500, { error: `pi did not exit within ${Math.round(timeoutMs / 1000)}s — it may be stuck; check the process directly` });
+}
+
+const closeFlights = new Map();
+const restartFlights = new Set();
+async function closeSessionById(sessionId) {
+  const identity = routeIdentity(sessionId);
+  if (!identity) return closeResult(400, { error: 'Invalid session ID' });
+  const id = routeSessionId(identity.harnessId, identity.nativeSessionId);
+  if (restartFlights.has(id)) return closeResult(409, { error: 'The session is being restarted.' });
+  if (closeFlights.has(id)) return closeFlights.get(id);
+  const flight = Promise.resolve().then(async () => {
+    let previous;
+    try {
+      previous = recoveryStore.getControl(identity.harnessId, identity.nativeSessionId);
+      // Persist intent before any signal or pane action; a crash must not turn
+      // an explicitly closed session into a recovery candidate.
+      recoveryStore.patchControl(identity.harnessId, identity.nativeSessionId, { closed: true });
+      const result = await performSessionClose(id);
+      if (result.status >= 400) {
+        recoveryStore.patchControl(identity.harnessId, identity.nativeSessionId, { closed: previous.closed });
+      }
+      return result;
+    } catch (error) {
+      if (previous) {
+        try { recoveryStore.patchControl(identity.harnessId, identity.nativeSessionId, { closed: previous.closed }); }
+        catch (rollbackError) { console.error(`Recovery close-intent rollback failed: ${rollbackError.message}`); }
+      }
+      return closeResult(500, { error: error.message });
+    }
+  });
+  closeFlights.set(id, flight);
+  try { return await flight; }
+  finally { if (closeFlights.get(id) === flight) closeFlights.delete(id); }
 }
 
 app.post('/api/sessions/:id/close', async (req, res) => {
@@ -5705,8 +5747,9 @@ function activeSessionClearsQuarantine(sessionId) {
   return true;
 }
 
-async function launchResumedSession({ descriptor, sessionFile, cwd, name, target, model }) {
+async function launchResumedSession({ descriptor, sessionFile, cwd, name, target, model, thinking }) {
   const args = descriptor.argv.resume({ file: sessionFile, model });
+  if (thinking && ['pi', 'omp'].includes(descriptor.id)) args.push('--thinking', thinking);
   if (target && target.type === 'tmux') {
     try {
       const id = await spawnHarnessInTmux({ descriptor, target, args, cwd, name });
@@ -5735,149 +5778,254 @@ async function launchResumedSession({ descriptor, sessionFile, cwd, name, target
     throw err;
   }
   const rpc = await resumeRPCSession(sessionFile, cwd || process.env.HOME);
+  if (model && formatModelRef(rpc.state?.model) !== model) {
+    const parsed = parseModelId(model);
+    if (!parsed?.provider || !parsed?.id) throw new Error('Saved model must include its provider');
+    await rpc.setModel(parsed.provider, parsed.id);
+  }
+  if (thinking && rpc.state?.thinkingLevel !== thinking) await rpc.setThinkingLevel(thinking);
   return { id: rpc.id };
 }
 
-// Resume an inactive session. Default: the same headless dispatch as /new
-// (hidden tmux when available, else an RPC `pi --mode rpc --session <path>`
-// child); with a tmux `target`, `pi --session <path>` in that window instead.
-app.post('/api/sessions/:id/resume', async (req, res) => {
-  const requestedId = req.params.id;
-  const model = req.body?.model;
+function resumeError(status, message) {
+  return Object.assign(new Error(message), { status });
+}
+
+function assertNoConflictingWriter(sessionId, sessionFile) {
+  if (restartFlights.has(sessionId)) throw resumeError(409, 'The session is being restarted; refusing another writer.');
+  for (const entry of listRegisteredSessions()) {
+    const identity = registryIdentity(entry);
+    const sameId = identity && routeSessionId(identity.harnessId, identity.nativeSessionId) === sessionId;
+    let sameFile = false;
+    try { sameFile = entry.sessionFile && fs.realpathSync(entry.sessionFile) === sessionFile; } catch {}
+    if (sameId || sameFile) {
+      throw resumeError(409, 'A live or conflicting bridge claims this transcript; refusing to start another writer.');
+    }
+  }
+  const identity = routeIdentity(sessionId);
+  if (!identity) return;
+  const boot = recoveryStore.bootId();
+  const control = recoveryStore.getControl(identity.harnessId, identity.nativeSessionId);
+  const launch = control.attempt?.launch;
+  if (launch && (!boot || !launch.bootId || launch.bootId === boot)
+      && (launch.uncertain || processIdentityAlive(launch))) {
+    throw resumeError(409, 'A previous recovery launch may still own this transcript; refusing another writer.');
+  }
+  const observation = recoveryStore.readRecord(identity.harnessId, identity.nativeSessionId);
+  if (observation && (!boot || !observation.bootId || observation.bootId === boot)
+      && processIdentityAlive({ pid: observation.pid, startTime: observation.startTime })) {
+    throw resumeError(409, 'The observed process is still alive without a reachable bridge; refusing another writer.');
+  }
+}
+
+// All callers share the complete guard sequence, including its asynchronous
+// validation/cleanup phase. Lock before the first await, not just the launch.
+async function resumeSessionById(requestedId, { model, target, recovery = null } = {}) {
+  const requestedRoute = routeIdentity(requestedId);
+  if (requestedRoute && restartFlights.has(routeSessionId(requestedRoute.harnessId, requestedRoute.nativeSessionId))) {
+    throw resumeError(409, 'The session is being restarted; no second writer was launched.');
+  }
   if (model !== undefined && (typeof model !== 'string' || !model.trim())) {
-    return res.status(400).json({ error: 'Model must be a non-empty string' });
+    throw resumeError(400, 'Model must be a non-empty string');
   }
-
+  invalidateRegistryCache();
   if (activeSessionClearsQuarantine(requestedId)) {
-    return res.json({ success: true, id: requestedId, alreadyActive: true });
+    return { success: true, id: requestedId, alreadyActive: true };
   }
-
-  const sessionSource = findSessionSource(requestedId);
-  if (!sessionSource) return res.status(404).json({ error: 'Session file not found' });
+  const sessionSource = recovery ? validateRecoveryRecord(recovery) : findSessionSource(requestedId);
+  if (!sessionSource) throw resumeError(404, 'Session file not found');
   const descriptor = getHarness(sessionSource.harnessId);
-  if (model && descriptor.id !== 'omp') {
-    return res.status(400).json({ error: 'Resume model overrides are currently supported only for Oh My Pi sessions.' });
+  if (model && descriptor.id !== 'omp' && !recovery) {
+    throw resumeError(400, 'Resume model overrides are currently supported only for Oh My Pi sessions.');
   }
   let sessionFile;
-  try {
-    sessionFile = fs.realpathSync(sessionSource.file);
-  } catch {
-    return res.status(404).json({ error: 'Session file not found' });
-  }
+  try { sessionFile = fs.realpathSync(sessionSource.file); }
+  catch { throw resumeError(404, 'Session file not found'); }
   const sessionId = routeSessionId(sessionSource.harnessId, sessionSource.nativeSessionId);
-
-  // The route id may be a partial historical match; liveness belongs to the
-  // canonical JSONL basename, so check it again before creating a flight.
-  invalidateRegistryCache();
-  if (activeSessionClearsQuarantine(sessionId)) {
-    return res.json({ success: true, id: sessionId, alreadyActive: true });
-  }
-
-  // A subagent's JSONL belongs to the live session that runs it (see
-  // liveSubsessionCandidates). Resuming it would put a second harness process
-  // on a file the parent keeps appending to — the one refusal the
-  // capabilities flag alone cannot enforce, since a client may be stale.
-  if (liveSubsessionCandidates(getActiveSessions()).some(candidate =>
-    apiIdForCandidate(candidate) === sessionId)) {
-    return res.status(409).json({
-      error: 'This session is a subagent still loaded in its parent session; its parent owns the transcript. Close or finish the parent session before resuming it.',
-    });
-  }
-
-  const uncertainExplicit = uncertainExplicitResumes.get(sessionFile);
-  if (uncertainExplicit) {
-    const state = await tmux.paneProcessState(
-      uncertainExplicit.socket,
-      uncertainExplicit.paneId,
-      { knownProcesses: uncertainExplicit.knownProcesses },
-    );
-    if (!state.paneExists && !state.knownProcesses.length) {
-      if (uncertainExplicitResumes.get(sessionFile) === uncertainExplicit) {
-        uncertainExplicitResumes.delete(sessionFile);
-      }
-    } else {
-      uncertainExplicitResumes.set(sessionFile, {
-        ...uncertainExplicit,
-        knownProcesses: state.knownProcesses,
-      });
-      // Registration can race the inspection above. Refresh once more before
-      // refusing a retry whose original pane has just become the active writer.
-      invalidateRegistryCache();
-      if (activeSessionClearsQuarantine(sessionId)) {
-        return res.json({ success: true, id: sessionId, alreadyActive: true });
-      }
-      return res.status(409).json({
-        error: `A previous explicit tmux resume timed out and its pane/process is still present (${uncertainExplicit.paneId}); refusing to launch another process against this session file. Inspect or close that tmux pane before retrying.`,
-      });
-    }
-  }
-
-  const failedCleanup = failedResumeCleanups.get(sessionFile);
-  if (failedCleanup) {
-    try {
-      await tmux.killPaneAndWait(failedCleanup.socket, failedCleanup.paneId, {
-        knownProcesses: failedCleanup.knownProcesses,
-        timeout: failedCleanup.timeout,
-      });
-      if (failedResumeCleanups.get(sessionFile) === failedCleanup) failedResumeCleanups.delete(sessionFile);
-      invalidateRegistryCache();
-    } catch (cleanupError) {
-      if (Array.isArray(cleanupError.remainingProcesses)) {
-        failedResumeCleanups.set(sessionFile, {
-          ...failedCleanup,
-          knownProcesses: cleanupError.remainingProcesses,
-        });
-      }
-      return res.status(500).json({
-        error: `Previous hidden tmux cleanup is still incomplete; refusing to resume another process against this session file: ${cleanupError.message}`,
-      });
-    }
-  }
-
+  if (restartFlights.has(sessionId)) throw resumeError(409, 'The session is being restarted.');
   const existingFlight = resumeFlights.get(sessionFile);
   if (existingFlight) {
-    try {
-      const result = await existingFlight;
-      // A launch promise settling is not itself proof that the process stayed
-      // alive. Refresh bridge state after waiting before reporting the shared
-      // first caller's target as active.
-      invalidateRegistryCache();
-      if (!sessionIsActive(result.id)) {
-        const err = new Error('The concurrent resume completed, but the session is no longer active');
-        err.status = 500;
-        throw err;
-      }
-      return res.json({ success: true, id: result.id, alreadyActive: true, sharedResume: true });
-    } catch (e) {
-      console.error('Concurrent session resume failed:', e);
-      return res.status(e.status || 500).json({ error: e.message });
+    const result = await existingFlight;
+    invalidateRegistryCache();
+    if (!sessionIsActive(result.id)) {
+      throw resumeError(500, 'The concurrent resume completed, but the session is no longer active');
     }
+    return { success: true, id: result.id, alreadyActive: true, sharedResume: true };
   }
 
-  let cwd = readSessionCwd({ ...sessionSource, file: sessionFile });
-  if (cwd && !fs.existsSync(cwd)) {
-    console.warn(`Session cwd ${cwd} doesn't exist, using HOME`);
-    cwd = process.env.HOME;
-  }
-
-  try {
-    await validateHarnessPilotSelection(descriptor, { model, cwd });
-  } catch (e) {
-    return res.status(e.status || 500).json({ error: e.message });
-  }
-
-  const name = sessionSource.name || null;
-  const flight = launchResumedSession({ descriptor, sessionFile, cwd, name, target: req.body?.target, model });
+  const flight = Promise.resolve().then(async () => {
+    invalidateRegistryCache();
+    if (activeSessionClearsQuarantine(sessionId)) return { success: true, id: sessionId, alreadyActive: true };
+    assertNoConflictingWriter(sessionId, sessionFile);
+    if (liveSubsessionCandidates(getActiveSessions()).some(candidate => apiIdForCandidate(candidate) === sessionId)) {
+      throw resumeError(409, 'This session is a subagent still loaded in its parent session; its parent owns the transcript. Close or finish the parent session before resuming it.');
+    }
+    const uncertainExplicit = uncertainExplicitResumes.get(sessionFile);
+    if (uncertainExplicit) {
+      const state = await tmux.paneProcessState(uncertainExplicit.socket, uncertainExplicit.paneId,
+        { knownProcesses: uncertainExplicit.knownProcesses });
+      if (!state.paneExists && !state.knownProcesses.length) {
+        if (uncertainExplicitResumes.get(sessionFile) === uncertainExplicit) uncertainExplicitResumes.delete(sessionFile);
+      } else {
+        uncertainExplicitResumes.set(sessionFile, { ...uncertainExplicit, knownProcesses: state.knownProcesses });
+        invalidateRegistryCache();
+        if (activeSessionClearsQuarantine(sessionId)) return { success: true, id: sessionId, alreadyActive: true };
+        throw resumeError(409, `A previous explicit tmux resume timed out and its pane/process is still present (${uncertainExplicit.paneId}); refusing to launch another process against this session file. Inspect or close that tmux pane before retrying.`);
+      }
+    }
+    const failedCleanup = failedResumeCleanups.get(sessionFile);
+    if (failedCleanup) {
+      try {
+        await tmux.killPaneAndWait(failedCleanup.socket, failedCleanup.paneId, {
+          knownProcesses: failedCleanup.knownProcesses, timeout: failedCleanup.timeout,
+        });
+        if (failedResumeCleanups.get(sessionFile) === failedCleanup) failedResumeCleanups.delete(sessionFile);
+        invalidateRegistryCache();
+      } catch (cleanupError) {
+        if (Array.isArray(cleanupError.remainingProcesses)) {
+          failedResumeCleanups.set(sessionFile, { ...failedCleanup, knownProcesses: cleanupError.remainingProcesses });
+        }
+        throw resumeError(500, `Previous hidden tmux cleanup is still incomplete; refusing to resume another process against this session file: ${cleanupError.message}`);
+      }
+    }
+    let cwd = recovery ? recovery.cwd : readSessionCwd({ ...sessionSource, file: sessionFile });
+    if (!recovery && cwd && !fs.existsSync(cwd)) {
+      console.warn(`Session cwd ${cwd} doesn't exist, using HOME`);
+      cwd = process.env.HOME;
+    }
+    const thinking = recovery && ['pi', 'omp'].includes(descriptor.id) ? recovery.thinkingLevel : undefined;
+    await validateHarnessPilotSelection(descriptor, { model, thinking, cwd });
+    // The model command/cleanup can take seconds. Re-prove liveness and saved
+    // source after those waits, immediately before the only launch call.
+    invalidateRegistryCache();
+    if (activeSessionClearsQuarantine(sessionId)) return { success: true, id: sessionId, alreadyActive: true };
+    assertNoConflictingWriter(sessionId, sessionFile);
+    if (recovery) {
+      validateRecoveryRecord(recovery);
+      const control = recoveryStore.getControl(recovery.harnessId, recovery.nativeSessionId);
+      if (control.closed || control.excluded) throw resumeError(409, 'Recovery was closed or excluded before launch.');
+      const attempt = control.attempt;
+      recoveryStore.patchControl(recovery.harnessId, recovery.nativeSessionId, {
+        attempt: { ...attempt, launch: { bootId: recoveryStore.bootId(), uncertain: true } },
+      });
+    }
+    if (closeFlights.has(sessionId)) throw resumeError(409, 'The session is being closed; retry after close completes.');
+    const result = await launchResumedSession({
+      descriptor, sessionFile, cwd, name: recovery?.name || sessionSource.name || null, target, model, thinking,
+    });
+    if (result.id !== sessionId) throw resumeError(409, 'The resumed harness registered a different session identity; inspect the running process.');
+    if (!recovery) recoveryStore.patchControl(descriptor.id, sessionSource.nativeSessionId, { closed: false });
+    return { success: true, id: result.id };
+  });
   resumeFlights.set(sessionFile, flight);
-  try {
-    const result = await flight;
-    res.json({ success: true, id: result.id });
-  } catch (e) {
-    console.error('Failed to resume session:', e);
-    res.status(e.status || 500).json({ error: e.message });
-  } finally {
-    if (resumeFlights.get(sessionFile) === flight) resumeFlights.delete(sessionFile);
+  try { return await flight; }
+  finally { if (resumeFlights.get(sessionFile) === flight) resumeFlights.delete(sessionFile); }
+}
+
+app.post('/api/sessions/:id/resume', async (req, res) => {
+  try { res.json(await resumeSessionById(req.params.id, { model: req.body?.model, target: req.body?.target })); }
+  catch (error) { res.status(error.status || 500).json({ error: error.message }); }
+});
+
+function validateRecoveryRecord(record) {
+  const descriptor = getHarness(record.harnessId);
+  const id = routeSessionId(record.harnessId, record.nativeSessionId);
+  if (!descriptor || !descriptor.argv?.resume || !routeIdentity(id)) throw resumeError(409, 'The saved harness or session identity is unsupported.');
+  if (!path.isAbsolute(record.sessionFile || '') || !path.isAbsolute(record.cwd || '')) {
+    throw resumeError(409, 'Recovery requires an absolute saved transcript and original working directory.');
   }
+  let file, root;
+  try {
+    file = fs.realpathSync(record.sessionFile);
+    root = fs.realpathSync(descriptor.rootPath());
+    if (!fs.statSync(record.cwd).isDirectory()) throw new Error('not a directory');
+    if (!fs.statSync(file).isFile()) throw new Error('not a file');
+  } catch { throw resumeError(409, 'The saved transcript or original working directory is missing or unreadable; recovery does not fall back to HOME.'); }
+  if (!file.startsWith(root + path.sep)) throw resumeError(409, 'The saved transcript is outside this harness session store.');
+  const discovery = findSessionCandidate(descriptor.rootPath(), record.nativeSessionId, { descriptor, allowPartial: false });
+  const source = discovery.candidate;
+  if (discovery.truncated || !source || fs.realpathSync(source.file) !== file || !readSessionHeader(file, descriptor.profileId)) {
+    throw resumeError(409, 'The exact saved transcript identity cannot be verified unambiguously.');
+  }
+  if (descriptor.nestedSubsessions && (source.parentSession || fs.existsSync(`${path.dirname(file)}.jsonl`))) {
+    throw resumeError(409, 'This is a parent-owned subagent transcript; automatic recovery never resurrects subagents.');
+  }
+  const boot = recoveryStore.bootId();
+  if (!boot || !record.bootId || !record.startTime || !record.pid || !record.instanceId || !record.checkpoint) {
+    throw resumeError(409, 'The saved process identity or transcript checkpoint is incomplete; inspect this session manually.');
+  }
+  if (boot === record.bootId && processIdentityAlive({ pid: record.pid, startTime: record.startTime })) {
+    throw resumeError(409, 'The saved process is still alive without a verified bridge; refusing another transcript writer.');
+  }
+  const launch = recoveryStore.getControl(record.harnessId, record.nativeSessionId).attempt?.launch;
+  if (launch?.bootId === boot && (launch.uncertain || processIdentityAlive(launch))) {
+    throw resumeError(409, 'A previous recovery launch may still own this transcript; inspect its process before retrying.');
+  }
+  return source;
+}
+
+async function probeRecoveryLive(record) {
+  const id = routeSessionId(record.harnessId, record.nativeSessionId);
+  invalidateRegistryCache();
+  const session = await getLiveSession(id);
+  if (!session) {
+    assertNoConflictingWriter(id, record.sessionFile);
+    return null;
+  }
+  const file = session.sessionFile || session.state?.sessionFile || getRegisteredSession(id)?.sessionFile;
+  if (!file || fs.realpathSync(file) !== fs.realpathSync(record.sessionFile)) {
+    throw resumeError(409, 'The live session claims a different transcript; historical recovery is refused.');
+  }
+  if (session instanceof BridgeSession) await session.waitForHello({ timeout: 2000 });
+  return session;
+}
+
+const recoveryRunner = createRecoveryRunner({
+  store: recoveryStore,
+  getMode: () => readDishSettings().recoveryMode,
+  routeId: record => routeSessionId(record.harnessId, record.nativeSessionId),
+  probeLive: probeRecoveryLive,
+  validateRecord: validateRecoveryRecord,
+  restore: async record => {
+    const model = ['pi', 'omp'].includes(record.harnessId) ? formatModelRef(record.model) || undefined : undefined;
+    const result = await resumeSessionById(routeSessionId(record.harnessId, record.nativeSessionId), { model, recovery: record });
+    const session = await probeRecoveryLive(record);
+    const identity = processIdentity(session instanceof BridgeSession ? getRegisteredSession(result.id)?.pid : session?.proc?.pid);
+    const control = recoveryStore.getControl(record.harnessId, record.nativeSessionId);
+    recoveryStore.patchControl(record.harnessId, record.nativeSessionId, {
+      attempt: { ...control.attempt, launch: { bootId: recoveryStore.bootId(), uncertain: !identity, ...identity } },
+    });
+    return result;
+  },
+  continueSession: async (record, session, message) => {
+    if (!['pi', 'omp'].includes(record.harnessId) || !liveSessionSupports(session, 'prompt')) {
+      throw resumeError(409, 'The live harness does not support verified recovery prompts.');
+    }
+    if (session.turnInProgress || session.compacting) throw resumeError(409, 'The session started working or compacting before recovery delivery; no prompt was sent.');
+    await session.prompt(message);
+  },
+});
+
+app.get('/api/recovery', (_req, res) => {
+  try { res.json(recoveryRunner.report()); }
+  catch (error) { res.status(500).json({ error: error.message }); }
+});
+app.put('/api/sessions/:id/recovery', (req, res) => {
+  if (typeof req.body?.excluded !== 'boolean') return res.status(400).json({ error: 'excluded must be a boolean' });
+  const identity = routeIdentity(req.params.id);
+  if (!identity || !getHarness(identity.harnessId)) return res.status(400).json({ error: 'Invalid session ID' });
+  if (!recoveryStore.readRecord(identity.harnessId, identity.nativeSessionId)
+      && !getRegisteredSession(req.params.id) && !getRPCSession(req.params.id)?.alive
+      && !findSessionSource(req.params.id, { exact: true })) return res.status(404).json({ error: 'Session not found' });
+  try {
+    const control = recoveryStore.patchControl(identity.harnessId, identity.nativeSessionId, { excluded: req.body.excluded });
+    res.json({ excluded: control.excluded });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+app.post('/api/recovery/retry', async (req, res) => {
+  if (typeof req.body?.id !== 'string') return res.status(400).json({ error: 'id is required' });
+  try { res.json(await recoveryRunner.retry(req.body.id)); }
+  catch (error) { res.status(error.status || 500).json({ error: error.message }); }
 });
 
 // Restart is intentionally narrower than close. RPC children are relaunched
@@ -5894,6 +6042,19 @@ app.post('/api/sessions/:id/restart', async (req, res) => {
   if (!descriptor || descriptor.closeMode === 'client-only' || descriptor.closeMode === 'unsupported') {
     return res.status(409).json({ error: `${descriptor?.label || route.harnessId} does not support agent restart.` });
   }
+  if (restartFlights.has(sessionId) || closeFlights.has(sessionId)) {
+    return res.status(409).json({ error: 'The session is already being restarted or closed.' });
+  }
+  const activeFile = getRPCSession(sessionId)?.sessionFile || getRegisteredSession(sessionId)?.sessionFile;
+  if (activeFile) {
+    try {
+      if (resumeFlights.has(fs.realpathSync(activeFile))) {
+        return res.status(409).json({ error: 'The session is still being resumed.' });
+      }
+    } catch {}
+  }
+  restartFlights.add(sessionId);
+  try {
 
   const rpc = getRPCSession(sessionId);
   if (rpc?.alive) {
@@ -5905,7 +6066,8 @@ app.post('/api/sessions/:id/restart', async (req, res) => {
       return res.status(409).json({ error: 'The active RPC session has no resumable session file.' });
     }
     const cwd = rpc.cwd && fs.existsSync(rpc.cwd) ? rpc.cwd : process.env.HOME;
-    const closed = await closeSessionById(sessionId);
+    // Restart preserves open intent; only the explicit close route retires it.
+    const closed = await performSessionClose(sessionId);
     if (closed.status !== 200) return res.status(closed.status).json(closed.body);
     try {
       const replacement = await resumeRPCSession(sessionFile, cwd);
@@ -6002,6 +6164,9 @@ app.post('/api/sessions/:id/restart', async (req, res) => {
       ...(replaced ? { stopped: true } : {}),
     });
   }
+  } finally {
+    restartFlights.delete(sessionId);
+  }
 });
 
 // =========================================================================
@@ -6015,35 +6180,6 @@ app.post('/api/sessions/:id/restart', async (req, res) => {
 // through the same helpers the session routes use — nothing here knows what a
 // harness is beyond its descriptor and the live session's capabilities.
 
-// Resume a session through the same headless dispatch POST /resume takes
-// (hidden tmux when available, else an RPC child), sharing its in-flight map
-// so a routine and a user resuming the same JSONL cannot start two writers.
-async function resumeSessionHeadless(sessionId) {
-  if (sessionIsActive(sessionId)) return { id: sessionId };
-  const sessionSource = findSessionSource(sessionId);
-  if (!sessionSource) throw new Error('Session file not found');
-  const descriptor = getHarness(sessionSource.harnessId);
-  if (!descriptor) throw new Error(`Unknown harness: ${sessionSource.harnessId}`);
-  const sessionFile = fs.realpathSync(sessionSource.file);
-  const routeId = routeSessionId(sessionSource.harnessId, sessionSource.nativeSessionId);
-  invalidateRegistryCache();
-  if (sessionIsActive(routeId)) return { id: routeId };
-
-  const existing = resumeFlights.get(sessionFile);
-  if (existing) return existing;
-
-  let cwd = readSessionCwd({ ...sessionSource, file: sessionFile });
-  if (cwd && !fs.existsSync(cwd)) cwd = process.env.HOME;
-  const flight = launchResumedSession({
-    descriptor, sessionFile, cwd, name: sessionSource.name || null, target: undefined, model: undefined,
-  });
-  resumeFlights.set(sessionFile, flight);
-  try {
-    return await flight;
-  } finally {
-    if (resumeFlights.get(sessionFile) === flight) resumeFlights.delete(sessionFile);
-  }
-}
 
 function escapeInvocationAttr(value) {
   return String(value).replace(/[&<>"]/g, (ch) =>
@@ -6069,12 +6205,13 @@ function composeRoutinePrompt(routine, invocation) {
 const routineRunner = createRoutineRunner({
   store: routinesStore,
   createSession: ({ harness, model, thinking, cwd }) => createSession({ harness, model, thinking, cwd }),
-  resumeSession: resumeSessionHeadless,
+  resumeSession: sessionId => resumeSessionById(sessionId),
   getLiveSession,
   closeSession: closeSessionById,
   composePrompt: composeRoutinePrompt,
   isTurnInProgress: (sess) => !!sess?.turnInProgress,
   supports: liveSessionSupports,
+  recoveryOutcome: sessionId => recoveryRunner.outcome(sessionId),
 });
 
 function expandRoutineCwd(cwd) {
@@ -6522,12 +6659,19 @@ const server = app.listen(PORT, HOST, () => {
   skillsLib.getSkillFilePaths({ cwds: knownWorkspaceCwds() })
     .then(paths => sessionIndex.setSkillRoots(paths))
     .catch(() => {});
-  // Routines: reconcile the ledger against what actually survived the restart
-  // (nothing is caught up — a missed minute stays missed), then arm the
-  // unref'd 30s scheduler tick.
-  routineRunner.recoverAfterRestart()
-    .catch((e) => console.error(`Routine restart recovery failed: ${e.message}`));
-  routineRunner.start();
+  // Recovery runs on every configured server startup, with no browser or boot
+  // service dependency. Reconcile routine-owned invocations only afterwards:
+  // a restored idle session is interrupted work, not a completed oneShot.
+  recoveryRunner.start()
+    .then(() => routineRunner.recoverAfterRestart())
+    .then(() => { if (!recoveryStopped) routineRunner.start(); })
+    .catch((e) => console.error(`Session restart recovery failed: ${e.message}`));
+});
+let recoveryStopped = false;
+server.on('close', () => {
+  recoveryStopped = true;
+  recoveryRunner.stop();
+  routineRunner.stop();
 });
 
 // Optional dedicated share listener: a second minimal app that serves only

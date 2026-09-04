@@ -4650,6 +4650,28 @@ body.standalone-file-page {
 .main.usage-open .empty-state,
 .main.usage-open .session-view { display: none !important; }
 
+/* Host-local recovery outcomes share the existing takeover shell. */
+.recovery-view { display: none; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.main.recovery-open .recovery-view { display: flex; }
+.main.recovery-open .empty-state,
+.main.recovery-open .session-view { display: none !important; }
+.recovery-preferences[hidden] { display: none; }
+.recovery-preferences { flex-direction: column; align-items: stretch; gap: 12px; }
+.recovery-controls { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.recovery-controls select { max-width: 100%; }
+.recovery-host-bar { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.recovery-host-bar select { min-width: 0; max-width: 100%; }
+.recovery-note { font-size: 12px; line-height: 1.6; color: var(--text-muted); }
+.recovery-note strong { color: var(--text); }
+.recovery-row { padding: 16px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.recovery-row-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 16px; }
+.recovery-status { color: var(--accent); font-size: 12px; }
+.recovery-meta { margin-top: 4px; font-size: 11px; font-family: var(--font-mono); color: var(--text-muted); }
+.recovery-reason { margin-top: 8px; font-size: 13px; }
+.recovery-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.recovery-row .recovery-actions { margin-top: 10px; }
+.recovery-actions label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+
 /* --- Advanced search (main-pane takeover, .main.search-open) --------------
    Same shell as the usage view; the query input owns the header. Facets are
    plain controls that rewrite the query text — no separate facet state. */

@@ -521,6 +521,21 @@
           <div class="routines-detail" id="routinesDetail"></div>
         </div>
       </div>
+      <div class="recovery-view" id="recoveryView">
+        <div class="usage-view-header">
+          <button class="menu-btn" onclick="toggleSidebar()" aria-label="Open session list">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M3 12h18M3 6h18M3 18h18"/>
+            </svg>
+          </button>
+          <span class="usage-view-title">Recovery</span>
+          <span class="usage-view-note">Host-local session outcomes</span>
+          <button class="btn-small" onclick="loadRecoveryView()" title="Refresh recovery report">Refresh</button>
+          <button class="btn-icon" onclick="closeRecoveryView()" title="Close (Esc)" aria-label="Close recovery report">✕</button>
+        </div>
+        <div class="recovery-host-bar"><label for="recoveryReportHost">Host</label><select class="ns-select" id="recoveryReportHost"></select></div>
+        <div class="usage-view-body" id="recoveryViewBody"></div>
+      </div>
     </main>
   </div>
 

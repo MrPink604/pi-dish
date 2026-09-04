@@ -2406,6 +2406,7 @@ function showPendingSessionView(spawnId) {
   closeNewSessionView(); // the provisional pane replaces the takeover
   closeSkillsView();
   closeRoutinesView();
+  closeRecoveryView();
   stashCurrentTranscript();
   setCurrentSession(null);
   currentSessionSpawnId = spawnId;
@@ -2520,6 +2521,7 @@ async function selectSession(id, { forceTranscriptReload = false, host = null } 
   closeNewSessionView();
   closeSkillsView();
   closeRoutinesView();
+  closeRecoveryView();
   stashCurrentTranscript();
   if (forceTranscriptReload) transcriptCache.delete(id);
   if (!setCurrentSession(id, host)) return;
@@ -3329,6 +3331,7 @@ async function renderPreferences() {
     <select id="responseMetadataMode"><option value="hidden">Hidden</option><option value="compact">Compact</option><option value="performance">Performance</option><option value="performance-cost">Performance + estimated cost</option></select></div>
     <label class="preference-row toggle-row"><span><strong>Show estimated session spend in desktop header</strong><small>Stored on this device; off by default.</small></span><input id="showSessionSpend" type="checkbox"></label>
     <div class="preference-row"><label for="monthlyBudget"><strong>Monthly budget warning (USD)</strong><small>Server-global: applies to every device. Estimates use each session harness's catalog pricing; blank clears.</small></label><div class="budget-save"><input id="monthlyBudget" type="number" min="0.01" step="0.01" placeholder="No warning"><button class="btn-small" id="saveBudget">Save</button></div><small id="budgetStatus"></small></div>
+    <div id="recoveryPreferences" class="preference-row recovery-preferences" hidden></div>
     <div class="preference-row"><label><strong>Hosts</strong><small>Added hosts are stored on this device (with their token). Entries this server publishes — and this host itself — are read-only.</small></label>
       <div class="hosts-list" id="hostsList"></div>
       <div class="host-add">
@@ -3373,6 +3376,7 @@ async function renderPreferences() {
   };
   renderSavedFiltersList();
   renderHostsSection();
+  renderRecoveryPreferences();
   body.querySelector('#addHostBtn').addEventListener('click', addHostFromForm);
   body.querySelector('#addHostBase').addEventListener('keydown', (e) => { if (e.key === 'Enter') addHostFromForm(); });
   try {
@@ -3394,6 +3398,185 @@ async function renderPreferences() {
     try { const r = await apiFetch(null, '/api/settings', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ monthlyBudgetUsd:value }) }); const d = await r.json(); if (!r.ok) throw new Error(d.error); status.textContent = 'Saved for all devices.'; }
     catch (e) { status.textContent = 'Save failed: ' + e.message; }
   });
+}
+
+// Recovery is host-global; retain host entries, not ids that could fall back
+// to self if a remote disappears while a request is in flight.
+let recoveryHostId = null;
+let recoveryViewSeq = 0;
+
+function recoveryCapableHosts() {
+  return effectiveHosts().filter(host => hostSupportsCapability(host, 'recovery', appConfig));
+}
+
+function selectRecoveryHost(hosts, preferredId) {
+  return hosts.find(host => host.hostId === preferredId) ||
+    hosts.find(host => host.hostId === recoveryHostId) || hosts[0];
+}
+
+function recoveryHostOptions(hosts) {
+  return hosts.map(host => `<option value="${escapeHtml(host.hostId || '')}">${escapeHtml(hostDisplayLabel(host))}</option>`).join('');
+}
+
+async function renderRecoveryPreferences() {
+  const section = document.getElementById('recoveryPreferences');
+  if (!section) return;
+  await hostFleetReady;
+  if (!section.isConnected) return;
+  const hosts = recoveryCapableHosts();
+  if (!hosts.length) return;
+  section.hidden = false;
+  section.innerHTML = `<label for="recoveryMode"><strong>Session recovery</strong><small>Saved on the selected host for all devices. Runs whenever its server is launched; no boot-service setup is required. Restore opens sessions idle. Continue may incur model cost and perform external actions; tool execution is not exactly-once.</small></label>
+    <div class="recovery-controls">
+      <label for="recoverySettingsHost">Host</label><select id="recoverySettingsHost">${recoveryHostOptions(hosts)}</select>
+      <select id="recoveryMode" disabled aria-label="Recovery mode"><option value="off">Off</option><option value="restore">Restore open sessions</option><option value="continue">Restore and continue interrupted work</option></select>
+      <div class="recovery-actions"><button class="btn-small" id="saveRecoveryMode" disabled>Save</button><button class="btn-small" id="openRecoveryReport">Recovery report</button></div>
+      <small id="recoverySettingsStatus" role="status"></small>
+    </div>`;
+  const hostSelect = section.querySelector('#recoverySettingsHost');
+  const mode = section.querySelector('#recoveryMode');
+  const save = section.querySelector('#saveRecoveryMode');
+  const status = section.querySelector('#recoverySettingsStatus');
+  hostSelect.value = selectRecoveryHost(hosts, currentSession?.host)?.hostId || '';
+  let seq = 0;
+  const selectedHost = () => hosts.find(host => (host.hostId || '') === hostSelect.value);
+  const owns = request => section.isConnected && seq === request &&
+    document.getElementById('settingsModal').style.display !== 'none';
+  const load = async () => {
+    const request = ++seq, host = selectedHost();
+    recoveryHostId = host.hostId;
+    mode.disabled = save.disabled = true;
+    status.textContent = 'Loading host setting…';
+    try {
+      const res = await apiFetch(host, '/api/settings', { timeoutMs: 20000 });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (!owns(request)) return;
+      mode.value = data.recoveryMode || 'off';
+      mode.disabled = save.disabled = false;
+      status.textContent = '';
+    } catch (error) {
+      if (owns(request)) status.textContent = 'Could not load: ' + error.message;
+    }
+  };
+  hostSelect.addEventListener('change', load);
+  section.querySelector('#openRecoveryReport').addEventListener('click', () => openRecoveryView(selectedHost().hostId));
+  save.addEventListener('click', async () => {
+    const host = selectedHost(), value = mode.value;
+    if (value === 'continue' && !confirm('On future server launches, continue interrupted work automatically? This may incur cost and repeat external actions. Tool execution is not exactly-once.')) return;
+    const request = ++seq;
+    mode.disabled = save.disabled = true;
+    status.textContent = 'Saving…';
+    try {
+      await apiSend(host, '/api/settings', { recoveryMode: value }, 'PUT');
+      if (owns(request)) status.textContent = 'Saved on ' + hostDisplayLabel(host) + ' for future server launches.';
+    } catch (error) {
+      if (owns(request)) status.textContent = 'Save failed: ' + error.message;
+    } finally {
+      if (owns(request)) mode.disabled = save.disabled = false;
+    }
+  });
+  load();
+}
+
+function isRecoveryViewOpen() {
+  return document.querySelector('.main').classList.contains('recovery-open');
+}
+
+function closeRecoveryView() {
+  recoveryViewSeq += 1;
+  document.querySelector('.main').classList.remove('recovery-open');
+}
+
+function openRecoveryView(hostId) {
+  const hosts = recoveryCapableHosts();
+  if (!hosts.length) return;
+  closeSettingsModal();
+  closeSidebar();
+  closeUsageView();
+  closeSearchView();
+  closeNewSessionView();
+  closeSkillsView();
+  closeRoutinesView();
+  closeDiffView();
+  closeFileView();
+  document.querySelector('.main').classList.add('recovery-open');
+  const hostSelect = document.getElementById('recoveryReportHost');
+  hostSelect.innerHTML = recoveryHostOptions(hosts);
+  hostSelect.value = selectRecoveryHost(hosts, hostId)?.hostId || '';
+  hostSelect.onchange = () => loadRecoveryView();
+  loadRecoveryView();
+}
+
+async function loadRecoveryView() {
+  const seq = ++recoveryViewSeq;
+  const hostSelect = document.getElementById('recoveryReportHost');
+  const host = recoveryCapableHosts().find(entry => (entry.hostId || '') === hostSelect.value);
+  const body = document.getElementById('recoveryViewBody');
+  const owns = () => seq === recoveryViewSeq && isRecoveryViewOpen();
+  if (!host) {
+    body.textContent = 'This host no longer advertises recovery support.';
+    return;
+  }
+  recoveryHostId = host.hostId;
+  body.innerHTML = '<div class="usage-state" role="status">Loading recovery report…</div>';
+  try {
+    const res = await apiFetch(host, '/api/recovery', { timeoutMs: 20000 });
+    const report = await res.json();
+    if (!res.ok) throw new Error(report.error || `HTTP ${res.status}`);
+    if (!owns()) return;
+    const modes = { off: 'Off', restore: 'Restore open sessions', continue: 'Restore and continue interrupted work' };
+    body.innerHTML = `<p class="recovery-note"><strong>${escapeHtml(modes[report.mode] || report.mode)}</strong> on ${escapeHtml(hostDisplayLabel(host))}. Recovery runs when this host’s server starts, not when this report opens.</p>
+      <p class="recovery-note">Needs review means recovery could not safely decide what happened. Inspect the transcript and any external actions before proceeding. Restore only reopens the session idle; it does not replay an uncertain prompt. Excluding a session prevents automatic recovery, without closing it.</p>
+      <div id="recoveryActionStatus" role="status" class="recovery-note"></div>
+      <div class="recovery-list"></div>`;
+    const list = body.querySelector('.recovery-list');
+    const records = Array.isArray(report.sessions) ? report.sessions : [];
+    if (report.truncated) {
+      const note = document.createElement('p');
+      note.className = 'recovery-note';
+      note.textContent = `Showing the newest ${records.length} of ${report.totalRecords} recovery records. Older observations are not shown.`;
+      list.before(note);
+    }
+    if (!records.length) list.innerHTML = '<div class="usage-state">No recorded sessions on this host yet.</div>';
+    for (const record of records) {
+      const row = document.createElement('article');
+      row.className = 'recovery-row';
+      row.dataset.sessionId = record.id;
+      const canRestore = ['needs-review', 'failed'].includes(record.status);
+      row.innerHTML = `<div class="recovery-row-heading"><strong>${escapeHtml(record.name || record.id)}</strong><span class="recovery-status">${escapeHtml(record.status)}</span></div>
+        <div class="recovery-meta">${escapeHtml(record.harnessId || '')} · ${escapeHtml(record.cwd || 'Working directory unavailable')}</div>
+        <div class="recovery-reason">${escapeHtml(record.reason || '')}</div>
+        <div class="recovery-meta">${escapeHtml(record.id)}${record.updatedAt ? ' · ' + escapeHtml(new Date(record.updatedAt).toLocaleString()) : ''}</div>
+        <div class="recovery-actions"><label><input type="checkbox" class="recovery-excluded"${record.excluded ? ' checked' : ''}> Exclude from automatic recovery</label>${canRestore ? '<button class="btn-small recovery-restore">Restore idle</button>' : ''}</div>`;
+      list.appendChild(row);
+      const action = async (path, payload, method) => {
+        const controls = body.querySelectorAll('input, button');
+        controls.forEach(control => { control.disabled = true; });
+        const status = body.querySelector('#recoveryActionStatus');
+        status.textContent = 'Updating ' + (record.name || record.id) + '…';
+        try {
+          await apiSend(host, path, payload, method);
+          if (owns()) await loadRecoveryView();
+        } catch (error) {
+          if (!owns()) return;
+          status.textContent = 'Action failed: ' + error.message + '. Refresh the report to check the host’s outcome before trying again.';
+          row.querySelector('.recovery-excluded').checked = !!record.excluded;
+          controls.forEach(control => { control.disabled = false; });
+        }
+      };
+      row.querySelector('.recovery-excluded').addEventListener('change', event => {
+        action(`/api/sessions/${encodeURIComponent(record.id)}/recovery`, { excluded: event.target.checked }, 'PUT');
+      });
+      row.querySelector('.recovery-restore')?.addEventListener('click', () => {
+        if (confirm('Restore ' + (record.name || record.id) + ' idle? This will not replay uncertain work. Review its transcript before sending another prompt.')) {
+          action('/api/recovery/retry', { id: record.id }, 'POST');
+        }
+      });
+    }
+  } catch (error) {
+    if (owns()) body.textContent = 'Could not load recovery report: ' + error.message;
+  }
 }
 
 // --- Hosts (settings section, not a takeover: it is a short list plus one
@@ -3566,6 +3749,7 @@ function openSearchView(initialQuery) {
   closeNewSessionView();
   closeSkillsView();
   closeRoutinesView();
+  closeRecoveryView();
   if (typeof initialQuery === 'string') searchViewQuery = initialQuery;
   const input = document.getElementById('searchViewInput');
   input.value = searchViewQuery;
@@ -3863,6 +4047,7 @@ function openSkillsView() {
   closeSearchView();
   closeNewSessionView();
   closeRoutinesView();
+  closeRecoveryView();
   document.querySelector('.main').classList.add('skills-open');
   skillsDetailPath = null;
   loadSkillsDirectory();
@@ -4257,6 +4442,7 @@ function openUsageView() {
   closeNewSessionView();
   closeSkillsView();
   closeRoutinesView();
+  closeRecoveryView();
   if (isUsageViewOpen()) return;
   document.querySelector('.main').classList.add('usage-open');
   loadUsageView();
@@ -9062,6 +9248,7 @@ function openNewSessionView(opts = {}) {
   closeSearchView();
   closeSkillsView();
   closeRoutinesView();
+  closeRecoveryView();
   document.querySelector('.main').classList.add('new-session-open');
   nsPendingDraft = opts.draft || null;
 
@@ -11132,6 +11319,8 @@ document.addEventListener('keydown', function(e) {
     e.preventDefault(); closeStatsModal();
   } else if (document.getElementById('artifactsModal').style.display !== 'none') {
     e.preventDefault(); closeArtifactsModal();
+  } else if (isRecoveryViewOpen()) {
+    e.preventDefault(); closeRecoveryView();
   } else if (isRoutinesViewOpen()) {
     e.preventDefault(); routinesViewEscape();
   } else if (isSkillsViewOpen()) {
@@ -11924,6 +12113,7 @@ function openRoutinesView() {
   closeSearchView();
   closeNewSessionView();
   closeSkillsView();
+  closeRecoveryView();
   if (isRoutinesViewOpen()) return;
   document.querySelector('.main').classList.add('routines-open');
   // Re-opening restores the last selection (and its poll); with none, the

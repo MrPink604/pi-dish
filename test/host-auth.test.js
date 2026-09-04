@@ -316,7 +316,9 @@ test('settings responses never carry the token or the origin allowlist', async (
   const { base } = await boot(home);
 
   const settings = await (await fetch(`${base}/api/settings`, authed(TOKEN))).json();
-  assert.deepEqual(Object.keys(settings).sort(), ['monthlyBudgetUsd', 'savedFilters']);
+  assert.equal(Object.hasOwn(settings, 'token'), false);
+  assert.equal(Object.hasOwn(settings, 'allowedOrigins'), false);
+  assert.equal(Object.hasOwn(settings, 'remotes'), false);
 
   // A settings write must not drop the file-level fleet/auth config.
   const put = await fetch(`${base}/api/settings`, authed(TOKEN, {

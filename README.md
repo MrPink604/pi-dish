@@ -324,6 +324,46 @@ how much you'll enjoy them:
   `chrome://flags/#unsafely-treat-insecure-origin-as-secure` and relaunch.
 - iOS Safari has no override at all. It needs https.
 
+### Session recovery
+
+Settings → **Session recovery** configures the selected host, for all devices:
+
+- **Off** (default): no automatic restoration.
+- **Restore open sessions**: reopen eligible saved sessions without prompting.
+- **Restore and continue interrupted work**: also send one visible recovery
+  prompt for a verifiably interrupted Pi/OMP run. It asks the agent to inspect
+  the saved conversation, files and external state before continuing.
+
+Recovery runs whenever the server starts, including a manual launch hours
+after a reboot. It does not install or prescribe a boot service, and does not
+need a browser connected. Already-running sessions are attached, not duplicated.
+Normal headless dispatch applies: hidden tmux when available, Pi RPC fallback
+otherwise; OMP and Prime require tmux. Original workspace and transcript must
+still exist; automatic recovery never silently switches to HOME.
+
+**Recovery report** opens a full-pane view of restored, continued, failed and
+needs-review outcomes. Exclude individual sessions there, or use **Restore
+idle** after inspecting a failed/uncertain session. That action never replays
+an uncertain prompt. Closing a session through pi-dish retires its recovery
+intent; merely stopping the server does not.
+
+Update/reload the bridge in each agent to start collecting recovery evidence.
+Its private `~/.pi/dish/recovery/` observations survive registry cleanup and
+are written even while the server is absent. Separate control records preserve
+exclusions, explicit closes and recovery attempts. Writes synchronize the saved
+transcript/checkpoint and use atomic, synchronized file replacement. Old
+sessions without observations cannot be reconstructed retroactively.
+
+This is best-effort recovery, **not exactly-once tool execution**. Unsaved
+memory, subprocesses and parent-owned subagents are not restored. An unresolved
+tool call, changed transcript, compaction, uncertain prompt delivery or generic
+harness shutdown requires review: the latter does not distinguish a TUI quit,
+reload and OS shutdown. A launch whose outcome is unknown is not repeated
+against the same transcript while its process might survive. Routine sessions
+keep their existing invocation; missed scheduled ticks are not caught up.
+Continuation inspection is capped at 64 MiB/200,000 transcript entries;
+reports/startup candidates at 5,000, with truncation reported explicitly.
+
 ### Optional: the mood extension
 
 You may notice the web UI has special-cased support for a `set_mood` tool
@@ -341,12 +381,19 @@ ln -s "$PWD/extensions/mood.ts" ~/.pi/agent/extensions/mood.ts
 
 ### Upgrading
 
-After pulling changes, run `./install.sh`, restart the server, and `/reload`
-running Pi or OMP sessions so they load the updated bridge. A tmux-managed
-server can be reconciled with `scripts/pi-dish-tmux.sh restart`; it uses the
+After pulling changes, run `./install.sh` and restart the server. `/reload`
+running Pi sessions to load the updated bridge; restart OMP processes for
+bridge code changes (OMP's `/reload` reloads runtime state, not extension
+modules). A tmux-managed server can be reconciled with
+`scripts/pi-dish-tmux.sh restart`; it uses the
 `pi-dish` session and `server` window by default.
 The manager always targets the default tmux server, even when invoked from
 inside a pane attached to another socket.
+
+Keep the bundled Pi SDK aligned with the installed host Pi; the integration
+canary checks this. Pi 0.85.0's SDK imports `@earendil-works/pi-server` without
+declaring that runtime dependency, so pi-dish explicitly includes the matching
+server package as well.
 
 ### Peer session control
 

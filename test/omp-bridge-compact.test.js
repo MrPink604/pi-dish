@@ -118,8 +118,10 @@ test('OMP bridge projects the native ask tool through extension UI', async () =>
       }],
     };
     await session.respondExtensionUI(request.id, { value: answer });
-    await waitFor(() => fs.existsSync(host.askResultFile));
-    assert.deepEqual(JSON.parse(fs.readFileSync(host.askResultFile, 'utf8')), answer);
+    const received = await waitFor(() => {
+      try { return JSON.parse(fs.readFileSync(host.askResultFile, 'utf8')); } catch { return null; }
+    });
+    assert.deepEqual(received, answer);
   } finally {
     session.close();
     await host.close();

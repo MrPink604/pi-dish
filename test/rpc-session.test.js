@@ -438,6 +438,13 @@ test('overlapping RPC resumes launch exactly one process for the JSONL', async (
 
     const closed = await post(`/api/sessions/${id}/close`, {});
     assert.equal(closed.status, 200, JSON.stringify(closed.body));
+    const recovery = (await get('/api/recovery')).body.sessions.find(row => row.id === id);
+    assert.equal(recovery.status, 'closed', 'manual close durably prevents automatic recovery');
+    const resumed = await post(`/api/sessions/${id}/resume`, {});
+    assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
+    assert.notEqual((await get('/api/recovery')).body.sessions.find(row => row.id === id).status, 'closed',
+      'an explicit successful resume clears the prior close intent');
+    await post(`/api/sessions/${id}/close`, {});
   } finally {
     process.env.PI_DISH_PI_COMMAND = saved;
   }
@@ -521,14 +528,28 @@ test('POST /restart replaces an RPC child without changing backend or session id
   assert.equal(before?.capabilities.restart, true);
   assert.ok(before?.pid);
 
-  const restarted = await post(`/api/sessions/${id}/restart`, {});
-  assert.equal(restarted.status, 200, JSON.stringify(restarted.body));
-  assert.deepEqual(restarted.body, { success: true, id, placement: 'rpc' });
+  const exited = new Promise(resolve => getRPCSession(id).on('exit', resolve));
+  const previousDelay = process.env.PI_FIXTURE_STARTUP_DELAY_MS;
+  process.env.PI_FIXTURE_STARTUP_DELAY_MS = '400';
+  try {
+    const restarting = post(`/api/sessions/${id}/restart`, {});
+    await exited;
+    const concurrentResume = await post(`/api/sessions/${id}/resume`, {});
+    assert.equal(concurrentResume.status, 409, 'resume cannot start a second writer during replacement');
+    const restarted = await restarting;
+    assert.equal(restarted.status, 200, JSON.stringify(restarted.body));
+    assert.deepEqual(restarted.body, { success: true, id, placement: 'rpc' });
+  } finally {
+    if (previousDelay === undefined) delete process.env.PI_FIXTURE_STARTUP_DELAY_MS;
+    else process.env.PI_FIXTURE_STARTUP_DELAY_MS = previousDelay;
+  }
 
   const after = await findActive(id);
   assert.ok(after, 'same session is active after restart');
   assert.notEqual(after.pid, before.pid, 'restart launched a fresh process');
   assert.equal(getRPCSession(id)?.proc.pid, after.pid, 'replacement remains managed by the RPC backend');
+  const recovery = (await get('/api/recovery')).body.sessions.find(row => row.id === id);
+  assert.ok(recovery && recovery.status !== 'closed', 'restart preserves recovery intent');
 
   const closed = await post(`/api/sessions/${id}/close`, {});
   assert.equal(closed.status, 200, JSON.stringify(closed.body));

@@ -405,6 +405,43 @@ client-only lifecycle does not advertise it either. The stats-modal Restart
 button keys off explicit `restart: true` so mixed-version fleet hosts do not
 show an unsupported control.
 
+## Session recovery (lib/session-recovery.js, lib/recovery-runner.js)
+
+Host setting `recoveryMode` is `off` (default), `restore`, or `continue`.
+Recovery runs on server startup, independently of a browser or any prescribed
+boot service. The bridge writes lifecycle observations even while the server
+is absent; bridge-less RPC children are observed by their parent server.
+`~/.pi/dish/recovery/{observations,controls}/` separates bridge-owned evidence
+from server-owned exclusions, close intent and recovery attempts. Both use
+hashed session identities and private, fsync + rename + directory-fsync writes.
+The live registry remains disposable and must never become the recovery store.
+
+`createSessionObserver` checkpoints saved transcript bytes, not streaming
+deltas. Pi's `message_end` extension callback precedes its JSONL append, so
+defer the checkpoint; `turn_end` is not whole-run completion. Pi uses
+`agent_settled`; uncertain completion/compaction stays uncertain. Initialization
+preserves previous observations until meaningful lifecycle activity occurs.
+Generic shutdown cannot distinguish quit, reload and OS shutdown: report it as
+needs-review. Explicit API close persists closed intent before signalling;
+restart uses the proved close operation without retiring that intent.
+
+`resumeSessionById` is the shared guarded path for API, routines and recovery.
+`restartFlights`, `closeFlights` and `resumeFlights` exclude competing writers.
+Fresh live identity beats a saved PID; boot IDs scope historical process
+authority. Recovery never falls back to HOME when the original cwd is missing,
+never launches parent-owned subagents, and persists launch/delivery intent
+before acting. Ambiguous delivery is never automatically repeated. A verified
+idle session can restore across repeated losses without sending any prompt.
+Routine reconciliation runs after recovery and preserves the invocation rather
+than spawning a second run or treating restored-idle work as completed.
+
+Settings exposes host-scoped controls and a separate `.main.recovery-open`
+report takeover. `/api/recovery` reports outcomes and truncation;
+`PUT /api/sessions/:id/recovery` sets exclusion, and `/api/recovery/retry`
+explicitly restores idle, never replays an uncertain prompt. Continuation is
+best effort, not exactly-once side effects; changed/unverifiable transcripts
+and unresolved tool results require review. See README for operational limits.
+
 ## tmux spawning (lib/tmux.js)
 
 `POST /api/sessions/new` and `/resume` dispatch target-less ("headless")
@@ -1504,7 +1541,7 @@ returns null — unconfigured — unless the url parses as http(s), defaults the
 model to `whisper-1`, and drops a `language` that isn't BCP-47-ish rather
 than forwarding a typo into an upstream 400. Like the token and
 `allowedOrigins`, it is **file-level only**: `settingsForClient` never carries
-it and `PUT /api/settings` writes only the two keys it names, so an `stt` key
+it and `PUT /api/settings` writes only its allowlisted keys, so an `stt` key
 in a body is ignored. What is advertised is a boolean —
 `hostCapabilities().stt` and `/api/config`'s `stt` — so a fleet where exactly
 one host has a whisper box behind it shows the button everywhere and relays
