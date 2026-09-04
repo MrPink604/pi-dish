@@ -5079,43 +5079,95 @@ async function finishSessionClose(sessionId) {
   if (currentSession?.id === sessionId) selectSession(sessionId);
 }
 
-// Close-session section of the stats modal (active sessions only): SIGTERM
-// the pi process via POST /close. The transcript stays on disk and resumable —
-// only the running process goes away, so this is the phone-side equivalent of
-// Ctrl+D in the TUI.
+// Session-process controls in the stats modal. Restart is deliberately a
+// close followed by the normal resume path: the old process fully exits before
+// the replacement reads startup-only CLI code and settings, while the existing
+// close guards and resume single-flight protections remain authoritative.
 function renderCloseSection(sessionId, generation) {
   if (!ownsStatsModal(sessionId, generation)) return;
   const el = document.getElementById('statsClose');
   if (!el) return;
   const session = findSession(sessionId);
   if (!session?.isActive || !sessionSupports(session, 'close')) { el.remove(); return; }
+  const host = sessionHostId(sessionId);
   const detach = session.harnessId === 'prime' || session.closeMode === 'client-only';
   el.innerHTML = '<div class="stats-share-title">Session process</div>' +
     '<div class="stats-share-body">' +
+    (detach ? '' : '<button type="button" class="btn-small" id="sessionRestartBtn">Restart agent</button>') +
     `<button type="button" class="btn-small btn-danger" id="sessionCloseBtn">${detach ? 'Detach client' : 'Close session'}</button>` +
-    `<div class="stats-share-hint">${detach ? 'Disconnects this client. The logical agent continues independently.' : 'Shuts down this agent process. The transcript is kept and can be resumed.'}</div>` +
+    `<div class="stats-share-hint">${detach
+      ? 'Disconnects this client. The logical agent continues independently.'
+      : 'Restart stops and resumes the agent so CLI and startup-only setting changes take effect. The transcript is kept.'}</div>` +
     '</div>';
-  el.querySelector('#sessionCloseBtn').addEventListener('click', async () => {
+
+  const closeBtn = el.querySelector('#sessionCloseBtn');
+  closeBtn.addEventListener('click', async () => {
     if (!ownsStatsModal(sessionId, generation)) return;
     const warn = detach
       ? 'Detach this client? The logical agent will continue independently.'
-      : findSession(sessionId)?.turnInProgress
+      : findSession(sessionId, host)?.turnInProgress
         ? 'A turn is in progress — closing will abort it. Close this session?'
         : 'Close this session? The agent process will shut down (the transcript stays resumable).';
     if (!confirm(warn)) return;
-    const btn = el.querySelector('#sessionCloseBtn');
-    btn.disabled = true;
-    btn.textContent = detach ? 'Detaching…' : 'Closing…';
+    closeBtn.disabled = true;
+    closeBtn.textContent = detach ? 'Detaching…' : 'Closing…';
     try {
-      await apiSend(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/close`);
+      await apiSend(host, `/api/sessions/${encodeURIComponent(sessionId)}/close`);
       if (!ownsStatsModal(sessionId, generation)) return;
       closeStatsModal();
       await finishSessionClose(sessionId);
     } catch (e) {
       if (!ownsStatsModal(sessionId, generation)) return;
-      btn.disabled = false;
-      btn.textContent = detach ? 'Detach client' : 'Close session';
+      closeBtn.disabled = false;
+      closeBtn.textContent = detach ? 'Detach client' : 'Close session';
       setStatus('Close failed: ' + e.message, 'error');
+    }
+  });
+
+  const restartBtn = el.querySelector('#sessionRestartBtn');
+  if (!restartBtn) return;
+  restartBtn.addEventListener('click', async () => {
+    if (!ownsStatsModal(sessionId, generation)) return;
+    const active = findSession(sessionId, host);
+    const warn = active?.turnInProgress
+      ? 'A turn is in progress — restarting will abort it. Restart this agent?'
+      : 'Restart this agent? The current process will stop, then the session will resume with updated CLI code and startup settings.';
+    if (!confirm(warn)) return;
+
+    const target = savedResumeTarget();
+    const wasSelected = currentSession?.id === sessionId && currentSession?.host === host;
+    closeBtn.disabled = true;
+    restartBtn.disabled = true;
+    restartBtn.textContent = 'Restarting…';
+    setStatus(target ? 'Restarting agent in tmux…' : 'Restarting agent…', 'working');
+    let stopped = false;
+    try {
+      await apiSend(host, `/api/sessions/${encodeURIComponent(sessionId)}/close`);
+      stopped = true;
+      const data = await apiSend(host, `/api/sessions/${encodeURIComponent(sessionId)}/resume`,
+        target ? { target } : {});
+      if (ownsStatsModal(sessionId, generation)) closeStatsModal();
+      setStatus('Agent restarted');
+      await refreshSessions();
+      if (wasSelected && currentSession?.id === sessionId && currentSession?.host === host) {
+        selectSession(data.id, { host });
+      }
+    } catch (e) {
+      if (stopped) {
+        if (ownsStatsModal(sessionId, generation)) closeStatsModal();
+        await loadSessions(undefined, { withPrevious: true });
+        if (wasSelected && currentSession?.id === sessionId && currentSession?.host === host) {
+          selectSession(sessionId, { host });
+        }
+        setStatus('Restart failed after shutdown: ' + e.message, 'error');
+      } else {
+        if (ownsStatsModal(sessionId, generation)) {
+          closeBtn.disabled = false;
+          restartBtn.disabled = false;
+          restartBtn.textContent = 'Restart agent';
+        }
+        setStatus('Restart failed: ' + e.message, 'error');
+      }
     }
   });
 }

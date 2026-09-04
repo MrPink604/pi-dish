@@ -3663,11 +3663,13 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // post-close list reload to settle before the real close section below.
     await desktop.waitForSelector(`${closeRowSel} .session-close-btn`, { state: 'attached', timeout: 5000 });
 
-    // 13. Close session: the stats modal shows where the session runs, and
-    // its danger button SIGTERMs the pi process, flipping the view to the
-    // inactive/resume state. A dummy child stands in for pi — the registry
-    // normally carries this process's own pid, which close must never get.
-    console.log('close session:');
+    // 13. Restart + close session: the stats modal shows where the session
+    // runs. Restart SIGTERMs the old process, resumes the same transcript with
+    // a fresh CLI process, and keeps the selected session active. A final
+    // close still flips the view to the inactive/resume state. A dummy child
+    // stands in for the original pi — the registry normally carries this
+    // process's own pid, which lifecycle controls must never get.
+    console.log('restart and close session:');
     const { spawn } = require('child_process');
     const dummy = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
     let dummySignal = null;
@@ -3677,7 +3679,8 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.click(`.session-item[data-id="${registryState.sessionId}"]`);
     await desktop.waitForSelector('.message.assistant');
     await desktop.click('#sessionContext');
-    await desktop.waitForSelector('#sessionCloseBtn', { timeout: 2000 });
+    await desktop.waitForSelector('#sessionRestartBtn', { timeout: 2000 });
+    check(true, 'stats modal offers Restart agent for a restartable session');
     const runtimeRow = await desktop.evaluate(() => {
       const row = [...document.querySelectorAll('#statsBody tr')]
         .find((tr) => tr.querySelector('.stats-key')?.textContent === 'Running in');
@@ -3685,12 +3688,33 @@ let remoteHost = null; // second pi-dish (multi-host section)
     });
     check(runtimeRow === `terminal · pid ${dummy.pid}`,
       `stats modal shows where the session runs (got ${JSON.stringify(runtimeRow)})`);
+
+    desktop.once('dialog', (d) => d.accept());
+    await desktop.click('#sessionRestartBtn');
+    await dummyGone;
+    check(dummySignal === 'SIGTERM', `restart gracefully stopped the old agent (got ${dummySignal})`);
+    await desktop.waitForFunction((id) =>
+      currentSession?.id === id && currentSession.isActive &&
+      document.getElementById('resumeBar').style.display === 'none',
+      registryState.sessionId, { timeout: 15000 });
+    check(true, 'restart resumed the same transcript and kept it selected');
+
+    // The replacement is the fixture CLI launched through the normal resume
+    // path, proving restart does not merely reload the browser or bridge.
+    await desktop.click('#sessionContext');
+    await desktop.waitForSelector('#sessionRestartBtn', { timeout: 5000 });
+    const restartedRuntime = await desktop.evaluate(() => {
+      const row = [...document.querySelectorAll('#statsBody tr')]
+        .find((tr) => tr.querySelector('.stats-key')?.textContent === 'Running in');
+      return row ? row.querySelector('.stats-val').textContent : null;
+    });
+    check(/^pi-dish server \(headless\) · pid \d+$/.test(restartedRuntime || ''),
+      `restart launched a fresh CLI process (got ${JSON.stringify(restartedRuntime)})`);
+
     desktop.once('dialog', (d) => d.accept());
     await desktop.click('#sessionCloseBtn');
     await desktop.waitForSelector('#resumeBar', { state: 'visible', timeout: 10000 });
     check(true, 'view flipped to the inactive/resume state after close');
-    await dummyGone;
-    check(dummySignal === 'SIGTERM', `pi process got a graceful SIGTERM (got ${dummySignal})`);
 
     // Stats remain useful after a session stops (and on devices where the
     // desktop context badge is hidden), so the read-only bar keeps them
