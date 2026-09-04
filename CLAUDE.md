@@ -393,6 +393,18 @@ and inherit the server's own `$TMUX`). Tests that assert runtime kinds pin
 row-level ✕ on live sidebar rows — both funnel post-close handling through
 `finishSessionClose` (list re-fetch + re-select flips the view to inactive).
 
+`POST /api/sessions/:id/restart` is narrower than close because it replaces a
+runtime placement, not just the proved agent process. RPC children restart as
+RPC children against the same JSONL. A tmux agent is restartable only when its
+spawn token, bridge claim, pane-root birth identity, and ancestry prove
+pi-dish owns that exact pane; `respawnPane()` then launches the descriptor's
+fresh resume argv/env in the same pane, preserving the tmux server, session,
+window, and pane while issuing new launch authority. Externally launched Pi
+sessions remain closeable but never advertise `capabilities.restart`; Prime's
+client-only lifecycle does not advertise it either. The stats-modal Restart
+button keys off explicit `restart: true` so mixed-version fleet hosts do not
+show an unsupported control.
+
 ## tmux spawning (lib/tmux.js)
 
 `POST /api/sessions/new` and `/resume` dispatch target-less ("headless")

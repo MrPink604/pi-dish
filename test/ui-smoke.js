@@ -3663,12 +3663,9 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // post-close list reload to settle before the real close section below.
     await desktop.waitForSelector(`${closeRowSel} .session-close-btn`, { state: 'attached', timeout: 5000 });
 
-    // 13. Restart + close session: the stats modal shows where the session
-    // runs. Restart SIGTERMs the old process, resumes the same transcript with
-    // a fresh CLI process, and keeps the selected session active. A final
-    // close still flips the view to the inactive/resume state. A dummy child
-    // stands in for the original pi — the registry normally carries this
-    // process's own pid, which lifecycle controls must never get.
+    // 13. Restart + close session. A bridge-registered Pi that pi-dish did
+    // not launch remains closeable by exact process identity, but does not get
+    // pane-replacement authority or a Restart button.
     console.log('restart and close session:');
     const { spawn } = require('child_process');
     const dummy = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
@@ -3679,8 +3676,9 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.click(`.session-item[data-id="${registryState.sessionId}"]`);
     await desktop.waitForSelector('.message.assistant');
     await desktop.click('#sessionContext');
-    await desktop.waitForSelector('#sessionRestartBtn', { timeout: 2000 });
-    check(true, 'stats modal offers Restart agent for a restartable session');
+    await desktop.waitForSelector('#sessionCloseBtn', { timeout: 2000 });
+    check(await desktop.locator('#sessionRestartBtn').count() === 0,
+      'externally launched Pi keeps Close but does not offer pane restart');
     const runtimeRow = await desktop.evaluate(() => {
       const row = [...document.querySelectorAll('#statsBody tr')]
         .find((tr) => tr.querySelector('.stats-key')?.textContent === 'Running in');
@@ -3688,33 +3686,57 @@ let remoteHost = null; // second pi-dish (multi-host section)
     });
     check(runtimeRow === `terminal · pid ${dummy.pid}`,
       `stats modal shows where the session runs (got ${JSON.stringify(runtimeRow)})`);
-
     desktop.once('dialog', (d) => d.accept());
-    await desktop.click('#sessionRestartBtn');
+    await desktop.click('#sessionCloseBtn');
+    await desktop.waitForSelector('#resumeBar', { state: 'visible', timeout: 10000 });
     await dummyGone;
-    check(dummySignal === 'SIGTERM', `restart gracefully stopped the old agent (got ${dummySignal})`);
-    await desktop.waitForFunction((id) =>
-      currentSession?.id === id && currentSession.isActive &&
-      document.getElementById('resumeBar').style.display === 'none',
-      registryState.sessionId, { timeout: 15000 });
-    check(true, 'restart resumed the same transcript and kept it selected');
+    check(dummySignal === 'SIGTERM', `close gracefully stopped the external agent (got ${dummySignal})`);
+    check(true, 'view flipped to the inactive/resume state after close');
 
-    // The replacement is the fixture CLI launched through the normal resume
-    // path, proving restart does not merely reload the browser or bridge.
+    // RPC sessions are pi-dish-owned. Restart must replace the managed child
+    // directly, retain the session id, and never divert into tmux.
+    const rpcRestartId = await desktop.evaluate(async (id) => {
+      await apiSend(selfHost.hostId, `/api/sessions/${encodeURIComponent(id)}/resume`);
+      await loadSessions(undefined, { withPrevious: true });
+      await selectSession(id, { host: selfHost.hostId });
+      return id;
+    }, BETA_ID);
+    await desktop.waitForFunction((id) => currentSession?.id === id && currentSession.isActive,
+      rpcRestartId, { timeout: 10000 });
     await desktop.click('#sessionContext');
     await desktop.waitForSelector('#sessionRestartBtn', { timeout: 5000 });
-    const restartedRuntime = await desktop.evaluate(() => {
+    check(true, 'pi-dish-owned RPC session offers Restart agent');
+    const beforeRestartRuntime = await desktop.evaluate(() => {
       const row = [...document.querySelectorAll('#statsBody tr')]
         .find((tr) => tr.querySelector('.stats-key')?.textContent === 'Running in');
       return row ? row.querySelector('.stats-val').textContent : null;
     });
-    check(/^pi-dish server \(headless\) · pid \d+$/.test(restartedRuntime || ''),
-      `restart launched a fresh CLI process (got ${JSON.stringify(restartedRuntime)})`);
+    const beforeRestartPid = Number((beforeRestartRuntime || '').match(/pid (\d+)$/)?.[1]);
+    check(/^pi-dish server \(headless\) · pid \d+$/.test(beforeRestartRuntime || ''),
+      `RPC restart starts from a managed child (got ${JSON.stringify(beforeRestartRuntime)})`);
+
+    desktop.once('dialog', (d) => d.accept());
+    await desktop.click('#sessionRestartBtn');
+    await desktop.waitForFunction((id) =>
+      currentSession?.id === id && currentSession.isActive &&
+      document.getElementById('statsModal').style.display === 'none',
+      rpcRestartId, { timeout: 15000 });
+    check(true, 'restart kept the same RPC transcript selected');
+
+    await desktop.click('#sessionContext');
+    await desktop.waitForSelector('#sessionRestartBtn', { timeout: 5000 });
+    const afterRestartRuntime = await desktop.evaluate(() => {
+      const row = [...document.querySelectorAll('#statsBody tr')]
+        .find((tr) => tr.querySelector('.stats-key')?.textContent === 'Running in');
+      return row ? row.querySelector('.stats-val').textContent : null;
+    });
+    const afterRestartPid = Number((afterRestartRuntime || '').match(/pid (\d+)$/)?.[1]);
+    check(afterRestartPid > 1 && afterRestartPid !== beforeRestartPid,
+      `restart replaced the RPC child in place (${beforeRestartPid} → ${afterRestartPid})`);
 
     desktop.once('dialog', (d) => d.accept());
     await desktop.click('#sessionCloseBtn');
     await desktop.waitForSelector('#resumeBar', { state: 'visible', timeout: 10000 });
-    check(true, 'view flipped to the inactive/resume state after close');
 
     // Stats remain useful after a session stops (and on devices where the
     // desktop context badge is hidden), so the read-only bar keeps them

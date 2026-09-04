@@ -5079,10 +5079,10 @@ async function finishSessionClose(sessionId) {
   if (currentSession?.id === sessionId) selectSession(sessionId);
 }
 
-// Session-process controls in the stats modal. Restart is deliberately a
-// close followed by the normal resume path: the old process fully exits before
-// the replacement reads startup-only CLI code and settings, while the existing
-// close guards and resume single-flight protections remain authoritative.
+// Session-process controls in the stats modal. Restart is advertised only for
+// a pi-dish-owned tmux pane or RPC child; the server replaces that exact
+// placement so startup-only CLI code/settings refresh without creating a new
+// tmux session or window.
 function renderCloseSection(sessionId, generation) {
   if (!ownsStatsModal(sessionId, generation)) return;
   const el = document.getElementById('statsClose');
@@ -5091,13 +5091,16 @@ function renderCloseSection(sessionId, generation) {
   if (!session?.isActive || !sessionSupports(session, 'close')) { el.remove(); return; }
   const host = sessionHostId(sessionId);
   const detach = session.harnessId === 'prime' || session.closeMode === 'client-only';
+  const restartable = session.capabilities?.restart === true;
   el.innerHTML = '<div class="stats-share-title">Session process</div>' +
     '<div class="stats-share-body">' +
-    (detach ? '' : '<button type="button" class="btn-small" id="sessionRestartBtn">Restart agent</button>') +
+    (restartable ? '<button type="button" class="btn-small" id="sessionRestartBtn">Restart agent</button>' : '') +
     `<button type="button" class="btn-small btn-danger" id="sessionCloseBtn">${detach ? 'Detach client' : 'Close session'}</button>` +
     `<div class="stats-share-hint">${detach
       ? 'Disconnects this client. The logical agent continues independently.'
-      : 'Restart stops and resumes the agent so CLI and startup-only setting changes take effect. The transcript is kept.'}</div>` +
+      : restartable
+        ? 'Restarts the agent in its current pi-dish-owned pane or RPC slot. The transcript is kept.'
+        : 'Shuts down this agent process. The transcript is kept and can be resumed.'}</div>` +
     '</div>';
 
   const closeBtn = el.querySelector('#sessionCloseBtn');
@@ -5134,18 +5137,13 @@ function renderCloseSection(sessionId, generation) {
       : 'Restart this agent? The current process will stop, then the session will resume with updated CLI code and startup settings.';
     if (!confirm(warn)) return;
 
-    const target = savedResumeTarget();
     const wasSelected = currentSession?.id === sessionId && currentSession?.host === host;
     closeBtn.disabled = true;
     restartBtn.disabled = true;
     restartBtn.textContent = 'Restarting…';
-    setStatus(target ? 'Restarting agent in tmux…' : 'Restarting agent…', 'working');
-    let stopped = false;
+    setStatus('Restarting agent…', 'working');
     try {
-      await apiSend(host, `/api/sessions/${encodeURIComponent(sessionId)}/close`);
-      stopped = true;
-      const data = await apiSend(host, `/api/sessions/${encodeURIComponent(sessionId)}/resume`,
-        target ? { target } : {});
+      const data = await apiSend(host, `/api/sessions/${encodeURIComponent(sessionId)}/restart`);
       if (ownsStatsModal(sessionId, generation)) closeStatsModal();
       setStatus('Agent restarted');
       await refreshSessions();
@@ -5153,21 +5151,12 @@ function renderCloseSection(sessionId, generation) {
         selectSession(data.id, { host });
       }
     } catch (e) {
-      if (stopped) {
-        if (ownsStatsModal(sessionId, generation)) closeStatsModal();
-        await loadSessions(undefined, { withPrevious: true });
-        if (wasSelected && currentSession?.id === sessionId && currentSession?.host === host) {
-          selectSession(sessionId, { host });
-        }
-        setStatus('Restart failed after shutdown: ' + e.message, 'error');
-      } else {
-        if (ownsStatsModal(sessionId, generation)) {
-          closeBtn.disabled = false;
-          restartBtn.disabled = false;
-          restartBtn.textContent = 'Restart agent';
-        }
-        setStatus('Restart failed: ' + e.message, 'error');
+      if (ownsStatsModal(sessionId, generation)) closeStatsModal();
+      await loadSessions(undefined, { withPrevious: true });
+      if (wasSelected && currentSession?.id === sessionId && currentSession?.host === host) {
+        selectSession(sessionId, { host });
       }
+      setStatus('Restart failed: ' + e.message, 'error');
     }
   });
 }

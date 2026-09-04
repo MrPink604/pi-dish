@@ -759,10 +759,12 @@ function sessionIdentityFields(harnessId, nativeSessionId) {
   };
 }
 
-function sessionCapabilities(harnessId, bridgeCapabilities = {}, { active = false, conflicted = false, closeAllowed = false } = {}) {
+function sessionCapabilities(harnessId, bridgeCapabilities = {}, {
+  active = false, conflicted = false, closeAllowed = false, restartAllowed = false,
+} = {}) {
   if (conflicted) return Object.fromEntries([
     'prompt', 'steer', 'followUp', 'abort', 'compact', 'models', 'setModel', 'setThinking',
-    'rename', 'commands', 'queueCancel', 'tree', 'export', 'close', 'resume',
+    'rename', 'commands', 'queueCancel', 'tree', 'export', 'close', 'restart', 'resume',
   ].map(key => [key, false]));
   const pi = harnessId === 'pi';
   const closeMode = getHarness(harnessId)?.closeMode || 'unsupported';
@@ -789,6 +791,7 @@ function sessionCapabilities(harnessId, bridgeCapabilities = {}, { active = fals
     // recorded when it launched that client.
     close: active && (closeMode === 'logical'
       || ((closeMode === 'owned-pane' || closeMode === 'client-only') && closeAllowed)),
+    restart: active && restartAllowed,
     resume: !active,
   };
 }
@@ -1309,6 +1312,8 @@ function getActiveSessions(registered = listRegisteredSessions()) {
     const identityFields = sessionIdentityFields(identity.harnessId, identity.nativeSessionId);
     const ownedSpawn = tmux.getSpawn(routeId);
     const closeMode = getHarness(identity.harnessId).closeMode;
+    const restartAllowed = closeMode !== 'client-only'
+      && spawnAllowsOwnedPaneClose(ownedSpawn, reg);
     let info = {};
     let source = null;
     if (reg.sessionFile && fs.existsSync(reg.sessionFile)) {
@@ -1326,6 +1331,7 @@ function getActiveSessions(registered = listRegisteredSessions()) {
         active: true,
         conflicted,
         closeAllowed: spawnAllowsManagedClose(ownedSpawn, reg, closeMode),
+        restartAllowed: !!getRPCSession(routeId)?.alive || restartAllowed,
       }),
       closeMode,
       conflicted,
@@ -1366,7 +1372,7 @@ function getActiveSessions(registered = listRegisteredSessions()) {
     }
     active.push(activeSessionEntry({
       ...sessionIdentityFields('pi', rpc.id),
-      capabilities: sessionCapabilities('pi', {}, { active: true }),
+      capabilities: sessionCapabilities('pi', {}, { active: true, restartAllowed: true }),
       name: state.sessionName || state.name,
       model: formatModelRef(state.model) || formatModelRef(rpc.model),
       percent: usage?.percent,
@@ -5239,7 +5245,7 @@ function stripLaunchWrapperArgs(descriptor, args) {
 // the window, and wait up to 30s for the session to register. The window is
 // left open on timeout for the user to inspect. `args` are pi's CLI args
 // (a TUI launch — never --mode rpc). Returns the registered session id.
-async function spawnHarnessInTmux({ descriptor, target, args, cwd, name, hidden }) {
+async function spawnHarnessInTmux({ descriptor, target, args, cwd, name, hidden, restartPane = null }) {
   if (!tmux.isTmuxAvailable()) {
     const err = new Error('tmux is not available on this host'); err.status = 400; throw err;
   }
@@ -5247,7 +5253,7 @@ async function spawnHarnessInTmux({ descriptor, target, args, cwd, name, hidden 
   if (!tmux.isSocketAllowed(socket)) {
     const err = new Error('Invalid tmux socket'); err.status = 400; throw err;
   }
-  if (!target.tmuxSession && !target.newTmuxSession) {
+  if (!restartPane && !target.tmuxSession && !target.newTmuxSession) {
     const err = new Error('target needs tmuxSession or newTmuxSession'); err.status = 400; throw err;
   }
 
@@ -5281,17 +5287,32 @@ async function spawnHarnessInTmux({ descriptor, target, args, cwd, name, hidden 
 
   let paneId;
   try {
-    ({ paneId } = await tmux.spawnInTmux({
-      socket,
-      tmuxSession: target.tmuxSession,
-      newTmuxSessionName: target.newTmuxSession,
-      windowName: name || target.windowName || null,
-      cwd: cwd || env.HOME,
-      command,
-      env,
-    }));
+    if (restartPane) {
+      paneId = restartPane.paneId;
+      await tmux.respawnPane({
+        socket,
+        paneId,
+        cwd: cwd || env.HOME,
+        command,
+        env,
+        expectedProcess: restartPane.paneProcess,
+      });
+      if (restartPane.registry) pruneRegisteredSession(restartPane.registry);
+      tmux.removeSpawn(restartPane.sessionId, restartPane.spawn);
+    } else {
+      ({ paneId } = await tmux.spawnInTmux({
+        socket,
+        tmuxSession: target.tmuxSession,
+        newTmuxSessionName: target.newTmuxSession,
+        windowName: name || target.windowName || null,
+        cwd: cwd || env.HOME,
+        command,
+        env,
+      }));
+    }
   } catch (e) {
-    const err = new Error(`Failed to open tmux window: ${e.message}`); err.status = 500; throw err;
+    const action = restartPane ? 'restart tmux pane' : 'open tmux window';
+    const err = new Error(`Failed to ${action}: ${e.message}`); err.status = 500; throw err;
   }
 
   const timeoutMs = Number(process.env.PI_DISH_SPAWN_TIMEOUT_MS) || 30000;
@@ -5856,6 +5877,130 @@ app.post('/api/sessions/:id/resume', async (req, res) => {
     res.status(e.status || 500).json({ error: e.message });
   } finally {
     if (resumeFlights.get(sessionFile) === flight) resumeFlights.delete(sessionFile);
+  }
+});
+
+// Restart is intentionally narrower than close. RPC children are relaunched
+// as RPC children; tmux sessions are eligible only when the persisted spawn
+// claim proves pi-dish owns the exact pane, which can then be respawned in
+// place. An externally launched Pi remains closeable by process identity but
+// is never granted pane-replacement authority.
+app.post('/api/sessions/:id/restart', async (req, res) => {
+  const requestedId = req.params.id;
+  const route = routeIdentity(requestedId);
+  if (!route) return res.status(400).json({ error: 'Invalid session ID' });
+  const sessionId = routeSessionId(route.harnessId, route.nativeSessionId);
+  const descriptor = getHarness(route.harnessId);
+  if (!descriptor || descriptor.closeMode === 'client-only' || descriptor.closeMode === 'unsupported') {
+    return res.status(409).json({ error: `${descriptor?.label || route.harnessId} does not support agent restart.` });
+  }
+
+  const rpc = getRPCSession(sessionId);
+  if (rpc?.alive) {
+    const sourceFile = rpc.sessionFile || rpc.state?.sessionFile;
+    let sessionFile;
+    try {
+      sessionFile = fs.realpathSync(sourceFile);
+    } catch {
+      return res.status(409).json({ error: 'The active RPC session has no resumable session file.' });
+    }
+    const cwd = rpc.cwd && fs.existsSync(rpc.cwd) ? rpc.cwd : process.env.HOME;
+    const closed = await closeSessionById(sessionId);
+    if (closed.status !== 200) return res.status(closed.status).json(closed.body);
+    try {
+      const replacement = await resumeRPCSession(sessionFile, cwd);
+      return res.json({ success: true, id: replacement.id, placement: 'rpc' });
+    } catch (error) {
+      console.error('Failed to restart RPC session:', error);
+      return res.status(500).json({
+        error: `The agent stopped, but its RPC replacement failed to start: ${error.message}`,
+        stopped: true,
+      });
+    }
+  }
+
+  let reg = getRegisteredSession(sessionId);
+  if (!reg) return res.status(404).json({ error: 'Session not active' });
+  const spawn = tmux.getSpawn(sessionId);
+  if (!spawn?.socket || !spawn?.paneId || !spawnMatchesRegistryClaim(spawn, reg)) {
+    return res.status(409).json({
+      error: 'Restart is available only for RPC sessions and tmux panes launched by pi-dish. This Pi session can still be closed normally.',
+    });
+  }
+  let paneProcess = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
+  if (!sameProcessIdentity(paneProcess, spawn.paneProcess)
+      || !spawnAllowsOwnedPaneClose(spawn, reg)) {
+    return res.status(409).json({
+      error: 'The recorded tmux pane no longer proves ownership of this agent, so pi-dish will not restart it.',
+    });
+  }
+
+  let sessionSource;
+  try {
+    sessionSource = reg.sessionFile
+      ? sourceForIdentity(route.harnessId, route.nativeSessionId, reg.sessionFile)
+      : findSessionSource(sessionId);
+  } catch {}
+  let sessionFile;
+  try {
+    sessionFile = fs.realpathSync(sessionSource?.file || reg.sessionFile);
+  } catch {
+    return res.status(409).json({ error: 'The active agent has no resumable session file.' });
+  }
+  let cwd = readSessionCwd({ ...(sessionSource || {}), file: sessionFile });
+  if (!cwd || !fs.existsSync(cwd)) cwd = process.env.HOME;
+
+  // Repeat the close path's claim and process proofs immediately before the
+  // destructive respawn. A replacement bridge/pane cannot inherit the first
+  // half of an older restart request.
+  invalidateRegistryCache();
+  const freshReg = getRegisteredSession(sessionId);
+  if (!freshReg || !sameRegistryClaim(freshReg, reg)) {
+    return res.status(409).json({ error: 'The live bridge changed while restart was being authorized; no pane was replaced.' });
+  }
+  try {
+    await proveBridgeRegistryClaim(freshReg);
+  } catch (error) {
+    return res.status(409).json({ error: `The live bridge could not re-prove its identity before restart: ${error.message}` });
+  }
+  paneProcess = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
+  if (!sameProcessIdentity(paneProcess, spawn.paneProcess)
+      || !spawnAllowsOwnedPaneClose(spawn, freshReg)) {
+    return res.status(409).json({ error: 'The tmux pane ownership proof changed before restart; no pane was replaced.' });
+  }
+  invalidateRegistryCache();
+  reg = getRegisteredSession(sessionId);
+  if (!reg || !sameRegistryClaim(reg, freshReg)) {
+    return res.status(409).json({ error: 'The live bridge changed immediately before restart; no pane was replaced.' });
+  }
+
+  try {
+    const id = await spawnHarnessInTmux({
+      descriptor,
+      target: { socket: spawn.socket },
+      args: descriptor.argv.resume({ file: sessionFile }),
+      cwd,
+      name: reg.name || null,
+      hidden: path.resolve(spawn.socket) === path.resolve(path.join(tmux.tmuxTmpdir(), HEADLESS_TMUX_SERVER)),
+      restartPane: {
+        sessionId,
+        paneId: spawn.paneId,
+        paneProcess: spawn.paneProcess,
+        spawn,
+        registry: reg,
+      },
+    });
+    return res.json({ success: true, id, placement: 'tmux', paneId: spawn.paneId });
+  } catch (error) {
+    console.error('Failed to restart tmux session:', error);
+    const currentPaneProcess = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
+    const replaced = !sameProcessIdentity(currentPaneProcess, spawn.paneProcess);
+    return res.status(error.status || 500).json({
+      error: replaced
+        ? `The agent pane was restarted, but its replacement failed to become ready: ${error.message}`
+        : `The agent was not restarted: ${error.message}`,
+      ...(replaced ? { stopped: true } : {}),
+    });
   }
 });
 

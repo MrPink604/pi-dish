@@ -513,6 +513,27 @@ test('POST /close shuts down an RPC child and removes it from the active list', 
   assert.equal(await findActive(id), null, 'closed session left the active list');
 });
 
+test('POST /restart replaces an RPC child without changing backend or session id', async () => {
+  const created = await post('/api/sessions/new', {});
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  const id = created.body.id;
+  const before = await findActive(id);
+  assert.equal(before?.capabilities.restart, true);
+  assert.ok(before?.pid);
+
+  const restarted = await post(`/api/sessions/${id}/restart`, {});
+  assert.equal(restarted.status, 200, JSON.stringify(restarted.body));
+  assert.deepEqual(restarted.body, { success: true, id, placement: 'rpc' });
+
+  const after = await findActive(id);
+  assert.ok(after, 'same session is active after restart');
+  assert.notEqual(after.pid, before.pid, 'restart launched a fresh process');
+  assert.equal(getRPCSession(id)?.proc.pid, after.pid, 'replacement remains managed by the RPC backend');
+
+  const closed = await post(`/api/sessions/${id}/close`, {});
+  assert.equal(closed.status, 200, JSON.stringify(closed.body));
+});
+
 test('a pi that dies on startup surfaces as a 500, not a hang', async () => {
   const saved = process.env.PI_DISH_PI_COMMAND;
   process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_EXIT_ON_START=1 ${process.execPath} ${FIXTURE}`;

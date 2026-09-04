@@ -281,6 +281,51 @@ test('OMP close kills and verifies only its exact pi-dish-owned pane process tre
   }
 });
 
+test('POST /restart respawns an owned agent in the exact tmux pane', { skip: !tmuxOk }, async () => {
+  const created = await post('/api/sessions/new', {
+    harness: 'omp',
+    target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+  });
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  const id = created.body.id;
+  const beforeSpawn = tmux.getSpawn(id);
+  assert.ok(beforeSpawn?.paneProcess?.pid && beforeSpawn?.paneProcess?.startTime);
+  const beforeLocation = await tmux.paneLocation(beforeSpawn.socket, beforeSpawn.paneId);
+
+  const beforeList = await get('/api/sessions?active=1');
+  const beforeSession = beforeList.body.active.find(entry => entry.id === id);
+  assert.equal(beforeSession?.capabilities.restart, true);
+
+  const restarted = await post(`/api/sessions/${encodeURIComponent(id)}/restart`);
+  assert.equal(restarted.status, 200, JSON.stringify(restarted.body));
+  assert.deepEqual(restarted.body, {
+    success: true,
+    id,
+    placement: 'tmux',
+    paneId: beforeSpawn.paneId,
+  });
+
+  const afterSpawn = tmux.getSpawn(id);
+  assert.ok(afterSpawn, 'replacement owns a persisted pane claim');
+  assert.equal(afterSpawn.paneId, beforeSpawn.paneId, 'restart preserves pane identity');
+  assert.equal(path.resolve(afterSpawn.socket), path.resolve(beforeSpawn.socket));
+  assert.notEqual(afterSpawn.spawnToken, beforeSpawn.spawnToken, 'replacement has fresh launch authority');
+  assert.notEqual(afterSpawn.paneProcess.pid, beforeSpawn.paneProcess.pid, 'replacement is a fresh CLI process');
+  assert.deepEqual(await tmux.paneLocation(afterSpawn.socket, afterSpawn.paneId), beforeLocation,
+    'restart preserves the tmux session and window');
+
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  const replacement = fs.readdirSync(registryDir)
+    .map(name => JSON.parse(fs.readFileSync(path.join(registryDir, name), 'utf8')))
+    .find(entry => entry.harnessId === 'omp' && entry.spawnToken === afterSpawn.spawnToken);
+  assert.ok(replacement, 'replacement bridge registration is live');
+  assert.ok(replacement.launchArgs.includes('--resume'), 'replacement resumes the existing transcript');
+  assert.equal(fs.realpathSync(replacement.sessionFile), fs.realpathSync(beforeSession.sessionFile));
+
+  const closed = await post(`/api/sessions/${encodeURIComponent(id)}/close`);
+  assert.equal(closed.status, 200, JSON.stringify(closed.body));
+});
+
 test('OMP close stays unavailable for a live pane pi-dish does not own', { skip: !tmuxOk }, async () => {
   const created = await post('/api/sessions/new', {
     harness: 'omp',
@@ -304,10 +349,14 @@ test('OMP close stays unavailable for a live pane pi-dish does not own', { skip:
     const list = await get('/api/sessions?active=1');
     const session = list.body.active.find(entry => entry.id === created.body.id);
     assert.equal(session?.capabilities.close, false);
+    assert.equal(session?.capabilities.restart, false);
 
     const refused = await post(`/api/sessions/${encodeURIComponent(created.body.id)}/close`);
     assert.equal(refused.status, 409, JSON.stringify(refused.body));
     assert.match(refused.body.error, /not launched by pi-dish/i);
+    const restartRefused = await post(`/api/sessions/${encodeURIComponent(created.body.id)}/restart`);
+    assert.equal(restartRefused.status, 409, JSON.stringify(restartRefused.body));
+    assert.match(restartRefused.body.error, /only for RPC sessions and tmux panes launched by pi-dish/i);
     assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true, 'unowned pane remains live');
     assert.doesNotThrow(() => process.kill(registry.pid, 0), 'unowned OMP process remains live');
   } finally {
