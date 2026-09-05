@@ -5177,6 +5177,9 @@ function openStatsModal() {
           ' / ' + (cu.contextWindow ? formatTokens(cu.contextWindow) : '—') +
           (cu.percent != null ? ` (${Math.round(cu.percent * 10) / 10}%)` : '')],
         ['Messages', `${s.userMessages} user · ${s.assistantMessages} assistant · ${s.toolCalls} tool calls`],
+        // Always shown, including zero: how often the context was rebuilt is
+        // read together with the Context row above it.
+        ['Compactions', String(s.compactions ?? 0)],
         ['__section', 'Performance'],
         s.responseTiming?.medianMs ? ['Response time', `${formatDuration(s.responseTiming.medianMs)} median · ${formatDuration(s.responseTiming.slowestMs)} slowest`] : null,
         avgSpeed ? ['Effective speed', `${avgSpeed} avg · ${formatDuration(s.genMs)} measured response time`] : null,

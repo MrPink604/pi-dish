@@ -2890,7 +2890,7 @@ app.get('/api/sessions/:id/stats', async (req, res) => {
       await refreshHarnessPricing(session.harnessId);
     }
 
-    const { tokens, reasoningTokens, cost, costs, costUnavailable, responseTiming, userMessages, assistantMessages, toolCalls, toolResults, genMs, genOutput } =
+    const { tokens, reasoningTokens, cost, costs, costUnavailable, responseTiming, userMessages, assistantMessages, toolCalls, toolResults, compactions, genMs, genOutput } =
       getSessionStats(session);
 
     const reg = getRegisteredSession(sessionId);
@@ -2908,6 +2908,7 @@ app.get('/api/sessions/:id/stats', async (req, res) => {
       assistantMessages,
       toolCalls,
       toolResults,
+      compactions,
       totalMessages: userMessages + assistantMessages + toolResults,
       tokens: { ...tokens, total: tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite },
       cost,

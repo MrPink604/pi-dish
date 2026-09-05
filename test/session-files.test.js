@@ -308,6 +308,8 @@ test('large snapcompact archives are projected without retaining frame payloads'
     ['before snap', 'before answer', 'after snap']);
   assert.equal(SF.getSessionInfo(file).contextTokens, 0, 'the projected compaction still resets context');
   assert.equal(SF.getSessionStats(file).assistantMessages, 1, 'stats skip the archive and retain messages');
+  assert.equal(SF.getSessionStats(file).compactions, 1,
+    'a projected large compaction record is still counted');
   assert.ok(!SF.buildSearchTextFromContent(content).includes(archiveMarker));
 
   const unusual = JSON.stringify({
@@ -319,6 +321,22 @@ test('large snapcompact archives are projected without retaining frame payloads'
   assert.equal(unusualCompact.summary, 'field serialized after preserveData');
   assert.ok(unusualCompact.preserveData.custom.startsWith(archiveMarker),
     'nonstandard field order falls back to full JSON parsing');
+});
+
+test('getSessionStats counts compaction entries', () => {
+  const file = writeSession([
+    { type: 'session', cwd: '/x' },
+    userMsg('one'),
+    assistantMsg('a'),
+    { type: 'compaction', tokensBefore: 120000, summary: 'first' },
+    userMsg('two'),
+    assistantMsg('b'),
+    { type: 'compaction', tokensBefore: 130000, summary: 'second' },
+  ]);
+  const stats = SF.getSessionStats(file);
+  assert.equal(stats.compactions, 2);
+  assert.equal(stats.userMessages, 2, 'compactions are not messages');
+  assert.equal(SF.getSessionStats(writeSession([userMsg('none')])).compactions, 0);
 });
 
 test('readSessionMessages keeps every entry when the leaf is the last message', () => {
