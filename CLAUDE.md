@@ -554,6 +554,29 @@ above the unscored tail), naming unanswering hosts — the fleet's
 client-is-the-aggregator invariant applies to the CLI too; never add a
 server-side merged endpoint for it.
 
+A ref may name any identifier the session has, not just its route id: the
+encoded key, the harness-native id inside it, or that id's trailing uuid
+(`sessionRefAliases` / `resolveSessionRefAmong` in helpers.js — one rule for
+`/api/sessions/resolve`, `#ref` expansion, the CLI's local fallback and the
+picker; stages are exact route id → exact alias → route-id prefix → alias
+prefix, in that order, so every ref that resolved before still means the same
+session). This exists because a non-Pi route id is `~sk1_` +
+base64url(`[harnessId, nativeId]`): ~100 characters whose first ~30 are
+identical for every session of that harness on the host, so the prefix half
+of the grammar was dead there and the only usable ref was the whole key — a
+key an agent retypes and mistypes, which still decodes, leaving the server
+nothing to answer but "not found" (a real session lost a steer that way and
+reported the control channel broken). `shortSessionRef` is the inverse: the
+shortest handle that still resolves, normally the uuid tail's first 8
+characters, and it is what `resolve` returns as `ref`, what `list`/`search`
+print in column 1, and what the UI's copy-ref and `#` picker write. Clients
+gate it on the owning host's `refAliases` capability (older hosts resolve
+route-id prefixes only; the CLI notices a bodied 404 there and resolves the
+alias against that host's own list instead, so short refs survive a
+mixed-version fleet). The rule is deliberately duplicated in
+`skills/lib/pi-dish-client.js` — those CLIs import nothing from the server —
+with a parity test in test/skills-core.test.js pinning the copies together.
+
 **`#ref` mentions**: a ref is only a string, and a model reading `8f3ab2c1` in
 a prompt has no reason to treat it as a handle — the skill catalog describes
 the CLI but never says "this token is a live session". So the composer's `#`

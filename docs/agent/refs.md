@@ -8,9 +8,9 @@ and resolve to the parsed transcript the server serves rather than raw JSONL.
 ## Grammar
 
 ```
-8f3ab2c1              id prefix, session on this host
-tycho/8f3ab2c1        host-qualified: session on host "tycho"
-self/8f3ab2c1         explicit local
+019f9834              a session on this host (see "What a ref may name")
+tycho/019f9834        host-qualified: session on host "tycho"
+self/019f9834         explicit local
 <hostId>:<sessionId>  provenance form: full host uuid + full session id
 ```
 
@@ -24,6 +24,30 @@ self/8f3ab2c1         explicit local
 - The `hostId:sessionId` form is what launch provenance records for
   cross-host spawns; the part before the first `:` must be the full host
   uuid.
+
+## What a ref may name
+
+A session has more than one identifier, and a ref may use any of them:
+
+| identifier | example |
+| --- | --- |
+| route id (what the HTTP routes speak) | `~sk1_WyJvbXAiLCIyMDI2LTA5…` (Pi: the native id) |
+| harness-native id | `2026-09-05T09-07-03-291Z_01a070d2-43fb-7360-aaba-a4ddf8d1deb0` |
+| uuid tail | `01a070d2-43fb-7360-aaba-a4ddf8d1deb0` |
+
+Each resolves exactly, or by prefix (≥4 characters), in that order of
+precedence. **Prefer the uuid tail** — `01a070d2` — which is what `list`,
+`search` and `resolve` print. A non-Pi route id is a ~100-character base64
+key whose first ~30 characters are identical for every session of that
+harness on the host, so it is neither shortenable by prefix nor safe to
+retype: a one-character slip still decodes to a well-formed id, and the only
+answer the server can give is `Session not found`. Copy handles; never
+retype a route id.
+
+Hosts that predate this (no `refAliases` capability) resolve route-id
+prefixes only. The CLI notices and resolves such a ref locally against that
+host's session list instead, so short refs keep working across a
+mixed-version fleet.
 
 ## `#ref` in a prompt
 
@@ -49,6 +73,9 @@ A `#token` that resolves to nothing is left alone, so `#include` and
 
 ## Where refs come from
 
+- `list`, `search` and `resolve`: the first column (and `resolve`'s `ref:`
+  line) is the shortest handle that host resolves — that is the string to
+  pass to the next command.
 - The composer's `#` picker (above), which writes the ref for you.
 - The pi-dish UI: right-click (long-press on a phone) a session in the
   sidebar and copy its ref, or copy it from the session stats modal.
@@ -59,12 +86,13 @@ A `#token` that resolves to nothing is left alone, so `#include` and
 
 ## Resolution mechanics
 
-`resolve <ref>` prints what a ref points at without touching the session.
-Every other command resolves refs the same way before acting: the CLI asks
-the owning host's `GET /api/sessions/resolve?id=<prefix>`; on hosts too old
-to serve it (no `resolve` capability), the CLI falls back to fetching the
-session list and prefix-matching client-side, so refs work across a
-mixed-version fleet.
+`resolve <ref>` prints what a ref points at without touching the session,
+plus the short `ref:` to keep. Every other command resolves refs the same
+way before acting: the CLI asks the owning host's `GET
+/api/sessions/resolve?id=<ref>`; on hosts too old to serve it (no `resolve`
+capability) — or too old to resolve aliases (no `refAliases`) — the CLI
+fetches the session list and resolves client-side by the same rule, so refs
+work across a mixed-version fleet.
 
 ## Caveats
 

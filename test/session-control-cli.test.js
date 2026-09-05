@@ -200,3 +200,96 @@ test('peer-session CLI attach command lists active tmux entries with --json', as
   assert.equal(entries[0].socket, '/tmp/tmux-test');
   assert.equal(entries[0].pane, '%42');
 });
+
+// =========================================================================
+// Short refs for encoded route ids
+//
+// An OMP route id is ~100 base64 characters whose leading ~30 are shared by
+// every OMP session on the host: printing it invites an agent to retype it,
+// and a mistyped key still decodes, so the server can only answer "not
+// found". The CLI therefore prints the shortest handle the *owning* host can
+// resolve, and a host too old to resolve aliases is handled client-side.
+// =========================================================================
+
+const ALIAS_NATIVE = '2026-09-05T09-07-03-291Z_01a070d2-43fb-7360-aaba-a4ddf8d1deb0';
+const ALIAS_ROUTE = encodeSessionKey('omp', ALIAS_NATIVE);
+
+function aliasServer({ refAliases }) {
+  const requests = [];
+  const session = { id: ALIAS_ROUTE, isActive: true, name: 'Orchestrator', cwd: '/work/osbg' };
+  const capabilities = { sessions: true, search: true, resolve: true, docs: true };
+  if (refAliases) capabilities.refAliases = true;
+  const server = http.createServer((req, res) => {
+    requests.push(req.url);
+    res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/api/hosts') {
+      res.end(JSON.stringify({ hosts: [{ self: true, name: null, label: 'framework', reachable: true, capabilities }] }));
+      return;
+    }
+    if (req.url === '/api/sessions' || req.url === '/api/sessions?active=1') {
+      res.end(JSON.stringify({ active: [session], previous: [] }));
+      return;
+    }
+    if (req.url.startsWith('/api/sessions/resolve?')) {
+      const ref = new URL(req.url, 'http://x').searchParams.get('id');
+      // The legacy shape: route-id prefixes only, and no `ref` in the reply.
+      const hit = refAliases
+        ? [ALIAS_ROUTE, ALIAS_NATIVE, '01a070d2-43fb-7360-aaba-a4ddf8d1deb0'].some(a => a.startsWith(ref))
+        : ALIAS_ROUTE.startsWith(ref);
+      if (!hit) { res.statusCode = 404; res.end(JSON.stringify({ error: 'Session not found' })); return; }
+      res.end(JSON.stringify(refAliases ? { session, ref: '01a070d2' } : { session }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === `/api/sessions/${encodeURIComponent(ALIAS_ROUTE)}/steer`) {
+      res.end(JSON.stringify({ success: true }));
+      return;
+    }
+    res.statusCode = 404; res.end(JSON.stringify({ error: 'not found' }));
+  });
+  return { server, requests };
+}
+
+async function withAliasServer(t, options) {
+  const { server, requests } = aliasServer(options);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  return { base: `http://127.0.0.1:${server.address().port}`, requests };
+}
+
+test('peer-session CLI prints short refs and resolves them on a capable host', async t => {
+  const { base, requests } = await withAliasServer(t, { refAliases: true });
+
+  const listed = await run(['list', '--active'], base);
+  assert.match(listed.stdout, /^01a070d2\tactive\tOrchestrator\t\/work\/osbg$/m,
+    'the row leads with a handle an agent can retype, not the encoded key');
+  assert.ok(!listed.stdout.includes(ALIAS_ROUTE), 'the ~100-char route id is not what the CLI hands back');
+
+  const resolved = await run(['resolve', '01a070d2'], base);
+  assert.match(resolved.stdout, /^ref: 01a070d2$/m);
+  assert.match(resolved.stdout, new RegExp(`^${ALIAS_ROUTE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'),
+    'the full route id is still shown — it is what the HTTP routes speak');
+
+  // The short ref drives a real control call; the route still gets the full id.
+  await run(['steer', '01a070d2', 'Use the new routing'], base);
+  assert.ok(requests.includes(`/api/sessions/${encodeURIComponent(ALIAS_ROUTE)}/steer`));
+});
+
+test('peer-session CLI resolves a short ref client-side on a host without ref aliases', async t => {
+  const { base, requests } = await withAliasServer(t, { refAliases: false });
+
+  // The host's resolver 404s the uuid tail, so the CLI resolves it against
+  // that host's own session list and carries on with the full route id.
+  await run(['steer', '01a070d2', 'Use the new routing'], base);
+  assert.ok(requests.includes(`/api/sessions/${encodeURIComponent(ALIAS_ROUTE)}/steer`),
+    'the control call reaches the session despite the older resolver');
+
+  // Rows on such a host keep printing full ids: a short one would not resolve.
+  const listed = await run(['list', '--active'], base);
+  assert.match(listed.stdout, new RegExp(`^${ALIAS_ROUTE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\tactive`, 'm'));
+
+  // A genuinely unknown ref is still an error, not a retry loop.
+  await assert.rejects(() => run(['resolve', 'ffffffff'], base), (e) => {
+    assert.match(e.stderr, /Session not found/);
+    return true;
+  });
+});

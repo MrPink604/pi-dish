@@ -28,7 +28,7 @@ try {
 const {
   makeFail, print, defaultBase, discoverSession, request, api, jsonInit,
   requestText, fleetHosts, hostSupports, entryForHostName, resolveSessionRef,
-  mergeSearchResults, renderTranscript, registryEntries, registryRouteId, sessionHarnessId,
+  mergeSearchResults, renderTranscript, registryEntries, registryRouteId, sessionHarnessId, stableSessionRef,
 } = core;
 
 const fail = makeFail('pi-dish-sessions');
@@ -213,8 +213,9 @@ for (const spec of COMMANDS) {
 }
 
 const REF_EXPLAINER = [
-  '  8f3ab2c1                a session id, or a unique prefix of at least 4 characters',
-  '  tycho/8f3ab2c1          host-qualified: a fleet name, host uuid, or label; self/… is explicit local',
+  '  01a070d2                a session id, its uuid tail, or a unique ≥4-char prefix of either',
+  '                          (what list/search/resolve print — copy that, never retype a ~sk1_ key)',
+  '  tycho/01a070d2          host-qualified: a fleet name, host uuid, or label; self/… is explicit local',
   '  <hostId>:<sessionId>    provenance form (full uuid + full id), as recorded for cross-host spawns',
 ];
 
@@ -316,19 +317,39 @@ function hostLine(host) {
   return `${name}\t${state}\t${host.label || host.name || ''}\t${capabilities}`;
 }
 
-function sessionLine(session) {
+function sessionLine(session, ref) {
   // `subagent` is a session another live session runs: it has a transcript to
   // read but no socket to drive, so it is neither active nor plain history.
   const state = session.isActive
     ? (session.turnInProgress || session.compacting ? 'working' : 'active')
     : session.subagentLive ? 'subagent' : 'inactive';
-  return `${session.id}\t${state}\t${session.name || 'Unnamed'}\t${session.cwd || ''}`;
+  return `${ref || session.id}\t${state}\t${session.name || 'Unnamed'}\t${session.cwd || ''}`;
 }
 
-function searchRow(session) {
+/**
+ * The handle each row prints, per host. A non-Pi route id is ~100 base64
+ * characters whose first ~30 are identical for every session of that harness
+ * on the host, so printing it invites an agent to retype it — and a mistyped
+ * key still decodes, leaving the server nothing to say but "not found".
+ * `stableSessionRef` picks the shortest *identifier* that still resolves
+ * there (normally the uuid tail) and leaves a route id whole rather than
+ * printing a snapshot-unique truncation of it.
+ * A host that predates ref aliases resolves route-id prefixes only, so its
+ * rows keep printing full ids.
+ */
+function refIndex(sessions, entry) {
+  const rows = sessions || [];
+  const refs = new Map();
+  if (!hostSupports(entry, 'refAliases')) return refs;
+  const ids = rows.map((session) => session.id);
+  for (const session of rows) refs.set(session.id, stableSessionRef(session.id, ids));
+  return refs;
+}
+
+function searchRow(session, ref) {
   const when = session.lastActivity ? String(session.lastActivity).slice(0, 10) : '';
   const matches = session.matchCount ? `${session.matchCount} match${session.matchCount === 1 ? '' : 'es'}` : 'metadata match';
-  return `${sessionLine(session)}\t${when}\t${matches}`;
+  return `${sessionLine(session, ref)}\t${when}\t${matches}`;
 }
 
 function writeSnippets(session) {
@@ -482,12 +503,17 @@ async function fleetSearch(base, query, limit, json) {
 
   const buckets = [];
   const status = {};
+  // Refs are per host: a ref is only short enough to print if the host that
+  // owns the session can resolve the short form, and uniqueness is judged
+  // against that host's own corpus.
+  const refsByHost = new Map();
   for (const skip of skipped) status[skip.label] = { status: 'skipped', error: skip.reason };
   settled.forEach((outcome, i) => {
     const target = targets[i];
     if (outcome.status === 'fulfilled') {
       const data = outcome.value.data || {};
       buckets.push({ host: target.label, results: data.results || [] });
+      refsByHost.set(target.label, refIndex(data.results || [], hosts.find((h) => (h.self ? '(self)' : h.name) === target.label)));
       status[target.label] = { status: 'ok', total: data.total ?? (data.results || []).length, indexing: !!data.indexing };
     } else {
       const reason = outcome.reason;
@@ -505,7 +531,7 @@ async function fleetSearch(base, query, limit, json) {
     return print({ results: merged.map((row) => ({ ...row.session, host: row.host })), hosts: status }, true);
   }
   for (const row of merged) {
-    process.stdout.write(`${row.host}\t${searchRow(row.session)}\n`);
+    process.stdout.write(`${row.host}\t${searchRow(row.session, refsByHost.get(row.host)?.get(row.session.id))}\n`);
     writeSnippets(row.session);
   }
   if (!merged.length) process.stdout.write('No matches.\n');
@@ -722,8 +748,10 @@ async function main() {
       // `children` is what `--active` returns for subagents running inside a
       // live session: real sessions with transcripts, absent from `previous`
       // on that request (and already in it on a full list).
-      for (const session of [...(data.active || []), ...(data.children || []), ...(data.previous || [])]) {
-        process.stdout.write(sessionLine(session) + '\n');
+      const rows = [...(data.active || []), ...(data.children || []), ...(data.previous || [])];
+      const refs = refIndex(rows, await entryForHostName(base, hostFlag));
+      for (const session of rows) {
+        process.stdout.write(sessionLine(session, refs.get(session.id)) + '\n');
       }
       if (data.indexing) process.stdout.write('# Session index is still building; repeat list for more.\n');
       if (data.discoveryTruncated) process.stdout.write('# Nested session discovery reached its safety limit.\n');
@@ -759,8 +787,9 @@ async function main() {
       const { data } = await api(base, hostFlag, `/api/search?q=${encodeURIComponent(query)}`);
       const results = (data.results || []).slice(0, limit);
       if (args.json) return print({ ...data, results }, true);
+      const searchRefs = refIndex(results, await entryForHostName(base, hostFlag));
       for (const session of results) {
-        process.stdout.write(searchRow(session) + '\n');
+        process.stdout.write(searchRow(session, searchRefs.get(session.id)) + '\n');
         writeSnippets(session);
       }
       if (!results.length) process.stdout.write('No matches.\n');
@@ -781,8 +810,11 @@ async function main() {
     const id = target.id;
 
     if (spec.name === 'resolve') {
-      if (args.json) return print({ host, id, session: target.session }, true);
+      if (args.json) return print({ host, id, ref: target.ref || null, session: target.session }, true);
       const session = target.session || {};
+      // The short ref first: it is what the caller should keep, and the full
+      // id below it is what the routes speak.
+      if (target.ref && target.ref !== id) process.stdout.write(`ref: ${host ? `${host}/` : ''}${target.ref}\n`);
       process.stdout.write(`${id}\n`);
       process.stdout.write(`host: ${host || '(self)'}\n`);
       process.stdout.write(`name: ${session.name || 'Unnamed'}\n`);

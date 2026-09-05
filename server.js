@@ -59,6 +59,7 @@ const {
   isModelEnabled, extractTextContent, THINKING_LEVEL_NAMES,
   sessionMetaText, parseModelId, formatModelRef, buildSnippet, buildSnippets,
   parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch,
+  resolveSessionRefAmong, stableSessionRef,
 } = require('./public/helpers');
 const { expandSessionRefs } = require('./lib/session-refs');
 
@@ -226,6 +227,10 @@ function hostCapabilities() {
     sessions: true, search: true, usage: true, spawns: true,
     shares: true, pages: true, comments: true, skills: true, harnesses: true,
     resolve: true, docs: true, routines: true, recovery: true,
+    // A ref may name a session's native id or uuid tail, not just its route
+    // id. Clients gate short refs on this: an older host resolves route-id
+    // prefixes only, where the shortest ref for a non-Pi session is ~34 chars.
+    refAliases: true,
   };
   if (terminal.isTerminalEnabled()) caps.terminal = true;
   if (tmux.isTmuxAvailable()) caps.tmux = true;
@@ -1734,20 +1739,15 @@ app.get('/api/sessions', (req, res) => {
   res.json({ active, previous, children, indexing, discoveryTruncated, discoverySkipped });
 });
 
-// The one prefix-resolution rule for refs, shared by GET /api/sessions/resolve
-// and the `#ref` prompt expansion so a ref can't mean two things depending on
-// which door it came through: exact id wins (an active entry wins a collision
-// with a historical one of the same id), then a unique prefix. `exactOnly`
-// serves the machine-produced `<hostId>:<fullId>` form, whose id is whole —
-// expanding a prefix there could retarget a recorded ref.
+// Refs resolve through the shared rule in public/helpers.js (route id and
+// alias, exact then prefix — see the comment there), so GET
+// /api/sessions/resolve, the `#ref` prompt expansion, the skill CLIs' local
+// fallback and the browser's picker cannot disagree about what a ref means.
+// An active entry wins a collision with a historical one of the same id.
+// `exactOnly` serves the machine-produced `<hostId>:<fullId>` form, whose id
+// is whole — expanding a prefix there could retarget a recorded ref.
 function resolveRefInCatalog(catalog, ref, exactOnly = false) {
-  const byId = new Map();
-  for (const session of catalog.list) if (!byId.has(session.id)) byId.set(session.id, session); // active first
-  const exact = byId.get(ref);
-  if (exact) return { session: exact, matches: [exact] };
-  if (exactOnly) return { session: null, matches: [] };
-  const matches = [...byId.values()].filter((session) => session.id.startsWith(ref));
-  return { session: matches.length === 1 ? matches[0] : null, matches };
+  return resolveSessionRefAmong(catalog.list, ref, { exactOnly });
 }
 
 // Session refs: resolve a short id prefix to one full list entry. Registered
@@ -1765,7 +1765,10 @@ app.get('/api/sessions/resolve', (req, res) => {
   annotateSessionParents(catalog.list); // list rows carry lineage hints; keep the shape identical
   annotateSessionRoutines(catalog.list);
   const { session, matches } = resolveRefInCatalog(catalog, ref);
-  if (session) return res.json({ session });
+  // `ref` is the handle a caller should keep and paste instead of a
+  // 100-character encoded route id — shortened only where a *different*
+  // identifier can name the session, never by truncating the route id.
+  if (session) return res.json({ session, ref: stableSessionRef(session.id, catalog.list.map((entry) => entry.id)) });
   if (matches.length > 1) {
     return res.status(409).json({
       error: 'ambiguous session id prefix',
@@ -4796,6 +4799,9 @@ app.get('/api/config', (req, res) => {
     // A boolean only: the endpoint URL and its key are server-side config and
     // never travel to a client (see settingsForClient).
     stt: !!stt.resolveSttConfig(readDishSettings()),
+    // The self-host fallback for hostSupportsCapability: this build resolves
+    // refs by native id/uuid tail, so the client may print short refs for it.
+    refAliases: true,
   });
 });
 

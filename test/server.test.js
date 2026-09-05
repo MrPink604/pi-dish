@@ -3988,6 +3988,45 @@ test('GET /api/sessions/resolve reports ambiguous prefixes with candidates', asy
   assert.equal(exactWins.body.session.id, RESOLVE_AMBIGUOUS_A);
 });
 
+// An OMP session's route id is base64url of ["omp", nativeId]: ~100 characters
+// whose leading ~30 are shared by every OMP session on the host, so a ref has
+// to be able to name the native id or its uuid tail instead.
+const ALIAS_NATIVE_ID = '2026-09-05T09-07-03-291Z_01a070d2-43fb-7360-aaba-a4ddf8d1deb0';
+const ALIAS_ROUTE_ID = encodeSessionKey('omp', ALIAS_NATIVE_ID);
+
+test('GET /api/sessions/resolve accepts a native id or uuid tail and answers with a short ref', async () => {
+  const file = path.join(tmpHome, '.omp', 'agent', 'sessions', 'project', `${ALIAS_NATIVE_ID}.jsonl`);
+  fs.writeFileSync(file, [
+    { type: 'session', cwd: ompCwd, timestamp: '2026-09-05T09:07:03.291Z' },
+    { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'alias ref fixture' }], timestamp: '2026-09-05T09:07:04.000Z' } },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n');
+  await waitForSessions([ALIAS_ROUTE_ID]);
+
+  for (const ref of [ALIAS_ROUTE_ID, ALIAS_NATIVE_ID, '01a070d2-43fb-7360-aaba-a4ddf8d1deb0', '01a070d2', '2026-09-05T09-07']) {
+    const { status, body } = await get(`/api/sessions/resolve?id=${encodeURIComponent(ref)}`);
+    assert.equal(status, 200, `${ref} → ${JSON.stringify(body)}`);
+    assert.equal(body.session.id, ALIAS_ROUTE_ID, ref);
+  }
+
+  // The short ref is what a caller should keep — and it resolves back here.
+  const { body } = await get(`/api/sessions/resolve?id=${encodeURIComponent(ALIAS_ROUTE_ID)}`);
+  assert.ok(body.ref && body.ref.length <= 40, `short ref: ${body.ref}`);
+  assert.notEqual(body.ref, ALIAS_ROUTE_ID);
+  const viaShort = await get(`/api/sessions/resolve?id=${encodeURIComponent(body.ref)}`);
+  assert.equal(viaShort.body.session.id, ALIAS_ROUTE_ID);
+
+  // A hand-retyped key that drops "-05T" inside the base64 still decodes to a
+  // well-formed id, so it must resolve to nothing rather than a near miss.
+  const corrupt = ALIAS_ROUTE_ID.replace('LTA1VDA5', 'LTA5');
+  assert.notEqual(corrupt, ALIAS_ROUTE_ID);
+  assert.equal((await get(`/api/sessions/resolve?id=${encodeURIComponent(corrupt)}`)).status, 404);
+});
+
+test('GET /api/host advertises ref-alias resolution so clients can print short refs', async () => {
+  const { body } = await get('/api/host');
+  assert.equal(body.capabilities.refAliases, true);
+});
+
 test('GET /api/sessions/resolve rejects unknown and too-short refs', async () => {
   const unknown = await get('/api/sessions/resolve?id=nosuchsessionprefix');
   assert.equal(unknown.status, 404);

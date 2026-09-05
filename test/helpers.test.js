@@ -1259,6 +1259,91 @@ test('sessionRef takes a widened prefix in every host form', () => {
   assert.equal(H.sessionRef(session, null), '2026-08-');
 });
 
+// --- ref aliases ----------------------------------------------------------
+//
+// The corpus that motivated these: an OMP route id is base64url of
+// ["omp", nativeId], so every OMP session on a host shares ~30 characters of
+// prefix and the only route-id ref that resolves is nearly the whole key.
+
+const OMP_A = '~sk1_' + Buffer.from(JSON.stringify(['omp', '2026-09-05T09-07-03-291Z_01a070d2-43fb-7360-aaba-a4ddf8d1deb0'])).toString('base64url');
+const OMP_B = '~sk1_' + Buffer.from(JSON.stringify(['omp', '2026-09-05T16-25-56-254Z_01a07264-131e-74a7-979a-1e763bf12b97'])).toString('base64url');
+const PI_A = '2026-07-25T07-36-28-426Z_019f9834-3e0a-77bb-bd3b-7ee46212bdf1';
+const CORPUS = [{ id: OMP_A, name: 'orchestrator' }, { id: OMP_B, name: 'reviewer' }, { id: PI_A, name: 'pi one' }];
+
+test('sessionRefAliases derives the native id and uuid tail from the id alone', () => {
+  assert.deepEqual(H.sessionRefAliases(OMP_A), [
+    OMP_A,
+    '2026-09-05T09-07-03-291Z_01a070d2-43fb-7360-aaba-a4ddf8d1deb0',
+    '01a070d2-43fb-7360-aaba-a4ddf8d1deb0',
+  ]);
+  // A bare Pi id is its own native id, so it contributes no second alias.
+  assert.deepEqual(H.sessionRefAliases(PI_A), [PI_A, '019f9834-3e0a-77bb-bd3b-7ee46212bdf1']);
+  assert.deepEqual(H.sessionRefAliases(''), []);
+  // Malformed keys stay opaque rather than guessing at a native id.
+  assert.deepEqual(H.sessionRefAliases('~sk1_notbase64!!'), ['~sk1_notbase64!!']);
+  assert.equal(H.decodeRouteSessionId(PI_A), null);
+  assert.equal(H.decodeRouteSessionId(OMP_A).harnessId, 'omp');
+});
+
+test('resolveSessionRefAmong resolves native ids and uuid prefixes, not just route ids', () => {
+  const hit = (ref) => H.resolveSessionRefAmong(CORPUS, ref).session?.name;
+  assert.equal(hit(OMP_A), 'orchestrator');
+  assert.equal(hit('2026-09-05T09-07-03-291Z_01a070d2-43fb-7360-aaba-a4ddf8d1deb0'), 'orchestrator');
+  assert.equal(hit('01a070d2-43fb-7360-aaba-a4ddf8d1deb0'), 'orchestrator');
+  assert.equal(hit('01a070d2'), 'orchestrator');
+  assert.equal(hit('01a07264'), 'reviewer');
+  assert.equal(hit('019f9834'), 'pi one');
+  // The failure that started this: a hand-retyped key drops "-05T" inside the
+  // base64 and still decodes, so it must resolve to nothing, not a near miss.
+  const corrupt = OMP_A.replace('LTA1VDA5', 'LTA5');
+  assert.notEqual(corrupt, OMP_A);
+  assert.equal(H.resolveSessionRefAmong(CORPUS, corrupt).session, null);
+});
+
+test('resolveSessionRefAmong keeps route-id resolution ahead of aliases', () => {
+  // `01a07264` is this session's own uuid prefix *and* a route id in full.
+  const shadow = [{ id: '01a07264', name: 'literal id' }, ...CORPUS];
+  assert.equal(H.resolveSessionRefAmong(shadow, '01a07264').session.name, 'literal id');
+  // Ambiguity is still reported with candidates rather than picked from.
+  const ambiguous = H.resolveSessionRefAmong(CORPUS, '~sk1_WyJvbXAi');
+  assert.equal(ambiguous.session, null);
+  assert.deepEqual(ambiguous.matches.map(s => s.name), ['orchestrator', 'reviewer']);
+  // The provenance form is whole: exactOnly never expands a prefix.
+  assert.equal(H.resolveSessionRefAmong(CORPUS, '01a070d2', { exactOnly: true }).session, null);
+  assert.equal(H.resolveSessionRefAmong(CORPUS, OMP_A, { exactOnly: true }).session.name, 'orchestrator');
+  assert.equal(H.resolveSessionRefAmong(CORPUS, '').session, null);
+});
+
+test('shortSessionRef prefers the uuid tail and widens only when it must', () => {
+  const ids = CORPUS.map(s => s.id);
+  assert.equal(H.shortSessionRef(OMP_A, ids), '01a070d2');
+  assert.equal(H.shortSessionRef(PI_A, ids), '019f9834');
+  // Whatever it hands out has to resolve back to the same session.
+  for (const session of CORPUS) {
+    const ref = H.shortSessionRef(session.id, ids);
+    assert.equal(H.resolveSessionRefAmong(CORPUS, ref).session.name, session.name, ref);
+  }
+  // Sessions created in the same uuidv7 millisecond window share the tail's
+  // first 8 characters, so the ref widens instead of going ambiguous.
+  const twin = { id: PI_A.replace('019f9834-3e0a', '019f9834-3e0b') };
+  const widened = H.shortSessionRef(PI_A, [twin.id]);
+  assert.ok(widened.length > 8 && '019f9834-3e0a-77bb-bd3b-7ee46212bdf1'.startsWith(widened), widened);
+  assert.equal(H.shortSessionRef('', ids), '');
+});
+
+test('stableSessionRef shortens only by naming another identifier', () => {
+  const ids = CORPUS.map(s => s.id);
+  // An alias-derived handle is a different identifier, so it is printable.
+  assert.equal(H.stableSessionRef(OMP_A, ids), '01a070d2');
+  assert.equal(H.stableSessionRef(PI_A, ids), '019f9834');
+  // An id with no uuid tail can only be truncated, and a snapshot-unique
+  // truncation is not something to print as *the* handle for a session.
+  const legacy = ['2026-08-20T10-00-00-aaaa1111', '2026-08-21T10-00-00-bbbb2222'];
+  assert.equal(H.shortSessionRef(legacy[0], legacy), '2026-08-20');
+  assert.equal(H.stableSessionRef(legacy[0], legacy), legacy[0]);
+  assert.equal(H.stableSessionRef('', ids), '');
+});
+
 test('parseSessionRefTokens finds every ref form and dedupes them', () => {
   const text = 'compare #8f3ab2c1 with #tycho/8f3ab2c1 and '
     + '#0f9c1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b:2026-07-05T00-00-00-x, again #8f3ab2c1.';
@@ -1345,6 +1430,13 @@ test('searchSessionsForRef ranks name matches over cwd, live over historical', (
   assert.deepEqual(H.searchSessionsForRef(list, '').map(r => r.session.id),
     ['cccc3333', 'bbbb2222', 'aaaa1111']);
   assert.deepEqual(H.searchSessionsForRef(list, 'zzzz'), []);
+  // An encoded route id hides its identity from a typed prefix; the uuid tail
+  // inside it is what a user actually has to type.
+  const omp = [{ id: OMP_A, name: 'orchestrator', cwd: '/w/osbg', isActive: true, lastActivity: '2026-09-05' }];
+  assert.deepEqual(H.searchSessionsForRef(omp, '01a070d2').map(r => r.session.id), [OMP_A]);
+  assert.deepEqual(H.searchSessionsForRef(omp, '2026-09-05T09').map(r => r.session.id), [OMP_A]);
+  assert.deepEqual(H.searchSessionsForRef(omp, '~sk1_WyJvbXAi').map(r => r.session.id), [OMP_A]);
+  assert.deepEqual(H.searchSessionsForRef(omp, 'ffff'), []);
 });
 
 test('mergeHostEntries puts self first and keys on hostId, then base', () => {

@@ -173,3 +173,62 @@ test('renderTranscript handles an empty window and a host qualifier', () => {
   assert.match(out, /- state: active/);
   assert.match(out, /_No messages in this window\._/);
 });
+
+// --- ref aliases ----------------------------------------------------------
+//
+// The CLIs import nothing from the server (see the module header), so this
+// rule exists twice: here and in public/helpers.js. These tests pin the two
+// copies to each other — a divergence would make a ref mean different things
+// depending on whether the server or the CLI expanded it.
+
+const H = require('../public/helpers.js');
+const { sessionRefAliases, resolveRefAmong, shortSessionRef, stableSessionRef, nativeSessionId } = core;
+
+const OMP_A = '~sk1_' + Buffer.from(JSON.stringify(['omp', '2026-09-05T09-07-03-291Z_01a070d2-43fb-7360-aaba-a4ddf8d1deb0'])).toString('base64url');
+const OMP_B = '~sk1_' + Buffer.from(JSON.stringify(['omp', '2026-09-05T16-25-56-254Z_01a07264-131e-74a7-979a-1e763bf12b97'])).toString('base64url');
+const PI_A = '2026-07-25T07-36-28-426Z_019f9834-3e0a-77bb-bd3b-7ee46212bdf1';
+const CORPUS = [{ id: OMP_A, name: 'a' }, { id: OMP_B, name: 'b' }, { id: PI_A, name: 'c' }];
+
+test('the CLI core reads the native id out of an encoded route id', () => {
+  assert.equal(nativeSessionId(OMP_A), '2026-09-05T09-07-03-291Z_01a070d2-43fb-7360-aaba-a4ddf8d1deb0');
+  assert.equal(nativeSessionId(PI_A), PI_A, 'a bare Pi id is its own native id');
+  assert.equal(nativeSessionId('~sk1_nonsense!!'), null, 'a malformed key answers nothing, never a guess');
+});
+
+test('CLI ref resolution matches the server rule exactly', () => {
+  const refs = [
+    OMP_A, OMP_B, PI_A,
+    '2026-09-05T09-07-03-291Z_01a070d2-43fb-7360-aaba-a4ddf8d1deb0',
+    '01a070d2-43fb-7360-aaba-a4ddf8d1deb0', '01a070d2', '01a07264', '019f9834',
+    '~sk1_WyJvbXAi', '2026-', 'nope1234', OMP_A.replace('LTA1VDA5', 'LTA5'),
+  ];
+  for (const ref of refs) {
+    const mine = resolveRefAmong(CORPUS, ref, false);
+    const theirs = H.resolveSessionRefAmong(CORPUS, ref);
+    assert.equal(mine.session?.name ?? null, theirs.session?.name ?? null, ref);
+    assert.deepEqual(mine.matches.map(s => s.name), theirs.matches.map(s => s.name), ref);
+  }
+  // exactOnly (the provenance form) agrees too.
+  assert.equal(resolveRefAmong(CORPUS, '01a070d2', true).session, null);
+  assert.equal(resolveRefAmong(CORPUS, OMP_A, true).session.name, 'a');
+});
+
+test('CLI short refs match the server rule and resolve back', () => {
+  const ids = CORPUS.map(s => s.id);
+  for (const session of CORPUS) {
+    const ref = shortSessionRef(session.id, ids);
+    assert.equal(ref, H.shortSessionRef(session.id, ids), session.id);
+    assert.equal(resolveRefAmong(CORPUS, ref, false).session.name, session.name, ref);
+  }
+  assert.equal(shortSessionRef(OMP_A, ids), '01a070d2');
+  assert.deepEqual(sessionRefAliases(OMP_A), H.sessionRefAliases(OMP_A));
+  assert.deepEqual(sessionRefAliases(PI_A), H.sessionRefAliases(PI_A));
+  // The printable form agrees too, including its refusal to shorten an id
+  // that has no second identifier to name.
+  const legacy = ['2026-08-20T10-00-00-aaaa1111', '2026-08-21T10-00-00-bbbb2222'];
+  for (const id of [...ids, ...legacy]) {
+    const peers = [...ids, ...legacy];
+    assert.equal(stableSessionRef(id, peers), H.stableSessionRef(id, peers), id);
+  }
+  assert.equal(stableSessionRef(legacy[0], legacy), legacy[0]);
+});

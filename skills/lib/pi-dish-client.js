@@ -106,6 +106,18 @@ function registryRouteId(entry) {
   return '~sk1_' + Buffer.from(JSON.stringify([harnessId, nativeSessionId]), 'utf8').toString('base64url');
 }
 
+/** The `[harnessId, nativeSessionId]` tuple inside an encoded route id, or
+ *  null for a bare (legacy Pi) id and for anything malformed. */
+function decodeRouteId(routeId) {
+  const raw = String(routeId || '');
+  if (!raw.startsWith('~sk1_')) return null;
+  try {
+    const tuple = JSON.parse(Buffer.from(raw.slice(5), 'base64url').toString('utf8'));
+    if (!Array.isArray(tuple) || typeof tuple[0] !== 'string' || !tuple[0]) return null;
+    return { harnessId: tuple[0], nativeSessionId: typeof tuple[1] === 'string' ? tuple[1] : null };
+  } catch { return null; }
+}
+
 /**
  * The harness a route id belongs to: an encoded key names it, a bare id is a
  * legacy raw Pi id. `null` means the id cannot answer the question (a
@@ -115,11 +127,15 @@ function sessionHarnessId(routeId) {
   const raw = String(routeId || '');
   if (!raw) return null;
   if (!raw.startsWith('~sk1_')) return 'pi';
-  try {
-    const tuple = JSON.parse(Buffer.from(raw.slice(5), 'base64url').toString('utf8'));
-    if (!Array.isArray(tuple) || typeof tuple[0] !== 'string' || !tuple[0]) return null;
-    return tuple[0];
-  } catch { return null; }
+  return decodeRouteId(raw)?.harnessId || null;
+}
+
+/** The harness-native session id a route id carries (its own id, for Pi). */
+function nativeSessionId(routeId) {
+  const raw = String(routeId || '');
+  if (!raw) return null;
+  if (!raw.startsWith('~sk1_')) return raw;
+  return decodeRouteId(raw)?.nativeSessionId || null;
 }
 
 /**
@@ -290,6 +306,103 @@ function parseRef(raw) {
   return { hostPart: null, hostIdForm: false, id: ref };
 }
 
+// =========================================================================
+// Ref aliases
+//
+// A ref may name any identifier a session has: its route id, the
+// harness-native id encoded inside a `~sk1_` key, or that id's trailing
+// uuid. Without this an OMP/Prime ref is effectively the whole 100-char
+// base64 key, because every such key on a host shares its first ~30
+// characters — and a mistyped key still decodes, so the only answer a
+// server can give is "not found". The canonical rule (and the reasoning)
+// lives in public/helpers.js `resolveSessionRefAmong`; it is mirrored here
+// rather than imported because these CLIs deliberately import nothing from
+// the server (see the module header).
+// =========================================================================
+
+const UUID_TAIL_RE = /(?:^|[_-])([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+/** Every identifier a ref may name for one route id, most specific first. */
+function sessionRefAliases(id) {
+  const routeId = String(id ?? '');
+  if (!routeId) return [];
+  const aliases = [routeId];
+  const native = nativeSessionId(routeId);
+  if (native && native !== routeId) aliases.push(native);
+  const uuid = UUID_TAIL_RE.exec(native || routeId);
+  if (uuid) aliases.push(uuid[1]);
+  return aliases;
+}
+
+/** Exact route id, exact alias, route-id prefix, alias prefix — in that
+ *  order, so a ref that resolved before aliases existed still means the same
+ *  session. Returns `{ session, matches }` like the server's route. */
+function resolveRefAmong(sessions, ref, exactOnly) {
+  const needle = String(ref ?? '');
+  const byId = new Map();
+  for (const session of sessions || []) {
+    if (session?.id && !byId.has(session.id)) byId.set(session.id, session);
+  }
+  const entries = [...byId.values()].map((session) => ({ session, aliases: sessionRefAliases(session.id) }));
+  const stages = [
+    (entry) => entry.session.id === needle,
+    (entry) => entry.aliases.includes(needle),
+    (entry) => entry.session.id.startsWith(needle),
+    (entry) => entry.aliases.some((alias) => alias.startsWith(needle)),
+  ];
+  let candidates = [];
+  for (let stage = 0; stage < (exactOnly ? 2 : stages.length); stage++) {
+    const matches = entries.filter(stages[stage]).map((entry) => entry.session);
+    if (matches.length === 1) return { session: matches[0], matches };
+    if (matches.length && !candidates.length) candidates = matches;
+  }
+  return { session: null, matches: candidates };
+}
+
+/**
+ * The shortest ref that still points at exactly one of `peerIds` — the uuid
+ * tail where the corpus allows it, widened as far as needed, else a route-id
+ * prefix. What the CLI prints instead of a 100-char key, so the next command
+ * carries a handle an agent can retype without corrupting it.
+ */
+function shortSessionRef(id, peerIds, minLen = 8) {
+  const self = String(id ?? '');
+  if (!self) return '';
+  const peers = [];
+  for (const peer of peerIds || []) {
+    const other = String(peer ?? '');
+    if (other && other !== self) peers.push(...sessionRefAliases(other));
+  }
+  // Most specific alias first, so an equally short candidate resolves the tie
+  // toward the uuid tail: a `2026-07-` timestamp prefix is unique only against
+  // the snapshot it was computed from.
+  let best = self;
+  for (const alias of sessionRefAliases(self).slice().reverse()) {
+    for (let len = Math.min(minLen, alias.length); len <= alias.length; len++) {
+      const candidate = alias.slice(0, len);
+      if (peers.some((peer) => peer.startsWith(candidate))) continue;
+      if (candidate.length < best.length) best = candidate;
+      break;
+    }
+  }
+  return best;
+}
+
+/**
+ * The handle to *print*: `shortSessionRef`, unless the only thing it
+ * shortened was the route id itself. Truncating a route id swaps a stable
+ * identifier for a prefix unique only against the corpus snapshot it came
+ * from, and a printed row is exactly what an agent comes back to later.
+ * Naming a different identifier (native id, uuid tail) is not a truncation.
+ */
+function stableSessionRef(id, peerIds, minLen = 8) {
+  const self = String(id ?? '');
+  if (!self) return '';
+  const ref = shortSessionRef(self, peerIds, minLen);
+  if (ref === self) return self;
+  return sessionRefAliases(self).slice(1).some((alias) => alias.startsWith(ref)) ? ref : self;
+}
+
 function hostLabelOf(entry) {
   if (!entry) return null;
   if (entry.self) return '(self)';
@@ -357,26 +470,25 @@ function sessionCatalog(data) {
 }
 
 /**
- * Client-side ref resolution, for hosts that predate GET
- * /api/sessions/resolve. Same rule as the server's: exact id wins, otherwise
- * exactly one prefix match.
+ * Client-side ref resolution: for hosts that predate GET
+ * /api/sessions/resolve, and for hosts whose resolver predates ref aliases —
+ * resolving locally turns a short alias into the full route id the host does
+ * understand, so short refs work across a mixed-version fleet.
  */
 async function resolveSessionClientSide(base, host, id, exactOnly) {
   const { data } = await api(base, host, '/api/sessions');
-  const byId = sessionCatalog(data);
-  const exact = byId.get(id);
-  if (exact) return exact;
-  if (exactOnly) throw new Error(`Session not found: ${id}`);
-  if (id.length < 4) throw new Error('id prefix must be at least 4 characters');
-  const matches = [...byId.values()].filter((session) => session.id.startsWith(id));
-  if (matches.length === 1) return matches[0];
+  const catalog = [...sessionCatalog(data).values()];
+  if (!exactOnly && String(id).length < 4) throw new Error('id prefix must be at least 4 characters');
+  const { session, matches } = resolveRefAmong(catalog, id, exactOnly);
+  if (session) return session;
   if (matches.length > 1) throw ambiguousRefError(id, matches);
   throw new Error(`Session not found: ${id}`);
 }
 
 /**
- * Resolve a ref to `{ host, id, session }`. A full id resolves to itself, so
- * existing callers passing bare ids are unaffected.
+ * Resolve a ref to `{ host, id, session, ref }`. A full id resolves to
+ * itself, so existing callers passing bare ids are unaffected; `ref` is the
+ * short handle the owning host recommends for it, when it serves one.
  */
 async function resolveSessionRef(base, rawRef, hostFlag) {
   const ref = parseRef(rawRef);
@@ -409,13 +521,15 @@ async function resolveSessionRef(base, rawRef, hostFlag) {
         // prefix matching must not turn a stale recorded id into a
         // near-miss on some other session.
         if (ref.hostIdForm && data.session.id !== ref.id) throw new Error(`Session not found: ${ref.id}`);
-        return { host, id: data.session.id, session: data.session };
+        return { host, id: data.session.id, session: data.session, ref: typeof data.ref === 'string' ? data.ref : null };
       }
     } catch (e) {
       // A JSON error body is the host's own verdict — not found, or ambiguous.
       if (e.body?.error) {
         if (Array.isArray(e.body.matches)) throw ambiguousRefError(ref.id, e.body.matches);
-        throw e;
+        // …except a miss on a host whose resolver predates ref aliases, which
+        // cannot expand a native id or uuid tail. Resolve it here instead.
+        if (e.status !== 404 || hostSupports(entry, 'refAliases')) throw e;
       }
       // A bodiless 404 is version skew, not a missing session: fall through.
       if (e.status !== 404) throw e;
@@ -609,13 +723,14 @@ module.exports = {
   // output
   makeFail, print,
   // discovery
-  parentPid, ancestorPids, pidAlive, registryEntries, registryRouteId, sessionHarnessId,
+  parentPid, ancestorPids, pidAlive, registryEntries, registryRouteId, sessionHarnessId, nativeSessionId,
   discoverSession, discoverSessionQuietly,
   // http
   TOKEN, defaultBase, request, requestText, hostPath, api, unknownHostError, jsonInit,
   // fleet + refs
   fleetHosts, resetFleetCache, hostSupports, hostLabelOf, parseRef, resolveHostPart,
   entryForHostName, resolveSessionRef, resolveSessionClientSide,
+  sessionRefAliases, resolveRefAmong, shortSessionRef, stableSessionRef,
   // pure helpers (unit-tested in test/skills-core.test.js)
   mergeSearchResults, renderTranscript, summarizeToolArgs, truncateResult,
 };

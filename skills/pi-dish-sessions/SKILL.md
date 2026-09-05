@@ -21,9 +21,13 @@ machine-readable output.
 
 ## Session refs
 
-Anywhere a command takes a session id, it takes a **ref**: a full id, a
-unique id prefix (≥4 chars, e.g. `8f3ab2c1`), or a host-qualified form
-(`tycho/8f3ab2c1` — no `--host` needed). Users copy refs from the pi-dish
+Anywhere a command takes a session id, it takes a **ref**: a full id, its
+uuid tail, a unique ≥4-char prefix of either (`01a070d2`), or a
+host-qualified form (`tycho/01a070d2` — no `--host` needed). `list`,
+`search` and `resolve` print the shortest ref for each session in their
+first column; pass that along. Never retype an encoded `~sk1_…` route id —
+it is ~100 base64 characters and a one-character slip still decodes, so the
+server can only say `Session not found`. Users copy refs from the pi-dish
 UI; treat a pasted short id as a ref, and `resolve <ref>` to see what it
 points at.
 

@@ -956,7 +956,7 @@ function acceptFileMention(relPath, isDir) {
 // The picker is local: every session this client can address is already in
 // `sessions` (the fleet is aggregated client-side), so ranking them is a sort,
 // not a round trip. Knowing the whole corpus is also what lets the picker
-// write a ref that resolves — see uniqueSessionPrefix.
+// write a ref that resolves — see refPrefixFor.
 
 function allKnownSessions() {
   return [...sessions.active, ...sessions.previous];
@@ -973,10 +973,25 @@ function sessionRefCandidates() {
   return all.filter(s => s.id !== currentSession.id || sessionHostIdOf(s) !== currentHost);
 }
 
-/** Ids sharing a session's host — the only ones a prefix has to beat. */
+/** Ids sharing a session's host — the only ones a ref has to beat. */
 function sameHostSessionIds(session) {
   const hostId = sessionHostIdOf(session);
   return allKnownSessions().filter(s => sessionHostIdOf(s) === hostId).map(s => s.id);
+}
+
+/**
+ * The short id part of a ref, from the point of view of the host that will
+ * expand it — always the session's owner. `shortSessionRef` may name the
+ * native id or uuid tail inside an encoded route id, which only a host
+ * advertising `refAliases` resolves; an older peer gets the route-id prefix
+ * it understands (long for a non-Pi session, but resolvable there).
+ */
+function refPrefixFor(session) {
+  const ids = sameHostSessionIds(session);
+  const owner = hostEntryFor(sessionHostIdOf(session));
+  return hostSupportsCapability(owner, 'refAliases', appConfig)
+    ? shortSessionRef(session.id, ids)
+    : uniqueSessionPrefix(session.id, ids);
 }
 
 /**
@@ -990,7 +1005,7 @@ function sameHostSessionIds(session) {
 function composerSessionRef(session, target) {
   const sessionHost = sessionHostIdOf(session);
   const targetHost = sessionHostIdOf(target);
-  const prefix = uniqueSessionPrefix(session.id, sameHostSessionIds(session));
+  const prefix = refPrefixFor(session);
   if (sessionHost === targetHost) return prefix;
   if (targetHost === selfHost.hostId) {
     const entry = hostEntryFor(sessionHost);
@@ -1925,8 +1940,7 @@ let sessionMenuTimer = null;
  *  that names three sessions is one the owning server refuses. */
 function sessionRefFor(session) {
   if (!session || !session.id) return '';
-  return sessionRef(session, hostEntryFor(session.host || null),
-    uniqueSessionPrefix(session.id, sameHostSessionIds(session)));
+  return sessionRef(session, hostEntryFor(session.host || null), refPrefixFor(session));
 }
 
 function isSessionMenuOpen() {
