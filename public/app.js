@@ -10274,6 +10274,7 @@ function clearExtensionUI() {
   extUIState.widgets.clear();
   for (const badge of extUIState.statuses.values()) badge.remove();
   extUIState.statuses.clear();
+  syncExtStatusRow();
   // Dialogs are stashed, not destroyed: detaching keeps in-progress
   // selections/inputs intact, the stream replay re-docks them when switching
   // back, and extension_ui_state drops any resolved in the meantime.
@@ -10445,9 +10446,47 @@ function showExtWidget(key, lines, placement) {
   extUIState.widgets.set(key, { el: container, collapsed: container.classList.contains('collapsed') });
 }
 
+let extStatusPrefApplied = false;
+
+// Status lines live in their own strip under the header badges, not inline
+// with them: a host's goal/advisor line is a whole sentence (OMP clips at 60
+// chars), and inside the badge row it wrapped into a six-line block that
+// doubled the header height on a phone and pushed the model selector out of
+// reach. Collapsed (the default) the strip is one clipped line; the ▾ opens
+// it to full text, like the widget cards above the composer.
+function extStatusRow() {
+  return document.getElementById('extUiStatuses');
+}
+
+function syncExtStatusRow() {
+  const row = extStatusRow();
+  if (!row) return;
+  if (!extStatusPrefApplied) {
+    extStatusPrefApplied = true;
+    let open = false;
+    try { open = localStorage.getItem('pi-dish-ext-status-open') === '1'; } catch {}
+    if (open) toggleExtStatusRow();
+  }
+  const items = document.getElementById('extUiStatusItems');
+  row.style.display = items && items.children.length ? '' : 'none';
+}
+
+function toggleExtStatusRow() {
+  const row = extStatusRow();
+  if (!row) return;
+  const collapsed = !row.classList.contains('collapsed');
+  row.classList.toggle('collapsed', collapsed);
+  const toggle = document.getElementById('extUiStatusToggle');
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    toggle.title = collapsed ? 'Show full status' : 'Collapse status';
+  }
+  try { localStorage.setItem('pi-dish-ext-status-open', collapsed ? '0' : '1'); } catch {}
+}
+
 function showExtStatus(key, text) {
-  const meta = document.querySelector('.session-meta-desktop');
-  if (!meta) return;
+  const items = document.getElementById('extUiStatusItems');
+  if (!items) return;
 
   // State-map lookup for the same reason as showExtWidget: the raw key is
   // not safe to splice into a CSS selector.
@@ -10457,6 +10496,7 @@ function showExtStatus(key, text) {
   if (!text) {
     badge?.remove();
     extUIState.statuses.delete(key);
+    syncExtStatusRow();
     return;
   }
 
@@ -10464,12 +10504,15 @@ function showExtStatus(key, text) {
     badge = document.createElement('span');
     badge.className = 'ext-ui-status-badge';
     badge.dataset.statusKey = key;
-    badge.title = `Status from ${key}`;
-    meta.appendChild(badge);
+    items.appendChild(badge);
   }
 
   badge.textContent = text;
+  // The collapsed strip clips, so the full line stays reachable on hover and
+  // as the accessible name.
+  badge.title = `${text}\n(status from ${key})`;
   extUIState.statuses.set(key, badge);
+  syncExtStatusRow();
 }
 
 // Interactive dialogs: extensions block on select/confirm/input/editor/ask.

@@ -3553,6 +3553,34 @@ let remoteHost = null; // second pi-dish (multi-host section)
     const ctx = await mobile.locator('#sessionContextBar').boundingBox();
     check(ctx && ctx.x < vp.width / 4 && ctx.y > vp.height / 2, 'context badge sits bottom-left');
     check(!(await mobile.locator('#sessionContext').isVisible()), 'header context badge hidden on mobile');
+
+    // A long host status line (OMP's goal line runs to ~60 chars) must not
+    // grow the header: the strip clips to one line until the ▾ opens it.
+    const headerHeight = () => mobile.evaluate(() =>
+      document.querySelector('.session-header').getBoundingClientRect().height);
+    const baseHeader = await headerHeight();
+    emit('extension_ui_request', {
+      method: 'setStatus',
+      statusKey: 'goal',
+      statusText: 'Goal · make the 2 client test work and continue progressing…',
+    });
+    await mobile.waitForSelector('#extUiStatuses .ext-ui-status-badge', { timeout: 5000 });
+    const collapsedStatus = await mobile.evaluate(() => {
+      const badge = document.querySelector('#extUiStatuses .ext-ui-status-badge');
+      return { height: badge.getBoundingClientRect().height, clipped: badge.scrollWidth > badge.clientWidth };
+    });
+    const withStatus = await headerHeight();
+    check(collapsedStatus.height <= 24 && collapsedStatus.clipped && withStatus - baseHeader <= 30,
+      `collapsed status stays one clipped line (got ${JSON.stringify(collapsedStatus)}, header ${baseHeader}→${withStatus})`);
+    await mobile.click('#extUiStatusToggle');
+    check(await mobile.evaluate(() => {
+      const badge = document.querySelector('#extUiStatuses .ext-ui-status-badge');
+      return badge.scrollWidth <= badge.clientWidth + 1 && badge.getBoundingClientRect().height > 24;
+    }), 'the ▾ expands the status strip to the full line');
+    emit('extension_ui_request', { method: 'setStatus', statusKey: 'goal', statusText: '' });
+    await mobile.waitForFunction(() =>
+      document.getElementById('extUiStatuses').style.display === 'none', { timeout: 5000 });
+    check(true, 'the strip hides itself when the last status clears');
     await mobile.click('#sessionModel');
     await mobile.waitForSelector('.model-option', { timeout: 5000 });
     check(await mobile.locator('.model-option').count() >= 2, 'model dropdown opens from header');

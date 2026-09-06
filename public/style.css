@@ -5601,11 +5601,37 @@ mark.comment-mark {
   .diff-view-body, .file-view-body { padding: 8px 10px 16px; }
 }
 
-/* Extension status badge in session header */
+/* Extension status strip under the session-header badges. Collapsed it is
+   one clipped line (a goal sentence must not grow the header); expanded it
+   wraps to full text. */
+.ext-ui-status-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  margin-top: 4px;
+}
+
+.ext-ui-status-items {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ext-ui-status-row.collapsed .ext-ui-status-items {
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
 .ext-ui-status-badge {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
+  max-width: 100%;
   padding: 2px 8px;
   border-radius: 4px;
   font-size: 11px;
@@ -5613,6 +5639,31 @@ mark.comment-mark {
   color: var(--text-muted);
   font-family: var(--font-mono);
   animation: status-pop 0.2s ease;
+}
+
+.ext-ui-status-row.collapsed .ext-ui-status-badge {
+  /* Block, not inline-flex: text-overflow does not apply to the anonymous
+     flex item a bare text node becomes, so the clip showed no ellipsis. */
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ext-ui-status-toggle {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  padding: 0 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.ext-ui-status-row:not(.collapsed) .ext-ui-status-toggle {
+  transform: rotate(180deg);
 }
 
 @keyframes status-pop {
@@ -5637,6 +5688,23 @@ mark.comment-mark {
   .ext-ui-widget {
     margin-left: 12px;
     margin-right: 12px;
+  }
+
+  /* .session-info already gaps its rows on mobile. */
+  .ext-ui-status-row {
+    margin-top: 0;
+  }
+
+  /* Expanded, the strip must still not own the screen: a phone header has
+     the title, badge row and relation chips above it. */
+  .ext-ui-status-row:not(.collapsed) .ext-ui-status-items {
+    max-height: 5.5em;
+    overflow-y: auto;
+  }
+
+  .ext-ui-status-toggle {
+    min-width: 24px;
+    min-height: 24px;
   }
 }
 
