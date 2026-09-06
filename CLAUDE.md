@@ -1122,6 +1122,15 @@ per-session state: the server remembers each live session's current set
 (`trackExtUIState` in server.js) and replays it into every new SSE
 connection; the client wipes the DOM on session switch (`clearExtensionUI`).
 Widget collapse state is remembered per session+key across switches.
+Status lines get their own strip under the header badges (`#extUiStatuses`,
+`showExtStatus`), never a badge inside the badge row: a host status is a
+sentence (OMP clips its goal line at 60 chars) and inside that flex row it
+wrapped into a six-line block that doubled the phone header's height. The
+strip is collapsed by default — one line, `text-overflow` ellipsis (which is
+why the collapsed badge is `display:block`: the property doesn't apply to the
+anonymous flex item a bare text node becomes) — and the ▾ opens it to the
+full text, capped and scrollable on mobile, with the choice device-local in
+`pi-dish-ext-status-open`.
 
 Steering/follow-up queue (`queue_update`): pi does **not** route this event
 through the extension runner (verified pi 0.80.3), so the bridge can't observe
