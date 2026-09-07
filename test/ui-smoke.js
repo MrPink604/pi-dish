@@ -3508,8 +3508,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       null, { timeout: 3000 });
     check(true, 'Escape closes the routines takeover');
 
-    // Bulk restart uses the real owned RPC path. Its status takeover and the
-    // independently added recovery report must never remain open together.
+    // Bulk restart stays inside Settings rather than replacing the session.
     console.log('bounce agents:');
     const bounceSpawn = await fetch(base + '/api/sessions/new', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -3523,6 +3522,12 @@ let remoteHost = null; // second pi-dish (multi-host section)
     try {
       await desktop.evaluate(() => openSettingsModal());
       await desktop.click('#openBounceAgents');
+      check(await desktop.locator('#settingsModal').isVisible() &&
+        await desktop.locator('#settingsModal #bounceView').isVisible(),
+      'bounce controls expand inside Settings');
+      const bouncePosition = await desktop.locator('#openBounceAgents').boundingBox();
+      const themePosition = await desktop.locator('#settingsTheme').boundingBox();
+      check(bouncePosition.y < themePosition.y, 'Bounce agents is at the top of Settings');
       await desktop.selectOption('#bounceMode', 'restart');
       const bounceTarget = desktop.locator('.bounce-target').filter({ hasText: 'Bounce smoke' });
       await bounceTarget.locator('input').check();
@@ -3534,17 +3539,16 @@ let remoteHost = null; // second pi-dish (multi-host section)
       bouncedId = bounced.replacementId || bouncedId;
       await desktop.evaluate(() => openSettingsModal());
       await desktop.click('#openRecoveryReport');
-      check(await desktop.evaluate(() => document.querySelector('.main').classList.contains('recovery-open') &&
-        !document.querySelector('.main').classList.contains('bounce-open')),
-      'opening recovery closes the bounce takeover');
+      check(!(await desktop.locator('#settingsModal').isVisible()) &&
+        !(await desktop.locator('#bounceMode').isVisible()),
+      'opening recovery closes Settings and its bounce controls');
       await desktop.evaluate(() => openSettingsModal());
       await desktop.click('#openBounceAgents');
-      check(await desktop.evaluate(() => document.querySelector('.main').classList.contains('bounce-open') &&
-        !document.querySelector('.main').classList.contains('recovery-open')),
-      'opening bounce closes the recovery takeover');
+      check(await desktop.locator('#settingsModal #bounceMode').isVisible(),
+        'bounce controls reopen in Settings over the current view');
       await desktop.keyboard.press('Escape');
-      check(await desktop.evaluate(() => !document.querySelector('.main').classList.contains('bounce-open')),
-        'Escape closes the bounce takeover');
+      check(!(await desktop.locator('#settingsModal').isVisible()),
+        'Escape closes Settings and its bounce controls');
     } finally {
       await fetch(`${base}/api/sessions/${encodeURIComponent(bouncedId)}/close`, { method: 'POST' });
     }

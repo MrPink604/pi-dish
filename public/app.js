@@ -3367,11 +3367,15 @@ function toggleFocusMode() {
 // --- Global preferences (modal — the usage overview lives in its own
 // main-pane takeover view now, opened from the sidebar header) ---
 function openSettingsModal() {
+  closeSidebar();
+  closeBounceView();
   document.getElementById('settingsModal').style.display = 'flex';
   renderPreferences();
+  document.querySelector('#settingsModal .settings-body').scrollTop = 0;
 }
 
 function closeSettingsModal() {
+  closeBounceView();
   document.getElementById('settingsModal').style.display = 'none';
 }
 
@@ -3387,7 +3391,6 @@ async function renderPreferences() {
     <label class="preference-row toggle-row"><span><strong>Show estimated session spend in desktop header</strong><small>Stored on this device; off by default.</small></span><input id="showSessionSpend" type="checkbox"></label>
     <div class="preference-row"><label for="monthlyBudget"><strong>Monthly budget warning (USD)</strong><small>Server-global: applies to every device. Estimates use each session harness's catalog pricing; blank clears.</small></label><div class="budget-save"><input id="monthlyBudget" type="number" min="0.01" step="0.01" placeholder="No warning"><button class="btn-small" id="saveBudget">Save</button></div><small id="budgetStatus"></small></div>
     <div id="recoveryPreferences" class="preference-row recovery-preferences" hidden></div>
-    <div class="preference-row"><span><strong>Bounce agents</strong><small>Safely reload or restart owned agents when idle, across capable hosts.</small></span><button class="btn-small" id="openBounceAgents" onclick="openBounceView()">Open Bounce agents</button></div>
     <div class="preference-row"><label><strong>Hosts</strong><small>Added hosts are stored on this device (with their token). Entries this server publishes — and this host itself — are read-only.</small></label>
       <div class="hosts-list" id="hostsList"></div>
       <div class="host-add">
@@ -11470,8 +11473,6 @@ document.addEventListener('keydown', function(e) {
     e.preventDefault(); closeArtifactsModal();
   } else if (isRecoveryViewOpen()) {
     e.preventDefault(); closeRecoveryView();
-  } else if (isBounceViewOpen()) {
-    e.preventDefault(); closeBounceView();
   } else if (isRoutinesViewOpen()) {
     e.preventDefault(); routinesViewEscape();
   } else if (isSkillsViewOpen()) {
@@ -13241,25 +13242,17 @@ let bounceSubmitting = false;
 const bouncePendingRestarts = new Set();
 
 function isBounceViewOpen() {
-  return document.querySelector('.main').classList.contains('bounce-open');
+  return document.getElementById('bounceView').open;
 }
 
 function openBounceView() {
-  closeSettingsModal();
-  closeSidebar();
-  closeUsageView();
-  closeSearchView();
-  closeNewSessionView();
-  closeSkillsView();
-  closeRoutinesView();
-  closeRecoveryView();
-  document.querySelector('.main').classList.add('bounce-open');
+  document.getElementById('bounceView').open = true;
   refreshBounceView();
   document.getElementById('bounceMode').focus();
 }
 
 function closeBounceView() {
-  document.querySelector('.main').classList.remove('bounce-open');
+  document.getElementById('bounceView').open = false;
   ++bounceGeneration;
   for (const state of bounceHosts) clearTimeout(state.timer);
 }
@@ -13285,8 +13278,8 @@ async function refreshBounceView() {
     `<section class="bounce-host" data-bounce-host="${index}">
       <h3>${escapeHtml(hostDisplayLabel(state.host))}</h3>
       ${state.supported
-        ? `<h4>Active targets</h4><div class="bounce-preview"></div><h4>Recent operations</h4><div class="bounce-operations"></div>`
-        : '<p class="bounce-help">Excluded: this host does not advertise safe bulk Reload/Restart support.</p>'}
+        ? `<div class="bounce-preview"></div><div class="bounce-operations"></div>`
+        : '<p class="bounce-help">Update this host to enable bouncing.</p>'}
     </section>`).join('');
   for (const state of bounceHosts) {
     if (!state.supported) continue;
@@ -13438,7 +13431,7 @@ function renderBounceOperations(state) {
         <ul>${operation.targets.map(target => `<li><span class="bounce-result" data-status="${escapeHtml(target.status)}">${escapeHtml(target.status)}</span>
           <span><strong>${escapeHtml(target.name || target.sessionId)}</strong><small>${escapeHtml(target.harnessId || '')}${target.reason ? ` · ${escapeHtml(target.reason)}` : ''}</small></span></li>`).join('')}</ul>
       </article>`;
-    }).join('') : '<p class="bounce-help">No recent operations on this host.</p>'}`;
+    }).join('') : ''}`;
   if (root.innerHTML === html) return;
   root.innerHTML = html;
   root.querySelectorAll('[data-bounce-cancel]').forEach(button => button.addEventListener('click', () => {

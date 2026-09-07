@@ -539,34 +539,6 @@
         <div class="usage-view-body" id="recoveryViewBody"></div>
       </div>
 
-      <section class="bounce-view" id="bounceView" aria-labelledby="bounceTitle">
-        <div class="usage-view-header">
-          <button class="menu-btn" onclick="toggleSidebar()" aria-label="Open session list">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
-          </button>
-          <h2 class="usage-view-title" id="bounceTitle">Bounce agents</h2>
-          <button class="btn-small" id="bounceRefresh" onclick="refreshBounceView()">Refresh preview</button>
-          <button class="btn-icon" onclick="closeBounceView()" aria-label="Close Bounce agents (Esc)">×</button>
-        </div>
-        <div class="bounce-body">
-          <p class="bounce-help">Only pi-dish-owned agents are eligible. Working parents wait until idle; an input dialog mid-turn is not idle. All OMP children must exit, including idle kept-alive children. No forced interruptions.</p>
-          <p class="bounce-help"><strong>Use Restart for OMP bridge/runtime upgrades.</strong> OMP Reload does not update the bridge extension.</p>
-          <p class="bounce-help">Requests run on each host even if this page closes. A server restart cancels its pending requests; recent operation history is process-local. Cancel stops waiting targets only, never executing targets.</p>
-          <div class="bounce-controls">
-            <label for="bounceMode">Action</label>
-            <select id="bounceMode" onchange="refreshBounceView()">
-              <option value="reload">Reload</option>
-              <option value="restart">Restart</option>
-            </select>
-            <button class="btn-small" id="bounceSelectEligible" onclick="selectBounceTargets(true)">Select eligible</button>
-            <button class="btn-small" id="bounceClearSelection" onclick="selectBounceTargets(false)">Clear selection</button>
-            <button class="btn-small" id="bounceSubmit" onclick="submitBounceTargets()" disabled>Queue Reload (0)</button>
-          </div>
-          <p class="bounce-help">Select a preview snapshot, then queue it. Newly started sessions are never added automatically. Each host rechecks safety before acting.</p>
-          <div id="bounceNotice" class="usage-notice" role="status"></div>
-          <div id="bounceHosts"></div>
-        </div>
-      </section>
     </main>
   </div>
 
@@ -657,7 +629,25 @@
   <div class="modal-overlay" id="settingsModal" style="display:none" onclick="if(event.target===this)closeSettingsModal()">
     <div class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
       <div class="modal-header"><h3 id="settingsTitle">Settings</h3><button class="btn-icon" onclick="closeSettingsModal()" title="Close (Esc)">✕</button></div>
-      <div class="settings-body" id="settingsBody"></div>
+      <div class="settings-body">
+        <details class="bounce-settings" id="bounceView">
+          <summary id="openBounceAgents" onclick="event.preventDefault(); isBounceViewOpen() ? closeBounceView() : openBounceView()">Bounce agents</summary>
+          <p class="bounce-help">Waits for idle agents and exited OMP children. Use Restart for OMP updates.</p>
+          <div class="bounce-controls">
+            <select id="bounceMode" aria-label="Action" onchange="refreshBounceView()">
+              <option value="reload">Reload</option>
+              <option value="restart">Restart</option>
+            </select>
+            <button class="btn-small" id="bounceSelectEligible" onclick="selectBounceTargets(true)">Select all</button>
+            <button class="btn-small" id="bounceClearSelection" onclick="selectBounceTargets(false)">Clear</button>
+            <button class="btn-small" id="bounceRefresh" onclick="refreshBounceView()">Refresh</button>
+            <button class="btn-small" id="bounceSubmit" onclick="submitBounceTargets()" disabled>Queue Reload (0)</button>
+          </div>
+          <div id="bounceNotice" class="usage-notice" role="status"></div>
+          <div id="bounceHosts"></div>
+        </details>
+        <div id="settingsBody"></div>
+      </div>
     </div>
   </div>
 

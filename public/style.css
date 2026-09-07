@@ -4678,7 +4678,6 @@ body.standalone-file-page {
 .recovery-view { display: none; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 .main.recovery-open .recovery-view { display: flex; }
 .main.recovery-open .empty-state,
-.main.recovery-open .bounce-view,
 .main.recovery-open .session-view { display: none !important; }
 .recovery-preferences[hidden] { display: none; }
 .recovery-preferences { flex-direction: column; align-items: stretch; gap: 12px; }
@@ -4696,22 +4695,18 @@ body.standalone-file-page {
 .recovery-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
 .recovery-row .recovery-actions { margin-top: 10px; }
 .recovery-actions label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
-/* Safe bulk agent lifecycle controls, opened from Settings. */
-.bounce-view { display: none; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
-.main.bounce-open .bounce-view { display: flex; }
-.main.bounce-open .empty-state,
-.main.bounce-open .recovery-view,
-.main.bounce-open .session-view { display: none !important; }
-.bounce-view .usage-view-title { margin: 0; flex: 1; }
-.bounce-body { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 24px 36px; }
-.bounce-help { color: var(--text-muted); font-size: 12px; line-height: 1.6; margin: 0 0 10px; }
-.bounce-help strong { color: var(--text); font-weight: 500; }
-.bounce-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 18px 0 10px; font-size: 12px; }
+/* Bulk lifecycle controls stay inside Settings. */
+.bounce-settings { border-bottom: 1px solid var(--line); padding: 0 0 14px; margin-bottom: 4px; min-width: 0; }
+.bounce-settings > summary { cursor: pointer; color: var(--text); font-size: 13px; font-weight: 600; padding: 8px 0; }
+.bounce-settings[open] > summary { margin-bottom: 4px; }
+.bounce-help { color: var(--text-muted); font-size: 12px; line-height: 1.5; margin: 0 0 10px; }
+.bounce-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0; font-size: 12px; }
 .bounce-controls select { background: var(--bg-darker); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 7px 10px; }
 .bounce-controls button:disabled { opacity: .5; cursor: default; }
-.bounce-host { margin-top: 24px; padding-top: 14px; border-top: 1px solid var(--line); }
-.bounce-host h3 { margin: 0 0 14px; font-size: 14px; color: var(--text); overflow-wrap: anywhere; }
-.bounce-host h4 { margin: 18px 0 8px; font-size: 12px; font-weight: 500; color: var(--text-muted); }
+.bounce-host { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.bounce-host:only-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.bounce-host:only-child > h3 { display: none; }
+.bounce-host h3 { margin: 0 0 8px; font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
 .bounce-target { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
 .bounce-target.ineligible { cursor: default; color: var(--text-muted); }
 .bounce-target input { flex-shrink: 0; margin: 3px 0; accent-color: var(--accent); width: 16px; height: 16px; }
@@ -4734,7 +4729,6 @@ body.standalone-file-page {
 .bounce-result[data-status="failed"] { color: var(--error); }
 .bounce-result[data-status="waiting"] { color: var(--warning); }
 @media (max-width: 768px) {
-  .bounce-body { padding: 14px 16px 28px; }
   .bounce-controls .btn-small { min-height: 36px; }
   .bounce-target { padding: 12px 0; }
   .bounce-operation-header button { min-height: 36px; }
