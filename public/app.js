@@ -1687,7 +1687,7 @@ function renderSessionItem(session, opts = {}) {
   // Live sessions report their thinking level; historical rows have none to
   // show, so the chip simply doesn't render there.
   const thinkingChip = session.thinkingLevel
-    ? `<span class="session-item-thinking" title="Thinking level: ${escapeHtml(session.thinkingLevel)}">🧠 ${escapeHtml(session.thinkingLevel)}</span>`
+    ? `<span class="session-item-thinking" title="Thinking level: ${escapeHtml(session.thinkingLevel)}">${escapeHtml(session.thinkingLevel)}</span>`
     : '';
 
   return `
@@ -3066,7 +3066,7 @@ let thinkingDropdownOpen = false;
 function updateThinkingBadges() {
   const level = currentSession?.thinkingLevel;
   const show = !!(currentSession && currentSession.isActive && sessionSupports(currentSession, 'setThinking'));
-  const label = '🧠 ' + (level || '?') + ' ▾';
+  const label = (level || '?') + ' ▾';
   const badge = document.getElementById('sessionThinking');
   if (badge) {
     badge.style.display = show ? '' : 'none';
