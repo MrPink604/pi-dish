@@ -153,6 +153,59 @@ test('OMP session usage is catalog-priced while unknown models remain unavailabl
   assert.equal(stats.costUnavailable.total, 1);
 });
 
+test('OMP subscription-plan zero rates stay unpriced while free tiers remain free', () => {
+  const planHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-pricing-plan-'));
+  process.env.HOME = planHome;
+  pricing.resetForTests();
+  try {
+    fs.mkdirSync(path.join(planHome, '.pi', 'dish', 'pricing'), { recursive: true });
+    fs.writeFileSync(path.join(planHome, '.pi', 'dish', 'pricing', 'omp.json'), JSON.stringify({
+      updatedAt: 1, models: [
+        { provider: 'kimi-code', id: 'k3', cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+        { provider: 'google-antigravity', id: 'gemini-3.7-flash', cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+        { provider: 'opencode-zen', id: 'mimo-v2.5-free', cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+        { provider: 'kimi-code', id: 'k3-priced', cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 } },
+      ],
+    }) + '\n');
+
+    assert.equal(pricing.estimateUsageCost('omp', 'kimi-code', 'k3', { input: 1_000_000 }), undefined,
+      'zero-rate Kimi subscription entries are unpriced, not free');
+    assert.equal(pricing.estimateUsageCost('omp', 'google-antigravity', 'gemini-3.7-flash', { input: 1_000_000 }), undefined,
+      'zero-rate Antigravity subscription entries are unpriced, not free');
+    assert.deepEqual(pricing.estimateUsageCost('omp', 'opencode-zen', 'mimo-v2.5-free', { input: 1_000_000 }),
+      { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      'genuinely free tiers keep their authoritative $0');
+    assert.equal(pricing.estimateUsageCost('omp', 'kimi-code', 'k3-priced', { input: 1_000_000 }).total, 3,
+      'a rate-card override prices the same provider normally');
+
+    const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+    const candidate = { harnessId: 'omp', profileId: 'omp-v1', profileVersion: 1 };
+    const content = [
+      { type: 'message', message: { role: 'assistant', provider: 'kimi-code', model: 'k3', content: [],
+        usage: { input: 100, output: 10, cost: zeroCost } } },
+      { type: 'message', message: { role: 'assistant', provider: 'opencode-zen', model: 'mimo-v2.5-free', content: [],
+        usage: { input: 100, output: 10, cost: zeroCost } } },
+    ].map(JSON.stringify).join('\n') + '\n';
+    const usage = sessionFiles.buildIndexedUsageFromContent(content, candidate);
+    assert.equal(usage.models['kimi-code/k3'].costs.total, 0);
+    assert.equal(usage.models['kimi-code/k3'].costUnavailable.total, 1,
+      'plan-reported zeros count as unavailable, not free');
+    assert.equal(usage.models['opencode-zen/mimo-v2.5-free'].costs.total, 0);
+    assert.equal(usage.models['opencode-zen/mimo-v2.5-free'].costUnavailable.total, 0);
+
+    const file = path.join(planHome, 'omp-plan.jsonl');
+    fs.writeFileSync(file, content);
+    const messages = sessionFiles.readSessionMessages({ ...candidate, file })
+      .filter(message => message.role === 'assistant');
+    assert.equal(messages[0].usage.cost, undefined, 'plan session messages show no fake $0 cost');
+    assert.deepEqual(messages[1].usage.cost, zeroCost, 'free-tier messages keep their reported $0');
+  } finally {
+    process.env.HOME = tmp;
+    pricing.resetForTests();
+    fs.rmSync(planHome, { recursive: true, force: true });
+  }
+});
+
 test('OMP session usage keeps recorded costs when catalog pricing is unavailable', () => {
   const missingHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-pricing-recorded-'));
   process.env.HOME = missingHome;
