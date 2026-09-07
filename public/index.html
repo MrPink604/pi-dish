@@ -289,12 +289,9 @@
         <!-- Input (for active sessions) -->
         <div class="input-area">
           <!-- Mobile control panel (opened via ⚙ in the actions row).
-               Model + context live in the header on mobile now. -->
+               Model + thinking live in the header on mobile, context in the
+               input row. -->
           <div class="control-panel" id="controlPanel">
-            <button class="cp-row" id="cpThinkingRow" onclick="toggleThinkingDropdown(event)" title="Thinking level" style="display:none">
-              <span class="cp-label">Thinking</span>
-              <span class="cp-value" id="sessionThinkingMobile">—</span>
-            </button>
             <button class="cp-row" onclick="closeControlPanel(); openSearch()" title="Search in session">
               <span class="cp-label">Search in session</span>
               <span class="cp-value">🔍</span>

@@ -1684,6 +1684,11 @@ function renderSessionItem(session, opts = {}) {
     ? `<div class="session-item-snippet">${highlightTokens(session.searchSnippet,
         positiveQueryTokens(parseSessionQuery(filterQuery)))}</div>`
     : '';
+  // Live sessions report their thinking level; historical rows have none to
+  // show, so the chip simply doesn't render there.
+  const thinkingChip = session.thinkingLevel
+    ? `<span class="session-item-thinking" title="Thinking level: ${escapeHtml(session.thinkingLevel)}">🧠 ${escapeHtml(session.thinkingLevel)}</span>`
+    : '';
 
   return `
     <div class="session-item ${activeClass} ${inactiveClass}${closeBusy ? ' closing' : ''}${staleHost}" data-id="${escapeHtml(session.id)}"${session.host ? ` data-host="${escapeHtml(session.host)}"` : ''}>
@@ -1694,6 +1699,7 @@ function renderSessionItem(session, opts = {}) {
       </div>
       <div class="session-item-meta">
         <span class="session-item-model" title="${escapeHtml(session.model || '')}">${escapeHtml(shortModelName(session.model))}</span>
+        ${thinkingChip}
         <span class="session-item-context ${ctxClass}" title="${escapeHtml(ctxTitle)}">${escapeHtml(ctxText)}</span>
       </div>
       <div class="session-item-tags${hostChip ? ' with-host' : ''}">
@@ -3061,15 +3067,11 @@ function updateThinkingBadges() {
   const level = currentSession?.thinkingLevel;
   const show = !!(currentSession && currentSession.isActive && sessionSupports(currentSession, 'setThinking'));
   const label = '🧠 ' + (level || '?') + ' ▾';
-  const desktop = document.getElementById('sessionThinking');
-  if (desktop) {
-    desktop.style.display = show ? '' : 'none';
-    desktop.textContent = label;
+  const badge = document.getElementById('sessionThinking');
+  if (badge) {
+    badge.style.display = show ? '' : 'none';
+    badge.textContent = label;
   }
-  const mobileRow = document.getElementById('cpThinkingRow');
-  if (mobileRow) mobileRow.style.display = show ? '' : 'none';
-  const mobileVal = document.getElementById('sessionThinkingMobile');
-  if (mobileVal) mobileVal.textContent = (level || '?') + ' ▾';
 }
 
 function toggleThinkingDropdown(event) {
@@ -3082,8 +3084,10 @@ function toggleThinkingDropdown(event) {
     `<div class="thinking-option${l === currentSession.thinkingLevel ? ' active' : ''}" onclick="selectThinkingLevel('${l}')">${l}</div>`
   ).join('');
 
-  // On mobile the trigger sits above the keyboard/composer — open upward.
-  anchorDropdown(dropdown, event.currentTarget.getBoundingClientRect(), { above: window.innerWidth <= 768 });
+  // Open upward only when the trigger sits in the lower half of the screen
+  // (the composer area on mobile); the header trigger opens downward.
+  const rect = event.currentTarget.getBoundingClientRect();
+  anchorDropdown(dropdown, rect, { above: rect.top > window.innerHeight / 2 });
   dropdown.style.display = 'block';
   armOutsideClickClose(['thinkingDropdown'], closeThinkingDropdown, () => thinkingDropdownOpen);
 }

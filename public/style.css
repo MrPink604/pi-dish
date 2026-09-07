@@ -896,9 +896,9 @@ body.sidebar-open {
   50% { opacity: 0.5; }
 }
 
-/* Row 2: what the session is running and how full it is. Two facts, so they
-   read at a glance — the message count and the second context number were
-   noise the eye had to step over. */
+/* Row 2: what the session is running and how full it is, plus its thinking
+   level while live. Scannable facts only — the message count and the second
+   context number were noise the eye had to step over. */
 .session-item-meta {
   display: flex;
   align-items: baseline;
@@ -913,6 +913,12 @@ body.sidebar-open {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+.session-item-thinking {
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .session-item-context {
@@ -2808,10 +2814,9 @@ body.sidebar-open {
     font-size: 9px;
   }
 
-  /* Keep only the model selector in the header — context lives bottom-left
-     in the input row, the rest in the ⚙ panel. !important beats the inline
-     display toggles in JS. */
-  #sessionThinking,
+  /* Keep the model selector and thinking badge in the header — context
+     lives bottom-left in the input row, the rest in the ⚙ panel.
+     !important beats the inline display toggles in JS. */
   #sessionMsgCount,
   #sessionWorking,
   #sessionContext {
