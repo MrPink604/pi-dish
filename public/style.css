@@ -1251,7 +1251,8 @@ body.sidebar-open {
 /* Model selector dropdown */
 .model-selector {
   position: relative;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
 }
 
 .badge-model {
