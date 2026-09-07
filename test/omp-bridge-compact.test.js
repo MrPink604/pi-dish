@@ -128,6 +128,22 @@ test('OMP bridge projects the native ask tool through extension UI', async () =>
   }
 });
 
+test('OMP bridge accepts the harness thinking vocabulary (max/auto), rejects others', async () => {
+  const host = await startFakeHost(false);
+  const session = new BridgeSession(host.claim);
+  try {
+    await session.connect();
+    // The fake host's getThinkingLevel() always reads back "minimal"; the
+    // assertions are about which values the bridge accepts, not the read-back.
+    assert.ok(await session.setThinkingLevel('auto'), 'auto accepted');
+    assert.ok(await session.setThinkingLevel('max'), 'max accepted');
+    await assert.rejects(session.setThinkingLevel('bogus'), /level must be one of: off, minimal, low, medium, high, xhigh, max, auto/);
+  } finally {
+    session.close();
+    await host.close();
+  }
+});
+
 test('OMP bridge retires an ask request when local presentation throws', async () => {
   const host = await startFakeHost(false, { askDialog: true, askThrow: true });
   const session = new BridgeSession(host.claim);

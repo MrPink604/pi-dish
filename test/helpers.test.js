@@ -2067,3 +2067,22 @@ test('isDarkColorHex judges theme backgrounds', () => {
   assert.equal(H.isDarkColorHex('#fff'), false, 'shorthand hex');
   assert.equal(H.isDarkColorHex('nonsense'), true, 'unparseable reads as dark');
 });
+
+test('thinkingLevelsFor trims OMP options to the model catalog entry', () => {
+  // k3-style catalog entry: a subset of OMP's vocabulary.
+  assert.deepEqual(H.thinkingLevelsFor('omp', { thinking: ['low', 'high', 'max'] }),
+    ['off', 'low', 'high', 'max', 'auto']);
+  // No catalog entry (or an empty list): the full OMP vocabulary.
+  assert.deepEqual(H.thinkingLevelsFor('omp', { thinking: null }),
+    ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'auto']);
+  assert.deepEqual(H.thinkingLevelsFor('omp', null),
+    ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'auto']);
+  // A catalog entry listing off can't produce duplicates.
+  assert.deepEqual(H.thinkingLevelsFor('omp', { thinking: ['off', 'low'] }),
+    ['off', 'low', 'auto']);
+  // Pi and other harnesses keep pi's fixed vocabulary.
+  assert.deepEqual(H.thinkingLevelsFor('pi', { thinking: ['low'] }),
+    ['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+  assert.deepEqual(H.thinkingLevelsFor('prime', null),
+    ['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+});

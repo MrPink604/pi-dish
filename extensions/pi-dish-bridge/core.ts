@@ -260,6 +260,10 @@ export type BridgeDescriptor = {
   // Resident harness daemons may not forward arbitrary client environment
   // variables. Launch-specific wrappers inject this value directly instead.
   spawnToken?: string;
+  // Accepted values for set_thinking_level / the /thinking command. Pi hosts
+  // keep the default six; wrapper hosts pass their own vocabulary (OMP adds
+  // max/auto). Individual models may support a subset — the host clamps.
+  thinkingLevels?: readonly string[];
   // Wrapper hosts (OMP, …) embed pi's extension API, so the stock bridge from
   // the wrapper's user-extension directory also loads inside their processes
   // — where it must not register, because the wrapper's own dedicated bridge
@@ -1617,8 +1621,11 @@ export function createBridge(descriptor: BridgeDescriptor) {
       if (!descriptor.capabilities.setThinking) {
         return { ok: false, error: `/${name} is unavailable in the ${descriptor.name} public bridge profile.` };
       }
-      if (!THINKING_LEVELS.includes(args)) return { ok: false, error: `usage: /thinking <${THINKING_LEVELS.join("|")}>` };
-      pi.setThinkingLevel(args as any);
+      const levels = descriptor.thinkingLevels ?? THINKING_LEVELS;
+      if (!levels.includes(args)) return { ok: false, error: `usage: /thinking <${levels.join("|")}>` };
+      // Runtime-validated against the host's own vocabulary just above;
+      // wrapper hosts accept levels pi's ThinkingLevel union doesn't name.
+      pi.setThinkingLevel(args as Parameters<ExtensionAPI["setThinkingLevel"]>[0]);
       writeRegistry();
       return { ok: true, info: `Thinking level: ${args}` };
     }
@@ -2078,8 +2085,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
         }
 
         case "set_thinking_level": {
-          if (!THINKING_LEVELS.includes(cmd.level)) {
-            return respond(false, undefined, `level must be one of: ${THINKING_LEVELS.join(", ")}`);
+          const levels = descriptor.thinkingLevels ?? THINKING_LEVELS;
+          if (!levels.includes(cmd.level)) {
+            return respond(false, undefined, `level must be one of: ${levels.join(", ")}`);
           }
           pi.setThinkingLevel(cmd.level);
           writeRegistry();

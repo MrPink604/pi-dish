@@ -10,6 +10,9 @@ export const bridgeDescriptor = {
     commands: true, reload: false, queueRead: false, queueCancel: false,
     treeRead: true, treeNavigation: true, extensionUI: true, shareSnapshot: true,
   },
+  // OMP's --thinking vocabulary (omp --help). Models support a subset — OMP
+  // clamps — but the bridge must accept every value the harness does.
+  thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"],
   sessionSwitchEvents: true,
   nestedSubsessions: true,
   publicCompactionEvents: true,

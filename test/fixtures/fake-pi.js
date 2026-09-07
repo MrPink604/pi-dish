@@ -214,10 +214,16 @@ if (process.env.PI_FIXTURE_NOREGISTER) {
         const line = buf.slice(0, i); buf = buf.slice(i + 1);
         let msg;
         try { msg = JSON.parse(line); } catch { continue; }
-        if (msg.id === undefined) continue;
-        let response;
         if (msg.command === 'get_commands') {
           response = { type: 'response', id: msg.id, success: true, data: { commands: [] } };
+        } else if (msg.command === 'get_available_models') {
+          // Mirror OMP's live model registry: same models the catalog
+          // command serves, but WITHOUT the per-model thinking arrays.
+          response = { type: 'response', id: msg.id, success: true, data: { models: [
+            { provider: 'zai', id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 1000000 },
+            { provider: 'zai', id: 'glm-4.7-flash', name: 'GLM-4.7-Flash', contextWindow: 200000 },
+            { provider: 'live-only', id: 'uncatalogued', name: 'Uncatalogued', contextWindow: 64000 },
+          ] } };
         } else if (msg.command === 'set_session_name') {
           response = { type: 'response', id: msg.id, success: true };
         } else {

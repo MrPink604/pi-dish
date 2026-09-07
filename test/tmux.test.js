@@ -156,6 +156,28 @@ test('OMP spawn omits the launch wrapper when the discovery bridge is installed'
   }
 });
 
+test('OMP session models gain catalog thinking levels the live registry omits', { skip: !tmuxOk }, async () => {
+  const { status, body } = await post('/api/sessions/new', {
+    harness: 'omp',
+    target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+
+  // The fixture's live model registry answers get_available_models without
+  // per-model thinking arrays (like the real OMP runtime); the server merges
+  // them in from the `omp models --json` catalog.
+  const res = await fetch(`${base}/api/models?sessionId=${encodeURIComponent(body.id)}`);
+  assert.equal(res.status, 200);
+  const models = await res.json();
+  const glm52 = models.find(m => m.selector === 'zai/glm-5.2');
+  assert.deepEqual(glm52.thinking, ['high', 'max'], 'catalog levels merged onto the live entry');
+  assert.equal(glm52.contextWindow, 1000000, 'live registry fields survive the merge');
+  const flash = models.find(m => m.selector === 'zai/glm-4.7-flash');
+  assert.deepEqual(flash.thinking, ['minimal', 'low', 'medium', 'high', 'xhigh']);
+  const uncatalogued = models.find(m => m.selector === 'live-only/uncatalogued');
+  assert.equal(uncatalogued.thinking, null, 'models absent from the catalog stay list-less');
+});
+
 test('OMP spawn keeps its launch wrapper when the configured agent directory has no discovery bridge', { skip: !tmuxOk }, async () => {
   const defaultExtDir = path.join(tmpHome, '.omp', 'agent', 'extensions');
   fs.mkdirSync(defaultExtDir, { recursive: true });

@@ -3075,7 +3075,8 @@ function updateSessionHeader() {
   updateMicButton();
 }
 
-// --- Thinking level selector (levels come from helpers.THINKING_LEVEL_NAMES) ---
+// --- Thinking level selector (levels from helpers.thinkingLevelsFor: pi's
+//     fixed vocabulary, OMP's model-supported subset + off/auto) ---
 let thinkingDropdownOpen = false;
 
 function updateThinkingBadges() {
@@ -3089,13 +3090,24 @@ function updateThinkingBadges() {
   }
 }
 
-function toggleThinkingDropdown(event) {
+async function toggleThinkingDropdown(event) {
   if (!currentSession || !currentSession.isActive || !sessionSupports(currentSession, 'setThinking')) return;
+  // Load the model list so OMP can trim the dropdown to what the session's
+  // model supports (cached after the first fetch).
+  await loadModels(currentSession.id, currentSession.harnessId);
   const dropdown = document.getElementById('thinkingDropdown');
   thinkingDropdownOpen = !thinkingDropdownOpen;
   if (!thinkingDropdownOpen) { dropdown.style.display = 'none'; return; }
 
-  dropdown.innerHTML = THINKING_LEVEL_NAMES.map(l =>
+  const ref = currentSession.model || '';
+  const model = knownModels.find(m => m &&
+    (m.selector === ref || m.id === ref || `${m.provider}/${m.id}` === ref));
+  const levels = thinkingLevelsFor(currentSession.harnessId, model);
+  // The current level always shows, even if the catalog doesn't name it.
+  if (currentSession.thinkingLevel && !levels.includes(currentSession.thinkingLevel)) {
+    levels.push(currentSession.thinkingLevel);
+  }
+  dropdown.innerHTML = levels.map(l =>
     `<div class="thinking-option${l === currentSession.thinkingLevel ? ' active' : ''}" onclick="selectThinkingLevel('${l}')">${l}</div>`
   ).join('');
 
@@ -3120,9 +3132,13 @@ async function selectThinkingLevel(level) {
   if (!currentSession || !sessionSupports(currentSession, 'setThinking')) return;
   try {
     const data = await apiSend(currentSession.host, `/api/sessions/${encodeURIComponent(currentSession.id)}/thinking`, { level });
-    // Pi clamps to what the model supports; trust the reported level.
-    patchSession(currentSession.id, { thinkingLevel: data.level || level });
-    setStatus('Thinking level: ' + currentSession.thinkingLevel);
+    // The harness clamps to what the model supports; trust the reported
+    // level, and say so when it differs from what was asked for.
+    const reported = data.level || level;
+    patchSession(currentSession.id, { thinkingLevel: reported });
+    setStatus(reported !== level
+      ? `Thinking level: ${reported} (model doesn't support ${level})`
+      : `Thinking level: ${reported}`);
   } catch (e) {
     setStatus('Thinking level failed: ' + e.message, 'error');
   }

@@ -1835,6 +1835,25 @@ function stripThinkingSuffix(pattern) {
   return THINKING_LEVEL_NAMES.includes(suffix) ? pattern.slice(0, idx) : pattern;
 }
 
+// OMP's harness-wide thinking vocabulary (omp --thinking): every model
+// supports a subset (the catalog's `thinking` array), plus off/auto which
+// are always accepted.
+const OMP_THINKING_LEVEL_NAMES = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'auto'];
+
+/**
+ * The levels a session's thinking dropdown should offer. Pi exposes one
+ * fixed vocabulary. OMP sessions get off/auto plus the current model's
+ * supported subset when the catalog says what it is; the full OMP
+ * vocabulary when it doesn't (an unsupported pick then clamps, which the
+ * status line reports).
+ */
+function thinkingLevelsFor(harnessId, model) {
+  if (harnessId !== 'omp') return THINKING_LEVEL_NAMES;
+  const supported = Array.isArray(model?.thinking) && model.thinking.length
+    ? model.thinking : OMP_THINKING_LEVEL_NAMES.slice(0, -1);
+  return [...new Set(['off', ...supported, 'auto'])];
+}
+
 // Glob → RegExp: * and ? don't cross "/" (minimatch semantics), [...] passes through.
 // Returns null for a malformed glob (e.g. an unbalanced '[') rather than
 // throwing — a hand-edited settings pattern must not take down /api/models.
@@ -2499,7 +2518,7 @@ if (typeof module !== 'undefined' && module.exports) {
     partitionPinned, applyLocalFilter, applyHostTerms, fuzzyMatch, fuzzyScore,
     RELATION_KIND_ORDER, sortRelations, isChildRelation, groupRelations,
     parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch, stripQueryField,
-    highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES,
+    highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES, thinkingLevelsFor,
     sessionKey, parseSessionKey, sessionRefKey, normalizeHostBase, sanitizeHostCatalog,
     hostDisplayLabel, sessionRef, uniqueSessionPrefix, mergeHostEntries, mergeUsageSummaries, createFanoutRenderQueue,
     decodeRouteSessionId, sessionRefAliases, resolveSessionRefAmong, shortSessionRef, stableSessionRef,

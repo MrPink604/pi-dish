@@ -4289,6 +4289,28 @@ app.put('/api/harnesses/:id/model-roles', async (req, res) => {
   }
 });
 
+// A live OMP session's model registry doesn't carry the per-model thinking
+// level list that `omp models --json` has — merge it in from the (cached)
+// catalog by selector, so the thinking dropdown can offer only what the
+// session's model supports.
+async function withCatalogThinkingLevels(models, descriptor) {
+  if (descriptor?.modelCatalog !== 'command') return models;
+  if (!models.some(m => m && !Array.isArray(m.thinking))) return models;
+  try {
+    const catalog = await runHarnessModelCommand(descriptor, {});
+    const levelsBySelector = new Map(
+      catalog.filter(m => m && Array.isArray(m.thinking)).map(m => [m.selector, m.thinking]));
+    return models.map(m => {
+      if (!m || Array.isArray(m.thinking)) return m;
+      const thinking = levelsBySelector.get(m.selector)
+        ?? levelsBySelector.get(`${m.provider}/${m.id}`);
+      return thinking ? { ...m, thinking } : m;
+    });
+  } catch {
+    return models;
+  }
+}
+
 app.get('/api/models', async (req, res) => {
   try {
     const sessionId = req.query.sessionId;
@@ -4297,7 +4319,8 @@ app.get('/api/models', async (req, res) => {
       if (!identity) return res.status(400).json({ error: 'Invalid session ID' });
       const sessionModels = await getSessionModels(sessionId);
       if (sessionModels) {
-        return res.json(identity.harnessId === 'pi' ? annotateEnabled(sessionModels) : sessionModels);
+        if (identity.harnessId === 'pi') return res.json(annotateEnabled(sessionModels));
+        return res.json(await withCatalogThinkingLevels(sessionModels, getHarness(identity.harnessId)));
       }
       if (identity.harnessId !== 'pi') {
         return res.status(409).json({ error: `Model discovery is unavailable for this ${getHarness(identity.harnessId).label} session.` });
