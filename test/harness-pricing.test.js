@@ -231,3 +231,57 @@ test('OMP session usage keeps recorded costs when catalog pricing is unavailable
     fs.rmSync(missingHome, { recursive: true, force: true });
   }
 });
+
+test('OMP models.yml rate card prices dead ids and beats catalog rows', () => {
+  const cardHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-pricing-card-'));
+  process.env.HOME = cardHome;
+  pricing.resetForTests();
+  try {
+    fs.mkdirSync(path.join(cardHome, '.pi', 'dish', 'pricing'), { recursive: true });
+    fs.mkdirSync(path.join(cardHome, '.omp', 'agent'), { recursive: true });
+    fs.writeFileSync(path.join(cardHome, '.pi', 'dish', 'pricing', 'omp.json'), JSON.stringify({
+      updatedAt: 1, models: [
+        { provider: 'zai', id: 'glm-4.7-flash', cost: { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0.8 } },
+      ],
+    }) + '\n');
+    const modelsYml = path.join(cardHome, '.omp', 'agent', 'models.yml');
+    fs.writeFileSync(modelsYml, [
+      'providers:',
+      '  google-antigravity:',
+      '    modelOverrides:',
+      '      gemini-3.7-flash-tiered:',
+      '        cost: { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 }',
+      '  zai:',
+      '    modelOverrides:',
+      '      glm-4.7-flash:',
+      '        cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 }',
+      '',
+    ].join('\n'));
+
+    assert.equal(pricing.estimateUsageCost('omp', 'google-antigravity', 'gemini-3.7-flash-tiered',
+      { input: 1_000_000, output: 1_000_000 }).total, 4.5,
+      'an override-only id OMP drops from its catalog still prices');
+    assert.equal(pricing.estimateUsageCost('omp', 'zai', 'glm-4.7-flash',
+      { input: 1_000_000, output: 1_000_000 }).total, 3,
+      'a user rate-card row wins over the catalog row');
+    const revision = pricing.pricingRevision('omp');
+    assert.notEqual(revision, 'missing');
+
+    // Editing the rate card must shift the pricing revision so indexed
+    // sessions re-price through the normal mismatch path.
+    fs.writeFileSync(modelsYml, fs.readFileSync(modelsYml, 'utf8').replace('input: 0.75', 'input: 0.95'));
+    assert.notEqual(pricing.pricingRevision('omp'), revision,
+      'rate-card edits shift the pricing revision');
+
+    // A broken file degrades to no overrides rather than breaking pricing.
+    fs.writeFileSync(modelsYml, 'providers: [unclosed\n');
+    const fallback = pricing.estimateUsageCost('omp', 'zai', 'glm-4.7-flash',
+      { input: 1_000_000, output: 1_000_000 });
+    assert.ok(Math.abs(fallback.total - 2.8) < 1e-9,
+      'broken models.yml falls back to the plain catalog');
+  } finally {
+    process.env.HOME = tmp;
+    pricing.resetForTests();
+    fs.rmSync(cardHome, { recursive: true, force: true });
+  }
+});
