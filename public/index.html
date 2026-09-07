@@ -630,8 +630,8 @@
     <div class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
       <div class="modal-header"><h3 id="settingsTitle">Settings</h3><button class="btn-icon" onclick="closeSettingsModal()" title="Close (Esc)">✕</button></div>
       <div class="settings-body">
-        <details class="bounce-settings" id="bounceView">
-          <summary id="openBounceAgents" onclick="event.preventDefault(); isBounceViewOpen() ? closeBounceView() : openBounceView()">Bounce agents</summary>
+        <details class="bounce-settings" id="bounceView" ontoggle="this.open ? refreshBounceView() : closeBounceView()">
+          <summary id="openBounceAgents">Bounce agents</summary>
           <p class="bounce-help">Waits for idle agents and exited OMP children. Use Restart for OMP updates.</p>
           <div class="bounce-controls">
             <select id="bounceMode" aria-label="Action" onchange="refreshBounceView()">

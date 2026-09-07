@@ -13245,11 +13245,6 @@ function isBounceViewOpen() {
   return document.getElementById('bounceView').open;
 }
 
-function openBounceView() {
-  document.getElementById('bounceView').open = true;
-  refreshBounceView();
-  document.getElementById('bounceMode').focus();
-}
 
 function closeBounceView() {
   document.getElementById('bounceView').open = false;

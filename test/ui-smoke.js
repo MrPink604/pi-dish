@@ -3523,11 +3523,15 @@ let remoteHost = null; // second pi-dish (multi-host section)
       await desktop.evaluate(() => openSettingsModal());
       await desktop.click('#openBounceAgents');
       check(await desktop.locator('#settingsModal').isVisible() &&
-        await desktop.locator('#settingsModal #bounceView').isVisible(),
+        await desktop.locator('#settingsModal #bounceMode').isVisible(),
       'bounce controls expand inside Settings');
       const bouncePosition = await desktop.locator('#openBounceAgents').boundingBox();
       const themePosition = await desktop.locator('#settingsTheme').boundingBox();
       check(bouncePosition.y < themePosition.y, 'Bounce agents is at the top of Settings');
+      await desktop.click('#openBounceAgents');
+      check(!(await desktop.locator('#bounceMode').isVisible()), 'second click collapses bounce controls');
+      await desktop.click('#openBounceAgents');
+      await desktop.waitForSelector('#bounceMode', { state: 'visible' });
       await desktop.selectOption('#bounceMode', 'restart');
       const bounceTarget = desktop.locator('.bounce-target').filter({ hasText: 'Bounce smoke' });
       await bounceTarget.locator('input').check();
