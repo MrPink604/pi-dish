@@ -1125,6 +1125,7 @@ body.sidebar-open {
 
 .session-meta {
   display: flex;
+  align-items: center;
   gap: 8px;
 }
 
@@ -1454,6 +1455,17 @@ body.sidebar-open {
   color: var(--text-muted);
 }
 
+
+/* Header meta badges: one line-height and no borders (UA button chrome or
+   the harness accent), so host / harness / model / thinking / context all
+   render at the same height. */
+.session-meta-desktop .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  line-height: 14px;
+  border: none;
+}
 .badge-context {
   font-family: var(--font-mono);
 }
@@ -2968,9 +2980,10 @@ body.sidebar-open {
     white-space: nowrap;
   }
 
-  /* Model dropdown on mobile: full-width sheet under the header (its
-     trigger now lives top-right in the header) */
-  .model-dropdown {
+  /* Model and thinking dropdowns on mobile: full-width sheet under the
+     header (their triggers now live top-right in the header) */
+  .model-dropdown,
+  .thinking-dropdown {
     position: fixed;
     left: 8px;
     right: 8px;
@@ -3848,7 +3861,7 @@ mark.search-mark {
 .badge-thinking {
   cursor: pointer;
   border: none;
-  font: inherit;
+  font-family: inherit;
 }
 
 .thinking-dropdown {
@@ -3856,18 +3869,23 @@ mark.search-mark {
   z-index: 300;
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 4px;
+  border-radius: 6px;
   min-width: 110px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
+/* The base rule above follows the mobile sheet rule in file order — restate
+   the sheet's radius here so phones get it. */
+@media (max-width: 768px) {
+  .thinking-dropdown { border-radius: 10px; }
+}
+
 .thinking-option {
-  padding: 8px 12px;
-  border-radius: 5px;
-  font-size: 13px;
+  padding: 6px 12px 6px 20px;
+  font-size: 12px;
   cursor: pointer;
   color: var(--text);
+  white-space: nowrap;
 }
 
 .thinking-option:hover { background: var(--bg-hover); }
@@ -3877,7 +3895,7 @@ mark.search-mark {
 button.badge-context {
   cursor: pointer;
   border: none;
-  font: inherit;
+  font-family: inherit;
 }
 
 /* Queue chips above the input */
@@ -4960,6 +4978,37 @@ body.standalone-file-page {
   white-space: nowrap;
 }
 
+/* Header harness badge: icon only — the name lives in the tooltip. */
+#sessionHarness {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+@media (max-width: 768px) {
+  #sessionHarness { padding: 3px 8px; }
+}
+
+#sessionHarness .harness-badge-icon {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+#sessionHarness .harness-badge-icon-fallback {
+  display: inline-grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+#sessionHarness .harness-badge-label {
+  display: none;
+}
+
 .session-item .harness-badge {
   display: inline-flex;
   align-items: center;
@@ -4980,7 +5029,7 @@ body.standalone-file-page {
   object-fit: contain;
 }
 
-.session-item .harness-badge-prime {
+.harness-badge-prime {
   border-color: color-mix(in srgb, #8b5cf6 55%, transparent);
   color: color-mix(in srgb, #a78bfa 45%, var(--text));
   background: color-mix(in srgb, #5b21b6 18%, var(--bg-card));
@@ -4991,12 +5040,12 @@ body.standalone-file-page {
   background: #5b21b6;
 }
 
-.session-item .harness-badge-omp {
+.harness-badge-omp {
   border-color: color-mix(in srgb, #9b4dff 55%, transparent);
   color: color-mix(in srgb, #ed4abf 45%, var(--text));
 }
 
-.session-item .harness-badge-pi {
+.harness-badge-pi {
   border-color: color-mix(in srgb, var(--cyan) 45%, transparent);
   color: color-mix(in srgb, var(--cyan) 55%, var(--text));
 }

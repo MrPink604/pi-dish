@@ -1597,14 +1597,18 @@ async function performRowClose(id) {
   }
 }
 
+function harnessBadgeInnerHtml(info) {
+  const icon = info.icon
+    ? `<img class="harness-badge-icon" src="${escapeHtml(info.icon)}" alt="">`
+    : '<span class="harness-badge-icon harness-badge-icon-fallback" aria-hidden="true">◆</span>';
+  return icon + `<span class="harness-badge-label">${escapeHtml(info.label)}</span>`;
+}
+
 function renderHarnessBadge(harnessId, harnessLabel) {
   const id = harnessId || 'pi';
   const info = harnessBadgeInfo(id, harnessLabel);
   const title = harnessLabel || info.label;
-  const icon = info.icon
-    ? `<img class="harness-badge-icon" src="${escapeHtml(info.icon)}" alt="">`
-    : '<span class="harness-badge-icon harness-badge-icon-fallback" aria-hidden="true">◆</span>';
-  return `<span class="harness-badge harness-badge-${escapeHtml(id)}" title="${escapeHtml(title)} harness" aria-label="${escapeHtml(title)} harness">${icon}<span>${escapeHtml(info.label)}</span></span>`;
+  return `<span class="harness-badge harness-badge-${escapeHtml(id)}" title="${escapeHtml(title)} harness" aria-label="${escapeHtml(title)} harness">${harnessBadgeInnerHtml(info)}</span>`;
 }
 
 function renderSessionItem(session, opts = {}) {
@@ -3017,7 +3021,18 @@ function updateSessionHeader() {
   const harnessEl = document.getElementById('sessionHarness');
   const showHarness = currentSession.harnessId && currentSession.harnessId !== 'pi';
   harnessEl.style.display = showHarness ? '' : 'none';
-  harnessEl.textContent = showHarness ? (currentSession.harnessLabel || currentSession.harnessId) : '';
+  if (showHarness) {
+    const info = harnessBadgeInfo(currentSession.harnessId, currentSession.harnessLabel);
+    const title = currentSession.harnessLabel || info.label;
+    harnessEl.className = `badge harness-badge harness-badge-${currentSession.harnessId}`;
+    harnessEl.title = `${title} harness`;
+    harnessEl.setAttribute('aria-label', `${title} harness`);
+    // Icon only in the header — the label span is CSS-hidden here, the name
+    // lives in the tooltip. Sidebar rows show the full badge.
+    harnessEl.innerHTML = harnessBadgeInnerHtml(info);
+  } else {
+    harnessEl.textContent = '';
+  }
   // The tree has no header button any more (type /tree in the composer); the
   // mobile control panel keeps its row, so it still follows harness support.
   const cpTree = document.getElementById('cpTreeRow');
@@ -3084,10 +3099,13 @@ function toggleThinkingDropdown(event) {
     `<div class="thinking-option${l === currentSession.thinkingLevel ? ' active' : ''}" onclick="selectThinkingLevel('${l}')">${l}</div>`
   ).join('');
 
-  // Open upward only when the trigger sits in the lower half of the screen
-  // (the composer area on mobile); the header trigger opens downward.
-  const rect = event.currentTarget.getBoundingClientRect();
-  anchorDropdown(dropdown, rect, { above: rect.top > window.innerHeight / 2 });
+  // Desktop: anchored under the header button. Mobile: the stylesheet
+  // positions it (full-width sheet, same as the model dropdown).
+  if (window.innerWidth > 768) {
+    anchorDropdown(dropdown, event.currentTarget.getBoundingClientRect());
+  } else {
+    clearDropdownPos(dropdown);
+  }
   dropdown.style.display = 'block';
   armOutsideClickClose(['thinkingDropdown'], closeThinkingDropdown, () => thinkingDropdownOpen);
 }
