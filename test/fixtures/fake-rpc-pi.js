@@ -130,7 +130,8 @@ function handle(cmd) {
   const { id, type } = cmd;
   switch (type) {
     case 'get_state': {
-      const state = { sessionFile, sessionId, sessionName, model, thinkingLevel: 'medium', messageCount: 1 };
+      const state = { sessionFile, sessionId, sessionName, model, thinkingLevel: 'medium', messageCount: 1,
+        isStreaming: turnOpen, isCompacting: false, pendingMessageCount: 0 };
       const delay = Number(process.env.PI_FIXTURE_STARTUP_DELAY_MS) || 0;
       if (delay > 0) setTimeout(() => respond(id, state), delay);
       else respond(id, state);

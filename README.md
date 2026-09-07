@@ -81,6 +81,10 @@ Rules of thumb:
   branching — with optional branch summaries (pi's `/tree` summarize flow):
   jump back to an earlier point and inject an LLM summary of the branch you're
   abandoning, so explored dead-ends still inform the conversation.
+- **Bounce agents** — Settings → Bounce agents queues Reload or Restart for
+  selected pi-dish-owned runtimes across capable hosts. Busy agents wait;
+  OMP parents also wait for every child to exit, including idle children.
+  Preview eligibility, inspect per-agent blockers, and cancel waiting work.
 - **Usage insights** — quiet per-response effective speed by default, with
   device-local metadata density controls and click-through token/cache/cost
   details. The global Settings → Usage view summarizes estimated spend by
@@ -387,11 +391,11 @@ ln -s "$PWD/extensions/mood.ts" ~/.pi/agent/extensions/mood.ts
 
 ### Upgrading
 
-After pulling changes, run `./install.sh` and restart the server. `/reload`
-running Pi sessions to load the updated bridge; restart OMP processes for
-bridge code changes (OMP's `/reload` reloads runtime state, not extension
-modules). A tmux-managed server can be reconciled with
-`scripts/pi-dish-tmux.sh restart`; it uses the
+After pulling changes, run `./install.sh` and restart the server. Use
+**Settings → Bounce agents** to select owned runtimes and queue **Reload**
+for Pi extension changes or **Restart** for runtime upgrades and OMP bridge
+changes. OMP's `/reload` does not re-import bridge extensions. A tmux-managed
+server can be reconciled with `scripts/pi-dish-tmux.sh restart`; it uses the
 `pi-dish` session and `server` window by default.
 The manager always targets the default tmux server, even when invoked from
 inside a pane attached to another socket.
@@ -400,6 +404,23 @@ Keep the bundled Pi SDK aligned with the installed host Pi; the integration
 canary checks this. Pi 0.85.0's SDK imports `@earendil-works/pi-server` without
 declaring that runtime dependency, so pi-dish explicitly includes the matching
 server package as well.
+
+Bulk maintenance targets a snapshot: sessions launched later are not added.
+Only server-owned RPC children and proven pi-dish-owned tmux panes qualify.
+Turns, compaction, queued input, open input dialogs, OMP background work and
+undelivered results delay execution. Every OMP child must exit, even if idle;
+unreadable or incomplete child discovery blocks rather than guessing.
+
+The bridge reports fresh safety state, and ownership/activity are checked
+again immediately before the action. Pi reload also checks inside its
+command handler and never types over a TUI draft. Restart cannot atomically
+fence new input from an external TUI; avoid starting work there while a
+target is executing. Old bridges without safety reporting need one manual
+upgrade/restart before bulk maintenance becomes available.
+
+Waiting requests continue after the browser closes, but are not persisted
+across a pi-dish server restart. Cancel affects waiting targets only.
+Failures are not automatically retried; inspect the agent before requeueing.
 
 ### Peer session control
 

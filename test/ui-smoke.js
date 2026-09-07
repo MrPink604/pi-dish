@@ -3508,6 +3508,47 @@ let remoteHost = null; // second pi-dish (multi-host section)
       null, { timeout: 3000 });
     check(true, 'Escape closes the routines takeover');
 
+    // Bulk restart uses the real owned RPC path. Its status takeover and the
+    // independently added recovery report must never remain open together.
+    console.log('bounce agents:');
+    const bounceSpawn = await fetch(base + '/api/sessions/new', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ harness: 'pi', cwd: CWD, name: 'Bounce smoke' }),
+    }).then(async response => {
+      const body = await response.json();
+      if (!response.ok) throw new Error(JSON.stringify(body));
+      return body;
+    });
+    let bouncedId = bounceSpawn.id;
+    try {
+      await desktop.evaluate(() => openSettingsModal());
+      await desktop.click('#openBounceAgents');
+      await desktop.selectOption('#bounceMode', 'restart');
+      const bounceTarget = desktop.locator('.bounce-target').filter({ hasText: 'Bounce smoke' });
+      await bounceTarget.locator('input').check();
+      await desktop.click('#bounceSubmit');
+      await desktop.waitForSelector('.bounce-result[data-status="completed"]', { timeout: 15000 });
+      const bounceOperations = await fetch(base + '/api/session-bounces').then(r => r.json());
+      const bounced = bounceOperations.operations.flatMap(op => op.targets).find(t => t.sessionId === bounceSpawn.id);
+      check(bounced?.status === 'completed', 'Bounce agents completes the selected owned RPC restart');
+      bouncedId = bounced.replacementId || bouncedId;
+      await desktop.evaluate(() => openSettingsModal());
+      await desktop.click('#openRecoveryReport');
+      check(await desktop.evaluate(() => document.querySelector('.main').classList.contains('recovery-open') &&
+        !document.querySelector('.main').classList.contains('bounce-open')),
+      'opening recovery closes the bounce takeover');
+      await desktop.evaluate(() => openSettingsModal());
+      await desktop.click('#openBounceAgents');
+      check(await desktop.evaluate(() => document.querySelector('.main').classList.contains('bounce-open') &&
+        !document.querySelector('.main').classList.contains('recovery-open')),
+      'opening bounce closes the recovery takeover');
+      await desktop.keyboard.press('Escape');
+      check(await desktop.evaluate(() => !document.querySelector('.main').classList.contains('bounce-open')),
+        'Escape closes the bounce takeover');
+    } finally {
+      await fetch(`${base}/api/sessions/${encodeURIComponent(bouncedId)}/close`, { method: 'POST' });
+    }
+
     // 3. Mobile: hamburger + drawer from empty state and session header
     console.log('mobile:');
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });

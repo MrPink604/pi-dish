@@ -71,6 +71,13 @@ const ctx: any = {
   abort() {},
 };
 
+if (process.env.FAKE_OMP_LIFECYCLE_FILE) {
+  ctx.isIdle = () => true;
+  ctx.hasPendingMessages = () => false;
+  ctx.getAsyncJobSnapshot = () =>
+    JSON.parse(fs.readFileSync(process.env.FAKE_OMP_LIFECYCLE_FILE!, "utf8"));
+}
+
 if (process.env.FAKE_OMP_HAS_COMPACT === "1") {
   ctx.compact = async (instructions?: string) => {
     fs.writeFileSync(process.env.FAKE_OMP_COMPACT_CALL!, JSON.stringify({ instructions }));

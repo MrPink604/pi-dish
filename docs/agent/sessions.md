@@ -52,6 +52,42 @@ harness-specific formats that raw JSONL reads get wrong.
 - `related <ref>` — parents/children from native Pi lineage plus advisory
   pi-dish launch provenance.
 
+### Bulk maintenance
+
+Settings → **Bounce agents** queues a snapshot of owned runtimes. Each host
+advertises `capabilities.sessionBounces`; clients aggregate capable hosts,
+not the server.
+
+- `GET /api/session-bounces/preview?mode=reload|restart` returns active
+  targets with eligibility, reasons, and current safety blockers.
+- `POST /api/session-bounces` with `{mode, sessionIds}` returns
+  `202 {operation}`. Only explicit IDs are considered; unknown/unowned or
+  already-queued targets are skipped.
+- `GET /api/session-bounces` returns `{operations}` with per-target
+  `waiting`, `executing`, `completed`, `skipped`, `failed`, or `cancelled`
+  status and a reason. Successful restarts include `replacementId`.
+- `DELETE /api/session-bounces/:id` cancels waiting targets only.
+
+Use Reload for Pi extension changes; use Restart for runtime upgrades or
+OMP bridge changes. Bulk Reload requires the Pi bridge's guarded command:
+there is no typed-command fallback and no implicit switch to Restart.
+
+Working/compacting parents, queued messages, open input dialogs, and OMP
+background jobs or pending deliveries block execution. **Every OMP child
+must exit, including idle kept-alive children.** Unknown safety state or
+incomplete descendant discovery also blocks. Old bridges lacking safety
+reporting require a manual upgrade/restart first.
+
+Runtime identity and safety are rechecked before execution, using the
+existing restart ownership proofs. Restart cannot atomically lock external
+TUI input: do not start a new turn there while maintenance is executing.
+The individual Restart agent control remains an immediate manual action;
+it does not implicitly enqueue a safe bulk operation.
+
+Requests survive browser closure, not server restart; operation history is
+bounded and process-local. There is no force mode or automatic retry after
+an ambiguous failure. Inspect the runtime before submitting again.
+
 ## Capability degradation
 
 - A live session with the pi-dish bridge is fully controllable.

@@ -24,6 +24,7 @@ async function startFakeHost(hasCompact, {
   askThrow = false,
   checkUiRestore = false,
   nativeProjection = null,
+  lifecycle = false,
 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-compact-'));
   const home = path.join(root, 'home');
@@ -35,6 +36,8 @@ async function startFakeHost(hasCompact, {
   const callFile = path.join(root, 'compact-call.json');
   const askResultFile = path.join(root, 'ask-result.json');
   const uiRestoreResultFile = path.join(root, 'ui-restore-result.json');
+  const lifecycleFile = path.join(root, 'lifecycle.json');
+  fs.writeFileSync(lifecycleFile, 'null');
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(socketDir, { recursive: true, mode: 0o700 });
   if (nestedSubsession) {
@@ -58,6 +61,7 @@ async function startFakeHost(hasCompact, {
       FAKE_OMP_ASK_THROW: askThrow ? '1' : '0',
       FAKE_OMP_UI_RESTORE_RESULT: checkUiRestore ? uiRestoreResultFile : '',
       FAKE_OMP_NATIVE_PROJECTION: nativeProjection ? JSON.stringify(nativeProjection) : '',
+      FAKE_OMP_LIFECYCLE_FILE: lifecycle ? lifecycleFile : '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -82,7 +86,7 @@ async function startFakeHost(hasCompact, {
   const registryPath = path.join(registryDir, fs.readdirSync(registryDir).find(name => name.endsWith('.json')));
   const claim = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
   return {
-    root, callFile, askResultFile, claim, child,
+    root, callFile, askResultFile, lifecycleFile, claim, child,
     async close() {
       child.kill('SIGTERM');
       await new Promise(resolve => child.once('exit', resolve));
@@ -93,6 +97,33 @@ async function startFakeHost(hasCompact, {
     },
   };
 }
+
+test('OMP lifecycle blocks pending background deliveries and fails closed on unknown job state', async () => {
+  const host = await startFakeHost(false, { lifecycle: true });
+  const session = new BridgeSession(host.claim);
+  try {
+    await session.connect();
+    const backgroundWork = async (jobs) => {
+      fs.writeFileSync(host.lifecycleFile, JSON.stringify(jobs));
+      return (await session.send('get_state')).lifecycle.backgroundWork;
+    };
+    const empty = { running: [], delivery: { queued: 0, delivering: false, pendingJobIds: [] } };
+    assert.equal(await backgroundWork(null), false, 'no job manager is an explicit empty state');
+    assert.equal(await backgroundWork(empty), false);
+    assert.equal(await backgroundWork({ ...empty, running: [{ id: 'build', status: 'running' }] }), true);
+    assert.equal(await backgroundWork({
+      ...empty, delivery: { ...empty.delivery, pendingJobIds: ['build'] },
+    }), true, 'a settled job awaiting delivery still prevents maintenance');
+    assert.equal(await backgroundWork({ ...empty, delivery: { queued: 0 } }), null,
+      'partial data is not evidence that background work finished');
+    fs.writeFileSync(host.lifecycleFile, '{torn');
+    assert.equal((await session.send('get_state')).lifecycle.backgroundWork, null,
+      'a failed runtime read does not permit maintenance');
+  } finally {
+    session.close();
+    await host.close();
+  }
+});
 
 test('OMP bridge projects the native ask tool through extension UI', async () => {
   const host = await startFakeHost(false, { askDialog: true });

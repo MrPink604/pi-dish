@@ -626,6 +626,39 @@ test('compaction: second /compact refused, prompts queue until compaction ends',
   }
 });
 
+test('guarded reload refuses unfinished work and reloads after the agent becomes idle',
+  { skip: !piOk, timeout: 60000 }, async () => {
+    const bridge = await getBridgeSession(sessionId);
+    const before = extLoadCount();
+    try {
+      const sent = await post(`/api/sessions/${sessionId}/prompt`, { message: 'HOLD bounce safety' });
+      assert.equal(sent.status, 200, JSON.stringify(sent.body));
+      await waitFor(() => holdRelease, 15000, 'held bounce-safety turn');
+      await assert.rejects(bridge.send('guarded_reload'), /no longer safely idle/);
+      assert.equal(extLoadCount(), before, 'unfinished turn did not reload extensions');
+    } finally {
+      if (holdRelease) holdRelease();
+    }
+    await waitFor(async () => {
+      const state = await bridge.send('get_state');
+      return state.lifecycle?.idle === true && state.lifecycle?.pendingMessages === false;
+    }, 20000, 'agent returns control before reload');
+    try {
+      await bridge.send('guarded_reload');
+    } catch (error) {
+      // Reload can tear down the socket before its response frame is flushed.
+      // Only the real extension canary below proves successful execution.
+      if (!/socket closed/i.test(error.message)) throw error;
+    }
+    await waitFor(() => extLoadCount() > before, 15000, 'guarded extension reload');
+    await waitFor(async () => {
+      try {
+        const fresh = await getBridgeSession(sessionId);
+        return fresh.alive && (await fresh.send('get_state')).lifecycle?.idle === true;
+      } catch { return false; }
+    }, 15000, 'guarded reload reconnects');
+  });
+
 // Last on purpose: reload tears the bridge down and re-registers it.
 test('/reload from the API: responds ok, re-evaluates extensions, session stays usable', { skip: !piOk, timeout: 60000 }, async () => {
   const before = extLoadCount();

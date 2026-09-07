@@ -566,3 +566,51 @@ test('a pi that dies on startup surfaces as a 500, not a hang', async () => {
     process.env.PI_DISH_PI_COMMAND = saved;
   }
 });
+
+test('bulk API previews ownership, validates requests, cancels waiting targets and restarts an idle RPC runtime', async () => {
+  const created = await post('/api/sessions/new', {});
+  assert.equal(created.status, 200);
+  const id = created.body.id;
+  const original = getRPCSession(id);
+  try {
+    assert.equal((await get('/api/host')).body.capabilities.sessionBounces, true);
+    assert.equal((await get('/api/session-bounces/preview?mode=force')).status, 400);
+    assert.equal((await post('/api/session-bounces', { mode: 'restart', sessionIds: [] })).status, 400);
+    const preview = await get('/api/session-bounces/preview?mode=restart');
+    assert.equal(preview.status, 200);
+    assert.equal(preview.body.targets.find(target => target.sessionId === id).eligible, true);
+    const reload = await get('/api/session-bounces/preview?mode=reload');
+    assert.equal(reload.body.targets.find(target => target.sessionId === id).eligible, false,
+      'an RPC runtime without a bridge never falls back to typing reload');
+
+    // Keep the live event flag busy independently of timing the fixture turn.
+    original.turnInProgress = true;
+    const queued = await post('/api/session-bounces', { mode: 'restart', sessionIds: [id, 'unknown-bulk-target'] });
+    assert.equal(queued.status, 202);
+    assert.equal(queued.body.operation.targets[1].status, 'skipped');
+    const waiting = (await get('/api/session-bounces')).body.operations.find(op => op.id === queued.body.operation.id);
+    assert.match(waiting.targets[0].reason, /turn/);
+    const duplicate = await post('/api/session-bounces', { mode: 'restart', sessionIds: [id] });
+    assert.equal(duplicate.body.operation.targets[0].status, 'skipped');
+    const cancelledResponse = await fetch(base + `/api/session-bounces/${queued.body.operation.id}`, { method: 'DELETE' });
+    assert.equal(cancelledResponse.status, 200);
+    assert.equal((await cancelledResponse.json()).operation.targets[0].status, 'cancelled');
+    assert.equal(original.alive, true);
+    original.turnInProgress = false;
+
+    const ready = await post('/api/session-bounces', { mode: 'restart', sessionIds: [id] });
+    const deadline = Date.now() + 10000;
+    let result;
+    do {
+      result = (await get('/api/session-bounces')).body.operations.find(op => op.id === ready.body.operation.id).targets[0];
+      if (!['waiting', 'executing'].includes(result.status)) break;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    } while (Date.now() < deadline);
+    assert.equal(result.status, 'completed', result.reason);
+    assert.equal(original.alive, false);
+    assert.notEqual(getRPCSession(id), original);
+    assert.equal(result.replacementId, id);
+  } finally {
+    getRPCSession(id)?.kill();
+  }
+});

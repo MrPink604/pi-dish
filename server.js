@@ -43,7 +43,7 @@ const {
   readSessionTailEntry,
   decodeDirToCwd,
 } = require('./lib/session-files');
-const { discoverSessionCandidates, discoverHarnessSessions, findSessionCandidate, discoverSubsessionCandidates, readSessionHeader } = require('./lib/session-discovery');
+const { discoverSessionCandidates, discoverHarnessSessions, findSessionCandidate, discoverSubsessionCandidates, readSessionHeader, inspectSubsessionExits } = require('./lib/session-discovery');
 const sessionIndex = require('./lib/session-index');
 const { encodeSessionKey, resolveSessionRoute, canonicalSessionId, VERSION: SESSION_KEY_VERSION } = require('./lib/session-key');
 const { getHarness, listHarnesses, resolveLaunchSpec } = require('./lib/harnesses');
@@ -54,6 +54,7 @@ const routinesStore = require('./lib/routines');
 const { createRoutineRunner } = require('./lib/routine-runner');
 const recoveryStore = require('./lib/session-recovery');
 const { createRecoveryRunner, recoveryMode } = require('./lib/recovery-runner');
+const { createSessionBounces, lifecycleBlockers } = require('./lib/session-bounces');
 const skillsLib = require('./lib/skills');
 const {
   isModelEnabled, extractTextContent, THINKING_LEVEL_NAMES,
@@ -226,7 +227,7 @@ function hostCapabilities() {
   const caps = {
     sessions: true, search: true, usage: true, spawns: true,
     shares: true, pages: true, comments: true, skills: true, harnesses: true,
-    resolve: true, docs: true, routines: true, recovery: true,
+    resolve: true, docs: true, routines: true, recovery: true, sessionBounces: true,
     // A ref may name a session's native id or uuid tail, not just its route
     // id. Clients gate short refs on this: an older host resolves route-id
     // prefixes only, where the shortest ref for a non-Pi session is ~34 chars.
@@ -969,6 +970,16 @@ function liveSessionSupports(sess, capability) {
     ? sess.capabilities?.[capability] !== false
     : sess.capabilities?.[capability] === true;
 }
+
+const bounceActionLocks = new Set();
+app.use('/api/sessions/:id', (req, res, next) => {
+  let id;
+  try { id = canonicalSessionId(req.params.id); } catch { return next(); }
+  if (req.method !== 'GET' && bounceActionLocks.has(id)) {
+    return res.status(409).json({ error: 'A safe bulk operation is executing for this session; wait for its result.' });
+  }
+  next();
+});
 
 /**
  * The live session's current tree leaf id (null for an empty tree). Prefers
@@ -4504,7 +4515,7 @@ app.post('/api/sessions/:id/abort', async (req, res) => {
 // than growing a second, subtly different close path.
 const closeResult = (status, body) => ({ status, body });
 
-async function performSessionClose(sessionId) {
+async function performSessionClose(sessionId, { beforeAction = null } = {}) {
   const route = routeIdentity(sessionId);
   if (!route) return closeResult(400, { error: 'Invalid session ID' });
   const descriptor = getHarness(route.harnessId);
@@ -4662,6 +4673,10 @@ async function performSessionClose(sessionId) {
   let reg = getRegisteredSession(sessionId);
   let exited;
   if (rpc?.alive) {
+    if (beforeAction) {
+      const finalCheck = await beforeAction();
+      finalCheck();
+    }
     rpc.kill();
     // Our own child: kill(pid, 0) still succeeds while it's a zombie, so wait
     // on the 'exit'-driven flag instead of the pid.
@@ -5368,6 +5383,7 @@ async function spawnHarnessInTmux({ descriptor, target, args, cwd, name, hidden,
         command,
         env,
         expectedProcess: restartPane.paneProcess,
+        beforeAction: restartPane.beforeAction,
       });
       if (restartPane.registry) pruneRegisteredSession(restartPane.registry);
       tmux.removeSpawn(restartPane.sessionId, restartPane.spawn);
@@ -5383,6 +5399,7 @@ async function spawnHarnessInTmux({ descriptor, target, args, cwd, name, hidden,
       }));
     }
   } catch (e) {
+    if (e.bounceWaiting || e.bounceSkipped) throw e;
     const action = restartPane ? 'restart tmux pane' : 'open tmux window';
     const err = new Error(`Failed to ${action}: ${e.message}`); err.status = 500; throw err;
   }
@@ -6063,23 +6080,22 @@ app.post('/api/recovery/retry', async (req, res) => {
 // claim proves pi-dish owns the exact pane, which can then be respawned in
 // place. An externally launched Pi remains closeable by process identity but
 // is never granted pane-replacement authority.
-app.post('/api/sessions/:id/restart', async (req, res) => {
-  const requestedId = req.params.id;
+async function restartSessionById(requestedId, { beforeAction = null } = {}) {
   const route = routeIdentity(requestedId);
-  if (!route) return res.status(400).json({ error: 'Invalid session ID' });
+  if (!route) return closeResult(400, { error: 'Invalid session ID' });
   const sessionId = routeSessionId(route.harnessId, route.nativeSessionId);
   const descriptor = getHarness(route.harnessId);
   if (!descriptor || descriptor.closeMode === 'client-only' || descriptor.closeMode === 'unsupported') {
-    return res.status(409).json({ error: `${descriptor?.label || route.harnessId} does not support agent restart.` });
+    return closeResult(409, { error: `${descriptor?.label || route.harnessId} does not support agent restart.` });
   }
   if (restartFlights.has(sessionId) || closeFlights.has(sessionId)) {
-    return res.status(409).json({ error: 'The session is already being restarted or closed.' });
+    return closeResult(409, { error: 'The session is already being restarted or closed.' });
   }
   const activeFile = getRPCSession(sessionId)?.sessionFile || getRegisteredSession(sessionId)?.sessionFile;
   if (activeFile) {
     try {
       if (resumeFlights.has(fs.realpathSync(activeFile))) {
-        return res.status(409).json({ error: 'The session is still being resumed.' });
+        return closeResult(409, { error: 'The session is still being resumed.' });
       }
     } catch {}
   }
@@ -6093,18 +6109,18 @@ app.post('/api/sessions/:id/restart', async (req, res) => {
     try {
       sessionFile = fs.realpathSync(sourceFile);
     } catch {
-      return res.status(409).json({ error: 'The active RPC session has no resumable session file.' });
+      return closeResult(409, { error: 'The active RPC session has no resumable session file.' });
     }
     const cwd = rpc.cwd && fs.existsSync(rpc.cwd) ? rpc.cwd : process.env.HOME;
     // Restart preserves open intent; only the explicit close route retires it.
-    const closed = await performSessionClose(sessionId);
-    if (closed.status !== 200) return res.status(closed.status).json(closed.body);
+    const closed = await performSessionClose(sessionId, { beforeAction });
+    if (closed.status !== 200) return closed;
     try {
       const replacement = await resumeRPCSession(sessionFile, cwd);
-      return res.json({ success: true, id: replacement.id, placement: 'rpc' });
+      return closeResult(200, { success: true, id: replacement.id, placement: 'rpc' });
     } catch (error) {
       console.error('Failed to restart RPC session:', error);
-      return res.status(500).json({
+      return closeResult(500, {
         error: `The agent stopped, but its RPC replacement failed to start: ${error.message}`,
         stopped: true,
       });
@@ -6112,17 +6128,17 @@ app.post('/api/sessions/:id/restart', async (req, res) => {
   }
 
   let reg = getRegisteredSession(sessionId);
-  if (!reg) return res.status(404).json({ error: 'Session not active' });
+  if (!reg) return closeResult(404, { error: 'Session not active' });
   const spawn = tmux.getSpawn(sessionId);
   if (!spawn?.socket || !spawn?.paneId || !spawnMatchesRegistryClaim(spawn, reg)) {
-    return res.status(409).json({
+    return closeResult(409, {
       error: 'Restart is available only for RPC sessions and tmux panes launched by pi-dish. This Pi session can still be closed normally.',
     });
   }
   let paneProcess = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
   if (!sameProcessIdentity(paneProcess, spawn.paneProcess)
       || !spawnAllowsOwnedPaneClose(spawn, reg)) {
-    return res.status(409).json({
+    return closeResult(409, {
       error: 'The recorded tmux pane no longer proves ownership of this agent, so pi-dish will not restart it.',
     });
   }
@@ -6137,7 +6153,7 @@ app.post('/api/sessions/:id/restart', async (req, res) => {
   try {
     sessionFile = fs.realpathSync(sessionSource?.file || reg.sessionFile);
   } catch {
-    return res.status(409).json({ error: 'The active agent has no resumable session file.' });
+    return closeResult(409, { error: 'The active agent has no resumable session file.' });
   }
   let cwd = readSessionCwd({ ...(sessionSource || {}), file: sessionFile });
   if (!cwd || !fs.existsSync(cwd)) cwd = process.env.HOME;
@@ -6148,22 +6164,22 @@ app.post('/api/sessions/:id/restart', async (req, res) => {
   invalidateRegistryCache();
   const freshReg = getRegisteredSession(sessionId);
   if (!freshReg || !sameRegistryClaim(freshReg, reg)) {
-    return res.status(409).json({ error: 'The live bridge changed while restart was being authorized; no pane was replaced.' });
+    return closeResult(409, { error: 'The live bridge changed while restart was being authorized; no pane was replaced.' });
   }
   try {
     await proveBridgeRegistryClaim(freshReg);
   } catch (error) {
-    return res.status(409).json({ error: `The live bridge could not re-prove its identity before restart: ${error.message}` });
+    return closeResult(409, { error: `The live bridge could not re-prove its identity before restart: ${error.message}` });
   }
   paneProcess = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
   if (!sameProcessIdentity(paneProcess, spawn.paneProcess)
       || !spawnAllowsOwnedPaneClose(spawn, freshReg)) {
-    return res.status(409).json({ error: 'The tmux pane ownership proof changed before restart; no pane was replaced.' });
+    return closeResult(409, { error: 'The tmux pane ownership proof changed before restart; no pane was replaced.' });
   }
   invalidateRegistryCache();
   reg = getRegisteredSession(sessionId);
   if (!reg || !sameRegistryClaim(reg, freshReg)) {
-    return res.status(409).json({ error: 'The live bridge changed immediately before restart; no pane was replaced.' });
+    return closeResult(409, { error: 'The live bridge changed immediately before restart; no pane was replaced.' });
   }
 
   try {
@@ -6180,14 +6196,16 @@ app.post('/api/sessions/:id/restart', async (req, res) => {
         paneProcess: spawn.paneProcess,
         spawn,
         registry: reg,
+        beforeAction,
       },
     });
-    return res.json({ success: true, id, placement: 'tmux', paneId: spawn.paneId });
+    return closeResult(200, { success: true, id, placement: 'tmux', paneId: spawn.paneId });
   } catch (error) {
+    if (error.bounceWaiting || error.bounceSkipped) throw error;
     console.error('Failed to restart tmux session:', error);
     const currentPaneProcess = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
     const replaced = !sameProcessIdentity(currentPaneProcess, spawn.paneProcess);
-    return res.status(error.status || 500).json({
+    return closeResult(error.status || 500, {
       error: replaced
         ? `The agent pane was restarted, but its replacement failed to become ready: ${error.message}`
         : `The agent was not restarted: ${error.message}`,
@@ -6197,6 +6215,204 @@ app.post('/api/sessions/:id/restart', async (req, res) => {
   } finally {
     restartFlights.delete(sessionId);
   }
+}
+
+app.post('/api/sessions/:id/restart', async (req, res) => {
+  const result = await restartSessionById(req.params.id);
+  res.status(result.status).json(result.body);
+});
+
+function captureBounceAuthority(row) {
+  const sessionId = row.id;
+  const rpc = getRPCSession(sessionId);
+  const reg = getRegisteredSession(sessionId);
+  const spawn = tmux.getSpawn(sessionId);
+  const descriptor = getHarness(row.harnessId || 'pi');
+  if (!descriptor || ['client-only', 'unsupported'].includes(descriptor.closeMode) || row.conflicted) return null;
+  if (!rpc?.alive && (!reg || !spawnAllowsOwnedPaneClose(spawn, reg))) return null;
+  return {
+    sessionId, harnessId: descriptor.id, rpc: rpc?.alive ? rpc : null,
+    reg: reg ? structuredClone(reg) : null,
+    spawn: spawn ? structuredClone(spawn) : null,
+    sessionFile: rpc?.sessionFile || reg?.sessionFile || null,
+  };
+}
+
+function bounceIdentityFailure(authority) {
+  invalidateRegistryCache();
+  const rpc = getRPCSession(authority.sessionId);
+  if (authority.rpc) {
+    if (rpc !== authority.rpc || !rpc.alive || rpc.sessionFile !== authority.sessionFile) return 'The original RPC runtime exited or was replaced.';
+    const reg = getRegisteredSession(authority.sessionId);
+    if (authority.reg ? !reg || !sameRegistryClaim(reg, authority.reg) : !!reg) return 'The RPC bridge identity changed after the target snapshot.';
+  } else {
+    const reg = getRegisteredSession(authority.sessionId);
+    if (!reg || !sameRegistryClaim(reg, authority.reg) || reg.sessionFile !== authority.sessionFile) return 'The original bridge runtime exited, switched sessions, or was replaced.';
+    const spawn = tmux.getSpawn(authority.sessionId);
+    if (!spawn || spawn.socket !== authority.spawn?.socket || spawn.paneId !== authority.spawn?.paneId
+        || spawn.spawnToken !== authority.spawn?.spawnToken
+        || !sameProcessIdentity(spawn.paneProcess, authority.spawn?.paneProcess)
+        || !spawnAllowsOwnedPaneClose(spawn, reg)) return 'The original pi-dish pane ownership proof no longer matches.';
+  }
+  return null;
+}
+
+function trackBounceActivity(live) {
+  if (live.bounceActivityRevision !== undefined) return;
+  live.bounceActivityRevision = 0;
+  for (const event of ['turn_start', 'compaction_start', 'queue_update', 'extension_ui_request', 'session_switch', 'message_start']) {
+    live.on(event, () => { live.bounceActivityRevision++; });
+  }
+}
+
+async function readBounceState(live) {
+  const state = await live.send('get_state', {}, { timeout: 5000 });
+  if (live instanceof BridgeSession) return state;
+  // RPC's public state contract uses different names. It is a server-owned
+  // child observed from birth, so dialogs and tools cannot predate connection.
+  return {
+    turnInProgress: state?.isStreaming,
+    compacting: state?.isCompacting,
+    lifecycle: {
+      idle: typeof state?.isStreaming === 'boolean' ? !state.isStreaming : null,
+      pendingMessages: Number.isInteger(state?.pendingMessageCount) && state.pendingMessageCount >= 0 ? state.pendingMessageCount > 0 : null,
+      pendingDialogs: live.extUIState?.dialogs?.size ?? 0,
+      backgroundWork: false,
+    },
+  };
+}
+
+function bounceDescendantBlockers(authority) {
+  if (!getHarness(authority.harnessId)?.nestedSubsessions) return [];
+  return inspectSubsessionExits(authority.sessionFile, { harnessId: authority.harnessId }).blockers;
+}
+
+async function inspectBounce(authority, mode) {
+  const failure = bounceIdentityFailure(authority);
+  if (failure) return { eligible: false, reason: failure, blockers: [] };
+  if (mode === 'reload' && authority.harnessId !== 'pi') {
+    return { eligible: false, reason: 'Safe bulk reload is unavailable for this harness. Use Restart for OMP bridge/runtime upgrades; bulk reload never types into a draft.', blockers: [] };
+  }
+  let live;
+  try { live = await getLiveSession(authority.sessionId); } catch (error) {
+    return { eligible: true, blockers: [`Cannot connect to the original live agent: ${error.message}`] };
+  }
+  if (!live?.alive) return { eligible: true, blockers: ['Waiting for a connected live agent.'] };
+  if (mode === 'reload' && (!(live instanceof BridgeSession) || live.capabilities?.guardedReload !== true)) {
+    return { eligible: false, reason: 'This runtime lacks safe guarded reload. Upgrade the bridge manually or choose Restart.', blockers: [] };
+  }
+  if (!authority.rpc) {
+    const pane = await tmux.paneProcessIdentity(authority.spawn.socket, authority.spawn.paneId);
+    if (!sameProcessIdentity(pane, authority.spawn.paneProcess)) {
+      return { eligible: false, reason: 'The owned pane exited or was replaced.', blockers: [] };
+    }
+  }
+  trackBounceActivity(live);
+  const revision = live.bounceActivityRevision;
+  let state;
+  try { state = await readBounceState(live); } catch (error) {
+    return { eligible: true, blockers: [`Cannot read live safety state; upgrade an older bridge manually: ${error.message}`] };
+  }
+  const changed = bounceIdentityFailure(authority);
+  if (changed) return { eligible: false, reason: changed, blockers: [] };
+  if (live instanceof BridgeSession && !state?.lifecycle) {
+    return { eligible: false, reason: 'This bridge predates live safety reporting. Upgrade or restart it manually before using bulk operations.', blockers: [] };
+  }
+  const blockers = lifecycleBlockers(state, live);
+  if (revision !== live.bounceActivityRevision) blockers.push('New activity arrived during the safety check.');
+  blockers.push(...bounceDescendantBlockers(authority));
+  return { eligible: true, blockers, live };
+}
+
+async function executeBounce(authority, mode, inspected) {
+  const live = inspected.live;
+  bounceActionLocks.add(authority.sessionId);
+  live.bounceExecuting = true;
+  const beforeAction = async () => {
+    const revision = live.bounceActivityRevision;
+    let state;
+    try { state = await readBounceState(live); } catch (error) {
+      throw Object.assign(new Error(`Cannot recheck live safety before execution: ${error.message}`), { bounceWaiting: true });
+    }
+    // Returned guard runs synchronously at the signal/respawn boundary,
+    // after the caller's last async ownership check, with no further await.
+    return () => {
+      const failure = bounceIdentityFailure(authority);
+      if (failure) throw Object.assign(new Error(failure), { bounceSkipped: true });
+      const blockers = lifecycleBlockers(state, live);
+      if (revision !== live.bounceActivityRevision) blockers.push('New activity arrived before execution.');
+      blockers.push(...bounceDescendantBlockers(authority));
+      if (blockers.length) throw Object.assign(new Error(blockers.join(' ')), { bounceWaiting: true });
+    };
+  };
+  try {
+    if (mode === 'restart') {
+      const result = await restartSessionById(authority.sessionId, { beforeAction });
+      if (result.status !== 200) {
+        if (!result.body.stopped && [404, 409].includes(result.status)) return { skipped: true, reason: result.body.error };
+        throw new Error(result.body.error);
+      }
+      return { replacementId: result.body.id };
+    }
+    const finalCheck = await beforeAction();
+    finalCheck();
+    try { await live.send('guarded_reload', {}, { timeout: 10000 }); } catch (error) {
+      if (/no longer safely idle/i.test(error.message)) return { waiting: true, reason: error.message };
+      if (!/socket closed/i.test(error.message)) throw error;
+    }
+    // Dispatch is not completion. A fresh connected bridge instance proves
+    // reload really finished; never retry an ambiguous timeout.
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      invalidateRegistryCache();
+      const reg = getRegisteredSession(authority.sessionId);
+      if (reg && !sameRegistryClaim(reg, authority.reg)
+          && sameProcessIdentity(reg, authority.reg)
+          && reg.sessionFile === authority.sessionFile) {
+        const replacement = await getLiveSession(authority.sessionId);
+        if (replacement?.alive && replacement instanceof BridgeSession
+            && sameRegistryClaim(replacement.registryClaim, reg)) return {};
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    throw new Error('Reload was dispatched, but a replacement bridge was not confirmed. Inspect the session before retrying.');
+  } catch (error) {
+    if (error.bounceWaiting) return { waiting: true, reason: error.message };
+    if (error.bounceSkipped) return { skipped: true, reason: error.message };
+    throw error;
+  } finally {
+    bounceActionLocks.delete(authority.sessionId);
+    live.bounceExecuting = false;
+  }
+}
+
+const sessionBounces = createSessionBounces({
+  catalog: () => { invalidateRegistryCache(); return getActiveSessions(); },
+  capture: captureBounceAuthority,
+  inspect: inspectBounce,
+  execute: executeBounce,
+});
+
+app.get('/api/session-bounces/preview', async (req, res) => {
+  if (!['reload', 'restart'].includes(req.query.mode)) return res.status(400).json({ error: 'mode must be reload or restart' });
+  try { res.json({ targets: await sessionBounces.preview(req.query.mode) }); }
+  catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.post('/api/session-bounces', (req, res) => {
+  try { res.status(202).json({ operation: sessionBounces.enqueue(req.body?.mode, req.body?.sessionIds) }); }
+  catch (error) { res.status(error.status || 500).json({ error: error.message }); }
+});
+
+app.get('/api/session-bounces', async (_req, res) => {
+  try { res.json({ operations: await sessionBounces.list() }); }
+  catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.delete('/api/session-bounces/:id', (req, res) => {
+  const operation = sessionBounces.cancel(req.params.id);
+  if (!operation) return res.status(404).json({ error: 'Unknown bulk operation' });
+  res.json({ operation });
 });
 
 // =========================================================================
@@ -6689,6 +6905,7 @@ const server = app.listen(PORT, HOST, () => {
   skillsLib.getSkillFilePaths({ cwds: knownWorkspaceCwds() })
     .then(paths => sessionIndex.setSkillRoots(paths))
     .catch(() => {});
+  sessionBounces.start();
   // Recovery runs on every configured server startup, with no browser or boot
   // service dependency. Reconcile routine-owned invocations only afterwards:
   // a restored idle session is interrupted work, not a completed oneShot.
@@ -6735,6 +6952,7 @@ if (process.env.PI_DISH_SHARE_PORT) {
 // another `ssh -N` holding a connection to a work host. They reproduce the
 // default exit codes so nothing else observes a change.
 server.on('close', () => remoteHosts.shutdown());
+server.on('close', () => sessionBounces.stop());
 for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
   process.once(signal, () => { remoteHosts.shutdown(); process.exit(code); });
 }

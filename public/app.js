@@ -2432,6 +2432,7 @@ function showPendingSessionView(spawnId) {
   closeSkillsView();
   closeRoutinesView();
   closeRecoveryView();
+  closeBounceView();
   stashCurrentTranscript();
   setCurrentSession(null);
   currentSessionSpawnId = spawnId;
@@ -2515,7 +2516,7 @@ function showPendingSessionFailure(spawnId, message, spawn) {
   btn.title = message;
 }
 
-async function selectSession(id, { forceTranscriptReload = false, host = null } = {}) {
+async function selectSession(id, { forceTranscriptReload = false, host = null, keepBounceView = false } = {}) {
   // Validate the target before tearing anything down: a stale id (a resume
   // racing a filtered refresh, a pruned session) must leave the current view
   // intact instead of stashing the transcript and then bailing on a blank pane.
@@ -2547,6 +2548,7 @@ async function selectSession(id, { forceTranscriptReload = false, host = null } 
   closeSkillsView();
   closeRoutinesView();
   closeRecoveryView();
+  if (!keepBounceView) closeBounceView();
   stashCurrentTranscript();
   if (forceTranscriptReload) transcriptCache.delete(id);
   if (!setCurrentSession(id, host)) return;
@@ -3385,6 +3387,7 @@ async function renderPreferences() {
     <label class="preference-row toggle-row"><span><strong>Show estimated session spend in desktop header</strong><small>Stored on this device; off by default.</small></span><input id="showSessionSpend" type="checkbox"></label>
     <div class="preference-row"><label for="monthlyBudget"><strong>Monthly budget warning (USD)</strong><small>Server-global: applies to every device. Estimates use each session harness's catalog pricing; blank clears.</small></label><div class="budget-save"><input id="monthlyBudget" type="number" min="0.01" step="0.01" placeholder="No warning"><button class="btn-small" id="saveBudget">Save</button></div><small id="budgetStatus"></small></div>
     <div id="recoveryPreferences" class="preference-row recovery-preferences" hidden></div>
+    <div class="preference-row"><span><strong>Bounce agents</strong><small>Safely reload or restart owned agents when idle, across capable hosts.</small></span><button class="btn-small" id="openBounceAgents" onclick="openBounceView()">Open Bounce agents</button></div>
     <div class="preference-row"><label><strong>Hosts</strong><small>Added hosts are stored on this device (with their token). Entries this server publishes — and this host itself — are read-only.</small></label>
       <div class="hosts-list" id="hostsList"></div>
       <div class="host-add">
@@ -3592,6 +3595,7 @@ function openRecoveryView(hostId) {
   closeNewSessionView();
   closeSkillsView();
   closeRoutinesView();
+  closeBounceView();
   closeDiffView();
   closeFileView();
   document.querySelector('.main').classList.add('recovery-open');
@@ -3845,6 +3849,7 @@ function openSearchView(initialQuery) {
   closeSkillsView();
   closeRoutinesView();
   closeRecoveryView();
+  closeBounceView();
   if (typeof initialQuery === 'string') searchViewQuery = initialQuery;
   const input = document.getElementById('searchViewInput');
   input.value = searchViewQuery;
@@ -4143,6 +4148,7 @@ function openSkillsView() {
   closeNewSessionView();
   closeRoutinesView();
   closeRecoveryView();
+  closeBounceView();
   document.querySelector('.main').classList.add('skills-open');
   skillsDetailPath = null;
   loadSkillsDirectory();
@@ -4538,6 +4544,7 @@ function openUsageView() {
   closeSkillsView();
   closeRoutinesView();
   closeRecoveryView();
+  closeBounceView();
   if (isUsageViewOpen()) return;
   document.querySelector('.main').classList.add('usage-open');
   loadUsageView();
@@ -9347,6 +9354,7 @@ function openNewSessionView(opts = {}) {
   closeSkillsView();
   closeRoutinesView();
   closeRecoveryView();
+  closeBounceView();
   document.querySelector('.main').classList.add('new-session-open');
   nsPendingDraft = opts.draft || null;
 
@@ -11462,6 +11470,8 @@ document.addEventListener('keydown', function(e) {
     e.preventDefault(); closeArtifactsModal();
   } else if (isRecoveryViewOpen()) {
     e.preventDefault(); closeRecoveryView();
+  } else if (isBounceViewOpen()) {
+    e.preventDefault(); closeBounceView();
   } else if (isRoutinesViewOpen()) {
     e.preventDefault(); routinesViewEscape();
   } else if (isSkillsViewOpen()) {
@@ -12255,6 +12265,7 @@ function openRoutinesView() {
   closeNewSessionView();
   closeSkillsView();
   closeRecoveryView();
+  closeBounceView();
   if (isRoutinesViewOpen()) return;
   document.querySelector('.main').classList.add('routines-open');
   // Re-opening restores the last selection (and its poll); with none, the
@@ -13221,4 +13232,265 @@ async function deleteRoutine() {
     return;
   }
   routineBusy = false;
+}
+
+// --- Bounce agents: the browser selects a snapshot; each host owns its wait. ---
+let bounceHosts = [];
+let bounceGeneration = 0;
+let bounceSubmitting = false;
+const bouncePendingRestarts = new Set();
+
+function isBounceViewOpen() {
+  return document.querySelector('.main').classList.contains('bounce-open');
+}
+
+function openBounceView() {
+  closeSettingsModal();
+  closeSidebar();
+  closeUsageView();
+  closeSearchView();
+  closeNewSessionView();
+  closeSkillsView();
+  closeRoutinesView();
+  closeRecoveryView();
+  document.querySelector('.main').classList.add('bounce-open');
+  refreshBounceView();
+  document.getElementById('bounceMode').focus();
+}
+
+function closeBounceView() {
+  document.querySelector('.main').classList.remove('bounce-open');
+  ++bounceGeneration;
+  for (const state of bounceHosts) clearTimeout(state.timer);
+}
+
+async function refreshBounceView() {
+  if (bounceSubmitting || !isBounceViewOpen()) return;
+  const generation = ++bounceGeneration;
+  for (const state of bounceHosts) clearTimeout(state.timer);
+  bounceHosts = [];
+  updateBounceSelection();
+  document.getElementById('bounceHosts').textContent = 'Loading hosts…';
+  document.getElementById('bounceNotice').textContent = '';
+  await hostFleetReady;
+  if (generation !== bounceGeneration || !isBounceViewOpen()) return;
+  const mode = document.getElementById('bounceMode').value;
+  bounceHosts = effectiveHosts().map(host => ({
+    host, mode, generation, supported: host.capabilities?.sessionBounces === true,
+    targets: [], selected: new Set(), operations: [], previewError: '',
+    operationError: '', actionNotice: '', cancelling: new Set(), loading: true,
+    timer: null, polling: false, readSeq: 0,
+  }));
+  document.getElementById('bounceHosts').innerHTML = bounceHosts.map((state, index) =>
+    `<section class="bounce-host" data-bounce-host="${index}">
+      <h3>${escapeHtml(hostDisplayLabel(state.host))}</h3>
+      ${state.supported
+        ? `<h4>Active targets</h4><div class="bounce-preview"></div><h4>Recent operations</h4><div class="bounce-operations"></div>`
+        : '<p class="bounce-help">Excluded: this host does not advertise safe bulk Reload/Restart support.</p>'}
+    </section>`).join('');
+  for (const state of bounceHosts) {
+    if (!state.supported) continue;
+    renderBouncePreview(state);
+    renderBounceOperations(state);
+    loadBouncePreview(state);
+    pollBounceOperations(state);
+  }
+}
+
+function bounceHostElement(state) {
+  if (state.generation !== bounceGeneration || !isBounceViewOpen()) return null;
+  const index = bounceHosts.indexOf(state);
+  return index < 0 ? null : document.querySelector(`[data-bounce-host="${index}"]`);
+}
+
+async function loadBouncePreview(state) {
+  try {
+    const res = await apiFetch(state.host, `/api/session-bounces/preview?mode=${state.mode}`, { timeoutMs: 20000 });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!Array.isArray(data.targets)) throw new Error('Invalid preview response');
+    state.targets = data.targets;
+  } catch (error) {
+    state.previewError = `Preview unavailable: ${error.message}`;
+  }
+  state.loading = false;
+  renderBouncePreview(state);
+  updateBounceSelection();
+}
+
+function renderBouncePreview(state) {
+  const root = bounceHostElement(state)?.querySelector('.bounce-preview');
+  if (!root) return;
+  root.innerHTML = state.loading ? '<p class="bounce-help">Loading preview…</p>'
+    : state.previewError ? `<p class="bounce-error" role="status">${escapeHtml(state.previewError)}</p>`
+    : state.targets.length ? state.targets.map((target, index) => {
+      const eligible = target.eligible === true;
+      const blockers = Array.isArray(target.blockers) ? target.blockers : [];
+      const reason = [target.reason, ...blockers].filter(Boolean).join(' · ');
+      return `<label class="bounce-target${eligible ? '' : ' ineligible'}">
+        <input type="checkbox" data-bounce-target="${index}" ${eligible && !bounceSubmitting ? '' : 'disabled'} ${state.selected.has(target.sessionId) ? 'checked' : ''}>
+        <span><strong>${escapeHtml(target.name || target.sessionId)}</strong>
+          <small>${escapeHtml(target.harnessId || 'Unknown harness')} · ${eligible ? blockers.length ? 'Eligible — waiting' : 'Eligible' : 'Ineligible'}</small>
+          ${reason ? `<small>${escapeHtml(reason)}</small>` : ''}
+        </span>
+      </label>`;
+    }).join('') : '<p class="bounce-help">No active sessions.</p>';
+  root.querySelectorAll('[data-bounce-target]').forEach(input => input.addEventListener('change', () => {
+    const target = state.targets[Number(input.dataset.bounceTarget)];
+    if (input.checked) state.selected.add(target.sessionId);
+    else state.selected.delete(target.sessionId);
+    updateBounceSelection();
+  }));
+}
+
+function selectBounceTargets(selected) {
+  if (bounceSubmitting) return;
+  for (const state of bounceHosts) {
+    state.selected = new Set(selected ? state.targets.filter(target => target.eligible === true).map(target => target.sessionId) : []);
+    renderBouncePreview(state);
+  }
+  updateBounceSelection();
+}
+
+function updateBounceSelection() {
+  const count = bounceHosts.reduce((sum, state) => sum + state.selected.size, 0);
+  const mode = document.getElementById('bounceMode').value === 'restart' ? 'Restart' : 'Reload';
+  const submit = document.getElementById('bounceSubmit');
+  submit.disabled = !count || bounceSubmitting;
+  submit.textContent = bounceSubmitting ? 'Queueing…' : `Queue ${mode} (${count})`;
+  for (const id of ['bounceMode', 'bounceRefresh', 'bounceSelectEligible', 'bounceClearSelection']) {
+    document.getElementById(id).disabled = bounceSubmitting;
+  }
+}
+
+async function submitBounceTargets() {
+  if (bounceSubmitting) return;
+  const snapshot = bounceHosts.filter(state => state.selected.size).map(state => ({ state, sessionIds: [...state.selected] }));
+  if (!snapshot.length) return;
+  bounceSubmitting = true;
+  updateBounceSelection();
+  // Clear the submitted selection even on a lost response: acceptance may have
+  // happened on the host. Never automatically retry a mutation.
+  for (const { state } of snapshot) {
+    state.selected.clear();
+    state.actionNotice = '';
+    renderBouncePreview(state);
+  }
+  await Promise.allSettled(snapshot.map(async ({ state, sessionIds }) => {
+    try {
+      const res = await apiFetch(state.host, '/api/session-bounces', {
+        method: 'POST', timeoutMs: 20000, headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: state.mode, sessionIds }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (!data.operation) throw new Error('Invalid queue response');
+      ++state.readSeq;
+      state.operations = [data.operation, ...state.operations.filter(op => op.id !== data.operation.id)];
+      state.actionNotice = 'Snapshot queued on this host.';
+      await reconcileBounceRestarts(state, [data.operation], true);
+    } catch (error) {
+      state.actionNotice = `Queue request failed: ${error.message}. Acceptance may be unknown; check recent operations before selecting again.`;
+    }
+    renderBounceOperations(state);
+  }));
+  bounceSubmitting = false;
+  updateBounceSelection();
+  for (const state of bounceHosts) renderBouncePreview(state);
+  if (isBounceViewOpen() && bounceHosts.some(state => state.generation !== bounceGeneration)) refreshBounceView();
+}
+
+async function pollBounceOperations(state) {
+  if (!bounceHostElement(state) || state.polling) return;
+  clearTimeout(state.timer);
+  state.polling = true;
+  const seq = ++state.readSeq;
+  try {
+    const res = await apiFetch(state.host, '/api/session-bounces', { timeoutMs: 20000 });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!Array.isArray(data.operations)) throw new Error('Invalid operations response');
+    if (seq === state.readSeq && bounceHostElement(state)) {
+      state.operations = data.operations;
+      state.operationError = '';
+      await reconcileBounceRestarts(state, data.operations);
+    }
+  } catch (error) {
+    if (seq === state.readSeq) state.operationError = `Status unavailable: ${error.message}. Displayed operations may be stale.`;
+  }
+  state.polling = false;
+  renderBounceOperations(state);
+  if (bounceHostElement(state)) state.timer = setTimeout(() => pollBounceOperations(state), 2500);
+}
+
+function renderBounceOperations(state) {
+  const root = bounceHostElement(state)?.querySelector('.bounce-operations');
+  if (!root) return;
+  const html = `${state.actionNotice ? `<p class="usage-notice" role="status">${escapeHtml(state.actionNotice)}</p>` : ''}
+    ${state.operationError ? `<p class="bounce-error" role="status">${escapeHtml(state.operationError)}</p>` : ''}
+    ${state.operations.length ? state.operations.map((operation, index) => {
+      const waiting = operation.targets.some(target => target.status === 'waiting');
+      return `<article class="bounce-operation">
+        <div class="bounce-operation-header"><strong>${operation.mode === 'restart' ? 'Restart' : 'Reload'}</strong>
+          <time>${escapeHtml(new Date(operation.createdAt).toLocaleString())}</time>
+          ${waiting ? `<button class="btn-small" data-bounce-cancel="${index}" ${state.cancelling.has(operation.id) ? 'disabled' : ''}>${state.cancelling.has(operation.id) ? 'Cancelling…' : 'Cancel waiting'}</button>` : ''}
+        </div>
+        <ul>${operation.targets.map(target => `<li><span class="bounce-result" data-status="${escapeHtml(target.status)}">${escapeHtml(target.status)}</span>
+          <span><strong>${escapeHtml(target.name || target.sessionId)}</strong><small>${escapeHtml(target.harnessId || '')}${target.reason ? ` · ${escapeHtml(target.reason)}` : ''}</small></span></li>`).join('')}</ul>
+      </article>`;
+    }).join('') : '<p class="bounce-help">No recent operations on this host.</p>'}`;
+  if (root.innerHTML === html) return;
+  root.innerHTML = html;
+  root.querySelectorAll('[data-bounce-cancel]').forEach(button => button.addEventListener('click', () => {
+    cancelBounceWaiting(state, state.operations[Number(button.dataset.bounceCancel)]);
+  }));
+}
+
+async function cancelBounceWaiting(state, operation) {
+  if (state.cancelling.has(operation.id)) return;
+  state.cancelling.add(operation.id);
+  renderBounceOperations(state);
+  try {
+    const res = await apiFetch(state.host, `/api/session-bounces/${encodeURIComponent(operation.id)}`, { method: 'DELETE', timeoutMs: 20000 });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!data.operation) throw new Error('Invalid cancellation response');
+    ++state.readSeq;
+    state.operations = state.operations.map(op => op.id === operation.id ? data.operation : op);
+    state.actionNotice = 'Waiting targets cancelled. Executing targets continue.';
+    await reconcileBounceRestarts(state, [data.operation]);
+  } catch (error) {
+    state.actionNotice = `Cancellation failed: ${error.message}. Check status before trying again.`;
+  }
+  state.cancelling.delete(operation.id);
+  renderBounceOperations(state);
+}
+
+async function reconcileBounceRestarts(state, operations, submitted = false) {
+  const completed = [];
+  for (const operation of operations) {
+    if (operation.mode !== 'restart') continue;
+    for (const target of operation.targets) {
+      const key = sessionKey(state.host.hostId, `${operation.id}:${target.sessionId}`);
+      if (target.status === 'waiting' || target.status === 'executing') bouncePendingRestarts.add(key);
+      else if (target.status === 'completed') {
+        if (submitted) bouncePendingRestarts.add(key);
+        if (bouncePendingRestarts.has(key)) completed.push({ target, key });
+      } else bouncePendingRestarts.delete(key);
+    }
+  }
+  if (!completed.length || !bounceHostElement(state)) return;
+  const selected = currentSession;
+  const generation = sessionSelectionGeneration;
+  const affected = completed.find(({ target }) => target.sessionId === selected?.id && selected?.host === (state.host.hostId || null))?.target;
+  await refreshSessions();
+  if (!bounceHostElement(state)) return; // Reconcile on reopen; never dismiss another takeover.
+  const id = affected?.replacementId || affected?.sessionId;
+  if (affected && !findSession(id, selected.host)) await loadSessions(undefined, { withPrevious: true });
+  if (!bounceHostElement(state)) return;
+  for (const { key } of completed) bouncePendingRestarts.delete(key);
+  if (!affected || !ownsSessionView(selected.id, generation) || currentSession.host !== selected.host) return;
+  // Reconnect the selected transcript underneath the status surface, without
+  // closing it; an ordinary user session switch still closes the takeover.
+  await selectSession(id, { host: selected.host, keepBounceView: true });
 }

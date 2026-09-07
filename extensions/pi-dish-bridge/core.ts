@@ -662,6 +662,27 @@ export function createBridge(descriptor: BridgeDescriptor) {
     },
   });
 
+  // Bulk reload enters a real command context and checks safety there, not
+  // when the server queued it. Never type into the user's TUI draft.
+  let guardedReloadReply: ((success: boolean, data?: unknown, error?: string) => void) | null = null;
+  pi.registerCommand("dish-bounce-reload", {
+    description: "Reload an idle agent for pi-dish maintenance",
+    handler: async (_args, ctx) => {
+      const reply = guardedReloadReply;
+      guardedReloadReply = null;
+      if (!reply) return;
+      const state = lifecycleSnapshot(ctx);
+      if (turnInProgress || compacting || state.idle !== true ||
+          state.pendingMessages !== false || state.pendingDialogs ||
+          state.backgroundWork !== false) {
+        reply(false, undefined, "Agent is no longer safely idle; reload was not started.");
+        return;
+      }
+      reply(true, { info: "Reload dispatched" });
+      await ctx.reload();
+    },
+  });
+
   // Manual recovery/debug: re-broadcast current widget/status state to
   // connected pi-dish clients (and re-check socket ownership). Usable from
   // the TUI and from the web composer (run_command → executeSlashCommand).
@@ -721,7 +742,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // A wrapper may opt into an operation that is absent on an older host.
   // Resolve that claim against the live public context before registration;
   // alternative hosts must fail closed rather than throwing at extension load.
-  const capabilities = { ...descriptor.capabilities };
+  const capabilities = { ...descriptor.capabilities, guardedReload: descriptor.selfPrime === true };
 
   let turnInProgress = false;
   // Compaction has no active turn (turn_start never fires), yet pi has aborted
@@ -1437,6 +1458,44 @@ export function createBridge(descriptor: BridgeDescriptor) {
     try { return pi.getThinkingLevel() ?? null; } catch { return null; }
   }
 
+  function lifecycleSnapshot(ctx: unknown = lastCtx) {
+    const readBoolean = (name: "isIdle" | "hasPendingMessages"): boolean | null => {
+      try {
+        if (!ctx || typeof ctx !== "object" || !(name in ctx)) return null;
+        const method: unknown = Reflect.get(ctx, name);
+        if (typeof method !== "function") return null;
+        const value: unknown = Reflect.apply(method, ctx, []);
+        return typeof value === "boolean" ? value : null;
+      } catch { return null; }
+    };
+    let backgroundWork: boolean | null = descriptor.harnessId === "pi" ? false : null;
+    if (descriptor.harnessId === "omp" && ctx && typeof ctx === "object" &&
+        "getAsyncJobSnapshot" in ctx && typeof ctx.getAsyncJobSnapshot === "function") {
+      try {
+        const jobs: unknown = Reflect.apply(ctx.getAsyncJobSnapshot, ctx, []);
+        // OMP explicitly returns null when this session has no job manager.
+        if (jobs === null) backgroundWork = false;
+        else if (jobs && typeof jobs === "object" && "delivery" in jobs && "running" in jobs) {
+          const delivery = jobs.delivery;
+          if (Array.isArray(jobs.running) && delivery && typeof delivery === "object" &&
+              "queued" in delivery && typeof delivery.queued === "number" &&
+              Number.isSafeInteger(delivery.queued) && delivery.queued >= 0 &&
+              "delivering" in delivery && typeof delivery.delivering === "boolean" &&
+              "pendingJobIds" in delivery && Array.isArray(delivery.pendingJobIds)) {
+            backgroundWork = jobs.running.length > 0 || delivery.queued > 0 ||
+              delivery.delivering || delivery.pendingJobIds.length > 0;
+          }
+        }
+      } catch {}
+    }
+    return {
+      idle: readBoolean("isIdle"),
+      pendingMessages: compactionQueue.length > 0 ? true : readBoolean("hasPendingMessages"),
+      pendingDialogs: pendingDialogs.size,
+      backgroundWork,
+    };
+  }
+
   function stateSnapshot() {
     return {
       protocolVersion: 2,
@@ -1463,6 +1522,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       ...(PROCESS_START_TIME ? { startTime: PROCESS_START_TIME } : {}),
       spawnToken: descriptor.spawnToken ?? SPAWN_TOKEN ?? null,
       queue: mergedQueue(),
+      lifecycle: lifecycleSnapshot(),
     };
   }
 
@@ -1832,6 +1892,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         tree_navigate: "treeNavigation",
         branch: "treeNavigation",
         set_session_name: "rename",
+        guarded_reload: "guardedReload",
       };
       const requiredCapability = commandCapabilities[cmd?.command];
       if (requiredCapability && !capabilities[requiredCapability]) {
@@ -1848,6 +1909,36 @@ export function createBridge(descriptor: BridgeDescriptor) {
           refreshContextUsage();
           respond(true, stateSnapshot());
           return;
+
+        case "guarded_reload": {
+          const captured = getCapturedSession();
+          if (!captured || typeof captured.prompt !== "function") {
+            return respond(false, undefined, "The bridge cannot acquire a reload command context.");
+          }
+          if (guardedReloadReply) return respond(false, undefined, "A guarded reload is already pending.");
+          guardedReloadReply = respond;
+          const requestedSession = sessionId;
+          // Preserve the macrotask boundary required by Pi's reload teardown.
+          setTimeout(() => {
+            if (sessionId !== requestedSession || guardedReloadReply !== respond) {
+              if (guardedReloadReply === respond) guardedReloadReply = null;
+              respond(false, undefined, "Session changed before reload; no reload was started.");
+              return;
+            }
+            Promise.resolve().then(() => captured.prompt("/dish-bounce-reload")).then(() => {
+              if (guardedReloadReply === respond) {
+                guardedReloadReply = null;
+                respond(false, undefined, "The runtime did not execute its reload command.");
+              }
+            }).catch((error: unknown) => {
+              if (guardedReloadReply === respond) {
+                guardedReloadReply = null;
+                respond(false, undefined, error instanceof Error ? error.message : String(error));
+              }
+            });
+          }, 50);
+          return;
+        }
 
         case "compact": {
           const instructions = typeof cmd.instructions === "string" ? cmd.instructions.trim() : "";
