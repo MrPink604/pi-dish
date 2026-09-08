@@ -5376,7 +5376,6 @@ body.standalone-file-page {
 .usage-budget.over .usage-budget-fill { background: var(--error); }
 
 /* Subscription limits: provider quota rows, same bar grammar as the budget. */
-.usage-limits-host { margin-top: 10px; font-size: 11px; font-weight: 600; color: var(--text-muted); }
 .usage-limits-provider { margin-top: 8px; }
 .usage-limits-provider-name { font-size: 12px; color: var(--text-bright); font-weight: 600; }
 .usage-limits-provider-name small { color: var(--text-muted); font-weight: 400; }

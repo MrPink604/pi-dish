@@ -2398,37 +2398,94 @@ function formatLimitReset(resetsAt, now = Date.now()) {
 }
 
 /**
+ * Merge /api/usage-limits payloads across hosts into one provider view.
+ * Hosts in a fleet often hold the *same* provider accounts, so per-host
+ * rendering duplicates every window. Entries: [{ hostLabel, payload }].
+ * Reports are grouped by provider, limits by label+window; rows that agree
+ * collapse to one, rows that genuinely differ stay separate and carry their
+ * host label(s). "Agree" is tolerant on purpose — fetch times and rolling
+ * windows shift values slightly between hosts, and exact-equality would
+ * split every row: usedFraction within `fractionTolerance`, resetsAt within
+ * `resetToleranceMs` (null only equals null), and the same planType (a plan
+ * mismatch almost certainly means different accounts). Errors pass through
+ * per host. Harness labels ride along so a future second reporting harness
+ * still attributes correctly.
+ */
+function mergeUsageLimits(entries, { fractionTolerance = 0.02, resetToleranceMs = 15 * 60000 } = {}) {
+  const providers = new Map(), errors = [];
+  for (const entry of entries || []) {
+    for (const h of entry?.payload?.harnesses || []) {
+      if (h.error) { errors.push({ hostLabel: entry.hostLabel, harnessLabel: h.label || h.harness, error: h.error }); continue; }
+      for (const report of h.reports || []) {
+        let prov = providers.get(report.provider);
+        if (!prov) providers.set(report.provider, prov = { provider: report.provider, planTypes: new Set(), groups: new Map() });
+        if (report.planType) prov.planTypes.add(report.planType);
+        for (const limit of report.limits || []) {
+          const key = `${limit.label}${limit.windowLabel || ''}`;
+          let group = prov.groups.get(key);
+          if (!group) prov.groups.set(key, group = { rows: [] });
+          group.rows.push({
+            ...limit, planType: report.planType || null,
+            fetchedAt: report.fetchedAt || 0, hostLabel: entry.hostLabel,
+          });
+        }
+      }
+    }
+  }
+  const equivalent = (a, b) =>
+    a.planType === b.planType
+    && Math.abs(a.usedFraction - b.usedFraction) <= fractionTolerance
+    && (a.resetsAt == null && b.resetsAt == null
+      || (a.resetsAt != null && b.resetsAt != null && Math.abs(a.resetsAt - b.resetsAt) <= resetToleranceMs));
+  const reports = [...providers.values()].map(prov => {
+    const hostCount = new Set([...prov.groups.values()].flatMap(g => g.rows.map(r => r.hostLabel))).size;
+    const limits = [...prov.groups.values()].flatMap(group => {
+      // Freshest first; each row joins the first cluster whose representative
+      // it agrees with, else founds its own.
+      const clusters = [];
+      for (const row of [...group.rows].sort((a, b) => b.fetchedAt - a.fetchedAt)) {
+        const cluster = clusters.find(c => equivalent(c.rep, row));
+        if (cluster) cluster.hosts.push(row.hostLabel);
+        else clusters.push({ rep: row, hosts: [row.hostLabel] });
+      }
+      return clusters.map(c => ({
+        ...c.rep,
+        hosts: c.hosts.length >= hostCount ? null : [...new Set(c.hosts)].sort(),
+      }));
+    });
+    return {
+      provider: prov.provider,
+      planType: prov.planTypes.size === 1 ? [...prov.planTypes][0] : null,
+      limits,
+    };
+  }).filter(p => p.limits.length);
+  return { reports, errors };
+}
+
+/**
  * "Subscription limits" section of the usage view: provider quota windows
- * (5h/7d utilization + reset) as reported by each harness CLI, per host.
- * Entries: [{ hostLabel, payload }], payload the /api/usage-limits response
- * ({ harnesses: [{ label, reports | error }] }). Host labels show only when
- * more than one host contributed. Returns '' when there is nothing to show,
- * so the section vanishes on hosts/fleets with no supporting harness.
+ * (5h/7d utilization + reset) as reported by the harness CLIs, merged across
+ * hosts by mergeUsageLimits — a row shows its host label only when hosts
+ * disagree about it. Returns '' when there is nothing to show, so the
+ * section vanishes on hosts/fleets with no supporting harness.
  */
 function usageLimitsHtml(entries, { now = Date.now() } = {}) {
-  const usable = (entries || []).filter(e => e?.payload?.harnesses?.length);
-  if (!usable.length) return '';
-  const multiHost = usable.length > 1;
-  const groups = usable.map(entry => {
-    const blocks = entry.payload.harnesses.map(h => {
-      if (h.error) {
-        return `<div class="usage-limits-error">${escapeHtml(h.label || h.harness)}: ${escapeHtml(h.error)}</div>`;
-      }
-      return (h.reports || []).map(report => {
-        const rows = report.limits.map(limit => {
-          const pct = Math.min(100, Math.max(0, limit.usedFraction * 100));
-          const cls = pct >= 100 ? ' over' : pct >= 80 ? ' warn' : '';
-          const reset = limit.resetsAt ? ` · resets ${formatLimitReset(limit.resetsAt, now)}` : '';
-          return `<div class="usage-limit-row"><div class="usage-limit-head"><span>${escapeHtml(limit.label)}</span><small>${Math.round(limit.usedFraction * 100)}% used${escapeHtml(reset)}</small></div><div class="usage-limit-track"><div class="usage-limit-fill${cls}" style="width:${pct.toFixed(1)}%"></div></div></div>`;
-        }).join('');
-        const plan = report.planType ? ` <small>${escapeHtml(report.planType)}</small>` : '';
-        return `<div class="usage-limits-provider"><div class="usage-limits-provider-name">${escapeHtml(report.provider)}${plan}</div>${rows}</div>`;
-      }).join('');
+  const { reports, errors } = mergeUsageLimits(entries);
+  if (!reports.length && !errors.length) return '';
+  const body = reports.map(report => {
+    const rows = report.limits.map(limit => {
+      const pct = Math.min(100, Math.max(0, limit.usedFraction * 100));
+      const cls = pct >= 100 ? ' over' : pct >= 80 ? ' warn' : '';
+      const reset = limit.resetsAt ? ` · resets ${formatLimitReset(limit.resetsAt, now)}` : '';
+      const host = limit.hosts ? ` · ${escapeHtml(limit.hosts.join(', '))}` : '';
+      return `<div class="usage-limit-row"><div class="usage-limit-head"><span>${escapeHtml(limit.label)}</span><small>${Math.round(limit.usedFraction * 100)}% used${escapeHtml(reset)}${host}</small></div><div class="usage-limit-track"><div class="usage-limit-fill${cls}" style="width:${pct.toFixed(1)}%"></div></div></div>`;
     }).join('');
-    const host = multiHost ? `<div class="usage-limits-host">${escapeHtml(entry.hostLabel)}</div>` : '';
-    return `${host}${blocks}`;
+    const plan = report.planType ? ` <small>${escapeHtml(report.planType)}</small>` : '';
+    return `<div class="usage-limits-provider"><div class="usage-limits-provider-name">${escapeHtml(report.provider)}${plan}</div>${rows}</div>`;
   }).join('');
-  return `<section class="usage-section usage-limits"><h4>Subscription limits <span class="usage-hint">reported by the harness CLI — quota, not spend</span></h4>${groups}</section>`;
+  const errHtml = errors.map(e =>
+    `<div class="usage-limits-error">${escapeHtml(e.harnessLabel)} on ${escapeHtml(e.hostLabel)}: ${escapeHtml(e.error)}</div>`).join('');
+  return `<section class="usage-section usage-limits"><h4>Subscription limits <span class="usage-hint">reported by the harness CLI — quota, not spend</span></h4>${body}${errHtml}</section>`;
 }
 
 /**
@@ -2584,7 +2641,7 @@ if (typeof module !== 'undefined' && module.exports) {
     buildSnippet, buildSnippets, highlightTokens, looksLikeFilePath, findPathTokens,
     renderDiffHtml, diffStatusClass,
     shortModelName, niceTicks, formatUsageDay, aggregateUsageWeekly,
-    formatLimitReset, usageLimitsHtml,
+    formatLimitReset, mergeUsageLimits, usageLimitsHtml,
     tmuxPrefixSeq, filenameFromContentDisposition,
     OMP_MODEL_ROLES, buildModelRoleRows, formatModelRoleSummary,
   };

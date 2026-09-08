@@ -340,10 +340,15 @@ degrades per harness to an `error` entry. Harnesses without a `usage` argv
 (Pi, Prime) contribute nothing; the host advertises the feature as the
 `usageLimits` capability only when such a harness is installed, and the
 client fans the route out per capable host (`loadUsageLimits`, alongside but
-independent of the summary fan-out) and renders per host through
-`usageLimitsHtml` (helpers.js) — account quota isn't summable, so nothing
-merges across hosts and the section vanishes when no host answers with
-reports.
+independent of the summary fan-out). Hosts in a fleet often hold the *same*
+provider accounts, so per-host rendering would duplicate every window:
+`mergeUsageLimits` (helpers.js) groups reports by provider and limits by
+label+window, collapsing rows that agree within a tolerance (2 points of
+usedFraction, 15 minutes of resetsAt, same planType — fetch times and
+rolling windows shift values slightly, so exact equality would split every
+row) into one unqualified row, while rows that genuinely differ stay
+separate and carry their host label(s). `usageLimitsHtml` renders that
+merged view; the section vanishes when no host answers with reports.
 
 Server-side session dispatch: `getLiveSession(id)` in server.js is the one
 place bridge-vs-RPC resolution lives (bridge registry entry → connected

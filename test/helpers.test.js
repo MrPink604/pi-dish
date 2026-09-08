@@ -1123,36 +1123,88 @@ test('formatLimitReset renders compact future windows', () => {
   assert.equal(H.formatLimitReset('junk', now), 'now');
 });
 
-test('usageLimitsHtml renders per-host provider quota rows', () => {
+test('mergeUsageLimits collapses agreeing rows and qualifies differing ones', () => {
+  const now = 1700000000000;
+  const limit = (usedFraction, resetsAt, extra = {}) => ({
+    id: 'a', label: '7 days', windowLabel: '7 days', resetsAt, usedFraction, unit: 'percent', status: 'ok', ...extra,
+  });
+  const entry = (hostLabel, reports) => ({ hostLabel, payload: { generatedAt: now, harnesses: [{ harness: 'omp', label: 'Oh My Pi', reports }] } });
+  const report = (limits, { planType = 'pro', fetchedAt = now, provider = 'fakeprov' } = {}) =>
+    ({ provider, planType, fetchedAt, limits });
+
+  // Same account on two hosts: within tolerance, one row, no qualifier.
+  let merged = H.mergeUsageLimits([
+    entry('host-a', [report([limit(0.42, now + 86400000)])]),
+    entry('host-b', [report([limit(0.43, now + 86400000 + 5 * 60000)], { fetchedAt: now - 60000 })]),
+  ]);
+  assert.equal(merged.reports.length, 1);
+  assert.equal(merged.reports[0].limits.length, 1, 'near-identical rows collapse');
+  assert.equal(merged.reports[0].limits[0].hosts, null, 'a fleet-wide row carries no qualifier');
+  assert.equal(merged.reports[0].limits[0].usedFraction, 0.42, 'the freshest report wins');
+  assert.equal(merged.reports[0].planType, 'pro');
+
+  // Genuinely different values for the same provider window: both stay,
+  // each qualified by its host.
+  merged = H.mergeUsageLimits([
+    entry('host-a', [report([limit(0.1, now + 86400000)])]),
+    entry('host-b', [report([limit(0.9, now + 86400000)])]),
+  ]);
+  assert.equal(merged.reports[0].limits.length, 2, 'disagreeing rows do not merge');
+  assert.deepEqual(merged.reports[0].limits.map(l => l.hosts), [['host-a'], ['host-b']]);
+  assert.equal(merged.reports[0].planType, 'pro', 'a uniform plan still shows at provider level');
+
+  // A plan mismatch splits even identical usage — likely different accounts.
+  merged = H.mergeUsageLimits([
+    entry('host-a', [report([limit(0.42, now + 86400000)], { planType: 'pro' })]),
+    entry('host-b', [report([limit(0.42, now + 86400000)], { planType: 'max' })]),
+  ]);
+  assert.equal(merged.reports[0].limits.length, 2, 'plan mismatch keeps rows separate');
+  assert.equal(merged.reports[0].planType, null, 'a split plan leaves the provider header');
+
+  // Errors pass through with their host.
+  merged = H.mergeUsageLimits([
+    entry('host-a', [report([limit(0.42, now + 86400000)])]),
+    { hostLabel: 'host-b', payload: { harnesses: [{ harness: 'omp', label: 'Oh My Pi', error: 'boom' }] } },
+  ]);
+  assert.deepEqual(merged.errors, [{ hostLabel: 'host-b', harnessLabel: 'Oh My Pi', error: 'boom' }]);
+  assert.equal(merged.reports[0].limits[0].hosts, null, 'the surviving row needs no qualifier');
+});
+
+test('usageLimitsHtml renders the merged provider quota view', () => {
   const now = 1700000000000;
   const entry = (hostLabel, harnesses) => ({ hostLabel, payload: { generatedAt: now, harnesses } });
-  const omp = {
+  const omp = (limits, planType = 'max') => ({
     harness: 'omp', label: 'Oh My Pi',
-    reports: [{
-      provider: 'anthropic', planType: 'max', fetchedAt: now,
-      limits: [
-        { id: 'a', label: '5 hours', windowLabel: '5 hours', resetsAt: now + 3600000, usedFraction: 0.42, unit: 'percent', status: 'ok' },
-        { id: 'b', label: '<7> days', windowLabel: '7 days', resetsAt: null, usedFraction: 0.9, unit: 'percent', status: 'ok' },
-        { id: 'c', label: 'weekly scoped', windowLabel: null, resetsAt: null, usedFraction: 1.2, unit: 'percent', status: 'exhausted' },
-      ],
-    }],
-  };
-  const single = H.usageLimitsHtml([entry('host-a', [omp])], { now });
+    reports: [{ provider: 'anthropic', planType, fetchedAt: now, limits }],
+  });
+  const base = [
+    { id: 'a', label: '5 hours', windowLabel: '5 hours', resetsAt: now + 3600000, usedFraction: 0.42, unit: 'percent', status: 'ok' },
+    { id: 'b', label: '<7> days', windowLabel: '7 days', resetsAt: null, usedFraction: 0.9, unit: 'percent', status: 'ok' },
+  ];
+  const single = H.usageLimitsHtml([entry('host-a', [omp(base)])], { now });
   assert.ok(single.includes('Subscription limits'));
   assert.ok(single.includes('anthropic') && single.includes('max'));
   assert.ok(single.includes('42% used') && single.includes('resets in 1h'));
   assert.ok(single.includes('&lt;7&gt; days'), 'provider-supplied labels are escaped');
-  assert.ok(!single.includes('usage-limits-host'), 'host labels hide on a single host');
+  assert.ok(!single.includes('usage-limits-host'), 'no per-host groupings remain');
   assert.ok(/usage-limit-fill warn/.test(single), '90% renders the warn bar');
-  assert.ok(/usage-limit-fill over/.test(single) && single.includes('width:100.0%'),
-    'an exhausted window clamps to a full error bar');
 
-  const multi = H.usageLimitsHtml([
-    entry('host-a', [omp]),
+  // Two hosts, one shared window and one window they disagree on: the shared
+  // row is bare, the differing rows carry their host names.
+  const two = H.usageLimitsHtml([
+    entry('host-a', [omp(base)]),
+    entry('host-b', [omp([{ ...base[0] }, { ...base[1], usedFraction: 0.2 }])]),
+  ], { now });
+  const fiveHour = two.match(/5 hours<\/span><small>42% used[^<]*<\/small>/)[0];
+  assert.ok(!/· host/.test(fiveHour), 'the agreeing row is unqualified');
+  assert.ok(two.includes('90% used') && two.includes('· host-a'), 'differing row shows its host');
+  assert.ok(two.includes('20% used') && two.includes('· host-b'));
+
+  const err = H.usageLimitsHtml([
+    entry('host-a', [omp(base)]),
     entry('host-b', [{ harness: 'omp', label: 'Oh My Pi', error: 'boom <x>' }]),
   ], { now });
-  assert.equal(multi.match(/usage-limits-host/g).length, 2, 'fleet rows name their host');
-  assert.ok(multi.includes('boom &lt;x&gt;'), 'harness errors render escaped, not thrown');
+  assert.ok(err.includes('on host-b: boom &lt;x&gt;'), 'harness errors render escaped per host');
 
   assert.equal(H.usageLimitsHtml([], { now }), '');
   assert.equal(H.usageLimitsHtml([entry('host-a', [])], { now }), '',
