@@ -609,6 +609,25 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check((await desktop.locator('.message.custom-message.generic').textContent()).includes('future notice'),
       'unknown visible custom_message renders a generic row');
 
+    // The thinking badge opens its dropdown after an await on /api/models —
+    // which outlives the click's event dispatch, so the handler must anchor
+    // off the element, not off event.currentTarget (that regressed to a
+    // TypeError and a dropdown that never appeared on desktop).
+    console.log('thinking dropdown:');
+    await desktop.click('#sessionThinking');
+    await desktop.waitForSelector('#thinkingDropdown .thinking-option');
+    const thinkingBox = await desktop.locator('#thinkingDropdown').boundingBox();
+    const badgeBox = await desktop.locator('#sessionThinking').boundingBox();
+    check(await desktop.locator('#thinkingDropdown .thinking-option').count() >= 2,
+      'thinking dropdown lists selectable levels');
+    check(!!thinkingBox && !!badgeBox && Math.abs(thinkingBox.x - badgeBox.x) < 2 &&
+      thinkingBox.y >= badgeBox.y,
+      'thinking dropdown is anchored under its badge on desktop');
+    await desktop.click('#sessionThinking');
+    await desktop.waitForSelector('#thinkingDropdown', { state: 'hidden' });
+    check(!(await desktop.locator('#thinkingDropdown').isVisible()),
+      'clicking the badge again closes the thinking dropdown');
+
     console.log('same-pane session switch:');
     writeRegistry({
       sessionId: SWITCH_ID,

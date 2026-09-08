@@ -3106,7 +3106,7 @@ function updateThinkingBadges() {
   }
 }
 
-async function toggleThinkingDropdown(event) {
+async function toggleThinkingDropdown() {
   if (!currentSession || !currentSession.isActive || !sessionSupports(currentSession, 'setThinking')) return;
   // Load the model list so OMP can trim the dropdown to what the session's
   // model supports (cached after the first fetch).
@@ -3128,14 +3128,18 @@ async function toggleThinkingDropdown(event) {
   ).join('');
 
   // Desktop: anchored under the header button. Mobile: the stylesheet
-  // positions it (full-width sheet, same as the model dropdown).
+  // positions it (full-width sheet, same as the model dropdown). The button
+  // is looked up by id, never taken off the click event: the await above
+  // outlives the event dispatch, so `event.currentTarget` is null by here.
   if (window.innerWidth > 768) {
-    anchorDropdown(dropdown, event.currentTarget.getBoundingClientRect());
+    anchorDropdown(dropdown, document.getElementById('sessionThinking').getBoundingClientRect());
   } else {
     clearDropdownPos(dropdown);
   }
   dropdown.style.display = 'block';
-  armOutsideClickClose(['thinkingDropdown'], closeThinkingDropdown, () => thinkingDropdownOpen);
+  // The badge counts as inside, or clicking it while open would close the
+  // dropdown here and let this handler's own toggle reopen it.
+  armOutsideClickClose(['sessionThinking', 'thinkingDropdown'], closeThinkingDropdown, () => thinkingDropdownOpen);
 }
 
 function closeThinkingDropdown() {
