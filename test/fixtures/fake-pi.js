@@ -64,28 +64,64 @@ const readJsonFile = (file) => {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return {}; }
 };
 
+// The agents hub reads its inventory from `agents unpack` (the only way to
+// enumerate bundled agents) plus the user/project agent dirs.
+if (harnessId === 'omp' && args[0] === 'agents' && args[1] === 'unpack') {
+  const dirIndex = args.indexOf('--dir');
+  const dir = dirIndex >= 0 ? args[dirIndex + 1] : path.join(home, '.omp', 'agent', 'agents');
+  fs.mkdirSync(dir, { recursive: true });
+  const bundled = {
+    scout: '---\nname: scout\ndescription: Read-only scout\nmodel:\n  - "@smol"\nthinkingLevel: medium\n---\n\nScout.\n',
+    reviewer: '---\nname: reviewer\ndescription: Code review specialist\nmodel:\n  - "@slow"\n---\n\nReviewer.\n',
+  };
+  const written = [];
+  for (const [name, body] of Object.entries(bundled)) {
+    const file = path.join(dir, `${name}.md`);
+    fs.writeFileSync(file, body);
+    written.push(file);
+  }
+  fs.writeSync(1, JSON.stringify({ targetDir: dir, total: written.length, written, skipped: [] }) + '\n');
+  process.exit(0);
+}
+
 if (harnessId === 'omp' && args[0] === 'config' && args.includes('--json')) {
   const key = args[2];
   const baseRoles = { default: 'zai/glm-4.7-flash' };
-  const globalRoles = { ...baseRoles, ...(readJsonFile(fakeGlobalConfigFile).modelRoles || {}) };
+  const stored = readJsonFile(fakeGlobalConfigFile);
+  const globalRoles = { ...baseRoles, ...(stored.modelRoles || {}) };
+  // Per-agent settings: one name array plus three records, exactly the shape
+  // OMP's /agents hub persists.
+  const AGENT_KEYS = {
+    'task.disabledAgents': { type: 'array', empty: [] },
+    'task.agentModelOverrides': { type: 'record', empty: {} },
+    'task.agentPrewalk': { type: 'record', empty: {} },
+    'task.agentAdvisor': { type: 'record', empty: {} },
+  };
   if (args[1] === 'set') {
-    if (key !== 'modelRoles') {
+    if (key !== 'modelRoles' && !AGENT_KEYS[key]) {
       fs.writeSync(2, `Setting is not writable: ${key}\n`);
       process.exit(1);
     }
-    const stored = readJsonFile(fakeGlobalConfigFile);
-    stored.modelRoles = JSON.parse(args[3]);
+    stored[key] = JSON.parse(args[3]);
     fs.mkdirSync(path.dirname(fakeGlobalConfigFile), { recursive: true });
     fs.writeFileSync(fakeGlobalConfigFile, JSON.stringify(stored));
-    fs.writeSync(1, JSON.stringify({ key, value: stored.modelRoles, type: 'record' }) + '\n');
+    fs.writeSync(1, JSON.stringify({ key, value: stored[key], type: AGENT_KEYS[key]?.type || 'record' }) + '\n');
     process.exit(0);
   }
   if (args[1] === 'get') {
     const projectRoles = readJsonFile(path.join(process.cwd(), '.omp', 'fake-project-roles.json'));
+    const projectAgents = readJsonFile(path.join(process.cwd(), '.omp', 'fake-project-agents.json'));
     const values = {
       modelRoles: { key, value: { ...globalRoles, ...projectRoles }, type: 'record', description: '' },
       defaultThinkingLevel: { key, value: 'high', type: 'enum', description: 'Reasoning depth' },
     };
+    for (const [agentKey, spec] of Object.entries(AGENT_KEYS)) {
+      const global = stored[agentKey] ?? spec.empty;
+      const project = projectAgents[agentKey];
+      const value = project === undefined ? global
+        : Array.isArray(spec.empty) ? [...new Set([...global, ...project])] : { ...global, ...project };
+      values[agentKey] = { key, value, type: spec.type, description: '' };
+    }
     if (!values[key]) {
       fs.writeSync(2, `Unknown setting: ${key}\n`);
       process.exit(1);

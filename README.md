@@ -96,6 +96,10 @@ Rules of thumb:
   Spend is estimated from each session harness's cached model-catalog
   pricing, not provider billing; an asterisk marks the known subtotal when
   calls with unavailable pricing were omitted, and their count is shown.
+  Where a harness CLI can report them (OMP's `usage`), the same view leads
+  with Subscription limits: each provider account's quota windows (5-hour,
+  weekly, …), percent used, and reset countdown — no running session needed,
+  and account identifiers never leave the server.
 - **Reading tools** — in-session search (Ctrl+F, auto-pages older messages
   in), focus mode that hides tool noise, per-message copy buttons.
 - **Mobile-first** — the whole point. Slide-out drawer, slide-up control

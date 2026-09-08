@@ -327,6 +327,24 @@ in/out and show the cached share (`usageTokensDetail` in app.js) — the rate's
 denominator is the whole prompt side, matching `formatCacheStat` in the
 stats modal; keep the two consistent.
 
+The Subscription limits section above the range presets is a different kind
+of data — provider-account quota (5h/7d windows, percent used, reset
+countdowns), not spend — and deliberately reuses the harness's own reporter
+instead of reimplementing provider quota APIs: `GET /api/usage-limits` runs
+the descriptor's `argv.usage` command (OMP's `omp usage --json --redact`,
+which reads OMP's auth store and queries providers directly — no running
+session needed) through the same `runHarnessJsonCommand` shell-out as
+`config get`/`agents unpack`, whitelists fields server-side (even `--redact`
+output carries partial account ids; emails never reach the wire), and
+degrades per harness to an `error` entry. Harnesses without a `usage` argv
+(Pi, Prime) contribute nothing; the host advertises the feature as the
+`usageLimits` capability only when such a harness is installed, and the
+client fans the route out per capable host (`loadUsageLimits`, alongside but
+independent of the summary fan-out) and renders per host through
+`usageLimitsHtml` (helpers.js) — account quota isn't summable, so nothing
+merges across hosts and the section vanishes when no host answers with
+reports.
+
 Server-side session dispatch: `getLiveSession(id)` in server.js is the one
 place bridge-vs-RPC resolution lives (bridge registry entry → connected
 BridgeSession, else alive RPCSession, else null). Don't re-roll the
@@ -646,32 +664,59 @@ error and the takeover stays open. The workspace-header `+` button
 direct-spawns via `createSession(cwd)` (same async path, default model)
 without the takeover.
 
-### OMP model roles (GET/PUT `/api/harnesses/:id/model-roles`)
+### Harness settings: agents + model roles (`#harnessSettingsModal`)
 
-OMP assigns a model per *role* (`default`, `smol`, `vision`, … — canonical set
-and user-facing copy in `OMP_MODEL_ROLES`, helpers.js; the record may also hold
+One modal covers pi-dish's take on OMP's `/models` roles and `/agents` hub:
+two panes (`showHarnessSettingsTab('agents'|'models')`), one Save
+(`saveHarnessSettings` → only the rows the user moved). Entries: the session
+header's harness badge (`openSessionHarnessSettings`, mirrored by the mobile
+control panel's `#cpHarnessRow`) and the takeover's `#nsEditAgents` /
+`#nsEditRoles`. Both open it against a `{ hostId, cwd }` scope — the session's
+cwd, or the takeover's — because the *effective* view depends on that
+directory's project config. The badge is only clickable where the session's own
+host reports `pilotConfig` for its harness (`/api/harnesses`, cached per host in
+`harnessRowsByHost`), so it never promises an editor a 501 would refuse.
+Escape closes the modal only.
+
+**Model roles** (`GET /api/harnesses/:id/config`, `PUT …/model-roles`): OMP
+assigns a model per *role* (`default`, `smol`, `vision`, … — canonical set and
+user-facing copy in `OMP_MODEL_ROLES`, helpers.js; the record may also hold
 arbitrary custom keys, preserve them). The "Oh My Pi defaults" readout in the
-takeover summarizes them (`formatModelRoleSummary`) and opens `#modelRolesModal`
-— a small focused modal per the takeover/modal rule, Escape closes the modal
-only. Rows come from the pure `buildModelRoleRows(global, effective)`.
+takeover summarizes them (`formatModelRoleSummary`); rows come from the pure
+`buildModelRoleRows(global, effective)`.
 
-The CLI semantics that shape the server side: `omp config get modelRoles` is the
-**merged project-over-global view for the cwd**, while `omp config set
-modelRoles <json>` replaces the whole record in the **global** config regardless
-of cwd (dotted sub-keys are unsupported, so it is always a whole-record write).
+**Task agents** (`GET`/`PUT /api/harnesses/:id/agents`): the per-agent settings
+are one array plus three records — `task.disabledAgents`,
+`task.agentModelOverrides`, `task.agentPrewalk`, `task.agentAdvisor` (descriptor
+`pilotConfig`). OMP has no "list agents" command, so `lib/harness-agents.js`
+mirrors its three sources, project-first: `<cwd>/.omp/agents/*.md`, the user
+`<agent dir>/agents/*.md`, and the bundled definitions — enumerable only by
+`omp agents unpack --dir <tmp> --json` into a throwaway dir (cached per process;
+it spawns the harness). Frontmatter gives name/description/model/thinkingLevel,
+so a row can offer "(inherit @smol)" against the definition's own model. The
+prewalk/advisor records read back as either booleans or OMP's normalized
+`"on"`/`"off"` strings (`sanitizeFlagRecord`); the wire shape is boolean, and
+`null` in a PUT drops the override back to inherited. A PUT rewrites only the
+records it actually moved — every `config set` is a whole-value write, so
+touching an untouched key would materialize a global copy of the merged read.
+
+The CLI semantics that shape the server side: `omp config get <key>` is the
+**merged project-over-global view for the cwd**, while `omp config set <key>
+<json>` replaces the whole value in the **global** config regardless of cwd
+(dotted sub-keys are unsupported, so it is always a whole-value write).
 A naive read(merged) → edit → set() would therefore copy a project's
 `.omp/config.yml` overrides into the global config permanently. So
-`readGlobalModelRoles` (server.js) runs the get with cwd set to a **freshly
+`readGlobalConfigValues` (server.js) runs the gets with cwd set to a **freshly
 mkdtemp'd empty dir** — no project config to overlay, so merged == global — and
-the PUT patches *that* record. Don't "simplify" it back to reading the cwd.
-`GET /config` returns both (`modelRoles` effective + `globalModelRoles`); the
-editor's selects bind to global and show a per-row "project override" hint where
-the effective value differs. PUTs are serialized per harness
-(`queueModelRoleWrite`) because each one is a read-modify-write of one record.
-Values are stored verbatim (OMP resolves refs); the fake-pi fixture emulates the
-two-tier merge (`$HOME/.omp/agent/fake-config.json` global +
-`<cwd>/.omp/fake-project-roles.json` overlay) so the no-leak guarantee is
-testable without the real binary.
+the PUTs patch *that* record. Don't "simplify" it back to reading the cwd.
+Both GETs return the effective and global views; selects bind to global and show
+a per-row "project override" hint where the effective value differs. Writes are
+serialized per harness (`queueHarnessConfigWrite`) because each one is a
+read-modify-write. Values are stored verbatim (OMP resolves model refs); the
+fake-pi fixture emulates the two-tier merge
+(`$HOME/.omp/agent/fake-config.json` global + `<cwd>/.omp/fake-project-roles.json`
+and `fake-project-agents.json` overlays) plus `agents unpack`, so the no-leak
+guarantee is testable without the real binary.
 
 ## Routines (lib/routines.js, lib/cron.js, lib/routine-runner.js, /api/routines)
 

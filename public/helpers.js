@@ -2383,6 +2383,55 @@ function aggregateUsageWeekly(daily) {
 }
 
 /**
+ * Compact future-reset text for a usage-limit window: "in 5d 3h", "in 42m",
+ * "now" once the reset time has passed. `now` is injectable for tests.
+ */
+function formatLimitReset(resetsAt, now = Date.now()) {
+  const ms = Number(resetsAt) - now;
+  if (!Number.isFinite(ms) || ms <= 0) return 'now';
+  const mins = Math.ceil(ms / 60000);
+  if (mins < 60) return `in ${mins}m`;
+  const h = Math.floor(mins / 60), m = mins % 60;
+  if (h < 24) return m ? `in ${h}h ${m}m` : `in ${h}h`;
+  const d = Math.floor(h / 24), rh = h % 24;
+  return rh ? `in ${d}d ${rh}h` : `in ${d}d`;
+}
+
+/**
+ * "Subscription limits" section of the usage view: provider quota windows
+ * (5h/7d utilization + reset) as reported by each harness CLI, per host.
+ * Entries: [{ hostLabel, payload }], payload the /api/usage-limits response
+ * ({ harnesses: [{ label, reports | error }] }). Host labels show only when
+ * more than one host contributed. Returns '' when there is nothing to show,
+ * so the section vanishes on hosts/fleets with no supporting harness.
+ */
+function usageLimitsHtml(entries, { now = Date.now() } = {}) {
+  const usable = (entries || []).filter(e => e?.payload?.harnesses?.length);
+  if (!usable.length) return '';
+  const multiHost = usable.length > 1;
+  const groups = usable.map(entry => {
+    const blocks = entry.payload.harnesses.map(h => {
+      if (h.error) {
+        return `<div class="usage-limits-error">${escapeHtml(h.label || h.harness)}: ${escapeHtml(h.error)}</div>`;
+      }
+      return (h.reports || []).map(report => {
+        const rows = report.limits.map(limit => {
+          const pct = Math.min(100, Math.max(0, limit.usedFraction * 100));
+          const cls = pct >= 100 ? ' over' : pct >= 80 ? ' warn' : '';
+          const reset = limit.resetsAt ? ` · resets ${formatLimitReset(limit.resetsAt, now)}` : '';
+          return `<div class="usage-limit-row"><div class="usage-limit-head"><span>${escapeHtml(limit.label)}</span><small>${Math.round(limit.usedFraction * 100)}% used${escapeHtml(reset)}</small></div><div class="usage-limit-track"><div class="usage-limit-fill${cls}" style="width:${pct.toFixed(1)}%"></div></div></div>`;
+        }).join('');
+        const plan = report.planType ? ` <small>${escapeHtml(report.planType)}</small>` : '';
+        return `<div class="usage-limits-provider"><div class="usage-limits-provider-name">${escapeHtml(report.provider)}${plan}</div>${rows}</div>`;
+      }).join('');
+    }).join('');
+    const host = multiHost ? `<div class="usage-limits-host">${escapeHtml(entry.hostLabel)}</div>` : '';
+    return `${host}${blocks}`;
+  }).join('');
+  return `<section class="usage-section usage-limits"><h4>Subscription limits <span class="usage-hint">reported by the harness CLI — quota, not spend</span></h4>${groups}</section>`;
+}
+
+/**
  * tmux prefix key notation ("C-b", "C-a", "M-x", "C-Space") → the raw byte
  * sequence a terminal sends for it. Null when unmappable — the on-screen
  * prefix button hides rather than sending the wrong bytes.
@@ -2535,6 +2584,7 @@ if (typeof module !== 'undefined' && module.exports) {
     buildSnippet, buildSnippets, highlightTokens, looksLikeFilePath, findPathTokens,
     renderDiffHtml, diffStatusClass,
     shortModelName, niceTicks, formatUsageDay, aggregateUsageWeekly,
+    formatLimitReset, usageLimitsHtml,
     tmuxPrefixSeq, filenameFromContentDisposition,
     OMP_MODEL_ROLES, buildModelRoleRows, formatModelRoleSummary,
   };

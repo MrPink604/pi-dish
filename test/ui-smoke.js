@@ -1391,6 +1391,42 @@ let remoteHost = null; // second pi-dish (multi-host section)
         }),
       });
     });
+    // Task-agent hub: bundled/user/project definitions with per-agent
+    // settings, again editing the global record while a project overlay is
+    // only ever called out.
+    let ompAgentSettings = {
+      disabled: ['sonic'], modelOverrides: { scout: 'zai/glm-5.2' },
+      prewalk: {}, advisor: { reviewer: true },
+    };
+    const ompAgentsBody = () => JSON.stringify({
+      agents: [
+        { name: 'reviewer', description: 'Code review specialist', source: 'bundled', model: '@slow', thinkingLevel: null },
+        { name: 'scout', description: 'Read-only scout', source: 'user', model: '@smol', thinkingLevel: 'medium' },
+        { name: 'sonic', description: 'Mechanical updates only', source: 'bundled', model: '@smol', thinkingLevel: null },
+      ],
+      // Effective view: the project also disables `scout` in this directory.
+      settings: { ...ompAgentSettings, disabled: [...ompAgentSettings.disabled, 'scout'] },
+      globalSettings: ompAgentSettings,
+    });
+    let agentsPatch = null;
+    await desktop.route(/\/api\/harnesses\/omp\/agents(?:\?|$)/, async (route) => {
+      if (route.request().method() === 'PUT') {
+        agentsPatch = route.request().postDataJSON();
+        for (const [name, settings] of Object.entries(agentsPatch.agents || {})) {
+          if (settings.disabled === true) ompAgentSettings.disabled.push(name);
+          if (settings.disabled === false) {
+            ompAgentSettings.disabled = ompAgentSettings.disabled.filter(entry => entry !== name);
+          }
+          if (settings.model === null) delete ompAgentSettings.modelOverrides[name];
+          else if (settings.model) ompAgentSettings.modelOverrides[name] = settings.model;
+          for (const key of ['prewalk', 'advisor']) {
+            if (settings[key] === null) delete ompAgentSettings[key][name];
+            else if (settings[key] !== undefined) ompAgentSettings[key][name] = settings[key];
+          }
+        }
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: ompAgentsBody() });
+    });
     await desktop.evaluate(() => localStorage.setItem('pi-dish-new-harness', 'omp'));
     await desktop.evaluate(() => loadHarnesses());
     await desktop.waitForFunction(() => document.querySelector('#nsHarnessSelect option[value="omp"]'));
@@ -1411,10 +1447,26 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check((await desktop.locator('#nsHarnessRoles').textContent()).includes('default zai/glm-4.7-flash'),
       'the readout summarizes the effective role assignments');
 
-    // Model-role editor: a modal over the takeover, initialized from the
-    // *global* record with the project override called out per row.
-    await desktop.click('#nsEditRoles');
-    await desktop.waitForSelector('#modelRolesModal .model-role-row');
+    // Harness settings: one modal, an agents pane and a models pane, both
+    // initialized from the *global* records with project overrides called out.
+    await desktop.click('#nsEditAgents');
+    await desktop.waitForSelector('#harnessAgentsBody .hs-agent-row');
+    check(await desktop.locator('#harnessAgentsBody .hs-agent-row').count() === 3,
+      'every discovered task agent gets a row');
+    check(await desktop.isChecked('.hs-agent-enabled[data-agent="scout"]') &&
+      !(await desktop.isChecked('.hs-agent-enabled[data-agent="sonic"]')),
+      'the enable toggle initializes from the global disabled list');
+    check((await desktop.locator('.hs-agent-row[data-agent="scout"]').textContent()).includes('project override'),
+      'an agent the project disables here is flagged as a project override');
+    check(await desktop.inputValue('.hs-agent-model[data-agent="scout"]') === 'zai/glm-5.2' &&
+      await desktop.inputValue('.hs-agent-advisor[data-agent="reviewer"]') === 'on' &&
+      await desktop.inputValue('.hs-agent-prewalk[data-agent="reviewer"]') === '',
+      'per-agent model, advisor and prewalk controls initialize from the global records');
+    check((await desktop.locator('.hs-agent-row[data-agent="reviewer"] .hs-agent-model option').first().textContent())
+      === '(inherit @slow)', 'the inherit option names the definition\'s own model');
+
+    await desktop.click('#hsTabModels');
+    await desktop.waitForSelector('#modelRolesBody .model-role-row');
     check(await desktop.locator('.model-role-row').count() >= 10,
       'every canonical OMP role gets a row');
     check(await desktop.inputValue('.model-role-select[data-role="smol"]') === 'zai/glm-5.2',
@@ -1426,19 +1478,27 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check((await desktop.locator('.model-role-row[data-role="plan"] option[value="fixture-missing/offline-model"]').textContent())
       === 'fixture-missing/offline-model', 'role models use the authoritative OMP catalog without credential guesses');
     await desktop.keyboard.press('Escape');
-    check(await desktop.evaluate(() => document.getElementById('modelRolesModal').style.display === 'none') &&
+    check(await desktop.evaluate(() => document.getElementById('harnessSettingsModal').style.display === 'none') &&
       await desktop.evaluate(() => document.querySelector('.main').classList.contains('new-session-open')),
-      'Escape closes the roles modal only, not the takeover underneath');
+      'Escape closes the settings modal only, not the takeover underneath');
 
+    // One Save covers both panes, sending only the rows the user moved.
     await desktop.click('#nsEditRoles');
-    await desktop.waitForSelector('#modelRolesModal .model-role-row');
+    await desktop.waitForSelector('#modelRolesBody .model-role-row');
     await desktop.selectOption('.model-role-select[data-role="plan"]', 'zai/glm-5.2');
     await desktop.selectOption('.model-role-select[data-role="smol"]', '');
+    await desktop.click('#hsTabAgents');
+    await desktop.uncheck('.hs-agent-enabled[data-agent="reviewer"]');
+    await desktop.selectOption('.hs-agent-model[data-agent="scout"]', '');
+    await desktop.selectOption('.hs-agent-prewalk[data-agent="scout"]', 'off');
     await desktop.click('#modelRolesSave');
     await desktop.waitForFunction(() =>
-      document.getElementById('modelRolesModal').style.display === 'none');
+      document.getElementById('harnessSettingsModal').style.display === 'none');
     check(JSON.stringify(modelRolesPatch?.roles) === JSON.stringify({ smol: null, plan: 'zai/glm-5.2' }),
       `saving PUTs only the changed roles (got ${JSON.stringify(modelRolesPatch?.roles)})`);
+    check(JSON.stringify(agentsPatch?.agents) === JSON.stringify({
+      reviewer: { disabled: true }, scout: { model: null, prewalk: false },
+    }), `saving PUTs only the changed agent settings (got ${JSON.stringify(agentsPatch?.agents)})`);
     await desktop.waitForFunction(() =>
       document.getElementById('nsHarnessRoles').textContent.includes('plan zai/glm-5.2'));
     check(!(await desktop.locator('#nsHarnessRoles').textContent()).includes('smol'),
@@ -1572,6 +1632,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.unroute('**/api/session-spawns/ui-spawn-1');
     await desktop.unroute(/\/api\/models\?harness=omp(?:&|$)/);
     await desktop.unroute(/\/api\/harnesses\/omp\/config(?:\?|$)/);
+    await desktop.unroute(/\/api\/harnesses\/omp\/agents(?:\?|$)/);
     await desktop.unroute('**/api/harnesses');
 
     // 5. Rename propagates to the sidebar without a reload

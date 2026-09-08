@@ -30,6 +30,26 @@ if (exportIndex >= 0) {
   process.exit(0);
 }
 
+// `omp usage --json --redact`: one provider report with raw account metadata
+// the server must strip, plus one malformed limit it must drop.
+if (args[0] === 'usage' && args.includes('--json')) {
+  process.stdout.write(JSON.stringify({
+    generatedAt: 1700000000000,
+    reports: [{
+      provider: 'fakeprov',
+      fetchedAt: 1700000001000,
+      metadata: { planType: 'pro', email: 'secret@example.com', accountId: 'acct-123' },
+      limits: [
+        { id: 'fakeprov:primary', label: '7 days', scope: { accountId: 'acct-123' },
+          window: { id: '7d', label: '7 days', resetsAt: 1700604800000 },
+          amount: { usedFraction: 0.42, remainingFraction: 0.58, unit: 'percent' }, status: 'ok' },
+        { id: 'broken', label: null, amount: { usedFraction: 'x' } },
+      ],
+    }, { provider: 'nolimits', limits: [] }],
+  }) + '\n');
+  process.exit(0);
+}
+
 if (args[0] === 'models' && args[1] === '--json') {
   process.stdout.write('[]\n');
   process.exit(0);

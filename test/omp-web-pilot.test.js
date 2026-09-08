@@ -160,6 +160,78 @@ test('OMP model-role PUT validates the patch and is unsupported for pi', async (
   assert.equal((await put('/api/harnesses/pi/model-roles', { roles: { default: 'x' } })).status, 501);
 });
 
+test('OMP agents endpoint lists definitions per source with global and effective settings', async () => {
+  // A user definition overrides the bundled one of the same name; a project
+  // definition adds a row that only exists in this cwd.
+  fs.mkdirSync(path.join(home, '.omp', 'agent', 'agents'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.omp', 'agent', 'agents', 'scout.md'),
+    '---\nname: scout\ndescription: My scout\nmodel: openai/gpt-5\n---\n');
+  fs.mkdirSync(path.join(cwd, '.omp', 'agents'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, '.omp', 'agents', 'porter.md'),
+    '---\nname: porter\ndescription: Project porter\nthinkingLevel: high\n---\n');
+  fs.writeFileSync(path.join(cwd, '.omp', 'fake-project-agents.json'),
+    JSON.stringify({ 'task.disabledAgents': ['porter'] }));
+
+  const { status, body } = await get(`/api/harnesses/omp/agents?${new URLSearchParams({ cwd })}`);
+  assert.equal(status, 200);
+  assert.deepEqual(body.agents.map(agent => [agent.name, agent.source]), [
+    ['porter', 'project'], ['reviewer', 'bundled'], ['scout', 'user'],
+  ]);
+  const scout = body.agents.find(agent => agent.name === 'scout');
+  assert.equal(scout.description, 'My scout');
+  assert.equal(scout.model, 'openai/gpt-5');
+  assert.equal(body.agents.find(agent => agent.name === 'reviewer').model, '@slow');
+  assert.equal(body.agents.find(agent => agent.name === 'porter').thinkingLevel, 'high');
+  // The project overlay disables an agent only in this directory, so it shows
+  // up as effective without polluting the editable global record.
+  assert.deepEqual(body.settings.disabled, ['porter']);
+  assert.deepEqual(body.globalSettings.disabled, []);
+});
+
+test('OMP agents PUT patches only the records the caller moved', async () => {
+  const first = await put('/api/harnesses/omp/agents', {
+    cwd, agents: { scout: { disabled: true, model: 'zai/glm-5.2', prewalk: true } },
+  });
+  assert.equal(first.status, 200);
+  assert.deepEqual(first.body.globalSettings.disabled, ['scout']);
+  assert.deepEqual(first.body.globalSettings.modelOverrides, { scout: 'zai/glm-5.2' });
+  assert.deepEqual(first.body.globalSettings.prewalk, { scout: true });
+  assert.deepEqual(first.body.globalSettings.advisor, {});
+  // The project overlay stays out of the global record it just rewrote.
+  assert.deepEqual(first.body.settings.disabled, ['scout', 'porter']);
+
+  // null drops an override back to inherited; false is a real stored value.
+  const second = await put('/api/harnesses/omp/agents', {
+    cwd, agents: { scout: { model: null, prewalk: false }, reviewer: { advisor: true } },
+  });
+  assert.equal(second.status, 200);
+  assert.deepEqual(second.body.globalSettings.modelOverrides, {});
+  assert.deepEqual(second.body.globalSettings.prewalk, { scout: false });
+  assert.deepEqual(second.body.globalSettings.advisor, { reviewer: true });
+  assert.deepEqual(second.body.globalSettings.disabled, ['scout'], 'an untouched record is left alone');
+
+  const reenabled = await put('/api/harnesses/omp/agents', { agents: { scout: { disabled: false } } });
+  assert.equal(reenabled.status, 200);
+  assert.deepEqual(reenabled.body.globalSettings.disabled, []);
+});
+
+test('OMP agents PUT validates the patch and is unsupported for pi', async () => {
+  for (const agents of [null, 'scout', ['scout'], {}]) {
+    assert.equal((await put('/api/harnesses/omp/agents', { agents })).status, 400);
+  }
+  assert.equal((await put('/api/harnesses/omp/agents', { agents: { '-bad': {} } })).status, 400);
+  assert.equal((await put('/api/harnesses/omp/agents', { agents: { scout: 'off' } })).status, 400);
+  assert.equal((await put('/api/harnesses/omp/agents', { agents: { scout: { disabled: 'yes' } } })).status, 400);
+  assert.equal((await put('/api/harnesses/omp/agents', { agents: { scout: { prewalk: 1 } } })).status, 400);
+  assert.equal((await put('/api/harnesses/omp/agents', { agents: { scout: { model: '' } } })).status, 400);
+  assert.equal((await put('/api/harnesses/omp/agents', { agents: { scout: { model: 'x'.repeat(201) } } })).status, 400);
+  assert.equal((await put('/api/harnesses/omp/agents', { cwd: 7, agents: { scout: { disabled: true } } })).status, 400);
+
+  assert.equal((await put('/api/harnesses/nope/agents', { agents: { scout: { disabled: true } } })).status, 404);
+  assert.equal((await put('/api/harnesses/pi/agents', { agents: { scout: { disabled: true } } })).status, 501);
+  assert.equal((await get('/api/harnesses/pi/agents')).status, 501);
+});
+
 test('OMP launch rejects a thinking level outside the selected model catalog entry', async () => {
   const invalid = await post('/api/sessions/new', {
     harness: 'omp', cwd, model: 'zai/glm-5.2', thinking: 'minimal', async: true,

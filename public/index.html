@@ -121,7 +121,7 @@
               onblur="commitRename()" onkeydown="handleRenameKey(event)">
             <div class="session-meta session-meta-desktop">
               <span class="badge host-badge" id="sessionHost" style="display:none"></span>
-              <span class="badge harness-badge" id="sessionHarness" style="display:none"></span>
+              <span class="badge harness-badge" id="sessionHarness" style="display:none" onclick="openSessionHarnessSettings()"></span>
               <div class="model-selector" id="modelSelector">
                 <button class="badge badge-model" id="sessionModel" onclick="toggleModelDropdown()" title="Change model">model ▾</button>
               </div>
@@ -316,6 +316,10 @@
               <span class="cp-label">Session tree</span>
               <span class="cp-value">⑂</span>
             </button>
+            <button class="cp-row" id="cpHarnessRow" onclick="closeControlPanel(); openSessionHarnessSettings()" title="Harness settings: agents and models" style="display:none">
+              <span class="cp-label">Harness settings</span>
+              <span class="cp-value">◆</span>
+            </button>
             <button class="cp-row" onclick="closeControlPanel(); exportSession()" title="Export session as HTML">
               <span class="cp-label">Export HTML</span>
               <span class="cp-value">↓</span>
@@ -457,7 +461,8 @@
             <div class="ns-config-values" id="nsHarnessConfigValues">Loading…</div>
             <div class="ns-config-roles" id="nsHarnessRoles"></div>
             <div class="ns-config-actions">
-              <button class="btn-small" id="nsEditRoles" style="display:none" onclick="openModelRolesModal()">Edit model roles</button>
+              <button class="btn-small" id="nsEditAgents" style="display:none" onclick="openHarnessSettings({ tab: 'agents' })">Edit agents</button>
+              <button class="btn-small" id="nsEditRoles" style="display:none" onclick="openHarnessSettings({ tab: 'models' })">Edit model roles</button>
             </div>
             <div class="ns-hidden-note">Used only when model or thinking stays at (default). Editing roles writes OMP's global config; a project <code>.omp/config.yml</code> still wins in its own directory.</div>
           </div>
@@ -651,13 +656,27 @@
     </div>
   </div>
 
-  <div class="modal-overlay" id="modelRolesModal" style="display:none" onclick="if(event.target===this)closeModelRolesModal()">
-    <div class="modal model-roles-modal" role="dialog" aria-modal="true" aria-labelledby="modelRolesTitle">
-      <div class="modal-header"><h3 id="modelRolesTitle">Oh My Pi model roles</h3><button class="btn-icon" onclick="closeModelRolesModal()" title="Close (Esc)">✕</button></div>
-      <div class="model-roles-body" id="modelRolesBody"></div>
+  <!-- Harness settings: pi-dish's stand-in for OMP's /agents and /models
+       hubs. Two panes over one save: the task-agent hub (enable, model
+       override, prewalk, advisor) and the model-role assignments. Opened from
+       the session header's harness badge and from the new-session takeover;
+       both entries land on the same editor, scoped to a working directory. -->
+  <div class="modal-overlay" id="harnessSettingsModal" style="display:none" onclick="if(event.target===this)closeHarnessSettings()">
+    <div class="modal harness-settings-modal" role="dialog" aria-modal="true" aria-labelledby="harnessSettingsTitle">
+      <div class="modal-header"><h3 id="harnessSettingsTitle">Harness settings</h3><button class="btn-icon" onclick="closeHarnessSettings()" title="Close (Esc)">✕</button></div>
+      <div class="hs-tabs" role="tablist">
+        <button class="hs-tab" id="hsTabAgents" role="tab" onclick="showHarnessSettingsTab('agents')">Agents</button>
+        <button class="hs-tab" id="hsTabModels" role="tab" onclick="showHarnessSettingsTab('models')">Models</button>
+        <span class="hs-scope" id="harnessSettingsScope"></span>
+      </div>
+      <div class="hs-pane" id="hsPaneAgents"><div class="hs-agents-body" id="harnessAgentsBody">Loading…</div></div>
+      <div class="hs-pane" id="hsPaneModels" style="display:none">
+        <div class="hs-defaults" id="harnessSettingsDefaults">Loading…</div>
+        <div class="model-roles-body" id="modelRolesBody"></div>
+      </div>
       <div class="modal-footer model-roles-footer">
         <span class="model-roles-error" id="modelRolesError"></span>
-        <button class="btn-small" id="modelRolesSave" onclick="saveModelRoles()">Save</button>
+        <button class="btn-small" id="modelRolesSave" onclick="saveHarnessSettings()">Save</button>
       </div>
     </div>
   </div>

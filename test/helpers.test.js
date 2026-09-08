@@ -1113,6 +1113,52 @@ test('aggregateUsageWeekly preserves component availability across mixed days', 
   assert.equal(week.models[0].cost, 0.2, 'the same subtotal rule applies per model');
 });
 
+test('formatLimitReset renders compact future windows', () => {
+  const now = 1700000000000;
+  assert.equal(H.formatLimitReset(now + 42 * 60000, now), 'in 42m');
+  assert.equal(H.formatLimitReset(now + 4 * 3600000 + 12 * 60000, now), 'in 4h 12m');
+  assert.equal(H.formatLimitReset(now + 5 * 86400000 + 3 * 3600000, now), 'in 5d 3h');
+  assert.equal(H.formatLimitReset(now + 2 * 86400000, now), 'in 2d');
+  assert.equal(H.formatLimitReset(now - 1000, now), 'now', 'a passed reset reads as due');
+  assert.equal(H.formatLimitReset('junk', now), 'now');
+});
+
+test('usageLimitsHtml renders per-host provider quota rows', () => {
+  const now = 1700000000000;
+  const entry = (hostLabel, harnesses) => ({ hostLabel, payload: { generatedAt: now, harnesses } });
+  const omp = {
+    harness: 'omp', label: 'Oh My Pi',
+    reports: [{
+      provider: 'anthropic', planType: 'max', fetchedAt: now,
+      limits: [
+        { id: 'a', label: '5 hours', windowLabel: '5 hours', resetsAt: now + 3600000, usedFraction: 0.42, unit: 'percent', status: 'ok' },
+        { id: 'b', label: '<7> days', windowLabel: '7 days', resetsAt: null, usedFraction: 0.9, unit: 'percent', status: 'ok' },
+        { id: 'c', label: 'weekly scoped', windowLabel: null, resetsAt: null, usedFraction: 1.2, unit: 'percent', status: 'exhausted' },
+      ],
+    }],
+  };
+  const single = H.usageLimitsHtml([entry('host-a', [omp])], { now });
+  assert.ok(single.includes('Subscription limits'));
+  assert.ok(single.includes('anthropic') && single.includes('max'));
+  assert.ok(single.includes('42% used') && single.includes('resets in 1h'));
+  assert.ok(single.includes('&lt;7&gt; days'), 'provider-supplied labels are escaped');
+  assert.ok(!single.includes('usage-limits-host'), 'host labels hide on a single host');
+  assert.ok(/usage-limit-fill warn/.test(single), '90% renders the warn bar');
+  assert.ok(/usage-limit-fill over/.test(single) && single.includes('width:100.0%'),
+    'an exhausted window clamps to a full error bar');
+
+  const multi = H.usageLimitsHtml([
+    entry('host-a', [omp]),
+    entry('host-b', [{ harness: 'omp', label: 'Oh My Pi', error: 'boom <x>' }]),
+  ], { now });
+  assert.equal(multi.match(/usage-limits-host/g).length, 2, 'fleet rows name their host');
+  assert.ok(multi.includes('boom &lt;x&gt;'), 'harness errors render escaped, not thrown');
+
+  assert.equal(H.usageLimitsHtml([], { now }), '');
+  assert.equal(H.usageLimitsHtml([entry('host-a', [])], { now }), '',
+    'a host with no supporting harness contributes no section');
+});
+
 test('tmuxPrefixSeq maps tmux prefix notation to raw bytes', () => {
   assert.equal(H.tmuxPrefixSeq('C-b'), '\x02');
   assert.equal(H.tmuxPrefixSeq('C-a'), '\x01');

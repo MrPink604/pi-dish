@@ -4964,7 +4964,7 @@ body.standalone-file-page {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ns-config-actions { margin: 8px 0 6px; }
+.ns-config-actions { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 6px; }
 
 /* Model-role editor. Rows collapse to a stacked, full-width layout on narrow
    screens — this is a phone remote first. */
@@ -5002,6 +5002,99 @@ body.standalone-file-page {
   .model-role-select { flex: 1 1 100%; }
 }
 
+/* Harness settings modal: agents hub + model roles behind one Save. */
+.harness-settings-modal { width: min(760px, calc(100vw - 24px)); max-height: min(800px, 90dvh); display: flex; flex-direction: column; }
+.hs-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+.hs-tab {
+  padding: 8px 10px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.hs-tab:hover { color: var(--text); }
+.hs-tab.active { color: var(--text-bright); border-bottom-color: var(--accent); }
+.hs-scope {
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hs-pane { min-height: 0; overflow: auto; }
+.hs-defaults {
+  padding: 10px 16px 0;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.hs-agents-body { padding: 8px 16px; color: var(--text-muted); font-size: 12px; }
+.hs-agent-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.hs-agent-row.disabled .hs-agent-label { opacity: 0.55; }
+.hs-agent-label { display: flex; flex-direction: column; gap: 3px; flex: 1 1 240px; min-width: 0; }
+.hs-agent-enable { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.hs-agent-enable strong { color: var(--text-bright); font-size: 13px; }
+.hs-agent-label small { color: var(--text-muted); font-size: 11px; }
+.hs-agent-source {
+  align-self: flex-start;
+  padding: 0 5px;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.hs-agent-source-project { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 45%, transparent); }
+.hs-agent-source-user { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.hs-agent-definition { color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; }
+.hs-agent-controls { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
+.hs-agent-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.hs-agent-field select {
+  padding: 6px;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 12px;
+  text-transform: none;
+}
+.hs-agent-field select:focus { outline: none; border-color: var(--accent); }
+.hs-agent-model { max-width: 240px; }
+
+@media (max-width: 600px) {
+  .hs-agent-row { gap: 8px; }
+  .hs-agent-controls { width: 100%; }
+  .hs-agent-field { flex: 1 1 30%; }
+  .hs-agent-field select { width: 100%; }
+  .hs-agent-model { max-width: none; }
+}
+
 @media (max-width: 600px) {
   .ns-choice-row { grid-template-columns: 1fr; }
 }
@@ -5025,6 +5118,10 @@ body.standalone-file-page {
   padding: 2px 8px;
   font-size: 11px;
 }
+
+/* Opens the harness settings modal (agents + models) for this session. */
+#sessionHarness.clickable { cursor: pointer; }
+#sessionHarness.clickable:hover { border-color: var(--accent); background: var(--bg-hover); }
 
 @media (max-width: 768px) {
   #sessionHarness { padding: 3px 8px; }
@@ -5277,6 +5374,20 @@ body.standalone-file-page {
 .usage-budget.warn .usage-budget-fill { background: var(--warning); }
 .usage-budget.over .usage-budget-track { background: color-mix(in srgb, var(--error) 18%, var(--bg-card)); }
 .usage-budget.over .usage-budget-fill { background: var(--error); }
+
+/* Subscription limits: provider quota rows, same bar grammar as the budget. */
+.usage-limits-host { margin-top: 10px; font-size: 11px; font-weight: 600; color: var(--text-muted); }
+.usage-limits-provider { margin-top: 8px; }
+.usage-limits-provider-name { font-size: 12px; color: var(--text-bright); font-weight: 600; }
+.usage-limits-provider-name small { color: var(--text-muted); font-weight: 400; }
+.usage-limit-row { margin-top: 6px; }
+.usage-limit-head { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
+.usage-limit-head small { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.usage-limit-track { height: 5px; border-radius: 3px; background: color-mix(in srgb, var(--accent) 18%, var(--bg-card)); margin-top: 3px; }
+.usage-limit-fill { height: 100%; border-radius: 3px; background: var(--accent); }
+.usage-limit-fill.warn { background: var(--warning); }
+.usage-limit-fill.over { background: var(--error); }
+.usage-limits-error { margin-top: 8px; font-size: 11px; color: var(--text-muted); }
 
 .usage-ranges { display: flex; flex-wrap: wrap; gap: 4px; margin: 18px 0 4px; align-items: center; }
 .usage-range-btn { border: 0; background: transparent; color: var(--text-muted); padding: 6px 10px; border-radius: 4px; cursor: pointer; font: inherit; font-size: 12px; }

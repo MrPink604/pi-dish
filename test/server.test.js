@@ -2446,6 +2446,47 @@ test('usage summary preserves cost availability through every grouping and filte
   }
 });
 
+test('usage limits come from the harness CLI, sanitized and failure-tolerant', async () => {
+  const { status, body } = await get('/api/usage-limits');
+  assert.equal(status, 200);
+  assert.ok(Number.isFinite(body.generatedAt));
+  const omp = body.harnesses.find(h => h.harness === 'omp');
+  assert.ok(omp, 'the fake OMP fixture is installed for this suite');
+  assert.equal(omp.label, 'Oh My Pi');
+  assert.equal(omp.error, undefined);
+  assert.equal(omp.reports.length, 1, 'the limits-less provider report is dropped');
+  const report = omp.reports[0];
+  assert.equal(report.provider, 'fakeprov');
+  assert.equal(report.planType, 'pro');
+  assert.equal(report.limits.length, 1, 'the malformed limit is dropped');
+  const limit = report.limits[0];
+  assert.equal(limit.label, '7 days');
+  assert.equal(limit.usedFraction, 0.42);
+  assert.equal(limit.resetsAt, 1700604800000);
+  // Account identifiers never reach the wire, even in fields the fixture
+  // left unredacted (email, scope.accountId, metadata.accountId).
+  assert.ok(!JSON.stringify(body).includes('secret@example.com'));
+  assert.ok(!JSON.stringify(body).includes('acct-123'));
+  assert.equal('email' in report, false);
+  // The capability is how a client knows to fan the route out at all.
+  assert.equal((await get('/api/host')).body.capabilities.usageLimits, true);
+});
+
+test('usage limits degrade to an error entry when the harness command fails', async () => {
+  const previous = process.env.PI_DISH_OMP_COMMAND;
+  process.env.PI_DISH_OMP_COMMAND = path.join(os.tmpdir(), 'pi-dish-missing-omp');
+  try {
+    const { status, body } = await get('/api/usage-limits');
+    assert.equal(status, 200);
+    assert.equal(body.harnesses.length, 0,
+      'an uninstalled harness is skipped, not an error — the capability check agrees');
+    assert.equal('usageLimits' in (await get('/api/host')).body.capabilities, false);
+  } finally {
+    if (previous === undefined) delete process.env.PI_DISH_OMP_COMMAND;
+    else process.env.PI_DISH_OMP_COMMAND = previous;
+  }
+});
+
 test('server-global telemetry settings preserve unrelated fields and validate budgets', async () => {
   const settingsFile = path.join(tmpHome, '.pi', 'dish', 'settings.json');
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
