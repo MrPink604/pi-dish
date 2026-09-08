@@ -4823,7 +4823,6 @@ function renderUsageView(d) {
     ${d.indexing ? '<div class="usage-notice">History is indexing; totals will refresh…</div>' : ''}
     ${usageHostErrors.length ? `<div class="usage-notice">Not counted: ${escapeHtml(usageHostErrors.join(', '))} did not answer.</div>` : ''}
     ${usageHostPending.length ? `<div class="usage-notice">Still counting ${escapeHtml(usageHostPending.join(', '))}…</div>` : ''}
-    ${usageLimitsHtml(usageLimitsEntries)}
     <div class="usage-ranges">${ranges}${sortCtl}${stackCtl}</div>
     ${(t.calls || 0) === 0 ? '<div class="usage-state">No usage in this range.</div>' : summary}
     ${filterNote}
@@ -4836,6 +4835,7 @@ function renderUsageView(d) {
       ${usageGroupListHtml('Sessions', d.groups?.sessions, 'session', metric)}
     </div>
     ${d.unpricedModelCalls ? `<div class="usage-notice">* Known priced usage only; ${d.unpricedModelCalls} call${d.unpricedModelCalls === 1 ? '' : 's'} ${d.unpricedModelCalls === 1 ? 'has' : 'have'} unavailable pricing and ${d.unpricedModelCalls === 1 ? 'is' : 'are'} omitted.</div>` : ''}
+    ${usageLimitsHtml(usageLimitsEntries)}
   `;
   body.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => setUsageRange(b.dataset.range)));
   body.querySelectorAll('[data-sort]').forEach(b => b.addEventListener('click', () => setUsageSort(b.dataset.sort)));

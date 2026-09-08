@@ -327,7 +327,7 @@ in/out and show the cached share (`usageTokensDetail` in app.js) — the rate's
 denominator is the whole prompt side, matching `formatCacheStat` in the
 stats modal; keep the two consistent.
 
-The Subscription limits section above the range presets is a different kind
+The Subscription limits section at the bottom of the view is a different kind
 of data — provider-account quota (5h/7d windows, percent used, reset
 countdowns), not spend — and deliberately reuses the harness's own reporter
 instead of reimplementing provider quota APIs: `GET /api/usage-limits` runs
