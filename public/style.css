@@ -2343,6 +2343,7 @@ body.sidebar-open {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px; /* minimum spacing; .status flex-grows to push actions right */
   margin-top: 8px;
 }
 
@@ -4008,7 +4009,6 @@ button.badge-context {
 }
 
 /* Dictation button. The base .badge-tool-btn is display:none (mobile-only
-/* Dictation button. The base .badge-tool-btn is display:none (mobile-only
    tool buttons); app.js sets the inline display when a host advertises stt,
    so this rule only carries the shape. */
 #btnMic {
@@ -4018,6 +4018,24 @@ button.badge-context {
      scrolling and the pointerup never arrives. */
   touch-action: none;
   user-select: none;
+}
+
+/* Desktop: the composer's attach/dictate buttons get the mobile row's visual
+   weight — height matched to Send, real padding — instead of rendering as
+   tiny 11px badges stranded under a full-width textarea. Scoped to desktop so
+   the touch-sized mobile rules below stay authoritative there. */
+@media (min-width: 769px) {
+  .input-actions .badge-tool-btn {
+    min-height: 33px;
+    padding: 3px 10px;
+    font-size: 14px;
+    border-radius: 6px;
+  }
+
+  .input-actions .badge-tool-btn:hover {
+    background: var(--bg-card);
+    color: var(--text);
+  }
 }
 
 /* Visible but not usable here (insecure origin, no MediaRecorder): the tap
