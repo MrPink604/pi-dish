@@ -14,6 +14,17 @@
  *
  * Not part of `npm test` (needs Chrome). Run with: npm run test:ui
  */
+const scenarios = require('./ui-scenarios');
+const args = process.argv.slice(2);
+if (args[0] === '--list' && args.length === 1) {
+  console.log(Object.keys(scenarios).join('\n'));
+  process.exit(0);
+}
+const selectedScenario = args[0] === '--scenario' && args.length === 2 ? args[1] : null;
+if (args.length && !scenarios[selectedScenario]) {
+  throw new Error('Usage: npm run test:ui -- [--list | --scenario <name>]');
+}
+
 // Resolve the browser cache before the fixture replaces HOME.
 const { chromium } = require('playwright');
 const fs = require('node:fs');
@@ -579,6 +590,19 @@ let remoteHost = null; // second pi-dish (multi-host section)
       permissions: ['clipboard-read', 'clipboard-write'],
     });
     watch(desktop, 'desktop');
+    const scenarioContext = () => ({ path, tmpHome, desktop, check, fs, registryState, SKILL_SESSION_ID, CWD, BETA_ID, SESSION_ID, base, browser, watch, emit });
+    if (selectedScenario) {
+      await desktop.goto(base, { waitUntil: 'networkidle' });
+      await desktop.click('#tabAll');
+      await desktop.evaluate(id => selectSession(id), SESSION_ID);
+      // The usage catalog is an explicit prerequisite, not a timing side effect
+      // of running minutes of unrelated scenarios before opening the view.
+      if (selectedScenario === 'usage') await fetch(base + '/api/usage-summary?days=30');
+      // Mobile includes the routine detail layout; build that fixture with the
+      // same routine scenario used by the complete end-to-end run.
+      if (selectedScenario === 'mobile') await scenarios.routines(scenarioContext());
+      await scenarios[selectedScenario](scenarioContext());
+    } else {
     await desktop.goto(base, { waitUntil: 'networkidle' });
     await desktop.waitForSelector('.session-item');
     check(await desktop.locator('.session-item').count() === 1, 'live session listed under Active');
@@ -1697,52 +1721,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       null, { timeout: 5000 });
     check(true, 'sidebar shows new name without reload');
 
-    // 6. Scoped models: dropdown edit mode toggles models and persists to
-    // pi's settings.json (enabledModels), normal view hides disabled ones
-    console.log('scoped models:');
-    const settingsFile = path.join(tmpHome, '.pi', 'agent', 'settings.json');
-    const readSettings = () => { try { return JSON.parse(fs.readFileSync(settingsFile, 'utf-8')); } catch { return {}; } };
-    await desktop.click('#sessionModel');
-    await desktop.waitForSelector('.model-option', { timeout: 5000 });
-    check(await desktop.locator('.model-option').count() === 3, 'all models listed when nothing is scoped');
-    await desktop.click('.model-dropdown-footer >> text=Edit models');
-    await desktop.waitForSelector('.model-check');
-    check(await desktop.locator('.model-option .model-check').count() === 3, 'edit mode shows a checkbox per model');
-    check(await desktop.locator('.model-group-toggle').count() === 1, 'provider header becomes a section toggle');
-    await desktop.click('.model-option[title="test/other-model"]');
-    check(await desktop.locator('.model-option[title="test/other-model"].disabled').count() === 1,
-      'toggled model renders as disabled');
-    await desktop.waitForTimeout(700); // debounced save
-    check(JSON.stringify(readSettings().enabledModels) === JSON.stringify(['test/smoke-model', 'test/third-model']),
-      'enabledModels persisted to pi settings.json');
-    await desktop.click('.model-dropdown-footer >> text=Done');
-    await desktop.waitForTimeout(100);
-    check(await desktop.locator('.model-option').count() === 2, 'scoped view hides disabled models');
-    const footerInfo = await desktop.locator('.model-footer-info').textContent();
-    check(footerInfo === '1 hidden', `footer reports hidden count (got ${JSON.stringify(footerInfo)})`);
-    // Reopen: the scope survives a fresh /api/models fetch (server-side resolve)
-    await desktop.click('.messages');
-    await desktop.waitForTimeout(200);
-    await desktop.click('#sessionModel');
-    await desktop.waitForSelector('.model-option', { timeout: 5000 });
-    check(await desktop.locator('.model-option').count() === 2, 'scope survives reopening the dropdown');
-    // Enable all clears the filter from settings
-    await desktop.click('.model-dropdown-footer >> text=Edit models');
-    await desktop.click('.model-dropdown-footer >> text=All');
-    await desktop.waitForTimeout(700);
-    check(!('enabledModels' in readSettings()), 'enabling everything clears enabledModels');
-    // Provider header toggles its whole section: all on → all off → all on.
-    await desktop.click('.model-group-toggle');
-    check(await desktop.locator('.model-option.disabled').count() === 3,
-      'provider toggle disables every model in the section');
-    await desktop.click('.model-group-toggle');
-    check(await desktop.locator('.model-option.disabled').count() === 0,
-      'provider toggle re-enables the section');
-    await desktop.waitForTimeout(700); // debounced save settles (round-trip = no filter)
-    check(!('enabledModels' in readSettings()), 'provider round-trip leaves no filter persisted');
-    await desktop.click('.model-dropdown-footer >> text=Done');
-    await desktop.click('.messages');
-    await desktop.waitForTimeout(200);
+    await scenarios.models(scenarioContext());
 
     // 7. Image attachment: attach a PNG, send, optimistic + JSONL renders
     // both carry the image, and the bridge receives the base64 payload.
@@ -2151,32 +2130,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     }
     await desktop.click('#termCloseBtn');
 
-    // 9. Drafts persist per session; ArrowUp recalls sent prompts
-    console.log('drafts & history:');
-    await desktop.fill('#promptInput', 'unsent draft');
-    await desktop.waitForTimeout(500); // debounced draft save
-    check(await desktop.evaluate((id) => localStorage.getItem(draftKey(id)),
-      registryState.sessionId) === 'unsent draft', 'draft saved to localStorage');
-    // Wipe the input without an input event, re-select the session: the
-    // draft must come back.
-    await desktop.evaluate(() => { document.getElementById('promptInput').value = ''; });
-    await desktop.click('.session-item');
-    await desktop.waitForTimeout(300);
-    check(await desktop.inputValue('#promptInput') === 'unsent draft', 'draft restored on session select');
-    // ArrowUp from the start of the box steps into history; ArrowDown
-    // returns to the stashed draft.
-    await desktop.evaluate(() => document.getElementById('promptInput').setSelectionRange(0, 0));
-    await desktop.focus('#promptInput');
-    await desktop.keyboard.press('ArrowUp');
-    check(await desktop.inputValue('#promptInput') === 'send after compaction',
-      `ArrowUp recalls the last sent prompt (got ${JSON.stringify(await desktop.inputValue('#promptInput'))})`);
-    await desktop.keyboard.press('ArrowDown');
-    check(await desktop.inputValue('#promptInput') === 'unsent draft', 'ArrowDown restores the draft');
-    // Clean up so later sections start with an empty composer + no draft.
-    await desktop.fill('#promptInput', '');
-    await desktop.waitForTimeout(500);
-    check(await desktop.evaluate((id) => localStorage.getItem(draftKey(id)),
-      registryState.sessionId) === null, 'clearing the box clears the draft');
+    await scenarios.drafts(scenarioContext());
 
     // 10. Extension UI scoping: widgets/statuses are per-session — cleared
     // on switch, replayed from the server's remembered state on switch-back.
@@ -2773,160 +2727,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
         'double-clicking the handle restores the default width');
     }
 
-    console.log('sidebar tree collapse & pin:');
-    await desktop.waitForSelector(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`, { timeout: 5000 });
-    check(await desktop.locator(`.session-item[data-id="${SKILL_SESSION_ID}"]`).count() === 0,
-      'same-workspace child session is grouped under its parent and collapsed by default');
-    const familyRootId = await desktop.locator(`.session-item[data-id="${registryState.sessionId}"]`)
-      .evaluate(el => el.closest('.session-family-root')?.dataset.familyId);
-    check(familyRootId === registryState.sessionId, 'parent anchors the session family block');
-    await desktop.click(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
-    await desktop.waitForSelector(`.session-item[data-id="${SKILL_SESSION_ID}"]`, { timeout: 2000 });
-    const familyIds = await desktop.locator(`.session-family-root[data-family-id="${registryState.sessionId}"] .session-item`)
-      .evaluateAll(rows => rows.map(row => row.dataset.id));
-    check(JSON.stringify(familyIds) === JSON.stringify([registryState.sessionId, SKILL_SESSION_ID]),
-      'expanded family keeps the parent first with its child directly beneath');
-    check(await desktop.evaluate((id) =>
-      JSON.parse(localStorage.getItem('pi-dish-expanded-session-families') || '[]')
-        .some((key) => parseSessionKey(key).sessionId === id), registryState.sessionId),
-      'family expansion persists device-locally');
-    await desktop.click(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
-    await desktop.waitForFunction((id) => !document.querySelector(`.session-item[data-id="${id}"]`), SKILL_SESSION_ID);
-    await desktop.evaluate((id) => patchSession(id, { turnInProgress: true }), SKILL_SESSION_ID);
-    check(await desktop.locator(`.session-item[data-id="${registryState.sessionId}"] .session-item-status.working`).count() === 1,
-      'collapsed parent surfaces a working child status');
-    await desktop.evaluate((id) => patchSession(id, { turnInProgress: false }), SKILL_SESSION_ID);
-    await desktop.evaluate((id) => selectSession(id), SKILL_SESSION_ID);
-    await desktop.waitForFunction((id) => currentSession?.id === id &&
-      document.querySelector(`.session-item[data-id="${id}"]`)?.classList.contains('active'), SKILL_SESSION_ID);
-    check(await desktop.locator(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`)
-      .getAttribute('aria-expanded') === 'true',
-      'selecting a collapsed child reveals its ancestor and active row');
-    await desktop.evaluate((id) => selectSession(id), registryState.sessionId);
-    await desktop.waitForFunction((id) => currentSession?.id === id, registryState.sessionId);
-    await desktop.click(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
-    await desktop.waitForFunction((id) => !document.querySelector(`.session-item[data-id="${id}"]`), SKILL_SESSION_ID);
-
-    const groupLabels = () => desktop.evaluate(() =>
-      [...document.querySelectorAll('.session-segment:not(.pinned-segment) .workspace-group-label')]
-        .map((el) => el.textContent));
-    await desktop.waitForFunction(() =>
-      document.querySelectorAll('.session-segment').length >= 3, null, { timeout: 5000 });
-    const labelsBefore = await groupLabels();
-    check(labelsBefore.length === 3, `prefix node + two children on All (got ${JSON.stringify(labelsBefore)})`);
-    check(labelsBefore[0].endsWith('/workspace'), 'prefix node shows the shared path once');
-    check(labelsBefore[1] === 'proj-alpha' && labelsBefore[2] === 'proj-beta',
-      'children show distinguishing tails, newest first');
-    await desktop.click('.workspace-children .workspace-group-header'); // first (newest) child
-    await desktop.waitForSelector('.session-segment.collapsed', { timeout: 2000 });
-    const labelsAfter = await groupLabels();
-    check(labelsAfter[labelsAfter.length - 1] === 'proj-alpha', 'collapsed child sinks below its expanded sibling');
-    check(await desktop.locator('.session-segment.collapsed .session-item').count() === 0,
-      'collapsed group hides its sessions');
-    check(await desktop.evaluate(() =>
-      JSON.parse(localStorage.getItem('pi-dish-collapsed-groups') || '[]').length) === 1,
-      'collapse persisted to localStorage');
-    await desktop.click('.session-segment.collapsed .workspace-group-header');
-    await desktop.waitForFunction(() => !document.querySelector('.session-segment.collapsed'), null, { timeout: 2000 });
-    check(JSON.stringify(await groupLabels()) === JSON.stringify(labelsBefore),
-      'expanding restores the original order');
-    // Collapsing the prefix node takes the whole subtree with it.
-    await desktop.click('.session-segment .workspace-group-header'); // first = prefix node
-    await desktop.waitForSelector('.session-segment.collapsed', { timeout: 2000 });
-    check(await desktop.evaluate(() =>
-      document.querySelectorAll('#sessionList .session-item').length) === 0,
-      'collapsed prefix node hides all descendant sessions');
-    await desktop.click('.session-segment.collapsed .workspace-group-header');
-    await desktop.waitForFunction(() => !document.querySelector('.session-segment.collapsed'), null, { timeout: 2000 });
-    // The header + spawns a session at the node's path (stubbed — a real
-    // createSession would launch `pi --mode rpc`), and must not toggle collapse.
-    await desktop.evaluate(() => {
-      window.__newSessionCwd = null;
-      window.createSession = (cwd) => { window.__newSessionCwd = cwd; };
-    });
-    await desktop.hover('.workspace-children .workspace-group-header');
-    await desktop.click('.workspace-children .workspace-group-header .workspace-new-btn');
-    check(await desktop.evaluate(() => window.__newSessionCwd) === CWD,
-      'header + button targets the node cwd');
-    check(await desktop.locator('.session-segment.collapsed').count() === 0,
-      'header + button does not toggle collapse');
-
-    const pinToggle = async (id) => {
-      await desktop.hover(`.session-item[data-id="${id}"]`);
-      await desktop.click(`.session-item[data-id="${id}"] .session-pin-btn`);
-    };
-    await pinToggle(registryState.sessionId);
-    await desktop.waitForSelector('.pinned-segment', { timeout: 2000 });
-    check(await desktop.evaluate(() =>
-      document.querySelector('#sessionList .session-segment')?.classList.contains('pinned-segment')),
-      'pinned section renders at the top');
-    check(await desktop.locator(`.pinned-segment .session-item[data-id="${SKILL_SESSION_ID}"]`).count() === 0,
-      'pinned family remains collapsed by default');
-    await pinToggle(BETA_ID);
-    await desktop.waitForFunction(() =>
-      document.querySelectorAll('.pinned-segment > .session-family-root').length === 2, null, { timeout: 2000 });
-    check(await desktop.locator('.pinned-segment .session-drag-handle').count() === 2,
-      'pinned families carry one drag handle each');
-    check(await desktop.locator('.pinned-segment .session-item-cwd').count() === 2,
-      'pinned rows show their workspace');
-    // Expand the pinned parent, then drag beta above it: the child must move
-    // with the parent wrapper rather than becoming an independently sorted row.
-    await desktop.click(`.pinned-segment .session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
-    await desktop.waitForSelector(`.pinned-segment .session-item[data-id="${SKILL_SESSION_ID}"]`);
-    const handleBox = await desktop.locator(`.pinned-segment .session-item[data-id="${BETA_ID}"] .session-drag-handle`).boundingBox();
-    const firstBox = await desktop.locator(`.pinned-segment .session-item[data-id="${registryState.sessionId}"]`).boundingBox();
-    await desktop.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
-    await desktop.mouse.down();
-    await desktop.mouse.move(firstBox.x + 20, firstBox.y + 2, { steps: 5 });
-    await desktop.mouse.up();
-    await desktop.waitForFunction((want) =>
-      JSON.stringify([...document.querySelectorAll('.pinned-segment > .session-family-root')].map((el) => el.dataset.familyId)) === want,
-      JSON.stringify([BETA_ID, registryState.sessionId]), { timeout: 2000 });
-    const draggedFamilyIds = await desktop.locator(`.pinned-segment .session-family-root[data-family-id="${registryState.sessionId}"] .session-item`)
-      .evaluateAll(rows => rows.map(row => row.dataset.id));
-    check(JSON.stringify(draggedFamilyIds) === JSON.stringify([registryState.sessionId, SKILL_SESSION_ID]),
-      'drag handle moves the expanded family as one block');
-    check(JSON.stringify(await desktop.evaluate(() => JSON.parse(localStorage.getItem('pi-dish-pinned-sessions') || '[]')
-      .map((key) => parseSessionKey(key).sessionId))) ===
-      JSON.stringify([BETA_ID, registryState.sessionId]), 'manual family order persisted to localStorage');
-    // Collapse, then unpin both; the section disappears and families rejoin.
-    await desktop.click(`.pinned-segment .session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
-    await pinToggle(BETA_ID);
-    await pinToggle(registryState.sessionId);
-    await desktop.waitForFunction(() => !document.querySelector('.pinned-segment'), null, { timeout: 2000 });
-    check(true, 'unpinning removes the pinned section');
-
-    // A filtered result can contain only the child. Pinning that fragment must
-    // still persist and later render the canonical parent family.
-    await desktop.fill('#filterInput', 'use smoke skill');
-    await desktop.waitForSelector(`.ranked-segment .session-item[data-id="${SKILL_SESSION_ID}"]`, { timeout: 5000 });
-    await pinToggle(SKILL_SESSION_ID);
-    check(JSON.stringify(await desktop.evaluate(() => JSON.parse(localStorage.getItem('pi-dish-pinned-sessions') || '[]')
-      .map((key) => parseSessionKey(key).sessionId))) ===
-      JSON.stringify([SESSION_ID]), 'pinning a filtered child stores the stable parent family id');
-    await desktop.fill('#filterInput', '');
-    await desktop.waitForFunction((id) => document.querySelector('.pinned-segment .session-item')?.dataset.id === id,
-      SESSION_ID, { timeout: 5000 });
-    check(await desktop.locator(`.pinned-segment .session-item[data-id="${SKILL_SESSION_ID}"]`).count() === 0,
-      'filtered child pin restores the whole family in its collapsed state');
-    await pinToggle(SESSION_ID);
-    await desktop.waitForFunction(() => !document.querySelector('.pinned-segment'), null, { timeout: 2000 });
-
-    // Cross-workspace lineage is navigation-only: pinning its filtered child
-    // must not toggle or absorb the independently pinned parent.
-    await pinToggle(SESSION_ID);
-    await desktop.fill('#filterInput', 'beta answer');
-    await desktop.waitForSelector(`.ranked-segment .session-item[data-id="${BETA_ID}"]`, { timeout: 5000 });
-    await pinToggle(BETA_ID);
-    check(JSON.stringify(await desktop.evaluate(() => JSON.parse(localStorage.getItem('pi-dish-pinned-sessions') || '[]')
-      .map((key) => parseSessionKey(key).sessionId))) ===
-      JSON.stringify([SESSION_ID, BETA_ID]), 'cross-workspace filtered child pins independently');
-    await desktop.fill('#filterInput', '');
-    await desktop.waitForFunction(() => document.querySelectorAll('.pinned-segment > .session-family-root').length === 2,
-      null, { timeout: 5000 });
-    await pinToggle(BETA_ID);
-    await pinToggle(SESSION_ID);
-    await desktop.waitForFunction(() => !document.querySelector('.pinned-segment'), null, { timeout: 2000 });
+    await scenarios.sidebar(scenarioContext());
 
     // 12. All-tab server search: busy indicator while in flight, content
     // matches carry a highlighted snippet, clearing restores the full list.
@@ -3334,501 +3135,15 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.click(`.session-item[data-id="${registryState.sessionId}"]`);
     await desktop.waitForSelector('#messages .message.assistant', { timeout: 5000 });
 
-    // Usage view: the global usage overview as a main-pane takeover (sidebar
-    // header bar-chart button). Range presets re-scope the sections, a bar
-    // click opens that day's per-model detail, a session row jumps into the
-    // session, and Escape closes the pane. Asserted on the all-time range so
-    // the fixed fixture dates stay in-window whenever the smoke runs.
-    console.log('usage view:');
-    await desktop.click('[title="Usage and spend"]');
-    await desktop.waitForSelector('.usage-kpis', { timeout: 5000 });
-    check(await desktop.evaluate(() => document.querySelector('.main').classList.contains('usage-open')),
-      'usage button opens the takeover pane');
-    check(await desktop.evaluate(() => document.getElementById('sessionView').offsetParent === null),
-      'session view hidden while usage is open');
-    await desktop.click('[data-range="all"]');
-    await desktop.waitForFunction(() =>
-      [...document.querySelectorAll('#usageViewBody .usage-row')].some((r) => r.textContent.includes('smoke-model')),
-      null, { timeout: 5000 });
-    check(true, 'all-time range lists the fixture model with its share');
-    // Token breakdowns: the totals line splits in/out with a cache rate
-    // (fixture: 100 in, 45 out, 20 cacheRead over a 130-token prompt side =
-    // 15% hit), and the model rows carry the compact per-row form.
-    check(await desktop.evaluate(() => {
-      const line = document.querySelector('.usage-token-line');
-      return !!line && line.textContent.includes('100 in') && line.textContent.includes('45 out') &&
-        line.textContent.includes('(15% hit)');
-    }), 'range totals break down in/out tokens and the cache rate');
-    check(await desktop.evaluate(() =>
-      [...document.querySelectorAll('#usageViewBody .usage-row.model-toggle')]
-        .some((r) => r.textContent.includes('100 in / 45 out') && r.textContent.includes('15% cached'))),
-      'model rows carry in/out and cached-share breakdowns');
-    check(await desktop.evaluate(() => {
-      const value = document.querySelector('.usage-total-line strong')?.textContent || '';
-      return value.startsWith('~$') && value.endsWith('*');
-    }), 'mixed usage total shows its marked known subtotal');
-    check(await desktop.evaluate(() =>
-      [...document.querySelectorAll('#usageViewBody .usage-row.model-toggle')]
-        .some((r) => r.textContent.includes('unpriced') && r.textContent.includes('*'))),
-      'partially priced model rows show their subtotal and unpriced count');
-    check(await desktop.evaluate(() =>
-      document.querySelector('#usageViewBody .usage-notice')?.textContent
-        .includes('Known priced usage only')),
-      'usage notice explains the partial-estimate marker');
-    await desktop.waitForSelector('#usageChart svg', { timeout: 5000 });
-    check(await desktop.locator('#usageChart .usage-col').count() >= 2,
-      'stacked daily chart renders one column per bucket');
-    check(await desktop.locator('#usageChart text.tick').count() >= 4,
-      'chart draws axis tick labels');
-    check((await desktop.locator('#usageChart svg').getAttribute('aria-label')).startsWith('Estimated spend'),
-      'a positive known subtotal keeps cost chart geometry');
-    // Cost bucket pivot: the range totals break into read/cached/output/
-    // cache-write, and the stack toggle re-pivots the chart itself.
-    check(await desktop.evaluate(() => {
-      const items = [...document.querySelectorAll('#usageViewBody .usage-section .usage-share-bar + .usage-legend .usage-legend-item')]
-        .map(el => el.textContent);
-      return ['Read', 'Cached read', 'Output', 'Cache write'].every(label =>
-        items.some(text => text.includes(label) && text.includes('~$'))) &&
-        items.some(text => text.includes('Unattributed') && text.includes('~$'));
-    }), 'spend-by-bucket section prices all four cost buckets and preserves total-only remainder');
-    check(await desktop.evaluate(() =>
-      [...document.querySelectorAll('#usageViewBody .usage-kpi')]
-        .some(k => (k.getAttribute('title') || '').includes('Cached read'))),
-      'KPI tiles pivot their window spend into buckets on hover');
-    check(await desktop.evaluate(() =>
-      [...document.querySelectorAll('#usageViewBody .usage-row.model-toggle')]
-        .some(r => (r.getAttribute('title') || '').includes('Cache write'))),
-      'model rows carry their bucket breakdown in the tooltip');
-    // Index refreshes replace the controls and chart wholesale. Wait until
-    // that background work is done before exercising a click-driven pivot;
-    // otherwise the assertion races a render from an older request.
-    await desktop.waitForFunction(() => usageData && !usageData.indexing, null, { timeout: 10000 });
-    await desktop.click('[data-stack="buckets"]');
-    await desktop.waitForFunction(() =>
-      [...document.querySelectorAll('#usageChart .usage-legend-item')].some(el => el.textContent === 'Cached read') &&
-      [...document.querySelectorAll('#usageChart .usage-legend-item')].some(el => el.textContent === 'Unattributed') &&
-      document.querySelector('#usageChart .seg.sother') !== null,
-      null, { timeout: 5000 });
-    check(await desktop.evaluate(() => localStorage.getItem('pi-dish-usage-stack') === 'buckets'),
-      'bucket stacking re-pivots the chart and persists device-locally');
-    await desktop.click('[data-stack="models"]');
-    await desktop.waitForFunction(() =>
-      [...document.querySelectorAll('#usageChart .usage-legend-item')].some(el => el.textContent.includes('smoke-model')),
-      null, { timeout: 5000 });
-    check(true, 'model stacking restores the per-model legend');
-    // Event-driven: while the session index is still settling, the view
-    // repolls at 1s and each re-render can shift the chart's day axis (the
-    // 'all' range starts at the earliest *indexed* day), so a bucket index
-    // captured mid-indexing goes stale by click time. Wait for indexing to
-    // settle with the smoke model present, then resolve the index once.
-    await desktop.waitForFunction(() =>
-      usageData && !usageData.indexing &&
-      usageChart.buckets.some(b => b.models?.some(m => m.ref === 'test/smoke-model')),
-      null, { timeout: 10000 });
-    const smokeBucket = await desktop.evaluate(() => usageChart.buckets.findIndex(b =>
-      b.models?.some(m => m.ref === 'test/smoke-model')));
-    await desktop.locator('#usageChart .usage-col').nth(smokeBucket).click();
-    await desktop.waitForSelector('.usage-day-detail', { timeout: 2000 });
-    check(await desktop.evaluate(() => document.querySelector('.usage-day-detail').textContent.includes('smoke-model')),
-      "clicking a bar opens that day's per-model detail");
-    check(await desktop.evaluate(() => document.querySelector('.usage-day-detail').textContent.includes('% hit')),
-      'day detail includes the cache hit rate');
-    // Sort toggle refetches with sort=tokens and re-renders the breakdowns.
-    await desktop.click('.usage-sort [data-sort="tokens"]');
-    await desktop.waitForFunction(() =>
-      document.querySelector('.usage-sort [data-sort="tokens"]')?.classList.contains('active') &&
-      [...document.querySelectorAll('#usageViewBody .usage-row')].some((r) => r.textContent.includes('smoke-model')),
-      null, { timeout: 5000 });
-    check(await desktop.evaluate(() => localStorage.getItem('pi-dish-usage-sort') === 'tokens'),
-      'tokens sort activates and persists device-locally');
-    await desktop.waitForFunction(() =>
-      document.querySelector('#usageChart svg')?.getAttribute('aria-label')?.startsWith('Tokens'),
-      null, { timeout: 5000 });
-    check(true, 'tokens metric drives the daily chart, not just the tables');
-    await desktop.click('.usage-sort [data-sort="cost"]');
-    await desktop.waitForFunction(() =>
-      document.querySelector('.usage-sort [data-sort="cost"]')?.classList.contains('active'),
-      null, { timeout: 5000 });
-    // Model filter: model rows are multi-select toggles; the filter is
-    // applied server-side, so the workspace/session groups reflect it. The
-    // beta session's calls index under unknown/unknown, so filtering to the
-    // fixture's smoke-model must drop the beta workspace.
-    check(await desktop.evaluate(() =>
-      [...document.querySelectorAll('#usageViewBody .usage-row')].some((r) => r.textContent.includes('proj-beta'))),
-      'unfiltered usage lists the beta workspace');
-    await desktop.click('.usage-row.model-toggle[data-model-ref="test/smoke-model"]');
-    await desktop.waitForFunction(() =>
-      document.querySelector('.usage-filter-note')?.textContent.includes('smoke-model'),
-      null, { timeout: 5000 });
-    check(await desktop.evaluate(() =>
-      ![...document.querySelectorAll('#usageViewBody .usage-row')].some((r) => r.textContent.includes('proj-beta'))),
-      'model filter drops workspaces/sessions without that model');
-    check(await desktop.evaluate(() => {
-      const rows = [...document.querySelectorAll('#usageViewBody .usage-row.model-toggle')];
-      return rows.some((r) => r.classList.contains('on') && r.textContent.includes('smoke-model')) &&
-        rows.some((r) => r.classList.contains('off'));
-    }), 'facet list keeps deselected models, dimmed');
-    await desktop.click('#usageViewBody .usage-row.model-toggle.off');
-    await desktop.waitForFunction(() =>
-      [...document.querySelectorAll('#usageViewBody .usage-row')].some((r) => r.textContent.includes('proj-beta')),
-      null, { timeout: 5000 });
-    check(true, 'multi-select re-adds a second model and the beta workspace returns');
-    await desktop.click('[data-clear-models]');
-    await desktop.waitForFunction(() => !document.querySelector('.usage-filter-note'),
-      null, { timeout: 5000 });
-    check(true, 'clear removes the model filter');
-    await desktop.click(`[data-session-id="${SESSION_ID}"]`);
-    await desktop.waitForFunction(() => !document.querySelector('.main').classList.contains('usage-open'),
-      null, { timeout: 2000 });
-    check(await desktop.evaluate(() => document.getElementById('sessionView').offsetParent !== null),
-      'session row closes the takeover and shows that session');
-    await desktop.click('[title="Usage and spend"]');
-    await desktop.waitForSelector('.usage-kpis', { timeout: 5000 });
-    await desktop.keyboard.press('Escape');
-    await desktop.waitForFunction(() => !document.querySelector('.main').classList.contains('usage-open'),
-      null, { timeout: 2000 });
-    check(true, 'Escape closes the usage view');
+    await scenarios.usage(scenarioContext());
 
-    // Skills view: the observational directory + in-takeover detail + refine
-    // launcher. Opened from the sidebar-header shield button.
-    console.log('skills view:');
-    await desktop.click('[title="Skills"]');
-    await desktop.waitForFunction(() =>
-      document.querySelector('.main').classList.contains('skills-open') &&
-      [...document.querySelectorAll('.sk-row .sk-name')].some((n) => n.textContent.includes('smoke-skill')),
-      null, { timeout: 8000 });
-    check(await desktop.evaluate(() => document.getElementById('sessionView').offsetParent === null),
-      'session view hidden while the skills takeover is open');
-    check(await desktop.evaluate(() =>
-      /inferred from tool calls/.test(document.querySelector('.sk-summary')?.textContent || '') &&
-      /catalog ~\d/.test(document.querySelector('.sk-summary')?.textContent || '')),
-      'directory summary badges inferred usage and the estimated catalog footprint');
-    // Open the detail page for the fixture skill.
-    await desktop.evaluate(() => {
-      [...document.querySelectorAll('.sk-row')].find((r) => r.querySelector('.sk-name').textContent.includes('smoke-skill')).click();
-    });
-    await desktop.waitForSelector('.skills-detail-wrap', { timeout: 8000 });
-    check(await desktop.evaluate(() => !!document.querySelector('.skills-detail-title')?.textContent.includes('smoke-skill')),
-      'detail header names the skill in-takeover (not a modal)');
-    check(await desktop.evaluate(() =>
-      [...document.querySelectorAll('.sec-row.cold .never')].some((n) => /never read/.test(n.textContent))),
-      'coverage map flags a never-read section');
-    check(await desktop.evaluate(() => !!document.querySelector('.spark-lg') && document.querySelectorAll('.spark-lg i').length === 26),
-      'side column renders the 26-week sparkline');
-    // Refine launcher: prefills the new-session takeover with a draft (never sends).
-    await desktop.click('.refine-btn');
-    await desktop.waitForFunction(() =>
-      document.querySelector('.main').classList.contains('new-session-open'), null, { timeout: 5000 });
-    check(await desktop.evaluate(() => (document.getElementById('newSessionCwd').value || '').includes('smoke-skill')),
-      'refine sets the new-session cwd to the skill directory');
-    check(await desktop.evaluate(() => typeof nsPendingDraft === 'string' &&
-      nsPendingDraft.includes('SKILL.md') && /coverage\?skill=/.test(nsPendingDraft)),
-      'refine stashes an evidence-bundle draft (path + coverage URL), never auto-sent');
-    await desktop.keyboard.press('Escape');
-    await desktop.waitForFunction(() => !document.querySelector('.main').classList.contains('new-session-open'),
-      null, { timeout: 2000 });
-    check(true, 'Escape closes the new-session takeover opened by refine');
+    await scenarios.skills(scenarioContext());
 
-    // Routines takeover: the fifth sidebar-header icon, the create/edit
-    // round-trip (a changed prompt is a new version), a real Run now through
-    // the fake RPC pi, and the routine provenance chip that lands on the
-    // resulting session's sidebar row. See TASKS/routines.md.
-    console.log('routines:');
-    await desktop.waitForSelector('#btnRoutines', { state: 'visible', timeout: 5000 });
-    check(true, 'sidebar header shows the routines icon on a routines-capable host');
-    await desktop.click('#btnRoutines');
-    await desktop.waitForSelector('.main.routines-open #rtNewBtn', { timeout: 5000 });
-    check(await desktop.evaluate(() => document.getElementById('sessionView').offsetParent === null),
-      'session view hidden while the routines takeover is open');
-    check(await desktop.evaluate(() => document.querySelectorAll('.host-chip').length === 0 ||
-      !document.querySelector('.routines-list .host-chip')),
-      'no host chrome in the routines list on a single host');
+    await scenarios.routines(scenarioContext());
 
-    await desktop.click('#rtNewBtn');
-    await desktop.waitForSelector('#rtName', { timeout: 5000 });
-    await desktop.fill('#rtName', 'smoke-routine');
-    await desktop.fill('#rtDescription', 'the smoke test routine');
-    await desktop.fill('#rtCwd', CWD);
-    await desktop.selectOption('#rtCronPreset', '0 9 * * 1-5');
-    check(await desktop.inputValue('#rtCron') === '0 9 * * 1-5',
-      'a schedule preset writes into the cron input');
-    await desktop.fill('#rtPrompt', 'smoke routine prompt v1');
-    await desktop.click('#rtSaveBtn');
-    await desktop.waitForSelector('.rt-row', { timeout: 10000 });
-    check(await desktop.locator('#rtError').textContent() === '',
-      `routine created without a validation error (got "${await desktop.locator('#rtError').textContent()}")`);
-    check((await desktop.locator('.rt-row').first().textContent()).includes('smoke-routine'),
-      'the new routine appears in the list');
-    check((await desktop.locator('.rt-row-sched').first().textContent()).includes('0 9 * * 1-5'),
-      'the list row shows the cron expression');
-    check((await desktop.locator('#rtCurl').textContent()).includes('/api/routines/') &&
-      (await desktop.locator('#rtCurl').textContent()).includes('"input"'),
-      'the invoke box shows a curl carrying an input body');
+    await scenarios.bounce(scenarioContext());
 
-    // A changed prompt appends a version; nothing else does.
-    await desktop.fill('#rtPrompt', 'smoke routine prompt v2');
-    await desktop.click('#rtSaveBtn');
-    await desktop.waitForFunction(() =>
-      document.querySelector('.rt-version-badge')?.textContent === 'v2', null, { timeout: 10000 });
-    check(true, 'editing the prompt bumps the routine to version 2');
-    await desktop.click('#rtVersions > summary');
-    await desktop.waitForSelector('.rt-version-row', { timeout: 5000 });
-    check(await desktop.locator('.rt-version-row').count() === 2,
-      'the versions block lists both prompt versions');
-    await desktop.click('.rt-version-restore[data-restore="1"]');
-    check(await desktop.inputValue('#rtPrompt') === 'smoke routine prompt v1',
-      'restore writes the older prompt back into the editor (a save would make it a new version)');
-    await desktop.fill('#rtPrompt', 'smoke routine prompt v2');
-
-    // Run now: a real spawn through the fake RPC pi, observed to completion.
-    await desktop.click('#rtRunBtn');
-    await desktop.waitForSelector('.rt-table tbody tr', { timeout: 30000 });
-    check(true, 'Run now lands an invocation row in the runs table');
-    await desktop.waitForFunction(() =>
-      /completed/.test(document.querySelector('.rt-table tbody tr')?.textContent || ''),
-    null, { timeout: 40000 });
-    const runRow = (await desktop.locator('.rt-table tbody tr').first().innerText()).replace(/\s+/g, ' ');
-    check(runRow.includes('v2') && runRow.includes('invoke') && runRow.includes('prompt'),
-      `the run records its version, trigger and delivery (got "${runRow}")`);
-    // Clicking a version row filters the table to that version's runs.
-    await desktop.click('.rt-version-row[data-version="1"]');
-    check(await desktop.locator('.rt-table tbody tr').count() === 0 &&
-      await desktop.locator('.rt-filter-chip').count() === 1,
-      'clicking a version row filters the runs table to that version');
-    await desktop.click('.rt-filter-clear');
-    await desktop.waitForFunction(() => document.querySelectorAll('.rt-table tbody tr').length === 1,
-      null, { timeout: 5000 });
-    check(true, 'clearing the version filter restores every run');
-
-    // Provenance: the session the routine produced wears its chip.
-    const routineSessionId = await desktop.evaluate(() => routineInvocations[0]?.sessionId || null);
-    check(!!routineSessionId, 'the invocation records the session it ran in');
-    await desktop.evaluate(() => { switchTab('all'); });
-    await desktop.evaluate(() => { loadSessions(undefined, { withPrevious: true }); });
-    // Inactive automation runs stay off the All tab unless the query asks
-    // (the oneShot run's session is closed after its close grace), so ask
-    // for the routine by name before asserting its chip.
-    await desktop.evaluate(() => {
-      document.getElementById('filterInput').value = 'routine:smoke-routine';
-      onFilterInput();
-    });
-    await desktop.waitForSelector('.routine-chip', { timeout: 10000 });
-    check((await desktop.locator('.routine-chip').first().textContent()).includes('smoke-routine'),
-      'the routine\'s session wears a ⏱ chip in the sidebar');
-    check(await desktop.evaluate((id) =>
-      !!document.querySelector(`.session-item[data-id="${id}"] .routine-chip`), routineSessionId),
-    'the chip sits on the row of the session the run actually used');
-
-    // The `routine:` grammar field is metadata-only and shared everywhere.
-    await desktop.evaluate(() => {
-      document.getElementById('filterInput').value = 'routine:smoke-routine';
-      onFilterInput();
-    });
-    await desktop.waitForFunction((id) => {
-      const rows = [...document.querySelectorAll('.session-item')];
-      return rows.length === 1 && rows[0].dataset.id === id;
-    }, routineSessionId, { timeout: 10000 });
-    check(true, 'routine:<name> narrows the sidebar to that routine\'s sessions');
-    await desktop.evaluate(() => {
-      document.getElementById('filterInput').value = '';
-      onFilterInput();
-    });
-    await desktop.evaluate(() => switchTab('active'));
-
-    // Takeovers are mutually exclusive, and Escape closes this one.
-    await desktop.evaluate(() => openRoutinesView());
-    await desktop.waitForSelector('.main.routines-open', { timeout: 5000 });
-    await desktop.click('[title="Usage and spend"]');
-    await desktop.waitForFunction(() => document.querySelector('.main').classList.contains('usage-open') &&
-      !document.querySelector('.main').classList.contains('routines-open'), null, { timeout: 5000 });
-    check(true, 'opening the usage view closes the routines takeover');
-    await desktop.keyboard.press('Escape');
-    await desktop.evaluate(() => openRoutinesView());
-    await desktop.waitForSelector('.main.routines-open', { timeout: 5000 });
-    await desktop.keyboard.press('Escape');
-    await desktop.waitForFunction(() => !document.querySelector('.main').classList.contains('routines-open'),
-      null, { timeout: 3000 });
-    check(true, 'Escape closes the routines takeover');
-
-    // Bulk restart stays inside Settings rather than replacing the session.
-    console.log('bounce agents:');
-    const bounceSpawn = await fetch(base + '/api/sessions/new', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ harness: 'pi', cwd: CWD, name: 'Bounce smoke' }),
-    }).then(async response => {
-      const body = await response.json();
-      if (!response.ok) throw new Error(JSON.stringify(body));
-      return body;
-    });
-    let bouncedId = bounceSpawn.id;
-    try {
-      await desktop.evaluate(() => openSettingsModal());
-      await desktop.click('#openBounceAgents');
-      check(await desktop.locator('#settingsModal').isVisible() &&
-        await desktop.locator('#settingsModal #bounceMode').isVisible(),
-      'bounce controls expand inside Settings');
-      const bouncePosition = await desktop.locator('#openBounceAgents').boundingBox();
-      const themePosition = await desktop.locator('#settingsTheme').boundingBox();
-      check(bouncePosition.y < themePosition.y, 'Bounce agents is at the top of Settings');
-      await desktop.click('#openBounceAgents');
-      check(!(await desktop.locator('#bounceMode').isVisible()), 'second click collapses bounce controls');
-      await desktop.click('#openBounceAgents');
-      await desktop.waitForSelector('#bounceMode', { state: 'visible' });
-      await desktop.selectOption('#bounceMode', 'restart');
-      const bounceTarget = desktop.locator('.bounce-target').filter({ hasText: 'Bounce smoke' });
-      await bounceTarget.locator('input').check();
-      await desktop.click('#bounceSubmit');
-      await desktop.waitForSelector('.bounce-result[data-status="completed"]', { timeout: 15000 });
-      const bounceOperations = await fetch(base + '/api/session-bounces').then(r => r.json());
-      const bounced = bounceOperations.operations.flatMap(op => op.targets).find(t => t.sessionId === bounceSpawn.id);
-      check(bounced?.status === 'completed', 'Bounce agents completes the selected owned RPC restart');
-      bouncedId = bounced.replacementId || bouncedId;
-      await desktop.evaluate(() => openSettingsModal());
-      await desktop.click('#openRecoveryReport');
-      check(!(await desktop.locator('#settingsModal').isVisible()) &&
-        !(await desktop.locator('#bounceMode').isVisible()),
-      'opening recovery closes Settings and its bounce controls');
-      await desktop.evaluate(() => openSettingsModal());
-      await desktop.click('#openBounceAgents');
-      check(await desktop.locator('#settingsModal #bounceMode').isVisible(),
-        'bounce controls reopen in Settings over the current view');
-      await desktop.keyboard.press('Escape');
-      check(!(await desktop.locator('#settingsModal').isVisible()),
-        'Escape closes Settings and its bounce controls');
-    } finally {
-      await fetch(`${base}/api/sessions/${encodeURIComponent(bouncedId)}/close`, { method: 'POST' });
-    }
-
-    // 3. Mobile: hamburger + drawer from empty state and session header
-    console.log('mobile:');
-    const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-    watch(mobile, 'mobile');
-    await mobile.goto(base, { waitUntil: 'networkidle' });
-    await mobile.evaluate(() => localStorage.removeItem('pi-dish-session'));
-    await mobile.reload({ waitUntil: 'networkidle' });
-    check(await mobile.locator('.empty-menu-btn').isVisible(), 'empty-state hamburger visible');
-    await mobile.click('.empty-menu-btn');
-    await mobile.waitForSelector('.sidebar.open');
-    check(true, 'drawer opens from empty state');
-    await mobile.click('.session-item');
-    await mobile.waitForSelector('.message.assistant');
-    check(!(await mobile.locator('.sidebar').evaluate(el => el.classList.contains('open'))),
-      'drawer closes after picking a session');
-    const box = await mobile.locator('.header-menu-btn').boundingBox();
-    check(box && box.x >= 0 && box.y >= 0 && box.width >= 36, 'header hamburger visible in layout');
-    await mobile.waitForSelector('#sessionRelations .session-relation-chip', { timeout: 5000 });
-    const relationLayout = await mobile.evaluate(() => {
-      const strip = document.getElementById('sessionRelations');
-      const chips = [...strip.querySelectorAll('.session-relation-chip')];
-      const rect = strip.getBoundingClientRect();
-      const tops = chips.map(chip => Math.round(chip.getBoundingClientRect().top));
-      return {
-        height: rect.height,
-        rows: new Set(tops).size,
-        flexWrap: getComputedStyle(strip).flexWrap,
-        maxChipWidth: Math.max(...chips.map(chip => chip.getBoundingClientRect().width)),
-      };
-    });
-    check(relationLayout.rows === 1 && relationLayout.flexWrap === 'nowrap' &&
-      relationLayout.height <= 32 && relationLayout.maxChipWidth <= 171,
-      `related-session chips stay in one compact mobile strip (got ${JSON.stringify(relationLayout)})`);
-
-    // Layout contract: title gets its own row above the top-right model
-    // selector, while the context badge stays bottom-left.
-    const vp = mobile.viewportSize();
-    const title = await mobile.locator('#sessionName').boundingBox();
-    const model = await mobile.locator('#sessionModel').boundingBox();
-    check(title && model && title.y + title.height <= model.y,
-      'session title sits above the model selector');
-    check(model && model.x > vp.width / 2 && model.y < 60, 'model selector sits top-right');
-    const ctx = await mobile.locator('#sessionContextBar').boundingBox();
-    check(ctx && ctx.x < vp.width / 4 && ctx.y > vp.height / 2, 'context badge sits bottom-left');
-    check(!(await mobile.locator('#sessionContext').isVisible()), 'header context badge hidden on mobile');
-
-    // A long host status line (OMP's goal line runs to ~60 chars) must not
-    // grow the header: the strip clips to one line until the ▾ opens it.
-    const headerHeight = () => mobile.evaluate(() =>
-      document.querySelector('.session-header').getBoundingClientRect().height);
-    const baseHeader = await headerHeight();
-    emit('extension_ui_request', {
-      method: 'setStatus',
-      statusKey: 'goal',
-      statusText: 'Goal · make the 2 client test work and continue progressing…',
-    });
-    await mobile.waitForSelector('#extUiStatuses .ext-ui-status-badge', { timeout: 5000 });
-    const collapsedStatus = await mobile.evaluate(() => {
-      const badge = document.querySelector('#extUiStatuses .ext-ui-status-badge');
-      return { height: badge.getBoundingClientRect().height, clipped: badge.scrollWidth > badge.clientWidth };
-    });
-    const withStatus = await headerHeight();
-    check(collapsedStatus.height <= 24 && collapsedStatus.clipped && withStatus - baseHeader <= 30,
-      `collapsed status stays one clipped line (got ${JSON.stringify(collapsedStatus)}, header ${baseHeader}→${withStatus})`);
-    await mobile.click('#extUiStatusToggle');
-    check(await mobile.evaluate(() => {
-      const badge = document.querySelector('#extUiStatuses .ext-ui-status-badge');
-      return badge.scrollWidth <= badge.clientWidth + 1 && badge.getBoundingClientRect().height > 24;
-    }), 'the ▾ expands the status strip to the full line');
-    emit('extension_ui_request', { method: 'setStatus', statusKey: 'goal', statusText: '' });
-    await mobile.waitForFunction(() =>
-      document.getElementById('extUiStatuses').style.display === 'none', { timeout: 5000 });
-    check(true, 'the strip hides itself when the last status clears');
-    await mobile.click('#sessionModel');
-    await mobile.waitForSelector('.model-option', { timeout: 5000 });
-    check(await mobile.locator('.model-option').count() >= 2, 'model dropdown opens from header');
-    const sheet = await mobile.locator('.model-dropdown').boundingBox();
-    check(sheet && sheet.y < 120, 'model dropdown drops from the top on mobile');
-    await mobile.click('.messages'); // dismiss dropdown
-    await mobile.waitForTimeout(200);
-    await mobile.click('.header-menu-btn');
-    await mobile.waitForSelector('.sidebar.open');
-    check(true, 'drawer opens from session header');
-    await mobile.click('.sidebar-overlay'); // close the drawer again
-
-    // Terminal on mobile: opened from the ⚙ control panel; the extra-keys
-    // bar (esc/tab/ctrl/arrows) is part of the touch layout. ^C must reach
-    // the shell as SIGINT (kills a running sleep), and the ctrl latch turns
-    // the next typed key into a control character.
-    // Routines on a phone: one column at a time, with a ‹ back control.
-    await mobile.evaluate(() => openRoutinesView());
-    await mobile.waitForSelector('.main.routines-open .rt-row', { timeout: 10000 });
-    check(await mobile.evaluate(() => document.getElementById('routinesDetail').offsetParent === null),
-      'mobile routines opens on the list, detail stacked out of view');
-    await mobile.click('.rt-row');
-    await mobile.waitForSelector('.routines-view.detail-open #rtName', { timeout: 5000 });
-    check(await mobile.evaluate(() => document.getElementById('routinesList').offsetParent === null &&
-      document.getElementById('routinesDetail').offsetParent !== null),
-    'tapping a routine swaps the list for the detail');
-    await mobile.click('.rt-back');
-    check(await mobile.evaluate(() => document.getElementById('routinesList').offsetParent !== null),
-      'the ‹ back control returns to the routine list');
-    await mobile.evaluate(() => closeRoutinesView());
-
-    console.log('mobile terminal:');
-    await mobile.click('#btnPanel');
-    await mobile.waitForSelector('#cpTerminalRow', { state: 'visible' });
-    await mobile.click('#cpTerminalRow');
-    await mobile.waitForSelector('#terminalPanel .xterm', { timeout: 5000 });
-    check(await mobile.locator('#terminalKeybar').isVisible(), 'extra-keys bar visible on mobile');
-    await mobile.waitForFunction(() => document.getElementById('terminalStatus').textContent === '',
-      { timeout: 5000 });
-    await mobile.keyboard.type('sleep 100\r');
-    await mobile.waitForTimeout(300);
-    await mobile.tap('#terminalKeybar button[data-termkey="ctrl-c"]');
-    await mobile.keyboard.type('echo after-$((1+1))\r');
-    await mobile.waitForFunction(() => {
-      const rows = document.querySelector('#terminalPanel .xterm');
-      return rows && rows.textContent.includes('after-2');
-    }, { timeout: 5000 });
-    check(true, '^C key interrupts a running command (prompt came back)');
-    // Ctrl latch: tap ctrl, type c → ^C again (nothing running; just assert
-    // the latch visually arms and clears).
-    await mobile.tap('#terminalKeybar button[data-termkey="ctrl"]');
-    check(await mobile.evaluate(() => document.getElementById('termKeyCtrl').classList.contains('latched')),
-      'ctrl key latches');
-    await mobile.keyboard.type('c');
-    check(await mobile.evaluate(() => !document.getElementById('termKeyCtrl').classList.contains('latched')),
-      'latch clears after the next key');
-    await mobile.click('#termCloseBtn');
+    await scenarios.mobile(scenarioContext());
 
     // 12b. Row-level close: live rows carry a quiet hover-reveal ✕ with a
     // two-tap inline confirm. The POST is intercepted (deterministic — the
@@ -4448,6 +3763,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       `the dead host's section heading says why its rows are stale (got ${JSON.stringify(offlineSection)})`);
     await multi.close();
 
+    }
     check(errors.length === 0, errors.length ? `no page errors — got: ${errors.join(' | ')}` : 'no page errors');
   } catch (e) {
     failures++;
