@@ -7777,7 +7777,18 @@ function openMessageStream(url, sessionId, selectionGeneration) {
     // OMP can deliver the same completed message event more than once. Keep
     // completion rendering idempotent for the whole turn, including a late
     // repeat after turn_end's JSONL catch-up has installed the indexed copy.
+    // Two keys: the full key for custom messages (a redelivery with evolved
+    // details must reach upsertLiveCustomMessage), and the core signature —
+    // role/timestamp/content — for user/assistant, so a repeat that only
+    // gained usage/details metadata still dedups. The core signature is also
+    // what a late message_update for an already-finalized message carries
+    // (timestamp is stamped at API-call start, content complete by the last
+    // delta), which lets the update handler below refuse to resurrect a
+    // streaming bubble for it.
     const seenMessageEnds = new Set();
+    const messageEndKey = (m) => JSON.stringify(m.role === 'custom'
+      ? [m.role, m.timestamp ?? null, m.content ?? null, m.errorMessage ?? null, m.customType ?? null, m.details ?? null]
+      : [m.role, m.timestamp ?? null, m.content ?? null]);
 
     evtSource.onopen = () => { if (ownsStream()) setStatus(''); };
 
@@ -7864,6 +7875,13 @@ function openMessageStream(url, sessionId, selectionGeneration) {
           return;
         }
         if (message.role !== 'assistant') return;
+        // A redelivered/late update for a message whose message_end already
+        // ran (OMP usage-enrichment repeats, delivery-timing corners) must not
+        // resurrect a streaming bubble: the finalized render — or, post
+        // turn_end, the indexed JSONL copy — is already on screen, and a
+        // bubble created now would never be stripped again. It also must not
+        // re-arm the turn state below.
+        if (seenMessageEnds.size && seenMessageEnds.has(messageEndKey(message))) return;
         if (turnCleanupDone) seenMessageEnds.clear();
         turnCleanupDone = false;
         if (!turnInProgress) setTurnInProgress(true);
@@ -7877,14 +7895,7 @@ function openMessageStream(url, sessionId, selectionGeneration) {
         if (!message) return;
         const container = document.getElementById('messages');
         if (!container) return;
-        const messageKey = JSON.stringify([
-          message.role,
-          message.timestamp ?? null,
-          message.content ?? null,
-          message.errorMessage ?? null,
-          message.customType ?? null,
-          message.details ?? null,
-        ]);
+        const messageKey = messageEndKey(message);
         if (seenMessageEnds.has(messageKey)) return;
         seenMessageEnds.add(messageKey);
         if (message.role === 'user') {
@@ -10683,12 +10694,11 @@ const extUIState = {
   collapsed: new Map(),    // `sessionId|key` -> bool — survives session switches
 };
 
-// Extension UI is per-session: wipe the previous session's widgets, status
-// badges, and docked dialogs when switching. The server replays the new
-// session's remembered state once the stream connects, so elements come back
-// when switching to a session that has them.
 function clearExtensionUI() {
-  for (const { el } of extUIState.widgets.values()) el.remove();
+  for (const entry of extUIState.widgets.values()) {
+    clearTimeout(entry.removeTimer);
+    entry.el.remove();
+  }
   extUIState.widgets.clear();
   for (const badge of extUIState.statuses.values()) badge.remove();
   extUIState.statuses.clear();
@@ -10814,16 +10824,23 @@ function showExtWidget(key, lines, placement) {
   let container = extUIState.widgets.get(key)?.el;
   if (container && !container.isConnected) container = null;
 
+  const existing = extUIState.widgets.get(key);
   if (!lines || !lines.length) {
-    if (container) {
-      container.classList.add('hidden');
-      setTimeout(() => container.remove(), 200);
-    }
-    extUIState.widgets.delete(key);
+    if (!container) { extUIState.widgets.delete(key); return; }
+    container.classList.add('hidden');
+    // Keep the map entry until the fade-out removal fires, and make that
+    // removal cancellable: a re-set inside the window reuses this very
+    // element, instead of stacking a second card while the stale timer
+    // still destroys it (the clear/set churn a todo-style widget produces
+    // at turn boundaries read as constant flashing).
+    clearTimeout(existing.removeTimer);
+    existing.removeTimer = setTimeout(() => {
+      container.remove();
+      if (extUIState.widgets.get(key) === existing) extUIState.widgets.delete(key);
+    }, 200);
     return;
   }
-
-  const existing = extUIState.widgets.get(key);
+  if (existing?.removeTimer) { clearTimeout(existing.removeTimer); existing.removeTimer = null; }
   const collapsedKey = (currentSession?.id || '') + '|' + key;
   const wasCollapsed = existing?.collapsed ?? extUIState.collapsed.get(collapsedKey) ?? false;
 
@@ -10860,7 +10877,11 @@ function showExtWidget(key, lines, placement) {
   }
 
   container.classList.remove('hidden');
-  container.querySelector('.ext-ui-widget-body').textContent = lines.join('\n');
+  // Identical re-sets (forced pushes, reconnect replays) skip the text swap —
+  // replacing the text node forces a reflow that reads as a flicker.
+  const bodyText = lines.join('\n');
+  const body = container.querySelector('.ext-ui-widget-body');
+  if (body.textContent !== bodyText) body.textContent = bodyText;
   extUIState.widgets.set(key, { el: container, collapsed: container.classList.contains('collapsed') });
 }
 

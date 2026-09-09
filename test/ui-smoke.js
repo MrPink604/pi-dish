@@ -370,8 +370,13 @@ function streamTurn(userText, images) {
         emit('message_end', { message: done });
         emit('turn_end', {});
         // OMP can repeat the completed event after the turn boundary. The
-        // browser must not append it beside the authoritative JSONL render.
+        // browser must not append it beside the authoritative JSONL render —
+        // not the verbatim repeat, not a metadata-drifted one (usage attached
+        // late), and not a late message_update, which must not resurrect a
+        // streaming bubble for an already-finalized message either.
         setTimeout(() => emit('message_end', { message: done }), 100);
+        setTimeout(() => emit('message_end', { message: { ...done, usage: { input: 500, output: 42 } } }), 120);
+        setTimeout(() => emit('message_update', { message: done }), 140);
       }
     }, 60);
   }, 150);
@@ -747,11 +752,16 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(finals.some(t => t.includes('Streamed reply with')), 'final assistant message rendered');
     check(await desktop.locator('.message.assistant[data-streaming="true"]').count() === 0,
       'streaming placeholder cleaned up');
-    await desktop.waitForTimeout(200); // let the simulated late OMP repeat land
+    await desktop.waitForTimeout(300); // let the simulated late OMP repeats land
     check(await desktop.evaluate(() =>
       [...document.querySelectorAll('.message.assistant')]
         .filter(el => el.textContent.includes('Streamed reply with')).length === 1),
       'repeated assistant completion remains a single rendered response');
+    check(await desktop.locator('.message.assistant[data-streaming="true"]').count() === 0,
+      'late message_update resurrects no streaming bubble');
+    check(await desktop.evaluate(() =>
+      !document.getElementById('sessionWorking').classList.contains('active')),
+      'late message_update does not re-arm the working badge');
     // The JSONL catch-up supersedes the live panel and folds this turn's
     // tool activity into a second collapsed group.
     check(await desktop.locator('details.live-tool-panel').count() === 0,
@@ -2176,6 +2186,31 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(await desktop.locator('.ext-ui-widget-body').textContent() === 'proc one\nproc two',
       'live widget rendered for session 1');
     check(await desktop.locator('.ext-ui-status-badge').textContent() === '2 running', 'status badge rendered');
+    // Widget clear→set race: a clear hides the card and schedules its removal
+    // at +200ms; a re-set inside that window must reuse the same element and
+    // cancel the removal. Todo-style widgets clear and re-set at turn/tool
+    // boundaries, which otherwise stacks a second card while the stale timer
+    // destroys the fresh one — constant visible flashing.
+    emit('extension_ui_request', { method: 'setWidget', widgetKey: 'todo', widgetLines: ['task one'] });
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('.ext-ui-widget')].some((el) => el.dataset.widgetKey === 'todo'),
+      { timeout: 3000 });
+    await desktop.evaluate(() => { document.querySelector('[data-widget-key="todo"]').dataset.marker = 'kept'; });
+    emit('extension_ui_request', { method: 'setWidget', widgetKey: 'todo', widgetLines: [] });
+    await desktop.waitForTimeout(50);
+    emit('extension_ui_request', { method: 'setWidget', widgetKey: 'todo', widgetLines: ['task one', 'task two'] });
+    await desktop.waitForTimeout(300); // past the removal window
+    check(await desktop.evaluate(() => {
+      const els = [...document.querySelectorAll('[data-widget-key="todo"]')];
+      return els.length === 1 && els[0].dataset.marker === 'kept'
+        && !els[0].classList.contains('hidden')
+        && els[0].querySelector('.ext-ui-widget-body').textContent === 'task one\ntask two';
+    }), 'widget re-set inside the fade window reuses the card, cancels removal');
+    // And the removal still completes when nothing re-sets the widget.
+    emit('extension_ui_request', { method: 'setWidget', widgetKey: 'todo', widgetLines: [] });
+    await desktop.waitForFunction(() => !document.querySelector('[data-widget-key="todo"]'), { timeout: 3000 });
+    check(true, 'widget removal completes when not re-set');
+
     await new Promise((r) => bridge2.listen(socket2Path, r));
     registerSession2();
     // The server caches the registry scan for 500ms (REGISTRY_CACHE_MS) — a
