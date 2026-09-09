@@ -7258,6 +7258,9 @@ if (process.env.PI_DISH_SHARE_PORT) {
 // default exit codes so nothing else observes a change.
 onServerClose(() => remoteHosts.shutdown());
 onServerClose(() => sessionBounces.stop());
+for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+  process.once(signal, () => { remoteHosts.shutdown(); process.exit(code); });
+}
 
 // WebSocket upgrades bypass Express, and two features want them: the local
 // terminal and the /hosts/<name> terminal proxy. Every 'upgrade' listener

@@ -528,7 +528,8 @@ function fakeSshPath() {
   return `${dir}:${process.env.PATH}`;
 }
 
-test('the ssh transport forwards through a socket in the dish run dir', async () => {
+for (const [signal, exitCode] of [['SIGTERM', 143], ['SIGINT', 130]]) {
+test(`the ssh transport forwards through a socket and cleans up on ${signal}`, async () => {
   const home = makeHome();
   writeSettings(home, {
     // remotePort is the peer's port on the far side of the (fake) hop.
@@ -553,11 +554,14 @@ test('the ssh transport forwards through a socket in the dish run dir', async ()
   assert.ok((await proxied.json()).previous.some((s) => s.id === PEER_SESSION_ID));
 
   // The forward is a child of the server and goes down with it.
-  sshHub.child.kill('SIGTERM');
+  const exited = new Promise(resolve => sshHub.child.once('exit', (code) => resolve(code)));
+  sshHub.child.kill(signal);
+  assert.equal(await exited, exitCode);
   const deadline = Date.now() + 5000;
   while (fs.existsSync(socketPath) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
   assert.equal(fs.existsSync(socketPath), false, 'the ssh child must not outlive the server');
 });
+}
 
 test('a failing ssh forward is reported as a class, never as its stderr', async () => {
   const home = makeHome();
