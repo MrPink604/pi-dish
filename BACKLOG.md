@@ -26,7 +26,8 @@ Each behavior fix includes a focused regression check.
 - Extend cross-host collision coverage to composer drafts/attachments, queued
   prompts, and extension dialogs. Audit their remaining bare-id state at the
   same time; the maintenance passes do not yet migrate all UI state.
-- Cover listener startup failure, retry, loopback aliases, and shutdown together.
+- Completed: listener startup, bind retry, alias failure, advertised URLs,
+  and SIGINT/SIGTERM port release covered together in an isolated suite.
 - Completed: independently runnable real OMP/Prime canaries; OMP 18.1.15
   verified against a local fake provider, including live-tree reads and resume.
 - Establish automated checks and an explicit supported Node/tooling matrix.

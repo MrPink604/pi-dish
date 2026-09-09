@@ -657,6 +657,12 @@ context per test; failures retain traces and screenshots in `test-results/`.
 Inspect a trace with `npx playwright show-trace <trace.zip>`. The full smoke
 continues to cover streaming, terminal, routines, and mobile interactions.
 
+Listener regressions run with `npm test -- test/listener-lifecycle.test.js`.
+They cover startup, port collisions, loopback aliases, advertised URLs, bind
+retry, and signal shutdown. The retry test injects one missing-interface error
+and then waits for the real 15-second retry; all sockets remain on loopback.
+Alias cases explicitly skip on systems without `127.0.0.2` support.
+
 The opt-in lineage canary runs the actual released OMP and Prime CLIs through
 pi-dish's tmux/HTTP orchestration. It uses an isolated HOME, tmux server,
 socket directory, and Prime daemon. A local fake OpenAI Responses endpoint
