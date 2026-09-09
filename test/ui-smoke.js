@@ -4315,6 +4315,110 @@ let remoteHost = null; // second pi-dish (multi-host section)
       `the new-session takeover offers both hosts (got ${JSON.stringify(hostOptions)})`);
     await multi.keyboard.press('Escape');
 
+    // Two real history stores may contain the same native session id. Drive
+    // selection, polling, retained transcripts and delayed mutations against
+    // that collision rather than testing only distinct per-host ids.
+    console.log('same-id sessions across hosts:');
+    const collisionId = '2026-09-09T00-00-00-hostcollision';
+    const collisionFiles = [
+      path.join(sessionDir, `${collisionId}.jsonl`),
+      path.join(remoteHome, '.pi', 'agent', 'sessions', '--remote--', `${collisionId}.jsonl`),
+    ];
+    for (const [index, file] of collisionFiles.entries()) {
+      fs.writeFileSync(file, [
+        { type: 'session', cwd: CWD, timestamp: '2026-09-09T00:00:00.000Z' },
+        { type: 'message', message: { role: 'user', content: `COLLISION ${index ? 'REMOTE' : 'SELF'} TRANSCRIPT` } },
+      ].map(entry => JSON.stringify(entry)).join('\n') + '\n');
+    }
+    const selfId = await multi.evaluate(() => selfHost.hostId);
+    const remoteId = remoteDescriptor.hostId;
+    await multi.evaluate(() => loadSessions(undefined, { withPrevious: true }));
+    await multi.evaluate(({ id, host }) => selectSession(id, { host }), { id: collisionId, host: selfId });
+    check((await multi.locator('#messages').textContent()).includes('COLLISION SELF TRANSCRIPT'),
+      'the self-host collision renders its own transcript');
+    await multi.evaluate(({ id, host }) => selectSession(id, { host }), { id: collisionId, host: remoteId });
+    check((await multi.locator('#messages').textContent()).includes('COLLISION REMOTE TRANSCRIPT') &&
+      !(await multi.locator('#messages').textContent()).includes('COLLISION SELF TRANSCRIPT'),
+      'selecting the peer with the same id cannot restore the self-host transcript');
+    await multi.evaluate(() => loadSessions(undefined, { withPrevious: true }));
+    check(await multi.evaluate(host => currentSession.host === host, remoteId),
+      'polling preserves the selected host when ids collide');
+    const selectedCollision = multi.locator(`.session-item.active[data-id="${collisionId}"]`);
+    check(await selectedCollision.count() === 1 && await selectedCollision.getAttribute('data-host') === remoteId,
+      'only the selected host row is highlighted');
+    await multi.evaluate(id => selectSession(id, { host: 'missing-host' }), collisionId);
+    check(await multi.evaluate(({ id, host }) => !findSession(id, 'missing-host') && currentSession.host === host,
+      { id: collisionId, host: remoteId }), 'a missing host-qualified session never falls back to another host');
+    await multi.evaluate(({ id, host }) => selectSession(id, { host }), { id: collisionId, host: selfId });
+    check((await multi.locator('#messages').textContent()).includes('COLLISION SELF TRANSCRIPT') &&
+      !(await multi.locator('#messages').textContent()).includes('COLLISION REMOTE TRANSCRIPT'),
+      'switching back restores only the owning host\'s cached transcript');
+
+    // Hold each actual HTTP response while the reader switches to the other
+    // host's same-id session. Completion must update only the request owner.
+    for (const [action, field, value] of [
+      ['model', 'model', 'test/collision-model'],
+      ['thinking', 'thinkingLevel', 'high'],
+      ['rename', 'name', 'renamed remote collision'],
+    ]) {
+      await multi.evaluate(({ id, host }) => selectSession(id, { host }), { id: collisionId, host: remoteId });
+      await multi.evaluate(({ id, host }) => patchSession(id, {
+        isActive: true, capabilities: { setModel: true, setThinking: true, rename: true },
+      }, host), { id: collisionId, host: remoteId });
+      const endpoint = `${remoteHost.base}/api/sessions/${collisionId}/${action}`;
+      let receiveRequest;
+      const received = new Promise(resolve => { receiveRequest = resolve; });
+      await multi.route(endpoint, route => { receiveRequest(route); });
+      const sent = multi.waitForRequest(endpoint, { timeout: 10000 });
+      const before = await multi.evaluate(({ id, host, field }) => findSession(id, host)[field],
+        { id: collisionId, host: selfId, field });
+      await multi.evaluate(({ action, value }) => {
+        if (action === 'rename') document.getElementById('sessionNameInput').value = value;
+        window.__collisionMutation = action === 'model' ? selectModel(value)
+          : action === 'thinking' ? selectThinkingLevel(value) : commitRename();
+      }, { action, value });
+      await sent;
+      const route = await received;
+      await multi.evaluate(({ id, host }) => selectSession(id, { host }), { id: collisionId, host: selfId });
+      await route.fulfill({ json: { success: true, level: value } });
+      await multi.evaluate(() => window.__collisionMutation);
+      const outcome = await multi.evaluate(({ id, self, remote, field }) => ({
+        selectedHost: currentSession.host, selected: currentSession[field],
+        self: findSession(id, self)[field], remote: findSession(id, remote)[field],
+      }), { id: collisionId, self: selfId, remote: remoteId, field });
+      check(outcome.selectedHost === selfId && outcome.selected === before && outcome.self === before && outcome.remote === value,
+        `delayed ${action} completion updates only the originating host`);
+      await multi.unroute(endpoint);
+      await multi.evaluate(({ id, host }) => patchSession(id, { isActive: false }, host), { id: collisionId, host: remoteId });
+    }
+
+    // A row close belongs to the clicked row, even while its same-id peer is
+    // selected. Confirming one host must not arm a close on the other host.
+    await multi.evaluate(({ id, hosts }) => {
+      for (const host of hosts) patchSession(id, { isActive: true, capabilities: { close: true } }, host);
+    }, { id: collisionId, hosts: [selfId, remoteId] });
+    const selfClose = multi.locator(`.session-item[data-id="${collisionId}"][data-host="${selfId}"] .session-close-btn`);
+    const remoteClose = multi.locator(`.session-item[data-id="${collisionId}"][data-host="${remoteId}"] .session-close-btn`);
+    await selfClose.click();
+    check((await selfClose.textContent()).includes('close?') && !(await remoteClose.textContent()).includes('close?'),
+      'the close confirmation is scoped to its host');
+    await remoteClose.click();
+    check((await remoteClose.textContent()).includes('close?') && !(await selfClose.textContent()).includes('close?'),
+      'the first click on another host arms a new confirmation');
+    const closeEndpoint = `${remoteHost.base}/api/sessions/${collisionId}/close`;
+    await multi.route(closeEndpoint, route => route.fulfill({ json: { success: true } }));
+    const [closeResponse] = await Promise.all([
+      multi.waitForResponse(closeEndpoint), remoteClose.click(),
+    ]);
+    check(closeResponse.request().method() === 'POST' &&
+      await multi.evaluate(host => currentSession.host === host, selfId),
+      'closing the remote row sends to the peer and preserves the self-host selection');
+    await multi.waitForFunction(() => sessionCloseBusyId === null);
+    await multi.unroute(closeEndpoint);
+    await multi.evaluate(({ id, host }) => selectSession(id, { host }), { id: REMOTE_SESSION_ID, host: remoteId });
+    for (const file of collisionFiles) fs.unlinkSync(file);
+    await multi.evaluate(() => loadSessions(undefined, { withPrevious: true }));
+
     // A host that stops answering keeps its last-known rows, dimmed — and
     // degrades nothing else.
     const remoteGone = new Promise((r) => remoteHost.child.once('exit', r));

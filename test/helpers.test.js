@@ -324,6 +324,25 @@ test('session family cycles degrade to standalone roots', () => {
   assert.ok(roots.every(root => root.children.length === 0));
 });
 
+test('session families preserve colliding ids and resolve parents only on their owning host', () => {
+  const sessions = [
+    { id: 'parent', host: 'a', cwd: '/work' },
+    { id: 'child', host: 'a', cwd: '/work', parentId: 'parent' },
+    { id: 'parent', host: 'b', cwd: '/work' },
+    { id: 'child', host: 'b', cwd: '/work', parentId: 'parent' },
+    { id: 'orphan', host: 'c', cwd: '/work', parentId: 'parent' },
+  ];
+  const roots = H.buildSessionFamilies(sessions);
+  assert.equal(H.flattenSessionFamilies(roots).length, 5, 'every host keeps its own rows');
+  assert.deepEqual(roots.map(node => [H.sessionRefKey(node.session),
+    node.children.map(child => H.sessionRefKey(child.session))]), [
+    ['a parent', ['a child']], ['b parent', ['b child']], ['c orphan', []],
+  ]);
+  const [pinned, rest] = H.partitionPinnedFamilies(roots, ['b child']);
+  assert.deepEqual(pinned.map(node => H.sessionRefKey(node.session)), ['b parent']);
+  assert.equal(H.flattenSessionFamilies(rest).length, 3);
+});
+
 test('partitionPinnedFamilies pins and orders the whole family from any member id', () => {
   const families = H.buildSessionFamilies([
     { id: 'p', cwd: '/w', lastActivity: 1 },

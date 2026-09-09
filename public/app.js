@@ -793,7 +793,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const closeBtn = e.target.closest('.session-close-btn');
     if (closeBtn) {
       e.stopPropagation();
-      handleRowCloseClick(closeBtn.closest('.session-item').dataset.id);
+      const item = closeBtn.closest('.session-item');
+      handleRowCloseClick(item.dataset.id, item.dataset.host || null);
       return;
     }
     // A finished drag still emits a click on the handle — never treat it as a select.
@@ -1569,15 +1570,16 @@ function refreshSessions() {
 // first tap arms a danger-styled "close?" state that auto-reverts after ~3s,
 // second tap fires POST /close. State lives in module vars (not the DOM) so
 // the 10s poll's re-render restores an armed confirm instead of clearing it.
-let sessionCloseConfirmId = null; // row awaiting its second confirm tap
+let sessionCloseConfirmId = null; // host+session key awaiting its second confirm tap
 let sessionCloseConfirmTimer = null;
-let sessionCloseBusyId = null;    // row whose close POST is in flight
+let sessionCloseBusyId = null;    // host+session key whose close POST is in flight
 
-function handleRowCloseClick(id) {
+function handleRowCloseClick(id, host = sessionHostId(id)) {
+  const key = sessionKey(host, id);
   if (sessionCloseBusyId) return; // one close at a time
-  if (sessionCloseConfirmId === id) { performRowClose(id); return; }
+  if (sessionCloseConfirmId === key) { performRowClose(id, host); return; }
   clearTimeout(sessionCloseConfirmTimer);
-  sessionCloseConfirmId = id;
+  sessionCloseConfirmId = key;
   sessionCloseConfirmTimer = setTimeout(() => {
     sessionCloseConfirmId = null;
     renderSessions();
@@ -1585,15 +1587,15 @@ function handleRowCloseClick(id) {
   renderSessions();
 }
 
-async function performRowClose(id) {
+async function performRowClose(id, host = sessionHostId(id)) {
   clearTimeout(sessionCloseConfirmTimer);
   sessionCloseConfirmId = null;
-  sessionCloseBusyId = id;
+  sessionCloseBusyId = sessionKey(host, id);
   renderSessions();
   try {
-    await apiSend(sessionHostId(id), `/api/sessions/${encodeURIComponent(id)}/close`);
+    await apiSend(host, `/api/sessions/${encodeURIComponent(id)}/close`);
     sessionCloseBusyId = null;
-    await finishSessionClose(id);
+    await finishSessionClose(id, host);
   } catch (e) {
     sessionCloseBusyId = null;
     setStatus('Close failed: ' + e.message, 'error');
@@ -1617,7 +1619,7 @@ function renderHarnessBadge(harnessId, harnessLabel) {
 
 function renderSessionItem(session, opts = {}) {
   const ctxClass = contextClass(session.contextPercent);
-  const activeClass = currentSession?.id === session.id ? 'active' : '';
+  const activeClass = currentSession && sessionRefKey(currentSession) === sessionRefKey(session) ? 'active' : '';
   // A live subagent has no bridge of its own (its parent's process owns it),
   // so `isActive` is false — but it is a running session, not history, and
   // must not read as dimmed.
@@ -1663,8 +1665,8 @@ function renderSessionItem(session, opts = {}) {
     : (opts.familyDepth > 0 ? '<span class="session-family-leaf" aria-hidden="true">↳</span>' : '');
   // Live rows only; the confirm/busy states read the module vars so a poll
   // re-render restores an armed confirm rather than silently clearing it.
-  const closeArmed = sessionCloseConfirmId === session.id;
-  const closeBusy = sessionCloseBusyId === session.id;
+  const closeArmed = sessionCloseConfirmId === sessionRefKey(session);
+  const closeBusy = sessionCloseBusyId === sessionRefKey(session);
   const closeBtn = session.isActive && sessionSupports(session, 'close')
     ? `<button class="session-close-btn${closeArmed ? ' confirm' : ''}" title="${closeArmed ? 'Tap again to close this session' : (session.harnessId === 'prime' ? 'Detach client' : 'Close session (transcript stays resumable)')}">${closeBusy ? '…' : closeArmed ? (session.harnessId === 'prime' ? 'detach?' : 'close?') : '✕'}</button>`
     : '';
@@ -2324,13 +2326,24 @@ function renderDateBucket(bucket) {
 /**
  * Wire ids stay host-local, so two hosts *can* hand out the same generic
  * `session.jsonl` header id. Callers that know the host (every click path
- * through a rendered row) pass it and get an unambiguous entry; callers that
- * don't keep the old first-match behaviour.
+ * through a rendered row) pass it and get an exact entry. Without a host,
+ * prefer the selected session's host; otherwise require an unambiguous id.
+ * A missing host-qualified entry must never fall back to another machine.
  */
 function findSession(id, host) {
+  if (!host && currentSession?.id === id) host = currentSession.host;
   const match = (s) => s.id === id && (!host || (s.host || null) === host);
-  return sessions.active.find(match) || sessions.previous.find(match)
-    || (host ? findSession(id) : undefined);
+  let found;
+  for (const list of [sessions.active, sessions.previous]) {
+    for (const session of list) {
+      if (!match(session)) continue;
+      if (found && (found.host || null) !== (session.host || null)) return undefined;
+      // Active-only polls can retain a previous row for the same host+id.
+      // Prefer the active entry while that historical snapshot catches up.
+      if (!found) found = session;
+    }
+  }
+  return found;
 }
 
 // =========================================================================
@@ -2377,7 +2390,7 @@ function setSessionLists(next, hostId = selfHost.hostId) {
   }
   sessions = merged;
   if (currentSession) {
-    const fresh = findSession(currentSession.id);
+    const fresh = findSession(currentSession.id, currentSession.host);
     if (fresh) currentSession = { ...currentSession, ...fresh };
   }
   renderSessions();
@@ -2401,14 +2414,15 @@ function setCurrentSession(id, host) {
  * detached `currentSession` copy, then re-render sidebar + header. This is
  * the write path for local mutations — rename, model switch, thinking level.
  */
-function patchSession(id, patch) {
+function patchSession(id, patch, host = sessionHostId(id)) {
+  const matches = (s) => s && s.id === id && (s.host || null) === (host || null);
   for (const list of [sessions.active, sessions.previous]) {
-    const s = list.find(s => s.id === id);
+    const s = list.find(matches);
     if (s) stampSessionHost(Object.assign(s, patch));
   }
-  if (currentSession?.id === id) stampSessionHost(Object.assign(currentSession, patch));
+  if (matches(currentSession)) stampSessionHost(Object.assign(currentSession, patch));
   renderSessions();
-  if (currentSession?.id === id) updateSessionHeader();
+  if (matches(currentSession)) updateSessionHeader();
 }
 
 /**
@@ -2573,8 +2587,8 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   closeRecoveryView();
   if (!keepBounceView) closeBounceView();
   stashCurrentTranscript();
-  if (forceTranscriptReload) transcriptCache.delete(id);
   if (!setCurrentSession(id, host)) return;
+  if (forceTranscriptReload) transcriptCache.delete(sessionRefKey(currentSession));
   // Math rendering is transcript-only. Start its one-shot load while the
   // synchronous session chrome is updated, then gate markdown hydration on it.
   const mathAssetsReady = loadMathAssets().catch(() => {});
@@ -3169,17 +3183,20 @@ function closeThinkingDropdown() {
 async function selectThinkingLevel(level) {
   closeThinkingDropdown();
   if (!currentSession || !sessionSupports(currentSession, 'setThinking')) return;
+  const { id, host } = currentSession;
+  const generation = sessionSelectionGeneration;
   try {
-    const data = await apiSend(currentSession.host, `/api/sessions/${encodeURIComponent(currentSession.id)}/thinking`, { level });
+    const data = await apiSend(host, `/api/sessions/${encodeURIComponent(id)}/thinking`, { level });
     // The harness clamps to what the model supports; trust the reported
     // level, and say so when it differs from what was asked for.
     const reported = data.level || level;
-    patchSession(currentSession.id, { thinkingLevel: reported });
+    patchSession(id, { thinkingLevel: reported }, host);
+    if (!ownsSessionView(id, generation)) return;
     setStatus(reported !== level
       ? `Thinking level: ${reported} (model doesn't support ${level})`
       : `Thinking level: ${reported}`);
   } catch (e) {
-    setStatus('Thinking level failed: ' + e.message, 'error');
+    if (ownsSessionView(id, generation)) setStatus('Thinking level failed: ' + e.message, 'error');
   }
 }
 
@@ -5448,10 +5465,12 @@ async function copyMessageShareLink(btn) {
 // re-fetch both lists (the session just moved from active to previous) and,
 // when it was the selected session, re-select so the view flips to its
 // inactive state (resume bar).
-async function finishSessionClose(sessionId) {
+async function finishSessionClose(sessionId, host = sessionHostId(sessionId)) {
   setStatus('Session closed');
   await loadSessions(undefined, { withPrevious: true });
-  if (currentSession?.id === sessionId) selectSession(sessionId);
+  if (currentSession?.id === sessionId && (currentSession.host || null) === (host || null)) {
+    await selectSession(sessionId, { host });
+  }
 }
 
 // Session-process controls in the stats modal. Restart is advertised only for
@@ -5493,7 +5512,7 @@ function renderCloseSection(sessionId, generation) {
       await apiSend(host, `/api/sessions/${encodeURIComponent(sessionId)}/close`);
       if (!ownsStatsModal(sessionId, generation)) return;
       closeStatsModal();
-      await finishSessionClose(sessionId);
+      await finishSessionClose(sessionId, host);
     } catch (e) {
       if (!ownsStatsModal(sessionId, generation)) return;
       closeBtn.disabled = false;
@@ -6664,11 +6683,15 @@ async function commitRename() {
   const newName = inputEl.value.trim();
   inputEl.style.display = 'none';
   nameEl.style.display = '';
-  if (!newName || newName === currentSession.name || !currentSession.isActive) return;
+  if (!currentSession || !newName || newName === currentSession.name || !currentSession.isActive) return;
+  const { id, host } = currentSession;
+  const generation = sessionSelectionGeneration;
   try {
-    await apiSend(currentSession.host, '/api/sessions/' + encodeURIComponent(currentSession.id) + '/rename', { name: newName });
-    patchSession(currentSession.id, { name: newName });
-  } catch (e) { setStatus('Rename failed: ' + e.message, 'error'); }
+    await apiSend(host, '/api/sessions/' + encodeURIComponent(id) + '/rename', { name: newName });
+    patchSession(id, { name: newName }, host);
+  } catch (e) {
+    if (ownsSessionView(id, generation)) setStatus('Rename failed: ' + e.message, 'error');
+  }
 }
 
 function cancelRename() {
@@ -6859,12 +6882,16 @@ async function selectModel(fullModelId) {
   // A redundant set_model for the truly-same model is harmless.
   var isSame = fullModelId === currentSession?.model;
   if (!currentSession || !sessionSupports(currentSession, 'setModel') || isSame) return;
+  const { id, host } = currentSession;
+  const generation = sessionSelectionGeneration;
   setStatus('Switching model...', 'working');
   try {
-    await apiSend(currentSession.host, '/api/sessions/' + encodeURIComponent(currentSession.id) + '/model', { modelId: fullModelId });
-    patchSession(currentSession.id, { model: fullModelId });
-    setStatus('Model switched to ' + fullModelId);
-  } catch (e) { setStatus('Model switch failed: ' + e.message, 'error'); }
+    await apiSend(host, '/api/sessions/' + encodeURIComponent(id) + '/model', { modelId: fullModelId });
+    patchSession(id, { model: fullModelId }, host);
+    if (ownsSessionView(id, generation)) setStatus('Model switched to ' + fullModelId);
+  } catch (e) {
+    if (ownsSessionView(id, generation)) setStatus('Model switch failed: ' + e.message, 'error');
+  }
 }
 
 // =========================================================================
@@ -6888,7 +6915,7 @@ let totalMessages = 0;
 let loadingOlder = false;
 let loadingOlderGeneration = 0;
 
-// Recently viewed transcript DOM, including every page the reader explicitly
+// Recently viewed transcript DOM, keyed by host+session, including every page the reader explicitly
 // loaded. Moving nodes into a DocumentFragment preserves expensive markdown,
 // highlighting, open tool groups, and image elements without serializing or
 // re-downloading them. The bounded TTL/LRU policy keeps that convenience from
@@ -6910,7 +6937,7 @@ function pruneTranscriptCache(skipId) {
 }
 
 function stashCurrentTranscript() {
-  const id = currentSession?.id;
+  const id = currentSession && sessionRefKey(currentSession);
   const container = document.getElementById('messages');
   if (!id || !container || lastLoadedIndex == null || container.querySelector('.loading, .error')) return;
   const scrollTop = container.scrollTop;
@@ -6955,6 +6982,7 @@ function trimStashedTranscript(entry) {
 }
 
 function restoreCachedTranscript(id) {
+  id = sessionKey(sessionHostId(id), id);
   const cached = transcriptCache.get(id);
   if (!cached) return false;
   if (Date.now() - cached.lastUsed > TRANSCRIPT_CACHE_TTL_MS) {
@@ -7766,6 +7794,7 @@ function startMessageStream(sessionId, selectionGeneration = sessionSelectionGen
 }
 
 function openMessageStream(url, sessionId, selectionGeneration) {
+  const hostId = sessionHostId(sessionId);
   try {
     const evtSource = new EventSource(url);
     messageStream = evtSource;
@@ -8036,7 +8065,7 @@ function openMessageStream(url, sessionId, selectionGeneration) {
     // resolves; a second forced reload of the same state is harmless.
     addOwnedListener('session_tree', () => {
       if (currentSession && currentSession.id === sessionId) {
-        selectSession(sessionId, { forceTranscriptReload: true });
+        selectSession(sessionId, { forceTranscriptReload: true, host: hostId });
       }
     });
     addOwnedListener('session_switch', (e) => {
@@ -8047,10 +8076,10 @@ function openMessageStream(url, sessionId, selectionGeneration) {
       // The route identifies a different transcript even though the pane and
       // bridge socket stayed put. Never restore a prior DOM stash for that id:
       // the session may have changed since it was last viewed.
-      transcriptCache.delete(nextId);
+      transcriptCache.delete(sessionKey(hostId, nextId));
       void loadSessions(undefined, { withPrevious: true }).then(() => {
-        if (!ownsSessionView(sessionId, selectionGeneration) || !findSession(nextId)) return;
-        selectSession(nextId, { forceTranscriptReload: true });
+        if (!ownsSessionView(sessionId, selectionGeneration) || !findSession(nextId, hostId)) return;
+        selectSession(nextId, { forceTranscriptReload: true, host: hostId });
       });
     });
 

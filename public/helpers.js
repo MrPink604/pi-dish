@@ -402,7 +402,7 @@ function sessionFamilyParentId(session) {
 }
 
 /**
- * Build same-workspace parent/child trees from advisory `parentId` hints.
+ * Build same-host, same-workspace parent/child trees from advisory `parentId` hints.
  * Roots and sibling subtrees sort as blocks by the newest activity anywhere
  * below them, while the parent session itself remains the first row.
  * Missing/cross-workspace parents and cycles degrade to standalone roots.
@@ -410,14 +410,14 @@ function sessionFamilyParentId(session) {
 function buildSessionFamilies(list) {
   const nodes = new Map();
   (list || []).forEach((session, order) => {
-    if (session?.id && !nodes.has(session.id)) {
-      nodes.set(session.id, { session, children: [], activity: 0, size: 1, order });
+    if (session?.id && !nodes.has(sessionRefKey(session))) {
+      nodes.set(sessionRefKey(session), { session, children: [], activity: 0, size: 1, order });
     }
   });
 
   const attached = new Set();
   for (const node of nodes.values()) {
-    const parent = nodes.get(sessionFamilyParentId(node.session));
+    const parent = nodes.get(sessionKey(node.session.host, sessionFamilyParentId(node.session)));
     if (!parent || parent === node || (parent.session.cwd || '~') !== (node.session.cwd || '~')) continue;
     // Follow the declared chain before attaching so malformed A→B→A hints
     // cannot remove both nodes from the root set or recurse forever.
@@ -427,12 +427,12 @@ function buildSessionFamilies(list) {
     while (cursor && !seen.has(cursor)) {
       if (cursor === node) { cyclic = true; break; }
       seen.add(cursor);
-      const next = nodes.get(sessionFamilyParentId(cursor.session));
+      const next = nodes.get(sessionKey(cursor.session.host, sessionFamilyParentId(cursor.session)));
       cursor = next && (next.session.cwd || '~') === (cursor.session.cwd || '~') ? next : null;
     }
     if (cyclic) continue;
     parent.children.push(node);
-    attached.add(node.session.id);
+    attached.add(sessionRefKey(node.session));
   }
 
   const activityMs = (session) => {
@@ -450,7 +450,7 @@ function buildSessionFamilies(list) {
     node.children.sort((a, b) => b.activity - a.activity || a.order - b.order);
     return node;
   };
-  const roots = [...nodes.values()].filter(node => !attached.has(node.session.id)).map(finalize);
+  const roots = [...nodes.values()].filter(node => !attached.has(sessionRefKey(node.session))).map(finalize);
   return roots.sort((a, b) => b.activity - a.activity || a.order - b.order);
 }
 
@@ -493,12 +493,12 @@ function partitionPinnedFamilies(families, pinnedKeys) {
     const matches = rootByMember.has(id)
       ? [rootByMember.get(id)] : (rootsByMissingParent.get(id) || []);
     for (const root of matches) {
-      if (pinnedRoots.has(root.session.id)) continue;
+      if (pinnedRoots.has(sessionRefKey(root.session))) continue;
       pinned.push(root);
-      pinnedRoots.add(root.session.id);
+      pinnedRoots.add(sessionRefKey(root.session));
     }
   }
-  return [pinned, (families || []).filter(root => !pinnedRoots.has(root.session.id))];
+  return [pinned, (families || []).filter(root => !pinnedRoots.has(sessionRefKey(root.session)))];
 }
 
 /**
