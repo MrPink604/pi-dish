@@ -2179,6 +2179,52 @@ let remoteHost = null; // second pi-dish (multi-host section)
     emit('extension_ui_request', { method: 'setWidget', widgetKey: 'todo', widgetLines: [] });
     await desktop.waitForFunction(() => !document.querySelector('[data-widget-key="todo"]'), { timeout: 3000 });
     check(true, 'widget removal completes when not re-set');
+    // Status clear→set race: same churn hardening as the widget card. Hosts
+    // re-project status lines at turn boundaries, and a clear/set pair inside
+    // the removal grace must reuse the badge — destroy/recreate replays the
+    // badge's pop animation and reads as rapid flickering. The re-set keeps
+    // the '2 running' text so the switch-back replay check below still holds.
+    await desktop.evaluate(() => { document.querySelector('.ext-ui-status-badge').dataset.marker = 'kept'; });
+    emit('extension_ui_request', { method: 'setStatus', statusKey: 'procs' });
+    await desktop.waitForTimeout(50);
+    emit('extension_ui_request', { method: 'setStatus', statusKey: 'procs', statusText: '2 running' });
+    await desktop.waitForTimeout(700); // past the removal grace
+    check(await desktop.evaluate(() => {
+      const els = [...document.querySelectorAll('.ext-ui-status-badge')];
+      return els.length === 1 && els[0].dataset.marker === 'kept' && els[0].textContent === '2 running';
+    }), 'status re-set inside the grace window reuses the badge, cancels removal');
+    // Removal still completes when nothing re-sets the status.
+    emit('extension_ui_request', { method: 'setStatus', statusKey: 'tempstat', statusText: 'temporary' });
+    await desktop.waitForFunction(() =>
+      [...document.querySelectorAll('.ext-ui-status-badge')].some((el) => el.textContent === 'temporary'),
+      { timeout: 3000 });
+    emit('extension_ui_request', { method: 'setStatus', statusKey: 'tempstat' });
+    await desktop.waitForFunction(() =>
+      ![...document.querySelectorAll('.ext-ui-status-badge')].some((el) => el.textContent === 'temporary'),
+      { timeout: 3000 });
+    check(true, 'status removal completes when not re-set');
+    // The expand toggle only appears when the collapsed strip actually clips
+    // text — a lone short line expands to itself, so the arrow was a dead
+    // control; a clipped strip gets it back, and it toggles both ways.
+    check(await desktop.evaluate(() =>
+      getComputedStyle(document.getElementById('extUiStatusToggle')).display === 'none'),
+      'status toggle hidden while nothing is clipped');
+    emit('extension_ui_request', { method: 'setStatus', statusKey: 'goal', statusText: `Goal · ${'a very long objective line '.repeat(12)}` });
+    await desktop.waitForFunction(() =>
+      getComputedStyle(document.getElementById('extUiStatusToggle')).display !== 'none',
+      { timeout: 3000 });
+    check(true, 'status toggle appears once the collapsed strip clips');
+    await desktop.click('#extUiStatusToggle');
+    check(await desktop.evaluate(() =>
+      !document.getElementById('extUiStatuses').classList.contains('collapsed')),
+      'status toggle expands the clipped strip');
+    await desktop.click('#extUiStatusToggle');
+    check(await desktop.evaluate(() =>
+      document.getElementById('extUiStatuses').classList.contains('collapsed')),
+      'status toggle collapses the strip again');
+    emit('extension_ui_request', { method: 'setStatus', statusKey: 'goal' });
+    await desktop.waitForFunction(() => document.querySelectorAll('.ext-ui-status-badge').length === 1,
+      { timeout: 3000 });
 
     await new Promise((r) => bridge2.listen(socket2Path, r));
     registerSession2();

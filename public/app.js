@@ -10767,7 +10767,7 @@ function clearExtensionUI() {
     entry.el.remove();
   }
   extUIState.widgets.clear();
-  for (const badge of extUIState.statuses.values()) badge.remove();
+  for (const badge of extUIState.statuses.values()) { clearTimeout(badge.removeTimer); badge.remove(); }
   extUIState.statuses.clear();
   syncExtStatusRow();
   // Dialogs are stashed, not destroyed: detaching keeps in-progress
@@ -10953,6 +10953,14 @@ function showExtWidget(key, lines, placement) {
 }
 
 let extStatusPrefApplied = false;
+// Grace before a cleared status badge is actually removed. Hosts re-project
+// their status lines at turn boundaries (OMP's goal/advisor/prewalk reads
+// fire on every status-line render), and a clear/set pair inside the window
+// would otherwise destroy and recreate the badge — replaying its pop
+// animation and reading as rapid flickering. Matches showExtWidget's
+// cancellable-removal treatment.
+const EXT_STATUS_REMOVE_GRACE_MS = 500;
+let extStatusRowObserver = null;
 
 // Status lines live in their own strip under the header badges, not inline
 // with them: a host's goal/advisor line is a whole sentence (OMP clips at 60
@@ -10975,6 +10983,26 @@ function syncExtStatusRow() {
   }
   const items = document.getElementById('extUiStatusItems');
   row.style.display = items && items.children.length ? '' : 'none';
+  const toggle = document.getElementById('extUiStatusToggle');
+  if (toggle && items) {
+    // The arrow only earns its place when the collapsed strip actually clips
+    // text: a single short line expands to exactly itself, so an always-on
+    // toggle read as a dead control. Expanded always keeps it — that is how
+    // the strip collapses again. The clip happens inside each badge (they
+    // shrink to max-width:100% and ellipsis their own text), so measure the
+    // badges, not the row.
+    const clipped = () => [...items.children].some((el) => el.scrollWidth > el.clientWidth + 1);
+    const update = () => {
+      toggle.style.display = !row.classList.contains('collapsed') || clipped() ? '' : 'none';
+    };
+    update();
+    // Width changes (window, sidebar, a sibling badge) create or remove the
+    // clip without a status event — re-measure on row resize.
+    if (!extStatusRowObserver && typeof ResizeObserver !== 'undefined') {
+      extStatusRowObserver = new ResizeObserver(update);
+      extStatusRowObserver.observe(items);
+    }
+  }
 }
 
 function toggleExtStatusRow() {
@@ -10988,6 +11016,7 @@ function toggleExtStatusRow() {
     toggle.title = collapsed ? 'Show full status' : 'Collapse status';
   }
   try { localStorage.setItem('pi-dish-ext-status-open', collapsed ? '0' : '1'); } catch {}
+  syncExtStatusRow();
 }
 
 function showExtStatus(key, text) {
@@ -11000,11 +11029,24 @@ function showExtStatus(key, text) {
   if (badge && !badge.isConnected) badge = null;
 
   if (!text) {
-    badge?.remove();
-    extUIState.statuses.delete(key);
-    syncExtStatusRow();
+    if (!badge) {
+      extUIState.statuses.delete(key);
+      syncExtStatusRow();
+      return;
+    }
+    // Cancellable removal: a re-set inside the grace window reuses this very
+    // badge instead of stacking a fresh one (with its pop animation) while
+    // the stale timer still fires — the clear/set churn of re-projected
+    // goal/advisor lines read as constant flickering.
+    clearTimeout(badge.removeTimer);
+    badge.removeTimer = setTimeout(() => {
+      badge.remove();
+      if (extUIState.statuses.get(key) === badge) extUIState.statuses.delete(key);
+      syncExtStatusRow();
+    }, EXT_STATUS_REMOVE_GRACE_MS);
     return;
   }
+  if (badge?.removeTimer) { clearTimeout(badge.removeTimer); badge.removeTimer = null; }
 
   if (!badge) {
     badge = document.createElement('span');
@@ -11013,10 +11055,13 @@ function showExtStatus(key, text) {
     items.appendChild(badge);
   }
 
-  badge.textContent = text;
+  // Identical re-sets (forced pushes, reconnect replays) skip the text swap —
+  // replacing the text node forces a reflow that reads as a flicker.
+  if (badge.textContent !== text) badge.textContent = text;
   // The collapsed strip clips, so the full line stays reachable on hover and
   // as the accessible name.
-  badge.title = `${text}\n(status from ${key})`;
+  const title = `${text}\n(status from ${key})`;
+  if (badge.title !== title) badge.title = title;
   extUIState.statuses.set(key, badge);
   syncExtStatusRow();
 }
