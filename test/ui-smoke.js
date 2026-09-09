@@ -3552,6 +3552,13 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(!!routineSessionId, 'the invocation records the session it ran in');
     await desktop.evaluate(() => { switchTab('all'); });
     await desktop.evaluate(() => { loadSessions(undefined, { withPrevious: true }); });
+    // Inactive automation runs stay off the All tab unless the query asks
+    // (the oneShot run's session is closed after its close grace), so ask
+    // for the routine by name before asserting its chip.
+    await desktop.evaluate(() => {
+      document.getElementById('filterInput').value = 'routine:smoke-routine';
+      onFilterInput();
+    });
     await desktop.waitForSelector('.routine-chip', { timeout: 10000 });
     check((await desktop.locator('.routine-chip').first().textContent()).includes('smoke-routine'),
       'the routine\'s session wears a ⏱ chip in the sidebar');
