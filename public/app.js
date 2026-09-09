@@ -778,7 +778,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   // selects and (on mobile) closes the drawer.
   document.getElementById('sessionList').addEventListener('click', (e) => {
     const familyToggle = e.target.closest('.session-family-toggle');
-    if (familyToggle) { toggleSessionFamilyExpanded(familyToggle.dataset.familyId); return; }
+    if (familyToggle) {
+      const item = familyToggle.closest('.session-item');
+      toggleSessionFamilyExpanded(familyToggle.dataset.familyId, item.dataset.host || null);
+      return;
+    }
     const pinBtn = e.target.closest('.session-pin-btn');
     if (pinBtn) {
       const item = pinBtn.closest('.session-item');
@@ -786,7 +790,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const memberIds = family
         ? [...family.querySelectorAll('.session-item[data-id]')].map(row => row.dataset.id)
         : [item.dataset.id];
-      toggleSessionPinned(item.dataset.id, family?.dataset.familyId || item.dataset.id, memberIds);
+      toggleSessionPinned(item.dataset.id, family?.dataset.familyId || item.dataset.id, memberIds, item.dataset.host || null);
       return;
     }
     // Row-level close: two-tap confirm — never a row select.
@@ -1738,7 +1742,7 @@ function renderSessionFamily(node, opts = {}, depth = 0, rootId = node.session.i
         renderSessionFamily(child, opts, depth + 1, rootId, rootKey)).join('')}</div>`
     : '';
   const classes = depth === 0 ? 'session-family session-family-root' : 'session-family session-family-child';
-  const familyAttr = depth === 0 ? ` data-family-id="${escapeHtml(rootId)}"` : '';
+  const familyAttr = depth === 0 ? ` data-family-id="${escapeHtml(rootId)}" data-family-key="${escapeHtml(rootKey)}"` : '';
   return `<div class="${classes}"${familyAttr}>${row}${children}</div>`;
 }
 
@@ -1773,8 +1777,8 @@ function toggleGroupCollapsed(cwd) {
 }
 
 /**
- * Composite client key for a session id held by the sidebar's DOM/maps
- * (which stay host-local wire ids). Unknown ids resolve to this host, which
+ * Composite client key for a host-local wire id. Unknown ids resolve to
+ * this host, which
  * is what a not-yet-listed or just-spawned session is.
  */
 function keyForSessionId(id) {
@@ -1783,20 +1787,18 @@ function keyForSessionId(id) {
 
 /**
  * Fold a session key onto its family root's key. Pins are stored per family
- * root, while the render-time root map is keyed by host-local ids — phase 2,
- * where the lists actually merge hosts, re-keys that map.
+ * root. Both sides of the render-time map include the owning host.
  */
 function canonicalFamilyKey(key) {
-  const { hostId, sessionId } = parseSessionKey(key);
-  return sessionKey(hostId, sidebarFamilyRootMap.get(sessionId) || sessionId);
+  return sidebarFamilyRootMap.get(key) || key;
 }
 
 // Session families default collapsed to keep subagents quiet. Store only the
 // explicit expansions so newly discovered families also start collapsed.
 const expandedSessionFamilies = new Set(readJSONPref('pi-dish-expanded-session-families', []));
 
-function toggleSessionFamilyExpanded(id) {
-  const key = keyForSessionId(id);
+function toggleSessionFamilyExpanded(id, host = sessionHostId(id)) {
+  const key = sessionKey(host, id);
   if (expandedSessionFamilies.has(key)) expandedSessionFamilies.delete(key);
   else expandedSessionFamilies.add(key);
   localStorage.setItem('pi-dish-expanded-session-families', JSON.stringify([...expandedSessionFamilies]));
@@ -1807,35 +1809,38 @@ function currentFamilyRootMap() {
   const list = [...sessions.active, ...sessions.previous];
   const roots = buildSessionFamilies(list);
   const map = new Map();
-  const visit = (node, rootId) => {
-    map.set(node.session.id, rootId);
-    for (const child of node.children) visit(child, rootId);
+  const visit = (node, rootKey) => {
+    map.set(sessionRefKey(node.session), rootKey);
+    for (const child of node.children) visit(child, rootKey);
   };
-  for (const root of roots) visit(root, root.session.id);
+  for (const root of roots) visit(root, sessionRefKey(root.session));
 
   // Filtered/Active views can omit an ancestor. Follow the server-confirmed
   // same-cwd family hint beyond the visible fragment so pins retain one stable
   // family identity and collect every visible sibling fragment.
-  const byId = new Map(list.map(session => [session.id, session]));
-  for (const [memberId, visibleRootId] of map) {
-    let canonical = visibleRootId;
-    let cursor = byId.get(visibleRootId);
+  const byKey = new Map(list.map(session => [sessionRefKey(session), session]));
+  for (const [memberKey, visibleRootKey] of map) {
+    let canonical = visibleRootKey;
+    let cursor = byKey.get(visibleRootKey);
     const seen = new Set([canonical]);
-    while (cursor?.familyParentId && !seen.has(cursor.familyParentId)) {
-      canonical = cursor.familyParentId;
+    while (cursor?.familyParentId) {
+      const parentKey = sessionKey(cursor.host, cursor.familyParentId);
+      if (seen.has(parentKey)) break;
+      canonical = parentKey;
       seen.add(canonical);
-      cursor = byId.get(canonical);
+      cursor = byKey.get(canonical);
     }
-    map.set(memberId, canonical);
+    map.set(memberKey, canonical);
   }
   return map;
 }
 
-function revealSessionInFamily(id) {
+function revealSessionInFamily(id, host = sessionHostId(id)) {
+  const key = sessionKey(host, id);
   const roots = buildSessionFamilies([...sessions.active, ...sessions.previous]);
   let ancestors = null;
   const find = (node, path) => {
-    if (node.session.id === id) { ancestors = path; return true; }
+    if (sessionRefKey(node.session) === key) { ancestors = path; return true; }
     return node.children.some(child => find(child, [...path, node]));
   };
   roots.some(root => find(root, []));
@@ -1863,28 +1868,30 @@ function savePinnedSessions() {
   localStorage.setItem('pi-dish-pinned-sessions', JSON.stringify(pinnedSessions));
 }
 
-function toggleSessionPinned(id, displayedRootId = id, renderedMemberIds = [id]) {
+function toggleSessionPinned(id, displayedRootId = id, renderedMemberIds = [id], host = sessionHostId(id)) {
   const roots = currentFamilyRootMap();
-  const canonicalRoot = roots.get(id) || id;
-  const aliases = new Set(renderedMemberIds);
-  aliases.add(displayedRootId);
+  const key = sessionKey(host, id);
+  const canonicalRoot = roots.get(key) || key;
+  const aliases = new Set(renderedMemberIds.map(memberId => sessionKey(host, memberId)));
+  aliases.add(sessionKey(host, displayedRootId));
   // Include collapsed descendants and legacy child pins from the complete
-  // lists, but keep cross-cwd relationships independent (the helper does).
-  for (const [memberId, rootId] of roots) {
-    if (rootId === canonicalRoot) aliases.add(memberId);
+  // lists, but keep other hosts and cross-cwd relationships independent.
+  for (const [memberKey, rootKey] of roots) {
+    if (rootKey === canonicalRoot) aliases.add(memberKey);
   }
   // If Active/search omits the parent, an existing parent pin should still
   // toggle off from its visible child fragment.
-  const visibleIds = new Set([...document.querySelectorAll('#sessionList .session-item[data-id]')]
-    .map(row => row.dataset.id));
-  for (const memberId of aliases) {
-    const parentId = findSession(memberId)?.familyParentId;
-    if (parentId && !visibleIds.has(parentId)) aliases.add(parentId);
+  const visibleKeys = new Set([...document.querySelectorAll('#sessionList .session-item[data-id]')]
+    .map(row => sessionKey(row.dataset.host, row.dataset.id)));
+  for (const memberKey of aliases) {
+    const { hostId, sessionId } = parseSessionKey(memberKey);
+    const parentId = findSession(sessionId, hostId)?.familyParentId;
+    const parentKey = sessionKey(hostId, parentId);
+    if (parentId && !visibleKeys.has(parentKey)) aliases.add(parentKey);
   }
-  const aliasKeys = new Set([...aliases].map(keyForSessionId));
-  const wasPinned = pinnedSessions.some(pin => aliasKeys.has(pin));
-  pinnedSessions = pinnedSessions.filter(pin => !aliasKeys.has(pin));
-  if (!wasPinned) pinnedSessions.push(keyForSessionId(canonicalRoot));
+  const wasPinned = pinnedSessions.some(pin => aliases.has(pin));
+  pinnedSessions = pinnedSessions.filter(pin => !aliases.has(pin));
+  if (!wasPinned) pinnedSessions.push(canonicalRoot);
   savePinnedSessions();
   renderSessions();
 }
@@ -1926,7 +1933,7 @@ function initPinnedDrag() {
       pinnedDragActive = false;
       pinnedSessions = [...segment.children]
         .filter(el => el.classList.contains('session-family-root'))
-        .map(el => keyForSessionId(el.dataset.familyId));
+        .map(el => el.dataset.familyKey);
       savePinnedSessions();
       renderSessions();
     };
@@ -2592,7 +2599,7 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   // Math rendering is transcript-only. Start its one-shot load while the
   // synchronous session chrome is updated, then gate markdown hydration on it.
   const mathAssetsReady = loadMathAssets().catch(() => {});
-  revealSessionInFamily(id);
+  revealSessionInFamily(id, currentSession.host);
   // Tear down the previous session's stream up front, before the awaits below.
   // Left open, its in-flight turn_end/message_update events fire against the
   // session we're switching to (loadMessages has already reset the cursors).

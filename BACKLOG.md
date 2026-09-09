@@ -21,9 +21,11 @@ Each behavior fix includes a focused regression check.
   browser scenarios for same-id transcript selection and delayed metadata writes.
 - Split the long browser smoke into independently runnable feature scenarios
   while retaining desktop/mobile end-to-end coverage.
+- Completed: independent family regressions and fixes for cross-host pinning,
+  expansion, ancestor lookup, and drag ordering.
 - Extend cross-host collision coverage to composer drafts/attachments, queued
-  prompts, extension dialogs, and family pinning. Audit their remaining bare-id
-  state at the same time; the first maintenance pass does not migrate all UI state.
+  prompts, and extension dialogs. Audit their remaining bare-id state at the
+  same time; the maintenance passes do not yet migrate all UI state.
 - Cover listener startup failure, retry, loopback aliases, and shutdown together.
 - Make a real OMP canary independently runnable from Prime, alongside the existing
   real Pi checks. Keep model traffic on local fake providers.
