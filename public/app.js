@@ -9485,19 +9485,53 @@ function modelRoleOptions(value) {
   return html;
 }
 
+/**
+ * Options for a role's thinking-level select: (inherit), then off/auto and
+ * the model's supported ladder in OMP's /models roles order. `keepUnknown`
+ * retains an off-ladder stored level as a "(current)" option — used on the
+ * initial render only; switching the model rebuilds the ladder without it.
+ */
+function modelRoleLevelOptions(level, modelSelector, keepUnknown) {
+  const models = Array.isArray(harnessSettings?.models) ? harnessSettings.models : [];
+  const entry = models.find(m => (m.selector || `${m.provider}/${m.id}`) === modelSelector);
+  const levels = modelRoleLevels(entry);
+  let html = `<option value=""${level ? '' : ' selected'}>(inherit)</option>`;
+  if (level && keepUnknown && !levels.includes(level)) {
+    html += `<option value="${escapeHtml(level)}" selected>(current) ${escapeHtml(level)}</option>`;
+  }
+  for (const name of levels) {
+    html += `<option value="${escapeHtml(name)}"${name === level ? ' selected' : ''}>${escapeHtml(name)}</option>`;
+  }
+  return html;
+}
+
+/** Model changed: re-derive the level ladder from the new model's catalog. */
+function modelRoleModelChanged(select) {
+  const levelSelect = select.closest('.model-role-row')?.querySelector('.model-role-level');
+  if (!levelSelect) return;
+  levelSelect.innerHTML = modelRoleLevelOptions(levelSelect.value, select.value, false);
+}
+
 function renderModelRoles() {
   const body = document.getElementById('modelRolesBody');
   if (!body) return;
   const rows = buildModelRoleRows(harnessSettings?.config?.globalModelRoles, harnessSettings?.config?.modelRoles);
-  body.innerHTML = rows.map(row => `<div class="model-role-row" data-role="${escapeHtml(row.key)}">
+  const known = harnessSettingsModelSelectors();
+  body.innerHTML = rows.map(row => {
+    const { model, level } = parseModelRoleRef(row.value, known);
+    return `<div class="model-role-row" data-role="${escapeHtml(row.key)}">
       <div class="model-role-label">
         <strong>${escapeHtml(row.name)}</strong>
         <code class="model-role-key">${escapeHtml(row.key)}</code>
         <small>${escapeHtml(row.description)}</small>
         ${row.override ? `<small class="model-role-override">project override: ${escapeHtml(row.override)} (.omp/config.yml wins here)</small>` : ''}
       </div>
-      <select class="model-role-select" data-role="${escapeHtml(row.key)}" data-initial="${escapeHtml(row.value)}">${modelRoleOptions(row.value)}</select>
-    </div>`).join('');
+      <select class="model-role-select" data-role="${escapeHtml(row.key)}" data-initial="${escapeHtml(model)}"
+              onchange="modelRoleModelChanged(this)">${modelRoleOptions(model)}</select>
+      <select class="model-role-level" data-role="${escapeHtml(row.key)}" data-initial="${escapeHtml(level)}"
+              title="Thinking level for this role">${modelRoleLevelOptions(level, model, true)}</select>
+    </div>`;
+  }).join('');
 }
 
 /**
@@ -9591,9 +9625,16 @@ function renderHarnessAgents(error) {
 /** Only the rows the user moved, in the PUT shapes the two endpoints take. */
 function collectHarnessSettingsPatch() {
   const roles = {};
+  const levelSelects = new Map();
+  for (const select of document.querySelectorAll('#modelRolesBody .model-role-level')) {
+    levelSelects.set(select.dataset.role, select);
+  }
   for (const select of document.querySelectorAll('#modelRolesBody .model-role-select')) {
-    if (select.value === select.dataset.initial) continue;
-    roles[select.dataset.role] = select.value || null;
+    const levelSelect = levelSelects.get(select.dataset.role);
+    const level = levelSelect?.value || '';
+    if (select.value === select.dataset.initial && level === (levelSelect?.dataset.initial || '')) continue;
+    // Inherit stores as the bare model ref; an unset model drops the role.
+    roles[select.dataset.role] = select.value ? composeModelRoleRef(select.value, level) : null;
   }
   const agents = {};
   const field = (name, key, value) => {

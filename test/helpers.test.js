@@ -1311,6 +1311,46 @@ test('formatModelRoleSummary orders canonically and truncates gracefully', () =>
     'custom keys sort after the canonical ones');
 });
 
+test('parseModelRoleRef splits the ":level" suffix like OMP resolves it', () => {
+  const known = ['zai/glm-5.2', 'deepseek/deepseek-v3.2:max'];
+  assert.deepEqual(H.parseModelRoleRef('openai-codex/gpt-5.6-sol:xhigh', known),
+    { model: 'openai-codex/gpt-5.6-sol', level: 'xhigh' });
+  assert.deepEqual(H.parseModelRoleRef('zai/glm-5.2', known), { model: 'zai/glm-5.2', level: '' });
+  assert.deepEqual(H.parseModelRoleRef('', known), { model: '', level: '' });
+  assert.deepEqual(H.parseModelRoleRef(null, known), { model: '', level: '' });
+  // An explicit ":inherit" pin normalizes to inherit, and the level suffix is
+  // case-insensitive.
+  assert.deepEqual(H.parseModelRoleRef('kimi-code/k3:inherit', known), { model: 'kimi-code/k3', level: '' });
+  assert.deepEqual(H.parseModelRoleRef('zai/glm-5.2:HIGH', known), { model: 'zai/glm-5.2', level: 'high' });
+  // Exact catalog matches win over suffix parsing: a model id that itself
+  // ends in ":max" is not a level pin.
+  assert.deepEqual(H.parseModelRoleRef('deepseek/deepseek-v3.2:max', known),
+    { model: 'deepseek/deepseek-v3.2:max', level: '' });
+  // …but it is one when the catalog doesn't list the full string.
+  assert.deepEqual(H.parseModelRoleRef('deepseek/deepseek-v3.2:max', []),
+    { model: 'deepseek/deepseek-v3.2', level: 'max' });
+  // An unrecognized suffix stays part of the model ref (aliases, out-of-band
+  // providers): the harness resolves refs this catalog can't.
+  assert.deepEqual(H.parseModelRoleRef('zai/glm-5.2:bogus', known), { model: 'zai/glm-5.2:bogus', level: '' });
+});
+
+test('composeModelRoleRef stores inherit as the bare ref', () => {
+  assert.equal(H.composeModelRoleRef('zai/glm-5.2', 'high'), 'zai/glm-5.2:high');
+  assert.equal(H.composeModelRoleRef('zai/glm-5.2', ''), 'zai/glm-5.2');
+  assert.equal(H.composeModelRoleRef('zai/glm-5.2', 'inherit'), 'zai/glm-5.2');
+  assert.equal(H.composeModelRoleRef('', 'high'), '');
+});
+
+test('modelRoleLevels follows OMP\'s roles order off/auto then the model ladder', () => {
+  assert.deepEqual(H.modelRoleLevels({ thinking: ['high', 'max'] }), ['off', 'auto', 'high', 'max']);
+  assert.deepEqual(H.modelRoleLevels({ thinking: null }),
+    ['off', 'auto', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+  assert.deepEqual(H.modelRoleLevels(null),
+    ['off', 'auto', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+  // A catalog entry listing off can't produce duplicates.
+  assert.deepEqual(H.modelRoleLevels({ thinking: ['off', 'low'] }), ['off', 'auto', 'low']);
+});
+
 // =========================================================================
 // Multi-host (TASKS/multi-host.md phase 2) — the client is the aggregator,
 // so the merges it performs are pure functions with tests, not view code.

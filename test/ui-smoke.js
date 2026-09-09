@@ -1382,8 +1382,10 @@ let remoteHost = null; // second pi-dish (multi-host section)
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(ompModels) });
     });
     // Global roles are what the editor writes; the effective record carries a
-    // project override (vision) that must stay out of the global record.
-    let ompGlobalRoles = { default: 'zai/glm-4.7-flash', smol: 'zai/glm-5.2' };
+    // project override (vision) that must stay out of the global record. The
+    // advisor pins a thinking level as OMP's ":level" ref suffix — off the
+    // model's catalog ladder, to exercise the "(current)" escape hatch.
+    let ompGlobalRoles = { default: 'zai/glm-4.7-flash', smol: 'zai/glm-5.2', advisor: 'zai/glm-4.7-flash:max' };
     await desktop.route(/\/api\/harnesses\/omp\/config(?:\?|$)/, async (route) => {
       await route.fulfill({
         status: 200,
@@ -1496,6 +1498,13 @@ let remoteHost = null; // second pi-dish (multi-host section)
       'a differing effective value is flagged as a project override');
     check((await desktop.locator('.model-role-row[data-role="plan"] option[value="fixture-missing/offline-model"]').textContent())
       === 'fixture-missing/offline-model', 'role models use the authoritative OMP catalog without credential guesses');
+    check(await desktop.inputValue('.model-role-select[data-role="advisor"]') === 'zai/glm-4.7-flash',
+      'a level-pinned role parses its model out of the stored ref');
+    check(await desktop.inputValue('.model-role-level[data-role="advisor"]') === 'max' &&
+      (await desktop.locator('.model-role-level[data-role="advisor"] option[value="max"]').textContent()) === '(current) max',
+      'an off-ladder stored level stays selectable as (current)');
+    check(await desktop.inputValue('.model-role-level[data-role="smol"]') === '',
+      'a bare role ref initializes the level select to inherit');
     await desktop.keyboard.press('Escape');
     check(await desktop.evaluate(() => document.getElementById('harnessSettingsModal').style.display === 'none') &&
       await desktop.evaluate(() => document.querySelector('.main').classList.contains('new-session-open')),
@@ -1505,6 +1514,12 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.click('#nsEditRoles');
     await desktop.waitForSelector('#modelRolesBody .model-role-row');
     await desktop.selectOption('.model-role-select[data-role="plan"]', 'zai/glm-5.2');
+    const planLevels = await desktop.locator('.model-role-level[data-role="plan"] option')
+      .evaluateAll(options => options.map(option => option.value));
+    check(JSON.stringify(planLevels) === JSON.stringify(['', 'off', 'auto', 'high', 'max']),
+      `switching the role's model rebuilds the level ladder (got ${JSON.stringify(planLevels)})`);
+    await desktop.selectOption('.model-role-level[data-role="plan"]', 'max');
+    await desktop.selectOption('.model-role-level[data-role="advisor"]', '');
     await desktop.selectOption('.model-role-select[data-role="smol"]', '');
     await desktop.click('#hsTabAgents');
     await desktop.uncheck('.hs-agent-enabled[data-agent="reviewer"]');
@@ -1513,8 +1528,10 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.click('#modelRolesSave');
     await desktop.waitForFunction(() =>
       document.getElementById('harnessSettingsModal').style.display === 'none');
-    check(JSON.stringify(modelRolesPatch?.roles) === JSON.stringify({ smol: null, plan: 'zai/glm-5.2' }),
-      `saving PUTs only the changed roles (got ${JSON.stringify(modelRolesPatch?.roles)})`);
+    check(JSON.stringify(modelRolesPatch?.roles) === JSON.stringify({
+      smol: null, plan: 'zai/glm-5.2:max', advisor: 'zai/glm-4.7-flash',
+    }), `saving PUTs only the changed roles, composing model:level and storing inherit bare ` +
+      `(got ${JSON.stringify(modelRolesPatch?.roles)})`);
     check(JSON.stringify(agentsPatch?.agents) === JSON.stringify({
       reviewer: { disabled: true }, scout: { model: null, prewalk: false },
     }), `saving PUTs only the changed agent settings (got ${JSON.stringify(agentsPatch?.agents)})`);

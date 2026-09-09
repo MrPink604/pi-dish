@@ -686,9 +686,16 @@ Escape closes the modal only.
 **Model roles** (`GET /api/harnesses/:id/config`, `PUT …/model-roles`): OMP
 assigns a model per *role* (`default`, `smol`, `vision`, … — canonical set and
 user-facing copy in `OMP_MODEL_ROLES`, helpers.js; the record may also hold
-arbitrary custom keys, preserve them). The "Oh My Pi defaults" readout in the
-takeover summarizes them (`formatModelRoleSummary`); rows come from the pure
-`buildModelRoleRows(global, effective)`.
+arbitrary custom keys, preserve them). A role value may pin a thinking level
+as OMP's `:level` ref suffix (`openai-codex/gpt-5.6-sol:xhigh`); a bare ref
+inherits the default level (OMP's `Inherit`, also accepted as an explicit
+`:inherit` spelling). The editor splits and re-composes that suffix client-side
+(`parseModelRoleRef`/`composeModelRoleRef`/`modelRoleLevels` in helpers.js —
+exact catalog matches win over suffix parsing, since a model id can itself end
+in `:max`), offering off/auto plus the model's catalog ladder; the server
+stores refs verbatim and needed no change. The "Oh My Pi defaults" readout in
+the takeover summarizes them (`formatModelRoleSummary`); rows come from the
+pure `buildModelRoleRows(global, effective)`.
 
 **Task agents** (`GET`/`PUT /api/harnesses/:id/agents`): the per-agent settings
 are one array plus three records — `task.disabledAgents`,

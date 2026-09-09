@@ -1876,6 +1876,51 @@ function thinkingLevelsFor(harnessId, model) {
   return [...new Set(['off', ...supported, 'auto'])];
 }
 
+// The levels a model-role value may pin as its ":level" suffix (OMP's
+// /models roles editor). A bare ref means the role inherits the default
+// thinking level; OMP also accepts an explicit ":inherit" spelling.
+const OMP_ROLE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'auto'];
+
+/**
+ * Split a stored model-role value into its model ref and pinned thinking
+ * level ('' = inherit). Mirrors OMP's resolution order: an exact catalog
+ * match wins over suffix parsing, so a model id that itself ends in ":max"
+ * is not mistaken for a level pin. An unrecognized suffix stays part of the
+ * model — the harness resolves refs this catalog can't (aliases, providers
+ * added out of band).
+ */
+function parseModelRoleRef(value, knownSelectors) {
+  const ref = typeof value === 'string' ? value.trim() : '';
+  if (!ref) return { model: '', level: '' };
+  if (Array.isArray(knownSelectors) && knownSelectors.includes(ref)) return { model: ref, level: '' };
+  const idx = ref.lastIndexOf(':');
+  if (idx > 0) {
+    const suffix = ref.slice(idx + 1).toLowerCase();
+    if (suffix === 'inherit') return { model: ref.slice(0, idx), level: '' };
+    if (OMP_ROLE_THINKING_LEVELS.includes(suffix)) return { model: ref.slice(0, idx), level: suffix };
+  }
+  return { model: ref, level: '' };
+}
+
+/** Inverse of parseModelRoleRef: inherit stores as the bare model ref. */
+function composeModelRoleRef(model, level) {
+  const ref = typeof model === 'string' ? model.trim() : '';
+  if (!ref) return '';
+  return level && level !== 'inherit' ? `${ref}:${level}` : ref;
+}
+
+/**
+ * The levels a role row may pin, in the order OMP's /models roles editor
+ * offers them: off, auto, then the model's supported ladder (the full OMP
+ * vocabulary when the catalog doesn't say). Inherit is the empty option the
+ * select renders separately.
+ */
+function modelRoleLevels(model) {
+  const supported = Array.isArray(model?.thinking) && model.thinking.length
+    ? model.thinking : OMP_THINKING_LEVEL_NAMES.slice(0, -1);
+  return [...new Set(['off', 'auto', ...supported])];
+}
+
 // Glob → RegExp: * and ? don't cross "/" (minimatch semantics), [...] passes through.
 // Returns null for a malformed glob (e.g. an unbalanced '[') rather than
 // throwing — a hand-edited settings pattern must not take down /api/models.
@@ -2667,5 +2712,6 @@ if (typeof module !== 'undefined' && module.exports) {
     formatLimitReset, mergeUsageLimits, usageLimitsHtml,
     tmuxPrefixSeq, filenameFromContentDisposition,
     OMP_MODEL_ROLES, buildModelRoleRows, formatModelRoleSummary,
+    OMP_ROLE_THINKING_LEVELS, parseModelRoleRef, composeModelRoleRef, modelRoleLevels,
   };
 }

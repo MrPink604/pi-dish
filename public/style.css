@@ -5006,11 +5006,23 @@ body.standalone-file-page {
   font-size: 12px;
 }
 .model-role-select:focus { outline: none; border-color: var(--accent); }
+.model-role-level {
+  flex: 0 1 150px;
+  max-width: 100%;
+  padding: 6px;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 12px;
+}
+.model-role-level:focus { outline: none; border-color: var(--accent); }
 .model-roles-error { color: var(--error); font-size: 11px; }
 
 @media (max-width: 600px) {
   .model-role-row { gap: 6px; }
-  .model-role-select { flex: 1 1 100%; }
+  .model-role-select, .model-role-level { flex: 1 1 100%; }
 }
 
 /* Harness settings modal: agents hub + model roles behind one Save. */
