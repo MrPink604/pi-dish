@@ -567,6 +567,33 @@ test('routine: is a field term over the session\'s routine stamp', () => {
     'routine: never reaches content search');
 });
 
+test('is:automation tests routine provenance; queryAsksForAutomation is positive-only', () => {
+  const q = (str, s) => H.evaluateSessionQuery(H.parseSessionQuery(str), s);
+  const stamped = { name: 'x', cwd: '/a', model: 'm', id: 's1', routine: 'nightly-review', routineId: 'r1' };
+  const stampedLive = { ...stamped, id: 's2', isActive: true };
+  const plain = { name: 'x', cwd: '/a', model: 'm', id: 's3' };
+  assert.equal(H.isAutomationSession(stamped), true);
+  assert.equal(H.isAutomationSession({ routineId: 'r1' }), true, 'the id alone stamps it too');
+  assert.equal(H.isAutomationSession(plain), false);
+  assert.equal(H.isAutomationSession(null), false);
+  assert.equal(q('is:automation', stamped), true);
+  assert.equal(q('is:automation', stampedLive), true, 'liveness and automation are independent tests');
+  assert.equal(q('is:automation', plain), false);
+  assert.equal(q('-is:automation', plain), true);
+  assert.equal(q('-is:automation', stamped), false);
+  assert.equal(q('is:automania', stamped), false, 'a typo still matches nothing');
+
+  // The default-hiding escape hatch: only affirmative terms lift it.
+  const asks = (str) => H.queryAsksForAutomation(H.parseSessionQuery(str));
+  assert.equal(asks('is:automation'), true);
+  assert.equal(asks('error routine:nightly'), true);
+  assert.equal(asks('-routine:nightly'), false, 'negation narrows, it never asks');
+  assert.equal(asks('-is:automation'), false);
+  assert.equal(asks('nightly'), false, 'a plain term is not an ask');
+  assert.equal(asks(''), false);
+  assert.equal(H.queryAsksForAutomation(null), false);
+});
+
 test('stripQueryField removes a field\'s tokens and leaves the rest tokenized as parsed', () => {
   const strip = (q) => H.stripQueryField(q, 'host');
   assert.equal(strip('host:beelink login'), 'login');

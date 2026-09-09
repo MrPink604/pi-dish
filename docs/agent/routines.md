@@ -132,11 +132,15 @@ query grammar reaches them:
 routine:nightly-review          # sessions this routine produced
 routine:nightly-review is:active
 -routine:nightly-review         # everything else
+is:automation                   # every routine's sessions, any routine
 ```
 
 That works in `sessions search`, the sidebar, advanced search, and saved
 scopes. Plain terms deliberately do *not* match a routine name — searching
-`nightly-review` finds transcripts that mention it, not runs of it.
+`nightly-review` finds transcripts that mention it, not runs of it. In the
+web UI, closed routine runs are hidden from the All tab and from searches
+unless the query (or an active scope) carries one of the affirmative terms
+above — the CLI and API lists stay inclusive, so `list` shows them either way.
 
 Transcript, cost, duration and model usage all come from the ordinary session
 views: a routine is a session template and an invocation is a session, so

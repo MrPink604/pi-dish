@@ -525,6 +525,7 @@ function partitionPinned(list, pinnedIds) {
 //                          whose *content* merely mentions the word survives
 //   name:x cwd:x model:x id:x   field-scoped terms
 //   is:active               live sessions only (-is:active for historical)
+//   is:automation           routine-invoked sessions (see isAutomationSession)
 //   since:7d since:2026-07-01 before:...   lastActivity bounds (h/d/w or ISO)
 //
 // Unknown prefixes stay literal text ("subagent: fix" searches for the colon
@@ -665,6 +666,25 @@ function positiveQueryTokens(parsed) {
   return parsed.terms.filter(t => !t.neg && !t.field).map(t => t.value);
 }
 
+/** A session launched by a routine invocation — "automation". The stamp is
+ * *presentation-only* provenance (annotateSessionRoutines in server.js), so
+ * this answers listing questions ("is this a cron run?") and never control
+ * ones. */
+function isAutomationSession(session) {
+  return !!(session && (session.routine || session.routineId));
+}
+
+/** Does a parsed query *affirmatively* ask for automation sessions — a
+ * positive `is:automation` test or a positive `routine:` term? Negations and
+ * plain terms never ask: `-routine:x` only narrows within whatever the caller
+ * is already showing. This is the escape hatch for the UI default that hides
+ * inactive routine runs (every cron tick is a session; unmanaged they bury
+ * the human list), so it must stay a positive-only signal. */
+function queryAsksForAutomation(parsed) {
+  return (parsed?.terms || []).some(term =>
+    !term.neg && (term.field === 'routine' || (term.field === 'is' && term.value === 'automation')));
+}
+
 /**
  * Evaluate a parsed query against a session. `contentText` (lowercased
  * message text) widens *positive plain* terms only: negations stay
@@ -686,9 +706,11 @@ function evaluateSessionQuery(parsed, session, contentText) {
       // nothing there — which is exactly why clients strip these first.
       hit = String(session.hostLabel || session.host || '').toLowerCase().includes(term.value);
     } else if (term.field === 'is') {
-      // Not a substring field: is:active tests liveness (anything else
-      // simply never matches, so a typo can't silently mean "everything").
-      hit = term.value === 'active' && !!session.isActive;
+      // Not a substring field: is:active tests liveness, is:automation
+      // routine provenance (anything else simply never matches, so a typo
+      // can't silently mean "everything").
+      hit = (term.value === 'active' && !!session.isActive)
+        || (term.value === 'automation' && isAutomationSession(session));
     } else {
       const hay = term.field ? String(session[term.field] || '').toLowerCase() : meta;
       hit = hay.includes(term.value);
@@ -2624,6 +2646,7 @@ if (typeof module !== 'undefined' && module.exports) {
     partitionPinned, applyLocalFilter, applyHostTerms, fuzzyMatch, fuzzyScore,
     RELATION_KIND_ORDER, sortRelations, isChildRelation, groupRelations,
     parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch, stripQueryField,
+    isAutomationSession, queryAsksForAutomation,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES, thinkingLevelsFor,
     sessionKey, parseSessionKey, sessionRefKey, normalizeHostBase, sanitizeHostCatalog,
     hostDisplayLabel, sessionRef, uniqueSessionPrefix, mergeHostEntries, mergeUsageSummaries, createFanoutRenderQueue,

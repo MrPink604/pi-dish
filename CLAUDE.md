@@ -776,7 +776,10 @@ Client: the Routines main-pane takeover (`.main.routines-open`, fifth
 sidebar-header icon, hidden when no host advertises `routines`) — routine
 list | editor + invoke curl + versions + invocations table, fan-out per
 capable host per the fleet rules. Sessions carrying `routine` wear a `⏱ name`
-chip in the sidebar row. Agent-facing contract: `docs/agent/routines.md`.
+chip in the sidebar row — but only where the sidebar shows them at all: inactive
+automation runs are hidden from the All tab and searches unless affirmatively
+asked for (see the sidebar section). Agent-facing contract:
+`docs/agent/routines.md`.
 
 ## Share links (lib/shares.js, /share/:token)
 
@@ -1408,6 +1411,24 @@ Polls on the Active tab request `?active=1` — the server skips the historical
 session-tree scan and the client keeps its previously fetched `previous` list.
 Cold load does the same; it fetches history only when restoring a saved
 inactive session or when the user opens All.
+
+Routine-invoked sessions are **automation runs**, and every cron tick is one —
+so inactive ones stay out of the All tab and out of typed searches unless the
+query (or an active scope) affirmatively asks: a positive `is:automation`
+grammar term or a positive `routine:name` field term
+(`queryAsksForAutomation`/`isAutomationSession` in helpers.js — negations and
+plain terms never lift the default). A *live* routine session stays visible
+everywhere; it is real work in flight. The hiding is render-time only
+(`renderSessions` narrows `showing` into `visible`): the rows remain in the
+`sessions` state, so selection, `#` refs, cold-load restore, related-chip
+navigation and the search facets keep working, and a quiet "N automation runs
+hidden" note (same style as the scopes note) is the audit trail. `/api/search`
+applies the same rule server-side behind `hideAutomation=1` — sent by the
+advanced-search takeover, honored *before* scoring and the 100-result cap so
+the cap is never spent on rows the client would drop, and reported as
+`hiddenByAutomation` — while API/CLI consumers keep the inclusive default
+(`view=client` contract; `scope=` asking counts as asking).
+
 The Active tab also shows the **live subagents** of those sessions (see the
 nested-discovery section): they arrive as the response's `children`,
 `mergeLiveSubagents` folds them into the kept `previous` list — they are
@@ -1546,7 +1567,10 @@ each content match carrying up to four snippets plus a total occurrence count
 one). Metadata-matched sessions still get snippets when the positive tokens
 occur in their content; only positive plain terms ever trigger the content
 read. `is:active` is a grammar term (liveness test, not a substring; a typo'd
-`is:` value matches nothing). The facet row (date presets, workspace/model
+`is:` value matches nothing); so is `is:automation` (routine provenance — it is
+also the affirmative ask that lifts the takeover's `hideAutomation=1` default,
+as is any positive `routine:` term, in the query or the scope).
+The facet row (date presets, workspace/model
 selects sourced from the sidebar's session lists — not from results, or
 picking one would empty the rest — a host select from the client's host list
 when there is a fleet, and Active-only) is pure UI over the

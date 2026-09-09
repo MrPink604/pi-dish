@@ -235,6 +235,26 @@ test('a routine session is stamped and findable with routine: while it lives', a
 
   await waitForStatus(body.invocation.id, 'completed');
   await post(`/api/sessions/${sessionId}/close`, {});
+
+  // Closed, the run is history — and history is where automation runs pile
+  // up. The browser's search view sends hideAutomation=1; the query or an
+  // active scope asking for them (is:automation / routine:) lifts it, and
+  // the API default stays inclusive for CLI consumers.
+  await waitFor(async () => {
+    const res = await get('/api/search');
+    return res.body.results.some((s) => s.id === sessionId) ? res : null;
+  }, { label: 'the closed routine run to become searchable history' });
+  const hidden = await get('/api/search?hideAutomation=1');
+  assert.ok(!hidden.body.results.some((s) => s.id === sessionId),
+    'hideAutomation drops the closed routine run');
+  assert.ok(hidden.body.hiddenByAutomation >= 1, 'the dropped run is counted');
+  const asked = await get('/api/search?hideAutomation=1&q=is%3Aautomation');
+  assert.ok(asked.body.results.some((s) => s.id === sessionId),
+    'is:automation affirmatively asks for it');
+  const scoped = await get('/api/search?hideAutomation=1&scope=routine%3Astamped-routine');
+  assert.ok(scoped.body.results.some((s) => s.id === sessionId),
+    'a scope naming the routine asks for it too');
+
   await del(`/api/routines/${routine.id}`);
 });
 

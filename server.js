@@ -61,6 +61,7 @@ const {
   isModelEnabled, extractTextContent, THINKING_LEVEL_NAMES,
   sessionMetaText, parseModelId, formatModelRef, buildSnippet, buildSnippets,
   parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch,
+  isAutomationSession, queryAsksForAutomation,
   resolveSessionRefAmong, stableSessionRef,
 } = require('./public/helpers');
 const { expandSessionRefs } = require('./lib/session-refs');
@@ -1934,10 +1935,25 @@ app.get('/api/search', (req, res) => {
   const parsed = parseSessionQuery(query);
   const scopeParsed = parseSessionQuery(scopeQuery);
   const hasScope = scopeParsed.terms.length || scopeParsed.since !== null || scopeParsed.before !== null;
+  // Routine runs are cron noise in a human's results (every invocation is a
+  // session), so the browser asks for inactive ones to be dropped unless the
+  // query — or an active scope, which arrives as its own parsed query —
+  // affirmatively asks for them (`is:automation`, `routine:name`). A param,
+  // not a default flip: API/CLI consumers keep the inclusive corpus, the
+  // same contract `view=client` keeps for /api/sessions. Applied before
+  // scoring and the result cap so the cap is never spent on rows the client
+  // would drop.
+  const hideAutomation = req.query.hideAutomation === '1'
+    && !queryAsksForAutomation(parsed) && !(hasScope && queryAsksForAutomation(scopeParsed));
   const contentTokens = positiveQueryTokens(parsed);
   const results = [];
   let hiddenByScopes = 0;
+  let hiddenByAutomation = 0;
   for (const session of [...active, ...previous]) {
+    if (hideAutomation && !session.isActive && isAutomationSession(session)) {
+      hiddenByAutomation++;
+      continue;
+    }
     let text = null;
     if (!evaluateSessionQuery(parsed, session)) {
       if (!contentTokens.length || !session.sessionFile) continue;
@@ -1963,6 +1979,7 @@ app.get('/api/search', (req, res) => {
     results: results.slice(0, SEARCH_RESULT_CAP),
     total: results.length,
     hiddenByScopes,
+    hiddenByAutomation,
     indexing,
     discoveryTruncated,
     discoverySkipped,

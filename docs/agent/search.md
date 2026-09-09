@@ -24,7 +24,12 @@ One dialect everywhere (CLI, sidebar, advanced search):
 - Field terms (metadata-only): `name:`, `cwd:`, `model:`, `id:`.
 - `since:` / `before:` on last activity: `7d`, `12h`, `2w`, or ISO dates.
 - `is:active` — live sessions only.
+- `is:automation` — sessions a routine produced (`routine:` names which one).
 - Unknown prefixes stay literal text.
+
+The web UI hides *inactive* routine runs from its lists and searches unless
+the query asks for them; the CLI and API see everything, so an agent's search
+never needs the term to find a routine's work.
 
 ## Ranking
 

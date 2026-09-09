@@ -2048,6 +2048,24 @@ function renderSessions() {
   const countEl = document.getElementById('countActive');
   if (countEl) countEl.textContent = (active.length + pending.length) || '';
 
+  // Routine-invoked sessions are automation: every cron tick is one, so the
+  // historical list fills with them. They stay out of the sidebar unless the
+  // typed query or an active scope affirmatively asks (`is:automation`,
+  // `routine:name`); a live one is real work in flight and stays. Hidden
+  // rows remain in `sessions` — selection, refs, restore and the search
+  // facets all keep working; only this render skips them.
+  const sq = scopeQuery();
+  const scopeParsed = sq ? parseSessionQuery(sq) : null;
+  const asksAutomation = queryAsksForAutomation(parseSessionQuery(filterQuery))
+    || (scopeParsed ? queryAsksForAutomation(scopeParsed) : false);
+  let visible = showing, automationHidden = 0;
+  if (!asksAutomation) {
+    visible = showing.filter((session) => {
+      if (session.isActive || !isAutomationSession(session)) return true;
+      automationHidden++;
+      return false;
+    });
+  }
   // Once the lists reflect the typed query, the server's filtering (which
   // includes message content) is authoritative — re-filtering locally would
   // drop content-only matches, since the local pass is metadata-only. Until
@@ -2056,12 +2074,10 @@ function renderSessions() {
   // here on top of what the server-filtered lists came back with (the
   // debounce-window applyLocalFilter path evaluates it inline).
   const queried = (filterQuery && listsQueriedFor === filterQuery)
-    ? applyHostTerms(showing, filterQuery)
-    : applyLocalFilter(showing, filterQuery);
+    ? applyHostTerms(visible, filterQuery)
+    : applyLocalFilter(visible, filterQuery);
   // Active scopes apply client-side on top of whatever the query kept —
   // metadata/date-only by design, so they behave identically on both tabs.
-  const sq = scopeQuery();
-  const scopeParsed = sq ? parseSessionQuery(sq) : null;
   const filtered = scopeParsed ? queried.filter(s => evaluateSessionQuery(scopeParsed, s)) : queried;
   const scopesHidden = queried.length - filtered.length;
 
@@ -2085,7 +2101,7 @@ function renderSessions() {
     // means "no matches", not "no sessions running".
     const msg = sidebarTab === 'active'
       ? (active.length === 0 && !filterQuery ? 'No active sessions<br><span style="font-size:11px">Click "+ New Session" or resume one from All</span>' : 'No matches')
-      : (showing.length === 0 && !filterQuery ? 'No sessions found' : 'No matches');
+      : (visible.length === 0 && !filterQuery ? 'No sessions found' : 'No matches');
     html += `<div class="empty-session"><p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">${msg}</p></div>`;
   } else if (filterQuery) {
     // Search results are one flat relevance-ranked list — grouping (and the
@@ -2126,6 +2142,9 @@ function renderSessions() {
   html += hostOfflineNotesHtml();
   // Sessions a forgotten chip silently removed must stay discoverable — the
   // note is the audit trail for "why isn't my session in the list?".
+  if (automationHidden > 0) {
+    html += `<div class="scope-hidden-note">${automationHidden} automation run${automationHidden === 1 ? '' : 's'} hidden (is:automation shows them)</div>`;
+  }
   if (scopesHidden > 0) {
     html += `<div class="scope-hidden-note">${scopesHidden} hidden by scopes</div>`;
   }
@@ -3913,17 +3932,18 @@ function mergeSearchPayloads(entries, query) {
   }
   const parsed = parseSessionQuery(query);
   const results = [];
-  let total = 0, hiddenByScopes = 0, indexing = false;
+  let total = 0, hiddenByScopes = 0, hiddenByAutomation = 0, indexing = false;
   for (const { host, payload } of entries) {
     for (const session of payload.results || []) results.push(stampHost(session, host));
     total += Number(payload.total) || (payload.results || []).length;
     hiddenByScopes += Number(payload.hiddenByScopes) || 0;
+    hiddenByAutomation += Number(payload.hiddenByAutomation) || 0;
     if (payload.indexing) indexing = true;
   }
   results.sort((a, b) =>
     (b.searchScore ?? scoreSessionMatch(parsed, b)) - (a.searchScore ?? scoreSessionMatch(parsed, a))
     || new Date(b.lastActivity || 0) - new Date(a.lastActivity || 0));
-  return { results, total, hiddenByScopes, indexing };
+  return { results, total, hiddenByScopes, hiddenByAutomation, indexing };
 }
 
 async function runSearchView() {
@@ -3938,6 +3958,11 @@ async function runSearchView() {
   // host terms prune the fan-out instead; the rest is applied to the
   // merged results below.
   const params = new URLSearchParams({ q: stripQueryField(query, 'host') });
+  // The browser's default: inactive routine runs are cron noise — the server
+  // drops them (before its result cap) unless the query or an active scope
+  // affirmatively asks. Sent as a param so API/CLI consumers of /api/search
+  // keep the inclusive corpus.
+  params.set('hideAutomation', '1');
   const wireScope = stripQueryField(scope, 'host');
   if (wireScope) params.set('scope', wireScope);
   // Every host searches its own index and ranks with the same shared
@@ -3958,7 +3983,7 @@ async function runSearchView() {
     const ok = hosts.map((host, i) => (status[i] === 'ok' ? { host, payload: payloads[i] } : null)).filter(Boolean);
     const d = ok.length
       ? mergeSearchPayloads(ok, query)
-      : { results: [], total: 0, hiddenByScopes: 0, indexing: false };
+      : { results: [], total: 0, hiddenByScopes: 0, hiddenByAutomation: 0, indexing: false };
     // The client-only half of the grammar, applied to what came back: the
     // query's remaining host terms (negations, and positives on a host that
     // serves several labels), then any host term in an active scope. Every
@@ -4031,6 +4056,7 @@ function searchFacetState() {
     model: val('model'),
     host: val('host'),
     activeOnly: parsed.terms.some(t => t.field === 'is' && !t.neg && t.value === 'active'),
+    automationOnly: parsed.terms.some(t => t.field === 'is' && !t.neg && t.value === 'automation'),
     since: (searchViewQuery.match(/(?:^|\s)since:(\S+)/i) || [])[1] || '',
   };
 }
@@ -4075,6 +4101,7 @@ function renderSearchFacetsHtml() {
     <select class="search-facet-select" id="searchFacetModel">${modelOptions}</select>
     ${hostSelect}
     <button class="scope-chip${st.activeOnly ? ' active' : ''}" id="searchFacetActive" title="is:active">Active only</button>
+    <button class="scope-chip${st.automationOnly ? ' active' : ''}" id="searchFacetAutomation" title="is:automation">Automation</button>
   </div>`;
 }
 
@@ -4084,6 +4111,7 @@ function renderSearchView(d, query = searchViewQuery) {
   const tokens = positiveQueryTokens(parseSessionQuery(query));
   const shown = d.results || [];
   const scopesHidden = Number(d.hiddenByScopes) || 0;
+  const automationHidden = Number(d.hiddenByAutomation) || 0;
 
   const cards = shown.map(s => {
     let dot = '';
@@ -4111,6 +4139,7 @@ function renderSearchView(d, query = searchViewQuery) {
     <div class="search-count-line">${shown.length === 1 ? '1 session' : `${shown.length} sessions`}${d.total > d.results.length ? ` — showing the ${d.results.length} ${tokens.length ? 'best matches' : 'most recent'}, narrow the query for the rest` : ''}</div>
     ${cards || '<div class="usage-state">No matching sessions.</div>'}
     ${scopesHidden > 0 ? `<div class="scope-hidden-note">${scopesHidden} hidden by scopes</div>` : ''}
+    ${automationHidden > 0 ? `<div class="scope-hidden-note">${automationHidden} automation run${automationHidden === 1 ? '' : 's'} hidden (is:automation shows them)</div>` : ''}
   `;
   body.querySelectorAll('[data-since]').forEach(b =>
     b.addEventListener('click', () => setSearchToken('since', b.dataset.since || null)));
@@ -4122,6 +4151,8 @@ function renderSearchView(d, query = searchViewQuery) {
     setSearchToken('host', e.target.value || null));
   body.querySelector('#searchFacetActive').addEventListener('click', () =>
     setSearchToken('is', searchFacetState().activeOnly ? null : 'active'));
+  body.querySelector('#searchFacetAutomation').addEventListener('click', () =>
+    setSearchToken('is', searchFacetState().automationOnly ? null : 'automation'));
 }
 
 /**
