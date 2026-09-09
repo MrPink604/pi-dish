@@ -250,6 +250,7 @@ if (process.env.PI_FIXTURE_NOREGISTER) {
         const line = buf.slice(0, i); buf = buf.slice(i + 1);
         let msg;
         try { msg = JSON.parse(line); } catch { continue; }
+        let response;
         if (msg.command === 'get_commands') {
           response = { type: 'response', id: msg.id, success: true, data: { commands: [] } };
         } else if (msg.command === 'get_available_models') {

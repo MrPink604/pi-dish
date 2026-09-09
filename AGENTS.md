@@ -25,9 +25,11 @@ uses Express and CommonJS (`server.js`, `lib/`); the browser uses plain scripts
 ## Verification
 
 ```sh
+npm run check                         # correctness lint + incremental types
 npm test                              # unit, API, bridge and lifecycle suites
 npm test -- test/remote-hosts.test.js   # example focused suite
 npm run test:browser                   # isolated browser scenarios
+npm run test:ui:scenarios              # each extracted feature with fresh fixtures
 npm run test:ui                        # desktop/mobile browser smoke
 npm run build:vendor                   # only after changing vendor inputs
 ```
@@ -35,7 +37,9 @@ npm run build:vendor                   # only after changing vendor inputs
 Run the relevant checks while developing and the full backend suite before
 committing behavior changes. UI behavior changes also need the browser smoke
 suite. Add focused regressions for defects; defer broad coverage work to its
-own change. Documentation-only edits need link/content checks.
+own change. Run `npm run check` before committing code changes.
+Documentation-only edits need link/content checks. The supported matrix and
+coverage map live in [docs/testing.md](docs/testing.md).
 
 Install the pinned browser tooling with `npm ci` and
 `npm run test:browser:install`. `CHROME_BIN` optionally overrides the managed

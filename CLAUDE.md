@@ -1309,7 +1309,10 @@ or manual CDP below.
 
 UI changes are validated with the repository-pinned Playwright and Chromium.
 Run `npm ci` and `npm run test:browser:install` once, then `npm run test:browser`
-for isolated scenarios or `npm run test:ui` for the full integration smoke.
+for isolated regressions, `npm run test:ui:scenarios` for extracted features
+with fresh fixtures, or `npm run test:ui` for the full integration smoke.
+Use `npm run test:ui -- --scenario mobile` to run one extracted feature.
+The CI/tooling matrix and refactoring coverage map are in [docs/testing.md](docs/testing.md).
 `CHROME_BIN` optionally points at a local Chrome binary. Focused tests live in
 `test/browser/` and retain traces/screenshots on failure; see README.
 

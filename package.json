@@ -19,7 +19,11 @@
     "test:ui": "node test/ui-smoke.js",
     "shots": "node scripts/readme-shots.js",
     "test:browser": "playwright test",
-    "test:browser:install": "playwright install chromium"
+    "test:browser:install": "playwright install chromium",
+    "test:ui:scenarios": "node scripts/run-ui-scenarios.js",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "check": "npm run lint && npm run typecheck"
   },
   "build": {
     "appId": "com.pidish.app",
@@ -69,7 +73,11 @@
     "@xterm/xterm": "^6.0.0",
     "electron": "^33.0.0",
     "electron-builder": "^25.1.8",
-    "mermaid": "^11.17.2"
+    "eslint": "10.10.0",
+    "espree": "11.2.0",
+    "globals": "17.6.0",
+    "mermaid": "^11.17.2",
+    "typescript": "7.0.2"
   },
   "allowScripts": {
     "node-pty@1.1.0": true

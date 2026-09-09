@@ -631,8 +631,10 @@ for what crosses the bridge and what stays TUI-only.
 ## Development
 
 ```bash
+npm run check         # correctness lint + incremental JavaScript type check
 npm test              # API + unit tests (node:test)
 npm run test:browser  # isolated browser scenarios (Playwright)
+npm run test:ui:scenarios # feature scenarios, each with fresh fixtures
 npm run test:ui       # full desktop/mobile integration smoke
 npm run build:vendor  # regenerate public/vendor/ after bumping marked/highlight.js
 npm run electron:dev  # desktop shell
@@ -656,6 +658,9 @@ and fixture sessions. Focused scenarios start fresh servers and a fresh browser
 context per test; failures retain traces and screenshots in `test-results/`.
 Inspect a trace with `npx playwright show-trace <trace.zip>`. The full smoke
 continues to cover streaming, terminal, routines, and mobile interactions.
+List extracted features with `npm run test:ui -- --list`; run one with
+`npm run test:ui -- --scenario drafts`. See [Testing](docs/testing.md) for
+the CI matrix, coverage map, and refactoring checks.
 
 Listener regressions run with `npm test -- test/listener-lifecycle.test.js`.
 They cover startup, port collisions, loopback aliases, advertised URLs, bind
@@ -673,7 +678,7 @@ paid request are needed. One reproducible isolated install is:
 PREFIX="$HOME/.local/share/pi-dish-harnesses"
 npm install --prefix "$PREFIX/bun" --no-audit --no-fund bun@1.3.14
 BUN="$PREFIX/bun/node_modules/.bin/bun"
-BUN_INSTALL="$PREFIX/omp" "$BUN" install -g @oh-my-pi/pi-coding-agent@17.2.11
+BUN_INSTALL="$PREFIX/omp" "$BUN" install -g @oh-my-pi/pi-coding-agent@18.1.15
 curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | \
   env PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL=0 \
       PRIME_AGENT_INSTALLER_PLAIN=1 \
