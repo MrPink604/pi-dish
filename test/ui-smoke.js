@@ -2155,11 +2155,11 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(await desktop.locator('.ext-ui-widget-body').textContent() === 'proc one\nproc two',
       'live widget rendered for session 1');
     check(await desktop.locator('.ext-ui-status-badge').textContent() === '2 running', 'status badge rendered');
-    // Widget clear→set race: a clear hides the card and schedules its removal
-    // at +200ms; a re-set inside that window must reuse the same element and
-    // cancel the removal. Todo-style widgets clear and re-set at turn/tool
-    // boundaries, which otherwise stacks a second card while the stale timer
-    // destroys the fresh one — constant visible flashing.
+    // Widget clear→set race: a clear holds the card visible through a grace
+    // window before fading it out; a re-set inside that window must reuse
+    // the same element and cancel the removal. Todo-style widgets clear and
+    // re-set at turn/tool boundaries — hiding on the clear half collapses
+    // and reopens the frame on every rewrite while a session runs.
     emit('extension_ui_request', { method: 'setWidget', widgetKey: 'todo', widgetLines: ['task one'] });
     await desktop.waitForFunction(() =>
       [...document.querySelectorAll('.ext-ui-widget')].some((el) => el.dataset.widgetKey === 'todo'),
@@ -2167,14 +2167,33 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.evaluate(() => { document.querySelector('[data-widget-key="todo"]').dataset.marker = 'kept'; });
     emit('extension_ui_request', { method: 'setWidget', widgetKey: 'todo', widgetLines: [] });
     await desktop.waitForTimeout(50);
+    // Inside the grace window the clear must not have hidden the card yet —
+    // that instant hide is what read as flickering during active turns.
+    check(await desktop.evaluate(() => {
+      const el = document.querySelector('[data-widget-key="todo"]');
+      return !!el && !el.classList.contains('hidden');
+    }), 'cleared widget stays visible through the removal grace');
     emit('extension_ui_request', { method: 'setWidget', widgetKey: 'todo', widgetLines: ['task one', 'task two'] });
-    await desktop.waitForTimeout(300); // past the removal window
+    await desktop.waitForTimeout(800); // past grace + fade
     check(await desktop.evaluate(() => {
       const els = [...document.querySelectorAll('[data-widget-key="todo"]')];
       return els.length === 1 && els[0].dataset.marker === 'kept'
         && !els[0].classList.contains('hidden')
         && els[0].querySelector('.ext-ui-widget-body').textContent === 'task one\ntask two';
-    }), 'widget re-set inside the fade window reuses the card, cancels removal');
+    }), 'widget re-set inside the grace window reuses the card, cancels removal');
+    // A re-set during the fade phase (grace already elapsed) un-hides the
+    // same card instead of letting the stale removal land on it.
+    emit('extension_ui_request', { method: 'setWidget', widgetKey: 'todo', widgetLines: [] });
+    await desktop.waitForTimeout(600); // past the grace, mid-fade
+    check(await desktop.evaluate(() =>
+      document.querySelector('[data-widget-key="todo"]')?.classList.contains('hidden') === true),
+      'widget fades once the grace elapses without a re-set');
+    emit('extension_ui_request', { method: 'setWidget', widgetKey: 'todo', widgetLines: ['task one', 'task two'] });
+    await desktop.waitForTimeout(50);
+    check(await desktop.evaluate(() => {
+      const els = [...document.querySelectorAll('[data-widget-key="todo"]')];
+      return els.length === 1 && els[0].dataset.marker === 'kept' && !els[0].classList.contains('hidden');
+    }), 'widget re-set mid-fade un-hides and reuses the card');
     // And the removal still completes when nothing re-sets the widget.
     emit('extension_ui_request', { method: 'setWidget', widgetKey: 'todo', widgetLines: [] });
     await desktop.waitForFunction(() => !document.querySelector('[data-widget-key="todo"]'), { timeout: 3000 });

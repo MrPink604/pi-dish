@@ -10882,6 +10882,12 @@ function showExtToast(message, type) {
   }
 }
 
+// A cleared widget fades out only after a visible hold: the grace absorbs
+// clear/set churn from hosts re-projecting mid-turn, the fade is the
+// collapse animation once the clear proves genuine.
+const EXT_WIDGET_REMOVE_GRACE_MS = 500;
+const EXT_WIDGET_REMOVE_FADE_MS = 200;
+
 function showExtWidget(key, lines, placement) {
   // Pi's default placement is above the editor. Keep widgets near the prompt
   // instead of at the top of the scrollback where they are easy to miss.
@@ -10894,17 +10900,23 @@ function showExtWidget(key, lines, placement) {
   const existing = extUIState.widgets.get(key);
   if (!lines || !lines.length) {
     if (!container) { extUIState.widgets.delete(key); return; }
-    container.classList.add('hidden');
-    // Keep the map entry until the fade-out removal fires, and make that
-    // removal cancellable: a re-set inside the window reuses this very
-    // element, instead of stacking a second card while the stale timer
-    // still destroys it (the clear/set churn a todo-style widget produces
-    // at turn boundaries read as constant flashing).
+    // Keep the map entry and hold the card visible through a grace window
+    // before the fade starts. Hosts re-project widgets while a turn runs,
+    // and hiding on the clear half of a clear/set pair collapses and
+    // reopens the frame on every rewrite — the flicker a todo-style widget
+    // shows during active sessions. A re-set inside either window cancels
+    // the pending phase and reuses this very element instead of stacking a
+    // second card while a stale timer destroys the fresh one.
     clearTimeout(existing.removeTimer);
     existing.removeTimer = setTimeout(() => {
-      container.remove();
-      if (extUIState.widgets.get(key) === existing) extUIState.widgets.delete(key);
-    }, 200);
+      if (extUIState.widgets.get(key) !== existing) return;
+      container.classList.add('hidden');
+      existing.removeTimer = setTimeout(() => {
+        existing.removeTimer = null;
+        container.remove();
+        if (extUIState.widgets.get(key) === existing) extUIState.widgets.delete(key);
+      }, EXT_WIDGET_REMOVE_FADE_MS);
+    }, EXT_WIDGET_REMOVE_GRACE_MS);
     return;
   }
   if (existing?.removeTimer) { clearTimeout(existing.removeTimer); existing.removeTimer = null; }
