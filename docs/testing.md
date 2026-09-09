@@ -48,7 +48,8 @@ On a fresh supported Linux image, `npx playwright install --with-deps chromium`
 also installs browser OS dependencies. `CHROME_BIN` overrides the managed browser
 for local debugging. The browser workflow retains focused-test traces and
 screenshots from `test-results/` for seven days on failure; all suite output is
-available in the job log.
+available in the job log. Failure excerpts are also published as check
+annotations, so they can be inspected without downloading authenticated logs.
 
 `npm run lint` applies correctness rules to repository JavaScript, including
 undefined names, duplicate arguments/keys/cases, unreachable code, unsafe
@@ -71,7 +72,8 @@ the rest of the application is not yet type checked.
 | Composer drafts, attachments, delayed preparation and send | `test/browser/composer-ownership.spec.js` |
 | Queue edit/cancel/send and abort ownership | `test/browser/queue-ownership.spec.js` |
 | Reused extension dialog ids, responses and replay | `test/browser/extension-dialogs.spec.js` |
-| Listener startup, bind retry, alias errors, advertised URLs, signal release | `test/listener-lifecycle.test.js` |
+| New-session harness discovery order and host ownership | `test/browser/harness-discovery.spec.js` |
+| Listener startup, bind retry, delayed/failed aliases, advertised URLs, signal release | `test/listener-lifecycle.test.js` |
 | Bridge, lifecycle, capabilities and API behavior | `npm test` (`test/*.test.js`) |
 | Models, drafts, sidebar, usage, skills, routines, bounce, mobile | `test/ui-scenarios/` |
 | Streaming, retained transcripts, terminal and desktop/mobile integration | `test/ui-smoke.js` |

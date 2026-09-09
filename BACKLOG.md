@@ -15,23 +15,35 @@ its descriptions of missing features are historical.
 These changes establish the baseline before broader testing or refactoring work.
 Each behavior fix includes a focused regression check.
 
-## 2. Testing and coverage (in progress)
+## 2. Testing and coverage (completed 2026-09-09)
 
-- Completed: pinned local Playwright, managed Chromium setup, and independent
-  browser scenarios for same-id transcript selection and delayed metadata writes.
-- Split the long browser smoke into independently runnable feature scenarios
-  while retaining desktop/mobile end-to-end coverage.
-- Completed: independent family regressions and fixes for cross-host pinning,
-  expansion, ancestor lookup, and drag ordering.
-- Extend cross-host collision coverage to composer drafts/attachments, queued
-  prompts, and extension dialogs. Audit their remaining bare-id state at the
-  same time; the maintenance passes do not yet migrate all UI state.
-- Completed: listener startup, bind retry, alias failure, advertised URLs,
-  and SIGINT/SIGTERM port release covered together in an isolated suite.
-- Completed: independently runnable real OMP/Prime canaries; OMP 18.1.15
-  verified against a local fake provider, including live-tree reads and resume.
-- Establish automated checks and an explicit supported Node/tooling matrix.
-  Introduce lint/type checking incrementally, with formatting churn kept separate.
+- Pinned local Playwright and managed Chromium; 26 independent browser
+  regressions cover same-id host collisions and delayed metadata writes.
+- Extracted eight independently runnable smoke features while retaining the
+  complete desktop/mobile integration flow. Each standalone run owns fresh
+  fixtures; shared prompt history and selection-order dependencies were removed.
+- Added family regressions and fixes for cross-host pinning, expansion,
+  ancestor lookup, and drag ordering.
+- Scoped composer drafts/attachments, queued prompts, pending sends/aborts,
+  and extension dialogs to their owning hosts, with focused regressions for
+  collisions and asynchronous completion after switching sessions. Harness
+  discovery also rejects stale responses and failures after newer requests
+  or host switches.
+- Covered listener startup, bind retry, alias failure, advertised URLs,
+  and SIGINT/SIGTERM port release together in an isolated suite. CI exposed
+  a race while binding the loopback alias; automatically selected callback
+  URLs now use a listening address.
+- Made real OMP/Prime canaries independently runnable; verified OMP 18.1.15
+  against a local fake provider, including live-tree reads and resume.
+  Prime remains an opt-in check requiring its own installation.
+- Added CI for the Node 22.19 minimum and current 22/24/26 patches, plus browser
+  regressions, independent features, and desktop/mobile smoke on Node 24.
+- Introduced correctness lint and strict incremental JavaScript type checking
+  for the cron boundary, without formatting churn or a framework migration.
+
+See [docs/testing.md](docs/testing.md) for the tooling matrix, coverage map,
+commands, and checks to preserve during refactoring. Structural work can now
+proceed in small changes; this baseline does not claim exhaustive coverage.
 
 ## 3. Structural work (after the test baseline)
 
