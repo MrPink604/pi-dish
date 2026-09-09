@@ -8,7 +8,7 @@ const { sanitizeTestEnv } = require('../test-env');
 const ROOT = '2026-09-09T00-00-00-shared-root';
 const CHILD = '2026-09-09T00-01-00-shared-child';
 
-async function startHost(label, logs, hosts, origin) {
+async function startHost(label, logs, hosts, origin, liveSessions) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-browser-'));
   const host = { home, label, token: `browser-fixture-${label}` };
   hosts.push(host); // Register before setup so partial failures also clean up.
@@ -32,12 +32,16 @@ async function startHost(label, logs, hosts, origin) {
   host.child = fork(path.join(__dirname, '../fixtures/browser-server.js'), [], {
     env: { ...sanitizeTestEnv(), HOME: home, TMUX_TMPDIR: path.join(home, 'tmux'),
       PI_DISH_INDEX_SYNC_BUDGET: '1000',
+      ...(liveSessions ? { PI_DISH_TEST_LIVE_SESSION: ROOT } : {}),
       PI_DISH_OMP_COMMAND: `${process.execPath} ${path.join(__dirname, '../fixtures/fake-omp-export.js')}` },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   for (const stream of [host.child.stdout, host.child.stderr]) {
     stream.on('data', data => logs.push(`${label}: ${data}`));
   }
+  host.commands = [];
+  host.child.on('message', event => { if (event.type === 'command') host.commands.push(event.message); });
+  host.emit = (event, data, entry) => host.child.send({ event, data, entry });
   host.base = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`${label} startup timed out`)), 15000);
     const failed = err => { clearTimeout(timer); reject(err); };
@@ -63,12 +67,13 @@ async function stopHost(host) {
 }
 
 const test = base.extend({
-  fleet: async ({ page }, use, testInfo) => {
+  liveSessions: [false, { option: true }],
+  fleet: async ({ page, liveSessions }, use, testInfo) => {
     const hosts = [], logs = [], errors = [];
     page.on('pageerror', error => errors.push(error.message));
     try {
-      const self = await startHost('self', logs, hosts);
-      const peer = await startHost('peer', logs, hosts, self.base);
+      const self = await startHost('self', logs, hosts, null, liveSessions);
+      const peer = await startHost('peer', logs, hosts, self.base, liveSessions);
       await page.addInitScript(entry => {
         localStorage.setItem('pi-dish-hosts', JSON.stringify([entry]));
       }, { base: peer.base, hostId: peer.hostId, label: peer.label, token: peer.token });

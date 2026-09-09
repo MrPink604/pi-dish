@@ -7835,7 +7835,7 @@ function openMessageStream(url, sessionId, selectionGeneration) {
         turnCleanupDone = !data.turnInProgress;
         // Stale dialogs for this session are pruned by the extension_ui_state
         // event that follows the connect replay — no per-init sweep needed.
-        if (!data.turnInProgress) abortingSessions.delete(sessionId);
+        if (!data.turnInProgress) abortingSessions.delete(sessionKey(hostId, sessionId));
         // Both flags, independently: auto-compaction runs inside a turn
         // (both true), a TUI /compact has neither turn nor stream events yet
         // (compacting only), and a reconnect after either ended must clear
@@ -7872,7 +7872,7 @@ function openMessageStream(url, sessionId, selectionGeneration) {
     const handleTurnEnd = () => {
       if (turnCleanupDone || !ownsStream()) return;
       turnCleanupDone = true;
-      abortingSessions.delete(sessionId);
+      abortingSessions.delete(sessionKey(hostId, sessionId));
       setTurnInProgress(false);
       cancelStreamingRender();
       // Clean up any orphaned running panels (defensive)
@@ -8018,7 +8018,7 @@ function openMessageStream(url, sessionId, selectionGeneration) {
 
     // Dialog answered elsewhere (TUI or another browser) — dismiss ours.
     addOwnedListener('extension_ui_resolved', (e) => {
-      try { dismissExtDialog(JSON.parse(e.data).id); } catch {}
+      try { dismissExtDialog(extDialogKey(JSON.parse(e.data).id, sessionId, hostId)); } catch {}
     });
     // Authoritative list of this session's pending dialogs, sent on (re)connect
     // after the replay burst. Prunes stashed dialogs that were answered or
@@ -8028,7 +8028,7 @@ function openMessageStream(url, sessionId, selectionGeneration) {
       try {
         const pending = new Set(JSON.parse(e.data).dialogs || []);
         for (const [requestId, entry] of [...openExtDialogs]) {
-          if (entry.sessionId === sessionId && !pending.has(requestId)) dismissExtDialog(requestId);
+          if (entry.sessionKey === sessionKey(hostId, sessionId) && !pending.has(entry.requestId)) dismissExtDialog(requestId);
         }
       } catch {}
     });
@@ -8042,7 +8042,7 @@ function openMessageStream(url, sessionId, selectionGeneration) {
       // A manual compaction has no turn_end/agent_end boundary. Whether Stop
       // won the race, compaction failed, or it completed first, its end is the
       // authoritative point where a compaction-only abort gate can clear.
-      if (!turnInProgress) abortingSessions.delete(sessionId);
+      if (!turnInProgress) abortingSessions.delete(sessionKey(hostId, sessionId));
       try {
         const data = JSON.parse(e.data);
         if (data.errorMessage) {
@@ -8104,11 +8104,11 @@ function openMessageStream(url, sessionId, selectionGeneration) {
     });
 
     addOwnedListener('session_ended', () => {
-      abortingSessions.delete(sessionId);
+      abortingSessions.delete(sessionKey(hostId, sessionId));
       setCompacting(false);
       setTurnInProgress(false);
       for (const [requestId, entry] of [...openExtDialogs]) {
-        if (entry.sessionId === sessionId) dismissExtDialog(requestId);
+        if (entry.sessionKey === sessionKey(hostId, sessionId)) dismissExtDialog(requestId);
       }
       setStatus('Session ended');
       refreshSessions();
@@ -8138,19 +8138,26 @@ function openMessageStream(url, sessionId, selectionGeneration) {
 
 var pendingImages = []; // { data: base64 (no data: prefix), mimeType }
 const pendingImagesBySession = new Map();
-let composerSessionId = null;
+let composerSessionKey = null;
 let composerDraftDirty = false;
 
 async function addImageFiles(files) {
+  const owner = composerSessionKey;
+  if (!owner) return;
   for (const file of Array.from(files || [])) {
     if (!file || !file.type || !file.type.startsWith('image/')) continue;
     try {
-      pendingImages.push(await prepareImageAttachment(file));
+      const image = await prepareImageAttachment(file);
+      if (composerSessionKey === owner) {
+        pendingImages.push(image);
+        renderAttachmentStrip();
+      } else {
+        pendingImagesBySession.set(owner, [...(pendingImagesBySession.get(owner) || []), image]);
+      }
     } catch (e) {
-      setStatus(`Could not attach ${file.name || 'image'}: ${e.message}`, 'error');
+      if (composerSessionKey === owner) setStatus(`Could not attach ${file.name || 'image'}: ${e.message}`, 'error');
     }
   }
-  renderAttachmentStrip();
 }
 
 // Phone photos are routinely 10MB+; downscale to a sane long edge and
@@ -8489,16 +8496,17 @@ var historyIndex = -1;   // -1 = not browsing history
 var historyStash = '';   // in-progress text stashed while browsing
 var draftSaveTimer = null;
 
-// Composer owners are session ids — namespaced per host, since two hosts can
-// hand out the same session id — or `spawn:<id>` operation keys, which are
-// server-process-local and never outlive a reload (cleared at boot).
+// Composer owners are captured host-qualified session keys or `spawn:<id>`
+// operation keys. Bare wire ids are normalized at synchronous call boundaries.
+// Spawn operations are server-process-local and never outlive a reload (cleared at boot).
 function composerOwnerKey(owner) {
-  return String(owner).startsWith('spawn:') ? owner : keyForSessionId(owner);
+  return String(owner).startsWith('spawn:') || String(owner).includes(' ') ? owner : keyForSessionId(owner);
 }
 function draftKey(id) { return `pi-dish-draft-${composerOwnerKey(id)}`; }
 function historyKey(id) { return `pi-dish-history-${composerOwnerKey(id)}`; }
 
 function writeSessionDraft(sessionId, value) {
+  if (sessionId) sessionId = composerOwnerKey(sessionId);
   if (!sessionId) return;
   try {
     if (value.trim() && value.length < 50000) localStorage.setItem(draftKey(sessionId), value);
@@ -8511,19 +8519,19 @@ function writeSessionDraft(sessionId, value) {
 // added and must not follow a rapid session switch.
 function stashPromptState() {
   clearTimeout(draftSaveTimer);
-  if (!composerSessionId) return;
+  if (!composerSessionKey) return;
   const input = document.getElementById('promptInput');
-  if (composerDraftDirty) writeSessionDraft(composerSessionId, input?.value || '');
-  if (pendingImages.length) pendingImagesBySession.set(composerSessionId, pendingImages);
-  else pendingImagesBySession.delete(composerSessionId);
+  if (composerDraftDirty) writeSessionDraft(composerSessionKey, input?.value || '');
+  if (pendingImages.length) pendingImagesBySession.set(composerSessionKey, pendingImages);
+  else pendingImagesBySession.delete(composerSessionKey);
   pendingImages = [];
-  composerSessionId = null;
+  composerSessionKey = null;
   composerDraftDirty = false;
   renderAttachmentStrip();
 }
 
 function clearPromptComposer() {
-  composerSessionId = null;
+  composerSessionKey = null;
   composerDraftDirty = false;
   pendingImages = [];
   const input = document.getElementById('promptInput');
@@ -8543,27 +8551,29 @@ function setComposerWaiting(waiting) {
 
 function saveDraftSoon() {
   clearTimeout(draftSaveTimer);
-  const sessionId = composerSessionId;
+  const sessionId = composerSessionKey;
   composerDraftDirty = true;
   draftSaveTimer = setTimeout(() => {
-    if (!sessionId || composerSessionId !== sessionId) return;
+    if (!sessionId || composerSessionKey !== sessionId) return;
     const v = document.getElementById('promptInput').value;
     writeSessionDraft(sessionId, v);
     composerDraftDirty = false;
   }, 300);
 }
 
-function clearDraft(sessionId = composerSessionId) {
+function clearDraft(sessionId = composerSessionKey) {
+  if (sessionId) sessionId = composerOwnerKey(sessionId);
   clearTimeout(draftSaveTimer);
   if (sessionId) try { localStorage.removeItem(draftKey(sessionId)); } catch {}
-  if (composerSessionId === sessionId) composerDraftDirty = false;
+  if (composerSessionKey === sessionId) composerDraftDirty = false;
 }
 
 /** On session switch: load that session's draft + history into the input. */
 function restorePromptState(ownerId = currentSession?.id) {
   if (!ownerId) return;
+  ownerId = composerOwnerKey(ownerId);
   const input = document.getElementById('promptInput');
-  composerSessionId = ownerId;
+  composerSessionKey = ownerId;
   composerDraftDirty = false;
   let draft = '';
   try { draft = localStorage.getItem(draftKey(ownerId)) || ''; } catch {}
@@ -8578,7 +8588,8 @@ function restorePromptState(ownerId = currentSession?.id) {
   if (!Array.isArray(promptHistory)) promptHistory = [];
 }
 
-function recordPrompt(message, sessionId = composerSessionId) {
+function recordPrompt(message, sessionId = composerSessionKey) {
+  if (sessionId) sessionId = composerOwnerKey(sessionId);
   if (!sessionId) return;
   promptHistory = pushPromptHistory(promptHistory, message, 50);
   historyIndex = -1;
@@ -8592,13 +8603,15 @@ function mergeComposerText(existing, restored) {
 }
 
 function migratePromptState(fromId, toId) {
+  fromId = composerOwnerKey(fromId);
+  toId = composerOwnerKey(toId);
   let sourceDraft = '', destinationDraft = '';
   try {
     sourceDraft = localStorage.getItem(draftKey(fromId)) || '';
     destinationDraft = localStorage.getItem(draftKey(toId)) || '';
     localStorage.removeItem(draftKey(fromId));
   } catch {}
-  const destinationVisible = composerSessionId === toId && currentSession?.id === toId;
+  const destinationVisible = composerSessionKey === toId;
   if (sourceDraft) {
     const input = document.getElementById('promptInput');
     const merged = mergeComposerText(destinationVisible ? input.value : destinationDraft, sourceDraft);
@@ -8625,13 +8638,14 @@ function migratePromptState(fromId, toId) {
 // Failed sends and queue edits complete asynchronously. Restore their payload
 // to the originating session even if another session now owns the composer.
 function restorePromptToSession(sessionId, message, images) {
+  if (sessionId) sessionId = composerOwnerKey(sessionId);
   let saved = '';
   try { saved = localStorage.getItem(draftKey(sessionId)) || ''; } catch {}
   const restored = message ? mergeComposerText(saved, message) : saved;
   writeSessionDraft(sessionId, restored);
 
   if (images?.length) {
-    if (composerSessionId === sessionId && currentSession?.id === sessionId) {
+    if (composerSessionKey === sessionId) {
       pendingImages = images.concat(pendingImages);
       renderAttachmentStrip();
     } else {
@@ -8639,7 +8653,7 @@ function restorePromptToSession(sessionId, message, images) {
     }
   }
 
-  if (composerSessionId === sessionId && currentSession?.id === sessionId && message) {
+  if (composerSessionKey === sessionId && message) {
     const input = document.getElementById('promptInput');
     input.value = mergeComposerText(input.value, message);
     input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -8684,7 +8698,7 @@ function discardOptimisticPrompt(clientPromptId) {
 function consumePendingSelfEcho(sessionId, message) {
   const text = splitSessionRefContext(message).text;
   for (const [clientPromptId, pending] of pendingOptimisticPrompts) {
-    if (pending.sessionId !== sessionId || pending.message !== text) continue;
+    if (pending.sessionKey !== keyForSessionId(sessionId) || pending.message !== text) continue;
     pendingOptimisticPrompts.delete(clientPromptId);
     return true;
   }
@@ -8705,8 +8719,10 @@ async function sendPrompt() {
   }
   if ((!message && !pendingImages.length) || !currentSession) return;
   const sessionId = currentSession.id;
+  const hostId = currentSession.host;
+  const ownerKey = sessionRefKey(currentSession);
   const selectionGeneration = sessionSelectionGeneration;
-  if (abortingSessions.has(sessionId)) {
+  if (abortingSessions.has(ownerKey)) {
     setStatus('Wait for the current turn to finish stopping', 'working');
     return;
   }
@@ -8725,16 +8741,16 @@ async function sendPrompt() {
     }
     input.value = '';
     input.style.height = '';
-    recordPrompt(message, sessionId);
-    clearDraft(sessionId);
+    recordPrompt(message, ownerKey);
+    clearDraft(ownerKey);
     setStatus('Running ' + message.split(' ')[0] + '...', 'working');
     try {
-      const data = await apiSend(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/command`, { message });
+      const data = await apiSend(hostId, `/api/sessions/${encodeURIComponent(sessionId)}/command`, { message });
       if (!ownsSessionView(sessionId, selectionGeneration)) return;
       setStatus(data.info || 'Done');
       refreshSessions();
     } catch (e) {
-      restorePromptToSession(sessionId, message, null);
+      restorePromptToSession(ownerKey, message, null);
       if (ownsSessionView(sessionId, selectionGeneration)) {
         setStatus(`${message.split(' ')[0]}: ${e.message}`, 'error');
       }
@@ -8744,8 +8760,8 @@ async function sendPrompt() {
 
   input.value = '';
   input.style.height = '';
-  recordPrompt(message, sessionId);
-  clearDraft(sessionId);
+  recordPrompt(message, ownerKey);
+  clearDraft(ownerKey);
   const images = takePendingImages();
   const refs = sessionRefHints(message);
   setStatus('Sending...', 'working');
@@ -8768,7 +8784,7 @@ async function sendPrompt() {
   // (images-only prompt). The stable id also lets queue Edit remove exactly
   // this optimistic bubble even when several prompts have identical text.
   pendingOptimisticPrompts.set(clientPromptId, {
-    clientPromptId, sessionId, message, element: optimisticElement, status: 'sending',
+    clientPromptId, sessionId, sessionKey: ownerKey, message, element: optimisticElement, status: 'sending',
   });
   followStream = true; // sending means: follow the stream from here on
   scrollToBottom(container);
@@ -8778,7 +8794,7 @@ async function sendPrompt() {
   try {
     const body = images ? { message, images } : { message };
     if (refs.length) body.refs = refs;
-    const resp = await apiSend(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/prompt`, body);
+    const resp = await apiSend(hostId, `/api/sessions/${encodeURIComponent(sessionId)}/prompt`, body);
     const pending = pendingOptimisticPrompts.get(clientPromptId);
     if (pending) pending.status = resp?.result?.queued ? 'queued' : 'accepted';
     if (!ownsSessionView(sessionId, selectionGeneration)) return;
@@ -8795,7 +8811,7 @@ async function sendPrompt() {
     }
   } catch (e) {
     discardOptimisticPrompt(clientPromptId); // no echo is coming for a failed send
-    restorePromptToSession(sessionId, message, images);
+    restorePromptToSession(ownerKey, message, images);
     if (ownsSessionView(sessionId, selectionGeneration)) {
       setStatus(`Error: ${e.message}`, 'error');
       setTurnInProgress(false);
@@ -8927,16 +8943,18 @@ async function sendQueuedMessage(kind) {
   }
   if ((!message && !pendingImages.length) || !currentSession || !currentSession.isActive) return;
   const sessionId = currentSession.id;
+  const hostId = currentSession.host;
+  const ownerKey = sessionRefKey(currentSession);
   const selectionGeneration = sessionSelectionGeneration;
-  if (abortingSessions.has(sessionId)) {
+  if (abortingSessions.has(ownerKey)) {
     setStatus('Wait for the current turn to finish stopping', 'working');
     return;
   }
 
   input.value = '';
   input.style.height = '';
-  recordPrompt(message, sessionId);
-  clearDraft(sessionId);
+  recordPrompt(message, ownerKey);
+  clearDraft(ownerKey);
   const images = takePendingImages();
   setStatus(steer ? 'Steering...' : 'Queueing follow-up...', 'working');
 
@@ -8945,12 +8963,12 @@ async function sendQueuedMessage(kind) {
   const refs = sessionRefHints(message);
   if (refs.length) body.refs = refs;
   try {
-    const resp = await apiSend(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}${steer ? '/steer' : '/prompt'}`, body);
+    const resp = await apiSend(hostId, `/api/sessions/${encodeURIComponent(sessionId)}${steer ? '/steer' : '/prompt'}`, body);
     if (!ownsSessionView(sessionId, selectionGeneration)) return;
     if (resp?.result?.queued) setStatus('Queued — will send when compaction finishes');
     else setStatus(steer ? 'Steered' : 'Queued for after this turn');
   } catch (e) {
-    restorePromptToSession(sessionId, message, images);
+    restorePromptToSession(ownerKey, message, images);
     if (ownsSessionView(sessionId, selectionGeneration)) {
       setStatus(`${steer ? 'Steer' : 'Follow-up'} failed: ${e.message}`, 'error');
     }
@@ -8985,7 +9003,7 @@ function renderQueueStatus(data) {
     const text = splitSessionRefContext(raw).text;
     let clientPromptId = null;
     for (const [id, pending] of pendingOptimisticPrompts) {
-      if (associated.has(id) || pending.sessionId !== currentSession?.id ||
+      if (associated.has(id) || pending.sessionKey !== sessionRefKey(currentSession) ||
           pending.status !== 'queued' || pending.message !== text) continue;
       clientPromptId = id;
       associated.add(id);
@@ -9014,6 +9032,8 @@ function queueRowHtml(kind, label, text, index, clientPromptId = null) {
 async function editQueuedMessage(btn) {
   if (!currentSession) return;
   const sessionId = currentSession.id;
+  const hostId = currentSession.host;
+  const ownerKey = sessionRefKey(currentSession);
   const selectionGeneration = sessionSelectionGeneration;
   const row = btn.closest('.queue-item');
   if (!row) return;
@@ -9035,9 +9055,9 @@ async function editQueuedMessage(btn) {
   // flight, so a remaining identical prompt keeps its own client id.
   if (clientPrompt) clientPrompt.status = 'cancelling';
   try {
-    await apiSend(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/queue/cancel`, { kind, index, text });
+    await apiSend(hostId, `/api/sessions/${encodeURIComponent(sessionId)}/queue/cancel`, { kind, index, text });
     if (clientPromptId) discardOptimisticPrompt(clientPromptId);
-    restorePromptToSession(sessionId, splitSessionRefContext(text).text, null);
+    restorePromptToSession(ownerKey, splitSessionRefContext(text).text, null);
     // The follow-up queue_update reconciles the strip; no manual removal needed.
   } catch (e) {
     if (clientPrompt && pendingOptimisticPrompts.has(clientPromptId)) {
@@ -9053,17 +9073,19 @@ async function abortTurn() {
   // its compaction_end (aborted) event clears the compacting indicator.
   if (!currentSession || (!turnInProgress && !compactingNow)) return;
   const sessionId = currentSession.id;
+  const hostId = currentSession.host;
+  const ownerKey = sessionRefKey(currentSession);
   const selectionGeneration = sessionSelectionGeneration;
-  if (abortingSessions.has(sessionId)) return;
-  abortingSessions.add(sessionId);
+  if (abortingSessions.has(ownerKey)) return;
+  abortingSessions.add(ownerKey);
   setStatus('Stopping...', 'working');
   try {
-    await apiSend(sessionHostId(sessionId), '/api/sessions/' + encodeURIComponent(sessionId) + '/abort');
+    await apiSend(hostId, '/api/sessions/' + encodeURIComponent(sessionId) + '/abort');
     // HTTP acknowledgement only means the abort request was accepted. Keep
     // the turn owned by the stream until turn_end/agent_end performs cleanup
     // and JSONL catch-up.
   } catch (e) {
-    abortingSessions.delete(sessionId);
+    abortingSessions.delete(ownerKey);
     if (ownsSessionView(sessionId, selectionGeneration)) setStatus('Stop failed: ' + e.message, 'error');
   }
 }
@@ -9101,7 +9123,7 @@ async function monitorSessionSpawn(spawnId, host = null) {
           // Capture the visible provisional composer before moving its draft
           // and attachments onto the bridge's authoritative session id.
           if (showingSpawn) stashPromptState();
-          migratePromptState(pendingComposerKey(spawnId), data.sessionId);
+          migratePromptState(pendingComposerKey(spawnId), sessionKey(host || selfHost.hostId, data.sessionId));
           // Do not yank the user away if they selected another session (or a
           // newer spawn) while this process was starting.
           if (showingSpawn) {
@@ -10727,7 +10749,7 @@ function updateMoodFromMessages(messages) {
 const extUIState = {
   widgets: new Map(),      // key -> { el, collapsed } — current session only
   statuses: new Map(),     // key -> el — current session only
-  collapsed: new Map(),    // `sessionId|key` -> bool — survives session switches
+  collapsed: new Map(),    // `host sessionId|key` -> bool — survives session switches
 };
 
 function clearExtensionUI() {
@@ -10877,7 +10899,7 @@ function showExtWidget(key, lines, placement) {
     return;
   }
   if (existing?.removeTimer) { clearTimeout(existing.removeTimer); existing.removeTimer = null; }
-  const collapsedKey = (currentSession?.id || '') + '|' + key;
+  const collapsedKey = sessionRefKey(currentSession) + '|' + key;
   const wasCollapsed = existing?.collapsed ?? extUIState.collapsed.get(collapsedKey) ?? false;
 
   if (!container) {
@@ -10997,7 +11019,10 @@ function showExtStatus(key, text) {
 // unblocks. For TUI sessions the same dialog is also on screen in the
 // terminal — whoever answers first wins (the server tells us via
 // extension_ui_resolved).
-const openExtDialogs = new Map(); // requestId -> { el, sessionId, minimized, sig }
+const openExtDialogs = new Map(); // host/session/request key -> stashed dialog
+function extDialogKey(requestId, sessionId, hostId = sessionHostId(sessionId)) {
+  return JSON.stringify([hostId, sessionId, requestId]);
+}
 
 // Content signature for re-emission dedupe: some hosts re-invoke the dialog
 // primitive (fresh request id each time) while one is already open. Identity
@@ -11017,7 +11042,7 @@ function findDuplicateExtDialog(req, sessionId) {
   const sig = extDialogSig(req);
   if (sig === null) return null;
   for (const entry of openExtDialogs.values()) {
-    if (entry.sessionId === sessionId && entry.sig === sig) return entry;
+    if (entry.sessionKey === keyForSessionId(sessionId) && entry.sig === sig) return entry;
   }
   return null;
 }
@@ -11061,13 +11086,17 @@ function setExtDialogMinimized(requestId, minimized) {
   }
 }
 
-function sendExtDialogResponse(requestId, response) {
-  const entry = openExtDialogs.get(requestId);
-  const sessionId = entry?.sessionId || currentSession?.id;
-  if (!sessionId) return;
-  apiSend(currentSession?.host, `/api/sessions/${encodeURIComponent(sessionId)}/ui-response`, { requestId, ...response })
-    .catch(e => setStatus('Dialog response failed: ' + e.message, 'error'));
-  dismissExtDialog(requestId);
+function sendExtDialogResponse(dialogKey, response) {
+  const entry = openExtDialogs.get(dialogKey);
+  if (!entry) return;
+  const generation = sessionSelectionGeneration;
+  apiSend(entry.hostId, `/api/sessions/${encodeURIComponent(entry.sessionId)}/ui-response`, { requestId: entry.requestId, ...response })
+    .catch(e => {
+      if (ownsSessionView(entry.sessionId, generation) && currentSession?.host === entry.hostId) {
+        setStatus('Dialog response failed: ' + e.message, 'error');
+      }
+    });
+  dismissExtDialog(dialogKey);
 }
 
 function dismissExtDialog(requestId) {
@@ -11108,9 +11137,11 @@ function buildExtDialogCard(requestId, { title, bodyHtml, footerHtml, collapsedL
 
 function showExtAskDialog(req, sessionId) {
   if (!req.id) return;
+  const hostId = sessionHostId(sessionId);
+  const dialogKey = extDialogKey(req.id, sessionId, hostId);
   // Replayed request for a dialog we still hold (e.g. switch-back): re-dock
   // the live element so in-progress selections survive.
-  const existing = openExtDialogs.get(req.id);
+  const existing = openExtDialogs.get(dialogKey);
   if (existing) {
     dockExtDialog(existing);
     return;
@@ -11128,12 +11159,12 @@ function showExtAskDialog(req, sessionId) {
     return;
   }
 
-  const card = buildExtDialogCard(req.id, {
+  const card = buildExtDialogCard(dialogKey, {
     title: questions.length === 1 ? 'Question' : `${questions.length} questions`,
     collapsedLabel: questions.length === 1
       ? `Question pending: ${questions[0].question || ''}`
       : `${questions.length} questions pending — click to answer`,
-    onClose: () => sendExtDialogResponse(req.id, { cancelled: true }),
+    onClose: () => sendExtDialogResponse(dialogKey, { cancelled: true }),
     bodyHtml: `
     <div class="ext-ui-ask-questions">
       ${questions.map((question, questionIndex) => {
@@ -11218,7 +11249,7 @@ function showExtAskDialog(req, sessionId) {
   });
 
   card.querySelector('[data-action="chat"]').addEventListener('click', () => {
-    sendExtDialogResponse(req.id, { value: { kind: 'chat' } });
+    sendExtDialogResponse(dialogKey, { value: { kind: 'chat' } });
   });
   card.querySelector('[data-action="submit-ask"]').addEventListener('click', () => {
     let invalid = null;
@@ -11255,18 +11286,20 @@ function showExtAskDialog(req, sessionId) {
       invalid.querySelector('.ext-ui-ask-option, .ext-ui-ask-custom')?.focus();
       return;
     }
-    sendExtDialogResponse(req.id, { value: { kind: 'submit', results } });
+    sendExtDialogResponse(dialogKey, { value: { kind: 'submit', results } });
   });
 
-  const entry = { el: card, sessionId, minimized: false, sig: extDialogSig(req) };
-  openExtDialogs.set(req.id, entry);
+  const entry = { el: card, sessionId, hostId, sessionKey: sessionKey(hostId, sessionId), requestId: req.id, minimized: false, sig: extDialogSig(req) };
+  openExtDialogs.set(dialogKey, entry);
   dockExtDialog(entry);
   card.querySelector('.ext-ui-ask-option, .ext-ui-ask-custom')?.focus();
 }
 
 function showExtDialog(req, sessionId) {
   if (!req.id) return;
-  const existing = openExtDialogs.get(req.id);
+  const hostId = sessionHostId(sessionId);
+  const dialogKey = extDialogKey(req.id, sessionId, hostId);
+  const existing = openExtDialogs.get(dialogKey);
   if (existing) {
     dockExtDialog(existing);
     return;
@@ -11310,34 +11343,34 @@ function showExtDialog(req, sessionId) {
   }
 
   const title = req.title || { select: 'Select', confirm: 'Confirm', input: 'Input', editor: 'Editor' }[req.method] || 'Dialog';
-  const card = buildExtDialogCard(req.id, {
+  const card = buildExtDialogCard(dialogKey, {
     title,
     bodyHtml,
     collapsedLabel: `${title} pending — click to answer`,
-    onClose: () => sendExtDialogResponse(req.id, { cancelled: true }),
+    onClose: () => sendExtDialogResponse(dialogKey, { cancelled: true }),
   });
 
   card.querySelectorAll('.ext-ui-dialog-option').forEach(btn => {
     btn.addEventListener('click', () => {
       const option = (req.options || [])[Number(btn.dataset.optionIndex)];
-      sendExtDialogResponse(req.id, { value: typeof option === 'string' ? option : option?.label || '' });
+      sendExtDialogResponse(dialogKey, { value: typeof option === 'string' ? option : option?.label || '' });
     });
   });
   card.querySelectorAll('.ext-ui-dialog-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const action = btn.dataset.action;
-      if (action === 'yes') sendExtDialogResponse(req.id, { confirmed: true });
-      else if (action === 'no') sendExtDialogResponse(req.id, { confirmed: false });
-      else if (action === 'cancel') sendExtDialogResponse(req.id, { cancelled: true });
+      if (action === 'yes') sendExtDialogResponse(dialogKey, { confirmed: true });
+      else if (action === 'no') sendExtDialogResponse(dialogKey, { confirmed: false });
+      else if (action === 'cancel') sendExtDialogResponse(dialogKey, { cancelled: true });
       else if (action === 'submit') {
         const field = card.querySelector('.ext-ui-dialog-input, .ext-ui-dialog-editor');
-        sendExtDialogResponse(req.id, { value: field ? field.value : '' });
+        sendExtDialogResponse(dialogKey, { value: field ? field.value : '' });
       }
     });
   });
 
-  const entry = { el: card, sessionId, minimized: false, sig: extDialogSig(req) };
-  openExtDialogs.set(req.id, entry);
+  const entry = { el: card, sessionId, hostId, sessionKey: sessionKey(hostId, sessionId), requestId: req.id, minimized: false, sig: extDialogSig(req) };
+  openExtDialogs.set(dialogKey, entry);
   dockExtDialog(entry);
   const field = card.querySelector('.ext-ui-dialog-input, .ext-ui-dialog-editor');
   if (field) field.focus();

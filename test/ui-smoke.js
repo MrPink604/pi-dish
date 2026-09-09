@@ -1961,7 +1961,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.click('#btnStop');
     emit('compaction_end', { reason: 'manual', errorMessage: 'lost abort race' });
     await desktop.waitForFunction(() => !compactingNow, { timeout: 3000 });
-    check(!(await desktop.evaluate((id) => abortingSessions.has(id), SESSION_ID)),
+    check(!(await desktop.evaluate((id) => abortingSessions.has(keyForSessionId(id)), SESSION_ID)),
       'compaction_end clears a compaction-only abort gate even on failure');
 
     // 8c-2. Compaction gates sends: while compacting there's no turn, but a
@@ -2534,7 +2534,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     const failedOwnership = await desktop.evaluate((a) => ({
       currentText: document.getElementById('promptInput').value,
       originDraft: localStorage.getItem(draftKey(a)),
-      originImages: pendingImagesBySession.get(a)?.length || 0,
+      originImages: pendingImagesBySession.get(keyForSessionId(a))?.length || 0,
       pendingMatch: [...pendingOptimisticPrompts.values()].some((p) => p.message === 'failed prompt from A'),
     }), SESSION_ID);
     check(!failedOwnership.currentText.includes('failed prompt from A') &&
@@ -2548,7 +2548,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.evaluate((a) => {
       document.getElementById('promptInput').value = '';
       pendingImages = [];
-      pendingImagesBySession.delete(a);
+      pendingImagesBySession.delete(keyForSessionId(a));
       clearDraft(a);
       renderAttachmentStrip();
     }, SESSION_ID);
@@ -2565,7 +2565,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
         el.textContent = 'duplicate buffered prompt';
         container.appendChild(el);
         pendingOptimisticPrompts.set(id, {
-          clientPromptId: id, sessionId: a, message: 'duplicate buffered prompt', element: el, status: 'queued',
+          clientPromptId: id, sessionId: a, sessionKey: keyForSessionId(a), message: 'duplicate buffered prompt', element: el, status: 'queued',
         });
         return el;
       };
