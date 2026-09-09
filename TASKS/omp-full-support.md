@@ -1,9 +1,11 @@
 # Task: Full OMP Support
 
 **Priority:** P0
-**Status:** Planned — baseline (Phases 1–4 of `pi-lineage-harness-support.md`) is
-implemented and verified; this task closes the deliberately capability-degraded
-OMP gaps and makes configured OMP sessions pilotable from the web.
+**Status (2026-09-09):** The compact, live-tree, and web-pilot workstreams below
+are implemented. This document retains their original scope and baseline;
+it is not a list of currently missing features. Queue listing/cancellation
+remain disabled. See `README.md` for current support and `BACKLOG.md` for the
+current maintenance order.
 **Depends on:** `TASKS/pi-lineage-harness-support.md` (landed)
 
 ## Context

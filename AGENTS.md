@@ -1,0 +1,58 @@
+# Working on pi-dish
+
+pi-dish is a personal web/phone controller for Pi-lineage agents. The backend
+uses Express and CommonJS (`server.js`, `lib/`); the browser uses plain scripts
+(`public/`); harness extensions live in `extensions/`.
+
+## Start here
+
+- [README.md](README.md): setup, supported behavior, development commands.
+- [BACKLOG.md](BACKLOG.md): current priorities and the staged maintenance plan.
+- [CLAUDE.md](CLAUDE.md): detailed architecture and implementation invariants;
+  read the sections relevant to the code you change.
+- `TASKS/` and `docs/history/` contain design and implementation history.
+  Check current code and tests before treating a historical gap as open work.
+
+## Scope and changes
+
+- Keep maintenance changes small and independently reviewable. Major module
+  extraction, test-suite restructuring, and framework adoption are separate
+  stages in the backlog; do not bundle them into a bug fix.
+- Preserve unrelated local files. Stage only the files belonging to the change.
+- After verification, commit and push completed work unless the user asks
+  otherwise. Follow the user's branch choice.
+
+## Verification
+
+```sh
+npm test                              # unit, API, bridge and lifecycle suites
+npm test -- test/remote-hosts.test.js   # example focused suite
+npm run test:ui                        # desktop/mobile browser smoke
+npm run build:vendor                   # only after changing vendor inputs
+```
+
+Run the relevant checks while developing and the full backend suite before
+committing behavior changes. UI behavior changes also need the browser smoke
+suite. Add focused regressions for defects; defer broad coverage work to its
+own change. Documentation-only edits need link/content checks.
+
+The browser suite currently needs a separately installed Playwright and Chrome.
+`NODE_PATH` can point to Playwright's installation (for example,
+`NODE_PATH=/usr/lib/node_modules npm run test:ui`); `CHROME_BIN` overrides the
+Chrome path. `npm run test:lineage` is an opt-in real OMP/Prime canary with
+explicit executable paths; see README. Report skips or unavailable checks.
+
+## Invariants
+
+- Use the existing test environment sanitization and temporary homes, sockets,
+  and tmux servers. Tests must not use live agent sessions or provider credentials.
+- A browser session identity includes its owning host. Capture identity before
+  an asynchronous operation; a response must not retarget whichever session is
+  selected when it finishes. Use the existing state writers and selection guards.
+- Session JSONL belongs to the harness. Read through `lib/session-files.js`
+  and `lib/session-index.js`; preserve capability gates and process/launch-token
+  ownership checks before lifecycle operations.
+- Keep browser assets local, with no CDN dependencies. Preserve streaming
+  coalescing, pagination, and retained transcript behavior when touching rendering.
+- Keep credentials and machine configuration out of Git. Follow the fleet's
+  access and configuration ownership rules for any host administration.

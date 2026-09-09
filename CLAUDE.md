@@ -1,5 +1,9 @@
 # pi-dish
 
+Contributor entrypoint: [AGENTS.md](AGENTS.md). Current work order:
+[BACKLOG.md](BACKLOG.md). This document retains the detailed architecture and
+implementation notes; historical task plans may describe superseded behavior.
+
 Web/phone remote control for pi coding-agent sessions. Express server (`server.js`)
 + vanilla JS frontend (`public/`), plus an Electron shell (`electron/`) that loads
 the same server. Sessions are discovered three ways: live sessions via the
@@ -1149,6 +1153,13 @@ current-session/header only, never the lists, whose name/model come from the
 registry-aware poll). Each write re-renders the views it affects, so a
 mutation can't leave sidebar and header disagreeing (the old "rename needs
 F5" bug class). Never assign to `sessions`/`currentSession` elsewhere.
+
+Host identity is part of selection and mutation ownership. `findSession(id,
+host)` never falls back to another host; without a host it prefers the selected
+session's host and otherwise requires an unambiguous id. Async rename/model/
+thinking updates capture the host and id before sending, then pass that host to
+`patchSession`. Retained transcript DOM is keyed by `sessionRefKey(session)`;
+force reload and session-switch invalidation must use the same composite key.
 
 ## Streaming pipeline
 

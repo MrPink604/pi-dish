@@ -24,12 +24,15 @@ exposing it to a network you don't fully trust.
 
 (All screenshots are staged fixture data — regenerate with `npm run shots`.)
 
-## ⚠️ Security: there is none
+## Security and trusted access
 
 Understand what this server is before running it:
 
-- **Zero authentication.** No accounts, no passwords, no tokens. Anyone who
-  can reach the port gets the full UI.
+- **No authentication by default.** Anyone who can reach the port can drive
+  agents unless an authenticated proxy or pi-dish's optional bearer gate
+  protects it. Configure `PI_DISH_TOKEN` or `~/.pi/dish/token` to require a
+  bearer token for `/api` and `/hosts` requests. The host descriptor, static
+  UI, and published share/page routes remain public; there are no user accounts.
 - **The UI drives coding agents.** Sending a prompt to a pi session means an
   agent with shell access executes things on your machine. Reaching this
   server is functionally equivalent to having a shell on the host.
@@ -37,7 +40,7 @@ Understand what this server is before running it:
   can reach it out of the box. To use it from your phone you must opt in by
   setting `HOST` (e.g. `HOST=0.0.0.0` for all interfaces, or your Tailscale
   IP to expose it to your tailnet only) or by putting a reverse proxy in
-  front. Once exposed, everything on that network gets the full UI.
+  front. Without an access gate, everything on that network can drive agents.
 - **Plain HTTP.** No TLS. Prompts, session transcripts, and everything else
   travel in cleartext.
 
@@ -197,10 +200,19 @@ OMP's exported `AgentSession` getters drive bridge-owned `Todos`, `planmode`,
 and `prewalk` projections; they are capability-detected, so an older OMP keeps
 ordinary bridge behavior instead of failing extension load.
 
-The alternative-harness baseline deliberately omits private Pi features:
-queue cancellation, compaction, tree navigation, and inactive JSONL mutation
-are unavailable. OMP supports read-only HTML export and sharing; Prime does
-not. An OMP session launched by pi-dish can be closed remotely: pi-dish
+Current alternative-harness support is capability-detected:
+
+| Feature | OMP | Prime Agent |
+|---|---|---|
+| Prompts, steering, follow-ups, abort, model/thinking controls | Supported through the bridge | Supported through the bridge |
+| Compaction | Supported on live capable bridges | Unavailable |
+| Tree navigation | Supported live, with a reachable tmux pane for command-context handoff | Unavailable |
+| Harness queue listing/cancellation | Unavailable | Unavailable |
+| Read-only HTML export and sharing | Supported | Unavailable |
+| Inactive JSONL mutation through Pi's SDK | Unavailable | Unavailable |
+
+Older bridges may advertise fewer capabilities. An OMP session launched by
+pi-dish can be closed remotely: pi-dish
 revalidates its launch token and exact tmux pane process identity, proves the
 live OMP process belongs to that pane, then kills the pane and waits for its
 captured process tree to exit. OMP sessions launched outside pi-dish remain
@@ -548,9 +560,10 @@ curl -s -X POST localhost:3333/api/routines/nightly-review/invoke \
   -d '{"source":"gh-webhook","input":{"pr":42}}'
 ```
 
-Every run is an ordinary session stamped with the routine's name, so its
-transcript, cost and duration show up everywhere sessions do and
-`routine:nightly-review` finds them in the sidebar filter and full search.
+Every run is an ordinary session stamped with the routine's name. Inactive
+routine runs are hidden from the browser's default lists and searches;
+`routine:nightly-review` or `is:automation` includes them. API/CLI searches
+remain inclusive, and their usage still contributes to the usage summaries.
 The routine view keeps the prompt's version history and a table of every
 run (trigger, prompt version, status, session). One-shot routines close
 their session when the turn ends; "continue" routines keep reusing one
@@ -561,6 +574,9 @@ lives outside pi-dish and polls the invocation it started. Agents read the
 contract from `/api/agent-docs/routines`.
 
 ## Slash command support
+
+The table below describes Pi. OMP and Prime use their capability-gated bridge
+commands; see the alternative-harness section above.
 
 | Command type | TUI session (bridge) | pi-dish-spawned session (RPC) |
 |---|---|---|
@@ -651,8 +667,10 @@ and unsupported close behavior, plus Prime's worker/client split, unsafe-detach
 refusal, exact-daemon cleanup, resume, and a second streamed/persisted turn
 after resume.
 
-`CLAUDE.md` documents the architecture in detail (it's the file the agent
-that wrote this reads, so it's the most honest documentation in the repo).
+Start with [AGENTS.md](AGENTS.md) for contributor commands and invariants.
+[CLAUDE.md](CLAUDE.md) documents the architecture in detail, and
+[BACKLOG.md](BACKLOG.md) tracks the maintenance stages. Historical task plans
+are retained separately from the current work order.
 
 ## License
 
