@@ -67,7 +67,7 @@ const {
 const { expandSessionRefs } = require('./lib/session-refs');
 
 const app = express();
-const PORT = process.env.PORT || 3333;
+const PORT = Number.isFinite(Number(process.env.PORT)) ? Number(process.env.PORT) : 3333;
 // Localhost-only by default; opt in to LAN/VPN exposure explicitly, e.g.
 // HOST=0.0.0.0 (all interfaces) or HOST=<tailscale ip>. Auth is opt-in (see
 // the host identity / auth section below) — without a token, anything that
@@ -7115,18 +7115,66 @@ function findSessionFile(sessionId, options) {
 // Warm the models cache at startup so context window sizes are accurate immediately
 piSDK.getAvailableModels().then(setModelsCache).catch(() => {});
 
-const server = app.listen(PORT, HOST, () => {
+// Every listener pi-dish owns: the loopback alias below plus each main
+// (fleet-facing) listener candidate. Close hooks and WebSocket upgrades
+// must reach all of them.
+const ownedServers = [];
+const serverCloseHooks = [];
+
+function ownServer(l) {
+  ownedServers.push(l);
+  for (const hook of serverCloseHooks) l.on('close', hook);
+  wireUpgrades(l);
+  return l;
+}
+
+function onServerClose(hook) {
+  serverCloseHooks.push(hook);
+  for (const l of ownedServers) l.on('close', hook);
+}
+
+const LOOPBACK = '127.0.0.1';
+const hostIsLoopback = HOST === LOOPBACK || HOST === 'localhost';
+const hostIsWildcard = HOST === '0.0.0.0' || HOST === '::';
+
+// With HOST=<specific address> (typically the tailscale IP) nothing listens
+// on loopback, yet host-local callers need it: the update timer's health
+// probe and spawned session CLIs (PI_DISH_URL below) must keep working
+// while the tailnet is wedged, so a dead relay reads as "unreachable from
+// the fleet", never as "pi-dish down" — the update timer restarts, pauses
+// updates, and spawns a diagnosis session on the latter. Bound first, and
+// kept up even when HOST itself cannot bind.
+let aliasServer = null;
+function ensureLoopbackAlias(port) {
+  if (hostIsLoopback || hostIsWildcard || aliasServer) return;
+  aliasServer = ownServer(app.listen(port, LOOPBACK, () => {
+    console.log(`pi-dish loopback alias at http://${LOOPBACK}:${aliasServer.address().port}`);
+  }));
+  aliasServer.on('error', (err) => {
+    console.error(`pi-dish: loopback alias not listening: ${err.message}`);
+    aliasServer = null;
+  });
+}
+
+// Bound before the main listener (and before it starts retrying) with a
+// concrete port, so both listeners answer the one URL we advertise.
+// PORT=0 defers to startMainListener below: only the main listener can
+// mint the ephemeral port the alias must share.
+if (PORT > 0) ensureLoopbackAlias(PORT);
+
+let recoveryStopped = false;
+let server = null; // fleet-facing listener; set by startMainListener
+
+function onMainListening(main) {
   // Base URL for agents running on this machine (skill CLIs and the
   // pi-dish-pages hook fetch it). Children spawned by pi-dish inherit
   // process.env (RPC) or get it via tmux -e; respect an operator-provided
-  // value. HOST is a *bind* address, so loopback is only reachable when we
-  // bound loopback or a wildcard: with HOST=<tailscale ip> nothing listens on
-  // 127.0.0.1 and every spawned session's first call fails to connect.
-  // Advertise the address we actually accept connections on.
+  // value. Prefer loopback whenever we serve it — it stays reachable no
+  // matter the tailnet state; otherwise advertise the address we bound.
   if (!process.env.PI_DISH_URL) {
-    const bound = server.address();
+    const bound = main.address();
     const wildcard = !bound.address || bound.address === '0.0.0.0' || bound.address === '::';
-    const reachable = wildcard ? '127.0.0.1' : bound.address;
+    const reachable = wildcard || aliasServer ? LOOPBACK : bound.address;
     const authority = reachable.includes(':') ? `[${reachable}]` : reachable;
     process.env.PI_DISH_URL = `http://${authority}:${bound.port}`;
   }
@@ -7149,9 +7197,30 @@ const server = app.listen(PORT, HOST, () => {
     .then(() => routineRunner.recoverAfterRestart())
     .then(() => { if (!recoveryStopped) routineRunner.start(); })
     .catch((e) => console.error(`Session restart recovery failed: ${e.message}`));
-});
-let recoveryStopped = false;
-server.on('close', () => {
+}
+
+function startMainListener(retrySeconds = 15) {
+  const main = ownServer(app.listen(PORT, HOST, () => {
+    if (PORT === 0) ensureLoopbackAlias(main.address().port);
+    onMainListening(main);
+  }));
+  main.on('error', (err) => {
+    if (err.code === 'EADDRNOTAVAIL') {
+      // HOST's interface is gone (tailscaled down or still starting). Keep
+      // serving loopback and retry: crashing here would only buy a
+      // supervisor restart loop that ends the moment the address returns.
+      console.error(`pi-dish: ${HOST} is not assigned yet; retrying in ${retrySeconds}s`);
+      setTimeout(() => startMainListener(retrySeconds), retrySeconds * 1000);
+      return;
+    }
+    console.error(`pi-dish: cannot listen on ${HOST}:${PORT}: ${err.message}`);
+    process.exit(1);
+  });
+  server = main;
+}
+
+startMainListener();
+onServerClose(() => {
   recoveryStopped = true;
   recoveryRunner.stop();
   routineRunner.stop();
@@ -7179,7 +7248,7 @@ if (process.env.PI_DISH_SHARE_PORT) {
   const shareServer = shareApp.listen(process.env.PI_DISH_SHARE_PORT, shareHost, () => {
     console.log(`pi-dish share listener at http://${shareHost}:${shareServer.address().port}`);
   });
-  server.on('close', () => { try { shareServer.close(); } catch {} });
+  onServerClose(() => { try { shareServer.close(); } catch {} });
 }
 
 // ssh forwards are children of this process; nothing outlives the server.
@@ -7187,24 +7256,24 @@ if (process.env.PI_DISH_SHARE_PORT) {
 // (`node --watch` restarts, Ctrl-C): without them every restart would strand
 // another `ssh -N` holding a connection to a work host. They reproduce the
 // default exit codes so nothing else observes a change.
-server.on('close', () => remoteHosts.shutdown());
-server.on('close', () => sessionBounces.stop());
-for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
-  process.once(signal, () => { remoteHosts.shutdown(); process.exit(code); });
-}
+onServerClose(() => remoteHosts.shutdown());
+onServerClose(() => sessionBounces.stop());
 
 // WebSocket upgrades bypass Express, and two features want them: the local
 // terminal and the /hosts/<name> terminal proxy. Every 'upgrade' listener
 // sees every socket, so one dispatcher hands each socket to the first
 // handler that claims it and destroys whatever nothing claims (which is the
-// behavior a server with no handler at all has).
+// behavior a server with no handler at all has). Attached to every owned
+// listener — the loopback alias included — by ownServer above.
 const upgradeHandlers = [];
-server.on('upgrade', (req, socket, head) => {
-  let url;
-  try { url = new URL(req.url || '', 'http://localhost'); } catch { return socket.destroy(); }
-  for (const handle of upgradeHandlers) if (handle(req, socket, head, url)) return;
-  socket.destroy();
-});
+function wireUpgrades(l) {
+  l.on('upgrade', (req, socket, head) => {
+    let url;
+    try { url = new URL(req.url || '', 'http://localhost'); } catch { return socket.destroy(); }
+    for (const handle of upgradeHandlers) if (handle(req, socket, head, url)) return;
+    socket.destroy();
+  });
+}
 
 // Proxied terminals work even when this host's own terminal feature is off:
 // the PTY lives on the peer.
@@ -7332,7 +7401,7 @@ if (terminal.isTerminalEnabled()) {
     return true;
   });
 
-  server.on('close', () => terminal.killAllTerminals());
+  onServerClose(() => terminal.killAllTerminals());
 }
 
 module.exports = server;

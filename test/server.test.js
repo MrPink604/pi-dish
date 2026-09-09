@@ -2140,10 +2140,11 @@ test('the server exports PI_DISH_URL for spawned agents (pi-dish-pages skill)', 
   assert.equal(process.env.PI_DISH_URL, base);
 });
 
-// A tailnet/LAN bind (HOST=<tailscale ip>) listens on that address only, so
-// the URL handed to spawned agents must be the bound address — a hardcoded
-// loopback URL is refused by the kernel and every skill CLI call fails.
-test('PI_DISH_URL follows a non-loopback bind address', async () => {
+// A tailnet/LAN bind (HOST=<tailscale ip>) serves a loopback alias alongside
+// the bound address, so the URL handed to spawned agents is loopback — it
+// keeps working for skill CLIs even while the tailnet is unreachable. The
+// contract under test is that the URL is actually served, whatever it is.
+test('PI_DISH_URL served to spawned agents always answers', async () => {
   const { spawn } = require('node:child_process');
   const os = require('node:os');
   const canBind = (host) => new Promise((resolve) => {
@@ -2158,11 +2159,10 @@ test('PI_DISH_URL follows a non-loopback bind address', async () => {
     if (candidate && await canBind(candidate)) { host = candidate; break; }
   }
   if (!host) return; // no non-loopback-shaped address on this machine
-
   const child = spawn(process.execPath, [
     '-e',
     "const s = require(process.argv[1]);"
-    + " const done = () => { console.log('PI_DISH_URL=' + process.env.PI_DISH_URL); process.exit(0); };"
+    + " const done = () => { console.log('PI_DISH_URL=' + process.env.PI_DISH_URL); setInterval(() => {}, 60000); };"
     + " s.listening ? done() : s.once('listening', done);",
     path.join(__dirname, '..', 'server.js'),
   ], {
@@ -2173,14 +2173,21 @@ test('PI_DISH_URL follows a non-loopback bind address', async () => {
     stdio: ['ignore', 'pipe', 'ignore'],
   });
   let out = '';
-  child.stdout.on('data', chunk => { out += chunk; });
-  await new Promise(resolve => child.on('exit', resolve));
-
-  const reported = out.split('\n').find(line => line.startsWith('PI_DISH_URL='))?.slice('PI_DISH_URL='.length);
-  const authority = host.includes(':') ? `[${host}]` : host;
-  assert.ok(reported, `child reported a URL (stdout: ${out})`);
-  assert.match(reported, new RegExp(`^http://${authority.replace(/[[\]./]/g, '\\$&')}:\\d+$`),
-    `spawned agents get the bound address, not loopback (got ${reported})`);
+  try {
+    await new Promise(resolve => child.stdout.on('data', function onChunk(chunk) {
+      out += chunk;
+      if (out.includes('PI_DISH_URL=')) { child.stdout.off('data', onChunk); resolve(); }
+    }));
+    const reported = out.split('\n').find(line => line.startsWith('PI_DISH_URL='))?.slice('PI_DISH_URL='.length);
+    assert.ok(reported, `child reported a URL (stdout: ${out})`);
+    // Whatever address the server advertises must actually answer — a URL the
+    // kernel refuses strands every spawned agent's first CLI call.
+    const res = await fetch(`${reported}/api/host`);
+    assert.equal(res.status, 200, `advertised ${reported} must serve /api/host`);
+  } finally {
+    try { child.kill('SIGTERM'); } catch {}
+    await new Promise(resolve => child.on('exit', resolve));
+  }
 });
 
 test('PUT /api/models/enabled persists pi scoped models in settings.json', async () => {

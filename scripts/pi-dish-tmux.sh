@@ -108,7 +108,11 @@ load_endpoint() {
 
 healthy() {
   load_endpoint
-  curl --fail --silent --max-time 2 "http://$HOST:$PORT/api/host" >/dev/null
+  # Probe loopback, not $HOST: the server binds a loopback alias whenever it
+  # serves a specific address, so host-local health never depends on the
+  # tailnet. A wedged tailscaled is then "unreachable from the fleet", not
+  # "pi-dish unhealthy" — the update timer restarts pi-dish on the latter.
+  curl --fail --silent --max-time 2 "http://127.0.0.1:$PORT/api/host" >/dev/null
 }
 
 wait_until_healthy() {
