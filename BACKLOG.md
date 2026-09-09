@@ -27,8 +27,8 @@ Each behavior fix includes a focused regression check.
   prompts, and extension dialogs. Audit their remaining bare-id state at the
   same time; the maintenance passes do not yet migrate all UI state.
 - Cover listener startup failure, retry, loopback aliases, and shutdown together.
-- Make a real OMP canary independently runnable from Prime, alongside the existing
-  real Pi checks. Keep model traffic on local fake providers.
+- Completed: independently runnable real OMP/Prime canaries; OMP 18.1.15
+  verified against a local fake provider, including live-tree reads and resume.
 - Establish automated checks and an explicit supported Node/tooling matrix.
   Introduce lint/type checking incrementally, with formatting churn kept separate.
 

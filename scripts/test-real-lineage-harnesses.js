@@ -4,7 +4,7 @@
 /**
  * Opt-in integration canary for the real OMP and Prime Agent CLIs.
  *
- * This intentionally does not run under `npm test`: both harnesses are large,
+ * This intentionally does not run under `npm test`: the harnesses are large,
  * independently released tools. Install them, then provide their executable
  * paths (and Bun's bin directory for OMP):
  *
@@ -12,6 +12,9 @@
  *   PI_DISH_REAL_PRIME_BIN=/path/to/prime-agent \
  *   PI_DISH_REAL_BUN_BIN_DIR=/path/containing/bun \
  *   npm run test:lineage
+ *
+ * Select just one with `npm run test:lineage -- omp` (or `prime`); only its
+ * executable is required, plus Bun for OMP.
  *
  * The canary uses an isolated HOME, tmux server, bridge socket directory, and
  * Prime daemon. It sends real streamed turns only to a localhost fake OpenAI
@@ -26,15 +29,26 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 
+const selection = process.argv[2] || 'all';
+if (process.argv.length > 3 || !['all', 'omp', 'prime'].includes(selection)) {
+  throw new Error('Usage: npm run test:lineage -- [all|omp|prime]');
+}
+const selected = selection === 'all' ? ['omp', 'prime'] : [selection];
 const ompBin = process.env.PI_DISH_REAL_OMP_BIN;
 const primeBin = process.env.PI_DISH_REAL_PRIME_BIN;
 const bunBinDir = process.env.PI_DISH_REAL_BUN_BIN_DIR;
-if (!ompBin || !primeBin || !bunBinDir) {
-  throw new Error('PI_DISH_REAL_OMP_BIN, PI_DISH_REAL_PRIME_BIN, and PI_DISH_REAL_BUN_BIN_DIR are required');
-}
-for (const [name, file] of [['OMP', ompBin], ['Prime Agent', primeBin]]) {
-  fs.accessSync(file, fs.constants.X_OK);
+const binaries = { omp: ompBin, prime: primeBin };
+for (const name of selected) {
+  const file = binaries[name];
+  if (!file) throw new Error(`PI_DISH_REAL_${name.toUpperCase()}_BIN is required for ${name}`);
   if (!path.isAbsolute(file)) throw new Error(`${name} executable path must be absolute`);
+  fs.accessSync(file, fs.constants.X_OK);
+}
+if (selected.includes('omp')) {
+  if (!bunBinDir || !path.isAbsolute(bunBinDir)) {
+    throw new Error('PI_DISH_REAL_BUN_BIN_DIR must be an absolute directory for OMP');
+  }
+  fs.accessSync(path.join(bunBinDir, 'bun'), fs.constants.X_OK);
 }
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-lineage-real-'));
@@ -51,18 +65,21 @@ fs.chmodSync(socketDir, 0o700);
 // this run's own — see test/test-env.js.
 require('../test/test-env').applyTestEnv();
 const originalPath = process.env.PATH || '';
-process.env.PATH = [bunBinDir, path.dirname(ompBin), path.dirname(primeBin), originalPath].join(path.delimiter);
+process.env.PATH = [selected.includes('omp') && bunBinDir, ...selected.map(name => path.dirname(binaries[name])), originalPath]
+  .filter(Boolean).join(path.delimiter);
 process.env.HOME = home;
+// Fleet CLI overlays may otherwise override this canary's model configuration.
+for (const key of ['PI_CONFIG_FILES', 'PI_CODING_AGENT_DIR', 'OMP_AGENT_DIR']) delete process.env[key];
 process.env.TMUX_TMPDIR = tmuxDir;
 process.env.PORT = '0';
 process.env.PI_DISH_SOCKET_DIR = socketDir;
 process.env.PI_DISH_SPAWN_TIMEOUT_MS = '20000';
 
 const shellWord = value => `'${String(value).replace(/'/g, `'\\''`)}'`;
-process.env.PI_DISH_OMP_COMMAND = [
+if (selected.includes('omp')) process.env.PI_DISH_OMP_COMMAND = [
   shellWord(ompBin), '--no-extensions', '--no-skills', '--no-rules',
 ].join(' ');
-process.env.PI_DISH_PRIME_COMMAND = [
+if (selected.includes('prime')) process.env.PI_DISH_PRIME_COMMAND = [
   shellWord(primeBin), '--offline', '--daemon-socket', shellWord(primeDaemon),
   '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-context-files',
 ].join(' ');
@@ -148,7 +165,8 @@ async function request(method, route, body) {
 
 const get = route => request('GET', route);
 const post = (route, body = {}) => request('POST', route, body);
-const target = () => ({ type: 'tmux', socket: tmuxSocket, tmuxSession: 'work' });
+let tmuxSessionId; // Stable even when the rename endpoint renames the tmux session.
+const target = () => ({ type: 'tmux', socket: tmuxSocket, tmuxSession: tmuxSessionId });
 
 async function waitFor(check, label, timeout = 15000) {
   const deadline = Date.now() + timeout;
@@ -227,7 +245,7 @@ async function runStreamedTurn(sessionId, prompt) {
 }
 
 async function shutdownPrime() {
-  if (!fs.existsSync(primeDaemon)) return { success: true };
+  if (!selected.includes('prime') || !fs.existsSync(primeDaemon)) return { success: true };
   // Prime 0.7.1's public `shutdown` command discovers every daemon and cannot
   // be scoped to a socket. Use the installed protocol client so this canary
   // stops only the isolated supervisor it created.
@@ -256,7 +274,7 @@ async function testOmp() {
   assert.equal(active.capabilities.prompt, true);
   assert.equal(active.capabilities.close, true);
   assert.equal(active.capabilities.queueCancel, false);
-  assert.equal(active.capabilities.tree, false);
+  assert.equal(active.capabilities.tree, true);
 
   const commands = await get(`/api/commands?sessionId=${encodeURIComponent(id)}`);
   assert.equal(commands.status, 200, JSON.stringify(commands.body));
@@ -268,12 +286,18 @@ async function testOmp() {
   assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/thinking`, { level: 'low' })).status, 200);
   assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/command`, { message: '/dish-push' })).status, 200);
   const turn = await runStreamedTurn(id, 'pi-dish managed OMP integration canary');
+  const tree = await get(`/api/sessions/${encodeURIComponent(id)}/tree`);
+  assert.equal(tree.status, 200, JSON.stringify(tree.body));
+  assert.ok(tree.body.nodes.some(node => node.role === 'assistant' && node.text === turn.assistantText && node.active),
+    'the real OMP live tree includes the persisted assistant response on its active path');
   const closeSpawn = tmux.getSpawn(id);
   assert.ok(closeSpawn?.paneProcess?.startTime, 'real OMP close has an owned pane identity');
   const close = await post(`/api/sessions/${encodeURIComponent(id)}/close`);
   assert.equal(close.status, 200, JSON.stringify(close.body));
   assert.equal(await tmux.paneExists(closeSpawn.socket, closeSpawn.paneId), false);
   assert.equal(tmux.getSpawn(id), null);
+  assert.equal((await get(`/api/sessions/${encodeURIComponent(id)}/tree`)).status, 409,
+    'inactive OMP tree reads remain capability-gated');
 
   // A fresh model-less OMP TUI does not create its JSONL until a real turn.
   // Resume a minimal current-format corpus through the actual OMP loader so
@@ -306,12 +330,14 @@ async function testOmp() {
     JSON.stringify({ session: messages.body.session, messages: messages.body.messages, file: fs.readFileSync(resumeFile, 'utf8') }));
 
   return {
-    version: '17.2.11',
+    version: execFileSync(ompBin, ['--version'], { encoding: 'utf8', timeout: 10000 }).trim(),
     routeNamespace: id.slice(0, 5),
     commands: commands.body.length,
     models: models.body.length,
     streamedTurnEvents: turn.events,
     persistedAssistantMessage: true,
+    liveTreeRead: true,
+    inactiveTreeReadRefused: true,
     closeStatus: close.status,
     resumeSameRoute: resumed.body.id === resumeId,
     historyMessageRead: true,
@@ -411,7 +437,7 @@ async function testPrime() {
   assert.match(resumedClose.body.error, /worker is still in .* client pane.*process tree/i);
 
   return {
-    version: '0.7.1',
+    version: execFileSync(primeBin, ['--version'], { encoding: 'utf8', timeout: 10000 }).trim(),
     routeNamespace: id.slice(0, 5),
     commands: commands.body.length,
     models: models.body.length,
@@ -458,22 +484,26 @@ async function cleanup() {
     fs.writeFileSync(path.join(home, '.prime', 'agent', 'models.json'), JSON.stringify({
       providers: { openai: { baseUrl: fakeBaseUrl, apiKey: 'pi-dish-local-canary-key' } },
     }, null, 2));
-    execFileSync('tmux', [
+    tmuxSessionId = execFileSync('tmux', [
       '-S', tmuxSocket, '-f', '/dev/null', 'new-session', '-d', '-s', 'work', '-c', work,
-    ], { stdio: 'ignore' });
+      '-P', '-F', '#{session_id}',
+      process.execPath, '-e', 'setInterval(() => {}, 3600000)',
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
     server = require('../server.js');
     tmux = require('../lib/tmux');
     if (!server.listening) await new Promise(resolve => server.once('listening', resolve));
     base = `http://127.0.0.1:${server.address().port}`;
     const harnesses = await get('/api/harnesses');
     assert.equal(harnesses.status, 200);
-    for (const id of ['omp', 'prime']) {
+    for (const id of selected) {
       const harness = harnesses.body.harnesses.find(item => item.id === id);
       assert.equal(harness?.available, true, `${id} must be reported installed`);
       assert.equal(harness.rpcFallback, false);
     }
-    const result = { omp: await testOmp(), prime: await testPrime() };
-    assert.ok(fakeRequestCount >= 3, `expected at least three fake provider calls, got ${fakeRequestCount}`);
+    const result = {};
+    for (const id of selected) result[id] = await (id === 'omp' ? testOmp() : testPrime());
+    const expectedCalls = (selected.includes('omp') ? 1 : 0) + (selected.includes('prime') ? 2 : 0);
+    assert.equal(fakeRequestCount, expectedCalls, 'each streamed turn must use the local fake provider');
     result.fakeProviderRequests = fakeRequestCount;
     console.log(JSON.stringify(result, null, 2));
   } finally {

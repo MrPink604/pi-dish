@@ -681,11 +681,25 @@ PI_DISH_REAL_BUN_BIN_DIR="$PREFIX/bun/node_modules/.bin" \
 npm run test:lineage
 ```
 
+OMP and Prime can also run independently. For an existing OMP installation:
+
+```bash
+PI_DISH_REAL_OMP_BIN="$(command -v omp)" \
+PI_DISH_REAL_BUN_BIN_DIR="$(dirname "$(command -v bun)")" \
+npm run test:lineage -- omp
+```
+
+Use `npm run test:lineage -- prime` with `PI_DISH_REAL_PRIME_BIN` for Prime;
+that mode does not require OMP or Bun. Omitting the selector runs both and
+requires both sets of paths. The output reports the actual CLI versions.
+
 The canary covers real wrapper registration, model/command discovery, a live
-streamed turn and persisted transcript, canonical history routes, OMP resume
-and unsupported close behavior, plus Prime's worker/client split, unsafe-detach
-refusal, exact-daemon cleanup, resume, and a second streamed/persisted turn
-after resume.
+streamed turn and persisted transcript, canonical history routes, OMP live
+and inactive tree capability checks, owned-pane close and resume, plus Prime's
+worker/client split, unsafe-detach refusal, exact-daemon cleanup, resume, and
+a second streamed/persisted turn after resume. The independent OMP path was
+verified with OMP 18.1.15 on 2026-09-09; Prime remains an opt-in check requiring
+its own installation.
 
 Start with [AGENTS.md](AGENTS.md) for contributor commands and invariants.
 [CLAUDE.md](CLAUDE.md) documents the architecture in detail, and

@@ -41,8 +41,8 @@ Install the pinned browser tooling with `npm ci` and
 `npm run test:browser:install`. `CHROME_BIN` optionally overrides the managed
 Chromium binary. Run one focused scenario with
 `npm run test:browser -- session-identity.spec.js --grep "delayed rename"`.
-`npm run test:lineage` is an opt-in real OMP/Prime canary with explicit
-executable paths; see README. Report skips or unavailable checks.
+`npm run test:lineage -- omp` (or `prime`) is an opt-in real harness canary
+with explicit executable paths; omit the selector to run both; see README. Report skips or unavailable checks.
 
 ## Invariants
 
