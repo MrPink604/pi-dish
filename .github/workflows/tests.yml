@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -41,7 +45,10 @@ jobs:
       - name: Backend, bridge and lifecycle tests
         env:
           PI_DISH_PI_COMMAND: ${{ github.workspace }}/node_modules/.bin/pi
-        run: npm test
+        run: npm test -- --test-reporter=spec 2>&1 | tee "$RUNNER_TEMP/backend.log"
+      - name: Backend failure details
+        if: failure()
+        run: node scripts/report-ci-failure.js "$RUNNER_TEMP/backend.log"
 
   browser:
     name: Browser (Node 24)
@@ -61,9 +68,12 @@ jobs:
           sudo apt-get install -y tmux zsh build-essential python3
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - run: npm run test:browser
-      - run: npm run test:ui:scenarios
-      - run: npm run test:ui
+      - run: npm run test:browser 2>&1 | tee "$RUNNER_TEMP/browser.log"
+      - run: npm run test:ui:scenarios 2>&1 | tee -a "$RUNNER_TEMP/browser.log"
+      - run: npm run test:ui 2>&1 | tee -a "$RUNNER_TEMP/browser.log"
+      - name: Browser failure details
+        if: failure()
+        run: node scripts/report-ci-failure.js "$RUNNER_TEMP/browser.log"
       - name: Browser failure evidence
         if: failure()
         uses: actions/upload-artifact@v7
