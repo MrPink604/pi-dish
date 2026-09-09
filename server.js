@@ -5536,12 +5536,15 @@ function injectLaunchWrapper(descriptor, args, wrapperPath) {
 
 // install.sh links the harness bridge into the host agent's own extension
 // discovery dir, where it loads into every session — including ones pi-dish
-// didn't spawn. When that link resolves to *this* repo's bridge, spawns omit
-// the --extension wrapper entirely: the spawn token already rides the
-// PI_DISH_SPAWN_TOKEN env var, and a second explicitly-loaded copy would only
-// exercise the bridge's duplicate-load sentinel. The realpath must match
-// strictly — a link into some other checkout may predate env-token support,
-// so it keeps the wrapper (the sentinel makes that safe).
+// didn't spawn. When that link resolves to *this* repo's bridge and the spawn
+// token can ride the PI_DISH_SPAWN_TOKEN env var (the bridge instance runs in
+// the launched client), spawns omit the --extension wrapper entirely. A
+// harness whose bridge runs elsewhere (Prime's resident worker,
+// wrapperTokenRequired) keeps the wrapper even when discovery is installed:
+// its token wrapper adopts into a discovery-loaded copy instead of loading a
+// duplicate bridge. The realpath must match strictly — a link into some other
+// checkout may predate env-token support, so it keeps the wrapper (adoption
+// makes that safe).
 function discoveryBridgeInstalled(descriptor, env = process.env) {
   if (!descriptor.wrapperEntrypoint || typeof descriptor.discoveryExtensionsDir !== 'function') return false;
   const bridgeDir = path.dirname(descriptor.wrapperEntrypoint);
@@ -5599,12 +5602,20 @@ async function spawnHarnessInTmux({ descriptor, target, args, cwd, name, hidden,
 
   const token = crypto.randomBytes(16).toString('hex');
   env.PI_DISH_SPAWN_TOKEN = token;
-  // The configured command may carry harness-specific environment overrides
-  // (notably OMP_AGENT_DIR). Discovery must be checked where the child will
-  // actually look, not against the server's default agent directory.
   const discoveryInstalled = discoveryBridgeInstalled(descriptor, { ...process.env, ...env });
-  const wrapperPath = discoveryInstalled ? null : materializeLaunchWrapper(descriptor, token);
-  const command = [...spec.argv, ...(discoveryInstalled
+  // OMP's bridge instance runs inside the launched client, so the spawn token
+  // rides PI_DISH_SPAWN_TOKEN env and the discovery-installed bridge replaces
+  // the generated wrapper. Prime's bridge runs in a resident daemon worker
+  // that forwards extension modules but not client env, so its token can only
+  // ride the generated wrapper (wrapperTokenRequired) and the wrapper is never
+  // dropped. When Prime's discovery link has already loaded a tokenless copy
+  // into the same worker, the wrapper adopts into it (see the bridge's load
+  // sentinel) instead of racing a duplicate bridge — and discovery must stay
+  // enabled process-wide, because Prime captures the flag when the daemon is
+  // born and a suppressed launch would disable every later manual session.
+  const tokenRidesEnv = descriptor.wrapperTokenRequired !== true;
+  const wrapperPath = discoveryInstalled && tokenRidesEnv ? null : materializeLaunchWrapper(descriptor, token);
+  const command = [...spec.argv, ...(discoveryInstalled && tokenRidesEnv
     ? stripLaunchWrapperArgs(descriptor, args)
     : injectLaunchWrapper(descriptor, args, wrapperPath))];
 

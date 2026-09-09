@@ -699,7 +699,14 @@ function renderTranscript(payload, options = {}) {
         const text = String(block.thinking ?? block.text ?? '');
         body.push(['<thinking>', text.replace(/\s+$/, ''), '</thinking>'].join('\n'));
       } else if (block.type === 'toolCall') {
-        const args = summarizeToolArgs(block.arguments);
+        // Mirror the web summary for prime's kernel tool: bash('...') wraps
+        // shell work; otherwise the first code line carries the intent.
+        let args = summarizeToolArgs(block.arguments);
+        if (block.name === 'ipython' && typeof block.arguments?.code === 'string') {
+          const m = /(?:^|[^A-Za-z0-9_])bash\(\s*(['"])((?:\\.|(?!\1).)*)\1/.exec(block.arguments.code);
+          const inner = m ? m[2].replace(/\\(['"\\])/g, '$1') : block.arguments.code.split('\n')[0];
+          args = oneLine(inner).slice(0, 120);
+        }
         body.push(`⚙ ${block.name || 'tool'}${args ? `: ${args}` : ''}`);
       } else if (block.type === 'image') {
         body.push('[image]');

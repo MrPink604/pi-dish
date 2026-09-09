@@ -23,6 +23,7 @@ function isolatedAgentDirs(t) {
   return {
     pi: path.join(temp, 'pi-agent'),
     omp: path.join(temp, 'omp-agent'),
+    prime: path.join(temp, 'prime-agent'),
   };
 }
 
@@ -33,6 +34,10 @@ function runInstall(dirs) {
       ...process.env,
       PI_AGENT_DIR: dirs.pi,
       OMP_AGENT_DIR: dirs.omp,
+      PRIME_AGENT_DIR: dirs.prime,
+      // Keep the uv bootstrap out of the test: it must not touch the network
+      // or the developer's real prime installation.
+      PI_DISH_PRIME_COMMAND: '/nonexistent/prime-agent',
     },
     encoding: 'utf8',
   });
@@ -51,6 +56,17 @@ test('installer links the correct bridge and every skill into Pi and OMP', t => 
     fs.readlinkSync(path.join(dirs.omp, 'extensions', 'pi-dish-bridge-omp')),
     path.join(ROOT, 'extensions', 'pi-dish-bridge-omp'),
   );
+  assert.equal(
+    fs.readlinkSync(path.join(dirs.prime, 'extensions', 'pi-dish-bridge-prime')),
+    path.join(ROOT, 'extensions', 'pi-dish-bridge-prime'),
+  );
+  // Prime resolves the wrapper's ../pi-dish-bridge/core.js import from the
+  // symlink path, so the shared core must sit beside it; that stock bridge
+  // stands down under prime hosts.
+  assert.equal(
+    fs.readlinkSync(path.join(dirs.prime, 'extensions', 'pi-dish-bridge')),
+    path.join(ROOT, 'extensions', 'pi-dish-bridge'),
+  );
 
   for (const agentDir of [dirs.pi, dirs.omp]) {
     for (const skill of SKILLS) {
@@ -64,6 +80,9 @@ test('installer links the correct bridge and every skill into Pi and OMP', t => 
       'the shared CLI core (skills/lib) must not be linked as a skill',
     );
   }
+  // Skills stay linked into Pi and OMP only: the pi-dish skills are Pi/OMP
+  // tooling and Prime's skill loading is not part of this integration.
+  assert.ok(!fs.existsSync(path.join(dirs.prime, 'skills')));
 
   const repeated = runInstall(dirs);
   assert.equal(repeated.status, 0, repeated.stderr);

@@ -16,8 +16,8 @@ pull requests, and manual dispatch. All jobs use Ubuntu 24.04 x64 and `npm ci`.
 | Node 24 + Playwright 1.63.0 managed Chromium | Focused browser tests, eight independent smoke features, full desktop/mobile smoke |
 | Bun 1.3.14 | OMP bridge fixture execution in backend jobs |
 | Bundled Pi from the lockfile | Real Pi bridge canary in every backend job |
-| OMP 18.1.15 | Opt-in real CLI canary, verified locally on 2026-09-09 |
-| Prime Agent 0.7.1 | Opt-in real CLI canary; requires a separate installation |
+| OMP 18.1.16 | Opt-in real CLI canary, verified locally on 2026-09-09 |
+| Prime Agent 0.9.4 | Opt-in real CLI canary, verified locally on 2026-09-09; see [prime-agent.md](prime-agent.md) |
 
 Linux is the automated baseline. Other operating systems and Electron packaging
 are outside this matrix. Node's `>=22.19.0` engine declaration does not imply

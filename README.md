@@ -145,7 +145,9 @@ desktop app for some reason.
 
 pi-dish discovers running sessions through bridge extensions that register
 each agent and expose a control socket. The installer reconciles the runtime
-dependencies, Pi bridge, OMP bridge, and every bundled skill:
+dependencies, the Pi, OMP, and Prime bridges, and every bundled skill. When
+the Prime CLI is installed but uv (required by Prime's Python kernel for its
+first tool run) is missing, the installer installs uv to `~/.local/bin`:
 
 ```bash
 git clone https://github.com/MrPink604/pi-dish
@@ -153,11 +155,14 @@ cd pi-dish
 ./install.sh
 ```
 
-The bridge links land in `~/.pi/agent/extensions/pi-dish-bridge` and
-`~/.omp/agent/extensions/pi-dish-bridge-omp`. Every directory under
-`skills/` is linked into both agents' default `skills/` directories.
-`PI_AGENT_DIR` and `OMP_AGENT_DIR` override those destinations for an isolated
-install, and `./install.sh --links-only` skips `npm ci`.
+The bridge links land in `~/.pi/agent/extensions/pi-dish-bridge`,
+`~/.omp/agent/extensions/pi-dish-bridge-omp`, and
+`~/.prime/agent/extensions/pi-dish-bridge-prime` (plus the shared bridge core
+beside it — see the alternative-harness section below). Every directory under
+`skills/` is linked into the Pi and OMP agents' default `skills/` directories.
+`PI_AGENT_DIR`, `OMP_AGENT_DIR`, and `PRIME_AGENT_DIR` override those
+destinations for an isolated install, and `./install.sh --links-only` skips
+`npm ci`.
 
 `pi-dish-pages` teaches agents to publish HTML artifacts,
 `pi-dish-comments` gives them a small CLI-backed inbox for anchored feedback,
@@ -181,14 +186,22 @@ thin wrappers are:
 - `extensions/pi-dish-bridge-omp/index.ts`
 - `extensions/pi-dish-bridge-prime/index.ts`
 
-OMP launched outside pi-dish loads the installed default wrapper
-automatically. Prime still needs its wrapper passed with `--extension`.
-Managed launches pass a generated module under
-`~/.pi/dish/launch-wrappers/` instead; it imports the same thin wrapper and
-embeds the one-launch correlation token. This matters for Prime because its
-resident daemon forwards extension paths to workers but does not forward
-arbitrary client environment variables. Generated modules are retained so a
-resident worker can reload or recover its extension later.
+Both bridges load automatically in sessions started outside pi-dish: the
+installer links each wrapper into its harness's extension discovery directory
+(`~/.omp/agent/extensions/`, `~/.prime/agent/extensions/`). Prime resolves
+extension imports from the symlink path, so the installer also links the
+shared bridge core as a sibling (`~/.prime/agent/extensions/pi-dish-bridge`);
+the stock Pi bridge that directory exposes stands down under OMP and Prime
+hosts. Managed launches do not use the discovery link: they pass a generated
+module under `~/.pi/dish/launch-wrappers/` that imports the same thin wrapper
+and embeds the one-launch correlation token. This matters for Prime because
+its resident daemon forwards extension paths to workers but does not forward
+arbitrary client environment variables — the token can only ride the module.
+When the discovery link has already loaded a tokenless bridge copy into the
+same worker, the generated wrapper adopts into it through the bridge's load
+sentinel instead of loading a duplicate bridge, so the launch's correlation
+claim still lands on the surviving instance. Generated modules are retained
+so a resident worker can reload or recover its extension later.
 
 OMP and Prime use the shared public-extension bridge and never start or fall
 back to native RPC. Their history is discovered from `~/.omp/agent/sessions/`
@@ -219,9 +232,13 @@ captured process tree to exit. OMP sessions launched outside pi-dish remain
 uncloseable. Prime's agent worker is resident, so “Detach client” instead proves
 the worker is outside the owned pane's process tree before killing only the
 pane. If ancestry cannot be proven, either operation fails closed. Prime detach
-never signals or claims to stop the logical agent. In the pinned Prime 0.7.1
-canary the worker remains a client descendant, so pi-dish disables/refuses
-detach rather than risking the worker.
+never signals or claims to stop the logical agent. Whether the guard admits
+detach depends on the live daemon topology, not the pi-dish version: when the
+daemon was started by that very client the worker is a client descendant and
+pi-dish refuses (observed on Prime 0.7.1 and 0.9.4 first launches); once a
+daemon outlives its original client — e.g. resuming after the client pane died
+— the worker hangs off the resident daemon and a proven detach succeeds
+(observed on Prime 0.9.4).
 
 Use `PI_DISH_OMP_COMMAND` or `PI_DISH_PRIME_COMMAND` when a CLI is not on
 `PATH`, analogous to `PI_DISH_PI_COMMAND` for Pi.
@@ -249,8 +266,8 @@ descriptions to that export. An offline historical JSONL still renders all of
 its persisted OMP records natively, but cannot reconstruct runtime-only prompt
 or tool state that OMP did not write to the file.
 
-The current real-host compatibility canary is pinned to OMP 17.2.11 (which
-requires Bun 1.3.14+) and Prime Agent 0.7.1. See Development for the isolated
+The current real-host compatibility canary is pinned to OMP 18.1.16 (which
+requires Bun 1.3.14+) and Prime Agent 0.9.4. See Development for the isolated
 install and test command.
 
 After that, any `pi` you launch (TUI in tmux, headless, spawned from
@@ -678,13 +695,13 @@ paid request are needed. One reproducible isolated install is:
 PREFIX="$HOME/.local/share/pi-dish-harnesses"
 npm install --prefix "$PREFIX/bun" --no-audit --no-fund bun@1.3.14
 BUN="$PREFIX/bun/node_modules/.bin/bun"
-BUN_INSTALL="$PREFIX/omp" "$BUN" install -g @oh-my-pi/pi-coding-agent@18.1.15
+BUN_INSTALL="$PREFIX/omp" "$BUN" install -g @oh-my-pi/pi-coding-agent@18.1.16
 curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | \
   env PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL=0 \
       PRIME_AGENT_INSTALLER_PLAIN=1 \
       npm_config_prefix="$PREFIX/prime" \
       PATH="$PREFIX/bun/node_modules/.bin:$PATH" \
-      sh -s -- 0.7.1
+      sh -s -- 0.9.4
 
 PI_DISH_REAL_OMP_BIN="$PREFIX/omp/bin/omp" \
 PI_DISH_REAL_PRIME_BIN="$PREFIX/prime/bin/prime-agent" \
@@ -700,6 +717,10 @@ PI_DISH_REAL_BUN_BIN_DIR="$(dirname "$(command -v bun)")" \
 npm run test:lineage -- omp
 ```
 
+The canary unpacks OMP's native addon into its isolated home under the
+system temp directory; on a host with a quota- or size-limited `/tmp`, point
+`TMPDIR` at a larger location before running it.
+
 Use `npm run test:lineage -- prime` with `PI_DISH_REAL_PRIME_BIN` for Prime;
 that mode does not require OMP or Bun. Omitting the selector runs both and
 requires both sets of paths. The output reports the actual CLI versions.
@@ -709,8 +730,9 @@ streamed turn and persisted transcript, canonical history routes, OMP live
 and inactive tree capability checks, owned-pane close and resume, plus Prime's
 worker/client split, unsafe-detach refusal, exact-daemon cleanup, resume, and
 a second streamed/persisted turn after resume. The independent OMP path was
-verified with OMP 18.1.15 on 2026-09-09; Prime remains an opt-in check requiring
-its own installation.
+verified with OMP 18.1.16 and Prime 0.9.4 on 2026-09-09; both remain opt-in
+checks requiring their own installations. See [docs/prime-agent.md](docs/prime-agent.md)
+for Prime's verified coverage and outstanding gaps.
 
 Start with [AGENTS.md](AGENTS.md) for contributor commands and invariants.
 [CLAUDE.md](CLAUDE.md) documents the architecture in detail, and

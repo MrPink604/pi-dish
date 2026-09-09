@@ -50,7 +50,7 @@ if (selected.includes('omp')) {
   }
   fs.accessSync(path.join(bunBinDir, 'bun'), fs.constants.X_OK);
 }
-
+const repoRoot = path.resolve(__dirname, '..');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-lineage-real-'));
 const home = path.join(root, 'home');
 const tmuxDir = path.join(root, 'tmux');
@@ -79,10 +79,22 @@ const shellWord = value => `'${String(value).replace(/'/g, `'\\''`)}'`;
 if (selected.includes('omp')) process.env.PI_DISH_OMP_COMMAND = [
   shellWord(ompBin), '--no-extensions', '--no-skills', '--no-rules',
 ].join(' ');
-if (selected.includes('prime')) process.env.PI_DISH_PRIME_COMMAND = [
-  shellWord(primeBin), '--offline', '--daemon-socket', shellWord(primeDaemon),
-  '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-context-files',
-].join(' ');
+if (selected.includes('prime')) {
+  process.env.PI_DISH_PRIME_COMMAND = [
+    shellWord(primeBin), '--offline', '--daemon-socket', shellWord(primeDaemon),
+    '--no-skills', '--no-prompt-templates', '--no-context-files',
+  ].join(' ');
+  // Mirror install.sh: link the wrapper plus the shared core into the
+  // isolated home's discovery directory. This deliberately leaves discovery
+  // enabled for managed clients (no --no-extensions here) so the canary
+  // exercises pi-dish's own discovery suppression on token-wrapper launches.
+  const primeExtensions = path.join(home, '.prime', 'agent', 'extensions');
+  fs.mkdirSync(primeExtensions, { recursive: true });
+  fs.symlinkSync(path.join(repoRoot, 'extensions', 'pi-dish-bridge-prime'),
+    path.join(primeExtensions, 'pi-dish-bridge-prime'));
+  fs.symlinkSync(path.join(repoRoot, 'extensions', 'pi-dish-bridge'),
+    path.join(primeExtensions, 'pi-dish-bridge'));
+}
 
 const { encodeSessionKey } = require('../lib/session-key');
 let server = null;
@@ -244,15 +256,15 @@ async function runStreamedTurn(sessionId, prompt) {
   }
 }
 
-async function shutdownPrime() {
-  if (!selected.includes('prime') || !fs.existsSync(primeDaemon)) return { success: true };
-  // Prime 0.7.1's public `shutdown` command discovers every daemon and cannot
+async function shutdownPrime(daemonSocket = primeDaemon) {
+  if (!selected.includes('prime') || !fs.existsSync(daemonSocket)) return { success: true };
+  // Prime's public `shutdown` command discovers every daemon and cannot
   // be scoped to a socket. Use the installed protocol client so this canary
   // stops only the isolated supervisor it created.
   const packageRoot = path.resolve(path.dirname(fs.realpathSync(primeBin)), '..', '..');
   const clientModule = path.join(packageRoot, 'dist', 'modes', 'daemon', 'daemon-client.js');
   const { DaemonClient } = await import(pathToFileURL(clientModule).href);
-  const client = new DaemonClient(primeDaemon);
+  const client = new DaemonClient(daemonSocket);
   await client.connect();
   try {
     return await client.request({ type: 'shutdown', force: true }, 20000);
@@ -373,7 +385,7 @@ async function testPrime() {
   }, 'real Prime active session');
   assert.equal(active.harnessId, 'prime');
   assert.equal(active.capabilities.close, false,
-    'Prime 0.7.1 worker remains a client descendant, so detach must be disabled');
+    'a fresh-daemon Prime worker remains a client descendant, so detach must be disabled');
   assert.equal(active.capabilities.queueCancel, false);
 
   const commands = await get(`/api/commands?sessionId=${encodeURIComponent(id)}`);
@@ -436,6 +448,37 @@ async function testPrime() {
   assert.equal(resumedClose.status, 409, JSON.stringify(resumedClose.body));
   assert.match(resumedClose.body.error, /worker is still in .* client pane.*process tree/i);
 
+  // A prime TUI started outside pi-dish (no --extension, discovery enabled)
+  // must load the discovery-linked bridge and register tokenlessly — the
+  // manual-session feature the installer links exist for. It births its own
+  // daemon: a client that finds a resident worker attaches to that session
+  // instead of creating one, which is correct but not this probe.
+  const manualDaemon = path.join(root, 'prime-manual-daemon.sock');
+  execFileSync('tmux', ['-S', tmuxSocket, 'new-session', '-d', '-s', 'prime-manual', [
+    'env', `HOME=${shellWord(home)}`, `PI_DISH_SOCKET_DIR=${shellWord(socketDir)}`,
+    shellWord(primeBin), '--offline', '--daemon-socket', shellWord(manualDaemon),
+    '--model', 'openai/gpt-4o-mini',
+  ].join(' ')], { stdio: 'ignore' });
+  try {
+    await waitFor(() => {
+      let names;
+      try { names = fs.readdirSync(path.join(home, '.pi', 'dish', 'sessions')); } catch { return null; }
+      for (const name of names) {
+        try {
+          const claim = JSON.parse(fs.readFileSync(path.join(home, '.pi', 'dish', 'sessions', name), 'utf8'));
+          if (claim.wrapper?.harnessId === 'prime' && !claim.spawnToken) return claim;
+        } catch {}
+      }
+      return null;
+    }, 'tokenless discovery registration from a manual prime TUI', 30000);
+    const manualList = await get('/api/sessions?active=1');
+    assert.ok((manualList.body.active || []).filter(session => session.harnessId === 'prime').length >= 2,
+      'manual discovery session must appear alongside the managed one');
+  } finally {
+    try { execFileSync('tmux', ['-S', tmuxSocket, 'kill-session', '-t', 'prime-manual'], { stdio: 'ignore' }); } catch {}
+    try { await shutdownPrime(manualDaemon); } catch {}
+  }
+
   return {
     version: execFileSync(primeBin, ['--version'], { encoding: 'utf8', timeout: 10000 }).trim(),
     routeNamespace: id.slice(0, 5),
@@ -446,9 +489,7 @@ async function testPrime() {
     wrapperTokenClaimed: true,
     workerClientSplit: true,
     unsafeDetachRefused: true,
-    resumeSameRoute: resumed.body.id === id,
-    historyRouteRead: true,
-    postResumeStreamedTurnEvents: resumedTurn.events,
+    manualDiscoveryRegistered: true,
     postResumePersistedAssistantMessage: true,
   };
 }

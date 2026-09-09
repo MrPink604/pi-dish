@@ -7398,20 +7398,33 @@ function renderThinkingBlock(thinking) {
 function renderToolCall(block) {
   const args = block.arguments || {};
   const summary = getToolSummary(block.name, args);
+  // Prime's ipython tool takes one `code` argument; the raw JSON wrapper
+  // around it is noise. Other tools keep the JSON dump.
+  const bodyHtml = block.name === 'ipython' && typeof args.code === 'string'
+    ? `<pre><code>${escapeHtml(args.code)}</code></pre>`
+    : `<pre><code>${escapeHtml(JSON.stringify(args, null, 2))}</code></pre>`;
 
   return `<details class="tool-call">
     <summary class="tool-call-header">
       <span class="tool-call-icon">⚡</span><span class="tool-call-name">${escapeHtml(block.name)}</span>
       ${summary ? `<span class="tool-call-summary">${escapeHtml(summary)}</span>` : ''}
     </summary>
-    <div class="tool-call-content"><pre><code>${escapeHtml(JSON.stringify(args, null, 2))}</code></pre></div>
+    <div class="tool-call-content">${bodyHtml}</div>
   </details>`;
 }
 
 function renderToolResult(msg, time, attrs = '') {
-  const content = extractTextContent(msg.content);
+  let content = extractTextContent(msg.content);
   const isError = msg.isError;
   const timestamp = msg.timestamp || Date.now();
+  // Prime's ipython results are a BashResult repr; show the wrapped command
+  // output (and a nonzero-exit chip) instead of the Python repr.
+  const parsed = parseIpythonResult(content);
+  let exitBadge = '';
+  if (parsed) {
+    content = parsed.output;
+    if (parsed.exitCode !== 0) exitBadge = `<span class="tool-result-meta error-badge">exit ${parsed.exitCode}</span>`;
+  }
   const lines = content.split('\n');
   const lineCount = lines.length;
   const preview = truncate(lines[0], 80);
@@ -7429,6 +7442,7 @@ function renderToolResult(msg, time, attrs = '') {
         <span class="tool-result-name">${escapeHtml(msg.toolName || 'result')}</span>
         ${lineCount > 5 ? `<span class="tool-result-meta">${lineCount} lines</span>` : ''}
         ${imageCount ? `<span class="tool-result-meta">${imageCount === 1 ? 'image' : imageCount + ' images'}</span>` : ''}
+        ${exitBadge}
         ${isError ? '<span class="tool-result-meta error-badge">error</span>' : ''}
         ${lineCount > 5 ? `<span class="tool-result-preview">${escapeHtml(preview)}</span>` : ''}
       </summary>
@@ -7607,9 +7621,12 @@ function upsertLiveCustomMessage(message, { streaming = false } = {}) {
 // =========================================================================
 
 // One place for the output escaping + truncation — a freshly appended panel
-// and an incrementally updated one must render output identically.
+// and an incrementally updated one must render output identically. Prime's
+// ipython results land here as a BashResult repr once complete; the parse
+// only matches the full text, so streaming prefixes fall through raw.
 function liveToolOutputHtml(output) {
-  return escapeHtml(truncate(output, 8000));
+  const parsed = parseIpythonResult(output);
+  return escapeHtml(truncate(parsed ? parsed.output : output, 8000));
 }
 
 function buildLiveToolPanel(toolCallId, toolName, args, output, isError, isComplete, durationMs, imagesHtml = '') {
@@ -10673,6 +10690,9 @@ function renderStreamingMessage(message) {
     } else if (block.type === 'toolCall') {
       const args = block.arguments || {};
       const argsJson = JSON.stringify(args, null, 2);
+      // Match the static renderer: prime's ipython tool shows its `code`
+      // argument directly instead of the JSON wrapper.
+      const bodyText = block.name === 'ipython' && typeof args.code === 'string' ? args.code : argsJson;
       if (!blockEl) {
         el.insertAdjacentHTML('beforeend',
           `<details class="tool-call" data-block-index="${i}" data-block-type="toolCall">
@@ -10688,7 +10708,7 @@ function renderStreamingMessage(message) {
         blockEl._src = argsJson;
         blockEl.querySelector('.tool-call-name').textContent = block.name || 'tool';
         blockEl.querySelector('.tool-call-summary').textContent = getToolSummary(block.name, args);
-        blockEl.querySelector('.tool-call-content code').textContent = argsJson;
+        blockEl.querySelector('.tool-call-content code').textContent = bodyText;
       }
     }
   });

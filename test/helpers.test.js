@@ -185,6 +185,32 @@ test('getToolSummary picks the right field per tool', () => {
   assert.equal(H.getToolSummary('Bash', null), '');
 });
 
+test('getToolSummary surfaces prime ipython shell work and code lines', () => {
+  assert.equal(H.getToolSummary('ipython', { code: "await bash('cat note.txt')" }), 'cat note.txt');
+  assert.equal(H.getToolSummary('ipython', { code: 'bash("grep -r \'x\' .")' }), "grep -r 'x' .");
+  assert.equal(H.getToolSummary('ipython', { code: "df = pandas.read_csv('a.csv')\ndf.head()" }), "df = pandas.read_csv('a.csv')");
+  assert.equal(H.getToolSummary('ipython', {}), '');
+  assert.equal(H.getToolSummary('ipython', null), '');
+});
+
+test('parseIpythonResult unwraps BashResult reprs only when complete', () => {
+  assert.deepEqual(
+    H.parseIpythonResult("BashResult(exit_code=0, output='hello\\n', duration=0.017216796055436134)"),
+    { exitCode: 0, output: 'hello\n', durationMs: 17 },
+  );
+  assert.deepEqual(
+    H.parseIpythonResult('BashResult(exit_code=1, output=\'boom: it\\\'s done\\n\', duration=1.5)'),
+    { exitCode: 1, output: "boom: it's done\n", durationMs: 1500 },
+  );
+  assert.deepEqual(
+    H.parseIpythonResult("BashResult(exit_code=0, output='no duration')"),
+    { exitCode: 0, output: 'no duration', durationMs: null },
+  );
+  assert.equal(H.parseIpythonResult("BashResult(exit_code=0, output='partial"), null);
+  assert.equal(H.parseIpythonResult('plain kernel text'), null);
+  assert.equal(H.parseIpythonResult(null), null);
+});
+
 test('getToolOutputText concatenates text blocks only', () => {
   assert.equal(H.getToolOutputText({ content: [
     { type: 'text', text: 'a' }, { type: 'image' }, { type: 'text', text: 'b' },
