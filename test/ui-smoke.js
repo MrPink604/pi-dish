@@ -1483,8 +1483,10 @@ let remoteHost = null; // second pi-dish (multi-host section)
       }
       await route.fulfill({ status: 200, contentType: 'application/json', body: ompAgentsBody() });
     });
-    await desktop.evaluate(() => localStorage.setItem('pi-dish-new-harness', 'omp'));
-    await desktop.evaluate(() => loadHarnesses());
+    await desktop.evaluate(() => {
+      localStorage.setItem('pi-dish-new-harness', 'omp');
+      return loadHarnesses();
+    });
     await desktop.waitForFunction(() => document.querySelector('#nsHarnessSelect option[value="omp"]'));
     check(await desktop.locator('#nsHarnessSelect option[value="prime"]').count() === 0,
       'unavailable harnesses are omitted from the Agent selector');

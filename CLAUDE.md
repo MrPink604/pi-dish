@@ -674,6 +674,12 @@ error and the takeover stays open. The workspace-header `+` button
 direct-spawns via `createSession(cwd)` (same async path, default model)
 without the takeover.
 
+Harness discovery captures the selected host and a request sequence before
+awaiting `/api/harnesses`. Only the latest request for the still-selected host
+may update the picker and its catalog; stale failures must also leave the
+newer selection intact. The host catalog cache is written under that captured
+host, never whichever host is selected when the response arrives.
+
 ### Harness settings: agents + model roles (`#harnessSettingsModal`)
 
 One modal covers pi-dish's take on OMP's `/models` roles and `/agents` hub:

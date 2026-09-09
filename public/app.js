@@ -9283,6 +9283,7 @@ const HARNESS_KEY = 'pi-dish-new-harness';
 let knownHarnesses = [{ id: 'pi', label: 'Pi', available: true }];
 let newSessionHarness = 'pi';
 let nsConfigSeq = 0;
+let nsHarnessSeq = 0;
 let nsPilotRefreshTimer = null;
 
 const NS_THINKING_LABELS = {
@@ -9326,13 +9327,17 @@ function harnessSupportsSettings(session) {
 }
 
 async function loadHarnesses() {
+  const hostId = nsHostId();
+  const seq = ++nsHarnessSeq;
+  const ownsDiscovery = () => seq === nsHarnessSeq && hostId === nsHostId();
   try {
-    const res = await apiFetch(nsHostId(), '/api/harnesses');
+    const res = await apiFetch(hostId, '/api/harnesses');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (!ownsDiscovery()) return;
     if (Array.isArray(data.harnesses) && data.harnesses.length) {
       knownHarnesses = data.harnesses;
-      harnessRowsByHost.set(nsHostId() || selfHost.hostId, data.harnesses);
+      harnessRowsByHost.set(hostId || selfHost.hostId, data.harnesses);
       // The takeover can open while this startup request is in flight. Its
       // Pi-only fallback must not erase a saved alternative once discovery
       // confirms that harness is available. Reading here also respects a
@@ -9343,6 +9348,7 @@ async function loadHarnesses() {
       }
     }
   } catch (_) {
+    if (!ownsDiscovery()) return;
     knownHarnesses = [{ id: 'pi', label: 'Pi', available: true }];
   }
   renderNsHarnesses();
