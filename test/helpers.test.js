@@ -154,6 +154,29 @@ test('extractTextContent handles string, block-array, and junk', () => {
   assert.equal(H.extractTextContent({ nope: true }), '');
 });
 
+test('extractTextBlocks ignores non-text blocks entirely', () => {
+  assert.equal(H.extractTextBlocks('plain'), 'plain');
+  // An image-bearing prompt echo must extract to exactly the composer's
+  // trimmed text — a phantom separator here broke echo suppression and
+  // rendered the prompt twice.
+  assert.equal(H.extractTextBlocks([
+    { type: 'text', text: 'describe this' },
+    { type: 'image', data: 'AAAA', mimeType: 'image/png' },
+  ]), 'describe this');
+  assert.equal(H.extractTextBlocks([
+    { type: 'image', data: 'AAAA', mimeType: 'image/png' },
+    { type: 'text', text: 'describe this' },
+  ]), 'describe this');
+  assert.equal(H.extractTextBlocks([{ type: 'image', data: 'AAAA', mimeType: 'image/png' }]), '');
+  assert.equal(H.extractTextBlocks([
+    { type: 'text', text: 'a' },
+    { type: 'image', data: 'AAAA', mimeType: 'image/png' },
+    { type: 'text', text: 'b' },
+  ]), 'a\nb');
+  assert.equal(H.extractTextBlocks(null), '');
+  assert.equal(H.extractTextBlocks({ nope: true }), '');
+});
+
 test('getToolSummary picks the right field per tool', () => {
   assert.equal(H.getToolSummary('Bash', { command: 'ls -la\nrm x' }), 'ls -la');
   assert.equal(H.getToolSummary('Read', { path: '/tmp/f' }), '/tmp/f');

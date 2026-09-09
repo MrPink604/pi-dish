@@ -1741,6 +1741,18 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.click('#btnSend');
     await desktop.waitForSelector('.message.user img.msg-image', { timeout: 5000 });
     check(true, 'optimistic user message renders the image');
+    // The bridge echoes the image prompt back as a user message_end (like
+    // real pi); the optimistic render must suppress it even though the echoed
+    // content carries a non-text block — exactly one bubble, one image, for
+    // the whole turn. Waiting for the live tool panel guarantees the echo has
+    // had its chance to double-render before counting.
+    await desktop.waitForSelector('details.live-tool-panel', { timeout: 5000 });
+    check(await desktop.evaluate(() => {
+      const bubbles = [...document.querySelectorAll('.message.user')]
+        .filter((el) => el.textContent.includes('describe the screenshot'));
+      return bubbles.length === 1 &&
+        document.querySelectorAll('.message.user img.msg-image').length === 1;
+    }), 'image prompt echo suppressed (single user bubble mid-turn)');
     check(await desktop.locator('.attachment-thumb').count() === 0, 'attachment strip cleared after send');
     check(lastPrompt && Array.isArray(lastPrompt.images) && lastPrompt.images.length === 1 &&
       lastPrompt.images[0].data === PNG_B64 && lastPrompt.images[0].mimeType === 'image/png',

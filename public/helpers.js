@@ -162,6 +162,20 @@ function extractTextContent(content) {
   return '';
 }
 
+/** Text of the text blocks only — no phantom separators from image or other
+ *  non-text blocks (extractTextContent joins those in as empty lines, so it
+ *  can never equal the composer's trimmed text once an image is attached).
+ *  Used when comparing a prompt to its echo. */
+function extractTextBlocks(content) {
+  if (!content) return '';
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter(c => typeof c === 'string' || (c && c.type === 'text'))
+    .map(c => typeof c === 'string' ? c : c.text)
+    .join('\n');
+}
+
 function getToolSummary(toolName, args) {
   if (!args) return '';
   if (toolName === 'Bash' || toolName === 'bash') return args.command ? truncate(args.command.split('\n')[0], 60) : '';
@@ -2684,7 +2698,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     escapeHtml, stripAnsi, formatTokens, formatCacheStat, formatRuntime, formatRelativeTime, formatTime, formatDuration, formatTokSpeed,
     formatEstimatedCost, formatUsageCost, formatResponseMetadata,
-    shortCwd, truncate, extractTextContent, getToolSummary, getToolOutputText, extractImageBlocks, messageHasVisibleText,
+    shortCwd, truncate, extractTextContent, extractTextBlocks, getToolSummary, getToolOutputText, extractImageBlocks, messageHasVisibleText,
     contextClass, sessionSupports, harnessBadgeInfo, sessionMetaText, parseModelId, formatModelRef,
     groupByWorkspace, buildWorkspaceTree, collectTreeSessions, groupSessionsByDate,
     buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies,

@@ -7180,7 +7180,7 @@ async function fetchNewMessagesSince(sessionId, selectionGeneration = sessionSel
     // not consume its optimistic association. The authoritative indexed user
     // message is now present, so that association no longer has work to do.
     fresh.filter(m => m.role === 'user').forEach(m => {
-      consumePendingSelfEcho(sessionId, extractTextContent(m.content));
+      consumePendingSelfEcho(sessionId, m.content);
     });
     updateMoodFromMessages(fresh);
     if (fresh.length === 0) {
@@ -7938,7 +7938,7 @@ function openMessageStream(url, sessionId, selectionGeneration) {
           // pi echoes every user message it processes — including the prompt
           // this client just rendered optimistically in sendMessage. Skip that
           // one echo or the prompt shows twice until the turn_end catch-up.
-          if (consumePendingSelfEcho(sessionId, extractTextContent(message.content))) {
+          if (consumePendingSelfEcho(sessionId, message.content)) {
             return;
           }
           // A steer/follow-up pi just delivered mid-turn (or a prompt typed in
@@ -8695,8 +8695,11 @@ function discardOptimisticPrompt(clientPromptId) {
 
 // The composer never sends the <session-refs> block — the server appends it —
 // so every echoed prompt has to be compared with the block stripped back off.
-function consumePendingSelfEcho(sessionId, message) {
-  const text = splitSessionRefContext(message).text;
+// Comparison runs on the text blocks only: extractTextContent pads a phantom
+// '\n' per image block, which never equals the composer's trimmed text and so
+// let an image prompt's echo render as a second bubble.
+function consumePendingSelfEcho(sessionId, content) {
+  const text = splitSessionRefContext(extractTextBlocks(content)).text;
   for (const [clientPromptId, pending] of pendingOptimisticPrompts) {
     if (pending.sessionKey !== keyForSessionId(sessionId) || pending.message !== text) continue;
     pendingOptimisticPrompts.delete(clientPromptId);
