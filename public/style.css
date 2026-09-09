@@ -3115,7 +3115,11 @@ body.sidebar-open {
   background: var(--text-muted);
 }
 
-/* Modal overlay */
+/* Modal overlay. Deliberately no backdrop-filter: a full-viewport blur forces
+   a blurred re-raster of everything behind the overlay on every repaint, and
+   with a session streaming behind an open modal that costs ~25ms/frame —
+   every control on the page, native select popups included, goes to 24fps.
+   The plain dim keeps the modality at zero per-frame cost. */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -3124,7 +3128,6 @@ body.sidebar-open {
   display: flex;
   align-items: center;
   justify-content: center;
-  backdrop-filter: blur(2px);
 }
 
 .modal {
