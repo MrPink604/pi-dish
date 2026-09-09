@@ -27,6 +27,7 @@ uses Express and CommonJS (`server.js`, `lib/`); the browser uses plain scripts
 ```sh
 npm test                              # unit, API, bridge and lifecycle suites
 npm test -- test/remote-hosts.test.js   # example focused suite
+npm run test:browser                   # isolated browser scenarios
 npm run test:ui                        # desktop/mobile browser smoke
 npm run build:vendor                   # only after changing vendor inputs
 ```
@@ -36,11 +37,12 @@ committing behavior changes. UI behavior changes also need the browser smoke
 suite. Add focused regressions for defects; defer broad coverage work to its
 own change. Documentation-only edits need link/content checks.
 
-The browser suite currently needs a separately installed Playwright and Chrome.
-`NODE_PATH` can point to Playwright's installation (for example,
-`NODE_PATH=/usr/lib/node_modules npm run test:ui`); `CHROME_BIN` overrides the
-Chrome path. `npm run test:lineage` is an opt-in real OMP/Prime canary with
-explicit executable paths; see README. Report skips or unavailable checks.
+Install the pinned browser tooling with `npm ci` and
+`npm run test:browser:install`. `CHROME_BIN` optionally overrides the managed
+Chromium binary. Run one focused scenario with
+`npm run test:browser -- session-identity.spec.js --grep "delayed rename"`.
+`npm run test:lineage` is an opt-in real OMP/Prime canary with explicit
+executable paths; see README. Report skips or unavailable checks.
 
 ## Invariants
 

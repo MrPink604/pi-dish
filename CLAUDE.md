@@ -19,7 +19,8 @@ nested-discovery section).
 npm start          # server on http://127.0.0.1:3333 (PORT/HOST env to override;
                    # localhost-only by default — HOST=0.0.0.0 to expose on LAN)
 npm test           # API + helper unit tests (node:test, test/*.test.js)
-npm run test:ui    # browser smoke test (needs Chrome + global playwright)
+npm run test:browser  # isolated Playwright scenarios
+npm run test:ui    # full desktop/mobile browser smoke
 npm run build:vendor  # regenerate public/vendor/ from node_modules
 ```
 
@@ -1306,13 +1307,12 @@ or manual CDP below.
 
 ## UI testing (browser, CDP)
 
-UI changes are validated by driving real Chrome over CDP
-with the globally installed playwright (`NODE_PATH=/usr/lib/node_modules`):
+UI changes are validated with the repository-pinned Playwright and Chromium.
+Run `npm ci` and `npm run test:browser:install` once, then `npm run test:browser`
+for isolated scenarios or `npm run test:ui` for the full integration smoke.
+`CHROME_BIN` optionally points at a local Chrome binary. Focused tests live in
+`test/browser/` and retain traces/screenshots on failure; see README.
 
-- Launch via `chromium.launch({ executablePath: '/opt/google/chrome/chrome', headless: true })`.
-  Note: spawning `google-chrome-stable --remote-debugging-port=...` by hand does
-  not work on this machine (the CachyOS wrapper never opens the debug port) —
-  let playwright launch the binary itself.
 - To get a live session in the list without a real pi session, register a fake
   bridge entry: create a Unix socket server plus a JSON file in
   `~/.pi/dish/sessions/` with `{ sessionId, socketPath, pid, cwd, name, model,
@@ -1337,8 +1337,8 @@ answers `get_commands`/`get_available_models`/`prompt` and, on `prompt`,
 streams a whole turn (`turn_start`, `message_update` deltas, JSONL append,
 `message_end`, `turn_end`) so the real SSE → streaming-renderer → catch-up
 path is exercised end to end, plus the mobile hamburger/drawer flows. Extend
-it for new UI flows; write one-off CDP scripts in the scratchpad only for
-exploratory debugging.
+it for integration flows; add independent regressions in `test/browser/`
+when a fresh context and small fixture make the failure easier to isolate.
 
 ## Terminal (lib/terminal.js, PI_DISH_TERMINAL=1)
 

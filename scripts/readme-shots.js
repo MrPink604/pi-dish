@@ -8,6 +8,8 @@
  * Run: npm run shots — then strip metadata before committing, e.g.
  *   magick shot.png -strip -define png:exclude-chunks=tIME,tEXt,zTXt,iTXt,date shot.png
  */
+// Resolve the browser cache before the fixture replaces HOME.
+const { chromium } = require('playwright');
 const fs = require('node:fs');
 const os = require('node:os');
 const net = require('node:net');
@@ -187,8 +189,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   if (!server.listening) await new Promise((r) => server.once('listening', r));
   const base = `http://127.0.0.1:${server.address().port}`;
 
-  const { chromium } = require('playwright');
-  const browser = await chromium.launch({ executablePath: '/opt/google/chrome/chrome', headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || undefined, headless: true });
 
   try {
     // ---- desktop: main overview -------------------------------------------------

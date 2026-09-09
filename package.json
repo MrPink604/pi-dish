@@ -16,8 +16,10 @@
     "electron:dev": "electron electron/main.js",
     "electron:build": "electron-builder",
     "postinstall": "electron-builder install-app-deps",
-    "test:ui": "NODE_PATH=${NODE_PATH:-$(npm root -g)} node test/ui-smoke.js",
-    "shots": "NODE_PATH=${NODE_PATH:-$(npm root -g)} node scripts/readme-shots.js"
+    "test:ui": "node test/ui-smoke.js",
+    "shots": "node scripts/readme-shots.js",
+    "test:browser": "playwright test",
+    "test:browser:install": "playwright install chromium"
   },
   "build": {
     "appId": "com.pidish.app",
@@ -62,6 +64,7 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "electron": "^33.0.0",

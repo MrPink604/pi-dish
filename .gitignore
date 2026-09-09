@@ -4,3 +4,5 @@ node_modules/
 dist/
 launch-tailnet.sh
 .pi-subagents/
+test-results/
+playwright-report/

@@ -2,8 +2,8 @@
 /**
  * UI smoke test — boots server.js against a temp HOME containing a fake
  * *live* bridge session (Unix socket + registry entry, per the pattern in
- * CLAUDE.md), then drives real Chrome over CDP with the globally installed
- * playwright and asserts the core flows:
+ * CLAUDE.md), then drives Chromium with the repository-pinned
+ * Playwright and asserts the core flows:
  *
  *   1. desktop: live session listed under Active, selecting renders messages
  *   2. prompt round-trip: send → streamed message_update renders live →
@@ -14,6 +14,8 @@
  *
  * Not part of `npm test` (needs Chrome). Run with: npm run test:ui
  */
+// Resolve the browser cache before the fixture replaces HOME.
+const { chromium } = require('playwright');
 const fs = require('node:fs');
 const os = require('node:os');
 const net = require('node:net');
@@ -548,8 +550,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
   // more than the section's 5s wait. Fire-and-forget; the result is unused.
   fetch(`${base}/api/usage-summary?days=30`).then((r) => r.arrayBuffer()).catch(() => {});
 
-  const { chromium } = require('playwright');
-  const executablePath = process.env.CHROME_BIN || '/opt/google/chrome/chrome';
+  const executablePath = process.env.CHROME_BIN || undefined;
   const browser = await chromium.launch({
     executablePath,
     headless: true,

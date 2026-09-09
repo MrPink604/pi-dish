@@ -4,8 +4,8 @@
 **Status:** Agreed shape (2026-07-31) — buildable contract
 **Affects:** `lib/session-index.js`, new `lib/skills.js`, `server.js`,
 `public/app.js`, `public/style.css`, `skills/pi-dish-skill-refine/`
-**Mockup:** `pd-scratch/skills-mockup/` (index.html directory, detail.html
-detail page — approved shape). **Supersedes** the Phase 1 UX/API sections of
+**Mockup:** Approved scratch mockups were removed during repository cleanup
+on 2026-09-09; the implemented Skills view is the current visual reference. **Supersedes** the Phase 1 UX/API sections of
 `skills-view.md`; that file remains the reference for Pi catalog semantics
 (frontmatter ≠ startup cost, discovered/advertised/activated) and for the
 deferred tokenization/eval research. `skills-maintenance-research.md` is the

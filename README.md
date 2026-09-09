@@ -632,10 +632,30 @@ for what crosses the bridge and what stays TUI-only.
 
 ```bash
 npm test              # API + unit tests (node:test)
-npm run test:ui       # browser smoke test (needs Chrome + global Playwright)
+npm run test:browser  # isolated browser scenarios (Playwright)
+npm run test:ui       # full desktop/mobile integration smoke
 npm run build:vendor  # regenerate public/vendor/ after bumping marked/highlight.js
 npm run electron:dev  # desktop shell
 ```
+
+Browser setup is reproducible from the lockfile:
+
+```bash
+npm ci
+npm run test:browser:install
+npm run test:browser
+npm run test:browser -- session-identity.spec.js --grep "delayed rename"
+npm run test:ui
+```
+
+The pinned Playwright version uses its matching Chromium download by default;
+`CHROME_BIN=/absolute/path/to/chrome` overrides it for local debugging. See
+[Playwright browser prerequisites](https://playwright.dev/docs/browsers) for
+supported systems and OS dependencies. Both browser suites use temporary homes
+and fixture sessions. Focused scenarios start fresh servers and a fresh browser
+context per test; failures retain traces and screenshots in `test-results/`.
+Inspect a trace with `npx playwright show-trace <trace.zip>`. The full smoke
+continues to cover streaming, terminal, routines, and mobile interactions.
 
 The opt-in lineage canary runs the actual released OMP and Prime CLIs through
 pi-dish's tmux/HTTP orchestration. It uses an isolated HOME, tmux server,

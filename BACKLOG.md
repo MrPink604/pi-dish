@@ -15,10 +15,10 @@ its descriptions of missing features are historical.
 These changes establish the baseline before broader testing or refactoring work.
 Each behavior fix includes a focused regression check.
 
-## 2. Testing and coverage (next stage)
+## 2. Testing and coverage (in progress)
 
-- Make browser-test prerequisites reproducible from the repository instead of
-  depending on a machine's global Playwright installation and Chrome path.
+- Completed: pinned local Playwright, managed Chromium setup, and independent
+  browser scenarios for same-id transcript selection and delayed metadata writes.
 - Split the long browser smoke into independently runnable feature scenarios
   while retaining desktop/mobile end-to-end coverage.
 - Extend cross-host collision coverage to composer drafts/attachments, queued
