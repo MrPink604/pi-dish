@@ -6419,10 +6419,13 @@ async function restartSessionById(requestedId, { beforeAction = null } = {}) {
   }
 
   try {
+    // Pass the live bridge's registered model so the respawned argv carries
+    // --model: launch-time sniffing (fleet omp-launch) keys off argv, and a
+    // bare --resume would otherwise start under the default role's model.
     const id = await spawnHarnessInTmux({
       descriptor,
       target: { socket: spawn.socket },
-      args: descriptor.argv.resume({ file: sessionFile }),
+      args: descriptor.argv.resume({ file: sessionFile, model: reg.model || undefined }),
       cwd,
       name: reg.name || null,
       hidden: path.resolve(spawn.socket) === path.resolve(path.join(tmux.tmuxTmpdir(), HEADLESS_TMUX_SERVER)),
