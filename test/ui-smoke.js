@@ -1719,6 +1719,8 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // 7. Image attachment: attach a PNG, send, optimistic + JSONL renders
     // both carry the image, and the bridge receives the base64 payload.
     console.log('image attachments:');
+    await desktop.waitForSelector('#btnAttach', { state: 'visible', timeout: 5000 });
+    check(true, 'the 📎 attach button is visible beside the composer');
     const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
     await desktop.evaluate(async (b64) => {
       const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
@@ -3549,7 +3551,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     const routineSessionId = await desktop.evaluate(() => routineInvocations[0]?.sessionId || null);
     check(!!routineSessionId, 'the invocation records the session it ran in');
     await desktop.evaluate(() => { switchTab('all'); });
-    await desktop.evaluate(() => loadSessions(undefined, { withPrevious: true }));
+    await desktop.evaluate(() => { loadSessions(undefined, { withPrevious: true }); });
     await desktop.waitForSelector('.routine-chip', { timeout: 10000 });
     check((await desktop.locator('.routine-chip').first().textContent()).includes('smoke-routine'),
       'the routine\'s session wears a ⏱ chip in the sidebar');

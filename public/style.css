@@ -3997,6 +3997,17 @@ button.badge-context {
 
 .composer-note-dismiss:hover { color: var(--text); }
 
+/* Image-attach button. The base .badge-tool-btn is display:none (mobile-only
+   tool buttons) and nothing in app.js toggles this one's display, so it
+   un-hides itself here — the picker is a desktop affordance too (paste is
+   the keyboard-only alternative). */
+#btnAttach {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Dictation button. The base .badge-tool-btn is display:none (mobile-only
 /* Dictation button. The base .badge-tool-btn is display:none (mobile-only
    tool buttons); app.js sets the inline display when a host advertises stt,
    so this rule only carries the shape. */
