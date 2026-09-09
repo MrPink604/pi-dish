@@ -7145,14 +7145,17 @@ const hostIsWildcard = HOST === '0.0.0.0' || HOST === '::';
 // updates, and spawns a diagnosis session on the latter. Bound first, and
 // kept up even when HOST itself cannot bind.
 let aliasServer = null;
+const explicitAgentUrl = !!process.env.PI_DISH_URL;
 function ensureLoopbackAlias(port) {
   if (hostIsLoopback || hostIsWildcard || aliasServer) return;
   aliasServer = ownServer(app.listen(port, LOOPBACK, () => {
+    updateAgentUrl(server);
     console.log(`pi-dish loopback alias at http://${LOOPBACK}:${aliasServer.address().port}`);
   }));
   aliasServer.on('error', (err) => {
     console.error(`pi-dish: loopback alias not listening: ${err.message}`);
     aliasServer = null;
+    updateAgentUrl(server);
   });
 }
 
@@ -7165,19 +7168,25 @@ if (PORT > 0) ensureLoopbackAlias(PORT);
 let recoveryStopped = false;
 let server = null; // fleet-facing listener; set by startMainListener
 
-function onMainListening(main) {
+function updateAgentUrl(main) {
   // Base URL for agents running on this machine (skill CLIs and the
   // pi-dish-pages hook fetch it). Children spawned by pi-dish inherit
   // process.env (RPC) or get it via tmux -e; respect an operator-provided
   // value. Prefer loopback whenever we serve it — it stays reachable no
   // matter the tailnet state; otherwise advertise the address we bound.
-  if (!process.env.PI_DISH_URL) {
+  if (!explicitAgentUrl && main?.listening) {
     const bound = main.address();
     const wildcard = !bound.address || bound.address === '0.0.0.0' || bound.address === '::';
-    const reachable = wildcard || aliasServer ? LOOPBACK : bound.address;
+    // Creating the alias object does not mean its asynchronous bind succeeded.
+    // Until it listens, the primary is the address an agent can actually reach.
+    const reachable = wildcard || aliasServer?.listening ? LOOPBACK : bound.address;
     const authority = reachable.includes(':') ? `[${reachable}]` : reachable;
     process.env.PI_DISH_URL = `http://${authority}:${bound.port}`;
   }
+}
+
+function onMainListening(main) {
+  updateAgentUrl(main);
   console.log(`pi-dish running at http://${HOST}:${PORT}`);
   if (HOST === '127.0.0.1') {
     console.log('Bound to localhost only. To reach it from other devices, set HOST (e.g. HOST=0.0.0.0 or your Tailscale IP) or front it with a reverse proxy.');

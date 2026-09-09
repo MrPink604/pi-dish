@@ -95,7 +95,8 @@ test('specific-host ephemeral startup shares a port with its loopback alias and 
   const main = await server.wait(event => event.address?.address === '127.0.0.2');
   const alias = await server.wait(event => event.address?.address === '127.0.0.1');
   assert.equal(alias.address.port, main.address.port);
-  assert.equal(main.advertised, `http://127.0.0.1:${main.address.port}`);
+  assert.ok([`http://127.0.0.2:${main.address.port}`, `http://127.0.0.1:${main.address.port}`].includes(main.advertised));
+  assert.equal(alias.advertised, `http://127.0.0.1:${main.address.port}`);
   const primary = await descriptor('127.0.0.2', main.address.port);
   assert.equal((await descriptor('127.0.0.1', main.address.port)).hostId, primary.hostId);
   await stopAndRebind(t, server, 'SIGINT', [main, alias]);
@@ -119,6 +120,38 @@ test('loopback stays usable while a missing interface waits for the real bind re
   assert.equal((await descriptor('127.0.0.1', port)).hostId, before.hostId);
   assert.equal(server.events.filter(event => event.address?.address === '127.0.0.1').length, 1);
   await stopAndRebind(t, server, 'SIGTERM', [main, alias]);
+});
+
+for (const explicitUrl of ['', 'https://fixture.invalid/dish']) {
+  test(`a delayed alias advertises ${explicitUrl ? 'the explicit URL unchanged' : 'only an address already listening'}`, { timeout: 15000 }, async t => {
+    if (!await alternateLoopback(t)) return;
+    const server = boot(t, { HOST: '127.0.0.2', PI_DISH_TEST_HOLD_ALIAS: '1', PI_DISH_URL: explicitUrl });
+    await server.wait(event => event.type === 'alias-held');
+    const main = await server.wait(event => event.address?.address === '127.0.0.2');
+    assert.equal(main.advertised, explicitUrl || `http://127.0.0.2:${main.address.port}`);
+    assert.equal(server.events.some(event => event.address?.address === '127.0.0.1'), false);
+    assert.ok((await descriptor('127.0.0.2', main.address.port)).hostId);
+    server.child.send({ releaseAlias: true });
+    const alias = await server.wait(event => event.address?.address === '127.0.0.1');
+    assert.equal(alias.advertised, explicitUrl || `http://127.0.0.1:${main.address.port}`);
+    assert.ok((await descriptor('127.0.0.1', main.address.port)).hostId);
+    await stopAndRebind(t, server, 'SIGTERM', [main, alias]);
+  });
+}
+
+test('an alias failure after primary startup keeps advertising the reachable primary', { timeout: 15000 }, async t => {
+  if (!await alternateLoopback(t)) return;
+  const server = boot(t, { HOST: '127.0.0.2', PI_DISH_TEST_HOLD_ALIAS: '1' });
+  await server.wait(event => event.type === 'alias-held');
+  const main = await server.wait(event => event.address?.address === '127.0.0.2');
+  const occupied = await bind(t, '127.0.0.1', main.address.port);
+  server.child.send({ releaseAlias: true });
+  const failed = await server.wait(event => event.type === 'listen-error');
+  assert.equal(failed.code, 'EADDRINUSE');
+  assert.equal(failed.advertised, `http://127.0.0.2:${main.address.port}`);
+  assert.ok((await descriptor('127.0.0.2', main.address.port)).hostId);
+  await stopAndRebind(t, server, 'SIGTERM', [main]);
+  assert.equal(occupied.listening, true);
 });
 
 test('a port collision exits with a useful error instead of retrying indefinitely', { timeout: 15000 }, async t => {
