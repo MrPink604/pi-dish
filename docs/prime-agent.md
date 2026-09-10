@@ -19,6 +19,9 @@ persisted turn, and discovery registration from a manually started TUI.
 Close coverage on 2026-09-10 additionally verifies idle/busy root shutdown,
 another root surviving and answering on the same daemon, close after the
 client pane exits, and refusal to close a manual session.
+Restart coverage on the same release verifies idle and busy worker replacement
+in the original tmux pane, fresh wrapper ownership, preserved history,
+post-restart streamed turns, and another root surviving and answering.
 
 What works today, live:
 
@@ -34,6 +37,9 @@ What works today, live:
   then remove the verified client pane without stopping other roots or the
   shared daemon. A missing client pane does not prevent owned-worker close.
   The transcript stays resumable; manual sessions remain uncloseable.
+- Restart a pi-dish-owned root in the same live client pane. Stop the root and
+  its children, wait for worker exit, then resume the root with a fresh wrapper
+  token. Other roots keep running; child agents are not automatically resumed.
 - ipython tool calls and `BashResult(...)` results render as code/command
   output in the web transcript and the CLI read path.
 
@@ -41,8 +47,9 @@ What works today, live:
 
 Roughly in experiential impact order:
 
-1. **Restart remains unavailable.** Close followed by Resume works, but
-   pi-dish does not yet replace a Prime worker in the same client pane.
+1. **Bulk Bounce remains unavailable.** Direct Restart works for owned roots
+   with a live client pane; Prime remains excluded from bulk maintenance's
+   idle-safety checks.
 2. **Resume is refused while the worker lives** (`alreadyActive`). A session
    whose client pane died keeps accepting prompts headless, but pi-dish
    cannot attach a fresh client TUI to that worker; `prime-agent --resume`
@@ -79,12 +86,16 @@ Roughly in experiential impact order:
 ## Version pin
 
 The compatibility canary is pinned to Prime 0.9.4 (see
-[docs/testing.md](testing.md)). Close uses daemon protocol 7 and Linux process
+[docs/testing.md](testing.md)). Close and Restart use daemon protocol 7 and Linux process
 birth identities. The server reads only the worker's non-secret internal
 supervisor-socket and root-id environment fields, then checks the live roster
 against its launch token and socket-proved bridge claim. Missing metadata,
 unknown protocols, mismatched roots and replaced panes fail closed. No daemon
 shutdown, raw worker signal, or retry after an indeterminate stop is used.
 Recovery keeps closed intent after a stop was sent, even if acknowledgement
-or client cleanup fails. Run new Prime releases through
+or client cleanup fails. Restart preserves open intent and never launches a
+replacement after an indeterminate stop. A failed replacement registration
+leaves the client pane for inspection and quarantines automatic resume retries
+in the running Dish server, even if the client subsequently exits: a missing
+client alone cannot prove a detached worker stopped. Run new Prime releases through
 `npm run test:lineage -- prime` before trusting these version-specific fields.

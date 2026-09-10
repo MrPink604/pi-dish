@@ -237,8 +237,11 @@ stays resumable. This also works if the original client pane has already gone.
 Prime's launch token, worker birth identity, exact daemon/root identity and
 live roster must agree; missing evidence or a replaced pane fails closed.
 The implementation is verified on Linux with Prime 0.9.4's daemon protocol 7;
-manual sessions and unsupported runtimes remain uncloseable. Prime Restart
-remains unavailable. Older remote Dish hosts still show their client-only
+manual sessions and unsupported runtimes remain uncloseable. **Restart agent**
+uses the same verified worker stop, then resumes the root in its original live
+tmux pane with fresh launch ownership. It aborts in-progress work and stops
+children; other roots keep running. A missing pane remains Close-only, and
+Prime remains excluded from bulk Bounce. Older remote Dish hosts still show their client-only
 “Detach client” operation.
 
 Use `PI_DISH_OMP_COMMAND` or `PI_DISH_PRIME_COMMAND` when a CLI is not on
@@ -732,7 +735,7 @@ and inactive tree capability checks, owned-pane close and resume, plus Prime's
 worker/client split, idle/busy root close, another root surviving and answering,
 close after client exit, manual-close refusal, and a persisted turn after
 resume. The independent OMP path was verified with OMP 18.1.16 on 2026-09-09
-and Prime 0.9.4 close/resume on 2026-09-10; both remain opt-in
+and Prime 0.9.4 close/resume and idle/busy same-pane restart on 2026-09-10; both remain opt-in
 checks requiring their own installations. See [docs/prime-agent.md](docs/prime-agent.md)
 for Prime's verified coverage and outstanding gaps.
 

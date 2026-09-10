@@ -392,7 +392,7 @@ async function testPrime() {
   }, 'real Prime active session');
   assert.equal(active.harnessId, 'prime');
   assert.equal(active.capabilities.close, true, 'owned Prime roots can stop through their supervisor');
-  assert.equal(active.capabilities.restart, false);
+  assert.equal(active.capabilities.restart, true);
   assert.equal(active.capabilities.queueCancel, false);
 
   const commands = await get(`/api/commands?sessionId=${encodeURIComponent(id)}`);
@@ -420,9 +420,26 @@ async function testPrime() {
   const peerSpawn = tmux.getSpawn(peer.body.id);
   const peerClaim = await findPrimeClaim(peerSpawn);
   const { processIdentityAlive } = require('../lib/process-identity');
+  const originalLocation = await tmux.paneLocation(spawn.socket, spawn.paneId);
+  const restarted = await post(`/api/sessions/${encodeURIComponent(id)}/restart`);
+  assert.equal(restarted.status, 200, JSON.stringify(restarted.body));
+  assert.equal(restarted.body.id, id);
+  assert.equal(restarted.body.paneId, spawn.paneId);
+  assert.equal(processIdentityAlive(first.claim), false, 'restart exits the worker, not just the client');
+  assert.equal(processIdentityAlive(peerClaim.claim), true, 'restart leaves other roots alive');
+  const restartedSpawn = tmux.getSpawn(id);
+  const restartedClaim = await findPrimeClaim(restartedSpawn);
+  assert.notEqual(restartedSpawn.spawnToken, spawn.spawnToken);
+  assert.notEqual(restartedClaim.claim.pid, first.claim.pid);
+  assert.equal(restartedClaim.claim.sessionFile, first.claim.sessionFile);
+  assert.deepEqual(await tmux.paneLocation(restartedSpawn.socket, restartedSpawn.paneId), originalLocation);
+  const restartedTurn = await runStreamedTurn(id, 'Prime answers after same-pane restart');
+  assert.ok(restartedTurn.transcript.body.messages.some(message => JSON.stringify(message.content).includes(turn.assistantText)),
+    'pre-restart transcript survives');
+  await runStreamedTurn(peer.body.id, 'Prime peer still answers after another root restarts');
   const closed = await post(`/api/sessions/${encodeURIComponent(id)}/close`);
   assert.equal(closed.status, 200, JSON.stringify(closed.body));
-  assert.equal(processIdentityAlive(first.claim), false, 'selected worker exits before close responds');
+  assert.equal(processIdentityAlive(restartedClaim.claim), false, 'selected worker exits before close responds');
   assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), false);
   assert.equal(tmux.getSpawn(id), null);
   assert.equal(processIdentityAlive(peerClaim.claim), true, 'other root worker survives');
@@ -452,9 +469,22 @@ async function testPrime() {
   assert.equal(busyPrompt.status, 200, JSON.stringify(busyPrompt.body));
   await waitFor(async () => fakeRequestCount > beforeBusyTurn
     && (await get('/api/sessions?active=1')).body.active.some(row => row.id === id && row.turnInProgress), 'Prime turn in progress');
+  const busyRestart = await post(`/api/sessions/${encodeURIComponent(id)}/restart`);
+  assert.equal(busyRestart.status, 200, JSON.stringify(busyRestart.body));
+  assert.equal(busyRestart.body.id, id);
+  assert.equal(busyRestart.body.paneId, resumedSpawn.paneId);
+  assert.equal(processIdentityAlive(second.claim), false);
+  assert.equal(processIdentityAlive(peerClaim.claim), true);
+  const busyReplacement = await findPrimeClaim(tmux.getSpawn(id));
+  await runStreamedTurn(id, 'Prime answers after restarting during a turn');
+  holdNextResponse = true;
+  const beforeBusyClose = fakeRequestCount;
+  assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/prompt`, { message: 'Keep this turn open for close' })).status, 200);
+  await waitFor(async () => fakeRequestCount > beforeBusyClose
+    && (await get('/api/sessions?active=1')).body.active.some(row => row.id === id && row.turnInProgress), 'Prime turn before close');
   const resumedClose = await post(`/api/sessions/${encodeURIComponent(id)}/close`);
   assert.equal(resumedClose.status, 200, JSON.stringify(resumedClose.body));
-  assert.equal(processIdentityAlive(second.claim), false);
+  assert.equal(processIdentityAlive(busyReplacement.claim), false);
   assert.equal(processIdentityAlive(peerClaim.claim), true);
 
   // A prime TUI started outside pi-dish (no --extension, discovery enabled)
@@ -508,6 +538,9 @@ async function testPrime() {
     workerClientSplit: true,
     ownedRootClosed: true,
     busyRootClosed: true,
+    samePaneRestarted: true,
+    busyRootRestarted: true,
+    postRestartPersistedAssistantMessage: true,
     otherRootSurvivedAndAnswered: true,
     closeAfterClientExit: true,
     manualDiscoveryRegistered: true,
@@ -565,7 +598,7 @@ async function cleanup() {
     }
     const result = {};
     for (const id of selected) result[id] = await (id === 'omp' ? testOmp() : testPrime());
-    const expectedCalls = (selected.includes('omp') ? 1 : 0) + (selected.includes('prime') ? 4 : 0);
+    const expectedCalls = (selected.includes('omp') ? 1 : 0) + (selected.includes('prime') ? 8 : 0);
     assert.equal(fakeRequestCount, expectedCalls, 'each streamed turn must use the local fake provider');
     result.fakeProviderRequests = fakeRequestCount;
     console.log(JSON.stringify(result, null, 2));

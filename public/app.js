@@ -5505,7 +5505,9 @@ function renderCloseSection(sessionId, generation) {
     `<div class="stats-share-hint">${detach
       ? 'Disconnects this client. The logical agent continues independently.'
       : ownedAgent
-        ? 'Stops this agent and its children, then closes its pi-dish-owned client pane. The transcript stays resumable.'
+        ? (restartable
+          ? 'Restart stops this agent and its children, then resumes the root in the same pane. Close also removes the client pane. The transcript is kept; other root agents keep running.'
+          : 'Stops this agent and its children, then closes its pi-dish-owned client pane. The transcript stays resumable.')
         : restartable
         ? 'Restarts the agent in its current pi-dish-owned pane or RPC slot. The transcript is kept.'
         : 'Shuts down this agent process. The transcript is kept and can be resumed.'}</div>` +
@@ -5542,7 +5544,9 @@ function renderCloseSection(sessionId, generation) {
   restartBtn.addEventListener('click', async () => {
     if (!ownsStatsModal(sessionId, generation)) return;
     const active = findSession(sessionId, host);
-    const warn = active?.turnInProgress
+    const warn = ownedAgent
+      ? 'Restart this agent? This stops the root and its children, aborting any work in progress, then resumes the root in the same pane. The transcript is kept; other root agents keep running.'
+      : active?.turnInProgress
       ? 'A turn is in progress — restarting will abort it. Restart this agent?'
       : 'Restart this agent? The current process will stop, then the session will resume with updated CLI code and startup settings.';
     if (!confirm(warn)) return;

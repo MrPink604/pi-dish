@@ -849,6 +849,12 @@ function spawnAllowsManagedClose(spawn, registryEntry, closeMode) {
   return false;
 }
 
+function spawnAllowsRestart(spawn, registryEntry, closeMode) {
+  return closeMode === 'owned-agent'
+    ? spawnAllowsManagedClose(spawn, registryEntry, closeMode) && processIdentityAlive(spawn.paneProcess)
+    : spawnAllowsOwnedPaneClose(spawn, registryEntry);
+}
+
 // =========================================================================
 // Helpers
 // =========================================================================
@@ -1327,8 +1333,7 @@ function getActiveSessions(registered = listRegisteredSessions()) {
     const identityFields = sessionIdentityFields(identity.harnessId, identity.nativeSessionId);
     const ownedSpawn = tmux.getSpawn(routeId);
     const closeMode = getHarness(identity.harnessId).closeMode;
-    const restartAllowed = closeMode !== 'owned-agent'
-      && spawnAllowsOwnedPaneClose(ownedSpawn, reg);
+    const restartAllowed = spawnAllowsRestart(ownedSpawn, reg, closeMode);
     let info = {};
     let source = null;
     if (reg.sessionFile && fs.existsSync(reg.sessionFile)) {
@@ -4743,7 +4748,7 @@ app.post('/api/sessions/:id/abort', async (req, res) => {
 // than growing a second, subtly different close path.
 const closeResult = (status, body) => ({ status, body });
 
-async function performSessionClose(sessionId, { beforeAction = null } = {}) {
+async function performSessionClose(sessionId, { beforeAction = null, keepPrimePane = false } = {}) {
   const route = routeIdentity(sessionId);
   if (!route) return closeResult(400, { error: 'Invalid session ID' });
   const descriptor = getHarness(route.harnessId);
@@ -4828,7 +4833,7 @@ async function performSessionClose(sessionId, { beforeAction = null } = {}) {
     const checkPane = async () => {
       const current = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
       if (sameProcessIdentity(current, spawn.paneProcess)) return true;
-      if (current || processIdentityAlive(spawn.paneProcess) || await tmux.paneExists(spawn.socket, spawn.paneId)) {
+      if (keepPrimePane || current || processIdentityAlive(spawn.paneProcess) || await tmux.paneExists(spawn.socket, spawn.paneId)) {
         throw new Error('The recorded Prime client pane has been replaced; pi-dish will not close it');
       }
       return false;
@@ -4838,6 +4843,7 @@ async function performSessionClose(sessionId, { beforeAction = null } = {}) {
       await stopPrimeWorker(reg, async () => {
         await proveBridgeRegistryClaim(reg);
         await checkPane();
+        const finalCheck = beforeAction ? await beforeAction() : null;
         invalidateRegistryCache();
         const freshReg = getRegisteredSession(routeId);
         const freshSpawn = tmux.getSpawn(routeId);
@@ -4847,8 +4853,14 @@ async function performSessionClose(sessionId, { beforeAction = null } = {}) {
             || !sameProcessIdentity(freshSpawn.paneProcess, spawn.paneProcess)) {
           throw new Error('Prime bridge or launch ownership changed before close');
         }
+        if (finalCheck) finalCheck();
       }, { timeout: Number(process.env.PI_DISH_CLOSE_TIMEOUT_MS) || 10000 });
       stopped = true;
+      if (keepPrimePane) {
+        // Restart keeps placement authority until the guarded respawn below.
+        pruneRegisteredSession(reg);
+        return closeResult(200, { success: true });
+      }
       if (await checkPane()) {
         await tmux.killPane(spawn.socket, spawn.paneId);
         const deadline = Date.now() + 3000;
@@ -4862,7 +4874,7 @@ async function performSessionClose(sessionId, { beforeAction = null } = {}) {
       return closeResult(200, { success: true });
     } catch (error) {
       const preserveCloseIntent = stopped || error.stopRequested === true;
-      return { ...closeResult(preserveCloseIntent ? 500 : 409, { error: `Failed to close Prime: ${error.message}` }), preserveCloseIntent };
+      return { ...closeResult(preserveCloseIntent ? 500 : 409, { error: `Failed to stop Prime: ${error.message}` }), preserveCloseIntent, stopped };
     }
   }
   const rpc = getRPCSession(sessionId);
@@ -5580,6 +5592,7 @@ async function spawnHarnessInTmux({ descriptor, target, args, cwd, name, hidden,
     : injectLaunchWrapper(descriptor, args, wrapperPath))];
 
   let paneId;
+  let restartedPaneProcess = null;
   try {
     if (restartPane) {
       paneId = restartPane.paneId;
@@ -5592,6 +5605,7 @@ async function spawnHarnessInTmux({ descriptor, target, args, cwd, name, hidden,
         expectedProcess: restartPane.paneProcess,
         beforeAction: restartPane.beforeAction,
       });
+      if (descriptor.closeMode === 'owned-agent') restartedPaneProcess = await tmux.paneProcessIdentity(socket, paneId);
       if (restartPane.registry) pruneRegisteredSession(restartPane.registry);
       tmux.removeSpawn(restartPane.sessionId, restartPane.spawn);
     } else {
@@ -5629,7 +5643,18 @@ async function spawnHarnessInTmux({ descriptor, target, args, cwd, name, hidden,
     }
     const identity = registryIdentity(accepted);
     const routeId = routeSessionId(identity.harnessId, identity.nativeSessionId);
+    if (restartPane && descriptor.closeMode === 'owned-agent'
+        && (routeId !== restartPane.sessionId
+          || fs.realpathSync(accepted.sessionFile) !== fs.realpathSync(restartPane.registry.sessionFile)
+          || sameProcessIdentity(accepted, restartPane.registry)
+          || !primeWorkerTarget(accepted))) {
+      throw new Error('Prime replacement did not prove a new worker for the original transcript');
+    }
     const paneProcess = await tmux.paneProcessIdentity(socket, paneId);
+    if (restartPane && descriptor.closeMode === 'owned-agent'
+        && !sameProcessIdentity(paneProcess, restartedPaneProcess)) {
+      throw new Error('Prime client pane changed before replacement registration');
+    }
     tmux.recordSpawn(routeId, {
       socket,
       paneId,
@@ -5681,6 +5706,15 @@ async function spawnHarnessInTmux({ descriptor, target, args, cwd, name, hidden,
       registrationError.status = 500;
       registrationError.preventHeadlessFallback = true;
     }
+  }
+
+  if (restartPane && descriptor.closeMode === 'owned-agent') {
+    // A resident replacement can outlive its client. Neither killing that
+    // pane nor observing it gone proves another writer is safe to launch.
+    const err = new Error(`${registrationError?.message || `Prime did not register within ${timeoutLabel}`} — the tmux pane was left open for inspection; no second replacement was launched.`);
+    err.status = registrationError?.status || 500;
+    err.resumeUncertain = { socket, paneId, detachedWorker: true, knownProcesses: [] };
+    throw err;
   }
 
   // A user-targeted window stays open for inspection; a hidden headless
@@ -6118,12 +6152,15 @@ async function resumeSessionById(requestedId, { model, target, recovery = null }
     if (uncertainExplicit) {
       const state = await tmux.paneProcessState(uncertainExplicit.socket, uncertainExplicit.paneId,
         { knownProcesses: uncertainExplicit.knownProcesses });
-      if (!state.paneExists && !state.knownProcesses.length) {
+      if (!uncertainExplicit.detachedWorker && !state.paneExists && !state.knownProcesses.length) {
         if (uncertainExplicitResumes.get(sessionFile) === uncertainExplicit) uncertainExplicitResumes.delete(sessionFile);
       } else {
         uncertainExplicitResumes.set(sessionFile, { ...uncertainExplicit, knownProcesses: state.knownProcesses });
         invalidateRegistryCache();
         if (activeSessionClearsQuarantine(sessionId)) return { success: true, id: sessionId, alreadyActive: true };
+        if (uncertainExplicit.detachedWorker) {
+          throw resumeError(409, 'A previous Prime restart did not prove its replacement worker; inspect the Prime daemon and client pane before retrying. No second writer was launched.');
+        }
         throw resumeError(409, `A previous explicit tmux resume timed out and its pane/process is still present (${uncertainExplicit.paneId}); refusing to launch another process against this session file. Inspect or close that tmux pane before retrying.`);
       }
     }
@@ -6292,7 +6329,7 @@ async function restartSessionById(requestedId, { beforeAction = null } = {}) {
   if (!route) return closeResult(400, { error: 'Invalid session ID' });
   const sessionId = routeSessionId(route.harnessId, route.nativeSessionId);
   const descriptor = getHarness(route.harnessId);
-  if (!descriptor || descriptor.closeMode === 'owned-agent' || descriptor.closeMode === 'unsupported') {
+  if (!descriptor || descriptor.closeMode === 'unsupported') {
     return closeResult(409, { error: `${descriptor?.label || route.harnessId} does not support agent restart.` });
   }
   if (restartFlights.has(sessionId) || closeFlights.has(sessionId)) {
@@ -6339,12 +6376,12 @@ async function restartSessionById(requestedId, { beforeAction = null } = {}) {
   const spawn = tmux.getSpawn(sessionId);
   if (!spawn?.socket || !spawn?.paneId || !spawnMatchesRegistryClaim(spawn, reg)) {
     return closeResult(409, {
-      error: 'Restart is available only for RPC sessions and tmux panes launched by pi-dish. This Pi session can still be closed normally.',
+      error: 'Restart is available only for RPC sessions and tmux panes launched by pi-dish.',
     });
   }
   let paneProcess = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
   if (!sameProcessIdentity(paneProcess, spawn.paneProcess)
-      || !spawnAllowsOwnedPaneClose(spawn, reg)) {
+      || !spawnAllowsRestart(spawn, reg, descriptor.closeMode)) {
     return closeResult(409, {
       error: 'The recorded tmux pane no longer proves ownership of this agent, so pi-dish will not restart it.',
     });
@@ -6380,7 +6417,7 @@ async function restartSessionById(requestedId, { beforeAction = null } = {}) {
   }
   paneProcess = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
   if (!sameProcessIdentity(paneProcess, spawn.paneProcess)
-      || !spawnAllowsOwnedPaneClose(spawn, freshReg)) {
+      || !spawnAllowsRestart(spawn, freshReg, descriptor.closeMode)) {
     return closeResult(409, { error: 'The tmux pane ownership proof changed before restart; no pane was replaced.' });
   }
   invalidateRegistryCache();
@@ -6389,7 +6426,44 @@ async function restartSessionById(requestedId, { beforeAction = null } = {}) {
     return closeResult(409, { error: 'The live bridge changed immediately before restart; no pane was replaced.' });
   }
 
+  let workerStopped = false;
   try {
+    let beforeRespawn = beforeAction;
+    if (descriptor.closeMode === 'owned-agent') {
+      const checkLaunch = () => {
+        const current = tmux.getSpawn(sessionId);
+        if (!current || current.spawnToken !== spawn.spawnToken
+            || current.socket !== spawn.socket || current.paneId !== spawn.paneId
+            || !sameProcessIdentity(current.paneProcess, spawn.paneProcess)) {
+          throw new Error('Prime launch ownership changed during restart');
+        }
+      };
+      const stopped = await performSessionClose(sessionId, {
+        keepPrimePane: true,
+        beforeAction: async () => {
+          const finalCheck = beforeAction ? await beforeAction() : null;
+          return () => {
+            checkLaunch();
+            invalidateRegistryCache();
+            const current = getRegisteredSession(sessionId);
+            if (!current || !sameRegistryClaim(current, reg)) throw new Error('Prime worker changed during restart');
+            if (finalCheck) finalCheck();
+          };
+        },
+      });
+      if (stopped.status !== 200) return closeResult(stopped.status, {
+        ...stopped.body,
+        ...(stopped.preserveCloseIntent ? { stopUncertain: true } : {}),
+      });
+      workerStopped = true;
+      beforeRespawn = async () => () => {
+        checkLaunch();
+        invalidateRegistryCache();
+        if (processIdentityAlive(reg) || listRegisteredSessions().some(entry => {
+          try { return fs.realpathSync(entry.sessionFile) === sessionFile; } catch { return false; }
+        })) throw new Error('A live worker still claims this transcript; refusing another writer');
+      };
+    }
     // Pass the live bridge's registered model so the respawned argv carries
     // --model: launch-time sniffing (fleet omp-launch) keys off argv, and a
     // bare --resume would otherwise start under the default role's model.
@@ -6406,18 +6480,19 @@ async function restartSessionById(requestedId, { beforeAction = null } = {}) {
         paneProcess: spawn.paneProcess,
         spawn,
         registry: reg,
-        beforeAction,
+        beforeAction: beforeRespawn,
       },
     });
     return closeResult(200, { success: true, id, placement: 'tmux', paneId: spawn.paneId });
   } catch (error) {
     if (error.bounceWaiting || error.bounceSkipped) throw error;
     console.error('Failed to restart tmux session:', error);
+    if (error.resumeUncertain) uncertainExplicitResumes.set(sessionFile, error.resumeUncertain);
     const currentPaneProcess = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
-    const replaced = !sameProcessIdentity(currentPaneProcess, spawn.paneProcess);
+    const replaced = workerStopped || !sameProcessIdentity(currentPaneProcess, spawn.paneProcess);
     return closeResult(error.status || 500, {
       error: replaced
-        ? `The agent pane was restarted, but its replacement failed to become ready: ${error.message}`
+        ? `The agent stopped, but its replacement failed to become ready: ${error.message}`
         : `The agent was not restarted: ${error.message}`,
       ...(replaced ? { stopped: true } : {}),
     });

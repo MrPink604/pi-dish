@@ -2,15 +2,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { test, expect, ROOT } = require('./fixtures');
 
-async function configureSession(page, fleet, mode, close = true) {
+async function configureSession(page, fleet, mode, close = true, restart = false) {
   await fleet.select(fleet.peer);
-  await page.evaluate(({ id, host, mode, close }) => patchSession(id, {
+  await page.evaluate(({ id, host, mode, close, restart }) => patchSession(id, {
     isActive: true,
     // The same harness has different close semantics on old and new hosts.
     harnessId: 'prime',
     closeMode: mode,
-    capabilities: { close, restart: false, export: false },
-  }, host), { id: ROOT, host: fleet.peer.hostId, mode, close });
+    capabilities: { close, restart, export: false },
+  }, host), { id: ROOT, host: fleet.peer.hostId, mode, close, restart });
 }
 
 async function openStats(page) {
@@ -52,6 +52,42 @@ test('Prime owned-agent close warns about the agent family and stays on its owni
   await fleet.select(fleet.self);
   await route.fulfill({ json: { success: true } });
   await expect(page.locator('#statsModal')).toBeHidden();
+  await expect.poll(() => page.evaluate(() => currentSession.host)).toBe(fleet.self.hostId);
+  await expect(page.locator('#messages')).toContainText('self root transcript');
+});
+
+test('Prime restart warns about children and keeps the response bound to the owning host', async ({ page, fleet }) => {
+  await configureSession(page, fleet, 'owned-agent', true, true);
+  await openStats(page);
+  await expect(page.locator('#sessionRestartBtn')).toHaveText('Restart agent');
+  await expect(page.locator('#statsClose')).toContainText('resumes the root in the same pane');
+  await expect(page.locator('#statsClose')).toContainText('other root agents keep running');
+  const artifact = path.resolve(__dirname, '../../.amp/in/artifacts/prime-restart.png');
+  fs.mkdirSync(path.dirname(artifact), { recursive: true });
+  await page.locator('#statsClose').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: artifact });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.locator('#sidebar').evaluate(el => el.getBoundingClientRect().right)).toBeLessThanOrEqual(0);
+  await page.locator('#statsClose').scrollIntoViewIfNeeded();
+  await expect(page.locator('#sessionRestartBtn')).toBeInViewport();
+  await expect(page.locator('#sessionCloseBtn')).toBeInViewport();
+  await page.screenshot({ path: path.join(path.dirname(artifact), 'prime-restart-mobile.png') });
+
+  let receive;
+  const received = new Promise(resolve => { receive = resolve; });
+  await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/restart`, route => receive(route));
+  const warning = new Promise(resolve => page.once('dialog', async dialog => {
+    resolve(dialog.message());
+    await dialog.accept();
+  }));
+  await page.locator('#sessionRestartBtn').click();
+  expect(await warning).toBe('Restart this agent? This stops the root and its children, aborting any work in progress, then resumes the root in the same pane. The transcript is kept; other root agents keep running.');
+  const route = await received;
+  expect(route.request().method()).toBe('POST');
+  await expect(page.locator('#sessionRestartBtn')).toBeDisabled();
+  await expect(page.locator('#sessionCloseBtn')).toBeDisabled();
+  await fleet.select(fleet.self);
+  await route.fulfill({ json: { success: true, id: ROOT } });
   await expect.poll(() => page.evaluate(() => currentSession.host)).toBe(fleet.self.hostId);
   await expect(page.locator('#messages')).toContainText('self root transcript');
 });

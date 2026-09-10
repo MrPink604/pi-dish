@@ -440,8 +440,15 @@ spawn token, bridge claim, pane-root birth identity, and ancestry prove
 pi-dish owns that exact pane; `respawnPane()` then launches the descriptor's
 fresh resume argv/env in the same pane, preserving the tmux server, session,
 window, and pane while issuing new launch authority. Externally launched Pi
-sessions remain closeable but never advertise `capabilities.restart`; Prime's
-owned-agent lifecycle does not advertise it either. The stats-modal Restart
+sessions remain closeable but never advertise `capabilities.restart`. Prime
+uses its launch-token, worker and supervisor proofs instead of ancestry:
+restart stops the owned root/children through `performSessionClose` while
+retaining the client pane, then rechecks placement and absence of a live writer
+before respawn. The new bridge must prove a new worker for the original
+session ID/file. An indeterminate stop launches nothing; failed registration
+leaves the pane inspectable and quarantines resume in the running server even
+if that pane exits, since the worker is detached. A missing client is Close-only.
+Prime stays excluded from bulk Bounce's idle-safety path. The stats-modal Restart
 button keys off explicit `restart: true` so mixed-version fleet hosts do not
 show an unsupported control.
 

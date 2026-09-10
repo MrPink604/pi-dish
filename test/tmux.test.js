@@ -536,7 +536,7 @@ test('Prime close stops the owned worker and pane, refusing a replaced pane firs
   const session = list.body.active.find(entry => entry.id === created.body.id);
   assert.equal(session?.closeMode, 'owned-agent');
   assert.equal(session?.capabilities.close, true);
-  assert.equal(session?.capabilities.restart, false);
+  assert.equal(session?.capabilities.restart, true);
 
   try {
     tmux.recordSpawn(created.body.id, {
@@ -618,10 +618,182 @@ async function primeCloseFixture(t) {
     primeAfterKill = () => {};
     primeStopMode = 'stop';
     primeProtocolVersion = 7;
+    for (const entry of primeClaims().filter(entry => entry.nativeSessionId === claim.nativeSessionId)) {
+      process.kill(entry.pid, 'SIGTERM');
+    }
     if (processIdentityAlive(claim)) process.kill(claim.pid, 'SIGTERM');
     if (await tmux.paneExists(spawn.socket, spawn.paneId)) await tmux.killPane(spawn.socket, spawn.paneId);
   });
   return { id, spawn, claim, close: () => post(`/api/sessions/${encodeURIComponent(id)}/close`) };
+}
+
+test('Prime restart replaces the worker in the same pane and transcript without stopping its peer', { skip: !tmuxOk }, async t => {
+  const { id, spawn, claim } = await primeCloseFixture(t);
+  const peer = await primeCloseFixture(t);
+  const location = await tmux.paneLocation(spawn.socket, spawn.paneId);
+  const transcript = fs.readFileSync(claim.sessionFile, 'utf8');
+  const killsBefore = primeKills.length;
+  const restart = await post(`/api/sessions/${encodeURIComponent(id)}/restart`);
+  assert.equal(restart.status, 200, JSON.stringify(restart.body));
+  assert.deepEqual(restart.body, { success: true, id, placement: 'tmux', paneId: spawn.paneId });
+  assert.equal(processIdentityAlive(claim), false, 'old worker exited before success');
+  assert.equal(processIdentityAlive(peer.claim), true, 'other root remains alive');
+  assert.deepEqual(primeKills.slice(killsBefore), [`prime-${spawn.spawnToken}`]);
+  const replacement = tmux.getSpawn(id);
+  assert.equal(replacement.socket, spawn.socket);
+  assert.equal(replacement.paneId, spawn.paneId);
+  assert.notEqual(replacement.spawnToken, spawn.spawnToken);
+  assert.notEqual(replacement.paneProcess.pid, spawn.paneProcess.pid);
+  assert.deepEqual(await tmux.paneLocation(spawn.socket, spawn.paneId), location);
+  const worker = primeClaims().find(entry => entry.spawnToken === replacement.spawnToken);
+  assert.ok(worker);
+  assert.notEqual(worker.pid, claim.pid);
+  assert.equal(worker.sessionFile, claim.sessionFile);
+  assert.ok(worker.launchArgs.includes('--resume'));
+  assert.equal(fs.readFileSync(claim.sessionFile, 'utf8'), transcript);
+  assert.notEqual(require('../lib/session-recovery').getControl('prime', claim.nativeSessionId).closed, true);
+});
+
+test('Prime restart rejects unowned, replaced and missing panes and changed supervisor ownership', { skip: !tmuxOk }, async t => {
+  const { id, spawn, claim } = await primeCloseFixture(t);
+  const killsBefore = primeKills.length;
+  const refused = async () => {
+    const result = await post(`/api/sessions/${encodeURIComponent(id)}/restart`);
+    assert.equal(result.status, 409, JSON.stringify(result.body));
+    assert.equal(primeKills.length, killsBefore);
+    assert.equal(processIdentityAlive(claim), true);
+  };
+  tmux.removeSpawn(id, spawn);
+  await refused();
+  tmux.recordSpawn(id, { ...spawn, paneProcess: { ...spawn.paneProcess, startTime: '0' } });
+  await refused();
+  tmux.recordSpawn(id, spawn);
+  primeRosterTransform = rows => rows.map(row => ({ ...row, workerPid: process.pid }));
+  await refused();
+  primeRosterTransform = rows => rows;
+  primeAfterList = () => tmux.recordSpawn(id, { ...spawn, spawnToken: 'changed' });
+  await refused();
+  primeAfterList = () => {};
+  tmux.recordSpawn(id, spawn);
+  await tmux.killPane(spawn.socket, spawn.paneId);
+  await refused();
+  const row = (await get('/api/sessions?active=1')).body.active.find(row => row.id === id);
+  assert.equal(row.capabilities.restart, false);
+  assert.equal(row.capabilities.close, true);
+});
+
+for (const mode of ['lost-response', 'hang', 'replaced-pane']) {
+  test(`Prime restart ${mode} never launches a replacement after an unproved stop or pane`, { skip: !tmuxOk }, async t => {
+    const { id, spawn, claim } = await primeCloseFixture(t);
+    const oldTimeout = process.env.PI_DISH_CLOSE_TIMEOUT_MS;
+    process.env.PI_DISH_CLOSE_TIMEOUT_MS = '300';
+    t.after(() => {
+      if (oldTimeout === undefined) delete process.env.PI_DISH_CLOSE_TIMEOUT_MS;
+      else process.env.PI_DISH_CLOSE_TIMEOUT_MS = oldTimeout;
+    });
+    if (mode === 'replaced-pane') primeAfterKill = () => tmuxCmd(['respawn-pane', '-k', '-t', spawn.paneId, 'sleep 3600']);
+    else primeStopMode = mode;
+    const killsBefore = primeKills.length;
+    const result = await post(`/api/sessions/${encodeURIComponent(id)}/restart`);
+    assert.equal(result.status, 500, JSON.stringify(result.body));
+    assert.equal(primeKills.length, killsBefore + 1);
+    assert.equal(tmux.getSpawn(id).spawnToken, spawn.spawnToken, 'no new launch');
+    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true);
+    if (mode === 'hang') assert.equal(processIdentityAlive(claim), true);
+    if (mode === 'replaced-pane') assert.equal(result.body.stopped, true);
+    assert.notEqual(require('../lib/session-recovery').getControl('prime', claim.nativeSessionId).closed, true);
+  });
+}
+
+test('Prime restart excludes competing restart, close and resume requests while replacing its worker', { skip: !tmuxOk }, async t => {
+  const { id, spawn } = await primeCloseFixture(t);
+  const oldCommand = process.env.PI_DISH_PRIME_COMMAND;
+  process.env.PI_DISH_PRIME_COMMAND = `env PI_FIXTURE_HARNESS=prime PI_FIXTURE_REGISTER_DELAY_MS=800 ${process.execPath} ${FIXTURE}`;
+  t.after(() => { process.env.PI_DISH_PRIME_COMMAND = oldCommand; });
+  let stopped;
+  const stopping = new Promise(resolve => { stopped = resolve; });
+  primeAfterKill = stopped;
+  const restart = post(`/api/sessions/${encodeURIComponent(id)}/restart`);
+  await stopping;
+  for (const action of ['restart', 'close', 'resume']) {
+    const result = await post(`/api/sessions/${encodeURIComponent(id)}/${action}`);
+    assert.equal(result.status, 409, JSON.stringify(result.body));
+    assert.match(result.body.error, /restart/i);
+  }
+  const result = await restart;
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.notEqual(tmux.getSpawn(id).spawnToken, spawn.spawnToken);
+});
+
+test('Prime failed replacement stays inspectable and blocks a second writer even after its client exits', { skip: !tmuxOk }, async t => {
+  const { id, spawn, claim } = await primeCloseFixture(t);
+  const oldCommand = process.env.PI_DISH_PRIME_COMMAND;
+  const oldTimeout = process.env.PI_DISH_SPAWN_TIMEOUT_MS;
+  // Only the replacement has a mismatched live hello; keep its worker
+  // observable for fixture teardown while exercising registration failure.
+  process.env.PI_DISH_PRIME_COMMAND = `env PI_FIXTURE_HARNESS=prime PI_FIXTURE_HELLO_MISMATCH=1 ${process.execPath} ${FIXTURE}`;
+  process.env.PI_DISH_SPAWN_TIMEOUT_MS = '1500';
+  t.after(() => {
+    process.env.PI_DISH_PRIME_COMMAND = oldCommand;
+    if (oldTimeout === undefined) delete process.env.PI_DISH_SPAWN_TIMEOUT_MS;
+    else process.env.PI_DISH_SPAWN_TIMEOUT_MS = oldTimeout;
+  });
+  const result = await post(`/api/sessions/${encodeURIComponent(id)}/restart`);
+  assert.equal(result.status, 500, JSON.stringify(result.body));
+  assert.equal(result.body.stopped, true);
+  assert.match(result.body.error, /left open for inspection/);
+  assert.equal(processIdentityAlive(claim), false);
+  assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true);
+  // Remove its disposable claim to model a bridge-less resident worker.
+  const worker = primeClaims().find(entry => entry.nativeSessionId === claim.nativeSessionId);
+  assert.ok(worker);
+  const regDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  for (const name of fs.readdirSync(regDir)) {
+    if (JSON.parse(fs.readFileSync(path.join(regDir, name), 'utf8')).pid === worker.pid) fs.unlinkSync(path.join(regDir, name));
+  }
+  t.after(() => { if (processIdentityAlive(worker)) process.kill(worker.pid, 'SIGTERM'); });
+  await tmux.killPane(spawn.socket, spawn.paneId);
+  const retry = await post(`/api/sessions/${encodeURIComponent(id)}/resume`);
+  assert.equal(retry.status, 409, JSON.stringify(retry.body));
+  assert.match(retry.body.error, /previous Prime restart/);
+  assert.equal(processIdentityAlive(worker), true, 'no signal escalation');
+});
+
+for (const mismatch of ['session-id', 'session-file', 'client-pane']) {
+  test(`Prime restart rejects replacement ${mismatch} drift`, { skip: !tmuxOk }, async t => {
+    const { id, spawn, claim } = await primeCloseFixture(t);
+    const oldCommand = process.env.PI_DISH_PRIME_COMMAND;
+    const originalProbe = tmux.paneProcessIdentity;
+    t.after(() => {
+      process.env.PI_DISH_PRIME_COMMAND = oldCommand;
+      tmux.paneProcessIdentity = originalProbe;
+      for (const entry of primeClaims().filter(entry => entry.sessionFile.includes('/wrong-restart/'))) {
+        process.kill(entry.pid, 'SIGTERM');
+      }
+    });
+    if (mismatch === 'client-pane') {
+      tmux.paneProcessIdentity = async (socket, paneId) => {
+        // The initial post-respawn snapshot still has the old spawn record.
+        // Replace the client only when the new worker is ready to register.
+        if (paneId === spawn.paneId && socket === spawn.socket && !tmux.getSpawn(id)
+            && primeClaims().some(entry => entry.nativeSessionId === claim.nativeSessionId)) {
+          tmux.paneProcessIdentity = originalProbe;
+          tmuxCmd(['respawn-pane', '-k', '-t', paneId, 'sleep 3600']);
+        }
+        return originalProbe(socket, paneId);
+      };
+    } else {
+      const wrongFile = path.join(tmpHome, 'wrong-restart', mismatch === 'session-id' ? 'wrong-id.jsonl' : path.basename(claim.sessionFile));
+      process.env.PI_DISH_PRIME_COMMAND = `${oldCommand} --resume ${wrongFile}`;
+    }
+    const result = await post(`/api/sessions/${encodeURIComponent(id)}/restart`);
+    assert.equal(result.status, 500, JSON.stringify(result.body));
+    assert.equal(result.body.stopped, true);
+    assert.match(result.body.error, mismatch === 'client-pane' ? /client pane changed/ : /original transcript/);
+    assert.equal(tmux.getSpawn(id), null, 'unproved replacement receives no placement authority');
+    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true, 'leave client for inspection');
+    assert.equal(processIdentityAlive(claim), false);
+  });
 }
 
 test('Prime close rejects unowned launches, changed tokens, ambiguous roots and changed roster identities', { skip: !tmuxOk }, async t => {
