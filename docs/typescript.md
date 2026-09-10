@@ -20,9 +20,15 @@ format change.
 | `line-splitter.ts` | Incremental UTF-8 LF framing |
 | `running-tool-calls.ts` | Shared bridge/RPC reconnect snapshots |
 
-`server.js`, browser state/transport/rendering, feature stores and harness
-extensions remain in their existing form. Cron
-retains its prior strict JavaScript/JSDoc check. The foundation's declarations
+`public/session-state.js` now owns browser list/selection state and the existing
+generation guards. It uses strict JavaScript/JSDoc checking, like cron, and loads
+as a local plain script before `app.js`; there is no browser compilation step.
+Its metadata fields stay unknown, and `test/types/browser-state.ts` checks its
+public interface. Browser route/host ids are strings here, without claiming the
+server's branded validation. Async caller ownership capture is the next stage.
+
+`server.js`, browser transport/rendering, feature stores and harness
+extensions remain in their existing form. The foundation's declarations
 do not mean that all its JavaScript callers have been checked.
 
 ## Source and runtime

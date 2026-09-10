@@ -19,18 +19,18 @@ module.exports = async function sidebar({ desktop, registryState, check, SKILL_S
     'family expansion persists device-locally');
   await desktop.click(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
   await desktop.waitForFunction((id) => !document.querySelector(`.session-item[data-id="${id}"]`), SKILL_SESSION_ID);
-  await desktop.evaluate((id) => patchSession(id, { turnInProgress: true }), SKILL_SESSION_ID);
+  await desktop.evaluate((id) => sessionState.patchSession(id, { turnInProgress: true }), SKILL_SESSION_ID);
   check(await desktop.locator(`.session-item[data-id="${registryState.sessionId}"] .session-item-status.working`).count() === 1,
     'collapsed parent surfaces a working child status');
-  await desktop.evaluate((id) => patchSession(id, { turnInProgress: false }), SKILL_SESSION_ID);
+  await desktop.evaluate((id) => sessionState.patchSession(id, { turnInProgress: false }), SKILL_SESSION_ID);
   await desktop.evaluate((id) => selectSession(id), SKILL_SESSION_ID);
-  await desktop.waitForFunction((id) => currentSession?.id === id &&
+  await desktop.waitForFunction((id) => sessionState.currentSession?.id === id &&
     document.querySelector(`.session-item[data-id="${id}"]`)?.classList.contains('active'), SKILL_SESSION_ID);
   check(await desktop.locator(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`)
     .getAttribute('aria-expanded') === 'true',
     'selecting a collapsed child reveals its ancestor and active row');
   await desktop.evaluate((id) => selectSession(id), registryState.sessionId);
-  await desktop.waitForFunction((id) => currentSession?.id === id, registryState.sessionId);
+  await desktop.waitForFunction((id) => sessionState.currentSession?.id === id, registryState.sessionId);
   await desktop.click(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
   await desktop.waitForFunction((id) => !document.querySelector(`.session-item[data-id="${id}"]`), SKILL_SESSION_ID);
 

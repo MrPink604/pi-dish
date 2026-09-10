@@ -25,12 +25,6 @@ function resolveHost(host) {
   return typeof host === 'string' ? hostById(host) : host;
 }
 
-/** Host id owning a session id — self for pending/unknown ids. */
-function sessionHostId(id) {
-  if (id && currentSession && currentSession.id === id && currentSession.host) return currentSession.host;
-  return findSession(id)?.host || selfHost.hostId;
-}
-
 /**
  * The one fetch entry point for /api paths. Nothing else in this file may
  * call fetch() for the API: the host's base and bearer token are attached
@@ -487,15 +481,14 @@ function hostChipHtml(hostId, { note = false } = {}) {
     `<span class="host-chip-dot"></span>${escapeHtml(label)}${down && note ? ' · unreachable' : ''}</span>`;
 }
 
-// Session state — `sessions` (the sidebar lists) and `currentSession` (a
-// detached copy of the selected entry) are only ever written by the state
-// functions in the "Session state writes" section: setSessionLists /
-// setCurrentSession / patchSession / mergeCurrentSession. Each one rebuilds
-// the derived state and re-renders the views that show it, so a mutation
-// can't leave the sidebar and header disagreeing (the old "rename needs F5"
-// bug class). Read these freely; never assign to them anywhere else.
-let sessions = { active: [], previous: [] };
-let currentSession = null;
+// All session list/selection writes and their rendering hooks share one store.
+// Read its snapshots freely; mutate them only through its four state writers.
+const sessionState = createSessionState({
+  getSelfHostId: () => selfHost.hostId,
+  getHostLabel: hostLabelFor,
+  onListsChanged: renderSessions,
+  onCurrentChanged: updateSessionHeader,
+});
 // Provisional rows for asynchronous harness launches. They are presentation state,
 // not sessions: the durable source of truth remains tmux + the bridge registry.
 const pendingSessionSpawns = new Map(); // spawn id -> { cwd, target, harness, harnessLabel }
@@ -508,14 +501,7 @@ try {
     if (key?.startsWith('pi-dish-draft-spawn:')) localStorage.removeItem(key);
   }
 } catch {}
-// Every selection, including a forced reload of the same session, owns a new
-// generation. Async transcript/stream work may mutate the pane only while its
-// generation still owns it; comparing the session id alone is not enough.
-let sessionSelectionGeneration = 0;
 let sessionRelationsSeq = 0;
-function ownsSessionView(sessionId, generation) {
-  return currentSession?.id === sessionId && sessionSelectionGeneration === generation;
-}
 const RESPONSE_MODE_KEY = 'pi-dish-response-metadata';
 const RESPONSE_MODES = new Set(['hidden', 'compact', 'performance', 'performance-cost']);
 let responseMetadataMode = RESPONSE_MODES.has(localStorage.getItem(RESPONSE_MODE_KEY)) ? localStorage.getItem(RESPONSE_MODE_KEY) : 'compact';
@@ -606,7 +592,7 @@ async function loadCommands(sessionId) {
   const seq = ++commandsSeq;
   try {
     const qs = sessionId ? ('?sessionId=' + encodeURIComponent(sessionId)) : '';
-    const res = await apiFetch(sessionHostId(sessionId), '/api/commands' + qs);
+    const res = await apiFetch(sessionState.sessionHostId(sessionId), '/api/commands' + qs);
     const data = await res.json();
     if (seq !== commandsSeq) return; // superseded by a newer session's fetch
     if (Array.isArray(data)) slashCommands = data;
@@ -643,11 +629,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   // saved inactive session must be restored; opening All fetches it on demand.
   const saved = parseSessionKey(localStorage.getItem('pi-dish-session') || '');
   await loadSessions();
-  if (saved.sessionId && !findSession(saved.sessionId, saved.hostId)) {
+  if (saved.sessionId && !sessionState.findSession(saved.sessionId, saved.hostId)) {
     await loadSessions(undefined, { withPrevious: true });
   }
   if (saved.sessionId) {
-    const found = findSession(saved.sessionId, saved.hostId);
+    const found = sessionState.findSession(saved.sessionId, saved.hostId);
     if (found) selectSession(saved.sessionId, { host: found.host || null });
   }
   
@@ -697,7 +683,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (!sel || sel.isCollapsed) { e.preventDefault(); abortTurn(); }
     }
     // Ctrl+F opens in-session search when a session is showing
-    if (e.ctrlKey && e.key === 'f' && currentSession) {
+    if (e.ctrlKey && e.key === 'f' && sessionState.currentSession) {
       e.preventDefault();
       openSearch();
     }
@@ -740,7 +726,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // enclosing <details>.
   document.addEventListener('click', (e) => {
     const link = e.target.closest('.file-link');
-    if (!link || !currentSession) return;
+    if (!link || !sessionState.currentSession) return;
     e.preventDefault();
     openFileViewer(link.textContent.trim());
   });
@@ -827,7 +813,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('sessionList').addEventListener('contextmenu', (e) => {
     const item = e.target.closest('.session-item[data-id]');
     if (!item) return;
-    const session = findSession(item.dataset.id, item.dataset.host || null);
+    const session = sessionState.findSession(item.dataset.id, item.dataset.host || null);
     if (!session) return;
     e.preventDefault();
     openSessionMenu(session, e.clientX, e.clientY);
@@ -907,11 +893,11 @@ function handleAutocomplete(text) {
   const input = document.getElementById('promptInput');
   const caret = input.selectionStart ?? text.length;
   const at = text.slice(0, caret).match(/(?:^|\s)@([^\s@]*)$/);
-  if (at && currentSession) { queueFileAutocomplete(at[1]); return; }
+  if (at && sessionState.currentSession) { queueFileAutocomplete(at[1]); return; }
   // #token ending at the caret → session ref. `# ` (a markdown heading) can't
   // reach here: the token charset excludes the space.
   const hash = text.slice(0, caret).match(/(?:^|\s)#([^\s#]*)$/);
-  if (hash && currentSession) { showSessionRefAutocomplete(hash[1]); return; }
+  if (hash && sessionState.currentSession) { showSessionRefAutocomplete(hash[1]); return; }
 
   if (!text.startsWith('/')) { hideAutocomplete(); return; }
   var spaceIdx = text.indexOf(' ');
@@ -925,7 +911,7 @@ function handleAutocomplete(text) {
 // --- @file mentions ---
 const fileAcFetcher = debouncedFetcher(120,
   async (token) => {
-    const res = await apiFetch(currentSession.host, `/api/sessions/${encodeURIComponent(currentSession.id)}/files?q=${encodeURIComponent(token)}`);
+    const res = await apiFetch(sessionState.currentSession.host, `/api/sessions/${encodeURIComponent(sessionState.currentSession.id)}/files?q=${encodeURIComponent(token)}`);
     const data = await res.json();
     return res.ok ? data.files : null;
   },
@@ -969,7 +955,7 @@ function acceptFileMention(relPath, isDir) {
 // write a ref that resolves — see refPrefixFor.
 
 function allKnownSessions() {
-  return [...sessions.active, ...sessions.previous];
+  return [...sessionState.sessions.active, ...sessionState.sessions.previous];
 }
 
 function sessionHostIdOf(session) {
@@ -978,9 +964,9 @@ function sessionHostIdOf(session) {
 
 function sessionRefCandidates() {
   const all = allKnownSessions();
-  if (!currentSession) return all;
-  const currentHost = sessionHostIdOf(currentSession);
-  return all.filter(s => s.id !== currentSession.id || sessionHostIdOf(s) !== currentHost);
+  if (!sessionState.currentSession) return all;
+  const currentHost = sessionHostIdOf(sessionState.currentSession);
+  return all.filter(s => s.id !== sessionState.currentSession.id || sessionHostIdOf(s) !== currentHost);
 }
 
 /** Ids sharing a session's host — the only ones a ref has to beat. */
@@ -1028,7 +1014,7 @@ function showSessionRefAutocomplete(token) {
   const rows = searchSessionsForRef(sessionRefCandidates(), token, 8);
   if (!rows.length) { hideAutocomplete(); return; }
   showAutocompleteList(rows.map(({ session, indices }, i) => {
-    const ref = composerSessionRef(session, currentSession);
+    const ref = composerSessionRef(session, sessionState.currentSession);
     const name = session.name || session.id.slice(0, 8);
     const desc = [
       isMultiHost() ? hostLabelFor(session.host) : '',
@@ -1060,7 +1046,7 @@ function acceptSessionRefMention(ref) {
 }
 
 /** The session a ref addresses, resolved the way its owning server would. */
-function sessionMatchingRef(ref, localHostId = currentSession ? sessionHostIdOf(currentSession) : selfHost.hostId) {
+function sessionMatchingRef(ref, localHostId = sessionState.currentSession ? sessionHostIdOf(sessionState.currentSession) : selfHost.hostId) {
   const parts = parseSessionRefParts(ref);
   if (!parts) return null;
   const onHost = allKnownSessions().filter((session) => {
@@ -1296,13 +1282,13 @@ function markSessionSeen(session, lastActivity = session?.lastActivity) {
 
 function isUnread(session) {
   return isUnreadSession(session, seenActivity,
-    currentSession ? sessionRefKey(currentSession) : null, !document.hidden);
+    sessionState.currentSession ? sessionRefKey(sessionState.currentSession) : null, !document.hidden);
 }
 
 // Unread count in the tab title — the "agent came back" signal when the
 // tab is in the background.
 function updateUnreadTitle() {
-  const unread = sessions.active.filter(isUnread).length;
+  const unread = sessionState.sessions.active.filter(isUnread).length;
   document.title = unread ? `(${unread}) pi-dish` : 'pi-dish';
 }
 
@@ -1497,12 +1483,12 @@ async function runHostSessionsLoad(host, key, wireQuery, withPrevious, ctx) {
     // latest activity — bookkeep against the fresh data *before*
     // setSessionLists renders the unread dots. Prune stale ids too, but
     // only from an unfiltered load: a search result is not the full list.
-    if (currentSession && !document.hidden && (currentSession.host || null) === hostId) {
-      const fresh = next.active.find(s => s.id === currentSession.id)
-        || next.previous.find(s => s.id === currentSession.id);
+    if (sessionState.currentSession && !document.hidden && (sessionState.currentSession.host || null) === hostId) {
+      const fresh = next.active.find(s => s.id === sessionState.currentSession.id)
+        || next.previous.find(s => s.id === sessionState.currentSession.id);
       // Key off the state copy: `next` hasn't been through a state writer
       // yet, so its entries aren't host-stamped.
-      if (fresh) markSessionSeen(currentSession, fresh.lastActivity);
+      if (fresh) markSessionSeen(sessionState.currentSession, fresh.lastActivity);
     }
     if (!wireQuery) {
       // Prune this host's stale entries only: another host's sessions aren't
@@ -1559,7 +1545,7 @@ function publishSessionLists() {
     if (!cache) continue;
     parts.push({ hostId: host.hostId || null, active: cache.active, previous: cache.previous });
   }
-  setSessionLists(parts.length ? parts : [{ hostId: selfHost.hostId, active: [], previous: [] }]);
+  sessionState.setSessionLists(parts.length ? parts : [{ hostId: selfHost.hostId, active: [], previous: [] }]);
 }
 
 // Refresh the list, preserving an in-flight server-side search so a
@@ -1579,7 +1565,7 @@ let sessionCloseConfirmId = null; // host+session key awaiting its second confir
 let sessionCloseConfirmTimer = null;
 let sessionCloseBusyId = null;    // host+session key whose close POST is in flight
 
-function handleRowCloseClick(id, host = sessionHostId(id)) {
+function handleRowCloseClick(id, host = sessionState.sessionHostId(id)) {
   const key = sessionKey(host, id);
   if (sessionCloseBusyId) return; // one close at a time
   if (sessionCloseConfirmId === key) { performRowClose(id, host); return; }
@@ -1592,7 +1578,7 @@ function handleRowCloseClick(id, host = sessionHostId(id)) {
   renderSessions();
 }
 
-async function performRowClose(id, host = sessionHostId(id)) {
+async function performRowClose(id, host = sessionState.sessionHostId(id)) {
   clearTimeout(sessionCloseConfirmTimer);
   sessionCloseConfirmId = null;
   sessionCloseBusyId = sessionKey(host, id);
@@ -1624,7 +1610,7 @@ function renderHarnessBadge(harnessId, harnessLabel) {
 
 function renderSessionItem(session, opts = {}) {
   const ctxClass = contextClass(session.contextPercent);
-  const activeClass = currentSession && sessionRefKey(currentSession) === sessionRefKey(session) ? 'active' : '';
+  const activeClass = sessionState.currentSession && sessionRefKey(sessionState.currentSession) === sessionRefKey(session) ? 'active' : '';
   // A live subagent has no bridge of its own (its parent's process owns it),
   // so `isActive` is false — but it is a running session, not history, and
   // must not read as dimmed.
@@ -1787,7 +1773,7 @@ function toggleGroupCollapsed(cwd) {
  * is what a not-yet-listed or just-spawned session is.
  */
 function keyForSessionId(id) {
-  return sessionKey(sessionHostId(id), id);
+  return sessionKey(sessionState.sessionHostId(id), id);
 }
 
 /**
@@ -1802,7 +1788,7 @@ function canonicalFamilyKey(key) {
 // explicit expansions so newly discovered families also start collapsed.
 const expandedSessionFamilies = new Set(readJSONPref('pi-dish-expanded-session-families', []));
 
-function toggleSessionFamilyExpanded(id, host = sessionHostId(id)) {
+function toggleSessionFamilyExpanded(id, host = sessionState.sessionHostId(id)) {
   const key = sessionKey(host, id);
   if (expandedSessionFamilies.has(key)) expandedSessionFamilies.delete(key);
   else expandedSessionFamilies.add(key);
@@ -1811,7 +1797,7 @@ function toggleSessionFamilyExpanded(id, host = sessionHostId(id)) {
 }
 
 function currentFamilyRootMap() {
-  const list = [...sessions.active, ...sessions.previous];
+  const list = [...sessionState.sessions.active, ...sessionState.sessions.previous];
   const roots = buildSessionFamilies(list);
   const map = new Map();
   const visit = (node, rootKey) => {
@@ -1840,9 +1826,9 @@ function currentFamilyRootMap() {
   return map;
 }
 
-function revealSessionInFamily(id, host = sessionHostId(id)) {
+function revealSessionInFamily(id, host = sessionState.sessionHostId(id)) {
   const key = sessionKey(host, id);
-  const roots = buildSessionFamilies([...sessions.active, ...sessions.previous]);
+  const roots = buildSessionFamilies([...sessionState.sessions.active, ...sessionState.sessions.previous]);
   let ancestors = null;
   const find = (node, path) => {
     if (sessionRefKey(node.session) === key) { ancestors = path; return true; }
@@ -1873,7 +1859,7 @@ function savePinnedSessions() {
   localStorage.setItem('pi-dish-pinned-sessions', JSON.stringify(pinnedSessions));
 }
 
-function toggleSessionPinned(id, displayedRootId = id, renderedMemberIds = [id], host = sessionHostId(id)) {
+function toggleSessionPinned(id, displayedRootId = id, renderedMemberIds = [id], host = sessionState.sessionHostId(id)) {
   const roots = currentFamilyRootMap();
   const key = sessionKey(host, id);
   const canonicalRoot = roots.get(key) || key;
@@ -1890,7 +1876,7 @@ function toggleSessionPinned(id, displayedRootId = id, renderedMemberIds = [id],
     .map(row => sessionKey(row.dataset.host, row.dataset.id)));
   for (const memberKey of aliases) {
     const { hostId, sessionId } = parseSessionKey(memberKey);
-    const parentId = findSession(sessionId, hostId)?.familyParentId;
+    const parentId = sessionState.findSession(sessionId, hostId)?.familyParentId;
     const parentKey = sessionKey(hostId, parentId);
     if (parentId && !visibleKeys.has(parentKey)) aliases.add(parentKey);
   }
@@ -2049,7 +2035,7 @@ function renderSessions() {
   sidebarFamilyRootMap = currentFamilyRootMap();
   hostSectionsShown = null; // only the workspace view builds host sections
   const list = document.getElementById('sessionList');
-  const { active, previous } = sessions;
+  const { active, previous } = sessionState.sessions;
   // A live subagent runs inside a live session's process, so it belongs on
   // the Active tab even though it is a historical row everywhere else (its
   // parent owns it; pi-dish has no socket to it). The count badge stays a
@@ -2335,124 +2321,6 @@ function renderDateBucket(bucket) {
   </div>`;
 }
 
-/**
- * Wire ids stay host-local, so two hosts *can* hand out the same generic
- * `session.jsonl` header id. Callers that know the host (every click path
- * through a rendered row) pass it and get an exact entry. Without a host,
- * prefer the selected session's host; otherwise require an unambiguous id.
- * A missing host-qualified entry must never fall back to another machine.
- */
-function findSession(id, host) {
-  if (!host && currentSession?.id === id) host = currentSession.host;
-  const match = (s) => s.id === id && (!host || (s.host || null) === host);
-  let found;
-  for (const list of [sessions.active, sessions.previous]) {
-    for (const session of list) {
-      if (!match(session)) continue;
-      if (found && (found.host || null) !== (session.host || null)) return undefined;
-      // Active-only polls can retain a previous row for the same host+id.
-      // Prefer the active entry while that historical snapshot catches up.
-      if (!found) found = session;
-    }
-  }
-  return found;
-}
-
-// =========================================================================
-// Session state writes — the ONLY functions that assign to `sessions` or
-// `currentSession` (see the declaration comment at the top of the file).
-// Every write re-renders the affected views itself, so callers can't forget.
-// =========================================================================
-
-/**
- * Every session in client state carries the id of the host it came from, so
- * a session-scoped request or client key can be resolved back to its host
- * without consulting anything else. Stamped here (and only here, in the four
- * state writers) because the wire payload has no idea which host served it.
- */
-function stampSessionHost(session, hostId = selfHost.hostId) {
-  if (!session) return session;
-  if (!session.host && hostId) session.host = hostId;
-  // …and the host's display label, so the client-evaluated `host:` filter
-  // term can match what the user actually reads in the UI. Re-derived on
-  // every write: a host can be relabelled while its sessions sit in state.
-  const label = hostLabelFor(session.host || hostId);
-  if (label) session.hostLabel = label;
-  return session;
-}
-
-/**
- * Replace the sidebar lists (poll / search result / explicit refresh) and
- * fold the fresh entry into `currentSession` so the header stays honest too
- * — polling used to update only the sidebar, leaving the header stale.
- */
-function setSessionLists(next, hostId = selfHost.hostId) {
-  // Two shapes, one writer: a single host's `{ active, previous }` (what a
-  // single-host client has always passed) or the multi-host poll's
-  // `[{ hostId, active, previous }, …]`. Stamping stays here — the wire
-  // payload has no idea which host served it — so the merge can't produce an
-  // unstamped session by taking a shortcut around the state writers.
-  const parts = Array.isArray(next)
-    ? next
-    : [{ hostId, active: next.active, previous: next.previous }];
-  const merged = { active: [], previous: [] };
-  for (const part of parts) {
-    for (const session of part.active || []) merged.active.push(stampSessionHost(session, part.hostId));
-    for (const session of part.previous || []) merged.previous.push(stampSessionHost(session, part.hostId));
-  }
-  sessions = merged;
-  if (currentSession) {
-    const fresh = findSession(currentSession.id, currentSession.host);
-    if (fresh) currentSession = { ...currentSession, ...fresh };
-  }
-  renderSessions();
-  updateSessionHeader();
-}
-
-/**
- * Point `currentSession` at a list entry — always a detached copy, so later
- * list replacements can't mutate it behind the views' back. Returns it
- * (null when the id isn't in either list). Rendering is the caller's job:
- * selectSession re-renders everything it touches anyway.
- */
-function setCurrentSession(id, host) {
-  const entry = findSession(id, host);
-  currentSession = entry ? stampSessionHost({ ...entry }) : null;
-  return currentSession;
-}
-
-/**
- * Patch a session everywhere it lives: both lists and (when selected) the
- * detached `currentSession` copy, then re-render sidebar + header. This is
- * the write path for local mutations — rename, model switch, thinking level.
- */
-function patchSession(id, patch, host = sessionHostId(id)) {
-  const matches = (s) => s && s.id === id && (s.host || null) === (host || null);
-  for (const list of [sessions.active, sessions.previous]) {
-    const s = list.find(matches);
-    if (s) stampSessionHost(Object.assign(s, patch));
-  }
-  if (matches(currentSession)) stampSessionHost(Object.assign(currentSession, patch));
-  renderSessions();
-  if (matches(currentSession)) updateSessionHeader();
-}
-
-/**
- * Merge fresher metadata for the *current* session only (the `session`
- * payload riding on /messages responses) and re-render the header.
- * Deliberately does not touch the list entries: their name/model come from
- * the registry-aware poll, which can be more current than JSONL-derived
- * fields — the sidebar keeps its own source of truth.
- */
-function mergeCurrentSession(id, fields) {
-  if (!fields || currentSession?.id !== id) return;
-  const host = currentSession.host;
-  Object.assign(currentSession, fields);
-  currentSession.host = host; // the wire payload never speaks about hosts
-  stampSessionHost(currentSession);
-  updateSessionHeader();
-}
-
 // =========================================================================
 // Session Selection
 // =========================================================================
@@ -2466,7 +2334,7 @@ function showPendingSessionView(spawnId) {
   const spawn = pendingSessionSpawns.get(spawnId);
   if (!spawn) return;
   const harnessLabel = spawn.harnessLabel || 'Pi';
-  sessionSelectionGeneration += 1;
+  sessionState.advanceSelection();
   loadingOlder = false;
   loadingOlderGeneration += 1;
   stashPromptState();
@@ -2483,7 +2351,7 @@ function showPendingSessionView(spawnId) {
   closeRecoveryView();
   closeBounceView();
   stashCurrentTranscript();
-  setCurrentSession(null);
+  sessionState.setCurrentSession(null);
   currentSessionSpawnId = spawnId;
 
   if (streamReconnectTimeout) { clearTimeout(streamReconnectTimeout); streamReconnectTimeout = null; }
@@ -2564,8 +2432,8 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   // Validate the target before tearing anything down: a stale id (a resume
   // racing a filtered refresh, a pruned session) must leave the current view
   // intact instead of stashing the transcript and then bailing on a blank pane.
-  if (!findSession(id, host)) return;
-  const selectionGeneration = ++sessionSelectionGeneration;
+  if (!sessionState.findSession(id, host)) return;
+  const selectionGeneration = sessionState.advanceSelection();
   loadingOlder = false;
   loadingOlderGeneration += 1;
   stashPromptState();
@@ -2594,12 +2462,12 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   closeRecoveryView();
   if (!keepBounceView) closeBounceView();
   stashCurrentTranscript();
-  if (!setCurrentSession(id, host)) return;
-  if (forceTranscriptReload) transcriptCache.delete(sessionRefKey(currentSession));
+  if (!sessionState.setCurrentSession(id, host)) return;
+  if (forceTranscriptReload) transcriptCache.delete(sessionRefKey(sessionState.currentSession));
   // Math rendering is transcript-only. Start its one-shot load while the
   // synchronous session chrome is updated, then gate markdown hydration on it.
   const mathAssetsReady = loadMathAssets().catch(() => {});
-  revealSessionInFamily(id, currentSession.host);
+  revealSessionInFamily(id, sessionState.currentSession.host);
   // Tear down the previous session's stream up front, before the awaits below.
   // Left open, its in-flight turn_end/message_update events fire against the
   // session we're switching to (loadMessages has already reset the cursors).
@@ -2613,8 +2481,8 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   // per-session; clear them before the new session's projections arrive.
   clearExtensionUI();
   clearSessionRelations();
-  localStorage.setItem('pi-dish-session', sessionRefKey(currentSession));
-  markSessionSeen(currentSession);
+  localStorage.setItem('pi-dish-session', sessionRefKey(sessionState.currentSession));
+  markSessionSeen(sessionState.currentSession);
   
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('sessionView').style.display = 'flex';
@@ -2626,7 +2494,7 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   
   closeControlPanel();
 
-  if (currentSession.isActive) {
+  if (sessionState.currentSession.isActive) {
     if (inputArea) inputArea.style.display = '';
     if (resumeBar) resumeBar.style.display = 'none';
     resetResumeModelPicker();
@@ -2638,11 +2506,11 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
     // resuming would put a second harness process on a file that process
     // keeps appending to. The bar keeps the read-only label and Stats; only
     // the Resume affordance goes.
-    const resumable = sessionSupports(currentSession, 'resume');
+    const resumable = sessionSupports(sessionState.currentSession, 'resume');
     if (resumeBar) {
       resumeBar.style.display = '';
       const cwdSpan = resumeBar.querySelector('.resume-cwd');
-      if (cwdSpan) cwdSpan.textContent = currentSession.cwd || '~';
+      if (cwdSpan) cwdSpan.textContent = sessionState.currentSession.cwd || '~';
       const label = resumeBar.querySelector('.resume-label');
       if (label) {
         label.textContent = resumable
@@ -2652,16 +2520,16 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
       const resumeBtn = resumeBar.querySelector('#resumeSessionBtn');
       if (resumeBtn) resumeBtn.style.display = resumable ? '' : 'none';
     }
-    if (resumable) loadResumeModelOptions(currentSession);
+    if (resumable) loadResumeModelOptions(sessionState.currentSession);
     else resetResumeModelPicker();
   }
-  if (sessionActions) sessionActions.style.display = currentSession.isActive ? '' : 'none';
+  if (sessionActions) sessionActions.style.display = sessionState.currentSession.isActive ? '' : 'none';
 
   // Working state and queue strip are per-session — seed from the list data
   // instead of leaking the previous session's state until the init event.
   renderQueueStatus(null);
-  setCompacting(currentSession.isActive && !!currentSession.compacting);
-  setTurnInProgress(currentSession.isActive && !!currentSession.turnInProgress);
+  setCompacting(sessionState.currentSession.isActive && !!sessionState.currentSession.compacting);
+  setTurnInProgress(sessionState.currentSession.isActive && !!sessionState.currentSession.turnInProgress);
 
   // Artifacts are per-session; clear the previous session's badge before the
   // fetch lands so a stale count never shows against the new session.
@@ -2672,18 +2540,18 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   renderSessions();
   updateSessionHeader();
   loadSessionRelations(id, selectionGeneration); // summary-only; don't stall transcript hydration
-  if (currentSession.isActive) {
+  if (sessionState.currentSession.isActive) {
     // Fire-and-forget: nothing below needs the results, and both can ask the
     // live session over its socket — don't stall the transcript on them.
-    loadModels(id, currentSession.harnessId);
+    loadModels(id, sessionState.currentSession.harnessId);
     loadCommands(id); // refresh autocomplete with this session's commands
   }
   await mathAssetsReady;
-  if (!ownsSessionView(id, selectionGeneration)) return;
+  if (!sessionState.ownsSessionView(id, selectionGeneration)) return;
   await loadMessages(id, selectionGeneration);
-  if (!ownsSessionView(id, selectionGeneration)) return;
+  if (!sessionState.ownsSessionView(id, selectionGeneration)) return;
   
-  if (currentSession.isActive) {
+  if (sessionState.currentSession.isActive) {
     startMessageStream(id, selectionGeneration);
   } else {
     if (messageStream) { messageStream.close(); messageStream = null; }
@@ -2717,7 +2585,7 @@ async function loadResumeModelOptions(session) {
     const res = await apiFetch(session.host, modelCatalogUrl('omp', session.cwd));
     const models = await res.json();
     if (!res.ok) throw new Error(models.error || `HTTP ${res.status}`);
-    if (seq !== resumeModelsSeq || currentSession?.id !== session.id) return;
+    if (seq !== resumeModelsSeq || sessionState.currentSession?.id !== session.id) return;
     const current = session.model && session.model !== 'unknown' ? ` (${session.model})` : '';
     let html = `<option value="">Session model${escapeHtml(current)}</option>`;
     for (const model of Array.isArray(models) ? models : []) {
@@ -2728,21 +2596,21 @@ async function loadResumeModelOptions(session) {
     select.disabled = false;
     select.title = 'Optionally override the model while resuming this OMP session';
   } catch (e) {
-    if (seq !== resumeModelsSeq || currentSession?.id !== session.id) return;
+    if (seq !== resumeModelsSeq || sessionState.currentSession?.id !== session.id) return;
     select.disabled = true;
     select.title = `Could not load Oh My Pi models: ${e.message}`;
   }
 }
 
 async function resumeSession() {
-  if (!currentSession) return;
+  if (!sessionState.currentSession) return;
   const target = savedResumeTarget();
-  const model = currentSession.harnessId === 'omp'
+  const model = sessionState.currentSession.harnessId === 'omp'
     ? (document.getElementById('resumeModelSelect')?.value || undefined) : undefined;
   setStatus(target ? 'Resuming in tmux…' : 'Resuming session...', 'working');
 
   try {
-    const data = await apiSend(currentSession.host, `/api/sessions/${encodeURIComponent(currentSession.id)}/resume`, {
+    const data = await apiSend(sessionState.currentSession.host, `/api/sessions/${encodeURIComponent(sessionState.currentSession.id)}/resume`, {
       ...(target ? { target } : {}),
       ...(model ? { model } : {}),
     });
@@ -2783,8 +2651,8 @@ function modelsCacheKey(harnessId, hostId) {
 }
 
 async function loadModels(sessionId, harnessId, cwd, host) {
-  const requestedHarnessId = harnessId || (sessionId ? findSession(sessionId)?.harnessId : null) || 'pi';
-  const requestedHost = sessionId ? sessionHostId(sessionId) : (host === undefined ? null : host);
+  const requestedHarnessId = harnessId || (sessionId ? sessionState.findSession(sessionId)?.harnessId : null) || 'pi';
+  const requestedHost = sessionId ? sessionState.sessionHostId(sessionId) : (host === undefined ? null : host);
   const seq = ++modelsSeq;
   try {
     const url = sessionId ? ('/api/models?sessionId=' + encodeURIComponent(sessionId))
@@ -2872,8 +2740,8 @@ function createRelationChip(relation) {
   name.textContent = target.name || target.id.slice(0, 8);
   button.append(kind, name);
   button.addEventListener('click', () => {
-    const sourceId = currentSession?.id;
-    const generation = sessionSelectionGeneration;
+    const sourceId = sessionState.currentSession?.id;
+    const generation = sessionState.generation;
     openRelatedSession(target.id, sourceId, generation);
   });
   return button;
@@ -2962,12 +2830,12 @@ window.addEventListener('resize', () => {
   clearTimeout(relationResizeTimer);
   relationResizeTimer = setTimeout(() => {
     const el = document.getElementById('sessionRelations');
-    if (currentSession && el?.style.display !== 'none') renderSessionRelations(sessionRelations);
+    if (sessionState.currentSession && el?.style.display !== 'none') renderSessionRelations(sessionRelations);
   }, 100);
 });
 
 function openRelationsModal() {
-  if (!currentSession || !sessionRelations.length) return;
+  if (!sessionState.currentSession || !sessionRelations.length) return;
   document.getElementById('relationsModal').style.display = 'flex';
   renderRelationsModal();
 }
@@ -2981,8 +2849,8 @@ function renderRelationsModal() {
   const body = document.getElementById('relationsBody');
   if (!body) return;
   body.replaceChildren();
-  const sourceId = currentSession?.id;
-  const generation = sessionSelectionGeneration;
+  const sourceId = sessionState.currentSession?.id;
+  const generation = sessionState.generation;
   for (const group of groupRelations(sessionRelations)) {
     const title = document.createElement('div');
     title.className = 'stats-share-title relation-group-title';
@@ -3021,27 +2889,27 @@ function renderRelationsModal() {
 async function loadSessionRelations(sessionId, generation) {
   const seq = ++sessionRelationsSeq;
   try {
-    const res = await apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/related`);
+    const res = await apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/related`);
     const data = await res.json();
     if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-    if (seq !== sessionRelationsSeq || !ownsSessionView(sessionId, generation)) return;
+    if (seq !== sessionRelationsSeq || !sessionState.ownsSessionView(sessionId, generation)) return;
     renderSessionRelations(data.relations);
     if (data.indexing) {
       setTimeout(() => {
-        if (ownsSessionView(sessionId, generation)) loadSessionRelations(sessionId, generation);
+        if (sessionState.ownsSessionView(sessionId, generation)) loadSessionRelations(sessionId, generation);
       }, 1000);
     }
   } catch (e) {
-    if (seq === sessionRelationsSeq && ownsSessionView(sessionId, generation)) renderSessionRelations([]);
+    if (seq === sessionRelationsSeq && sessionState.ownsSessionView(sessionId, generation)) renderSessionRelations([]);
     console.error('Failed to load related sessions:', e);
   }
 }
 
 async function openRelatedSession(sessionId, sourceId, generation) {
-  if (!sourceId || !ownsSessionView(sourceId, generation)) return;
-  if (!findSession(sessionId)) await loadSessions(undefined, { withPrevious: true });
-  if (!ownsSessionView(sourceId, generation)) return;
-  if (!findSession(sessionId)) {
+  if (!sourceId || !sessionState.ownsSessionView(sourceId, generation)) return;
+  if (!sessionState.findSession(sessionId)) await loadSessions(undefined, { withPrevious: true });
+  if (!sessionState.ownsSessionView(sourceId, generation)) return;
+  if (!sessionState.findSession(sessionId)) {
     setStatus('Related session is not available yet', 'error');
     return;
   }
@@ -3066,30 +2934,30 @@ function setModelChipLabel(btn, model, suffix) {
 }
 
 function updateSessionHeader() {
-  if (!currentSession) return;
+  if (!sessionState.currentSession) return;
 
-  document.getElementById('sessionName').textContent = currentSession.name || 'Unnamed';
+  document.getElementById('sessionName').textContent = sessionState.currentSession.name || 'Unnamed';
   const hostEl = document.getElementById('sessionHost');
   if (hostEl) {
-    const showHost = isMultiHost() && !!hostEntryFor(currentSession.host);
+    const showHost = isMultiHost() && !!hostEntryFor(sessionState.currentSession.host);
     hostEl.style.display = showHost ? '' : 'none';
-    hostEl.className = 'badge host-badge' + (hostIdIsDown(currentSession.host) ? ' offline' : '');
+    hostEl.className = 'badge host-badge' + (hostIdIsDown(sessionState.currentSession.host) ? ' offline' : '');
     // Same color the sidebar gave this host; the dot is a ::before, so the
     // badge stays a textContent write.
-    hostEl.style.setProperty('--host-color', showHost ? hostColorFor(currentSession.host) : '');
-    hostEl.textContent = showHost ? hostLabelFor(currentSession.host) : '';
+    hostEl.style.setProperty('--host-color', showHost ? hostColorFor(sessionState.currentSession.host) : '');
+    hostEl.textContent = showHost ? hostLabelFor(sessionState.currentSession.host) : '';
   }
   const harnessEl = document.getElementById('sessionHarness');
-  const showHarness = currentSession.harnessId && currentSession.harnessId !== 'pi';
+  const showHarness = sessionState.currentSession.harnessId && sessionState.currentSession.harnessId !== 'pi';
   harnessEl.style.display = showHarness ? '' : 'none';
   if (showHarness) {
-    const info = harnessBadgeInfo(currentSession.harnessId, currentSession.harnessLabel);
-    const title = currentSession.harnessLabel || info.label;
-    ensureHarnessRows(sessionHostIdOf(currentSession));
+    const info = harnessBadgeInfo(sessionState.currentSession.harnessId, sessionState.currentSession.harnessLabel);
+    const title = sessionState.currentSession.harnessLabel || info.label;
+    ensureHarnessRows(sessionHostIdOf(sessionState.currentSession));
     // Clickable only where the host reports a settings view for this harness
     // (OMP's /agents + /models hubs today).
-    const configurable = harnessSupportsSettings(currentSession);
-    harnessEl.className = `badge harness-badge harness-badge-${currentSession.harnessId}`
+    const configurable = harnessSupportsSettings(sessionState.currentSession);
+    harnessEl.className = `badge harness-badge harness-badge-${sessionState.currentSession.harnessId}`
       + (configurable ? ' clickable' : '');
     harnessEl.title = configurable ? `${title} settings: agents and models` : `${title} harness`;
     harnessEl.setAttribute('aria-label', configurable ? `${title} settings` : `${title} harness`);
@@ -3104,32 +2972,32 @@ function updateSessionHeader() {
   // The tree has no header button any more (type /tree in the composer); the
   // mobile control panel keeps its row, so it still follows harness support.
   const cpTree = document.getElementById('cpTreeRow');
-  if (cpTree) cpTree.style.display = sessionSupports(currentSession, 'tree') ? '' : 'none';
+  if (cpTree) cpTree.style.display = sessionSupports(sessionState.currentSession, 'tree') ? '' : 'none';
   // Phone parity for the header badge: same modal from the control panel.
   const cpHarness = document.getElementById('cpHarnessRow');
-  if (cpHarness) cpHarness.style.display = harnessSupportsSettings(currentSession) ? '' : 'none';
-  document.getElementById('btnExport').style.display = sessionSupports(currentSession, 'export') ? '' : 'none';
+  if (cpHarness) cpHarness.style.display = harnessSupportsSettings(sessionState.currentSession) ? '' : 'none';
+  document.getElementById('btnExport').style.display = sessionSupports(sessionState.currentSession, 'export') ? '' : 'none';
 
   const nameEl = document.getElementById('sessionName');
-  const canRename = currentSession.isActive && sessionSupports(currentSession, 'rename');
+  const canRename = sessionState.currentSession.isActive && sessionSupports(sessionState.currentSession, 'rename');
   nameEl.classList.toggle('editable-name', canRename);
   nameEl.title = canRename ? 'Click to rename' : '';
   nameEl.onclick = canRename ? startRename : null;
 
   const modelBtn = document.getElementById('sessionModel');
-  const canSetModel = currentSession.isActive && sessionSupports(currentSession, 'setModel');
-  setModelChipLabel(modelBtn, currentSession.model, canSetModel ? ' ▾' : '');
+  const canSetModel = sessionState.currentSession.isActive && sessionSupports(sessionState.currentSession, 'setModel');
+  setModelChipLabel(modelBtn, sessionState.currentSession.model, canSetModel ? ' ▾' : '');
   modelBtn.onclick = canSetModel ? toggleModelDropdown : null;
   modelBtn.style.cursor = canSetModel ? 'pointer' : 'default';
 
   // One readout, in the composer field: percent only (its slot is fixed
   // width), with the token count in the tooltip.
-  const ctxClass = contextClass(currentSession.contextPercent);
+  const ctxClass = contextClass(sessionState.currentSession.contextPercent);
   const contextEl = document.getElementById('sessionContext');
-  contextEl.textContent = `${currentSession.contextPercent}%`;
+  contextEl.textContent = `${sessionState.currentSession.contextPercent}%`;
   contextEl.className = 'tool-btn tool-ctx' + (ctxClass ? ' ' + ctxClass : '');
-  contextEl.title = currentSession.contextTokens
-    ? `Session stats — ${formatTokens(currentSession.contextTokens)} tokens of context`
+  contextEl.title = sessionState.currentSession.contextTokens
+    ? `Session stats — ${formatTokens(sessionState.currentSession.contextTokens)} tokens of context`
     : 'Session stats';
 
   updateThinkingBadges();
@@ -3140,7 +3008,7 @@ function updateSessionHeader() {
   // context the header used to hide behind the stats modal.
   const cwdChip = document.getElementById('sessionCwdChip');
   if (cwdChip) {
-    const cwd = currentSession.cwd || '';
+    const cwd = sessionState.currentSession.cwd || '';
     cwdChip.style.display = cwd ? '' : 'none';
     cwdChip.textContent = cwd ? (cwd.split('/').filter(Boolean).pop() || cwd) : '';
     cwdChip.title = cwd ? `${cwd} — session stats` : 'Session stats';
@@ -3152,8 +3020,8 @@ function updateSessionHeader() {
 let thinkingDropdownOpen = false;
 
 function updateThinkingBadges() {
-  const level = currentSession?.thinkingLevel;
-  const show = !!(currentSession && currentSession.isActive && sessionSupports(currentSession, 'setThinking'));
+  const level = sessionState.currentSession?.thinkingLevel;
+  const show = !!(sessionState.currentSession && sessionState.currentSession.isActive && sessionSupports(sessionState.currentSession, 'setThinking'));
   const label = (level || '?') + ' ▾';
   const badge = document.getElementById('sessionThinking');
   if (badge) {
@@ -3163,24 +3031,24 @@ function updateThinkingBadges() {
 }
 
 async function toggleThinkingDropdown() {
-  if (!currentSession || !currentSession.isActive || !sessionSupports(currentSession, 'setThinking')) return;
+  if (!sessionState.currentSession || !sessionState.currentSession.isActive || !sessionSupports(sessionState.currentSession, 'setThinking')) return;
   // Load the model list so OMP can trim the dropdown to what the session's
   // model supports (cached after the first fetch).
-  await loadModels(currentSession.id, currentSession.harnessId);
+  await loadModels(sessionState.currentSession.id, sessionState.currentSession.harnessId);
   const dropdown = document.getElementById('thinkingDropdown');
   thinkingDropdownOpen = !thinkingDropdownOpen;
   if (!thinkingDropdownOpen) { dropdown.style.display = 'none'; return; }
 
-  const ref = currentSession.model || '';
+  const ref = sessionState.currentSession.model || '';
   const model = knownModels.find(m => m &&
     (m.selector === ref || m.id === ref || `${m.provider}/${m.id}` === ref));
-  const levels = thinkingLevelsFor(currentSession.harnessId, model);
+  const levels = thinkingLevelsFor(sessionState.currentSession.harnessId, model);
   // The current level always shows, even if the catalog doesn't name it.
-  if (currentSession.thinkingLevel && !levels.includes(currentSession.thinkingLevel)) {
-    levels.push(currentSession.thinkingLevel);
+  if (sessionState.currentSession.thinkingLevel && !levels.includes(sessionState.currentSession.thinkingLevel)) {
+    levels.push(sessionState.currentSession.thinkingLevel);
   }
   dropdown.innerHTML = levels.map(l =>
-    `<div class="thinking-option${l === currentSession.thinkingLevel ? ' active' : ''}" onclick="selectThinkingLevel('${l}')">${l}</div>`
+    `<div class="thinking-option${l === sessionState.currentSession.thinkingLevel ? ' active' : ''}" onclick="selectThinkingLevel('${l}')">${l}</div>`
   ).join('');
 
   // Desktop: anchored under the header button. Mobile: the stylesheet
@@ -3205,21 +3073,21 @@ function closeThinkingDropdown() {
 
 async function selectThinkingLevel(level) {
   closeThinkingDropdown();
-  if (!currentSession || !sessionSupports(currentSession, 'setThinking')) return;
-  const { id, host } = currentSession;
-  const generation = sessionSelectionGeneration;
+  if (!sessionState.currentSession || !sessionSupports(sessionState.currentSession, 'setThinking')) return;
+  const { id, host } = sessionState.currentSession;
+  const generation = sessionState.generation;
   try {
     const data = await apiSend(host, `/api/sessions/${encodeURIComponent(id)}/thinking`, { level });
     // The harness clamps to what the model supports; trust the reported
     // level, and say so when it differs from what was asked for.
     const reported = data.level || level;
-    patchSession(id, { thinkingLevel: reported }, host);
-    if (!ownsSessionView(id, generation)) return;
+    sessionState.patchSession(id, { thinkingLevel: reported }, host);
+    if (!sessionState.ownsSessionView(id, generation)) return;
     setStatus(reported !== level
       ? `Thinking level: ${reported} (model doesn't support ${level})`
       : `Thinking level: ${reported}`);
   } catch (e) {
-    if (ownsSessionView(id, generation)) setStatus('Thinking level failed: ' + e.message, 'error');
+    if (sessionState.ownsSessionView(id, generation)) setStatus('Thinking level failed: ' + e.message, 'error');
   }
 }
 
@@ -3252,7 +3120,7 @@ function toggleSearchBar() {
 }
 
 function openSearch() {
-  if (!currentSession) return;
+  if (!sessionState.currentSession) return;
   const bar = document.getElementById('searchBar');
   bar.style.display = '';
   const input = document.getElementById('searchInput');
@@ -3290,16 +3158,16 @@ function updateSearchCount(msg) {
 }
 
 async function runSessionSearch(query, { mode = 'message', closeIfEmpty = false } = {}) {
-  if (!currentSession) return;
-  const sessionId = currentSession.id;
+  if (!sessionState.currentSession) return;
+  const sessionId = sessionState.currentSession.id;
   updateSearchCount('searching…');
   try {
     const params = new URLSearchParams({ q: query });
     if (mode !== 'message') params.set('mode', mode);
-    const res = await apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/search?${params}`);
+    const res = await apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/search?${params}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-    if (currentSession?.id !== sessionId) return;
+    if (sessionState.currentSession?.id !== sessionId) return;
     search.query = query;
     search.matches = visibleSearchMatchesOf(data.matches || []);
     search.pos = search.matches.length - 1; // start from the latest match
@@ -3307,7 +3175,7 @@ async function runSessionSearch(query, { mode = 'message', closeIfEmpty = false 
     else if (closeIfEmpty) { closeSearch(); return; }
     updateSearchCount();
   } catch (e) {
-    if (currentSession?.id !== sessionId) return;
+    if (sessionState.currentSession?.id !== sessionId) return;
     updateSearchCount('search failed');
     console.error('Session search failed:', e);
   }
@@ -3334,7 +3202,7 @@ async function moveSearch(delta) {
 async function jumpToSearchResult() {
   if (search.navigating) return;
   const match = search.matches[search.pos];
-  if (!match || !currentSession) return;
+  if (!match || !sessionState.currentSession) return;
   search.navigating = true;
   try {
     const container = document.getElementById('messages');
@@ -3599,7 +3467,7 @@ async function renderRecoveryPreferences() {
   const status = section.querySelector('#recoverySettingsStatus');
   const report = section.querySelector('#openRecoveryReport');
   hostSelect.innerHTML = recoveryHostOptions(recoveryCapableHosts());
-  hostSelect.value = selectRecoveryHost(recoveryCapableHosts(), currentSession?.host)?.hostId || '';
+  hostSelect.value = selectRecoveryHost(recoveryCapableHosts(), sessionState.currentSession?.host)?.hostId || '';
   let seq = 0;
   const selectedHost = () => recoveryCapableHosts().find(host => (host.hostId || '') === hostSelect.value);
   const owns = request => section.isConnected && seq === request &&
@@ -4102,7 +3970,7 @@ function searchFacetState() {
 // client already knows), not from the current results — otherwise picking a
 // workspace would immediately empty every other option.
 function searchFacetOptions() {
-  const all = [...sessions.active, ...sessions.previous];
+  const all = [...sessionState.sessions.active, ...sessionState.sessions.previous];
   const cwds = new Map(), models = new Set();
   for (const s of all) {
     if (s.cwd) cwds.set(s.cwd, shortCwd(s.cwd));
@@ -4202,9 +4070,9 @@ async function openSearchResult(id, hasContentMatches, host = null) {
   closeSearchView();
   // Search results span the whole corpus; the sidebar lists may be narrowed
   // (or Active-tab-only) right now, and selectSession validates against them.
-  if (!findSession(id, host)) await loadSessions(undefined, { withPrevious: true });
+  if (!sessionState.findSession(id, host)) await loadSessions(undefined, { withPrevious: true });
   await selectSession(id, { host });
-  if (tokens.length && hasContentMatches && currentSession?.id === id) {
+  if (tokens.length && hasContentMatches && sessionState.currentSession?.id === id) {
     openSearch();
     const input = document.getElementById('searchInput');
     input.value = tokens.join(' ');
@@ -4600,7 +4468,7 @@ function buildRefineDraft(skill, cov, refine) {
 // activating entry (the per-message deep-link machinery keys on entry id).
 async function openSkillActivation(sessionId, entryId) {
   closeSkillsView();
-  if (!findSession(sessionId)) await loadSessions(undefined, { withPrevious: true });
+  if (!sessionState.findSession(sessionId)) await loadSessions(undefined, { withPrevious: true });
   await selectSession(sessionId);
   if (!entryId) return;
   setTimeout(() => {
@@ -5300,11 +5168,11 @@ function ownsStatsModal(sessionId, generation) {
 }
 
 function openStatsModal() {
-  if (!currentSession) return;
-  const sessionId = currentSession.id;
+  if (!sessionState.currentSession) return;
+  const sessionId = sessionState.currentSession.id;
   // Resolved now, while the selection is certainly this session — the stats
   // response lands a round-trip later.
-  const ref = sessionRefFor(currentSession);
+  const ref = sessionRefFor(sessionState.currentSession);
   const generation = ++statsModalGeneration;
   statsModalSessionId = sessionId;
   const modal = document.getElementById('statsModal');
@@ -5328,7 +5196,7 @@ function openStatsModal() {
       );
     });
   }
-  apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/stats`)
+  apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/stats`)
     .then(r => r.json())
     .then(s => {
       if (!ownsStatsModal(sessionId, generation)) return;
@@ -5394,11 +5262,11 @@ function loadShareSection(sessionId, generation) {
   if (!ownsStatsModal(sessionId, generation)) return;
   const el = document.getElementById('statsShare');
   if (!el) return;
-  const session = findSession(sessionId);
+  const session = sessionState.findSession(sessionId);
   if (!sessionSupports(session, 'export')) { el.remove(); return; }
   el.innerHTML = '<div class="stats-share-title">Public share link</div>' +
     '<div class="stats-share-body">Loading…</div>';
-  apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`)
+  apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`)
     .then(r => (r.status === 404 ? null : r.json()))
     .then(share => renderShareSection(sessionId, share, generation))
     .catch(() => renderShareSection(sessionId, null, generation));
@@ -5414,7 +5282,7 @@ function renderShareSection(sessionId, share, generation) {
       '<button type="button" class="btn-small" id="shareCreateBtn">Create share link</button>' +
       '<div class="stats-share-hint">Anyone with the link can view this session read-only.</div>';
     bodyEl.querySelector('#shareCreateBtn').addEventListener('click', () => {
-      apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'POST' })
+      apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'POST' })
         .then(r => r.json())
         .then(s => {
           if (!ownsStatsModal(sessionId, generation)) return;
@@ -5432,7 +5300,7 @@ function renderShareSection(sessionId, share, generation) {
     `<button type="button" class="stats-copy stats-share-link" data-copy="${escapeHtml(link)}" title="Click to copy">${escapeHtml(link)}</button>` +
     '<button type="button" class="btn-small btn-danger" id="shareRevokeBtn">Revoke</button>';
   bodyEl.querySelector('#shareRevokeBtn').addEventListener('click', () => {
-    apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'DELETE' })
+    apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'DELETE' })
       .then(r => r.json())
       .then(() => {
         if (!ownsStatsModal(sessionId, generation)) return;
@@ -5450,16 +5318,16 @@ function renderShareSection(sessionId, share, generation) {
 // there on load). Reuses the existing share; if none exists yet, creating
 // one publishes the whole session, so that asks first.
 async function copyMessageShareLink(btn) {
-  if (!currentSession) return;
+  if (!sessionState.currentSession) return;
   const entryId = btn.dataset.entryId;
   if (!entryId) return;
-  const sessionId = currentSession.id;
+  const sessionId = sessionState.currentSession.id;
   try {
-    let res = await apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`);
+    let res = await apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`);
     let share = res.status === 404 ? null : await res.json();
     if (!share || share.error) {
       if (!confirm('No share link exists for this session yet — create one? Anyone with the link can view the whole session read-only.')) return;
-      res = await apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'POST' });
+      res = await apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'POST' });
       share = await res.json();
       if (!res.ok) throw new Error(share.error || `HTTP ${res.status}`);
       refreshArtifacts(sessionId);
@@ -5478,10 +5346,10 @@ async function copyMessageShareLink(btn) {
 // re-fetch both lists (the session just moved from active to previous) and,
 // when it was the selected session, re-select so the view flips to its
 // inactive state (resume bar).
-async function finishSessionClose(sessionId, host = sessionHostId(sessionId)) {
+async function finishSessionClose(sessionId, host = sessionState.sessionHostId(sessionId)) {
   setStatus('Session closed');
   await loadSessions(undefined, { withPrevious: true });
-  if (currentSession?.id === sessionId && (currentSession.host || null) === (host || null)) {
+  if (sessionState.currentSession?.id === sessionId && (sessionState.currentSession.host || null) === (host || null)) {
     await selectSession(sessionId, { host });
   }
 }
@@ -5494,9 +5362,9 @@ function renderCloseSection(sessionId, generation) {
   if (!ownsStatsModal(sessionId, generation)) return;
   const el = document.getElementById('statsClose');
   if (!el) return;
-  const session = findSession(sessionId);
+  const session = sessionState.findSession(sessionId);
   if (!session?.isActive || !sessionSupports(session, 'close')) { el.remove(); return; }
-  const host = sessionHostId(sessionId);
+  const host = sessionState.sessionHostId(sessionId);
   const detach = session.closeMode === 'client-only'; // Older fleet hosts still only detach Prime clients.
   const ownedAgent = session.closeMode === 'owned-agent';
   const restartable = session.capabilities?.restart === true;
@@ -5522,7 +5390,7 @@ function renderCloseSection(sessionId, generation) {
       ? 'Detach this client? The logical agent will continue independently.'
       : ownedAgent
         ? 'Stop this agent and its children? Any work in progress will be aborted; the transcript stays resumable.'
-        : findSession(sessionId, host)?.turnInProgress
+        : sessionState.findSession(sessionId, host)?.turnInProgress
         ? 'A turn is in progress — closing will abort it. Close this session?'
         : 'Close this session? The agent process will shut down (the transcript stays resumable).';
     if (!confirm(warn)) return;
@@ -5545,7 +5413,7 @@ function renderCloseSection(sessionId, generation) {
   if (!restartBtn) return;
   restartBtn.addEventListener('click', async () => {
     if (!ownsStatsModal(sessionId, generation)) return;
-    const active = findSession(sessionId, host);
+    const active = sessionState.findSession(sessionId, host);
     const warn = ownedAgent
       ? 'Restart this agent? This stops the root and its children, aborting any work in progress, then resumes the root in the same pane. The transcript is kept; other root agents keep running.'
       : active?.turnInProgress
@@ -5553,7 +5421,7 @@ function renderCloseSection(sessionId, generation) {
       : 'Restart this agent? The current process will stop, then the session will resume with updated CLI code and startup settings.';
     if (!confirm(warn)) return;
 
-    const wasSelected = currentSession?.id === sessionId && currentSession?.host === host;
+    const wasSelected = sessionState.currentSession?.id === sessionId && sessionState.currentSession?.host === host;
     closeBtn.disabled = true;
     restartBtn.disabled = true;
     restartBtn.textContent = 'Restarting…';
@@ -5563,13 +5431,13 @@ function renderCloseSection(sessionId, generation) {
       if (ownsStatsModal(sessionId, generation)) closeStatsModal();
       setStatus('Agent restarted');
       await refreshSessions();
-      if (wasSelected && currentSession?.id === sessionId && currentSession?.host === host) {
+      if (wasSelected && sessionState.currentSession?.id === sessionId && sessionState.currentSession?.host === host) {
         selectSession(data.id, { host });
       }
     } catch (e) {
       if (ownsStatsModal(sessionId, generation)) closeStatsModal();
       await loadSessions(undefined, { withPrevious: true });
-      if (wasSelected && currentSession?.id === sessionId && currentSession?.host === host) {
+      if (wasSelected && sessionState.currentSession?.id === sessionId && sessionState.currentSession?.host === host) {
         selectSession(sessionId, { host });
       }
       setStatus('Restart failed: ' + e.message, 'error');
@@ -5609,15 +5477,15 @@ function isFileViewOpen() {
 
 function ownsFileView(sessionId, generation) {
   return fileViewSessionId === sessionId && fileViewGeneration === generation &&
-    ownsSessionView(sessionId, fileViewSelectionGeneration) && isFileViewOpen();
+    sessionState.ownsSessionView(sessionId, fileViewSelectionGeneration) && isFileViewOpen();
 }
 
 async function openFileViewer(mention) {
-  if (!currentSession) return;
-  const sessionId = currentSession.id;
+  if (!sessionState.currentSession) return;
+  const sessionId = sessionState.currentSession.id;
   const generation = ++fileViewGeneration;
   fileViewSessionId = sessionId;
-  fileViewSelectionGeneration = sessionSelectionGeneration;
+  fileViewSelectionGeneration = sessionState.generation;
   const body = document.getElementById('fileViewBody');
   const title = document.getElementById('fileViewTitle');
   const pathEl = document.getElementById('fileViewPath');
@@ -5637,19 +5505,19 @@ async function openFileViewer(mention) {
   closeDiffView(); // the two takeover panes are mutually exclusive
   document.getElementById('sessionView').classList.add('file-open');
   try {
-    const res = await apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/file?path=${encodeURIComponent(mention)}`);
+    const res = await apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/file?path=${encodeURIComponent(mention)}`);
     const data = await res.json();
     if (!ownsFileView(sessionId, generation)) return;
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     title.textContent = data.path.split('/').pop();
     fileViewAbsPath = data.path;
     fileViewRelPath = data.relPath;
-    rawLink.href = hostAssetUrl(sessionHostId(sessionId),
+    rawLink.href = hostAssetUrl(sessionState.sessionHostId(sessionId),
       `/api/sessions/${encodeURIComponent(sessionId)}/file/content?path=${encodeURIComponent(data.path)}&v=${data.mtime}-${data.size}`);
     rawLink.style.display = '';
     document.getElementById('fileViewPublish').style.display = '';
     // Already published (by the agent or a previous click)? Show its link.
-    apiFetch(sessionHostId(sessionId), '/api/pages')
+    apiFetch(sessionState.sessionHostId(sessionId), '/api/pages')
       .then((r) => r.json())
       .then((list) => {
         if (!ownsFileView(sessionId, generation) || fileViewAbsPath !== data.path) return;
@@ -5662,7 +5530,7 @@ async function openFileViewer(mention) {
     pathEl.title = data.path;
     if (data.image) {
       const src = data.image.url
-        ? hostAssetUrl(sessionHostId(sessionId), data.image.url)
+        ? hostAssetUrl(sessionState.sessionHostId(sessionId), data.image.url)
         : `data:${data.image.mimeType};base64,${data.image.data}`;
       body.innerHTML = `<img class="file-view-img" src="${escapeHtml(src)}" decoding="async" alt="">`;
       return;
@@ -5912,11 +5780,11 @@ async function submitAnchoredComment() {
   document.getElementById('commentStatus').textContent = 'Saving…';
   try {
     const response = editing
-      ? await apiFetch(sessionHostId(editing.sessionId), `/api/comments/${encodeURIComponent(editing.id)}`, {
+      ? await apiFetch(sessionState.sessionHostId(editing.sessionId), `/api/comments/${encodeURIComponent(editing.id)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: editing.sessionId, body }),
       })
-      : await apiFetch(sessionHostId(draft.sessionId), '/api/comments', {
+      : await apiFetch(sessionState.sessionHostId(draft.sessionId), '/api/comments', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: draft.sessionId, body, target: draft.target }),
       });
@@ -5967,7 +5835,7 @@ async function refreshAnchoredComments() {
     ? ownsFileView(sessionId, generation) && fileViewAbsPath === filePath
     : ownsDiffView(sessionId, generation));
   try {
-    const indexRes = await apiFetch(sessionHostId(sessionId), `/api/comments/index?sessionId=${encodeURIComponent(sessionId)}`);
+    const indexRes = await apiFetch(sessionState.sessionHostId(sessionId), `/api/comments/index?sessionId=${encodeURIComponent(sessionId)}`);
     const index = await indexRes.json();
     if (!indexRes.ok || !owns()) return;
     const ids = (index.comments || [])
@@ -5976,7 +5844,7 @@ async function refreshAnchoredComments() {
         : entry.target?.kind === 'diff'))
       .map((entry) => entry.id);
     if (!ids.length) return setAnchoredComments([]);
-    const fullRes = await apiFetch(sessionHostId(sessionId), '/api/comments/get', {
+    const fullRes = await apiFetch(sessionState.sessionHostId(sessionId), '/api/comments/get', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId, ids }),
     });
@@ -6234,7 +6102,7 @@ async function handleCommentDelete() {
   button.disabled = true;
   document.getElementById('commentStatus').textContent = 'Deleting…';
   try {
-    const response = await apiFetch(sessionHostId(comment.sessionId), `/api/comments/${encodeURIComponent(comment.id)}`, {
+    const response = await apiFetch(sessionState.sessionHostId(comment.sessionId), `/api/comments/${encodeURIComponent(comment.id)}`, {
       method: 'DELETE', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: comment.sessionId }),
     });
@@ -6275,7 +6143,7 @@ function renderFilePageRow(page, sessionId, generation) {
     );
   });
   el.querySelector('#filePageRevoke').addEventListener('click', () => {
-    apiFetch(sessionHostId(sessionId), `/api/pages/${encodeURIComponent(page.token)}`, { method: 'DELETE' })
+    apiFetch(sessionState.sessionHostId(sessionId), `/api/pages/${encodeURIComponent(page.token)}`, { method: 'DELETE' })
       .then(() => {
         if (!ownsFileView(sessionId, generation)) return;
         renderFilePageRow(null, sessionId, generation);
@@ -6288,13 +6156,13 @@ function renderFilePageRow(page, sessionId, generation) {
 }
 
 async function publishFileView() {
-  if (!fileViewAbsPath || !currentSession) return;
+  if (!fileViewAbsPath || !sessionState.currentSession) return;
   const sessionId = fileViewSessionId;
   const generation = fileViewGeneration;
   const path = fileViewAbsPath;
   if (!ownsFileView(sessionId, generation)) return;
   try {
-    const res = await apiFetch(sessionHostId(sessionId), '/api/pages', {
+    const res = await apiFetch(sessionState.sessionHostId(sessionId), '/api/pages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -6320,7 +6188,7 @@ function loadPagesSection(sessionId, generation) {
   if (!ownsStatsModal(sessionId, generation)) return;
   const el = document.getElementById('statsPages');
   if (!el) return;
-  apiFetch(sessionHostId(sessionId), `/api/pages?sessionId=${encodeURIComponent(sessionId)}`)
+  apiFetch(sessionState.sessionHostId(sessionId), `/api/pages?sessionId=${encodeURIComponent(sessionId)}`)
     .then((r) => r.json())
     .then((list) => {
       if (!ownsStatsModal(sessionId, generation)) return;
@@ -6337,7 +6205,7 @@ function loadPagesSection(sessionId, generation) {
       el.querySelectorAll('.stats-page-revoke').forEach((btn) => {
         btn.addEventListener('click', () => {
           const token = btn.closest('.stats-page-row').dataset.token;
-          apiFetch(sessionHostId(sessionId), `/api/pages/${encodeURIComponent(token)}`, { method: 'DELETE' })
+          apiFetch(sessionState.sessionHostId(sessionId), `/api/pages/${encodeURIComponent(token)}`, { method: 'DELETE' })
             .then(() => {
               if (!ownsStatsModal(sessionId, generation)) return;
               loadPagesSection(sessionId, generation);
@@ -6366,12 +6234,12 @@ async function refreshArtifacts(sessionId) {
   const seq = ++artifactsSeq;
   try {
     const [pagesRes, shareRes] = await Promise.all([
-      apiFetch(sessionHostId(sessionId), `/api/pages?sessionId=${encodeURIComponent(sessionId)}`),
-      apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`),
+      apiFetch(sessionState.sessionHostId(sessionId), `/api/pages?sessionId=${encodeURIComponent(sessionId)}`),
+      apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`),
     ]);
     const pages = pagesRes.ok ? await pagesRes.json() : [];
     const share = (shareRes.ok && shareRes.status !== 404) ? await shareRes.json() : null;
-    if (seq !== artifactsSeq || currentSession?.id !== sessionId) return;
+    if (seq !== artifactsSeq || sessionState.currentSession?.id !== sessionId) return;
     sessionArtifacts = { pages: Array.isArray(pages) ? pages : [], share };
     updateArtifactsBadge();
     if (document.getElementById('artifactsModal').style.display !== 'none') renderArtifactsModal();
@@ -6393,10 +6261,10 @@ function updateArtifactsBadge() {
 }
 
 function openArtifactsModal() {
-  if (!currentSession) return;
+  if (!sessionState.currentSession) return;
   document.getElementById('artifactsModal').style.display = 'flex';
   renderArtifactsModal();
-  refreshArtifacts(currentSession.id);
+  refreshArtifacts(sessionState.currentSession.id);
 }
 
 function closeArtifactsModal() {
@@ -6442,8 +6310,8 @@ function renderArtifactsModal() {
     );
   }));
   body.querySelectorAll('.artifact-revoke').forEach((btn) => btn.addEventListener('click', () => {
-    apiFetch(currentSession?.host, `/api/pages/${encodeURIComponent(btn.dataset.token)}`, { method: 'DELETE' })
-      .then(() => refreshArtifacts(currentSession?.id))
+    apiFetch(sessionState.currentSession?.host, `/api/pages/${encodeURIComponent(btn.dataset.token)}`, { method: 'DELETE' })
+      .then(() => refreshArtifacts(sessionState.currentSession?.id))
       .catch((e) => setStatus('Failed to revoke: ' + e.message, 'error'));
   }));
 }
@@ -6473,7 +6341,7 @@ function isDiffViewOpen() {
 
 function ownsDiffView(sessionId, generation) {
   return diffViewSessionId === sessionId && diffViewGeneration === generation &&
-    ownsSessionView(sessionId, diffViewSelectionGeneration) && isDiffViewOpen();
+    sessionState.ownsSessionView(sessionId, diffViewSelectionGeneration) && isDiffViewOpen();
 }
 
 function toggleDiffView() {
@@ -6482,7 +6350,7 @@ function toggleDiffView() {
 }
 
 async function openDiffView() {
-  if (!currentSession) return;
+  if (!sessionState.currentSession) return;
   closeFileView(); // the two takeover panes are mutually exclusive
   document.getElementById('sessionView').classList.add('diff-open');
   document.getElementById('btnDiff')?.classList.add('active');
@@ -6501,17 +6369,17 @@ function closeDiffView() {
 }
 
 async function loadDiffView() {
-  if (!currentSession || !isDiffViewOpen()) return;
-  const sessionId = currentSession.id;
+  if (!sessionState.currentSession || !isDiffViewOpen()) return;
+  const sessionId = sessionState.currentSession.id;
   const generation = ++diffViewGeneration;
   diffViewSessionId = sessionId;
-  diffViewSelectionGeneration = sessionSelectionGeneration;
+  diffViewSelectionGeneration = sessionState.generation;
   const body = document.getElementById('diffViewBody');
   const rootEl = document.getElementById('diffViewRoot');
   closeCommentBubble();
   body.innerHTML = '<div class="loading">Loading…</div>';
   try {
-    const res = await apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/diff`);
+    const res = await apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/diff`);
     const data = await res.json();
     if (!ownsDiffView(sessionId, generation)) return;
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -6586,7 +6454,7 @@ function renderDiffViewHtml(data) {
 
 async function loadDeferredDiffPatch(details) {
   const patch = details.querySelector('.diff-patch[data-deferred="1"]');
-  if (!patch || patch.dataset.loading || !currentSession || !diffViewSessionId) return;
+  if (!patch || patch.dataset.loading || !sessionState.currentSession || !diffViewSessionId) return;
   const sessionId = diffViewSessionId;
   const viewGeneration = diffViewGeneration;
   const requestGeneration = ++diffPatchRequestGeneration;
@@ -6599,7 +6467,7 @@ async function loadDeferredDiffPatch(details) {
       path: patch.dataset.path,
       snapshot: patch.dataset.snapshot,
     });
-    const res = await apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/diff/patch?${query}`);
+    const res = await apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/diff/patch?${query}`);
     const data = await res.json();
     if (!ownsDiffView(sessionId, viewGeneration) || !patch.isConnected ||
         patch.dataset.requestGeneration !== String(requestGeneration)) return;
@@ -6644,8 +6512,8 @@ async function loadDeferredDiffPatch(details) {
 // Neither path takes a deadline: the exporter runs over the whole session
 // before the first byte.
 async function exportSession() {
-  if (!currentSession) return;
-  const session = currentSession;
+  if (!sessionState.currentSession) return;
+  const session = sessionState.currentSession;
   const host = resolveHost(session.host);
   const path = `/api/sessions/${encodeURIComponent(session.id)}/export`;
   if (!host.token) { window.open(host.base + path, '_blank'); return; }
@@ -6684,12 +6552,12 @@ function downloadBlob(blob, name) {
 
 // --- Inline rename ---
 function startRename() {
-  if (!currentSession || !currentSession.isActive || !sessionSupports(currentSession, 'rename')) return;
+  if (!sessionState.currentSession || !sessionState.currentSession.isActive || !sessionSupports(sessionState.currentSession, 'rename')) return;
   const nameEl = document.getElementById('sessionName');
   const inputEl = document.getElementById('sessionNameInput');
   nameEl.style.display = 'none';
   inputEl.style.display = '';
-  inputEl.value = currentSession.name || '';
+  inputEl.value = sessionState.currentSession.name || '';
   inputEl.focus();
   inputEl.select();
 }
@@ -6705,14 +6573,14 @@ async function commitRename() {
   const newName = inputEl.value.trim();
   inputEl.style.display = 'none';
   nameEl.style.display = '';
-  if (!currentSession || !newName || newName === currentSession.name || !currentSession.isActive) return;
-  const { id, host } = currentSession;
-  const generation = sessionSelectionGeneration;
+  if (!sessionState.currentSession || !newName || newName === sessionState.currentSession.name || !sessionState.currentSession.isActive) return;
+  const { id, host } = sessionState.currentSession;
+  const generation = sessionState.generation;
   try {
     await apiSend(host, '/api/sessions/' + encodeURIComponent(id) + '/rename', { name: newName });
-    patchSession(id, { name: newName }, host);
+    sessionState.patchSession(id, { name: newName }, host);
   } catch (e) {
-    if (ownsSessionView(id, generation)) setStatus('Rename failed: ' + e.message, 'error');
+    if (sessionState.ownsSessionView(id, generation)) setStatus('Rename failed: ' + e.message, 'error');
   }
 }
 
@@ -6726,8 +6594,8 @@ let modelDropdownOpen = false;
 let modelEditMode = false; // scoped-models switcher: toggle which models are enabled
 
 async function toggleModelDropdown() {
-  if (!currentSession || !currentSession.isActive || !sessionSupports(currentSession, 'setModel')) return;
-  await loadModels(currentSession.id, currentSession.harnessId);
+  if (!sessionState.currentSession || !sessionState.currentSession.isActive || !sessionSupports(sessionState.currentSession, 'setModel')) return;
+  await loadModels(sessionState.currentSession.id, sessionState.currentSession.harnessId);
   modelDropdownOpen = !modelDropdownOpen;
   modelEditMode = false;
   const dropdown = document.getElementById('modelDropdown');
@@ -6748,7 +6616,7 @@ async function toggleModelDropdown() {
 
 function isCurrentModel(m) {
   var fullId = m.provider + '/' + m.id;
-  return m.id === currentSession?.model || fullId === currentSession?.model;
+  return m.id === sessionState.currentSession?.model || fullId === sessionState.currentSession?.model;
 }
 
 function renderModelDropdown(query) {
@@ -6826,7 +6694,7 @@ function renderModelDropdownFooter(dropdown, hidden) {
     html += '<button class="model-footer-btn primary" onclick="exitModelEditMode()">Done</button>';
   } else {
     if (hidden > 0) html += '<span class="model-footer-info">' + hidden + ' hidden</span>';
-    if (currentSession?.harnessId === 'pi') {
+    if (sessionState.currentSession?.harnessId === 'pi') {
       html += '<button class="model-footer-btn" onclick="enterModelEditMode()" title="Choose which models are enabled (pi scoped models)">⚙ Edit models</button>';
     }
   }
@@ -6834,7 +6702,7 @@ function renderModelDropdownFooter(dropdown, hidden) {
 }
 
 function enterModelEditMode() {
-  if (currentSession?.harnessId !== 'pi') return;
+  if (sessionState.currentSession?.harnessId !== 'pi') return;
   modelEditMode = true;
   renderModelDropdown(currentModelQuery());
 }
@@ -6902,17 +6770,17 @@ async function selectModel(fullModelId) {
   // bare id, and the same id can exist under two providers (anthropic vs a
   // Bedrock mirror) — a bare-id comparison silently swallowed those switches.
   // A redundant set_model for the truly-same model is harmless.
-  var isSame = fullModelId === currentSession?.model;
-  if (!currentSession || !sessionSupports(currentSession, 'setModel') || isSame) return;
-  const { id, host } = currentSession;
-  const generation = sessionSelectionGeneration;
+  var isSame = fullModelId === sessionState.currentSession?.model;
+  if (!sessionState.currentSession || !sessionSupports(sessionState.currentSession, 'setModel') || isSame) return;
+  const { id, host } = sessionState.currentSession;
+  const generation = sessionState.generation;
   setStatus('Switching model...', 'working');
   try {
     await apiSend(host, '/api/sessions/' + encodeURIComponent(id) + '/model', { modelId: fullModelId });
-    patchSession(id, { model: fullModelId }, host);
-    if (ownsSessionView(id, generation)) setStatus('Model switched to ' + fullModelId);
+    sessionState.patchSession(id, { model: fullModelId }, host);
+    if (sessionState.ownsSessionView(id, generation)) setStatus('Model switched to ' + fullModelId);
   } catch (e) {
-    if (ownsSessionView(id, generation)) setStatus('Model switch failed: ' + e.message, 'error');
+    if (sessionState.ownsSessionView(id, generation)) setStatus('Model switch failed: ' + e.message, 'error');
   }
 }
 
@@ -6959,7 +6827,7 @@ function pruneTranscriptCache(skipId) {
 }
 
 function stashCurrentTranscript() {
-  const id = currentSession && sessionRefKey(currentSession);
+  const id = sessionState.currentSession && sessionRefKey(sessionState.currentSession);
   const container = document.getElementById('messages');
   if (!id || !container || lastLoadedIndex == null || container.querySelector('.loading, .error')) return;
   const scrollTop = container.scrollTop;
@@ -7004,7 +6872,7 @@ function trimStashedTranscript(entry) {
 }
 
 function restoreCachedTranscript(id) {
-  id = sessionKey(sessionHostId(id), id);
+  id = sessionKey(sessionState.sessionHostId(id), id);
   const cached = transcriptCache.get(id);
   if (!cached) return false;
   if (Date.now() - cached.lastUsed > TRANSCRIPT_CACHE_TTL_MS) {
@@ -7050,7 +6918,7 @@ function renderMessageHtml(msg) {
   return '';
 }
 
-async function loadMessages(id, selectionGeneration = sessionSelectionGeneration) {
+async function loadMessages(id, selectionGeneration = sessionState.generation) {
   cancelStreamingRender();
   closeSearch();
   const container = document.getElementById('messages');
@@ -7070,20 +6938,20 @@ async function loadMessages(id, selectionGeneration = sessionSelectionGeneration
   // without a set_mood call doesn't wipe a mood set earlier in the session.
   setMoodIndicator('', '');
   try {
-    const res = await apiFetch(sessionHostId(id), `/api/sessions/${encodeURIComponent(id)}/messages?limit=${MESSAGE_PAGE_SIZE}`);
+    const res = await apiFetch(sessionState.sessionHostId(id), `/api/sessions/${encodeURIComponent(id)}/messages?limit=${MESSAGE_PAGE_SIZE}`);
     const data = await res.json();
     // A newer selection may have superseded us while the fetch was in flight —
     // don't clobber its transcript/cursors with this stale response.
-    if (!ownsSessionView(id, selectionGeneration)) return;
+    if (!sessionState.ownsSessionView(id, selectionGeneration)) return;
     const { messages, session, firstIndex, lastIndex, hasMore, totalMessages: total } = data;
-    mergeCurrentSession(id, session);
+    sessionState.mergeCurrentSession(id, session);
     oldestLoadedIndex = firstIndex;
     lastLoadedIndex = lastIndex;
     hasMoreOlder = !!hasMore;
     totalMessages = total || 0;
     renderMessages(messages);
   } catch (e) {
-    if (!ownsSessionView(id, selectionGeneration)) return;
+    if (!sessionState.ownsSessionView(id, selectionGeneration)) return;
     container.innerHTML = `<div class="error">Failed to load messages: ${e.message}</div>`;
   }
 }
@@ -7109,10 +6977,10 @@ function renderMessages(messages) {
 }
 
 async function loadOlderMessages() {
-  if (loadingOlder || !hasMoreOlder || !currentSession || oldestLoadedIndex == null) return;
+  if (loadingOlder || !hasMoreOlder || !sessionState.currentSession || oldestLoadedIndex == null) return;
   loadingOlder = true;
-  const sessionId = currentSession.id;
-  const selectionGeneration = sessionSelectionGeneration;
+  const sessionId = sessionState.currentSession.id;
+  const selectionGeneration = sessionState.generation;
   const requestGeneration = ++loadingOlderGeneration;
   const beforeIndex = oldestLoadedIndex;
   const container = document.getElementById('messages');
@@ -7127,12 +6995,12 @@ async function loadOlderMessages() {
   const anchorOffset = anchor ? anchor.getBoundingClientRect().top : 0;
 
   try {
-    const res = await apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/messages?limit=${MESSAGE_PAGE_SIZE}&before=${beforeIndex}`);
+    const res = await apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/messages?limit=${MESSAGE_PAGE_SIZE}&before=${beforeIndex}`);
     const data = await res.json();
     // The request belongs to the transcript that initiated it. A quick
     // session switch or same-session forced reload must not prepend those
     // messages into the replacement transcript.
-    if (!ownsSessionView(sessionId, selectionGeneration) || requestGeneration !== loadingOlderGeneration) return;
+    if (!sessionState.ownsSessionView(sessionId, selectionGeneration) || requestGeneration !== loadingOlderGeneration) return;
     const { messages, firstIndex, hasMore } = data;
     if (messages && messages.length) {
       const html = messages.map(renderMessageHtml).join('');
@@ -7159,14 +7027,14 @@ async function loadOlderMessages() {
       if (existingBar) existingBar.remove();
     }
   } catch (e) {
-    if (!ownsSessionView(sessionId, selectionGeneration) || requestGeneration !== loadingOlderGeneration) return;
+    if (!sessionState.ownsSessionView(sessionId, selectionGeneration) || requestGeneration !== loadingOlderGeneration) return;
     if (bar) bar.querySelector('.load-older-btn').textContent = `Failed: ${e.message} — retry`;
   } finally {
     if (requestGeneration === loadingOlderGeneration) loadingOlder = false;
   }
 }
 
-async function fetchNewMessagesSince(sessionId, selectionGeneration = sessionSelectionGeneration) {
+async function fetchNewMessagesSince(sessionId, selectionGeneration = sessionState.generation) {
   // Incremental catch-up after turn_end / init. Avoids the full reload that
   // stalls long sessions.
   if (lastLoadedIndex == null) {
@@ -7174,13 +7042,13 @@ async function fetchNewMessagesSince(sessionId, selectionGeneration = sessionSel
     return loadMessages(sessionId, selectionGeneration);
   }
   try {
-    const res = await apiFetch(sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/messages?after=${lastLoadedIndex}`);
+    const res = await apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/messages?after=${lastLoadedIndex}`);
     const data = await res.json();
     // Bail if the user switched sessions or force-reloaded this same session
     // while the catch-up was in flight.
-    if (!ownsSessionView(sessionId, selectionGeneration)) return;
+    if (!sessionState.ownsSessionView(sessionId, selectionGeneration)) return;
     const { messages, lastIndex, totalMessages: total, session } = data;
-    mergeCurrentSession(sessionId, session);
+    sessionState.mergeCurrentSession(sessionId, session);
     if (typeof total === 'number') totalMessages = total;
     if (!messages || messages.length === 0) return;
 
@@ -7222,7 +7090,7 @@ async function fetchNewMessagesSince(sessionId, selectionGeneration = sessionSel
     finalizeRender(container);
     if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
   } catch (e) {
-    if (!ownsSessionView(sessionId, selectionGeneration)) return;
+    if (!sessionState.ownsSessionView(sessionId, selectionGeneration)) return;
     console.error('fetchNewMessagesSince failed:', e);
   }
 }
@@ -7243,7 +7111,7 @@ function imageBlocksHtml(content, alt = 'image') {
   if (!images.length) return '';
   const imgs = images.map(img => {
     const src = img.url
-      ? hostAssetUrl(currentSession?.host, img.url)
+      ? hostAssetUrl(sessionState.currentSession?.host, img.url)
       : `data:${img.mimeType};base64,${img.data}`;
     const loading = img.url ? ' loading="lazy" decoding="async"' : '';
     return `<img class="msg-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"${loading}>`;
@@ -7255,7 +7123,7 @@ function imageBlocksHtml(content, alt = 'image') {
 // message (pi's HTML export scrolls to ?targetId=<JSONL entry id>). Only
 // JSONL-backed messages have an entry id — streaming placeholders don't.
 function messageLinkBtnHtml(msg) {
-  if (!msg.id || !sessionSupports(currentSession, 'export')) return '';
+  if (!msg.id || !sessionSupports(sessionState.currentSession, 'export')) return '';
   return `<button type="button" class="msg-link-btn" data-entry-id="${escapeHtml(msg.id)}" title="Copy share link to this message">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
@@ -7313,7 +7181,7 @@ function renderAssistantMessage(msg, time, opts = {}) {
     errorHtml = `<div class="message-content message-error"><div class="markdown-body"><strong>Error:</strong> ${escapeHtml(msg.errorMessage)}</div></div>`;
   }
   
-  const showModel = msg.model && (!currentSession || msg.model !== currentSession.model);
+  const showModel = msg.model && (!sessionState.currentSession || msg.model !== sessionState.currentSession.model);
   // Tool-only messages (no prose, no error) are fully hidden in focus mode —
   // without this their empty header row lingers as a stray marker.
   const noTextClass = messageHasVisibleText(msg) ? '' : ' no-text';
@@ -7380,7 +7248,7 @@ function refreshResponsePricingState() {
 function openResponseDetails(id) {
   const m = responseDetails.get(id); if (!m) return;
   const u = m.usage || {}, c = u.cost || {};
-  const selected = m.model || currentSession?.model || '—';
+  const selected = m.model || sessionState.currentSession?.model || '—';
   const model = m.responseModel || selected;
   const prompt = (u.input||0)+(u.cacheRead||0)+(u.cacheWrite||0);
   const modelRows = m.responseModel && m.responseModel !== selected
@@ -7814,30 +7682,30 @@ function finalizeLiveToolPanel(data) {
 let messageStream = null;
 let streamReconnectTimeout = null;
 
-function startMessageStream(sessionId, selectionGeneration = sessionSelectionGeneration) {
+function startMessageStream(sessionId, selectionGeneration = sessionState.generation) {
   if (streamReconnectTimeout) { clearTimeout(streamReconnectTimeout); streamReconnectTimeout = null; }
   if (messageStream) { messageStream.close(); messageStream = null; }
   if (!sessionId) return;
 
-  const host = resolveHost(sessionHostId(sessionId));
+  const host = resolveHost(sessionState.sessionHostId(sessionId));
   const path = `/api/sessions/${encodeURIComponent(sessionId)}/stream`;
   if (!host.token) { openMessageStream(host.base + path, sessionId, selectionGeneration); return; }
   // Token host: the ticket is minted per connect, never remembered — the
   // reconnect path lands back here and mints a fresh one.
   mintHostTicket(host, 'stream').then((ticket) => {
-    if (messageStream || !ownsSessionView(sessionId, selectionGeneration)) return;
+    if (messageStream || !sessionState.ownsSessionView(sessionId, selectionGeneration)) return;
     openMessageStream(`${host.base}${path}?ticket=${encodeURIComponent(ticket)}`, sessionId, selectionGeneration);
   }).catch(() => {
-    if (ownsSessionView(sessionId, selectionGeneration)) setStatus('Stream failed', 'error');
+    if (sessionState.ownsSessionView(sessionId, selectionGeneration)) setStatus('Stream failed', 'error');
   });
 }
 
 function openMessageStream(url, sessionId, selectionGeneration) {
-  const hostId = sessionHostId(sessionId);
+  const hostId = sessionState.sessionHostId(sessionId);
   try {
     const evtSource = new EventSource(url);
     messageStream = evtSource;
-    const ownsStream = () => messageStream === evtSource && ownsSessionView(sessionId, selectionGeneration);
+    const ownsStream = () => messageStream === evtSource && sessionState.ownsSessionView(sessionId, selectionGeneration);
     const addOwnedListener = (event, listener) => evtSource.addEventListener(event, (e) => {
       if (ownsStream()) listener(e);
     });
@@ -8102,7 +7970,7 @@ function openMessageStream(url, sessionId, selectionGeneration) {
     // from the JSONL. The UI's own branch flow also reloads after its POST
     // resolves; a second forced reload of the same state is harmless.
     addOwnedListener('session_tree', () => {
-      if (currentSession && currentSession.id === sessionId) {
+      if (sessionState.currentSession && sessionState.currentSession.id === sessionId) {
         selectSession(sessionId, { forceTranscriptReload: true, host: hostId });
       }
     });
@@ -8116,7 +7984,7 @@ function openMessageStream(url, sessionId, selectionGeneration) {
       // the session may have changed since it was last viewed.
       transcriptCache.delete(sessionKey(hostId, nextId));
       void loadSessions(undefined, { withPrevious: true }).then(() => {
-        if (!ownsSessionView(sessionId, selectionGeneration) || !findSession(nextId, hostId)) return;
+        if (!sessionState.ownsSessionView(sessionId, selectionGeneration) || !sessionState.findSession(nextId, hostId)) return;
         selectSession(nextId, { forceTranscriptReload: true, host: hostId });
       });
     });
@@ -8150,12 +8018,12 @@ function openMessageStream(url, sessionId, selectionGeneration) {
       if (evtSource.readyState === EventSource.CLOSED) {
         setStatus('Stream disconnected', 'error');
         streamReconnectTimeout = setTimeout(() => {
-          if (ownsSessionView(sessionId, selectionGeneration)) startMessageStream(sessionId, selectionGeneration);
+          if (sessionState.ownsSessionView(sessionId, selectionGeneration)) startMessageStream(sessionId, selectionGeneration);
         }, 3000);
       }
     };
   } catch (err) {
-    if (!ownsSessionView(sessionId, selectionGeneration)) return;
+    if (!sessionState.ownsSessionView(sessionId, selectionGeneration)) return;
     console.error('Stream failed:', err);
     setStatus('Stream failed', 'error');
   }
@@ -8599,7 +8467,7 @@ function clearDraft(sessionId = composerSessionKey) {
 }
 
 /** On session switch: load that session's draft + history into the input. */
-function restorePromptState(ownerId = currentSession?.id) {
+function restorePromptState(ownerId = sessionState.currentSession?.id) {
   if (!ownerId) return;
   ownerId = composerOwnerKey(ownerId);
   const input = document.getElementById('promptInput');
@@ -8750,11 +8618,11 @@ async function sendPrompt() {
     }
     return;
   }
-  if ((!message && !pendingImages.length) || !currentSession) return;
-  const sessionId = currentSession.id;
-  const hostId = currentSession.host;
-  const ownerKey = sessionRefKey(currentSession);
-  const selectionGeneration = sessionSelectionGeneration;
+  if ((!message && !pendingImages.length) || !sessionState.currentSession) return;
+  const sessionId = sessionState.currentSession.id;
+  const hostId = sessionState.currentSession.host;
+  const ownerKey = sessionRefKey(sessionState.currentSession);
+  const selectionGeneration = sessionState.generation;
   if (abortingSessions.has(ownerKey)) {
     setStatus('Wait for the current turn to finish stopping', 'working');
     return;
@@ -8779,12 +8647,12 @@ async function sendPrompt() {
     setStatus('Running ' + message.split(' ')[0] + '...', 'working');
     try {
       const data = await apiSend(hostId, `/api/sessions/${encodeURIComponent(sessionId)}/command`, { message });
-      if (!ownsSessionView(sessionId, selectionGeneration)) return;
+      if (!sessionState.ownsSessionView(sessionId, selectionGeneration)) return;
       setStatus(data.info || 'Done');
       refreshSessions();
     } catch (e) {
       restorePromptToSession(ownerKey, message, null);
-      if (ownsSessionView(sessionId, selectionGeneration)) {
+      if (sessionState.ownsSessionView(sessionId, selectionGeneration)) {
         setStatus(`${message.split(' ')[0]}: ${e.message}`, 'error');
       }
     }
@@ -8830,7 +8698,7 @@ async function sendPrompt() {
     const resp = await apiSend(hostId, `/api/sessions/${encodeURIComponent(sessionId)}/prompt`, body);
     const pending = pendingOptimisticPrompts.get(clientPromptId);
     if (pending) pending.status = resp?.result?.queued ? 'queued' : 'accepted';
-    if (!ownsSessionView(sessionId, selectionGeneration)) return;
+    if (!sessionState.ownsSessionView(sessionId, selectionGeneration)) return;
     if (resp?.result?.queued) {
       // Held by the bridge until compaction finishes; no turn is running yet.
       // Raise the compacting indicator before undoing the optimistic
@@ -8845,7 +8713,7 @@ async function sendPrompt() {
   } catch (e) {
     discardOptimisticPrompt(clientPromptId); // no echo is coming for a failed send
     restorePromptToSession(ownerKey, message, images);
-    if (ownsSessionView(sessionId, selectionGeneration)) {
+    if (sessionState.ownsSessionView(sessionId, selectionGeneration)) {
       setStatus(`Error: ${e.message}`, 'error');
       setTurnInProgress(false);
     }
@@ -8934,8 +8802,8 @@ function setTurnInProgress(active) {
   syncActivityIndicator();
   // Reflect in the sidebar immediately — the working dot shouldn't wait for
   // the next 10s poll. (turn events only stream for the viewed session.)
-  if (currentSession && !!currentSession.turnInProgress !== !!active) {
-    patchSession(currentSession.id, { turnInProgress: !!active });
+  if (sessionState.currentSession && !!sessionState.currentSession.turnInProgress !== !!active) {
+    sessionState.patchSession(sessionState.currentSession.id, { turnInProgress: !!active });
   }
   var btnSteer = document.getElementById('btnSteer');
   var btnFollowUp = document.getElementById('btnFollowUp');
@@ -8959,8 +8827,8 @@ function setCompacting(active) {
   syncActivityIndicator();
   // Sidebar dot immediately, same as the turn dot (compaction events only
   // stream for the viewed session; other rows update via the poll).
-  if (currentSession && !!currentSession.compacting !== on) {
-    patchSession(currentSession.id, { compacting: on });
+  if (sessionState.currentSession && !!sessionState.currentSession.compacting !== on) {
+    sessionState.patchSession(sessionState.currentSession.id, { compacting: on });
   }
 }
 
@@ -8978,11 +8846,11 @@ async function sendQueuedMessage(kind) {
     }
     return;
   }
-  if ((!message && !pendingImages.length) || !currentSession || !currentSession.isActive) return;
-  const sessionId = currentSession.id;
-  const hostId = currentSession.host;
-  const ownerKey = sessionRefKey(currentSession);
-  const selectionGeneration = sessionSelectionGeneration;
+  if ((!message && !pendingImages.length) || !sessionState.currentSession || !sessionState.currentSession.isActive) return;
+  const sessionId = sessionState.currentSession.id;
+  const hostId = sessionState.currentSession.host;
+  const ownerKey = sessionRefKey(sessionState.currentSession);
+  const selectionGeneration = sessionState.generation;
   if (abortingSessions.has(ownerKey)) {
     setStatus('Wait for the current turn to finish stopping', 'working');
     return;
@@ -9001,12 +8869,12 @@ async function sendQueuedMessage(kind) {
   if (refs.length) body.refs = refs;
   try {
     const resp = await apiSend(hostId, `/api/sessions/${encodeURIComponent(sessionId)}${steer ? '/steer' : '/prompt'}`, body);
-    if (!ownsSessionView(sessionId, selectionGeneration)) return;
+    if (!sessionState.ownsSessionView(sessionId, selectionGeneration)) return;
     if (resp?.result?.queued) setStatus('Queued — will send when compaction finishes');
     else setStatus(steer ? 'Steered' : 'Queued for after this turn');
   } catch (e) {
     restorePromptToSession(ownerKey, message, images);
-    if (ownsSessionView(sessionId, selectionGeneration)) {
+    if (sessionState.ownsSessionView(sessionId, selectionGeneration)) {
       setStatus(`${steer ? 'Steer' : 'Follow-up'} failed: ${e.message}`, 'error');
     }
   }
@@ -9040,7 +8908,7 @@ function renderQueueStatus(data) {
     const text = splitSessionRefContext(raw).text;
     let clientPromptId = null;
     for (const [id, pending] of pendingOptimisticPrompts) {
-      if (associated.has(id) || pending.sessionKey !== sessionRefKey(currentSession) ||
+      if (associated.has(id) || pending.sessionKey !== sessionRefKey(sessionState.currentSession) ||
           pending.status !== 'queued' || pending.message !== text) continue;
       clientPromptId = id;
       associated.add(id);
@@ -9056,7 +8924,7 @@ function renderQueueStatus(data) {
 
 function queueRowHtml(kind, label, text, index, clientPromptId = null) {
   const clientAttr = clientPromptId ? ` data-client-prompt-id="${escapeHtml(clientPromptId)}"` : '';
-  const edit = sessionSupports(currentSession, 'queueCancel')
+  const edit = sessionSupports(sessionState.currentSession, 'queueCancel')
     ? '<button class="queue-item-edit" onclick="editQueuedMessage(this)" title="Remove from queue and edit">↩ Edit</button>' : '';
   return `<div class="queue-item" data-kind="${kind}" data-index="${index}"${clientAttr}>
     <span class="queue-item-kind">${label}</span>
@@ -9067,11 +8935,11 @@ function queueRowHtml(kind, label, text, index, clientPromptId = null) {
 
 // Cancel a queued message on the bridge and return its text to the composer.
 async function editQueuedMessage(btn) {
-  if (!currentSession) return;
-  const sessionId = currentSession.id;
-  const hostId = currentSession.host;
-  const ownerKey = sessionRefKey(currentSession);
-  const selectionGeneration = sessionSelectionGeneration;
+  if (!sessionState.currentSession) return;
+  const sessionId = sessionState.currentSession.id;
+  const hostId = sessionState.currentSession.host;
+  const ownerKey = sessionRefKey(sessionState.currentSession);
+  const selectionGeneration = sessionState.generation;
   const row = btn.closest('.queue-item');
   if (!row) return;
   const kind = row.dataset.kind;
@@ -9101,18 +8969,18 @@ async function editQueuedMessage(btn) {
       clientPrompt.status = previousPromptStatus;
       renderQueueStatus(lastQueueData);
     }
-    if (ownsSessionView(sessionId, selectionGeneration)) setStatus(e.message, 'error');
+    if (sessionState.ownsSessionView(sessionId, selectionGeneration)) setStatus(e.message, 'error');
   }
 }
 
 async function abortTurn() {
   // Compaction counts: the bridge cancels a running compaction on abort, and
   // its compaction_end (aborted) event clears the compacting indicator.
-  if (!currentSession || (!turnInProgress && !compactingNow)) return;
-  const sessionId = currentSession.id;
-  const hostId = currentSession.host;
-  const ownerKey = sessionRefKey(currentSession);
-  const selectionGeneration = sessionSelectionGeneration;
+  if (!sessionState.currentSession || (!turnInProgress && !compactingNow)) return;
+  const sessionId = sessionState.currentSession.id;
+  const hostId = sessionState.currentSession.host;
+  const ownerKey = sessionRefKey(sessionState.currentSession);
+  const selectionGeneration = sessionState.generation;
   if (abortingSessions.has(ownerKey)) return;
   abortingSessions.add(ownerKey);
   setStatus('Stopping...', 'working');
@@ -9123,7 +8991,7 @@ async function abortTurn() {
     // and JSONL catch-up.
   } catch (e) {
     abortingSessions.delete(ownerKey);
-    if (ownsSessionView(sessionId, selectionGeneration)) setStatus('Stop failed: ' + e.message, 'error');
+    if (sessionState.ownsSessionView(sessionId, selectionGeneration)) setStatus('Stop failed: ' + e.message, 'error');
   }
 }
 
@@ -9153,7 +9021,7 @@ async function monitorSessionSpawn(spawnId, host = null) {
       // request before selecting the authoritative session row.
       for (;;) {
         await loadSessions();
-        if (findSession(data.sessionId, host)) {
+        if (sessionState.findSession(data.sessionId, host)) {
           pendingSessionSpawns.delete(spawnId);
           renderSessions();
           const showingSpawn = currentSessionSpawnId === spawnId;
@@ -9354,7 +9222,7 @@ function ensureHarnessRows(hostId) {
   harnessRowFetches.add(key);
   harnessSettingsFetch(key, '/api/harnesses').then(data => {
     harnessRowsByHost.set(key, Array.isArray(data?.harnesses) ? data.harnesses : []);
-    if (currentSession) updateSessionHeader();
+    if (sessionState.currentSession) updateSessionHeader();
   }).catch(() => {}).finally(() => harnessRowFetches.delete(key));
 }
 
@@ -9511,12 +9379,12 @@ async function harnessSettingsFetch(hostId, url) {
 
 /** Harness badge in the session header: same editor, scoped to the session. */
 function openSessionHarnessSettings() {
-  if (!currentSession || !harnessSupportsSettings(currentSession)) return;
+  if (!sessionState.currentSession || !harnessSupportsSettings(sessionState.currentSession)) return;
   openHarnessSettings({
-    harnessId: currentSession.harnessId,
-    hostId: sessionHostIdOf(currentSession),
-    cwd: currentSession.cwd || '',
-    label: currentSession.harnessLabel || harnessBadgeInfo(currentSession.harnessId).label,
+    harnessId: sessionState.currentSession.harnessId,
+    hostId: sessionHostIdOf(sessionState.currentSession),
+    cwd: sessionState.currentSession.cwd || '',
+    label: sessionState.currentSession.harnessLabel || harnessBadgeInfo(sessionState.currentSession.harnessId).label,
   });
 }
 
@@ -9901,7 +9769,7 @@ function renderNsWorkspaces() {
   const seen = new Set();
   const cwds = [];
   const hostId = nsHostId();
-  for (const s of [...sessions.active, ...sessions.previous]) {
+  for (const s of [...sessionState.sessions.active, ...sessionState.sessions.previous]) {
     // Another machine's paths are not quick-picks for this one.
     if (isMultiHost() && (s.host || null) !== hostId) continue;
     if (s.cwd && !seen.has(s.cwd)) { seen.add(s.cwd); cwds.push(s.cwd); }
@@ -10957,7 +10825,7 @@ function showExtWidget(key, lines, placement) {
     return;
   }
   if (existing?.removeTimer) { clearTimeout(existing.removeTimer); existing.removeTimer = null; }
-  const collapsedKey = sessionRefKey(currentSession) + '|' + key;
+  const collapsedKey = sessionRefKey(sessionState.currentSession) + '|' + key;
   const wasCollapsed = existing?.collapsed ?? extUIState.collapsed.get(collapsedKey) ?? false;
 
   if (!container) {
@@ -11123,7 +10991,7 @@ function showExtStatus(key, text) {
 // terminal — whoever answers first wins (the server tells us via
 // extension_ui_resolved).
 const openExtDialogs = new Map(); // host/session/request key -> stashed dialog
-function extDialogKey(requestId, sessionId, hostId = sessionHostId(sessionId)) {
+function extDialogKey(requestId, sessionId, hostId = sessionState.sessionHostId(sessionId)) {
   return JSON.stringify([hostId, sessionId, requestId]);
 }
 
@@ -11192,10 +11060,10 @@ function setExtDialogMinimized(requestId, minimized) {
 function sendExtDialogResponse(dialogKey, response) {
   const entry = openExtDialogs.get(dialogKey);
   if (!entry) return;
-  const generation = sessionSelectionGeneration;
+  const generation = sessionState.generation;
   apiSend(entry.hostId, `/api/sessions/${encodeURIComponent(entry.sessionId)}/ui-response`, { requestId: entry.requestId, ...response })
     .catch(e => {
-      if (ownsSessionView(entry.sessionId, generation) && currentSession?.host === entry.hostId) {
+      if (sessionState.ownsSessionView(entry.sessionId, generation) && sessionState.currentSession?.host === entry.hostId) {
         setStatus('Dialog response failed: ' + e.message, 'error');
       }
     });
@@ -11240,7 +11108,7 @@ function buildExtDialogCard(requestId, { title, bodyHtml, footerHtml, collapsedL
 
 function showExtAskDialog(req, sessionId) {
   if (!req.id) return;
-  const hostId = sessionHostId(sessionId);
+  const hostId = sessionState.sessionHostId(sessionId);
   const dialogKey = extDialogKey(req.id, sessionId, hostId);
   // Replayed request for a dialog we still hold (e.g. switch-back): re-dock
   // the live element so in-progress selections survive.
@@ -11400,7 +11268,7 @@ function showExtAskDialog(req, sessionId) {
 
 function showExtDialog(req, sessionId) {
   if (!req.id) return;
-  const hostId = sessionHostId(sessionId);
+  const hostId = sessionState.sessionHostId(sessionId);
   const dialogKey = extDialogKey(req.id, sessionId, hostId);
   const existing = openExtDialogs.get(dialogKey);
   if (existing) {
@@ -11976,10 +11844,10 @@ var treeData = null;
 var treeToolCallMap = new Map();
 
 async function openTreeModal() {
-  if (!currentSession) return;
+  if (!sessionState.currentSession) return;
   setStatus('Loading tree...', 'working');
   try {
-    const res = await apiFetch(currentSession.host, '/api/sessions/' + encodeURIComponent(currentSession.id) + '/tree');
+    const res = await apiFetch(sessionState.currentSession.host, '/api/sessions/' + encodeURIComponent(sessionState.currentSession.id) + '/tree');
     if (!res.ok) throw new Error(await res.text());
     treeData = await res.json();
     treeToolCallMap.clear();
@@ -12150,7 +12018,7 @@ function renderTreeNodeContent(node) {
 var pendingBranchId = null;
 
 function selectTreeNode(entryId) {
-  if (!currentSession || !treeData) return;
+  if (!sessionState.currentSession || !treeData) return;
   if (entryId === treeData.leafId) { closeTreeModal(); return; }
   document.querySelectorAll('.tree-node.selected').forEach(el => el.classList.remove('selected'));
   var el = document.querySelector('.tree-node[data-id="' + entryId + '"]');
@@ -12162,7 +12030,7 @@ function selectTreeNode(entryId) {
   // OMP's public navigateTree API accepts { summarize } but has no custom
   // instructions field. Keep the supported summary toggle and avoid showing
   // an input the host would have to ignore.
-  var allowSummaryInstructions = currentSession.harnessId !== 'omp';
+  var allowSummaryInstructions = sessionState.currentSession.harnessId !== 'omp';
   document.getElementById('treeStatus').innerHTML =
     '<div class="branch-confirm">' +
       '<label class="branch-summarize-label"><input type="checkbox" id="branchSummarize"' + (summarize ? ' checked' : '') +
@@ -12191,7 +12059,7 @@ function cancelBranch() {
 }
 
 async function confirmBranch() {
-  if (!currentSession || !pendingBranchId) return;
+  if (!sessionState.currentSession || !pendingBranchId) return;
   var entryId = pendingBranchId;
   var summarize = !!document.getElementById('branchSummarize')?.checked;
   var customInstructions = document.getElementById('branchInstructions')?.value.trim() || undefined;
@@ -12200,7 +12068,7 @@ async function confirmBranch() {
   if (btn) { btn.disabled = true; btn.textContent = summarize ? 'Summarizing…' : 'Branching…'; }
   setStatus(summarize ? 'Summarizing abandoned branch…' : 'Branching...', 'working');
   try {
-    var data = await apiSend(currentSession.host, '/api/sessions/' + encodeURIComponent(currentSession.id) + '/branch',
+    var data = await apiSend(sessionState.currentSession.host, '/api/sessions/' + encodeURIComponent(sessionState.currentSession.id) + '/branch',
       { entryId, summarize, customInstructions });
     pendingBranchId = null;
     closeTreeModal();
@@ -12210,12 +12078,12 @@ async function confirmBranch() {
     // reload below runs restorePromptState, which overwrites the input.
     if (data.editorText) {
       try {
-        var key = draftKey(currentSession.id);
+        var key = draftKey(sessionState.currentSession.id);
         if (!(localStorage.getItem(key) || '').trim()) localStorage.setItem(key, data.editorText);
       } catch {}
     }
     setStatus('Branched — reloading');
-    selectSession(currentSession.id, { forceTranscriptReload: true });
+    selectSession(sessionState.currentSession.id, { forceTranscriptReload: true });
   } catch (e) {
     setStatus('Branch failed: ' + e.message, 'error');
     if (btn) { btn.disabled = false; btn.textContent = 'Branch from here'; }
@@ -12277,8 +12145,8 @@ function sessionHostSupportsTmux(session) {
 }
 
 function updateTerminalButtons() {
-  const supported = sessionHostSupportsTerminal(currentSession);
-  const show = supported && currentSession?.isActive;
+  const supported = sessionHostSupportsTerminal(sessionState.currentSession);
+  const show = supported && sessionState.currentSession?.isActive;
   const btn = document.getElementById('btnTerminal');
   if (btn) btn.style.display = show ? '' : 'none';
   const row = document.getElementById('cpTerminalRow');
@@ -12379,15 +12247,15 @@ function toggleTerminal() {
 }
 
 async function openTerminal(mode) {
-  if (!currentSession || termState || !sessionHostSupportsTerminal(currentSession)) return;
-  const session = currentSession;
+  if (!sessionState.currentSession || termState || !sessionHostSupportsTerminal(sessionState.currentSession)) return;
+  const session = sessionState.currentSession;
   const sessionId = session.id;
-  const selectionGeneration = sessionSelectionGeneration;
+  const selectionGeneration = sessionState.generation;
   // Assets may still be in flight (or never requested, on a load whose first
   // terminal-capable session is a remote one) — the promise is one-shot.
   try { await loadTerminalAssets(); } catch { return; }
   if (typeof Terminal === 'undefined') return;
-  if (termState || !ownsSessionView(sessionId, selectionGeneration)) return;
+  if (termState || !sessionState.ownsSessionView(sessionId, selectionGeneration)) return;
   // 'shell' (default) or 'tmux' (a grouped tmux client viewing the pane the
   // session's pi runs in). The last choice sticks per session.
   if (!mode) mode = localStorage.getItem(terminalModeKey(sessionId)) === 'tmux' ? 'tmux' : 'shell';
@@ -12401,7 +12269,7 @@ async function openTerminal(mode) {
       new Promise(r => setTimeout(r, 2000)),
     ]);
   } catch {}
-  if (termState || !ownsSessionView(sessionId, selectionGeneration)) return;
+  if (termState || !sessionState.ownsSessionView(sessionId, selectionGeneration)) return;
 
   const panel = document.getElementById('terminalPanel');
   const container = document.getElementById('terminalContainer');
@@ -12468,7 +12336,7 @@ function setTerminalStatus(text, cls) {
 function connectTerminalWS() {
   if (!termState) return;
   const state = termState;
-  const host = resolveHost(sessionHostId(state.sessionId));
+  const host = resolveHost(sessionState.sessionHostId(state.sessionId));
   const modeQ = state.mode === 'tmux' ? '?mode=tmux' : '';
   const url = hostWsUrl(host, `/api/sessions/${encodeURIComponent(state.sessionId)}/terminal${modeQ}`);
   if (!host.token) { openTerminalWS(state, url); return; }
@@ -12545,7 +12413,7 @@ function closeTerminal() {
 function updateTerminalModeUI() {
   const btn = document.getElementById('termModeBtn');
   if (btn) {
-    const showBtn = !!(termState && sessionHostSupportsTmux(currentSession) && currentSession?.isActive);
+    const showBtn = !!(termState && sessionHostSupportsTmux(sessionState.currentSession) && sessionState.currentSession?.isActive);
     btn.style.display = showBtn ? '' : 'none';
     if (termState?.mode === 'tmux') {
       btn.textContent = '⇆ shell';
@@ -12564,7 +12432,7 @@ function updateTerminalModeUI() {
 }
 
 function switchTerminalMode() {
-  if (!termState || !currentSession) return;
+  if (!termState || !sessionState.currentSession) return;
   const next = termState.mode === 'tmux' ? 'shell' : 'tmux';
   const id = termState.sessionId;
   if (next === 'tmux') localStorage.setItem(terminalModeKey(id), 'tmux');
@@ -13086,7 +12954,7 @@ function routineKnownCwds() {
   const hostId = routineFormHostId();
   const seen = new Set();
   const out = [];
-  for (const s of [...sessions.active, ...sessions.previous]) {
+  for (const s of [...sessionState.sessions.active, ...sessionState.sessions.previous]) {
     if (isMultiHost() && (s.host || null) !== hostId) continue;
     if (!s.cwd || seen.has(s.cwd)) continue;
     seen.add(s.cwd);
@@ -13573,7 +13441,7 @@ function routineInvocationDetail(inv) {
  * nothing here — prefer the session's own name when this client has it.
  */
 function routineSessionLabel(sessionId) {
-  const known = findSession(sessionId, routineSelected?.host || null);
+  const known = sessionState.findSession(sessionId, routineSelected?.host || null);
   if (known && known.name) return truncate(known.name, 28, '…');
   // Pi's ids lead with a timestamp, so the app's usual first-8 ref would read
   // "2026-09-" on every row; the distinguishing part is the tail. Uuid-shaped
@@ -13643,7 +13511,7 @@ function loadMoreRoutineInvocations() {
 async function openRoutineSession(sessionId, host) {
   if (!sessionId) return;
   closeRoutinesView();
-  if (!findSession(sessionId, host)) await loadSessions(undefined, { withPrevious: true });
+  if (!sessionState.findSession(sessionId, host)) await loadSessions(undefined, { withPrevious: true });
   await selectSession(sessionId, { host });
 }
 
@@ -14030,16 +13898,16 @@ async function reconcileBounceRestarts(state, operations, submitted = false) {
     }
   }
   if (!completed.length || !bounceHostElement(state)) return;
-  const selected = currentSession;
-  const generation = sessionSelectionGeneration;
+  const selected = sessionState.currentSession;
+  const generation = sessionState.generation;
   const affected = completed.find(({ target }) => target.sessionId === selected?.id && selected?.host === (state.host.hostId || null))?.target;
   await refreshSessions();
   if (!bounceHostElement(state)) return; // Reconcile on reopen; never dismiss another takeover.
   const id = affected?.replacementId || affected?.sessionId;
-  if (affected && !findSession(id, selected.host)) await loadSessions(undefined, { withPrevious: true });
+  if (affected && !sessionState.findSession(id, selected.host)) await loadSessions(undefined, { withPrevious: true });
   if (!bounceHostElement(state)) return;
   for (const { key } of completed) bouncePendingRestarts.delete(key);
-  if (!affected || !ownsSessionView(selected.id, generation) || currentSession.host !== selected.host) return;
+  if (!affected || !sessionState.ownsSessionView(selected.id, generation) || sessionState.currentSession.host !== selected.host) return;
   // Reconnect the selected transcript underneath the status surface, without
   // closing it; an ordinary user session switch still closes the takeover.
   await selectSession(id, { host: selected.host, keepBounceView: true });

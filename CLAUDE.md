@@ -41,8 +41,9 @@ and describes harness launch/lifecycle metadata and reconnect tool snapshots.
 Wire data and small JSON stores remain unvalidated beyond each existing
 boundary: responses/store values are `unknown`, not a generic caller-selected
 payload type. These types do not replace runtime ownership proofs or validate
-feature schemas. `SessionRef` is available for future typed callers; browser
-state and async selection guards have not migrated. Details: [docs/typescript.md](docs/typescript.md).
+feature schemas. `SessionRef` is available for future typed callers. The browser
+state store uses strict JavaScript/JSDoc checking; async ownership capture remains
+with its callers. Details: [docs/typescript.md](docs/typescript.md).
 
 ## Committing
 
@@ -1197,18 +1198,27 @@ same view as its summary and so the patch route never passes client-supplied
 paths to git. Preserve both the small-diff behavior and the lazy large-diff
 browser assertions.
 
-## Client session state (public/app.js)
+## Client session state (public/session-state.js)
 
-`sessions` (sidebar lists) and `currentSession` (a **detached copy** of the
-selected entry) are written only by the four functions in the "Session state
-writes" section: `setSessionLists` (poll/search results; folds the fresh
+`app.js` creates one `sessionState` store with host lookup and rendering hooks.
+Its `sessions` (sidebar lists) and `currentSession` (a **detached copy** of the
+selected entry) are written only by four store methods:
+`setSessionLists` (poll/search results; folds the fresh
 entry into `currentSession`), `setCurrentSession` (selection),
 `patchSession` (local mutations — rename, model switch, thinking level), and
 `mergeCurrentSession` (the `session` payload on /messages responses —
 current-session/header only, never the lists, whose name/model come from the
 registry-aware poll). Each write re-renders the views it affects, so a
 mutation can't leave sidebar and header disagreeing (the old "rename needs
-F5" bug class). Never assign to `sessions`/`currentSession` elsewhere.
+F5" bug class). Read through `sessionState.sessions`/`currentSession`; never
+mutate those snapshots elsewhere. The store is DOM-free and loads before
+`app.js` as a local plain script. Its callbacks retain the existing sidebar and
+header rendering order; selection itself leaves rendering with its caller.
+
+`advanceSelection()` invalidates prior work before a view reset, including
+forced reloads and provisional spawn views. `generation` and `ownsSessionView`
+retain the existing stale-response guard. An id match alone never proves that
+an earlier transcript request still owns the pane.
 
 Host identity is part of selection and mutation ownership. `findSession(id,
 host)` never falls back to another host; without a host it prefers the selected

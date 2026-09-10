@@ -76,6 +76,10 @@ the message-count and session-spend badges. Spec and mock:
   basics and adopted identities are validated; v2 connections must prove their
   original claim before events can change session state. Socket regressions
   cover pre-hello claim rewriting, malformed updates and replay ordering.
+- Browser list/selection state now lives in `public/session-state.js`, with
+  strict JavaScript/JSDoc checks, host-aware lookup, the four existing writers
+  and generation invalidation. DOM rendering stays in `app.js` via callbacks;
+  state regressions and the host-collision browser scenarios cover the boundary.
 - Extend the typed foundation into application event and request-ownership contracts.
 - Extract frontend state/transport and server application/lifecycle boundaries
   in small changes guarded by the preceding tests.

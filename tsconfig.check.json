@@ -9,5 +9,5 @@
     "module": "NodeNext",
     "types": ["node"]
   },
-  "files": ["lib/cron.js", "test/types/core.ts"]
+  "files": ["lib/cron.js", "public/session-state.js", "test/types/core.ts", "test/types/browser-state.ts"]
 }

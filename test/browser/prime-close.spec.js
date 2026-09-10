@@ -4,7 +4,7 @@ const { test, expect, ROOT } = require('./fixtures');
 
 async function configureSession(page, fleet, mode, close = true, restart = false) {
   await fleet.select(fleet.peer);
-  await page.evaluate(({ id, host, mode, close, restart }) => patchSession(id, {
+  await page.evaluate(({ id, host, mode, close, restart }) => sessionState.patchSession(id, {
     isActive: true,
     // The same harness has different close semantics on old and new hosts.
     harnessId: 'prime',
@@ -57,7 +57,7 @@ test('Prime owned-agent close warns about the agent family and stays on its owni
   await fleet.select(fleet.self);
   await route.fulfill({ json: { success: true } });
   await expect(page.locator('#statsModal')).toBeHidden();
-  await expect.poll(() => page.evaluate(() => currentSession.host)).toBe(fleet.self.hostId);
+  await expect.poll(() => page.evaluate(() => sessionState.currentSession.host)).toBe(fleet.self.hostId);
   await expect(page.locator('#messages')).toContainText('self root transcript');
 });
 
@@ -93,7 +93,7 @@ test('Prime restart warns about children and keeps the response bound to the own
   await expect(page.locator('#sessionCloseBtn')).toBeDisabled();
   await fleet.select(fleet.self);
   await route.fulfill({ json: { success: true, id: ROOT } });
-  await expect.poll(() => page.evaluate(() => currentSession.host)).toBe(fleet.self.hostId);
+  await expect.poll(() => page.evaluate(() => sessionState.currentSession.host)).toBe(fleet.self.hostId);
   await expect(page.locator('#messages')).toContainText('self root transcript');
 });
 

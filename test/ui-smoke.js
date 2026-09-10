@@ -672,7 +672,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       cwd: CWD,
       reason: 'new',
     });
-    await desktop.waitForFunction((id) => currentSession?.id === id, SWITCH_ID, { timeout: 5000 });
+    await desktop.waitForFunction((id) => sessionState.currentSession?.id === id, SWITCH_ID, { timeout: 5000 });
     await desktop.waitForFunction(() => document.getElementById('messages')?.textContent.includes('switched transcript answer'),
       { timeout: 5000 });
     check(!(await desktop.locator('#messages').textContent()).includes('existing answer'),
@@ -693,7 +693,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       cwd: CWD,
       reason: 'resume',
     });
-    await desktop.waitForFunction((id) => currentSession?.id === id, SESSION_ID, { timeout: 5000 });
+    await desktop.waitForFunction((id) => sessionState.currentSession?.id === id, SESSION_ID, { timeout: 5000 });
     await desktop.waitForFunction(() => document.getElementById('messages')?.textContent.includes('existing answer'),
       { timeout: 5000 });
     check(true, 'client follows a resume switch back to the original route');
@@ -1666,7 +1666,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     spawnResult = 'ready';
     await desktop.waitForFunction(() => !document.querySelector('.session-item.starting'), null, { timeout: 3000 });
     check(readySpawnPolled, 'ready spawn reconciles the provisional row to the registered session');
-    await desktop.waitForFunction(({ id, draft }) => currentSession?.id === id &&
+    await desktop.waitForFunction(({ id, draft }) => sessionState.currentSession?.id === id &&
       document.getElementById('promptInput').value === draft,
     { id: SESSION_ID, draft: startupDraft }, { timeout: 3000 });
     const migratedDraft = await desktop.evaluate(({ spawnId, sessionId }) => ({
@@ -2358,7 +2358,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     }, { a: SESSION_ID });
     await desktop.waitForFunction(() => typeof window.__releaseAuditSelection === 'function');
     await desktop.evaluate((b) => selectSession(b, { forceTranscriptReload: true }), SESSION2_ID);
-    await desktop.waitForFunction((b) => currentSession?.id === b &&
+    await desktop.waitForFunction((b) => sessionState.currentSession?.id === b &&
       [...document.querySelectorAll('#messages .message')].some((el) => el.textContent.includes('second session')),
       SESSION2_ID, { timeout: 5000 });
     await desktop.evaluate(async () => {
@@ -2366,10 +2366,10 @@ let remoteHost = null; // second pi-dish (multi-host section)
       await window.__auditSelectionA;
     });
     const rapidSelection = await desktop.evaluate((b) => ({
-      currentId: currentSession?.id,
+      currentId: sessionState.currentSession?.id,
       streamUrl: messageStream?.url || '',
       text: document.getElementById('messages').textContent,
-      generation: sessionSelectionGeneration,
+      generation: sessionState.generation,
       expected: b,
     }), SESSION2_ID);
     check(rapidSelection.currentId === SESSION2_ID && rapidSelection.streamUrl.includes(`/${SESSION2_ID}/stream`) &&
@@ -2398,7 +2398,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
         }
         return realFetch(input, init);
       };
-      window.__auditOldCatchup = fetchNewMessagesSince(a, sessionSelectionGeneration);
+      window.__auditOldCatchup = fetchNewMessagesSince(a, sessionState.generation);
     }, SESSION_ID);
     await desktop.waitForFunction(() => typeof window.__releaseAuditCatchup === 'function');
     await desktop.evaluate((a) => selectSession(a, { forceTranscriptReload: true }), SESSION_ID);
@@ -2712,7 +2712,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     const terminalOwnership = await desktop.evaluate(({ a, b }) => ({
       owner: termState?.sessionId,
       urls: window.__auditTerminalUrls.slice(),
-      currentId: currentSession?.id,
+      currentId: sessionState.currentSession?.id,
       hasAUrl: window.__auditTerminalUrls.some((url) => url.includes(encodeURIComponent(a))),
       hasBUrl: window.__auditTerminalUrls.some((url) => url.includes(encodeURIComponent(b))),
     }), { a: SESSION_ID, b: SESSION2_ID });
@@ -2981,27 +2981,27 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check((await desktop.locator('#sessionRelations').textContent()).includes('Parent'),
       'native Pi parentSession renders a neutral relation chip');
     await desktop.click('#sessionRelations .session-relation-chip');
-    await desktop.waitForFunction((id) => currentSession?.id === id, registryState.sessionId, { timeout: 5000 });
+    await desktop.waitForFunction((id) => sessionState.currentSession?.id === id, registryState.sessionId, { timeout: 5000 });
     check(true, 'related-session chip navigates to the available peer session');
     const relationRaceOwner = await desktop.evaluate(async (nextId) => {
       const originalLoad = loadSessions;
       let release;
       loadSessions = () => new Promise(resolve => { release = resolve; });
       try {
-        const sourceId = currentSession.id;
-        const generation = sessionSelectionGeneration;
+        const sourceId = sessionState.currentSession.id;
+        const generation = sessionState.generation;
         const pending = openRelatedSession('not-yet-loaded-peer', sourceId, generation);
         await selectSession(nextId);
         release();
         await pending;
-        return currentSession.id;
+        return sessionState.currentSession.id;
       } finally {
         loadSessions = originalLoad;
       }
     }, BETA_ID);
     check(relationRaceOwner === BETA_ID, 'stale related-session reload cannot hijack a newer selection');
     await desktop.evaluate((id) => selectSession(id), registryState.sessionId);
-    await desktop.waitForFunction((id) => currentSession?.id === id, registryState.sessionId);
+    await desktop.waitForFunction((id) => sessionState.currentSession?.id === id, registryState.sessionId);
 
     // Relation chip overflow: only live child fan-outs appear in the header.
     // Closed children and live children beyond one physical row go behind
@@ -3081,13 +3081,13 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.click('.session-relation-more');
     await desktop.waitForSelector('#relationsModal .relation-row', { timeout: 5000 });
     await desktop.locator('#relationsModal .relation-row').first().click();
-    await desktop.waitForFunction((id) => currentSession?.id === id, registryState.sessionId, { timeout: 5000 });
+    await desktop.waitForFunction((id) => sessionState.currentSession?.id === id, registryState.sessionId, { timeout: 5000 });
     check(true, 'overflow modal row navigates to the relation');
     check(await desktop.locator('#relationsModal').evaluate((el) => el.style.display === 'none'),
       'navigation closes the relations modal');
     await desktop.unroute('**/api/sessions/*/related');
     await desktop.evaluate((id) => selectSession(id), registryState.sessionId);
-    await desktop.waitForFunction((id) => currentSession?.id === id &&
+    await desktop.waitForFunction((id) => sessionState.currentSession?.id === id &&
       !document.getElementById('sessionRelations').textContent.includes('overflow-'),
       registryState.sessionId, { timeout: 5000 });
 
@@ -3314,7 +3314,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       await selectSession(id, { host: selfHost.hostId });
       return id;
     }, BETA_ID);
-    await desktop.waitForFunction((id) => currentSession?.id === id && currentSession.isActive,
+    await desktop.waitForFunction((id) => sessionState.currentSession?.id === id && sessionState.currentSession.isActive,
       rpcRestartId, { timeout: 10000 });
     await desktop.click('#sessionContext');
     await desktop.waitForSelector('#sessionRestartBtn', { timeout: 5000 });
@@ -3331,7 +3331,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     desktop.once('dialog', (d) => d.accept());
     await desktop.click('#sessionRestartBtn');
     await desktop.waitForFunction((id) =>
-      currentSession?.id === id && currentSession.isActive &&
+      sessionState.currentSession?.id === id && sessionState.currentSession.isActive &&
       document.getElementById('statsModal').style.display === 'none',
       rpcRestartId, { timeout: 15000 });
     check(true, 'restart kept the same RPC transcript selected');
@@ -3386,6 +3386,11 @@ let remoteHost = null; // second pi-dish (multi-host section)
       const key = sessionKey(hostId, id);
       const bareLeft = Object.keys(localStorage).filter((k) =>
         /^pi-dish-(draft|history|terminal-mode)-/.test(k) && !k.includes(' ') && !k.includes('spawn:'));
+      const freshState = createSessionState({
+        getSelfHostId: () => selfHost.hostId, getHostLabel: hostLabelFor,
+        onListsChanged() {}, onCurrentChanged() {},
+      });
+      freshState.setSessionLists({ active: [{ id: 'fresh' }] });
       return {
         key,
         hostId,
@@ -3400,7 +3405,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
         bareLeft,
         derivedDraftKey: draftKey(id),
         derivedTerminalKey: terminalModeKey(id),
-        stampedHost: stampSessionHost({ id: 'fresh' }).host,
+        stampedHost: freshState.sessions.active[0].host,
         migratedFlag: localStorage.getItem('pi-dish-keys-migrated'),
       };
     }, registryState.sessionId);
@@ -3622,12 +3627,12 @@ let remoteHost = null; // second pi-dish (multi-host section)
       const bare = sessionMatchingRef(remoteId.slice(0, 12));
       // A same-id session on another host is still a valid picker candidate;
       // only the current host+id pair is excluded.
-      const shadow = { ...currentSession, host: selfHost.hostId };
-      sessions.previous.push(shadow);
+      const shadow = { ...sessionState.currentSession, host: selfHost.hostId };
+      sessionState.sessions.previous.push(shadow);
       const candidates = sessionRefCandidates().filter((s) => s.id === remoteId)
         .map((s) => sessionHostIdOf(s));
-      sessions.previous.pop();
-      return { bareHost: bare?.host || null, currentHost: currentSession.host, candidates };
+      sessionState.sessions.previous.pop();
+      return { bareHost: bare?.host || null, currentHost: sessionState.currentSession.host, candidates };
     }, REMOTE_SESSION_ID);
     check(remoteRefResolution.bareHost === remoteRefResolution.currentHost,
       `a bare transcript #ref resolves on its owning remote host (got ${JSON.stringify(remoteRefResolution)})`);
@@ -3736,13 +3741,13 @@ let remoteHost = null; // second pi-dish (multi-host section)
       !(await multi.locator('#messages').textContent()).includes('COLLISION SELF TRANSCRIPT'),
       'selecting the peer with the same id cannot restore the self-host transcript');
     await multi.evaluate(() => loadSessions(undefined, { withPrevious: true }));
-    check(await multi.evaluate(host => currentSession.host === host, remoteId),
+    check(await multi.evaluate(host => sessionState.currentSession.host === host, remoteId),
       'polling preserves the selected host when ids collide');
     const selectedCollision = multi.locator(`.session-item.active[data-id="${collisionId}"]`);
     check(await selectedCollision.count() === 1 && await selectedCollision.getAttribute('data-host') === remoteId,
       'only the selected host row is highlighted');
     await multi.evaluate(id => selectSession(id, { host: 'missing-host' }), collisionId);
-    check(await multi.evaluate(({ id, host }) => !findSession(id, 'missing-host') && currentSession.host === host,
+    check(await multi.evaluate(({ id, host }) => !sessionState.findSession(id, 'missing-host') && sessionState.currentSession.host === host,
       { id: collisionId, host: remoteId }), 'a missing host-qualified session never falls back to another host');
     await multi.evaluate(({ id, host }) => selectSession(id, { host }), { id: collisionId, host: selfId });
     check((await multi.locator('#messages').textContent()).includes('COLLISION SELF TRANSCRIPT') &&
@@ -3757,7 +3762,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       ['rename', 'name', 'renamed remote collision'],
     ]) {
       await multi.evaluate(({ id, host }) => selectSession(id, { host }), { id: collisionId, host: remoteId });
-      await multi.evaluate(({ id, host }) => patchSession(id, {
+      await multi.evaluate(({ id, host }) => sessionState.patchSession(id, {
         isActive: true, capabilities: { setModel: true, setThinking: true, rename: true },
       }, host), { id: collisionId, host: remoteId });
       const endpoint = `${remoteHost.base}/api/sessions/${collisionId}/${action}`;
@@ -3765,7 +3770,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       const received = new Promise(resolve => { receiveRequest = resolve; });
       await multi.route(endpoint, route => { receiveRequest(route); });
       const sent = multi.waitForRequest(endpoint, { timeout: 10000 });
-      const before = await multi.evaluate(({ id, host, field }) => findSession(id, host)[field],
+      const before = await multi.evaluate(({ id, host, field }) => sessionState.findSession(id, host)[field],
         { id: collisionId, host: selfId, field });
       await multi.evaluate(({ action, value }) => {
         if (action === 'rename') document.getElementById('sessionNameInput').value = value;
@@ -3778,19 +3783,19 @@ let remoteHost = null; // second pi-dish (multi-host section)
       await route.fulfill({ json: { success: true, level: value } });
       await multi.evaluate(() => window.__collisionMutation);
       const outcome = await multi.evaluate(({ id, self, remote, field }) => ({
-        selectedHost: currentSession.host, selected: currentSession[field],
-        self: findSession(id, self)[field], remote: findSession(id, remote)[field],
+        selectedHost: sessionState.currentSession.host, selected: sessionState.currentSession[field],
+        self: sessionState.findSession(id, self)[field], remote: sessionState.findSession(id, remote)[field],
       }), { id: collisionId, self: selfId, remote: remoteId, field });
       check(outcome.selectedHost === selfId && outcome.selected === before && outcome.self === before && outcome.remote === value,
         `delayed ${action} completion updates only the originating host`);
       await multi.unroute(endpoint);
-      await multi.evaluate(({ id, host }) => patchSession(id, { isActive: false }, host), { id: collisionId, host: remoteId });
+      await multi.evaluate(({ id, host }) => sessionState.patchSession(id, { isActive: false }, host), { id: collisionId, host: remoteId });
     }
 
     // A row close belongs to the clicked row, even while its same-id peer is
     // selected. Confirming one host must not arm a close on the other host.
     await multi.evaluate(({ id, hosts }) => {
-      for (const host of hosts) patchSession(id, { isActive: true, capabilities: { close: true } }, host);
+      for (const host of hosts) sessionState.patchSession(id, { isActive: true, capabilities: { close: true } }, host);
     }, { id: collisionId, hosts: [selfId, remoteId] });
     const selfClose = multi.locator(`.session-item[data-id="${collisionId}"][data-host="${selfId}"] .session-close-btn`);
     const remoteClose = multi.locator(`.session-item[data-id="${collisionId}"][data-host="${remoteId}"] .session-close-btn`);
@@ -3806,7 +3811,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       multi.waitForResponse(closeEndpoint), remoteClose.click(),
     ]);
     check(closeResponse.request().method() === 'POST' &&
-      await multi.evaluate(host => currentSession.host === host, selfId),
+      await multi.evaluate(host => sessionState.currentSession.host === host, selfId),
       'closing the remote row sends to the peer and preserves the self-host selection');
     await multi.waitForFunction(() => sessionCloseBusyId === null);
     await multi.unroute(closeEndpoint);
