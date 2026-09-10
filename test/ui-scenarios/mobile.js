@@ -83,37 +83,35 @@ module.exports = async function mobile({ browser, watch, base, check, emit, SESS
   check(chipRow.first === 'sessionWorkingMobile' && chipRow.text === 'idle' && chipRow.scrolls,
     `the chip row scrolls and leads with run state (got ${JSON.stringify(chipRow)})`);
 
-  // Composer contract on a phone: every control lives inside the prompt
-  // field, over a strip the field reserves for them, and the context
-  // readout holds one position across the idle/running switch — a turn
-  // starting used to reflow the whole row and push Follow-up off screen.
+  // Composer contract on a phone: every control lives inside the field's
+  // box, in a strip below the text (an overlaid rail let scrolled lines run
+  // under the glyphs), and the context readout holds one position across the
+  // idle/running switch — a turn starting used to reflow the whole row and
+  // push Follow-up off screen.
   const ctxRight = () => mobile.evaluate(() =>
     Math.round(document.getElementById('sessionContext').getBoundingClientRect().right));
   const ctxIdle = await ctxRight();
   await mobile.evaluate(() => setTurnInProgress(true));
   const composer = await mobile.evaluate(() => {
-    const field = document.getElementById('promptInput');
-    const rect = field.getBoundingClientRect();
-    const inField = (el) => {
-      const r = el.getBoundingClientRect();
-      return r.left >= rect.left && r.right <= rect.right && r.top >= rect.top && r.bottom <= rect.bottom;
-    };
-    const attach = document.getElementById('btnAttach');
+    const box = document.querySelector('.composer-box').getBoundingClientRect();
+    const text = document.getElementById('promptInput').getBoundingClientRect();
+    const inBox = (r) => r.left >= box.left && r.right <= box.right &&
+      r.top >= box.top && r.bottom <= box.bottom;
     const visible = [...document.querySelectorAll('.composer-tools button')]
       .filter(el => el.offsetParent !== null);
     return {
-      reserved: parseFloat(getComputedStyle(field).paddingBottom),
-      attachHeight: attach.getBoundingClientRect().height,
+      textBottom: Math.round(text.bottom),
+      railTop: Math.round(document.querySelector('.composer-tools').getBoundingClientRect().top),
       ids: visible.map(el => el.id),
-      outside: visible.filter(el => !inField(el)).map(el => el.id),
+      outside: visible.filter(el => !inBox(el.getBoundingClientRect())).map(el => el.id),
       overflowing: visible.filter(el => {
         const r = el.getBoundingClientRect();
         return r.left < 0 || r.right > window.innerWidth;
       }).map(el => el.id),
     };
   });
-  check(composer.reserved >= composer.attachHeight && composer.outside.length === 0,
-    `every composer control sits inside the field's reserved strip (got ${JSON.stringify(composer)})`);
+  check(composer.outside.length === 0 && composer.textBottom <= composer.railTop,
+    `the control strip sits inside the field, below the text (got ${JSON.stringify(composer)})`);
   check(composer.ids.includes('btnFollowUp') && composer.ids.includes('btnSteer') &&
     composer.overflowing.length === 0,
     `steer and follow-up stay reachable mid-turn (got ${JSON.stringify(composer)})`);

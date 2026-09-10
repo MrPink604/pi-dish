@@ -17,6 +17,13 @@ Deviations from the spec below, as built:
 - `.session-info` now takes the header width it is given (`flex: 1 1 auto`).
   Removing badges from the meta row had shrunk the column, which starved the
   relation strip's one-row fit calculation.
+- The rail is a real row inside a bordered `.composer-box` (transparent
+  textarea above it), not an overlay on reserved `padding-bottom`: padding
+  scrolls with a textarea's text, so a mid-scroll draft ran under the glyphs.
+  `resize: none` follows from that — the native grip drew a light square
+  inside the box.
+- The 0–33 tier is `--text-muted`, not `--text-bright`: white at the default
+  tier read as an alert next to muted glyphs.
 
 ## Why
 
@@ -122,7 +129,7 @@ Delete, do not hide:
 
 | percent | class      | colour              |
 |---------|------------|---------------------|
-| 0–33    | *(none)*   | `--text-bright`     |
+| 0–33    | *(none)*   | `--text-muted`      |
 | 34–66   | `high`     | `--warning`         |
 | 67–100  | `critical` | `--error`           |
 

@@ -559,13 +559,12 @@ let autocompleteIndex = 0;
 let followStream = false;
 
 /**
- * Grow the prompt textarea with its content, capped at 190px — the old 160px
- * cap plus the ~30px strip the field reserves at its bottom for the in-field
- * tool rail (📎/🎙), so the visible line count is unchanged.
+ * Grow the prompt textarea with its content, capped at 160px. The control
+ * row is a sibling strip below the textarea, so this cap is text only.
  */
 function autosizePromptInput(input) {
   input.style.height = 'auto';
-  input.style.height = `${Math.min(input.scrollHeight, 190)}px`;
+  input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
 }
 
 function isPinnedToBottom(el) {
@@ -8944,8 +8943,6 @@ function setTurnInProgress(active) {
   if (btnSteer) btnSteer.style.display = active ? '' : 'none';
   if (btnFollowUp) btnFollowUp.style.display = active ? '' : 'none';
   if (btnSend) btnSend.style.display = active ? 'none' : '';
-  // The field reserves a taller strip while the turn column is two glyphs.
-  document.querySelector('.composer-box')?.classList.toggle('turn', !!active);
   // A turn ending mid-compaction (manual /compact aborts the agent first;
   // auto-compaction holds queued sends) must not wipe the compaction badge,
   // the held-message strip, or the status line.

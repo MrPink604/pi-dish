@@ -2324,53 +2324,48 @@ body.sidebar-open {
   position: relative; /* anchor for autocomplete + control panel */
 }
 
-/* The prompt field and its in-field tool rail share one box, so the rail can
-   be pinned to the field's bottom-left corner however tall the (resizable,
-   autosized) textarea gets. */
+/* The bordered box is the field: it holds the (transparent, borderless)
+   textarea above its own control row. The rail used to be absolutely
+   positioned over the textarea's reserved bottom padding, but padding
+   scrolls with the text — any intermediate scroll position ran lines
+   straight under the glyphs. A real row cannot be scrolled into. */
 .composer-box {
   position: relative;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px 6px 4px;
+}
+
+.composer-box:focus-within {
+  border-color: var(--accent);
 }
 
 .input-area textarea {
   display: block;
   width: 100%;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px;
-  /* Room for the tool rail: text scrolls above it rather than under it. */
-  padding-bottom: 40px;
+  background: transparent;
+  border: none;
+  padding: 8px 6px 2px;
   color: var(--text);
   font-size: 14px;
   font-family: inherit;
-  resize: vertical;
-  min-height: 88px; /* the old 60px text box plus the reserved tool strip */
+  /* No native grip: it drew a light hatched square inside the field, and
+     autosize already tracks the content. */
+  resize: none;
+  min-height: 44px;
 }
 
 .input-area textarea:focus {
   outline: none;
-  border-color: var(--accent);
 }
 
-/* Mid-turn the rail is two glyphs tall (steer over follow-up), so the field
-   reserves more of its own bottom and grows to keep the same visible line
-   count. autosizePromptInput's cap covers the taller state. */
-.composer-box.turn textarea {
-  padding-bottom: 76px;
-  min-height: 124px;
-}
-
-/* The in-field rail: content tools on the left, readout/stop/turn column on
-   the right. Bottom-anchored across the full field width; the textarea's
-   native resize grip is at bottom-right, so the rail leaves 18px for it. */
+/* Content tools left, readout/stop/turn column right. */
 .composer-tools {
-  position: absolute;
-  left: 8px;
-  right: 20px;
-  bottom: 8px;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 4px;
+  padding: 0 2px;
 }
 
 .composer-gap {
@@ -2385,8 +2380,8 @@ body.sidebar-open {
   align-items: center;
   justify-content: center;
   flex: none;
-  min-width: 34px;
-  min-height: 34px;
+  min-width: 30px;
+  min-height: 30px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -2398,8 +2393,8 @@ body.sidebar-open {
 }
 
 .composer-tools .tool-btn svg {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 }
 
 .composer-tools .tool-btn:hover {
@@ -2408,10 +2403,10 @@ body.sidebar-open {
   color: var(--text);
 }
 
-/* Context readout. Fixed slot, colour-coded by fill: white to a third,
-   warning to two thirds, error beyond. */
+/* Context readout. Fixed slot, and quiet until the fill matters: the same
+   muted weight as the glyphs, then warning past a third, error past two. */
 .composer-tools .tool-ctx {
-  color: var(--text-bright);
+  color: var(--text-muted);
 }
 
 .composer-tools .tool-ctx.high { color: var(--warning); }
@@ -2432,7 +2427,7 @@ body.sidebar-open {
    width so both states occupy the same column. */
 .composer-act {
   flex: none;
-  width: 38px;
+  width: 30px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2443,8 +2438,8 @@ body.sidebar-open {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -2454,8 +2449,8 @@ body.sidebar-open {
 }
 
 .composer-send svg {
-  width: 19px;
-  height: 19px;
+  width: 15px;
+  height: 15px;
 }
 
 .composer-send:disabled {
@@ -3069,25 +3064,10 @@ body.sidebar-open {
   }
 
   .input-area textarea {
-    min-height: 70px; /* one line of text plus the reserved tool strip */
-    max-height: 158px;
+    min-height: 40px; /* one line; the control row is its own strip below */
+    max-height: 132px;
     font-size: 16px; /* Prevents zoom on iOS */
-    padding: 8px 10px;
-    padding-bottom: 38px;
-    border-radius: 8px;
-  }
-
-  .composer-tools {
-    left: 6px;
-    bottom: 4px;
-  }
-
-  /* Touch sizes for the in-field tools live with the rule that shapes them
-     (a later same-specificity rule would win over this block). */
-
-  .composer-box.turn textarea {
-    padding-bottom: 74px;
-    min-height: 106px;
+    padding: 8px 6px 2px;
   }
 
   .btn {
@@ -4163,30 +4143,30 @@ button.badge-context {
 
 .composer-note-dismiss:hover { color: var(--text); }
 
-/* Desktop tightens the touch-sized rail. */
+/* Desktop trims the rail a little further; the base sizes are touch-sized. */
 @media (min-width: 769px) {
   .composer-tools .tool-btn {
-    min-width: 30px;
-    min-height: 30px;
+    min-width: 28px;
+    min-height: 28px;
   }
 
   .composer-tools .tool-btn svg {
-    width: 18px;
-    height: 18px;
+    width: 17px;
+    height: 17px;
   }
 
   .composer-act {
-    width: 34px;
+    width: 28px;
   }
 
   .composer-send {
-    width: 30px;
-    height: 30px;
+    width: 26px;
+    height: 26px;
   }
 
-  .composer-box.turn textarea {
-    padding-bottom: 68px;
-    min-height: 116px;
+  .composer-send svg {
+    width: 14px;
+    height: 14px;
   }
 }
 
