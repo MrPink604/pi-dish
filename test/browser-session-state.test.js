@@ -15,6 +15,15 @@ function fixture() {
   return { state, renders, labels, identifySelf: host => { selfHostId = host; } };
 }
 
+test('browser lookups without a session id tolerate an empty selection', () => {
+  const { state } = fixture();
+  assert.equal(state.findSession(), undefined);
+  assert.equal(state.sessionHostId(), 'self');
+  state.setSessionLists({ active: [{ id: 'one' }] });
+  assert.equal(state.findSession(), undefined);
+  assert.equal(state.sessionHostId(), 'self');
+});
+
 test('browser state resolves colliding ids by host and prefers active rows of the same identity', () => {
   const { state } = fixture();
   state.setSessionLists([

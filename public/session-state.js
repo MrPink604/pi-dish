@@ -23,7 +23,7 @@ function createSessionState(options) {
    * @param {string | null} [host]
    */
   function findSession(id, host) {
-    if (!host && currentSession?.id === id) host = currentSession.host;
+    if (!host && currentSession && currentSession.id === id) host = currentSession.host;
     /** @type {SessionEntry | undefined} */
     let found;
     for (const list of [sessions.active, sessions.previous]) {
