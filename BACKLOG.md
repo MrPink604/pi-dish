@@ -88,6 +88,8 @@ the message-count and session-spend badges. Spec and mock:
   shares/pages and comments also retain their originating owner through later
   requests and view updates; feature counters still distinguish work inside a
   selection. Delayed-response browser regressions cover the boundary.
+- Tree/branch operations and model/thinking menus now retain selection ownership;
+  stale branch replies preserve only the originating draft and cannot reselect.
 - Extend the typed foundation into application event and request-ownership contracts.
 - Extract frontend state/transport and server application/lifecycle boundaries
   in small changes guarded by the preceding tests.

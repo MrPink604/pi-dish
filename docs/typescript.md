@@ -34,6 +34,8 @@ guard is removed; file/diff request counters still distinguish newer requests
 inside one selection. Resume, search, stats, shares/pages and comment callbacks
 also retain captured owners. Their existing feature counters still distinguish
 modal instances, file requests and comment drafts within a selected session.
+Tree/branch operations and model/thinking menu loads also carry selection
+owners; a late branch preserves returned editor text in its original draft.
 
 `server.js`, browser transport/rendering, feature stores and harness
 extensions remain in their existing form. The foundation's declarations

@@ -83,6 +83,7 @@ browser and remaining JavaScript modules are not yet type checked. See
 | Typed bridge registry validation, pre-hello claim protection and session-switch replay ordering | `test/bridge-session.test.js` |
 | Browser state writers, detached metadata, host lookup and selection generation | `test/browser-session-state.test.js`, `test/types/browser-state.ts` |
 | Captured transcript/stream ownership, delayed stream tickets and host-qualified related navigation | `test/browser/selection-ownership.spec.js` |
+| Late tree/branch responses, draft routing and model/thinking menus across hosts | `test/browser/menu-ownership.spec.js` plus forced transcript-reload smoke |
 | Retired terminal callbacks after reconnect or host switch | `test/browser/terminal-ownership.spec.js` plus desktop/mobile terminal smoke |
 | Late resume, share creation, search, navigation and comment callbacks across hosts | `test/browser/feature-ownership.spec.js` plus stats/file/comment smoke |
 | Same session id on two hosts; stale metadata completion | `test/browser/session-identity.spec.js` |

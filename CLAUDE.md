@@ -1240,6 +1240,12 @@ follow-up requests. Stats modal counters, file/diff request counters and comment
 draft versions remain separate guards for work within the same selection. A
 late missing-share response cannot prompt to publish after the user navigates
 away, and delayed diff hydration cannot reopen an old comment editor.
+Tree loads and branch completions retain their selection owner and modal
+generation. A completed branch saves returned editor text to its originating
+host-qualified draft; only the originating selection can reselect and reload,
+even if its tree was dismissed while the request was pending. Selection
+changes dismiss tree/artifact overlays and model/thinking menus, and delayed
+model catalog loads cannot reopen menus for the old selection.
 
 Host identity is part of selection and mutation ownership. `findSession(id,
 host)` never falls back to another host; without a host it prefers the selected

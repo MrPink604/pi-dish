@@ -2345,6 +2345,10 @@ function showPendingSessionView(spawnId) {
   closeDiffView();
   closeFileView();
   closeStatsModal();
+  closeTreeModal();
+  closeModelDropdown();
+  closeThinkingDropdown();
+  closeArtifactsModal();
   closeUsageView();
   closeSearchView();
   closeNewSessionView(); // the provisional pane replaces the takeover
@@ -2457,6 +2461,10 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   closeDiffView();
   closeFileView();
   closeStatsModal();
+  closeTreeModal();
+  closeModelDropdown();
+  closeThinkingDropdown();
+  closeArtifactsModal();
   closeUsageView(); // picking a session while the usage takeover is up means "show me that session"
   closeSearchView();
   closeNewSessionView();
@@ -3040,7 +3048,9 @@ async function toggleThinkingDropdown() {
   if (!sessionState.currentSession || !sessionState.currentSession.isActive || !sessionSupports(sessionState.currentSession, 'setThinking')) return;
   // Load the model list so OMP can trim the dropdown to what the session's
   // model supports (cached after the first fetch).
-  await loadModels(sessionState.currentSession.id, sessionState.currentSession.harnessId);
+  const owner = sessionState.captureSelection();
+  await loadModels(owner.id, sessionState.currentSession.harnessId);
+  if (!sessionState.ownsSelection(owner)) return;
   const dropdown = document.getElementById('thinkingDropdown');
   thinkingDropdownOpen = !thinkingDropdownOpen;
   if (!thinkingDropdownOpen) { dropdown.style.display = 'none'; return; }
@@ -6655,7 +6665,9 @@ let modelEditMode = false; // scoped-models switcher: toggle which models are en
 
 async function toggleModelDropdown() {
   if (!sessionState.currentSession || !sessionState.currentSession.isActive || !sessionSupports(sessionState.currentSession, 'setModel')) return;
-  await loadModels(sessionState.currentSession.id, sessionState.currentSession.harnessId);
+  const owner = sessionState.captureSelection();
+  await loadModels(owner.id, sessionState.currentSession.harnessId);
+  if (!sessionState.ownsSelection(owner)) return;
   modelDropdownOpen = !modelDropdownOpen;
   modelEditMode = false;
   const dropdown = document.getElementById('modelDropdown');
@@ -11902,15 +11914,29 @@ function copyTextToClipboard(text) {
 // Tree Modal
 // =========================================================================
 var treeData = null;
+var treeOwner = null;
+var treeViewGeneration = 0;
+
+function ownsTree(owner, generation) {
+  return owner === treeOwner && generation === treeViewGeneration && sessionState.ownsSelection(owner);
+}
 var treeToolCallMap = new Map();
 
 async function openTreeModal() {
   if (!sessionState.currentSession) return;
+  closeTreeModal();
+  const owner = sessionState.captureSelection();
+  const generation = ++treeViewGeneration;
+  treeOwner = owner;
+  treeData = null;
+  pendingBranchId = null;
   setStatus('Loading tree...', 'working');
   try {
-    const res = await apiFetch(sessionState.currentSession.host, '/api/sessions/' + encodeURIComponent(sessionState.currentSession.id) + '/tree');
+    const res = await apiFetch(owner.host, '/api/sessions/' + encodeURIComponent(owner.id) + '/tree');
     if (!res.ok) throw new Error(await res.text());
-    treeData = await res.json();
+    const data = await res.json();
+    if (!ownsTree(owner, generation)) return;
+    treeData = data;
     treeToolCallMap.clear();
     for (var node of treeData.nodes) {
       if (node.role === 'assistant' && node.toolCalls) {
@@ -11923,10 +11949,15 @@ async function openTreeModal() {
     document.getElementById('treeModal').style.display = 'flex';
     document.getElementById('treeSearch').focus();
     setStatus('');
-  } catch (e) { setStatus('Failed to load tree: ' + e.message, 'error'); }
+  } catch (e) {
+    if (ownsTree(owner, generation)) setStatus('Failed to load tree: ' + e.message, 'error');
+  }
 }
 
 function closeTreeModal() {
+  treeViewGeneration += 1;
+  treeOwner = null;
+  pendingBranchId = null;
   document.getElementById('treeModal').style.display = 'none';
   treeData = null;
 }
@@ -12079,7 +12110,7 @@ function renderTreeNodeContent(node) {
 var pendingBranchId = null;
 
 function selectTreeNode(entryId) {
-  if (!sessionState.currentSession || !treeData) return;
+  if (!treeData || !ownsTree(treeOwner, treeViewGeneration)) return;
   if (entryId === treeData.leafId) { closeTreeModal(); return; }
   document.querySelectorAll('.tree-node.selected').forEach(el => el.classList.remove('selected'));
   var el = document.querySelector('.tree-node[data-id="' + entryId + '"]');
@@ -12120,7 +12151,9 @@ function cancelBranch() {
 }
 
 async function confirmBranch() {
-  if (!sessionState.currentSession || !pendingBranchId) return;
+  const owner = treeOwner;
+  const generation = treeViewGeneration;
+  if (!treeData || !pendingBranchId || !ownsTree(owner, generation)) return;
   var entryId = pendingBranchId;
   var summarize = !!document.getElementById('branchSummarize')?.checked;
   var customInstructions = document.getElementById('branchInstructions')?.value.trim() || undefined;
@@ -12129,25 +12162,26 @@ async function confirmBranch() {
   if (btn) { btn.disabled = true; btn.textContent = summarize ? 'Summarizing…' : 'Branching…'; }
   setStatus(summarize ? 'Summarizing abandoned branch…' : 'Branching...', 'working');
   try {
-    var data = await apiSend(sessionState.currentSession.host, '/api/sessions/' + encodeURIComponent(sessionState.currentSession.id) + '/branch',
+    var data = await apiSend(owner.host, '/api/sessions/' + encodeURIComponent(owner.id) + '/branch',
       { entryId, summarize, customInstructions });
-    pendingBranchId = null;
-    closeTreeModal();
     // A user-message target means "re-edit this prompt" (leaf moves to its
     // parent) — mirror the TUI and prefill the composer, but never clobber
     // a draft already in progress. Written to the draft store because the
     // reload below runs restorePromptState, which overwrites the input.
     if (data.editorText) {
       try {
-        var key = draftKey(sessionState.currentSession.id);
+        var key = draftKey(sessionRefKey(owner));
         if (!(localStorage.getItem(key) || '').trim()) localStorage.setItem(key, data.editorText);
       } catch {}
     }
+    if (!sessionState.ownsSelection(owner)) return;
+    closeTreeModal();
     setStatus('Branched — reloading');
-    selectSession(sessionState.currentSession.id, { forceTranscriptReload: true });
+    selectSession(owner.id, { host: owner.host, forceTranscriptReload: true });
   } catch (e) {
+    if (!sessionState.ownsSelection(owner)) return;
     setStatus('Branch failed: ' + e.message, 'error');
-    if (btn) { btn.disabled = false; btn.textContent = 'Branch from here'; }
+    if (ownsTree(owner, generation) && btn) { btn.disabled = false; btn.textContent = 'Branch from here'; }
   }
 }
 
