@@ -21,8 +21,28 @@ npm start          # server on http://127.0.0.1:3333 (PORT/HOST env to override;
 npm test           # API + helper unit tests (node:test, test/*.test.js)
 npm run test:browser  # isolated Playwright scenarios
 npm run test:ui    # full desktop/mobile browser smoke
+npm run build:core  # regenerate typed foundation CommonJS/declarations in lib/
 npm run build:vendor  # regenerate public/vendor/ from node_modules
 ```
+
+## Typed foundation (src/core/)
+
+`harnesses`, `session-key`, `host-identity`, `dish-store`, `process-identity`,
+`pending-requests`, `line-splitter`, and `running-tool-calls` are authored in
+`src/core/*.ts`. `lib/` retains generated CommonJS at their original paths,
+plus declarations for typed consumers; the generated banner identifies these
+files. Edit the sources and run `npm run build:core`. `npm run check` compiles
+into a temporary directory and rejects mismatched or orphaned generated output.
+Node, Electron and harness consumers continue to execute the checked-in JS;
+do not run these sources directly, since runtime-relative paths belong to `lib/`.
+
+`src/core/contracts.ts` distinguishes host, native-session and route-session ids
+and describes harness launch/lifecycle metadata and reconnect tool snapshots.
+Wire data and small JSON stores remain unvalidated beyond each existing
+boundary: responses/store values are `unknown`, not a generic caller-selected
+payload type. These types do not replace runtime ownership proofs or validate
+feature schemas. `SessionRef` is available for future typed callers; browser
+state and async selection guards have not migrated. Details: [docs/typescript.md](docs/typescript.md).
 
 ## Committing
 

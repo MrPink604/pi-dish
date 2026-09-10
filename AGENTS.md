@@ -4,6 +4,12 @@ pi-dish is a personal web/phone controller for Pi-lineage agents. The backend
 uses Express and CommonJS (`server.js`, `lib/`); the browser uses plain scripts
 (`public/`); harness extensions live in `extensions/`.
 
+The typed foundation lives in `src/core/`. Its generated CommonJS and `.d.ts`
+files are checked in at the existing `lib/` paths. Edit the TypeScript source,
+run `npm run build:core`, and include both source and generated output in the
+commit. `npm run check` rejects stale output. See [docs/typescript.md](docs/typescript.md)
+for the exact boundary; the application and feature modules remain JavaScript.
+
 ## Start here
 
 - [README.md](README.md): setup, supported behavior, development commands.
@@ -26,6 +32,7 @@ uses Express and CommonJS (`server.js`, `lib/`); the browser uses plain scripts
 
 ```sh
 npm run check                         # correctness lint + incremental types
+npm run build:core                    # regenerate lib/ after changing src/core/
 npm test                              # unit, API, bridge and lifecycle suites
 npm test -- test/remote-hosts.test.js   # example focused suite
 npm run test:browser                   # isolated browser scenarios

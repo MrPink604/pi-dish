@@ -58,15 +58,26 @@ derived from the actual helpers and app declarations. Generated/vendor assets,
 historical docs, and agent working directories are excluded. This deliberately
 does not introduce formatting rules or a repository-wide style rewrite.
 
-`npm run typecheck` uses strict `checkJs` without emission for `lib/cron.js`.
-JSDoc covers parser inputs, parsed fields, matching, and next-run results.
-Add files to `tsconfig.check.json` as subsequent refactors establish contracts;
-the rest of the application is not yet type checked.
+`npm run typecheck` compiles the strict TypeScript foundation in `src/core/`
+into a temporary directory and compares its JavaScript and declarations with
+the checked-in `lib/` output. Stale or orphaned generated files fail the check;
+check mode never repairs them. Tests and deployments execute those same checked-in
+CommonJS files. Run `npm run build:core` to regenerate after source edits.
+
+The same command checks compile-only consumers in `test/types/core.ts`, including
+negative cases for mixed identity types and unvalidated response/store payloads.
+It also retains strict `checkJs` without emission for `lib/cron.js`; JSDoc covers
+parser inputs, parsed fields, matching, and next-run results. The application,
+browser and remaining JavaScript modules are not yet type checked. See
+[Typed foundation](typescript.md) for the exact migrated scope.
 
 ## Coverage map for refactoring
 
 | Boundary / behavior | Regression entrypoint |
 | --- | --- |
+| Core compilation, stale output/declarations, failed builds, orphan detection | `test/core-build.test.js`, `npm run typecheck` |
+| Identity types, request payload boundaries, harness and process shapes | `test/types/core.ts` (compile-only) |
+| Core route canonicalization, byte framing, request correlation/cleanup, host stores and process proofs | `test/core-contracts.test.js` plus existing bridge/API/lifecycle suites |
 | Same session id on two hosts; stale metadata completion | `test/browser/session-identity.spec.js` |
 | Family pinning, expansion, ancestor lookup, drag ordering | `test/browser/session-families.spec.js` |
 | Composer drafts, attachments, delayed preparation and send | `test/browser/composer-ownership.spec.js` |

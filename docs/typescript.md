@@ -1,0 +1,82 @@
+# Typed foundation
+
+The first migration is limited to existing shared primitives. It introduces no
+feature-module extraction, UI framework, ESM runtime migration, or wire/store
+format change.
+
+| TypeScript source in `src/core/` | Responsibility |
+| --- | --- |
+| `contracts.ts` | Identity distinctions, process proof shapes, harness descriptors and running-tool snapshots |
+| `session-key.ts` | Strict route decoding, harness/native encoding and legacy Pi canonicalization |
+| `harnesses.ts` | Existing harness registry and launch argv/environment construction |
+| `host-identity.ts` | Stable host id and host label |
+| `dish-store.ts` | HOME-scoped reads and atomic writes for small JSON stores |
+| `process-identity.ts` | Linux birth identity, liveness and bounded ancestry proofs |
+| `pending-requests.ts` | Correlation, timeout and disconnect cleanup for socket/stdio requests |
+| `line-splitter.ts` | Incremental UTF-8 LF framing |
+| `running-tool-calls.ts` | Shared bridge/RPC reconnect snapshots |
+
+`server.js`, browser state/transport/rendering, bridge/RPC session classes,
+feature stores and harness extensions remain in their existing form. Cron
+retains its prior strict JavaScript/JSDoc check. The foundation's declarations
+do not mean that all its JavaScript callers have been checked.
+
+## Source and runtime
+
+Edit `src/core/*.ts`, then run:
+
+```sh
+npm run build:core
+npm run check
+npm test
+```
+
+The pinned TypeScript compiler emits ES2022 CommonJS and declarations to the
+existing `lib/` entrypoints. Both outputs are committed. Consumers keep using
+paths such as `require('./lib/session-key')`; installs, direct server startup,
+Electron's existing file list and native harness loaders need no TypeScript
+loader or additional production dependency. Runtime-relative paths such as
+the harness registry's extension paths are still resolved from `lib/`, so do
+not execute `src/core/` directly.
+
+`scripts/build-core.js` compiles to a temporary directory before replacing
+output. A type error leaves existing output untouched. Its `--check` mode
+compares bytes without writing, including declaration files, and rejects old
+generated files whose source was removed. `npm run typecheck` includes this
+check, so the existing Node CI matrix verifies the generated files that the
+backend and browser integration suites actually execute. A compiler upgrade
+may require regenerating output; inspect that separately from source changes.
+
+This checked-in output is a deliberate compatibility measure for the bounded
+migration. The new build is needed when editing the foundation, not when
+starting a deployed checkout. Broader build/deployment changes need their own
+decision and packaging checks.
+
+## Contract conventions
+
+- `NativeSessionId`, `SessionId` and `HostId` are distinct branded strings.
+  Existing validators/decoders and the host-id producer establish them. A Pi
+  route retains the native id's bytes, but the types distinguish its role.
+  Use `resolveSessionRoute` when passing a route back to a harness; avoid casts
+  at callers. `validSessionId` narrows an unknown native id after validation.
+- `SessionRef` requires both a host and route id and is readonly. It is a
+  foundation contract for later consumers, not a replacement for the browser's
+  existing state writers or selection-generation checks. It does not grant
+  lifecycle authority.
+- `ProcessIdentity` includes PID and birth time. Input functions still accept
+  partial/coercible registry values so the existing fail-closed checks remain
+  authoritative. Type annotations never substitute for checking a live process.
+- `PendingRequests.track` returns `Promise<unknown>`; receiving a response does
+  not validate its schema. `readStore` returns a record of unknown values. A
+  later typed caller must narrow these at its own protocol/feature boundary.
+- Tool arguments and partial results remain opaque. The shared tracker owns
+  lifecycle bookkeeping, not tool-specific validation.
+- Harness contracts describe current behavior, including optional legacy
+  resume arguments. They preserve lifecycle modes and capability differences;
+  they do not enable additional harness commands.
+
+`test/types/core.ts` checks the declarations through the public `lib/` imports,
+including cases that must fail compilation. Runtime regressions exercise the
+generated files. Preserve the existing assertions when subsequent consumers
+migrate; adapt setup/imports without weakening behavioral coverage. See
+[Testing](testing.md) for the full matrix and scope limitations.

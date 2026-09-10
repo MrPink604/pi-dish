@@ -652,7 +652,8 @@ for what crosses the bridge and what stays TUI-only.
 ## Development
 
 ```bash
-npm run check         # correctness lint + incremental JavaScript type check
+npm run check         # correctness lint, core types/output, incremental JS types
+npm run build:core    # regenerate lib/ after editing src/core/
 npm test              # API + unit tests (node:test)
 npm run test:browser  # isolated browser scenarios (Playwright)
 npm run test:ui:scenarios # feature scenarios, each with fresh fixtures
@@ -660,6 +661,13 @@ npm run test:ui       # full desktop/mobile integration smoke
 npm run build:vendor  # regenerate public/vendor/ after bumping marked/highlight.js
 npm run electron:dev  # desktop shell
 ```
+
+Shared identity, harness, and transport primitives are authored in TypeScript
+under `src/core/`. Their generated CommonJS files and declarations are checked
+in under `lib/`, preserving direct Node startup and the existing package layout.
+Run `npm run build:core` after source changes; `npm run check` verifies that the
+committed runtime matches the source. See [Typed foundation](docs/typescript.md)
+for scope and conventions. Browser and feature modules remain JavaScript.
 
 Browser setup is reproducible from the lockfile:
 

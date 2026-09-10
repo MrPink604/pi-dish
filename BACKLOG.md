@@ -55,7 +55,13 @@ the message-count and session-spend badges. Spec and mock:
 
 ## 4. Structural work (after the test baseline)
 
-- Define shared identity, capability, event, and request-ownership contracts.
+- First bounded TypeScript foundation: existing identity, harness metadata,
+  process proof, request correlation and stream helpers now live in `src/core/`,
+  with generated CommonJS/declarations at the original `lib/` paths and CI
+  consistency checks. See [docs/typescript.md](docs/typescript.md). Feature modules
+  and browser state/transport are outside this first conversion.
+- Extend the typed foundation into application capability, event, and
+  request-ownership contracts.
 - Extract frontend state/transport and server application/lifecycle boundaries
   in small changes guarded by the preceding tests.
 - Evaluate a contained component-framework pilot. Preserve the current transcript

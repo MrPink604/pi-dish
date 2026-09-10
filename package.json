@@ -13,6 +13,7 @@
     "test": "node scripts/run-tests.js",
     "test:lineage": "node scripts/test-real-lineage-harnesses.js",
     "build:vendor": "node scripts/build-vendor.js",
+    "build:core": "node scripts/build-core.js",
     "electron:dev": "electron electron/main.js",
     "electron:build": "electron-builder",
     "postinstall": "electron-builder install-app-deps",
@@ -22,7 +23,7 @@
     "test:browser:install": "playwright install chromium",
     "test:ui:scenarios": "node scripts/run-ui-scenarios.js",
     "lint": "eslint .",
-    "typecheck": "tsc -p tsconfig.check.json",
+    "typecheck": "node scripts/build-core.js --check && tsc -p tsconfig.check.json",
     "check": "npm run lint && npm run typecheck"
   },
   "build": {
