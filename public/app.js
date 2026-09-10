@@ -560,10 +560,14 @@ let autocompleteIndex = 0;
 // short of the 80px pin threshold. Cleared by any deliberate scroll gesture.
 let followStream = false;
 
-/** Grow the prompt textarea with its content, capped at 160px. */
+/**
+ * Grow the prompt textarea with its content, capped at 190px — the old 160px
+ * cap plus the ~30px strip the field reserves at its bottom for the in-field
+ * tool rail (📎/🎙), so the visible line count is unchanged.
+ */
 function autosizePromptInput(input) {
   input.style.height = 'auto';
-  input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+  input.style.height = `${Math.min(input.scrollHeight, 190)}px`;
 }
 
 function isPinnedToBottom(el) {

@@ -2321,22 +2321,42 @@ body.sidebar-open {
   position: relative; /* anchor for autocomplete + control panel */
 }
 
+/* The prompt field and its in-field tool rail share one box, so the rail can
+   be pinned to the field's bottom-left corner however tall the (resizable,
+   autosized) textarea gets. */
+.composer-box {
+  position: relative;
+}
+
 .input-area textarea {
+  display: block;
   width: 100%;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px;
+  /* Room for the tool rail: text scrolls above it rather than under it. */
+  padding-bottom: 40px;
   color: var(--text);
   font-size: 14px;
   font-family: inherit;
   resize: vertical;
-  min-height: 60px;
+  min-height: 88px; /* the old 60px text box plus the reserved tool strip */
 }
 
 .input-area textarea:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+/* Attach/dictate, inside the field. Bottom-left keeps the textarea's native
+   resize grip (bottom-right) clickable. */
+.composer-tools {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  display: flex;
+  gap: 6px;
 }
 
 .input-actions {
@@ -2345,6 +2365,25 @@ body.sidebar-open {
   align-items: center;
   gap: 8px; /* minimum spacing; .status flex-grows to push actions right */
   margin-top: 8px;
+}
+
+/* Meta (context %, status text, working timer) yields space; the turn
+   buttons never do — clipping Follow-up off a phone screen is the bug this
+   split exists to prevent. */
+.input-actions-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.input-actions-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
 .mood-indicator {
@@ -2901,16 +2940,36 @@ body.sidebar-open {
   }
 
   .input-area textarea {
-    min-height: 40px;
-    max-height: 120px;
+    min-height: 70px; /* one line of text plus the reserved tool strip */
+    max-height: 158px;
     font-size: 16px; /* Prevents zoom on iOS */
     padding: 8px 10px;
+    padding-bottom: 38px;
     border-radius: 8px;
   }
+
+  .composer-tools {
+    left: 6px;
+    bottom: 4px;
+  }
+
+  /* Touch sizes for the in-field tools live with the rule that shapes them
+     (a later same-specificity rule would win over this block). */
 
   .input-actions {
     margin-top: 4px;
     gap: 6px;
+  }
+
+  .input-actions-meta,
+  .input-actions-main {
+    gap: 6px;
+  }
+
+  /* Tighter than desktop so ⚙ + Stop + Steer + Follow-up all fit a phone
+     row without the meta group having to give up more than its timer. */
+  .input-actions-main .btn {
+    padding: 8px 10px;
   }
 
   /* Working spinner next to the ⚙ button */
@@ -4001,44 +4060,53 @@ button.badge-context {
 
 .composer-note-dismiss:hover { color: var(--text); }
 
-/* Image-attach button. The base .badge-tool-btn is display:none (mobile-only
-   tool buttons) and nothing in app.js toggles this one's display, so it
-   un-hides itself here — the picker is a desktop affordance too (paste is
-   the keyboard-only alternative). */
-#btnAttach {
+/* In-field tool rail buttons (📎, 🎙). They sit on the textarea, so they
+   carry no border of their own until hovered — the field is the container
+   the eye reads. Touch size by default, tightened on desktop below; both
+   stay inside the strip the field reserves with its bottom padding. */
+.composer-tools .badge-tool-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  font-size: 17px;
+  line-height: 1;
+  border-color: transparent;
+  background: transparent;
+  border-radius: 6px;
+  color: var(--text-muted); /* not opacity: the mic's state classes recolor it */
 }
 
-/* Dictation button. The base .badge-tool-btn is display:none (mobile-only
-   tool buttons); app.js sets the inline display when a host advertises stt,
-   so this rule only carries the shape. */
+@media (min-width: 769px) {
+  .composer-tools .badge-tool-btn {
+    min-width: 30px;
+    min-height: 30px;
+    font-size: 15px;
+  }
+}
+
+.composer-tools .badge-tool-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+/* The base .badge-tool-btn is display:none (mobile-only tool buttons) and
+   nothing in app.js toggles the attach button's display, so it un-hides
+   itself here — the picker is a desktop affordance too (paste is the
+   keyboard-only alternative). app.js sets #btnMic's inline display when a
+   host advertises stt, so that one only needs its shape. */
+#btnAttach {
+  display: inline-flex;
+}
+
 #btnMic {
-  align-items: center;
-  justify-content: center;
   /* Hold-to-talk on touch: without this the browser claims the gesture for
      scrolling and the pointerup never arrives. */
   touch-action: none;
   user-select: none;
-}
-
-/* Desktop: the composer's attach/dictate buttons get the mobile row's visual
-   weight — height matched to Send, real padding — instead of rendering as
-   tiny 11px badges stranded under a full-width textarea. Scoped to desktop so
-   the touch-sized mobile rules below stay authoritative there. */
-@media (min-width: 769px) {
-  .input-actions .badge-tool-btn {
-    min-height: 33px;
-    padding: 3px 10px;
-    font-size: 14px;
-    border-radius: 6px;
-  }
-
-  .input-actions .badge-tool-btn:hover {
-    background: var(--bg-card);
-    color: var(--text);
-  }
 }
 
 /* Visible but not usable here (insecure origin, no MediaRecorder): the tap

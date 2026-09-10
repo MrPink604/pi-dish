@@ -1646,6 +1646,15 @@ so the outside-click closer must treat detached targets as inside.
 
 ## Prompt composer (public/app.js)
 
+- **Layout**: `.composer-box` holds the textarea plus `.composer-tools`, the
+  in-field rail (📎 attach, 🎙 dictate) pinned bottom-left; the field reserves
+  that strip with `padding-bottom`, and `autosizePromptInput`'s cap includes
+  it, so text never runs under the icons. The row below splits into
+  `.input-actions-meta` (context %, status, working timer — may be clipped)
+  and `.input-actions-main` (⚙, Stop, Steer, Follow-up, Send — never shrinks).
+  Anything added to that row goes in the meta group: the turn buttons must
+  stay reachable at phone widths, which is what pushed the tools into the
+  field in the first place. `test/ui-scenarios/mobile.js` asserts both.
 - **Image attachments**: paste or 📎-pick images; `prepareImageAttachment()`
   downscales to a 1568px long edge / JPEG re-encode before base64ing (phone
   photos are huge). Images ride the `images` field on `/prompt` and `/steer`

@@ -331,21 +331,38 @@
                error). Filled with textContent only. -->
           <div class="composer-note" id="composerNote" style="display:none"></div>
           <div class="attachment-strip" id="attachmentStrip" style="display:none"></div>
-          <textarea id="promptInput" placeholder="Send a message..." rows="2"></textarea>
-          <input type="file" id="imageFileInput" accept="image/*" multiple style="display:none">
+          <!-- Composer box: the prompt field plus the tools that act on its
+               *content* (attach, dictate), pinned inside the field's bottom
+               left. They used to sit in .input-actions, where on a phone the
+               two of them pushed Follow-up past the right edge during a turn.
+               The field reserves that strip with padding-bottom, so a long
+               draft never runs underneath them. -->
+          <div class="composer-box">
+            <textarea id="promptInput" placeholder="Send a message..." rows="2"></textarea>
+            <input type="file" id="imageFileInput" accept="image/*" multiple style="display:none">
+            <div class="composer-tools">
+              <button class="badge badge-tool-btn" id="btnAttach" onclick="document.getElementById('imageFileInput').click()" title="Attach images" aria-label="Attach images">📎</button>
+              <!-- Dictation. No inline onclick: desktop toggles on click while
+                   touch is hold-to-talk, so app.js binds the pointer handlers. -->
+              <button class="badge badge-tool-btn" id="btnMic" style="display:none" title="Dictate (speech to text)" aria-label="Dictate">🎙</button>
+            </div>
+          </div>
+          <!-- Turn actions. Two groups: status/meta, which may be clipped when
+               the row is narrow, and the buttons, which never shrink — a phone
+               must always be able to reach Follow-up mid-turn. -->
           <div class="input-actions">
-            <button class="badge badge-tool-btn" id="btnAttach" onclick="document.getElementById('imageFileInput').click()" title="Attach images">📎</button>
-            <!-- Dictation. No inline onclick: desktop toggles on click while
-                 touch is hold-to-talk, so app.js binds the pointer handlers. -->
-            <button class="badge badge-tool-btn" id="btnMic" style="display:none" title="Dictate (speech to text)">🎙</button>
-            <button class="badge badge-context" id="sessionContextBar" onclick="openStatsModal()" title="Session stats">0%</button>
-            <span class="status" id="status"></span>
-            <span class="badge badge-working" id="sessionWorkingMobile"><span class="spinner-dot"></span><span class="spinner-text"></span></span>
-            <button class="badge badge-tool-btn mobile-only" id="btnPanel" onclick="toggleControlPanel()" title="Session controls">⚙</button>
-            <button class="btn btn-stop" id="btnStop" onclick="abortTurn()" style="display:none" title="Stop (Esc)">Stop</button>
-            <button class="btn btn-steer" id="btnSteer" onclick="sendSteer()" style="display:none" title="Steer (Ctrl+Enter)">Steer</button>
-            <button class="btn btn-steer" id="btnFollowUp" onclick="sendFollowUp()" style="display:none" title="Queue after agent finishes">Follow-up</button>
-            <button class="btn btn-primary" id="btnSend" onclick="sendPrompt()">Send</button>
+            <div class="input-actions-meta">
+              <button class="badge badge-context" id="sessionContextBar" onclick="openStatsModal()" title="Session stats">0%</button>
+              <span class="status" id="status"></span>
+              <span class="badge badge-working" id="sessionWorkingMobile"><span class="spinner-dot"></span><span class="spinner-text"></span></span>
+            </div>
+            <div class="input-actions-main">
+              <button class="badge badge-tool-btn mobile-only" id="btnPanel" onclick="toggleControlPanel()" title="Session controls">⚙</button>
+              <button class="btn btn-stop" id="btnStop" onclick="abortTurn()" style="display:none" title="Stop (Esc)">Stop</button>
+              <button class="btn btn-steer" id="btnSteer" onclick="sendSteer()" style="display:none" title="Steer (Ctrl+Enter)">Steer</button>
+              <button class="btn btn-steer" id="btnFollowUp" onclick="sendFollowUp()" style="display:none" title="Queue after agent finishes">Follow-up</button>
+              <button class="btn btn-primary" id="btnSend" onclick="sendPrompt()">Send</button>
+            </div>
           </div>
         </div>
       </div>
