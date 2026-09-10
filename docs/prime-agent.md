@@ -64,24 +64,37 @@ Roughly in experiential impact order:
    the already-registered resident session). Isolating pi-dish launches on a
    dedicated `--daemon-socket` would keep user daemons pristine at the cost
    of cross-daemon attachment; a candidate follow-up, not implemented.
-4. **Spend insights are blind to Prime.** `modelCatalog` is `null` for the
-   harness, so usage-summary pricing omits Prime sessions entirely (the
-   asterisk/omitted-call path). Prime's `model list` output includes no
-   pricing; a future catalog source would have to come from Prime itself.
-5. **Capability gaps that are upstream-unavailable today:** compaction,
-   tree read/navigation, queue listing/cancellation, and HTML export/sharing
-   are disabled for Prime (see the README support matrix). Prime's
-   `session-artifacts/` store has no pi-dish surface either.
-6. **First-run kernel bootstrap.** Prime's only built-in tool (`ipython`)
+4. **No estimated pricing for Prime.** `modelCatalog` is `null` for the
+   harness, so there is no catalog cost estimate, no usage-limits/budget
+   coverage, and `GET /api/models?harness=prime` is a 501 (the new-session and
+   routines model pickers are empty). Recorded spend does render: Prime writes
+   a populated `usage.cost` per assistant message, which the shared parser
+   consumes for `/stats` and the usage view.
+5. **Capabilities disabled by the descriptor, not by upstream.** Compaction
+   (`ctx.compact`), tree read (`sessionManager.getTree`) and tree navigation
+   (`ExtensionCommandContext.navigateTree`) exist in Prime 0.9.4's public
+   extension API; reload (`ctx.reload`) does too. Queue read/cancel is the one
+   genuine public-API gap, but Prime's captured `AgentSession` exposes
+   read/mutate. HTML export/sharing is blocked by server gates although Prime
+   ships its own exporter. Prime's `session-artifacts/` store has no pi-dish
+   surface either.
+6. **Agent skills are not linked into Prime.** `install.sh` links the bundled
+   skills into Pi and OMP only, so a Prime session has no pi-dish CLI.
+7. **Prime's own product surface has no pi-dish UI.** ~37 TUI slash commands
+   and ~17 CLI subcommands (goal, autonomous, schedule, heartbeat, refine,
+   MCP, package, scoped-models, fork/clone, `/context`'s agent tree, …) are
+   unreachable from the web.
+8. **First-run kernel bootstrap.** Prime's only built-in tool (`ipython`)
    needs a uv-managed Python runtime. `install.sh` now installs uv when the
    Prime CLI is present, but the kernel still downloads Python packages on
    first tool use — an offline fresh host will fail tool calls with Prime's
    own setup error until bootstrap succeeds once with network access.
-7. **Minor UI corners.** Tool-call ordering in the CLI markdown can interleave
+9. **Minor UI corners.** Tool-call ordering in the CLI markdown can interleave
    a mid-turn steer after the tool result it preceded.
-8. **Pi-dish skills are not linked into Prime.** The bundled skills
-   (sessions, pages, comments, …) are Pi/OMP tooling; Prime's skill loading
-   is untested with them, so `install.sh` links them into Pi and OMP only.
+
+[prime-agent-gaps.md](prime-agent-gaps.md) carries the full
+TUI-vs-pi-dish catalogue behind items 4–8 — every gap with its evidence and
+the concrete fix path.
 
 ## Version pin
 
