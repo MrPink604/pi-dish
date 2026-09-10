@@ -23,6 +23,12 @@ export interface CapabilityContext {
   restartAllowed?: boolean;
 }
 
+/** Minimum decoded registry shape. This is not a protocol-v2 ownership proof. */
+export interface BridgeRegistryEntry extends Record<string, unknown> {
+  sessionId: NativeSessionId;
+  socketPath: string;
+}
+
 /** A route id is unique within its host, not across the fleet. */
 export interface SessionRef {
   readonly hostId: HostId;

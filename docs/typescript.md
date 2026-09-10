@@ -12,6 +12,7 @@ format change.
 | `session-capabilities.ts` | Bridge capability defaults and API projection; lifecycle authority stays with callers |
 | `wire-protocol.ts` | RPC/bridge envelope validation and response/event distinctions; feature payloads remain unknown |
 | `rpc-session.ts` | RPC child lifecycle, request methods, stream reconstruction and native-id pool |
+| `bridge-session.ts` | Registry discovery/claims, socket handshake and pool, request methods and reconnect snapshots |
 | `host-identity.ts` | Stable host id and host label |
 | `dish-store.ts` | HOME-scoped reads and atomic writes for small JSON stores |
 | `process-identity.ts` | Linux birth identity, liveness and bounded ancestry proofs |
@@ -19,8 +20,8 @@ format change.
 | `line-splitter.ts` | Incremental UTF-8 LF framing |
 | `running-tool-calls.ts` | Shared bridge/RPC reconnect snapshots |
 
-`server.js`, browser state/transport/rendering, the bridge session class,
-feature stores and harness extensions remain in their existing form. Cron
+`server.js`, browser state/transport/rendering, feature stores and harness
+extensions remain in their existing form. Cron
 retains its prior strict JavaScript/JSDoc check. The foundation's declarations
 do not mean that all its JavaScript callers have been checked.
 
@@ -91,6 +92,16 @@ decision and packaging checks.
   class consumes them; snapshots and command results retain unknown feature
   fields. Its discovery/recovery dependencies remain JavaScript behind explicit
   typed adapter signatures, so those implementations are not yet type checked.
+- Bridge registry decoding establishes only a native id and socket-path shape.
+  Entries failing that shape are pruned from disk, like stale registrations;
+  a live producer may not rewrite its entry until its registry signature changes.
+  A legacy hello with an invalid native id emits a protocol error and closes
+  the socket without applying its state.
+  Mutable metadata and harness identity remain unvalidated until their consuming
+  boundaries. Protocol-v2 events/responses wait for an exact claim-matching
+  hello before they can mutate state. A malformed switch id cannot retarget the
+  connection; identity-less legacy switch resets remain supported. Bridge
+  request ids are optional because an early rejection never tracked a request.
 - Tool arguments and partial results remain opaque. The shared tracker owns
   lifecycle bookkeeping, not tool-specific validation.
 - Harness contracts describe current behavior, including optional legacy

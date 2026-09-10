@@ -523,6 +523,10 @@ async function testPrime() {
 
   // A missing TUI must not strand an owned resident worker forever.
   await tmux.killPane(peerSpawn.socket, peerSpawn.paneId);
+  // tmux can acknowledge removal before the real client finishes exiting.
+  // Exercise the dead-client case only after both ownership checks settle.
+  await waitFor(async () => !processIdentityAlive(peerSpawn.paneProcess)
+    && !await tmux.paneExists(peerSpawn.socket, peerSpawn.paneId), 'Prime client exit after pane removal');
   const headlessClose = await post(`/api/sessions/${encodeURIComponent(peer.body.id)}/close`);
   assert.equal(headlessClose.status, 200, JSON.stringify(headlessClose.body));
   assert.equal(processIdentityAlive(peerClaim.claim), false);

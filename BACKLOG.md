@@ -72,7 +72,10 @@ the message-count and session-spend badges. Spec and mock:
   Native ids are validated before registration; startup state and streaming
   deltas are narrowed where consumed. Fable-reviewed regressions preserve
   retry/child cleanup, snapshot reconstruction and recovery ownership.
-  The bridge session class is the next conversion.
+- The bridge session class, registry and pool now compile strictly. Registry
+  basics and adopted identities are validated; v2 connections must prove their
+  original claim before events can change session state. Socket regressions
+  cover pre-hello claim rewriting, malformed updates and replay ordering.
 - Extend the typed foundation into application event and request-ownership contracts.
 - Extract frontend state/transport and server application/lifecycle boundaries
   in small changes guarded by the preceding tests.

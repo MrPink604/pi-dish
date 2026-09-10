@@ -325,3 +325,109 @@ test('alternate protocol-v2 connections accept an exact static claim', async () 
   sess.close();
   await new Promise((r) => server.close(r));
 });
+
+test('protocol-v2 events before hello cannot rewrite the claim used to prove the socket', async () => {
+  const socketPath = path.join(tmpDir, 'bridge-pre-hello.sock');
+  const claim = alternateClaim(socketPath);
+  const original = structuredClone(claim);
+  const changed = { ...claim, sessionId: 'unproven-session', nativeSessionId: 'unproven-session', sessionFile: path.join(tmpDir, 'unproven.jsonl') };
+  const sockets = [];
+  const server = net.createServer(sock => {
+    sockets.push(sock);
+    sock.on('error', () => {});
+    sock.write(JSON.stringify({ type: 'event', event: 'session_switch', data: changed }) + '\n'
+      + JSON.stringify({ type: 'hello', ...changed }) + '\n');
+  });
+  await new Promise(resolve => server.listen(socketPath, resolve));
+  const sess = new BridgeSession(claim);
+  try {
+    await assert.rejects(sess.connect(), /does not match the selected registry claim/);
+    assert.deepEqual(claim, original, 'an unproven event cannot change the expected ownership evidence');
+    assert.equal(sess.id, original.sessionId);
+  } finally {
+    sess.close();
+    for (const sock of sockets) sock.destroy();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('protocol-v2 replay starts only after an exact hello and valid later events still flow', async () => {
+  const socketPath = path.join(tmpDir, 'bridge-ordered-proof.sock');
+  const claim = alternateClaim(socketPath);
+  const sockets = [];
+  const server = net.createServer(sock => {
+    sockets.push(sock);
+    sock.on('error', () => {});
+    sock.write([
+      { type: 'event', event: 'extension_ui_request', data: { method: 'setWidget', widgetKey: 'unproven', widgetLines: ['bad'] } },
+      { type: 'event', event: 'turn_start', data: {} },
+      { type: 'hello', ...claim, turnInProgress: false },
+      { type: 'event', event: 'turn_start', data: { verified: true } },
+    ].map(frame => JSON.stringify(frame)).join('\n') + '\n');
+  });
+  await new Promise(resolve => server.listen(socketPath, resolve));
+  const sess = new BridgeSession(claim);
+  const starts = [];
+  sess.on('turn_start', data => starts.push(data));
+  const started = new Promise(resolve => sess.once('turn_start', resolve));
+  try {
+    await sess.connect();
+    await started;
+    assert.deepEqual(starts, [{ verified: true }]);
+    assert.equal(sess.extUIState.widgets.size, 0);
+    assert.equal(sess.turnInProgress, true);
+  } finally {
+    sess.close();
+    for (const sock of sockets) sock.destroy();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('registry scanning rejects malformed native ids and socket paths before filesystem use', () => {
+  for (const patch of [{ sessionId: 7 }, { sessionId: 'bad id' }, { socketPath: 7 }]) {
+    const file = writeRegistryEntry('malformed-entry', { sessionId: 'valid-id', socketPath: '/unused', ...patch });
+    assert.doesNotThrow(() => listRegisteredSessions());
+    assert.equal(fs.existsSync(file), false);
+  }
+});
+
+test('malformed identity updates preserve the selected bridge and valid switches preserve emit ordering', () => {
+  const claim = { sessionId: 'old-id', socketPath: '/unused', capabilities: { prompt: false } };
+  const sess = new BridgeSession(claim);
+  sess._handle({ type: 'hello', capabilities: 'malformed' });
+  assert.equal(sess.capabilities.prompt, false, 'malformed capability containers cannot erase an explicit denial');
+  sess._handle({ type: 'event', event: 'turn_start', data: {} });
+  sess._handle({ type: 'event', event: 'extension_ui_request', data: { method: 'setStatus', statusKey: 'owned', statusText: 'ready' } });
+  const switches = [];
+  sess.on('session_switch', data => switches.push({ data, id: sess.id, statuses: sess.extUIState.statuses.size }));
+  sess._handle({ type: 'event', event: 'session_switch', data: { sessionId: 'invalid id' } });
+  assert.equal(sess.turnInProgress, true);
+  assert.equal(sess.extUIState.statuses.size, 1);
+  assert.deepEqual(switches, []);
+  const next = { sessionId: 'new-id', sessionFile: '/new.jsonl', cwd: '/new' };
+  sess._handle({ type: 'event', event: 'session_switch', data: next });
+  assert.deepEqual(switches, [{ data: next, id: 'old-id', statuses: 0 }], 'listeners see the old identity after replay state is cleared');
+  assert.equal(sess.id, 'new-id');
+  assert.equal(sess.nativeSessionId, 'new-id');
+  assert.equal(claim.sessionId, 'new-id');
+  assert.equal(claim.sessionFile, '/new.jsonl');
+});
+
+test('legacy hello with an invalid native id reports a protocol error and destroys its socket', () => {
+  const sess = new BridgeSession({ sessionId: 'old-id', socketPath: '/unused' });
+  const errors = [];
+  const hellos = [];
+  let destroyed = false;
+  sess.sock = { destroy() { destroyed = true; } };
+  sess.on('protocol_error', error => errors.push(error));
+  sess.on('hello', hello => hellos.push(hello));
+  sess._handle({ type: 'hello', sessionId: 'invalid id', turnInProgress: true });
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].code, 'EPROTO');
+  assert.match(errors[0].message, /invalid native session id/);
+  assert.equal(destroyed, true);
+  assert.equal(sess.hello, null);
+  assert.deepEqual(hellos, []);
+  assert.equal(sess.nativeSessionId, 'old-id');
+  assert.equal(sess.turnInProgress, false);
+});

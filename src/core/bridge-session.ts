@@ -1,0 +1,739 @@
+/**
+ * Connector for pi-dish-bridge sockets.
+ *
+ * Discovers running pi sessions via the registry at ~/.pi/dish/sessions/
+ * and connects to their per-session Unix socket on demand.
+ *
+ * Each registry entry is a JSON file written by the bridge extension on
+ * session_start (and updated on turn/model/name changes). The bridge cleans
+ * its own files up on session_shutdown; we also discard entries whose socket
+ * is unreachable.
+ */
+import fs = require('fs');
+import net = require('net');
+import os = require('os');
+import path = require('path');
+import { EventEmitter } from 'events';
+import { isDeepStrictEqual } from 'util';
+import { createLineSplitter } from './line-splitter';
+import { PendingRequests } from './pending-requests';
+import { decodeBridgeFrame, isRecord, type ProtocolRecord } from './wire-protocol';
+import { processIdentity, processIdentityAlive } from './process-identity';
+import { trackRunningToolCalls } from './running-tool-calls';
+import { listHarnesses } from './harnesses';
+
+import { validSessionId } from './session-key';
+import type { AdvertisedCapabilities, BridgeRegistryEntry, HarnessId, NativeSessionId, RunningToolCall } from './contracts';
+
+type BridgeRequest = Promise<unknown> & { readonly requestId?: number };
+interface PromptOptions { deliverAs?: 'steer' | 'followUp'; images?: unknown[]; }
+interface TreeOptions { summarize?: boolean; customInstructions?: string; label?: string; }
+type BridgeEvents = Record<string, unknown[]>;
+
+function asRecord(value: unknown): ProtocolRecord { return isRecord(value) ? value : {}; }
+function isRegistryEntry(value: unknown): value is BridgeRegistryEntry {
+  return isRecord(value) && validSessionId(value.sessionId)
+    && typeof value.socketPath === 'string' && value.socketPath.length > 0;
+}
+function requireNativeId(value: unknown): NativeSessionId {
+  if (!validSessionId(value)) throw new TypeError('Invalid bridge session identity');
+  return value;
+}
+
+const ROOT = path.join(os.homedir(), '.pi', 'dish');
+const REGISTRY_DIR = path.join(ROOT, 'sessions');
+
+function ensureDirs() {
+  try { fs.mkdirSync(REGISTRY_DIR, { recursive: true }); } catch {}
+}
+
+/**
+ * List all registered (active) sessions from disk.
+ * Returns an array of { sessionId, sessionFile, cwd, pid, socketPath, name, model, turnInProgress }.
+ * Stale entries (dead pid or missing socket) are pruned on read.
+ *
+ * Memoized for a fraction of a second: routes hit this 2-4 times per request
+ * (dispatch, live-usage overlay, session-file lookup), and each scan is a
+ * readdir + per-entry read/parse + pid liveness check. The TTL is short
+ * enough that a new/ended session is still seen within one poll tick.
+ */
+let registryCache: { at: number; entries: BridgeRegistryEntry[] } | null = null; // { at, entries }
+const REGISTRY_CACHE_MS = 500;
+
+function listRegisteredSessions() {
+  if (registryCache && Date.now() - registryCache.at < REGISTRY_CACHE_MS) {
+    return registryCache.entries;
+  }
+  const entries = scanRegistry();
+  registryCache = { at: Date.now(), entries };
+  return entries;
+}
+
+// For state changes the server itself caused (closing a session): the client
+// re-fetches the list immediately after the response, and a memoized scan
+// from up to 500ms ago would still show the session as live.
+function invalidateRegistryCache() {
+  registryCache = null;
+}
+
+function hasStartTime(entry: unknown) {
+  return Object.prototype.hasOwnProperty.call(entry || {}, 'startTime');
+}
+
+function hasOwn(entry: unknown, key: string) {
+  return Object.prototype.hasOwnProperty.call(entry || {}, key);
+}
+
+function registryHarnessId(input: unknown): unknown {
+  const entry = asRecord(input);
+  return asRecord(entry.wrapper).harnessId || entry.harnessId || 'pi';
+}
+
+// A wrapper host (OMP, …) embeds pi's extension API, so the stock
+// pi-dish-bridge from the wrapper's user-extension directory also loads in
+// the same process and registers the session a second time as a plain pi
+// session: one logical session then appears twice in pi-dish (a wrapper row
+// plus a pi row), and because the session index is keyed by file path the
+// two claims carry different profile ids and invalidate each other's cached
+// entries on every poll — a full re-parse of the JSONL per row per refresh.
+// The wrapper-specific claim is authoritative for that process; hide the
+// duplicate generic-pi claim rather than pruning its file (its bridge is
+// alive in the same process and would just rewrite the entry).
+// Alternate harnesses' session files can never legitimately belong to a
+// generic-pi claim: wrapper hosts embed pi's extension API, so the stock
+// pi-dish-bridge from the wrapper's user-extension directory loads in their
+// processes and registers the wrapper's session as a plain pi session. Host
+// detection in the bridge is the first line of defense; this containment
+// check is deterministic and catches whatever slips past it (old bridge
+// copies, detection gaps). Config roots (not just the sessions subpath)
+// cover wrapper profile trees like ~/.omp/profiles/<p>/agent/sessions.
+const FOREIGN_CONFIG_ROOTS = listHarnesses()
+  .filter((descriptor) => descriptor.id !== 'pi')
+  .map((descriptor) => {
+    try {
+      // rootPath is <configRoot>/<agent>/sessions; the config root is two
+      // levels up.
+      return path.dirname(path.dirname(descriptor.rootPath()));
+    } catch { return null; }
+  })
+  .filter((root): root is string => typeof root === 'string' && root !== path.sep);
+
+function underAnyRoot(file: unknown, roots: string[]) {
+  if (typeof file !== 'string' || !path.isAbsolute(file)) return false;
+  const resolved = path.resolve(file);
+  return roots.some((root) => resolved === root || resolved.startsWith(root + path.sep));
+}
+
+function withoutWrappedPiClaims(entries: BridgeRegistryEntry[]) {
+  const wrapped = new Set();
+  for (const entry of entries) {
+    if (registryHarnessId(entry) === 'pi' || !entry.sessionFile) continue;
+    wrapped.add(`${Number(entry.pid)}\0${entry.sessionFile}`);
+  }
+  return entries.filter((entry) => {
+    if (registryHarnessId(entry) !== 'pi') return true;
+    if (!entry.sessionFile) return true;
+    if (wrapped.has(`${Number(entry.pid)}\0${entry.sessionFile}`)) return false;
+    // A pi claim pointing into another harness's config tree is the stock
+    // bridge riding inside that wrapper host — even with no competing wrapper
+    // claim (a manually launched wrapper has none).
+    return !underAnyRoot(entry.sessionFile, FOREIGN_CONFIG_ROOTS);
+  });
+}
+
+// Legacy registry compatibility belongs to upstream Pi only. Alternative
+// harness identity is trusted only when the thin wrapper publishes the full
+// protocol-v2 claim that its socket must prove again in hello.
+function validRegistryClaimShape(input: unknown): boolean {
+  const entry = asRecord(input);
+  const wrapper = asRecord(entry.wrapper);
+  const harnessId = registryHarnessId(entry);
+  if (harnessId === 'pi') return true;
+  return Number(entry?.protocolVersion) >= 2
+    && wrapper.harnessId === harnessId
+    && entry?.harnessId === harnessId
+    && typeof wrapper.name === 'string'
+    && wrapper.name.length > 0
+    && typeof wrapper.wrapperVersion === 'string'
+    && wrapper.wrapperVersion.length > 0
+    && typeof entry?.nativeSessionId === 'string'
+    && entry.nativeSessionId.length > 0
+    && entry.nativeSessionId === entry.sessionId
+    && typeof entry?.bridgeInstanceId === 'string'
+    && entry.bridgeInstanceId.length > 0
+    && entry.bridgeInstanceId === entry.instanceId
+    && typeof entry?.sessionFile === 'string'
+    && entry.sessionFile.length > 0
+    && typeof entry?.socketPath === 'string'
+    && entry.socketPath.length > 0
+    && typeof entry.pid === 'number' && Number.isInteger(entry.pid)
+    && entry.pid > 1
+    && hasStartTime(entry)
+    && !!entry.capabilities
+    && typeof entry.capabilities === 'object'
+    && !Array.isArray(entry.capabilities)
+    && hasOwn(entry, 'spawnToken')
+    && (entry.spawnToken === null
+      || (typeof entry.spawnToken === 'string' && entry.spawnToken.length > 0));
+}
+
+function sameRegistryClaim(left: unknown, right: unknown): boolean {
+  if (!isRecord(left) || !isRecord(right)) return false;
+  const leftBridgeId = left.bridgeInstanceId || left.instanceId || null;
+  const rightBridgeId = right.bridgeInstanceId || right.instanceId || null;
+  return left.sessionId === right.sessionId
+    && left.socketPath === right.socketPath
+    && Number(left.pid) === Number(right.pid)
+    && hasStartTime(left) === hasStartTime(right)
+    && (!hasStartTime(left) || String(left.startTime) === String(right.startTime))
+    && leftBridgeId === rightBridgeId
+    && registryHarnessId(left) === registryHarnessId(right)
+    && (left.nativeSessionId || left.sessionId) === (right.nativeSessionId || right.sessionId)
+    && Number(left.protocolVersion || 1) === Number(right.protocolVersion || 1)
+    && left.sessionFile === right.sessionFile
+    && isDeepStrictEqual(left.wrapper || null, right.wrapper || null)
+    && isDeepStrictEqual(left.capabilities || null, right.capabilities || null)
+    && hasOwn(left, 'spawnToken') === hasOwn(right, 'spawnToken')
+    && (!hasOwn(left, 'spawnToken') || left.spawnToken === right.spawnToken);
+}
+
+/**
+ * Remove only the registry claim that was actually inspected. Re-read before
+ * unlinking so a new bridge for the same session cannot be erased by a stale
+ * scan or failed connection from the old bridge. The socket itself is left
+ * alone: unlinking a path after a replacement bridge binds it would sever a
+ * healthy listener from future clients.
+ */
+function pruneRegisteredSession(entry: unknown) {
+  invalidateRegistryCache();
+  if (!isRecord(entry) || typeof entry.sessionId !== 'string' || !entry.sessionId || path.basename(entry.sessionId) !== entry.sessionId) return false;
+  const file = typeof entry._registryPath === 'string' && entry._registryPath
+    ? entry._registryPath : path.join(REGISTRY_DIR, `${entry.sessionId}.json`);
+  let current: unknown;
+  try {
+    current = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return false;
+  }
+  if (!sameRegistryClaim(entry, current)) return false;
+  try {
+    fs.unlinkSync(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// These errors prove that the registry's socket path has no connectable bridge
+// listener. A timeout is deliberately excluded: the bridge may still be live
+// but wedged, and deleting its claim would let a lower-priority transport hide
+// it permanently.
+function pruneUnreachableRegisteredSession(entry: unknown, error: unknown) {
+  const code = asRecord(error).code;
+  if (typeof code !== 'string' || !['ENOENT', 'ECONNREFUSED', 'ENOTSOCK'].includes(code)) return false;
+  return pruneRegisteredSession(entry);
+}
+
+function pruneMalformedRegistryEntry(file: string, inspected: unknown) {
+  try {
+    const current: unknown = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    if (!isDeepStrictEqual(current, inspected)) return false;
+    fs.unlinkSync(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function scanRegistry() {
+  ensureDirs();
+  const out: BridgeRegistryEntry[] = [];
+  let entries;
+  try {
+    entries = fs.readdirSync(REGISTRY_DIR);
+  } catch {
+    return out;
+  }
+
+  for (const name of entries) {
+    if (!name.endsWith('.json')) continue;
+    const file = path.join(REGISTRY_DIR, name);
+    let entry: unknown;
+    try {
+      entry = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    } catch {
+      continue;
+    }
+    if (!isRegistryEntry(entry) || !validRegistryClaimShape(entry)) {
+      pruneMalformedRegistryEntry(file, entry);
+      continue;
+    }
+    Object.defineProperty(entry, '_registryPath', { value: file });
+    if (!fs.existsSync(entry.socketPath)) {
+      pruneRegisteredSession(entry);
+      continue;
+    }
+    if (hasStartTime(entry)) {
+      const identity = processIdentity(Number(entry.pid));
+      if (!identity || identity.startTime !== String(entry.startTime)) {
+        pruneRegisteredSession(entry);
+        continue;
+      }
+    } else if (entry.pid && !pidAlive(entry.pid)) {
+      // Legacy bridges did not publish a birth marker. Keep live legacy
+      // entries visible, but dead ones are still safe to discard. Destructive
+      // use of a legacy PID requires a bridge handshake in server.js.
+      pruneRegisteredSession(entry);
+      continue;
+    }
+    out.push(entry);
+  }
+  return withoutWrappedPiClaims(out);
+}
+
+function pidAlive(pid: unknown) {
+  try { process.kill(Number(pid), 0); return true; } catch (e) { return asRecord(e).code === 'EPERM'; }
+}
+
+function getRegisteredSession(sessionId: NativeSessionId) {
+  const matches = listRegisteredSessions().filter(e => e.sessionId === sessionId);
+  const pi = matches.filter(e => !e.protocolVersion || (asRecord(e.wrapper).harnessId || e.harnessId) === 'pi');
+  // This legacy raw-id lookup belongs to upstream Pi only. Alternate callers
+  // must select the canonical (harnessId, nativeSessionId) tuple or an exact
+  // registry claim, so a colliding native ID can never hijack a Pi route.
+  return pi.length === 1 ? pi[0] : null;
+}
+
+function getRegisteredSessionByNativeId(harnessId: HarnessId, nativeSessionId: NativeSessionId) {
+  const matches = listRegisteredSessions().filter(e =>
+    registryHarnessId(e) === harnessId
+    && (e.nativeSessionId || e.sessionId) === nativeSessionId);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function getRegisteredSessionByClaim(claim: unknown) {
+  return listRegisteredSessions().find(e => sameRegistryClaim(e, claim)) || null;
+}
+
+function refreshRegisteredSession(sessionId: NativeSessionId) {
+  invalidateRegistryCache();
+  return getRegisteredSession(sessionId);
+}
+
+const EXT_UI_DIALOG_METHODS = new Set(['select', 'confirm', 'input', 'editor', 'ask']);
+
+/**
+ * A live connection to a bridge socket. Mirrors the surface that server.js
+ * previously expected from RPCSession: on(event, cb), prompt, abort, setModel,
+ * setName, plus a few state fields (alive, turnInProgress, sessionFile, cwd).
+ */
+class BridgeSession extends EventEmitter<BridgeEvents> {
+  declare id: NativeSessionId;
+  declare protocolVersion: unknown;
+  declare wrapper: unknown;
+  declare harnessId: unknown;
+  declare nativeSessionId: NativeSessionId;
+  declare bridgeInstanceId: unknown;
+  declare capabilities: AdvertisedCapabilities;
+  declare registryClaim: BridgeRegistryEntry;
+  declare sessionFile: unknown;
+  declare cwd: unknown;
+  declare pid: unknown;
+  declare startTime: unknown;
+  declare socketPath: string;
+  declare name: unknown;
+  declare model: unknown;
+  declare contextUsage: unknown;
+  declare turnInProgress: boolean;
+  declare compacting: boolean;
+  declare queueState: unknown;
+  declare runningToolCalls: Map<string, RunningToolCall>;
+  declare extUIState: { widgets: Map<unknown, ProtocolRecord>; statuses: Map<unknown, ProtocolRecord>; dialogs: Map<unknown, ProtocolRecord> };
+  declare alive: boolean;
+  declare sock: net.Socket | null;
+  declare _nextId: number;
+  declare _pending: InstanceType<typeof PendingRequests>;
+  declare hello: ProtocolRecord | null;
+  declare bounceExecuting?: boolean;
+
+  constructor(registryEntry: BridgeRegistryEntry) {
+    super();
+    if (!isRegistryEntry(registryEntry)) throw new TypeError('Invalid bridge registry entry');
+    this.id = registryEntry.sessionId;
+    this.protocolVersion = registryEntry.protocolVersion || 1;
+    this.wrapper = registryEntry.wrapper || null;
+    this.harnessId = registryHarnessId(registryEntry);
+    this.nativeSessionId = requireNativeId(registryEntry.nativeSessionId || registryEntry.sessionId);
+    this.bridgeInstanceId = registryEntry.bridgeInstanceId || registryEntry.instanceId || null;
+    this.capabilities = asRecord(registryEntry.capabilities);
+    this.registryClaim = registryEntry;
+    this.sessionFile = registryEntry.sessionFile;
+    this.cwd = registryEntry.cwd;
+    this.pid = registryEntry.pid;
+    this.startTime = registryEntry.startTime;
+    this.socketPath = registryEntry.socketPath;
+    this.name = registryEntry.name || null;
+    this.model = registryEntry.model || null;
+    this.turnInProgress = !!registryEntry.turnInProgress;
+    this.compacting = !!registryEntry.compacting;
+    this.queueState = null; // populated from the bridge hello / queue_update
+    this.runningToolCalls = new Map();
+    // Populate this inside _handle(), before connect() resolves, so bridge
+    // state replay cannot outrun server-side listeners on the first socket.
+    this.extUIState = { widgets: new Map(), statuses: new Map(), dialogs: new Map() };
+
+    this.alive = false;
+    this.sock = null;
+    this._nextId = 1;
+    this._pending = new PendingRequests();
+    this.hello = null;
+  }
+
+  connect(): Promise<this> {
+    this.hello = null;
+    return new Promise<this>((resolve, reject) => {
+      const sock = net.createConnection(this.socketPath);
+      this.sock = sock;
+      let settled = false;
+      const requiresHelloProof = Number(this.registryClaim?.protocolVersion) >= 2;
+
+      const cleanupConnectListeners = () => {
+        clearTimeout(connectTimer);
+        this.off('hello', onHello);
+        this.off('protocol_error', onProtocolError);
+      };
+      const succeed = () => {
+        if (settled) return;
+        settled = true;
+        cleanupConnectListeners();
+        resolve(this);
+      };
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanupConnectListeners();
+        reject(error);
+      };
+      const onHello = () => succeed();
+      const onProtocolError = (error: unknown) => fail(error);
+      if (requiresHelloProof) {
+        this.once('hello', onHello);
+        this.once('protocol_error', onProtocolError);
+      }
+
+      // A socket that exists but never accepts (wedged pi) would otherwise
+      // hang every route that resolves this session. Protocol-v2 sessions must
+      // also prove that the socket belongs to the exact selected registry
+      // claim before callers can send a command.
+      const connectTimer = setTimeout(() => {
+        if (!settled) { fail(new Error('bridge connect timeout')); sock.destroy(); }
+      }, 5000);
+
+      sock.on('connect', () => {
+        this.alive = true;
+        if (!requiresHelloProof) succeed();
+      });
+      sock.on('error', (err) => {
+        this.alive = false;
+        fail(err);
+        // Only re-emit when something is listening — an unlistened 'error'
+        // on an EventEmitter throws and would crash the whole server. The
+        // 'close' that always follows a socket error drives cleanup anyway.
+        if (this.listenerCount('error')) this.emit('error', err);
+      });
+      sock.on('close', () => {
+        this.alive = false;
+        this._pending.failAll(new Error('socket closed'));
+        this.emit('close');
+      });
+      sock.on('data', createLineSplitter((line) => {
+        let msg: unknown;
+        try { msg = JSON.parse(line); } catch { return; }
+        this._handle(msg);
+      }));
+    });
+  }
+
+  _validateV2Hello(msg: unknown) {
+    if (Number(this.registryClaim?.protocolVersion || 1) < 2) return null;
+    const claim = this.registryClaim;
+    const mismatch = !validRegistryClaimShape(claim)
+      || !validRegistryClaimShape(msg)
+      || !sameRegistryClaim(msg, claim);
+    if (!mismatch) return null;
+    const error: NodeJS.ErrnoException = new Error('bridge hello does not match the selected registry claim');
+    error.code = 'EPROTO';
+    return error;
+  }
+
+  _handle(input: unknown) {
+    const frame = decodeBridgeFrame(input);
+    if (!frame) return;
+    // A v2 socket must prove the selected claim before any event can mutate
+    // that claim or populate replay state. Otherwise a pre-hello switch could
+    // rewrite the evidence that the following hello is compared against.
+    if (frame.kind !== 'hello' && Number(this.registryClaim.protocolVersion || 1) >= 2 && !this.hello) return;
+    if (frame.kind === 'hello') {
+      const msg = frame.hello;
+      const protocolError = this._validateV2Hello(msg);
+      if (protocolError) {
+        this.emit('protocol_error', protocolError);
+        try { this.sock?.destroy(); } catch {}
+        return;
+      }
+      const nextNativeId = msg.nativeSessionId || msg.sessionId || this.nativeSessionId;
+      if (!validSessionId(nextNativeId)) {
+        const error = Object.assign(new Error('bridge hello has an invalid native session id'), { code: 'EPROTO' });
+        this.emit('protocol_error', error);
+        try { this.sock?.destroy(); } catch {}
+        return;
+      }
+      this.hello = msg;
+      // Legacy Pi bridges predate claim-bound identity and retain their
+      // compatibility handshake. Protocol-v2 identity always remains the
+      // selected registry claim; only mutable state is refreshed from hello.
+      if (Number(this.registryClaim?.protocolVersion || 1) < 2) {
+        this.protocolVersion = msg.protocolVersion || this.protocolVersion;
+        this.wrapper = msg.wrapper || this.wrapper;
+        this.harnessId = asRecord(msg.wrapper).harnessId || msg.harnessId || this.harnessId;
+        this.nativeSessionId = nextNativeId;
+        this.bridgeInstanceId = msg.bridgeInstanceId || msg.instanceId || this.bridgeInstanceId;
+      }
+      if (Number(this.registryClaim?.protocolVersion || 1) < 2) {
+        if (isRecord(msg.capabilities)) this.capabilities = msg.capabilities;
+      }
+      this.turnInProgress = !!msg.turnInProgress;
+      this.compacting = !!msg.compacting;
+      if (msg.model) this.model = msg.model;
+      if (msg.name) this.name = msg.name;
+      if (msg.contextUsage) this.contextUsage = msg.contextUsage;
+      // Remembered so the SSE stream route can replay it into a client that
+      // just (re)connected — the bridge only pushes hello when our socket
+      // connects, which is once per session.
+      this.queueState = msg.queue || null;
+      this.emit('hello', msg);
+      return;
+    }
+    if (frame.kind === 'response') {
+      const msg = frame.response;
+      this._pending.settle(msg.id, msg.success, msg.data, msg.error ?? undefined);
+      return;
+    }
+    if (frame.kind === 'event') {
+      const ev = frame.event;
+      const data = asRecord(frame.data);
+      const switchedId = ev === 'session_switch' && validSessionId(data.sessionId) ? data.sessionId : null;
+      // Older producers may send an identity-less switch solely to clear
+      // replay state. Preserve that reset, but never adopt a malformed id.
+      if (ev === 'session_switch' && data.sessionId && !switchedId) return;
+      trackRunningToolCalls(this.runningToolCalls, ev, {
+        toolCallId: typeof data.toolCallId === 'string' ? data.toolCallId : undefined,
+        toolName: typeof data.toolName === 'string' ? data.toolName : undefined,
+        startedAt: typeof data.startedAt === 'number' || typeof data.startedAt === 'string' ? data.startedAt : undefined,
+        args: data.args, partialResult: data.partialResult,
+      });
+      if (ev === 'turn_start') this.turnInProgress = true;
+      else if (ev === 'turn_end' || ev === 'agent_end') this.turnInProgress = false;
+      else if (ev === 'compaction_start') this.compacting = true;
+      else if (ev === 'compaction_end') this.compacting = false;
+      else if (ev === 'queue_update') this.queueState = frame.data;
+      if (ev === 'extension_ui_request' && data?.method) {
+        if (data.method === 'setWidget') {
+          const key = data.widgetKey || 'default';
+          if (Array.isArray(data.widgetLines) && data.widgetLines.length) this.extUIState.widgets.set(key, data);
+          else this.extUIState.widgets.delete(key);
+        } else if (data.method === 'setStatus') {
+          const key = data.statusKey || 'default';
+          if (data.statusText) this.extUIState.statuses.set(key, data);
+          else this.extUIState.statuses.delete(key);
+        } else if (typeof data.method === 'string' && EXT_UI_DIALOG_METHODS.has(data.method) && data.id) {
+          this.extUIState.dialogs.set(data.id, data);
+        }
+      } else if (ev === 'extension_ui_resolved' && data?.id) {
+        this.extUIState.dialogs.delete(data.id);
+      }
+      else if (ev === 'session_switch') {
+        // The preserved socket now controls a different logical session.
+        // Clear session-owned live state before listeners re-key server state;
+        // identity fields are updated after emit so listeners can still use
+        // the previous native id as a fallback with older event producers.
+        this.turnInProgress = false;
+        this.compacting = false;
+        this.queueState = null;
+        this.runningToolCalls.clear();
+        this.extUIState.widgets.clear();
+        this.extUIState.statuses.clear();
+        this.extUIState.dialogs.clear();
+      }
+      this.emit(ev, frame.data);
+      if (switchedId) {
+        this.id = switchedId;
+        this.nativeSessionId = switchedId;
+        if (data.sessionFile) this.sessionFile = data.sessionFile;
+        if (data.cwd) this.cwd = data.cwd;
+        // The pool is instance-keyed, but validates a reused connection
+        // against the registry claim selected for the requested route. Adopt
+        // the rewritten identity here too, or the first new-route request
+        // sees the old claim, closes this healthy socket, and disconnects
+        // clients that were meant to survive the in-pane switch.
+        if (this.registryClaim) {
+          this.registryClaim.sessionId = switchedId;
+          this.registryClaim.nativeSessionId = data.sessionId;
+          if (data.sessionFile) this.registryClaim.sessionFile = data.sessionFile;
+          if (data.cwd) this.registryClaim.cwd = data.cwd;
+        }
+      }
+    }
+  }
+
+  waitForHello({ timeout = 2000 } = {}): Promise<ProtocolRecord> {
+    if (this.hello) return Promise.resolve(this.hello);
+    if (!this.alive) return Promise.reject(new Error('bridge disconnected before hello'));
+    return new Promise<ProtocolRecord>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout>;
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.off('hello', onHello);
+        this.off('close', onClose);
+      };
+      const onHello = (hello: unknown) => {
+        if (!isRecord(hello)) return;
+        cleanup(); resolve(hello);
+      };
+      const onClose = () => { cleanup(); reject(new Error('bridge disconnected before hello')); };
+      this.once('hello', onHello);
+      this.once('close', onClose);
+      timer = setTimeout(() => {
+        cleanup();
+        reject(new Error(`bridge hello timed out after ${timeout}ms`));
+      }, timeout);
+    });
+  }
+
+  // Timeout mirrors RPCSession.send — without it a command the bridge never
+  // answers (wedged extension host) leaves the awaiting HTTP request hanging
+  // until the socket happens to close.
+  send(command: string, params: ProtocolRecord = {}, { timeout = 30000 } = {}): BridgeRequest {
+    if (this.bounceExecuting && !command.startsWith('get_')
+        && !['guarded_reload', 'tree_read', 'tree_leaf', 'share_snapshot'].includes(command)) {
+      return Promise.reject(new Error('A safe bulk operation is executing; wait for its result.'));
+    }
+    if (!this.alive || !this.sock) return Promise.reject(new Error('not connected'));
+    const id = this._nextId++;
+    const promise = this._pending.track(id, { timeout, label: `bridge ${command}` });
+    try {
+      this.sock.write(JSON.stringify({ id, command, ...params }) + '\n');
+    } catch (e) {
+      this._pending.fail(id, e);
+    }
+    // Internal request correlation for protocols that need an explicit
+    // queued barrier before an out-of-band host action (OMP tree commands).
+    return Object.assign(promise, { requestId: id });
+  }
+
+  prompt(message: string, opts: PromptOptions = {}) {
+    const params: ProtocolRecord = { message };
+    if (opts.deliverAs) params.deliverAs = opts.deliverAs;
+    if (opts.images?.length) params.images = opts.images;
+    // Prompts can legitimately take a moment to be accepted (same allowance
+    // as RPCSession.prompt).
+    return this.send('prompt', params, { timeout: 120000 });
+  }
+  steer(message: string, opts: PromptOptions = {}) {
+    const params: ProtocolRecord = { message };
+    if (opts.images?.length) params.images = opts.images;
+    return this.send('steer', params);
+  }
+  abort() { return this.send('abort'); }
+  compact(instructions?: string) { return this.send('compact', { instructions }); }
+  cancelQueued(kind: 'steering' | 'followUp', index: number, text: string) { return this.send('cancel_queued', { kind, index, text }); }
+  setModel(model: string) { return this.send('set_model', { model }); }
+  setName(name: string) { return this.send('set_session_name', { name }); }
+  getCommands() { return this.send('get_commands'); }
+  getAvailableModels() { return this.send('get_available_models'); }
+  getShareSnapshot() { return this.send('share_snapshot'); }
+  setThinkingLevel(level: string) { return this.send('set_thinking_level', { level }); }
+  runCommand(message: string, deliverAs?: 'steer' | 'followUp') { return this.send('run_command', { message, deliverAs }); }
+  readTree() { return this.send('tree_read', {}, { timeout: 10000 }); }
+  // Leaf id only — the transcript route needs just the live leaf, and
+  // tree_read serializes the whole session tree per call. Older running
+  // bridge extensions answer "unknown command"; callers fall back to
+  // readTree() (see server.js liveTreeLeafId).
+  readTreeLeaf() { return this.send('tree_leaf', {}, { timeout: 10000 }); }
+  // Branch-summary generation is a full LLM call over the abandoned branch —
+  // give it the long prompt-style allowance, not the 30s default.
+  navigateTree(targetId: string, opts: TreeOptions = {}) {
+    const params: ProtocolRecord = { targetId };
+    if (opts.summarize) params.summarize = true;
+    if (opts.customInstructions) params.customInstructions = opts.customInstructions;
+    if (opts.label) params.label = opts.label;
+    return this.send('navigate_tree', params, { timeout: 180000 });
+  }
+  treeNavigate(targetId: string, opts: Pick<TreeOptions, 'summarize'> = {}) {
+    const params: ProtocolRecord = { targetId };
+    if (opts.summarize) params.summarize = true;
+    return this.send('tree_navigate', params, { timeout: 180000 });
+  }
+  branchTree(targetId: string) {
+    return this.send('branch', { targetId }, { timeout: 180000 });
+  }
+  respondExtensionUI(requestId: string, response: ProtocolRecord) { return this.send('extension_ui_response', { requestId, ...response }); }
+
+  close() {
+    this.alive = false;
+    if (this.sock) { try { this.sock.end(); } catch {} this.sock = null; }
+  }
+}
+
+// Pool — reuse a single connection per session for the lifetime of any subscriber.
+const connections = new Map<string, Promise<BridgeSession>>(); // exact registry claim -> Promise<BridgeSession>
+
+function connectionKey(entry: BridgeRegistryEntry) {
+  return entry.bridgeInstanceId || entry.instanceId
+    ? `${registryHarnessId(entry)}:${entry.bridgeInstanceId || entry.instanceId}`
+    : `v1:${entry.sessionId}:${entry.socketPath}`;
+}
+
+async function getBridgeSession(sessionId: NativeSessionId | BridgeRegistryEntry) {
+  const entry = typeof sessionId === 'object' ? getRegisteredSessionByClaim(sessionId) : getRegisteredSession(sessionId);
+  if (!entry) throw new Error(`session ${typeof sessionId === 'string' ? sessionId : 'claim'} not registered or ambiguous`);
+  const key = connectionKey(entry);
+  let promise = connections.get(key);
+  if (promise) {
+    const sess = await promise;
+    if (sess.alive && sameRegistryClaim(sess.registryClaim, entry)) return sess;
+    if (sess.alive) sess.close();
+    connections.delete(key);
+  }
+
+  const sess = new BridgeSession(entry);
+  promise = sess.connect().then(() => sess);
+  connections.set(key, promise);
+  promise.catch(() => {
+    if (connections.get(key) === promise) connections.delete(key);
+  });
+  sess.on('close', () => {
+    if (connections.get(key) === promise) connections.delete(key);
+  });
+  return promise;
+}
+
+export = {
+  ROOT,
+  REGISTRY_DIR,
+  listRegisteredSessions,
+  invalidateRegistryCache,
+  getRegisteredSession,
+  getRegisteredSessionByNativeId,
+  getRegisteredSessionByClaim,
+  refreshRegisteredSession,
+  validRegistryClaimShape,
+  sameRegistryClaim,
+  pruneRegisteredSession,
+  pruneUnreachableRegisteredSession,
+  getBridgeSession,
+  BridgeSession,
+  pidAlive,
+  processIdentity,
+  processIdentityAlive,
+};

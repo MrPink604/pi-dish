@@ -10,6 +10,7 @@ import { trackRunningToolCalls } from '../../lib/running-tool-calls';
 import { bridgeSupports, sessionCapabilities } from '../../lib/session-capabilities';
 import { decodeBridgeFrame, decodeRPCFrame } from '../../lib/wire-protocol';
 import { getRPCSession } from '../../lib/rpc-session';
+import { BridgeSession } from '../../lib/bridge-session';
 import type { HostId, NativeSessionId, SessionId, SessionRef, ProcessIdentity, RunningToolCall, HarnessDescriptor } from '../../lib/contracts';
 
 const hostId: HostId = getHostId();
@@ -25,6 +26,27 @@ sessionCapabilities('prime', {}, { closeAllowed: 'yes' });
 const sessionId: SessionId = canonicalSessionId('legacy-pi');
 const nativeId: NativeSessionId = resolveSessionRoute(sessionId).nativeSessionId;
 const rpc = getRPCSession(nativeId);
+const bridge = new BridgeSession({ sessionId: nativeId, socketPath: '/fixture.sock' });
+const bridgeRequest = bridge.send('tree_read');
+bridge.cancelQueued('steering', 0, 'queued text');
+// @ts-expect-error Queue names differ from prompt delivery modes.
+bridge.cancelQueued('steer', 0, 'queued text');
+// @ts-expect-error Queue cancellation must carry the text used to check the selected item.
+bridge.cancelQueued('steering', 0);
+// @ts-expect-error OMP tree navigation only forwards the summarize option.
+bridge.treeNavigate('entry', { label: 'not forwarded' });
+if (bridgeRequest.requestId !== undefined) {
+  const correlationId: number = bridgeRequest.requestId;
+  void correlationId;
+}
+// @ts-expect-error An early rejected bridge request has no correlation id.
+const guaranteedCorrelationId: number = bridgeRequest.requestId;
+bridge.on('custom_event', payload => {
+  // @ts-expect-error A named bridge event does not validate its payload.
+  payload.message.content.map(String);
+});
+// @ts-expect-error Bridge model selection takes a model reference, unlike RPC's two arguments.
+bridge.setModel({ provider: 'test', id: 'model' });
 if (rpc) {
   const unsubscribe: () => void = rpc.on('message_update', payload => {
     // @ts-expect-error Event subscribers must narrow the payload they consume.
@@ -109,4 +131,4 @@ trackRunningToolCalls(running, 'tool_execution_start', { toolCallId: 't1', toolN
 // @ts-expect-error Reconnect snapshots require a numeric timestamp.
 running.set('t1', { toolName: 'Bash', args: {}, startedAt: 'yesterday', lastPartialResult: null });
 
-void [canPrompt, incompleteOwner, mixedOwner, incompleteProcess, closeMode, consumeUnvalidatedResponse];
+void [guaranteedCorrelationId, canPrompt, incompleteOwner, mixedOwner, incompleteProcess, closeMode, consumeUnvalidatedResponse];

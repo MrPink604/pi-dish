@@ -28,7 +28,7 @@ npm run build:vendor  # regenerate public/vendor/ from node_modules
 ## Typed foundation (src/core/)
 
 `harnesses`, `session-capabilities`, `session-key`, `host-identity`, `dish-store`, `process-identity`,
-`pending-requests`, `wire-protocol`, `rpc-session`, `line-splitter`, and `running-tool-calls` are authored in
+`pending-requests`, `wire-protocol`, `rpc-session`, `bridge-session`, `line-splitter`, and `running-tool-calls` are authored in
 `src/core/*.ts`. `lib/` retains generated CommonJS at their original paths,
 plus declarations for typed consumers; the generated banner identifies these
 files. Edit the sources and run `npm run build:core`. `npm run check` compiles
