@@ -45,7 +45,15 @@ See [docs/testing.md](docs/testing.md) for the tooling matrix, coverage map,
 commands, and checks to preserve during refactoring. Structural work can now
 proceed in small changes; this baseline does not claim exhaustive coverage.
 
-## 3. Structural work (after the test baseline)
+## 3. Session chrome and composer redesign (agreed, not started)
+
+Three-row mobile header (title · fixed host/harness/model/reasoning · scrolling
+chips), a field-only composer with in-field attach/dictate/context/stop and
+stacked steer/follow-up glyphs, new context-percentage tiers, and removal of
+the message-count and session-spend badges. Spec and mock:
+[docs/design/mobile-chrome-composer.md](docs/design/mobile-chrome-composer.md).
+
+## 4. Structural work (after the test baseline)
 
 - Define shared identity, capability, event, and request-ownership contracts.
 - Extract frontend state/transport and server application/lifecycle boundaries
