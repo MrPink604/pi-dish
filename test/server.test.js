@@ -3518,11 +3518,16 @@ test('dedicated share listener serves shared sessions, pages, and standalone fil
     env: { ...process.env, HOME: tmpHome, PORT: '0', PI_DISH_SHARE_PORT: String(sharePort), PI_DISH_SHARE_HOST: '127.0.0.1' },
     stdio: 'ignore',
   });
+  // Capture exit before readiness polling: a startup failure may exit before
+  // finally runs, and installing the listener there would wait forever.
+  const exited = new Promise(resolve => child.once('exit', resolve));
   try {
     // Wait for the share listener to accept connections.
     const shareBase = `http://127.0.0.1:${sharePort}`;
     let ready = false;
     for (let i = 0; i < 100 && !ready; i++) {
+      assert.equal(child.exitCode, null, `share listener exited during startup (${child.exitCode})`);
+      assert.equal(child.signalCode, null, `share listener terminated during startup (${child.signalCode})`);
       try {
         const r = await fetch(`${shareBase}/share/${created.body.token}`);
         if (r.status === 200) ready = true;
@@ -3546,7 +3551,7 @@ test('dedicated share listener serves shared sessions, pages, and standalone fil
     assert.equal(notFound.status, 404, 'the share listener does not expose the main API');
   } finally {
     child.kill();
-    await new Promise(r => child.on('exit', r));
+    await exited;
   }
 });
 

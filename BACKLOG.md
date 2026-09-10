@@ -64,7 +64,11 @@ the message-count and session-spend badges. Spec and mock:
   and API projection share one policy; lifecycle authorization stays with the
   server callers. Harness/state/flag regressions and Fable review cover this
   extraction.
-- Extend the typed foundation into event and request-ownership contracts.
+- Shared RPC/bridge envelope decoding now validates response correlation and
+  separates response/event/hello frames, while keeping payloads unknown and
+  preserving bridge ownership proofs. Malformed-frame transport regressions
+  and Fable review cover the boundary. Transport classes are the next conversion.
+- Extend the typed foundation into application event and request-ownership contracts.
 - Extract frontend state/transport and server application/lifecycle boundaries
   in small changes guarded by the preceding tests.
 - Evaluate a contained component-framework pilot. Preserve the current transcript

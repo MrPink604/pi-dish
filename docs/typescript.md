@@ -10,6 +10,7 @@ format change.
 | `session-key.ts` | Strict route decoding, harness/native encoding and legacy Pi canonicalization |
 | `harnesses.ts` | Existing harness registry and launch argv/environment construction |
 | `session-capabilities.ts` | Bridge capability defaults and API projection; lifecycle authority stays with callers |
+| `wire-protocol.ts` | RPC/bridge envelope validation and response/event distinctions; feature payloads remain unknown |
 | `host-identity.ts` | Stable host id and host label |
 | `dish-store.ts` | HOME-scoped reads and atomic writes for small JSON stores |
 | `process-identity.ts` | Linux birth identity, liveness and bounded ancestry proofs |
@@ -78,6 +79,12 @@ decision and packaging checks.
 - `PendingRequests.track` returns `Promise<unknown>`; receiving a response does
   not validate its schema. `readStore` returns a record of unknown values. A
   later typed caller must narrow these at its own protocol/feature boundary.
+- Both transports ignore malformed envelopes (including JSON primitives) and
+  responses without boolean success, a valid correlation id shape, or a
+  string/null error. An ignored response leaves its request pending until a
+  valid reply, disconnect, or timeout. Unknown event names still pass through.
+  Envelope decoding does not validate event or command payloads, and a decoded
+  hello still requires the existing claim proof.
 - Tool arguments and partial results remain opaque. The shared tracker owns
   lifecycle bookkeeping, not tool-specific validation.
 - Harness contracts describe current behavior, including optional legacy

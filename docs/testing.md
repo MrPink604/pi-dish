@@ -78,6 +78,7 @@ browser and remaining JavaScript modules are not yet type checked. See
 | Core compilation, stale output/declarations, failed builds, orphan detection | `test/core-build.test.js`, `npm run typecheck` |
 | Identity types, request payload boundaries, harness and process shapes | `test/types/core.ts` (compile-only) |
 | Core route canonicalization, byte framing, request correlation/cleanup, host stores and process proofs | `test/core-contracts.test.js` plus existing bridge/API/lifecycle suites |
+| Wire envelope validation, malformed responses, unknown events and transport survival | `test/transport-frames.test.js` plus existing bridge/RPC protocol suites |
 | Same session id on two hosts; stale metadata completion | `test/browser/session-identity.spec.js` |
 | Family pinning, expansion, ancestor lookup, drag ordering | `test/browser/session-families.spec.js` |
 | Composer drafts, attachments, delayed preparation and send | `test/browser/composer-ownership.spec.js` |

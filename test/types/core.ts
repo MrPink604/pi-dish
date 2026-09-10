@@ -8,6 +8,7 @@ import { readStore } from '../../lib/dish-store';
 import { createLineSplitter } from '../../lib/line-splitter';
 import { trackRunningToolCalls } from '../../lib/running-tool-calls';
 import { bridgeSupports, sessionCapabilities } from '../../lib/session-capabilities';
+import { decodeBridgeFrame, decodeRPCFrame } from '../../lib/wire-protocol';
 import type { HostId, NativeSessionId, SessionId, SessionRef, ProcessIdentity, RunningToolCall, HarnessDescriptor } from '../../lib/contracts';
 
 const hostId: HostId = getHostId();
@@ -25,6 +26,18 @@ const nativeId: NativeSessionId = resolveSessionRoute(sessionId).nativeSessionId
 const owner: SessionRef = { hostId, sessionId };
 encodeSessionKey('omp', nativeId);
 const input: unknown = 'from-json';
+const rpcFrame = decodeRPCFrame(input);
+if (rpcFrame?.kind === 'response') {
+  const success: boolean = rpcFrame.response.success;
+  // @ts-expect-error A valid response envelope does not validate its command payload.
+  rpcFrame.response.data.sessions.map(String);
+  void success;
+}
+const bridgeFrame = decodeBridgeFrame(input);
+if (bridgeFrame?.kind === 'event') {
+  // @ts-expect-error Bridge event payloads require feature-specific narrowing.
+  bridgeFrame.data.method.trim();
+}
 if (validSessionId(input)) encodeSessionKey('prime', input);
 // @ts-expect-error Dynamic harness names must go through getHarness.
 registry[String(input)].closeMode;
