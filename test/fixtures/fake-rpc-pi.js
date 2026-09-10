@@ -125,11 +125,17 @@ async function runTurn(message) {
   abortTurn = null;
 }
 
+let sentInvalidState = false;
 function handle(cmd) {
   logCmd(cmd);
   const { id, type } = cmd;
   switch (type) {
     case 'get_state': {
+      if (process.env.PI_FIXTURE_STATE_LOG) fs.appendFileSync(process.env.PI_FIXTURE_STATE_LOG, `${process.pid}\n`);
+      if (!sentInvalidState && process.env.PI_FIXTURE_INVALID_STATE_ONCE) {
+        sentInvalidState = true;
+        return respond(id, JSON.parse(process.env.PI_FIXTURE_INVALID_STATE_ONCE));
+      }
       const state = { sessionFile, sessionId, sessionName, model, thinkingLevel: 'medium', messageCount: 1,
         isStreaming: turnOpen, isCompacting: false, pendingMessageCount: 0 };
       const delay = Number(process.env.PI_FIXTURE_STARTUP_DELAY_MS) || 0;

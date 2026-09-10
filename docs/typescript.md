@@ -11,6 +11,7 @@ format change.
 | `harnesses.ts` | Existing harness registry and launch argv/environment construction |
 | `session-capabilities.ts` | Bridge capability defaults and API projection; lifecycle authority stays with callers |
 | `wire-protocol.ts` | RPC/bridge envelope validation and response/event distinctions; feature payloads remain unknown |
+| `rpc-session.ts` | RPC child lifecycle, request methods, stream reconstruction and native-id pool |
 | `host-identity.ts` | Stable host id and host label |
 | `dish-store.ts` | HOME-scoped reads and atomic writes for small JSON stores |
 | `process-identity.ts` | Linux birth identity, liveness and bounded ancestry proofs |
@@ -18,7 +19,7 @@ format change.
 | `line-splitter.ts` | Incremental UTF-8 LF framing |
 | `running-tool-calls.ts` | Shared bridge/RPC reconnect snapshots |
 
-`server.js`, browser state/transport/rendering, bridge/RPC session classes,
+`server.js`, browser state/transport/rendering, the bridge session class,
 feature stores and harness extensions remain in their existing form. Cron
 retains its prior strict JavaScript/JSDoc check. The foundation's declarations
 do not mean that all its JavaScript callers have been checked.
@@ -85,6 +86,11 @@ decision and packaging checks.
   valid reply, disconnect, or timeout. Unknown event names still pass through.
   Envelope decoding does not validate event or command payloads, and a decoded
   hello still requires the existing claim proof.
+- RPC startup validates its state object, session-file shape, and native id
+  before publishing a session. Event payload fields are narrowed where the RPC
+  class consumes them; snapshots and command results retain unknown feature
+  fields. Its discovery/recovery dependencies remain JavaScript behind explicit
+  typed adapter signatures, so those implementations are not yet type checked.
 - Tool arguments and partial results remain opaque. The shared tracker owns
   lifecycle bookkeeping, not tool-specific validation.
 - Harness contracts describe current behavior, including optional legacy

@@ -9,6 +9,7 @@ import { createLineSplitter } from '../../lib/line-splitter';
 import { trackRunningToolCalls } from '../../lib/running-tool-calls';
 import { bridgeSupports, sessionCapabilities } from '../../lib/session-capabilities';
 import { decodeBridgeFrame, decodeRPCFrame } from '../../lib/wire-protocol';
+import { getRPCSession } from '../../lib/rpc-session';
 import type { HostId, NativeSessionId, SessionId, SessionRef, ProcessIdentity, RunningToolCall, HarnessDescriptor } from '../../lib/contracts';
 
 const hostId: HostId = getHostId();
@@ -23,6 +24,20 @@ capabilities.close = 'true';
 sessionCapabilities('prime', {}, { closeAllowed: 'yes' });
 const sessionId: SessionId = canonicalSessionId('legacy-pi');
 const nativeId: NativeSessionId = resolveSessionRoute(sessionId).nativeSessionId;
+const rpc = getRPCSession(nativeId);
+if (rpc) {
+  const unsubscribe: () => void = rpc.on('message_update', payload => {
+    // @ts-expect-error Event subscribers must narrow the payload they consume.
+    payload.message.content.map(String);
+  });
+  // @ts-expect-error Prompt text cannot be a parsed protocol object.
+  rpc.prompt({ text: 'hello' });
+  // @ts-expect-error A command result has not been schema validated by correlation.
+  rpc.getCommands().then(result => result.commands.map(String));
+  void unsubscribe;
+}
+// @ts-expect-error The RPC pool is indexed by native Pi ids, not public routes.
+getRPCSession(sessionId);
 const owner: SessionRef = { hostId, sessionId };
 encodeSessionKey('omp', nativeId);
 const input: unknown = 'from-json';

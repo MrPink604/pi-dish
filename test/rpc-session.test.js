@@ -28,6 +28,7 @@ process.env.PI_DISH_HEADLESS = 'rpc';
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-rpc-pi.js');
 const CMD_LOG = path.join(tmpHome, 'rpc-commands.jsonl');
 const START_LOG = path.join(tmpHome, 'rpc-starts.jsonl');
+const STATE_LOG = path.join(tmpHome, 'rpc-state-requests.txt');
 process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_LOG=${CMD_LOG} ${process.execPath} ${FIXTURE}`;
 process.env.PI_FIXTURE_START_LOG = START_LOG;
 
@@ -144,6 +145,55 @@ test('POST /api/sessions/new rejects an invalid reasoning level', async () => {
   const { status, body } = await post('/api/sessions/new', { thinking: 'extreme' });
   assert.equal(status, 400);
   assert.match(body.error, /reasoning level/i);
+});
+
+test('RPC startup waits for a valid state object and session file before registering', async () => {
+  for (const invalid of [[], { sessionFile: 123 }]) {
+    process.env.PI_FIXTURE_INVALID_STATE_ONCE = JSON.stringify(invalid);
+    process.env.PI_FIXTURE_STATE_LOG = STATE_LOG;
+    let id;
+    try {
+      const created = await post('/api/sessions/new', {});
+      assert.equal(created.status, 200, JSON.stringify(created.body));
+      id = created.body.id;
+      assert.match(id, /^2026-07-10T00-00-00-/,
+        'a malformed first reply must not publish the provisional rpc id');
+      const rpc = getRPCSession(id);
+      assert.equal(fs.readFileSync(STATE_LOG, 'utf8').trim().split('\n').filter(pid => pid === String(rpc.proc.pid)).length, 2,
+        'the same child must receive a second get_state request after the malformed reply');
+      assert.equal(path.basename(rpc.sessionFile, '.jsonl'), id);
+      assert.equal(rpc.state.sessionFile, rpc.sessionFile);
+    } finally {
+      delete process.env.PI_FIXTURE_INVALID_STATE_ONCE;
+      delete process.env.PI_FIXTURE_STATE_LOG;
+      if (id) getRPCSession(id)?.kill();
+    }
+  }
+});
+
+test('RPC startup rejects an unroutable session id without retrying and stops its child', async () => {
+  process.env.PI_FIXTURE_INVALID_STATE_ONCE = JSON.stringify({ sessionFile: path.join(tmpHome, 'not a valid id.jsonl') });
+  process.env.PI_FIXTURE_STATE_LOG = STATE_LOG;
+  const before = readStarts().length;
+  try {
+    const created = await post('/api/sessions/new', {});
+    assert.equal(created.status, 500);
+    assert.match(created.body.error, /Invalid RPC session identity/);
+    const start = readStarts()[before];
+    assert.ok(start?.pid);
+    assert.equal(fs.readFileSync(STATE_LOG, 'utf8').trim().split('\n').filter(pid => pid === String(start.pid)).length, 1);
+    const identity = processIdentity(start.pid);
+    if (identity) {
+      for (let i = 0; i < 100 && processIdentity(start.pid)?.startTime === identity.startTime; i++) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.notEqual(processIdentity(start.pid)?.startTime, identity.startTime, 'failed startup cannot leave its child running');
+    }
+    assert.equal(getAllRPCSessions().some(rpc => rpc.proc.pid === start.pid), false);
+  } finally {
+    delete process.env.PI_FIXTURE_INVALID_STATE_ONCE;
+    delete process.env.PI_FIXTURE_STATE_LOG;
+  }
 });
 
 test('POST /api/sessions/new rejects a blank session name', async () => {

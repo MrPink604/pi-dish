@@ -67,7 +67,12 @@ the message-count and session-spend badges. Spec and mock:
 - Shared RPC/bridge envelope decoding now validates response correlation and
   separates response/event/hello frames, while keeping payloads unknown and
   preserving bridge ownership proofs. Malformed-frame transport regressions
-  and Fable review cover the boundary. Transport classes are the next conversion.
+  and Fable review cover the boundary.
+- The RPC session class, startup/pool and launch helpers now compile strictly.
+  Native ids are validated before registration; startup state and streaming
+  deltas are narrowed where consumed. Fable-reviewed regressions preserve
+  retry/child cleanup, snapshot reconstruction and recovery ownership.
+  The bridge session class is the next conversion.
 - Extend the typed foundation into application event and request-ownership contracts.
 - Extract frontend state/transport and server application/lifecycle boundaries
   in small changes guarded by the preceding tests.
