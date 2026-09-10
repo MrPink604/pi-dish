@@ -84,6 +84,7 @@ browser and remaining JavaScript modules are not yet type checked. See
 | Browser state writers, detached metadata, host lookup and selection generation | `test/browser-session-state.test.js`, `test/types/browser-state.ts` |
 | Captured transcript/stream ownership, delayed stream tickets and host-qualified related navigation | `test/browser/selection-ownership.spec.js` |
 | Retired terminal callbacks after reconnect or host switch | `test/browser/terminal-ownership.spec.js` plus desktop/mobile terminal smoke |
+| Late resume, share creation, search, navigation and comment callbacks across hosts | `test/browser/feature-ownership.spec.js` plus stats/file/comment smoke |
 | Same session id on two hosts; stale metadata completion | `test/browser/session-identity.spec.js` |
 | Family pinning, expansion, ancestor lookup, drag ordering | `test/browser/session-families.spec.js` |
 | Composer drafts, attachments, delayed preparation and send | `test/browser/composer-ownership.spec.js` |

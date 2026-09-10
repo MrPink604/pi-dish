@@ -1231,6 +1231,16 @@ current socket instance so retired connections cannot write into a newer view.
 A replacement socket becomes current before the old socket is closed, keeping
 its close callback from scheduling another reconnect.
 
+Resume, stats lifecycle actions and search-result navigation may refresh lists
+after their request finishes, but can only reselect while their original owner
+still applies. Search-result navigation uses `searchViewSeq` until it selects a
+target, then captures that selection before awaiting transcript hydration.
+Stats, shares/pages and comment callbacks retain their originating owner for
+follow-up requests. Stats modal counters, file/diff request counters and comment
+draft versions remain separate guards for work within the same selection. A
+late missing-share response cannot prompt to publish after the user navigates
+away, and delayed diff hydration cannot reopen an old comment editor.
+
 Host identity is part of selection and mutation ownership. `findSession(id,
 host)` never falls back to another host; without a host it prefers the selected
 session's host and otherwise requires an unambiguous id. Async rename/model/

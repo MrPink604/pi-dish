@@ -1579,6 +1579,7 @@ function handleRowCloseClick(id, host = sessionState.sessionHostId(id)) {
 }
 
 async function performRowClose(id, host = sessionState.sessionHostId(id)) {
+  const owner = sessionState.captureSelection();
   clearTimeout(sessionCloseConfirmTimer);
   sessionCloseConfirmId = null;
   sessionCloseBusyId = sessionKey(host, id);
@@ -1586,7 +1587,7 @@ async function performRowClose(id, host = sessionState.sessionHostId(id)) {
   try {
     await apiSend(host, `/api/sessions/${encodeURIComponent(id)}/close`);
     sessionCloseBusyId = null;
-    await finishSessionClose(id, host);
+    await finishSessionClose(id, host, owner);
   } catch (e) {
     sessionCloseBusyId = null;
     setStatus('Close failed: ' + e.message, 'error');
@@ -2335,6 +2336,7 @@ function showPendingSessionView(spawnId) {
   if (!spawn) return;
   const harnessLabel = spawn.harnessLabel || 'Pi';
   sessionState.advanceSelection();
+  search.navigating = false;
   loadingOlder = false;
   loadingOlderGeneration += 1;
   stashPromptState();
@@ -2434,6 +2436,7 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   // intact instead of stashing the transcript and then bailing on a blank pane.
   if (!sessionState.findSession(id, host)) return;
   sessionState.advanceSelection();
+  search.navigating = false;
   loadingOlder = false;
   loadingOlderGeneration += 1;
   stashPromptState();
@@ -2536,7 +2539,7 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   // fetch lands so a stale count never shows against the new session.
   sessionArtifacts = { pages: [], share: null };
   updateArtifactsBadge();
-  refreshArtifacts(id);
+  refreshArtifacts(owner);
 
   renderSessions();
   updateSessionHeader();
@@ -2575,7 +2578,8 @@ function resetResumeModelPicker() {
 
 async function loadResumeModelOptions(session) {
   resetResumeModelPicker();
-  if (!session || session.harnessId !== 'omp') return;
+  const owner = sessionState.captureSelection();
+  if (!session || session.harnessId !== 'omp' || !owner || owner.id !== session.id || owner.host !== (session.host || null)) return;
   const seq = resumeModelsSeq;
   const wrap = document.getElementById('resumeModelWrap');
   const select = document.getElementById('resumeModelSelect');
@@ -2583,10 +2587,10 @@ async function loadResumeModelOptions(session) {
   wrap.style.display = 'flex';
   select.title = 'Loading Oh My Pi models…';
   try {
-    const res = await apiFetch(session.host, modelCatalogUrl('omp', session.cwd));
+    const res = await apiFetch(owner.host, modelCatalogUrl('omp', session.cwd));
     const models = await res.json();
     if (!res.ok) throw new Error(models.error || `HTTP ${res.status}`);
-    if (seq !== resumeModelsSeq || sessionState.currentSession?.id !== session.id) return;
+    if (seq !== resumeModelsSeq || !sessionState.ownsSelection(owner)) return;
     const current = session.model && session.model !== 'unknown' ? ` (${session.model})` : '';
     let html = `<option value="">Session model${escapeHtml(current)}</option>`;
     for (const model of Array.isArray(models) ? models : []) {
@@ -2597,7 +2601,7 @@ async function loadResumeModelOptions(session) {
     select.disabled = false;
     select.title = 'Optionally override the model while resuming this OMP session';
   } catch (e) {
-    if (seq !== resumeModelsSeq || sessionState.currentSession?.id !== session.id) return;
+    if (seq !== resumeModelsSeq || !sessionState.ownsSelection(owner)) return;
     select.disabled = true;
     select.title = `Could not load Oh My Pi models: ${e.message}`;
   }
@@ -2605,23 +2609,25 @@ async function loadResumeModelOptions(session) {
 
 async function resumeSession() {
   if (!sessionState.currentSession) return;
+  const owner = sessionState.captureSelection();
   const target = savedResumeTarget();
   const model = sessionState.currentSession.harnessId === 'omp'
     ? (document.getElementById('resumeModelSelect')?.value || undefined) : undefined;
   setStatus(target ? 'Resuming in tmux…' : 'Resuming session...', 'working');
 
   try {
-    const data = await apiSend(sessionState.currentSession.host, `/api/sessions/${encodeURIComponent(sessionState.currentSession.id)}/resume`, {
+    const data = await apiSend(owner.host, `/api/sessions/${encodeURIComponent(owner.id)}/resume`, {
       ...(target ? { target } : {}),
       ...(model ? { model } : {}),
     });
-    setStatus('Session resumed');
     // Reload sessions and re-select (it's now active); refreshSessions
     // keeps an in-flight All-tab search intact.
     await refreshSessions();
-    selectSession(data.id);
+    if (!sessionState.ownsSelection(owner)) return;
+    setStatus('Session resumed');
+    selectSession(data.id, { host: owner.host });
   } catch (e) {
-    setStatus('Resume failed: ' + e.message, 'error');
+    if (sessionState.ownsSelection(owner)) setStatus('Resume failed: ' + e.message, 'error');
   }
 }
 
@@ -3159,23 +3165,25 @@ function updateSearchCount(msg) {
 
 async function runSessionSearch(query, { mode = 'message', closeIfEmpty = false } = {}) {
   if (!sessionState.currentSession) return;
-  const sessionId = sessionState.currentSession.id;
+  const owner = sessionState.captureSelection();
+  const sessionId = owner.id;
   updateSearchCount('searching…');
   try {
     const params = new URLSearchParams({ q: query });
     if (mode !== 'message') params.set('mode', mode);
-    const res = await apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/search?${params}`);
+    const res = await apiFetch(owner.host, `/api/sessions/${encodeURIComponent(sessionId)}/search?${params}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-    if (sessionState.currentSession?.id !== sessionId) return;
+    if (!sessionState.ownsSelection(owner)) return;
     search.query = query;
     search.matches = visibleSearchMatchesOf(data.matches || []);
     search.pos = search.matches.length - 1; // start from the latest match
     if (search.matches.length) await jumpToSearchResult();
     else if (closeIfEmpty) { closeSearch(); return; }
+    if (!sessionState.ownsSelection(owner)) return;
     updateSearchCount();
   } catch (e) {
-    if (sessionState.currentSession?.id !== sessionId) return;
+    if (!sessionState.ownsSelection(owner)) return;
     updateSearchCount('search failed');
     console.error('Session search failed:', e);
   }
@@ -3203,14 +3211,16 @@ async function jumpToSearchResult() {
   if (search.navigating) return;
   const match = search.matches[search.pos];
   if (!match || !sessionState.currentSession) return;
+  const owner = sessionState.captureSelection();
   search.navigating = true;
   try {
     const container = document.getElementById('messages');
     // Page older messages in until the match is loaded.
     let guard = 0;
-    while (oldestLoadedIndex != null && match.index < oldestLoadedIndex && hasMoreOlder && guard++ < 200) {
+    while (sessionState.ownsSelection(owner) && oldestLoadedIndex != null && match.index < oldestLoadedIndex && hasMoreOlder && guard++ < 200) {
       await loadOlderMessages();
     }
+    if (!sessionState.ownsSelection(owner)) return;
     const el = container.querySelector(`[data-msg-index="${match.index}"]`);
     if (!el) { updateSearchCount('not loaded'); return; }
     // A match folded into a collapsed tool-group is invisible — open it first.
@@ -3224,7 +3234,7 @@ async function jumpToSearchResult() {
     updateJumpButton(container);
     updateSearchCount();
   } finally {
-    search.navigating = false;
+    if (sessionState.ownsSelection(owner)) search.navigating = false;
   }
 }
 
@@ -3805,6 +3815,7 @@ function openSearchView(initialQuery) {
 }
 
 function closeSearchView() {
+  searchViewSeq += 1;
   document.querySelector('.main').classList.remove('search-open');
   clearTimeout(searchViewTimer);
   clearTimeout(searchViewRepollTimer);
@@ -4068,11 +4079,17 @@ function renderSearchView(d, query = searchViewQuery) {
 async function openSearchResult(id, hasContentMatches, host = null) {
   const tokens = positiveQueryTokens(parseSessionQuery(searchViewRenderedQuery));
   closeSearchView();
+  const navigation = searchViewSeq;
   // Search results span the whole corpus; the sidebar lists may be narrowed
   // (or Active-tab-only) right now, and selectSession validates against them.
   if (!sessionState.findSession(id, host)) await loadSessions(undefined, { withPrevious: true });
-  await selectSession(id, { host });
-  if (tokens.length && hasContentMatches && sessionState.currentSession?.id === id) {
+  if (navigation !== searchViewSeq) return;
+  const entry = sessionState.findSession(id, host);
+  if (!entry) return;
+  const selecting = selectSession(id, { host: entry.host || null });
+  const owner = sessionState.captureSelection();
+  await selecting;
+  if (tokens.length && hasContentMatches && sessionState.ownsSelection(owner) && owner.id === id && owner.host === (entry.host || null)) {
     openSearch();
     const input = document.getElementById('searchInput');
     input.value = tokens.join(' ');
@@ -5160,21 +5177,22 @@ window.addEventListener('resize', () => {
 
 // --- Session stats modal ---
 let statsModalGeneration = 0;
-let statsModalSessionId = null;
+let statsModalOwner = null;
 
-function ownsStatsModal(sessionId, generation) {
-  return statsModalSessionId === sessionId && statsModalGeneration === generation &&
+function ownsStatsModal(owner, generation) {
+  return statsModalOwner === owner && sessionState.ownsSelection(owner) && statsModalGeneration === generation &&
     document.getElementById('statsModal').style.display !== 'none';
 }
 
 function openStatsModal() {
   if (!sessionState.currentSession) return;
-  const sessionId = sessionState.currentSession.id;
+  const owner = sessionState.captureSelection();
+  const sessionId = owner.id;
   // Resolved now, while the selection is certainly this session — the stats
   // response lands a round-trip later.
   const ref = sessionRefFor(sessionState.currentSession);
   const generation = ++statsModalGeneration;
-  statsModalSessionId = sessionId;
+  statsModalOwner = owner;
   const modal = document.getElementById('statsModal');
   const body = document.getElementById('statsBody');
   modal.style.display = 'flex';
@@ -5185,21 +5203,24 @@ function openStatsModal() {
     body.addEventListener('click', (e) => {
       const btn = e.target.closest('.stats-copy');
       if (!btn) return;
+      const copyOwner = statsModalOwner;
+      const copyGeneration = statsModalGeneration;
       copyTextToClipboard(btn.dataset.copy || '').then(
         () => {
+          if (!ownsStatsModal(copyOwner, copyGeneration)) return;
           const orig = btn.textContent;
           btn.classList.add('copied');
           btn.textContent = 'Copied ✓';
           setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1200);
         },
-        () => setStatus('Copy failed (clipboard blocked)', 'error'),
+        () => { if (ownsStatsModal(copyOwner, copyGeneration)) setStatus('Copy failed (clipboard blocked)', 'error'); },
       );
     });
   }
-  apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/stats`)
+  apiFetch(owner.host, `/api/sessions/${encodeURIComponent(sessionId)}/stats`)
     .then(r => r.json())
     .then(s => {
-      if (!ownsStatsModal(sessionId, generation)) return;
+      if (!ownsStatsModal(owner, generation)) return;
       if (s.error) { body.textContent = s.error; return; }
       const cu = s.contextUsage || {};
       // Session-wide effective speed: output tokens over the summed
@@ -5246,34 +5267,36 @@ function openStatsModal() {
         '<div class="stats-share" id="statsShare"></div>' +
         '<div class="stats-share" id="statsPages"></div>' +
         '<div class="stats-share" id="statsClose"></div>';
-      loadShareSection(sessionId, generation);
-      loadPagesSection(sessionId, generation);
-      renderCloseSection(sessionId, generation);
+      loadShareSection(owner, generation);
+      loadPagesSection(owner, generation);
+      renderCloseSection(owner, generation);
     })
     .catch(e => {
-      if (ownsStatsModal(sessionId, generation)) body.textContent = 'Failed to load stats: ' + e.message;
+      if (ownsStatsModal(owner, generation)) body.textContent = 'Failed to load stats: ' + e.message;
     });
 }
 
 // Public share link section of the stats modal. Fetches current state (404 =
 // no share) and renders either a "Create share link" button or the existing
 // link as a click-to-copy row plus a Revoke button.
-function loadShareSection(sessionId, generation) {
-  if (!ownsStatsModal(sessionId, generation)) return;
+function loadShareSection(owner, generation) {
+  if (!ownsStatsModal(owner, generation)) return;
+  const sessionId = owner.id;
   const el = document.getElementById('statsShare');
   if (!el) return;
-  const session = sessionState.findSession(sessionId);
+  const session = sessionState.findSession(sessionId, owner.host);
   if (!sessionSupports(session, 'export')) { el.remove(); return; }
   el.innerHTML = '<div class="stats-share-title">Public share link</div>' +
     '<div class="stats-share-body">Loading…</div>';
-  apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`)
+  apiFetch(owner.host, `/api/sessions/${encodeURIComponent(sessionId)}/share`)
     .then(r => (r.status === 404 ? null : r.json()))
-    .then(share => renderShareSection(sessionId, share, generation))
-    .catch(() => renderShareSection(sessionId, null, generation));
+    .then(share => renderShareSection(owner, share, generation))
+    .catch(() => renderShareSection(owner, null, generation));
 }
 
-function renderShareSection(sessionId, share, generation) {
-  if (!ownsStatsModal(sessionId, generation)) return;
+function renderShareSection(owner, share, generation) {
+  if (!ownsStatsModal(owner, generation)) return;
+  const sessionId = owner.id;
   const el = document.getElementById('statsShare');
   if (!el) return;
   const bodyEl = el.querySelector('.stats-share-body') || el;
@@ -5282,15 +5305,16 @@ function renderShareSection(sessionId, share, generation) {
       '<button type="button" class="btn-small" id="shareCreateBtn">Create share link</button>' +
       '<div class="stats-share-hint">Anyone with the link can view this session read-only.</div>';
     bodyEl.querySelector('#shareCreateBtn').addEventListener('click', () => {
-      apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'POST' })
+      if (!ownsStatsModal(owner, generation)) return;
+      apiFetch(owner.host, `/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'POST' })
         .then(r => r.json())
         .then(s => {
-          if (!ownsStatsModal(sessionId, generation)) return;
-          renderShareSection(sessionId, s, generation);
-          refreshArtifacts(sessionId);
+          if (!ownsStatsModal(owner, generation)) return;
+          renderShareSection(owner, s, generation);
+          refreshArtifacts(owner);
         })
         .catch(e => {
-          if (ownsStatsModal(sessionId, generation)) setStatus('Failed to create share: ' + e.message, 'error');
+          if (ownsStatsModal(owner, generation)) setStatus('Failed to create share: ' + e.message, 'error');
         });
     });
     return;
@@ -5300,15 +5324,16 @@ function renderShareSection(sessionId, share, generation) {
     `<button type="button" class="stats-copy stats-share-link" data-copy="${escapeHtml(link)}" title="Click to copy">${escapeHtml(link)}</button>` +
     '<button type="button" class="btn-small btn-danger" id="shareRevokeBtn">Revoke</button>';
   bodyEl.querySelector('#shareRevokeBtn').addEventListener('click', () => {
-    apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'DELETE' })
+    if (!ownsStatsModal(owner, generation)) return;
+    apiFetch(owner.host, `/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'DELETE' })
       .then(r => r.json())
       .then(() => {
-        if (!ownsStatsModal(sessionId, generation)) return;
-        renderShareSection(sessionId, null, generation);
-        refreshArtifacts(sessionId);
+        if (!ownsStatsModal(owner, generation)) return;
+        renderShareSection(owner, null, generation);
+        refreshArtifacts(owner);
       })
       .catch(e => {
-        if (ownsStatsModal(sessionId, generation)) setStatus('Failed to revoke share: ' + e.message, 'error');
+        if (ownsStatsModal(owner, generation)) setStatus('Failed to revoke share: ' + e.message, 'error');
       });
   });
 }
@@ -5321,24 +5346,26 @@ async function copyMessageShareLink(btn) {
   if (!sessionState.currentSession) return;
   const entryId = btn.dataset.entryId;
   if (!entryId) return;
-  const sessionId = sessionState.currentSession.id;
+  const owner = sessionState.captureSelection();
+  const sessionId = owner.id;
   try {
-    let res = await apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`);
+    let res = await apiFetch(owner.host, `/api/sessions/${encodeURIComponent(sessionId)}/share`);
     let share = res.status === 404 ? null : await res.json();
     if (!share || share.error) {
+      if (!sessionState.ownsSelection(owner)) return;
       if (!confirm('No share link exists for this session yet — create one? Anyone with the link can view the whole session read-only.')) return;
-      res = await apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'POST' });
+      res = await apiFetch(owner.host, `/api/sessions/${encodeURIComponent(sessionId)}/share`, { method: 'POST' });
       share = await res.json();
       if (!res.ok) throw new Error(share.error || `HTTP ${res.status}`);
-      refreshArtifacts(sessionId);
+      refreshArtifacts(owner);
     }
     const base = share.url || (location.origin + share.path);
     await copyTextToClipboard(`${base}?targetId=${encodeURIComponent(entryId)}`);
     btn.classList.add('copied');
     setTimeout(() => btn.classList.remove('copied'), 1200);
-    setStatus('Message share link copied');
+    if (sessionState.ownsSelection(owner)) setStatus('Message share link copied');
   } catch (e) {
-    setStatus('Share link failed: ' + e.message, 'error');
+    if (sessionState.ownsSelection(owner)) setStatus('Share link failed: ' + e.message, 'error');
   }
 }
 
@@ -5346,10 +5373,10 @@ async function copyMessageShareLink(btn) {
 // re-fetch both lists (the session just moved from active to previous) and,
 // when it was the selected session, re-select so the view flips to its
 // inactive state (resume bar).
-async function finishSessionClose(sessionId, host = sessionState.sessionHostId(sessionId)) {
-  setStatus('Session closed');
+async function finishSessionClose(sessionId, host, owner) {
+  if (!owner || sessionState.ownsSelection(owner)) setStatus('Session closed');
   await loadSessions(undefined, { withPrevious: true });
-  if (sessionState.currentSession?.id === sessionId && (sessionState.currentSession.host || null) === (host || null)) {
+  if (sessionState.ownsSelection(owner) && owner.id === sessionId && owner.host === (host || null)) {
     await selectSession(sessionId, { host });
   }
 }
@@ -5358,13 +5385,14 @@ async function finishSessionClose(sessionId, host = sessionState.sessionHostId(s
 // a pi-dish-owned tmux pane or RPC child; the server replaces that exact
 // placement so startup-only CLI code/settings refresh without creating a new
 // tmux session or window.
-function renderCloseSection(sessionId, generation) {
-  if (!ownsStatsModal(sessionId, generation)) return;
+function renderCloseSection(owner, generation) {
+  if (!ownsStatsModal(owner, generation)) return;
+  const sessionId = owner.id;
   const el = document.getElementById('statsClose');
   if (!el) return;
-  const session = sessionState.findSession(sessionId);
+  const session = sessionState.findSession(sessionId, owner.host);
   if (!session?.isActive || !sessionSupports(session, 'close')) { el.remove(); return; }
-  const host = sessionState.sessionHostId(sessionId);
+  const host = owner.host;
   const detach = session.closeMode === 'client-only'; // Older fleet hosts still only detach Prime clients.
   const ownedAgent = session.closeMode === 'owned-agent';
   const restartable = session.capabilities?.restart === true;
@@ -5385,7 +5413,7 @@ function renderCloseSection(sessionId, generation) {
 
   const closeBtn = el.querySelector('#sessionCloseBtn');
   closeBtn.addEventListener('click', async () => {
-    if (!ownsStatsModal(sessionId, generation)) return;
+    if (!ownsStatsModal(owner, generation)) return;
     const warn = detach
       ? 'Detach this client? The logical agent will continue independently.'
       : ownedAgent
@@ -5398,11 +5426,11 @@ function renderCloseSection(sessionId, generation) {
     closeBtn.textContent = detach ? 'Detaching…' : 'Closing…';
     try {
       await apiSend(host, `/api/sessions/${encodeURIComponent(sessionId)}/close`);
-      if (!ownsStatsModal(sessionId, generation)) return;
+      if (!ownsStatsModal(owner, generation)) return;
       closeStatsModal();
-      await finishSessionClose(sessionId, host);
+      await finishSessionClose(sessionId, host, owner);
     } catch (e) {
-      if (!ownsStatsModal(sessionId, generation)) return;
+      if (!ownsStatsModal(owner, generation)) return;
       closeBtn.disabled = false;
       closeBtn.textContent = detach ? 'Detach client' : 'Close session';
       setStatus('Close failed: ' + e.message, 'error');
@@ -5412,7 +5440,7 @@ function renderCloseSection(sessionId, generation) {
   const restartBtn = el.querySelector('#sessionRestartBtn');
   if (!restartBtn) return;
   restartBtn.addEventListener('click', async () => {
-    if (!ownsStatsModal(sessionId, generation)) return;
+    if (!ownsStatsModal(owner, generation)) return;
     const active = sessionState.findSession(sessionId, host);
     const warn = ownedAgent
       ? 'Restart this agent? This stops the root and its children, aborting any work in progress, then resumes the root in the same pane. The transcript is kept; other root agents keep running.'
@@ -5421,33 +5449,32 @@ function renderCloseSection(sessionId, generation) {
       : 'Restart this agent? The current process will stop, then the session will resume with updated CLI code and startup settings.';
     if (!confirm(warn)) return;
 
-    const wasSelected = sessionState.currentSession?.id === sessionId && sessionState.currentSession?.host === host;
     closeBtn.disabled = true;
     restartBtn.disabled = true;
     restartBtn.textContent = 'Restarting…';
     setStatus('Restarting agent…', 'working');
     try {
       const data = await apiSend(host, `/api/sessions/${encodeURIComponent(sessionId)}/restart`);
-      if (ownsStatsModal(sessionId, generation)) closeStatsModal();
-      setStatus('Agent restarted');
+      if (ownsStatsModal(owner, generation)) closeStatsModal();
+      if (sessionState.ownsSelection(owner)) setStatus('Agent restarted');
       await refreshSessions();
-      if (wasSelected && sessionState.currentSession?.id === sessionId && sessionState.currentSession?.host === host) {
+      if (sessionState.ownsSelection(owner)) {
         selectSession(data.id, { host });
       }
     } catch (e) {
-      if (ownsStatsModal(sessionId, generation)) closeStatsModal();
+      if (ownsStatsModal(owner, generation)) closeStatsModal();
       await loadSessions(undefined, { withPrevious: true });
-      if (wasSelected && sessionState.currentSession?.id === sessionId && sessionState.currentSession?.host === host) {
+      if (sessionState.ownsSelection(owner)) {
         selectSession(sessionId, { host });
+        setStatus('Restart failed: ' + e.message, 'error');
       }
-      setStatus('Restart failed: ' + e.message, 'error');
     }
   });
 }
 
 function closeStatsModal() {
   statsModalGeneration += 1;
-  statsModalSessionId = null;
+  statsModalOwner = null;
   document.getElementById('statsModal').style.display = 'none';
 }
 
@@ -5464,6 +5491,7 @@ let fileViewSessionId = null;
 let fileViewGeneration = 0;
 let fileViewOwner = null;
 let anchoredCommentDraft = null;
+let commentOwner = null;
 let commentAnchorRange = null;
 let commentDraftVersion = 0;
 let anchoredComments = [];        // open comments anchored in the open view
@@ -5482,10 +5510,11 @@ function ownsFileView(sessionId, generation) {
 
 async function openFileViewer(mention) {
   if (!sessionState.currentSession) return;
-  const sessionId = sessionState.currentSession.id;
+  const owner = sessionState.captureSelection();
+  const sessionId = owner.id;
   const generation = ++fileViewGeneration;
   fileViewSessionId = sessionId;
-  fileViewOwner = sessionState.captureSelection();
+  fileViewOwner = owner;
   const body = document.getElementById('fileViewBody');
   const title = document.getElementById('fileViewTitle');
   const pathEl = document.getElementById('fileViewPath');
@@ -5505,19 +5534,19 @@ async function openFileViewer(mention) {
   closeDiffView(); // the two takeover panes are mutually exclusive
   document.getElementById('sessionView').classList.add('file-open');
   try {
-    const res = await apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/file?path=${encodeURIComponent(mention)}`);
+    const res = await apiFetch(owner.host, `/api/sessions/${encodeURIComponent(sessionId)}/file?path=${encodeURIComponent(mention)}`);
     const data = await res.json();
     if (!ownsFileView(sessionId, generation)) return;
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     title.textContent = data.path.split('/').pop();
     fileViewAbsPath = data.path;
     fileViewRelPath = data.relPath;
-    rawLink.href = hostAssetUrl(sessionState.sessionHostId(sessionId),
+    rawLink.href = hostAssetUrl(owner.host,
       `/api/sessions/${encodeURIComponent(sessionId)}/file/content?path=${encodeURIComponent(data.path)}&v=${data.mtime}-${data.size}`);
     rawLink.style.display = '';
     document.getElementById('fileViewPublish').style.display = '';
     // Already published (by the agent or a previous click)? Show its link.
-    apiFetch(sessionState.sessionHostId(sessionId), '/api/pages')
+    apiFetch(owner.host, '/api/pages')
       .then((r) => r.json())
       .then((list) => {
         if (!ownsFileView(sessionId, generation) || fileViewAbsPath !== data.path) return;
@@ -5530,7 +5559,7 @@ async function openFileViewer(mention) {
     pathEl.title = data.path;
     if (data.image) {
       const src = data.image.url
-        ? hostAssetUrl(sessionState.sessionHostId(sessionId), data.image.url)
+        ? hostAssetUrl(owner.host, data.image.url)
         : `data:${data.image.mimeType};base64,${data.image.data}`;
       body.innerHTML = `<img class="file-view-img" src="${escapeHtml(src)}" decoding="async" alt="">`;
       return;
@@ -5730,6 +5759,9 @@ function positionCommentBubble() {
 
 function openCommentBubble(draft, range, focusComposer = false) {
   if (!draft) return;
+  const owner = sessionState.captureSelection();
+  if (!owner || owner.id !== draft.sessionId) return;
+  commentOwner = owner;
   anchoredCommentDraft = draft;
   commentEditTarget = null;
   commentAnchorRange = range.cloneRange();
@@ -5755,6 +5787,7 @@ function closeCommentBubble() {
   document.getElementById('commentStatus').textContent = '';
   document.getElementById('commentDeleteBtn').style.display = 'none';
   anchoredCommentDraft = null;
+  commentOwner = null;
   commentEditTarget = null;
   commentAnchorRange = null;
   commentDraftVersion += 1;
@@ -5772,6 +5805,8 @@ async function submitAnchoredComment() {
   const draft = anchoredCommentDraft;
   const editing = commentEditTarget;
   if (!draft && !editing) return;
+  const owner = commentOwner;
+  if (!sessionState.ownsSelection(owner) || owner.id !== (editing || draft).sessionId) return;
   const draftVersion = commentDraftVersion;
   const body = document.getElementById('commentBody').value.trim();
   if (!body) return document.getElementById('commentBody').focus();
@@ -5780,16 +5815,17 @@ async function submitAnchoredComment() {
   document.getElementById('commentStatus').textContent = 'Saving…';
   try {
     const response = editing
-      ? await apiFetch(sessionState.sessionHostId(editing.sessionId), `/api/comments/${encodeURIComponent(editing.id)}`, {
+      ? await apiFetch(owner.host, `/api/comments/${encodeURIComponent(editing.id)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: editing.sessionId, body }),
       })
-      : await apiFetch(sessionState.sessionHostId(draft.sessionId), '/api/comments', {
+      : await apiFetch(owner.host, '/api/comments', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: draft.sessionId, body, target: draft.target }),
       });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    if (!sessionState.ownsSelection(owner)) return;
     if (draftVersion === commentDraftVersion
         && (editing ? commentEditTarget === editing : anchoredCommentDraft === draft)) {
       closeCommentBubble();
@@ -5799,11 +5835,11 @@ async function submitAnchoredComment() {
     // The point of saving is to see it: re-anchor immediately.
     refreshAnchoredComments();
   } catch (error) {
-    if (draftVersion === commentDraftVersion) {
+    if (draftVersion === commentDraftVersion && sessionState.ownsSelection(owner)) {
       document.getElementById('commentStatus').textContent = error.message;
     }
   } finally {
-    if (draftVersion === commentDraftVersion) button.disabled = false;
+    if (draftVersion === commentDraftVersion && sessionState.ownsSelection(owner)) button.disabled = false;
   }
 }
 
@@ -5826,16 +5862,17 @@ async function refreshAnchoredComments() {
   const diffOpen = !fileOpen && isDiffViewOpen();
   if (!fileOpen && !diffOpen) return setAnchoredComments([]);
   const sessionId = fileOpen ? fileViewSessionId : diffViewSessionId;
+  const owner = fileOpen ? fileViewOwner : diffViewOwner;
   const generation = fileOpen ? fileViewGeneration : diffViewGeneration;
   const filePath = fileViewAbsPath;
-  if (!sessionId || (fileOpen && !filePath)) return setAnchoredComments([]);
+  if (!sessionId || !sessionState.ownsSelection(owner) || (fileOpen && !filePath)) return setAnchoredComments([]);
   // The view can be closed, refreshed, or pointed at another file while these
   // two round trips are in flight — same generation guard as the views.
   const owns = () => (fileOpen
     ? ownsFileView(sessionId, generation) && fileViewAbsPath === filePath
     : ownsDiffView(sessionId, generation));
   try {
-    const indexRes = await apiFetch(sessionState.sessionHostId(sessionId), `/api/comments/index?sessionId=${encodeURIComponent(sessionId)}`);
+    const indexRes = await apiFetch(owner.host, `/api/comments/index?sessionId=${encodeURIComponent(sessionId)}`);
     const index = await indexRes.json();
     if (!indexRes.ok || !owns()) return;
     const ids = (index.comments || [])
@@ -5844,7 +5881,7 @@ async function refreshAnchoredComments() {
         : entry.target?.kind === 'diff'))
       .map((entry) => entry.id);
     if (!ids.length) return setAnchoredComments([]);
-    const fullRes = await apiFetch(sessionState.sessionHostId(sessionId), '/api/comments/get', {
+    const fullRes = await apiFetch(owner.host, '/api/comments/get', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId, ids }),
     });
@@ -6040,6 +6077,12 @@ function renderCommentListPopover() {
 async function focusAnchoredComment(id) {
   const comment = anchoredComments.find((entry) => entry.id === id);
   if (!comment) return;
+  const fileOpen = isFileViewOpen();
+  const owner = fileOpen ? fileViewOwner : diffViewOwner;
+  const generation = fileOpen ? fileViewGeneration : diffViewGeneration;
+  const owns = () => owner && (fileOpen
+    ? ownsFileView(owner.id, generation) : ownsDiffView(owner.id, generation));
+  if (!owns()) return;
   closeCommentListPopover();
   if (comment.target?.kind === 'diff') {
     const details = diffPatchFor(comment)?.closest('details.diff-file');
@@ -6048,6 +6091,7 @@ async function focusAnchoredComment(id) {
       // and we can render the marks once the patch really exists.
       details.open = true;
       await loadDeferredDiffPatch(details);
+      if (!owns()) return;
       applyCommentMarks();
     }
   }
@@ -6059,6 +6103,9 @@ async function focusAnchoredComment(id) {
 
 function openCommentEditor(comment, anchorEl) {
   if (!comment || !anchorEl) return;
+  const owner = sessionState.captureSelection();
+  if (!owner || owner.id !== comment.sessionId) return;
+  commentOwner = owner;
   const range = document.createRange();
   range.selectNodeContents(anchorEl);
   anchoredCommentDraft = null;
@@ -6089,6 +6136,8 @@ function disarmCommentDelete() {
 // Two-tap confirm, same idiom as the sidebar's row-level session close.
 async function handleCommentDelete() {
   if (!commentEditTarget) return;
+  const owner = commentOwner;
+  if (!sessionState.ownsSelection(owner) || owner.id !== commentEditTarget.sessionId) return;
   const button = document.getElementById('commentDeleteBtn');
   if (!commentDeleteArmed) {
     commentDeleteArmed = true;
@@ -6102,22 +6151,23 @@ async function handleCommentDelete() {
   button.disabled = true;
   document.getElementById('commentStatus').textContent = 'Deleting…';
   try {
-    const response = await apiFetch(sessionState.sessionHostId(comment.sessionId), `/api/comments/${encodeURIComponent(comment.id)}`, {
+    const response = await apiFetch(owner.host, `/api/comments/${encodeURIComponent(comment.id)}`, {
       method: 'DELETE', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: comment.sessionId }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    if (!sessionState.ownsSelection(owner)) return;
     if (draftVersion === commentDraftVersion) closeCommentBubble();
     setStatus('Comment deleted');
     refreshAnchoredComments();
   } catch (error) {
-    if (draftVersion === commentDraftVersion) {
+    if (draftVersion === commentDraftVersion && sessionState.ownsSelection(owner)) {
       document.getElementById('commentStatus').textContent = error.message;
       disarmCommentDelete();
     }
   } finally {
-    button.disabled = false;
+    if (draftVersion === commentDraftVersion && sessionState.ownsSelection(owner)) button.disabled = false;
   }
 }
 
@@ -6131,6 +6181,7 @@ function renderFilePageRow(page, sessionId, generation) {
   const el = document.getElementById('fileViewPage');
   if (!page) { el.style.display = 'none'; el.innerHTML = ''; return; }
   if (!ownsFileView(sessionId, generation)) return;
+  const owner = fileViewOwner;
   const link = page.url || (location.origin + page.path);
   el.style.display = '';
   el.innerHTML = 'Published: ' +
@@ -6143,11 +6194,12 @@ function renderFilePageRow(page, sessionId, generation) {
     );
   });
   el.querySelector('#filePageRevoke').addEventListener('click', () => {
-    apiFetch(sessionState.sessionHostId(sessionId), `/api/pages/${encodeURIComponent(page.token)}`, { method: 'DELETE' })
+    if (!ownsFileView(sessionId, generation)) return;
+    apiFetch(owner.host, `/api/pages/${encodeURIComponent(page.token)}`, { method: 'DELETE' })
       .then(() => {
         if (!ownsFileView(sessionId, generation)) return;
         renderFilePageRow(null, sessionId, generation);
-        refreshArtifacts(sessionId);
+        refreshArtifacts(owner);
       })
       .catch((e) => {
         if (ownsFileView(sessionId, generation)) setStatus('Failed to unpublish: ' + e.message, 'error');
@@ -6161,8 +6213,9 @@ async function publishFileView() {
   const generation = fileViewGeneration;
   const path = fileViewAbsPath;
   if (!ownsFileView(sessionId, generation)) return;
+  const owner = fileViewOwner;
   try {
-    const res = await apiFetch(sessionState.sessionHostId(sessionId), '/api/pages', {
+    const res = await apiFetch(owner.host, '/api/pages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -6176,7 +6229,7 @@ async function publishFileView() {
     if (!ownsFileView(sessionId, generation)) return;
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     renderFilePageRow(data, sessionId, generation);
-    refreshArtifacts(sessionId);
+    refreshArtifacts(owner);
   } catch (e) {
     if (ownsFileView(sessionId, generation)) setStatus('Publish failed: ' + e.message, 'error');
   }
@@ -6184,14 +6237,15 @@ async function publishFileView() {
 
 // Published pages section of the stats modal (only rendered when non-empty —
 // most sessions publish nothing and don't need the visual noise).
-function loadPagesSection(sessionId, generation) {
-  if (!ownsStatsModal(sessionId, generation)) return;
+function loadPagesSection(owner, generation) {
+  if (!ownsStatsModal(owner, generation)) return;
+  const sessionId = owner.id;
   const el = document.getElementById('statsPages');
   if (!el) return;
-  apiFetch(sessionState.sessionHostId(sessionId), `/api/pages?sessionId=${encodeURIComponent(sessionId)}`)
+  apiFetch(owner.host, `/api/pages?sessionId=${encodeURIComponent(sessionId)}`)
     .then((r) => r.json())
     .then((list) => {
-      if (!ownsStatsModal(sessionId, generation)) return;
+      if (!ownsStatsModal(owner, generation)) return;
       if (!Array.isArray(list) || !list.length) { el.innerHTML = ''; return; }
       el.innerHTML = '<div class="stats-share-title">Published pages</div>' +
         list.map((p) => {
@@ -6204,20 +6258,21 @@ function loadPagesSection(sessionId, generation) {
         }).join('');
       el.querySelectorAll('.stats-page-revoke').forEach((btn) => {
         btn.addEventListener('click', () => {
+          if (!ownsStatsModal(owner, generation)) return;
           const token = btn.closest('.stats-page-row').dataset.token;
-          apiFetch(sessionState.sessionHostId(sessionId), `/api/pages/${encodeURIComponent(token)}`, { method: 'DELETE' })
+          apiFetch(owner.host, `/api/pages/${encodeURIComponent(token)}`, { method: 'DELETE' })
             .then(() => {
-              if (!ownsStatsModal(sessionId, generation)) return;
-              loadPagesSection(sessionId, generation);
-              refreshArtifacts(sessionId);
+              if (!ownsStatsModal(owner, generation)) return;
+              loadPagesSection(owner, generation);
+              refreshArtifacts(owner);
             })
             .catch((e) => {
-              if (ownsStatsModal(sessionId, generation)) setStatus('Failed to revoke: ' + e.message, 'error');
+              if (ownsStatsModal(owner, generation)) setStatus('Failed to revoke: ' + e.message, 'error');
             });
         });
       });
     })
-    .catch(() => { if (ownsStatsModal(sessionId, generation)) el.innerHTML = ''; });
+    .catch(() => { if (ownsStatsModal(owner, generation)) el.innerHTML = ''; });
 }
 
 // --- Shared artifacts (header 📦: everything published/shared from the
@@ -6229,17 +6284,18 @@ function loadPagesSection(sessionId, generation) {
 let sessionArtifacts = { pages: [], share: null };
 let artifactsSeq = 0; // drops stale responses on fast session switches
 
-async function refreshArtifacts(sessionId) {
-  if (!sessionId) return;
+async function refreshArtifacts(owner = sessionState.captureSelection()) {
+  if (!sessionState.ownsSelection(owner)) return;
+  const sessionId = owner.id;
   const seq = ++artifactsSeq;
   try {
     const [pagesRes, shareRes] = await Promise.all([
-      apiFetch(sessionState.sessionHostId(sessionId), `/api/pages?sessionId=${encodeURIComponent(sessionId)}`),
-      apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/share`),
+      apiFetch(owner.host, `/api/pages?sessionId=${encodeURIComponent(sessionId)}`),
+      apiFetch(owner.host, `/api/sessions/${encodeURIComponent(sessionId)}/share`),
     ]);
     const pages = pagesRes.ok ? await pagesRes.json() : [];
     const share = (shareRes.ok && shareRes.status !== 404) ? await shareRes.json() : null;
-    if (seq !== artifactsSeq || sessionState.currentSession?.id !== sessionId) return;
+    if (seq !== artifactsSeq || !sessionState.ownsSelection(owner)) return;
     sessionArtifacts = { pages: Array.isArray(pages) ? pages : [], share };
     updateArtifactsBadge();
     if (document.getElementById('artifactsModal').style.display !== 'none') renderArtifactsModal();
@@ -6264,7 +6320,7 @@ function openArtifactsModal() {
   if (!sessionState.currentSession) return;
   document.getElementById('artifactsModal').style.display = 'flex';
   renderArtifactsModal();
-  refreshArtifacts(sessionState.currentSession.id);
+  refreshArtifacts();
 }
 
 function closeArtifactsModal() {
@@ -6272,6 +6328,7 @@ function closeArtifactsModal() {
 }
 
 function renderArtifactsModal() {
+  const owner = sessionState.captureSelection();
   const body = document.getElementById('artifactsBody');
   if (!body) return;
   const { pages, share } = sessionArtifacts;
@@ -6310,9 +6367,10 @@ function renderArtifactsModal() {
     );
   }));
   body.querySelectorAll('.artifact-revoke').forEach((btn) => btn.addEventListener('click', () => {
-    apiFetch(sessionState.currentSession?.host, `/api/pages/${encodeURIComponent(btn.dataset.token)}`, { method: 'DELETE' })
-      .then(() => refreshArtifacts(sessionState.currentSession?.id))
-      .catch((e) => setStatus('Failed to revoke: ' + e.message, 'error'));
+    if (!sessionState.ownsSelection(owner)) return;
+    apiFetch(owner.host, `/api/pages/${encodeURIComponent(btn.dataset.token)}`, { method: 'DELETE' })
+      .then(() => refreshArtifacts(owner))
+      .catch((e) => { if (sessionState.ownsSelection(owner)) setStatus('Failed to revoke: ' + e.message, 'error'); });
   }));
 }
 
@@ -6370,16 +6428,17 @@ function closeDiffView() {
 
 async function loadDiffView() {
   if (!sessionState.currentSession || !isDiffViewOpen()) return;
-  const sessionId = sessionState.currentSession.id;
+  const owner = sessionState.captureSelection();
+  const sessionId = owner.id;
   const generation = ++diffViewGeneration;
   diffViewSessionId = sessionId;
-  diffViewOwner = sessionState.captureSelection();
+  diffViewOwner = owner;
   const body = document.getElementById('diffViewBody');
   const rootEl = document.getElementById('diffViewRoot');
   closeCommentBubble();
   body.innerHTML = '<div class="loading">Loading…</div>';
   try {
-    const res = await apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/diff`);
+    const res = await apiFetch(owner.host, `/api/sessions/${encodeURIComponent(sessionId)}/diff`);
     const data = await res.json();
     if (!ownsDiffView(sessionId, generation)) return;
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -6459,6 +6518,7 @@ async function loadDeferredDiffPatch(details) {
   const viewGeneration = diffViewGeneration;
   const requestGeneration = ++diffPatchRequestGeneration;
   if (!ownsDiffView(sessionId, viewGeneration)) return;
+  const owner = diffViewOwner;
   patch.dataset.loading = '1';
   patch.dataset.requestGeneration = String(requestGeneration);
   try {
@@ -6467,7 +6527,7 @@ async function loadDeferredDiffPatch(details) {
       path: patch.dataset.path,
       snapshot: patch.dataset.snapshot,
     });
-    const res = await apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/diff/patch?${query}`);
+    const res = await apiFetch(owner.host, `/api/sessions/${encodeURIComponent(sessionId)}/diff/patch?${query}`);
     const data = await res.json();
     if (!ownsDiffView(sessionId, viewGeneration) || !patch.isConnected ||
         patch.dataset.requestGeneration !== String(requestGeneration)) return;
@@ -7795,7 +7855,7 @@ function openMessageStream(url, owner) {
       // stalls long sessions.
       fetchNewMessagesSince(owner);
       refreshSessions();
-      refreshArtifacts(sessionId); // the agent may have published pages mid-turn
+      refreshArtifacts(owner); // the agent may have published pages mid-turn
       setStatus('');
     };
     addOwnedListener('turn_end', handleTurnEnd);

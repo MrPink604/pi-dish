@@ -31,7 +31,9 @@ connections/retries, relations and metadata mutations now carry these tokens.
 Composer/queue actions, file/diff guards, terminal connections, dialog responses
 and bounce reconciliation use the same owner checks. The old id-plus-counter
 guard is removed; file/diff request counters still distinguish newer requests
-inside one selection. Older feature-specific id checks are the next migration.
+inside one selection. Resume, search, stats, shares/pages and comment callbacks
+also retain captured owners. Their existing feature counters still distinguish
+modal instances, file requests and comment drafts within a selected session.
 
 `server.js`, browser transport/rendering, feature stores and harness
 extensions remain in their existing form. The foundation's declarations

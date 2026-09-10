@@ -84,8 +84,10 @@ the message-count and session-spend badges. Spec and mock:
   now capture immutable host/id/generation owners. The store guards transcript
   merges and pins identity; stale entrypoints cannot replace the current view.
   Composer, queue, file/diff, terminal, dialog and bounce guards use the same
-  tokens, retiring the old id-plus-counter interface. Feature-specific callbacks
-  that still compare ids alone are the next ownership migration.
+  tokens, retiring the old id-plus-counter interface. Resume, search, stats,
+  shares/pages and comments also retain their originating owner through later
+  requests and view updates; feature counters still distinguish work inside a
+  selection. Delayed-response browser regressions cover the boundary.
 - Extend the typed foundation into application event and request-ownership contracts.
 - Extract frontend state/transport and server application/lifecycle boundaries
   in small changes guarded by the preceding tests.

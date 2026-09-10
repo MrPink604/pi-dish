@@ -2437,7 +2437,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.evaluate(() => window.__releaseAuditStats());
     await desktop.waitForTimeout(50);
     const statsOwner = await desktop.evaluate(() => ({
-      sessionId: statsModalSessionId,
+      sessionId: statsModalOwner?.id,
       text: document.getElementById('statsBody').textContent,
       visible: document.getElementById('statsModal').style.display !== 'none',
     }));
