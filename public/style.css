@@ -2967,7 +2967,15 @@ body.sidebar-open {
     display: none;
   }
 
+  /* The run-state chip already says a turn is live, so the prose status
+     line is redundant here and eats the scroller's first screen. Errors
+     still speak: they are the ones the chip cannot express. */
   .session-chips .status {
+    display: none;
+  }
+
+  .session-chips .status.error {
+    display: inline;
     flex: none;
     white-space: nowrap;
   }

@@ -82,6 +82,17 @@ module.exports = async function mobile({ browser, watch, base, check, emit, SESS
   });
   check(chipRow.first === 'sessionWorkingMobile' && chipRow.text === 'idle' && chipRow.scrolls,
     `the chip row scrolls and leads with run state (got ${JSON.stringify(chipRow)})`);
+  const statusVisibility = await mobile.evaluate(() => {
+    const el = document.getElementById('status');
+    setStatus('Waiting for response...', 'working');
+    const working = el.offsetParent !== null;
+    setStatus('Send failed', 'error');
+    const error = el.offsetParent !== null;
+    setStatus('');
+    return { working, error };
+  });
+  check(!statusVisibility.working && statusVisibility.error,
+    `the run chip carries turn state alone; only errors add prose (got ${JSON.stringify(statusVisibility)})`);
 
   // Composer contract on a phone: every control lives inside the field's
   // box, in a strip below the text (an overlaid rail let scrolled lines run
