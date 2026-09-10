@@ -1,4 +1,4 @@
-import type { NativeSessionId, SessionId, SessionIdentity } from './contracts';
+import type { HarnessId, NativeSessionId, SessionId, SessionIdentity } from './contracts';
 'use strict';
 
 import { getHarness } from './harnesses';
@@ -13,7 +13,7 @@ function validId(id: unknown): id is NativeSessionId {
   return typeof id === 'string' && id.length > 0 && id.length <= MAX_ID_LENGTH && SAFE_ID.test(id);
 }
 
-function encodeSessionKey(harnessId: string, nativeSessionId: NativeSessionId): SessionId {
+function encodeSessionKey(harnessId: HarnessId, nativeSessionId: NativeSessionId): SessionId {
   if (!getHarness(harnessId) || !validId(nativeSessionId)) throw new TypeError('Invalid session identity');
   return (VERSION + Buffer.from(JSON.stringify([harnessId, nativeSessionId]), 'utf8').toString('base64url')) as SessionId;
 }

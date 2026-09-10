@@ -21,7 +21,11 @@ try {
   if (result.status !== 0) {
     process.exitCode = result.status || 1;
   } else {
-    const files = fs.readdirSync(out).sort();
+    const entries = fs.readdirSync(out, { withFileTypes: true });
+    if (entries.some(entry => !entry.isFile())) {
+      throw new Error('Core sources must be flat: keep TypeScript files directly in src/core/. Nested output is not supported.');
+    }
+    const files = entries.map(entry => entry.name).sort();
     // A removed/renamed source must not leave an old executable module that
     // --check can no longer see. Only inspect files bearing our own banner.
     const orphaned = fs.readdirSync(path.join(root, 'lib')).filter(file => {

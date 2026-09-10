@@ -3,6 +3,7 @@ declare const identityKind: unique symbol;
 export type NativeSessionId = string & { readonly [identityKind]: 'native-session' };
 export type SessionId = string & { readonly [identityKind]: 'session-route' };
 export type HostId = string & { readonly [identityKind]: 'host' };
+export type HarnessId = 'pi' | 'omp' | 'prime';
 
 /** A route id is unique within its host, not across the fleet. */
 export interface SessionRef {
@@ -11,7 +12,7 @@ export interface SessionRef {
 }
 
 export interface SessionIdentity {
-  harnessId: string;
+  harnessId: HarnessId;
   nativeSessionId: NativeSessionId;
 }
 
@@ -55,7 +56,7 @@ export interface HostBuiltin {
 export type HarnessEnvironment = Record<string, string | undefined>;
 
 export interface HarnessDescriptor {
-  id: string;
+  id: HarnessId;
   label: string;
   wrapperEntrypoint: string | null;
   eventProfile: string;

@@ -1,7 +1,7 @@
 // Generated from src/core/session-key.ts; edit that source and run npm run build:core.
-import type { NativeSessionId, SessionId, SessionIdentity } from './contracts';
+import type { HarnessId, NativeSessionId, SessionId, SessionIdentity } from './contracts';
 declare function validId(id: unknown): id is NativeSessionId;
-declare function encodeSessionKey(harnessId: string, nativeSessionId: NativeSessionId): SessionId;
+declare function encodeSessionKey(harnessId: HarnessId, nativeSessionId: NativeSessionId): SessionId;
 declare function decodeSessionKey(key: unknown): SessionIdentity;
 declare function resolveSessionRoute(value: unknown): SessionIdentity;
 declare function canonicalSessionId(value: unknown): SessionId;

@@ -2,7 +2,7 @@
 // Keep negative cases: a widened declaration must not silently erase the contract.
 import { canonicalSessionId, resolveSessionRoute, encodeSessionKey, validSessionId } from '../../lib/session-key';
 import { getHostId } from '../../lib/host-identity';
-import { getHarness, resolveLaunchSpec } from '../../lib/harnesses';
+import { registry, getHarness, resolveLaunchSpec } from '../../lib/harnesses';
 import { PendingRequests } from '../../lib/pending-requests';
 import { readStore } from '../../lib/dish-store';
 import { createLineSplitter } from '../../lib/line-splitter';
@@ -16,6 +16,16 @@ const owner: SessionRef = { hostId, sessionId };
 encodeSessionKey('omp', nativeId);
 const input: unknown = 'from-json';
 if (validSessionId(input)) encodeSessionKey('prime', input);
+// @ts-expect-error Dynamic harness names must go through getHarness.
+registry[String(input)].closeMode;
+// @ts-expect-error The registry vocabulary cannot be extended by typed callers.
+registry.pi = registry.omp;
+// @ts-expect-error Only supported harnesses can produce typed routes.
+encodeSessionKey('constructor', nativeId);
+const decoded = resolveSessionRoute(sessionId);
+// @ts-expect-error Parsed identities retain the supported harness vocabulary.
+decoded.harnessId = 'unsupported';
+encodeSessionKey(decoded.harnessId, nativeId);
 
 // @ts-expect-error A route id is not a harness-native id, even when Pi uses the same bytes.
 encodeSessionKey('pi', sessionId);
@@ -30,8 +40,9 @@ owner.hostId = hostId;
 // @ts-expect-error A full process identity includes the process birth time.
 const incompleteProcess: ProcessIdentity = { pid: 123 };
 
-const harness = getHarness('omp');
+const harness = getHarness(input);
 if (harness) {
+  encodeSessionKey(harness.id, nativeId);
   const launch: { env: Record<string, string>; argv: string[] } = resolveLaunchSpec(harness);
   launch.argv.map(arg => arg.toUpperCase());
   // @ts-expect-error A model option is a model reference, not a catalog object.

@@ -23,7 +23,8 @@ do not mean that all its JavaScript callers have been checked.
 
 ## Source and runtime
 
-Edit `src/core/*.ts`, then run:
+Keep sources directly in `src/core/`; nested output is explicitly rejected
+before any generated files are replaced. Edit `src/core/*.ts`, then run:
 
 ```sh
 npm run build:core
@@ -59,6 +60,9 @@ decision and packaging checks.
   route retains the native id's bytes, but the types distinguish its role.
   Use `resolveSessionRoute` when passing a route back to a harness; avoid casts
   at callers. `validSessionId` narrows an unknown native id after validation.
+- `HarnessId` is the supported `pi | omp | prime` vocabulary. Dynamic input
+  goes through `getHarness`; its descriptor's `id` can then be used to encode
+  a route. Typed callers cannot index the registry with arbitrary strings.
 - `SessionRef` requires both a host and route id and is readonly. It is a
   foundation contract for later consumers, not a replacement for the browser's
   existing state writers or selection-generation checks. It does not grant

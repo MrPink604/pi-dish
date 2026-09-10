@@ -51,6 +51,18 @@ test('core build detects stale runtime/declarations and never repairs them in ch
     assert.equal(fs.readFileSync(declarations, 'utf8'), originalDeclarations);
 
     fs.writeFileSync(source, 'function value(): number { return 42; }\nexport = { value };\n');
+    const nested = path.join(root, 'src', 'core', 'identity');
+    fs.mkdirSync(nested);
+    fs.writeFileSync(path.join(nested, 'session.ts'), 'export const value = 1;\n');
+    for (const args of [[], ['--check']]) {
+      const unsupported = run(...args);
+      expectStatus(unsupported, 1);
+      assert.match(unsupported.stderr, /Core sources must be flat/);
+      assert.doesNotMatch(unsupported.stderr, /EISDIR/);
+      assert.equal(fs.readFileSync(runtime, 'utf8'), originalRuntime);
+      assert.equal(fs.readFileSync(declarations, 'utf8'), originalDeclarations);
+    }
+    fs.rmSync(nested, { recursive: true });
     fs.writeFileSync(path.join(root, 'lib', 'obsolete.js'), '// Generated from src/core/obsolete.ts;\n');
     const orphan = run('--check');
     expectStatus(orphan, 1);

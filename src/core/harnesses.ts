@@ -1,4 +1,4 @@
-import type { HarnessDescriptor } from './contracts';
+import type { HarnessDescriptor, HarnessId } from './contracts';
 'use strict';
 
 import os = require('os');
@@ -10,7 +10,7 @@ const repo = path.resolve(__dirname, '..');
 const bridge = (name: string) => path.join(repo, 'extensions', `pi-dish-bridge-${name}`, 'index.ts');
 
 
-const registry: Record<string, HarnessDescriptor> = {
+const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
   pi: {
     id: 'pi', label: 'Pi', wrapperEntrypoint: null, eventProfile: 'pi-v3', profileId: 'pi-v3', profileVersion: 1,
     rootPath: () => path.join(os.homedir(), '.pi', 'agent', 'sessions'), layout: 'nested', commandEnv: 'PI_DISH_PI_COMMAND',
@@ -181,7 +181,8 @@ const registry: Record<string, HarnessDescriptor> = {
 };
 
 function getHarness(id: unknown): HarnessDescriptor | null {
-  return typeof id === 'string' && Object.hasOwn(registry, id) ? registry[id] : null;
+  // The own-key check establishes membership; Object.hasOwn does not narrow it.
+  return typeof id === 'string' && Object.hasOwn(registry, id) ? registry[id as HarnessId] : null;
 }
 function listHarnesses() { return Object.values(registry); }
 

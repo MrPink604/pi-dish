@@ -10,13 +10,14 @@ export type SessionId = string & {
 export type HostId = string & {
     readonly [identityKind]: 'host';
 };
+export type HarnessId = 'pi' | 'omp' | 'prime';
 /** A route id is unique within its host, not across the fleet. */
 export interface SessionRef {
     readonly hostId: HostId;
     readonly sessionId: SessionId;
 }
 export interface SessionIdentity {
-    harnessId: string;
+    harnessId: HarnessId;
     nativeSessionId: NativeSessionId;
 }
 export interface ProcessIdentity {
@@ -55,7 +56,7 @@ export interface HostBuiltin {
 }
 export type HarnessEnvironment = Record<string, string | undefined>;
 export interface HarnessDescriptor {
-    id: string;
+    id: HarnessId;
     label: string;
     wrapperEntrypoint: string | null;
     eventProfile: string;
