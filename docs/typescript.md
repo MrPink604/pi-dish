@@ -9,6 +9,7 @@ format change.
 | `contracts.ts` | Identity distinctions, process proof shapes, harness descriptors and running-tool snapshots |
 | `session-key.ts` | Strict route decoding, harness/native encoding and legacy Pi canonicalization |
 | `harnesses.ts` | Existing harness registry and launch argv/environment construction |
+| `session-capabilities.ts` | Bridge capability defaults and API projection; lifecycle authority stays with callers |
 | `host-identity.ts` | Stable host id and host label |
 | `dish-store.ts` | HOME-scoped reads and atomic writes for small JSON stores |
 | `process-identity.ts` | Linux birth identity, liveness and bounded ancestry proofs |
@@ -63,6 +64,10 @@ decision and packaging checks.
 - `HarnessId` is the supported `pi | omp | prime` vocabulary. Dynamic input
   goes through `getHarness`; its descriptor's `id` can then be used to encode
   a route. Typed callers cannot index the registry with arbitrary strings.
+- Advertised bridge capability values remain `unknown`. The policy preserves
+  Pi's legacy defaults and requires exact `true` for alternative harnesses;
+  projected session capabilities are complete boolean records. Close/restart
+  flags are advice derived from independently checked ownership inputs.
 - `SessionRef` requires both a host and route id and is readonly. It is a
   foundation contract for later consumers, not a replacement for the browser's
   existing state writers or selection-generation checks. It does not grant

@@ -60,8 +60,11 @@ the message-count and session-spend badges. Spec and mock:
   with generated CommonJS/declarations at the original `lib/` paths and CI
   consistency checks. See [docs/typescript.md](docs/typescript.md). Feature modules
   and browser state/transport are outside this first conversion.
-- Extend the typed foundation into application capability, event, and
-  request-ownership contracts.
+- Session capability policy now lives in the typed foundation. Bridge defaults
+  and API projection share one policy; lifecycle authorization stays with the
+  server callers. Harness/state/flag regressions and Fable review cover this
+  extraction.
+- Extend the typed foundation into event and request-ownership contracts.
 - Extract frontend state/transport and server application/lifecycle boundaries
   in small changes guarded by the preceding tests.
 - Evaluate a contained component-framework pilot. Preserve the current transcript

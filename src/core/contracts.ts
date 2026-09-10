@@ -5,6 +5,24 @@ export type SessionId = string & { readonly [identityKind]: 'session-route' };
 export type HostId = string & { readonly [identityKind]: 'host' };
 export type HarnessId = 'pi' | 'omp' | 'prime';
 
+export type BridgeCapability = 'prompt' | 'steer' | 'followUp' | 'abort' | 'compact'
+  | 'models' | 'setModel' | 'setThinking' | 'rename' | 'commands' | 'reload'
+  | 'queueRead' | 'queueCancel' | 'treeRead' | 'treeNavigation' | 'extensionUI'
+  | 'shareSnapshot' | 'guardedReload';
+
+/** Registry/wire values are unvalidated; policy checks exact booleans. */
+export type AdvertisedCapabilities = Partial<Record<BridgeCapability, unknown>>;
+export type SessionCapability = 'prompt' | 'steer' | 'followUp' | 'abort' | 'compact'
+  | 'models' | 'setModel' | 'setThinking' | 'rename' | 'commands' | 'queueCancel'
+  | 'tree' | 'export' | 'close' | 'restart' | 'resume';
+export type SessionCapabilities = Record<SessionCapability, boolean>;
+export interface CapabilityContext {
+  active?: boolean;
+  conflicted?: boolean;
+  closeAllowed?: boolean;
+  restartAllowed?: boolean;
+}
+
 /** A route id is unique within its host, not across the fleet. */
 export interface SessionRef {
   readonly hostId: HostId;

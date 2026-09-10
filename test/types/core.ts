@@ -7,9 +7,19 @@ import { PendingRequests } from '../../lib/pending-requests';
 import { readStore } from '../../lib/dish-store';
 import { createLineSplitter } from '../../lib/line-splitter';
 import { trackRunningToolCalls } from '../../lib/running-tool-calls';
+import { bridgeSupports, sessionCapabilities } from '../../lib/session-capabilities';
 import type { HostId, NativeSessionId, SessionId, SessionRef, ProcessIdentity, RunningToolCall, HarnessDescriptor } from '../../lib/contracts';
 
 const hostId: HostId = getHostId();
+const capabilities = sessionCapabilities('omp', { prompt: 'unvalidated wire value' }, { active: true });
+const canPrompt: boolean = capabilities.prompt;
+bridgeSupports('pi', {}, 'treeNavigation');
+// @ts-expect-error UI capabilities and bridge operation names are distinct.
+bridgeSupports('omp', {}, 'tree');
+// @ts-expect-error Every public capability is a boolean after projection.
+capabilities.close = 'true';
+// @ts-expect-error Lifecycle authorization is an explicit boolean input.
+sessionCapabilities('prime', {}, { closeAllowed: 'yes' });
 const sessionId: SessionId = canonicalSessionId('legacy-pi');
 const nativeId: NativeSessionId = resolveSessionRoute(sessionId).nativeSessionId;
 const owner: SessionRef = { hostId, sessionId };
@@ -71,4 +81,4 @@ trackRunningToolCalls(running, 'tool_execution_start', { toolCallId: 't1', toolN
 // @ts-expect-error Reconnect snapshots require a numeric timestamp.
 running.set('t1', { toolName: 'Bash', args: {}, startedAt: 'yesterday', lastPartialResult: null });
 
-void [incompleteOwner, mixedOwner, incompleteProcess, closeMode, consumeUnvalidatedResponse];
+void [canPrompt, incompleteOwner, mixedOwner, incompleteProcess, closeMode, consumeUnvalidatedResponse];

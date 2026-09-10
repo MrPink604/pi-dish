@@ -47,6 +47,7 @@ const { discoverSessionCandidates, discoverHarnessSessions, findSessionCandidate
 const sessionIndex = require('./lib/session-index');
 const { encodeSessionKey, resolveSessionRoute, canonicalSessionId, VERSION: SESSION_KEY_VERSION } = require('./lib/session-key');
 const { getHarness, listHarnesses, resolveLaunchSpec } = require('./lib/harnesses');
+const { bridgeSupports, sessionCapabilities } = require('./lib/session-capabilities');
 const { refreshHarnessPricing } = require('./lib/harness-pricing');
 const { listTaskAgents } = require('./lib/harness-agents');
 const { inspectProcessAncestry } = require('./lib/process-identity');
@@ -773,43 +774,6 @@ function sessionIdentityFields(harnessId, nativeSessionId) {
   };
 }
 
-function sessionCapabilities(harnessId, bridgeCapabilities = {}, {
-  active = false, conflicted = false, closeAllowed = false, restartAllowed = false,
-} = {}) {
-  if (conflicted) return Object.fromEntries([
-    'prompt', 'steer', 'followUp', 'abort', 'compact', 'models', 'setModel', 'setThinking',
-    'rename', 'commands', 'queueCancel', 'tree', 'export', 'close', 'restart', 'resume',
-  ].map(key => [key, false]));
-  const pi = harnessId === 'pi';
-  const closeMode = getHarness(harnessId)?.closeMode || 'unsupported';
-  const advertised = (name) => active && (pi ? bridgeCapabilities[name] !== false : bridgeCapabilities[name] === true);
-  return {
-    prompt: advertised('prompt'),
-    steer: advertised('steer'),
-    followUp: advertised('followUp'),
-    abort: advertised('abort'),
-    compact: advertised('compact'),
-    models: active ? advertised('models') : pi,
-    setModel: active ? advertised('setModel') : pi,
-    setThinking: advertised('setThinking'),
-    rename: active ? advertised('rename') : pi,
-    commands: active ? advertised('commands') : pi,
-    queueCancel: advertised('queueCancel'),
-    tree: pi
-      ? (active ? advertised('treeNavigation') : true)
-      : harnessId === 'omp' && active
-        ? advertised('treeRead') && advertised('treeNavigation')
-        : false,
-    export: pi || harnessId === 'omp',
-    // Managed harnesses may only close/detach the exact tmux pane pi-dish
-    // recorded when it launched that client.
-    close: active && (closeMode === 'logical'
-      || ((closeMode === 'owned-pane' || closeMode === 'owned-agent') && closeAllowed)),
-    restart: active && restartAllowed,
-    resume: !active,
-  };
-}
-
 function spawnMatchesRegistryClaim(spawn, registryEntry) {
   return !!spawn?.spawnToken
     && !!spawn?.paneProcess?.pid
@@ -969,9 +933,7 @@ async function getLiveSession(sessionId) {
 // wrapper only gains an operation by advertising it explicitly.
 function liveSessionSupports(sess, capability) {
   if (!(sess instanceof BridgeSession)) return true;
-  return sess.harnessId === 'pi'
-    ? sess.capabilities?.[capability] !== false
-    : sess.capabilities?.[capability] === true;
+  return bridgeSupports(sess.harnessId, sess.capabilities, capability);
 }
 
 const bounceActionLocks = new Set();

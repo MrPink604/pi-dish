@@ -27,7 +27,7 @@ npm run build:vendor  # regenerate public/vendor/ from node_modules
 
 ## Typed foundation (src/core/)
 
-`harnesses`, `session-key`, `host-identity`, `dish-store`, `process-identity`,
+`harnesses`, `session-capabilities`, `session-key`, `host-identity`, `dish-store`, `process-identity`,
 `pending-requests`, `line-splitter`, and `running-tool-calls` are authored in
 `src/core/*.ts`. `lib/` retains generated CommonJS at their original paths,
 plus declarations for typed consumers; the generated banner identifies these
