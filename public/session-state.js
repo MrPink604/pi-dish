@@ -4,6 +4,7 @@
  * @typedef {{ id: string, host?: string | null, hostLabel?: string } & Record<string, unknown>} SessionEntry
  * @typedef {{ active: SessionEntry[], previous: SessionEntry[] }} SessionLists
  * @typedef {{ hostId?: string | null, active?: SessionEntry[], previous?: SessionEntry[] }} HostSessionLists
+ * @typedef {Readonly<{ id: string, host: string | null, generation: number }>} SelectionOwner
  * @typedef {{ getSelfHostId: () => string | null, getHostLabel: (host: string | null) => string | null,
  *   onListsChanged: () => void, onCurrentChanged: () => void }} SessionStateOptions
  */
@@ -110,14 +111,15 @@ function createSessionState(options) {
 
   /**
    * Transcript metadata refreshes the header only. Registry-aware list fields
-   * retain their own source of truth, and wire fields cannot change the host.
-   * @param {string} id
+   * retain their own source of truth, and wire fields cannot change identity.
+   * @param {SelectionOwner | null | undefined} owner
    * @param {Partial<SessionEntry> | null | undefined} fields
    */
-  function mergeCurrentSession(id, fields) {
-    if (!fields || currentSession?.id !== id) return;
-    const host = currentSession.host;
+  function mergeCurrentSession(owner, fields) {
+    if (!fields || !ownsSelection(owner) || !currentSession) return;
+    const { id, host } = currentSession;
     Object.assign(currentSession, fields);
+    currentSession.id = id;
     currentSession.host = host;
     stampSessionHost(currentSession);
     options.onCurrentChanged();
@@ -132,12 +134,26 @@ function createSessionState(options) {
     return currentSession?.id === sessionId && generation === selectedGeneration;
   }
 
+  /** @returns {SelectionOwner | null} */
+  function captureSelection() {
+    return currentSession
+      ? Object.freeze({ id: currentSession.id, host: currentSession.host || null, generation })
+      : null;
+  }
+
+  /** @param {SelectionOwner | null | undefined} owner */
+  function ownsSelection(owner) {
+    return !!owner && !!currentSession && owner.id === currentSession.id
+      && owner.host === (currentSession.host || null) && owner.generation === generation;
+  }
+
   return {
     get sessions() { return sessions; },
     get currentSession() { return currentSession; },
     get generation() { return generation; },
     findSession, sessionHostId, setSessionLists, setCurrentSession,
     patchSession, mergeCurrentSession, advanceSelection, ownsSessionView,
+    captureSelection, ownsSelection,
   };
 }
 

@@ -80,6 +80,10 @@ the message-count and session-spend badges. Spec and mock:
   strict JavaScript/JSDoc checks, host-aware lookup, the four existing writers
   and generation invalidation. DOM rendering stays in `app.js` via callbacks;
   state regressions and the host-collision browser scenarios cover the boundary.
+- Transcript loads, stream connections/retries, relations and metadata mutations
+  now capture immutable host/id/generation owners. The store guards transcript
+  merges and pins identity; stale entrypoints cannot replace the current view.
+  Remaining view/composer callers are the next ownership migration.
 - Extend the typed foundation into application event and request-ownership contracts.
 - Extract frontend state/transport and server application/lifecycle boundaries
   in small changes guarded by the preceding tests.

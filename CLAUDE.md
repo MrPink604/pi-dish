@@ -42,8 +42,8 @@ Wire data and small JSON stores remain unvalidated beyond each existing
 boundary: responses/store values are `unknown`, not a generic caller-selected
 payload type. These types do not replace runtime ownership proofs or validate
 feature schemas. `SessionRef` is available for future typed callers. The browser
-state store uses strict JavaScript/JSDoc checking; async ownership capture remains
-with its callers. Details: [docs/typescript.md](docs/typescript.md).
+state store uses strict JavaScript/JSDoc checking and issues immutable selection
+owners for its asynchronous callers. Details: [docs/typescript.md](docs/typescript.md).
 
 ## Committing
 
@@ -1206,7 +1206,7 @@ selected entry) are written only by four store methods:
 `setSessionLists` (poll/search results; folds the fresh
 entry into `currentSession`), `setCurrentSession` (selection),
 `patchSession` (local mutations — rename, model switch, thinking level), and
-`mergeCurrentSession` (the `session` payload on /messages responses —
+`mergeCurrentSession` (a current ownership token plus the `session` payload on /messages responses —
 current-session/header only, never the lists, whose name/model come from the
 registry-aware poll). Each write re-renders the views it affects, so a
 mutation can't leave sidebar and header disagreeing (the old "rename needs
@@ -1216,9 +1216,14 @@ mutate those snapshots elsewhere. The store is DOM-free and loads before
 header rendering order; selection itself leaves rendering with its caller.
 
 `advanceSelection()` invalidates prior work before a view reset, including
-forced reloads and provisional spawn views. `generation` and `ownsSessionView`
-retain the existing stale-response guard. An id match alone never proves that
-an earlier transcript request still owns the pane.
+forced reloads and provisional spawn views. `captureSelection()` freezes the
+host, id and generation; `ownsSelection(owner)` must hold before asynchronous
+view writes. Transcript loads, catch-up, streaming retries and related-session
+navigation carry the same captured owner through each round trip. A stale
+owner cannot start a replacement transcript load or close the current stream.
+Transcript metadata merges enforce ownership in the store and preserve both
+identity fields. The legacy `generation`/`ownsSessionView` interface remains
+temporarily for the remaining view and composer callers.
 
 Host identity is part of selection and mutation ownership. `findSession(id,
 host)` never falls back to another host; without a host it prefers the selected

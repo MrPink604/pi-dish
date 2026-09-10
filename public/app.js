@@ -2433,7 +2433,7 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   // racing a filtered refresh, a pruned session) must leave the current view
   // intact instead of stashing the transcript and then bailing on a blank pane.
   if (!sessionState.findSession(id, host)) return;
-  const selectionGeneration = sessionState.advanceSelection();
+  sessionState.advanceSelection();
   loadingOlder = false;
   loadingOlderGeneration += 1;
   stashPromptState();
@@ -2463,6 +2463,7 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   if (!keepBounceView) closeBounceView();
   stashCurrentTranscript();
   if (!sessionState.setCurrentSession(id, host)) return;
+  const owner = sessionState.captureSelection();
   if (forceTranscriptReload) transcriptCache.delete(sessionRefKey(sessionState.currentSession));
   // Math rendering is transcript-only. Start its one-shot load while the
   // synchronous session chrome is updated, then gate markdown hydration on it.
@@ -2539,7 +2540,7 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
 
   renderSessions();
   updateSessionHeader();
-  loadSessionRelations(id, selectionGeneration); // summary-only; don't stall transcript hydration
+  loadSessionRelations(owner); // summary-only; don't stall transcript hydration
   if (sessionState.currentSession.isActive) {
     // Fire-and-forget: nothing below needs the results, and both can ask the
     // live session over its socket — don't stall the transcript on them.
@@ -2547,12 +2548,12 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
     loadCommands(id); // refresh autocomplete with this session's commands
   }
   await mathAssetsReady;
-  if (!sessionState.ownsSessionView(id, selectionGeneration)) return;
-  await loadMessages(id, selectionGeneration);
-  if (!sessionState.ownsSessionView(id, selectionGeneration)) return;
+  if (!sessionState.ownsSelection(owner)) return;
+  await loadMessages(owner);
+  if (!sessionState.ownsSelection(owner)) return;
   
   if (sessionState.currentSession.isActive) {
-    startMessageStream(id, selectionGeneration);
+    startMessageStream(owner);
   } else {
     if (messageStream) { messageStream.close(); messageStream = null; }
   }
@@ -2740,9 +2741,7 @@ function createRelationChip(relation) {
   name.textContent = target.name || target.id.slice(0, 8);
   button.append(kind, name);
   button.addEventListener('click', () => {
-    const sourceId = sessionState.currentSession?.id;
-    const generation = sessionState.generation;
-    openRelatedSession(target.id, sourceId, generation);
+    openRelatedSession(target.id, sessionState.captureSelection());
   });
   return button;
 }
@@ -2849,8 +2848,7 @@ function renderRelationsModal() {
   const body = document.getElementById('relationsBody');
   if (!body) return;
   body.replaceChildren();
-  const sourceId = sessionState.currentSession?.id;
-  const generation = sessionState.generation;
+  const owner = sessionState.captureSelection();
   for (const group of groupRelations(sessionRelations)) {
     const title = document.createElement('div');
     title.className = 'stats-share-title relation-group-title';
@@ -2879,41 +2877,43 @@ function renderRelationsModal() {
       row.appendChild(meta);
       row.addEventListener('click', () => {
         closeRelationsModal();
-        openRelatedSession(target.id, sourceId, generation);
+        openRelatedSession(target.id, owner);
       });
       body.appendChild(row);
     }
   }
 }
 
-async function loadSessionRelations(sessionId, generation) {
+async function loadSessionRelations(owner) {
+  if (!sessionState.ownsSelection(owner)) return;
+  const { id: sessionId, host } = owner;
   const seq = ++sessionRelationsSeq;
   try {
-    const res = await apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/related`);
+    const res = await apiFetch(host, `/api/sessions/${encodeURIComponent(sessionId)}/related`);
     const data = await res.json();
     if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-    if (seq !== sessionRelationsSeq || !sessionState.ownsSessionView(sessionId, generation)) return;
+    if (seq !== sessionRelationsSeq || !sessionState.ownsSelection(owner)) return;
     renderSessionRelations(data.relations);
     if (data.indexing) {
       setTimeout(() => {
-        if (sessionState.ownsSessionView(sessionId, generation)) loadSessionRelations(sessionId, generation);
+        if (sessionState.ownsSelection(owner)) loadSessionRelations(owner);
       }, 1000);
     }
   } catch (e) {
-    if (seq === sessionRelationsSeq && sessionState.ownsSessionView(sessionId, generation)) renderSessionRelations([]);
+    if (seq === sessionRelationsSeq && sessionState.ownsSelection(owner)) renderSessionRelations([]);
     console.error('Failed to load related sessions:', e);
   }
 }
 
-async function openRelatedSession(sessionId, sourceId, generation) {
-  if (!sourceId || !sessionState.ownsSessionView(sourceId, generation)) return;
-  if (!sessionState.findSession(sessionId)) await loadSessions(undefined, { withPrevious: true });
-  if (!sessionState.ownsSessionView(sourceId, generation)) return;
-  if (!sessionState.findSession(sessionId)) {
+async function openRelatedSession(sessionId, owner) {
+  if (!sessionState.ownsSelection(owner)) return;
+  if (!sessionState.findSession(sessionId, owner.host)) await loadSessions(undefined, { withPrevious: true });
+  if (!sessionState.ownsSelection(owner)) return;
+  if (!sessionState.findSession(sessionId, owner.host)) {
     setStatus('Related session is not available yet', 'error');
     return;
   }
-  selectSession(sessionId);
+  selectSession(sessionId, { host: owner.host });
 }
 
 /**
@@ -3074,20 +3074,20 @@ function closeThinkingDropdown() {
 async function selectThinkingLevel(level) {
   closeThinkingDropdown();
   if (!sessionState.currentSession || !sessionSupports(sessionState.currentSession, 'setThinking')) return;
-  const { id, host } = sessionState.currentSession;
-  const generation = sessionState.generation;
+  const owner = sessionState.captureSelection();
+  const { id, host } = owner;
   try {
     const data = await apiSend(host, `/api/sessions/${encodeURIComponent(id)}/thinking`, { level });
     // The harness clamps to what the model supports; trust the reported
     // level, and say so when it differs from what was asked for.
     const reported = data.level || level;
     sessionState.patchSession(id, { thinkingLevel: reported }, host);
-    if (!sessionState.ownsSessionView(id, generation)) return;
+    if (!sessionState.ownsSelection(owner)) return;
     setStatus(reported !== level
       ? `Thinking level: ${reported} (model doesn't support ${level})`
       : `Thinking level: ${reported}`);
   } catch (e) {
-    if (sessionState.ownsSessionView(id, generation)) setStatus('Thinking level failed: ' + e.message, 'error');
+    if (sessionState.ownsSelection(owner)) setStatus('Thinking level failed: ' + e.message, 'error');
   }
 }
 
@@ -6574,13 +6574,13 @@ async function commitRename() {
   inputEl.style.display = 'none';
   nameEl.style.display = '';
   if (!sessionState.currentSession || !newName || newName === sessionState.currentSession.name || !sessionState.currentSession.isActive) return;
-  const { id, host } = sessionState.currentSession;
-  const generation = sessionState.generation;
+  const owner = sessionState.captureSelection();
+  const { id, host } = owner;
   try {
     await apiSend(host, '/api/sessions/' + encodeURIComponent(id) + '/rename', { name: newName });
     sessionState.patchSession(id, { name: newName }, host);
   } catch (e) {
-    if (sessionState.ownsSessionView(id, generation)) setStatus('Rename failed: ' + e.message, 'error');
+    if (sessionState.ownsSelection(owner)) setStatus('Rename failed: ' + e.message, 'error');
   }
 }
 
@@ -6772,15 +6772,15 @@ async function selectModel(fullModelId) {
   // A redundant set_model for the truly-same model is harmless.
   var isSame = fullModelId === sessionState.currentSession?.model;
   if (!sessionState.currentSession || !sessionSupports(sessionState.currentSession, 'setModel') || isSame) return;
-  const { id, host } = sessionState.currentSession;
-  const generation = sessionState.generation;
+  const owner = sessionState.captureSelection();
+  const { id, host } = owner;
   setStatus('Switching model...', 'working');
   try {
     await apiSend(host, '/api/sessions/' + encodeURIComponent(id) + '/model', { modelId: fullModelId });
     sessionState.patchSession(id, { model: fullModelId }, host);
-    if (sessionState.ownsSessionView(id, generation)) setStatus('Model switched to ' + fullModelId);
+    if (sessionState.ownsSelection(owner)) setStatus('Model switched to ' + fullModelId);
   } catch (e) {
-    if (sessionState.ownsSessionView(id, generation)) setStatus('Model switch failed: ' + e.message, 'error');
+    if (sessionState.ownsSelection(owner)) setStatus('Model switch failed: ' + e.message, 'error');
   }
 }
 
@@ -6918,7 +6918,9 @@ function renderMessageHtml(msg) {
   return '';
 }
 
-async function loadMessages(id, selectionGeneration = sessionState.generation) {
+async function loadMessages(owner = sessionState.captureSelection()) {
+  if (!sessionState.ownsSelection(owner)) return;
+  const { id, host } = owner;
   cancelStreamingRender();
   closeSearch();
   const container = document.getElementById('messages');
@@ -6926,7 +6928,7 @@ async function loadMessages(id, selectionGeneration = sessionState.generation) {
     // Keep the warm pages visible while checking for anything appended since
     // this session was last viewed. Inactive sessions have no SSE init to do
     // this catch-up for them.
-    await fetchNewMessagesSince(id, selectionGeneration);
+    await fetchNewMessagesSince(owner);
     return;
   }
   container.innerHTML = '<div class="loading">Loading...</div>';
@@ -6938,20 +6940,20 @@ async function loadMessages(id, selectionGeneration = sessionState.generation) {
   // without a set_mood call doesn't wipe a mood set earlier in the session.
   setMoodIndicator('', '');
   try {
-    const res = await apiFetch(sessionState.sessionHostId(id), `/api/sessions/${encodeURIComponent(id)}/messages?limit=${MESSAGE_PAGE_SIZE}`);
+    const res = await apiFetch(host, `/api/sessions/${encodeURIComponent(id)}/messages?limit=${MESSAGE_PAGE_SIZE}`);
     const data = await res.json();
     // A newer selection may have superseded us while the fetch was in flight —
     // don't clobber its transcript/cursors with this stale response.
-    if (!sessionState.ownsSessionView(id, selectionGeneration)) return;
+    if (!sessionState.ownsSelection(owner)) return;
     const { messages, session, firstIndex, lastIndex, hasMore, totalMessages: total } = data;
-    sessionState.mergeCurrentSession(id, session);
+    sessionState.mergeCurrentSession(owner, session);
     oldestLoadedIndex = firstIndex;
     lastLoadedIndex = lastIndex;
     hasMoreOlder = !!hasMore;
     totalMessages = total || 0;
     renderMessages(messages);
   } catch (e) {
-    if (!sessionState.ownsSessionView(id, selectionGeneration)) return;
+    if (!sessionState.ownsSelection(owner)) return;
     container.innerHTML = `<div class="error">Failed to load messages: ${e.message}</div>`;
   }
 }
@@ -6979,8 +6981,8 @@ function renderMessages(messages) {
 async function loadOlderMessages() {
   if (loadingOlder || !hasMoreOlder || !sessionState.currentSession || oldestLoadedIndex == null) return;
   loadingOlder = true;
-  const sessionId = sessionState.currentSession.id;
-  const selectionGeneration = sessionState.generation;
+  const owner = sessionState.captureSelection();
+  const { id: sessionId, host } = owner;
   const requestGeneration = ++loadingOlderGeneration;
   const beforeIndex = oldestLoadedIndex;
   const container = document.getElementById('messages');
@@ -6995,12 +6997,12 @@ async function loadOlderMessages() {
   const anchorOffset = anchor ? anchor.getBoundingClientRect().top : 0;
 
   try {
-    const res = await apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/messages?limit=${MESSAGE_PAGE_SIZE}&before=${beforeIndex}`);
+    const res = await apiFetch(host, `/api/sessions/${encodeURIComponent(sessionId)}/messages?limit=${MESSAGE_PAGE_SIZE}&before=${beforeIndex}`);
     const data = await res.json();
     // The request belongs to the transcript that initiated it. A quick
     // session switch or same-session forced reload must not prepend those
     // messages into the replacement transcript.
-    if (!sessionState.ownsSessionView(sessionId, selectionGeneration) || requestGeneration !== loadingOlderGeneration) return;
+    if (!sessionState.ownsSelection(owner) || requestGeneration !== loadingOlderGeneration) return;
     const { messages, firstIndex, hasMore } = data;
     if (messages && messages.length) {
       const html = messages.map(renderMessageHtml).join('');
@@ -7027,28 +7029,30 @@ async function loadOlderMessages() {
       if (existingBar) existingBar.remove();
     }
   } catch (e) {
-    if (!sessionState.ownsSessionView(sessionId, selectionGeneration) || requestGeneration !== loadingOlderGeneration) return;
+    if (!sessionState.ownsSelection(owner) || requestGeneration !== loadingOlderGeneration) return;
     if (bar) bar.querySelector('.load-older-btn').textContent = `Failed: ${e.message} — retry`;
   } finally {
     if (requestGeneration === loadingOlderGeneration) loadingOlder = false;
   }
 }
 
-async function fetchNewMessagesSince(sessionId, selectionGeneration = sessionState.generation) {
+async function fetchNewMessagesSince(owner = sessionState.captureSelection()) {
+  if (!sessionState.ownsSelection(owner)) return;
+  const { id: sessionId, host } = owner;
   // Incremental catch-up after turn_end / init. Avoids the full reload that
   // stalls long sessions.
   if (lastLoadedIndex == null) {
     // No baseline yet — fall back to a full tail load.
-    return loadMessages(sessionId, selectionGeneration);
+    return loadMessages(owner);
   }
   try {
-    const res = await apiFetch(sessionState.sessionHostId(sessionId), `/api/sessions/${encodeURIComponent(sessionId)}/messages?after=${lastLoadedIndex}`);
+    const res = await apiFetch(host, `/api/sessions/${encodeURIComponent(sessionId)}/messages?after=${lastLoadedIndex}`);
     const data = await res.json();
     // Bail if the user switched sessions or force-reloaded this same session
     // while the catch-up was in flight.
-    if (!sessionState.ownsSessionView(sessionId, selectionGeneration)) return;
+    if (!sessionState.ownsSelection(owner)) return;
     const { messages, lastIndex, totalMessages: total, session } = data;
-    sessionState.mergeCurrentSession(sessionId, session);
+    sessionState.mergeCurrentSession(owner, session);
     if (typeof total === 'number') totalMessages = total;
     if (!messages || messages.length === 0) return;
 
@@ -7090,7 +7094,7 @@ async function fetchNewMessagesSince(sessionId, selectionGeneration = sessionSta
     finalizeRender(container);
     if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
   } catch (e) {
-    if (!sessionState.ownsSessionView(sessionId, selectionGeneration)) return;
+    if (!sessionState.ownsSelection(owner)) return;
     console.error('fetchNewMessagesSince failed:', e);
   }
 }
@@ -7682,30 +7686,31 @@ function finalizeLiveToolPanel(data) {
 let messageStream = null;
 let streamReconnectTimeout = null;
 
-function startMessageStream(sessionId, selectionGeneration = sessionState.generation) {
+function startMessageStream(owner = sessionState.captureSelection()) {
+  if (!sessionState.ownsSelection(owner)) return;
+  const { id: sessionId, host: hostId } = owner;
   if (streamReconnectTimeout) { clearTimeout(streamReconnectTimeout); streamReconnectTimeout = null; }
   if (messageStream) { messageStream.close(); messageStream = null; }
-  if (!sessionId) return;
-
-  const host = resolveHost(sessionState.sessionHostId(sessionId));
+  const host = resolveHost(hostId);
   const path = `/api/sessions/${encodeURIComponent(sessionId)}/stream`;
-  if (!host.token) { openMessageStream(host.base + path, sessionId, selectionGeneration); return; }
+  if (!host.token) { openMessageStream(host.base + path, owner); return; }
   // Token host: the ticket is minted per connect, never remembered — the
   // reconnect path lands back here and mints a fresh one.
   mintHostTicket(host, 'stream').then((ticket) => {
-    if (messageStream || !sessionState.ownsSessionView(sessionId, selectionGeneration)) return;
-    openMessageStream(`${host.base}${path}?ticket=${encodeURIComponent(ticket)}`, sessionId, selectionGeneration);
+    if (messageStream || !sessionState.ownsSelection(owner)) return;
+    openMessageStream(`${host.base}${path}?ticket=${encodeURIComponent(ticket)}`, owner);
   }).catch(() => {
-    if (sessionState.ownsSessionView(sessionId, selectionGeneration)) setStatus('Stream failed', 'error');
+    if (sessionState.ownsSelection(owner)) setStatus('Stream failed', 'error');
   });
 }
 
-function openMessageStream(url, sessionId, selectionGeneration) {
-  const hostId = sessionState.sessionHostId(sessionId);
+function openMessageStream(url, owner) {
+  if (!sessionState.ownsSelection(owner)) return;
+  const { id: sessionId, host: hostId } = owner;
   try {
     const evtSource = new EventSource(url);
     messageStream = evtSource;
-    const ownsStream = () => messageStream === evtSource && sessionState.ownsSessionView(sessionId, selectionGeneration);
+    const ownsStream = () => messageStream === evtSource && sessionState.ownsSelection(owner);
     const addOwnedListener = (event, listener) => evtSource.addEventListener(event, (e) => {
       if (ownsStream()) listener(e);
     });
@@ -7748,7 +7753,7 @@ function openMessageStream(url, sessionId, selectionGeneration) {
         if (!data.turnInProgress) {
           // No turn running — incremental catch-up for any messages written
           // since our initial load (avoids full reload stall).
-          fetchNewMessagesSince(sessionId, selectionGeneration);
+          fetchNewMessagesSince(owner);
         }
       } catch {}
     });
@@ -7788,7 +7793,7 @@ function openMessageStream(url, sessionId, selectionGeneration) {
       }
       // Incrementally pull only new messages from JSONL — full reload
       // stalls long sessions.
-      fetchNewMessagesSince(sessionId, selectionGeneration);
+      fetchNewMessagesSince(owner);
       refreshSessions();
       refreshArtifacts(sessionId); // the agent may have published pages mid-turn
       setStatus('');
@@ -7984,7 +7989,7 @@ function openMessageStream(url, sessionId, selectionGeneration) {
       // the session may have changed since it was last viewed.
       transcriptCache.delete(sessionKey(hostId, nextId));
       void loadSessions(undefined, { withPrevious: true }).then(() => {
-        if (!sessionState.ownsSessionView(sessionId, selectionGeneration) || !sessionState.findSession(nextId, hostId)) return;
+        if (!sessionState.ownsSelection(owner) || !sessionState.findSession(nextId, hostId)) return;
         selectSession(nextId, { forceTranscriptReload: true, host: hostId });
       });
     });
@@ -8018,12 +8023,12 @@ function openMessageStream(url, sessionId, selectionGeneration) {
       if (evtSource.readyState === EventSource.CLOSED) {
         setStatus('Stream disconnected', 'error');
         streamReconnectTimeout = setTimeout(() => {
-          if (sessionState.ownsSessionView(sessionId, selectionGeneration)) startMessageStream(sessionId, selectionGeneration);
+          if (sessionState.ownsSelection(owner)) startMessageStream(owner);
         }, 3000);
       }
     };
   } catch (err) {
-    if (!sessionState.ownsSessionView(sessionId, selectionGeneration)) return;
+    if (!sessionState.ownsSelection(owner)) return;
     console.error('Stream failed:', err);
     setStatus('Stream failed', 'error');
   }

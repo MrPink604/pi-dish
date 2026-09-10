@@ -2398,7 +2398,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
         }
         return realFetch(input, init);
       };
-      window.__auditOldCatchup = fetchNewMessagesSince(a, sessionState.generation);
+      window.__auditOldCatchup = fetchNewMessagesSince(sessionState.captureSelection());
     }, SESSION_ID);
     await desktop.waitForFunction(() => typeof window.__releaseAuditCatchup === 'function');
     await desktop.evaluate((a) => selectSession(a, { forceTranscriptReload: true }), SESSION_ID);
@@ -2988,9 +2988,8 @@ let remoteHost = null; // second pi-dish (multi-host section)
       let release;
       loadSessions = () => new Promise(resolve => { release = resolve; });
       try {
-        const sourceId = sessionState.currentSession.id;
-        const generation = sessionState.generation;
-        const pending = openRelatedSession('not-yet-loaded-peer', sourceId, generation);
+        const owner = sessionState.captureSelection();
+        const pending = openRelatedSession('not-yet-loaded-peer', owner);
         await selectSession(nextId);
         release();
         await pending;

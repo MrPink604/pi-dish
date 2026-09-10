@@ -25,7 +25,10 @@ generation guards. It uses strict JavaScript/JSDoc checking, like cron, and load
 as a local plain script before `app.js`; there is no browser compilation step.
 Its metadata fields stay unknown, and `test/types/browser-state.ts` checks its
 public interface. Browser route/host ids are strings here, without claiming the
-server's branded validation. Async caller ownership capture is the next stage.
+server's branded validation. `captureSelection()` returns a frozen host/id/
+generation token; `ownsSelection()` checks all three. Transcript loads, stream
+connections/retries, relations and metadata mutations now carry these tokens.
+Other view/composer callers still use the generation guard until the next stage.
 
 `server.js`, browser transport/rendering, feature stores and harness
 extensions remain in their existing form. The foundation's declarations
@@ -78,9 +81,10 @@ decision and packaging checks.
   projected session capabilities are complete boolean records. Close/restart
   flags are advice derived from independently checked ownership inputs.
 - `SessionRef` requires both a host and route id and is readonly. It is a
-  foundation contract for later consumers, not a replacement for the browser's
-  existing state writers or selection-generation checks. It does not grant
-  lifecycle authority.
+  foundation contract for later consumers. Browser `SelectionOwner` also carries
+  a selection generation; it protects asynchronous view writes, not lifecycle
+  authority. Transcript metadata merges require a current owner and preserve
+  the selected id and host even if wire fields contain different values.
 - `ProcessIdentity` includes PID and birth time. Input functions still accept
   partial/coercible registry values so the existing fail-closed checks remain
   authoritative. Type annotations never substitute for checking a live process.

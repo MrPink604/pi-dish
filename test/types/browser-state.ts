@@ -12,6 +12,17 @@ state.sessionHostId();
 state.patchSession('session', { name: 'new name' }, 'self');
 const generation: number = state.advanceSelection();
 state.ownsSessionView('session', generation);
+const owner = state.captureSelection();
+state.ownsSelection(owner);
+state.mergeCurrentSession(owner, { model: 'opaque model' });
+if (owner) {
+  // @ts-expect-error Ownership cannot be retargeted after capture.
+  owner.host = 'peer';
+}
+// @ts-expect-error A session id alone cannot authorize a transcript merge.
+state.mergeCurrentSession('session', { name: 'stale' });
+// @ts-expect-error Host identity is required in addition to id and generation.
+state.ownsSelection({ id: 'session', generation });
 // @ts-expect-error Session lookup requires a string host identity.
 state.findSession('session', 7);
 // @ts-expect-error Session rows require an id even though metadata stays opaque.

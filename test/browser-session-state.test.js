@@ -66,10 +66,12 @@ test('browser transcript metadata stays detached from registry lists and cannot 
   const { state, renders } = fixture();
   state.setSessionLists({ active: [{ id: 'one', name: 'registry name' }] });
   state.setCurrentSession('one');
+  const owner = state.captureSelection();
   renders.length = 0;
-  state.mergeCurrentSession('other', { name: 'wrong session' });
+  state.mergeCurrentSession({ ...owner, id: 'other' }, { name: 'wrong session' });
   assert.deepEqual(renders, []);
-  state.mergeCurrentSession('one', { name: 'history name', host: 'untrusted', model: 'old model' });
+  state.mergeCurrentSession(owner, { id: 'wrong-id', name: 'history name', host: 'untrusted', model: 'old model' });
+  assert.equal(state.currentSession.id, 'one');
   assert.equal(state.currentSession.host, 'self');
   assert.equal(state.currentSession.name, 'history name');
   assert.equal(state.findSession('one').name, 'registry name');
@@ -102,7 +104,7 @@ test('browser state stamps legacy entries once host identity becomes known and p
   assert.equal(state.sessionHostId('one'), null);
   state.setCurrentSession('one');
   identifySelf('self');
-  state.mergeCurrentSession('one', { name: 'updated' });
+  state.mergeCurrentSession(state.captureSelection(), { name: 'updated' });
   assert.equal(state.currentSession.host, 'self');
   state.setSessionLists({ active: [{ id: 'two', host: 'peer' }] });
   assert.equal(state.findSession('two').host, 'peer');
@@ -127,4 +129,46 @@ test('browser selection generations reject stale work across same-id hosts, relo
   state.advanceSelection();
   state.setCurrentSession(null);
   assert.equal(state.ownsSessionView('same', reload), false);
+});
+
+test('captured browser ownership is immutable and distinguishes hosts even within the same generation', () => {
+  const { state } = fixture();
+  assert.equal(state.captureSelection(), null);
+  assert.equal(state.ownsSelection(null), false);
+  state.setSessionLists([
+    { hostId: 'self', active: [{ id: 'same' }] },
+    { hostId: 'peer', active: [{ id: 'same' }] },
+  ]);
+  state.setCurrentSession('same', 'self');
+  const owner = state.captureSelection();
+  assert.deepEqual(owner, { id: 'same', host: 'self', generation: 0 });
+  assert.equal(Object.isFrozen(owner), true);
+  assert.equal(Reflect.set(owner, 'host', 'peer'), false);
+  state.patchSession('same', { name: 'fresh metadata' }, 'self');
+  assert.equal(state.ownsSelection(owner), true);
+  state.setCurrentSession('same', 'peer');
+  assert.equal(state.ownsSelection(owner), false, 'host identity is checked independently of generation');
+  assert.equal(owner.host, 'self');
+});
+
+test('transcript merges reject stale ownership after host switches and same-session reloads', () => {
+  const { state, renders } = fixture();
+  state.setSessionLists([
+    { hostId: 'self', active: [{ id: 'same', name: 'local' }] },
+    { hostId: 'peer', active: [{ id: 'same', name: 'remote' }] },
+  ]);
+  state.setCurrentSession('same', 'self');
+  const local = state.captureSelection();
+  state.setCurrentSession('same', 'peer');
+  renders.length = 0;
+  state.mergeCurrentSession(local, { name: 'stale local' });
+  assert.equal(state.currentSession.name, 'remote');
+  const peer = state.captureSelection();
+  state.advanceSelection();
+  state.mergeCurrentSession(peer, { name: 'stale remote' });
+  assert.equal(state.currentSession.name, 'remote');
+  assert.deepEqual(renders, []);
+  state.mergeCurrentSession(state.captureSelection(), { name: 'current remote' });
+  assert.equal(state.currentSession.name, 'current remote');
+  assert.deepEqual(renders, ['header']);
 });
