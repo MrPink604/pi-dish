@@ -1902,7 +1902,6 @@ body.sidebar-open {
   max-height: 300px;
   overflow-y: auto;
   border-top: 1px solid color-mix(in srgb, var(--accent) 10%, transparent);
-  scrollbar-width: thin;
 }
 
 /* Branch summary — tree navigation's record of an abandoned branch */
@@ -3165,18 +3164,29 @@ body.sidebar-open {
   }
 }
 
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
+/* Scrollbar — standard properties for Firefox (webkit rules below are ignored
+   there); keep both in sync: thin width, border-colored thumb, no track. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
 
-::-webkit-scrollbar-track {
+:::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+:::-webkit-scrollbar-track {
   background: transparent;
 }
 
-::-webkit-scrollbar-thumb {
+:::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 4px;
+}
+
+:::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
 }
 
 /* Resume bar */
@@ -3262,9 +3272,6 @@ body.sidebar-open {
   background: var(--orange-dim);
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
-}
 
 /* Modal overlay. Deliberately no backdrop-filter: a full-viewport blur forces
    a blurred re-raster of everything behind the overlay on every repaint, and
