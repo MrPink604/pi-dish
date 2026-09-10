@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { encodeSessionKey, decodeSessionKey, resolveSessionRoute, VERSION } = require('../lib/session-key');
-const { registry, resolveLaunchSpec } = require('../lib/harnesses');
+const { registry, getHarness, resolveLaunchSpec } = require('../lib/harnesses');
 const { discoverSessionCandidates, discoverHarnessSessions } = require('../lib/session-discovery');
 const { getSessionInfo } = require('../lib/session-files');
 
@@ -58,6 +58,21 @@ test('canonical identities round-trip strictly and legacy routes belong to Pi', 
     'a malformed encoded route never falls back to Pi');
   for (const id of ['', '../x', 'x'.repeat(201)]) assert.throws(() => encodeSessionKey('pi', id));
   assert.throws(() => encodeSessionKey('other', 'x'));
+});
+
+test('harness lookup accepts only registered string names', () => {
+  for (const id of ['pi', 'omp', 'prime']) assert.equal(getHarness(id), registry[id]);
+  for (const id of ['constructor', '__proto__', 'toString', ['pi'], null, 42, { toString: () => 'pi' }]) {
+    assert.equal(getHarness(id), null);
+    assert.throws(() => encodeSessionKey(id, 'native'), /Invalid session identity/);
+  }
+});
+
+test('encoded session routes reject inherited and coerced harness names', () => {
+  for (const id of ['constructor', '__proto__', 'toString', ['pi'], null, 42]) {
+    const key = VERSION + Buffer.from(JSON.stringify([id, 'native']), 'utf8').toString('base64url');
+    assert.throws(() => resolveSessionRoute(key), /Malformed session key/);
+  }
 });
 
 test('OMP profile reads title, second-line header, and combined model', () => {
