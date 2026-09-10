@@ -1222,8 +1222,14 @@ view writes. Transcript loads, catch-up, streaming retries and related-session
 navigation carry the same captured owner through each round trip. A stale
 owner cannot start a replacement transcript load or close the current stream.
 Transcript metadata merges enforce ownership in the store and preserve both
-identity fields. The legacy `generation`/`ownsSessionView` interface remains
-temporarily for the remaining view and composer callers.
+identity fields. Composer/queue actions, file/diff guards, terminals, dialog
+responses and bounce reconciliation use the same tokens. File/diff request
+counters remain separate so a newer request inside one selection still wins.
+The old `generation`/`ownsSessionView` interface is removed. Terminal state
+retains its owner through ticket/reconnect paths; callbacks also check the
+current socket instance so retired connections cannot write into a newer view.
+A replacement socket becomes current before the old socket is closed, keeping
+its close callback from scheduling another reconnect.
 
 Host identity is part of selection and mutation ownership. `findSession(id,
 host)` never falls back to another host; without a host it prefers the selected

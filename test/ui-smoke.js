@@ -2369,7 +2369,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       currentId: sessionState.currentSession?.id,
       streamUrl: messageStream?.url || '',
       text: document.getElementById('messages').textContent,
-      generation: sessionState.generation,
+      generation: sessionState.captureSelection()?.generation,
       expected: b,
     }), SESSION2_ID);
     check(rapidSelection.currentId === SESSION2_ID && rapidSelection.streamUrl.includes(`/${SESSION2_ID}/stream`) &&

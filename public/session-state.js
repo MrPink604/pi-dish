@@ -128,11 +128,7 @@ function createSessionState(options) {
   // Every selection owns a new generation, including forced reloads and
   // provisional spawns. Invalidate before the view reset: an id alone cannot
   // prove that asynchronous work still owns the pane.
-  function advanceSelection() { return ++generation; }
-  /** @param {string} sessionId @param {number} selectedGeneration */
-  function ownsSessionView(sessionId, selectedGeneration) {
-    return currentSession?.id === sessionId && generation === selectedGeneration;
-  }
+  function advanceSelection() { generation += 1; }
 
   /** @returns {SelectionOwner | null} */
   function captureSelection() {
@@ -150,9 +146,8 @@ function createSessionState(options) {
   return {
     get sessions() { return sessions; },
     get currentSession() { return currentSession; },
-    get generation() { return generation; },
     findSession, sessionHostId, setSessionLists, setCurrentSession,
-    patchSession, mergeCurrentSession, advanceSelection, ownsSessionView,
+    patchSession, mergeCurrentSession, advanceSelection,
     captureSelection, ownsSelection,
   };
 }

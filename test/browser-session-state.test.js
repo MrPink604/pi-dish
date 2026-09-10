@@ -116,19 +116,22 @@ test('browser selection generations reject stale work across same-id hosts, relo
     { hostId: 'self', active: [{ id: 'same' }] },
     { hostId: 'peer', active: [{ id: 'same' }] },
   ]);
-  const first = state.advanceSelection();
+  state.advanceSelection();
   state.setCurrentSession('same', 'self');
-  assert.equal(state.ownsSessionView('same', first), true);
-  const peer = state.advanceSelection();
+  const first = state.captureSelection();
+  assert.equal(state.ownsSelection(first), true);
+  state.advanceSelection();
   state.setCurrentSession('same', 'peer');
-  assert.equal(state.ownsSessionView('same', first), false);
-  assert.equal(state.ownsSessionView('same', peer), true);
-  const reload = state.advanceSelection();
-  assert.equal(state.ownsSessionView('same', peer), false);
-  assert.equal(state.ownsSessionView('same', reload), true);
+  const peer = state.captureSelection();
+  assert.equal(state.ownsSelection(first), false);
+  assert.equal(state.ownsSelection(peer), true);
+  state.advanceSelection();
+  const reload = state.captureSelection();
+  assert.equal(state.ownsSelection(peer), false);
+  assert.equal(state.ownsSelection(reload), true);
   state.advanceSelection();
   state.setCurrentSession(null);
-  assert.equal(state.ownsSessionView('same', reload), false);
+  assert.equal(state.ownsSelection(reload), false);
 });
 
 test('captured browser ownership is immutable and distinguishes hosts even within the same generation', () => {

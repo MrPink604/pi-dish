@@ -5462,7 +5462,7 @@ let fileViewAbsPath = null; // resolved path of the viewed file (publish target)
 let fileViewRelPath = null;
 let fileViewSessionId = null;
 let fileViewGeneration = 0;
-let fileViewSelectionGeneration = 0;
+let fileViewOwner = null;
 let anchoredCommentDraft = null;
 let commentAnchorRange = null;
 let commentDraftVersion = 0;
@@ -5477,7 +5477,7 @@ function isFileViewOpen() {
 
 function ownsFileView(sessionId, generation) {
   return fileViewSessionId === sessionId && fileViewGeneration === generation &&
-    sessionState.ownsSessionView(sessionId, fileViewSelectionGeneration) && isFileViewOpen();
+    sessionState.ownsSelection(fileViewOwner) && isFileViewOpen();
 }
 
 async function openFileViewer(mention) {
@@ -5485,7 +5485,7 @@ async function openFileViewer(mention) {
   const sessionId = sessionState.currentSession.id;
   const generation = ++fileViewGeneration;
   fileViewSessionId = sessionId;
-  fileViewSelectionGeneration = sessionState.generation;
+  fileViewOwner = sessionState.captureSelection();
   const body = document.getElementById('fileViewBody');
   const title = document.getElementById('fileViewTitle');
   const pathEl = document.getElementById('fileViewPath');
@@ -5560,7 +5560,7 @@ async function openFileViewer(mention) {
 function closeFileView() {
   fileViewGeneration += 1;
   fileViewSessionId = null;
-  fileViewSelectionGeneration = 0;
+  fileViewOwner = null;
   document.getElementById('sessionView').classList.remove('file-open');
   document.getElementById('fileViewBody').innerHTML = '';
   fileViewRaw = null;
@@ -6332,7 +6332,7 @@ function copyFileViewContent(btn) {
 // the ⟳ button; no polling. Closed by ✕/Escape/session switch.
 let diffViewSessionId = null;
 let diffViewGeneration = 0;
-let diffViewSelectionGeneration = 0;
+let diffViewOwner = null;
 let diffPatchRequestGeneration = 0;
 
 function isDiffViewOpen() {
@@ -6341,7 +6341,7 @@ function isDiffViewOpen() {
 
 function ownsDiffView(sessionId, generation) {
   return diffViewSessionId === sessionId && diffViewGeneration === generation &&
-    sessionState.ownsSessionView(sessionId, diffViewSelectionGeneration) && isDiffViewOpen();
+    sessionState.ownsSelection(diffViewOwner) && isDiffViewOpen();
 }
 
 function toggleDiffView() {
@@ -6360,7 +6360,7 @@ async function openDiffView() {
 function closeDiffView() {
   diffViewGeneration += 1;
   diffViewSessionId = null;
-  diffViewSelectionGeneration = 0;
+  diffViewOwner = null;
   document.getElementById('sessionView').classList.remove('diff-open');
   document.getElementById('btnDiff')?.classList.remove('active');
   document.getElementById('diffViewBody').innerHTML = '';
@@ -6373,7 +6373,7 @@ async function loadDiffView() {
   const sessionId = sessionState.currentSession.id;
   const generation = ++diffViewGeneration;
   diffViewSessionId = sessionId;
-  diffViewSelectionGeneration = sessionState.generation;
+  diffViewOwner = sessionState.captureSelection();
   const body = document.getElementById('diffViewBody');
   const rootEl = document.getElementById('diffViewRoot');
   closeCommentBubble();
@@ -8624,10 +8624,9 @@ async function sendPrompt() {
     return;
   }
   if ((!message && !pendingImages.length) || !sessionState.currentSession) return;
-  const sessionId = sessionState.currentSession.id;
-  const hostId = sessionState.currentSession.host;
-  const ownerKey = sessionRefKey(sessionState.currentSession);
-  const selectionGeneration = sessionState.generation;
+  const owner = sessionState.captureSelection();
+  const { id: sessionId, host: hostId } = owner;
+  const ownerKey = sessionRefKey(owner);
   if (abortingSessions.has(ownerKey)) {
     setStatus('Wait for the current turn to finish stopping', 'working');
     return;
@@ -8652,12 +8651,12 @@ async function sendPrompt() {
     setStatus('Running ' + message.split(' ')[0] + '...', 'working');
     try {
       const data = await apiSend(hostId, `/api/sessions/${encodeURIComponent(sessionId)}/command`, { message });
-      if (!sessionState.ownsSessionView(sessionId, selectionGeneration)) return;
+      if (!sessionState.ownsSelection(owner)) return;
       setStatus(data.info || 'Done');
       refreshSessions();
     } catch (e) {
       restorePromptToSession(ownerKey, message, null);
-      if (sessionState.ownsSessionView(sessionId, selectionGeneration)) {
+      if (sessionState.ownsSelection(owner)) {
         setStatus(`${message.split(' ')[0]}: ${e.message}`, 'error');
       }
     }
@@ -8703,7 +8702,7 @@ async function sendPrompt() {
     const resp = await apiSend(hostId, `/api/sessions/${encodeURIComponent(sessionId)}/prompt`, body);
     const pending = pendingOptimisticPrompts.get(clientPromptId);
     if (pending) pending.status = resp?.result?.queued ? 'queued' : 'accepted';
-    if (!sessionState.ownsSessionView(sessionId, selectionGeneration)) return;
+    if (!sessionState.ownsSelection(owner)) return;
     if (resp?.result?.queued) {
       // Held by the bridge until compaction finishes; no turn is running yet.
       // Raise the compacting indicator before undoing the optimistic
@@ -8718,7 +8717,7 @@ async function sendPrompt() {
   } catch (e) {
     discardOptimisticPrompt(clientPromptId); // no echo is coming for a failed send
     restorePromptToSession(ownerKey, message, images);
-    if (sessionState.ownsSessionView(sessionId, selectionGeneration)) {
+    if (sessionState.ownsSelection(owner)) {
       setStatus(`Error: ${e.message}`, 'error');
       setTurnInProgress(false);
     }
@@ -8852,10 +8851,9 @@ async function sendQueuedMessage(kind) {
     return;
   }
   if ((!message && !pendingImages.length) || !sessionState.currentSession || !sessionState.currentSession.isActive) return;
-  const sessionId = sessionState.currentSession.id;
-  const hostId = sessionState.currentSession.host;
-  const ownerKey = sessionRefKey(sessionState.currentSession);
-  const selectionGeneration = sessionState.generation;
+  const owner = sessionState.captureSelection();
+  const { id: sessionId, host: hostId } = owner;
+  const ownerKey = sessionRefKey(owner);
   if (abortingSessions.has(ownerKey)) {
     setStatus('Wait for the current turn to finish stopping', 'working');
     return;
@@ -8874,12 +8872,12 @@ async function sendQueuedMessage(kind) {
   if (refs.length) body.refs = refs;
   try {
     const resp = await apiSend(hostId, `/api/sessions/${encodeURIComponent(sessionId)}${steer ? '/steer' : '/prompt'}`, body);
-    if (!sessionState.ownsSessionView(sessionId, selectionGeneration)) return;
+    if (!sessionState.ownsSelection(owner)) return;
     if (resp?.result?.queued) setStatus('Queued — will send when compaction finishes');
     else setStatus(steer ? 'Steered' : 'Queued for after this turn');
   } catch (e) {
     restorePromptToSession(ownerKey, message, images);
-    if (sessionState.ownsSessionView(sessionId, selectionGeneration)) {
+    if (sessionState.ownsSelection(owner)) {
       setStatus(`${steer ? 'Steer' : 'Follow-up'} failed: ${e.message}`, 'error');
     }
   }
@@ -8941,10 +8939,9 @@ function queueRowHtml(kind, label, text, index, clientPromptId = null) {
 // Cancel a queued message on the bridge and return its text to the composer.
 async function editQueuedMessage(btn) {
   if (!sessionState.currentSession) return;
-  const sessionId = sessionState.currentSession.id;
-  const hostId = sessionState.currentSession.host;
-  const ownerKey = sessionRefKey(sessionState.currentSession);
-  const selectionGeneration = sessionState.generation;
+  const owner = sessionState.captureSelection();
+  const { id: sessionId, host: hostId } = owner;
+  const ownerKey = sessionRefKey(owner);
   const row = btn.closest('.queue-item');
   if (!row) return;
   const kind = row.dataset.kind;
@@ -8974,7 +8971,7 @@ async function editQueuedMessage(btn) {
       clientPrompt.status = previousPromptStatus;
       renderQueueStatus(lastQueueData);
     }
-    if (sessionState.ownsSessionView(sessionId, selectionGeneration)) setStatus(e.message, 'error');
+    if (sessionState.ownsSelection(owner)) setStatus(e.message, 'error');
   }
 }
 
@@ -8982,10 +8979,9 @@ async function abortTurn() {
   // Compaction counts: the bridge cancels a running compaction on abort, and
   // its compaction_end (aborted) event clears the compacting indicator.
   if (!sessionState.currentSession || (!turnInProgress && !compactingNow)) return;
-  const sessionId = sessionState.currentSession.id;
-  const hostId = sessionState.currentSession.host;
-  const ownerKey = sessionRefKey(sessionState.currentSession);
-  const selectionGeneration = sessionState.generation;
+  const owner = sessionState.captureSelection();
+  const { id: sessionId, host: hostId } = owner;
+  const ownerKey = sessionRefKey(owner);
   if (abortingSessions.has(ownerKey)) return;
   abortingSessions.add(ownerKey);
   setStatus('Stopping...', 'working');
@@ -8996,7 +8992,7 @@ async function abortTurn() {
     // and JSONL catch-up.
   } catch (e) {
     abortingSessions.delete(ownerKey);
-    if (sessionState.ownsSessionView(sessionId, selectionGeneration)) setStatus('Stop failed: ' + e.message, 'error');
+    if (sessionState.ownsSelection(owner)) setStatus('Stop failed: ' + e.message, 'error');
   }
 }
 
@@ -11065,10 +11061,10 @@ function setExtDialogMinimized(requestId, minimized) {
 function sendExtDialogResponse(dialogKey, response) {
   const entry = openExtDialogs.get(dialogKey);
   if (!entry) return;
-  const generation = sessionState.generation;
+  const owner = sessionState.captureSelection();
   apiSend(entry.hostId, `/api/sessions/${encodeURIComponent(entry.sessionId)}/ui-response`, { requestId: entry.requestId, ...response })
     .catch(e => {
-      if (sessionState.ownsSessionView(entry.sessionId, generation) && sessionState.currentSession?.host === entry.hostId) {
+      if (sessionState.ownsSelection(owner) && owner.id === entry.sessionId && owner.host === (entry.hostId || null)) {
         setStatus('Dialog response failed: ' + e.message, 'error');
       }
     });
@@ -12254,13 +12250,13 @@ function toggleTerminal() {
 async function openTerminal(mode) {
   if (!sessionState.currentSession || termState || !sessionHostSupportsTerminal(sessionState.currentSession)) return;
   const session = sessionState.currentSession;
-  const sessionId = session.id;
-  const selectionGeneration = sessionState.generation;
+  const owner = sessionState.captureSelection();
+  const sessionId = owner.id;
   // Assets may still be in flight (or never requested, on a load whose first
   // terminal-capable session is a remote one) — the promise is one-shot.
   try { await loadTerminalAssets(); } catch { return; }
   if (typeof Terminal === 'undefined') return;
-  if (termState || !sessionState.ownsSessionView(sessionId, selectionGeneration)) return;
+  if (termState || !sessionState.ownsSelection(owner)) return;
   // 'shell' (default) or 'tmux' (a grouped tmux client viewing the pane the
   // session's pi runs in). The last choice sticks per session.
   if (!mode) mode = localStorage.getItem(terminalModeKey(sessionId)) === 'tmux' ? 'tmux' : 'shell';
@@ -12274,7 +12270,7 @@ async function openTerminal(mode) {
       new Promise(r => setTimeout(r, 2000)),
     ]);
   } catch {}
-  if (termState || !sessionState.ownsSessionView(sessionId, selectionGeneration)) return;
+  if (termState || !sessionState.ownsSelection(owner)) return;
 
   const panel = document.getElementById('terminalPanel');
   const container = document.getElementById('terminalContainer');
@@ -12295,7 +12291,7 @@ async function openTerminal(mode) {
   if (fitAddon) term.loadAddon(fitAddon);
 
   termState = {
-    term, fitAddon, ws: null, sessionId, mode,
+    term, fitAddon, ws: null, sessionId, owner, mode,
     tmuxPrefix: null, reconnectTimer: null, attempts: 0, closedByUser: false, exited: false,
   };
   updateTerminalModeUI();
@@ -12341,26 +12337,33 @@ function setTerminalStatus(text, cls) {
 function connectTerminalWS() {
   if (!termState) return;
   const state = termState;
-  const host = resolveHost(sessionState.sessionHostId(state.sessionId));
+  if (!sessionState.ownsSelection(state.owner)) return;
+  const host = resolveHost(state.owner.host);
   const modeQ = state.mode === 'tmux' ? '?mode=tmux' : '';
   const url = hostWsUrl(host, `/api/sessions/${encodeURIComponent(state.sessionId)}/terminal${modeQ}`);
   if (!host.token) { openTerminalWS(state, url); return; }
   // Same ticket rule as the SSE stream: minted per connect, never reused.
   setTerminalStatus(state.attempts ? 'reconnecting…' : 'connecting…', 'reconnecting');
   mintHostTicket(host, 'terminal').then((ticket) => {
-    if (termState !== state || state.closedByUser) return;
+    if (termState !== state || state.closedByUser || !sessionState.ownsSelection(state.owner)) return;
     openTerminalWS(state, `${url}${modeQ ? '&' : '?'}ticket=${encodeURIComponent(ticket)}`);
   }).catch(() => {
-    if (termState === state) setTerminalStatus('connect failed', 'error');
+    if (termState === state && sessionState.ownsSelection(state.owner)) setTerminalStatus('connect failed', 'error');
   });
 }
 
 function openTerminalWS(state, url) {
+  if (state !== termState || state.closedByUser || !sessionState.ownsSelection(state.owner)) return;
   const ws = new WebSocket(url);
+  const previous = state.ws;
   state.ws = ws;
+  // Publish the replacement first, so even an immediate old close callback
+  // cannot schedule another reconnect. Retired sockets must also detach.
+  try { previous?.close(); } catch {}
   setTerminalStatus(state.attempts ? 'reconnecting…' : 'connecting…', 'reconnecting');
 
   ws.onmessage = (ev) => {
+    if (state !== termState || state.ws !== ws || state.closedByUser || !sessionState.ownsSelection(state.owner)) return;
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
     if (msg.type === 'attach') {
@@ -12387,7 +12390,7 @@ function openTerminalWS(state, url) {
   };
 
   ws.onclose = () => {
-    if (state !== termState || state.closedByUser || state.exited) return;
+    if (state !== termState || state.ws !== ws || state.closedByUser || state.exited || !sessionState.ownsSelection(state.owner)) return;
     // Auto-reconnect with backoff while the panel is open — phones drop the
     // socket on every screen lock; the server-side PTY is still there.
     const delay = Math.min(8000, 1000 * 2 ** state.attempts);
@@ -13903,17 +13906,16 @@ async function reconcileBounceRestarts(state, operations, submitted = false) {
     }
   }
   if (!completed.length || !bounceHostElement(state)) return;
-  const selected = sessionState.currentSession;
-  const generation = sessionState.generation;
-  const affected = completed.find(({ target }) => target.sessionId === selected?.id && selected?.host === (state.host.hostId || null))?.target;
+  const owner = sessionState.captureSelection();
+  const affected = completed.find(({ target }) => target.sessionId === owner?.id && owner?.host === (state.host.hostId || null))?.target;
   await refreshSessions();
   if (!bounceHostElement(state)) return; // Reconcile on reopen; never dismiss another takeover.
   const id = affected?.replacementId || affected?.sessionId;
-  if (affected && !sessionState.findSession(id, selected.host)) await loadSessions(undefined, { withPrevious: true });
+  if (affected && !sessionState.findSession(id, owner.host)) await loadSessions(undefined, { withPrevious: true });
   if (!bounceHostElement(state)) return;
   for (const { key } of completed) bouncePendingRestarts.delete(key);
-  if (!affected || !sessionState.ownsSessionView(selected.id, generation) || sessionState.currentSession.host !== selected.host) return;
+  if (!affected || !sessionState.ownsSelection(owner)) return;
   // Reconnect the selected transcript underneath the status surface, without
   // closing it; an ordinary user session switch still closes the takeover.
-  await selectSession(id, { host: selected.host, keepBounceView: true });
+  await selectSession(id, { host: owner.host, keepBounceView: true });
 }
