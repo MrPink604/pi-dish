@@ -93,9 +93,11 @@ the message-count and session-spend badges. Spec and mock:
 - Extend the typed foundation into application event and request-ownership contracts.
 - Extract frontend state/transport and server application/lifecycle boundaries
   in small changes guarded by the preceding tests.
-- Evaluate a contained component-framework pilot. Preserve the current transcript
-  renderer and its performance contracts initially; a framework choice does not
-  itself fix state ownership.
+- Framework reassessment completed: retain the current production renderer.
+  [The assessment](docs/browser-framework-assessment.md) specifies a future
+  model-selector pilot comparing Preact with an extracted plain-JavaScript
+  baseline, including ownership, local delivery and measurement requirements.
+  No component framework has been adopted; transcript work stays separate.
 
 ## Product limitations to revisit separately
 

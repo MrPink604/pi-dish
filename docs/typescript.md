@@ -130,3 +130,6 @@ including cases that must fail compilation. Runtime regressions exercise the
 generated files. Preserve the existing assertions when subsequent consumers
 migrate; adapt setup/imports without weakening behavioral coverage. See
 [Testing](testing.md) for the full matrix and scope limitations.
+
+The [browser framework assessment](browser-framework-assessment.md) records the
+post-extraction decision and a contained future model-selector experiment.
