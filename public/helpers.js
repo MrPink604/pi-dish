@@ -258,9 +258,13 @@ function extractImageBlocks(content) {
   return out;
 }
 
-/** Severity class for a context-usage percentage (session list + header badges). */
+/**
+ * Severity class for a context-usage percentage. One scale everywhere the
+ * number appears (sidebar rows, the composer readout): white to a third,
+ * warning to two thirds, error beyond.
+ */
 function contextClass(percent) {
-  return percent > 80 ? 'critical' : percent > 50 ? 'high' : '';
+  return percent > 66 ? 'critical' : percent > 33 ? 'high' : '';
 }
 
 /** Missing capability metadata is legacy Pi behavior: supported by default. */

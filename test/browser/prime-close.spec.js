@@ -13,8 +13,13 @@ async function configureSession(page, fleet, mode, close = true, restart = false
   }, host), { id: ROOT, host: fleet.peer.hostId, mode, close, restart });
 }
 
+// The context readout lives in the composer, which an inactive session
+// hides behind the resume bar; that bar carries its own stats button.
+const statsButton = (page) =>
+  page.locator('#inactiveStatsBtn:visible, #sessionContext:visible').first();
+
 async function openStats(page) {
-  await page.locator('#sessionContext').click();
+  await statsButton(page).click();
   await expect(page.locator('#statsModal')).toBeVisible();
   await expect(page.locator('#statsClose')).toBeVisible();
 }
@@ -109,7 +114,7 @@ test('older client-only Prime session retains detach wording', async ({ page, fl
 test('unowned session with close capability disabled exposes no close control', async ({ page, fleet }) => {
   await configureSession(page, fleet, 'owned-agent', false);
   await expect(fleet.row(fleet.peer).locator('.session-close-btn')).toHaveCount(0);
-  await page.locator('#sessionContext').click();
+  await statsButton(page).click();
   await expect(page.locator('#statsModal')).toBeVisible();
   await expect(page.locator('#statsClose')).toHaveCount(0);
   await expect(page.locator('#sessionCloseBtn')).toHaveCount(0);

@@ -1119,7 +1119,10 @@ body.sidebar-open {
   color: var(--text-bright);
 }
 
+/* Takes the width the actions group leaves: the relation strip measures its
+   own clientWidth to decide how many chips fit in one row. */
 .session-info {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -2349,41 +2352,115 @@ body.sidebar-open {
   border-color: var(--accent);
 }
 
-/* Attach/dictate, inside the field. Bottom-left keeps the textarea's native
-   resize grip (bottom-right) clickable. */
+/* Mid-turn the rail is two glyphs tall (steer over follow-up), so the field
+   reserves more of its own bottom and grows to keep the same visible line
+   count. autosizePromptInput's cap covers the taller state. */
+.composer-box.turn textarea {
+  padding-bottom: 76px;
+  min-height: 124px;
+}
+
+/* The in-field rail: content tools on the left, readout/stop/turn column on
+   the right. Bottom-anchored across the full field width; the textarea's
+   native resize grip is at bottom-right, so the rail leaves 18px for it. */
 .composer-tools {
   position: absolute;
   left: 8px;
+  right: 20px;
   bottom: 8px;
   display: flex;
-  gap: 6px;
+  align-items: flex-end;
+  gap: 4px;
 }
 
-.input-actions {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px; /* minimum spacing; .status flex-grows to push actions right */
-  margin-top: 8px;
-}
-
-/* Meta (context %, status text, working timer) yields space; the turn
-   buttons never do — clipping Follow-up off a phone screen is the bug this
-   split exists to prevent. */
-.input-actions-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.composer-gap {
   flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
 }
 
-.input-actions-main {
-  display: flex;
+/* Rail buttons. No border or background of their own until hovered — the
+   field is the container, the glyph is the affordance. Touch-sized by
+   default; tightened on desktop below. */
+.composer-tools .tool-btn {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
+  justify-content: center;
+  flex: none;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.composer-tools .tool-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+.composer-tools .tool-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+/* Context readout. Fixed slot, colour-coded by fill: white to a third,
+   warning to two thirds, error beyond. */
+.composer-tools .tool-ctx {
+  color: var(--text-bright);
+}
+
+.composer-tools .tool-ctx.high { color: var(--warning); }
+.composer-tools .tool-ctx.critical { color: var(--error); }
+
+/* Stop is the one coloured glyph, and it holds its slot when idle so the
+   readout beside it never moves. */
+.composer-tools .tool-stop {
+  color: var(--error);
+  visibility: hidden;
+}
+
+.composer-tools .tool-stop:hover {
+  color: var(--error);
+}
+
+/* Turn column: Send when idle, steer over follow-up during a turn. Fixed
+   width so both states occupy the same column. */
+.composer-act {
+  flex: none;
+  width: 38px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.composer-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--text-on-accent);
+  cursor: pointer;
+}
+
+.composer-send svg {
+  width: 19px;
+  height: 19px;
+}
+
+.composer-send:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .mood-indicator {
@@ -2656,18 +2733,26 @@ body.sidebar-open {
   color: var(--text);
 }
 
-/* Working spinner in the input row: mobile only (desktop has it in the header) */
-.input-actions .badge-working {
+/* Run state and status text: the third header row on a phone. On desktop
+   the working badge lives in the meta row, so this row carries only the
+   status line, and only while there is one. */
+.session-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.session-chips .badge-working {
   display: none;
 }
 
-/* Context badge in the input row: mobile only (desktop has it in the header) */
-#sessionContextBar {
-  display: none;
-}
-
-.input-actions .btn {
-  flex-shrink: 0;
+/* Desktop shows cwd in the stats modal; the chip is a phone affordance.
+   !important beats the inline display app.js manages. */
+@media (min-width: 769px) {
+  #sessionCwdChip {
+    display: none !important;
+  }
 }
 
 /* Hamburger — sits inside the session header (or floats over the empty
@@ -2804,13 +2889,16 @@ body.sidebar-open {
     min-width: 0;
   }
 
-  /* Header: title gets its own row above the model controls. */
+  /* Header: three rows. Title row (☰ · name · search · ⚙), then the four
+     controls that always matter, then a scrolling chip row. Rows 2 and 3
+     span the full width, so the header aligns its first row at the top. */
   .session-header {
-    padding: 6px 12px 6px 6px;
+    padding: 6px 8px 6px 6px;
     padding-top: calc(env(safe-area-inset-top) + 6px);
     min-height: 48px;
     gap: 4px;
     justify-content: flex-start;
+    align-items: flex-start;
   }
 
   /* Keep the title independent from the badges so long names can use all
@@ -2835,13 +2923,58 @@ body.sidebar-open {
     max-width: none;
   }
 
+  /* Row 2: host · harness · model · reasoning. Only the model chip may
+     shrink, so the other three keep their full labels. */
   .session-meta-desktop {
     width: 100%;
     margin-left: 0;
     flex-shrink: 0;
     gap: 6px;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: flex-start;
+  }
+
+  .session-meta-desktop > * {
+    flex: none;
+  }
+
+  .session-meta-desktop .model-selector {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  /* Row 3: run state first, then the rest, scrolling with no visible bar. */
+  .session-chips {
+    width: 100%;
+    gap: 6px;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .session-chips::-webkit-scrollbar {
+    display: none;
+  }
+
+  .session-chips > * {
+    flex: none;
+  }
+
+  /* Idle reads "idle" rather than reserving blank space: this cell is the
+     row's anchor, so it is always present. */
+  .session-chips .badge-working {
+    display: inline-flex;
+    visibility: visible;
+  }
+
+  .session-chips .badge-working:not(.active) .spinner-dot {
+    display: none;
+  }
+
+  .session-chips .status {
+    flex: none;
+    white-space: nowrap;
   }
 
   .session-relations {
@@ -2867,33 +3000,29 @@ body.sidebar-open {
     font-size: 9px;
   }
 
-  /* Keep the model selector and thinking badge in the header — context
-     lives bottom-left in the input row, the rest in the ⚙ panel.
-     !important beats the inline display toggles in JS. */
-  #sessionMsgCount,
-  #sessionWorking,
-  #sessionContext {
+  /* Row 2 keeps only the four primary controls; the desktop working badge
+     belongs to the chip row here. !important beats the inline display
+     toggles in JS. */
+  #sessionWorking {
     display: none !important;
-  }
-
-  #sessionContextBar {
-    display: inline-flex;
-    align-items: center;
-    flex-shrink: 0;
-    min-height: 28px;
-    font-family: var(--font-mono);
   }
 
   #sessionModel {
     display: inline-block;
-    max-width: 34vw;
+    max-width: 40vw;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .session-actions {
-    display: none;
+  /* Row 1 keeps search and the control panel; everything else in the
+     actions group has a control-panel row. */
+  .session-actions > :not(#btnSearch):not(#btnPanel) {
+    display: none !important;
+  }
+
+  #btnPanel {
+    display: inline-flex;
   }
 
   .badge {
@@ -2956,34 +3085,9 @@ body.sidebar-open {
   /* Touch sizes for the in-field tools live with the rule that shapes them
      (a later same-specificity rule would win over this block). */
 
-  .input-actions {
-    margin-top: 4px;
-    gap: 6px;
-  }
-
-  .input-actions-meta,
-  .input-actions-main {
-    gap: 6px;
-  }
-
-  /* Tighter than desktop so ⚙ + Stop + Steer + Follow-up all fit a phone
-     row without the meta group having to give up more than its timer. */
-  .input-actions-main .btn {
-    padding: 8px 10px;
-  }
-
-  /* Working spinner next to the ⚙ button */
-  .input-actions .badge-working {
-    display: inline-flex;
-    flex-shrink: 0;
-  }
-
-  .badge-tool-btn.mobile-only {
-    flex-shrink: 0;
-    min-height: 38px;
-    padding: 3px 12px;
-    font-size: 15px;
-    border-radius: 8px;
+  .composer-box.turn textarea {
+    padding-bottom: 74px;
+    min-height: 106px;
   }
 
   .btn {
@@ -3915,8 +4019,7 @@ mark.search-mark {
   border-radius: 6px;
 }
 
-.btn-icon.active,
-.badge-tool-btn.active {
+.btn-icon.active {
   color: var(--accent);
   border-color: var(--accent);
 }
@@ -4060,46 +4163,31 @@ button.badge-context {
 
 .composer-note-dismiss:hover { color: var(--text); }
 
-/* In-field tool rail buttons (📎, 🎙). They sit on the textarea, so they
-   carry no border of their own until hovered — the field is the container
-   the eye reads. Touch size by default, tightened on desktop below; both
-   stay inside the strip the field reserves with its bottom padding. */
-.composer-tools .badge-tool-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 34px;
-  min-height: 34px;
-  padding: 0;
-  font-size: 17px;
-  line-height: 1;
-  border-color: transparent;
-  background: transparent;
-  border-radius: 6px;
-  color: var(--text-muted); /* not opacity: the mic's state classes recolor it */
-}
-
+/* Desktop tightens the touch-sized rail. */
 @media (min-width: 769px) {
-  .composer-tools .badge-tool-btn {
+  .composer-tools .tool-btn {
     min-width: 30px;
     min-height: 30px;
-    font-size: 15px;
   }
-}
 
-.composer-tools .badge-tool-btn:hover {
-  background: var(--bg-hover);
-  border-color: var(--border);
-  color: var(--text);
-}
+  .composer-tools .tool-btn svg {
+    width: 18px;
+    height: 18px;
+  }
 
-/* The base .badge-tool-btn is display:none (mobile-only tool buttons) and
-   nothing in app.js toggles the attach button's display, so it un-hides
-   itself here — the picker is a desktop affordance too (paste is the
-   keyboard-only alternative). app.js sets #btnMic's inline display when a
-   host advertises stt, so that one only needs its shape. */
-#btnAttach {
-  display: inline-flex;
+  .composer-act {
+    width: 34px;
+  }
+
+  .composer-send {
+    width: 30px;
+    height: 30px;
+  }
+
+  .composer-box.turn textarea {
+    padding-bottom: 68px;
+    min-height: 116px;
+  }
 }
 
 #btnMic {
@@ -4108,6 +4196,10 @@ button.badge-context {
   touch-action: none;
   user-select: none;
 }
+
+/* The slash only belongs to the recording state. */
+#btnMic .mic-slash { display: none; }
+#btnMic.recording .mic-slash { display: inline; }
 
 /* Visible but not usable here (insecure origin, no MediaRecorder): the tap
    still lands, and shows the reason in the composer note. */
@@ -4118,9 +4210,11 @@ button.badge-context {
 
 #btnMic.recording {
   color: var(--error);
-  border-color: var(--error);
-  background: color-mix(in srgb, var(--error) 18%, transparent);
   animation: pulse 1.5s infinite;
+}
+
+#btnMic.recording:hover {
+  color: var(--error);
 }
 
 #btnMic.busy {
@@ -4433,7 +4527,6 @@ img.msg-image {
 .host-add-status.error { color: var(--error); }
 
 .response-details-modal { width: min(540px, calc(100vw - 24px)); }
-.session-spend-badge { cursor: pointer; }
 
 /* Public share link section of the stats modal. */
 .stats-share {
@@ -4560,19 +4653,7 @@ img.msg-image {
   color: var(--text-muted);
 }
 
-/* Mobile-only inline tool buttons in the input row */
-.badge-tool-btn {
-  display: none;
-  cursor: pointer;
-  border: 1px solid var(--border);
-  background: var(--bg-hover);
-  color: var(--text-muted);
-  font: inherit;
-}
-
 @media (max-width: 768px) {
-  .badge-tool-btn.mobile-only { display: inline-flex; align-items: center; }
-
   /* Tree modal: full screen, touch-friendly rows */
   .tree-modal {
     width: 100vw;
@@ -4606,7 +4687,6 @@ img.msg-image {
     max-height: 90dvh;
   }
   .global-settings-btn { display: inline-flex; }
-  .session-spend-badge { display: none !important; }
   .settings-modal { width: 100vw; max-width: none; max-height: 95dvh; }
   .preference-row { align-items: flex-start; flex-direction: column; gap: 8px; }
   .toggle-row { flex-direction: row; }

@@ -517,10 +517,8 @@ function ownsSessionView(sessionId, generation) {
   return currentSession?.id === sessionId && sessionSelectionGeneration === generation;
 }
 const RESPONSE_MODE_KEY = 'pi-dish-response-metadata';
-const SESSION_SPEND_KEY = 'pi-dish-show-session-spend';
 const RESPONSE_MODES = new Set(['hidden', 'compact', 'performance', 'performance-cost']);
 let responseMetadataMode = RESPONSE_MODES.has(localStorage.getItem(RESPONSE_MODE_KEY)) ? localStorage.getItem(RESPONSE_MODE_KEY) : 'compact';
-let showSessionSpend = localStorage.getItem(SESSION_SPEND_KEY) === '1';
 // Which context number the sidebar rows carry. Device-local like the other
 // display preferences — it's a reading habit, not a fleet-wide setting.
 const CONTEXT_METRIC_KEY = 'pi-dish-sidebar-context-metric';
@@ -539,7 +537,7 @@ let usageSort = localStorage.getItem('pi-dish-usage-sort') === 'tokens' ? 'token
 // output/cache write). Client-side only — same payload, no refetch.
 let usageStack = localStorage.getItem('pi-dish-usage-stack') === 'buckets' ? 'buckets' : 'models';
 let usageModelFilter = new Set(); // multi-select model refs; empty = all models
-let settingsRenderSeq = 0, usageFetchSeq = 0, spendFetchSeq = 0;
+let settingsRenderSeq = 0, usageFetchSeq = 0;
 
 // Live tool panel tracking: toolCallId -> { el, startTime }
 let liveToolPanels = new Map();
@@ -2513,7 +2511,6 @@ function showPendingSessionView(spawnId) {
   setTurnInProgress(false);
   sessionArtifacts = { pages: [], share: null };
   updateArtifactsBadge();
-  refreshSessionSpend();
 
   const nameEl = document.getElementById('sessionName');
   nameEl.textContent = 'Starting session…';
@@ -2524,12 +2521,9 @@ function showPendingSessionView(spawnId) {
   modelBtn.textContent = `${harnessLabel} starting`;
   modelBtn.onclick = null;
   modelBtn.style.cursor = 'default';
-  document.getElementById('sessionMsgCount').textContent = '0 msgs';
-  document.getElementById('sessionContext').textContent = '0%';
-  document.getElementById('sessionContext').className = 'badge badge-context';
-  document.getElementById('sessionContextBar').textContent = '0%';
-  document.getElementById('sessionContextBar').className = 'badge badge-context';
-  document.getElementById('sessionSpendBadge').style.display = 'none';
+  const ctxReset = document.getElementById('sessionContext');
+  ctxReset.textContent = '0%';
+  ctxReset.className = 'tool-btn tool-ctx';
   updateThinkingBadges();
   updateTerminalButtons();
   updateMicButton();
@@ -2564,7 +2558,6 @@ function showPendingSessionFailure(spawnId, message, spawn) {
   input.placeholder = 'Your draft is preserved here so you can copy it';
   const btn = document.getElementById('btnSend');
   btn.disabled = true;
-  btn.textContent = 'Not started';
   btn.title = message;
 }
 
@@ -2676,7 +2669,6 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   sessionArtifacts = { pages: [], share: null };
   updateArtifactsBadge();
   refreshArtifacts(id);
-  refreshSessionSpend();
 
   renderSessions();
   updateSessionHeader();
@@ -3057,11 +3049,27 @@ async function openRelatedSession(sessionId, sourceId, generation) {
   selectSession(sessionId);
 }
 
+/**
+ * Most model signal that fits the chip. The provider slug is the least
+ * informative part, so it is dropped before the name is allowed to
+ * ellipsize (CSS does the truncation). Full ref stays in the tooltip.
+ */
+function setModelChipLabel(btn, model, suffix) {
+  const full = String(model || '');
+  btn.title = full ? `${full} — change model` : 'Change model';
+  btn.textContent = full + suffix;
+  // scrollWidth is 0 while the header is hidden; then the full ref stands
+  // and the next header update (the view is visible by then) trims it.
+  if (btn.clientWidth && btn.scrollWidth > btn.clientWidth) {
+    const short = shortModelName(full);
+    if (short !== full) btn.textContent = short + suffix;
+  }
+}
+
 function updateSessionHeader() {
   if (!currentSession) return;
 
   document.getElementById('sessionName').textContent = currentSession.name || 'Unnamed';
-  document.getElementById('sessionMsgCount').textContent = `${currentSession.messageCount} msgs`;
   const hostEl = document.getElementById('sessionHost');
   if (hostEl) {
     const showHost = isMultiHost() && !!hostEntryFor(currentSession.host);
@@ -3110,33 +3118,34 @@ function updateSessionHeader() {
   nameEl.onclick = canRename ? startRename : null;
 
   const modelBtn = document.getElementById('sessionModel');
-  if (currentSession.isActive && sessionSupports(currentSession, 'setModel')) {
-    modelBtn.textContent = currentSession.model + ' ▾';
-    modelBtn.onclick = toggleModelDropdown;
-    modelBtn.style.cursor = 'pointer';
-  } else {
-    modelBtn.textContent = currentSession.model;
-    modelBtn.onclick = null;
-    modelBtn.style.cursor = 'default';
-  }
+  const canSetModel = currentSession.isActive && sessionSupports(currentSession, 'setModel');
+  setModelChipLabel(modelBtn, currentSession.model, canSetModel ? ' ▾' : '');
+  modelBtn.onclick = canSetModel ? toggleModelDropdown : null;
+  modelBtn.style.cursor = canSetModel ? 'pointer' : 'default';
 
-  const tokenStr = currentSession.contextTokens ? ` (${formatTokens(currentSession.contextTokens)} tok)` : '';
+  // One readout, in the composer field: percent only (its slot is fixed
+  // width), with the token count in the tooltip.
   const ctxClass = contextClass(currentSession.contextPercent);
-
-  // Desktop header badge shows percent + tokens; the mobile one (bottom-left
-  // of the input row) only has room for the percent.
   const contextEl = document.getElementById('sessionContext');
-  contextEl.textContent = `${currentSession.contextPercent}%${tokenStr}`;
-  contextEl.className = 'badge badge-context' + (ctxClass ? ' ' + ctxClass : '');
-  const barCtx = document.getElementById('sessionContextBar');
-  if (barCtx) {
-    barCtx.textContent = `${currentSession.contextPercent}%`;
-    barCtx.className = 'badge badge-context' + (ctxClass ? ' ' + ctxClass : '');
-  }
+  contextEl.textContent = `${currentSession.contextPercent}%`;
+  contextEl.className = 'tool-btn tool-ctx' + (ctxClass ? ' ' + ctxClass : '');
+  contextEl.title = currentSession.contextTokens
+    ? `Session stats — ${formatTokens(currentSession.contextTokens)} tokens of context`
+    : 'Session stats';
 
   updateThinkingBadges();
   updateTerminalButtons();
   updateMicButton();
+
+  // Phone chip row: the working directory is the one piece of session
+  // context the header used to hide behind the stats modal.
+  const cwdChip = document.getElementById('sessionCwdChip');
+  if (cwdChip) {
+    const cwd = currentSession.cwd || '';
+    cwdChip.style.display = cwd ? '' : 'none';
+    cwdChip.textContent = cwd ? (cwd.split('/').filter(Boolean).pop() || cwd) : '';
+    cwdChip.title = cwd ? `${cwd} — session stats` : 'Session stats';
+  }
 }
 
 // --- Thinking level selector (levels from helpers.thinkingLevelsFor: pi's
@@ -3457,7 +3466,6 @@ async function renderPreferences() {
     <select id="sidebarContextMetric"><option value="percent">Percent of context</option><option value="tokens">Token count</option></select></div>
     <div class="preference-row"><label for="responseMetadataMode"><strong>Response metadata</strong><small>Stored on this device. “Effective speed” includes time to first token and JSONL append.</small></label>
     <select id="responseMetadataMode"><option value="hidden">Hidden</option><option value="compact">Compact</option><option value="performance">Performance</option><option value="performance-cost">Performance + estimated cost</option></select></div>
-    <label class="preference-row toggle-row"><span><strong>Show estimated session spend in desktop header</strong><small>Stored on this device; off by default.</small></span><input id="showSessionSpend" type="checkbox"></label>
     <div class="preference-row"><label for="monthlyBudget"><strong>Monthly budget warning (USD)</strong><small>Server-global: applies to every device. Estimates use each session harness's catalog pricing; blank clears.</small></label><div class="budget-save"><input id="monthlyBudget" type="number" min="0.01" step="0.01" placeholder="No warning"><button class="btn-small" id="saveBudget">Save</button></div><small id="budgetStatus"></small></div>
     <div id="recoveryPreferences" class="preference-row recovery-preferences" hidden></div>
     <div class="preference-row"><label><strong>Hosts</strong><small>Added hosts are stored on this device (with their token). Entries this server publishes — and this host itself — are read-only.</small></label>
@@ -3485,8 +3493,6 @@ async function renderPreferences() {
     localStorage.setItem(CONTEXT_METRIC_KEY, sidebarContextMetric);
     renderSessions();
   });
-  const spend = body.querySelector('#showSessionSpend'); spend.checked = showSessionSpend;
-  spend.addEventListener('change', () => { showSessionSpend = spend.checked; localStorage.setItem(SESSION_SPEND_KEY, showSessionSpend ? '1' : '0'); refreshSessionSpend(); });
   const renderSavedFiltersList = () => {
     const listEl = body.querySelector('#savedFiltersList');
     if (!listEl) return;
@@ -5284,13 +5290,6 @@ window.addEventListener('resize', () => {
   usageResizeTimer = setTimeout(drawUsageChart, 150);
 });
 
-async function refreshSessionSpend() {
-  const badge = document.getElementById('sessionSpendBadge');
-  if (!badge) return;
-  if (!showSessionSpend || !currentSession) { badge.style.display = 'none'; ++spendFetchSeq; return; }
-  const id = currentSession.id, seq = ++spendFetchSeq;
-  try { const r = await apiFetch(sessionHostId(id), `/api/sessions/${encodeURIComponent(id)}/stats`), s = await r.json(); if (seq !== spendFetchSeq || currentSession?.id !== id || !showSessionSpend) return; badge.textContent = formatUsageCost(s.costs?.total ?? s.cost, s.costUnavailable?.total); badge.style.display = ''; } catch { if (seq === spendFetchSeq) badge.style.display = 'none'; }
-}
 
 // --- Session stats modal ---
 let statsModalGeneration = 0;
@@ -7925,7 +7924,6 @@ function openMessageStream(url, sessionId, selectionGeneration) {
       fetchNewMessagesSince(sessionId, selectionGeneration);
       refreshSessions();
       refreshArtifacts(sessionId); // the agent may have published pages mid-turn
-      refreshSessionSpend();
       setStatus('');
     };
     addOwnedListener('turn_end', handleTurnEnd);
@@ -8579,8 +8577,7 @@ function setComposerWaiting(waiting) {
   const btn = document.getElementById('btnSend');
   if (!btn) return;
   btn.disabled = waiting;
-  btn.textContent = waiting ? 'Starting…' : 'Send';
-  btn.title = waiting ? 'Your draft will be preserved until Pi connects' : '';
+  btn.title = waiting ? 'Your draft will be preserved until Pi connects' : 'Send';
 }
 
 function saveDraftSoon() {
@@ -8888,7 +8885,9 @@ function updateWorkingIndicator() {
   }
   if (!turnInProgress || !turnStartedAt) {
     if (desktop) desktop.textContent = 'Working';
-    if (mobile) mobile.textContent = '';
+    // The phone's chip row leads with run state, so this cell always says
+    // something — blank would make the row's anchor move.
+    if (mobile) mobile.textContent = 'idle';
     return;
   }
   const elapsed = formatDuration(Date.now() - turnStartedAt);
@@ -8896,7 +8895,7 @@ function updateWorkingIndicator() {
   for (const name of runningTools.values()) tool = name; // most recently started
   if (tool && tool.length > 24) tool = tool.slice(0, 24) + '…';
   if (desktop) desktop.textContent = `Working ${elapsed}` + (tool ? ` · ${tool}` : '');
-  if (mobile) mobile.textContent = elapsed;
+  if (mobile) mobile.textContent = elapsed + (tool ? ` · ${tool}` : '');
 }
 
 // One place decides whether the pulsing badge, its ticker, and the Stop
@@ -8918,7 +8917,9 @@ function syncActivityIndicator() {
   // compaction on abort. Steer/follow-up only make sense against a turn,
   // so they remain setTurnInProgress's business.
   var btnStop = document.getElementById('btnStop');
-  if (btnStop) btnStop.style.display = active ? '' : 'none';
+  // visibility, not display: the context readout beside it keeps its
+  // position whether or not a turn is running.
+  if (btnStop) btnStop.style.visibility = active ? 'visible' : 'hidden';
   updateWorkingIndicator();
 }
 
@@ -8943,6 +8944,8 @@ function setTurnInProgress(active) {
   if (btnSteer) btnSteer.style.display = active ? '' : 'none';
   if (btnFollowUp) btnFollowUp.style.display = active ? '' : 'none';
   if (btnSend) btnSend.style.display = active ? 'none' : '';
+  // The field reserves a taller strip while the turn column is two glyphs.
+  document.querySelector('.composer-box')?.classList.toggle('turn', !!active);
   // A turn ending mid-compaction (manual /compact aborts the agent first;
   // auto-compaction holds queued sends) must not wipe the compaction badge,
   // the held-message strip, or the status line.

@@ -34,51 +34,93 @@ module.exports = async function mobile({ browser, watch, base, check, emit, SESS
     relationLayout.height <= 32 && relationLayout.maxChipWidth <= 171,
     `related-session chips stay in one compact mobile strip (got ${JSON.stringify(relationLayout)})`);
 
-  // Layout contract: title gets its own row above the top-right model
-  // selector, while the context badge stays bottom-left.
-  const vp = mobile.viewportSize();
+  // Header contract: three rows. The title owns row 1; row 2 carries the
+  // four controls that always matter, unclipped, with the model chip the
+  // only one allowed to shrink; row 3 scrolls and leads with run state.
   const title = await mobile.locator('#sessionName').boundingBox();
   const model = await mobile.locator('#sessionModel').boundingBox();
   check(title && model && title.y + title.height <= model.y,
     'session title sits above the model selector');
-  check(model && model.x > vp.width / 2 && model.y < 60, 'model selector sits top-right');
-  const ctx = await mobile.locator('#sessionContextBar').boundingBox();
-  check(ctx && ctx.x >= 0 && ctx.x + ctx.width < vp.width / 2 && ctx.y > vp.height / 2, `context badge sits bottom-left (got ${JSON.stringify(ctx)}, viewport ${JSON.stringify(vp)})`);
-  check(!(await mobile.locator('#sessionContext').isVisible()), 'header context badge hidden on mobile');
+  // The fixture is a single-host pi session, so host and harness are
+  // legitimately absent; populate them to prove the worst case — all four
+  // controls plus a long model ref — still fits without clipping.
+  const primary = await mobile.evaluate(() => {
+    const row = document.querySelector('.session-meta-desktop');
+    const host = document.getElementById('sessionHost');
+    const harness = document.getElementById('sessionHarness');
+    host.style.display = ''; host.textContent = 'tycho';
+    harness.style.display = ''; harness.textContent = '◆';
+    document.getElementById('sessionThinking').style.display = '';
+    const model = document.getElementById('sessionModel');
+    model.textContent = 'anthropic/claude-opus-4-5-20260101 ▾';
+    const shown = [...row.children].filter(el => el.offsetParent !== null);
+    return {
+      ids: shown.map(el => el.id || el.className),
+      overflowing: shown.filter(el => {
+        const r = el.getBoundingClientRect();
+        return r.left < 0 || r.right > window.innerWidth;
+      }).length,
+      clipped: shown.filter(el => el.scrollWidth > el.clientWidth + 1).map(el => el.id || el.className),
+      shrinkable: shown.filter(el => getComputedStyle(el).flexShrink !== '0').map(el => el.id || el.className),
+    };
+  });
+  check(primary.ids.includes('sessionHost') && primary.ids.includes('sessionHarness') &&
+    primary.ids.includes('sessionThinking') && primary.overflowing === 0,
+    `host, harness and reasoning fit beside the model (got ${JSON.stringify(primary)})`);
+  check(primary.clipped.length <= 1 && (primary.clipped[0] || 'sessionModel').includes('odel'),
+    `only the model chip gives up width (got ${JSON.stringify(primary.clipped)})`);
+  check(primary.shrinkable.length === 1 && primary.shrinkable[0].includes('model'),
+    `only the model chip may shrink (got ${JSON.stringify(primary.shrinkable)})`);
+  const chipRow = await mobile.evaluate(() => {
+    const row = document.getElementById('sessionChips');
+    const first = [...row.children].find(el => el.offsetParent !== null);
+    return {
+      first: first?.id,
+      text: first?.textContent.trim(),
+      scrolls: getComputedStyle(row).overflowX === 'auto',
+    };
+  });
+  check(chipRow.first === 'sessionWorkingMobile' && chipRow.text === 'idle' && chipRow.scrolls,
+    `the chip row scrolls and leads with run state (got ${JSON.stringify(chipRow)})`);
 
-  // Composer contract on a phone: the content tools (📎/🎙) sit inside the
-  // prompt field, over a strip the field reserves for them, and every
-  // control of a running turn stays fully on screen — Follow-up used to be
-  // pushed past the right edge once attach and dictate shared that row.
+  // Composer contract on a phone: every control lives inside the prompt
+  // field, over a strip the field reserves for them, and the context
+  // readout holds one position across the idle/running switch — a turn
+  // starting used to reflow the whole row and push Follow-up off screen.
+  const ctxRight = () => mobile.evaluate(() =>
+    Math.round(document.getElementById('sessionContext').getBoundingClientRect().right));
+  const ctxIdle = await ctxRight();
   await mobile.evaluate(() => setTurnInProgress(true));
   const composer = await mobile.evaluate(() => {
     const field = document.getElementById('promptInput');
     const rect = field.getBoundingClientRect();
-    const attach = document.getElementById('btnAttach').getBoundingClientRect();
-    const visible = [...document.querySelectorAll('.input-actions button')]
+    const inField = (el) => {
+      const r = el.getBoundingClientRect();
+      return r.left >= rect.left && r.right <= rect.right && r.top >= rect.top && r.bottom <= rect.bottom;
+    };
+    const attach = document.getElementById('btnAttach');
+    const visible = [...document.querySelectorAll('.composer-tools button')]
       .filter(el => el.offsetParent !== null);
     return {
       reserved: parseFloat(getComputedStyle(field).paddingBottom),
-      attachInField: attach.left >= rect.left && attach.right <= rect.right &&
-        attach.top >= rect.top && attach.bottom <= rect.bottom,
-      attachHeight: attach.height,
+      attachHeight: attach.getBoundingClientRect().height,
       ids: visible.map(el => el.id),
-      overflowing: visible
-        .filter(el => {
-          const r = el.getBoundingClientRect();
-          return r.left < 0 || r.right > window.innerWidth;
-        })
-        .map(el => el.id),
+      outside: visible.filter(el => !inField(el)).map(el => el.id),
+      overflowing: visible.filter(el => {
+        const r = el.getBoundingClientRect();
+        return r.left < 0 || r.right > window.innerWidth;
+      }).map(el => el.id),
     };
   });
-  check(composer.attachInField && composer.reserved >= composer.attachHeight,
-    `attach sits inside the prompt field's reserved strip (got ${JSON.stringify(composer)})`);
-  check(composer.ids.includes('btnFollowUp') && composer.overflowing.length === 0,
-    `every turn control fits the phone row (got ${JSON.stringify(composer)})`);
-  check(await mobile.locator('#btnAttach').isVisible() &&
-    await mobile.evaluate(() => document.querySelector('.input-actions #btnAttach') === null),
-    'attach moved out of the actions row and stayed clickable');
+  check(composer.reserved >= composer.attachHeight && composer.outside.length === 0,
+    `every composer control sits inside the field's reserved strip (got ${JSON.stringify(composer)})`);
+  check(composer.ids.includes('btnFollowUp') && composer.ids.includes('btnSteer') &&
+    composer.overflowing.length === 0,
+    `steer and follow-up stay reachable mid-turn (got ${JSON.stringify(composer)})`);
+  check(await ctxRight() === ctxIdle,
+    `the context readout keeps its slot when a turn starts (idle ${ctxIdle})`);
   await mobile.evaluate(() => setTurnInProgress(false));
+  check(await ctxRight() === ctxIdle, 'and when the turn ends');
 
   // A long host status line (OMP's goal line runs to ~60 chars) must not
   // grow the header: the strip clips to one line until the ▾ opens it.

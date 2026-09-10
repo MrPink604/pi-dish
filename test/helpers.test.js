@@ -118,10 +118,10 @@ test('truncate stays on one line and passes short text through', () => {
 
 test('contextClass buckets context pressure', () => {
   assert.equal(H.contextClass(0), '');
-  assert.equal(H.contextClass(50), '');
-  assert.equal(H.contextClass(51), 'high');
-  assert.equal(H.contextClass(80), 'high');
-  assert.equal(H.contextClass(81), 'critical');
+  assert.equal(H.contextClass(33), '');
+  assert.equal(H.contextClass(34), 'high');
+  assert.equal(H.contextClass(66), 'high');
+  assert.equal(H.contextClass(67), 'critical');
 });
 
 test('sessionMetaText joins the searchable fields lowercased', () => {

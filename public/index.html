@@ -126,10 +126,17 @@
                 <button class="badge badge-model" id="sessionModel" onclick="toggleModelDropdown()" title="Change model">model ▾</button>
               </div>
               <button class="badge badge-thinking" id="sessionThinking" onclick="toggleThinkingDropdown()" title="Thinking level" style="display:none">▾</button>
-              <button class="badge badge-context" id="sessionContext" onclick="openStatsModal()" title="Session stats">0%</button>
-              <button class="badge session-spend-badge" id="sessionSpendBadge" onclick="openStatsModal()" title="Estimated session spend from Pi catalog pricing" style="display:none"></button>
-              <span class="badge" id="sessionMsgCount">0 msgs</span>
               <span class="badge badge-working" id="sessionWorking"><span class="spinner-dot"></span><span class="spinner-text">Working</span></span>
+            </div>
+            <!-- Third header row on a phone: run state first (so the eye always
+                 lands on the same cell), then the chips that are worth a glance
+                 but not a fixed slot. Scrolls horizontally, no visible bar. On
+                 desktop only the status text shows, and only while it has
+                 something to say. -->
+            <div class="session-chips" id="sessionChips">
+              <span class="badge badge-working" id="sessionWorkingMobile"><span class="spinner-dot"></span><span class="spinner-text"></span></span>
+              <span class="status" id="status"></span>
+              <button class="badge mobile-only" id="sessionCwdChip" onclick="openStatsModal()" title="Session stats" style="display:none"></button>
             </div>
             <div class="ext-ui-status-row collapsed" id="extUiStatuses" style="display:none">
               <div class="ext-ui-status-items" id="extUiStatusItems"></div>
@@ -143,6 +150,14 @@
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="11" cy="11" r="7"/>
                 <path d="M21 21l-4.35-4.35"/>
+              </svg>
+            </button>
+            <!-- Phone only: the control panel used to be reachable from the
+                 composer row, which no longer exists. -->
+            <button class="btn-icon mobile-only" id="btnPanel" onclick="toggleControlPanel()" title="Session controls" aria-label="Session controls">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <circle cx="12" cy="12" r="3.2"/>
+                <path d="M19.4 15a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.7 1.7 0 00-1.87-.34 1.7 1.7 0 00-1.03 1.56V21a2 2 0 11-4 0v-.09A1.7 1.7 0 008.4 19.3a1.7 1.7 0 00-1.87.34l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.7 1.7 0 00.34-1.87 1.7 1.7 0 00-1.56-1.03H2a2 2 0 110-4h.09A1.7 1.7 0 003.7 8.4a1.7 1.7 0 00-.34-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06a1.7 1.7 0 001.87.34H8a1.7 1.7 0 001.03-1.56V2a2 2 0 114 0v.09A1.7 1.7 0 0015.6 3.7a1.7 1.7 0 001.87-.34l.06-.06a2 2 0 112.83 2.83l-.06.06a1.7 1.7 0 00-.34 1.87V8c.2.63.79 1.05 1.45 1.05H21a2 2 0 110 4h-.09c-.66 0-1.25.42-1.51 1.02z"/>
               </svg>
             </button>
             <button class="btn-icon" id="btnTerminal" onclick="toggleTerminal()" title="Terminal at session cwd" style="display:none">
@@ -331,37 +346,44 @@
                error). Filled with textContent only. -->
           <div class="composer-note" id="composerNote" style="display:none"></div>
           <div class="attachment-strip" id="attachmentStrip" style="display:none"></div>
-          <!-- Composer box: the prompt field plus the tools that act on its
-               *content* (attach, dictate), pinned inside the field's bottom
-               left. They used to sit in .input-actions, where on a phone the
-               two of them pushed Follow-up past the right edge during a turn.
-               The field reserves that strip with padding-bottom, so a long
-               draft never runs underneath them. -->
+          <!-- Composer box: the field owns every control. Left of the in-field
+               rail are the tools that act on the prompt's *content* (attach,
+               dictate); right of it the context readout, stop, and the turn
+               column — Send when idle, steer over follow-up mid-turn. The
+               separate button row this replaced overflowed on a phone, and any
+               new control would have pushed Follow-up off screen again. The
+               field reserves the rail's height with padding-bottom, so a long
+               draft scrolls above the glyphs instead of under them. -->
           <div class="composer-box">
             <textarea id="promptInput" placeholder="Send a message..." rows="2"></textarea>
             <input type="file" id="imageFileInput" accept="image/*" multiple style="display:none">
             <div class="composer-tools">
-              <button class="badge badge-tool-btn" id="btnAttach" onclick="document.getElementById('imageFileInput').click()" title="Attach images" aria-label="Attach images">📎</button>
+              <button class="tool-btn" id="btnAttach" onclick="document.getElementById('imageFileInput').click()" title="Attach images" aria-label="Attach images">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.2-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+              </button>
               <!-- Dictation. No inline onclick: desktop toggles on click while
                    touch is hold-to-talk, so app.js binds the pointer handlers. -->
-              <button class="badge badge-tool-btn" id="btnMic" style="display:none" title="Dictate (speech to text)" aria-label="Dictate">🎙</button>
-            </div>
-          </div>
-          <!-- Turn actions. Two groups: status/meta, which may be clipped when
-               the row is narrow, and the buttons, which never shrink — a phone
-               must always be able to reach Follow-up mid-turn. -->
-          <div class="input-actions">
-            <div class="input-actions-meta">
-              <button class="badge badge-context" id="sessionContextBar" onclick="openStatsModal()" title="Session stats">0%</button>
-              <span class="status" id="status"></span>
-              <span class="badge badge-working" id="sessionWorkingMobile"><span class="spinner-dot"></span><span class="spinner-text"></span></span>
-            </div>
-            <div class="input-actions-main">
-              <button class="badge badge-tool-btn mobile-only" id="btnPanel" onclick="toggleControlPanel()" title="Session controls">⚙</button>
-              <button class="btn btn-stop" id="btnStop" onclick="abortTurn()" style="display:none" title="Stop (Esc)">Stop</button>
-              <button class="btn btn-steer" id="btnSteer" onclick="sendSteer()" style="display:none" title="Steer (Ctrl+Enter)">Steer</button>
-              <button class="btn btn-steer" id="btnFollowUp" onclick="sendFollowUp()" style="display:none" title="Queue after agent finishes">Follow-up</button>
-              <button class="btn btn-primary" id="btnSend" onclick="sendPrompt()">Send</button>
+              <button class="tool-btn" id="btnMic" style="display:none" title="Dictate (speech to text)" aria-label="Dictate">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21"/><path class="mic-slash" d="M4 4l16 16"/></svg>
+              </button>
+              <span class="composer-gap"></span>
+              <button class="tool-btn tool-ctx" id="sessionContext" onclick="openStatsModal()" title="Session stats">0%</button>
+              <!-- Keeps its slot when idle (visibility, not display): the
+                   context readout must not shift when a turn starts. -->
+              <button class="tool-btn tool-stop" id="btnStop" onclick="abortTurn()" title="Stop (Esc)" aria-label="Stop">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>
+              </button>
+              <div class="composer-act">
+                <button class="tool-btn" id="btnSteer" onclick="sendSteer()" style="display:none" title="Steer (Ctrl+Enter)" aria-label="Steer">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8.6"/><circle cx="12" cy="12" r="2.4"/><path d="M3.4 12h6.2M14.4 12h6.2M12 14.4V20.6" stroke-linecap="round"/></svg>
+                </button>
+                <button class="tool-btn" id="btnFollowUp" onclick="sendFollowUp()" style="display:none" title="Queue after agent finishes" aria-label="Follow-up">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 5v6a4 4 0 01-4 4H5"/><path d="M9 11l-4 4 4 4"/></svg>
+                </button>
+                <button class="composer-send" id="btnSend" onclick="sendPrompt()" title="Send" aria-label="Send">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+                </button>
+              </div>
             </div>
           </div>
         </div>

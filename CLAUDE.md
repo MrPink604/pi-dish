@@ -136,6 +136,17 @@ part of the layout (`.header-menu-btn` in the session header,
 `.empty-menu-btn` over the empty state) — don't reintroduce a fixed floating
 button; it clipped over content.
 
+The phone session header is three rows, all inside `.session-info`'s column:
+the title row (hamburger, name, search, ⚙ `#btnPanel`), then
+`.session-meta-desktop` carrying only the four controls that always matter —
+host, harness (which doubles as the harness-settings button), model, reasoning
+level — where the model chip is the sole shrinkable item, then `#sessionChips`,
+a horizontal scroller that always leads with run state (`idle`, or the elapsed
+timer and current tool) so the row's first cell never moves. Anything new
+belongs in the chip row or the ⚙ panel; the primary row is full. The model chip
+drops its provider slug (`shortModelName`) before it ellipsizes —
+`setModelChipLabel` measures, and the full ref stays in the tooltip.
+
 ## Main-pane takeovers are the norm; modals are the exception
 
 Content-rich or exploratory surfaces swap into the main viewing pane and get
@@ -279,8 +290,7 @@ came from disk.
 ## Performance and usage telemetry (public/app.js, /api/usage-summary)
 
 Assistant response metadata is intentionally quiet and configurable from the
-global gear. The display mode and optional desktop session-spend badge are
-device-local (`pi-dish-response-metadata`, `pi-dish-show-session-spend` in
+global gear. The display mode is device-local (`pi-dish-response-metadata` in
 localStorage), as are the theme and the sidebar's context readout
 (`pi-dish-sidebar-context-metric`); the monthly budget warning is server-global in
 `~/.pi/dish/settings.json`. Compact is the default and shows effective output
@@ -1646,15 +1656,19 @@ so the outside-click closer must treat detached targets as inside.
 
 ## Prompt composer (public/app.js)
 
-- **Layout**: `.composer-box` holds the textarea plus `.composer-tools`, the
-  in-field rail (📎 attach, 🎙 dictate) pinned bottom-left; the field reserves
-  that strip with `padding-bottom`, and `autosizePromptInput`'s cap includes
-  it, so text never runs under the icons. The row below splits into
-  `.input-actions-meta` (context %, status, working timer — may be clipped)
-  and `.input-actions-main` (⚙, Stop, Steer, Follow-up, Send — never shrinks).
-  Anything added to that row goes in the meta group: the turn buttons must
-  stay reachable at phone widths, which is what pushed the tools into the
-  field in the first place. `test/ui-scenarios/mobile.js` asserts both.
+- **Layout**: every control lives in the field. `.composer-box` holds the
+  textarea plus `.composer-tools`, a bottom-anchored rail: attach and dictate
+  on the left, then the context readout (`#sessionContext`, tap = stats), Stop,
+  and `.composer-act` — a fixed-width column holding Send when idle and Steer
+  over Follow-up during a turn. There is no button row under the field; a phone
+  had no width left for one. Two invariants hold the readout still: Stop keeps
+  its slot when idle (`visibility`, not `display`) and `.composer-act` is a
+  fixed width in both states. The field reserves the rail's height with
+  `padding-bottom` (`.composer-box.turn` reserves the taller two-glyph state,
+  toggled in `setTurnInProgress`), and `autosizePromptInput`'s cap includes it,
+  so text never runs under the glyphs. Glyphs are stroke SVG, muted until
+  hover; Stop is the only coloured one, Send the only filled one.
+  `test/ui-scenarios/mobile.js` asserts the geometry.
 - **Image attachments**: paste or 📎-pick images; `prepareImageAttachment()`
   downscales to a 1568px long edge / JPEG re-encode before base64ing (phone
   photos are huge). Images ride the `images` field on `/prompt` and `/steer`

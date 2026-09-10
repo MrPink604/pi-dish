@@ -45,7 +45,7 @@ See [docs/testing.md](docs/testing.md) for the tooling matrix, coverage map,
 commands, and checks to preserve during refactoring. Structural work can now
 proceed in small changes; this baseline does not claim exhaustive coverage.
 
-## 3. Session chrome and composer redesign (agreed, not started)
+## 3. Session chrome and composer redesign (completed 2026-09-10)
 
 Three-row mobile header (title · fixed host/harness/model/reasoning · scrolling
 chips), a field-only composer with in-field attach/dictate/context/stop and

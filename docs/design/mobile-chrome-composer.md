@@ -1,8 +1,22 @@
 # Session chrome and composer redesign
 
-Status: **agreed, not yet implemented.** Mock:
+Status: **implemented** (2026-09-10). Mock:
 [`mobile-composer-mock.html`](mobile-composer-mock.html) (static, self-contained;
 open it directly or publish it with the pi-dish-pages skill).
+
+Deviations from the spec below, as built:
+
+- The chip row carries run state and a cwd chip. Extension status badges and
+  relation chips kept their own rows under it rather than joining the
+  scroller: the status strip owns an expand toggle and clip behaviour that a
+  shared scroller would break. No artifacts chip — the ⚙ panel already has
+  that row.
+- `#sessionContext` is the surviving id (the in-field readout), and
+  `#sessionContextBar` is gone. An inactive session hides the composer, so
+  the resume bar's existing `#inactiveStatsBtn` is the stats entry there.
+- `.session-info` now takes the header width it is given (`flex: 1 1 auto`).
+  Removing badges from the meta row had shrunk the column, which starved the
+  relation strip's one-row fit calculation.
 
 ## Why
 
