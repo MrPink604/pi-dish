@@ -14,9 +14,11 @@ Live coverage was exercised end-to-end (spawn → stream → control → resume)
 against Prime 0.9.4 on 2026-09-09, and the lineage canary
 (`npm run test:lineage -- prime`) additionally proves registration, command
 and model discovery, streamed turns, token-wrapper claims, the
-worker/client PID split, unsafe-detach refusal, isolated-daemon cleanup,
-managed resume with a second persisted turn, and discovery registration from
-a manually started TUI.
+worker/client PID split, isolated-daemon cleanup, managed resume with a second
+persisted turn, and discovery registration from a manually started TUI.
+Close coverage on 2026-09-10 additionally verifies idle/busy root shutdown,
+another root surviving and answering on the same daemon, close after the
+client pane exits, and refusal to close a manual session.
 
 What works today, live:
 
@@ -28,9 +30,10 @@ What works today, live:
   `tool_execution_*`, `queue_update`, `turn_end`, `agent_end`.
 - Flat-layout history under `~/.prime/agent/sessions/` with Prime's
   bookkeeping entries (`service_tier_change`, `session_state`, …) ignored.
-- Client-only detach when — and only when — the worker's ancestry provably
-  avoids the owned pane; headless turns through the resident worker; managed
-  resume after worker death.
+- Close pi-dish-owned root agents and their children through the supervisor,
+  then remove the verified client pane without stopping other roots or the
+  shared daemon. A missing client pane does not prevent owned-worker close.
+  The transcript stays resumable; manual sessions remain uncloseable.
 - ipython tool calls and `BashResult(...)` results render as code/command
   output in the web transcript and the CLI read path.
 
@@ -38,17 +41,13 @@ What works today, live:
 
 Roughly in experiential impact order:
 
-1. **No pi-dish path stops a Prime agent.** The bridge runs in a resident
-   daemon worker. While the worker is a pane descendant, detach is refused
-   (fail-closed); after the client pane dies it is refused again because the
-   recorded pane is gone; restart is refused for `client-only` harnesses.
-   A pi-dish-spawned Prime session therefore stays "active" (headless) until
-   the worker is killed externally or via Prime's own TUI. Closing this needs
-   a host-supported daemon-completion contract (see the lineage task doc).
+1. **Restart remains unavailable.** Close followed by Resume works, but
+   pi-dish does not yet replace a Prime worker in the same client pane.
 2. **Resume is refused while the worker lives** (`alreadyActive`). A session
    whose client pane died keeps accepting prompts headless, but pi-dish
    cannot attach a fresh client TUI to that worker; `prime-agent --resume`
-   in a terminal remains the escape hatch.
+   in a terminal remains the attach path. Owned workers can instead be closed
+   and resumed from Dish.
 3. **Manual discovery depends on how the daemon was born.** Prime snapshots
    extension configuration from the client that starts a daemon. A daemon
    born from a plain interactive launch discovery-loads the bridge for every
@@ -71,9 +70,7 @@ Roughly in experiential impact order:
    Prime CLI is present, but the kernel still downloads Python packages on
    first tool use — an offline fresh host will fail tool calls with Prime's
    own setup error until bootstrap succeeds once with network access.
-7. **Minor UI corners.** After a client pane dies, a stale sidebar render can
-   briefly show the "Detach client" button (the route answers 409 with an
-   accurate message); tool-call ordering in the CLI markdown can interleave
+7. **Minor UI corners.** Tool-call ordering in the CLI markdown can interleave
    a mid-turn steer after the tool result it preceded.
 8. **Pi-dish skills are not linked into Prime.** The bundled skills
    (sessions, pages, comments, …) are Pi/OMP tooling; Prime's skill loading
@@ -82,7 +79,12 @@ Roughly in experiential impact order:
 ## Version pin
 
 The compatibility canary is pinned to Prime 0.9.4 (see
-[docs/testing.md](testing.md)). Prime's daemon topology changed detach
-behavior between 0.7.x and 0.9.x — detach admissibility is decided by live
-ancestry proof, not by version, but new Prime releases should be run through
-`npm run test:lineage -- prime` before trusting the matrix above.
+[docs/testing.md](testing.md)). Close uses daemon protocol 7 and Linux process
+birth identities. The server reads only the worker's non-secret internal
+supervisor-socket and root-id environment fields, then checks the live roster
+against its launch token and socket-proved bridge claim. Missing metadata,
+unknown protocols, mismatched roots and replaced panes fail closed. No daemon
+shutdown, raw worker signal, or retry after an indeterminate stop is used.
+Recovery keeps closed intent after a stop was sent, even if acknowledgement
+or client cleanup fails. Run new Prime releases through
+`npm run test:lineage -- prime` before trusting these version-specific fields.

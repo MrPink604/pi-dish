@@ -17,7 +17,7 @@ pull requests, and manual dispatch. All jobs use Ubuntu 24.04 x64 and `npm ci`.
 | Bun 1.3.14 | OMP bridge fixture execution in backend jobs |
 | Bundled Pi from the lockfile | Real Pi bridge canary in every backend job |
 | OMP 18.1.16 | Opt-in real CLI canary, verified locally on 2026-09-09 |
-| Prime Agent 0.9.4 | Opt-in real CLI canary, verified locally on 2026-09-09; see [prime-agent.md](prime-agent.md) |
+| Prime Agent 0.9.4 | Opt-in real CLI canary, including owned-root close/resume, verified locally on 2026-09-10; see [prime-agent.md](prime-agent.md) |
 
 Linux is the automated baseline. Other operating systems and Electron packaging
 are outside this matrix. Node's `>=22.19.0` engine declaration does not imply
@@ -73,6 +73,7 @@ the rest of the application is not yet type checked.
 | Queue edit/cancel/send and abort ownership | `test/browser/queue-ownership.spec.js` |
 | Reused extension dialog ids, responses and replay | `test/browser/extension-dialogs.spec.js` |
 | New-session harness discovery order and host ownership | `test/browser/harness-discovery.spec.js` |
+| Prime owned-root close, legacy detach labels, unowned controls and host-bound requests | `test/browser/prime-close.spec.js`, `test/tmux.test.js`, `npm run test:lineage -- prime` |
 | Listener startup, bind retry, delayed/failed aliases, advertised URLs, signal release | `test/listener-lifecycle.test.js` |
 | Bridge, lifecycle, capabilities and API behavior | `npm test` (`test/*.test.js`) |
 | Models, drafts, sidebar, usage, skills, routines, bounce, mobile | `test/ui-scenarios/` |

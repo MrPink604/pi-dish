@@ -15,8 +15,11 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const net = require('node:net');
 const { execFileSync } = require('node:child_process');
 const { encodeSessionKey, VERSION: SESSION_KEY_VERSION } = require('../lib/session-key');
+const { createLineSplitter } = require('../lib/line-splitter');
+const { processIdentityAlive } = require('../lib/process-identity');
 
 // Short temp dirs — Unix socket paths have a ~108 char limit.
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-home-'));
@@ -26,6 +29,7 @@ process.env.TMUX_TMPDIR = tmuxTmp;
 process.env.PORT = '0';
 
 const TMUX_SOCKET = path.join(tmuxTmp, 's');
+process.env.PI_FIXTURE_PRIME_DAEMON_SOCKET = path.join(tmuxTmp, 'prime.sock');
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-pi.js');
 // getPiLaunchSpec() reads this — run our fixture instead of a real `pi`.
 process.env.PI_DISH_PI_COMMAND = `${process.execPath} ${FIXTURE}`;
@@ -50,12 +54,57 @@ if (tmuxOk) {
 const server = require('../server.js');
 const tmux = require('../lib/tmux');
 
+let primeRosterTransform = rows => rows;
+let primeStopMode = 'stop';
+let primeProtocolVersion = 7;
+let primeAfterList = () => {};
+let primeAfterKill = () => {};
+const primeKills = [];
+function primeClaims() {
+  const dir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  return fs.readdirSync(dir).flatMap(name => {
+    try {
+      const claim = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+      return claim.harnessId === 'prime' && processIdentityAlive(claim) ? [claim] : [];
+    } catch { return []; }
+  });
+}
+const primeDaemon = net.createServer(socket => {
+  socket.on('error', () => {});
+  socket.write(JSON.stringify({ type: 'daemon_hello', protocol: { name: 'prime-agent.daemon', version: primeProtocolVersion } }) + '\n');
+  socket.on('data', createLineSplitter(line => {
+    const envelope = JSON.parse(line);
+    assert.equal(envelope.type, 'command');
+    assert.deepEqual(envelope.protocol, { name: 'prime-agent.daemon', version: 7 });
+    const command = envelope.command;
+    const response = { id: envelope.id, type: 'response', command: command.type, success: true };
+    if (command.type === 'list') {
+      response.data = { sessions: primeRosterTransform(primeClaims().map(claim => ({
+        activeSessionId: `prime-${claim.spawnToken}`, sessionFile: claim.sessionFile,
+        workerPid: claim.pid, runtimeKind: 'top-level',
+      }))) };
+      primeAfterList();
+    } else {
+      assert.equal(command.type, 'kill', 'never use daemon shutdown');
+      primeKills.push(command.activeSessionId);
+      const claim = primeClaims().find(entry => `prime-${entry.spawnToken}` === command.activeSessionId);
+      assert.ok(claim, 'stop targets an exact live root');
+      if (primeStopMode !== 'hang') process.kill(claim.pid, 'SIGTERM');
+      primeAfterKill();
+      if (primeStopMode === 'lost-response') { socket.destroy(); return; }
+    }
+    socket.write(JSON.stringify(response) + '\n');
+  }));
+});
+
 let base;
 test.before(async () => {
+  await new Promise(resolve => primeDaemon.listen(process.env.PI_FIXTURE_PRIME_DAEMON_SOCKET, resolve));
   if (!server.listening) await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}`;
 });
 test.after(() => {
+  primeDaemon.close();
   server.close();
   try { execFileSync('tmux', ['-S', TMUX_SOCKET, 'kill-server'], { stdio: 'ignore' }); } catch {}
   try { execFileSync('tmux', ['-S', path.join(tmuxTmp, 'pi-dish'), 'kill-server'], { stdio: 'ignore' }); } catch {}
@@ -461,7 +510,7 @@ test('alternate launch rejects incomplete claims and mismatched socket hello ide
   }
 });
 
-test('Prime close detaches only the owned client pane and leaves its resident worker alive', { skip: !tmuxOk }, async () => {
+test('Prime close stops the owned worker and pane, refusing a replaced pane first', { skip: !tmuxOk }, async () => {
   const created = await post('/api/sessions/new', {
     harness: 'prime',
     target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
@@ -485,8 +534,9 @@ test('Prime close detaches only the owned client pane and leaves its resident wo
 
   const list = await get('/api/sessions?active=1');
   const session = list.body.active.find(entry => entry.id === created.body.id);
-  assert.equal(session?.closeMode, 'client-only');
+  assert.equal(session?.closeMode, 'owned-agent');
   assert.equal(session?.capabilities.close, true);
+  assert.equal(session?.capabilities.restart, false);
 
   try {
     tmux.recordSpawn(created.body.id, {
@@ -495,18 +545,18 @@ test('Prime close detaches only the owned client pane and leaves its resident wo
     });
     const refused = await post(`/api/sessions/${encodeURIComponent(created.body.id)}/close`);
     assert.equal(refused.status, 409, JSON.stringify(refused.body));
-    assert.match(refused.body.error, /exited or been replaced/i);
+    assert.match(refused.body.error, /been replaced/i);
     assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true,
       'a mismatched ownership record cannot kill the current pane');
     assert.doesNotThrow(() => process.kill(registry.pid, 0), 'resident worker remains alive after refused detach');
 
-    // Restore the exact accepted ownership record for the successful detach.
+    // Restore the exact accepted ownership record for the successful close.
     tmux.recordSpawn(created.body.id, spawn);
     const closed = await post(`/api/sessions/${encodeURIComponent(created.body.id)}/close`);
     assert.equal(closed.status, 200, JSON.stringify(closed.body));
-    assert.deepEqual(closed.body, { success: true, detached: true, logicalSessionActive: true });
+    assert.deepEqual(closed.body, { success: true });
     assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), false);
-    assert.doesNotThrow(() => process.kill(registry.pid, 0), 'resident worker was not signaled');
+    assert.equal(processIdentityAlive(registry), false, 'worker exits before close responds');
     assert.equal(tmux.getSpawn(created.body.id), null, 'client ownership record was removed');
   } finally {
     try { process.kill(registry.pid, 'SIGTERM'); } catch {}
@@ -514,7 +564,7 @@ test('Prime close detaches only the owned client pane and leaves its resident wo
   }
 });
 
-test('Prime close refuses when its worker remains in the owned client process tree', { skip: !tmuxOk }, async () => {
+test('Prime close also stops a worker in the owned client process tree', { skip: !tmuxOk }, async () => {
   process.env.PI_DISH_PRIME_COMMAND = `env PI_FIXTURE_HARNESS=prime PI_FIXTURE_PRIME_DESCENDANT_WORKER=1 ${process.execPath} ${FIXTURE}`;
   let spawn;
   let registry;
@@ -536,12 +586,11 @@ test('Prime close refuses when its worker remains in the owned client process tr
     registryPath = path.join(regDir, regFile);
     registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
 
-    const refused = await post(`/api/sessions/${encodeURIComponent(created.body.id)}/close`);
-    assert.equal(refused.status, 409, JSON.stringify(refused.body));
-    assert.match(refused.body.error, /worker is still in .* client pane.*process tree/i);
-    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true, 'unsafe client pane remains open');
-    assert.doesNotThrow(() => process.kill(registry.pid, 0), 'descendant worker remains alive');
-    assert.ok(tmux.getSpawn(created.body.id), 'ownership record remains available for a later safe detach');
+    const closed = await post(`/api/sessions/${encodeURIComponent(created.body.id)}/close`);
+    assert.equal(closed.status, 200, JSON.stringify(closed.body));
+    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), false);
+    assert.equal(processIdentityAlive(registry), false);
+    assert.equal(tmux.getSpawn(created.body.id), null);
   } finally {
     process.env.PI_DISH_PRIME_COMMAND = `env PI_FIXTURE_HARNESS=prime ${process.execPath} ${FIXTURE}`;
     if (spawn) {
@@ -552,6 +601,117 @@ test('Prime close refuses when its worker remains in the owned client process tr
     }
     if (registryPath) fs.rmSync(registryPath, { force: true });
   }
+});
+
+async function primeCloseFixture(t) {
+  const created = await post('/api/sessions/new', {
+    harness: 'prime', target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+  });
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  const id = created.body.id;
+  const spawn = tmux.getSpawn(id);
+  const claim = primeClaims().find(entry => entry.spawnToken === spawn.spawnToken);
+  assert.ok(claim);
+  t.after(async () => {
+    primeRosterTransform = rows => rows;
+    primeAfterList = () => {};
+    primeAfterKill = () => {};
+    primeStopMode = 'stop';
+    primeProtocolVersion = 7;
+    if (processIdentityAlive(claim)) process.kill(claim.pid, 'SIGTERM');
+    if (await tmux.paneExists(spawn.socket, spawn.paneId)) await tmux.killPane(spawn.socket, spawn.paneId);
+  });
+  return { id, spawn, claim, close: () => post(`/api/sessions/${encodeURIComponent(id)}/close`) };
+}
+
+test('Prime close rejects unowned launches, changed tokens, ambiguous roots and changed roster identities', { skip: !tmuxOk }, async t => {
+  const fixture = await primeCloseFixture(t);
+  const { id, spawn, claim, close } = fixture;
+  const killsBefore = primeKills.length;
+  const control = () => require('../lib/session-recovery').getControl('prime', claim.nativeSessionId);
+  const refused = async pattern => {
+    const result = await close();
+    assert.equal(result.status, 409, JSON.stringify(result.body));
+    assert.match(result.body.error, pattern);
+    assert.equal(primeKills.length, killsBefore, 'no daemon kill was sent');
+    assert.equal(processIdentityAlive(claim), true);
+    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true);
+    assert.notEqual(control().closed, true, 'refused close rolls back recovery intent');
+  };
+  tmux.removeSpawn(id, spawn);
+  await refused(/not launched by pi-dish/);
+  tmux.recordSpawn(id, { ...spawn, spawnToken: 'wrong-token' });
+  await refused(/launch no longer matches/);
+  tmux.recordSpawn(id, spawn);
+  for (const transform of [
+    row => ({ ...row, workerPid: process.pid }),
+    row => ({ ...row, sessionFile: '/another-session.jsonl' }),
+    row => ({ ...row, activeSessionId: 'different-root' }),
+    row => ({ ...row, parentActiveSessionId: 'parent-root' }),
+  ]) {
+    primeRosterTransform = rows => rows.map(transform);
+    await refused(/roster does not match/);
+  }
+  primeRosterTransform = rows => [...rows, ...rows];
+  await refused(/roster does not match/);
+  primeRosterTransform = rows => rows;
+  primeProtocolVersion = 6;
+  await refused(/Unsupported Prime/);
+  primeProtocolVersion = 7;
+  primeAfterList = () => tmux.recordSpawn(id, { ...spawn, spawnToken: 'changed-during-roster' });
+  await refused(/ownership changed/);
+});
+
+test('Prime close remains single-flight after its client exits and leaves another root alive', { skip: !tmuxOk }, async t => {
+  const selected = await primeCloseFixture(t);
+  const other = await primeCloseFixture(t);
+  await tmux.killPane(selected.spawn.socket, selected.spawn.paneId);
+  const killsBefore = primeKills.length;
+  const results = await Promise.all([selected.close(), selected.close()]);
+  for (const result of results) assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.deepEqual(primeKills.slice(killsBefore), [`prime-${selected.spawn.spawnToken}`]);
+  assert.equal(processIdentityAlive(selected.claim), false);
+  assert.equal(processIdentityAlive(other.claim), true);
+  assert.equal(await tmux.paneExists(other.spawn.socket, other.spawn.paneId), true);
+  assert.equal(tmux.getSpawn(selected.id), null);
+});
+
+for (const mode of ['lost-response', 'hang', 'replaced-pane']) {
+  test(`Prime ${mode} after stop preserves closed intent and never escalates or kills a replacement pane`, { skip: !tmuxOk }, async t => {
+    const { spawn, claim, close } = await primeCloseFixture(t);
+    const previousTimeout = process.env.PI_DISH_CLOSE_TIMEOUT_MS;
+    process.env.PI_DISH_CLOSE_TIMEOUT_MS = '300';
+    t.after(() => {
+      if (previousTimeout === undefined) delete process.env.PI_DISH_CLOSE_TIMEOUT_MS;
+      else process.env.PI_DISH_CLOSE_TIMEOUT_MS = previousTimeout;
+    });
+    if (mode === 'replaced-pane') {
+      primeAfterKill = () => tmuxCmd(['respawn-pane', '-k', '-t', spawn.paneId, 'sleep 3600']);
+    } else primeStopMode = mode;
+    const killsBefore = primeKills.length;
+    const result = await close();
+    assert.equal(result.status, 500, JSON.stringify(result.body));
+    assert.match(result.body.error, mode === 'lost-response' ? /socket closed/ : mode === 'hang' ? /did not exit/ : /been replaced/);
+    assert.equal(primeKills.length, killsBefore + 1, 'no retry of an indeterminate stop');
+    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true);
+    if (mode === 'hang') assert.equal(processIdentityAlive(claim), true, 'no signal escalation');
+    assert.equal(require('../lib/session-recovery').getControl('prime', claim.nativeSessionId).closed, true);
+  });
+}
+
+test('Prime without worker daemon metadata advertises no close and fails closed', { skip: !tmuxOk }, async t => {
+  const configured = process.env.PI_DISH_PRIME_COMMAND;
+  process.env.PI_DISH_PRIME_COMMAND = `env PI_FIXTURE_HARNESS=prime PI_FIXTURE_PRIME_DAEMON_SOCKET= ${process.execPath} ${FIXTURE}`;
+  let fixture;
+  try { fixture = await primeCloseFixture(t); }
+  finally { process.env.PI_DISH_PRIME_COMMAND = configured; }
+  const list = await get('/api/sessions?active=1');
+  assert.equal(list.body.active.find(row => row.id === fixture.id)?.capabilities.close, false);
+  const killsBefore = primeKills.length;
+  const result = await fixture.close();
+  assert.equal(result.status, 409);
+  assert.match(result.body.error, /daemon identity is unavailable/);
+  assert.equal(primeKills.length, killsBefore);
 });
 
 test('async tmux spawn returns a provisional operation before bridge registration', { skip: !tmuxOk }, async () => {

@@ -421,6 +421,18 @@ and inherit the server's own `$TMUX`). Tests that assert runtime kinds pin
 row-level ✕ on live sidebar rows — both funnel post-close handling through
 `finishSessionClose` (list re-fetch + re-select flips the view to inactive).
 
+Prime uses `closeMode: owned-agent`: `lib/prime-lifecycle.js` reads the exact
+live worker's non-secret supervisor-socket/root-id fields from `/proc`, fenced
+by its birth identity, and sends the protocol-7 operation behind `prime-agent
+stop`. The supervisor roster must match that root, worker PID and session
+file; a fresh bridge hello, launch token and pane check re-prove ownership
+before stop. Wait for worker exit, then clean up only the unchanged client
+pane — never the pane's descendant tree, which may include the shared daemon.
+The original client may already be gone; a replaced pane still fails closed.
+Manual roots remain uncloseable. A sent stop retains recovery's closed intent
+even if acknowledgement or pane cleanup fails, with no automatic retry or
+signal escalation. The UI keeps `client-only` detach labels for older hosts.
+
 `POST /api/sessions/:id/restart` is narrower than close because it replaces a
 runtime placement, not just the proved agent process. RPC children restart as
 RPC children against the same JSONL. A tmux agent is restartable only when its
@@ -429,7 +441,7 @@ pi-dish owns that exact pane; `respawnPane()` then launches the descriptor's
 fresh resume argv/env in the same pane, preserving the tmux server, session,
 window, and pane while issuing new launch authority. Externally launched Pi
 sessions remain closeable but never advertise `capabilities.restart`; Prime's
-client-only lifecycle does not advertise it either. The stats-modal Restart
+owned-agent lifecycle does not advertise it either. The stats-modal Restart
 button keys off explicit `restart: true` so mixed-version fleet hosts do not
 show an unsupported control.
 
@@ -772,7 +784,7 @@ best-effort rename only when the live session advertises `rename`), delivers,
 observes `turn_end`/`agent_end`/`message_end`/session-gone, and closes after
 `PI_DISH_ROUTINE_CLOSE_GRACE_MS` through `closeSessionById` — the `/close`
 route body extracted verbatim so every ownership guard still applies; a
-refused close (Prime `client-only`, an unprovable OMP pane) records
+refused close (unprovable Prime worker or OMP pane ownership) records
 `closeError` and never escalates. `continue` mode reuses the last
 invocation's session (live → prompt when idle, else resume headlessly, else
 spawn) and never auto-closes. Busy = an invocation in `starting`/`running`:

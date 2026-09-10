@@ -144,10 +144,16 @@ const token = wrapperToken || process.env.PI_DISH_SPAWN_TOKEN || '';
 
 // Prime's launcher/client is not its resident worker. Reproduce that split with
 // a short-lived broker so the worker is genuinely reparented outside the tmux
-// client tree. The unsafe-descendant mode deliberately skips the broker for a
-// fail-closed lifecycle test.
+// client tree. Descendant mode reproduces a first client's daemon ancestry.
 if (harnessId === 'prime' && !process.env.PI_FIXTURE_PRIME_WORKER) {
-  const workerEnv = { ...process.env, PI_FIXTURE_PRIME_WORKER: '1' };
+  const workerEnv = {
+    ...process.env, PI_FIXTURE_PRIME_WORKER: '1',
+    ...(process.env.PI_FIXTURE_PRIME_DAEMON_SOCKET ? {
+      PRIME_AGENT_INTERNAL_DAEMON_WORKER: '1',
+      PRIME_AGENT_INTERNAL_DAEMON_WORKER_ACTIVE_SESSION_ID: `prime-${token}`,
+      PRIME_AGENT_INTERNAL_DAEMON_SUPERVISOR_SOCKET: process.env.PI_FIXTURE_PRIME_DAEMON_SOCKET,
+    } : {}),
+  };
   // A warm Prime daemon forwards the extension path but not arbitrary client
   // environment. The generated wrapper must carry the correlation token.
   delete workerEnv.PI_DISH_SPAWN_TOKEN;

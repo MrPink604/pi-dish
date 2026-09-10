@@ -229,16 +229,17 @@ pi-dish can be closed remotely: pi-dish
 revalidates its launch token and exact tmux pane process identity, proves the
 live OMP process belongs to that pane, then kills the pane and waits for its
 captured process tree to exit. OMP sessions launched outside pi-dish remain
-uncloseable. Prime's agent worker is resident, so “Detach client” instead proves
-the worker is outside the owned pane's process tree before killing only the
-pane. If ancestry cannot be proven, either operation fails closed. Prime detach
-never signals or claims to stop the logical agent. Whether the guard admits
-detach depends on the live daemon topology, not the pi-dish version: when the
-daemon was started by that very client the worker is a client descendant and
-pi-dish refuses (observed on Prime 0.7.1 and 0.9.4 first launches); once a
-daemon outlives its original client — e.g. resuming after the client pane died
-— the worker hangs off the resident daemon and a proven detach succeeds
-(observed on Prime 0.9.4).
+uncloseable. For Prime, **Close session** stops the pi-dish-owned root agent
+and its children through Prime's supervisor (the operation behind
+`prime-agent stop`), waits for worker exit, then closes only the verified
+client pane. Other roots and the shared daemon remain running; the transcript
+stays resumable. This also works if the original client pane has already gone.
+Prime's launch token, worker birth identity, exact daemon/root identity and
+live roster must agree; missing evidence or a replaced pane fails closed.
+The implementation is verified on Linux with Prime 0.9.4's daemon protocol 7;
+manual sessions and unsupported runtimes remain uncloseable. Prime Restart
+remains unavailable. Older remote Dish hosts still show their client-only
+“Detach client” operation.
 
 Use `PI_DISH_OMP_COMMAND` or `PI_DISH_PRIME_COMMAND` when a CLI is not on
 `PATH`, analogous to `PI_DISH_PI_COMMAND` for Pi.
@@ -728,9 +729,10 @@ requires both sets of paths. The output reports the actual CLI versions.
 The canary covers real wrapper registration, model/command discovery, a live
 streamed turn and persisted transcript, canonical history routes, OMP live
 and inactive tree capability checks, owned-pane close and resume, plus Prime's
-worker/client split, unsafe-detach refusal, exact-daemon cleanup, resume, and
-a second streamed/persisted turn after resume. The independent OMP path was
-verified with OMP 18.1.16 and Prime 0.9.4 on 2026-09-09; both remain opt-in
+worker/client split, idle/busy root close, another root surviving and answering,
+close after client exit, manual-close refusal, and a persisted turn after
+resume. The independent OMP path was verified with OMP 18.1.16 on 2026-09-09
+and Prime 0.9.4 close/resume on 2026-09-10; both remain opt-in
 checks requiring their own installations. See [docs/prime-agent.md](docs/prime-agent.md)
 for Prime's verified coverage and outstanding gaps.
 

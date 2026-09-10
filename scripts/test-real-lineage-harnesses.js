@@ -101,6 +101,7 @@ let server = null;
 let tmux = null;
 
 let fakeRequestCount = 0;
+let holdNextResponse = false;
 const fakeRequests = [];
 const fakeOpenAi = http.createServer((req, res) => {
   fakeRequests.push(`${req.method} ${req.url}`);
@@ -115,6 +116,8 @@ const fakeOpenAi = http.createServer((req, res) => {
     let request;
     try { request = JSON.parse(body); } catch { res.writeHead(400).end(); return; }
     assert.equal(request.stream, true);
+    const holdResponse = holdNextResponse;
+    holdNextResponse = false;
     const sequence = ++fakeRequestCount;
     const messageId = `msg_pi_dish_${sequence}`;
     const responseId = `resp_pi_dish_${sequence}`;
@@ -156,6 +159,10 @@ const fakeOpenAi = http.createServer((req, res) => {
     });
     for (const event of events) {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
+      if (holdResponse && event.type === 'response.output_text.delta') {
+        // Keep a real provider turn in flight until Prime aborts the request.
+        return;
+      }
       await sleep(25);
     }
     res.end();
@@ -384,8 +391,8 @@ async function testPrime() {
     return list.body.active?.find(session => session.id === id);
   }, 'real Prime active session');
   assert.equal(active.harnessId, 'prime');
-  assert.equal(active.capabilities.close, false,
-    'a fresh-daemon Prime worker remains a client descendant, so detach must be disabled');
+  assert.equal(active.capabilities.close, true, 'owned Prime roots can stop through their supervisor');
+  assert.equal(active.capabilities.restart, false);
   assert.equal(active.capabilities.queueCancel, false);
 
   const commands = await get(`/api/commands?sessionId=${encodeURIComponent(id)}`);
@@ -406,25 +413,20 @@ async function testPrime() {
   assert.notEqual(Number(first.claim.pid), Number(spawn.paneProcess.pid), 'Prime worker and client pane must differ');
   process.kill(first.claim.pid, 0);
 
-  const refusedClose = await post(`/api/sessions/${encodeURIComponent(id)}/close`);
-  assert.equal(refusedClose.status, 409, JSON.stringify(refusedClose.body));
-  assert.match(refusedClose.body.error, /worker is still in .* client pane.*process tree/i);
-  process.kill(first.claim.pid, 0);
-  assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true);
-
-  // Stop only the isolated daemon. Once the worker is gone it is safe to clean
-  // up this canary's exact pane, then prove the persisted flat JSONL resumes
-  // via the actual Prime CLI and a fresh generated correlation wrapper.
-  const shutdown = await shutdownPrime();
-  assert.equal(shutdown.success, true, shutdown.error);
-  await waitFor(() => {
-    try { process.kill(first.claim.pid, 0); return false; } catch { return true; }
-  }, 'Prime worker shutdown', 20000);
-  if (await tmux.paneExists(spawn.socket, spawn.paneId)) {
-    await tmux.killPane(spawn.socket, spawn.paneId);
-  }
-  tmux.removeSpawn(id, spawn);
-  await sleep(800); // expire the server registry memo before resume dispatch
+  // Two roots on one supervisor distinguish a per-agent stop from daemon
+  // shutdown or killing the pane's captured descendant tree.
+  const peer = await post('/api/sessions/new', { harness: 'prime', model: 'openai/gpt-4o-mini', target: target() });
+  assert.equal(peer.status, 200, JSON.stringify(peer.body));
+  const peerSpawn = tmux.getSpawn(peer.body.id);
+  const peerClaim = await findPrimeClaim(peerSpawn);
+  const { processIdentityAlive } = require('../lib/process-identity');
+  const closed = await post(`/api/sessions/${encodeURIComponent(id)}/close`);
+  assert.equal(closed.status, 200, JSON.stringify(closed.body));
+  assert.equal(processIdentityAlive(first.claim), false, 'selected worker exits before close responds');
+  assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), false);
+  assert.equal(tmux.getSpawn(id), null);
+  assert.equal(processIdentityAlive(peerClaim.claim), true, 'other root worker survives');
+  await runStreamedTurn(peer.body.id, 'Prime peer still answers after another root closes');
   const inactiveList = await get('/api/sessions?active=1');
   assert.ok(!inactiveList.body.active.some(session => session.id === id));
 
@@ -444,9 +446,16 @@ async function testPrime() {
   assert.ok(resumedTurn.transcript.body.messages.some(message =>
     JSON.stringify(message.content).includes(resumedTurn.assistantText)),
   'post-resume assistant message must persist in Prime history');
+  holdNextResponse = true;
+  const beforeBusyTurn = fakeRequestCount;
+  const busyPrompt = await post(`/api/sessions/${encodeURIComponent(id)}/prompt`, { message: 'Keep this turn open for the close canary' });
+  assert.equal(busyPrompt.status, 200, JSON.stringify(busyPrompt.body));
+  await waitFor(async () => fakeRequestCount > beforeBusyTurn
+    && (await get('/api/sessions?active=1')).body.active.some(row => row.id === id && row.turnInProgress), 'Prime turn in progress');
   const resumedClose = await post(`/api/sessions/${encodeURIComponent(id)}/close`);
-  assert.equal(resumedClose.status, 409, JSON.stringify(resumedClose.body));
-  assert.match(resumedClose.body.error, /worker is still in .* client pane.*process tree/i);
+  assert.equal(resumedClose.status, 200, JSON.stringify(resumedClose.body));
+  assert.equal(processIdentityAlive(second.claim), false);
+  assert.equal(processIdentityAlive(peerClaim.claim), true);
 
   // A prime TUI started outside pi-dish (no --extension, discovery enabled)
   // must load the discovery-linked bridge and register tokenlessly — the
@@ -474,10 +483,19 @@ async function testPrime() {
     const manualList = await get('/api/sessions?active=1');
     assert.ok((manualList.body.active || []).filter(session => session.harnessId === 'prime').length >= 2,
       'manual discovery session must appear alongside the managed one');
+    const manual = manualList.body.active.find(session => session.harnessId === 'prime' && session.id !== peer.body.id);
+    assert.equal(manual.capabilities.close, false);
+    assert.equal((await post(`/api/sessions/${encodeURIComponent(manual.id)}/close`)).status, 409);
   } finally {
     try { execFileSync('tmux', ['-S', tmuxSocket, 'kill-session', '-t', 'prime-manual'], { stdio: 'ignore' }); } catch {}
     try { await shutdownPrime(manualDaemon); } catch {}
   }
+
+  // A missing TUI must not strand an owned resident worker forever.
+  await tmux.killPane(peerSpawn.socket, peerSpawn.paneId);
+  const headlessClose = await post(`/api/sessions/${encodeURIComponent(peer.body.id)}/close`);
+  assert.equal(headlessClose.status, 200, JSON.stringify(headlessClose.body));
+  assert.equal(processIdentityAlive(peerClaim.claim), false);
 
   return {
     version: execFileSync(primeBin, ['--version'], { encoding: 'utf8', timeout: 10000 }).trim(),
@@ -488,8 +506,12 @@ async function testPrime() {
     persistedAssistantMessage: true,
     wrapperTokenClaimed: true,
     workerClientSplit: true,
-    unsafeDetachRefused: true,
+    ownedRootClosed: true,
+    busyRootClosed: true,
+    otherRootSurvivedAndAnswered: true,
+    closeAfterClientExit: true,
     manualDiscoveryRegistered: true,
+    manualCloseRefused: true,
     postResumePersistedAssistantMessage: true,
   };
 }
@@ -543,7 +565,7 @@ async function cleanup() {
     }
     const result = {};
     for (const id of selected) result[id] = await (id === 'omp' ? testOmp() : testPrime());
-    const expectedCalls = (selected.includes('omp') ? 1 : 0) + (selected.includes('prime') ? 2 : 0);
+    const expectedCalls = (selected.includes('omp') ? 1 : 0) + (selected.includes('prime') ? 4 : 0);
     assert.equal(fakeRequestCount, expectedCalls, 'each streamed turn must use the local fake provider');
     result.fakeProviderRequests = fakeRequestCount;
     console.log(JSON.stringify(result, null, 2));

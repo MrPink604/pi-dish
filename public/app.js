@@ -1671,8 +1671,12 @@ function renderSessionItem(session, opts = {}) {
   // re-render restores an armed confirm rather than silently clearing it.
   const closeArmed = sessionCloseConfirmId === sessionRefKey(session);
   const closeBusy = sessionCloseBusyId === sessionRefKey(session);
+  const detachClient = session.closeMode === 'client-only';
+  const closeTitle = detachClient ? 'Detach client'
+    : session.closeMode === 'owned-agent' ? 'Stop this agent and its children (transcript stays resumable)'
+      : 'Close session (transcript stays resumable)';
   const closeBtn = session.isActive && sessionSupports(session, 'close')
-    ? `<button class="session-close-btn${closeArmed ? ' confirm' : ''}" title="${closeArmed ? 'Tap again to close this session' : (session.harnessId === 'prime' ? 'Detach client' : 'Close session (transcript stays resumable)')}">${closeBusy ? '…' : closeArmed ? (session.harnessId === 'prime' ? 'detach?' : 'close?') : '✕'}</button>`
+    ? `<button class="session-close-btn${closeArmed ? ' confirm' : ''}" title="${closeArmed ? 'Tap again: ' : ''}${closeTitle}">${closeBusy ? '…' : closeArmed ? (detachClient ? 'detach?' : 'close?') : '✕'}</button>`
     : '';
   const harnessBadge = renderHarnessBadge(session.harnessId, session.harnessLabel);
   // Provenance stamp from the routine ledger (server-side, presentation only,
@@ -5491,7 +5495,8 @@ function renderCloseSection(sessionId, generation) {
   const session = findSession(sessionId);
   if (!session?.isActive || !sessionSupports(session, 'close')) { el.remove(); return; }
   const host = sessionHostId(sessionId);
-  const detach = session.harnessId === 'prime' || session.closeMode === 'client-only';
+  const detach = session.closeMode === 'client-only'; // Older fleet hosts still only detach Prime clients.
+  const ownedAgent = session.closeMode === 'owned-agent';
   const restartable = session.capabilities?.restart === true;
   el.innerHTML = '<div class="stats-share-title">Session process</div>' +
     '<div class="stats-share-body">' +
@@ -5499,7 +5504,9 @@ function renderCloseSection(sessionId, generation) {
     `<button type="button" class="btn-small btn-danger" id="sessionCloseBtn">${detach ? 'Detach client' : 'Close session'}</button>` +
     `<div class="stats-share-hint">${detach
       ? 'Disconnects this client. The logical agent continues independently.'
-      : restartable
+      : ownedAgent
+        ? 'Stops this agent and its children, then closes its pi-dish-owned client pane. The transcript stays resumable.'
+        : restartable
         ? 'Restarts the agent in its current pi-dish-owned pane or RPC slot. The transcript is kept.'
         : 'Shuts down this agent process. The transcript is kept and can be resumed.'}</div>` +
     '</div>';
@@ -5509,7 +5516,9 @@ function renderCloseSection(sessionId, generation) {
     if (!ownsStatsModal(sessionId, generation)) return;
     const warn = detach
       ? 'Detach this client? The logical agent will continue independently.'
-      : findSession(sessionId, host)?.turnInProgress
+      : ownedAgent
+        ? 'Stop this agent and its children? Any work in progress will be aborted; the transcript stays resumable.'
+        : findSession(sessionId, host)?.turnInProgress
         ? 'A turn is in progress — closing will abort it. Close this session?'
         : 'Close this session? The agent process will shut down (the transcript stays resumable).';
     if (!confirm(warn)) return;
