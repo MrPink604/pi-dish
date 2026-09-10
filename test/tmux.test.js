@@ -29,7 +29,9 @@ process.env.TMUX_TMPDIR = tmuxTmp;
 process.env.PORT = '0';
 
 const TMUX_SOCKET = path.join(tmuxTmp, 's');
-process.env.PI_FIXTURE_PRIME_DAEMON_SOCKET = path.join(tmuxTmp, 'prime.sock');
+// listServers probes every socket in TMUX_TMPDIR with tmux's binary protocol.
+// Keep the JSON supervisor outside that discovery root, like a separate service.
+process.env.PI_FIXTURE_PRIME_DAEMON_SOCKET = path.join(tmpHome, 'prime.sock');
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-pi.js');
 // getPiLaunchSpec() reads this — run our fixture instead of a real `pi`.
 process.env.PI_DISH_PI_COMMAND = `${process.execPath} ${FIXTURE}`;
@@ -60,6 +62,7 @@ let primeProtocolVersion = 7;
 let primeAfterList = () => {};
 let primeAfterKill = () => {};
 const primeKills = [];
+let primeConnections = 0;
 function primeClaims() {
   const dir = path.join(tmpHome, '.pi', 'dish', 'sessions');
   return fs.readdirSync(dir).flatMap(name => {
@@ -70,6 +73,7 @@ function primeClaims() {
   });
 }
 const primeDaemon = net.createServer(socket => {
+  primeConnections++;
   socket.on('error', () => {});
   socket.write(JSON.stringify({ type: 'daemon_hello', protocol: { name: 'prime-agent.daemon', version: primeProtocolVersion } }) + '\n');
   socket.on('data', createLineSplitter(line => {
@@ -124,12 +128,14 @@ test('GET /api/config reports tmux availability', async () => {
 });
 
 test('GET /api/tmux/targets lists the running server and its sessions', { skip: !tmuxOk }, async () => {
+  const connectionsBefore = primeConnections;
   const { status, body } = await get('/api/tmux/targets');
   assert.equal(status, 200);
   assert.equal(body.available, true);
   const srv = body.servers.find((s) => path.resolve(s.socket) === path.resolve(TMUX_SOCKET));
   assert.ok(srv, 'our tmux socket is listed');
   assert.ok(srv.sessions.some((s) => s.name === 'work'), 'the "work" session is listed');
+  assert.equal(primeConnections, connectionsBefore, 'tmux discovery must not probe the Prime fixture supervisor');
 });
 
 test('POST /api/sessions/new with a tmux target spawns and returns the registered id', { skip: !tmuxOk }, async () => {
