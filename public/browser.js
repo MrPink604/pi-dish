@@ -56,12 +56,14 @@ var PiDishBrowser = (() => {
     createHostSessionLoader: () => createHostSessionLoader,
     createHostSettings: () => createHostSettings,
     createHostTransport: () => createHostTransport,
+    createMessageRenderer: () => createMessageRenderer,
     createModelCatalog: () => createModelCatalog,
     createNewSession: () => createNewSession,
     createNewSessionConfigPreview: () => createNewSessionConfigPreview,
     createNewSessionPreferences: () => createNewSessionPreferences,
     createPanelResize: () => createPanelResize,
     createRecovery: () => createRecovery,
+    createResponseDetails: () => createResponseDetails,
     createRichText: () => createRichText,
     createRoutinesView: () => createRoutinesView,
     createSearchView: () => createSearchView,
@@ -102,10 +104,13 @@ var PiDishBrowser = (() => {
     decodeHarnessConfigPreview: () => decodeHarnessConfigPreview,
     decodeHostDescriptor: () => decodeHostDescriptor,
     decodeKnownDirectories: () => decodeKnownDirectories,
+    decodeMessageContent: () => decodeMessageContent,
+    decodeMessageUsage: () => decodeMessageUsage,
     decodeModelCatalog: () => decodeModelCatalog,
     decodePublishedPages: () => decodePublishedPages,
     decodeRecoveryMode: () => decodeRecoveryMode,
     decodeRecoveryReport: () => decodeRecoveryReport,
+    decodeRenderMessage: () => decodeRenderMessage,
     decodeRoutine: () => decodeRoutine,
     decodeRoutineInvocations: () => decodeRoutineInvocations,
     decodeRoutineList: () => decodeRoutineList,
@@ -128,6 +133,7 @@ var PiDishBrowser = (() => {
     decodeUsageLimits: () => decodeUsageLimits,
     decodeUsageSummary: () => decodeUsageSummary,
     findQuoteOffset: () => findQuoteOffset,
+    groupToolActivity: () => groupToolActivity,
     harnessBadgeInnerHtml: () => harnessBadgeInnerHtml,
     hostConnReduce: () => hostConnReduce,
     hostKeyOf: () => hostKeyOf,
@@ -161,6 +167,7 @@ var PiDishBrowser = (() => {
     sidebarSession: () => sidebarSession,
     spawnTargetKey: () => spawnTargetKey,
     terminalTheme: () => terminalTheme,
+    updateToolGroupSummary: () => updateToolGroupSummary,
     withFetchTimeout: () => withFetchTimeout
   });
 
@@ -2877,6 +2884,20 @@ var PiDishBrowser = (() => {
     const formatted = formatEstimatedCost(value);
     return finite2(value) && unavailable ? `${formatted}*` : formatted;
   }
+  function formatResponseMetadata(msg, mode = "compact") {
+    if (!msg || mode === "hidden") return null;
+    const usage = msg.usage || {};
+    const speed = formatTokSpeed(msg.outputTokens || usage.output, msg.durationMs);
+    const tokens2 = usage.output ? `${formatTokens(usage.output)} out` : null;
+    const elapsed = finite2(msg.durationMs) && msg.durationMs > 0 ? `${msg.durationMs < 1e4 ? (msg.durationMs / 1e3).toFixed(1) : Math.round(msg.durationMs / 1e3)}s` : null;
+    if (mode === "compact") return speed || tokens2;
+    const performance = [elapsed, speed].filter(Boolean).join(" \xB7 ");
+    if (mode === "performance-cost") {
+      const cost = msg.pricingKnown !== false && finite2(usage.cost?.total) ? formatEstimatedCost(usage.cost.total) : null;
+      return [performance, cost].filter(Boolean).join(" \xB7 ") || tokens2;
+    }
+    return performance || tokens2;
+  }
   function formatRelativeTime(ts) {
     if (!ts) return "";
     const diff = Math.max(0, Date.now() - new Date(ts).getTime());
@@ -2887,6 +2908,9 @@ var PiDishBrowser = (() => {
     if (d === 1) return "yesterday";
     if (d < 7) return d + "d ago";
     return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
+  }
+  function formatTime(ts) {
+    return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
   function formatDuration(ms) {
     const total = Math.max(0, Math.floor(ms / 1e3));
@@ -13442,12 +13466,36 @@ ${restored}`;
     }
     return { hostPart: null, hostIdForm: false, id: ref };
   }
+  var SESSION_REF_BLOCK_RE = /\n*<session-refs>\n([\s\S]*?)\n<\/session-refs>[ \t]*$/;
   var SESSION_REF_PREAMBLE = [
     "The message above references other pi-dish sessions by `#ref`. Each is a real",
     "peer session, not a label: use the pi-dish-sessions skill CLI to read its",
     "transcript (`read <ref>`) or to message it (`send` / `steer` / `follow-up`",
     "<ref>). Never guess what a referenced session holds \u2014 read it."
   ].join("\n");
+  function splitSessionRefContext(text17) {
+    const body = String(text17 == null ? "" : text17);
+    const match = body.match(SESSION_REF_BLOCK_RE);
+    if (!match) return { text: body, refs: [] };
+    const refs = [];
+    for (const line of match[1].split("\n")) {
+      if (!line.startsWith("- ref=")) continue;
+      const entry = /* @__PURE__ */ Object.create(null);
+      for (const field of line.slice(2).split(" | ")) {
+        const eq = field.indexOf("=");
+        if (eq > 0) entry[field.slice(0, eq)] = field.slice(eq + 1);
+      }
+      if (!entry.ref) continue;
+      refs.push({
+        ref: entry.ref,
+        name: entry.name || "",
+        host: entry.host || "",
+        cwd: entry.cwd || "",
+        isActive: entry.active === "yes"
+      });
+    }
+    return { text: body.slice(0, match.index).replace(/\s+$/, ""), refs };
+  }
   function searchSessionsForRef(list, query, limit = 8) {
     const q = String(query == null ? "" : query).trim();
     const lower = q.toLowerCase();
@@ -13790,7 +13838,7 @@ ${restored}`;
 
   // src/browser/sidebar-render.ts
   function sidebarSession(row) {
-    const string = (value) => typeof value === "string" ? value : "";
+    const string2 = (value) => typeof value === "string" ? value : "";
     const capabilities = {};
     if (record8(row.capabilities)) {
       for (const [key, value] of Object.entries(row.capabilities)) if (typeof value === "boolean") capabilities[key] = value;
@@ -13800,26 +13848,26 @@ ${restored}`;
       id: row.id,
       host: row.host,
       hostLabel: row.hostLabel,
-      name: string(row.name),
-      cwd: string(row.cwd),
-      model: string(row.model),
+      name: string2(row.name),
+      cwd: string2(row.cwd),
+      model: string2(row.model),
       lastActivity: typeof row.lastActivity === "string" || finite2(row.lastActivity) ? row.lastActivity : null,
       isActive: row.isActive === true,
       turnInProgress: row.turnInProgress === true,
       subagentLive: row.subagentLive === true,
       compacting: row.compacting === true,
-      parentId: string(row.parentId),
+      parentId: string2(row.parentId),
       ...Object.hasOwn(row, "familyParentId") ? { familyParentId: parent } : {},
-      routine: string(row.routine),
-      routineId: string(row.routineId),
+      routine: string2(row.routine),
+      routineId: string2(row.routineId),
       capabilities,
       contextPercent: finite2(row.contextPercent) ? row.contextPercent : 0,
       contextTokens: finite2(row.contextTokens) ? row.contextTokens : void 0,
-      thinkingLevel: string(row.thinkingLevel),
-      closeMode: string(row.closeMode),
-      harnessId: string(row.harnessId),
-      harnessLabel: string(row.harnessLabel),
-      searchSnippet: string(row.searchSnippet),
+      thinkingLevel: string2(row.thinkingLevel),
+      closeMode: string2(row.closeMode),
+      harnessId: string2(row.harnessId),
+      harnessLabel: string2(row.harnessLabel),
+      searchSnippet: string2(row.searchSnippet),
       searchScore: finite2(row.searchScore) ? row.searchScore : void 0
     };
   }
@@ -14854,6 +14902,548 @@ ${restored}`;
         return query;
       }
     };
+  }
+
+  // src/browser/message-data.ts
+  var string = (value) => typeof value === "string" ? value : void 0;
+  var number7 = (value) => finite2(value) ? value : void 0;
+  function decodeMessageUsage(value) {
+    if (!record8(value)) return void 0;
+    const cost = record8(value.cost) ? value.cost : null, price = (value2) => value2 === null ? null : number7(value2);
+    return {
+      input: number7(value.input),
+      output: number7(value.output),
+      reasoning: number7(value.reasoning),
+      cacheRead: number7(value.cacheRead),
+      cacheWrite: number7(value.cacheWrite),
+      cost: cost ? { input: price(cost.input), output: price(cost.output), cacheRead: price(cost.cacheRead), cacheWrite: price(cost.cacheWrite), total: price(cost.total) } : void 0
+    };
+  }
+  function decodeMessageContent(value) {
+    if (typeof value === "string") return value;
+    if (!Array.isArray(value)) return void 0;
+    return value.flatMap((block) => typeof block === "string" ? [block] : !record8(block) || typeof block.type !== "string" ? [] : [{
+      type: block.type,
+      text: string(block.text),
+      thinking: string(block.thinking),
+      name: string(block.name),
+      id: string(block.id),
+      arguments: record8(block.arguments) ? block.arguments : void 0,
+      url: string(block.url),
+      data: string(block.data),
+      mimeType: string(block.mimeType)
+    }]);
+  }
+  function decodeRenderMessage(value) {
+    const row = record8(value) ? value : {}, details = record8(row.details) ? row.details : null;
+    return {
+      role: string(row.role) || "",
+      id: string(row.id),
+      index: finite2(row.index) && Number.isInteger(row.index) && row.index >= 0 ? row.index : void 0,
+      timestamp: typeof row.timestamp === "string" || finite2(row.timestamp) || row.timestamp instanceof Date ? row.timestamp : void 0,
+      content: decodeMessageContent(row.content),
+      model: string(row.model),
+      responseModel: string(row.responseModel),
+      provider: string(row.provider),
+      stopReason: string(row.stopReason),
+      errorMessage: string(row.errorMessage),
+      toolName: string(row.toolName),
+      toolCallId: string(row.toolCallId),
+      isError: row.isError === true,
+      customType: string(row.customType),
+      display: typeof row.display === "boolean" ? row.display : void 0,
+      usage: decodeMessageUsage(row.usage),
+      durationMs: number7(row.durationMs),
+      outputTokens: number7(row.outputTokens),
+      sessionRefs: Array.isArray(row.sessionRefs) ? row.sessionRefs.flatMap((entry) => record8(entry) && typeof entry.ref === "string" ? [{ ref: entry.ref, name: string(entry.name), host: string(entry.host), cwd: string(entry.cwd), isActive: entry.isActive === true }] : []) : void 0,
+      details: details ? {
+        notes: Array.isArray(details.notes) ? details.notes.flatMap((note) => typeof note === "string" ? [{ note }] : record8(note) && typeof note.note === "string" ? [{ note: note.note, severity: string(note.severity), advisor: string(note.advisor) }] : []) : void 0,
+        jobs: Array.isArray(details.jobs) ? details.jobs.flatMap((job) => record8(job) ? [{ label: string(job.label), jobId: string(job.jobId), durationMs: number7(job.durationMs) }] : []) : void 0
+      } : void 0
+    };
+  }
+
+  // src/browser/helper-content.ts
+  function extractTextContent(content) {
+    if (!content) return "";
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      const blocks = content;
+      return blocks.map((c) => typeof c === "string" ? c : record8(c) && c.type === "text" && typeof c.text === "string" ? c.text : "").join("\n");
+    }
+    return "";
+  }
+  function ipythonCodeSummary(code) {
+    if (typeof code !== "string" || !code) return "";
+    const m = /(?:^|[^A-Za-z0-9_])bash\(\s*(['"])((?:\\.|(?!\1).)*)\1/.exec(code);
+    const inner = m ? m[2].replace(/\\(['"\\])/g, "$1") : code.split("\n")[0];
+    return truncate(inner, 60);
+  }
+  function getToolSummary(toolName, args) {
+    if (!record8(args)) return "";
+    if (toolName === "Bash" || toolName === "bash") return typeof args.command === "string" && args.command ? truncate(args.command.split("\n")[0], 60) : "";
+    if (toolName === "ipython") return ipythonCodeSummary(args.code);
+    if (["Read", "read", "Edit", "edit", "Write", "write"].includes(toolName)) return typeof args.path === "string" ? args.path : "";
+    const keys = Object.keys(args);
+    if (keys.length) return truncate(String(args[keys[0]]), 40);
+    return "";
+  }
+  function parseIpythonResult(text17) {
+    if (typeof text17 !== "string") return null;
+    const m = /^BashResult\(exit_code=(-?\d+), output=(['"])((?:\\.|(?!\2).)*)\2(?:, duration=([0-9.eE+-]+))?\)\s*$/.exec(text17);
+    if (!m) return null;
+    return { exitCode: Number(m[1]), output: pythonReprUnescape(m[3]), durationMs: m[4] != null ? Math.round(Number(m[4]) * 1e3) : null };
+  }
+  function pythonReprUnescape(text17) {
+    return text17.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|[\s\S])/g, (all, seq) => {
+      if (seq[0] === "x") return String.fromCharCode(parseInt(seq.slice(1), 16));
+      if (seq[0] === "u") return String.fromCharCode(parseInt(seq.slice(1), 16));
+      const map = { n: "\n", t: "	", r: "\r", b: "\b", f: "\f", v: "\v", "0": "\0", "\n": "" };
+      return Object.hasOwn(map, seq) ? map[seq] : seq;
+    });
+  }
+  function messageHasVisibleText(msg) {
+    if (!record8(msg)) return false;
+    if (msg.errorMessage) return true;
+    if (typeof msg.content === "string") return !!msg.content;
+    return Array.isArray(msg.content) && msg.content.some((b) => record8(b) && b.type === "text" && typeof b.text === "string" && !!b.text);
+  }
+  function extractImageBlocks(content) {
+    if (!Array.isArray(content)) return [];
+    const out = [];
+    const blocks = content;
+    for (const block of blocks) {
+      if (!record8(block) || block.type !== "image") continue;
+      const mimeType = typeof block.mimeType === "string" && block.mimeType ? block.mimeType : "image/png";
+      if (typeof block.url === "string" && block.url) out.push({ url: block.url, mimeType });
+      else if (typeof block.data === "string" && block.data) out.push({ data: block.data, mimeType });
+    }
+    return out;
+  }
+
+  // src/browser/message-render.ts
+  function createMessageRenderer(options2) {
+    const { document: document2 } = options2;
+    let disposed = false;
+    function renderMessageHtml(msg) {
+      const time = msg.timestamp ? formatTime(msg.timestamp) : "";
+      const idxAttr = msg.index != null ? ` data-msg-index="${escapeHtml(msg.index)}"` : "";
+      if (msg.role === "user") return renderUserMessage(msg, time, idxAttr);
+      if (msg.role === "assistant") {
+        if (Array.isArray(msg.content) && msg.content.length === 0 && !msg.errorMessage) return "";
+        return renderAssistantMessage(msg, time, { attrs: idxAttr });
+      }
+      if (msg.role === "toolResult") return renderToolResult(msg, time, idxAttr);
+      if (msg.role === "branchSummary") return renderBranchSummary(msg, time, idxAttr);
+      if (msg.role === "custom") return renderCustomMessage(msg, time, idxAttr);
+      return "";
+    }
+    function imageBlocksHtml(content, alt = "image") {
+      const images = extractImageBlocks(content);
+      if (!images.length) return "";
+      const imgs = images.map((img) => {
+        const src = img.url ? options2.assetUrl(options2.sessionState.currentSession?.host, img.url) : `data:${img.mimeType};base64,${img.data}`;
+        const loading = img.url ? ' loading="lazy" decoding="async"' : "";
+        return `<img class="msg-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"${loading}>`;
+      }).join("");
+      return `<div class="msg-images">${imgs}</div>`;
+    }
+    function messageLinkBtnHtml(msg) {
+      if (!msg.id || record8(options2.sessionState.currentSession?.capabilities) && options2.sessionState.currentSession.capabilities.export === false) return "";
+      return `<button type="button" class="msg-link-btn" data-entry-id="${escapeHtml(msg.id)}" title="Copy share link to this message">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+    </svg></button>`;
+    }
+    function sessionRefChipsHtml(refs) {
+      if (!refs || !refs.length) return "";
+      const chips = refs.map((entry) => {
+        const session = options2.matchRef(entry.ref);
+        const label = entry.name || session?.name || entry.ref;
+        const live = (session ? session.isActive : entry.isActive) ? " live" : "";
+        const title = [entry.ref, entry.host, entry.cwd].filter(Boolean).join(" \xB7 ");
+        return `<button type="button" class="session-ref-chip${live}" data-session-ref="${escapeHtml(entry.ref)}" title="${escapeHtml(title)}">
+      <span class="session-ref-dot">\u25CF</span>${escapeHtml(label)}</button>`;
+      }).join("");
+      return `<div class="session-ref-chips">${chips}</div>`;
+    }
+    function renderUserMessage(msg, time, attrs = "") {
+      const { text: text17, refs } = splitSessionRefContext(extractTextContent(msg.content));
+      const imagesHtml = imageBlocksHtml(msg.content, "attached image");
+      const chipsHtml = sessionRefChipsHtml(msg.sessionRefs || refs);
+      return `<div${attrs} class="message user">
+    <div class="message-header"><span class="message-role user">\u276F</span>${time ? `<span class="message-time">${time}</span>` : ""}${messageLinkBtnHtml(msg)}</div>
+    <div class="message-content user-content">${text17 ? `<div class="markdown-body">${options2.markdown(text17)}</div>` : ""}${imagesHtml}${chipsHtml}</div>
+  </div>`;
+    }
+    function renderAssistantMessage(msg, time, opts = {}) {
+      let thinkingHtml = "", textHtml = "", toolCallsHtml = "";
+      const timestamp = msg.timestamp || Date.now();
+      const streamingClass = opts.streaming ? " streaming" : "";
+      const streamingAttr = opts.streaming ? ' data-streaming="true"' : "";
+      if (Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (typeof block === "string") continue;
+          if (block.type === "thinking" && block.thinking) thinkingHtml += renderThinkingBlock(block.thinking);
+          else if (block.type === "text" && block.text) textHtml += options2.markdown(block.text);
+          else if (block.type === "toolCall") toolCallsHtml += renderToolCall(block);
+        }
+      } else if (typeof msg.content === "string") {
+        textHtml = options2.markdown(msg.content);
+      }
+      let errorHtml = "";
+      if (msg.errorMessage) {
+        errorHtml = `<div class="message-content message-error"><div class="markdown-body"><strong>Error:</strong> ${escapeHtml(msg.errorMessage)}</div></div>`;
+      }
+      const showModel = msg.model && (!options2.sessionState.currentSession || msg.model !== options2.sessionState.currentSession.model);
+      const noTextClass = messageHasVisibleText(msg) ? "" : " no-text";
+      let speedHtml = "";
+      const hasMetadata = !opts.streaming && (msg.usage || msg.durationMs);
+      if (hasMetadata) speedHtml = options2.details.button(msg);
+      return `<div${opts.attrs || ""} class="message assistant${streamingClass}${noTextClass}${msg.errorMessage ? " error" : ""}" data-timestamp="${escapeHtml(String(timestamp))}"${streamingAttr}>
+    <div class="message-header">
+      <span class="message-role assistant">\u03C0</span>
+      ${showModel ? `<span class="badge">${escapeHtml(msg.model)}</span>` : ""}
+      ${opts.streaming ? '<span class="badge streaming">\u25CF</span>' : ""}
+      ${speedHtml}
+      ${time ? `<span class="message-time">${time}</span>` : ""}
+      ${messageLinkBtnHtml(msg)}
+    </div>
+    ${thinkingHtml}${toolCallsHtml}
+    ${textHtml ? `<div class="message-content"><div class="markdown-body">${textHtml}</div></div>` : ""}
+    ${errorHtml}
+  </div>`;
+    }
+    function renderThinkingBlock(thinking) {
+      const preview = thinking.substring(0, 80).replace(/\n/g, " ");
+      return `<details class="thinking-block">
+    <summary class="thinking-header"><span class="thinking-label">Thinking</span><span class="thinking-preview">${escapeHtml(preview)}\u2026</span></summary>
+    <div class="thinking-text">${escapeHtml(thinking)}</div>
+  </details>`;
+    }
+    function renderToolCall(block) {
+      const args = block.arguments || {};
+      const summary = getToolSummary(block.name || "", args);
+      const bodyHtml = block.name === "ipython" && typeof args.code === "string" ? `<pre><code>${escapeHtml(args.code)}</code></pre>` : `<pre><code>${escapeHtml(JSON.stringify(args, null, 2))}</code></pre>`;
+      return `<details class="tool-call">
+    <summary class="tool-call-header">
+      <span class="tool-call-icon">\u26A1</span><span class="tool-call-name">${escapeHtml(block.name)}</span>
+      ${summary ? `<span class="tool-call-summary">${escapeHtml(summary)}</span>` : ""}
+    </summary>
+    <div class="tool-call-content">${bodyHtml}</div>
+  </details>`;
+    }
+    function renderToolResult(msg, time, attrs = "") {
+      let content = extractTextContent(msg.content);
+      const isError = msg.isError;
+      const timestamp = msg.timestamp || Date.now();
+      const parsed = parseIpythonResult(content);
+      let exitBadge = "";
+      if (parsed) {
+        content = parsed.output;
+        if (parsed.exitCode !== 0) exitBadge = `<span class="tool-result-meta error-badge">exit ${parsed.exitCode}</span>`;
+      }
+      const lines = content.split("\n");
+      const lineCount = lines.length;
+      const preview = truncate(lines[0], 80);
+      const images = extractImageBlocks(msg.content);
+      const imageCount = images.length;
+      const imagesHtml = imageBlocksHtml(msg.content, "tool result image");
+      return `<div${attrs} class="message tool-result ${isError ? "error" : ""}" data-timestamp="${escapeHtml(String(timestamp))}">
+    <details class="tool-result-details" ${lineCount <= 5 || imageCount ? "open" : ""}>
+      <summary class="tool-result-header">
+        <span class="tool-result-icon">${isError ? "\u2717" : "\u2713"}</span>
+        <span class="tool-result-name">${escapeHtml(msg.toolName || "result")}</span>
+        ${lineCount > 5 ? `<span class="tool-result-meta">${lineCount} lines</span>` : ""}
+        ${imageCount ? `<span class="tool-result-meta">${imageCount === 1 ? "image" : imageCount + " images"}</span>` : ""}
+        ${exitBadge}
+        ${isError ? '<span class="tool-result-meta error-badge">error</span>' : ""}
+        ${lineCount > 5 ? `<span class="tool-result-preview">${escapeHtml(preview)}</span>` : ""}
+      </summary>
+      <div class="tool-result-content"><pre>${escapeHtml(truncate(content, 2e3))}</pre>${imagesHtml}</div>
+    </details>
+  </div>`;
+    }
+    function renderBranchSummary(msg, time, attrs = "") {
+      const text17 = extractTextContent(msg.content);
+      const timestamp = msg.timestamp || Date.now();
+      const preview = truncate(text17.split("\n")[0], 80);
+      return `<div${attrs} class="message branch-summary" data-timestamp="${escapeHtml(String(timestamp))}">
+    <details class="branch-summary-details">
+      <summary class="branch-summary-header">
+        <span class="branch-summary-icon">\u2387</span>
+        <span class="branch-summary-label">Branch summary</span>
+        ${time ? `<span class="message-time">${time}</span>` : ""}
+        <span class="branch-summary-preview">${escapeHtml(preview)}</span>
+      </summary>
+      <div class="message-content"><div class="markdown-body">${options2.markdown(text17)}</div></div>
+    </details>
+  </div>`;
+    }
+    const ADVISOR_SEVERITIES = ["nit", "concern", "blocker"];
+    function advisoryTagAttr(rawAttrs, name) {
+      const m = new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`, "i").exec(rawAttrs || "");
+      return m ? m[1].trim() : "";
+    }
+    function normalizeAdvisorSeverity(value) {
+      const sev = String(value || "").trim().toLowerCase();
+      return ADVISOR_SEVERITIES.includes(sev) ? sev : "";
+    }
+    function parseAdvisoryContent(text17) {
+      const notes = [];
+      const re = /<advisory\b([^>]*)>([\s\S]*?)<\/advisory>/gi;
+      let m;
+      while (m = re.exec(text17)) {
+        const note = m[2].trim();
+        if (note) notes.push({ note, severity: advisoryTagAttr(m[1], "severity"), advisor: advisoryTagAttr(m[1], "advisor") });
+      }
+      if (notes.length) return notes;
+      const bare = String(text17 || "").replace(/<\/?advisory\b[^>]*>/gi, "").trim();
+      return bare ? [{ note: bare }] : [];
+    }
+    function advisorNotesFrom(msg) {
+      const structured = Array.isArray(msg.details?.notes) ? msg.details.notes : null;
+      const notes = (structured && structured.length ? structured : parseAdvisoryContent(extractTextContent(msg.content))).map((n) => ({
+        note: n.note,
+        severity: normalizeAdvisorSeverity(n.severity),
+        advisor: (n.advisor || "").trim()
+      })).filter((n) => n.note);
+      return notes;
+    }
+    function advisoryBatchName(msg) {
+      const m = /<advisory\b([^>]*)>/i.exec(extractTextContent(msg.content));
+      return m ? advisoryTagAttr(m[1], "advisor") : "";
+    }
+    function advisorSeverityChip(severity) {
+      if (!severity) return "";
+      return `<span class="advisor-severity sev-${severity}">${escapeHtml(severity)}</span>`;
+    }
+    function renderAdvisorMessage(msg, time, attrs, timestamp) {
+      const notes = advisorNotesFrom(msg);
+      if (!notes.length) return "";
+      const worst = ADVISOR_SEVERITIES.filter((s) => notes.some((n) => n.severity === s)).pop() || "";
+      const names = [...new Set(notes.map((n) => n.advisor).filter(Boolean))];
+      const name = names.length === 1 ? names[0] : names.length ? "" : advisoryBatchName(msg);
+      const single = notes.length === 1;
+      const rows = notes.map((n) => `<div class="advisor-note">
+        ${single ? "" : advisorSeverityChip(n.severity)}${!single && !name && n.advisor ? `<span class="advisor-note-name">${escapeHtml(n.advisor)}</span>` : ""}
+        <div class="markdown-body">${options2.markdown(n.note)}</div>
+      </div>`).join("");
+      return `<div${attrs} class="message custom-message advisor${worst ? ` sev-${worst}` : ""}" data-timestamp="${escapeHtml(String(timestamp))}">
+    <div class="advisor-card">
+      <div class="advisor-header">
+        <span class="advisor-icon">\u25C8</span>
+        <span class="advisor-label">Advisor${name ? ` \xB7 ${escapeHtml(name)}` : ""}</span>
+        ${single ? advisorSeverityChip(notes[0].severity) : `<span class="advisor-count">${notes.length} notes</span>`}
+        ${time ? `<span class="message-time">${time}</span>` : ""}
+      </div>
+      <div class="advisor-notes">${rows}</div>
+    </div>
+  </div>`;
+    }
+    function renderCustomMessage(msg, time, attrs = "") {
+      const customType = msg.customType || "custom-message";
+      const timestamp = msg.timestamp || Date.now();
+      if (customType === "interrupted-thinking") {
+        return `<div${attrs} class="message custom-message interrupted" data-timestamp="${escapeHtml(String(timestamp))}">
+      <span class="custom-message-divider"></span><span class="custom-message-label">Interrupted</span>${time ? `<span class="message-time">${time}</span>` : ""}<span class="custom-message-divider"></span>
+    </div>`;
+      }
+      if (msg.display === false) return "";
+      if (customType === "async-result") {
+        const jobs = Array.isArray(msg.details?.jobs) ? msg.details.jobs : [];
+        const names = jobs.map((job) => job.label || job.jobId).filter(Boolean);
+        const duration = jobs.length === 1 && Number.isFinite(jobs[0].durationMs) ? formatDuration(jobs[0].durationMs) : "";
+        const meta = [names.join(", "), duration].filter(Boolean).join(" \xB7 ");
+        return `<div${attrs} class="message custom-message async-result" data-timestamp="${escapeHtml(String(timestamp))}">
+      <span class="custom-message-icon">\u2713</span><span class="custom-message-label">Background job${jobs.length > 1 ? "s" : ""} finished</span>${meta ? `<span class="custom-message-meta">${escapeHtml(meta)}</span>` : ""}${time ? `<span class="message-time">${time}</span>` : ""}
+    </div>`;
+      }
+      if (customType === "advisor") return renderAdvisorMessage(msg, time, attrs, timestamp);
+      const text17 = extractTextContent(msg.content);
+      const label = customType.replace(/[-_]+/g, " ");
+      return `<div${attrs} class="message custom-message generic" data-timestamp="${escapeHtml(String(timestamp))}">
+    <span class="custom-message-icon">\u25C7</span><span class="custom-message-label">${escapeHtml(label)}</span>${text17 ? `<span class="custom-message-meta">${escapeHtml(truncate(text17.replace(/\s+/g, " "), 240))}</span>` : ""}${time ? `<span class="message-time">${time}</span>` : ""}
+  </div>`;
+    }
+    function liveCustomMessageKey(message3) {
+      const jobs = Array.isArray(message3?.details?.jobs) ? message3.details.jobs.map((job) => job.jobId).filter(Boolean).join(",") : "";
+      return `${message3?.customType || "custom-message"}:${message3?.timestamp || jobs}`;
+    }
+    function upsertLiveCustomMessage(value, { streaming = false } = {}) {
+      if (disposed) return;
+      const message3 = decodeRenderMessage(value);
+      const container = document2.getElementById("messages");
+      if (!container) return;
+      const wasPinned = options2.pinned(container);
+      const key = liveCustomMessageKey(message3);
+      const existing = [...container.querySelectorAll(".message.custom-message[data-live-custom-key]")].find((el2) => el2.dataset.liveCustomKey === key);
+      const attrs = ` data-live-custom-key="${escapeHtml(key)}"${streaming ? ' data-streaming="true"' : ""}`;
+      const tmp = document2.createElement("template");
+      tmp.innerHTML = renderCustomMessage(message3, formatTime(message3.timestamp || Date.now()), attrs);
+      const el = tmp.content.firstElementChild;
+      if (!el) return;
+      if (existing) existing.replaceWith(el);
+      else container.appendChild(el);
+      if (wasPinned || options2.follow()) options2.scroll(container);
+      else options2.jump(container);
+    }
+    return {
+      message: (value) => renderMessageHtml(decodeRenderMessage(value)),
+      user: (value, time, attrs = "") => renderUserMessage(decodeRenderMessage(value), time, attrs),
+      assistant: (value, time, opts) => renderAssistantMessage(decodeRenderMessage(value), time, opts),
+      custom: (value, time, attrs = "") => renderCustomMessage(decodeRenderMessage(value), time, attrs),
+      images: imageBlocksHtml,
+      thinking: renderThinkingBlock,
+      tool: renderToolCall,
+      upsertCustom: upsertLiveCustomMessage,
+      dispose() {
+        disposed = true;
+      }
+    };
+  }
+
+  // src/browser/response-details.ts
+  function createResponseDetails(options2) {
+    const { document: document2, sessionState } = options2;
+    const responseDetails = /* @__PURE__ */ new Map();
+    let responseDetailSeq = 0, disposed = false;
+    const lifetime = new AbortController();
+    const key = () => sessionState.currentSession ? sessionRefKey(sessionState.currentSession) : null;
+    const model = () => typeof sessionState.currentSession?.model === "string" ? sessionState.currentSession.model : "";
+    const current = (detail) => !disposed && detail.key === key();
+    function button(value) {
+      if (disposed) return "";
+      const message3 = decodeRenderMessage(value), detail = responseDetailProjection(message3), id = `response-${++responseDetailSeq}`;
+      responseDetails.set(id, detail);
+      if (responseDetails.size > 2e3) {
+        const first = responseDetails.keys().next().value;
+        if (first) responseDetails.delete(first);
+      }
+      const metadata = formatResponseMetadata(detail, options2.mode());
+      return `<button type="button" class="message-speed message-metadata-btn" data-detail-id="${id}" title="Response details. Response time is request start to JSONL append; effective speed includes time to first token."${metadata ? "" : ' style="display:none"'}>${escapeHtml(metadata || "")}</button>`;
+    }
+    function updateRenderedResponseMetadata() {
+      if (disposed) return;
+      document2.querySelectorAll(".message-metadata-btn").forEach((btn) => {
+        const text17 = formatResponseMetadata(responseDetails.get(btn.dataset.detailId || ""), options2.mode());
+        btn.textContent = text17 || "";
+        btn.style.display = text17 ? "" : "none";
+      });
+    }
+    function responsePricingKnown(msg) {
+      return Number.isFinite(msg?.usage?.cost?.total);
+    }
+    function responseDetailProjection(msg) {
+      return {
+        key: key(),
+        selectedModel: model(),
+        usage: msg.usage,
+        durationMs: msg.durationMs,
+        outputTokens: msg.outputTokens,
+        provider: msg.provider,
+        model: msg.model,
+        responseModel: msg.responseModel,
+        stopReason: msg.stopReason,
+        pricingKnown: responsePricingKnown(msg)
+      };
+    }
+    function refreshResponsePricingState() {
+      if (disposed) return;
+      for (const detail of responseDetails.values()) detail.pricingKnown = responsePricingKnown(detail);
+      updateRenderedResponseMetadata();
+    }
+    function openResponseDetails(id) {
+      const m = responseDetails.get(id);
+      if (!m || !current(m)) return;
+      const u = m.usage || {}, c = u.cost || {};
+      const selected = m.model || m.selectedModel || "\u2014";
+      const model2 = m.responseModel || selected;
+      const prompt = (u.input || 0) + (u.cacheRead || 0) + (u.cacheWrite || 0);
+      const modelRows = m.responseModel && m.responseModel !== selected ? [["Selected model", selected], ["Response model", model2]] : [["Model", model2]];
+      const rows = [
+        ...modelRows,
+        ["Provider", m.provider || "\u2014"],
+        ["Response time", m.durationMs ? formatDuration(m.durationMs) : "\u2014"],
+        ["Effective speed", formatTokSpeed(m.outputTokens || u.output, m.durationMs) || "\u2014"],
+        ["Tokens", `${formatTokens(u.input)} input \xB7 ${formatTokens(u.output)} output${u.reasoning ? ` \xB7 ${formatTokens(u.reasoning)} reasoning` : ""}`],
+        ["Cache", `${formatTokens(u.cacheRead)} read \xB7 ${formatTokens(u.cacheWrite)} write${prompt ? ` \xB7 ${Math.round((u.cacheRead || 0) / prompt * 100)}% hit` : ""}`],
+        ["Estimated input", formatEstimatedCost(c.input)],
+        ["Estimated output", formatEstimatedCost(c.output)],
+        ["Estimated cache read / write", `${formatEstimatedCost(c.cacheRead)} / ${formatEstimatedCost(c.cacheWrite)}`],
+        ["Estimated total", formatEstimatedCost(c.total)],
+        ["Stop reason", m.stopReason || "\u2014"]
+      ];
+      document2.getElementById("responseDetailsBody").innerHTML = '<div class="telemetry-note">Pi catalog estimates, not provider-billed amounts. Response time is request start \u2192 JSONL append; effective speed includes TTFT.</div><table class="stats-table">' + rows.map(([k, v]) => `<tr><td class="stats-key">${escapeHtml(k)}</td><td class="stats-val">${escapeHtml(v)}</td></tr>`).join("") + "</table>";
+      document2.getElementById("responseDetailsModal").style.display = "flex";
+    }
+    function closeResponseDetails() {
+      document2.getElementById("responseDetailsModal").style.display = "none";
+    }
+    document2.addEventListener("click", (event) => {
+      if (!(event.target instanceof Element)) return;
+      const button2 = event.target.closest(".message-metadata-btn");
+      if (button2?.isConnected && button2.dataset.detailId) openResponseDetails(button2.dataset.detailId);
+    }, { signal: lifetime.signal });
+    return {
+      button,
+      update: updateRenderedResponseMetadata,
+      refreshPricing: refreshResponsePricingState,
+      open: openResponseDetails,
+      close: closeResponseDetails,
+      get size() {
+        return responseDetails.size;
+      },
+      dispose() {
+        if (disposed) return;
+        closeResponseDetails();
+        disposed = true;
+        lifetime.abort();
+        responseDetails.clear();
+      }
+    };
+  }
+
+  // src/browser/message-groups.ts
+  function groupToolActivity(container) {
+    if (!container) return;
+    const document2 = container.ownerDocument;
+    const isToolNoise = (el) => el.matches(".message.tool-result[data-msg-index], .message.assistant.no-text[data-msg-index]");
+    let run = [];
+    const wrapRun = () => {
+      if (!run.length) return;
+      const group = document2.createElement("details");
+      group.className = "tool-group";
+      group.innerHTML = '<summary class="tool-group-header"><span class="tool-group-label"></span><span class="tool-group-preview"></span></summary><div class="tool-group-body"></div>';
+      run[0].before(group);
+      const body = group.querySelector(".tool-group-body");
+      run.forEach((el) => body.appendChild(el));
+      run = [];
+    };
+    for (const child of Array.from(container.children)) {
+      if (isToolNoise(child)) run.push(child);
+      else wrapRun();
+    }
+    wrapRun();
+    container.querySelectorAll(":scope > details.tool-group").forEach((group) => {
+      const next = group.nextElementSibling;
+      if (!next || !next.matches("details.tool-group")) return;
+      next.querySelector(".tool-group-body").prepend(...group.querySelector(".tool-group-body").childNodes);
+      if (group.open && next instanceof HTMLDetailsElement) next.open = true;
+      group.remove();
+    });
+    container.querySelectorAll(":scope > details.tool-group").forEach(updateToolGroupSummary);
+  }
+  function updateToolGroupSummary(group) {
+    const calls = group.querySelectorAll("details.tool-call").length;
+    const results = group.querySelectorAll(".message.tool-result").length;
+    const n = Math.max(calls, results);
+    const names = [...new Set(
+      [...group.querySelectorAll(".tool-call-name")].map((el) => (el.textContent || "").trim())
+    )];
+    group.querySelector(".tool-group-label").textContent = n ? `\u26A1 ${n} tool use${n === 1 ? "" : "s"}` : "\u{1F9E0} thinking";
+    group.querySelector(".tool-group-preview").textContent = names.slice(0, 4).join(", ") + (names.length > 4 ? "\u2026" : "");
   }
   return __toCommonJS(index_exports);
 })();

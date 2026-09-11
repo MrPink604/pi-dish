@@ -2197,3 +2197,7 @@ endpoint; clipboard feedback and drag listeners retire with their owning control
 query/scopes, list polling and unread state. `host-session-loader.retireRequests()`
 retires pending observations while preserving caches when query text changes.
 Use read-only query/list getters rather than mutating former app globals.
+
+Browser message rendering is authored in `src/browser/message-render.ts` with
+narrowed inputs, host-owned response detail caches and deterministic tool grouping.
+Keep retained transcript anchors and custom-message upsert identity intact.

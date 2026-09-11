@@ -280,8 +280,7 @@ try {
     if (key?.startsWith('pi-dish-draft-spawn:')) localStorage.removeItem(key);
   }
 } catch {}
-let responseDetailSeq = 0;
-const responseDetails = new Map();
+const responseDetailsController = PiDishBrowser.createResponseDetails({ document, sessionState, mode: () => displayPreferences.responseMode });
 
 // Live tool panel tracking: toolCallId -> { el, startTime }
 let liveToolPanels = new Map();
@@ -452,10 +451,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.addEventListener('click', (e) => {
     const img = e.target.closest('img.msg-image');
     if (img) openImageLightbox(img.src);
-  });
-  document.addEventListener('click', (e) => {
-    const btn = e.target.closest('.message-metadata-btn');
-    if (btn) openResponseDetails(btn.dataset.detailId);
   });
 
   // Tap a linkified file mention to open it in the viewer. preventDefault
@@ -1487,25 +1482,7 @@ function maybeLoadOlderMessages(container) {
   if (container?.scrollTop <= LOAD_OLDER_SCROLL_THRESHOLD) loadOlderMessages();
 }
 
-function renderMessageHtml(msg) {
-  const time = msg.timestamp ? formatTime(msg.timestamp) : '';
-  // The stream index rides on the root element — dedup, tool grouping, and
-  // search jumps all key on data-msg-index. Passed into the renderers rather
-  // than string-spliced into their output afterwards.
-  const idxAttr = (msg.index != null) ? ` data-msg-index="${msg.index}"` : '';
-  if (msg.role === 'user') return renderUserMessage(msg, time, idxAttr);
-  if (msg.role === 'assistant') {
-    // OMP persists an empty assistant shell when thinking is interrupted. The
-    // following interrupted-thinking marker carries the useful UI; avoid a
-    // stray π header while preserving the message/index in the API.
-    if (Array.isArray(msg.content) && msg.content.length === 0 && !msg.errorMessage) return '';
-    return renderAssistantMessage(msg, time, { attrs: idxAttr });
-  }
-  if (msg.role === 'toolResult') return renderToolResult(msg, time, idxAttr);
-  if (msg.role === 'branchSummary') return renderBranchSummary(msg, time, idxAttr);
-  if (msg.role === 'custom') return renderCustomMessage(msg, time, idxAttr);
-  return '';
-}
+function renderMessageHtml(message) { return messageRenderer.message(message); }
 
 async function loadMessages(owner = sessionState.captureSelection()) {
   if (!sessionState.ownsSelection(owner)) return;
@@ -1688,409 +1665,23 @@ async function fetchNewMessagesSince(owner = sessionState.captureSelection()) {
   }
 }
 
-// Image content blocks → a `.msg-images` thumbnail row (empty string when
-// none), shared by user messages, tool results, and live tool panels so the
-// tap-to-zoom lightbox delegation works everywhere. Escape both the mime type
-// and the data before dropping them into the attribute — well-formed base64
-// has no HTML-special chars so escaping is a no-op for it, but malformed data
-// must not be able to break out of the src attribute.
-//
-// Resource URLs (everything but small live-streamed inline base64) are
-// relative to the host that owns the session, and every caller here renders
-// into the transcript of the selected one — so that is the host to resolve
-// against, not the serving origin.
-function imageBlocksHtml(content, alt = 'image') {
-  const images = extractImageBlocks(content);
-  if (!images.length) return '';
-  const imgs = images.map(img => {
-    const src = img.url
-      ? hostAssetUrl(sessionState.currentSession?.host, img.url)
-      : `data:${img.mimeType};base64,${img.data}`;
-    const loading = img.url ? ' loading="lazy" decoding="async"' : '';
-    return `<img class="msg-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"${loading}>`;
-  }).join('');
-  return `<div class="msg-images">${imgs}</div>`;
-}
-
-// Hover 🔗 on a turn header: copies the public share URL deep-linked to this
-// message (pi's HTML export scrolls to ?targetId=<JSONL entry id>). Only
-// JSONL-backed messages have an entry id — streaming placeholders don't.
-function messageLinkBtnHtml(msg) {
-  if (!msg.id || !sessionSupports(sessionState.currentSession, 'export')) return '';
-  return `<button type="button" class="msg-link-btn" data-entry-id="${escapeHtml(msg.id)}" title="Copy share link to this message">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-    </svg></button>`;
-}
-
-// The <session-refs> block the send routes append is context for the model,
-// not for the reader: the transcript hides it and shows one chip per ref,
-// which opens the session it names. Optimistic bubbles carry the same entries
-// on `msg.sessionRefs` — the server's copy only arrives with the echo, and by
-// then the echo has been suppressed.
-function sessionRefChipsHtml(refs) {
-  if (!refs || !refs.length) return '';
-  const chips = refs.map((entry) => {
-    const session = sessionMatchingRef(entry.ref);
-    const label = entry.name || session?.name || entry.ref;
-    const live = (session ? session.isActive : entry.isActive) ? ' live' : '';
-    const title = [entry.ref, entry.host, entry.cwd].filter(Boolean).join(' · ');
-    return `<button type="button" class="session-ref-chip${live}" data-session-ref="${escapeHtml(entry.ref)}" title="${escapeHtml(title)}">
-      <span class="session-ref-dot">●</span>${escapeHtml(label)}</button>`;
-  }).join('');
-  return `<div class="session-ref-chips">${chips}</div>`;
-}
-
-function renderUserMessage(msg, time, attrs = '') {
-  const { text, refs } = splitSessionRefContext(extractTextContent(msg.content));
-  const imagesHtml = imageBlocksHtml(msg.content, 'attached image');
-  const chipsHtml = sessionRefChipsHtml(msg.sessionRefs || refs);
-  return `<div${attrs} class="message user">
-    <div class="message-header"><span class="message-role user">❯</span>${time ? `<span class="message-time">${time}</span>` : ''}${messageLinkBtnHtml(msg)}</div>
-    <div class="message-content user-content">${text ? `<div class="markdown-body">${formatMarkdown(text)}</div>` : ''}${imagesHtml}${chipsHtml}</div>
-  </div>`;
-}
-
-function renderAssistantMessage(msg, time, opts = {}) {
-  let thinkingHtml = '', textHtml = '', toolCallsHtml = '';
-  const timestamp = msg.timestamp || Date.now();
-  const streamingClass = opts.streaming ? ' streaming' : '';
-  const streamingAttr = opts.streaming ? ' data-streaming="true"' : '';
-  
-  if (Array.isArray(msg.content)) {
-    for (const block of msg.content) {
-      if (block.type === 'thinking' && block.thinking) thinkingHtml += renderThinkingBlock(block.thinking);
-      else if (block.type === 'text' && block.text) textHtml += formatMarkdown(block.text);
-      else if (block.type === 'toolCall') toolCallsHtml += renderToolCall(block);
-    }
-  } else if (typeof msg.content === 'string') {
-    textHtml = formatMarkdown(msg.content);
-  }
-  
-  // Show error messages from the API (e.g. 402, rate limits, etc.)
-  let errorHtml = '';
-  if (msg.errorMessage) {
-    errorHtml = `<div class="message-content message-error"><div class="markdown-body"><strong>Error:</strong> ${escapeHtml(msg.errorMessage)}</div></div>`;
-  }
-  
-  const showModel = msg.model && (!sessionState.currentSession || msg.model !== sessionState.currentSession.model);
-  // Tool-only messages (no prose, no error) are fully hidden in focus mode —
-  // without this their empty header row lingers as a stray marker.
-  const noTextClass = messageHasVisibleText(msg) ? '' : ' no-text';
-  // Effective response speed rides the header next to the time — JSONL-backed
-  // renders only (streaming messages have no timing until finalized).
-  let speedHtml = '';
-  const hasMetadata = !opts.streaming && (msg.usage || msg.durationMs);
-  const detail = hasMetadata ? responseDetailProjection(msg) : null;
-  const metadata = detail ? formatResponseMetadata(detail, displayPreferences.responseMode) : null;
-  if (hasMetadata) {
-    const detailId = `response-${++responseDetailSeq}`;
-    // Keep only the small telemetry projection the detail modal consumes;
-    // retaining full message content here would pin every transcript render.
-    responseDetails.set(detailId, detail);
-    if (responseDetails.size > 2000) responseDetails.delete(responseDetails.keys().next().value);
-    speedHtml = `<button type="button" class="message-speed message-metadata-btn" data-detail-id="${detailId}" title="Response details. Response time is request start to JSONL append; effective speed includes time to first token."${metadata ? '' : ' style="display:none"'}>${escapeHtml(metadata || '')}</button>`;
-  }
-
-  return `<div${opts.attrs || ''} class="message assistant${streamingClass}${noTextClass}${msg.errorMessage ? ' error' : ''}" data-timestamp="${timestamp}"${streamingAttr}>
-    <div class="message-header">
-      <span class="message-role assistant">π</span>
-      ${showModel ? `<span class="badge">${escapeHtml(msg.model)}</span>` : ''}
-      ${opts.streaming ? '<span class="badge streaming">●</span>' : ''}
-      ${speedHtml}
-      ${time ? `<span class="message-time">${time}</span>` : ''}
-      ${messageLinkBtnHtml(msg)}
-    </div>
-    ${thinkingHtml}${toolCallsHtml}
-    ${textHtml ? `<div class="message-content"><div class="markdown-body">${textHtml}</div></div>` : ''}
-    ${errorHtml}
-  </div>`;
-}
-
-function updateRenderedResponseMetadata() {
-  document.querySelectorAll('.message-metadata-btn').forEach(btn => {
-    const text = formatResponseMetadata(responseDetails.get(btn.dataset.detailId), displayPreferences.responseMode);
-    btn.textContent = text || '';
-    btn.style.display = text ? '' : 'none';
-  });
-}
-
-function responsePricingKnown(msg) {
-  return Number.isFinite(msg?.usage?.cost?.total);
-}
-
-function responseDetailProjection(msg) {
-  return {
-    usage: msg.usage,
-    durationMs: msg.durationMs,
-    outputTokens: msg.outputTokens,
-    provider: msg.provider,
-    model: msg.model,
-    responseModel: msg.responseModel,
-    stopReason: msg.stopReason,
-    pricingKnown: responsePricingKnown(msg),
-  };
-}
-
-function refreshResponsePricingState() {
-  for (const detail of responseDetails.values()) detail.pricingKnown = responsePricingKnown(detail);
-  updateRenderedResponseMetadata();
-}
-
-function openResponseDetails(id) {
-  const m = responseDetails.get(id); if (!m) return;
-  const u = m.usage || {}, c = u.cost || {};
-  const selected = m.model || sessionState.currentSession?.model || '—';
-  const model = m.responseModel || selected;
-  const prompt = (u.input||0)+(u.cacheRead||0)+(u.cacheWrite||0);
-  const modelRows = m.responseModel && m.responseModel !== selected
-    ? [['Selected model', selected], ['Response model', model]]
-    : [['Model', model]];
-  const rows = [
-    ...modelRows, ['Provider', m.provider || '—'],
-    ['Response time', m.durationMs ? formatDuration(m.durationMs) : '—'],
-    ['Effective speed', formatTokSpeed(m.outputTokens || u.output, m.durationMs) || '—'],
-    ['Tokens', `${formatTokens(u.input)} input · ${formatTokens(u.output)} output${u.reasoning ? ` · ${formatTokens(u.reasoning)} reasoning` : ''}`],
-    ['Cache', `${formatTokens(u.cacheRead)} read · ${formatTokens(u.cacheWrite)} write${prompt ? ` · ${Math.round((u.cacheRead||0)/prompt*100)}% hit` : ''}`],
-    ['Estimated input', formatEstimatedCost(c.input)],
-    ['Estimated output', formatEstimatedCost(c.output)],
-    ['Estimated cache read / write', `${formatEstimatedCost(c.cacheRead)} / ${formatEstimatedCost(c.cacheWrite)}`],
-    ['Estimated total', formatEstimatedCost(c.total)], ['Stop reason', m.stopReason || '—'],
-  ];
-  document.getElementById('responseDetailsBody').innerHTML = '<div class="telemetry-note">Pi catalog estimates, not provider-billed amounts. Response time is request start → JSONL append; effective speed includes TTFT.</div><table class="stats-table">' + rows.map(([k,v]) => `<tr><td class="stats-key">${escapeHtml(k)}</td><td class="stats-val">${escapeHtml(v)}</td></tr>`).join('') + '</table>';
-  document.getElementById('responseDetailsModal').style.display = 'flex';
-}
-function closeResponseDetails() { document.getElementById('responseDetailsModal').style.display = 'none'; }
-
-function renderThinkingBlock(thinking) {
-  const preview = thinking.substring(0, 80).replace(/\n/g, ' ');
-  return `<details class="thinking-block">
-    <summary class="thinking-header"><span class="thinking-label">Thinking</span><span class="thinking-preview">${escapeHtml(preview)}…</span></summary>
-    <div class="thinking-text">${escapeHtml(thinking)}</div>
-  </details>`;
-}
-
-function renderToolCall(block) {
-  const args = block.arguments || {};
-  const summary = getToolSummary(block.name, args);
-  // Prime's ipython tool takes one `code` argument; the raw JSON wrapper
-  // around it is noise. Other tools keep the JSON dump.
-  const bodyHtml = block.name === 'ipython' && typeof args.code === 'string'
-    ? `<pre><code>${escapeHtml(args.code)}</code></pre>`
-    : `<pre><code>${escapeHtml(JSON.stringify(args, null, 2))}</code></pre>`;
-
-  return `<details class="tool-call">
-    <summary class="tool-call-header">
-      <span class="tool-call-icon">⚡</span><span class="tool-call-name">${escapeHtml(block.name)}</span>
-      ${summary ? `<span class="tool-call-summary">${escapeHtml(summary)}</span>` : ''}
-    </summary>
-    <div class="tool-call-content">${bodyHtml}</div>
-  </details>`;
-}
-
-function renderToolResult(msg, time, attrs = '') {
-  let content = extractTextContent(msg.content);
-  const isError = msg.isError;
-  const timestamp = msg.timestamp || Date.now();
-  // Prime's ipython results are a BashResult repr; show the wrapped command
-  // output (and a nonzero-exit chip) instead of the Python repr.
-  const parsed = parseIpythonResult(content);
-  let exitBadge = '';
-  if (parsed) {
-    content = parsed.output;
-    if (parsed.exitCode !== 0) exitBadge = `<span class="tool-result-meta error-badge">exit ${parsed.exitCode}</span>`;
-  }
-  const lines = content.split('\n');
-  const lineCount = lines.length;
-  const preview = truncate(lines[0], 80);
-  // A tool result carrying an image (e.g. a `read` on a PNG) opens by default
-  // regardless of line count — seeing the image is the point — and flags it in
-  // the header meta so it's discoverable when collapsed.
-  const images = extractImageBlocks(msg.content);
-  const imageCount = images.length;
-  const imagesHtml = imageBlocksHtml(msg.content, 'tool result image');
-
-  return `<div${attrs} class="message tool-result ${isError ? 'error' : ''}" data-timestamp="${timestamp}">
-    <details class="tool-result-details" ${(lineCount <= 5 || imageCount) ? 'open' : ''}>
-      <summary class="tool-result-header">
-        <span class="tool-result-icon">${isError ? '✗' : '✓'}</span>
-        <span class="tool-result-name">${escapeHtml(msg.toolName || 'result')}</span>
-        ${lineCount > 5 ? `<span class="tool-result-meta">${lineCount} lines</span>` : ''}
-        ${imageCount ? `<span class="tool-result-meta">${imageCount === 1 ? 'image' : imageCount + ' images'}</span>` : ''}
-        ${exitBadge}
-        ${isError ? '<span class="tool-result-meta error-badge">error</span>' : ''}
-        ${lineCount > 5 ? `<span class="tool-result-preview">${escapeHtml(preview)}</span>` : ''}
-      </summary>
-      <div class="tool-result-content"><pre>${escapeHtml(truncate(content, 2000))}</pre>${imagesHtml}</div>
-    </details>
-  </div>`;
-}
-
-// Tree-navigation marker: the summary of an abandoned branch, injected into
-// the model's context at this point. Collapsed by default — summaries run
-// long — but stays visible in focus mode (it's conversation context, not
-// tool noise).
-function renderBranchSummary(msg, time, attrs = '') {
-  const text = extractTextContent(msg.content);
-  const timestamp = msg.timestamp || Date.now();
-  const preview = truncate(text.split('\n')[0], 80);
-  return `<div${attrs} class="message branch-summary" data-timestamp="${timestamp}">
-    <details class="branch-summary-details">
-      <summary class="branch-summary-header">
-        <span class="branch-summary-icon">⎇</span>
-        <span class="branch-summary-label">Branch summary</span>
-        ${time ? `<span class="message-time">${time}</span>` : ''}
-        <span class="branch-summary-preview">${escapeHtml(preview)}</span>
-      </summary>
-      <div class="message-content"><div class="markdown-body">${formatMarkdown(text)}</div></div>
-    </details>
-  </div>`;
-}
-
-// OMP advisor notes — a second model passively reviewing each turn. The JSONL
-// entry carries structured notes in details.notes and an <advisory> XML
-// rendering of the same thing in content; prefer the structure, fall back to
-// unwrapping the XML so an older/odder producer still reads as prose.
-const ADVISOR_SEVERITIES = ['nit', 'concern', 'blocker'];
-
-function advisoryTagAttr(rawAttrs, name) {
-  const m = new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`, 'i').exec(rawAttrs || '');
-  return m ? m[1].trim() : '';
-}
-
-function normalizeAdvisorSeverity(value) {
-  const sev = String(value || '').trim().toLowerCase();
-  return ADVISOR_SEVERITIES.includes(sev) ? sev : '';
-}
-
-// Split an <advisory ...>note</advisory> batch into notes. Anything that isn't
-// wrapped (or is only half-wrapped) survives as a single unwrapped note rather
-// than leaking raw tags into the card.
-function parseAdvisoryContent(text) {
-  const notes = [];
-  const re = /<advisory\b([^>]*)>([\s\S]*?)<\/advisory>/gi;
-  let m;
-  while ((m = re.exec(text))) {
-    const note = m[2].trim();
-    if (note) notes.push({ note, severity: advisoryTagAttr(m[1], 'severity'), advisor: advisoryTagAttr(m[1], 'advisor') });
-  }
-  if (notes.length) return notes;
-  const bare = String(text || '').replace(/<\/?advisory\b[^>]*>/gi, '').trim();
-  return bare ? [{ note: bare }] : [];
-}
-
-function advisorNotesFrom(msg) {
-  const structured = Array.isArray(msg.details?.notes) ? msg.details.notes : null;
-  const notes = (structured && structured.length ? structured : parseAdvisoryContent(extractTextContent(msg.content)))
-    .map(n => ({
-      note: typeof n === 'string' ? n : String(n?.note || ''),
-      severity: normalizeAdvisorSeverity(typeof n === 'string' ? '' : n?.severity),
-      advisor: typeof n === 'string' ? '' : String(n?.advisor || '').trim(),
-    }))
-    .filter(n => n.note);
-  return notes;
-}
-
-// A batch may name its advisor only on the XML wrapper (multi-advisor
-// rosters), so fall back to that when the structured notes carry no name.
-function advisoryBatchName(msg) {
-  const m = /<advisory\b([^>]*)>/i.exec(extractTextContent(msg.content));
-  return m ? advisoryTagAttr(m[1], 'advisor') : '';
-}
-
-function advisorSeverityChip(severity) {
-  if (!severity) return '';
-  return `<span class="advisor-severity sev-${severity}">${escapeHtml(severity)}</span>`;
-}
-
-// A quiet card, not a boxed callout: hairline left accent tinted by the worst
-// severity in the batch, notes rendered as markdown (they carry `code` spans).
-// Conversation content, so it stays visible in focus mode.
-function renderAdvisorMessage(msg, time, attrs, timestamp) {
-  const notes = advisorNotesFrom(msg);
-  if (!notes.length) return '';
-  const worst = ADVISOR_SEVERITIES.filter(s => notes.some(n => n.severity === s)).pop() || '';
-  const names = [...new Set(notes.map(n => n.advisor).filter(Boolean))];
-  const name = names.length === 1 ? names[0] : (names.length ? '' : advisoryBatchName(msg));
-  const single = notes.length === 1;
-  const rows = notes.map(n => `<div class="advisor-note">
-        ${single ? '' : advisorSeverityChip(n.severity)}${!single && !name && n.advisor ? `<span class="advisor-note-name">${escapeHtml(n.advisor)}</span>` : ''}
-        <div class="markdown-body">${formatMarkdown(n.note)}</div>
-      </div>`).join('');
-  return `<div${attrs} class="message custom-message advisor${worst ? ` sev-${worst}` : ''}" data-timestamp="${timestamp}">
-    <div class="advisor-card">
-      <div class="advisor-header">
-        <span class="advisor-icon">◈</span>
-        <span class="advisor-label">Advisor${name ? ` · ${escapeHtml(name)}` : ''}</span>
-        ${single ? advisorSeverityChip(notes[0].severity) : `<span class="advisor-count">${notes.length} notes</span>`}
-        ${time ? `<span class="message-time">${time}</span>` : ''}
-      </div>
-      <div class="advisor-notes">${rows}</div>
-    </div>
-  </div>`;
-}
-
-// OMP conversational custom messages. interrupted-thinking deliberately
-// carries hidden reasoning in JSONL; session-files strips that content and we
-// render only this divider. Visible unknown types get a subdued generic row so
-// future host additions cannot vanish without explanation.
-function renderCustomMessage(msg, time, attrs = '') {
-  const customType = msg.customType || 'custom-message';
-  const timestamp = msg.timestamp || Date.now();
-  if (customType === 'interrupted-thinking') {
-    return `<div${attrs} class="message custom-message interrupted" data-timestamp="${timestamp}">
-      <span class="custom-message-divider"></span><span class="custom-message-label">Interrupted</span>${time ? `<span class="message-time">${time}</span>` : ''}<span class="custom-message-divider"></span>
-    </div>`;
-  }
-
-  // Unknown hidden custom messages are internal model/session continuity.
-  // session-files applies the same explicit skip historically; enforce it
-  // here too because live bridge events do not pass through that decoder.
-  if (msg.display === false) return '';
-
-  if (customType === 'async-result') {
-    const jobs = Array.isArray(msg.details?.jobs) ? msg.details.jobs : [];
-    const names = jobs.map(job => job.label || job.jobId).filter(Boolean);
-    const duration = jobs.length === 1 && Number.isFinite(jobs[0].durationMs)
-      ? formatDuration(jobs[0].durationMs) : '';
-    const meta = [names.join(', '), duration].filter(Boolean).join(' · ');
-    return `<div${attrs} class="message custom-message async-result" data-timestamp="${timestamp}">
-      <span class="custom-message-icon">✓</span><span class="custom-message-label">Background job${jobs.length > 1 ? 's' : ''} finished</span>${meta ? `<span class="custom-message-meta">${escapeHtml(meta)}</span>` : ''}${time ? `<span class="message-time">${time}</span>` : ''}
-    </div>`;
-  }
-
-  if (customType === 'advisor') return renderAdvisorMessage(msg, time, attrs, timestamp);
-
-  const text = extractTextContent(msg.content);
-  const label = customType.replace(/[-_]+/g, ' ');
-  return `<div${attrs} class="message custom-message generic" data-timestamp="${timestamp}">
-    <span class="custom-message-icon">◇</span><span class="custom-message-label">${escapeHtml(label)}</span>${text ? `<span class="custom-message-meta">${escapeHtml(truncate(text.replace(/\s+/g, ' '), 240))}</span>` : ''}${time ? `<span class="message-time">${time}</span>` : ''}
-  </div>`;
-}
-
-function liveCustomMessageKey(message) {
-  const jobs = Array.isArray(message?.details?.jobs)
-    ? message.details.jobs.map(job => job.jobId).filter(Boolean).join(',') : '';
-  return `${message?.customType || 'custom-message'}:${message?.timestamp || jobs}`;
-}
-
-function upsertLiveCustomMessage(message, { streaming = false } = {}) {
-  const container = document.getElementById('messages');
-  if (!container) return;
-  const wasPinned = isPinnedToBottom(container);
-  const key = liveCustomMessageKey(message);
-  const existing = [...container.querySelectorAll('.message.custom-message[data-live-custom-key]')]
-    .find(el => el.dataset.liveCustomKey === key);
-  const attrs = ` data-live-custom-key="${escapeHtml(key)}"${streaming ? ' data-streaming="true"' : ''}`;
-  const tmp = document.createElement('template');
-  tmp.innerHTML = renderCustomMessage(message, formatTime(message.timestamp || Date.now()), attrs);
-  const el = tmp.content.firstElementChild;
-  if (!el) return;
-  if (existing) existing.replaceWith(el);
-  else container.appendChild(el);
-  if (wasPinned || followStream) scrollToBottom(container); else updateJumpButton(container);
-}
+// Typed message projection and telemetry retain only their own render data.
+const messageRenderer = PiDishBrowser.createMessageRenderer({
+  document, sessionState, details: responseDetailsController, markdown: text => formatMarkdown(text),
+  assetUrl: hostAssetUrl, matchRef: ref => sessionMatchingRef(ref), pinned: isPinnedToBottom,
+  follow: () => followStream, scroll: scrollToBottom, jump: updateJumpButton,
+});
+function imageBlocksHtml(content, alt) { return messageRenderer.images(content, alt); }
+function renderUserMessage(message, time, attrs) { return messageRenderer.user(message, time, attrs); }
+function renderAssistantMessage(message, time, options) { return messageRenderer.assistant(message, time, options); }
+function renderCustomMessage(message, time, attrs) { return messageRenderer.custom(message, time, attrs); }
+function renderThinkingBlock(text) { return messageRenderer.thinking(text); }
+function renderToolCall(block) { return messageRenderer.tool(block); }
+function upsertLiveCustomMessage(message, options) { messageRenderer.upsertCustom(message, options); }
+function updateRenderedResponseMetadata() { responseDetailsController.update(); }
+function refreshResponsePricingState() { responseDetailsController.refreshPricing(); }
+function openResponseDetails(id) { responseDetailsController.open(id); }
+function closeResponseDetails() { responseDetailsController.close(); }
 
 // =========================================================================
 // Live Tool Panels (streaming tool execution)
@@ -3389,55 +2980,8 @@ function finalizeRender(container, { stripLive = true } = {}) {
  * and incremental catch-up don't fragment a turn. Streaming elements
  * (no data-msg-index) are never grouped.
  */
-function groupToolActivity(container) {
-  if (!container) return;
-  const isToolNoise = (el) =>
-    el.matches('.message.tool-result[data-msg-index], .message.assistant.no-text[data-msg-index]');
-
-  // Pass 1: wrap each maximal run of ungrouped tool activity.
-  let run = [];
-  const wrapRun = () => {
-    if (!run.length) return;
-    const group = document.createElement('details');
-    group.className = 'tool-group';
-    group.innerHTML = '<summary class="tool-group-header"><span class="tool-group-label"></span><span class="tool-group-preview"></span></summary><div class="tool-group-body"></div>';
-    run[0].before(group);
-    const body = group.querySelector('.tool-group-body');
-    run.forEach(el => body.appendChild(el));
-    run = [];
-  };
-  for (const child of Array.from(container.children)) {
-    if (isToolNoise(child)) run.push(child);
-    else wrapRun();
-  }
-  wrapRun();
-
-  // Pass 2: merge adjacent groups (a turn split across pages/catch-ups).
-  // The later group survives so an element being used as a scroll anchor
-  // (loadOlderMessages) isn't removed from the DOM.
-  container.querySelectorAll(':scope > details.tool-group').forEach(group => {
-    const next = group.nextElementSibling;
-    if (!next || !next.matches('details.tool-group')) return;
-    next.querySelector('.tool-group-body').prepend(...group.querySelector('.tool-group-body').childNodes);
-    if (group.open) next.open = true;
-    group.remove();
-  });
-
-  container.querySelectorAll(':scope > details.tool-group').forEach(updateToolGroupSummary);
-}
-
-function updateToolGroupSummary(group) {
-  const calls = group.querySelectorAll('details.tool-call').length;
-  const results = group.querySelectorAll('.message.tool-result').length;
-  const n = Math.max(calls, results);
-  const names = [...new Set(
-    [...group.querySelectorAll('.tool-call-name')].map(el => el.textContent.trim())
-  )];
-  group.querySelector('.tool-group-label').textContent =
-    n ? `⚡ ${n} tool use${n === 1 ? '' : 's'}` : '🧠 thinking';
-  group.querySelector('.tool-group-preview').textContent =
-    names.slice(0, 4).join(', ') + (names.length > 4 ? '…' : '');
-}
+function groupToolActivity(container) { PiDishBrowser.groupToolActivity(container); }
+function updateToolGroupSummary(group) { PiDishBrowser.updateToolGroupSummary(group); }
 
 // =========================================================================
 // Streaming assistant renderer — incremental, block-level, throttled.

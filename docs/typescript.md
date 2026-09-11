@@ -453,3 +453,8 @@ Sidebar query/scopes, list fan-out and activity markers live in `sidebar-query.t
 `sidebar-lists.ts` and `sidebar-activity.ts`. Input invalidates prior request owners
 before debounce; polling and indexing timers have a shared disposal boundary.
 Settings generations prevent old scope reads from overwriting newer definitions.
+
+Message projection lives in `message-render.ts`, with wire narrowing in
+`message-data.ts`, bounded identity-owned telemetry in `response-details.ts` and
+idempotent DOM grouping in `message-groups.ts`. Retained detail buttons remain
+usable when their host-qualified transcript is restored.

@@ -818,3 +818,19 @@ browser and smoke checks passed again before re-review.
 Fable’s re-review also restored empty-filter reopen semantics (`undefined` keeps
 the prior full-search query). The extended button regression and strict checks
 passed; the reviewer approved that exact correction without another full review.
+
+## Checkpoint 36 — message rendering and response details
+
+Moved static transcript projection, custom-message upserts, response telemetry and
+tool grouping into four strict modules. Wire inputs are narrowed explicitly,
+including legacy content strings, indexed empty assistant entries and tool data.
+Timestamp attributes are escaped. Response-detail entries retain their host/session
+identity across cached transcript restoration and keep only bounded render data.
+Tool group merging preserves the later paging anchor and expanded DOM state.
+
+Verification: strict checks, 934 backend tests, 237 browser tests, all independent
+UI scenarios and full desktop/mobile smoke passed on the draft. Two pure tests,
+five browser cases and strict contracts cover narrowing, telemetry identity,
+metadata disposal, custom upserts and idempotent grouping. The inherited sidebar
+button correction passed its extended focused regression and strict check.
+Fable review is required before push.
