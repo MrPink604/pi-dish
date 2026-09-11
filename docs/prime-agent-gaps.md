@@ -241,14 +241,12 @@ into the TUI) or the capture/self-prime path; mind the draft-append trade-off.
 (`server.js:3009-3013`).
 
 **A7 — Thinking `max`.** Prime's vocabulary is
-`off|minimal|low|medium|high|xhigh|max`; the bridge validates against
-`THINKING_LEVELS` (`core.ts:165,1713,2208`), and the client's
-`thinkingLevelsFor` returns pi's 6 levels for non-OMP (`helpers.js:1924-1928`),
-though `OMP_THINKING_LEVEL_NAMES` at `helpers.js:1915` already includes `max`.
-[live] `POST /thinking {level:'max'}` → 400 "level must be one of: off, minimal,
-low, medium, high, xhigh"; the new-session select *does* offer Max (a
-consistency bug on its own). Also `resume --thinking` is refused for Prime
-(`server.js:6035-6036`).
+`off|minimal|low|medium|high|xhigh|max`. Fixed: the bridge descriptor
+declares Prime's ladder (`pi-dish-bridge-prime/index.ts`), `POST /thinking`
+validates against the session harness's vocabulary after lookup
+(`server.js`, `thinkingLevelNamesFor` in `src/browser/helper-models.ts`),
+and the client's `thinkingLevelsFor` offers `max` for Prime. Remaining:
+`resume --thinking` is refused for Prime (`server.js:6035-6036`).
 
 ### B. Missing product surfaces
 
@@ -447,7 +445,7 @@ Representative live observations:
 | `GET /api/commands?sessionId=<prime>` | 4 emulated builtins + `/dish-push` + `skill:*` (11 Prime skills); no TUI commands |
 | `POST /command` `/compact` `/goal …` `/settings` `/login` `/agents` `/schedule` | "does not support compaction" / "unknown or unsupported command" |
 | `GET /tree` and typed `/tree` | 409 → modal + raw JSON error string |
-| `POST /thinking {max}` | 400 listing only off…xhigh |
+| `POST /thinking {max}` | 400 listing only off…xhigh (pre-fix; now accepted) |
 | `GET /stats` after one turn | tokens in/out 110/34, cache 10, `cost ~$0.000038` from Prime's JSONL |
 | SSE during a held turn | single `queue_update` with `{"steering":[],"followUp":[]}`; follow-up → `{queued:false}`, strip empty |
 | `POST /close` (owned root) | `{"success":true}`; pane removed; `prime-agent list` → "No active agents." |

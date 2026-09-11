@@ -434,6 +434,25 @@ test('slash commands map onto RPC protocol commands', async () => {
   assert.match(typo.body.error, /unknown or unsupported command/);
 });
 
+test('POST /thinking validates the level against the session harness vocabulary', async () => {
+  // 'max' exists only in Prime/OMP vocabularies: a live pi session rejects
+  // it after lookup, and the fixture is never asked.
+  const before = readLog().filter(c => c.type === 'set_thinking_level').length;
+  const max = await post(`/api/sessions/${sessionId}/thinking`, { level: 'max' });
+  assert.equal(max.status, 400);
+  assert.match(max.body.error, /level must be one of: off, minimal, low, medium, high, xhigh$/);
+  // A nonsense level is rejected before any session lookup, same as ever.
+  const bogus = await post(`/api/sessions/${sessionId}/thinking`, { level: 'ultra' });
+  assert.equal(bogus.status, 400);
+  assert.equal(readLog().filter(c => c.type === 'set_thinking_level').length, before,
+    'rejected levels never reach pi');
+
+  const ok = await post(`/api/sessions/${sessionId}/thinking`, { level: 'xhigh' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.level, 'xhigh');
+  assert.ok(readLog().some(c => c.type === 'set_thinking_level' && c.level === 'xhigh'));
+});
+
 test('a /compact issued while one runs is refused, not forwarded to pi', { timeout: 10000 }, async () => {
   const before = readLog().filter(c => c.type === 'compact').length;
   // Hold the real stdio response until all mid-compaction HTTP assertions

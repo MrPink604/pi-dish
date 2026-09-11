@@ -21,9 +21,11 @@ var PiDishHelpers = (() => {
   // src/browser/shared-helpers.ts
   var shared_helpers_exports = {};
   __export(shared_helpers_exports, {
+    ALL_THINKING_LEVEL_NAMES: () => ALL_THINKING_LEVEL_NAMES,
     HOST_COLOR_SLOTS: () => HOST_COLOR_SLOTS,
     OMP_MODEL_ROLES: () => OMP_MODEL_ROLES,
     OMP_ROLE_THINKING_LEVELS: () => OMP_ROLE_THINKING_LEVELS,
+    PRIME_THINKING_LEVEL_NAMES: () => PRIME_THINKING_LEVEL_NAMES,
     RELATION_KIND_ORDER: () => RELATION_KIND_ORDER,
     THINKING_LEVEL_NAMES: () => THINKING_LEVEL_NAMES,
     aggregateUsageWeekly: () => aggregateUsageWeekly,
@@ -133,6 +135,7 @@ var PiDishHelpers = (() => {
     stripAnsi: () => stripAnsi,
     stripQueryField: () => stripQueryField,
     sttUnavailableReason: () => sttUnavailableReason,
+    thinkingLevelNamesFor: () => thinkingLevelNamesFor,
     thinkingLevelsFor: () => thinkingLevelsFor,
     tmuxPrefixSeq: () => tmuxPrefixSeq,
     truncate: () => truncate,
@@ -1536,8 +1539,15 @@ ${block}` : block;
     return THINKING_LEVEL_NAMES.includes(suffix) ? pattern.slice(0, idx) : pattern;
   }
   var OMP_THINKING_LEVEL_NAMES = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"];
+  var PRIME_THINKING_LEVEL_NAMES = [...THINKING_LEVEL_NAMES, "max"];
+  var ALL_THINKING_LEVEL_NAMES = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"];
+  function thinkingLevelNamesFor(harnessId) {
+    if (harnessId === "omp") return OMP_THINKING_LEVEL_NAMES;
+    if (harnessId === "prime") return PRIME_THINKING_LEVEL_NAMES;
+    return THINKING_LEVEL_NAMES;
+  }
   function thinkingLevelsFor(harnessId, model) {
-    if (harnessId !== "omp") return THINKING_LEVEL_NAMES;
+    if (harnessId !== "omp") return thinkingLevelNamesFor(harnessId);
     const supported = Array.isArray(model?.thinking) && model.thinking.length ? model.thinking : OMP_THINKING_LEVEL_NAMES.slice(0, -1);
     return [.../* @__PURE__ */ new Set(["off", ...supported, "auto"])];
   }

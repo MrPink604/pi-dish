@@ -3094,8 +3094,14 @@ var PiDishBrowser = (() => {
   // src/browser/helper-models.ts
   var THINKING_LEVEL_NAMES = ["off", "minimal", "low", "medium", "high", "xhigh"];
   var OMP_THINKING_LEVEL_NAMES = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"];
+  var PRIME_THINKING_LEVEL_NAMES = [...THINKING_LEVEL_NAMES, "max"];
+  function thinkingLevelNamesFor(harnessId) {
+    if (harnessId === "omp") return OMP_THINKING_LEVEL_NAMES;
+    if (harnessId === "prime") return PRIME_THINKING_LEVEL_NAMES;
+    return THINKING_LEVEL_NAMES;
+  }
   function thinkingLevelsFor(harnessId, model) {
-    if (harnessId !== "omp") return THINKING_LEVEL_NAMES;
+    if (harnessId !== "omp") return thinkingLevelNamesFor(harnessId);
     const supported = Array.isArray(model?.thinking) && model.thinking.length ? model.thinking : OMP_THINKING_LEVEL_NAMES.slice(0, -1);
     return [.../* @__PURE__ */ new Set(["off", ...supported, "auto"])];
   }

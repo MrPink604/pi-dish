@@ -2320,9 +2320,9 @@ test('thinkingLevelsFor trims OMP options to the model catalog entry', () => {
   // A catalog entry listing off can't produce duplicates.
   assert.deepEqual(H.thinkingLevelsFor('omp', { thinking: ['off', 'low'] }),
     ['off', 'low', 'auto']);
-  // Pi and other harnesses keep pi's fixed vocabulary.
+  // Pi keeps pi's fixed vocabulary; Prime's adds 'max' (and has no 'auto').
   assert.deepEqual(H.thinkingLevelsFor('pi', { thinking: ['low'] }),
     ['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
   assert.deepEqual(H.thinkingLevelsFor('prime', null),
-    ['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+    ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 });

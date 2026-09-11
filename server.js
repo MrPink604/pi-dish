@@ -61,7 +61,7 @@ const { createRecoveryRunner, recoveryMode } = require('./lib/recovery-runner');
 const { createSessionBounces, lifecycleBlockers } = require('./lib/session-bounces');
 const skillsLib = require('./lib/skills');
 const {
-  isModelEnabled, extractTextContent, THINKING_LEVEL_NAMES,
+  isModelEnabled, extractTextContent, ALL_THINKING_LEVEL_NAMES, thinkingLevelNamesFor,
   sessionMetaText, parseModelId, formatModelRef, buildSnippet, buildSnippets,
   parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch,
   isAutomationSession, queryAsksForAutomation,
@@ -2854,14 +2854,20 @@ async function runRpcSlashCommand(rpc, message) {
 
 app.post('/api/sessions/:id/thinking', async (req, res) => {
   const { level } = req.body || {};
-  if (!THINKING_LEVEL_NAMES.includes(level)) {
-    return res.status(400).json({ error: `level must be one of: ${THINKING_LEVEL_NAMES.join(', ')}` });
+  // Cheap gate against the union of every harness's vocabulary; once the
+  // session's harness is known the per-harness check below decides.
+  if (!ALL_THINKING_LEVEL_NAMES.includes(level)) {
+    return res.status(400).json({ error: `level must be one of: ${ALL_THINKING_LEVEL_NAMES.join(', ')}` });
   }
   try {
     const sess = await getLiveSession(req.params.id);
     if (!sess) return res.status(404).json({ error: 'Session not active' });
     if (!liveSessionSupports(sess, 'setThinking')) {
       return res.status(409).json({ error: 'This session does not support changing thinking level.' });
+    }
+    const levels = thinkingLevelNamesFor(sess.harnessId || 'pi');
+    if (!levels.includes(level)) {
+      return res.status(400).json({ error: `level must be one of: ${levels.join(', ')}` });
     }
     const data = await sess.setThinkingLevel(level);
     res.json(thinkingResult(data, level));

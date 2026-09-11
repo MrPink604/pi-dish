@@ -41,15 +41,30 @@ export function stripThinkingSuffix(pattern: string) {
 // are always accepted.
 export const OMP_THINKING_LEVEL_NAMES = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'auto'];
 
+// Prime's harness-wide thinking vocabulary: pi's ladder plus a top 'max'
+// rung (and no 'auto').
+export const PRIME_THINKING_LEVEL_NAMES = [...THINKING_LEVEL_NAMES, 'max'];
+
+// Union of every harness's vocabulary. Only useful as a cheap gate before a
+// session's harness is known; thinkingLevelNamesFor decides.
+export const ALL_THINKING_LEVEL_NAMES = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'auto'];
+
+/** The fixed thinking vocabulary a harness accepts (OMP's model-specific trimming lives in thinkingLevelsFor). */
+export function thinkingLevelNamesFor(harnessId?: string) {
+  if (harnessId === 'omp') return OMP_THINKING_LEVEL_NAMES;
+  if (harnessId === 'prime') return PRIME_THINKING_LEVEL_NAMES;
+  return THINKING_LEVEL_NAMES;
+}
+
 /**
- * The levels a session's thinking dropdown should offer. Pi exposes one
- * fixed vocabulary. OMP sessions get off/auto plus the current model's
- * supported subset when the catalog says what it is; the full OMP
- * vocabulary when it doesn't (an unsupported pick then clamps, which the
- * status line reports).
+ * The levels a session's thinking dropdown should offer. Pi and Prime expose
+ * one fixed vocabulary each (Prime's adds 'max'). OMP sessions get off/auto
+ * plus the current model's supported subset when the catalog says what it
+ * is; the full OMP vocabulary when it doesn't (an unsupported pick then
+ * clamps, which the status line reports).
  */
 export function thinkingLevelsFor(harnessId?: string, model?: ModelRef | null) {
-  if (harnessId !== 'omp') return THINKING_LEVEL_NAMES;
+  if (harnessId !== 'omp') return thinkingLevelNamesFor(harnessId);
   const supported: readonly string[] = Array.isArray(model?.thinking) && model.thinking.length
     ? model.thinking : OMP_THINKING_LEVEL_NAMES.slice(0, -1);
   return [...new Set(['off', ...supported, 'auto'])];

@@ -9,6 +9,9 @@ export const bridgeDescriptor = {
     commands: true, reload: false, queueRead: false, queueCancel: false,
     treeRead: false, treeNavigation: false, extensionUI: true,
   },
+  // Prime's thinking ladder is pi's plus a top "max" rung; without this the
+  // shared core falls back to pi's six levels and rejects "max".
+  thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
 } satisfies BridgeDescriptor;
 
 export function createHarnessBridge(spawnToken?: string) {
