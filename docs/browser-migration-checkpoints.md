@@ -239,3 +239,11 @@ are not completion percentages.
   passed. Fable review of the local commit is required before push.
 - Next: new-session spawn coordination, then remaining application features,
   shared helpers and startup shell.
+
+- Fable reviewed `3d56bdd` and noted that closing the editor during a successful
+  save suppressed its matching new-session preview refresh. The follow-up calls
+  the captured-scope notification after all successful writes, while modal
+  completion still requires the owning view. A fifth browser regression covers
+  closing during save. Strict checks, 892 backend tests, 101 browser regressions,
+  independent UI scenarios and desktop/mobile smoke passed again. Fable review
+  of this follow-up is required before either harness-settings commit is pushed.

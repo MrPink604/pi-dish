@@ -343,7 +343,10 @@ async function save(): Promise<void> {
     // A failure stops the sequence; successful earlier writes stay committed.
     if (Object.keys(agents).length) await request(view.host, `${base}/agents`, { agents, cwd: cwd || undefined });
     if (Object.keys(roles).length) await request(view.host, `${base}/model-roles`, { roles, cwd: cwd || undefined });
-    if (owns(view)) { close(); options.onSaved(view.scope); }
+    if (owns(view)) close();
+    // A submitted save also refreshes matching background consumers after the
+    // modal closes; the callback retains the saved scope, never the new view.
+    options.onSaved(view.scope);
   } catch (error) { if (owns(view)) harnessSettingsError(errorMessage(error)); }
   finally {
     view.saving = false;

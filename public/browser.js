@@ -2576,10 +2576,8 @@ var PiDishBrowser = (() => {
       try {
         if (Object.keys(agents).length) await request(view.host, `${base}/agents`, { agents, cwd: cwd || void 0 });
         if (Object.keys(roles).length) await request(view.host, `${base}/model-roles`, { roles, cwd: cwd || void 0 });
-        if (owns(view)) {
-          close();
-          options.onSaved(view.scope);
-        }
+        if (owns(view)) close();
+        options.onSaved(view.scope);
       } catch (error) {
         if (owns(view)) harnessSettingsError(errorMessage(error));
       } finally {

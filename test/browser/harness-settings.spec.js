@@ -75,3 +75,29 @@ test('settings stop at the first failed patch and keep current changes editable'
   await expect(page.locator('#harnessSettingsModal')).toBeVisible();
   await expect(page.locator('#modelRolesSave')).toBeEnabled();
 });
+
+test('a save completed after the editor closes refreshes its matching takeover defaults', async ({ page, fleet }) => {
+  await routes(page);
+  await page.route('**/api/harnesses', route => route.fulfill({ json: { harnesses: [
+    { id: 'omp', label: 'Oh My Pi', available: true },
+  ] } }));
+  let modelName = 'before-save', held;
+  await page.route('**/api/harnesses/omp/config?*', route => route.fulfill({ json: {
+    defaultModel: modelName, globalModelRoles: {}, modelRoles: {},
+  } }));
+  await page.evaluate(() => { localStorage.setItem('pi-dish-new-harness', 'omp'); openNewSessionView({ cwd: '/save' }); });
+  await expect(page.locator('#nsHarnessConfigValues')).toContainText('before-save');
+  await page.locator('#nsEditAgents').click();
+  await expect(page.locator('.hs-agent-enabled[data-agent="scout"]')).toBeChecked();
+  await page.locator('.hs-agent-enabled[data-agent="scout"]').uncheck();
+  await page.route('**/api/harnesses/omp/agents', route => { held = route; });
+  await page.evaluate(() => { window.closedSave = saveHarnessSettings(); });
+  await expect.poll(() => !!held).toBe(true);
+  await page.evaluate(() => closeHarnessSettings());
+  await expect(page.locator('#harnessSettingsModal')).toBeHidden();
+  modelName = 'after-save';
+  await held.fulfill({ json: { ok: true } });
+  await page.evaluate(() => window.closedSave);
+  await expect(page.locator('#nsHarnessConfigValues')).toContainText('after-save');
+  await expect(page.locator('#harnessSettingsModal')).toBeHidden();
+});
