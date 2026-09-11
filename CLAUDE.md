@@ -1699,8 +1699,11 @@ search so the reader lands on the match.
 `src/core/session-api.ts` owns the client session projection and harness model
 normalization consumed by `server.js`. Named session control fields and model
 identities are validated; unknown feature metadata stays opaque. The module
-also defines catalog and mutation response decoders for subsequent browser
-adoption. Its checks do not replace capability gates or lifecycle proofs.
+also defines catalog and mutation response decoders consumed by
+`src/browser/api-client.ts`. The checked-in `public/browser.js` bundle loads
+before the ordinary app script and exposes `PiDishBrowser`; regenerate it with
+`npm run build:browser`. The app retains selection/view guards and the existing
+API wrapper names, while the adapter owns host resolution and typed reads/actions. Its checks do not replace capability gates or lifecycle proofs.
 
 ## Model dropdown / scoped models (public/app.js)
 

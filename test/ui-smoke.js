@@ -2653,11 +2653,11 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // Enabled-model persistence uses the IDs at edit time, not whichever
     // model list a session switch/reload installs before the debounce fires.
     await desktop.evaluate(async () => {
-      const realApiSend = apiSend;
-      window.__auditRealApiSend = realApiSend;
-      apiSend = async (host, url, body, ...args) => {
-        if (url === '/api/models/enabled') { window.__auditEnabledBody = body; return { success: true }; }
-        return realApiSend(host, url, body, ...args);
+      const realApiFetch = apiFetch;
+      window.__auditRealApiFetch = realApiFetch;
+      apiFetch = async (host, url, options) => {
+        if (url === '/api/models/enabled') { window.__auditEnabledBody = JSON.parse(options.body); return new Response(JSON.stringify({ success: true, enabledModels: window.__auditEnabledBody.enabledIds })); }
+        return realApiFetch(host, url, options);
       };
       knownModels = [
         { provider: 'audit', id: 'kept', enabled: true },
@@ -2666,7 +2666,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       saveEnabledModels();
       knownModels = [{ provider: 'other-session', id: 'replacement', enabled: true }];
       await new Promise((resolve) => setTimeout(resolve, 500));
-      apiSend = window.__auditRealApiSend;
+      apiFetch = window.__auditRealApiFetch;
     });
     check(JSON.stringify(await desktop.evaluate(() => window.__auditEnabledBody?.enabledIds)) ===
       JSON.stringify(['audit/kept']),

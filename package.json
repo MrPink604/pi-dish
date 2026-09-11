@@ -23,8 +23,9 @@
     "test:browser:install": "playwright install chromium",
     "test:ui:scenarios": "node scripts/run-ui-scenarios.js",
     "lint": "eslint .",
-    "typecheck": "node scripts/build-core.js --check && tsc -p tsconfig.check.json",
-    "check": "npm run lint && npm run typecheck"
+    "typecheck": "node scripts/build-core.js --check && node scripts/build-browser.js --check && tsc -p tsconfig.check.json",
+    "check": "npm run lint && npm run typecheck",
+    "build:browser": "node scripts/build-browser.js"
   },
   "build": {
     "appId": "com.pidish.app",
@@ -75,6 +76,7 @@
     "@xterm/xterm": "^6.0.0",
     "electron": "^33.0.0",
     "electron-builder": "^25.1.8",
+    "esbuild": "0.28.1",
     "eslint": "10.10.0",
     "espree": "11.2.0",
     "globals": "17.6.0",

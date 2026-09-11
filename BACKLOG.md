@@ -117,6 +117,7 @@ design history and may include work that has already shipped.
 
 1. Session/model API contracts: complete after Fable review and full checks;
    invalid history rows are isolated and optional capability flags stay optional.
-2. Typed browser request adapter and local browser build: pending.
+2. Typed browser request adapter and local browser build: complete after Fable
+   review and full checks, including malformed/unauthorized peer responses.
 3. Extracted model-selector baseline with explicit actions and cleanup: pending.
 4. Readiness checkpoint with baseline evidence: pending; framework adoption stays separate.

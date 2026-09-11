@@ -758,3 +758,7 @@ are retained separately from the current work order.
 [Vibecoded / 0BSD](LICENSE) — it's mostly agent output, so it's probably
 only barely copyrightable anyway. Do whatever you want with it. Vendored
 third-party code (`public/vendor/`) keeps its own MIT/BSD licenses.
+
+Browser TypeScript modules in `src/browser/` use `npm run build:browser`; commit
+the generated `public/browser.js` with source changes. `npm run check` verifies
+types and output consistency. See [the migration guide](docs/typescript.md).

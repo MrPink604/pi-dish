@@ -143,3 +143,24 @@ Missing capabilities remain optional, and thinking acknowledgements fall back
 to the validated requested level when a harness returns an unusable value.
 Browser response adoption is the next stage. This does not validate transcript
 content, every endpoint, or lifecycle authority.
+
+## Browser build and API adapter
+
+`src/browser/` compiles strictly using `tsconfig.browser.json`.
+`npm run build:browser` checks types, then uses the pinned esbuild dependency to
+emit the self-contained `public/browser.js` script, loaded before `app.js`.
+The output is committed; normal server startup and Electron packaging continue
+to use `public/` directly. `npm run check` rejects stale output without repairing
+it. esbuild is a build dependency, not an application framework.
+
+The adapter owns synchronous host/authorization resolution, generic JSON sends,
+and decoded session-list/model reads and model/thinking/rename mutations.
+Selection/view guards remain with callers; typed mutation methods retain the
+captured host and route id. Enabled-model preferences retain server-local scope.
+Other response payloads and transcript content remain outside this API slice.
+The browser state store keeps its separate strict JSDoc check.
+
+Model, thinking, rename and enabled-model sends use `sessionApi`; intercept
+`apiFetch` in integration tests for these operations, rather than `apiSend`.
+Browser runtime imports must remain under `src/`; legacy script contracts use
+type-only imports to avoid bundling a second copy of their runtime state.

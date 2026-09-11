@@ -75,6 +75,7 @@ browser and remaining JavaScript modules are not yet type checked. See
 
 | Boundary / behavior | Regression entrypoint |
 | --- | --- |
+| Browser build drift/type failures, request routing and malformed responses | `test/browser-build.test.js`, `test/browser-api.test.js`, `test/browser/api-boundary.spec.js`, `test/types/browser-api.ts` |
 | Session/model API projection, malformed rows and mutation contracts | `test/session-api.test.js`, `test/types/core.ts`, existing server model/list tests |
 | Core compilation, stale output/declarations, failed builds, orphan detection | `test/core-build.test.js`, `npm run typecheck` |
 | Identity types, request payload boundaries, harness and process shapes | `test/types/core.ts` (compile-only) |

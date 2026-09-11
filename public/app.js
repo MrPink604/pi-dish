@@ -31,14 +31,11 @@ function resolveHost(host) {
  * here, so a request can't accidentally go to the serving origin when the
  * session lives elsewhere. Returns fetch's promise unchanged.
  */
+const apiTransport = PiDishBrowser.createHostTransport({ resolveHost, fetch: (...args) => fetch(...args) });
+const sessionApi = PiDishBrowser.createSessionApi((...args) => apiFetch(...args));
+
 function apiFetch(host, path, opts = {}) {
-  const entry = resolveHost(host);
-  const init = withFetchTimeout(opts);
-  if (!entry.token) return fetch(entry.base + path, init);
-  return fetch(entry.base + path, {
-    ...init,
-    headers: { ...(init.headers || {}), Authorization: `Bearer ${entry.token}` },
-  });
+  return apiTransport.request(host, path, opts);
 }
 
 /**
@@ -65,12 +62,7 @@ function hostAssetUrl(host, path) {
  * AbortSignal.timeout must keep working exactly as before; a caller-supplied
  * signal always wins.
  */
-function withFetchTimeout(opts) {
-  const { timeoutMs, ...init } = opts;
-  if (!timeoutMs || init.signal) return init;
-  if (typeof AbortSignal === 'undefined' || typeof AbortSignal.timeout !== 'function') return init;
-  return { ...init, signal: AbortSignal.timeout(timeoutMs) };
-}
+function withFetchTimeout(opts) { return PiDishBrowser.withFetchTimeout(opts); }
 
 /** ws(s) URL for a host path — scheme/authority come from the host's base. */
 function hostWsUrl(host, path) {
@@ -1429,10 +1421,7 @@ async function runHostSessionsLoad(host, key, wireQuery, withPrevious, ctx) {
     // Older fleet hosts ignore the additive query parameter.
     params.set('view', 'client');
     const qs = params.toString();
-    const res = await apiFetch(host, '/api/sessions' + (qs ? '?' + qs : ''), { timeoutMs: 20000 });
-    if (res.status === 401) { noteHostBlocked(host); publishSessionLists(); return; }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    const data = await sessionApi.list(host, '/api/sessions' + (qs ? '?' + qs : ''), { timeoutMs: 20000 });
     noteHostReachable(host);
     // A slower earlier request must not clobber a newer one's results (a
     // cold search can land after the warm search that superseded it).
@@ -1504,6 +1493,7 @@ async function runHostSessionsLoad(host, key, wireQuery, withPrevious, ctx) {
     listsQueriedFor = ctx.query;
     publishSessionLists();
   } catch (e) {
+    if (e instanceof PiDishBrowser.ApiHttpError && e.status === 401) { noteHostBlocked(host); publishSessionLists(); return; }
     noteHostFailure(host, e);
     if (host.self) console.error('Failed to load sessions:', e);
     // Republish so the failing host's rows pick up their dimmed state; every
@@ -2597,9 +2587,7 @@ async function loadResumeModelOptions(session) {
   wrap.style.display = 'flex';
   select.title = 'Loading Oh My Pi models…';
   try {
-    const res = await apiFetch(owner.host, modelCatalogUrl('omp', session.cwd));
-    const models = await res.json();
-    if (!res.ok) throw new Error(models.error || `HTTP ${res.status}`);
+    const models = await sessionApi.models(owner.host, { harnessId: 'omp', cwd: session.cwd });
     if (seq !== resumeModelsSeq || !sessionState.ownsSelection(owner)) return;
     const current = session.model && session.model !== 'unknown' ? ` (${session.model})` : '';
     let html = `<option value="">Session model${escapeHtml(current)}</option>`;
@@ -2650,11 +2638,7 @@ let knownModelsHarnessId = null;
 let knownModelsCwd = null;
 let modelsSeq = 0; // drops out-of-order responses on fast session switches
 
-function modelCatalogUrl(harnessId, cwd) {
-  const params = new URLSearchParams({ harness: harnessId });
-  if (cwd) params.set('cwd', cwd);
-  return '/api/models?' + params.toString();
-}
+function modelCatalogUrl(harnessId, cwd) { return PiDishBrowser.modelCatalogUrl(harnessId, cwd); }
 
 /**
  * localStorage key for a harness's model catalog snapshot. Catalogs are
@@ -2672,12 +2656,9 @@ async function loadModels(sessionId, harnessId, cwd, host) {
   const requestedHost = sessionId ? sessionState.sessionHostId(sessionId) : (host === undefined ? null : host);
   const seq = ++modelsSeq;
   try {
-    const url = sessionId ? ('/api/models?sessionId=' + encodeURIComponent(sessionId))
-      : requestedHarnessId !== 'pi' ? modelCatalogUrl(requestedHarnessId, cwd) : '/api/models';
-    const res = await apiFetch(requestedHost, url);
-    const data = await res.json();
+    const data = await sessionApi.models(requestedHost, { sessionId, harnessId: requestedHarnessId, cwd });
     if (seq !== modelsSeq) return; // superseded by a newer session's fetch
-    knownModels = Array.isArray(data) ? data : [];
+    knownModels = data;
     knownModelsHarnessId = requestedHarnessId;
     knownModelsCwd = sessionId ? null : (cwd || '');
     // Cache the last good catalog so the new-session takeover renders its
@@ -3095,7 +3076,7 @@ async function selectThinkingLevel(level) {
   const owner = sessionState.captureSelection();
   const { id, host } = owner;
   try {
-    const data = await apiSend(host, `/api/sessions/${encodeURIComponent(id)}/thinking`, { level });
+    const data = await sessionApi.setThinking(owner, level);
     // The harness clamps to what the model supports; trust the reported
     // level, and say so when it differs from what was asked for.
     const reported = data.level || level;
@@ -6649,7 +6630,7 @@ async function commitRename() {
   const owner = sessionState.captureSelection();
   const { id, host } = owner;
   try {
-    await apiSend(host, '/api/sessions/' + encodeURIComponent(id) + '/rename', { name: newName });
+    await sessionApi.rename(owner, newName);
     sessionState.patchSession(id, { name: newName }, host);
   } catch (e) {
     if (sessionState.ownsSelection(owner)) setStatus('Rename failed: ' + e.message, 'error');
@@ -6828,7 +6809,7 @@ function saveEnabledModels() {
   clearTimeout(saveEnabledTimer);
   saveEnabledTimer = setTimeout(async () => {
     try {
-      await apiSend(null, '/api/models/enabled', { enabledIds }, 'PUT');
+      await sessionApi.setEnabledModels(enabledIds);
     } catch (e) { setStatus('Failed to save model list: ' + e.message, 'error'); }
   }, 400);
 }
@@ -6850,7 +6831,7 @@ async function selectModel(fullModelId) {
   const { id, host } = owner;
   setStatus('Switching model...', 'working');
   try {
-    await apiSend(host, '/api/sessions/' + encodeURIComponent(id) + '/model', { modelId: fullModelId });
+    await sessionApi.setModel(owner, fullModelId);
     sessionState.patchSession(id, { model: fullModelId }, host);
     if (sessionState.ownsSelection(owner)) setStatus('Model switched to ' + fullModelId);
   } catch (e) {
@@ -9882,7 +9863,7 @@ function openNewSessionView(opts = {}) {
       const cached = JSON.parse(localStorage.getItem(cacheKey)
         || (newSessionHarness === 'pi' ? localStorage.getItem('pi-dish-models-cache') : '') || 'null');
       if (Array.isArray(cached)) {
-        knownModels = cached;
+        knownModels = PiDishBrowser.decodeModelCatalog(cached);
         knownModelsHarnessId = newSessionHarness;
       }
     } catch {}
@@ -10444,14 +10425,7 @@ function savedResumeTarget() {
  * (they used to, with a slightly different fallback at every site).
  */
 async function apiSend(host, path, body, method = 'POST') {
-  const res = await apiFetch(host, path, {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body ?? {}),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
-  return data;
+  return PiDishBrowser.sendJson((...args) => apiFetch(...args), host, path, body, method);
 }
 
 /**
