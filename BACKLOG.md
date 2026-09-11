@@ -5,8 +5,8 @@ foundation is complete; browser migration is the current stage. Most application
 code still lives in JavaScript.**
 
 The browser-completion goal is active. Host identity and fleet discovery is
-checkpoint 1. Host catalog state/editing is checkpoint 2, currently in progress;
-host settings UI follows. See
+checkpoint 1; host catalog state/editing is checkpoint 2. Both are pushed after
+Fable review. Checkpoint 3 moves the host settings UI and add-host request owners. See
 [the checkpoint log](docs/browser-migration-checkpoints.md) for implementation
 verification and the complete browser entrypoint inventory. The last confirmed
 CI checkpoint is recorded below; final CI must pass before the goal is complete.
@@ -17,7 +17,7 @@ CI checkpoint is recorded below; final CI must pass before the goal is complete.
 | --- | --- | --- |
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
-| Browser migration | In progress — current stage | Ten implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
+| Browser migration | In progress — current stage | Eleven implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
 | Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -35,7 +35,7 @@ in `lib/`. Its full module inventory is in [the migration guide](docs/typescript
 Most JavaScript callers of these modules are not yet type checked; `lib/cron.js`
 is an explicitly checked exception.
 
-These ten browser implementation modules compile strictly into the local
+These eleven browser implementation modules compile strictly into the local
 `public/browser.js` bundle (`src/browser/index.ts` is the bundle entrypoint):
 
 | Completed browser module | Responsibility now owned by TypeScript |
@@ -50,6 +50,7 @@ These ten browser implementation modules compile strictly into the local
 | `harness-discovery.ts` | Harness-picker requests, ownership and the per-host settings-badge cache |
 | `host-discovery.ts` | Self/fleet request sequences, descriptor ownership and refresh timing |
 | `host-directory.ts` | Catalog/fleet/self state, effective lookups and owned source writers |
+| `host-settings.ts` | Host settings DOM, catalog actions and add-host request/view ownership |
 
 A completed module means that boundary has moved, been reviewed and verified.
 It does **not** mean its entire feature is migrated: for example, model-selector
@@ -84,22 +85,23 @@ plan.
 
 ## Review and verification
 
-For each implementation chunk: define the boundary, migrate it, get Fable 5.1
-review, resolve findings, run the relevant checks, then commit and push. Preserve
+For each implementation chunk: define the boundary, migrate it, run the relevant checks,
+commit locally, get Fable 5.1 review of the commit(s), resolve findings and
+re-review any fixes before pushing. Preserve
 host/session ownership, local browser assets and existing deployment paths.
 Follow [AGENTS.md](AGENTS.md) and [the test matrix](docs/testing.md) for required
 checks. Documentation-only changes need content and link checks. After a chunk
 ships, update this page's checkpoint, completed inventory and next step so the
 status stays current.
 
-Last confirmed CI checkpoint, `54c5a66` (newer local work is in the checkpoint log):
+Last confirmed CI checkpoint, `69cccb7` (newer local work is in the checkpoint log):
 
-- Fable 5.1 reviewed both host-discovery commits before push, including follow-up
-  fixes to request readiness, source ownership and publication notifications.
-- 856 backend tests and 66 browser regressions passed, along with independent UI
+- Fable 5.1 reviewed the host-directory commit before push with no blocking
+  findings. Its predecessor discovery commits were also reviewed before push.
+- 862 backend tests and 66 browser regressions passed, along with independent UI
   scenarios and desktop/mobile smoke. OMP/Prime fake-provider canaries last passed
   at `53b5ae0`; they will run again for the final browser audit.
-- [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34585526645):
+- [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34586840814):
   backend Node 22.19.0/22.x/24.x/26.x and browser/UI on Node 24.
 
 These results establish a verified checkpoint, not exhaustive application coverage

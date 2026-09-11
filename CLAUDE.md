@@ -1034,7 +1034,11 @@ exactly single-host pi-dish.
   self/catalog/fleet state and source mutations. Its public views are readonly;
   catalog saves preserve unchanged source objects and explicit replacements
   retire them. `src/browser/host-discovery.ts` owns descriptor/fleet request
-  lifetimes and refresh timing. The app supplies storage and rendering callbacks. Peer requests capture the originating
+  lifetimes and refresh timing. The app supplies storage and rendering callbacks. `src/browser/host-settings.ts`
+  owns the settings rows/form, token/removal actions and add-host validation.
+  Validation captures a view and attempt; form edits, resubmission and closing
+  settings retire pending responses and body reads before they can publish.
+  Mount/unmount and row replacement dispose their listeners. Peer requests capture the originating
   catalog object and endpoint, so a removed/re-added host, changed token or newer
   request retires the old success/failure. Fleet/self request sequences also
   prevent older responses from replacing newer identity or fleet results. A fleet entry

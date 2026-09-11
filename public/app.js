@@ -6,7 +6,6 @@
 // single-host client always sent.
 // =========================================================================
 // Catalog values enter through the typed normalization/merge boundary.
-function normalizeHostBase(input) { return PiDishBrowser.normalizeHostBase(input); }
 
 const HOSTS_KEY = 'pi-dish-hosts';
 const KEYS_MIGRATED_KEY = 'pi-dish-keys-migrated';
@@ -3082,11 +3081,13 @@ function openSettingsModal() {
 }
 
 function closeSettingsModal() {
+  hostSettings.unmount();
   closeBounceView();
   document.getElementById('settingsModal').style.display = 'none';
 }
 
 async function renderPreferences() {
+  hostSettings.unmount();
   const renderSeq = ++settingsRenderSeq;
   const body = document.getElementById('settingsBody');
   body.innerHTML = `<div class="preference-row"><label for="settingsTheme"><strong>Theme</strong><small>Stored on this device. Built-ins plus any token files in <code>~/.pi/dish/themes/</code>.</small></label>
@@ -3097,16 +3098,7 @@ async function renderPreferences() {
     <select id="responseMetadataMode"><option value="hidden">Hidden</option><option value="compact">Compact</option><option value="performance">Performance</option><option value="performance-cost">Performance + estimated cost</option></select></div>
     <div class="preference-row"><label for="monthlyBudget"><strong>Monthly budget warning (USD)</strong><small>Server-global: applies to every device. Estimates use each session harness's catalog pricing; blank clears.</small></label><div class="budget-save"><input id="monthlyBudget" type="number" min="0.01" step="0.01" placeholder="No warning"><button class="btn-small" id="saveBudget">Save</button></div><small id="budgetStatus"></small></div>
     <div id="recoveryPreferences" class="preference-row recovery-preferences" hidden></div>
-    <div class="preference-row"><label><strong>Hosts</strong><small>Added hosts are stored on this device (with their token). Entries this server publishes — and this host itself — are read-only.</small></label>
-      <div class="hosts-list" id="hostsList"></div>
-      <div class="host-add">
-        <input id="addHostBase" class="cwd-input" type="text" placeholder="http://tycho:3333" spellcheck="false" autocomplete="off">
-        <input id="addHostLabel" class="cwd-input" type="text" placeholder="Label (optional)" autocomplete="off">
-        <input id="addHostToken" class="cwd-input" type="password" placeholder="Token (optional)" autocomplete="off">
-        <button class="btn-small" id="addHostBtn">Add host</button>
-      </div>
-      <small class="host-add-status" id="addHostStatus"></small>
-    </div>
+    ${PiDishBrowser.hostSettingsHtml}
     <div class="preference-row"><label><strong>Saved sidebar filters</strong><small>Server-global. Chips under the sidebar filter toggle these per device; type a query there and hit “+ save filter” to add one.</small></label><div id="savedFiltersList" class="saved-filters-list"></div></div>`;
   const mode = body.querySelector('#responseMetadataMode'); mode.value = responseMetadataMode;
   mode.addEventListener('change', () => {
@@ -3138,10 +3130,9 @@ async function renderPreferences() {
     }
   };
   renderSavedFiltersList();
-  renderHostsSection();
+  hostSettings.mount(body);
+  refreshRecoveryHosts();
   renderRecoveryPreferences();
-  body.querySelector('#addHostBtn').addEventListener('click', addHostFromForm);
-  body.querySelector('#addHostBase').addEventListener('keydown', (e) => { if (e.key === 'Enter') addHostFromForm(); });
   try {
     const r = await apiFetch(null, '/api/settings'), s = await r.json();
     if (renderSeq !== settingsRenderSeq ) return;
@@ -3389,139 +3380,24 @@ async function loadRecoveryView() {
 // machines it can reach, tokens included; fleet entries come from the
 // server's config and are shown read-only. ---------------------------------
 
-function saveHostCatalog() {
-  hostDirectory.saveCatalog();
-  pruneHostCaches();
-  renderHostsSection();
-  renderSessions();
-}
-
-const HOST_STATE_TITLES = {
-  reachable: 'Reachable', connecting: 'Not contacted yet',
-  backoff: 'Unreachable — retrying', blocked: 'Needs a token',
-};
-
+const hostSettings = PiDishBrowser.createHostSettings({
+  directory: hostDirectory, connections: hostConnections, discovery: hostDiscovery,
+  request: apiFetch, protocol: () => location.protocol,
+  promptToken: label => prompt(`Token for ${label}`, ''),
+  displayLabel: hostDisplayLabel, escapeHtml,
+  color: hostColorFor, customColor: hostColorIsCustom, resolveColor: resolveColorToHex,
+  setColor: setHostColorOverride,
+  onCatalogSaved: () => {
+    pruneHostCaches();
+    renderHostsSection();
+    renderSessions();
+  },
+  refreshSessions, renderNewSessionHosts: renderNsHosts,
+});
+function saveHostCatalog() { hostSettings.save(); }
 function renderHostsSection() {
   refreshRecoveryHosts();
-  const list = document.getElementById('hostsList');
-  if (!list) return; // settings modal isn't open
-  list.innerHTML = effectiveHosts().map(host => {
-    const state = hostState(host);
-    const version = host.version ? `v${host.version}` : '';
-    const detail = [host.self ? 'this server' : host.base, version].filter(Boolean).join(' · ');
-    const actions = [];
-    if (state === 'blocked') actions.push(`<button class="btn-small host-token-btn" data-key="${escapeHtml(host.key)}">token?</button>`);
-    if (host.source === 'user') actions.push(`<button class="btn-icon host-remove-btn" data-key="${escapeHtml(host.key)}" title="Remove host">✕</button>`);
-    // Color picker: `<input type="color">` only speaks concrete hex, so an
-    // auto (var(--chart-N)) color is resolved through a probe element first.
-    const hostId = host.hostId || null;
-    const custom = hostColorIsCustom(hostId);
-    const hex = resolveColorToHex(hostColorFor(hostId)) || '#888888';
-    const colorControls = isMultiHost() ? `
-      <input type="color" class="host-color-input" data-host="${escapeHtml(hostId || '')}"
-        value="${escapeHtml(hex)}" style="background:${escapeHtml(hex)}"
-        title="${custom ? 'Custom color for this host' : 'Automatic color — pick one to override it'}">
-      <button class="btn-icon host-color-reset${custom ? '' : ' hidden'}" data-host="${escapeHtml(hostId || '')}" title="Back to the automatic color">↺</button>` : '';
-    return `<div class="host-row">
-      <span class="host-dot ${escapeHtml(state)}" title="${escapeHtml(HOST_STATE_TITLES[state] || state)}"></span>
-      <span class="host-row-name">${escapeHtml(hostDisplayLabel(host))}</span>
-      <span class="host-row-detail" title="${escapeHtml(host.base || '')}">${escapeHtml(detail)}</span>
-      <span class="host-row-actions">${colorControls}${actions.join('')}</span>
-    </div>`;
-  }).join('');
-  for (const input of list.querySelectorAll('.host-color-input')) {
-    // `input` fires continuously while the native picker is open — repaint the
-    // sidebar live, but don't rebuild this row out from under the open dialog.
-    input.addEventListener('input', () => {
-      input.style.background = input.value;
-      setHostColorOverride(input.dataset.host || null, input.value, { rows: false });
-    });
-    input.addEventListener('change', () => setHostColorOverride(input.dataset.host || null, input.value));
-  }
-  for (const btn of list.querySelectorAll('.host-color-reset')) {
-    btn.addEventListener('click', () => setHostColorOverride(btn.dataset.host || null, null));
-  }
-  for (const btn of list.querySelectorAll('.host-remove-btn')) {
-    btn.addEventListener('click', () => {
-      hostDirectory.remove(btn.dataset.key);
-      saveHostCatalog();
-    });
-  }
-  for (const btn of list.querySelectorAll('.host-token-btn')) {
-    btn.addEventListener('click', () => promptHostToken(btn.dataset.key));
-  }
-}
-
-/**
- * Re-enter the token for a host that answered 401. Blocked hosts are never
- * retried on their own, so this is also what un-parks one.
- */
-function promptHostToken(key) {
-  const entry = hostDirectory.catalog.find(item => (item.hostId || item.base) === key);
-  if (!entry) {
-    hostStatus('That host comes from this server’s config — set its token there.');
-    return;
-  }
-  const token = prompt(`Token for ${hostDisplayLabel(entry)}`, '');
-  if (token === null) return;
-  hostDirectory.setToken(key, token.trim() || undefined);
-  hostConnections.reset(key);
-  saveHostCatalog();
-  refreshSessions();
-}
-
-function hostStatus(message, isError = false) {
-  const el = document.getElementById('addHostStatus');
-  if (el) {
-    el.textContent = message;
-    el.classList.toggle('error', !!isError);
-  }
-}
-
-/**
- * Add a host by URL. Validated with a live GET <base>/api/host before it is
- * saved — a mistyped base must fail here, not turn into a permanently
- * failing row. The two failures worth naming are the ones a bare "failed to
- * fetch" hides: mixed content, and a cross-origin host that hasn't
- * allowlisted this page.
- */
-async function addHostFromForm() {
-  const baseInput = document.getElementById('addHostBase');
-  const labelInput = document.getElementById('addHostLabel');
-  const tokenInput = document.getElementById('addHostToken');
-  const raw = (baseInput?.value || '').trim();
-  if (!raw) { hostStatus('Enter the host URL.', true); return; }
-  const base = normalizeHostBase(raw);
-  if (!base) { hostStatus('That is not a usable host URL.', true); return; }
-  if (location.protocol === 'https:' && base.startsWith('http://')) {
-    hostStatus('This page is https, so the browser will block plain-http hosts. Serve that host over https (tailscale serve) or open pi-dish over http.', true);
-    return;
-  }
-  const token = (tokenInput?.value || '').trim();
-  const label = (labelInput?.value || '').trim();
-  hostStatus('Checking…');
-  let descriptor;
-  try {
-    const res = await apiFetch({ base, token: token || null }, '/api/host');
-    if (res.status === 401) throw new Error('that host needs a token');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    descriptor = await res.json();
-    if (!descriptor || typeof descriptor.hostId !== 'string' || !descriptor.hostId) throw new Error('no host descriptor');
-  } catch (e) {
-    hostStatus(`Could not reach that host: ${e.message}. A host on another origin must allowlist this one (allowedOrigins in its settings).`, true);
-    return;
-  }
-  if (descriptor.hostId === hostDirectory.self.hostId) { hostStatus('That is this host.', true); return; }
-  hostDiscovery.rememberDescriptor(descriptor);
-  hostDirectory.add({ base, hostId: descriptor.hostId, label: label || descriptor.label || null, token: token || null });
-  hostConnections.reset(descriptor.hostId);
-  saveHostCatalog();
-  if (baseInput) baseInput.value = '';
-  if (labelInput) labelInput.value = '';
-  if (tokenInput) tokenInput.value = '';
-  hostStatus(`Added ${hostDisplayLabel({ label, base })}.`);
-  refreshSessions();
-  renderNsHosts();
+  hostSettings.render();
 }
 
 // --- Advanced search (main-pane takeover) ---

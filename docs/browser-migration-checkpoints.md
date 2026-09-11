@@ -59,7 +59,7 @@ are not completion percentages.
   request controllers.
 
 
-## Checkpoint 2 — host directory (local verification complete)
+## Checkpoint 2 — host directory
 
 - Boundary: self/fleet/catalog state, effective host caching and lookup, and
   catalog add/remove/token/discovery writers.
@@ -70,5 +70,20 @@ are not completion percentages.
   Existing smoke fixtures use the same accessors instead of old global variables.
 - Verification: strict build/lint/type checks, 862 backend tests, 66 browser
   regressions, all independent UI scenarios and desktop/mobile smoke passed.
-- Fable commit review is required before pushing this checkpoint.
+- Commit `69cccb7` passed Fable 5.1 review with no blocking findings before push.
+  [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34586840814)
+  on that commit.
 - Next: host settings DOM and add-host request/view ownership.
+
+## Checkpoint 3 — host settings (local verification complete)
+
+- Boundary: settings markup, row/form listeners, catalog UI actions and add-host
+  validation with captured endpoint/view/attempt ownership.
+- Edits, repeated submissions and closing/reopening settings retire old replies,
+  including delayed body reads, before descriptor/catalog/status publication.
+- Form and row listeners are disposed; live color input retains the picker row.
+  Color state and shared formatting still enter through explicit typed callbacks.
+- Verification: strict build/lint/type checks, 862 backend tests, 71 browser
+  regressions, all independent UI scenarios and desktop/mobile smoke passed.
+- Fable commit review is required before pushing this checkpoint.
+- Next: host color state, then remaining new-session request controllers.

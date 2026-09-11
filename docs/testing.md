@@ -91,6 +91,7 @@ After editing `src/browser/`, run `npm run build:browser` before `npm test`;
 | Typed bridge registry validation, pre-hello claim protection and session-switch replay ordering | `test/bridge-session.test.js` |
 | Host-directory writers, exact/fallback lookup, source ownership and catalog persistence | `test/browser-host-directory.test.js`, `test/types/browser-directory.ts`, existing host discovery/browser and multi-host smoke |
 | Host descriptor/fleet request ownership, source replacement and credential changes | `test/browser-host-discovery.test.js`, `test/types/browser-discovery.ts`, `test/browser/host-discovery.spec.js` |
+| Host settings add validation, supersession, edits and close/reopen ownership | `test/browser/host-settings.spec.js`, multi-host color smoke |
 | Host URL normalization, persisted catalog projection and source precedence | `test/helpers.test.js`, `test/types/browser-hosts.ts`, existing multi-host smoke |
 | Thinking dropdown literal levels, owned actions, keyboard input and disposal | `test/browser/thinking-selector.spec.js`, `test/types/browser-selectors.ts`, existing delayed menu and desktop/mobile smoke |
 | Per-host shared requests, retired responses, endpoint capture, cached rows and live children | `test/browser-host-session-loader.test.js`, `test/types/browser-hosts.ts`, `test/browser/host-polls.spec.js`, existing browser API and multi-host scenarios |

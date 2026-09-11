@@ -241,8 +241,7 @@ also reject obsolete results; post-discovery rendering belongs to the latest
 published fleet, so a later failed attempt cannot suppress that notification.
 Fleet waiters follow replacement requests before releasing startup readiness.
 Catalog saves preserve unchanged source objects while still removing changed
-or extra fields. Descriptor identity is validated while optional metadata remains opaque. The app retains
-source mutation, persistence and rendering callbacks.
+or extra fields. Descriptor identity is validated while optional metadata remains opaque. Directory writers own source mutation; the app supplies persistence and rendering callbacks.
 
 `src/browser/host-directory.ts` owns self identity, the device catalog, fleet
 source rows and the cached effective host list. It supplies exact lookups and
@@ -252,4 +251,13 @@ saves retain unchanged source objects, while explicit replacement retires them.
 Discovery updates must refer to a currently owned source and persist only device
 catalog fields. Persisted labels are strings immediately after discovery; opaque
 labels/version/capabilities remain available through descriptor overlays. The app
-supplies storage and rendering/connection callbacks; settings DOM is still JavaScript.
+supplies storage and rendering/connection callbacks.
+
+`src/browser/host-settings.ts` owns settings markup, row/form listeners, catalog
+actions and add-host validation. Each request captures an endpoint and the
+mounted view/attempt; edits, resubmission, unmount and remount retire old replies
+before descriptor or catalog publication. Ownership is checked after both the
+response and its body. Form and row listeners are disposed on replacement/close.
+Color input preserves its row while updating the sidebar, and change refreshes
+the controls. Color state and shared formatting remain explicit typed callbacks
+until their own migration.

@@ -9,3 +9,4 @@ export { normalizeHostBase, sanitizeHostCatalog, reconcileHostCatalog, mergeHost
 export { createHarnessDiscovery } from './harness-discovery';
 export { createHostDiscovery, decodeHostDescriptor } from './host-discovery';
 export { createHostDirectory } from './host-directory';
+export { createHostSettings, hostSettingsHtml } from './host-settings';

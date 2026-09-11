@@ -29,6 +29,7 @@ var PiDishBrowser = (() => {
     createHostDirectory: () => createHostDirectory,
     createHostDiscovery: () => createHostDiscovery,
     createHostSessionLoader: () => createHostSessionLoader,
+    createHostSettings: () => createHostSettings,
     createHostTransport: () => createHostTransport,
     createSessionApi: () => createSessionApi,
     createSessionState: () => createSessionState,
@@ -36,6 +37,7 @@ var PiDishBrowser = (() => {
     decodeModelCatalog: () => decodeModelCatalog,
     hostConnReduce: () => hostConnReduce,
     hostKeyOf: () => hostKeyOf,
+    hostSettingsHtml: () => hostSettingsHtml,
     mergeHostEntries: () => mergeHostEntries,
     modelCatalogUrl: () => modelCatalogUrl,
     mountModelSelector: () => mountModelSelector,
@@ -1174,6 +1176,203 @@ var PiDishBrowser = (() => {
       add,
       applyDescriptor
     };
+  }
+
+  // src/browser/host-settings.ts
+  var hostSettingsHtml = `<div class="preference-row"><label><strong>Hosts</strong><small>Added hosts are stored on this device (with their token). Entries this server publishes \u2014 and this host itself \u2014 are read-only.</small></label>
+      <div class="hosts-list" id="hostsList"></div>
+      <div class="host-add">
+        <input id="addHostBase" class="cwd-input" type="text" placeholder="http://tycho:3333" spellcheck="false" autocomplete="off">
+        <input id="addHostLabel" class="cwd-input" type="text" placeholder="Label (optional)" autocomplete="off">
+        <input id="addHostToken" class="cwd-input" type="password" placeholder="Token (optional)" autocomplete="off">
+        <button class="btn-small" id="addHostBtn">Add host</button>
+      </div>
+      <small class="host-add-status" id="addHostStatus"></small>
+    </div>`;
+  var STATE_TITLES = {
+    reachable: "Reachable",
+    connecting: "Not contacted yet",
+    backoff: "Unreachable \u2014 retrying",
+    blocked: "Needs a token"
+  };
+  function createHostSettings(options) {
+    let view = null;
+    let sequence = 0;
+    let checking = false;
+    const { directory, connections, escapeHtml, displayLabel } = options;
+    function status(owner, message, error = false) {
+      if (view !== owner) return;
+      owner.status.textContent = message;
+      owner.status.classList.toggle("error", error);
+    }
+    function unmount() {
+      sequence++;
+      checking = false;
+      view?.events.abort();
+      view?.rowEvents.abort();
+      view = null;
+    }
+    function mount(root) {
+      unmount();
+      const list = root.querySelector("#hostsList");
+      const base = root.querySelector("#addHostBase");
+      const label = root.querySelector("#addHostLabel");
+      const token = root.querySelector("#addHostToken");
+      const statusElement = root.querySelector("#addHostStatus");
+      const button = root.querySelector("#addHostBtn");
+      if (!list || !base || !label || !token || !statusElement || !button) return;
+      const events = new AbortController();
+      view = { root, list, base, label, token, status: statusElement, events, rowEvents: new AbortController() };
+      const owner = view;
+      const listener = { signal: events.signal };
+      button.addEventListener("click", () => {
+        void addFromForm();
+      }, listener);
+      base.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") void addFromForm();
+      }, listener);
+      for (const input of [base, label, token]) input.addEventListener("input", () => {
+        sequence++;
+        if (checking) {
+          checking = false;
+          status(owner, "");
+        }
+      }, listener);
+      render();
+    }
+    function save() {
+      directory.saveCatalog();
+      options.onCatalogSaved();
+    }
+    function promptToken(key) {
+      const owner = view;
+      if (!owner) return;
+      const entry = directory.catalog.find((item) => (item.hostId || item.base) === key);
+      if (!entry) {
+        status(owner, "That host comes from this server\u2019s config \u2014 set its token there.");
+        return;
+      }
+      const token = options.promptToken(displayLabel(entry));
+      if (token === null || view !== owner) return;
+      directory.setToken(key, token.trim() || void 0);
+      connections.reset(key);
+      save();
+      options.refreshSessions();
+    }
+    async function addFromForm() {
+      const owner = view;
+      if (!owner) return;
+      const requestSequence = ++sequence;
+      checking = false;
+      const raw = owner.base.value.trim();
+      if (!raw) {
+        status(owner, "Enter the host URL.", true);
+        return;
+      }
+      const base = normalizeHostBase(raw);
+      if (!base) {
+        status(owner, "That is not a usable host URL.", true);
+        return;
+      }
+      if (options.protocol() === "https:" && base.startsWith("http://")) {
+        status(owner, "This page is https, so the browser will block plain-http hosts. Serve that host over https (tailscale serve) or open pi-dish over http.", true);
+        return;
+      }
+      const token = owner.token.value.trim();
+      const label = owner.label.value.trim();
+      const owns = () => view === owner && owner.root.isConnected && sequence === requestSequence;
+      status(owner, "Checking\u2026");
+      checking = true;
+      let descriptor;
+      try {
+        const response = await options.request(Object.freeze({ base, token: token || null }), "/api/host");
+        if (!owns()) return;
+        if (response.status === 401) throw new Error("that host needs a token");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        if (!owns()) return;
+        descriptor = decodeHostDescriptor(data);
+        if (!descriptor) throw new Error("no host descriptor");
+      } catch (error) {
+        if (owns()) status(owner, `Could not reach that host: ${error instanceof Error ? error.message : String(error)}. A host on another origin must allowlist this one (allowedOrigins in its settings).`, true);
+        return;
+      } finally {
+        if (owns()) checking = false;
+      }
+      if (descriptor.hostId === directory.self.hostId) {
+        status(owner, "That is this host.", true);
+        return;
+      }
+      options.discovery.rememberDescriptor(descriptor);
+      directory.add({ base, hostId: descriptor.hostId, label: label || descriptor.label || null, token: token || null });
+      connections.reset(descriptor.hostId);
+      save();
+      owner.base.value = "";
+      owner.label.value = "";
+      owner.token.value = "";
+      status(owner, `Added ${displayLabel({ label, base })}.`);
+      options.refreshSessions();
+      options.renderNewSessionHosts();
+    }
+    function render() {
+      const owner = view;
+      if (!owner) return;
+      const { list } = owner;
+      owner.rowEvents.abort();
+      owner.rowEvents = new AbortController();
+      const listener = { signal: owner.rowEvents.signal };
+      const hosts = directory.effectiveHosts();
+      list.innerHTML = hosts.map((host) => {
+        const state = connections.stateOf(host);
+        const version = host.version ? `v${host.version}` : "";
+        const detail = [host.self ? "this server" : host.base, version].filter(Boolean).join(" \xB7 ");
+        const actions = [];
+        if (state === "blocked") actions.push(`<button class="btn-small host-token-btn" data-key="${escapeHtml(host.key)}">token?</button>`);
+        if (host.source === "user") actions.push(`<button class="btn-icon host-remove-btn" data-key="${escapeHtml(host.key)}" title="Remove host">\u2715</button>`);
+        const hostId = host.hostId || null;
+        const custom = options.customColor(hostId);
+        const hex = options.resolveColor(options.color(hostId)) || "#888888";
+        const colorControls = hosts.length > 1 ? `
+        <input type="color" class="host-color-input" data-host="${escapeHtml(hostId || "")}"
+          value="${escapeHtml(hex)}" style="background:${escapeHtml(hex)}"
+          title="${custom ? "Custom color for this host" : "Automatic color \u2014 pick one to override it"}">
+        <button class="btn-icon host-color-reset${custom ? "" : " hidden"}" data-host="${escapeHtml(hostId || "")}" title="Back to the automatic color">\u21BA</button>` : "";
+        return `<div class="host-row">
+        <span class="host-dot ${escapeHtml(state)}" title="${escapeHtml(STATE_TITLES[state] || state)}"></span>
+        <span class="host-row-name">${escapeHtml(displayLabel(host))}</span>
+        <span class="host-row-detail" title="${escapeHtml(host.base || "")}">${escapeHtml(detail)}</span>
+        <span class="host-row-actions">${colorControls}${actions.join("")}</span>
+      </div>`;
+      }).join("");
+      for (const input of Array.from(list.querySelectorAll(".host-color-input"))) {
+        input.addEventListener("input", () => {
+          if (view !== owner || !list.contains(input)) return;
+          input.style.background = input.value;
+          options.setColor(input.dataset.host || null, input.value, { rows: false });
+        }, listener);
+        input.addEventListener("change", () => {
+          if (view === owner && list.contains(input)) options.setColor(input.dataset.host || null, input.value);
+        }, listener);
+      }
+      for (const btn of Array.from(list.querySelectorAll(".host-color-reset"))) {
+        btn.addEventListener("click", () => {
+          if (view === owner && list.contains(btn)) options.setColor(btn.dataset.host || null, null);
+        }, listener);
+      }
+      for (const btn of Array.from(list.querySelectorAll(".host-remove-btn"))) {
+        btn.addEventListener("click", () => {
+          if (view !== owner || !list.contains(btn)) return;
+          directory.remove(btn.dataset.key || "");
+          save();
+        }, listener);
+      }
+      for (const btn of Array.from(list.querySelectorAll(".host-token-btn"))) {
+        btn.addEventListener("click", () => {
+          if (view === owner && list.contains(btn)) promptToken(btn.dataset.key || "");
+        }, listener);
+      }
+    }
+    return { mount, unmount, render, save, addFromForm };
   }
   return __toCommonJS(index_exports);
 })();
