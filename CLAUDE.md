@@ -2095,3 +2095,9 @@ frozen endpoints. Limit results cannot merge into another range, and a summary
 must belong to that fetch before limits may re-render it. Chart/render listeners,
 indexing/resize timers and fan-out coalescers retire on close or replacement.
 Even a single answering peer's workspace/session groups retain host identity.
+
+Display preference modal state/requests/listeners are owned by
+`src/browser/display-preferences.ts`. Close/rebuild invalidates budget reads and
+saves and retires device/filter controls. `themes.ts` owns catalog refreshes and
+switching; `theme-prepaint.ts` restores cached tokens synchronously before CSS.
+`panel-resize.ts` owns pointer captures, size preferences and listener disposal.

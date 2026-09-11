@@ -45,3 +45,7 @@ export { decodeSearchPayload, mergeSearchPayloads, queryHosts } from './search-d
 
 export { createUsageView } from './usage-view';
 export { decodeUsageSummary, decodeUsageLimits } from './usage-data';
+
+export { createThemes, decodeThemes, decodeThemeTokens, applyCachedTheme, terminalTheme } from './themes';
+export { createPanelResize, clampSidebarWidth, clampTerminalHeight } from './panel-resize';
+export { createDisplayPreferences, decodeSavedFilters, responseMode } from './display-preferences';

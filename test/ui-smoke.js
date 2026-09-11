@@ -2769,16 +2769,18 @@ let remoteHost = null; // second pi-dish (multi-host section)
       const pct = await desktop.locator(`${rowSel} .session-item-context`).textContent();
       check(/%$/.test(pct), `row 2 defaults to percent of context (got ${pct})`);
       await desktop.evaluate(() => {
-        localStorage.setItem('pi-dish-sidebar-context-metric', 'tokens');
-        sidebarContextMetric = 'tokens';
-        renderSessions();
+        openSettingsModal();
+        const select = document.getElementById('sidebarContextMetric');
+        select.value = 'tokens'; select.dispatchEvent(new Event('change'));
+        closeSettingsModal();
       });
       const tok = await desktop.locator(`${rowSel} .session-item-context`).textContent();
       check(/tok$/.test(tok), `the token metric replaces the percent (got ${tok})`);
       await desktop.evaluate(() => {
-        localStorage.setItem('pi-dish-sidebar-context-metric', 'percent');
-        sidebarContextMetric = 'percent';
-        renderSessions();
+        openSettingsModal();
+        const select = document.getElementById('sidebarContextMetric');
+        select.value = 'percent'; select.dispatchEvent(new Event('change'));
+        closeSettingsModal();
       });
     }
     // The header icon row lost the theme picker and the all-sessions search;

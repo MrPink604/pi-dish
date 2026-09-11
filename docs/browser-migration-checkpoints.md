@@ -446,3 +446,26 @@ Fable 5.1 cleared session-navigation commit `fa5316a`, which is pushed.
   Fable review is required before push.
 - Fable 5.1 cleared advanced-search commit `99b7373`, which is pushed.
 - Next: display preferences and panel resizing, then remaining features/rendering.
+
+## Checkpoint 20 — display preferences, themes and resizing
+
+- `display-preferences.ts` owns the preferences modal, device metadata/context
+  choices, budget requests and rendered filter controls. Closing or rebuilding
+  the modal retires its controls and request responses, including late saves.
+- `themes.ts` decodes theme/token payloads, sequences catalog refreshes and
+  applies cached/selected themes. `theme-prepaint.ts` produces a small local
+  synchronous script before the stylesheet, preserving pre-paint restoration
+  while handling unavailable storage. Its output joins the build/staleness tests.
+- `panel-resize.ts` owns sidebar and terminal size preferences, pointer captures
+  and drag listeners. Disposal releases captures and retires in-progress drags;
+  repeated initialization is idempotent and zero-height terminal drags are ignored.
+- Four browser regressions cover retained settings controls, late reads/saves,
+  overlapping/disposed theme refreshes and pointer disposal. Unit/strict contracts
+  cover payload narrowing, unavailable storage, size clamps and readonly settings.
+  Existing smoke exercises actual preference controls instead of writing globals.
+- Strict checks, 913 backend tests, 137 browser regressions, independent UI
+  scenarios and full desktop/mobile smoke passed. Integrated runtime/config/test
+  files match the verified draft byte for byte; strict checks passed again.
+  Fable review is required before push.
+- Fable 5.1 cleared usage commit `07e4505`, which is pushed.
+- Next: terminal lifecycle, then remaining features/rendering and shell.

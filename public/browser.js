@@ -27,11 +27,15 @@ var PiDishBrowser = (() => {
     HOST_COLOR_SLOTS: () => HOST_COLOR_SLOTS,
     NEW_SESSION_HARNESS_KEY: () => NEW_SESSION_HARNESS_KEY,
     NS_THINKING_LABELS: () => NS_THINKING_LABELS,
+    applyCachedTheme: () => applyCachedTheme,
     assignHostColor: () => assignHostColor,
+    clampSidebarWidth: () => clampSidebarWidth,
+    clampTerminalHeight: () => clampTerminalHeight,
     createBounce: () => createBounce,
     createCwdAutocomplete: () => createCwdAutocomplete,
     createDirectoryCatalog: () => createDirectoryCatalog,
     createDirectoryTree: () => createDirectoryTree,
+    createDisplayPreferences: () => createDisplayPreferences,
     createHarnessDiscovery: () => createHarnessDiscovery,
     createHarnessSettings: () => createHarnessSettings,
     createHostConnections: () => createHostConnections,
@@ -45,6 +49,7 @@ var PiDishBrowser = (() => {
     createNewSession: () => createNewSession,
     createNewSessionConfigPreview: () => createNewSessionConfigPreview,
     createNewSessionPreferences: () => createNewSessionPreferences,
+    createPanelResize: () => createPanelResize,
     createRecovery: () => createRecovery,
     createSearchView: () => createSearchView,
     createSessionApi: () => createSessionApi,
@@ -55,6 +60,7 @@ var PiDishBrowser = (() => {
     createSkills: () => createSkills,
     createSpawnTargetPicker: () => createSpawnTargetPicker,
     createSpawnTargets: () => createSpawnTargets,
+    createThemes: () => createThemes,
     createUsageView: () => createUsageView,
     decodeBounceOperation: () => decodeBounceOperation,
     decodeBounceOperations: () => decodeBounceOperations,
@@ -68,6 +74,7 @@ var PiDishBrowser = (() => {
     decodeModelCatalog: () => decodeModelCatalog,
     decodeRecoveryMode: () => decodeRecoveryMode,
     decodeRecoveryReport: () => decodeRecoveryReport,
+    decodeSavedFilters: () => decodeSavedFilters,
     decodeSearchPayload: () => decodeSearchPayload,
     decodeSessionRelations: () => decodeSessionRelations,
     decodeSessionSearch: () => decodeSessionSearch,
@@ -76,6 +83,8 @@ var PiDishBrowser = (() => {
     decodeSpawnChoices: () => decodeSpawnChoices,
     decodeSpawnId: () => decodeSpawnId,
     decodeSpawnStatus: () => decodeSpawnStatus,
+    decodeThemeTokens: () => decodeThemeTokens,
+    decodeThemes: () => decodeThemes,
     decodeUsageLimits: () => decodeUsageLimits,
     decodeUsageSummary: () => decodeUsageSummary,
     hostConnReduce: () => hostConnReduce,
@@ -93,6 +102,7 @@ var PiDishBrowser = (() => {
     queryHosts: () => queryHosts,
     reconcileHostCatalog: () => reconcileHostCatalog,
     resolveColorToHex: () => resolveColorToHex,
+    responseMode: () => responseMode,
     rgbStringToHex: () => rgbStringToHex,
     sameDirectoryHost: () => sameDirectoryHost,
     sanitizeHostCatalog: () => sanitizeHostCatalog,
@@ -101,6 +111,7 @@ var PiDishBrowser = (() => {
     sendJson: () => sendJson,
     sessionSpawnKey: () => sessionSpawnKey,
     spawnTargetKey: () => spawnTargetKey,
+    terminalTheme: () => terminalTheme,
     withFetchTimeout: () => withFetchTimeout
   });
 
@@ -217,8 +228,8 @@ var PiDishBrowser = (() => {
 
   // src/browser/api-client.ts
   var ApiHttpError = class extends Error {
-    constructor(message2, status) {
-      super(message2);
+    constructor(message3, status) {
+      super(message3);
       this.status = status;
       this.name = "ApiHttpError";
     }
@@ -1255,9 +1266,9 @@ var PiDishBrowser = (() => {
     let sequence = 0;
     let checking = false;
     const { directory, connections, escapeHtml: escapeHtml2, displayLabel } = options;
-    function status(owner, message2, error = false) {
+    function status(owner, message3, error = false) {
       if (view !== owner) return;
-      owner.status.textContent = message2;
+      owner.status.textContent = message3;
       owner.status.classList.toggle("error", error);
     }
     function unmount() {
@@ -2311,8 +2322,8 @@ var PiDishBrowser = (() => {
     function ownsHost(view) {
       return sameDirectoryHost(view.host, options.host(view.scope.hostId));
     }
-    function harnessSettingsError(message2) {
-      $("modelRolesError").textContent = message2;
+    function harnessSettingsError(message3) {
+      $("modelRolesError").textContent = message3;
     }
     function showTab(tab) {
       for (const [name, tabId, paneId] of [["agents", "hsTabAgents", "hsPaneAgents"], ["models", "hsTabModels", "hsPaneModels"]]) {
@@ -2691,10 +2702,10 @@ var PiDishBrowser = (() => {
       } catch (error) {
         pending.delete(key);
         options.changed();
-        const message2 = error instanceof Error ? error.message : String(error);
+        const message3 = error instanceof Error ? error.message : String(error);
         if (options.current() === key) {
-          options.showFailure(key, message2, spawn);
-          options.status(`Session start failed: ${message2}`, "error");
+          options.showFailure(key, message3, spawn);
+          options.status(`Session start failed: ${message3}`, "error");
         } else options.discardPrompt(key);
       }
     }
@@ -3054,7 +3065,7 @@ var PiDishBrowser = (() => {
     let directoryTree = null;
     let workspaceEvents = new AbortController();
     let disposed = false;
-    const message2 = (error2) => error2 instanceof Error ? error2.message : String(error2);
+    const message3 = (error2) => error2 instanceof Error ? error2.message : String(error2);
     const isOpen = () => !disposed && root.classList.contains("new-session-open");
     const host = () => (selectedHostId ? options.host(selectedHostId) : null) || options.self();
     const hostId = () => host().hostId || null;
@@ -3352,7 +3363,7 @@ var PiDishBrowser = (() => {
         if (directory) storage.setItem("pi-dish-cwd", directory);
         await submit({ cwd: directory, target, harness, host: endpoint, ownsView, draft: null });
       } catch (error2) {
-        if (ownsView()) options.status(`Error: ${message2(error2)}`, "error");
+        if (ownsView()) options.status(`Error: ${message3(error2)}`, "error");
       }
     }
     async function spawn() {
@@ -3362,7 +3373,7 @@ var PiDishBrowser = (() => {
       try {
         target = selectedTarget();
       } catch (caught) {
-        error(message2(caught));
+        error(message3(caught));
         return;
       }
       const name = nameInput.value.trim(), directory = cwd();
@@ -3381,7 +3392,7 @@ var PiDishBrowser = (() => {
           ownsView
         });
       } catch (caught) {
-        if (ownsView()) error(message2(caught));
+        if (ownsView()) error(message3(caught));
       } finally {
         if (view === generation) {
           spawnButton.disabled = false;
@@ -3784,7 +3795,7 @@ var PiDishBrowser = (() => {
       if (!value) throw new Error("Missing bounce element: " + id);
       return value;
     };
-    const message2 = (error) => error instanceof Error ? error.message : String(error);
+    const message3 = (error) => error instanceof Error ? error.message : String(error);
     let disposed = false;
     function retire(state) {
       clearTimeout(state.timer);
@@ -3862,7 +3873,7 @@ var PiDishBrowser = (() => {
         if (!bounceHostElement(state)) return;
         state.targets = decodeBouncePreview(data);
       } catch (error) {
-        state.previewError = `Preview unavailable: ${message2(error)}`;
+        state.previewError = `Preview unavailable: ${message3(error)}`;
       }
       state.loading = false;
       renderBouncePreview(state);
@@ -3940,7 +3951,7 @@ var PiDishBrowser = (() => {
           state.actionNotice = "Snapshot queued on this host.";
           await reconcileBounceRestarts(state, [operation], true);
         } catch (error) {
-          state.actionNotice = `Queue request failed: ${message2(error)}. Acceptance may be unknown; check recent operations before selecting again.`;
+          state.actionNotice = `Queue request failed: ${message3(error)}. Acceptance may be unknown; check recent operations before selecting again.`;
         }
         renderBounceOperations(state);
       }));
@@ -3965,7 +3976,7 @@ var PiDishBrowser = (() => {
           await reconcileBounceRestarts(state, operations);
         }
       } catch (error) {
-        if (seq === state.readSeq) state.operationError = `Status unavailable: ${message2(error)}. Displayed operations may be stale.`;
+        if (seq === state.readSeq) state.operationError = `Status unavailable: ${message3(error)}. Displayed operations may be stale.`;
       }
       state.polling = false;
       renderBounceOperations(state);
@@ -4012,7 +4023,7 @@ var PiDishBrowser = (() => {
         state.actionNotice = "Waiting targets cancelled. Executing targets continue.";
         await reconcileBounceRestarts(state, [updated]);
       } catch (error) {
-        state.actionNotice = `Cancellation failed: ${message2(error)}. Check status before trying again.`;
+        state.actionNotice = `Cancellation failed: ${message3(error)}. Check status before trying again.`;
       }
       state.cancelling.delete(operation.id);
       renderBounceOperations(state);
@@ -4368,9 +4379,9 @@ var PiDishBrowser = (() => {
     let query = "", matches = [], pos = -1;
     let sequence = 0, disposed = false;
     let navigation = null;
-    function updateCount(message2) {
+    function updateCount(message3) {
       if (disposed) return;
-      element("searchCount").textContent = message2 !== void 0 ? message2 : matches.length ? `${pos + 1}/${matches.length}` : query ? "no matches" : "";
+      element("searchCount").textContent = message3 !== void 0 ? message3 : matches.length ? `${pos + 1}/${matches.length}` : query ? "no matches" : "";
     }
     function clearMarks() {
       document2.querySelectorAll(".message.search-current").forEach((el) => el.classList.remove("search-current"));
@@ -4650,7 +4661,7 @@ var PiDishBrowser = (() => {
     let viewHost = null;
     let bodyEvents = new AbortController(), headerEvents = new AbortController();
     let indexingTimer, activationTimer;
-    const message2 = (error) => error instanceof Error ? error.message : String(error);
+    const message3 = (error) => error instanceof Error ? error.message : String(error);
     function owns(seq = skillsSeq) {
       const current = options.self();
       return seq === skillsSeq && isSkillsViewOpen() && !!viewHost && current.hostId === viewHost.hostId && current.base === viewHost.base && (current.token || "") === (viewHost.token || "");
@@ -4755,7 +4766,7 @@ var PiDishBrowser = (() => {
       } catch (e) {
         if (!owns(seq)) return;
         body.classList.remove("usage-refreshing");
-        body.innerHTML = `<div class="usage-state">Could not load skills: ${escapeHtml(message2(e))}</div>`;
+        body.innerHTML = `<div class="usage-state">Could not load skills: ${escapeHtml(message3(e))}</div>`;
       }
     }
     function renderSkillsHeader(mode, skill) {
@@ -4886,7 +4897,7 @@ var PiDishBrowser = (() => {
         renderSkillDetail(skill, cov);
       } catch (e) {
         if (!owns(seq) || skillsDetailPath !== skillPath) return;
-        body.innerHTML = `<div class="usage-state">Could not load coverage: ${escapeHtml(message2(e))}</div>`;
+        body.innerHTML = `<div class="usage-state">Could not load coverage: ${escapeHtml(message3(e))}</div>`;
       }
     }
     function backToSkillsDirectory() {
@@ -5153,7 +5164,7 @@ var PiDishBrowser = (() => {
       const current = options.host(host.hostId);
       return !!current && current.hostId === host.hostId && current.base === host.base && (current.token || "") === (host.token || "");
     }
-    const message2 = (error) => error instanceof Error ? error.message : String(error);
+    const message3 = (error) => error instanceof Error ? error.message : String(error);
     let searchViewSeq = 0;
     let searchViewQuery = "";
     let searchViewRenderedQuery = "";
@@ -5263,7 +5274,7 @@ var PiDishBrowser = (() => {
       } catch (e) {
         if (stale()) return;
         body.classList.remove("usage-refreshing");
-        body.innerHTML = `<div class="usage-state">Search failed: ${escapeHtml(message2(e))}</div>`;
+        body.innerHTML = `<div class="usage-state">Search failed: ${escapeHtml(message3(e))}</div>`;
       }
     }
     function setSearchToken(prefix, value) {
@@ -5873,7 +5884,7 @@ var PiDishBrowser = (() => {
       if (!value) throw new Error("Missing usage element: " + id);
       return value;
     };
-    const message2 = (error) => error instanceof Error ? error.message : String(error);
+    const message3 = (error) => error instanceof Error ? error.message : String(error);
     let disposed = false, dataSequence = 0;
     let bodyEvents = new AbortController(), chartEvents = new AbortController(), detailEvents = new AbortController();
     const events = new AbortController();
@@ -6044,7 +6055,7 @@ var PiDishBrowser = (() => {
         if (stale()) return;
         retireRender();
         body.classList.remove("usage-refreshing");
-        body.innerHTML = `<div class="usage-state">Could not load usage: ${escapeHtml(message2(error))}</div>`;
+        body.innerHTML = `<div class="usage-state">Could not load usage: ${escapeHtml(message3(error))}</div>`;
       }
     }
     function usageMetricValue(bucket2, metric) {
@@ -6537,6 +6548,345 @@ var PiDishBrowser = (() => {
         disposed = true;
       }
     };
+  }
+
+  // src/browser/themes.ts
+  function decodeThemeTokens(value) {
+    if (!record8(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter((entry) => /^--[a-z][a-z0-9-]*$/.test(entry[0]) && typeof entry[1] === "string"));
+  }
+  function decodeThemes(value) {
+    if (!record8(value) || !Array.isArray(value.themes)) return [];
+    return value.themes.flatMap((row) => record8(row) && typeof row.id === "string" && row.id ? [{ id: row.id, builtin: row.builtin === true, tokens: decodeThemeTokens(row.tokens) }] : []);
+  }
+  function applyCachedTheme(document2, storage) {
+    try {
+      const id = storage.getItem("pi-dish-theme");
+      if (id && id !== "solarized") document2.documentElement.dataset.theme = id;
+      const tokens2 = JSON.parse(storage.getItem("pi-dish-theme-tokens") || "null");
+      for (const [key, value] of Object.entries(decodeThemeTokens(tokens2))) document2.documentElement.style.setProperty(key, value);
+    } catch {
+    }
+  }
+  function terminalTheme(document2) {
+    const css = document2.defaultView.getComputedStyle(document2.documentElement);
+    const v = (name) => css.getPropertyValue(name).trim();
+    return {
+      background: v("--bg-darker"),
+      foreground: v("--text"),
+      cursor: v("--text-bright"),
+      cursorAccent: v("--bg-darker"),
+      selectionBackground: v("--bg-card"),
+      black: v("--bg-card"),
+      red: v("--error"),
+      green: v("--success"),
+      yellow: v("--warning"),
+      blue: v("--accent"),
+      magenta: "#d33682",
+      cyan: v("--cyan"),
+      white: "#eee8d5",
+      brightBlack: v("--text-muted"),
+      brightRed: v("--orange"),
+      brightGreen: "#586e75",
+      brightYellow: "#657b83",
+      brightBlue: "#839496",
+      brightMagenta: "#6c71c4",
+      brightCyan: "#93a1a1",
+      brightWhite: "#fdf6e3"
+    };
+  }
+  function createThemes(options) {
+    const { document: document2, storage } = options;
+    let disposed = false, sequence = 0;
+    let available = [{ id: "solarized", builtin: true, tokens: {} }, { id: "graphite", builtin: true, tokens: {} }];
+    function render(select = document2.querySelector("#settingsTheme")) {
+      if (disposed || !select) return;
+      const current = storage.getItem("pi-dish-theme") || "solarized";
+      select.innerHTML = available.map((theme) => `<option value="${escapeHtml(theme.id)}"${theme.id === current ? " selected" : ""}>${escapeHtml(theme.id)}</option>`).join("");
+    }
+    function apply(id) {
+      if (disposed) return;
+      const theme = available.find((theme2) => theme2.id === id) || available[0];
+      const root = document2.documentElement;
+      for (const prop of [...root.style]) if (prop.startsWith("--")) root.style.removeProperty(prop);
+      if (theme.id === "solarized") delete root.dataset.theme;
+      else root.dataset.theme = theme.id;
+      for (const [key, value] of Object.entries(theme.tokens)) root.style.setProperty(key, value);
+      storage.setItem("pi-dish-theme", theme.id);
+      storage.setItem("pi-dish-theme-tokens", JSON.stringify(Object.keys(theme.tokens).length ? theme.tokens : null));
+      render();
+      options.changed();
+    }
+    async function load() {
+      if (disposed) return;
+      const own = ++sequence, endpoint = Object.freeze({ ...options.host() });
+      const current = () => !disposed && own === sequence && endpoint.base === options.host().base && (endpoint.token || "") === (options.host().token || "");
+      try {
+        const response = await options.request(endpoint, "/api/themes");
+        if (response.ok) {
+          const data = await response.json();
+          if (!current()) return;
+          const decoded = decodeThemes(data);
+          if (decoded.length) available = decoded;
+        }
+      } catch {
+      }
+      if (!current()) return;
+      render();
+      const saved = storage.getItem("pi-dish-theme");
+      if (saved && saved !== "solarized") apply(saved);
+    }
+    return { render, apply, load, dispose() {
+      disposed = true;
+      sequence++;
+    } };
+  }
+
+  // src/browser/panel-resize.ts
+  var SIDEBAR_WIDTH_KEY = "pi-dish-sidebar-width";
+  function clampSidebarWidth(px, viewportWidth) {
+    return Math.round(Math.min(Math.max(220, px), Math.max(220, viewportWidth * 0.5)));
+  }
+  function clampTerminalHeight(px, parentHeight) {
+    return Math.min(Math.round(parentHeight * 0.8), Math.max(140, px));
+  }
+  function createPanelResize(options) {
+    const { document: document2, storage } = options, window = document2.defaultView;
+    const events = new AbortController();
+    const mounts = /* @__PURE__ */ new Set();
+    const drags = /* @__PURE__ */ new Set();
+    let disposed = false;
+    function sidebarWidth() {
+      if (disposed) return;
+      const sidebar = document2.getElementById("sidebar");
+      if (!sidebar) return;
+      const saved = parseFloat(storage.getItem(SIDEBAR_WIDTH_KEY) || "");
+      sidebar.style.width = Number.isFinite(saved) ? clampSidebarWidth(saved, window.innerWidth) + "px" : "";
+    }
+    function terminalSize(panel) {
+      if (disposed) return;
+      const saved = parseFloat(storage.getItem("pi-dish-terminal-size") || "");
+      if (Number.isFinite(saved)) panel.style.flexBasis = Math.min(80, Math.max(10, saved)) + "%";
+    }
+    function mount(kind) {
+      if (disposed || mounts.has(kind)) return;
+      const handle = document2.getElementById(kind === "sidebar" ? "sidebarResizeHandle" : "terminalResizeHandle");
+      const panel = document2.getElementById(kind === "sidebar" ? "sidebar" : "terminalPanel");
+      if (!handle || !panel) return;
+      mounts.add(kind);
+      if (kind === "sidebar") {
+        sidebarWidth();
+        handle.addEventListener("dblclick", () => {
+          storage.removeItem(SIDEBAR_WIDTH_KEY);
+          panel.style.width = "";
+          options.fitTerminal();
+        }, { signal: events.signal });
+      }
+      let cancelDrag = null;
+      handle.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        cancelDrag?.();
+        const startX = event.clientX, startY = event.clientY, startWidth = panel.offsetWidth, startHeight = panel.offsetHeight;
+        const parentHeight = panel.parentElement?.clientHeight || 0;
+        if (kind === "terminal" && parentHeight <= 0) return;
+        const dragEvents = new AbortController(), pointer = event.pointerId;
+        handle.setPointerCapture(pointer);
+        handle.classList.add("dragging");
+        let active = true;
+        const finish = (save) => {
+          if (!active) return;
+          active = false;
+          dragEvents.abort();
+          drags.delete(cancel);
+          cancelDrag = null;
+          handle.classList.remove("dragging");
+          if (handle.hasPointerCapture(pointer)) handle.releasePointerCapture(pointer);
+          if (!save || disposed) return;
+          if (kind === "sidebar") storage.setItem(SIDEBAR_WIDTH_KEY, String(panel.offsetWidth));
+          else {
+            const pct = (panel.offsetHeight / parentHeight * 100).toFixed(1);
+            storage.setItem("pi-dish-terminal-size", pct);
+            panel.style.flexBasis = pct + "%";
+          }
+          options.fitTerminal();
+        };
+        const cancel = () => finish(false);
+        cancelDrag = cancel;
+        drags.add(cancel);
+        handle.addEventListener("pointermove", (move) => {
+          if (move.pointerId !== pointer) return;
+          if (kind === "sidebar") panel.style.width = clampSidebarWidth(startWidth + move.clientX - startX, window.innerWidth) + "px";
+          else {
+            panel.style.flexBasis = clampTerminalHeight(startHeight + startY - move.clientY, parentHeight) + "px";
+            options.fitTerminal();
+          }
+        }, { signal: dragEvents.signal });
+        for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) handle.addEventListener(type, (end) => {
+          if (end.pointerId === pointer) finish(true);
+        }, { signal: dragEvents.signal });
+      }, { signal: events.signal });
+    }
+    return {
+      sidebarWidth,
+      terminalSize,
+      sidebar: () => mount("sidebar"),
+      terminal: () => mount("terminal"),
+      dispose() {
+        disposed = true;
+        events.abort();
+        for (const cancel of [...drags]) cancel();
+        mounts.clear();
+      }
+    };
+  }
+
+  // src/browser/display-preferences.ts
+  function decodeSavedFilters(value) {
+    return Array.isArray(value) ? value.flatMap((row) => record8(row) && typeof row.name === "string" && typeof row.query === "string" ? [{ name: row.name, query: row.query }] : []) : [];
+  }
+  function responseMode(value) {
+    return value === "hidden" || value === "performance" || value === "performance-cost" ? value : "compact";
+  }
+  var RESPONSE_MODE_KEY = "pi-dish-response-metadata";
+  var CONTEXT_METRIC_KEY = "pi-dish-sidebar-context-metric";
+  function createDisplayPreferences(options) {
+    const { document: document2, storage } = options;
+    const modal = document2.getElementById("settingsModal"), body = document2.getElementById("settingsBody");
+    let disposed = false, sequence = 0;
+    let events = new AbortController(), filterEvents = new AbortController();
+    let mode = responseMode(storage.getItem(RESPONSE_MODE_KEY));
+    let context = storage.getItem(CONTEXT_METRIC_KEY) === "tokens" ? "tokens" : "percent";
+    function isOpen() {
+      return !disposed && modal.style.display === "flex";
+    }
+    function retire() {
+      sequence++;
+      events.abort();
+      filterEvents.abort();
+      options.unmountSections();
+    }
+    function close() {
+      if (disposed) return;
+      retire();
+      modal.style.display = "none";
+    }
+    function open() {
+      if (disposed) return;
+      options.beforeOpen();
+      modal.style.display = "flex";
+      void render();
+      const scroll = modal.querySelector(".settings-body");
+      if (scroll) scroll.scrollTop = 0;
+    }
+    async function render() {
+      if (!isOpen()) return;
+      retire();
+      events = new AbortController();
+      const seq = sequence, endpoint = Object.freeze({ ...options.host() });
+      const owns = () => seq === sequence && isOpen() && endpoint.base === options.host().base && (endpoint.token || "") === (options.host().token || "");
+      const listener = { signal: events.signal };
+      body.innerHTML = `<div class="preference-row"><label for="settingsTheme"><strong>Theme</strong><small>Stored on this device. Built-ins plus any token files in <code>~/.pi/dish/themes/</code>.</small></label>
+    <select id="settingsTheme"></select></div>
+    <div class="preference-row"><label for="sidebarContextMetric"><strong>Session list context readout</strong><small>Stored on this device. Which number each sidebar row shows for context use.</small></label>
+    <select id="sidebarContextMetric"><option value="percent">Percent of context</option><option value="tokens">Token count</option></select></div>
+    <div class="preference-row"><label for="responseMetadataMode"><strong>Response metadata</strong><small>Stored on this device. \u201CEffective speed\u201D includes time to first token and JSONL append.</small></label>
+    <select id="responseMetadataMode"><option value="hidden">Hidden</option><option value="compact">Compact</option><option value="performance">Performance</option><option value="performance-cost">Performance + estimated cost</option></select></div>
+    <div class="preference-row"><label for="monthlyBudget"><strong>Monthly budget warning (USD)</strong><small>Server-global: applies to every device. Estimates use each session harness's catalog pricing; blank clears.</small></label><div class="budget-save"><input id="monthlyBudget" type="number" min="0.01" step="0.01" placeholder="No warning"><button class="btn-small" id="saveBudget">Save</button></div><small id="budgetStatus"></small></div>
+    <div id="recoveryPreferences" class="preference-row recovery-preferences" hidden></div>
+    ${hostSettingsHtml}
+    <div class="preference-row"><label><strong>Saved sidebar filters</strong><small>Server-global. Chips under the sidebar filter toggle these per device; type a query there and hit \u201C+ save filter\u201D to add one.</small></label><div id="savedFiltersList" class="saved-filters-list"></div></div>`;
+      const modeSelect = body.querySelector("#responseMetadataMode");
+      modeSelect.value = mode;
+      modeSelect.addEventListener("change", () => {
+        if (!owns()) return;
+        mode = responseMode(modeSelect.value);
+        storage.setItem(RESPONSE_MODE_KEY, mode);
+        options.metadataChanged();
+      }, listener);
+      const theme = body.querySelector("#settingsTheme");
+      options.themes.render(theme);
+      theme.addEventListener("change", () => {
+        if (owns()) options.themes.apply(theme.value);
+      }, listener);
+      const metric = body.querySelector("#sidebarContextMetric");
+      metric.value = context;
+      metric.addEventListener("change", () => {
+        if (!owns()) return;
+        context = metric.value === "tokens" ? "tokens" : "percent";
+        storage.setItem(CONTEXT_METRIC_KEY, context);
+        options.contextChanged();
+      }, listener);
+      function renderFilters() {
+        if (!owns()) return;
+        filterEvents.abort();
+        filterEvents = new AbortController();
+        const list = body.querySelector("#savedFiltersList");
+        const filters = options.filters();
+        list.innerHTML = filters.length ? filters.map((filter) => `<div class="saved-filter-row"><span class="saved-filter-name">${escapeHtml(filter.name)}</span><code class="saved-filter-query">${escapeHtml(filter.query)}</code><button class="btn-icon saved-filter-del" data-name="${escapeHtml(filter.name)}" title="Delete filter">\u2715</button></div>`).join("") : '<small class="saved-filters-empty">No saved filters yet.</small>';
+        for (const button of list.querySelectorAll(".saved-filter-del")) {
+          const name = button.dataset.name;
+          button.addEventListener("click", async () => {
+            if (!owns() || button.disabled) return;
+            button.disabled = true;
+            try {
+              await options.persistFilters(options.filters().filter((filter) => filter.name !== name), endpoint);
+              if (owns()) renderFilters();
+            } catch (error) {
+              if (owns()) {
+                button.disabled = false;
+                options.alert("Could not delete filter: " + message2(error));
+              }
+            }
+          }, { signal: filterEvents.signal });
+        }
+      }
+      renderFilters();
+      options.mountSections(body);
+      const input = body.querySelector("#monthlyBudget"), status = body.querySelector("#budgetStatus"), save = body.querySelector("#saveBudget");
+      save.disabled = true;
+      try {
+        const response = await options.request(endpoint, "/api/settings");
+        const data = await response.json();
+        if (!owns()) return;
+        if (!response.ok || !record8(data)) throw new Error("Could not load server setting.");
+        input.value = finite2(data.monthlyBudgetUsd) ? String(data.monthlyBudgetUsd) : "";
+        if (Array.isArray(data.savedFilters)) {
+          options.setFilters(decodeSavedFilters(data.savedFilters));
+          renderFilters();
+        }
+      } catch {
+        if (owns()) status.textContent = "Could not load server setting.";
+      }
+      if (!owns()) return;
+      save.disabled = false;
+      save.addEventListener("click", async () => {
+        if (!owns() || save.disabled) return;
+        save.disabled = true;
+        const value = input.value.trim() === "" ? null : Number(input.value);
+        try {
+          const response = await options.request(endpoint, "/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ monthlyBudgetUsd: value }) });
+          const data = await response.json();
+          if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : "Save failed");
+          if (owns()) status.textContent = "Saved for all devices.";
+        } catch (error) {
+          if (owns()) status.textContent = "Save failed: " + message2(error);
+        } finally {
+          if (owns()) save.disabled = false;
+        }
+      }, listener);
+    }
+    return { open, close, render, get responseMode() {
+      return mode;
+    }, get contextMetric() {
+      return context;
+    }, dispose() {
+      close();
+      disposed = true;
+    } };
+  }
+  function message2(error) {
+    return error instanceof Error ? error.message : String(error);
   }
   return __toCommonJS(index_exports);
 })();

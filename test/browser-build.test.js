@@ -13,6 +13,7 @@ test('browser build detects stale output and preserves it on type failure', () =
     fs.copyFileSync(path.join(__dirname, '../scripts/build-browser.js'), path.join(root, 'scripts/build-browser.js'));
     fs.copyFileSync(path.join(__dirname, '../tsconfig.browser.json'), path.join(root, 'tsconfig.browser.json'));
     fs.symlinkSync(path.join(__dirname, '../node_modules'), path.join(root, 'node_modules'), 'junction');
+    fs.writeFileSync(path.join(root, 'src/browser/theme-prepaint.ts'), 'const themeAnswer: number = 3; console.log(themeAnswer);');
     const source = path.join(root, 'src/browser/index.ts');
     fs.writeFileSync(source, 'export const answer: number = 42;');
     const commentsSource = path.join(root, 'src/browser/artifact-comments.ts');
@@ -31,7 +32,9 @@ test('browser build detects stale output and preserves it on type failure', () =
     const commentsOriginal = fs.readFileSync(commentsOutput, 'utf8');
     const helpersOutput = path.join(root, 'public/helpers.js');
     const helpersOriginal = fs.readFileSync(helpersOutput, 'utf8');
-    for (const target of [output, commentsOutput, helpersOutput]) {
+    const themeOutput = path.join(root, 'public/theme-prepaint.js');
+    const themeOriginal = fs.readFileSync(themeOutput, 'utf8');
+    for (const target of [output, commentsOutput, helpersOutput, themeOutput]) {
       fs.appendFileSync(target, '\n// stale');
       const stale = run('--check');
       assert.equal(stale.status, 1);
@@ -41,6 +44,7 @@ test('browser build detects stale output and preserves it on type failure', () =
       assert.equal(fs.readFileSync(output, 'utf8'), original);
       assert.equal(fs.readFileSync(commentsOutput, 'utf8'), commentsOriginal);
       assert.equal(fs.readFileSync(helpersOutput, 'utf8'), helpersOriginal);
+      assert.equal(fs.readFileSync(themeOutput, 'utf8'), themeOriginal);
     }
     fs.writeFileSync(path.join(root, 'public/legacy.js'), 'export const answer = 42;');
     // A declaration can type a legacy import, but must not permit bundling it.

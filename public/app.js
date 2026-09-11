@@ -290,16 +290,8 @@ try {
     if (key?.startsWith('pi-dish-draft-spawn:')) localStorage.removeItem(key);
   }
 } catch {}
-const RESPONSE_MODE_KEY = 'pi-dish-response-metadata';
-const RESPONSE_MODES = new Set(['hidden', 'compact', 'performance', 'performance-cost']);
-let responseMetadataMode = RESPONSE_MODES.has(localStorage.getItem(RESPONSE_MODE_KEY)) ? localStorage.getItem(RESPONSE_MODE_KEY) : 'compact';
-// Which context number the sidebar rows carry. Device-local like the other
-// display preferences — it's a reading habit, not a fleet-wide setting.
-const CONTEXT_METRIC_KEY = 'pi-dish-sidebar-context-metric';
-let sidebarContextMetric = localStorage.getItem(CONTEXT_METRIC_KEY) === 'tokens' ? 'tokens' : 'percent';
 let responseDetailSeq = 0;
 const responseDetails = new Map();
-let settingsRenderSeq = 0;
 
 // Live tool panel tracking: toolCallId -> { el, startTime }
 let liveToolPanels = new Map();
@@ -967,8 +959,8 @@ async function loadSavedFilters() {
   } catch (e) { console.error('Failed to load saved filters:', e); }
 }
 
-async function persistSavedFilters(next) {
-  const res = await apiFetch(null, '/api/settings', {
+async function persistSavedFilters(next, host = null) {
+  const res = await apiFetch(host, '/api/settings', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ savedFilters: next }),
   });
@@ -1295,7 +1287,7 @@ function renderSessionItem(session, opts = {}) {
   // One context readout, not three: percent or absolute tokens per the device
   // setting (tokens falls back to percent when the session has no token
   // count). The colour still comes from the percent — that's the warning.
-  const ctxText = sidebarContextMetric === 'tokens' && session.contextTokens
+  const ctxText = displayPreferences.contextMetric === 'tokens' && session.contextTokens
     ? `${formatTokens(session.contextTokens)} tok`
     : `${session.contextPercent}%`;
   const ctxTitle = session.contextTokens
@@ -2586,91 +2578,20 @@ function toggleFocusMode() {
   if (container && isPinnedToBottom(container)) scrollToBottom(container);
 }
 
-// --- Global preferences (modal — the usage overview lives in its own
-// main-pane takeover view now, opened from the sidebar header) ---
-function openSettingsModal() {
-  closeSidebar();
-  closeBounceView();
-  document.getElementById('settingsModal').style.display = 'flex';
-  renderPreferences();
-  document.querySelector('#settingsModal .settings-body').scrollTop = 0;
-}
-
-function closeSettingsModal() {
-  recoveryController.unmountPreferences();
-  hostSettings.unmount();
-  closeBounceView();
-  document.getElementById('settingsModal').style.display = 'none';
-}
-
-async function renderPreferences() {
-  recoveryController.unmountPreferences();
-  hostSettings.unmount();
-  const renderSeq = ++settingsRenderSeq;
-  const body = document.getElementById('settingsBody');
-  body.innerHTML = `<div class="preference-row"><label for="settingsTheme"><strong>Theme</strong><small>Stored on this device. Built-ins plus any token files in <code>~/.pi/dish/themes/</code>.</small></label>
-    <select id="settingsTheme"></select></div>
-    <div class="preference-row"><label for="sidebarContextMetric"><strong>Session list context readout</strong><small>Stored on this device. Which number each sidebar row shows for context use.</small></label>
-    <select id="sidebarContextMetric"><option value="percent">Percent of context</option><option value="tokens">Token count</option></select></div>
-    <div class="preference-row"><label for="responseMetadataMode"><strong>Response metadata</strong><small>Stored on this device. “Effective speed” includes time to first token and JSONL append.</small></label>
-    <select id="responseMetadataMode"><option value="hidden">Hidden</option><option value="compact">Compact</option><option value="performance">Performance</option><option value="performance-cost">Performance + estimated cost</option></select></div>
-    <div class="preference-row"><label for="monthlyBudget"><strong>Monthly budget warning (USD)</strong><small>Server-global: applies to every device. Estimates use each session harness's catalog pricing; blank clears.</small></label><div class="budget-save"><input id="monthlyBudget" type="number" min="0.01" step="0.01" placeholder="No warning"><button class="btn-small" id="saveBudget">Save</button></div><small id="budgetStatus"></small></div>
-    <div id="recoveryPreferences" class="preference-row recovery-preferences" hidden></div>
-    ${PiDishBrowser.hostSettingsHtml}
-    <div class="preference-row"><label><strong>Saved sidebar filters</strong><small>Server-global. Chips under the sidebar filter toggle these per device; type a query there and hit “+ save filter” to add one.</small></label><div id="savedFiltersList" class="saved-filters-list"></div></div>`;
-  const mode = body.querySelector('#responseMetadataMode'); mode.value = responseMetadataMode;
-  mode.addEventListener('change', () => {
-    responseMetadataMode = RESPONSE_MODES.has(mode.value) ? mode.value : 'compact';
-    localStorage.setItem(RESPONSE_MODE_KEY, responseMetadataMode); updateRenderedResponseMetadata();
-  });
-  const themeSel = body.querySelector('#settingsTheme');
-  renderThemeSelect(themeSel);
-  themeSel.addEventListener('change', () => applyTheme(themeSel.value));
-  const ctxMetric = body.querySelector('#sidebarContextMetric'); ctxMetric.value = sidebarContextMetric;
-  ctxMetric.addEventListener('change', () => {
-    sidebarContextMetric = ctxMetric.value === 'tokens' ? 'tokens' : 'percent';
-    localStorage.setItem(CONTEXT_METRIC_KEY, sidebarContextMetric);
-    renderSessions();
-  });
-  const renderSavedFiltersList = () => {
-    const listEl = body.querySelector('#savedFiltersList');
-    if (!listEl) return;
-    listEl.innerHTML = savedFilters.length
-      ? savedFilters.map(f => `<div class="saved-filter-row"><span class="saved-filter-name">${escapeHtml(f.name)}</span><code class="saved-filter-query">${escapeHtml(f.query)}</code><button class="btn-icon saved-filter-del" data-name="${escapeHtml(f.name)}" title="Delete filter">✕</button></div>`).join('')
-      : '<small class="saved-filters-empty">No saved filters yet.</small>';
-    for (const btn of listEl.querySelectorAll('.saved-filter-del')) {
-      btn.addEventListener('click', async () => {
-        try {
-          await persistSavedFilters(savedFilters.filter(f => f.name !== btn.dataset.name));
-          renderSavedFiltersList();
-        } catch (e) { alert('Could not delete filter: ' + e.message); }
-      });
-    }
-  };
-  renderSavedFiltersList();
-  hostSettings.mount(body);
-  refreshRecoveryHosts();
-  renderRecoveryPreferences();
-  try {
-    const r = await apiFetch(null, '/api/settings'), s = await r.json();
-    if (renderSeq !== settingsRenderSeq ) return;
-    body.querySelector('#monthlyBudget').value = s.monthlyBudgetUsd ?? '';
-    if (Array.isArray(s.savedFilters)) {
-      savedFilters = s.savedFilters;
-      renderSavedFiltersList();
-    }
-  } catch {
-    if (renderSeq !== settingsRenderSeq ) return;
-    body.querySelector('#budgetStatus').textContent = 'Could not load server setting.';
-  }
-  if (renderSeq !== settingsRenderSeq ) return;
-  body.querySelector('#saveBudget').addEventListener('click', async () => {
-    const input = body.querySelector('#monthlyBudget'), status = body.querySelector('#budgetStatus');
-    const value = input.value.trim() === '' ? null : Number(input.value);
-    try { const r = await apiFetch(null, '/api/settings', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ monthlyBudgetUsd:value }) }); const d = await r.json(); if (!r.ok) throw new Error(d.error); status.textContent = 'Saved for all devices.'; }
-    catch (e) { status.textContent = 'Save failed: ' + e.message; }
-  });
-}
+// Display preferences own modal requests, rendered controls and device readouts.
+const displayPreferences = PiDishBrowser.createDisplayPreferences({
+  document, storage: localStorage, request: (host, url, options) => apiFetch(host, url, options), host: () => hostEntryFor(null),
+  beforeOpen: () => { closeSidebar(); closeBounceView(); },
+  unmountSections: () => { recoveryController.unmountPreferences(); hostSettings.unmount(); },
+  mountSections: body => { hostSettings.mount(body); refreshRecoveryHosts(); renderRecoveryPreferences(); },
+  themes: { render: select => renderThemeSelect(select), apply: id => applyTheme(id) },
+  filters: () => PiDishBrowser.decodeSavedFilters(savedFilters), setFilters: value => { savedFilters = [...value]; },
+  persistFilters: (value, host) => persistSavedFilters([...value], host),
+  metadataChanged: () => updateRenderedResponseMetadata(), contextChanged: () => renderSessions(), alert: message => alert(message),
+});
+function openSettingsModal() { displayPreferences.open(); }
+function closeSettingsModal() { closeBounceView(); displayPreferences.close(); }
+function renderPreferences() { return displayPreferences.render(); }
 
 // Recovery owns its preferences/report views and captured host endpoints.
 const recoveryController = PiDishBrowser.createRecovery({
@@ -4781,7 +4702,7 @@ function renderAssistantMessage(msg, time, opts = {}) {
   let speedHtml = '';
   const hasMetadata = !opts.streaming && (msg.usage || msg.durationMs);
   const detail = hasMetadata ? responseDetailProjection(msg) : null;
-  const metadata = detail ? formatResponseMetadata(detail, responseMetadataMode) : null;
+  const metadata = detail ? formatResponseMetadata(detail, displayPreferences.responseMode) : null;
   if (hasMetadata) {
     const detailId = `response-${++responseDetailSeq}`;
     // Keep only the small telemetry projection the detail modal consumes;
@@ -4808,7 +4729,7 @@ function renderAssistantMessage(msg, time, opts = {}) {
 
 function updateRenderedResponseMetadata() {
   document.querySelectorAll('.message-metadata-btn').forEach(btn => {
-    const text = formatResponseMetadata(responseDetails.get(btn.dataset.detailId), responseMetadataMode);
+    const text = formatResponseMetadata(responseDetails.get(btn.dataset.detailId), displayPreferences.responseMode);
     btn.textContent = text || '';
     btn.style.display = text ? '' : 'none';
   });
@@ -8643,87 +8564,14 @@ function updateTerminalButtons() {
 }
 
 // =========================================================================
-// Theme — all colors flow from the :root tokens (style.css). Built-in themes
-// are [data-theme] blocks; user themes (~/.pi/dish/themes/*.json, served by
-// /api/themes) are token maps applied as inline custom properties over the
-// default palette. The applied theme + tokens are cached in localStorage so
-// index.html can re-apply them pre-paint; loadThemes() then refreshes the
-// cache from the server (the theme file may have changed on disk).
-// =========================================================================
-
-let availableThemes = [{ id: 'solarized', builtin: true }, { id: 'graphite', builtin: true }];
-
-async function loadThemes() {
-  try {
-    const res = await apiFetch(null, '/api/themes');
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data.themes) && data.themes.length) availableThemes = data.themes;
-    }
-  } catch {}
-  renderThemeSelect();
-  // Re-resolve the saved choice against the fresh list: picks up edits to a
-  // custom theme's file, and falls back to default if the file is gone.
-  const saved = localStorage.getItem('pi-dish-theme');
-  if (saved && saved !== 'solarized') applyTheme(saved);
-}
-
-function renderThemeSelect(sel = document.getElementById('settingsTheme')) {
-  if (!sel) return;
-  const cur = localStorage.getItem('pi-dish-theme') || 'solarized';
-  sel.innerHTML = availableThemes.map((t) =>
-    `<option value="${escapeHtml(t.id)}"${t.id === cur ? ' selected' : ''}>${escapeHtml(t.id)}</option>`).join('');
-}
-
-function applyTheme(id) {
-  const theme = availableThemes.find((t) => t.id === id) || availableThemes[0];
-  const root = document.documentElement;
-  // Wipe the previous theme's inline tokens (all inline --props are ours).
-  for (const prop of [...root.style]) {
-    if (prop.startsWith('--')) root.style.removeProperty(prop);
-  }
-  if (theme.id === 'solarized') delete root.dataset.theme;
-  else root.dataset.theme = theme.id;
-  for (const [k, v] of Object.entries(theme.tokens || {})) root.style.setProperty(k, v);
-  localStorage.setItem('pi-dish-theme', theme.id);
-  localStorage.setItem('pi-dish-theme-tokens', JSON.stringify(theme.tokens || null));
-  renderThemeSelect();
-  // The terminal bakes token colors in at open time — re-derive live.
-  if (termState?.term) termState.term.options.theme = terminalTheme();
-  // Diagram SVGs bake their colors in at render time — re-render them too.
-  refreshDiagramTheme();
-}
-
-// xterm theme from the :root Solarized tokens; the handful of ANSI slots the
-// palette has no token for (magenta/violet, bright variants) use canonical
-// Solarized values.
-function terminalTheme() {
-  const css = getComputedStyle(document.documentElement);
-  const v = (name) => css.getPropertyValue(name).trim();
-  return {
-    background: v('--bg-darker'),
-    foreground: v('--text'),
-    cursor: v('--text-bright'),
-    cursorAccent: v('--bg-darker'),
-    selectionBackground: v('--bg-card'),
-    black: v('--bg-card'),
-    red: v('--error'),
-    green: v('--success'),
-    yellow: v('--warning'),
-    blue: v('--accent'),
-    magenta: '#d33682',
-    cyan: v('--cyan'),
-    white: '#eee8d5',
-    brightBlack: v('--text-muted'),
-    brightRed: v('--orange'),
-    brightGreen: '#586e75',
-    brightYellow: '#657b83',
-    brightBlue: '#839496',
-    brightMagenta: '#6c71c4',
-    brightCyan: '#93a1a1',
-    brightWhite: '#fdf6e3',
-  };
-}
+// Theme payloads and pre-paint cache restoration share typed token decoding.
+const themesController = PiDishBrowser.createThemes({ document, storage: localStorage, request: (host, url, options) => apiFetch(host, url, options), host: () => hostEntryFor(null),
+  changed: () => { if (termState?.term) termState.term.options.theme = terminalTheme(); refreshDiagramTheme(); },
+});
+function loadThemes() { return themesController.load(); }
+function renderThemeSelect(select) { themesController.render(select); }
+function applyTheme(id) { themesController.apply(id); }
+function terminalTheme() { return PiDishBrowser.terminalTheme(document); }
 
 // Per-session, host-namespaced; the panel size next to it is device-global.
 function terminalModeKey(sessionId) {
@@ -8988,108 +8836,14 @@ function termKeybarPress(key) {
   termState.term.focus();
 }
 
-// Drag the panel's top edge to resize it. Height persists as a percentage of
-// the session view (so it survives window resizes and different screens);
-// the flex-basis override lives in inline style, beating the stylesheet's
-// 45%/52% defaults. Pointer capture keeps the drag on the handle — no
-// document-level listeners needed (the handle is never reinserted mid-drag,
-// unlike the pinned-session rows).
-// Sidebar width — session titles are long and wide monitors have room, so the
-// right edge is a drag handle. Persisted in px (unlike the terminal's %: the
-// sidebar's useful width is a function of the text in it, not of the viewport)
-// and applied as an inline width over the --sidebar-width default. Pointer
-// capture keeps the drag on the handle, so no document-level listeners; the
-// mobile breakpoint hides the handle and overrides the width in CSS.
-const SIDEBAR_WIDTH_KEY = 'pi-dish-sidebar-width';
-const SIDEBAR_WIDTH_MIN = 220;
-
-function clampSidebarWidth(px) {
-  // Never let the drag eat the reading column: half the viewport is the cap.
-  return Math.round(Math.min(Math.max(SIDEBAR_WIDTH_MIN, px), Math.max(SIDEBAR_WIDTH_MIN, window.innerWidth * 0.5)));
-}
-
-function applySavedSidebarWidth() {
-  const sidebar = document.getElementById('sidebar');
-  if (!sidebar) return;
-  const saved = parseFloat(localStorage.getItem(SIDEBAR_WIDTH_KEY));
-  sidebar.style.width = Number.isFinite(saved) ? clampSidebarWidth(saved) + 'px' : '';
-}
-
-function initSidebarResize() {
-  const handle = document.getElementById('sidebarResizeHandle');
-  const sidebar = document.getElementById('sidebar');
-  if (!handle || !sidebar) return;
-  applySavedSidebarWidth();
-  handle.addEventListener('dblclick', () => {
-    localStorage.removeItem(SIDEBAR_WIDTH_KEY);
-    sidebar.style.width = '';
-  });
-  handle.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startWidth = sidebar.offsetWidth;
-    handle.setPointerCapture(e.pointerId);
-    handle.classList.add('dragging');
-    const onMove = (ev) => {
-      sidebar.style.width = clampSidebarWidth(startWidth + (ev.clientX - startX)) + 'px';
-    };
-    const onUp = () => {
-      handle.removeEventListener('pointermove', onMove);
-      handle.removeEventListener('pointerup', onUp);
-      handle.removeEventListener('pointercancel', onUp);
-      handle.classList.remove('dragging');
-      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebar.offsetWidth));
-      // The terminal is sized off the pane the sidebar just took width from.
-      fitTerminal();
-    };
-    handle.addEventListener('pointermove', onMove);
-    handle.addEventListener('pointerup', onUp);
-    handle.addEventListener('pointercancel', onUp);
-  });
-}
-
-function initTerminalResize() {
-  const handle = document.getElementById('terminalResizeHandle');
-  const panel = document.getElementById('terminalPanel');
-  if (!handle || !panel) return;
-  handle.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    const startY = e.clientY;
-    const startHeight = panel.offsetHeight;
-    const parentHeight = panel.parentElement.clientHeight;
-    handle.setPointerCapture(e.pointerId);
-    handle.classList.add('dragging');
-    const onMove = (ev) => {
-      const px = clampTerminalHeight(startHeight + (startY - ev.clientY), parentHeight);
-      panel.style.flexBasis = px + 'px';
-      fitTerminal();
-    };
-    const onUp = () => {
-      handle.removeEventListener('pointermove', onMove);
-      handle.removeEventListener('pointerup', onUp);
-      handle.removeEventListener('pointercancel', onUp);
-      handle.classList.remove('dragging');
-      const pct = (panel.offsetHeight / parentHeight) * 100;
-      localStorage.setItem('pi-dish-terminal-size', pct.toFixed(1));
-      panel.style.flexBasis = pct.toFixed(1) + '%';
-      fitTerminal();
-    };
-    handle.addEventListener('pointermove', onMove);
-    handle.addEventListener('pointerup', onUp);
-    handle.addEventListener('pointercancel', onUp);
-  });
-}
-
-function clampTerminalHeight(px, parentHeight) {
-  return Math.min(Math.round(parentHeight * 0.8), Math.max(140, px));
-}
-
-function applySavedTerminalSize(panel) {
-  const saved = parseFloat(localStorage.getItem('pi-dish-terminal-size'));
-  if (Number.isFinite(saved)) {
-    panel.style.flexBasis = Math.min(80, Math.max(10, saved)) + '%';
-  }
-}
+// Resize controllers own each pointer capture and release listeners on disposal.
+const panelResize = PiDishBrowser.createPanelResize({ document, storage: localStorage, fitTerminal: () => fitTerminal() });
+function clampSidebarWidth(px) { return PiDishBrowser.clampSidebarWidth(px, window.innerWidth); }
+function applySavedSidebarWidth() { panelResize.sidebarWidth(); }
+function initSidebarResize() { panelResize.sidebar(); }
+function initTerminalResize() { panelResize.terminal(); }
+function clampTerminalHeight(px, parentHeight) { return PiDishBrowser.clampTerminalHeight(px, parentHeight); }
+function applySavedTerminalSize(panel) { panelResize.terminalSize(panel); }
 
 function initTerminalKeybar() {
   const bar = document.getElementById('terminalKeybar');

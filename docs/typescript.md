@@ -374,3 +374,9 @@ result activation retains the query and endpoint that rendered its card.
 and indexing/resize timers. `usage-data.ts` keeps unavailable costs explicit and
 stamps host identity before partial merges. Render coalescers expose disposal so
 closed or superseded fan-outs cannot leave a timer running.
+
+Display preferences, themes and pointer resizing are owned by
+`display-preferences.ts`, `themes.ts` and `panel-resize.ts`. The separate
+`theme-prepaint.ts` entrypoint generates `public/theme-prepaint.js`; it runs
+synchronously before CSS and shares the typed token decoder with theme switching.
+The browser build validates all four outputs before writing any of them.

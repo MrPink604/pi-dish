@@ -10,6 +10,7 @@ if (compiled.error) throw compiled.error;
 if (compiled.status !== 0) process.exit(compiled.status || 1);
 const esbuild = require('esbuild');
 const entries = [
+  { source: 'src/browser/theme-prepaint.ts', target: 'public/theme-prepaint.js' },
   { source: 'src/browser/index.ts', target: 'public/browser.js', globalName: 'PiDishBrowser' },
   { source: 'src/browser/artifact-comments.ts', target: 'public/artifact-comments.js' },
   { source: 'src/browser/shared-helpers.ts', target: 'public/helpers.js', globalName: 'PiDishHelpers',
