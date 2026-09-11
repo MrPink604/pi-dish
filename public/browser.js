@@ -22,10 +22,15 @@ var PiDishBrowser = (() => {
   var index_exports = {};
   __export(index_exports, {
     ApiHttpError: () => ApiHttpError,
+    HOST_BACKOFF_LADDER: () => HOST_BACKOFF_LADDER,
+    HOST_BACKOFF_RESET_MS: () => HOST_BACKOFF_RESET_MS,
+    createHostConnections: () => createHostConnections,
     createHostTransport: () => createHostTransport,
     createSessionApi: () => createSessionApi,
     createSessionState: () => createSessionState,
     decodeModelCatalog: () => decodeModelCatalog,
+    hostConnReduce: () => hostConnReduce,
+    hostKeyOf: () => hostKeyOf,
     modelCatalogUrl: () => modelCatalogUrl,
     mountModelSelector: () => mountModelSelector,
     sendJson: () => sendJson,
@@ -468,6 +473,100 @@ var PiDishBrowser = (() => {
       captureSelection,
       ownsSelection
     };
+  }
+
+  // src/browser/host-connections.ts
+  var HOST_BACKOFF_LADDER = [3e3, 4e3, 8e3, 16e3];
+  var HOST_BACKOFF_RESET_MS = 3e4;
+  function hostKeyOf(host) {
+    return host && (host.key || host.hostId || host.base) || "self";
+  }
+  function hostConnReduce(prev, event, now) {
+    const at = typeof now === "number" && Number.isFinite(now) ? now : Date.now();
+    const kind = typeof event === "string" ? event : event && typeof event === "object" && "type" in event && event.type || "";
+    const state = prev && typeof prev === "object" ? prev : null;
+    const errText = (value) => {
+      if (value == null) return null;
+      const text2 = String(typeof value === "object" && "message" in value && value.message || value);
+      return text2 || null;
+    };
+    const eventError = event && typeof event === "object" && "error" in event ? errText(event.error) : null;
+    if (kind === "blocked") {
+      if (state && state.state === "blocked") return state;
+      return { state: "blocked", failures: 0, retryAt: 0, error: "Unauthorized", reachableSince: 0 };
+    }
+    if (kind === "success") {
+      const since = state && state.state === "reachable" && state.reachableSince ? state.reachableSince : at;
+      const forgiven = at - since >= HOST_BACKOFF_RESET_MS;
+      return {
+        state: "reachable",
+        failures: forgiven ? 0 : state && state.failures || 0,
+        retryAt: 0,
+        error: null,
+        reachableSince: since
+      };
+    }
+    if (kind === "failure") {
+      if (state && state.state === "blocked") return state;
+      const failures = (state && state.failures || 0) + 1;
+      const wait = HOST_BACKOFF_LADDER[Math.min(failures - 1, HOST_BACKOFF_LADDER.length - 1)];
+      return { state: "backoff", failures, retryAt: at + wait, error: eventError, reachableSince: 0 };
+    }
+    if (kind === "seed-down") {
+      if (state) return state;
+      return { state: "backoff", failures: 1, retryAt: at + HOST_BACKOFF_LADDER[0], error: eventError, reachableSince: 0 };
+    }
+    return state;
+  }
+  function createHostConnections(options) {
+    const records = /* @__PURE__ */ new Map();
+    const now = options.now || Date.now;
+    function stateOf(host) {
+      const entry = records.get(hostKeyOf(host));
+      if (entry) return entry.state;
+      if (host && host.self) return "reachable";
+      if (host && host.reachable === false) return "backoff";
+      return "connecting";
+    }
+    function isDown(host) {
+      const state = stateOf(host);
+      return state === "backoff" || state === "blocked";
+    }
+    function note(host, event) {
+      const key = hostKeyOf(host);
+      const prev = records.get(key) || null;
+      const next = hostConnReduce(prev, event, now());
+      if (!next || next === prev) return;
+      records.set(key, next);
+      if (!prev || prev.state !== next.state || prev.error !== next.error) options.onChange();
+    }
+    function seed(hosts) {
+      const at = now();
+      for (const host of hosts) {
+        if (host.self || host.reachable !== false) continue;
+        const key = hostKeyOf(host);
+        if (records.has(key)) continue;
+        const next = hostConnReduce(null, { type: "seed-down", error: host.error || "unreachable" }, at);
+        if (next) records.set(key, next);
+      }
+    }
+    function pollable(hosts) {
+      const at = now();
+      return hosts.filter((host) => {
+        if (host.self) return true;
+        const entry = records.get(hostKeyOf(host));
+        if (!entry) return true;
+        if (entry.state === "blocked") return false;
+        return !entry.retryAt || entry.retryAt <= at;
+      });
+    }
+    function reset(key) {
+      records.delete(key);
+    }
+    function prune(liveKeys) {
+      for (const key of records.keys()) if (!liveKeys.has(key)) records.delete(key);
+    }
+    return { stateOf, isDown, note, seed, pollable, reset, prune };
   }
   return __toCommonJS(index_exports);
 })();

@@ -167,7 +167,7 @@ function migrateClientKeys() {
 
 let fleetHosts = [];                // GET /api/hosts entries (never persisted)
 let effectiveHostsCache = null;     // rebuilt whenever a source changes
-const hostConnState = new Map();    // host key -> a hostConnReduce record (helpers.js)
+const hostConnections = PiDishBrowser.createHostConnections({ onChange: () => renderHostsSection() });
 const hostSessionCache = new Map(); // host key -> last known { active, previous }
 const hostLoadSeq = new Map();      // host key -> per-host poll sequence guard
 const hostLoadInflight = new Map(); // host key -> the poll already in flight
@@ -177,11 +177,6 @@ const hostIndexing = new Map();     // host key -> server still backfilling its 
 // catalog deliberately persists only base/id/label/token), so they are
 // overlaid onto the merged list instead of being written back into it.
 const hostDescriptors = new Map();
-
-// The ladder, its reset hysteresis and the transitions themselves live in
-// helpers.js (hostConnReduce, HOST_BACKOFF_LADDER) — pure and unit-tested.
-// Everything here only maps events onto it and decides when a change is
-// worth a re-render.
 
 function invalidateHosts() { effectiveHostsCache = null; }
 
@@ -199,7 +194,7 @@ function effectiveHosts() {
   return effectiveHostsCache;
 }
 
-function hostKeyOf(host) { return (host && (host.key || host.hostId || host.base)) || 'self'; }
+function hostKeyOf(host) { return PiDishBrowser.hostKeyOf(host); }
 function isMultiHost() { return effectiveHosts().length > 1; }
 function selfHostEntry() { return effectiveHosts()[0]; }
 
@@ -216,78 +211,21 @@ function hostLabelFor(hostId) {
 }
 
 /** reachable | connecting | backoff | blocked — one host's connection state. */
-function hostState(host) {
-  const entry = hostConnState.get(hostKeyOf(host));
-  if (entry) return entry.state;
-  if (host && host.self) return 'reachable';
-  // A fleet entry carries the serving host's own probe result until we poll it.
-  if (host && host.reachable === false) return 'backoff';
-  return 'connecting';
-}
+function hostState(host) { return hostConnections.stateOf(host); }
 
 /** Down = its rows are last-known, not live (backoff or blocked). */
-function hostIsDown(host) {
-  const state = hostState(host);
-  return state === 'backoff' || state === 'blocked';
-}
+function hostIsDown(host) { return hostConnections.isDown(host); }
 function hostIdIsDown(hostId) {
   const entry = hostEntryFor(hostId);
   return entry ? hostIsDown(entry) : false;
 }
 
-/**
- * Apply one connection event to a host's state. The re-render is gated on a
- * *visible* change: a host that has been down for an hour reaches this on
- * every 10s poll, and re-rendering the settings section each time is pure
- * churn. The ladder position moves silently underneath.
- */
-function noteHostConn(host, event) {
-  const key = hostKeyOf(host);
-  const prev = hostConnState.get(key) || null;
-  const next = hostConnReduce(prev, event, Date.now());
-  if (next === prev) return;
-  hostConnState.set(key, next);
-  if (!prev || prev.state !== next.state || prev.error !== next.error) renderHostsSection();
-}
-
-function noteHostReachable(host) { noteHostConn(host, 'success'); }
-
-/**
- * A 401 is not a transient failure: retrying it just burns requests until a
- * token is entered, so the host parks in `blocked` and the settings section
- * grows a quiet "token?" affordance.
- */
-function noteHostBlocked(host) { noteHostConn(host, 'blocked'); }
-
-function noteHostFailure(host, error) { noteHostConn(host, { type: 'failure', error }); }
-
-/**
- * The serving host has already probed its fleet, so a peer it reports as
- * unreachable starts in backoff instead of costing this page load one full
- * hang before the client has any state of its own. Seeding is deliberately
- * one-way: it never overwrites a state this client observed itself.
- */
-function seedHostConnFromFleet() {
-  const now = Date.now();
-  for (const host of effectiveHosts()) {
-    if (host.self || host.reachable !== false) continue;
-    const key = hostKeyOf(host);
-    if (hostConnState.has(key)) continue;
-    hostConnState.set(key, hostConnReduce(null, { type: 'seed-down', error: host.error || 'unreachable' }, now));
-  }
-}
-
-/** Hosts a poll may talk to right now — self always, blocked never. */
-function pollableHosts() {
-  const now = Date.now();
-  return effectiveHosts().filter(host => {
-    if (host.self) return true;
-    const entry = hostConnState.get(hostKeyOf(host));
-    if (!entry) return true;
-    if (entry.state === 'blocked') return false;
-    return !entry.retryAt || entry.retryAt <= now;
-  });
-}
+// Connection observations and poll eligibility share the typed retry policy.
+function noteHostReachable(host) { hostConnections.note(host, 'success'); }
+function noteHostBlocked(host) { hostConnections.note(host, 'blocked'); }
+function noteHostFailure(host, error) { hostConnections.note(host, { type: 'failure', error }); }
+function seedHostConnFromFleet() { hostConnections.seed(effectiveHosts()); }
+function pollableHosts() { return hostConnections.pollable(effectiveHosts()); }
 
 /** Hosts whose data may be fetched for search/usage fan-out. */
 function fanoutHosts() {
@@ -382,7 +320,8 @@ function refreshHostFleetSoon() {
 /** Drop cached rows/state for hosts that left the effective list. */
 function pruneHostCaches() {
   const live = new Set(effectiveHosts().map(hostKeyOf));
-  for (const map of [hostSessionCache, hostConnState, hostLoadSeq, hostLoadInflight, hostIndexing]) {
+  hostConnections.prune(live);
+  for (const map of [hostSessionCache, hostLoadSeq, hostLoadInflight, hostIndexing]) {
     for (const key of [...map.keys()]) if (!live.has(key)) map.delete(key);
   }
 }
@@ -3708,7 +3647,7 @@ function promptHostToken(key) {
   const token = prompt(`Token for ${hostDisplayLabel(entry)}`, '');
   if (token === null) return;
   entry.token = token.trim() || undefined;
-  hostConnState.delete(key);
+  hostConnections.reset(key);
   saveHostCatalog();
   refreshSessions();
 }
@@ -3761,7 +3700,7 @@ async function addHostFromForm() {
   });
   hostCatalog = hostCatalog.filter(entry => entry.hostId !== descriptor.hostId && entry.base !== base);
   hostCatalog.push({ base, hostId: descriptor.hostId, label: label || descriptor.label || null, token: token || null });
-  hostConnState.delete(descriptor.hostId);
+  hostConnections.reset(descriptor.hostId);
   saveHostCatalog();
   if (baseInput) baseInput.value = '';
   if (labelInput) labelInput.value = '';

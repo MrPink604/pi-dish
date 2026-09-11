@@ -178,3 +178,11 @@ Continue migrating coherent state, controller and DOM modules from `public/app.j
 into `src/browser/`, preserving owner-bearing actions and explicit cleanup.
 Plain TypeScript is the current implementation choice. A leaf component pilot
 can be reconsidered separately if a concrete maintenance problem warrants it.
+
+`src/browser/host-connections.ts` owns connection observations and poll eligibility.
+It retains the existing retry ladder, stable-success reset window, blocked-host
+policy and one-way fleet seeding. `app.js` supplies the current host list and a
+render callback; catalog persistence and descriptor requests remain outside this
+module. `hostKeyOf` provides one key convention for connection and request state.
+The reducer's existing tests now execute the browser bundle, alongside controller
+checks for notification gating, reset and pruning.

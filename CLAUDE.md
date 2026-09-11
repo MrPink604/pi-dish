@@ -1014,13 +1014,16 @@ exactly single-host pi-dish.
   request against an already-slow host, and the joiner refreshes the
   in-flight `ctx` so the response is guarded by the *newest* sequence rather
   than dropped as stale (no new `hostSeq` — that would invalidate the read
-  already on the wire). Connection state is the pure `hostConnReduce`
-  (helpers.js, unit-tested): the `[3,4,8,16]s` ladder, `blocked` sticky
+  already on the wire). Connection state and poll eligibility live in
+  `src/browser/host-connections.ts`, including the pure `hostConnReduce`:
+  the `[3,4,8,16]s` ladder, `blocked` sticky
   (401 ⇒ `blocked`, never retried — re-enter the token in the settings Hosts
   section), and a 30s reset hysteresis, so a *flapping* host keeps climbing
-  the ladder instead of resetting it every cycle. app.js only maps events
-  onto it and re-renders the Hosts section when `state`/`error` actually
-  changed. A fleet entry the server already probed `reachable:false` seeds
+  the ladder instead of resetting it every cycle. The typed controller owns
+  observations, seeding, token resets and pruning; its callback re-renders the
+  Hosts section only when `state`/`error` actually changed. `app.js` supplies
+  the effective host list and retains catalog/descriptor loading. A fleet entry
+  the server already probed `reachable:false` seeds
   that state on load (`seedHostConnFromFleet`, never overwriting a state this
   client observed itself), so a page load no longer pays one full hang per
   sleeping peer before its own backoff exists. Workspace group keys are host-qualified

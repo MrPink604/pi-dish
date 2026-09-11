@@ -1,6 +1,6 @@
 # pi-dish maintenance backlog
 
-Updated 2026-09-10. This is the current work order. The original RPC feature
+Updated 2026-09-11. This is the current work order. The original RPC feature
 audit is preserved in [docs/history/2026-07-rpc-gap-audit.md](docs/history/2026-07-rpc-gap-audit.md);
 its descriptions of missing features are historical.
 
@@ -136,6 +136,10 @@ design history and may include work that has already shipped.
   Moved the existing writers and immutable selection owners into `src/browser/`,
   removed the standalone JavaScript script, and routed production and unit-test
   consumers through the existing browser bundle. No state behavior changes.
-- Next: extract remaining host/request controllers and leaf UI through explicit
-  typed interfaces. Keep each extraction independently reviewable; preserve
-  selection guards, streaming coalescing, pagination and retained DOM.
+- Host connection policy/controller: completed 2026-09-11 after Fable review
+  and full verification (828 backend tests, 55 browser regressions, all UI
+  scenarios/smoke and OMP/Prime canaries). Moves retry/backoff, fleet seeding,
+  poll eligibility and observation storage into `src/browser/host-connections.ts`.
+- Next: per-host session request controller, then adjacent leaf UI. Keep each
+  extraction independently reviewable; preserve selection guards, streaming
+  coalescing, pagination and retained DOM.

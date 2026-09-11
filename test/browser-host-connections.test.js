@@ -1,0 +1,72 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const context = {};
+vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
+const { createHostConnections, hostKeyOf } = context.PiDishBrowser;
+
+test('host connection policy seeds unknown peers without replacing observations and always polls self', () => {
+  let now = 10000;
+  let renders = 0;
+  const connections = createHostConnections({ now: () => now, onChange: () => renders++ });
+  const self = { key: 'self', hostId: 'local', self: true };
+  const sleeping = { hostId: 'sleeping', reachable: false };
+  const unknown = { base: '/hosts/unknown' };
+  const hosts = [self, sleeping, unknown];
+  assert.equal(hostKeyOf(self), 'self');
+  assert.equal(hostKeyOf(null), 'self');
+  assert.equal(hostKeyOf(unknown), '/hosts/unknown');
+  assert.equal(connections.stateOf(self), 'reachable');
+  assert.equal(connections.stateOf(sleeping), 'backoff');
+  assert.equal(connections.stateOf(unknown), 'connecting');
+  connections.seed(hosts);
+  assert.equal(renders, 0, 'fleet loading owns the initial render');
+  assert.deepEqual(Array.from(connections.pollable(hosts)), [self, unknown]);
+  now += 3000;
+  assert.deepEqual(Array.from(connections.pollable(hosts)), hosts);
+  connections.note(sleeping, 'success');
+  connections.seed(hosts);
+  assert.equal(connections.stateOf(sleeping), 'reachable');
+  connections.note(self, 'blocked');
+  assert.ok(connections.pollable(hosts).includes(self), 'self must stay pollable even after a 401');
+});
+
+test('host connection notifications track visible changes while retries retain the failure ladder', () => {
+  let now = 10000;
+  let renders = 0;
+  const connections = createHostConnections({ now: () => now, onChange: () => renders++ });
+  const peer = { hostId: 'peer' };
+  connections.note(peer, { type: 'failure', error: new Error('offline') });
+  assert.equal(renders, 1);
+  connections.note(peer, { type: 'failure', error: 'offline' });
+  assert.equal(renders, 1, 'another failure moves the rung without rebuilding settings');
+  now += 3999;
+  assert.equal(connections.pollable([peer]).length, 0);
+  now += 1;
+  assert.equal(connections.pollable([peer])[0], peer);
+  connections.note(peer, { type: 'failure', error: 'different error' });
+  assert.equal(renders, 2);
+  connections.note(peer, 'blocked');
+  connections.note(peer, { type: 'failure', error: 'timeout' });
+  now += 60000;
+  assert.equal(renders, 3);
+  assert.equal(connections.pollable([peer]).length, 0, 'blocked peers do not retry on a timer');
+  assert.equal(connections.isDown(peer), true);
+  connections.reset('peer');
+  assert.equal(connections.stateOf(peer), 'connecting');
+  assert.equal(connections.pollable([peer])[0], peer);
+  assert.equal(renders, 3, 'the token/catalog caller owns its refresh');
+});
+
+test('host connection pruning forgets only removed hosts', () => {
+  const connections = createHostConnections({ onChange() {} });
+  const a = { hostId: 'a' };
+  const b = { hostId: 'b' };
+  connections.note(a, 'blocked');
+  connections.note(b, 'blocked');
+  connections.prune(new Set(['b']));
+  assert.equal(connections.stateOf(a), 'connecting');
+  assert.equal(connections.stateOf(b), 'blocked');
+});
