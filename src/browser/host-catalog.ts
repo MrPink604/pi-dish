@@ -94,6 +94,25 @@ export function sanitizeHostCatalog(raw: unknown): CatalogHost[] {
 }
 
 /**
+ * Catalog saves must not retire discovery for unrelated, unchanged rows. Keep
+ * their object identity only when every own field exactly matches projection;
+ * changed/extra fields still produce a clean normalized row.
+ */
+export function reconcileHostCatalog(current: readonly CatalogHost[]): CatalogHost[] {
+  return sanitizeHostCatalog(current).map(normalized => {
+    const source = current.find(row => row.base === normalized.base);
+    if (!source) return normalized;
+    const keys = Object.keys(source);
+    if (keys.length !== Object.keys(normalized).length) return normalized;
+    for (const key of keys) {
+      if (key !== 'base' && key !== 'hostId' && key !== 'label' && key !== 'token') return normalized;
+      if (source[key] !== normalized[key]) return normalized;
+    }
+    return source;
+  });
+}
+
+/**
  * Self, then runtime fleet, then persisted catalog. First route wins by id or
  * base; duplicates only fill missing metadata. No input row is mutated.
  */

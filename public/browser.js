@@ -40,6 +40,7 @@ var PiDishBrowser = (() => {
     mountModelSelector: () => mountModelSelector,
     mountThinkingSelector: () => mountThinkingSelector,
     normalizeHostBase: () => normalizeHostBase,
+    reconcileHostCatalog: () => reconcileHostCatalog,
     sanitizeHostCatalog: () => sanitizeHostCatalog,
     sendJson: () => sendJson,
     withFetchTimeout: () => withFetchTimeout
@@ -779,6 +780,19 @@ var PiDishBrowser = (() => {
     }
     return out;
   }
+  function reconcileHostCatalog(current) {
+    return sanitizeHostCatalog(current).map((normalized) => {
+      const source = current.find((row) => row.base === normalized.base);
+      if (!source) return normalized;
+      const keys = Object.keys(source);
+      if (keys.length !== Object.keys(normalized).length) return normalized;
+      for (const key of keys) {
+        if (key !== "base" && key !== "hostId" && key !== "label" && key !== "token") return normalized;
+        if (source[key] !== normalized[key]) return normalized;
+      }
+      return source;
+    });
+  }
   function mergeHostEntries(self, fleet, catalog) {
     const out = [];
     const byId = /* @__PURE__ */ new Map();
@@ -937,6 +951,8 @@ var PiDishBrowser = (() => {
     const now = options.now || Date.now;
     let selfSequence = 0;
     let fleetSequence = 0;
+    let fleetPublication = 0;
+    let fleetPending = null;
     let fleetRequestedAt = 0;
     function rememberDescriptor(value) {
       const descriptor = decodeHostDescriptor(value);
@@ -986,9 +1002,7 @@ var PiDishBrowser = (() => {
         }
       }));
     }
-    async function loadFleet() {
-      fleetRequestedAt = now();
-      const sequence = ++fleetSequence;
+    async function performFleet(sequence) {
       try {
         const response = await options.request(null, "/api/hosts", { timeoutMs: 1e4 });
         if (!response.ok) return;
@@ -996,10 +1010,25 @@ var PiDishBrowser = (() => {
         if (sequence !== fleetSequence || !record2(data) || !Array.isArray(data.hosts)) return;
         const rows = data.hosts;
         const hosts = rows.filter(record2);
+        fleetPublication = sequence;
         options.onFleet({ hosts: hosts.filter((host) => !host.self), selfLabel: hosts.find((host) => host.self)?.label });
         await identify(true);
-        if (sequence === fleetSequence) options.afterFleet();
+        if (sequence === fleetPublication) options.afterFleet();
       } catch {
+      }
+    }
+    async function loadFleet() {
+      fleetRequestedAt = now();
+      let work = performFleet(++fleetSequence);
+      fleetPending = work;
+      try {
+        await work;
+        while (fleetPending && fleetPending !== work) {
+          work = fleetPending;
+          await work;
+        }
+      } finally {
+        if (fleetPending === work) fleetPending = null;
       }
     }
     function refreshSoon() {

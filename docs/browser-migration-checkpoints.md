@@ -44,9 +44,12 @@ are not completion percentages.
 - Boundary: self identity, runtime fleet refresh and direct-host descriptor reads.
 - Typed request owners capture the endpoint and originating catalog object;
   replacing/removing a source or changing its route/token retires old responses.
+- Follow-up review fixes preserve fleet readiness across overlapping loads and
+  unchanged source owners across catalog saves. A later failed refresh cannot
+  suppress the UI notification owed by the current published fleet.
 - Source mutation, persistence, connection observations and rendering remain
   explicit callbacks until their own modules migrate.
-- Verification: strict build/lint/type checks, 853 backend tests, 64 browser
+- Verification: strict build/lint/type checks, 856 backend tests, 66 browser
   regressions, all independent UI scenarios and desktop/mobile smoke passed.
   Fable 5.1 commit review is required before pushing, as specified above.
 - Next: host catalog state/editing and settings UI, then remaining new-session

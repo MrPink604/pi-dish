@@ -3427,7 +3427,7 @@ async function loadRecoveryView() {
 // server's config and are shown read-only. ---------------------------------
 
 function saveHostCatalog() {
-  hostCatalog = sanitizeHostCatalog(hostCatalog);
+  hostCatalog = PiDishBrowser.reconcileHostCatalog(hostCatalog);
   localStorage.setItem(HOSTS_KEY, JSON.stringify(hostCatalog));
   invalidateHosts();
   pruneHostCaches();

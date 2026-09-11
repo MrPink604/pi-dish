@@ -237,6 +237,9 @@ preference storage, host selection and rendering callbacks.
 timing and direct-host descriptor requests. Each peer request captures its
 endpoint and catalog source; replaced sources, changed credentials/routes and
 superseding requests retire prior results, including failures. Fleet refreshes
-also reject obsolete results and post-discovery render callbacks. Descriptor
-identity is validated while optional metadata remains opaque. The app retains
+also reject obsolete results; post-discovery rendering belongs to the latest
+published fleet, so a later failed attempt cannot suppress that notification.
+Fleet waiters follow replacement requests before releasing startup readiness.
+Catalog saves preserve unchanged source objects while still removing changed
+or extra fields. Descriptor identity is validated while optional metadata remains opaque. The app retains
 source mutation, persistence and rendering callbacks.

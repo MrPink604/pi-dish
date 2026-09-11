@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const context = {};
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-const { createHostDiscovery, decodeHostDescriptor } = context.PiDishBrowser;
+const { createHostDiscovery, decodeHostDescriptor, reconcileHostCatalog } = context.PiDishBrowser;
 const response = (data, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => data });
 const descriptor = (hostId = 'peer', label = 'Peer') => ({ hostId, label, capabilities: { terminal: true } });
 function fixture(overrides = {}) {
@@ -179,7 +179,7 @@ test('fleet results reject old completions, isolate malformed rows and preserve 
   assert.equal(events.length, 2);
 });
 
-test('a newer fleet request retires an older after-fleet render while peer discovery is pending', async () => {
+test('a failed newer fleet refresh preserves the render owed by the current published list', async () => {
   const { discovery, calls, events, waitForCall } = fixture();
   const old = discovery.loadFleet();
   calls[0].resolve(response({ hosts: [] }));
@@ -189,7 +189,7 @@ test('a newer fleet request retires an older after-fleet render while peer disco
   await current;
   calls[1].resolve(response(descriptor()));
   await old;
-  assert.equal(events.filter(e => e[0] === 'afterFleet').length, 0);
+  assert.equal(events.filter(e => e[0] === 'afterFleet').length, 1);
 });
 
 
@@ -207,4 +207,60 @@ test('a persistence failure after learning identity still reports failure for th
   assert.equal(events[0][0], 'connection');
   assert.equal(events[0][2].type, 'failure');
   assert.equal(events[0][2].error.message, 'storage unavailable');
+});
+
+
+test('a superseded fleet waiter stays pending until the latest load settles', async () => {
+  const { discovery, calls, events, setHosts } = fixture();
+  setHosts([]);
+  let ready = false;
+  const startup = discovery.loadFleet().then(() => { ready = true; });
+  const replacement = discovery.loadFleet();
+  calls[0].resolve(response({ hosts: [{ base: '/hosts/old' }] }));
+  // Drain a full event-loop turn to observe any premature readiness resolution.
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ready, false);
+  assert.equal(events.length, 0);
+  calls[1].resolve(response({ hosts: [{ base: '/hosts/current' }] }));
+  await Promise.all([startup, replacement]);
+  assert.equal(ready, true);
+  assert.equal(events[0][1].hosts[0].base, '/hosts/current');
+});
+
+test('fleet waiters follow repeated replacements without allowing old publication callbacks', async () => {
+  const { discovery, calls, events, waitForCall } = fixture();
+  let ready = false;
+  const first = discovery.loadFleet().then(() => { ready = true; });
+  calls[0].resolve(response({ hosts: [] }));
+  await waitForCall(1); // First publication's peer descriptor is pending.
+  const second = discovery.loadFleet();
+  const third = discovery.loadFleet();
+  calls[2].resolve(response({ hosts: [{ base: '/hosts/superseded' }] }));
+  calls[3].resolve(response({ hosts: [{ base: '/hosts/current' }] }));
+  await waitForCall(4); // Third publication starts the replacement descriptor.
+  calls[1].resolve(response(descriptor('peer', 'Old')));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ready, false);
+  assert.equal(events.filter(e => e[0] === 'afterFleet').length, 0);
+  calls[4].resolve(response(descriptor('peer', 'Current')));
+  await Promise.all([first, second, third]);
+  assert.equal(ready, true);
+  assert.equal(events.filter(e => e[0] === 'afterFleet').length, 1);
+});
+
+test('saving a catalog preserves unrelated source owners while removing changed or extra fields', async () => {
+  const { discovery, calls, events, getSources, setSources } = fixture();
+  const unchanged = getSources()[0];
+  const current = discovery.identify(true);
+  const extra = { base: '/hosts/extra', hostId: 'extra', capabilities: { terminal: true } };
+  const whitespace = { base: '/hosts/space', label: ' Space ' };
+  setSources(reconcileHostCatalog([unchanged, extra, whitespace]));
+  assert.equal(getSources()[0], unchanged, 'unrelated discovery keeps its owner');
+  assert.notEqual(getSources()[1], extra);
+  assert.equal(getSources()[1].capabilities, undefined);
+  assert.notEqual(getSources()[2], whitespace);
+  assert.equal(getSources()[2].label, 'Space');
+  calls[0].resolve(response(descriptor()));
+  await current;
+  assert.equal(events[0][0], 'identified');
 });

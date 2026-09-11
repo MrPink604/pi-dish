@@ -49,6 +49,8 @@ export function createHostDiscovery(options: HostDiscoveryOptions) {
   const now = options.now || Date.now;
   let selfSequence = 0;
   let fleetSequence = 0;
+  let fleetPublication = 0;
+  let fleetPending: Promise<void> | null = null;
   let fleetRequestedAt = 0;
 
   function rememberDescriptor(value: unknown): HostDescriptor | null {
@@ -104,9 +106,7 @@ export function createHostDiscovery(options: HostDiscoveryOptions) {
     }));
   }
 
-  async function loadFleet(): Promise<void> {
-    fleetRequestedAt = now();
-    const sequence = ++fleetSequence;
+  async function performFleet(sequence: number): Promise<void> {
     try {
       const response = await options.request(null, '/api/hosts', { timeoutMs: 10000 });
       if (!response.ok) return;
@@ -114,10 +114,30 @@ export function createHostDiscovery(options: HostDiscoveryOptions) {
       if (sequence !== fleetSequence || !record(data) || !Array.isArray(data.hosts)) return;
       const rows: unknown[] = data.hosts;
       const hosts = rows.filter(record);
+      fleetPublication = sequence;
       options.onFleet({ hosts: hosts.filter(host => !host.self), selfLabel: hosts.find(host => host.self)?.label });
       await identify(true);
-      if (sequence === fleetSequence) options.afterFleet();
+      // A later failed refresh does not replace this published list, so it must
+      // not suppress the UI notification owed by this successful publication.
+      if (sequence === fleetPublication) options.afterFleet();
     } catch {} // Missing fleet support and failed refreshes retain the old list.
+  }
+
+  async function loadFleet(): Promise<void> {
+    fleetRequestedAt = now();
+    let work = performFleet(++fleetSequence);
+    fleetPending = work;
+    try {
+      await work;
+      // Startup's readiness gate awaits this method. Follow replacements until
+      // the current attempt settles; supersession must not open that gate early.
+      while (fleetPending && fleetPending !== work) {
+        work = fleetPending;
+        await work;
+      }
+    } finally {
+      if (fleetPending === work) fleetPending = null;
+    }
   }
 
   function refreshSoon(): void {
