@@ -36,10 +36,9 @@ export function createHostPresentation(options: HostPresentationOptions) {
     return Object.prototype.hasOwnProperty.call(overrides, keyFor(hostId));
   }
   function setColor(hostId: HostId, hex: string | null, { rows = true } = {}): void {
-    const key = keyFor(hostId);
-    if (hex) overrides = { ...overrides, [key]: hex };
-    else delete overrides[key];
-    overrides = sanitizeHostColors(overrides);
+    // A reset projects null out of a fresh map. Previously delivered readonly
+    // snapshots remain stable even if a persistence writer retains them.
+    overrides = sanitizeHostColors({ ...overrides, [keyFor(hostId)]: hex });
     try { options.persistColors(overrides); } catch {}
     options.onColorChanged(rows);
   }

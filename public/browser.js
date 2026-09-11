@@ -1443,10 +1443,7 @@ var PiDishBrowser = (() => {
       return Object.prototype.hasOwnProperty.call(overrides, keyFor(hostId));
     }
     function setColor(hostId, hex, { rows = true } = {}) {
-      const key = keyFor(hostId);
-      if (hex) overrides = { ...overrides, [key]: hex };
-      else delete overrides[key];
-      overrides = sanitizeHostColors(overrides);
+      overrides = sanitizeHostColors({ ...overrides, [keyFor(hostId)]: hex });
       try {
         options.persistColors(overrides);
       } catch {

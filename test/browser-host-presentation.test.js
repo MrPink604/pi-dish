@@ -87,3 +87,17 @@ test('host chips retain escaped labels, offline notes and single-host visibility
   directory.replaceCatalog([]);
   assert.equal(p.chipHtml(null), '');
 });
+
+
+test('persistence callbacks can retain stable color and order snapshots', () => {
+  const colors = [], orders = [];
+  const { presentation: p } = fixture({ persistColors: value => colors.push(value), persistOrder: value => orders.push(value) });
+  p.setColor('peer', '#123456');
+  p.setColor('peer', null);
+  assert.equal(colors[0].peer, '#123456', 'reset must not change the previous persistence snapshot');
+  assert.deepEqual({ ...colors[1] }, {});
+  p.colorFor('a');
+  p.colorFor('b');
+  assert.deepEqual([...orders[0]], ['a']);
+  assert.deepEqual([...orders[1]], ['a', 'b']);
+});

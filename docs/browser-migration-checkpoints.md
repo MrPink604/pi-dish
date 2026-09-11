@@ -97,7 +97,9 @@ are not completion percentages.
 - Readonly persistence contracts and focused tests cover runtime updates after
   storage failure, self identity fallback and own override keys. Prototype names
   such as `constructor` can no longer resolve to inherited functions as colors.
-- Verification: strict build/lint/type checks, 867 backend tests, 71 browser
+- Verification: strict build/lint/type checks, 868 backend tests, 71 browser
   regressions, all independent UI scenarios and desktop/mobile smoke passed.
-- Fable commit review is required before pushing this checkpoint.
+- Fable reviewed `4487019` with no blocking findings. A follow-up makes
+  persistence snapshots stable after color reset; strict checks, all backend and
+  browser tests and desktop/mobile smoke pass again. It needs review before push.
 - Next: remaining new-session directory, target, model/config and spawn controllers.
