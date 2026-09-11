@@ -168,10 +168,6 @@ function migrateClientKeys() {
 let fleetHosts = [];                // GET /api/hosts entries (never persisted)
 let effectiveHostsCache = null;     // rebuilt whenever a source changes
 const hostConnections = PiDishBrowser.createHostConnections({ onChange: () => renderHostsSection() });
-const hostSessionCache = new Map(); // host key -> last known { active, previous }
-const hostLoadSeq = new Map();      // host key -> per-host poll sequence guard
-const hostLoadInflight = new Map(); // host key -> the poll already in flight
-const hostIndexing = new Map();     // host key -> server still backfilling its index
 // GET /api/host descriptors, by hostId. Runtime only: label/version/
 // capabilities belong to the host, not to this browser's catalog entry (the
 // catalog deliberately persists only base/id/label/token), so they are
@@ -321,9 +317,7 @@ function refreshHostFleetSoon() {
 function pruneHostCaches() {
   const live = new Set(effectiveHosts().map(hostKeyOf));
   hostConnections.prune(live);
-  for (const map of [hostSessionCache, hostLoadSeq, hostLoadInflight, hostIndexing]) {
-    for (const key of [...map.keys()]) if (!live.has(key)) map.delete(key);
-  }
+  hostSessionLoader.prune(live);
 }
 
 // --- Host colors ---------------------------------------------------------
@@ -1314,151 +1308,47 @@ function queryHosts(hosts, query) {
   }));
 }
 
-/**
- * One host's slice of the poll. Guards are doubled on purpose: `seq` drops a
- * whole superseded fan-out (the query changed), while the per-host sequence
- * drops a slow response from *this* host that a newer poll already replaced.
- * Failure is never fatal — the host keeps its last-known rows and its state
- * moves to backoff/blocked, which is what dims them.
- */
-function loadHostSessions(host, query, withPrevious, seq) {
-  const key = hostKeyOf(host);
-  // `host:` never goes on the wire: a server has no idea which host it is
-  // from a session's point of view, so it would match the term against
-  // nothing and answer with an empty list. It is applied client-side, in
-  // renderSessions/applyLocalFilter, over what comes back.
-  const wireQuery = stripQueryField(query, 'host');
-  // Single-flight: the 10s poll must not stack a second identical request on
-  // a host that has not answered the first. Joining can't be a plain await,
-  // though — the in-flight response guards hold the *originator's* sequence
-  // and would drop a response the joiner is waiting for — so the guards read
-  // a mutable ctx that the joiner refreshes. No new hostSeq is allocated:
-  // joining is not a new request, and a new one would invalidate the read
-  // already on the wire. A different query (or withPrevious) is a different
-  // request and still issues its own; the guards drop whichever loses.
-  const inflight = hostLoadInflight.get(key);
-  if (inflight && inflight.wireQuery === wireQuery && inflight.withPrevious === withPrevious) {
-    inflight.ctx.seq = seq;
-    inflight.ctx.query = query || '';
-    return inflight.promise;
-  }
-  const ctx = { seq, query: query || '', hostSeq: (hostLoadSeq.get(key) || 0) + 1 };
-  hostLoadSeq.set(key, ctx.hostSeq);
-  const promise = runHostSessionsLoad(host, key, wireQuery, withPrevious, ctx).finally(() => {
-    if (hostLoadInflight.get(key)?.promise === promise) hostLoadInflight.delete(key);
-  });
-  hostLoadInflight.set(key, { promise, wireQuery, withPrevious, ctx });
-  return promise;
-}
-
-async function runHostSessionsLoad(host, key, wireQuery, withPrevious, ctx) {
-  try {
-    const params = new URLSearchParams();
-    if (wireQuery) params.set('q', wireQuery);
-    if (!withPrevious) params.set('active', '1');
-    // Browser list rows do not need server routing/file-system metadata.
-    // Older fleet hosts ignore the additive query parameter.
-    params.set('view', 'client');
-    const qs = params.toString();
-    const data = await sessionApi.list(host, '/api/sessions' + (qs ? '?' + qs : ''), { timeoutMs: 20000 });
-    noteHostReachable(host);
-    // A slower earlier request must not clobber a newer one's results (a
-    // cold search can land after the warm search that superseded it).
-    if (ctx.seq !== loadSessionsSeq || ctx.hostSeq !== hostLoadSeq.get(key)) return;
-    const cached = hostSessionCache.get(key) || { active: [], previous: [] };
-    if (withPrevious) {
-      hostIndexing.set(key, !!data.indexing);
-      // While the index backfills the list is partial — re-poll quickly
-      // until it settles instead of leaving the user a sparse list for the
-      // next 10s poll to fix.
-      if (data.indexing && !indexingRefreshTimer) {
-        indexingRefreshTimer = setTimeout(() => {
-          indexingRefreshTimer = null;
-          refreshSessions();
-        }, 1000);
-      }
-    }
-    let nextActive = data.active || [];
-    if (!withPrevious) {
-      // Active-only polls deliberately skip the historical scan, so they may
-      // be unable to re-resolve a native parent path. Preserve the last full
-      // list's advisory hint until the next full refresh can confirm/remove it.
-      const prior = new Map(cached.active.map(session => [session.id, session]));
-      nextActive = nextActive.map(session => {
-        const old = prior.get(session.id);
-        if (!old) return session;
-        const preserveParent = !session.parentId && old.parentId;
-        const preserveFamily = !session.familyParentId && old.familyParentId;
-        return preserveParent || preserveFamily
-          ? {
-              ...session,
-              ...(preserveParent ? { parentId: old.parentId, parentSource: old.parentSource } : {}),
-              ...(preserveFamily ? { familyParentId: old.familyParentId } : {}),
-            }
-          : session;
-      });
-    }
-    const next = {
-      active: nextActive,
-      // Live subagents are historical rows the Active tab still has to show
-      // (see mergeLiveSubagents): on an active-only poll they arrive as
-      // `children` and fold into the kept `previous` list; a full list
-      // already carries them, stamped by the server.
-      previous: withPrevious ? (data.previous || []) : mergeLiveSubagents(cached.previous, data.children),
-    };
+// Per-host transport ownership/cache lives in TypeScript. View effects stay
+// here so the controller cannot discover or retarget a selected session.
+const hostSessionLoader = PiDishBrowser.createHostSessionLoader({
+  requestList: (host, path, options) => sessionApi.list(host, path, options),
+  currentSequence: () => loadSessionsSeq,
+  stripHostQuery: query => stripQueryField(query, 'host'),
+  onConnection: (host, event) => hostConnections.note(host, event),
+  onIndexing: () => {
+    if (indexingRefreshTimer) return;
+    indexingRefreshTimer = setTimeout(() => {
+      indexingRefreshTimer = null;
+      refreshSessions();
+    }, 1000);
+  },
+  beforePublish: (host, next, wireQuery) => {
     const hostId = host.hostId || null;
-    // Viewing a session (with the tab visible) counts as having seen its
-    // latest activity — bookkeep against the fresh data *before*
-    // setSessionLists renders the unread dots. Prune stale ids too, but
-    // only from an unfiltered load: a search result is not the full list.
+    // Bookkeep fresh activity before the state writer renders unread dots.
     if (sessionState.currentSession && !document.hidden && (sessionState.currentSession.host || null) === hostId) {
       const fresh = next.active.find(s => s.id === sessionState.currentSession.id)
         || next.previous.find(s => s.id === sessionState.currentSession.id);
-      // Key off the state copy: `next` hasn't been through a state writer
-      // yet, so its entries aren't host-stamped.
       if (fresh) markSessionSeen(sessionState.currentSession, fresh.lastActivity);
     }
     if (!wireQuery) {
-      // Prune this host's stale entries only: another host's sessions aren't
-      // gone, they're just not in this response. A host-only query left the
-      // wire query empty, so this response is still the host's full list.
       const live = new Set(next.active.map(s => sessionKey(s.host || hostId, s.id)));
       for (const seenKey of Object.keys(seenActivity)) {
         if (parseSessionKey(seenKey).hostId !== hostId) continue;
         if (!live.has(seenKey)) delete seenActivity[seenKey];
       }
     }
-    hostSessionCache.set(key, next);
-    listsQueriedFor = ctx.query;
+  },
+  onPublish: query => {
+    if (query !== undefined) listsQueriedFor = query;
     publishSessionLists();
-  } catch (e) {
-    if (e instanceof PiDishBrowser.ApiHttpError && e.status === 401) { noteHostBlocked(host); publishSessionLists(); return; }
-    noteHostFailure(host, e);
-    if (host.self) console.error('Failed to load sessions:', e);
-    // Republish so the failing host's rows pick up their dimmed state; every
-    // other host's rows are untouched.
-    if (ctx.seq === loadSessionsSeq) publishSessionLists();
-  }
-}
+  },
+  onError: (host, error) => {
+    if (host.self) console.error('Failed to load sessions:', error);
+  },
+});
 
-/**
- * Fold an active-only poll's `children` (the subagent sessions running inside
- * the live sessions — see the server's liveSubsessionCandidates) into the
- * historical list the Active tab keeps. They are historical rows in every
- * other respect, so they live in `previous` and only `subagentLive` marks
- * them as belonging on the Active tab; clearing that flag on rows the server
- * no longer reports is what makes a finished subagent leave the tab without
- * waiting for a full refresh.
- */
-function mergeLiveSubagents(previous, children) {
-  const fresh = new Map((children || []).map(session => [session.id, session]));
-  const merged = (previous || []).map(session => {
-    const live = fresh.get(session.id);
-    if (live) { fresh.delete(session.id); return { ...session, ...live }; }
-    return session.subagentLive ? { ...session, subagentLive: false } : session;
-  });
-  for (const session of fresh.values()) merged.push(session);
-  return merged;
+function loadHostSessions(host, query, withPrevious, seq) {
+  return hostSessionLoader.load(host, query, withPrevious, seq);
 }
 
 /**
@@ -1467,10 +1357,10 @@ function mergeLiveSubagents(previous, children) {
  * host that stopped answering keeps its last ones.
  */
 function publishSessionLists() {
-  sessionIndexing = [...hostIndexing.values()].some(Boolean);
+  sessionIndexing = hostSessionLoader.isIndexing();
   const parts = [];
   for (const host of effectiveHosts()) {
-    const cache = hostSessionCache.get(hostKeyOf(host));
+    const cache = hostSessionLoader.getCache(host);
     if (!cache) continue;
     parts.push({ hostId: host.hostId || null, active: cache.active, previous: cache.previous });
   }
@@ -2179,7 +2069,7 @@ function hostOfflineNotesHtml() {
   return effectiveHosts().filter(host => {
     if (!hostIsDown(host)) return false;
     if (hostSectionsShown && hostSectionsShown.has(hostKeyOf(host))) return false;
-    const cache = hostSessionCache.get(hostKeyOf(host));
+    const cache = hostSessionLoader.getCache(host);
     return !cache || (!cache.active.length && !cache.previous.length);
   }).map(host => `<div class="host-offline-note">${escapeHtml(hostDisplayLabel(host))} — ${
     hostState(host) === 'blocked' ? 'needs a token (Settings)' : 'unreachable'}</div>`).join('');

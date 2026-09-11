@@ -186,3 +186,15 @@ render callback; catalog persistence and descriptor requests remain outside this
 module. `hostKeyOf` provides one key convention for connection and request state.
 The reducer's existing tests now execute the browser bundle, alongside controller
 checks for notification gating, reset and pruning.
+
+`src/browser/host-session-loader.ts` owns per-host list requests, shared in-flight
+work, last-known rows and indexing state. It preserves active-only family hints
+and live-subagent merging. `app.js` supplies decoded list reads, the current
+fan-out sequence and view callbacks; it retains query-host pruning, indexing
+refresh timers and unread bookkeeping. A request snapshots the host endpoint
+before awaiting and uses a unique owner; pruning or replacement retires it.
+Only matching wire query, historical scope and captured host routing/credentials
+can join a pending request. Retired successes and failures cannot replace newer
+host observations or resurrect pruned caches. A still-current host request can
+update connection state after its overall fan-out changes, but cannot publish
+rows for that old fan-out. Cache failures retain the existing last-known lists.

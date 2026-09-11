@@ -1,5 +1,7 @@
 import { createHostConnections, hostKeyOf } from '../../src/browser/host-connections';
 import type { HostConnectionRecord, HostConnectionState } from '../../src/browser/host-connections';
+import { createHostSessionLoader } from '../../src/browser/host-session-loader';
+import type { HostSessionLoaderOptions, SessionHost } from '../../src/browser/host-session-loader';
 
 const connections = createHostConnections({ onChange() {}, now: () => 1000 });
 const host = { hostId: 'peer', base: '/hosts/peer', label: 'Peer' };
@@ -19,3 +21,21 @@ createHostConnections({ onChange() {}, now: () => 'tomorrow' });
 declare const record: HostConnectionRecord;
 // @ts-expect-error Observations are produced by the reducer, not patched by consumers.
 record.retryAt = 0;
+
+declare const loaderOptions: HostSessionLoaderOptions;
+const loader = createHostSessionLoader(loaderOptions);
+loader.load(host, 'needle', false, 1);
+loader.getCache(host);
+loader.prune(new Set(['peer']));
+// @ts-expect-error A bare id cannot carry a captured host endpoint.
+loader.load('peer', undefined, true, 1);
+// @ts-expect-error Fan-out sequences are numbers.
+loader.load(host, undefined, true, 'new');
+declare const capturedHost: SessionHost;
+// @ts-expect-error Async callbacks must not retarget a captured host.
+capturedHost.hostId = 'different';
+createHostSessionLoader({
+  ...loaderOptions,
+  // @ts-expect-error Decoded list rows must carry string session identities.
+  requestList: async () => ({ active: [{ id: 7 }], previous: [] }),
+});

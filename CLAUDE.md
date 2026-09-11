@@ -1009,12 +1009,16 @@ exactly single-host pi-dish.
   8s) — a sleeping tailnet peer black-holes TCP, and an undeadlined request
   there holds one of the origin's six HTTP/1.1 connections for minutes while
   everything queues behind it. Streams, transcripts and file reads never pass
-  one. Polls are single-flight per host (`hostLoadInflight`): an identical
-  query arriving while one is in flight joins it instead of stacking a second
-  request against an already-slow host, and the joiner refreshes the
-  in-flight `ctx` so the response is guarded by the *newest* sequence rather
-  than dropped as stale (no new `hostSeq` — that would invalidate the read
-  already on the wire). Connection state and poll eligibility live in
+  one. `src/browser/host-session-loader.ts` owns single-flight polls and cached
+  rows per host: an identical wire query/scope for the same captured endpoint
+  joins an in-flight request instead of stacking another one. The joiner refreshes
+  the existing request owner's fan-out sequence/query, so its response can still
+  publish for the newest fan-out. A different query, scope, routing endpoint or
+  token starts a new request. Unique owner identity rejects retired completions,
+  including after a host is removed and re-added; an old 401 cannot overwrite a
+  newer request's successful connection state. The app retains fan-out selection,
+  indexing timers and unread bookkeeping before the state writer renders rows.
+  Connection state and poll eligibility live in
   `src/browser/host-connections.ts`, including the pure `hostConnReduce`:
   the `[3,4,8,16]s` ladder, `blocked` sticky
   (401 ⇒ `blocked`, never retried — re-enter the token in the settings Hosts

@@ -168,7 +168,12 @@ module.exports = async function mobile({ browser, watch, base, check, emit, SESS
   await mobile.click('.header-menu-btn');
   await mobile.waitForSelector('.sidebar.open');
   check(true, 'drawer opens from session header');
-  await mobile.click('.sidebar-overlay'); // close the drawer again
+  // The drawer covers the overlay's center once its slide-in finishes.
+  // Tap the exposed strip, so dismissal never depends on winning that race.
+  const overlay = await mobile.locator('.sidebar-overlay').boundingBox();
+  await mobile.locator('.sidebar-overlay').click({ position: { x: overlay.width - 8, y: overlay.height / 2 } });
+  await mobile.waitForFunction(() => !document.getElementById('sidebar').classList.contains('open'));
+  check(true, 'tapping the exposed overlay closes the drawer');
 
   // Terminal on mobile: opened from the ⚙ control panel; the extra-keys
   // bar (esc/tab/ctrl/arrows) is part of the touch layout. ^C must reach

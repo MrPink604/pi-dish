@@ -25,6 +25,7 @@ var PiDishBrowser = (() => {
     HOST_BACKOFF_LADDER: () => HOST_BACKOFF_LADDER,
     HOST_BACKOFF_RESET_MS: () => HOST_BACKOFF_RESET_MS,
     createHostConnections: () => createHostConnections,
+    createHostSessionLoader: () => createHostSessionLoader,
     createHostTransport: () => createHostTransport,
     createSessionApi: () => createSessionApi,
     createSessionState: () => createSessionState,
@@ -567,6 +568,105 @@ var PiDishBrowser = (() => {
       for (const key of records.keys()) if (!liveKeys.has(key)) records.delete(key);
     }
     return { stateOf, isDown, note, seed, pollable, reset, prune };
+  }
+
+  // src/browser/host-session-loader.ts
+  function mergeLiveSubagents(previous, children) {
+    const fresh = new Map((children || []).map((session) => [session.id, session]));
+    const merged = (previous || []).map((session) => {
+      const live = fresh.get(session.id);
+      if (live) {
+        fresh.delete(session.id);
+        return { ...session, ...live };
+      }
+      return session.subagentLive ? { ...session, subagentLive: false } : session;
+    });
+    for (const session of fresh.values()) merged.push(session);
+    return merged;
+  }
+  function mergeActiveHints(active, previousActive) {
+    const prior = new Map(previousActive.map((session) => [session.id, session]));
+    return active.map((session) => {
+      const old = prior.get(session.id);
+      if (!old) return session;
+      const preserveParent = !session.parentId && old.parentId;
+      const preserveFamily = !session.familyParentId && old.familyParentId;
+      return preserveParent || preserveFamily ? {
+        ...session,
+        ...preserveParent ? { parentId: old.parentId, parentSource: old.parentSource } : {},
+        ...preserveFamily ? { familyParentId: old.familyParentId } : {}
+      } : session;
+    });
+  }
+  function createHostSessionLoader(options) {
+    const caches = /* @__PURE__ */ new Map();
+    const owners = /* @__PURE__ */ new Map();
+    const inflight = /* @__PURE__ */ new Map();
+    const indexing = /* @__PURE__ */ new Map();
+    function load(host, query, withPrevious, sequence) {
+      const target = Object.freeze({ ...host });
+      const key = hostKeyOf(target);
+      const wireQuery = options.stripHostQuery(query);
+      const pending = inflight.get(key);
+      if (pending && pending.wireQuery === wireQuery && pending.withPrevious === withPrevious && pending.host.base === target.base && pending.host.token === target.token && pending.host.hostId === target.hostId) {
+        pending.owner.sequence = sequence;
+        pending.owner.query = query || "";
+        return pending.promise;
+      }
+      const owner = { sequence, query: query || "" };
+      owners.set(key, owner);
+      const promise = run(target, key, wireQuery, withPrevious, owner).finally(() => {
+        if (inflight.get(key)?.promise === promise) inflight.delete(key);
+      });
+      inflight.set(key, { host: target, owner, promise, wireQuery, withPrevious });
+      return promise;
+    }
+    async function run(host, key, wireQuery, withPrevious, owner) {
+      try {
+        const params = new URLSearchParams();
+        if (wireQuery) params.set("q", wireQuery);
+        if (!withPrevious) params.set("active", "1");
+        params.set("view", "client");
+        const data = await options.requestList(host, "/api/sessions?" + params.toString(), { timeoutMs: 2e4 });
+        if (owners.get(key) !== owner) return;
+        options.onConnection(host, "success");
+        if (owner.sequence !== options.currentSequence()) return;
+        const cached = caches.get(key) || { active: [], previous: [] };
+        if (withPrevious) {
+          indexing.set(key, !!data.indexing);
+          if (data.indexing) options.onIndexing();
+        }
+        const next = {
+          active: withPrevious ? data.active : mergeActiveHints(data.active, cached.active),
+          previous: withPrevious ? data.previous : mergeLiveSubagents(cached.previous, data.children)
+        };
+        options.beforePublish(host, next, wireQuery);
+        caches.set(key, next);
+        options.onPublish(owner.query);
+      } catch (error) {
+        if (owners.get(key) !== owner) return;
+        if (error instanceof ApiHttpError && error.status === 401) {
+          options.onConnection(host, "blocked");
+          options.onPublish();
+          return;
+        }
+        options.onConnection(host, { type: "failure", error });
+        options.onError(host, error);
+        if (owner.sequence === options.currentSequence()) options.onPublish();
+      }
+    }
+    function getCache(host) {
+      return caches.get(hostKeyOf(host));
+    }
+    function isIndexing() {
+      return [...indexing.values()].some(Boolean);
+    }
+    function prune(liveKeys) {
+      for (const map of [caches, owners, inflight, indexing]) {
+        for (const key of map.keys()) if (!liveKeys.has(key)) map.delete(key);
+      }
+    }
+    return { load, getCache, isIndexing, prune };
   }
   return __toCommonJS(index_exports);
 })();
