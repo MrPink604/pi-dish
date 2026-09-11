@@ -1737,6 +1737,20 @@ sessions pick the new scope up on next launch. Gotcha: edit-mode clicks
 re-render the dropdown's innerHTML before the click bubbles to the document,
 so the outside-click closer must treat detached targets as inside.
 
+## Thinking level dropdown
+
+`src/browser/thinking-selector.ts` owns the dropdown's DOM and listeners through
+mount/update/dispose, with owner-bearing select/close actions. The app keeps
+catalog loading, harness/model-supported levels, placement and API feedback.
+Actions check the captured selection owner before reaching `selectThinkingLevel`.
+Closing or changing selection disposes the module and clears its root.
+
+Levels render as literal text in native buttons. An unlisted current level is
+appended to a copied vocabulary for this view only; the shared Pi level list
+must never gain session-specific values. Enter/Space use native button behavior,
+and Escape requests an owned close. The existing desktop/mobile dropdown CSS
+and outside-click policy remain with the shell.
+
 ## Prompt composer (public/app.js)
 
 - **Layout**: every control lives in the field, and the *box* is the field:

@@ -198,3 +198,10 @@ can join a pending request. Retired successes and failures cannot replace newer
 host observations or resurrect pruned caches. A still-current host request can
 update connection state after its overall fan-out changes, but cannot publish
 rows for that old fan-out. Cache failures retain the existing last-known lists.
+
+`src/browser/thinking-selector.ts` owns another ordinary DOM leaf with typed
+view/actions and disposal. Its readonly level list is copied before including
+an unsupported current level; session-specific values cannot contaminate the
+shared Pi vocabulary. Labels use text properties and native buttons, replacing
+inline JavaScript handlers. The app still owns model discovery, level policy,
+placement and API feedback, and checks each action's captured selection owner.

@@ -2844,6 +2844,7 @@ function updateSessionHeader() {
 // --- Thinking level selector (levels from helpers.thinkingLevelsFor: pi's
 //     fixed vocabulary, OMP's model-supported subset + off/auto) ---
 let thinkingDropdownOpen = false;
+let thinkingSelector = null;
 
 function updateThinkingBadges() {
   const level = sessionState.currentSession?.thinkingLevel;
@@ -2865,19 +2866,25 @@ async function toggleThinkingDropdown() {
   if (!sessionState.ownsSelection(owner)) return;
   const dropdown = document.getElementById('thinkingDropdown');
   thinkingDropdownOpen = !thinkingDropdownOpen;
-  if (!thinkingDropdownOpen) { dropdown.style.display = 'none'; return; }
+  if (!thinkingDropdownOpen) { closeThinkingDropdown(); return; }
 
   const ref = sessionState.currentSession.model || '';
   const model = knownModels.find(m => m &&
     (m.selector === ref || m.id === ref || `${m.provider}/${m.id}` === ref));
-  const levels = thinkingLevelsFor(sessionState.currentSession.harnessId, model);
-  // The current level always shows, even if the catalog doesn't name it.
-  if (sessionState.currentSession.thinkingLevel && !levels.includes(sessionState.currentSession.thinkingLevel)) {
-    levels.push(sessionState.currentSession.thinkingLevel);
+  if (!thinkingSelector) {
+    // Unowned actions must not dismiss or mutate a newer selection. Normal
+    // selection changes already dispose this instance before the view reset.
+    thinkingSelector = PiDishBrowser.mountThinkingSelector(dropdown, {
+      selectLevel: (target, level) => {
+        if (sessionState.ownsSelection(target)) selectThinkingLevel(level);
+      },
+      requestClose: target => {
+        if (sessionState.ownsSelection(target)) closeThinkingDropdown();
+      },
+    });
   }
-  dropdown.innerHTML = levels.map(l =>
-    `<div class="thinking-option${l === sessionState.currentSession.thinkingLevel ? ' active' : ''}" onclick="selectThinkingLevel('${l}')">${l}</div>`
-  ).join('');
+  thinkingSelector.update({ owner, levels: thinkingLevelsFor(sessionState.currentSession.harnessId, model),
+    currentLevel: sessionState.currentSession.thinkingLevel || null });
 
   // Desktop: anchored under the header button. Mobile: the stylesheet
   // positions it (full-width sheet, same as the model dropdown). The button
@@ -2896,6 +2903,8 @@ async function toggleThinkingDropdown() {
 
 function closeThinkingDropdown() {
   thinkingDropdownOpen = false;
+  thinkingSelector?.dispose();
+  thinkingSelector = null;
   document.getElementById('thinkingDropdown').style.display = 'none';
 }
 

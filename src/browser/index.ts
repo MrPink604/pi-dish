@@ -4,3 +4,4 @@ export { mountModelSelector } from './model-selector';
 export { createSessionState } from './session-state';
 export { createHostConnections, hostKeyOf, hostConnReduce, HOST_BACKOFF_LADDER, HOST_BACKOFF_RESET_MS } from './host-connections';
 export { createHostSessionLoader } from './host-session-loader';
+export { mountThinkingSelector } from './thinking-selector';

@@ -34,6 +34,7 @@ var PiDishBrowser = (() => {
     hostKeyOf: () => hostKeyOf,
     modelCatalogUrl: () => modelCatalogUrl,
     mountModelSelector: () => mountModelSelector,
+    mountThinkingSelector: () => mountThinkingSelector,
     sendJson: () => sendJson,
     withFetchTimeout: () => withFetchTimeout
   });
@@ -667,6 +668,52 @@ var PiDishBrowser = (() => {
       }
     }
     return { load, getCache, isIndexing, prune };
+  }
+
+  // src/browser/thinking-selector.ts
+  function mountThinkingSelector(root, actions) {
+    let view = null;
+    let disposed = false;
+    function update(next) {
+      if (disposed) return;
+      const levels = [...next.levels];
+      if (next.currentLevel && !levels.includes(next.currentLevel)) levels.push(next.currentLevel);
+      view = { owner: next.owner, levels, currentLevel: next.currentLevel };
+      const fragment = root.ownerDocument.createDocumentFragment();
+      for (const level of levels) {
+        const button = root.ownerDocument.createElement("button");
+        button.type = "button";
+        const active = level === next.currentLevel;
+        button.className = "thinking-option" + (active ? " active" : "");
+        button.setAttribute("aria-pressed", String(active));
+        button.dataset.level = level;
+        button.textContent = level;
+        fragment.append(button);
+      }
+      root.replaceChildren(fragment);
+    }
+    function onClick(event) {
+      if (!view || !(event.target instanceof Element)) return;
+      const button = event.target.closest("button.thinking-option");
+      if (!button || !root.contains(button)) return;
+      actions.selectLevel(view.owner, button.dataset.level || "");
+    }
+    function onKeydown(event) {
+      if (view && event.key === "Escape") actions.requestClose(view.owner);
+    }
+    root.addEventListener("click", onClick);
+    root.addEventListener("keydown", onKeydown);
+    return {
+      update,
+      dispose() {
+        if (disposed) return;
+        disposed = true;
+        view = null;
+        root.removeEventListener("click", onClick);
+        root.removeEventListener("keydown", onKeydown);
+        root.replaceChildren();
+      }
+    };
   }
   return __toCommonJS(index_exports);
 })();

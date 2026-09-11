@@ -146,6 +146,12 @@ design history and may include work that has already shipped.
   Moves shared requests, cached rows, indexing state and active-only family/child
   merging into TypeScript. Unique request owners also prevent retired replies
   from restoring pruned caches or replacing newer connection outcomes.
-- Next: adjacent leaf UI, then remaining host/request controllers. Keep each
-  extraction independently reviewable; preserve selection guards, streaming
-  coalescing, pagination and retained DOM.
+- Thinking-level selector: completed 2026-09-11 after Fable review and full
+  verification (835 backend tests, 60 browser regressions, all UI scenarios/smoke
+  and OMP/Prime canaries).
+  Moves DOM/listeners behind typed owner-bearing actions and cleanup. Uses native
+  buttons and literal level text; an unsupported current level stays local to
+  its view instead of changing the shared Pi vocabulary.
+- Next: remaining host/request controllers and leaf UI. Keep each extraction
+  independently reviewable; preserve selection guards, streaming coalescing,
+  pagination and retained DOM.
