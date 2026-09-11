@@ -75,6 +75,7 @@ browser and remaining JavaScript modules are not yet type checked. See
 
 | Boundary / behavior | Regression entrypoint |
 | --- | --- |
+| Session/model API projection, malformed rows and mutation contracts | `test/session-api.test.js`, `test/types/core.ts`, existing server model/list tests |
 | Core compilation, stale output/declarations, failed builds, orphan detection | `test/core-build.test.js`, `npm run typecheck` |
 | Identity types, request payload boundaries, harness and process shapes | `test/types/core.ts` (compile-only) |
 | Core route canonicalization, byte framing, request correlation/cleanup, host stores and process proofs | `test/core-contracts.test.js` plus existing bridge/API/lifecycle suites |

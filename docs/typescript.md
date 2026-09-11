@@ -10,6 +10,7 @@ format change.
 | `session-key.ts` | Strict route decoding, harness/native encoding and legacy Pi canonicalization |
 | `harnesses.ts` | Existing harness registry and launch argv/environment construction |
 | `session-capabilities.ts` | Bridge capability defaults and API projection; lifecycle authority stays with callers |
+| `session-api.ts` | Browser session/model DTOs, runtime decoders and client projection; feature extras stay unknown |
 | `wire-protocol.ts` | RPC/bridge envelope validation and response/event distinctions; feature payloads remain unknown |
 | `rpc-session.ts` | RPC child lifecycle, request methods, stream reconstruction and native-id pool |
 | `bridge-session.ts` | Registry discovery/claims, socket handshake and pool, request methods and reconnect snapshots |
@@ -133,3 +134,12 @@ migrate; adapt setup/imports without weakening behavioral coverage. See
 
 The [browser framework assessment](browser-framework-assessment.md) records the
 post-extraction decision and a contained future model-selector experiment.
+
+The session/model API slice now has explicit decoded response contracts. Server
+client-list projection and harness model normalization use this boundary; malformed
+model identities are discarded. Client projection rejects malformed control
+fields per row, so a damaged history file cannot break the entire sidebar list.
+Missing capabilities remain optional, and thinking acknowledgements fall back
+to the validated requested level when a harness returns an unusable value.
+Browser response adoption is the next stage. This does not validate transcript
+content, every endpoint, or lifecycle authority.

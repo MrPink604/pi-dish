@@ -1,3 +1,4 @@
+const { normalizeModels, sessionForClient, thinkingResult } = require('./lib/session-api');
 const express = require('express');
 const compression = require('compression');
 const fs = require('fs');
@@ -841,45 +842,6 @@ const MODEL_CONTEXT_WINDOWS = {
   'default': 200000,
 };
 
-const MODEL_THINKING_LEVELS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
-
-function normalizeModel(model) {
-  if (!model) return null;
-  if (typeof model === 'string') {
-    const { provider, id } = parseModelId(model);
-    return provider && id ? {
-      id, name: id, provider, selector: `${provider}/${id}`, contextWindow: 0,
-      reasoning: false, thinking: null, pricing: null, free: false,
-    } : null;
-  }
-  const sourcePricing = model.pricing || model.cost;
-  const pricing = sourcePricing && Number.isFinite(sourcePricing.input) && Number.isFinite(sourcePricing.output)
-    ? Object.fromEntries(['input', 'output', 'cacheRead', 'cacheWrite'].filter(k => Number.isFinite(sourcePricing[k])).map(k => [k, sourcePricing[k]]))
-    : null;
-  const id = model.id || model.modelId;
-  const provider = model.provider;
-  const thinking = Array.isArray(model.thinking)
-    ? model.thinking.filter(level => MODEL_THINKING_LEVELS.has(level))
-    : null;
-  return {
-    id,
-    name: model.name || id,
-    provider,
-    selector: model.selector || (provider && id ? `${provider}/${id}` : null),
-    contextWindow: model.contextWindow || 0,
-    reasoning: !!model.reasoning,
-    thinking,
-    pricing,
-    free: !!pricing && pricing.input === 0 && pricing.output === 0,
-  };
-}
-
-function normalizeModels(models) {
-  return (Array.isArray(models) ? models : [])
-    .map(normalizeModel)
-    .filter(m => m && m.id && m.provider);
-}
-
 /**
  * The one place bridge-vs-RPC resolution lives. Returns the live session
  * (a connected BridgeSession when the bridge registry knows the id, else an
@@ -1671,13 +1633,13 @@ function annotateSessionRoutines(list) {
 // default response unchanged for API/CLI consumers that inspect provenance or
 // file-system metadata; `view=client` avoids transferring and retaining it on
 // every sidebar poll.
-function sessionForClient(session) {
-  const {
-    sessionKey, nativeSessionId, profileId, profileVersion,
-    sessionFile, parentSession, parentSessionSource, pid,
-    ...client
-  } = session;
-  return client;
+function clientSessionRows(rows) {
+  return rows.flatMap(session => {
+    try { return [sessionForClient(session)]; } catch {
+      console.warn('Ignoring invalid browser session row:', session.id);
+      return [];
+    }
+  });
 }
 
 app.get('/api/sessions', (req, res) => {
@@ -1707,9 +1669,9 @@ app.get('/api/sessions', (req, res) => {
     children = filterSessionsByQuery(children, query);
   }
   if (req.query.view === 'client') {
-    active = active.map(sessionForClient);
-    previous = previous.map(sessionForClient);
-    children = children.map(sessionForClient);
+    active = clientSessionRows(active);
+    previous = clientSessionRows(previous);
+    children = clientSessionRows(children);
   }
   res.json({ active, previous, children, indexing, discoveryTruncated, discoverySkipped });
 });
@@ -2902,7 +2864,7 @@ app.post('/api/sessions/:id/thinking', async (req, res) => {
       return res.status(409).json({ error: 'This session does not support changing thinking level.' });
     }
     const data = await sess.setThinkingLevel(level);
-    res.json({ success: true, level: data?.level ?? level });
+    res.json(thinkingResult(data, level));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

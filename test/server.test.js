@@ -296,6 +296,24 @@ test('GET /api/sessions client view omits server-only routing metadata', async (
   assert.equal(nested.familyParentId, SESSION_ID);
 });
 
+test('a malformed history row cannot break the client session list', async () => {
+  const badId = 'malformed-browser-row';
+  const file = path.join(sessionDir, badId + '.jsonl');
+  fs.writeFileSync(file, [
+    { type: 'session', version: 3, id: badId, cwd: '/fixture/bad', timestamp: new Date().toISOString() },
+    { type: 'session_info', name: { malformed: true } },
+  ].map(row => JSON.stringify(row)).join('\n') + '\n');
+  try {
+    const full = await get('/api/sessions');
+    assert.equal(full.status, 200);
+    assert.ok(full.body.previous.some(row => row.id === badId), 'fixture reaches the projection');
+    const client = await get('/api/sessions?view=client');
+    assert.equal(client.status, 200);
+    assert.ok(client.body.previous.some(row => row.id === SESSION_ID));
+    assert.ok(!client.body.previous.some(row => row.id === badId));
+  } finally { fs.rmSync(file, { force: true }); }
+});
+
 test('encoded alternative-harness routes never fall back to a partial native id', async () => {
   const ompDir = path.join(tmpHome, '.omp', 'agent', 'sessions', 'project');
   fs.mkdirSync(ompDir, { recursive: true });

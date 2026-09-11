@@ -1694,6 +1694,14 @@ list reload if the sidebar lists don't currently hold it — selectSession
 validates against them), and hands the positive tokens to the in-session
 search so the reader lands on the match.
 
+## Session/model API contracts
+
+`src/core/session-api.ts` owns the client session projection and harness model
+normalization consumed by `server.js`. Named session control fields and model
+identities are validated; unknown feature metadata stays opaque. The module
+also defines catalog and mutation response decoders for subsequent browser
+adoption. Its checks do not replace capability gates or lifecycle proofs.
+
 ## Model dropdown / scoped models (public/app.js)
 
 The header model dropdown mirrors pi's scoped-models feature (`/scoped-models`

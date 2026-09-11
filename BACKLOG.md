@@ -112,3 +112,11 @@ the message-count and session-spend badges. Spec and mock:
 Current capabilities are defined by the harness wrappers and the server's
 capability projection; README summarizes supported behavior. `TASKS/` records
 design history and may include work that has already shipped.
+
+## Framework evaluation preparation (in progress)
+
+1. Session/model API contracts: complete after Fable review and full checks;
+   invalid history rows are isolated and optional capability flags stay optional.
+2. Typed browser request adapter and local browser build: pending.
+3. Extracted model-selector baseline with explicit actions and cleanup: pending.
+4. Readiness checkpoint with baseline evidence: pending; framework adoption stays separate.

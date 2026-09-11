@@ -132,3 +132,26 @@ trackRunningToolCalls(running, 'tool_execution_start', { toolCallId: 't1', toolN
 running.set('t1', { toolName: 'Bash', args: {}, startedAt: 'yesterday', lastPartialResult: null });
 
 void [guaranteedCorrelationId, canPrompt, incompleteOwner, mixedOwner, incompleteProcess, closeMode, consumeUnvalidatedResponse];
+
+// Browser API contracts describe validated values, not arbitrary JSON casts.
+import { decodeModelCatalog, decodeSessionMetadata, decodeThinkingResult } from '../../lib/session-api';
+import type { ModelChangeRequest } from '../../lib/session-api';
+const apiModel = decodeModelCatalog([])[0]!;
+const apiProvider: string = apiModel.provider;
+const apiSession = decodeSessionMetadata({ id: 'a' });
+const apiControl: boolean | undefined = apiSession.capabilities?.btw;
+const apiLevel: string = decodeThinkingResult({ success: true, level: 'high' }).level;
+const apiChange: ModelChangeRequest = { modelId: apiProvider + '/model' };
+// @ts-expect-error Unknown feature fields require narrowing.
+const apiExtra: string = apiSession.extensionMetadata;
+// @ts-expect-error Control flags cannot accept wire strings.
+apiSession.capabilities = { close: 'true' };
+// @ts-expect-error Model changes must carry a selector.
+const missingSelector: ModelChangeRequest = {};
+void [apiControl, apiLevel, apiChange, apiExtra, missingSelector];
+
+if (apiSession.capabilities) {
+  // @ts-expect-error An unadvertised capability is undefined, even with a capabilities object.
+  const absentCapability: boolean = apiSession.capabilities.future;
+  void absentCapability;
+}
