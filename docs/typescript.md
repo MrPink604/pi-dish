@@ -329,3 +329,11 @@ current pane. It snapshots request data/endpoint, narrows acceptance/status repl
 keys provisional rows by host plus wire operation id and reconciles registered
 sessions against their owning host. App integration captures takeover/selection
 ownership before kickoff and retains the submitted refine draft through the POST.
+
+The shared helper boundary now lives in `src/browser/helper-*.ts`, with structural
+inputs/results in `shared-helper-types.ts` and a compatibility export entry in
+`shared-helpers.ts`. Those modules compile strictly into `public/helpers.js`,
+which still serves both CommonJS consumers and pre-app browser globals. Other
+TypeScript browser modules can import the specific helper modules directly.
+The build validates browser, comment and helper outputs together before writing;
+check mode rejects drift in any entrypoint.

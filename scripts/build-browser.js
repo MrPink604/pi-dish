@@ -12,12 +12,15 @@ const esbuild = require('esbuild');
 const entries = [
   { source: 'src/browser/index.ts', target: 'public/browser.js', globalName: 'PiDishBrowser' },
   { source: 'src/browser/artifact-comments.ts', target: 'public/artifact-comments.js' },
+  { source: 'src/browser/shared-helpers.ts', target: 'public/helpers.js', globalName: 'PiDishHelpers',
+    footer: 'if (typeof module !== \"undefined\" && module.exports) module.exports = PiDishHelpers; else Object.assign(globalThis, PiDishHelpers);' },
 ];
 const outputs = entries.map(entry => {
   const result = esbuild.buildSync({
     absWorkingDir: root, entryPoints: [entry.source], bundle: true,
     platform: 'browser', format: 'iife', globalName: entry.globalName, target: 'es2022',
     outfile: entry.target, write: false, metafile: true,
+    footer: entry.footer ? { js: entry.footer } : undefined,
     banner: { js: '// Generated from src/browser/; edit sources and run npm run build:browser.' },
   });
   if (Object.keys(result.metafile.inputs).some(input => !input.startsWith('src/'))) {

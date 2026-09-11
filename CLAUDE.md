@@ -2046,3 +2046,10 @@ select/resume). Two backends:
 `.message.branch-summary` blocks (`role: 'branchSummary'` from
 `parseMessages`) and stay visible in focus mode — they're conversation
 context, not tool noise.
+
+Shared pure helpers are authored in `src/browser/helper-*.ts`, with structural
+contracts in `shared-helper-types.ts`. `shared-helpers.ts` defines the public
+compatibility exports. Build all browser entries after source changes and commit
+`public/helpers.js` alongside any other regenerated outputs. The generated helper
+file supports both `require('./public/helpers')` and browser globals; keep those
+paths and exports stable for server, published-page and app consumers.

@@ -270,6 +270,28 @@ are not completion percentages.
   and transcript/streaming/startup ownership.
 
 - Fable cleared spawn implementation `454ce1c` and identified two stale references.
-  The follow-up names the typed polling owner in this guide and captures the
+  The follow-up names the typed polling owner in CLAUDE.md and captures the
   failed provisional composer key before test cleanup switches sessions. Strict
   checks and desktop/mobile smoke passed again; follow-up review precedes push.
+
+## Checkpoint 12 — shared helpers (verified locally; review pending)
+
+- The authored `public/helpers.js` implementation moves to ten strict helper
+  modules, structural helper input/result types and a compatibility export entry.
+  Generic grouping/reference functions preserve caller row types; content/tool
+  helpers narrow unknown blocks. Custom role/harness names remain literal keys.
+- The generated `public/helpers.js` keeps both delivery contracts: CommonJS
+  exports for server/test consumers and ordinary browser globals before app.js.
+  The browser build validates all three entrypoints before writing any output;
+  lint derives helper globals from the actual generated export surface.
+- Existing helper tests continue through the shipped CommonJS path. New tests
+  compare the browser-global surface, exercise browser/Node route decoding and
+  math rendering, and cover malformed content/prototype-like names. Compile
+  contracts verify generic row preservation and image/result types.
+- Strict checks, 899 backend tests, 105 browser regressions, independent UI
+  scenarios and complete desktop/mobile smoke passed. Fable review is required
+  before push.
+- Next: remaining new-session form orchestration and other application features,
+  followed by transcript/streaming and startup ownership.
+
+Spawn checkpoint commits `454ce1c` and `e3f30b1` were cleared by Fable 5.1 and pushed.

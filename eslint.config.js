@@ -15,7 +15,9 @@ function scriptGlobals(file) {
   }
   return helperGlobals;
 }
-const helperGlobals = scriptGlobals('public/helpers.js');
+const helperGlobals = { ...scriptGlobals('public/helpers.js'),
+  ...Object.fromEntries(Object.keys(require('./public/helpers')).map(name => [name, 'readonly'])),
+};
 const browserGlobals = scriptGlobals('public/browser.js');
 const appGlobals = scriptGlobals('public/app.js');
 module.exports = [

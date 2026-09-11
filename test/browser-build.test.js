@@ -17,6 +17,8 @@ test('browser build detects stale output and preserves it on type failure', () =
     fs.writeFileSync(source, 'export const answer: number = 42;');
     const commentsSource = path.join(root, 'src/browser/artifact-comments.ts');
     fs.writeFileSync(commentsSource, 'const pageAnswer: number = 7; console.log(pageAnswer);');
+    const helpersSource = path.join(root, 'src/browser/shared-helpers.ts');
+    fs.writeFileSync(helpersSource, 'export const fixtureHelper: number = 17;');
     const run = (...args) => spawnSync(process.execPath, ['scripts/build-browser.js', ...args], {
       cwd: root, env: sanitizeTestEnv(process.env), encoding: 'utf8', timeout: 30000,
     });
@@ -27,7 +29,9 @@ test('browser build detects stale output and preserves it on type failure', () =
     assert.equal(run('--check').status, 0);
     const commentsOutput = path.join(root, 'public/artifact-comments.js');
     const commentsOriginal = fs.readFileSync(commentsOutput, 'utf8');
-    for (const target of [output, commentsOutput]) {
+    const helpersOutput = path.join(root, 'public/helpers.js');
+    const helpersOriginal = fs.readFileSync(helpersOutput, 'utf8');
+    for (const target of [output, commentsOutput, helpersOutput]) {
       fs.appendFileSync(target, '\n// stale');
       const stale = run('--check');
       assert.equal(stale.status, 1);
@@ -36,6 +40,7 @@ test('browser build detects stale output and preserves it on type failure', () =
       assert.equal(run().status, 0);
       assert.equal(fs.readFileSync(output, 'utf8'), original);
       assert.equal(fs.readFileSync(commentsOutput, 'utf8'), commentsOriginal);
+      assert.equal(fs.readFileSync(helpersOutput, 'utf8'), helpersOriginal);
     }
     fs.writeFileSync(path.join(root, 'public/legacy.js'), 'export const answer = 42;');
     // A declaration can type a legacy import, but must not permit bundling it.
@@ -55,5 +60,12 @@ test('browser build detects stale output and preserves it on type failure', () =
     assert.notEqual(run().status, 0);
     assert.equal(fs.readFileSync(output, 'utf8'), original);
     assert.equal(fs.readFileSync(commentsOutput, 'utf8'), commentsOriginal);
+    // Third entry validation also completes before any output is written.
+    fs.writeFileSync(commentsSource, 'const pageAnswer: number = 8; console.log(pageAnswer);');
+    fs.writeFileSync(helpersSource, "export { answer } from '../../public/legacy.js';");
+    assert.notEqual(run().status, 0);
+    assert.equal(fs.readFileSync(output, 'utf8'), original);
+    assert.equal(fs.readFileSync(commentsOutput, 'utf8'), commentsOriginal);
+    assert.equal(fs.readFileSync(helpersOutput, 'utf8'), helpersOriginal);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
