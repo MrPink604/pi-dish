@@ -18,6 +18,6 @@ test('a retired peer poll cannot mark the host blocked after a newer poll succee
   await oldRoute.fulfill({ status: 401, json: { error: 'retired request' } });
   await page.evaluate(() => window.__oldHostPoll);
   expect(await page.evaluate(id => hostState(hostEntryFor(id)), fleet.peer.hostId)).toBe('reachable');
-  expect(await page.evaluate(() => listsQueriedFor)).toBe('new-poll');
+  expect(await page.evaluate(() => sidebarLists.queriedFor)).toBe('new-poll');
   await expect(fleet.row(fleet.peer)).toContainText('new peer result');
 });

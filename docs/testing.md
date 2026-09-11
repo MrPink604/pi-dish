@@ -89,6 +89,7 @@ After editing `src/browser/`, run `npm run build:browser` before `npm test`;
 | Wire envelope validation, malformed responses, unknown events and transport survival | `test/transport-frames.test.js` plus existing bridge/RPC protocol suites |
 | Typed RPC startup validation, failed-child cleanup, delta snapshots and recovery ownership | `test/rpc-session.test.js`, `test/transport-frames.test.js`, `test/session-recovery.test.js` |
 | Typed bridge registry validation, pre-hello claim protection and session-switch replay ordering | `test/bridge-session.test.js` |
+| Sidebar query/scopes, list polling and unread ownership | `test/types/browser-sidebar-lists.ts`, `test/browser/sidebar-lists.spec.js` |
 | Sidebar row controls, close endpoints, menus and drag lifetime | `test/types/browser-sidebar-controls.ts`, `test/browser/sidebar-controls.spec.js` |
 | Sidebar metadata, host collapse and search authority | `test/browser-sidebar-render.test.js`, `test/types/browser-sidebar-render.ts`, family/search/multi-host UI smoke |
 | Composer autocomplete query/menu ownership and session references | `test/browser-composer-autocomplete.test.js`, `test/types/browser-composer-autocomplete.ts`, `test/browser/composer-autocomplete.spec.js` |

@@ -117,12 +117,7 @@ function migrateClientKeys() {
       localStorage.removeItem(key);
       if (value !== null) localStorage.setItem(prefix + compose(owner), value);
     }
-    const seenNext = {};
-    for (const [id, at] of Object.entries(seenActivity)) {
-      seenNext[isBare(id) ? compose(id) : id] = at;
-    }
-    seenActivity = seenNext;
-    localStorage.setItem('pi-dish-seen', JSON.stringify(seenActivity));
+    sidebarActivity.migrate(hostDirectory.self.hostId);
     sidebarControls.migrate(hostDirectory.self.hostId);
     const selected = localStorage.getItem('pi-dish-session');
     if (selected && isBare(selected)) localStorage.setItem('pi-dish-session', compose(selected));
@@ -481,17 +476,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Periodic refresh must preserve an in-flight server search, or the list
   // resets to unfiltered mid-search.
-  setInterval(refreshSessions, 10000);
+  sidebarLists.mount();
 
   sidebarControls.mount();
-
-  document.getElementById('scopeChips').addEventListener('click', (e) => {
-    if (e.target.closest('.scope-add')) { saveCurrentFilterAsScope(); return; }
-    if (e.target.closest('.search-open-chip')) { openSearchView(filterQuery); return; }
-    const chip = e.target.closest('.scope-chip');
-    if (chip) toggleScope(chip.dataset.name);
-  });
-
 
   const messagesEl = document.getElementById('messages');
   if (messagesEl) {
@@ -566,293 +553,44 @@ function acceptAutocompleteByName(name) { composerAutocomplete.acceptCommand(nam
 // Sidebar
 // =========================================================================
 
-let sidebarTab = 'active'; // 'active' (only live sessions, default) or 'all' (live + historical)
-let filterQuery = '';
-let filterDebounceTimer = null;
-
-// --- sidebar view: group by workspace (tree) or by date (Recent) ---
-let sidebarView = localStorage.getItem('pi-dish-sidebar-view') === 'recent' ? 'recent' : 'workspace';
-
-function toggleSidebarView() {
-  sidebarView = sidebarView === 'recent' ? 'workspace' : 'recent';
-  localStorage.setItem('pi-dish-sidebar-view', sidebarView);
-  updateViewToggle();
-  renderSessions();
-}
-
-function updateViewToggle() {
-  const btn = document.getElementById('viewToggle');
-  if (!btn) return;
-  // The icon shows the *current* grouping; the title says what a click does.
-  btn.innerHTML = sidebarView === 'recent'
-    ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>'
-    : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>';
-  btn.title = sidebarView === 'recent' ? 'Grouped by date — switch to workspaces' : 'Grouped by workspace — switch to recent';
-}
-
-// --- saved filters ("scopes"): server-global definitions, device-local
-// active set. An active scope stays applied — AND-combined with whatever is
-// typed — until its chip is toggled off, so "no subagents" is set once, not
-// retyped. Definitions are cached locally only so chips paint before the
-// settings fetch lands; the server copy wins on every load.
-let savedFilters = readJSONPref('pi-dish-saved-filters-cache', []);
-let activeScopes = new Set(readJSONPref('pi-dish-active-scopes', []));
-
-async function loadSavedFilters() {
-  try {
-    const res = await apiFetch(null, '/api/settings');
-    const data = await res.json();
-    savedFilters = Array.isArray(data.savedFilters) ? data.savedFilters : [];
-    localStorage.setItem('pi-dish-saved-filters-cache', JSON.stringify(savedFilters));
-    renderScopeChips();
-    renderSessions();
-    if (isSearchViewOpen()) runSearchView();
-  } catch (e) { console.error('Failed to load saved filters:', e); }
-}
-
-async function persistSavedFilters(next, host = null) {
-  const res = await apiFetch(host, '/api/settings', {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ savedFilters: next }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'save failed');
-  savedFilters = data.savedFilters;
-  localStorage.setItem('pi-dish-saved-filters-cache', JSON.stringify(savedFilters));
-  renderScopeChips();
-  renderSessions();
-  // A just-saved scope can absorb and clear a typed query while that query's
-  // server response is still in flight. Re-fetch when the currently loaded
-  // lists no longer match the input so a late filtered response cannot leave
-  // the sidebar permanently narrowed after the scope changes or is deleted.
-  if (listsQueriedFor !== filterQuery) loadSessions(filterQuery || undefined);
-  if (isSearchViewOpen()) runSearchView();
-}
-
-/** The combined query of every active scope ('' when none apply). */
-function scopeQuery() {
-  return savedFilters.filter(f => activeScopes.has(f.name)).map(f => f.query).join(' ');
-}
-
-function toggleScope(name) {
-  if (activeScopes.has(name)) activeScopes.delete(name);
-  else activeScopes.add(name);
-  localStorage.setItem('pi-dish-active-scopes', JSON.stringify([...activeScopes]));
-  renderScopeChips();
-  renderSessions();
-  if (listsQueriedFor !== filterQuery) loadSessions(filterQuery || undefined);
-  if (isSearchViewOpen()) runSearchView();
-}
-
-async function saveCurrentFilterAsScope() {
-  const query = filterQuery.trim();
-  if (!query) return;
-  const name = window.prompt('Name this filter:', '');
-  if (!name || !name.trim()) return;
-  const trimmed = name.trim().slice(0, 60);
-  const next = savedFilters.filter(f => f.name !== trimmed).concat([{ name: trimmed, query }]);
-  try {
-    // The new scope starts active and replaces the typed query — it now
-    // carries the filter, so leaving the text too would double-apply it.
-    activeScopes.add(trimmed);
-    localStorage.setItem('pi-dish-active-scopes', JSON.stringify([...activeScopes]));
-    // The absorbed query may still have a debounced search pending. Left to
-    // fire it would land *after* this clear, re-narrowing the lists to a
-    // query that is no longer typed until the next 10s poll undid it.
-    clearTimeout(filterDebounceTimer);
-    setSearchBusy(false);
-    document.getElementById('filterInput').value = '';
-    filterQuery = '';
-    await persistSavedFilters(next);
-  } catch (e) { alert('Could not save filter: ' + e.message); }
-}
-
-function renderScopeChips() {
-  const el = document.getElementById('scopeChips');
-  if (!el) return;
-  const chips = savedFilters.map(f => `
-    <button class="scope-chip${activeScopes.has(f.name) ? ' active' : ''}"
-      data-name="${escapeHtml(f.name)}" title="${escapeHtml(f.query)}">${escapeHtml(f.name)}</button>`);
-  if (filterQuery.trim()) {
-    chips.push('<button class="scope-chip scope-add" title="Save the current query as a reusable filter">+ save filter</button>');
-    chips.push('<button class="scope-chip search-open-chip" title="Open this query in the full search view">⤢ full search</button>');
-  }
-  el.innerHTML = chips.join('');
-  el.style.display = chips.length ? '' : 'none';
-}
-
-// --- seen tracking: which sessions have new activity since last viewed ---
-let seenActivity = {};
-seenActivity = readJSONPref('pi-dish-seen', {});
-
-function markSessionSeen(session, lastActivity = session?.lastActivity) {
-  if (!session || !lastActivity) return;
-  seenActivity[sessionRefKey(session)] = lastActivity;
-  localStorage.setItem('pi-dish-seen', JSON.stringify(seenActivity));
-}
-
-function isUnread(session) {
-  return isUnreadSession(session, seenActivity,
-    sessionState.currentSession ? sessionRefKey(sessionState.currentSession) : null, !document.hidden);
-}
-
-// Unread count in the tab title — the "agent came back" signal when the
-// tab is in the background.
-function updateUnreadTitle() {
-  const unread = sessionState.sessions.active.filter(isUnread).length;
-  document.title = unread ? `(${unread}) pi-dish` : 'pi-dish';
-}
-
-function toggleSidebar() {
-  const sidebar = document.getElementById('sidebar');
-  const overlay = document.getElementById('sidebarOverlay');
-  const willOpen = !sidebar.classList.contains('open');
-  sidebar.classList.toggle('open', willOpen);
-  overlay.classList.toggle('active', willOpen);
-  document.body.classList.toggle('sidebar-open', willOpen);
-}
-
-function closeSidebar() {
-  document.getElementById('sidebar').classList.remove('open');
-  document.getElementById('sidebarOverlay').classList.remove('active');
-  document.body.classList.remove('sidebar-open');
-}
-
-function switchTab(tab) {
-  sidebarTab = tab;
-  document.getElementById('tabActive').classList.toggle('active', tab === 'active');
-  document.getElementById('tabAll').classList.toggle('active', tab === 'all');
-  document.getElementById('filterInput').placeholder = tab === 'active' ? 'Filter active sessions...' : 'Search all sessions...';
-  renderSessions();
-  // Re-run any pending query under the new tab's scope (Active skips the
-  // historical scan) — both tabs search server-side, so a content match on
-  // All must not vanish when the same query lands on Active.
-  loadSessions(filterQuery || undefined);
-}
-
-function onFilterInput() {
-  clearTimeout(filterDebounceTimer);
-  const q = document.getElementById('filterInput').value.trim();
-  filterQuery = q;
-  renderScopeChips(); // the "+ save filter" chip tracks whether a query is typed
-  // Instant metadata narrowing while the server search is in flight.
-  renderSessions();
-  if (q.length > 0) {
-    // Busy from the first keystroke — the debounce window is part of the
-    // latency the user sees, and a search box that shows nothing for
-    // 300ms+ reads as "not filtering".
-    setSearchBusy(true);
-    filterDebounceTimer = setTimeout(() => loadSessions(q), 300);
-  } else {
-    // Query cleared: the lists hold server-filtered results — reload.
-    loadSessions();
-  }
-}
-
-function setSearchBusy(busy) {
-  document.querySelector('.sidebar-filter')?.classList.toggle('searching', busy);
-}
-
-// On the Active tab the historical list is invisible, so polls request
-// active sessions only (?active=1 — the server then skips its full
-// session-tree scan) and keep the previously fetched `previous` list.
-// `withPrevious: true` forces a full fetch regardless of tab (initial load,
-// which may need to restore a historical session).
-let loadSessionsSeq = 0; // drops out-of-order responses (and the model catalog)
-let sessionIndexing = false; // server is still backfilling its session index
-let indexingRefreshTimer = null;
-// The query the current `sessions` lists were server-filtered by ('' when
-// unfiltered) — renderSessions falls back to local metadata narrowing until
-// the lists reflect what's typed.
-let listsQueriedFor = '';
-
-async function loadSessions(query, { withPrevious = sidebarTab === 'all' } = {}) {
-  const seq = ++loadSessionsSeq;
-  setSearchBusy(true);
-  // Fan out, never Promise.all: one slow (or dead) host must not hold the
-  // whole sidebar. Each host publishes the merged lists as its own response
-  // lands, so the list fills progressively.
-  await Promise.allSettled(queryHosts(pollableHosts(), query).map(host => loadHostSessions(host, query, withPrevious, seq)));
-  if (seq === loadSessionsSeq) setSearchBusy(false);
-}
-
-/**
- * The hosts a query can possibly match — `host:` is client-evaluated, so a
- * host no positive host term names is a wasted request. Pruning runs the
- * same evaluator the rows will, over a stand-in session carrying the host's
- * label/id, so the fan-out can't disagree with the filter. Negations never
- * prune (they narrow a fan-out, they don't name one) — those hosts are
- * fetched and filtered client-side like every other term.
- */
-function queryHosts(hosts, query) { return PiDishBrowser.queryHosts(hosts, query); }
-
-// Per-host transport ownership/cache lives in TypeScript. View effects stay
-// here so the controller cannot discover or retarget a selected session.
-const hostSessionLoader = PiDishBrowser.createHostSessionLoader({
-  requestList: (host, path, options) => sessionApi.list(host, path, options),
-  currentSequence: () => loadSessionsSeq,
-  stripHostQuery: query => stripQueryField(query, 'host'),
-  onConnection: (host, event) => hostConnections.note(host, event),
-  onIndexing: () => {
-    if (indexingRefreshTimer) return;
-    indexingRefreshTimer = setTimeout(() => {
-      indexingRefreshTimer = null;
-      refreshSessions();
-    }, 1000);
-  },
-  beforePublish: (host, next, wireQuery) => {
-    const hostId = host.hostId || null;
-    // Bookkeep fresh activity before the state writer renders unread dots.
-    if (sessionState.currentSession && !document.hidden && (sessionState.currentSession.host || null) === hostId) {
-      const fresh = next.active.find(s => s.id === sessionState.currentSession.id)
-        || next.previous.find(s => s.id === sessionState.currentSession.id);
-      if (fresh) markSessionSeen(sessionState.currentSession, fresh.lastActivity);
-    }
-    if (!wireQuery) {
-      const live = new Set(next.active.map(s => sessionKey(s.host || hostId, s.id)));
-      for (const seenKey of Object.keys(seenActivity)) {
-        if (parseSessionKey(seenKey).hostId !== hostId) continue;
-        if (!live.has(seenKey)) delete seenActivity[seenKey];
-      }
-    }
-  },
-  onPublish: query => {
-    if (query !== undefined) listsQueriedFor = query;
-    publishSessionLists();
-  },
-  onError: (host, error) => {
-    if (host.self) console.error('Failed to load sessions:', error);
-  },
+// Query, list fan-out and seen activity have separate typed owners.
+const sidebarActivity = PiDishBrowser.createSidebarActivity({ document, storage: localStorage, sessionState });
+const sidebarQuery = PiDishBrowser.createSidebarQuery({
+  document, storage: localStorage, request: (host, path, options) => apiFetch(host, path, options), host: () => hostEntryFor(null),
+  render: () => renderSessions(), reload: query => loadSessions(query), queriedFor: () => sidebarLists.queriedFor,
+  invalidateLists: () => sidebarLists.invalidate(), busy: value => setSearchBusy(value),
+  searchChanged: () => { if (isSearchViewOpen()) runSearchView(); }, openSearch: query => openSearchView(query),
+  prompt: (label, initial) => window.prompt(label, initial), alert: message => alert(message),
 });
-
-function loadHostSessions(host, query, withPrevious, seq) {
-  return hostSessionLoader.load(host, query, withPrevious, seq);
-}
-
-/**
- * Push the per-host caches through the one list writer. Hosts contribute
- * independently, so a host that has never answered simply has no rows and a
- * host that stopped answering keeps its last ones.
- */
-function publishSessionLists() {
-  sessionIndexing = hostSessionLoader.isIndexing();
-  const parts = [];
-  for (const host of effectiveHosts()) {
-    const cache = hostSessionLoader.getCache(host);
-    if (!cache) continue;
-    parts.push({ hostId: host.hostId || null, active: cache.active, previous: cache.previous });
-  }
-  sessionState.setSessionLists(parts.length ? parts : [{ hostId: hostDirectory.self.hostId, active: [], previous: [] }]);
-}
-
-// Refresh the list, preserving an in-flight server-side search so a
-// background poll — or the sidebar refresh button — doesn't reset it.
-function refreshSessions() {
-  // Fleet membership changes far more slowly than the session list, and the
-  // server probes real peers to answer — piggyback, don't poll it at 10s.
-  refreshHostFleetSoon();
-  return loadSessions(filterQuery || undefined);
-}
+sidebarQuery.mount();
+const sidebarLists = PiDishBrowser.createSidebarLists({
+  document, request: (host, path, options) => apiFetch(host, path, options), sessionState, activity: sidebarActivity,
+  hosts: effectiveHosts, pollable: pollableHosts, selfId: () => hostDirectory.self.hostId,
+  query: () => sidebarQuery.query, all: () => sidebarQuery.tab === 'all', refreshFleet: refreshHostFleetSoon,
+  connection: (host, event) => hostConnections.note(host, event),
+});
+const hostSessionLoader = sidebarLists.loader;
+function toggleSidebarView() { sidebarQuery.toggleView(); }
+function updateViewToggle() { sidebarQuery.updateView(); }
+function loadSavedFilters() { return sidebarQuery.loadFilters(); }
+function persistSavedFilters(next, host) { return sidebarQuery.persistFilters(next, host || undefined); }
+function scopeQuery() { return sidebarQuery.scope(); }
+function toggleScope(name) { sidebarQuery.toggleScope(name); }
+function saveCurrentFilterAsScope() { return sidebarQuery.saveCurrent(); }
+function renderScopeChips() { sidebarQuery.renderChips(); }
+function markSessionSeen(session, lastActivity) { sidebarActivity.mark(session, lastActivity); }
+function isUnread(session) { return sidebarActivity.unread(session); }
+function updateUnreadTitle() { sidebarActivity.title(); }
+function toggleSidebar() { sidebarQuery.toggle(); }
+function closeSidebar() { sidebarQuery.close(); }
+function switchTab(tab) { sidebarQuery.switchTab(tab); }
+function onFilterInput() { sidebarQuery.onInput(); }
+function setSearchBusy(value) { sidebarLists.busy(value); }
+function loadSessions(query, options) { return sidebarLists.load(query, options); }
+function queryHosts(hosts, query) { return PiDishBrowser.queryHosts(hosts, query); }
+function loadHostSessions(host, query, withPrevious, sequence) { return hostSessionLoader.load(host, query, withPrevious, sequence); }
+function publishSessionLists() { sidebarLists.publish(); }
+function refreshSessions() { return sidebarLists.refresh(); }
 
 // Sidebar row controls own preferences, family pins, confirmation, drag and menus.
 const sidebarControls = PiDishBrowser.createSidebarControls({
@@ -884,7 +622,7 @@ function renderSessions() {
   const sidebarFamilyRootMap = currentFamilyRootMap();
   const { html, count } = PiDishBrowser.renderSidebar({
     ...sessionState.sessions, selected: sessionState.currentSession,
-    tab: sidebarTab, view: sidebarView, query: filterQuery, queriedFor: listsQueriedFor, scope: scopeQuery(), indexing: sessionIndexing,
+    tab: sidebarQuery.tab, view: sidebarQuery.view, query: sidebarQuery.query, queriedFor: sidebarLists.queriedFor, scope: scopeQuery(), indexing: sidebarLists.indexing,
     contextMetric: displayPreferences.contextMetric, pending: [...pendingSessionSpawns.entries()], selectedSpawn: currentSessionSpawnId,
     expanded: sidebarControls.expanded, collapsed: sidebarControls.collapsed, pinned: sidebarControls.pinned, roots: sidebarFamilyRootMap,
     closeConfirm: sidebarControls.closeConfirm, closeBusy: sidebarControls.closeBusy, multiHost: isMultiHost(),
@@ -1440,7 +1178,7 @@ const displayPreferences = PiDishBrowser.createDisplayPreferences({
   unmountSections: () => { recoveryController.unmountPreferences(); hostSettings.unmount(); },
   mountSections: body => { hostSettings.mount(body); refreshRecoveryHosts(); renderRecoveryPreferences(); },
   themes: { render: select => renderThemeSelect(select), apply: id => applyTheme(id) },
-  filters: () => PiDishBrowser.decodeSavedFilters(savedFilters), setFilters: value => { savedFilters = [...value]; },
+  filters: () => sidebarQuery.filters, setFilters: value => sidebarQuery.setFilters(value),
   persistFilters: (value, host) => persistSavedFilters([...value], host),
   metadataChanged: () => updateRenderedResponseMetadata(), contextChanged: () => renderSessions(), alert: message => alert(message),
 });

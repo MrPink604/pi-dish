@@ -135,5 +135,5 @@ export function createHostSessionLoader(options: HostSessionLoaderOptions) {
     }
   }
 
-  return { load, getCache, isIndexing, prune };
+  return { load, getCache, isIndexing, prune, retireRequests() { owners.clear(); inflight.clear(); } };
 }

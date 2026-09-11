@@ -113,6 +113,7 @@ test('closing and reopening search preserves its single paging jump within a sel
 test('a search-result list reload cannot hijack a newer selection', async ({ page, fleet }) => {
   await fleet.select(fleet.peer, CHILD);
   await page.evaluate(({ id, host }) => {
+    openSearchView('');
     const keep = row => row.id !== id || row.host !== host;
     sessionState.setSessionLists({ active: sessionState.sessions.active.filter(keep), previous: sessionState.sessions.previous.filter(keep) });
     const load = loadSessions;

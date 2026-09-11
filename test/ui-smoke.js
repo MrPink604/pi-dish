@@ -2890,7 +2890,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // The absorbed query must not leave a debounced search pending: firing
     // after the clear, it would narrow the lists to an untyped query and only
     // the next 10s poll would undo it.
-    await desktop.waitForFunction(() => listsQueriedFor === '', null, { timeout: 5000 });
+    await desktop.waitForFunction(() => sidebarLists.queriedFor === '', null, { timeout: 5000 });
     check(true, 'the absorbed query leaves no server-filtered lists behind');
     // Both proj-beta sessions (the beta transcript and the ranking fixture
     // sharing its cwd) are hidden by the scope, and the note says so.
@@ -3381,7 +3381,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       localStorage.setItem('pi-dish-expanded-session-families', JSON.stringify([id]));
       localStorage.setItem('pi-dish-session', id);
       localStorage.removeItem('pi-dish-keys-migrated');
-      seenActivity = readJSONPref('pi-dish-seen', {});
+      sidebarActivity.reload();
       sidebarControls.reloadPreferences();
       migrateClientKeys();
       const key = sessionKey(hostId, id);
@@ -3671,7 +3671,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await multi.waitForSelector(`.session-item[data-id="${SESSION_ID}"]`, { state: 'detached', timeout: 10000 });
     check(await multi.locator(`.session-item[data-id="${REMOTE_SESSION_ID}"]`).count() === 1,
       'host: keeps the named host\'s rows and drops the others');
-    await multi.waitForFunction(() => listsQueriedFor === 'host:tycho', { timeout: 10000 });
+    await multi.waitForFunction(() => sidebarLists.queriedFor === 'host:tycho', { timeout: 10000 });
     multi.off('request', noteList);
     check(listReqs.length > 0 && listReqs.every((u) => u.startsWith(remoteBase)),
       `host: prunes the fan-out to the named host (got ${JSON.stringify(listReqs)})`);

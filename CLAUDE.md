@@ -2192,3 +2192,8 @@ server-filtered content matches authoritative and collapse keys host-qualified.
 Sidebar row preferences and actions live in `src/browser/sidebar-controls.ts`.
 Use its preference writers and migration method. Close confirmation captures an
 endpoint; clipboard feedback and drag listeners retire with their owning control.
+
+`src/browser/sidebar-query.ts`, `sidebar-lists.ts` and `sidebar-activity.ts` own
+query/scopes, list polling and unread state. `host-session-loader.retireRequests()`
+retires pending observations while preserving caches when query text changes.
+Use read-only query/list getters rather than mutating former app globals.

@@ -73,7 +73,10 @@ var PiDishBrowser = (() => {
     createSessionSearch: () => createSessionSearch,
     createSessionSpawns: () => createSessionSpawns,
     createSessionState: () => createSessionState,
+    createSidebarActivity: () => createSidebarActivity,
     createSidebarControls: () => createSidebarControls,
+    createSidebarLists: () => createSidebarLists,
+    createSidebarQuery: () => createSidebarQuery,
     createSkills: () => createSkills,
     createSpawnTargetPicker: () => createSpawnTargetPicker,
     createSpawnTargets: () => createSpawnTargets,
@@ -792,7 +795,10 @@ var PiDishBrowser = (() => {
         for (const key of map.keys()) if (!liveKeys.has(key)) map.delete(key);
       }
     }
-    return { load, getCache, isIndexing, prune };
+    return { load, getCache, isIndexing, prune, retireRequests() {
+      owners.clear();
+      inflight.clear();
+    } };
   }
 
   // src/browser/thinking-selector.ts
@@ -4520,6 +4526,13 @@ var PiDishBrowser = (() => {
     }
     groups.sort((a, b) => relationKindRank(a.kind) - relationKindRank(b.kind));
     return groups;
+  }
+  function isUnreadSession(session, seenMap, currentKey, viewingVisible) {
+    if (!session.isActive || session.turnInProgress) return false;
+    const key = sessionRefKey(session);
+    if (key === currentKey && viewingVisible) return false;
+    const seen = seenMap[key];
+    return !seen || timestampMillis(session.lastActivity) > timestampMillis(seen);
   }
 
   // src/browser/session-relations.ts
@@ -14480,6 +14493,365 @@ ${restored}`;
       },
       get pinned() {
         return pinned;
+      }
+    };
+  }
+
+  // src/browser/sidebar-activity.ts
+  function createSidebarActivity(options2) {
+    const { document: document2, storage, sessionState } = options2;
+    let seen = /* @__PURE__ */ Object.create(null);
+    function reload() {
+      try {
+        const value = JSON.parse(storage.getItem("pi-dish-seen") || "{}");
+        seen = /* @__PURE__ */ Object.create(null);
+        if (record8(value)) {
+          for (const [key, at] of Object.entries(value)) if (typeof at === "string" || typeof at === "number" && Number.isFinite(at)) seen[key] = at;
+        }
+      } catch {
+      }
+    }
+    function save() {
+      try {
+        storage.setItem("pi-dish-seen", JSON.stringify(seen));
+      } catch {
+      }
+    }
+    function mark(session, at = session?.lastActivity) {
+      if (!session || !at || typeof at !== "string" && typeof at !== "number") return;
+      seen[sessionRefKey(session)] = at;
+      save();
+    }
+    function unread(session) {
+      return isUnreadSession(sidebarSession(session), seen, sessionState.currentSession ? sessionRefKey(sessionState.currentSession) : null, !document2.hidden);
+    }
+    function title() {
+      const count2 = sessionState.sessions.active.filter(unread).length;
+      document2.title = count2 ? `(${count2}) pi-dish` : "pi-dish";
+    }
+    function prune(host, active) {
+      const live = new Set(active.map((row) => sessionKey(row.host || host, row.id)));
+      for (const key of Object.keys(seen)) if (parseSessionKey(key).hostId === host && !live.has(key)) delete seen[key];
+    }
+    function migrate(host) {
+      const next = /* @__PURE__ */ Object.create(null);
+      for (const [key, at] of Object.entries(seen)) next[parseSessionKey(key).hostId ? key : sessionKey(host, key)] = at;
+      seen = next;
+      save();
+    }
+    reload();
+    return { reload, mark, unread, title, prune, migrate };
+  }
+
+  // src/browser/sidebar-lists.ts
+  function createSidebarLists(options2) {
+    const { document: document2, sessionState } = options2, api = createSessionApi(options2.request);
+    let disposed = false, sequence = 0, indexing = false, queriedFor = "";
+    let indexingTimer = null, pollTimer = null;
+    function busy(value) {
+      if (!disposed) document2.querySelector(".sidebar-filter")?.classList.toggle("searching", value);
+    }
+    const loader = createHostSessionLoader({
+      requestList: (host, path, init) => api.list(host, path, init),
+      currentSequence: () => sequence,
+      stripHostQuery: (query) => stripQueryField(query, "host"),
+      onConnection: (host, event) => {
+        if (!disposed) options2.connection(host, event);
+      },
+      onIndexing: () => {
+        if (disposed || indexingTimer) return;
+        indexingTimer = setTimeout(() => {
+          indexingTimer = null;
+          void refresh();
+        }, 1e3);
+      },
+      beforePublish: (host, next, wireQuery) => {
+        if (disposed) return;
+        const hostId = host.hostId || null, selected = sessionState.currentSession;
+        if (selected && !document2.hidden && (selected.host || null) === hostId) {
+          const fresh = next.active.find((row) => row.id === selected.id) || next.previous.find((row) => row.id === selected.id);
+          if (fresh) options2.activity.mark(selected, fresh.lastActivity);
+        }
+        if (!wireQuery) options2.activity.prune(hostId, next.active);
+      },
+      onPublish: (query) => {
+        if (disposed) return;
+        if (query !== void 0) queriedFor = query;
+        publish();
+      },
+      onError: (host, error) => {
+        if (!disposed && host.self) console.error("Failed to load sessions:", error);
+      }
+    });
+    function publish() {
+      if (disposed) return;
+      indexing = loader.isIndexing();
+      const parts = [];
+      for (const host of options2.hosts()) {
+        const cache = loader.getCache(host);
+        if (cache) parts.push({ hostId: host.hostId || null, ...cache });
+      }
+      sessionState.setSessionLists(parts.length ? parts : [{ hostId: options2.selfId(), active: [], previous: [] }]);
+    }
+    async function load(query, { withPrevious = options2.all() } = {}) {
+      if (disposed) return;
+      const current = ++sequence;
+      busy(true);
+      await Promise.allSettled(queryHosts(options2.pollable(), query || "").map((host) => loader.load(host, query, withPrevious, current)));
+      if (!disposed && current === sequence) busy(false);
+    }
+    function invalidate() {
+      sequence++;
+      loader.retireRequests();
+    }
+    function refresh() {
+      if (disposed) return Promise.resolve();
+      options2.refreshFleet();
+      return load(options2.query() || void 0);
+    }
+    function mount() {
+      if (!disposed && !pollTimer) pollTimer = setInterval(() => {
+        void refresh();
+      }, 1e4);
+    }
+    function dispose() {
+      if (disposed) return;
+      busy(false);
+      disposed = true;
+      sequence++;
+      if (pollTimer) clearInterval(pollTimer);
+      if (indexingTimer) clearTimeout(indexingTimer);
+      pollTimer = indexingTimer = null;
+      loader.prune(/* @__PURE__ */ new Set());
+    }
+    return { loader, load, refresh, publish, busy, invalidate, mount, dispose, get indexing() {
+      return indexing;
+    }, get queriedFor() {
+      return queriedFor;
+    } };
+  }
+
+  // src/browser/sidebar-query.ts
+  function createSidebarQuery(options2) {
+    const { document: document2, storage } = options2;
+    const input = document2.getElementById("filterInput"), chips = document2.getElementById("scopeChips");
+    const lifetime = new AbortController();
+    let chipEvents = new AbortController();
+    let disposed = false, mounted = false, tab = "active", view = storage.getItem("pi-dish-sidebar-view") === "recent" ? "recent" : "workspace", query = "";
+    function read(key, fallback2) {
+      try {
+        return JSON.parse(storage.getItem(key) || "null") ?? fallback2;
+      } catch {
+        return fallback2;
+      }
+    }
+    function store(key, value) {
+      try {
+        storage.setItem(key, JSON.stringify(value));
+      } catch {
+      }
+    }
+    let filters = decodeSavedFilters(read("pi-dish-saved-filters-cache", []));
+    const rawScopes = read("pi-dish-active-scopes", []), scopes = new Set(Array.isArray(rawScopes) ? rawScopes.filter((v) => typeof v === "string") : []);
+    let debounce = null, queryGeneration = 0, settingsGeneration = 0;
+    function cancelDebounce() {
+      queryGeneration++;
+      if (debounce) clearTimeout(debounce);
+      debounce = null;
+    }
+    function scope() {
+      return filters.filter((filter) => scopes.has(filter.name)).map((filter) => filter.query).join(" ");
+    }
+    function toggleView() {
+      if (disposed) return;
+      view = view === "recent" ? "workspace" : "recent";
+      try {
+        storage.setItem("pi-dish-sidebar-view", view);
+      } catch {
+      }
+      updateView();
+      options2.render();
+    }
+    function updateView() {
+      if (disposed) return;
+      const button = document2.getElementById("viewToggle");
+      if (!button) return;
+      button.innerHTML = view === "recent" ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>' : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>';
+      button.title = view === "recent" ? "Grouped by date \u2014 switch to workspaces" : "Grouped by workspace \u2014 switch to recent";
+    }
+    function refreshViews(reload = true) {
+      if (disposed) return;
+      renderChips();
+      options2.render();
+      if (reload && options2.queriedFor() !== query) void options2.reload(query || void 0);
+      options2.searchChanged();
+    }
+    function setFilters(value) {
+      if (disposed) return;
+      settingsGeneration++;
+      filters = decodeSavedFilters(value);
+    }
+    function commitFilters(next) {
+      filters = [...next];
+      store("pi-dish-saved-filters-cache", filters);
+    }
+    async function loadFilters() {
+      if (disposed) return;
+      const generation = ++settingsGeneration, target = Object.freeze({ ...options2.host() });
+      try {
+        const response = await options2.request(target, "/api/settings"), data = await response.json();
+        if (disposed || generation !== settingsGeneration || options2.host().base !== target.base) return;
+        if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : "Failed to load filters");
+        commitFilters(decodeSavedFilters(record8(data) ? data.savedFilters : void 0));
+        refreshViews(false);
+      } catch (error) {
+        if (!disposed && generation === settingsGeneration && options2.host().base === target.base) console.error("Failed to load saved filters:", error);
+      }
+    }
+    async function persistFilters(next, host = options2.host()) {
+      if (disposed) return;
+      const generation = ++settingsGeneration, target = Object.freeze({ ...host });
+      const response = await options2.request(target, "/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ savedFilters: decodeSavedFilters(next) }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : "save failed");
+      if (disposed || generation !== settingsGeneration || options2.host().base !== target.base) return;
+      commitFilters(decodeSavedFilters(record8(data) ? data.savedFilters : void 0));
+      refreshViews();
+    }
+    function toggleScope(name) {
+      if (disposed) return;
+      if (scopes.has(name)) scopes.delete(name);
+      else scopes.add(name);
+      store("pi-dish-active-scopes", [...scopes]);
+      refreshViews();
+    }
+    async function saveCurrent() {
+      if (disposed) return;
+      const captured = query.trim();
+      if (!captured) return;
+      const name = options2.prompt("Name this filter:", "");
+      if (!name?.trim()) return;
+      const trimmed = name.trim().slice(0, 60), next = filters.filter((filter) => filter.name !== trimmed).concat([{ name: trimmed, query: captured }]);
+      scopes.add(trimmed);
+      store("pi-dish-active-scopes", [...scopes]);
+      cancelDebounce();
+      options2.invalidateLists();
+      options2.busy(false);
+      input.value = "";
+      query = "";
+      const generation = queryGeneration;
+      try {
+        await persistFilters(next);
+      } catch (error) {
+        if (!disposed && generation === queryGeneration) options2.alert("Could not save filter: " + (error instanceof Error ? error.message : String(error)));
+      }
+    }
+    function renderChips() {
+      if (disposed) return;
+      chipEvents.abort();
+      chipEvents = new AbortController();
+      const { signal } = chipEvents;
+      const html = filters.map((filter) => `<button class="scope-chip${scopes.has(filter.name) ? " active" : ""}" data-name="${escapeHtml(filter.name)}" title="${escapeHtml(filter.query)}">${escapeHtml(filter.name)}</button>`);
+      if (query.trim()) html.push('<button class="scope-chip scope-add" title="Save the current query as a reusable filter">+ save filter</button>', '<button class="scope-chip search-open-chip" title="Open this query in the full search view">\u2922 full search</button>');
+      chips.innerHTML = html.join("");
+      chips.style.display = html.length ? "" : "none";
+      for (const button of Array.from(chips.querySelectorAll("button"))) {
+        const name = button.dataset.name, captured = query;
+        button.addEventListener("click", () => {
+          if (disposed || signal.aborted || !chips.contains(button)) return;
+          if (button.classList.contains("scope-add")) void saveCurrent();
+          else if (button.classList.contains("search-open-chip")) options2.openSearch(captured);
+          else if (name !== void 0) toggleScope(name);
+        }, { signal });
+      }
+    }
+    function switchTab(next) {
+      if (disposed) return;
+      tab = next === "all" ? "all" : "active";
+      cancelDebounce();
+      document2.getElementById("tabActive")?.classList.toggle("active", tab === "active");
+      document2.getElementById("tabAll")?.classList.toggle("active", tab === "all");
+      input.placeholder = tab === "active" ? "Filter active sessions..." : "Search all sessions...";
+      options2.render();
+      void options2.reload(query || void 0);
+    }
+    function onInput() {
+      if (disposed) return;
+      cancelDebounce();
+      query = input.value.trim();
+      options2.invalidateLists();
+      renderChips();
+      options2.render();
+      if (query) {
+        options2.busy(true);
+        const generation = queryGeneration, captured = query;
+        debounce = setTimeout(() => {
+          debounce = null;
+          if (!disposed && generation === queryGeneration) void options2.reload(captured);
+        }, 300);
+      } else void options2.reload();
+    }
+    function toggle() {
+      if (disposed) return;
+      const sidebar = document2.getElementById("sidebar"), open = !sidebar.classList.contains("open");
+      sidebar.classList.toggle("open", open);
+      document2.getElementById("sidebarOverlay")?.classList.toggle("active", open);
+      document2.body.classList.toggle("sidebar-open", open);
+    }
+    function close() {
+      document2.getElementById("sidebar")?.classList.remove("open");
+      document2.getElementById("sidebarOverlay")?.classList.remove("active");
+      document2.body.classList.remove("sidebar-open");
+    }
+    function mount() {
+      if (disposed || mounted) return;
+      mounted = true;
+      const { signal } = lifetime;
+      input.addEventListener("input", onInput, { signal });
+      document2.getElementById("tabActive")?.addEventListener("click", () => switchTab("active"), { signal });
+      document2.getElementById("tabAll")?.addEventListener("click", () => switchTab("all"), { signal });
+      document2.getElementById("viewToggle")?.addEventListener("click", toggleView, { signal });
+      document2.querySelector(".filter-search-btn")?.addEventListener("click", () => options2.openSearch(query || void 0), { signal });
+      for (const button of Array.from(document2.querySelectorAll("[data-toggle-sidebar]"))) button.addEventListener("click", toggle, { signal });
+    }
+    function dispose() {
+      if (disposed) return;
+      cancelDebounce();
+      settingsGeneration++;
+      options2.invalidateLists();
+      options2.busy(false);
+      close();
+      disposed = true;
+      lifetime.abort();
+      chipEvents.abort();
+    }
+    return {
+      mount,
+      dispose,
+      toggleView,
+      updateView,
+      scope,
+      setFilters,
+      loadFilters,
+      persistFilters,
+      toggleScope,
+      saveCurrent,
+      renderChips,
+      switchTab,
+      onInput,
+      toggle,
+      close,
+      get filters() {
+        return filters;
+      },
+      get tab() {
+        return tab;
+      },
+      get view() {
+        return view;
+      },
+      get query() {
+        return query;
       }
     };
   }

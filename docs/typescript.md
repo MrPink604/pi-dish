@@ -448,3 +448,8 @@ Sidebar row interactions live in `sidebar-controls.ts`: preferences, host-qualif
 family pins, close confirmation and request state, clipboard menus and pointer
 listeners. The session state exposes a read-only selection generation for actions
 started with no selected session. Replaced menus and disposed controls stay inert.
+
+Sidebar query/scopes, list fan-out and activity markers live in `sidebar-query.ts`,
+`sidebar-lists.ts` and `sidebar-activity.ts`. Input invalidates prior request owners
+before debounce; polling and indexing timers have a shared disposal boundary.
+Settings generations prevent old scope reads from overwriting newer definitions.

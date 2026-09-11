@@ -794,3 +794,27 @@ UI scenarios and full desktop/mobile smoke passed. Seven new ownership cases and
 strict contracts cover menus, endpoint changes, empty/peer selection, family
 preferences, pointer identity and disposal. Actual runtime/tests match the verified
 draft byte for byte. Fable review remains required before push.
+
+## Checkpoint 35 — sidebar queries, polling and activity
+
+Moved tab/view/query state, saved scopes, search debounce, device unread tracking,
+list fan-out and indexing/poll timers into three strict controllers. Input retires
+old host observations before debounce; disposal stops polls and indexed refreshes.
+Saved settings use request generations and captured serving endpoints. Scope
+buttons retire with the projection, and seen migration/pruning stays host-local.
+
+Corrected the existing search-navigation race test to open search first. Previously
+it invoked a closed view and passed only when a background poll exercised its
+mocked loader. The corrected test now reaches the intended delayed navigation.
+
+Verification: strict checks, 932 backend tests, 233 browser tests, all independent
+UI scenarios and full desktop/mobile smoke passed. Eight new ownership cases and
+strict contracts cover debounce, saved scopes, host observations, indexing and
+disposal. Actual runtime/tests match the verified draft; Fable reviews before push.
+
+Fable caught a stale inline search-button reference. The magnifier now uses the
+query controller’s owned listener, with an actual-button regression. Full backend,
+browser and smoke checks passed again before re-review.
+Fable’s re-review also restored empty-filter reopen semantics (`undefined` keeps
+the prior full-search query). The extended button regression and strict checks
+passed; the reviewer approved that exact correction without another full review.

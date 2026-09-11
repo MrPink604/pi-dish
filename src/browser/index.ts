@@ -92,3 +92,7 @@ export { decodeSlashCommands, decodeFileCompletions } from './composer-autocompl
 export { renderSidebar, sidebarSession, harnessBadgeInnerHtml, renderHarnessBadge } from './sidebar-render';
 
 export { createSidebarControls } from './sidebar-controls';
+
+export { createSidebarActivity } from './sidebar-activity';
+export { createSidebarLists } from './sidebar-lists';
+export { createSidebarQuery } from './sidebar-query';

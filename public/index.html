@@ -25,7 +25,7 @@
 <body>
   <div class="app">
     <!-- Sidebar Overlay -->
-    <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+    <div class="sidebar-overlay" id="sidebarOverlay" data-toggle-sidebar></div>
     
     <!-- Sidebar -->
     <aside class="sidebar" id="sidebar">
@@ -63,19 +63,19 @@
       </div>
       
       <div class="sidebar-tabs">
-        <button class="sidebar-tab active" id="tabActive" onclick="switchTab('active')">Active <span class="tab-count" id="countActive"></span></button>
-        <button class="sidebar-tab" id="tabAll" onclick="switchTab('all')">All</button>
+        <button class="sidebar-tab active" id="tabActive">Active <span class="tab-count" id="countActive"></span></button>
+        <button class="sidebar-tab" id="tabAll">All</button>
       </div>
       
       <div class="sidebar-filter">
-        <input type="text" class="filter-input" id="filterInput" placeholder="Filter sessions..." oninput="onFilterInput()">
-        <button class="btn-icon filter-search-btn" onclick="openSearchView(filterQuery || undefined)" title="Search all sessions (full text)" aria-label="Search all sessions">
+        <input type="text" class="filter-input" id="filterInput" placeholder="Filter sessions...">
+        <button class="btn-icon filter-search-btn" title="Search all sessions (full text)" aria-label="Search all sessions">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <circle cx="11" cy="11" r="7"/>
             <path d="M21 21l-4.35-4.35"/>
           </svg>
         </button>
-        <button class="btn-icon view-toggle" id="viewToggle" onclick="toggleSidebarView()"></button>
+        <button class="btn-icon view-toggle" id="viewToggle"></button>
       </div>
       <div class="scope-chips" id="scopeChips"></div>
 
@@ -92,7 +92,7 @@
     <!-- Main Content -->
     <main class="main">
       <div class="empty-state" id="emptyState">
-        <button class="menu-btn empty-menu-btn" onclick="toggleSidebar()" aria-label="Open session list">
+        <button class="menu-btn empty-menu-btn" data-toggle-sidebar aria-label="Open session list">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <path d="M3 12h18M3 6h18M3 18h18"/>
           </svg>
@@ -104,7 +104,7 @@
       <div class="session-view" id="sessionView" style="display: none;">
         <!-- Session Header -->
         <header class="session-header">
-          <button class="menu-btn header-menu-btn" onclick="toggleSidebar()" aria-label="Open session list">
+          <button class="menu-btn header-menu-btn" data-toggle-sidebar aria-label="Open session list">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <path d="M3 12h18M3 6h18M3 18h18"/>
             </svg>
@@ -392,7 +392,7 @@
            isn't session-scoped). Opened from the sidebar header. -->
       <div class="usage-view" id="usageView">
         <div class="usage-view-header">
-          <button class="menu-btn" onclick="toggleSidebar()" aria-label="Open session list">
+          <button class="menu-btn" data-toggle-sidebar aria-label="Open session list">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <path d="M3 12h18M3 6h18M3 18h18"/>
             </svg>
@@ -416,7 +416,7 @@
            Opened from the sidebar header 🔍 or the "full search" chip. -->
       <div class="search-view" id="searchView">
         <div class="search-view-header">
-          <button class="menu-btn" onclick="toggleSidebar()" aria-label="Open session list">
+          <button class="menu-btn" data-toggle-sidebar aria-label="Open session list">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <path d="M3 12h18M3 6h18M3 18h18"/>
             </svg>
@@ -437,7 +437,7 @@
            mutually exclusive with the usage/search takeovers. -->
       <div class="new-session-view" id="newSessionView">
         <div class="usage-view-header">
-          <button class="menu-btn" onclick="toggleSidebar()" aria-label="Open session list">
+          <button class="menu-btn" data-toggle-sidebar aria-label="Open session list">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <path d="M3 12h18M3 6h18M3 18h18"/>
             </svg>
@@ -526,7 +526,7 @@
            takeovers. See TASKS/skills-view-phase1.md. -->
       <div class="skills-view" id="skillsView">
         <div class="usage-view-header skills-view-header">
-          <button class="menu-btn" onclick="toggleSidebar()" aria-label="Open session list">
+          <button class="menu-btn" data-toggle-sidebar aria-label="Open session list">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <path d="M3 12h18M3 6h18M3 18h18"/>
             </svg>
@@ -544,7 +544,7 @@
            See TASKS/routines.md. -->
       <div class="routines-view" id="routinesView">
         <div class="usage-view-header">
-          <button class="menu-btn" onclick="toggleSidebar()" aria-label="Open session list">
+          <button class="menu-btn" data-toggle-sidebar aria-label="Open session list">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <path d="M3 12h18M3 6h18M3 18h18"/>
             </svg>
@@ -566,7 +566,7 @@
       </div>
       <div class="recovery-view" id="recoveryView">
         <div class="usage-view-header">
-          <button class="menu-btn" onclick="toggleSidebar()" aria-label="Open session list">
+          <button class="menu-btn" data-toggle-sidebar aria-label="Open session list">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <path d="M3 12h18M3 6h18M3 18h18"/>
             </svg>
