@@ -2107,3 +2107,10 @@ Open captures the selected owner and endpoint before loading assets or fonts.
 Close also cancels pending opens; connection generations guard ticket races and
 socket callbacks. Retired onData/onResize callbacks cannot target a replacement
 terminal. Keybar/viewport listeners and reconnect timers retire with their owner.
+
+Routine state and form/ledger ownership live in `src/browser/routines-view.ts`,
+with payloads narrowed by `routines-data.ts`. Selected routines include their
+answering endpoint. List/form/catalog/mutation and ledger generations are separate;
+old same-id host responses cannot replace a new form. Draft values and baselines
+survive close/reopen, including edits during saves. Render listeners, autocomplete,
+ledger polling, delete arming and fan-out coalescers retire on close/disposal.

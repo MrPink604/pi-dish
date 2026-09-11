@@ -24,7 +24,8 @@ Checkpoint 17 migrates the skills directory, coverage detail and refinement laun
 Checkpoint 18 migrates fleet advanced search and its facets/results.
 Checkpoint 19 migrates usage summaries, subscription limits and chart interactions.
 Checkpoint 20 migrates display preferences, themes/pre-paint and panel resizing.
-Checkpoint 21 migrates terminal opens, sockets, reconnects and mobile key input. See
+Checkpoint 21 migrates terminal opens, sockets, reconnects and mobile key input.
+Checkpoint 22 migrates routine forms, catalogs, mutations and invocation history. See
 [the checkpoint log](docs/browser-migration-checkpoints.md) for implementation
 verification and the complete browser entrypoint inventory. The last confirmed
 CI checkpoint is recorded below; final CI must pass before the goal is complete.
@@ -35,7 +36,7 @@ CI checkpoint is recorded below; final CI must pass before the goal is complete.
 | --- | --- | --- |
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
-| Browser migration | In progress — current stage | Fifty implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
+| Browser migration | In progress — current stage | Fifty-two implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
 | Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -53,7 +54,7 @@ in `lib/`. Its full module inventory is in [the migration guide](docs/typescript
 Most JavaScript callers of these modules are not yet type checked; `lib/cron.js`
 is an explicitly checked exception.
 
-These fifty browser implementation modules compile strictly into local
+These fifty-two browser implementation modules compile strictly into local
 `public/browser.js`, `public/helpers.js`, `public/artifact-comments.js` and
 `public/theme-prepaint.js` scripts.
 The entries are `index.ts`, `shared-helpers.ts` and `artifact-comments.ts`;
@@ -90,6 +91,8 @@ The entries are `index.ts`, `shared-helpers.ts` and `artifact-comments.ts`;
 | `bounce.ts` | Host snapshots, selected bounce targets, operation polling and restart reconciliation |
 | `session-relations.ts` | Related-session wire rows, header/modal controls, indexing refresh and navigation |
 | `session-search.ts` | Query/match state, request sequencing, marks and serialized paging jumps |
+| `routines-data.ts` | Routine definitions, prompt versions and invocation payloads |
+| `routines-view.ts` | Routine forms, catalogs, mutation/ledger ownership and polling |
 | `terminal.ts` | Terminal lifecycle, pending opens, ticket/socket ownership and input |
 | `display-preferences.ts` | Settings lifecycle, budget requests and device readouts |
 | `themes.ts` / `theme-prepaint.ts` | Theme decoding, catalog refresh and synchronous cache restoration |
@@ -154,20 +157,15 @@ checks. Documentation-only changes need content and link checks. After a chunk
 ships, update this page's checkpoint, completed inventory and next step so the
 status stays current.
 
-Last confirmed CI checkpoint, `861d799` (newer local work is in the checkpoint log):
+Last confirmed CI checkpoint, `07e4505` (newer work is in the checkpoint log):
 
-- Fable 5.1 cleared the new-session options checkpoint before push. Both harness
-  editor commits, including preview-refresh follow-up `1d50e5d`, are also cleared
-  and pushed. Spawn commits `454ce1c`/`e3f30b1` and shared helpers `861d799`
-  are reviewed and pushed; their CI status is in the checkpoint log.
-- 899 backend tests and 105 browser regressions passed, along with independent UI
-  scenarios and desktop/mobile smoke. OMP/Prime fake-provider canaries last passed
-  at `53b5ae0`; they will run again for the final browser audit.
-- [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34598941974):
-  backend Node 22.19.0/22.x/24.x/26.x and browser/UI on Node 24.
-
-These results establish a verified checkpoint, not exhaustive application coverage
-or completion of the remaining migration.
+- Fable 5.1 cleared the usage dashboard before push.
+- Strict checks, 911 backend tests, 133 browser regressions, independent UI
+  scenarios and full desktop/mobile smoke passed on that checkpoint.
+- [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34604387530):
+  backend on Node 22.19.0, 22.x, 24.x and 26.x, plus the Node 24 browser job.
+- This verifies that checkpoint; final CI must pass on the completed browser
+  migration before the goal is marked done.
 
 ## Completed work before the current stage
 

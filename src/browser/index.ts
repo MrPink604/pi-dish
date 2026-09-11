@@ -51,3 +51,6 @@ export { createPanelResize, clampSidebarWidth, clampTerminalHeight } from './pan
 export { createDisplayPreferences, decodeSavedFilters, responseMode } from './display-preferences';
 
 export { createTerminalController, decodeTerminalOutput } from './terminal';
+
+export { createRoutinesView } from './routines-view';
+export { decodeRoutine, decodeRoutineList, decodeRoutineInvocations } from './routines-data';

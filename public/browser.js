@@ -51,6 +51,7 @@ var PiDishBrowser = (() => {
     createNewSessionPreferences: () => createNewSessionPreferences,
     createPanelResize: () => createPanelResize,
     createRecovery: () => createRecovery,
+    createRoutinesView: () => createRoutinesView,
     createSearchView: () => createSearchView,
     createSessionApi: () => createSessionApi,
     createSessionRelations: () => createSessionRelations,
@@ -75,6 +76,9 @@ var PiDishBrowser = (() => {
     decodeModelCatalog: () => decodeModelCatalog,
     decodeRecoveryMode: () => decodeRecoveryMode,
     decodeRecoveryReport: () => decodeRecoveryReport,
+    decodeRoutine: () => decodeRoutine,
+    decodeRoutineInvocations: () => decodeRoutineInvocations,
+    decodeRoutineList: () => decodeRoutineList,
     decodeSavedFilters: () => decodeSavedFilters,
     decodeSearchPayload: () => decodeSearchPayload,
     decodeSessionRelations: () => decodeSessionRelations,
@@ -311,10 +315,10 @@ var PiDishBrowser = (() => {
     const doc = root.ownerDocument;
     let view = null;
     let disposed = false;
-    function element(tag, className, text10) {
+    function element(tag, className, text11) {
       const node = doc.createElement(tag);
       node.className = className;
-      if (text10 !== void 0) node.textContent = text10;
+      if (text11 !== void 0) node.textContent = text11;
       return node;
     }
     const search = element("input", "model-search");
@@ -331,8 +335,8 @@ var PiDishBrowser = (() => {
       node.dataset.value = value;
       return node;
     }
-    function button(text10, name, value = "", primary = false) {
-      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text10);
+    function button(text11, name, value = "", primary = false) {
+      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text11);
       node.type = "button";
       return action(node, name, value);
     }
@@ -567,8 +571,8 @@ var PiDishBrowser = (() => {
     const state = prev && typeof prev === "object" ? prev : null;
     const errText = (value) => {
       if (value == null) return null;
-      const text10 = String(typeof value === "object" && "message" in value && value.message || value);
-      return text10 || null;
+      const text11 = String(typeof value === "object" && "message" in value && value.message || value);
+      return text11 || null;
     };
     const eventError = event && typeof event === "object" && "error" in event ? errText(event.error) : null;
     if (kind === "blocked") {
@@ -2762,9 +2766,9 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/helper-format.ts
-  function escapeHtml(text10) {
-    if (text10 == null || text10 === "") return "";
-    return String(text10).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  function escapeHtml(text11) {
+    if (text11 == null || text11 === "") return "";
+    return String(text11).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
   function formatTokens(tokens2) {
     if (!tokens2 || tokens2 === 0) return "0";
@@ -2803,9 +2807,19 @@ var PiDishBrowser = (() => {
     if (d < 7) return d + "d ago";
     return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
   }
+  function formatDuration(ms) {
+    const total = Math.max(0, Math.floor(ms / 1e3));
+    const h = Math.floor(total / 3600), m = Math.floor(total % 3600 / 60), s = total % 60;
+    const mm = h ? String(m).padStart(2, "0") : String(m);
+    return (h ? `${h}:${mm}` : mm) + ":" + String(s).padStart(2, "0");
+  }
   function shortCwd(cwd) {
     if (!cwd) return "";
     return cwd.replace(/^\/home\/[^/]+\//, "~/").replace(/^\/home\/[^/]+$/, "~");
+  }
+  function truncate(text11, maxLen, suffix = " \u2026 (truncated)") {
+    if (!text11 || text11.length <= maxLen) return text11;
+    return text11.slice(0, maxLen) + suffix;
   }
   function tmuxPrefixSeq(prefix) {
     if (typeof prefix !== "string") return null;
@@ -2832,6 +2846,12 @@ var PiDishBrowser = (() => {
     if (host.name) return String(host.name);
     if (!host.base) return "this host";
     return String(host.base).replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+  }
+  function hostSupportsCapability(hostEntry, capability, config) {
+    const caps = hostEntry && hostEntry.capabilities;
+    if (caps && typeof caps === "object") return caps[capability] === true;
+    const isSelf = !!hostEntry && (hostEntry.self === true || hostEntry.base === "");
+    return isSelf ? !!(config && config[capability]) : false;
   }
   function sessionMetaText(session) {
     return [session.name, session.cwd, session.model, session.id].join(" ").toLowerCase();
@@ -2953,12 +2973,12 @@ var PiDishBrowser = (() => {
     }
     return true;
   }
-  function countOccurrences(text10, token) {
-    if (!text10 || !token) return 0;
-    let n = 0, i = text10.indexOf(token);
+  function countOccurrences(text11, token) {
+    if (!text11 || !token) return 0;
+    let n = 0, i = text11.indexOf(token);
     while (i !== -1) {
       n++;
-      i = text10.indexOf(token, i + token.length);
+      i = text11.indexOf(token, i + token.length);
     }
     return n;
   }
@@ -3018,8 +3038,8 @@ var PiDishBrowser = (() => {
     result += escapeHtml(str.slice(last));
     return result;
   }
-  function highlightTokens(text10, tokens2) {
-    const str = String(text10);
+  function highlightTokens(text11, tokens2) {
+    const str = String(text11);
     const lower = str.toLowerCase();
     const ranges = [];
     for (const t of tokens2) {
@@ -4562,8 +4582,8 @@ var PiDishBrowser = (() => {
     const textNodes = [];
     while (walker.nextNode()) textNodes.push(walker.currentNode);
     for (const node of textNodes) {
-      const text10 = node.textContent || "";
-      const lower = text10.toLowerCase();
+      const text11 = node.textContent || "";
+      const lower = text11.toLowerCase();
       const ranges = [];
       for (const token of tokens2) {
         let from = 0, at;
@@ -4578,14 +4598,14 @@ var PiDishBrowser = (() => {
       let cursor = 0;
       for (const [start, end] of ranges) {
         if (start < cursor) continue;
-        frag.appendChild(document2.createTextNode(text10.slice(cursor, start)));
+        frag.appendChild(document2.createTextNode(text11.slice(cursor, start)));
         const mark = document2.createElement("mark");
         mark.className = "search-mark";
-        mark.textContent = text10.slice(start, end);
+        mark.textContent = text11.slice(start, end);
         frag.appendChild(mark);
         cursor = end;
       }
-      frag.appendChild(document2.createTextNode(text10.slice(cursor)));
+      frag.appendChild(document2.createTextNode(text11.slice(cursor)));
       node.replaceWith(frag);
     }
   }
@@ -6949,10 +6969,10 @@ var PiDishBrowser = (() => {
       })();
       return assets;
     }
-    function status(text10 = "", cls = "") {
+    function status(text11 = "", cls = "") {
       const value = document2.getElementById("terminalStatus");
       if (!value) return;
-      value.textContent = text10;
+      value.textContent = text11;
       value.className = "terminal-status" + (cls ? " " + cls : "");
     }
     function setCtrl(on) {
@@ -7232,6 +7252,1243 @@ var PiDishBrowser = (() => {
         close();
         events.abort();
         disposed = true;
+      }
+    };
+  }
+
+  // src/browser/routines-data.ts
+  var text10 = (value) => typeof value === "string" ? value : "";
+  var number4 = (value) => finite2(value) ? value : 0;
+  function decodeRoutineInvocations(value) {
+    if (!record8(value)) throw new Error("Invalid routine invocation response");
+    return { invocations: Array.isArray(value.invocations) ? value.invocations.flatMap((row) => {
+      if (!record8(row) || typeof row.id !== "string") return [];
+      return [{
+        id: row.id,
+        version: finite2(row.version) ? row.version : null,
+        trigger: text10(row.trigger),
+        source: text10(row.source),
+        delivery: text10(row.delivery),
+        status: text10(row.status),
+        startedAt: finite2(row.startedAt) ? row.startedAt : null,
+        durationMs: finite2(row.durationMs) ? row.durationMs : null,
+        sessionId: text10(row.sessionId),
+        skipReason: text10(row.skipReason),
+        error: text10(row.error),
+        closeError: text10(row.closeError),
+        summary: text10(row.summary)
+      }];
+    }) : [], nextBefore: finite2(value.nextBefore) ? value.nextBefore : null };
+  }
+  function decodeRoutine(value, host) {
+    if (!record8(value)) throw new Error("Invalid routine response");
+    const row = record8(value.routine) ? value.routine : value;
+    if (typeof row.id !== "string" || !row.id) throw new Error("Invalid routine identity");
+    const stats = record8(row.stats) ? row.stats : {};
+    const versions = Array.isArray(row.versions) ? row.versions.flatMap((version) => record8(version) && finite2(version.version) && typeof version.prompt === "string" ? [{ version: version.version, savedAt: number4(version.savedAt), prompt: version.prompt }] : []) : [];
+    return {
+      id: row.id,
+      name: text10(row.name),
+      description: text10(row.description),
+      harness: text10(row.harness) || "pi",
+      cwd: text10(row.cwd),
+      model: text10(row.model),
+      thinking: text10(row.thinking),
+      schedule: record8(row.schedule) && typeof row.schedule.cron === "string" ? { cron: row.schedule.cron } : null,
+      enabled: row.enabled !== false,
+      mode: row.mode === "continue" ? "continue" : "oneShot",
+      onBusy: row.onBusy === "steer" || row.onBusy === "followUp" ? row.onBusy : "skip",
+      minIntervalSec: number4(row.minIntervalSec),
+      prompt: text10(row.prompt),
+      promptVersion: number4(row.promptVersion) || 1,
+      versions,
+      stats: { invocations: number4(stats.invocations), nextRunAt: finite2(stats.nextRunAt) ? stats.nextRunAt : null, lastInvocation: decodeRoutineInvocations({ invocations: [stats.lastInvocation] }).invocations[0] || null },
+      host: host.hostId,
+      hostLabel: host.label || "",
+      endpoint: Object.freeze({ base: host.base, token: host.token })
+    };
+  }
+  function decodeRoutineList(value, host) {
+    if (!record8(value) || !Array.isArray(value.routines)) throw new Error("Invalid routines response");
+    return value.routines.flatMap((row) => {
+      try {
+        return [decodeRoutine(row, host)];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  // src/browser/routines-view.ts
+  function createRoutinesView(options) {
+    const document2 = options.root.ownerDocument, window = document2.defaultView, location = window.location;
+    const localStorage = options.storage, sessionState = options.sessionState;
+    const apiFetch = (host, path, init) => {
+      if (host && typeof host === "object" && "hostId" in host && (typeof host.hostId === "string" || host.hostId === null)) {
+        const current = options.host(host.hostId);
+        if (!current || current.base !== host.base) return Promise.reject(new Error("Routine host changed; select the routine again."));
+        return options.request({ ...host, token: current.token }, path, init);
+      }
+      return options.request(host, path, init);
+    };
+    const isMultiHost = options.multiHost, hostChipHtml = options.hostChip;
+    const copyTextToClipboard = options.copy, setStatus = options.status, confirm = options.confirm;
+    const createCwdAutocomplete2 = options.autocomplete;
+    const modelSelectOptionsHtml2 = (models) => modelSelectOptionsHtml(models, escapeHtml);
+    const field = (id) => document2.getElementById(id);
+    const errorMessage = (error) => error instanceof Error ? error.message : String(error);
+    let disposed = false;
+    let viewGeneration = 0, formGeneration = 0, harnessRequest = 0, modelRequest = 0;
+    let listEvents = new AbortController(), formEvents = new AbortController(), versionEvents = new AbortController(), invocationEvents = new AbortController();
+    let listQueue = null;
+    let invocationToken = null, mutationToken = null;
+    function sameHost(id, endpoint) {
+      const current = options.host(id);
+      return !!current && current.hostId === id && current.base === endpoint.base;
+    }
+    function captureForm() {
+      const current = options.host(routineFormHostId());
+      if (!current) return null;
+      const id = current.hostId;
+      return { view: viewGeneration, form: formGeneration, key: routineSelKey, creating: routineCreating, id, endpoint: Object.freeze({ ...current, ...routineSelected?.host === id ? routineSelected.endpoint : {} }) };
+    }
+    function ownsForm(owner) {
+      return !!owner && isRoutinesViewOpen() && owner.view === viewGeneration && owner.form === formGeneration && owner.key === routineSelKey && owner.creating === routineCreating && owner.id === options.host(routineFormHostId())?.hostId && sameHost(owner.id, owner.endpoint);
+    }
+    function retireForm() {
+      formGeneration++;
+      harnessRequest++;
+      modelRequest++;
+      formEvents.abort();
+      versionEvents.abort();
+      invocationEvents.abort();
+      disposeRoutineCwdAutocomplete();
+      invocationToken = null;
+      mutationToken = null;
+      routineBusy = false;
+      clearTimeout(routineDeleteArmTimer);
+      routineDeleteArmed = false;
+    }
+    async function httpError(response) {
+      const data = await response.json().catch(() => null);
+      return record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`;
+    }
+    function payloadError(data, status) {
+      return record8(data) && typeof data.error === "string" ? data.error : `HTTP ${status}`;
+    }
+    let routinesList = [];
+    let routinesHostErrors = [];
+    let routinesHostPending = [];
+    let routinesSeq = 0;
+    let routinesListError = "";
+    let routineSelKey = null;
+    let routineSelectedHostId = null;
+    let routineSelected = null;
+    let routineCreating = false;
+    let routineFormBaseline = null;
+    let routineFormError = "";
+    let routineDeleteArmed = false;
+    let routineBusy = false;
+    let routineInvocations = [];
+    let routineInvocationsNextBefore = null;
+    let routineInvocationsTimer = null;
+    let routineVersionFilter = null;
+    let routineVersionShown = null;
+    let routineNotice = "";
+    const routineModelCatalogs = /* @__PURE__ */ new Map();
+    const routineHarnessCatalogs = /* @__PURE__ */ new Map();
+    let routineModelSeq = 0;
+    let routineCwdAutocomplete = null;
+    function disposeRoutineCwdAutocomplete() {
+      routineCwdAutocomplete?.dispose();
+      routineCwdAutocomplete = null;
+    }
+    let routineCreateHostId = null;
+    const ROUTINE_CRON_PRESETS = [
+      ["", "No schedule (manual only)"],
+      ["0 * * * *", "Every hour"],
+      ["0 9 * * *", "Daily at 09:00"],
+      ["0 9 * * 1-5", "Weekdays at 09:00"],
+      ["0 9 * * 1", "Weekly, Monday 09:00"]
+    ];
+    const ROUTINE_ON_BUSY = [
+      ["skip", "Skip the run"],
+      ["steer", "Steer the running turn"],
+      ["followUp", "Queue as a follow-up"]
+    ];
+    const ROUTINE_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+    function routineKey(host, id) {
+      return sessionKey(host || null, id);
+    }
+    function routinesCapableHosts() {
+      return options.hosts().filter((host) => hostSupportsCapability(host, "routines", options.config()));
+    }
+    function anyHostSupportsRoutines() {
+      return options.effectiveHosts().some((host) => hostSupportsCapability(host, "routines", options.config()));
+    }
+    function updateRoutinesButton() {
+      if (disposed) return;
+      const btn = document2.getElementById("btnRoutines");
+      if (!btn) return;
+      const supported = anyHostSupportsRoutines();
+      btn.style.display = supported ? "" : "none";
+      if (!supported && isRoutinesViewOpen()) closeRoutinesView();
+    }
+    function isRoutinesViewOpen() {
+      return !disposed && options.root.classList.contains("routines-open");
+    }
+    function openRoutinesView() {
+      if (disposed) return;
+      options.closeOtherViews();
+      if (isRoutinesViewOpen()) return;
+      viewGeneration++;
+      options.root.classList.add("routines-open");
+      if (!routineSelected && !routineCreating) backToRoutinesList();
+      const retained = readRoutineForm();
+      if (retained) wireRoutineForm(retained, false);
+      else renderRoutineDetail();
+      loadRoutinesView();
+      if (routineSelected) {
+        renderRoutineInvocations();
+        loadRoutineInvocations({ reset: true });
+        startRoutineInvocationPoll();
+      }
+    }
+    function closeRoutinesView() {
+      if (disposed) return;
+      viewGeneration++;
+      routinesSeq++;
+      listEvents.abort();
+      listQueue?.dispose();
+      listQueue = null;
+      retireForm();
+      options.root.classList.remove("routines-open");
+      stopRoutineInvocationPoll();
+    }
+    function refreshRoutinesView() {
+      if (!isRoutinesViewOpen()) return;
+      loadRoutinesView();
+      if (routineSelected) loadRoutineInvocations({ reset: true });
+    }
+    function routinesViewEscape() {
+      const view = document2.getElementById("routinesView");
+      if (view && view.classList.contains("detail-open") && window.matchMedia("(max-width: 768px)").matches) {
+        backToRoutinesList();
+        return true;
+      }
+      closeRoutinesView();
+      return true;
+    }
+    function backToRoutinesList() {
+      if (!isRoutinesViewOpen()) return;
+      routineCwdAutocomplete?.hide();
+      document2.getElementById("routinesView")?.classList.remove("detail-open");
+    }
+    async function loadRoutinesView() {
+      if (!isRoutinesViewOpen()) return;
+      listQueue?.dispose();
+      listQueue = null;
+      const seq = ++routinesSeq;
+      const stale = () => seq !== routinesSeq || !isRoutinesViewOpen();
+      const listEl = document2.getElementById("routinesList");
+      if (listEl && !listEl.childElementCount) listEl.innerHTML = '<div class="usage-state">Loading routines\u2026</div>';
+      await options.fleetReady();
+      if (stale()) return;
+      const hosts = routinesCapableHosts().map((host) => Object.freeze({ ...host }));
+      if (!hosts.length) {
+        routinesList = [];
+        routinesListError = "No reachable host offers routines.";
+        renderRoutinesList();
+        return;
+      }
+      const status = hosts.map(() => "pending");
+      const entries = new Array(hosts.length);
+      const reasons = new Array(hosts.length);
+      const render = () => {
+        if (stale()) return;
+        if (!status.some((s, i) => s === "ok" && entries[i])) return;
+        routinesHostErrors = hosts.filter((_, i) => status[i] === "error").map(hostDisplayLabel);
+        routinesHostPending = hosts.filter((_, i) => status[i] === "pending").map(hostDisplayLabel);
+        routinesListError = "";
+        routinesList = entries.flat().filter(Boolean);
+        renderRoutinesList();
+      };
+      const queueRender = listQueue = createFanoutRenderQueue(status, render);
+      await Promise.allSettled(hosts.map(async (host, i) => {
+        try {
+          const res = await apiFetch(host, "/api/routines", { timeoutMs: 2e4 });
+          if (res.status === 401) {
+            if (sameHost(host.hostId, host)) options.connection(host, "blocked");
+            throw new Error("needs a token");
+          }
+          if (!res.ok) throw new Error(await httpError(res));
+          const data = await res.json();
+          if (!sameHost(host.hostId, host)) throw new Error("host connection changed");
+          entries[i] = decodeRoutineList(data, { ...host, label: hostDisplayLabel(host) });
+          status[i] = "ok";
+          options.connection(host, "success");
+        } catch (e) {
+          status[i] = "error";
+          reasons[i] = e;
+          if (!host.self && sameHost(host.hostId, host)) options.connection(host, "failure", e);
+        }
+        queueRender();
+      }));
+      if (stale()) return;
+      if (!status.some((s) => s === "ok")) {
+        routinesList = [];
+        routinesListError = errorMessage(reasons.find(Boolean) || new Error("no hosts answered"));
+        renderRoutinesList();
+      }
+    }
+    function routineStatusClass(status) {
+      if (status === "starting" || status === "running") return "working";
+      if (status === "completed") return "ok";
+      if (status === "errored" || status === "interrupted") return "bad";
+      return "muted";
+    }
+    function formatRoutineCountdown(ts) {
+      if (!ts) return "";
+      const diff = new Date(ts).getTime() - Date.now();
+      if (!Number.isFinite(diff)) return "";
+      if (diff <= 0) return "due now";
+      const m = Math.round(diff / 6e4);
+      if (m < 60) return `in ${Math.max(1, m)}m`;
+      const h = Math.round(m / 60);
+      if (h < 48) return `in ${h}h`;
+      return `in ${Math.round(h / 24)}d`;
+    }
+    function routineScheduleLine(routine) {
+      const cron = routine.schedule?.cron;
+      if (!cron) return '<span class="rt-sched muted">manual only</span>';
+      if (routine.enabled === false) {
+        return `<span class="rt-sched paused"><code>${escapeHtml(cron)}</code> \xB7 paused</span>`;
+      }
+      const next = formatRoutineCountdown(routine.stats?.nextRunAt);
+      return `<span class="rt-sched"><code>${escapeHtml(cron)}</code>${next ? ` \xB7 ${escapeHtml(next)}` : ""}</span>`;
+    }
+    function renderRoutinesList() {
+      if (!isRoutinesViewOpen()) return;
+      listEvents.abort();
+      listEvents = new AbortController();
+      const view = viewGeneration;
+      const el = document2.getElementById("routinesList");
+      if (!el) return;
+      const notices = [
+        routinesHostErrors.length ? `<div class="usage-notice">Not listed: ${escapeHtml(routinesHostErrors.join(", "))} did not answer.</div>` : "",
+        routinesHostPending.length ? `<div class="usage-notice">Still loading ${escapeHtml(routinesHostPending.join(", "))}\u2026</div>` : ""
+      ].join("");
+      const sorted = routinesList.slice().sort((a, b) => (b.stats?.lastInvocation?.startedAt || 0) - (a.stats?.lastInvocation?.startedAt || 0) || String(a.name || "").localeCompare(String(b.name || "")));
+      const rows = sorted.map((r) => {
+        const key = routineKey(r.host, r.id);
+        const last = r.stats?.lastInvocation || null;
+        const dot = `<span class="rt-dot ${last ? routineStatusClass(last.status) : "none"}" title="${escapeHtml(last ? last.status : "never run")}"></span>`;
+        const lastLine = last ? `${dot}${escapeHtml(last.status)} \xB7 ${escapeHtml(formatRelativeTime(last.startedAt))}` : `${dot}never run`;
+        const count = r.stats?.invocations || 0;
+        return `<div class="rt-row${routineSelKey === key ? " selected" : ""}" data-routine="${escapeHtml(r.id)}" data-host="${escapeHtml(r.host || "")}">
+        <div class="rt-row-top">
+          <span class="rt-name">${escapeHtml(r.name || r.id)}</span>
+          ${hostChipHtml(r.host)}
+        </div>
+        <div class="rt-row-sched">${routineScheduleLine(r)}</div>
+        <div class="rt-row-meta">${escapeHtml(r.mode === "continue" ? "continue" : "one-shot")} \xB7 on busy ${escapeHtml(r.onBusy || "skip")}</div>
+        <div class="rt-row-last">${lastLine}<span class="rt-count">${count} run${count === 1 ? "" : "s"}</span></div>
+      </div>`;
+      }).join("");
+      el.innerHTML = `
+      <div class="rt-list-head">
+        <button class="btn-small" id="rtNewBtn" data-rt-action="new">+ New routine</button>
+      </div>
+      ${notices}
+      ${routinesListError ? `<div class="usage-state">${escapeHtml(routinesListError)}</div>` : ""}
+      ${rows || (routinesListError ? "" : '<div class="usage-state">No routines yet.</div>')}`;
+      el.querySelector('[data-rt-action="new"]')?.addEventListener("click", () => {
+        if (isRoutinesViewOpen() && view === viewGeneration) startRoutineCreate();
+      }, { signal: listEvents.signal });
+      el.querySelectorAll(".rt-row").forEach((row) => {
+        const id = row.dataset.routine || "", host = row.dataset.host || null;
+        const resolved = options.host(host), endpoint = resolved ? Object.freeze({ ...resolved }) : null;
+        row.addEventListener("click", () => {
+          if (isRoutinesViewOpen() && view === viewGeneration && endpoint && !!options.host(host)) void selectRoutine(host, id);
+        }, { signal: listEvents.signal });
+      });
+    }
+    function routineFormDirty() {
+      if (!routineFormBaseline) return false;
+      const now = readRoutineForm();
+      return now && JSON.stringify(now) !== routineFormBaseline;
+    }
+    function confirmLeaveRoutineForm() {
+      if (!routineFormDirty()) return true;
+      return confirm("This routine has unsaved changes. Discard them?");
+    }
+    async function selectRoutine(host, id) {
+      if (!isRoutinesViewOpen()) return;
+      const resolved = options.host(host);
+      if (!resolved) return;
+      host = resolved.hostId;
+      const key = routineKey(host, id);
+      if (routineSelKey === key && routineSelected && sameHost(host, routineSelected.endpoint)) {
+        document2.getElementById("routinesView")?.classList.add("detail-open");
+        return;
+      }
+      if (!confirmLeaveRoutineForm()) return;
+      retireForm();
+      routineSelKey = key;
+      routineSelectedHostId = host;
+      routineCreating = false;
+      routineSelected = null;
+      routineFormBaseline = null;
+      routineFormError = "";
+      routineNotice = "";
+      routineDeleteArmed = false;
+      routineVersionFilter = null;
+      routineVersionShown = null;
+      routineInvocations = [];
+      routineInvocationsNextBefore = null;
+      stopRoutineInvocationPoll();
+      renderRoutinesList();
+      document2.getElementById("routinesView")?.classList.add("detail-open");
+      const owner = captureForm();
+      if (!ownsForm(owner)) return;
+      const detail = document2.getElementById("routinesDetail");
+      if (detail) detail.innerHTML = '<div class="usage-state">Loading routine\u2026</div>';
+      try {
+        const res = await apiFetch(owner.endpoint, `/api/routines/${encodeURIComponent(id)}`);
+        if (!res.ok) throw new Error(await httpError(res));
+        const data = await res.json();
+        if (!ownsForm(owner)) return;
+        routineSelected = decodeRoutine(data, owner.endpoint);
+        renderRoutineDetail();
+        loadRoutineInvocations({ reset: true });
+        startRoutineInvocationPoll();
+      } catch (e) {
+        if (!ownsForm(owner)) return;
+        if (detail) detail.innerHTML = `<div class="usage-state">Could not load routine: ${escapeHtml(errorMessage(e))}</div>`;
+      }
+    }
+    function startRoutineCreate() {
+      if (!isRoutinesViewOpen()) return;
+      if (!confirmLeaveRoutineForm()) return;
+      const hosts = routinesCapableHosts();
+      const host = hosts.find((h) => h.self) || hosts[0];
+      if (!host) return;
+      retireForm();
+      routineSelKey = null;
+      routineSelected = null;
+      routineCreating = true;
+      routineFormError = "";
+      routineNotice = "";
+      routineDeleteArmed = false;
+      routineVersionFilter = null;
+      routineVersionShown = null;
+      routineInvocations = [];
+      routineInvocationsNextBefore = null;
+      stopRoutineInvocationPoll();
+      routineCreateHostId = host ? host.hostId || null : null;
+      renderRoutinesList();
+      document2.getElementById("routinesView")?.classList.add("detail-open");
+      renderRoutineDetail();
+    }
+    function routineFormHostId() {
+      return routineCreating ? routineCreateHostId : routineSelected?.host ?? routineSelectedHostId;
+    }
+    function routineKnownCwds() {
+      const hostId = routineFormHostId();
+      const seen = /* @__PURE__ */ new Set();
+      const out = [];
+      for (const s of [...sessionState.sessions.active, ...sessionState.sessions.previous]) {
+        if (isMultiHost() && (s.host || null) !== hostId) continue;
+        if (typeof s.cwd !== "string" || !s.cwd || seen.has(s.cwd)) continue;
+        seen.add(s.cwd);
+        out.push({ path: s.cwd, short: shortCwd(s.cwd) });
+      }
+      return out;
+    }
+    async function loadRoutineHarnesses(hostId) {
+      const resolved = options.host(hostId);
+      if (!resolved) return [];
+      const endpoint = Object.freeze({ ...resolved });
+      const key = JSON.stringify([hostId, endpoint.base, endpoint.token || ""]);
+      if (routineHarnessCatalogs.has(key)) return routineHarnessCatalogs.get(key);
+      let list = [{ id: "pi", label: "Pi", available: true }];
+      try {
+        const res = await apiFetch(endpoint, "/api/harnesses");
+        if (res.ok) {
+          const data = await res.json();
+          if (record8(data) && Array.isArray(data.harnesses) && data.harnesses.length) list = data.harnesses.flatMap((row) => record8(row) && typeof row.id === "string" ? [{ id: row.id, label: typeof row.label === "string" ? row.label : row.id, available: row.available !== false }] : []);
+        }
+      } catch {
+      }
+      if (!disposed && sameHost(hostId, endpoint)) routineHarnessCatalogs.set(key, list);
+      return list;
+    }
+    async function loadRoutineModels(hostId, harnessId, cwd) {
+      const resolved = options.host(hostId);
+      if (!resolved) return [];
+      const endpoint = Object.freeze({ ...resolved });
+      const key = JSON.stringify([hostId, endpoint.base, endpoint.token || "", harnessId, cwd]);
+      if (routineModelCatalogs.has(key)) return routineModelCatalogs.get(key);
+      const seq = ++routineModelSeq;
+      let models = [];
+      try {
+        const url = harnessId !== "pi" ? modelCatalogUrl(harnessId, cwd) : "/api/models";
+        const res = await apiFetch(endpoint, url);
+        if (res.ok) {
+          const data = await res.json();
+          models = decodeModelCatalog(data);
+        }
+      } catch {
+      }
+      if (disposed || seq !== routineModelSeq || !sameHost(hostId, endpoint)) return models;
+      routineModelCatalogs.set(key, models);
+      return models;
+    }
+    function readRoutineForm() {
+      const detail = document2.getElementById("routinesDetail");
+      if (!detail || !detail.querySelector("#rtName")) return null;
+      const val = (id) => (field(id)?.value ?? "").trim();
+      const minInterval = parseInt(field("rtMinInterval")?.value || "", 10);
+      return {
+        name: val("rtName"),
+        description: val("rtDescription"),
+        harness: val("rtHarness") || "pi",
+        cwd: val("rtCwd"),
+        model: val("rtModel"),
+        thinking: val("rtThinking"),
+        cron: val("rtCron"),
+        enabled: !!field("rtEnabled")?.checked,
+        mode: detail.querySelector('input[name="rtMode"]:checked')?.value === "continue" ? "continue" : "oneShot",
+        onBusy: val("rtOnBusy") === "steer" ? "steer" : val("rtOnBusy") === "followUp" ? "followUp" : "skip",
+        minIntervalSec: Number.isFinite(minInterval) && minInterval > 0 ? minInterval : 0,
+        prompt: field("rtPrompt")?.value ?? ""
+      };
+    }
+    function routineFormDefaults() {
+      if (routineSelected) {
+        return {
+          name: routineSelected.name || "",
+          description: routineSelected.description || "",
+          harness: routineSelected.harness || "pi",
+          cwd: routineSelected.cwd || "",
+          model: routineSelected.model || "",
+          thinking: routineSelected.thinking || "",
+          cron: routineSelected.schedule?.cron || "",
+          enabled: routineSelected.enabled !== false,
+          mode: routineSelected.mode === "continue" ? "continue" : "oneShot",
+          onBusy: routineSelected.onBusy || "skip",
+          minIntervalSec: routineSelected.minIntervalSec || 0,
+          prompt: routineSelected.prompt || ""
+        };
+      }
+      return {
+        name: "",
+        description: "",
+        harness: "pi",
+        cwd: localStorage.getItem("pi-dish-cwd") || "",
+        model: "",
+        thinking: "",
+        cron: "",
+        enabled: true,
+        mode: "oneShot",
+        onBusy: "skip",
+        minIntervalSec: 0,
+        prompt: ""
+      };
+    }
+    function renderRoutineDetail(values, baseline) {
+      if (!isRoutinesViewOpen()) return;
+      retireForm();
+      const el = document2.getElementById("routinesDetail");
+      if (!el) return;
+      if (!routineSelected && !routineCreating) {
+        el.innerHTML = '<div class="usage-state">Select a routine, or create one.</div>';
+        return;
+      }
+      const v = values || routineFormDefaults();
+      const hosts = routinesCapableHosts();
+      const hostRow = routineCreating && hosts.length > 1 ? `<label class="rt-field">
+           <span class="ns-label">Host</span>
+           <select class="ns-select" id="rtHost">${hosts.map((h) => `<option value="${escapeHtml(h.hostId || "")}"${(h.hostId || null) === routineCreateHostId ? " selected" : ""}>${escapeHtml(hostDisplayLabel(h))}</option>`).join("")}</select>
+         </label>` : "";
+      const presets = ROUTINE_CRON_PRESETS.map(([value, label]) => `<option value="${escapeHtml(value)}"${value === v.cron ? " selected" : ""}>${escapeHtml(label)}</option>`).join("");
+      const onBusy = ROUTINE_ON_BUSY.map(([value, label]) => `<option value="${escapeHtml(value)}"${value === v.onBusy ? " selected" : ""}>${escapeHtml(label)}</option>`).join("");
+      const thinking = ['<option value="">(default)</option>'].concat(ROUTINE_THINKING_LEVELS.map((level) => `<option value="${level}"${level === v.thinking ? " selected" : ""}>${escapeHtml(NS_THINKING_LABELS[level] || level)}</option>`)).join("");
+      el.innerHTML = `
+      <div class="rt-detail-head">
+        <button class="rt-back" data-rt-action="back">\u2039 Routines</button>
+        <h2 class="rt-detail-title">${escapeHtml(routineCreating ? "New routine" : routineSelected?.name || routineSelected?.id || "")}</h2>
+        ${routineCreating ? "" : hostChipHtml(routineSelected?.host || null)}
+        ${routineCreating ? "" : `<span class="rt-version-badge">v${routineSelected?.promptVersion || 1}</span>`}
+      </div>
+
+      <div class="rt-form">
+        ${hostRow}
+        <div class="rt-field-row">
+          <label class="rt-field">
+            <span class="ns-label">Name</span>
+            <input type="text" class="cwd-input" id="rtName" value="${escapeHtml(v.name)}"
+              placeholder="nightly-review" spellcheck="false" autocomplete="off">
+          </label>
+          <label class="rt-field">
+            <span class="ns-label">Agent</span>
+            <select class="ns-select" id="rtHarness"><option value="${escapeHtml(v.harness)}">${escapeHtml(v.harness)}</option></select>
+          </label>
+        </div>
+
+        <label class="rt-field">
+          <span class="ns-label">Description <span class="ns-label-optional">(optional)</span></span>
+          <input type="text" class="cwd-input" id="rtDescription" value="${escapeHtml(v.description)}"
+            placeholder="What this routine is for" autocomplete="off">
+        </label>
+
+        <label class="rt-field">
+          <span class="ns-label">Working directory</span>
+          <div class="cwd-input-wrap">
+            <input type="text" class="cwd-input" id="rtCwd" value="${escapeHtml(v.cwd)}" placeholder="~" spellcheck="false" autocomplete="off">
+            <div class="cwd-dropdown" id="rtCwdDropdown"></div>
+          </div>
+        </label>
+
+        <div class="rt-field-row">
+          <label class="rt-field">
+            <span class="ns-label">Model</span>
+            <select class="ns-select" id="rtModel"><option value="">(default)</option>${v.model ? `<option value="${escapeHtml(v.model)}" selected>${escapeHtml(v.model)}</option>` : ""}</select>
+            <span class="ns-hidden-note" id="rtModelNote"></span>
+          </label>
+          <label class="rt-field">
+            <span class="ns-label">Thinking level</span>
+            <select class="ns-select" id="rtThinking">${thinking}</select>
+          </label>
+        </div>
+
+        <div class="rt-field-row">
+          <label class="rt-field">
+            <span class="ns-label">Schedule (cron, local time)</span>
+            <input type="text" class="cwd-input" id="rtCron" value="${escapeHtml(v.cron)}"
+              placeholder="0 9 * * 1-5" spellcheck="false" autocomplete="off">
+          </label>
+          <label class="rt-field">
+            <span class="ns-label">Preset</span>
+            <select class="ns-select" id="rtCronPreset">${presets}<option value="__custom" ${ROUTINE_CRON_PRESETS.some(([p]) => p === v.cron) ? "" : "selected"}>Custom\u2026</option></select>
+          </label>
+        </div>
+        <label class="rt-check">
+          <input type="checkbox" id="rtEnabled"${v.enabled ? " checked" : ""}>
+          <span>Schedule armed <small>\u2014 unchecking pauses the cadence; Run now and the invoke route keep working</small></span>
+        </label>
+
+        <div class="rt-field">
+          <span class="ns-label">Mode</span>
+          <label class="rt-radio"><input type="radio" name="rtMode" value="oneShot"${v.mode === "oneShot" ? " checked" : ""}>
+            <span>One-shot <small>\u2014 every run spawns a fresh session and closes it when the turn ends</small></span></label>
+          <label class="rt-radio"><input type="radio" name="rtMode" value="continue"${v.mode === "continue" ? " checked" : ""}>
+            <span>Continue <small>\u2014 reuse this routine's last session (resuming it if needed); never auto-closed</small></span></label>
+        </div>
+
+        <div class="rt-field-row">
+          <label class="rt-field">
+            <span class="ns-label">When the routine is busy</span>
+            <select class="ns-select" id="rtOnBusy">${onBusy}</select>
+            <span class="ns-hidden-note">Scheduled ticks always skip; this applies to invokes.</span>
+          </label>
+          <label class="rt-field">
+            <span class="ns-label">Minimum interval (seconds)</span>
+            <input type="number" class="cwd-input" id="rtMinInterval" min="0" step="1" value="${escapeHtml(String(v.minIntervalSec))}">
+            <span class="ns-hidden-note">Invokes closer together than this are rejected with 429.</span>
+          </label>
+        </div>
+
+        <label class="rt-field">
+          <span class="ns-label">Prompt</span>
+          <textarea class="rt-prompt" id="rtPrompt" rows="12" spellcheck="false" placeholder="What this routine asks the agent to do">${escapeHtml(v.prompt)}</textarea>
+          <span class="ns-hidden-note">Saving a changed prompt appends a new version. <code>#refs</code> resolve like they do in the composer; an invoke's <code>input</code> is appended as an <code>&lt;invocation-input&gt;</code> block.</span>
+        </label>
+
+        <div class="rt-actions">
+          <span class="rt-error" id="rtError">${escapeHtml(routineFormError)}</span>
+          <span class="rt-notice" id="rtNotice">${escapeHtml(routineNotice)}</span>
+          ${routineCreating ? "" : `<button class="btn-small btn-danger" id="rtDeleteBtn" data-rt-action="delete">${routineDeleteArmed ? "Delete?" : "Delete"}</button>`}
+          ${routineCreating ? "" : '<button class="btn" id="rtRunBtn" data-rt-action="run">Run now</button>'}
+          <button class="btn btn-primary" id="rtSaveBtn" data-rt-action="save">${routineCreating ? "Create routine" : "Save"}</button>
+        </div>
+      </div>
+
+      ${routineCreating ? "" : renderRoutineInvokeBox()}
+      ${routineCreating ? "" : renderRoutineVersions()}
+      ${routineCreating ? "" : '<div class="rt-invocations" id="rtInvocations"></div>'}`;
+      if (baseline !== void 0) routineFormBaseline = baseline;
+      wireRoutineForm(v, baseline === void 0);
+      if (!routineCreating) renderRoutineInvocations();
+    }
+    function wireRoutineForm(values, baseline = true) {
+      if (!isRoutinesViewOpen()) return;
+      formEvents.abort();
+      formEvents = new AbortController();
+      disposeRoutineCwdAutocomplete();
+      const owner = captureForm(), listener = { signal: formEvents.signal };
+      const el = document2.getElementById("routinesDetail");
+      if (!el) return;
+      const view = viewGeneration, form = formGeneration;
+      el.querySelector('[data-rt-action="back"]')?.addEventListener("click", () => {
+        if (isRoutinesViewOpen() && view === viewGeneration && form === formGeneration) backToRoutinesList();
+      }, listener);
+      if (!ownsForm(owner)) {
+        const error = field("rtError");
+        if (error) error.textContent = "Routine host changed or was removed. Return to Routines and select it again.";
+        for (const button of el.querySelectorAll('[data-rt-action]:not([data-rt-action="back"])')) button.disabled = true;
+        return;
+      }
+      const hostSel = el.querySelector("#rtHost");
+      if (hostSel) hostSel.addEventListener("change", () => {
+        if (!ownsForm(owner)) return;
+        routineCwdAutocomplete?.hide();
+        routineCreateHostId = hostSel.value || null;
+        const harness = el.querySelector("#rtHarness")?.value || values.harness;
+        const current = readRoutineForm();
+        retireForm();
+        if (current) wireRoutineForm({ ...current, harness }, false);
+      }, listener);
+      const harnessSel = el.querySelector("#rtHarness");
+      if (harnessSel) harnessSel.addEventListener("change", () => {
+        if (ownsForm(owner)) {
+          harnessRequest++;
+          void refreshRoutineModelOptions("");
+        }
+      }, listener);
+      field("rtModel")?.addEventListener("change", () => {
+        if (ownsForm(owner)) modelRequest++;
+      }, listener);
+      const cwdInput = el.querySelector("#rtCwd");
+      cwdInput?.addEventListener("input", () => {
+        if (ownsForm(owner)) modelRequest++;
+      }, listener);
+      const cwdDropdown = el.querySelector("#rtCwdDropdown");
+      if (cwdInput && cwdDropdown) {
+        routineCwdAutocomplete = createCwdAutocomplete2({
+          input: cwdInput,
+          dropdown: cwdDropdown,
+          hostId: () => routineFormHostId(),
+          known: () => routineKnownCwds(),
+          onPick: () => {
+            if (ownsForm(owner)) void refreshRoutineModelOptions();
+          },
+          onBlur: () => {
+            if (ownsForm(owner)) void refreshRoutineModelOptions();
+          }
+        });
+      }
+      const preset = el.querySelector("#rtCronPreset");
+      const cron = el.querySelector("#rtCron");
+      if (preset && cron) {
+        preset.addEventListener("change", () => {
+          if (!ownsForm(owner) || preset.value === "__custom") return;
+          cron.value = preset.value;
+        }, listener);
+        cron.addEventListener("input", () => {
+          if (!ownsForm(owner)) return;
+          const match = ROUTINE_CRON_PRESETS.some(([p]) => p === cron.value.trim());
+          preset.value = match ? cron.value.trim() : "__custom";
+        }, listener);
+      }
+      if (baseline) routineFormBaseline = JSON.stringify(values);
+      const actions = { back: backToRoutinesList, save: saveRoutine, run: runRoutineNow, delete: deleteRoutine, copy: copyRoutineCurl };
+      for (const button of el.querySelectorAll('[data-rt-action]:not([data-rt-action="back"])')) {
+        const action = actions[button.dataset.rtAction || ""];
+        if (action) button.addEventListener("click", () => {
+          if (ownsForm(owner)) action();
+        }, listener);
+      }
+      for (const [id, label] of [["rtSaveBtn", routineCreating ? "Create routine" : "Save"], ["rtRunBtn", "Run now"], ["rtDeleteBtn", "Delete"]]) {
+        const button = field(id);
+        if (button) {
+          button.disabled = false;
+          button.textContent = label;
+        }
+      }
+      mountVersions();
+      refreshRoutineHarnessOptions(values.harness).then((ready) => {
+        if (ready && ownsForm(owner)) return refreshRoutineModelOptions(values.model);
+      });
+    }
+    async function refreshRoutineHarnessOptions(preferred) {
+      const sel = field("rtHarness");
+      if (!sel) return false;
+      const owner = captureForm(), request = ++harnessRequest;
+      const hostId = routineFormHostId();
+      const list = await loadRoutineHarnesses(hostId);
+      if (!ownsForm(owner) || request !== harnessRequest || field("rtHarness") !== sel) return false;
+      const available = list.filter((h) => h && h.available !== false);
+      const want = preferred || sel.value || "pi";
+      sel.innerHTML = available.map((h) => `<option value="${escapeHtml(h.id)}">${escapeHtml(h.label || h.id)}</option>`).join("") || `<option value="${escapeHtml(want)}">${escapeHtml(want)}</option>`;
+      if (!available.some((h) => h.id === want)) {
+        sel.insertAdjacentHTML("afterbegin", `<option value="${escapeHtml(want)}">${escapeHtml(want)}</option>`);
+      }
+      sel.value = want;
+      return true;
+    }
+    async function refreshRoutineModelOptions(preferred) {
+      const sel = field("rtModel");
+      if (!sel) return;
+      const owner = captureForm(), request = ++modelRequest;
+      const want = preferred !== void 0 ? preferred : sel.value;
+      const hostId = routineFormHostId();
+      const harnessId = field("rtHarness")?.value || "pi";
+      const cwd = (field("rtCwd")?.value || "").trim();
+      const models = await loadRoutineModels(hostId, harnessId, cwd);
+      if (!ownsForm(owner) || request !== modelRequest || field("rtModel") !== sel || (field("rtHarness")?.value || "pi") !== harnessId || (field("rtCwd")?.value || "").trim() !== cwd) return;
+      const { html, enabled, hidden } = modelSelectOptionsHtml2(models);
+      sel.innerHTML = html;
+      if (want && !enabled.some((m) => (m.selector || `${m.provider}/${m.id}`) === want)) {
+        sel.insertAdjacentHTML("beforeend", `<option value="${escapeHtml(want)}">${escapeHtml(want)}</option>`);
+      }
+      sel.value = want || "";
+      const note = document2.getElementById("rtModelNote");
+      if (note) note.textContent = modelHiddenNote(hidden);
+    }
+    function routineInvokeUrl(routine) {
+      const base = routine.endpoint.base || "";
+      const path = `/api/routines/${encodeURIComponent(routine.id)}/invoke`;
+      try {
+        return new URL(base + path, location.origin).href;
+      } catch {
+        return base + path;
+      }
+    }
+    function routineInvokeCurl(routine) {
+      const authed = !!routine.endpoint.token;
+      return [
+        `curl -X POST '${routineInvokeUrl(routine)}' \\`,
+        "  -H 'Content-Type: application/json' \\",
+        ...authed ? ['  -H "Authorization: Bearer $PI_DISH_TOKEN" \\'] : [],
+        `  -d '{"source":"my-script","input":{"note":"anything JSON"}}'`
+      ].join("\n");
+    }
+    function renderRoutineInvokeBox() {
+      if (!routineSelected) return "";
+      const curl = routineInvokeCurl(routineSelected);
+      return `<details class="rt-box" open>
+      <summary>Invoke from a script</summary>
+      <pre class="rt-curl" id="rtCurl">${escapeHtml(curl)}</pre>
+      <div class="rt-box-actions">
+        <button class="btn-small" data-rt-action="copy">Copy</button>
+        <span class="ns-hidden-note">The optional <code>input</code> JSON is appended to the prompt as an <code>&lt;invocation-input&gt;</code> block. Add <code>?wait=1</code> to block until the run leaves <code>starting</code>.</span>
+      </div>
+    </details>`;
+    }
+    function copyRoutineCurl() {
+      if (!isRoutinesViewOpen() || !routineSelected) return;
+      copyTextToClipboard(routineInvokeCurl(routineSelected));
+      setStatus("Invoke command copied");
+    }
+    function renderRoutineVersions() {
+      const versions = Array.isArray(routineSelected?.versions) ? routineSelected.versions.slice().reverse() : [];
+      if (!versions.length) return "";
+      const rows = versions.map((entry) => {
+        const active = routineVersionFilter === entry.version;
+        const shown = routineVersionShown === entry.version;
+        return `<div class="rt-version${active ? " filtered" : ""}">
+        <div class="rt-version-row" data-version="${entry.version}">
+          <span class="rt-version-num">v${entry.version}</span>
+          <span class="rt-version-when" title="${escapeHtml(new Date(entry.savedAt).toLocaleString())}">${escapeHtml(formatRelativeTime(entry.savedAt))}</span>
+          ${entry.version === (routineSelected?.promptVersion || 1) ? '<span class="rt-version-current">current</span>' : ""}
+          <span class="rt-version-hint">${active ? "filtering runs" : "click to filter runs"}</span>
+          <button class="btn-small rt-version-view" data-view="${entry.version}">${shown ? "hide" : "view"}</button>
+          <button class="btn-small rt-version-restore" data-restore="${entry.version}">restore</button>
+        </div>
+        ${shown ? `<pre class="rt-version-text">${escapeHtml(entry.prompt || "")}</pre>` : ""}
+      </div>`;
+      }).join("");
+      return `<details class="rt-box" id="rtVersions"${routineVersionFilter || routineVersionShown ? " open" : ""}>
+      <summary>Prompt versions (${versions.length})</summary>
+      ${rows}
+      <div class="ns-hidden-note">Restoring only writes the text back into the editor \u2014 saving it then creates a <em>new</em> version.</div>
+    </details>`;
+    }
+    function mountVersions() {
+      versionEvents.abort();
+      versionEvents = new AbortController();
+      const root = document2.getElementById("rtVersions"), owner = captureForm();
+      if (!root) return;
+      root.addEventListener("click", (e) => {
+        if (!ownsForm(owner) || document2.getElementById("rtVersions") !== root || !(e.target instanceof Element)) return;
+        const view = e.target.closest(".rt-version-view");
+        if (view) {
+          const version = Number(view.dataset.view);
+          routineVersionShown = routineVersionShown === version ? null : version;
+          rerenderRoutineVersions();
+          return;
+        }
+        const restore = e.target.closest(".rt-version-restore");
+        if (restore) {
+          const version = Number(restore.dataset.restore);
+          const entry = (routineSelected?.versions || []).find((v) => v.version === version);
+          const textarea = field("rtPrompt");
+          if (entry && textarea) {
+            textarea.value = entry.prompt || "";
+            routineNotice = `Restored v${version} into the editor \u2014 save to make it the new version.`;
+            const notice = document2.getElementById("rtNotice");
+            if (notice) notice.textContent = routineNotice;
+          }
+          return;
+        }
+        const row = e.target.closest(".rt-version-row");
+        if (row && document2.getElementById("rtVersions")?.contains(row)) {
+          const version = Number(row.dataset.version);
+          routineVersionFilter = routineVersionFilter === version ? null : version;
+          rerenderRoutineVersions();
+          renderRoutineInvocations();
+        }
+      }, { signal: versionEvents.signal });
+    }
+    function rerenderRoutineVersions() {
+      const existing = document2.getElementById("rtVersions");
+      if (!existing) return;
+      existing.outerHTML = renderRoutineVersions();
+      mountVersions();
+    }
+    function stopRoutineInvocationPoll() {
+      if (routineInvocationsTimer !== null) clearInterval(routineInvocationsTimer);
+      routineInvocationsTimer = null;
+    }
+    function startRoutineInvocationPoll() {
+      if (!isRoutinesViewOpen()) return;
+      stopRoutineInvocationPoll();
+      routineInvocationsTimer = setInterval(() => {
+        if (!isRoutinesViewOpen() || !routineSelected || !options.host(routineSelected.host)) {
+          stopRoutineInvocationPoll();
+          return;
+        }
+        loadRoutineInvocations({ reset: true, quiet: true });
+      }, 1e4);
+    }
+    async function loadRoutineInvocations({ reset = false, quiet = false } = {}) {
+      if (!isRoutinesViewOpen() || !routineSelected || invocationToken) return;
+      const owner = captureForm();
+      if (!ownsForm(owner)) return;
+      const token = invocationToken = /* @__PURE__ */ Symbol();
+      const selected = routineSelected;
+      const key = routineSelKey;
+      const before = reset ? null : routineInvocationsNextBefore;
+      try {
+        const params = new URLSearchParams({ limit: "50" });
+        if (before) params.set("before", String(before));
+        const res = await apiFetch(
+          owner.endpoint,
+          `/api/routines/${encodeURIComponent(selected.id)}/invocations?${params}`,
+          { timeoutMs: 2e4 }
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!ownsForm(owner) || invocationToken !== token) return;
+        const decoded = decodeRoutineInvocations(data), list = decoded.invocations;
+        routineInvocations = reset ? list : routineInvocations.concat(list);
+        routineInvocationsNextBefore = decoded.nextBefore;
+        renderRoutineInvocations();
+        if (reset) {
+          const row = routinesList.find((r) => routineKey(r.host, r.id) === key);
+          if (row && row.stats) {
+            row.stats.lastInvocation = list[0] || null;
+            renderRoutinesList();
+          }
+        }
+      } catch (e) {
+        if (!quiet && ownsForm(owner) && invocationToken === token) {
+          const el = document2.getElementById("rtInvocations");
+          if (el) el.innerHTML = `<div class="usage-state">Could not load runs: ${escapeHtml(errorMessage(e))}</div>`;
+        }
+      } finally {
+        if (invocationToken === token) invocationToken = null;
+      }
+    }
+    function routineInvocationDetail(inv) {
+      const parts = [];
+      if (inv.skipReason) parts.push(`skipped: ${inv.skipReason}`);
+      if (inv.error) parts.push(inv.error);
+      if (inv.closeError) parts.push(`close: ${inv.closeError}`);
+      if (!parts.length && inv.summary) parts.push(inv.summary);
+      return parts.join(" \xB7 ");
+    }
+    function routineSessionLabel(sessionId) {
+      const known = sessionState.findSession(sessionId, routineSelected?.host || null);
+      if (known && known.name) return truncate(typeof known.name === "string" ? known.name : "", 28, "\u2026");
+      return /^\d{4}-\d\d-\d\d/.test(sessionId) ? sessionId.slice(-8) : sessionId.slice(0, 8);
+    }
+    function renderRoutineInvocations() {
+      if (!isRoutinesViewOpen()) return;
+      invocationEvents.abort();
+      invocationEvents = new AbortController();
+      const owner = captureForm();
+      const el = document2.getElementById("rtInvocations");
+      if (!el) return;
+      const filtered = routineVersionFilter ? routineInvocations.filter((inv) => inv.version === routineVersionFilter) : routineInvocations;
+      const rows = filtered.map((inv) => {
+        const trigger = inv.trigger + (inv.source ? ` (${inv.source})` : "");
+        const started = inv.startedAt ? `<span title="${escapeHtml(new Date(inv.startedAt).toLocaleString())}">${escapeHtml(formatRelativeTime(inv.startedAt))}</span>` : "\u2014";
+        const duration = Number.isFinite(inv.durationMs) ? formatDuration(inv.durationMs || 0) : "\u2014";
+        const session = inv.sessionId ? `<a class="rt-session-link" data-session="${escapeHtml(inv.sessionId)}" data-host="${escapeHtml(routineSelected?.host || "")}" title="${escapeHtml(inv.sessionId)}">${escapeHtml(routineSessionLabel(inv.sessionId))}</a>` : "\u2014";
+        const detail = routineInvocationDetail(inv);
+        return `<tr data-invocation="${escapeHtml(inv.id)}">
+        <td class="rt-num">v${escapeHtml(String(inv.version ?? ""))}</td>
+        <td>${escapeHtml(trigger)}</td>
+        <td>${escapeHtml(inv.delivery || "")}</td>
+        <td><span class="rt-dot ${routineStatusClass(inv.status)}"></span>${escapeHtml(inv.status || "")}</td>
+        <td>${started}</td>
+        <td class="rt-num">${escapeHtml(duration)}</td>
+        <td>${session}</td>
+        <td class="rt-detail-cell" title="${escapeHtml(detail)}">${escapeHtml(detail)}</td>
+      </tr>`;
+      }).join("");
+      el.innerHTML = `
+      <div class="rt-invocations-head">
+        <h3>Runs${routineVersionFilter ? ` <span class="rt-filter-chip">v${routineVersionFilter} only <button class="rt-filter-clear" data-rt-action="clear">\u2715</button></span>` : ""}</h3>
+      </div>
+      ${filtered.length ? `<div class="rt-table-wrap"><table class="rt-table">
+        <thead><tr><th>Ver</th><th>Trigger</th><th>Delivery</th><th>Status</th><th>Started</th><th>Duration</th><th>Session</th><th>Detail</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>` : '<div class="usage-state">No runs yet.</div>'}
+      ${routineInvocationsNextBefore ? '<button class="btn-small rt-load-more" data-rt-action="more">Load more</button>' : ""}`;
+      const listener = { signal: invocationEvents.signal };
+      el.querySelector('[data-rt-action="clear"]')?.addEventListener("click", () => {
+        if (ownsForm(owner)) clearRoutineVersionFilter();
+      }, listener);
+      el.querySelector('[data-rt-action="more"]')?.addEventListener("click", () => {
+        if (ownsForm(owner)) loadMoreRoutineInvocations();
+      }, listener);
+      el.querySelectorAll(".rt-session-link").forEach((link) => {
+        const id = link.dataset.session || "", host = link.dataset.host || null;
+        link.addEventListener("click", () => {
+          if (ownsForm(owner)) void openRoutineSession(id, host);
+        }, listener);
+      });
+    }
+    function clearRoutineVersionFilter() {
+      routineVersionFilter = null;
+      rerenderRoutineVersions();
+      renderRoutineInvocations();
+    }
+    function loadMoreRoutineInvocations() {
+      loadRoutineInvocations({ reset: false });
+    }
+    async function openRoutineSession(sessionId, host) {
+      if (!isRoutinesViewOpen() || !sessionId) return;
+      const resolved = options.host(host);
+      if (!resolved) return;
+      const selection = sessionState.captureSelection(), endpoint = Object.freeze({ ...resolved });
+      closeRoutinesView();
+      const view = viewGeneration;
+      if (!sessionState.findSession(sessionId, host)) await options.loadPrevious();
+      if (disposed || view !== viewGeneration || isRoutinesViewOpen() || !sameHost(host, endpoint) || (selection ? !sessionState.ownsSelection(selection) : sessionState.currentSession !== null)) return;
+      await options.selectSession(sessionId, { host });
+    }
+    function routineFormBody(values) {
+      return {
+        name: values.name,
+        description: values.description,
+        harness: values.harness,
+        cwd: values.cwd,
+        // Explicit null, not undefined: JSON.stringify drops undefined keys, and
+        // a PUT is a partial update — a dropped key would leave the old model in
+        // place instead of clearing it back to the harness default.
+        model: values.model || null,
+        thinking: values.thinking || null,
+        prompt: values.prompt,
+        schedule: values.cron ? { cron: values.cron } : null,
+        enabled: values.enabled,
+        mode: values.mode,
+        onBusy: values.onBusy,
+        minIntervalSec: values.minIntervalSec
+      };
+    }
+    function setRoutineFormError(message3) {
+      if (!isRoutinesViewOpen()) return;
+      routineFormError = message3 || "";
+      const el = document2.getElementById("rtError");
+      if (el) el.textContent = routineFormError;
+    }
+    function setRoutineNotice(message3) {
+      if (!isRoutinesViewOpen()) return;
+      routineNotice = message3 || "";
+      const el = document2.getElementById("rtNotice");
+      if (el) el.textContent = routineNotice;
+    }
+    async function saveRoutine() {
+      if (!isRoutinesViewOpen() || routineBusy) return;
+      const values = readRoutineForm();
+      if (!values) return;
+      const btn = field("rtSaveBtn");
+      const creating = routineCreating;
+      const hostId = routineFormHostId(), owner = captureForm(), selected = routineSelected;
+      if (!routineCreating && !selected) return;
+      if (!ownsForm(owner)) return;
+      const token = mutationToken = /* @__PURE__ */ Symbol();
+      setRoutineFormError("");
+      setRoutineNotice("");
+      routineBusy = true;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Saving\u2026";
+      }
+      try {
+        const path = creating ? "/api/routines" : `/api/routines/${encodeURIComponent(selected.id)}`;
+        const res = await apiFetch(owner.endpoint, path, {
+          method: creating ? "POST" : "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(routineFormBody(values))
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(payloadError(data, res.status));
+        if (!ownsForm(owner) || mutationToken !== token) return;
+        const saved = decodeRoutine(data, owner.endpoint);
+        const edited = readRoutineForm();
+        routineCreating = false;
+        routineSelected = saved;
+        routineSelKey = routineKey(hostId, saved.id);
+        routineVersionShown = null;
+        renderRoutineDetail(edited && JSON.stringify(edited) !== JSON.stringify(values) ? edited : void 0, JSON.stringify(values));
+        setRoutineNotice(creating ? "Routine created." : `Saved (v${saved.promptVersion || 1}).`);
+        void loadRoutinesView();
+        if (creating) {
+          routineInvocations = [];
+          routineInvocationsNextBefore = null;
+          startRoutineInvocationPoll();
+        }
+        loadRoutineInvocations({ reset: true });
+      } catch (e) {
+        if (ownsForm(owner) && mutationToken === token) setRoutineFormError(errorMessage(e));
+      } finally {
+        if (ownsForm(owner) && mutationToken === token) {
+          mutationToken = null;
+          routineBusy = false;
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = creating ? "Create routine" : "Save";
+          }
+        }
+      }
+    }
+    async function runRoutineNow() {
+      if (!isRoutinesViewOpen() || routineBusy || !routineSelected) return;
+      const btn = field("rtRunBtn"), owner = captureForm(), selected = routineSelected;
+      if (!ownsForm(owner)) return;
+      const token = mutationToken = /* @__PURE__ */ Symbol();
+      setRoutineFormError("");
+      setRoutineNotice("");
+      routineBusy = true;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Starting\u2026";
+      }
+      try {
+        const res = await apiFetch(
+          owner.endpoint,
+          `/api/routines/${encodeURIComponent(selected.id)}/invoke`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ source: "pi-dish-ui" })
+          }
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const extra = res.status === 429 && record8(data) && typeof data.retryAfterSec === "number" ? ` (retry in ${data.retryAfterSec}s)` : "";
+          throw new Error(payloadError(data, res.status) + extra);
+        }
+        if (!ownsForm(owner) || mutationToken !== token) return;
+        setRoutineNotice("Run started.");
+        await loadRoutineInvocations({ reset: true });
+        if (ownsForm(owner)) void loadRoutinesView();
+      } catch (e) {
+        if (ownsForm(owner) && mutationToken === token) setRoutineFormError(errorMessage(e));
+      } finally {
+        if (ownsForm(owner) && mutationToken === token) {
+          mutationToken = null;
+          routineBusy = false;
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = "Run now";
+          }
+        }
+      }
+    }
+    let routineDeleteArmTimer;
+    async function deleteRoutine() {
+      if (!isRoutinesViewOpen() || routineBusy || !routineSelected) return;
+      const btn = field("rtDeleteBtn"), owner = captureForm(), selected = routineSelected;
+      if (!ownsForm(owner)) return;
+      if (!routineDeleteArmed) {
+        routineDeleteArmed = true;
+        if (btn) btn.textContent = "Delete?";
+        clearTimeout(routineDeleteArmTimer);
+        routineDeleteArmTimer = setTimeout(() => {
+          if (!ownsForm(owner)) return;
+          routineDeleteArmed = false;
+          const live = field("rtDeleteBtn");
+          if (live) live.textContent = "Delete";
+        }, 3e3);
+        return;
+      }
+      clearTimeout(routineDeleteArmTimer);
+      const token = mutationToken = /* @__PURE__ */ Symbol();
+      routineDeleteArmed = false;
+      routineBusy = true;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Deleting\u2026";
+      }
+      try {
+        const res = await apiFetch(
+          owner.endpoint,
+          `/api/routines/${encodeURIComponent(selected.id)}`,
+          { method: "DELETE" }
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(payloadError(data, res.status));
+        if (!ownsForm(owner) || mutationToken !== token) return;
+        stopRoutineInvocationPoll();
+        routineSelected = null;
+        routineSelKey = null;
+        routineFormBaseline = null;
+        routineInvocations = [];
+        backToRoutinesList();
+        renderRoutineDetail();
+        await loadRoutinesView();
+      } catch (e) {
+        if (!ownsForm(owner) || mutationToken !== token) return;
+        mutationToken = null;
+        routineBusy = false;
+        setRoutineFormError(errorMessage(e));
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "Delete";
+        }
+        return;
+      }
+      if (mutationToken === token) {
+        mutationToken = null;
+        routineBusy = false;
+      }
+    }
+    return {
+      open: openRoutinesView,
+      close: closeRoutinesView,
+      isOpen: isRoutinesViewOpen,
+      refresh: refreshRoutinesView,
+      escape: routinesViewEscape,
+      back: backToRoutinesList,
+      select: selectRoutine,
+      create: startRoutineCreate,
+      updateButton: updateRoutinesButton,
+      save: saveRoutine,
+      run: runRoutineNow,
+      delete: deleteRoutine,
+      get invocations() {
+        return routineInvocations;
+      },
+      dispose() {
+        closeRoutinesView();
+        disposed = true;
+        routineModelCatalogs.clear();
+        routineHarnessCatalogs.clear();
       }
     };
   }

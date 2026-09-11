@@ -385,3 +385,8 @@ The browser build validates all four outputs before writing any of them.
 Pending opens are cancellable before an instance exists; font deadlines and
 reconnect timers are cleared on retirement. Xterm/FitAddon imports are type-only,
 and runtime assets remain the existing local vendor files.
+
+Routine list/form/catalog/mutation/ledger lifetimes live in `routines-view.ts`,
+with explicit definitions, versions and invocation decoding in `routines-data.ts`.
+Form owners include host endpoints; changing views or form targets retires earlier
+results. Closing preserves draft values while retiring listeners and timers.

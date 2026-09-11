@@ -72,7 +72,7 @@ module.exports = async function routines({ desktop, check, CWD }) {
   check(true, 'clearing the version filter restores every run');
 
   // Provenance: the session the routine produced wears its chip.
-  const routineSessionId = await desktop.evaluate(() => routineInvocations[0]?.sessionId || null);
+  const routineSessionId = await desktop.evaluate(() => routinesController.invocations[0]?.sessionId || null);
   check(!!routineSessionId, 'the invocation records the session it ran in');
   await desktop.evaluate(() => { switchTab('all'); });
   await desktop.evaluate(() => { loadSessions(undefined, { withPrevious: true }); });

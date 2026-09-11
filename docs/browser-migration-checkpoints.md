@@ -499,3 +499,38 @@ terminal host contract is now nullable; open and all ownership checks retire
 safely when that host disappears. A fifth browser regression covers removed-host
 socket messages, close/resize/key callbacks and reopening. Full local checks
 passed again after the fix. AGENTS.md now includes the pre-paint output.
+
+## Checkpoint 22 — routine forms and invocation history
+
+- `routines-view.ts` owns routine list fan-out, selected host/id, form baselines,
+  catalog requests, saves/invokes/deletes, version controls and invocation polling.
+  `routines-data.ts` narrows definitions, prompt versions, ledger rows and cursors.
+- Form requests and controls retain their view, form and endpoint. A response for
+  the same id on another host cannot replace the current form. A new form can
+  load its runs while an old ledger request remains in flight. Old mutation
+  finalizers cannot release another form's busy state.
+- Catalog caches include endpoints; host/harness/cwd changes retire prior option
+  renders. Close/reopen preserves current field values and the dirty baseline,
+  and edits made during a save survive the saved version's response.
+- List/form/version/invocation controls have owned listeners. Close/disposal
+  retires autocomplete, render coalescers, ledger polling and delete-arm timers.
+  Removed hosts disable actions without throwing. Run navigation keeps its
+  answering host and checks selection through any lazy session-list lookup.
+- Eleven browser regressions cover late detail/ledger/save/invoke/delete responses,
+  catalog host changes, retained controls, draft preservation, host removal and
+  session navigation. Decoder/strict contracts cover versions, cursors and owners.
+- Strict checks, 916 backend tests, 152 browser regressions, independent UI
+  scenarios and full desktop/mobile smoke passed. Integrated runtime/config/test
+  files match the verified draft byte for byte; strict checks passed again.
+  Fable review is required before push.
+- Fable 5.1 cleared amended terminal commit `0e5aef8`, including the removed-host
+  fix and corrected AGENTS.md output inventory, before its push.
+- Usage checkpoint `07e4505` passed all five CI jobs in run `34604387530`.
+- Next: session statistics, sharing and artifacts, then remaining features/shell.
+
+- Fable's routines review found that a rotated host token left retained form
+  controls inert. Requests now retain host/base identity while reading the
+  current token at dispatch. A changed base can be recovered through the live
+  back control and same-row reload; reopening shows a disabled state and a
+  recovery message while preserving the draft. Two new regressions cover both.
+  All required checks passed again after the fix; follow-up review precedes push.
