@@ -33,6 +33,11 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
     // content-addressed store (oh-my-pi session-persistence/blob-store).
     blobsPath: () => path.join(os.homedir(), '.omp', 'agent', 'blobs'),
     command: 'omp', rpcFallback: false, modelCatalog: 'command', closeMode: 'owned-pane', spawnTokenMode: 'wrapper',
+    // The generated launch wrapper imports this host package itself: OMP's
+    // bare-specifier rewrite covers only the entry's directory tree, which
+    // the wrapper (under ~/.pi/dish/launch-wrappers/) shares with none of the
+    // repo's bridge modules. See materializeLaunchWrapper.
+    wrapperHostPackage: '@oh-my-pi/pi-coding-agent',
     // install.sh links the bridge here for OMP's own extension discovery, so
     // every omp session — not just pi-dish spawns — loads it. Spawns check
     // this before injecting a launch wrapper (see discoveryBridgeInstalled).

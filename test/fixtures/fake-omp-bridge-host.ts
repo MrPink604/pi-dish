@@ -117,13 +117,32 @@ class FakeOmpAgentSession {
   }
   setAdvisorEnabled(enabled: boolean) { this.advisor.enabled = enabled; return this.isAdvisorActive(); }
   subscribe() { return () => {}; }
+  // /btw's backing API on the real AgentSession. The bridge mirrors OMP's
+  // embedded btw-user template into promptText; the test asserts the question
+  // arrived and that nothing touched the session file.
+  async runEphemeralTurn(opts: { promptText?: string; onTextDelta?: (delta: string) => void } = {}) {
+    if (process.env.FAKE_OMP_BTW_CALL) {
+      fs.writeFileSync(process.env.FAKE_OMP_BTW_CALL, JSON.stringify({ promptText: opts.promptText ?? null }));
+    }
+    if (process.env.FAKE_OMP_BTW_ERROR) throw new Error(process.env.FAKE_OMP_BTW_ERROR);
+    const text = process.env.FAKE_OMP_BTW_ANSWER || "fake btw answer";
+    opts.onTextDelta?.(text);
+    return { replyText: text, assistantMessage: { role: "assistant", content: [{ type: "text", text }] } };
+  }
 }
 
 const stepFile = process.env.FAKE_OMP_NATIVE_STEP_FILE || "";
 let nativeSession: FakeOmpAgentSession | null = null;
-if (stepFile) {
+// The bridge's getOmpNativeSession reads the native-state capture, which a
+// patched-accessor call publishes — OMP's status line does this constantly;
+// the fake calls subscribe() once instead. /btw tests need the capture even
+// without the projection step driver.
+if (stepFile || process.env.FAKE_OMP_HAS_BTW === "1") {
   patchOmpAgentSession(FakeOmpAgentSession);
   nativeSession = new FakeOmpAgentSession();
+  nativeSession.subscribe();
+}
+if (stepFile) {
   let appliedSeq: number | null = null;
   setInterval(() => {
     if (!fs.existsSync(stepFile)) return;

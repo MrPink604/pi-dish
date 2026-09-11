@@ -93,7 +93,9 @@ declare class BridgeSession extends EventEmitter<BridgeEvents> {
     getAvailableModels(): BridgeRequest;
     getShareSnapshot(): BridgeRequest;
     setThinkingLevel(level: string): BridgeRequest;
-    runCommand(message: string, deliverAs?: 'steer' | 'followUp'): BridgeRequest;
+    runCommand(message: string, deliverAs?: 'steer' | 'followUp', opts?: {
+        timeout?: number;
+    }): BridgeRequest;
     readTree(): BridgeRequest;
     readTreeLeaf(): BridgeRequest;
     navigateTree(targetId: string, opts?: TreeOptions): BridgeRequest;

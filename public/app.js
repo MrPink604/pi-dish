@@ -2380,6 +2380,7 @@ function showPendingSessionView(spawnId) {
   document.querySelector('.session-actions').style.display = 'none';
 
   renderQueueStatus(null);
+  closeBtwPanel();
   setCompacting(false);
   setTurnInProgress(false);
   sessionArtifacts = { pages: [], share: null };
@@ -2540,6 +2541,7 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   // Working state and queue strip are per-session — seed from the list data
   // instead of leaking the previous session's state until the init event.
   renderQueueStatus(null);
+  closeBtwPanel();
   setCompacting(sessionState.currentSession.isActive && !!sessionState.currentSession.compacting);
   setTurnInProgress(sessionState.currentSession.isActive && !!sessionState.currentSession.turnInProgress);
 
@@ -8721,13 +8723,22 @@ async function sendPrompt() {
     recordPrompt(message, ownerKey);
     clearDraft(ownerKey);
     setStatus('Running ' + message.split(' ')[0] + '...', 'working');
+    // /btw's answer rides the command response, not the transcript: show the
+    // question panel immediately so a long side turn has visible pending UI.
+    const btwQuestion = message.match(/^\/btw\s+([\s\S]*)$/)?.[1]?.trim();
+    if (btwQuestion) showBtwPanel(btwQuestion);
     try {
       const data = await apiSend(hostId, `/api/sessions/${encodeURIComponent(sessionId)}/command`, { message });
       if (!sessionState.ownsSelection(owner)) return;
+      if (btwQuestion) {
+        if (typeof data.answer === 'string' && data.answer) resolveBtwPanel(data.answer);
+        else failBtwPanel('(no answer)');
+      }
       setStatus(data.info || 'Done');
       refreshSessions();
     } catch (e) {
       restorePromptToSession(ownerKey, message, null);
+      if (btwQuestion) failBtwPanel(e.message);
       if (sessionState.ownsSelection(owner)) {
         setStatus(`${message.split(' ')[0]}: ${e.message}`, 'error');
       }
@@ -9045,6 +9056,61 @@ async function editQueuedMessage(btn) {
     }
     if (sessionState.ownsSelection(owner)) setStatus(e.message, 'error');
   }
+}
+
+// ---------------------------------------------------------------------------
+// /btw panel — ephemeral side question (OMP). The answer never lands in the
+// transcript; it lives in this dismissible card above the composer, mirroring
+// the TUI's btw panel. A new question replaces the panel; a session switch
+// drops it (see the two selection reset points).
+// ---------------------------------------------------------------------------
+let btwAnswerText = null;
+
+function showBtwPanel(question) {
+  const panel = document.getElementById('btwPanel');
+  if (!panel) return;
+  btwAnswerText = null;
+  panel.className = 'btw-panel pending';
+  panel.innerHTML = `<div class="btw-panel-header">
+    <span class="btw-panel-tag">btw</span>
+    <span class="btw-panel-question" onclick="this.classList.toggle('expanded')" title="Click to expand">${escapeHtml(question)}</span>
+    <button class="btw-panel-btn btw-copy" style="display:none" onclick="copyBtwAnswer(this)" title="Copy answer">Copy</button>
+    <button class="btw-panel-btn" onclick="closeBtwPanel()" title="Dismiss">✕</button>
+  </div>
+  <div class="btw-panel-answer">Asking…</div>`;
+  panel.style.display = '';
+}
+
+function resolveBtwPanel(answer) {
+  const panel = document.getElementById('btwPanel');
+  if (!panel || panel.style.display === 'none') return;
+  btwAnswerText = answer;
+  panel.className = 'btw-panel';
+  panel.querySelector('.btw-panel-answer').innerHTML = `<div class="markdown-body">${formatMarkdown(answer)}</div>`;
+  panel.querySelector('.btw-copy').style.display = '';
+}
+
+function failBtwPanel(error) {
+  const panel = document.getElementById('btwPanel');
+  if (!panel || panel.style.display === 'none') return;
+  panel.className = 'btw-panel error';
+  panel.querySelector('.btw-panel-answer').textContent = error;
+}
+
+function closeBtwPanel() {
+  const panel = document.getElementById('btwPanel');
+  if (!panel) return;
+  btwAnswerText = null;
+  panel.style.display = 'none';
+  panel.innerHTML = '';
+}
+
+function copyBtwAnswer(btn) {
+  if (!btwAnswerText) return;
+  copyTextToClipboard(btwAnswerText).then(() => {
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  }).catch(() => { btn.textContent = 'Failed'; });
 }
 
 async function abortTurn() {

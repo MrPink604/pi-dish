@@ -4123,6 +4123,70 @@ button.badge-context {
 
 .queue-item-edit:hover { color: var(--text); border-color: var(--accent); }
 
+/* Ephemeral /btw side question: a dismissible Q&A card above the composer.
+   Never in the transcript — mirrors the TUI's btw panel. */
+.btw-panel {
+  margin-top: 4px;
+  padding: 6px 8px;
+  background: var(--bg-darker);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  font-size: 13px;
+}
+
+.btw-panel-header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.btw-panel-tag {
+  flex: none;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+}
+
+.btw-panel-question {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.btw-panel-question.expanded {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.btw-panel-btn {
+  flex: none;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.btw-panel-btn:hover { color: var(--text); border-color: var(--accent); }
+
+.btw-panel-answer {
+  color: var(--text);
+}
+
+.btw-panel.pending .btw-panel-answer { color: var(--text-muted); font-style: italic; }
+.btw-panel.error .btw-panel-answer { color: var(--error, #e06c75); font-style: normal; }
+
 /* Composer note: a quiet strip above the prompt box for a composer-side
    failure worth explaining (mic permission, an insecure origin, a
    transcription error). Same treatment as the queue strip; unlike it, the

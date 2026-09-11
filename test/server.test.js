@@ -1926,6 +1926,76 @@ test('OMP /compact is denied when the live bridge does not advertise it', async 
   }
 });
 
+test('OMP /btw requires the advertised capability and passes the bridge answer through', async () => {
+  const nativeId = 'omp-btw-route';
+  const routeId = encodeSessionKey('omp', nativeId);
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  const socketPath = path.join(tmpHome, 'omp-btw-route.sock');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const identity = processIdentity(process.pid);
+  const claim = {
+    protocolVersion: 2,
+    wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+    harnessId: 'omp', nativeSessionId: nativeId, sessionId: nativeId,
+    bridgeInstanceId: nativeId, instanceId: nativeId,
+    sessionFile: ompSessionFile, socketPath, cwd: ompCwd,
+    pid: identity.pid, startTime: identity.startTime, spawnToken: null,
+    capabilities: { commands: true, btw: true },
+  };
+  const received = [];
+  const bridgeSockets = new Set();
+  const bridge = net.createServer(sock => {
+    bridgeSockets.add(sock);
+    sock.on('close', () => bridgeSockets.delete(sock));
+    sock.write(JSON.stringify({ type: 'hello', ...claim }) + '\n');
+    let buffered = '';
+    sock.on('data', chunk => {
+      buffered += chunk;
+      let newline;
+      while ((newline = buffered.indexOf('\n')) !== -1) {
+        const line = buffered.slice(0, newline);
+        buffered = buffered.slice(newline + 1);
+        if (!line) continue;
+        const command = JSON.parse(line);
+        received.push(command);
+        const data = command.command === 'run_command' ? { answer: 'side answer' } : {};
+        sock.write(JSON.stringify({ type: 'response', id: command.id, success: true, data }) + '\n');
+      }
+    });
+  });
+  await new Promise(resolve => bridge.listen(socketPath, resolve));
+  const registryPath = path.join(registryDir, `${nativeId}.json`);
+  fs.writeFileSync(registryPath, JSON.stringify(claim));
+  invalidateRegistryCache();
+
+  try {
+    const bare = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/btw' });
+    assert.equal(bare.status, 400, JSON.stringify(bare.body));
+    assert.match(bare.body.error, /usage: \/btw/);
+    assert.equal(received.length, 0, 'a bare /btw never reaches the bridge socket');
+
+    const asked = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/btw why sky blue?' });
+    assert.equal(asked.status, 200, JSON.stringify(asked.body));
+    assert.equal(asked.body.answer, 'side answer');
+    assert.ok(received.some(command => command.command === 'run_command' && command.message === '/btw why sky blue?'));
+
+    // Old wrappers predate the capability: fail closed before the socket.
+    claim.capabilities = { commands: true };
+    fs.writeFileSync(registryPath, JSON.stringify(claim));
+    invalidateRegistryCache();
+    const before = received.length;
+    const unsupported = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/btw q' });
+    assert.equal(unsupported.status, 409, JSON.stringify(unsupported.body));
+    assert.match(unsupported.body.error, /does not support \/btw/i);
+    assert.equal(received.length, before, 'unsupported /btw never reaches the bridge socket');
+  } finally {
+    fs.rmSync(registryPath, { force: true });
+    invalidateRegistryCache();
+    for (const sock of bridgeSockets) sock.destroy();
+    await new Promise(resolve => bridge.close(resolve));
+  }
+});
+
 test('OMP command discovery includes pane-backed host commands and API aliases stay capability-first', async () => {
   const nativeId = 'omp-command-filter';
   const routeId = encodeSessionKey('omp', nativeId);

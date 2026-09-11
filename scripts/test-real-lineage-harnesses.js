@@ -298,6 +298,8 @@ async function testOmp() {
   const commands = await get(`/api/commands?sessionId=${encodeURIComponent(id)}`);
   assert.equal(commands.status, 200, JSON.stringify(commands.body));
   assert.ok(Array.isArray(commands.body) && commands.body.length > 0);
+  assert.ok(commands.body.some(command => command.name === 'btw' && command.supported === true),
+    'real OMP advertises /btw through the bridge');
   const models = await get(`/api/models?sessionId=${encodeURIComponent(id)}`);
   assert.equal(models.status, 200, JSON.stringify(models.body));
   assert.ok(Array.isArray(models.body) && models.body.some(model => model.provider === 'openai' && model.id === 'gpt-4o-mini'));
@@ -305,6 +307,11 @@ async function testOmp() {
   assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/thinking`, { level: 'low' })).status, 200);
   assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/command`, { message: '/dish-push' })).status, 200);
   const turn = await runStreamedTurn(id, 'pi-dish managed OMP integration canary');
+  // /btw runs an ephemeral side turn against the same fake provider: the
+  // answer comes back over the command response and nothing is persisted.
+  const btw = await post(`/api/sessions/${encodeURIComponent(id)}/command`, { message: '/btw summarize this session' });
+  assert.equal(btw.status, 200, JSON.stringify(btw.body));
+  assert.match(btw.body.answer || '', /^pi-dish fake provider response \d+$/, 'real OMP /btw answer');
   const tree = await get(`/api/sessions/${encodeURIComponent(id)}/tree`);
   assert.equal(tree.status, 200, JSON.stringify(tree.body));
   assert.ok(tree.body.nodes.some(node => node.role === 'assistant' && node.text === turn.assistantText && node.active),
@@ -360,6 +367,7 @@ async function testOmp() {
     closeStatus: close.status,
     resumeSameRoute: resumed.body.id === resumeId,
     historyMessageRead: true,
+    btwAnswer: btw.body.answer,
   };
 }
 
@@ -602,7 +610,8 @@ async function cleanup() {
     }
     const result = {};
     for (const id of selected) result[id] = await (id === 'omp' ? testOmp() : testPrime());
-    const expectedCalls = (selected.includes('omp') ? 1 : 0) + (selected.includes('prime') ? 8 : 0);
+    // OMP: one streamed turn plus one ephemeral /btw side turn.
+    const expectedCalls = (selected.includes('omp') ? 2 : 0) + (selected.includes('prime') ? 8 : 0);
     assert.equal(fakeRequestCount, expectedCalls, 'each streamed turn must use the local fake provider');
     result.fakeProviderRequests = fakeRequestCount;
     console.log(JSON.stringify(result, null, 2));

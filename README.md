@@ -219,6 +219,7 @@ Current alternative-harness support is capability-detected:
 |---|---|---|
 | Prompts, steering, follow-ups, abort, model/thinking controls | Supported through the bridge | Supported through the bridge |
 | Compaction | Supported on live capable bridges | Unavailable |
+| Ephemeral side questions (`/btw`) | Supported on live capable bridges; the answer renders in a dismissible composer panel, never in the transcript | Unavailable |
 | Tree navigation | Supported live, with a reachable tmux pane for command-context handoff | Unavailable |
 | Harness queue listing/cancellation | Unavailable | Unavailable |
 | Read-only HTML export and sharing | Supported | Unavailable |

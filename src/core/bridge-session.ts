@@ -653,7 +653,11 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
   getAvailableModels() { return this.send('get_available_models'); }
   getShareSnapshot() { return this.send('share_snapshot'); }
   setThinkingLevel(level: string) { return this.send('set_thinking_level', { level }); }
-  runCommand(message: string, deliverAs?: 'steer' | 'followUp') { return this.send('run_command', { message, deliverAs }); }
+  // /btw awaits a full ephemeral provider turn inside the run_command call, so
+  // the caller passes a prompt-scale timeout; everything else keeps 30s.
+  runCommand(message: string, deliverAs?: 'steer' | 'followUp', opts: { timeout?: number } = {}) {
+    return this.send('run_command', { message, deliverAs }, opts);
+  }
   readTree() { return this.send('tree_read', {}, { timeout: 10000 }); }
   // Leaf id only — the transcript route needs just the live leaf, and
   // tree_read serializes the whole session tree per call. Older running

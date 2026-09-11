@@ -160,7 +160,14 @@ const EMULATED_BUILTINS = [
   { name: "thinking", description: "Set thinking level (off|minimal|low|medium|high|xhigh)" },
   { name: "abort", description: "Abort the current agent operation" },
   { name: "reload", description: "Reload extensions, skills, and prompt templates" },
+  { name: "btw", description: "Ask an ephemeral side question using the current session context" },
 ];
+
+// Host-specific slash emulations too host-bound for this shared module: the
+// wrapper supplies the implementation, core owns parsing/gating/response
+// shape. OMP uses this for /btw (AgentSession.runEphemeralTurn — a TUI-only
+// built-in its RPC/socket layer never dispatches).
+export type BtwRunner = (question: string) => Promise<string>;
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
@@ -269,6 +276,7 @@ export type BridgeDescriptor = {
   // — where it must not register, because the wrapper's own dedicated bridge
   // owns the session and a second generic-pi claim shows it twice in pi-dish.
   standDownUnderForeignHost?: boolean;
+  runBtw?: BtwRunner;
 };
 
 // Identifying the OMP host from inside an extension is subtler than it
@@ -1591,17 +1599,31 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
   /**
    * Execute a slash command remotely. Supports:
-   * - Emulated built-ins: /compact, /model, /name, /thinking, /abort
+   * - Emulated built-ins: /compact, /model, /name, /thinking, /abort, /btw
    * - Skills (/skill:name args): expanded like pi does, sent as a user message
    * - Prompt templates: expanded with arg substitution, sent as a user message
    * - Extension commands: NOT supported (pi's extension API has no way to
    *   invoke another extension's command handler) — returns a clear error.
    */
-  async function executeSlashCommand(text: string, deliverAs?: string): Promise<{ ok: boolean; error?: string; info?: string }> {
+  async function executeSlashCommand(text: string, deliverAs?: string): Promise<{ ok: boolean; error?: string; info?: string; answer?: string }> {
     const spaceIdx = text.indexOf(" ");
     const name = (spaceIdx === -1 ? text.slice(1) : text.slice(1, spaceIdx)).trim();
     const args = spaceIdx === -1 ? "" : text.slice(spaceIdx + 1).trim();
 
+    if (name === "btw") {
+      if (!capabilities.btw || !descriptor.runBtw) {
+        return { ok: false, error: `/${name} is unavailable in the ${descriptor.name} public bridge profile.` };
+      }
+      if (!args) return { ok: false, error: "usage: /btw <question>" };
+      // Awaiting the whole side turn (vs fire-and-forget like /compact) is
+      // the point: the answer only ever reaches the caller, never the
+      // transcript. The socket timeout for this request lives server-side.
+      try {
+        return { ok: true, answer: await descriptor.runBtw(args) };
+      } catch (e: any) {
+        return { ok: false, error: String(e?.message || e) };
+      }
+    }
     // --- Emulated built-ins ---
     if (name === "compact") {
       if (!capabilities.compact) {
@@ -2146,6 +2168,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
             if (command.name === "thinking") return !!capabilities.setThinking;
             if (command.name === "abort") return !!capabilities.abort;
             if (command.name === "reload") return !!descriptor.selfPrime;
+            if (command.name === "btw") return !!(capabilities.btw && descriptor.runBtw);
             return true;
           });
           const commands = pi.getCommands()
@@ -2175,7 +2198,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
             return respond(false, undefined, "message must start with /");
           }
           const result = await executeSlashCommand(String(cmd.message), cmd.deliverAs);
-          if (result.ok) respond(true, { info: result.info });
+          if (result.ok) respond(true, { info: result.info, answer: result.answer });
           else respond(false, undefined, result.error);
           return;
         }

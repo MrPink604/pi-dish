@@ -11,6 +11,10 @@ type HostMethod = (this: HostSession, ...args: unknown[]) => unknown;
 type ObserverState = {
   current: HostSession | null;
   signature: string | null;
+  // Diagnostics for "capture never fired" reports: how many AgentSession
+  // classes got patched and how many accessor calls ever published.
+  patches: number;
+  publishes: number;
   listeners: Set<(projection: OmpNativeProjection) => void>;
   readers: {
     todos?: HostMethod;
@@ -31,10 +35,15 @@ const cachedState = sharedGlobal[STATE_KEY];
 let state: ObserverState;
 if (isObserverState(cachedState)) {
   state = cachedState;
+  // States persisted by an older module copy predate the counters.
+  if (typeof state.patches !== "number") state.patches = 0;
+  if (typeof state.publishes !== "number") state.publishes = 0;
 } else {
   state = {
     current: null,
     signature: null,
+    patches: 0,
+    publishes: 0,
     listeners: new Set<(projection: OmpNativeProjection) => void>(),
     readers: {},
   };
@@ -75,6 +84,7 @@ function readProjection(session: HostSession): OmpNativeProjection {
 
 function publish(session: HostSession): void {
   state.current = session;
+  state.publishes += 1;
   const projection = readProjection(session);
   let signature: string;
   try { signature = JSON.stringify(projection); } catch { return; }
@@ -89,6 +99,7 @@ function patchAgentSession(AgentSession: { prototype: HostSession }): void {
   const proto = AgentSession.prototype;
   const alreadyPatched = proto[PATCHED_KEY] === true;
   proto[PATCHED_KEY] = true;
+  state.patches += 1;
 
   const capture = (name: string, readerKey?: keyof ObserverState["readers"]) => {
     // State survives extension reloads. Readers already present point at the
@@ -152,8 +163,24 @@ export function patchOmpAgentSession(AgentSession: unknown): void {
   if (isHostConstructor(AgentSession)) patchAgentSession(AgentSession);
 }
 
+// The live AgentSession itself, stashed by the prototype patch's first
+// publish. /btw needs the instance (AgentSession.runEphemeralTurn) — the
+// projection only exposes derived state. Null until OMP first calls one of
+// the patched accessors (subscribe at session start, or any status-line
+// read), so callers must treat null as "no session yet", not an error.
+export function getOmpNativeSession(): HostSession | null {
+  return state.current;
+}
+
 export function getOmpNativeProjection(): OmpNativeProjection | null {
   return state.current ? readProjection(state.current) : null;
+}
+
+// Capture health for /btw-style consumers: a patched class that never
+// published means the host built its session from a different AgentSession
+// (or an import failure kept the patch from ever applying).
+export function getOmpNativeCaptureStats(): { patches: number; publishes: number; captured: boolean } {
+  return { patches: state.patches, publishes: state.publishes, captured: state.current !== null };
 }
 
 export function subscribeOmpNativeProjection(listener: (projection: OmpNativeProjection) => void): () => void {
