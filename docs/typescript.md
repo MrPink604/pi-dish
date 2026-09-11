@@ -467,3 +467,7 @@ Transcript loading lives in `transcript.ts`, with `transcript-data.ts` narrowing
 page payloads and `transcript-cache.ts` retaining bounded host/endpoint-owned DOM.
 Selection retirement cancels requests before stashing without prematurely clearing
 the outgoing transcript’s cursors. Replaced paging controls remain inert.
+
+`session-activity.ts` owns turn/compaction flags, working timers and abort gates.
+`btw-panel.ts` gives each ephemeral question its own response/control lifetime;
+late answers, errors and clipboard feedback cannot alter a replacement question.

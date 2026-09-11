@@ -405,7 +405,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     // While dictating, Escape cancels the recording (handled by the document
     // listener) — it must not also abort the turn.
-    if (e.key === 'Escape' && !composerAutocomplete.visible && !isRecording() && turnInProgress) { e.preventDefault(); abortTurn(); }
+    if (e.key === 'Escape' && !composerAutocomplete.visible && !isRecording() && sessionActivity.turn) { e.preventDefault(); abortTurn(); }
   });
 
   // Global Ctrl+C to abort
@@ -413,7 +413,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Keys typed into the terminal belong to the shell (Ctrl+C = SIGINT,
     // Ctrl+F = forward), not to the app-level shortcuts.
     if (e.target.closest && e.target.closest('.terminal-panel')) return;
-    if (e.ctrlKey && e.key === 'c' && turnInProgress) {
+    if (e.ctrlKey && e.key === 'c' && sessionActivity.turn) {
       var sel = window.getSelection();
       if (!sel || sel.isCollapsed) { e.preventDefault(); abortTurn(); }
     }
@@ -1407,8 +1407,8 @@ function closeResponseDetails() { responseDetailsController.close(); }
 // =========================================================================
 
 const liveToolsController = PiDishBrowser.createLiveTools({
-  document, sessionState, started: (id, name) => { runningTools.set(id, name); updateWorkingIndicator(); },
-  finished: id => { runningTools.delete(id); updateWorkingIndicator(); }, pinned: isPinnedToBottom, scroll: scrollToBottom, jump: updateJumpButton,
+  document, sessionState, started: (id, name) => sessionActivity.toolStarted(id, name),
+  finished: id => sessionActivity.toolFinished(id), pinned: isPinnedToBottom, scroll: scrollToBottom, jump: updateJumpButton,
   images: (content, alt) => imageBlocksHtml(content, alt), mood: (name, args) => applyMoodFromTool(name, args),
 });
 function appendLiveToolPanel(data, options) { return liveToolsController.append(data, options); }
@@ -1476,7 +1476,7 @@ function openMessageStream(url, owner) {
         turnCleanupDone = !data.turnInProgress;
         // Stale dialogs for this session are pruned by the extension_ui_state
         // event that follows the connect replay — no per-init sweep needed.
-        if (!data.turnInProgress) abortingSessions.delete(sessionKey(hostId, sessionId));
+        if (!data.turnInProgress) sessionActivity.endAbort(sessionKey(hostId, sessionId));
         // Both flags, independently: auto-compaction runs inside a turn
         // (both true), a TUI /compact has neither turn nor stream events yet
         // (compacting only), and a reconnect after either ended must clear
@@ -1513,7 +1513,7 @@ function openMessageStream(url, owner) {
     const handleTurnEnd = () => {
       if (turnCleanupDone || !ownsStream()) return;
       turnCleanupDone = true;
-      abortingSessions.delete(sessionKey(hostId, sessionId));
+      sessionActivity.endAbort(sessionKey(hostId, sessionId));
       setTurnInProgress(false);
       cancelStreamingRender();
       liveToolsController.finishRunning();
@@ -1550,7 +1550,7 @@ function openMessageStream(url, owner) {
         if (seenMessageEnds.size && seenMessageEnds.has(messageEndKey(message))) return;
         if (turnCleanupDone) seenMessageEnds.clear();
         turnCleanupDone = false;
-        if (!turnInProgress) setTurnInProgress(true);
+        if (!sessionActivity.turn) setTurnInProgress(true);
         queueStreamingRender(message);
       } catch (err) {}
     });
@@ -1669,7 +1669,7 @@ function openMessageStream(url, owner) {
       // A manual compaction has no turn_end/agent_end boundary. Whether Stop
       // won the race, compaction failed, or it completed first, its end is the
       // authoritative point where a compaction-only abort gate can clear.
-      if (!turnInProgress) abortingSessions.delete(sessionKey(hostId, sessionId));
+      if (!sessionActivity.turn) sessionActivity.endAbort(sessionKey(hostId, sessionId));
       try {
         const data = JSON.parse(e.data);
         if (data.errorMessage) {
@@ -1731,7 +1731,7 @@ function openMessageStream(url, owner) {
     });
 
     addOwnedListener('session_ended', () => {
-      abortingSessions.delete(sessionKey(hostId, sessionId));
+      sessionActivity.endAbort(sessionKey(hostId, sessionId));
       setCompacting(false);
       setTurnInProgress(false);
       extensionUI.end({ id: sessionId, host: hostId });
@@ -1857,7 +1857,7 @@ async function sendPrompt() {
   const owner = sessionState.captureSelection();
   const { id: sessionId, host: hostId } = owner;
   const ownerKey = sessionRefKey(owner);
-  if (abortingSessions.has(ownerKey)) {
+  if (sessionActivity.isAborting(ownerKey)) {
     setStatus('Wait for the current turn to finish stopping', 'working');
     return;
   }
@@ -1870,7 +1870,7 @@ async function sendPrompt() {
     // The bridge refuses a /compact while one runs (concurrent compactions
     // race pi's message rewrite); fail fast here too so the composer text
     // survives and the feedback is immediate.
-    if (compactingNow && /^\/compact(\s|$)/.test(message)) {
+    if (sessionActivity.compacting && /^\/compact(\s|$)/.test(message)) {
       setStatus('Compaction already in progress', 'error');
       return;
     }
@@ -1882,19 +1882,19 @@ async function sendPrompt() {
     // /btw's answer rides the command response, not the transcript: show the
     // question panel immediately so a long side turn has visible pending UI.
     const btwQuestion = message.match(/^\/btw\s+([\s\S]*)$/)?.[1]?.trim();
-    if (btwQuestion) showBtwPanel(btwQuestion);
+    const btwOwner = btwQuestion ? showBtwPanel(btwQuestion) : null;
     try {
       const data = await apiSend(hostId, `/api/sessions/${encodeURIComponent(sessionId)}/command`, { message });
       if (!sessionState.ownsSelection(owner)) return;
       if (btwQuestion) {
-        if (typeof data.answer === 'string' && data.answer) resolveBtwPanel(data.answer);
-        else failBtwPanel('(no answer)');
+        if (typeof data.answer === 'string' && data.answer) resolveBtwPanel(data.answer, btwOwner);
+        else failBtwPanel('(no answer)', btwOwner);
       }
       setStatus(data.info || 'Done');
       refreshSessions();
     } catch (e) {
       restorePromptToSession(ownerKey, message, null);
-      if (btwQuestion) failBtwPanel(e.message);
+      if (btwQuestion) failBtwPanel(e.message, btwOwner);
       if (sessionState.ownsSelection(owner)) {
         setStatus(`${message.split(' ')[0]}: ${e.message}`, 'error');
       }
@@ -1963,117 +1963,10 @@ async function sendPrompt() {
   }
 }
 
-var turnInProgress = false;
-const abortingSessions = new Set();
-
-// --- Live activity: elapsed turn time + currently running tool -----------
-// The working badge reads "Working 1:42 · Bash" so a glance says what the
-// agent is doing and for how long (mobile badge shows just the timer).
-// Client-side by nature: opening a session mid-turn counts from connect.
-let turnStartedAt = null;
-let workingTicker = null;
-const runningTools = new Map(); // toolCallId -> toolName
-
-// Compaction state, tracked separately from the turn: manual compaction has
-// no turn at all, while auto-compaction runs inside one. Whichever is on,
-// the badge must say so — a send during compaction is held by the bridge,
-// and the user needs to see why nothing is streaming (and must not fire a
-// second /compact into it).
-var compactingNow = false;
-let compactingStartedAt = null;
-
-function updateWorkingIndicator() {
-  const desktop = document.querySelector('#sessionWorking .spinner-text');
-  const mobile = document.querySelector('#sessionWorkingMobile .spinner-text');
-  // Compacting wins the badge text over the turn: it's the rarer state and
-  // the one that changes what a send does right now.
-  if (compactingNow) {
-    const elapsed = compactingStartedAt ? formatDuration(Date.now() - compactingStartedAt) : '';
-    if (desktop) desktop.textContent = 'Compacting context…' + (elapsed ? ' ' + elapsed : '');
-    if (mobile) mobile.textContent = 'Compacting…';
-    return;
-  }
-  if (!turnInProgress || !turnStartedAt) {
-    if (desktop) desktop.textContent = 'Working';
-    // The phone's chip row leads with run state, so this cell always says
-    // something — blank would make the row's anchor move.
-    if (mobile) mobile.textContent = 'idle';
-    return;
-  }
-  const elapsed = formatDuration(Date.now() - turnStartedAt);
-  let tool = null;
-  for (const name of runningTools.values()) tool = name; // most recently started
-  if (tool && tool.length > 24) tool = tool.slice(0, 24) + '…';
-  if (desktop) desktop.textContent = `Working ${elapsed}` + (tool ? ` · ${tool}` : '');
-  if (mobile) mobile.textContent = elapsed + (tool ? ` · ${tool}` : '');
-}
-
-// One place decides whether the pulsing badge, its ticker, and the Stop
-// button are on: a running turn or a running compaction (or both, during
-// auto-compaction) keeps them alive. Text comes from updateWorkingIndicator.
-function syncActivityIndicator() {
-  const active = turnInProgress || compactingNow;
-  if (active) {
-    if (!workingTicker) workingTicker = setInterval(updateWorkingIndicator, 1000);
-  } else if (workingTicker) {
-    clearInterval(workingTicker);
-    workingTicker = null;
-  }
-  var workingDesktop = document.getElementById('sessionWorking');
-  var workingMobile = document.getElementById('sessionWorkingMobile');
-  if (workingDesktop) workingDesktop.classList.toggle('active', active);
-  if (workingMobile) workingMobile.classList.toggle('active', active);
-  // Stop stays reachable during compaction — the bridge cancels a running
-  // compaction on abort. Steer/follow-up only make sense against a turn,
-  // so they remain setTurnInProgress's business.
-  var btnStop = document.getElementById('btnStop');
-  // visibility, not display: the context readout beside it keeps its
-  // position whether or not a turn is running.
-  if (btnStop) btnStop.style.visibility = active ? 'visible' : 'hidden';
-  updateWorkingIndicator();
-}
-
-function setTurnInProgress(active) {
-  const starting = active && !turnInProgress;
-  turnInProgress = active;
-  if (starting) {
-    turnStartedAt = Date.now();
-  } else if (!active) {
-    turnStartedAt = null;
-    runningTools.clear();
-  }
-  syncActivityIndicator();
-  // Reflect in the sidebar immediately — the working dot shouldn't wait for
-  // the next 10s poll. (turn events only stream for the viewed session.)
-  if (sessionState.currentSession && !!sessionState.currentSession.turnInProgress !== !!active) {
-    sessionState.patchSession(sessionState.currentSession.id, { turnInProgress: !!active });
-  }
-  var btnSteer = document.getElementById('btnSteer');
-  var btnFollowUp = document.getElementById('btnFollowUp');
-  var btnSend = document.getElementById('btnSend');
-  if (btnSteer) btnSteer.style.display = active ? '' : 'none';
-  if (btnFollowUp) btnFollowUp.style.display = active ? '' : 'none';
-  if (btnSend) btnSend.style.display = active ? 'none' : '';
-  // A turn ending mid-compaction (manual /compact aborts the agent first;
-  // auto-compaction holds queued sends) must not wipe the compaction badge,
-  // the held-message strip, or the status line.
-  if (!active && !compactingNow) {
-    renderQueueStatus(null);
-    setStatus('');
-  }
-}
-
-function setCompacting(active) {
-  const on = !!active;
-  compactingNow = on;
-  compactingStartedAt = on ? (compactingStartedAt || Date.now()) : null;
-  syncActivityIndicator();
-  // Sidebar dot immediately, same as the turn dot (compaction events only
-  // stream for the viewed session; other rows update via the poll).
-  if (sessionState.currentSession && !!sessionState.currentSession.compacting !== on) {
-    sessionState.patchSession(sessionState.currentSession.id, { compacting: on });
-  }
-}
+const sessionActivity = PiDishBrowser.createSessionActivity({ document, sessionState, clearQueue: () => renderQueueStatus(null), status: message => setStatus(message) });
+function updateWorkingIndicator() { sessionActivity.update(); }
+function setTurnInProgress(active) { sessionActivity.setTurn(!!active); }
+function setCompacting(active) { sessionActivity.setCompacting(!!active); }
 
 // Steer and follow-up share everything but the endpoint and status strings.
 async function sendQueuedMessage(kind) {
@@ -2093,7 +1986,7 @@ async function sendQueuedMessage(kind) {
   const owner = sessionState.captureSelection();
   const { id: sessionId, host: hostId } = owner;
   const ownerKey = sessionRefKey(owner);
-  if (abortingSessions.has(ownerKey)) {
+  if (sessionActivity.isAborting(ownerKey)) {
     setStatus('Wait for the current turn to finish stopping', 'working');
     return;
   }
@@ -2220,64 +2113,23 @@ async function editQueuedMessage(btn) {
 // the TUI's btw panel. A new question replaces the panel; a session switch
 // drops it (see the two selection reset points).
 // ---------------------------------------------------------------------------
-let btwAnswerText = null;
-
-function showBtwPanel(question) {
-  const panel = document.getElementById('btwPanel');
-  if (!panel) return;
-  btwAnswerText = null;
-  panel.className = 'btw-panel pending';
-  panel.innerHTML = `<div class="btw-panel-header">
-    <span class="btw-panel-tag">btw</span>
-    <span class="btw-panel-question" onclick="this.classList.toggle('expanded')" title="Click to expand">${escapeHtml(question)}</span>
-    <button class="btw-panel-btn btw-copy" style="display:none" onclick="copyBtwAnswer(this)" title="Copy answer">Copy</button>
-    <button class="btw-panel-btn" onclick="closeBtwPanel()" title="Dismiss">✕</button>
-  </div>
-  <div class="btw-panel-answer">Asking…</div>`;
-  panel.style.display = '';
-}
-
-function resolveBtwPanel(answer) {
-  const panel = document.getElementById('btwPanel');
-  if (!panel || panel.style.display === 'none') return;
-  btwAnswerText = answer;
-  panel.className = 'btw-panel';
-  panel.querySelector('.btw-panel-answer').innerHTML = `<div class="markdown-body">${formatMarkdown(answer)}</div>`;
-  panel.querySelector('.btw-copy').style.display = '';
-}
-
-function failBtwPanel(error) {
-  const panel = document.getElementById('btwPanel');
-  if (!panel || panel.style.display === 'none') return;
-  panel.className = 'btw-panel error';
-  panel.querySelector('.btw-panel-answer').textContent = error;
-}
-
-function closeBtwPanel() {
-  const panel = document.getElementById('btwPanel');
-  if (!panel) return;
-  btwAnswerText = null;
-  panel.style.display = 'none';
-  panel.innerHTML = '';
-}
-
-function copyBtwAnswer(btn) {
-  if (!btwAnswerText) return;
-  copyTextToClipboard(btwAnswerText).then(() => {
-    btn.textContent = 'Copied';
-    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
-  }).catch(() => { btn.textContent = 'Failed'; });
-}
+const btwPanel = PiDishBrowser.createBtwPanel({ document, sessionState, markdown: text => formatMarkdown(text), copy: text => copyTextToClipboard(text) });
+function showBtwPanel(question) { return btwPanel.show(question); }
+function resolveBtwPanel(answer, owner) { btwPanel.resolve(answer, owner); }
+function failBtwPanel(error, owner) { btwPanel.fail(error, owner); }
+function closeBtwPanel() { btwPanel.close(); }
+function copyBtwAnswer(button) { return btwPanel.copy(button); }
 
 async function abortTurn() {
   // Compaction counts: the bridge cancels a running compaction on abort, and
   // its compaction_end (aborted) event clears the compacting indicator.
-  if (!sessionState.currentSession || (!turnInProgress && !compactingNow)) return;
+  if (!sessionState.currentSession || (!sessionActivity.turn && !sessionActivity.compacting)) return;
   const owner = sessionState.captureSelection();
   const { id: sessionId, host: hostId } = owner;
   const ownerKey = sessionRefKey(owner);
-  if (abortingSessions.has(ownerKey)) return;
-  abortingSessions.add(ownerKey);
+  if (sessionActivity.isAborting(ownerKey)) return;
+  const abortOwner = sessionActivity.beginAbort(ownerKey);
+  if (!abortOwner) return;
   setStatus('Stopping...', 'working');
   try {
     await apiSend(hostId, '/api/sessions/' + encodeURIComponent(sessionId) + '/abort');
@@ -2285,7 +2137,7 @@ async function abortTurn() {
     // the turn owned by the stream until turn_end/agent_end performs cleanup
     // and JSONL catch-up.
   } catch (e) {
-    abortingSessions.delete(ownerKey);
+    sessionActivity.endAbort(ownerKey, abortOwner);
     if (sessionState.ownsSelection(owner)) setStatus('Stop failed: ' + e.message, 'error');
   }
 }

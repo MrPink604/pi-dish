@@ -109,3 +109,6 @@ export { createMood } from './mood';
 export { createTranscript } from './transcript';
 export { createTranscriptCache } from './transcript-cache';
 export { decodeTranscriptPage } from './transcript-data';
+
+export { createSessionActivity } from './session-activity';
+export { createBtwPanel } from './btw-panel';

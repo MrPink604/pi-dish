@@ -1893,7 +1893,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.waitForFunction(() => document.getElementById('status')?.textContent === 'Stopping...',
       { timeout: 3000 });
     await desktop.waitForTimeout(100); // HTTP acknowledgement has landed
-    check(await desktop.evaluate(() => turnInProgress),
+    check(await desktop.evaluate(() => sessionActivity.turn),
       'abort HTTP acknowledgement does not clear turn state');
     await desktop.fill('#promptInput', 'must wait for abort boundary');
     await desktop.press('#promptInput', 'Enter');
@@ -1907,7 +1907,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.waitForFunction(() =>
       [...document.querySelectorAll('.message.user[data-msg-index]')]
         .some((el) => el.textContent.includes('abort catch-up marker')), { timeout: 5000 });
-    check(!(await desktop.evaluate(() => turnInProgress)), 'agent_end clears the aborted turn');
+    check(!(await desktop.evaluate(() => sessionActivity.turn)), 'agent_end clears the aborted turn');
     check(await desktop.locator('details.live-tool-panel').count() === 0,
       'agent_end catch-up removes the aborted turn live tool panel');
     await desktop.fill('#promptInput', '');
@@ -1955,8 +1955,8 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.waitForSelector('#btnStop', { state: 'visible', timeout: 3000 });
     await desktop.click('#btnStop');
     emit('compaction_end', { reason: 'manual', errorMessage: 'lost abort race' });
-    await desktop.waitForFunction(() => !compactingNow, { timeout: 3000 });
-    check(!(await desktop.evaluate((id) => abortingSessions.has(keyForSessionId(id)), SESSION_ID)),
+    await desktop.waitForFunction(() => !sessionActivity.compacting, { timeout: 3000 });
+    check(!(await desktop.evaluate((id) => sessionActivity.isAborting(keyForSessionId(id)), SESSION_ID)),
       'compaction_end clears a compaction-only abort gate even on failure');
 
     // 8c-2. Compaction gates sends: while compacting there's no turn, but a

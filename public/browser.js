@@ -35,6 +35,7 @@ var PiDishBrowser = (() => {
     createAnchoredComments: () => createAnchoredComments,
     createBounce: () => createBounce,
     createBrowserAssets: () => createBrowserAssets,
+    createBtwPanel: () => createBtwPanel,
     createComposerAutocomplete: () => createComposerAutocomplete,
     createComposerDrafts: () => createComposerDrafts,
     createComposerImages: () => createComposerImages,
@@ -69,6 +70,7 @@ var PiDishBrowser = (() => {
     createRichText: () => createRichText,
     createRoutinesView: () => createRoutinesView,
     createSearchView: () => createSearchView,
+    createSessionActivity: () => createSessionActivity,
     createSessionApi: () => createSessionApi,
     createSessionControls: () => createSessionControls,
     createSessionInfo: () => createSessionInfo,
@@ -16093,6 +16095,221 @@ ${restored}`;
         loaded = null;
       }
     };
+  }
+
+  // src/browser/session-activity.ts
+  function createSessionActivity(options2) {
+    const { document: document2, sessionState } = options2;
+    let turnInProgress = false, disposed = false;
+    let owner = null;
+    let turnStartedAt = null;
+    let workingTicker = null;
+    const runningTools = /* @__PURE__ */ new Map();
+    let compactingNow = false;
+    let compactingStartedAt = null;
+    function updateWorkingIndicator() {
+      if (disposed || !sessionState.ownsSelection(owner)) return;
+      const desktop = document2.querySelector("#sessionWorking .spinner-text");
+      const mobile = document2.querySelector("#sessionWorkingMobile .spinner-text");
+      if (compactingNow) {
+        const elapsed2 = compactingStartedAt ? formatDuration(Date.now() - compactingStartedAt) : "";
+        if (desktop) desktop.textContent = "Compacting context\u2026" + (elapsed2 ? " " + elapsed2 : "");
+        if (mobile) mobile.textContent = "Compacting\u2026";
+        return;
+      }
+      if (!turnInProgress || !turnStartedAt) {
+        if (desktop) desktop.textContent = "Working";
+        if (mobile) mobile.textContent = "idle";
+        return;
+      }
+      const elapsed = formatDuration(Date.now() - turnStartedAt);
+      let tool = null;
+      for (const name of runningTools.values()) tool = name;
+      if (tool && tool.length > 24) tool = tool.slice(0, 24) + "\u2026";
+      if (desktop) desktop.textContent = `Working ${elapsed}` + (tool ? ` \xB7 ${tool}` : "");
+      if (mobile) mobile.textContent = elapsed + (tool ? ` \xB7 ${tool}` : "");
+    }
+    function syncActivityIndicator() {
+      const active = turnInProgress || compactingNow;
+      if (active) {
+        if (!workingTicker) workingTicker = setInterval(updateWorkingIndicator, 1e3);
+      } else if (workingTicker) {
+        clearInterval(workingTicker);
+        workingTicker = null;
+      }
+      var workingDesktop = document2.getElementById("sessionWorking");
+      var workingMobile = document2.getElementById("sessionWorkingMobile");
+      if (workingDesktop) workingDesktop.classList.toggle("active", active);
+      if (workingMobile) workingMobile.classList.toggle("active", active);
+      var btnStop = document2.getElementById("btnStop");
+      if (btnStop) btnStop.style.visibility = active ? "visible" : "hidden";
+      updateWorkingIndicator();
+    }
+    function setTurnInProgress(active) {
+      if (disposed) return;
+      owner = sessionState.captureSelection();
+      const starting = active && !turnInProgress;
+      turnInProgress = active;
+      if (starting) {
+        turnStartedAt = Date.now();
+      } else if (!active) {
+        turnStartedAt = null;
+        runningTools.clear();
+      }
+      syncActivityIndicator();
+      if (sessionState.currentSession && !!sessionState.currentSession.turnInProgress !== !!active) {
+        sessionState.patchSession(sessionState.currentSession.id, { turnInProgress: !!active });
+      }
+      var btnSteer = document2.getElementById("btnSteer");
+      var btnFollowUp = document2.getElementById("btnFollowUp");
+      var btnSend = document2.getElementById("btnSend");
+      if (btnSteer) btnSteer.style.display = active ? "" : "none";
+      if (btnFollowUp) btnFollowUp.style.display = active ? "" : "none";
+      if (btnSend) btnSend.style.display = active ? "none" : "";
+      if (!active && !compactingNow) {
+        options2.clearQueue();
+        options2.status("");
+      }
+    }
+    function setCompacting(active) {
+      if (disposed) return;
+      owner = sessionState.captureSelection();
+      const on = !!active;
+      compactingNow = on;
+      compactingStartedAt = on ? compactingStartedAt || Date.now() : null;
+      syncActivityIndicator();
+      if (sessionState.currentSession && !!sessionState.currentSession.compacting !== on) {
+        sessionState.patchSession(sessionState.currentSession.id, { compacting: on });
+      }
+    }
+    function toolStarted(id, name) {
+      if (disposed) return;
+      runningTools.set(id, name);
+      updateWorkingIndicator();
+    }
+    function toolFinished(id) {
+      if (disposed) return;
+      runningTools.delete(id);
+      updateWorkingIndicator();
+    }
+    const aborts = /* @__PURE__ */ new Map();
+    function beginAbort(key) {
+      if (disposed || aborts.has(key)) return null;
+      const token = /* @__PURE__ */ Symbol();
+      aborts.set(key, token);
+      return token;
+    }
+    function endAbort(key, token) {
+      if (token === void 0 || aborts.get(key) === token) aborts.delete(key);
+    }
+    function dispose() {
+      if (disposed) return;
+      disposed = true;
+      if (workingTicker) clearInterval(workingTicker);
+      workingTicker = null;
+      runningTools.clear();
+      aborts.clear();
+    }
+    return {
+      setTurn: setTurnInProgress,
+      setCompacting,
+      update: updateWorkingIndicator,
+      toolStarted,
+      toolFinished,
+      beginAbort,
+      endAbort,
+      isAborting: (key) => aborts.has(key),
+      dispose,
+      get turn() {
+        return turnInProgress;
+      },
+      get compacting() {
+        return compactingNow;
+      }
+    };
+  }
+
+  // src/browser/btw-panel.ts
+  function createBtwPanel(options2) {
+    const panel = options2.document.getElementById("btwPanel");
+    let current = null, generation = 0, answer = null, disposed = false;
+    let events = new AbortController(), timer = null;
+    function owns(owner) {
+      return !disposed && !!owner && current === owner && options2.sessionState.ownsSelection(owner.selection);
+    }
+    function close() {
+      current = null;
+      answer = null;
+      events.abort();
+      if (timer) clearTimeout(timer);
+      timer = null;
+      panel.style.display = "none";
+      panel.innerHTML = "";
+    }
+    function show(question) {
+      if (disposed) return null;
+      close();
+      const selection = options2.sessionState.captureSelection();
+      if (!selection) return null;
+      const owner = Object.freeze({ selection, generation: ++generation });
+      current = owner;
+      events = new AbortController();
+      const { signal } = events;
+      panel.className = "btw-panel pending";
+      panel.innerHTML = `<div class="btw-panel-header"><span class="btw-panel-tag">btw</span>
+      <span class="btw-panel-question" title="Click to expand">${escapeHtml(question)}</span>
+      <button class="btw-panel-btn btw-copy" style="display:none" title="Copy answer">Copy</button>
+      <button class="btw-panel-btn btw-dismiss" title="Dismiss">\u2715</button></div><div class="btw-panel-answer">Asking\u2026</div>`;
+      panel.style.display = "";
+      panel.querySelector(".btw-panel-question").addEventListener("click", (event) => {
+        if (owns(owner)) event.currentTarget.classList.toggle("expanded");
+      }, { signal });
+      panel.querySelector(".btw-dismiss").addEventListener("click", () => {
+        if (owns(owner)) close();
+      }, { signal });
+      const button = panel.querySelector(".btw-copy");
+      button.addEventListener("click", () => {
+        void copy(button, owner);
+      }, { signal });
+      return owner;
+    }
+    function resolve(text17, owner) {
+      if (!owns(owner)) return;
+      answer = text17;
+      panel.className = "btw-panel";
+      panel.querySelector(".btw-panel-answer").innerHTML = `<div class="markdown-body">${options2.markdown(text17)}</div>`;
+      panel.querySelector(".btw-copy").style.display = "";
+    }
+    function fail(error, owner) {
+      if (!owns(owner)) return;
+      panel.className = "btw-panel error";
+      panel.querySelector(".btw-panel-answer").textContent = error;
+    }
+    async function copy(button, owner = current) {
+      if (!owns(owner) || !answer || !panel.contains(button)) return;
+      const captured = answer;
+      button.disabled = true;
+      try {
+        await options2.copy(captured);
+        if (!owns(owner) || !panel.contains(button)) return;
+        button.textContent = "Copied";
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          timer = null;
+          if (owns(owner) && panel.contains(button)) button.textContent = "Copy";
+        }, 1500);
+      } catch {
+        if (owns(owner) && panel.contains(button)) button.textContent = "Failed";
+      } finally {
+        if (owns(owner) && panel.contains(button)) button.disabled = false;
+      }
+    }
+    function dispose() {
+      if (disposed) return;
+      close();
+      disposed = true;
+    }
+    return { show, resolve, fail, close, copy, owns, dispose };
   }
   return __toCommonJS(index_exports);
 })();

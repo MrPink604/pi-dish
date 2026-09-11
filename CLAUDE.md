@@ -2207,3 +2207,6 @@ and preserve retained panel identity when resetting selection.
 
 The typed transcript controller owns pagination cursors and retained DOM; retire
 requests before stashing, and preserve the later group anchor during prepend.
+
+Browser activity/abort gates and `/btw` panels use typed owners. Keep per-question
+response tokens separate from the session identity and dispose clipboard timers.

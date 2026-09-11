@@ -171,3 +171,5 @@ complete application coverage.
 `live-transcript.spec.js` covers coalesced frame ownership, cumulative tools, retained panels and disposal.
 
 `transcript.spec.js` covers tail/older/catch-up races, retained cache bounds, endpoint identity and disposal.
+
+`session-activity.spec.js` covers activity/abort gates, replacement questions and panel disposal.

@@ -868,3 +868,16 @@ Verification: strict checks, 936 backend tests, 252 browser tests, all independe
 UI scenarios and full desktop/mobile smoke passed. Two pure tests, seven browser
 cases and strict contracts cover cursors, cache bounds, endpoint identity, paging
 locks, detached controls, literal errors and disposal. Fable reviews before push.
+
+## Checkpoint 39 — activity and side questions
+
+Moved activity flags, elapsed/tool labels, ticker lifetime and abort gates into a
+strict controller. A failed older abort cannot release a subsequent turn’s gate.
+Side-question panels own their selection and per-question generation, so a late
+answer or failure cannot replace another question. Clipboard completion, timers
+and detached dismissal controls retire with the panel.
+
+Verification: strict checks, 936 backend tests, 257 browser tests, all independent
+UI scenarios and full desktop/mobile smoke passed. Five browser cases and strict
+contracts cover compaction/turn overlap, ticker disposal, abort gate reuse,
+replacement questions and clipboard/disposal ownership. Fable reviews before push.
