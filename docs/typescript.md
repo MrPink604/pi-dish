@@ -343,3 +343,8 @@ lifecycle, selected host/harness, refine draft, workspace listeners and the
 configuration/discovery controllers it composes. `app.js` supplies host/session
 accessors, shared model/spawn controllers and cross-view callbacks. Submitted
 view guards stop owning their form on disposal as well as close/replacement.
+
+`recovery.ts` owns recovery preferences and reports, with readonly host/report
+contracts and explicit settings/report lifetimes. App callbacks supply capability
+checks, fleet readiness and cross-view navigation. Host route/token changes
+invalidate old requests and controls; submitted mutations retain their endpoints.

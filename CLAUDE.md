@@ -514,8 +514,10 @@ Routine reconciliation runs after recovery and preserves the invocation rather
 than spawning a second run or treating restored-idle work as completed.
 
 Settings exposes host-scoped controls and a separate `.main.recovery-open`
-report takeover. The main entrypoint routes settings/report actions to the
-selected owning host, including fleet proxies and browser-added peers.
+report takeover. `src/browser/recovery.ts` owns settings/report requests, selected endpoint
+snapshots and view listeners, including fleet proxies and browser-added peers.
+Settings close/re-render unmounts its preferences; report close/refresh retires
+its row actions. Captured mutations cannot write a newer view.
 `identifyHosts` must fetch capabilities even for a saved direct host with a
 known id: the browser persists identity but not its descriptor. Opening
 Settings refreshes the fleet; `refreshRecoveryHosts` updates only the pickers

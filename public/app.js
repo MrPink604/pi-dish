@@ -2998,12 +2998,14 @@ function openSettingsModal() {
 }
 
 function closeSettingsModal() {
+  recoveryController.unmountPreferences();
   hostSettings.unmount();
   closeBounceView();
   document.getElementById('settingsModal').style.display = 'none';
 }
 
 async function renderPreferences() {
+  recoveryController.unmountPreferences();
   hostSettings.unmount();
   const renderSeq = ++settingsRenderSeq;
   const body = document.getElementById('settingsBody');
@@ -3071,226 +3073,22 @@ async function renderPreferences() {
   });
 }
 
-// Recovery is host-global; retain host entries, not ids that could fall back
-// to self if a remote disappears while a request is in flight.
-let recoveryHostId = null;
-let recoveryViewSeq = 0;
-
-function recoveryCapableHosts() {
-  return effectiveHosts().filter(host => hostSupportsCapability(host, 'recovery', appConfig));
-}
-
-function selectRecoveryHost(hosts, preferredId) {
-  return hosts.find(host => host.hostId === preferredId) ||
-    hosts.find(host => host.hostId === recoveryHostId) || hosts[0];
-}
-
-function recoveryHostOptions(hosts) {
-  return hosts.map(host => `<option value="${escapeHtml(host.hostId || '')}">${escapeHtml(hostDisplayLabel(host))}</option>`).join('');
-}
-
-// Refresh only the options, not the form: a fleet poll must not discard an
-// unsaved mode selection. Losing the selected host invalidates its requests.
-function refreshRecoveryHosts() {
-  const hosts = recoveryCapableHosts();
-  const options = recoveryHostOptions(hosts);
-  for (const id of ['recoverySettingsHost', 'recoveryReportHost']) {
-    const select = document.getElementById(id);
-    if (!select || (id === 'recoveryReportHost' && !isRecoveryViewOpen())) continue;
-    const previous = select.value;
-    if (select.innerHTML !== options) {
-      select.innerHTML = options;
-      select.value = selectRecoveryHost(hosts, previous)?.hostId || '';
-    }
-    select.disabled = !hosts.length;
-    if (select.value !== previous) select.dispatchEvent(new Event('change'));
-  }
-  const unavailable = document.getElementById('recoveryUnavailableHosts');
-  if (unavailable) {
-    const missing = effectiveHosts().filter(host => !hostSupportsCapability(host, 'recovery', appConfig));
-    unavailable.textContent = missing.map(host => {
-      const reason = hostIsDown(host) ? 'unreachable or needs a token' :
-        host.capabilities ? 'update and restart pi-dish to enable recovery' : 'capabilities not yet available';
-      return hostDisplayLabel(host) + ': ' + reason + '.';
-    }).join(' ');
-    unavailable.hidden = !missing.length;
-  }
-}
-
-async function renderRecoveryPreferences() {
-  const section = document.getElementById('recoveryPreferences');
-  if (!section) return;
-  await hostFleetReady;
-  if (!section.isConnected) return;
-  section.hidden = false;
-  section.innerHTML = `<label for="recoveryMode"><strong>Session recovery</strong><small>Saved on the selected host for all devices. Runs whenever its server is launched; no boot-service setup is required. Restore opens sessions idle. Continue may incur model cost and perform external actions; tool execution is not exactly-once.</small></label>
-    <div class="recovery-controls">
-      <label for="recoverySettingsHost">Host</label><select id="recoverySettingsHost"></select>
-      <select id="recoveryMode" disabled aria-label="Recovery mode"><option value="off">Off</option><option value="restore">Restore open sessions</option><option value="continue">Restore and continue interrupted work</option></select>
-      <div class="recovery-actions"><button class="btn-small" id="saveRecoveryMode" disabled>Save</button><button class="btn-small" id="openRecoveryReport">Recovery report</button></div>
-      <small id="recoverySettingsStatus" role="status"></small>
-      <small id="recoveryUnavailableHosts" role="status" hidden></small>
-    </div>`;
-  const hostSelect = section.querySelector('#recoverySettingsHost');
-  const mode = section.querySelector('#recoveryMode');
-  const save = section.querySelector('#saveRecoveryMode');
-  const status = section.querySelector('#recoverySettingsStatus');
-  const report = section.querySelector('#openRecoveryReport');
-  hostSelect.innerHTML = recoveryHostOptions(recoveryCapableHosts());
-  hostSelect.value = selectRecoveryHost(recoveryCapableHosts(), sessionState.currentSession?.host)?.hostId || '';
-  let seq = 0;
-  const selectedHost = () => recoveryCapableHosts().find(host => (host.hostId || '') === hostSelect.value);
-  const owns = request => section.isConnected && seq === request &&
-    document.getElementById('settingsModal').style.display !== 'none';
-  const load = async () => {
-    const request = ++seq, host = selectedHost();
-    mode.disabled = save.disabled = report.disabled = true;
-    if (!host) {
-      status.textContent = 'No connected host currently advertises recovery support.';
-      return;
-    }
-    recoveryHostId = host.hostId;
-    report.disabled = false;
-    status.textContent = 'Loading host setting…';
-    try {
-      const res = await apiFetch(host, '/api/settings', { timeoutMs: 20000 });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      if (!owns(request)) return;
-      mode.value = data.recoveryMode || 'off';
-      mode.disabled = save.disabled = false;
-      status.textContent = '';
-    } catch (error) {
-      if (owns(request)) status.textContent = 'Could not load: ' + error.message;
-    }
-  };
-  hostSelect.addEventListener('change', load);
-  report.addEventListener('click', () => {
-    const host = selectedHost();
-    if (host) openRecoveryView(host.hostId);
-  });
-  save.addEventListener('click', async () => {
-    const host = selectedHost(), value = mode.value;
-    if (!host) return;
-    if (value === 'continue' && !confirm('On future server launches, continue interrupted work automatically? This may incur cost and repeat external actions. Tool execution is not exactly-once.')) return;
-    const request = ++seq;
-    mode.disabled = save.disabled = true;
-    status.textContent = 'Saving…';
-    try {
-      await apiSend(host, '/api/settings', { recoveryMode: value }, 'PUT');
-      if (owns(request)) status.textContent = 'Saved on ' + hostDisplayLabel(host) + ' for future server launches.';
-    } catch (error) {
-      if (owns(request)) status.textContent = 'Save failed: ' + error.message;
-    } finally {
-      if (owns(request)) mode.disabled = save.disabled = false;
-    }
-  });
-  load();
-  refreshRecoveryHosts();
-  // Opening settings re-reads the fleet, including upgrades since page load.
-  void loadHostFleet();
-}
-
-function isRecoveryViewOpen() {
-  return document.querySelector('.main').classList.contains('recovery-open');
-}
-
-function closeRecoveryView() {
-  recoveryViewSeq += 1;
-  document.querySelector('.main').classList.remove('recovery-open');
-}
-
-function openRecoveryView(hostId) {
-  const hosts = recoveryCapableHosts();
-  if (!hosts.length) return;
-  closeSettingsModal();
-  closeSidebar();
-  closeUsageView();
-  closeSearchView();
-  closeNewSessionView();
-  closeSkillsView();
-  closeRoutinesView();
-  closeBounceView();
-  closeDiffView();
-  closeFileView();
-  document.querySelector('.main').classList.add('recovery-open');
-  const hostSelect = document.getElementById('recoveryReportHost');
-  hostSelect.innerHTML = recoveryHostOptions(hosts);
-  hostSelect.value = selectRecoveryHost(hosts, hostId)?.hostId || '';
-  hostSelect.onchange = () => loadRecoveryView();
-  loadRecoveryView();
-}
-
-async function loadRecoveryView() {
-  const seq = ++recoveryViewSeq;
-  const hostSelect = document.getElementById('recoveryReportHost');
-  const host = recoveryCapableHosts().find(entry => (entry.hostId || '') === hostSelect.value);
-  const body = document.getElementById('recoveryViewBody');
-  const owns = () => seq === recoveryViewSeq && isRecoveryViewOpen();
-  if (!host) {
-    body.textContent = 'This host no longer advertises recovery support.';
-    return;
-  }
-  recoveryHostId = host.hostId;
-  body.innerHTML = '<div class="usage-state" role="status">Loading recovery report…</div>';
-  try {
-    const res = await apiFetch(host, '/api/recovery', { timeoutMs: 20000 });
-    const report = await res.json();
-    if (!res.ok) throw new Error(report.error || `HTTP ${res.status}`);
-    if (!owns()) return;
-    const modes = { off: 'Off', restore: 'Restore open sessions', continue: 'Restore and continue interrupted work' };
-    body.innerHTML = `<p class="recovery-note"><strong>${escapeHtml(modes[report.mode] || report.mode)}</strong> on ${escapeHtml(hostDisplayLabel(host))}. Recovery runs when this host’s server starts, not when this report opens.</p>
-      <p class="recovery-note">Needs review means recovery could not safely decide what happened. Inspect the transcript and any external actions before proceeding. Restore only reopens the session idle; it does not replay an uncertain prompt. Excluding a session prevents automatic recovery, without closing it.</p>
-      <div id="recoveryActionStatus" role="status" class="recovery-note"></div>
-      <div class="recovery-list"></div>`;
-    const list = body.querySelector('.recovery-list');
-    const records = Array.isArray(report.sessions) ? report.sessions : [];
-    if (report.truncated) {
-      const note = document.createElement('p');
-      note.className = 'recovery-note';
-      note.textContent = `Showing the newest ${records.length} of ${report.totalRecords} recovery records. Older observations are not shown.`;
-      list.before(note);
-    }
-    if (!records.length) list.innerHTML = '<div class="usage-state">No recorded sessions on this host yet.</div>';
-    for (const record of records) {
-      const row = document.createElement('article');
-      row.className = 'recovery-row';
-      row.dataset.sessionId = record.id;
-      const canRestore = ['needs-review', 'failed'].includes(record.status);
-      row.innerHTML = `<div class="recovery-row-heading"><strong>${escapeHtml(record.name || record.id)}</strong><span class="recovery-status">${escapeHtml(record.status)}</span></div>
-        <div class="recovery-meta">${escapeHtml(record.harnessId || '')} · ${escapeHtml(record.cwd || 'Working directory unavailable')}</div>
-        <div class="recovery-reason">${escapeHtml(record.reason || '')}</div>
-        <div class="recovery-meta">${escapeHtml(record.id)}${record.updatedAt ? ' · ' + escapeHtml(new Date(record.updatedAt).toLocaleString()) : ''}</div>
-        <div class="recovery-actions"><label><input type="checkbox" class="recovery-excluded"${record.excluded ? ' checked' : ''}> Exclude from automatic recovery</label>${canRestore ? '<button class="btn-small recovery-restore">Restore idle</button>' : ''}</div>`;
-      list.appendChild(row);
-      const action = async (path, payload, method) => {
-        const controls = body.querySelectorAll('input, button');
-        controls.forEach(control => { control.disabled = true; });
-        const status = body.querySelector('#recoveryActionStatus');
-        status.textContent = 'Updating ' + (record.name || record.id) + '…';
-        try {
-          await apiSend(host, path, payload, method);
-          if (owns()) await loadRecoveryView();
-        } catch (error) {
-          if (!owns()) return;
-          status.textContent = 'Action failed: ' + error.message + '. Refresh the report to check the host’s outcome before trying again.';
-          row.querySelector('.recovery-excluded').checked = !!record.excluded;
-          controls.forEach(control => { control.disabled = false; });
-        }
-      };
-      row.querySelector('.recovery-excluded').addEventListener('change', event => {
-        action(`/api/sessions/${encodeURIComponent(record.id)}/recovery`, { excluded: event.target.checked }, 'PUT');
-      });
-      row.querySelector('.recovery-restore')?.addEventListener('click', () => {
-        if (confirm('Restore ' + (record.name || record.id) + ' idle? This will not replay uncertain work. Review its transcript before sending another prompt.')) {
-          action('/api/recovery/retry', { id: record.id }, 'POST');
-        }
-      });
-    }
-  } catch (error) {
-    if (owns()) body.textContent = 'Could not load recovery report: ' + error.message;
-  }
-}
+// Recovery owns its preferences/report views and captured host endpoints.
+const recoveryController = PiDishBrowser.createRecovery({
+  root: document.querySelector('.main'), request: apiFetch, hosts: effectiveHosts,
+  supports: host => hostSupportsCapability(host, 'recovery', appConfig), down: hostIsDown,
+  fleetReady: () => hostFleetReady, refreshFleet: loadHostFleet,
+  selectedHost: () => sessionState.currentSession?.host || null,
+  settingsOpen: () => document.getElementById('settingsModal').style.display !== 'none',
+  closeOtherViews: () => { closeSettingsModal(); closeSidebar(); closeUsageView(); closeSearchView(); closeNewSessionView(); closeSkillsView(); closeRoutinesView(); closeBounceView(); closeDiffView(); closeFileView(); },
+  confirm: message => confirm(message),
+});
+function refreshRecoveryHosts() { recoveryController.refreshHosts(); }
+function renderRecoveryPreferences() { return recoveryController.mountPreferences(); }
+function isRecoveryViewOpen() { return recoveryController.isOpen(); }
+function closeRecoveryView() { recoveryController.close(); }
+function openRecoveryView(hostId) { recoveryController.open(hostId); }
+function loadRecoveryView() { return recoveryController.load(); }
 
 // --- Hosts (settings section, not a takeover: it is a short list plus one
 // add form). The catalog is device-local by design — a browser's own list of

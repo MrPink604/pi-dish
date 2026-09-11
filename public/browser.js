@@ -44,6 +44,7 @@ var PiDishBrowser = (() => {
     createNewSession: () => createNewSession,
     createNewSessionConfigPreview: () => createNewSessionConfigPreview,
     createNewSessionPreferences: () => createNewSessionPreferences,
+    createRecovery: () => createRecovery,
     createSessionApi: () => createSessionApi,
     createSessionSpawns: () => createSessionSpawns,
     createSessionState: () => createSessionState,
@@ -56,6 +57,8 @@ var PiDishBrowser = (() => {
     decodeHostDescriptor: () => decodeHostDescriptor,
     decodeKnownDirectories: () => decodeKnownDirectories,
     decodeModelCatalog: () => decodeModelCatalog,
+    decodeRecoveryMode: () => decodeRecoveryMode,
+    decodeRecoveryReport: () => decodeRecoveryReport,
     decodeSpawnChoices: () => decodeSpawnChoices,
     decodeSpawnId: () => decodeSpawnId,
     decodeSpawnStatus: () => decodeSpawnStatus,
@@ -196,8 +199,8 @@ var PiDishBrowser = (() => {
 
   // src/browser/api-client.ts
   var ApiHttpError = class extends Error {
-    constructor(message, status) {
-      super(message);
+    constructor(message2, status) {
+      super(message2);
       this.status = status;
       this.name = "ApiHttpError";
     }
@@ -277,10 +280,10 @@ var PiDishBrowser = (() => {
     const doc = root.ownerDocument;
     let view = null;
     let disposed = false;
-    function element(tag, className, text4) {
+    function element(tag, className, text5) {
       const node = doc.createElement(tag);
       node.className = className;
-      if (text4 !== void 0) node.textContent = text4;
+      if (text5 !== void 0) node.textContent = text5;
       return node;
     }
     const search = element("input", "model-search");
@@ -297,8 +300,8 @@ var PiDishBrowser = (() => {
       node.dataset.value = value;
       return node;
     }
-    function button(text4, name, value = "", primary = false) {
-      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text4);
+    function button(text5, name, value = "", primary = false) {
+      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text5);
       node.type = "button";
       return action(node, name, value);
     }
@@ -533,8 +536,8 @@ var PiDishBrowser = (() => {
     const state = prev && typeof prev === "object" ? prev : null;
     const errText = (value) => {
       if (value == null) return null;
-      const text4 = String(typeof value === "object" && "message" in value && value.message || value);
-      return text4 || null;
+      const text5 = String(typeof value === "object" && "message" in value && value.message || value);
+      return text5 || null;
     };
     const eventError = event && typeof event === "object" && "error" in event ? errText(event.error) : null;
     if (kind === "blocked") {
@@ -1234,9 +1237,9 @@ var PiDishBrowser = (() => {
     let sequence = 0;
     let checking = false;
     const { directory, connections, escapeHtml: escapeHtml2, displayLabel } = options;
-    function status(owner, message, error = false) {
+    function status(owner, message2, error = false) {
       if (view !== owner) return;
-      owner.status.textContent = message;
+      owner.status.textContent = message2;
       owner.status.classList.toggle("error", error);
     }
     function unmount() {
@@ -2290,8 +2293,8 @@ var PiDishBrowser = (() => {
     function ownsHost(view) {
       return sameDirectoryHost(view.host, options.host(view.scope.hostId));
     }
-    function harnessSettingsError(message) {
-      $("modelRolesError").textContent = message;
+    function harnessSettingsError(message2) {
+      $("modelRolesError").textContent = message2;
     }
     function showTab(tab) {
       for (const [name, tabId, paneId] of [["agents", "hsTabAgents", "hsPaneAgents"], ["models", "hsTabModels", "hsPaneModels"]]) {
@@ -2670,10 +2673,10 @@ var PiDishBrowser = (() => {
       } catch (error) {
         pending.delete(key);
         options.changed();
-        const message = error instanceof Error ? error.message : String(error);
+        const message2 = error instanceof Error ? error.message : String(error);
         if (options.current() === key) {
-          options.showFailure(key, message, spawn);
-          options.status(`Session start failed: ${message}`, "error");
+          options.showFailure(key, message2, spawn);
+          options.status(`Session start failed: ${message2}`, "error");
         } else options.discardPrompt(key);
       }
     }
@@ -2719,10 +2722,15 @@ var PiDishBrowser = (() => {
     };
   }
 
+  // src/browser/helper-values.ts
+  function record8(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+  }
+
   // src/browser/helper-format.ts
-  function escapeHtml(text4) {
-    if (text4 == null || text4 === "") return "";
-    return String(text4).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  function escapeHtml(text5) {
+    if (text5 == null || text5 === "") return "";
+    return String(text5).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
   function shortCwd(cwd) {
     if (!cwd) return "";
@@ -2756,10 +2764,10 @@ var PiDishBrowser = (() => {
     return Object.fromEntries(Object.entries(value).filter((entry) => typeof entry[1] === "string" && !!entry[1]));
   }
   function formatModelRoleSummary(roles, limit = 4) {
-    const record8 = modelRoleRecord(roles);
+    const record9 = modelRoleRecord(roles);
     const order = OMP_MODEL_ROLES.map((role) => role.key);
     const rank = (key) => order.indexOf(key) < 0 ? order.length : order.indexOf(key);
-    const entries = Object.keys(record8).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b)).map((key) => `${key} ${record8[key]}`);
+    const entries = Object.keys(record9).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b)).map((key) => `${key} ${record9[key]}`);
     if (!entries.length) return "No roles assigned";
     const shown = entries.slice(0, limit);
     const rest = entries.length - shown.length;
@@ -2838,7 +2846,7 @@ var PiDishBrowser = (() => {
     let directoryTree = null;
     let workspaceEvents = new AbortController();
     let disposed = false;
-    const message = (error2) => error2 instanceof Error ? error2.message : String(error2);
+    const message2 = (error2) => error2 instanceof Error ? error2.message : String(error2);
     const isOpen = () => !disposed && root.classList.contains("new-session-open");
     const host = () => (selectedHostId ? options.host(selectedHostId) : null) || options.self();
     const hostId = () => host().hostId || null;
@@ -3136,7 +3144,7 @@ var PiDishBrowser = (() => {
         if (directory) storage.setItem("pi-dish-cwd", directory);
         await submit({ cwd: directory, target, harness, host: endpoint, ownsView, draft: null });
       } catch (error2) {
-        if (ownsView()) options.status(`Error: ${message(error2)}`, "error");
+        if (ownsView()) options.status(`Error: ${message2(error2)}`, "error");
       }
     }
     async function spawn() {
@@ -3146,7 +3154,7 @@ var PiDishBrowser = (() => {
       try {
         target = selectedTarget();
       } catch (caught) {
-        error(message(caught));
+        error(message2(caught));
         return;
       }
       const name = nameInput.value.trim(), directory = cwd();
@@ -3165,7 +3173,7 @@ var PiDishBrowser = (() => {
           ownsView
         });
       } catch (caught) {
-        if (ownsView()) error(message(caught));
+        if (ownsView()) error(message2(caught));
       } finally {
         if (view === generation) {
           spawnButton.disabled = false;
@@ -3219,6 +3227,308 @@ var PiDishBrowser = (() => {
         autocomplete.dispose();
         targetPicker.dispose();
       }
+    };
+  }
+
+  // src/browser/recovery.ts
+  var text4 = (value) => typeof value === "string" ? value : "";
+  var message = (value) => value instanceof Error ? value.message : String(value);
+  function decodeRecoveryMode(value) {
+    return value === "restore" || value === "continue" ? value : "off";
+  }
+  function decodeRecoveryReport(value) {
+    if (!record8(value)) throw new Error("Invalid recovery report");
+    const rows = Array.isArray(value.sessions) ? value.sessions : [];
+    const sessions = rows.flatMap((row) => record8(row) && typeof row.id === "string" && row.id ? [{
+      id: row.id,
+      name: text4(row.name),
+      harnessId: text4(row.harnessId),
+      cwd: text4(row.cwd),
+      reason: text4(row.reason),
+      status: text4(row.status),
+      excluded: row.excluded === true,
+      updatedAt: typeof row.updatedAt === "string" || typeof row.updatedAt === "number" ? row.updatedAt : null
+    }] : []);
+    return {
+      mode: text4(value.mode) || "off",
+      sessions,
+      truncated: value.truncated === true,
+      totalRecords: typeof value.totalRecords === "number" && Number.isFinite(value.totalRecords) ? value.totalRecords : sessions.length
+    };
+  }
+  function createRecovery(options) {
+    const doc = options.root.ownerDocument;
+    const element = (id) => {
+      const value = doc.getElementById(id);
+      if (!value) throw new Error("Missing recovery element: " + id);
+      return value;
+    };
+    const apiFetch = options.request;
+    const apiSend = (host, path, payload, method) => sendJson(apiFetch, host, path, payload, method);
+    const effectiveHosts = options.hosts;
+    const hostIsDown = options.down;
+    const confirm = options.confirm;
+    let disposed = false;
+    let preferencesSeq = 0;
+    let preferenceEvents = null;
+    let reportEvents = null;
+    let preferenceEndpoint;
+    let reportEndpoint;
+    const snapshot = (host) => Object.freeze({ ...host });
+    const sameHost = (left, right) => !!left && !!right && left.hostId === right.hostId && left.base === right.base && (left.token || "") === (right.token || "");
+    function unmountPreferences() {
+      ++preferencesSeq;
+      preferenceEvents?.abort();
+      preferenceEvents = null;
+      preferenceEndpoint = void 0;
+    }
+    let recoveryHostId = null;
+    let recoveryViewSeq = 0;
+    function recoveryCapableHosts() {
+      return effectiveHosts().filter((host) => options.supports(host));
+    }
+    function selectRecoveryHost(hosts, preferredId) {
+      return hosts.find((host) => host.hostId === preferredId) || hosts.find((host) => host.hostId === recoveryHostId) || hosts[0];
+    }
+    function recoveryHostOptions(hosts) {
+      return hosts.map((host) => `<option value="${escapeHtml(host.hostId || "")}">${escapeHtml(hostDisplayLabel(host))}</option>`).join("");
+    }
+    function refreshRecoveryHosts() {
+      if (disposed) return;
+      const hosts = recoveryCapableHosts();
+      const optionHtml = recoveryHostOptions(hosts);
+      for (const id of ["recoverySettingsHost", "recoveryReportHost"]) {
+        const select = doc.getElementById(id);
+        if (!select || id === "recoveryReportHost" && !isRecoveryViewOpen()) continue;
+        const previous = select.value;
+        if (select.innerHTML !== optionHtml) {
+          select.innerHTML = optionHtml;
+          select.value = selectRecoveryHost(hosts, previous)?.hostId || "";
+        }
+        select.disabled = !hosts.length;
+        const liveHost = hosts.find((host) => (host.hostId || "") === select.value);
+        const endpoint = id === "recoverySettingsHost" ? preferenceEndpoint : reportEndpoint;
+        if (select.value !== previous || endpoint && !sameHost(endpoint, liveHost)) select.dispatchEvent(new Event("change"));
+      }
+      const unavailable = doc.getElementById("recoveryUnavailableHosts");
+      if (unavailable) {
+        const missing = effectiveHosts().filter((host) => !options.supports(host));
+        unavailable.textContent = missing.map((host) => {
+          const reason = hostIsDown(host) ? "unreachable or needs a token" : host.capabilities ? "update and restart pi-dish to enable recovery" : "capabilities not yet available";
+          return hostDisplayLabel(host) + ": " + reason + ".";
+        }).join(" ");
+        unavailable.hidden = !missing.length;
+      }
+    }
+    async function renderRecoveryPreferences() {
+      unmountPreferences();
+      const mountSeq = preferencesSeq;
+      const section = doc.getElementById("recoveryPreferences");
+      if (!section || disposed) return;
+      await options.fleetReady();
+      if (disposed || mountSeq !== preferencesSeq || !section.isConnected || !options.settingsOpen()) return;
+      const events = preferenceEvents = new AbortController();
+      const listener = { signal: events.signal };
+      section.hidden = false;
+      section.innerHTML = `<label for="recoveryMode"><strong>Session recovery</strong><small>Saved on the selected host for all devices. Runs whenever its server is launched; no boot-service setup is required. Restore opens sessions idle. Continue may incur model cost and perform external actions; tool execution is not exactly-once.</small></label>
+      <div class="recovery-controls">
+        <label for="recoverySettingsHost">Host</label><select id="recoverySettingsHost"></select>
+        <select id="recoveryMode" disabled aria-label="Recovery mode"><option value="off">Off</option><option value="restore">Restore open sessions</option><option value="continue">Restore and continue interrupted work</option></select>
+        <div class="recovery-actions"><button class="btn-small" id="saveRecoveryMode" disabled>Save</button><button class="btn-small" id="openRecoveryReport">Recovery report</button></div>
+        <small id="recoverySettingsStatus" role="status"></small>
+        <small id="recoveryUnavailableHosts" role="status" hidden></small>
+      </div>`;
+      const hostSelect = section.querySelector("#recoverySettingsHost");
+      const mode = section.querySelector("#recoveryMode");
+      const save = section.querySelector("#saveRecoveryMode");
+      const status = section.querySelector("#recoverySettingsStatus");
+      const report = section.querySelector("#openRecoveryReport");
+      hostSelect.innerHTML = recoveryHostOptions(recoveryCapableHosts());
+      hostSelect.value = selectRecoveryHost(recoveryCapableHosts(), options.selectedHost())?.hostId || "";
+      let seq = 0;
+      const selectedHost = () => recoveryCapableHosts().find((host) => (host.hostId || "") === hostSelect.value);
+      const ownsView = () => !disposed && mountSeq === preferencesSeq && section.isConnected && options.settingsOpen();
+      const owns = (request, host) => ownsView() && seq === request && sameHost(host, selectedHost());
+      const load = async () => {
+        if (!ownsView()) return;
+        const request = ++seq, selected = selectedHost();
+        const host = preferenceEndpoint = selected ? snapshot(selected) : void 0;
+        mode.disabled = save.disabled = report.disabled = true;
+        if (!host) {
+          status.textContent = "No connected host currently advertises recovery support.";
+          return;
+        }
+        recoveryHostId = host.hostId;
+        report.disabled = false;
+        status.textContent = "Loading host setting\u2026";
+        try {
+          const res = await apiFetch(host, "/api/settings", { timeoutMs: 2e4 });
+          const data = await res.json();
+          if (!res.ok) throw new Error(record8(data) && text4(data.error) || `HTTP ${res.status}`);
+          if (!owns(request, host)) return;
+          mode.value = decodeRecoveryMode(record8(data) ? data.recoveryMode : null);
+          mode.disabled = save.disabled = false;
+          status.textContent = "";
+        } catch (error) {
+          if (owns(request, host)) status.textContent = "Could not load: " + message(error);
+        }
+      };
+      hostSelect.addEventListener("change", () => {
+        void load();
+      }, listener);
+      report.addEventListener("click", () => {
+        const host = selectedHost();
+        if (host && ownsView()) openRecoveryView(host.hostId);
+      }, listener);
+      save.addEventListener("click", async () => {
+        const selected = selectedHost(), value = decodeRecoveryMode(mode.value);
+        if (!selected || !ownsView() || save.disabled || !sameHost(preferenceEndpoint, selected)) return;
+        const host = snapshot(selected);
+        if (value === "continue" && !confirm("On future server launches, continue interrupted work automatically? This may incur cost and repeat external actions. Tool execution is not exactly-once.")) return;
+        const request = ++seq;
+        mode.disabled = save.disabled = true;
+        status.textContent = "Saving\u2026";
+        try {
+          await apiSend(host, "/api/settings", { recoveryMode: value }, "PUT");
+          if (owns(request, host)) status.textContent = "Saved on " + hostDisplayLabel(host) + " for future server launches.";
+        } catch (error) {
+          if (owns(request, host)) status.textContent = "Save failed: " + message(error);
+        } finally {
+          if (owns(request, host)) mode.disabled = save.disabled = false;
+        }
+      }, listener);
+      void load();
+      refreshRecoveryHosts();
+      void options.refreshFleet();
+    }
+    function isRecoveryViewOpen() {
+      return !disposed && options.root.classList.contains("recovery-open");
+    }
+    function closeRecoveryView() {
+      if (disposed) return;
+      const select = doc.getElementById("recoveryReportHost");
+      if (select) select.onchange = null;
+      recoveryViewSeq += 1;
+      reportEvents?.abort();
+      reportEvents = null;
+      reportEndpoint = void 0;
+      options.root.classList.remove("recovery-open");
+    }
+    function openRecoveryView(hostId) {
+      const hosts = recoveryCapableHosts();
+      if (disposed || !hosts.length) return;
+      options.closeOtherViews();
+      options.root.classList.add("recovery-open");
+      const hostSelect = element("recoveryReportHost");
+      hostSelect.innerHTML = recoveryHostOptions(hosts);
+      hostSelect.value = selectRecoveryHost(hosts, hostId)?.hostId || "";
+      hostSelect.onchange = () => {
+        void loadRecoveryView();
+      };
+      loadRecoveryView();
+    }
+    async function loadRecoveryView() {
+      if (!isRecoveryViewOpen()) return;
+      const seq = ++recoveryViewSeq;
+      reportEvents?.abort();
+      const events = reportEvents = new AbortController();
+      const listener = { signal: events.signal };
+      const hostSelect = element("recoveryReportHost");
+      const selectedHost = () => recoveryCapableHosts().find((entry) => (entry.hostId || "") === hostSelect.value);
+      const selected = selectedHost();
+      const host = reportEndpoint = selected ? snapshot(selected) : void 0;
+      const body = element("recoveryViewBody");
+      const owns = () => seq === recoveryViewSeq && isRecoveryViewOpen() && sameHost(host, selectedHost());
+      if (!host) {
+        body.textContent = "This host no longer advertises recovery support.";
+        return;
+      }
+      recoveryHostId = host.hostId;
+      body.innerHTML = '<div class="usage-state" role="status">Loading recovery report\u2026</div>';
+      try {
+        const res = await apiFetch(host, "/api/recovery", { timeoutMs: 2e4 });
+        const data = await res.json();
+        if (!owns()) return;
+        if (!res.ok) throw new Error(record8(data) && text4(data.error) || `HTTP ${res.status}`);
+        const report = decodeRecoveryReport(data);
+        const modes = { off: "Off", restore: "Restore open sessions", continue: "Restore and continue interrupted work" };
+        body.innerHTML = `<p class="recovery-note"><strong>${escapeHtml(Object.hasOwn(modes, report.mode) ? modes[report.mode] : report.mode)}</strong> on ${escapeHtml(hostDisplayLabel(host))}. Recovery runs when this host\u2019s server starts, not when this report opens.</p>
+        <p class="recovery-note">Needs review means recovery could not safely decide what happened. Inspect the transcript and any external actions before proceeding. Restore only reopens the session idle; it does not replay an uncertain prompt. Excluding a session prevents automatic recovery, without closing it.</p>
+        <div id="recoveryActionStatus" role="status" class="recovery-note"></div>
+        <div class="recovery-list"></div>`;
+        const list = body.querySelector(".recovery-list");
+        const records = report.sessions;
+        let actionBusy = false;
+        if (report.truncated) {
+          const note = doc.createElement("p");
+          note.className = "recovery-note";
+          note.textContent = `Showing the newest ${records.length} of ${report.totalRecords} recovery records. Older observations are not shown.`;
+          list.before(note);
+        }
+        if (!records.length) list.innerHTML = '<div class="usage-state">No recorded sessions on this host yet.</div>';
+        for (const record9 of records) {
+          const row = doc.createElement("article");
+          row.className = "recovery-row";
+          row.dataset.sessionId = record9.id;
+          const canRestore = ["needs-review", "failed"].includes(record9.status);
+          row.innerHTML = `<div class="recovery-row-heading"><strong>${escapeHtml(record9.name || record9.id)}</strong><span class="recovery-status">${escapeHtml(record9.status)}</span></div>
+          <div class="recovery-meta">${escapeHtml(record9.harnessId || "")} \xB7 ${escapeHtml(record9.cwd || "Working directory unavailable")}</div>
+          <div class="recovery-reason">${escapeHtml(record9.reason || "")}</div>
+          <div class="recovery-meta">${escapeHtml(record9.id)}${record9.updatedAt ? " \xB7 " + escapeHtml(new Date(record9.updatedAt).toLocaleString()) : ""}</div>
+          <div class="recovery-actions"><label><input type="checkbox" class="recovery-excluded"${record9.excluded ? " checked" : ""}> Exclude from automatic recovery</label>${canRestore ? '<button class="btn-small recovery-restore">Restore idle</button>' : ""}</div>`;
+          list.appendChild(row);
+          const action = async (path, payload, method) => {
+            if (!owns() || actionBusy) return;
+            actionBusy = true;
+            const controls = body.querySelectorAll("input, button");
+            controls.forEach((control) => {
+              control.disabled = true;
+            });
+            const status = body.querySelector("#recoveryActionStatus");
+            status.textContent = "Updating " + (record9.name || record9.id) + "\u2026";
+            try {
+              await apiSend(host, path, payload, method);
+              if (owns()) await loadRecoveryView();
+            } catch (error) {
+              if (!owns()) return;
+              status.textContent = "Action failed: " + message(error) + ". Refresh the report to check the host\u2019s outcome before trying again.";
+              row.querySelector(".recovery-excluded").checked = record9.excluded;
+              actionBusy = false;
+              controls.forEach((control) => {
+                control.disabled = false;
+              });
+            }
+          };
+          const excluded = row.querySelector(".recovery-excluded");
+          excluded.addEventListener("change", () => {
+            void action(`/api/sessions/${encodeURIComponent(record9.id)}/recovery`, { excluded: excluded.checked }, "PUT");
+          }, listener);
+          row.querySelector(".recovery-restore")?.addEventListener("click", () => {
+            if (owns() && !actionBusy && confirm("Restore " + (record9.name || record9.id) + " idle? This will not replay uncertain work. Review its transcript before sending another prompt.")) {
+              void action("/api/recovery/retry", { id: record9.id }, "POST");
+            }
+          }, listener);
+        }
+      } catch (error) {
+        if (owns()) body.textContent = "Could not load recovery report: " + message(error);
+      }
+    }
+    function dispose() {
+      unmountPreferences();
+      closeRecoveryView();
+      disposed = true;
+      const select = doc.getElementById("recoveryReportHost");
+      if (select) select.onchange = null;
+    }
+    return {
+      mountPreferences: renderRecoveryPreferences,
+      unmountPreferences,
+      refreshHosts: refreshRecoveryHosts,
+      open: openRecoveryView,
+      close: closeRecoveryView,
+      isOpen: isRecoveryViewOpen,
+      load: loadRecoveryView,
+      dispose
     };
   }
   return __toCommonJS(index_exports);

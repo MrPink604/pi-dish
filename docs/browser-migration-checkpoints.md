@@ -316,3 +316,24 @@ Spawn checkpoint commits `454ce1c` and `e3f30b1` were cleared by Fable 5.1 and p
 
 Fable 5.1 cleared shared-helper commit `861d799`, which is pushed. Its newer CI
 run superseded the spawn run before that run finished its browser job.
+
+## Checkpoint 14 — recovery controls (verified locally; review pending)
+
+- `recovery.ts` owns host recovery preferences and the recovery-report takeover,
+  including mode/report decoding, selected endpoint snapshots and view listeners.
+- Settings rendering retains its mount across fleet readiness and response bodies.
+  Fleet refresh preserves unsaved mode edits unless the selected host or its
+  endpoint changes. Submitted saves retain their original endpoint; later results
+  cannot write a replacement settings view.
+- Report requests and row actions verify host identity, route/token and view
+  before acting. Refresh/close retires old controls; duplicate row actions are
+  ignored while one is pending. Existing continue/restore confirmations remain.
+- Five browser regressions cover held bodies, old saves, retained controls,
+  host-scoped exclusions and token changes. Unit/strict contracts cover narrowed
+  wire rows and immutable host/report inputs.
+- Strict checks, 900 backend tests, 113 browser regressions, independent UI
+  scenarios and full desktop/mobile smoke passed. Fable review is required before push.
+- Next: bounce operations, then remaining browser feature and rendering owners.
+
+Fable 5.1 cleared new-session form commit `9538411`, which is pushed. Shared-helper
+commit `861d799` passed all five CI jobs (run `34598941974`).

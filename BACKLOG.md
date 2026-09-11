@@ -16,7 +16,8 @@ Checkpoint 9 migrates new-session model/thinking preferences and defaults previe
 Checkpoint 10 migrates the shared harness settings editor.
 Checkpoint 11 migrates submitted spawn operations and provisional-state ownership.
 Checkpoint 12 migrates the shared helper entrypoint and its pure implementation modules.
-Checkpoint 13 migrates the new-session form and discovery-control orchestration. See
+Checkpoint 13 migrates the new-session form and discovery-control orchestration.
+Checkpoint 14 migrates host recovery preferences and the recovery report. See
 [the checkpoint log](docs/browser-migration-checkpoints.md) for implementation
 verification and the complete browser entrypoint inventory. The last confirmed
 CI checkpoint is recorded below; final CI must pass before the goal is complete.
@@ -27,7 +28,7 @@ CI checkpoint is recorded below; final CI must pass before the goal is complete.
 | --- | --- | --- |
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
-| Browser migration | In progress — current stage | Thirty-four implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
+| Browser migration | In progress — current stage | Thirty-five implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
 | Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -45,7 +46,7 @@ in `lib/`. Its full module inventory is in [the migration guide](docs/typescript
 Most JavaScript callers of these modules are not yet type checked; `lib/cron.js`
 is an explicitly checked exception.
 
-These thirty-four browser implementation modules compile strictly into local
+These thirty-five browser implementation modules compile strictly into local
 `public/browser.js`, `public/helpers.js` and `public/artifact-comments.js` scripts.
 The entries are `index.ts`, `shared-helpers.ts` and `artifact-comments.ts`;
 `shared-helper-types.ts` supplies their pure-helper contracts:
@@ -76,6 +77,7 @@ The entries are `index.ts`, `shared-helpers.ts` and `artifact-comments.ts`;
 | `harness-settings.ts` | Shared settings editor, captured view/endpoint reads and serialized save ownership |
 | `session-spawns.ts` | Submitted spawn snapshots, provisional rows, polling and composer reconciliation |
 | `new-session.ts` | Form state, host/harness controls, discovery coordination, workspace actions and submitted view ownership |
+| `recovery.ts` | Host recovery settings/report wire data, view lifecycle and captured mutations |
 | `helper-values.ts` | Unknown-value guards and compatible timestamp conversion |
 | `helper-format.ts` | Labels, durations, metadata, input insertion and download filenames |
 | `helper-content.ts` | Narrowed content blocks and tool summaries/results |
@@ -130,16 +132,16 @@ checks. Documentation-only changes need content and link checks. After a chunk
 ships, update this page's checkpoint, completed inventory and next step so the
 status stays current.
 
-Last confirmed CI checkpoint, `1d50e5d` (newer local work is in the checkpoint log):
+Last confirmed CI checkpoint, `861d799` (newer local work is in the checkpoint log):
 
 - Fable 5.1 cleared the new-session options checkpoint before push. Both harness
   editor commits, including preview-refresh follow-up `1d50e5d`, are also cleared
   and pushed. Spawn commits `454ce1c`/`e3f30b1` and shared helpers `861d799`
   are reviewed and pushed; their CI status is in the checkpoint log.
-- 892 backend tests and 101 browser regressions passed, along with independent UI
+- 899 backend tests and 105 browser regressions passed, along with independent UI
   scenarios and desktop/mobile smoke. OMP/Prime fake-provider canaries last passed
   at `53b5ae0`; they will run again for the final browser audit.
-- [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34596559634):
+- [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34598941974):
   backend Node 22.19.0/22.x/24.x/26.x and browser/UI on Node 24.
 
 These results establish a verified checkpoint, not exhaustive application coverage
