@@ -39,10 +39,13 @@ var PiDishBrowser = (() => {
     createHostTransport: () => createHostTransport,
     createSessionApi: () => createSessionApi,
     createSessionState: () => createSessionState,
+    createSpawnTargetPicker: () => createSpawnTargetPicker,
+    createSpawnTargets: () => createSpawnTargets,
     decodeDirectoryChildren: () => decodeDirectoryChildren,
     decodeHostDescriptor: () => decodeHostDescriptor,
     decodeKnownDirectories: () => decodeKnownDirectories,
     decodeModelCatalog: () => decodeModelCatalog,
+    decodeSpawnChoices: () => decodeSpawnChoices,
     hostConnReduce: () => hostConnReduce,
     hostKeyOf: () => hostKeyOf,
     hostSettingsHtml: () => hostSettingsHtml,
@@ -58,6 +61,7 @@ var PiDishBrowser = (() => {
     sanitizeHostColorOrder: () => sanitizeHostColorOrder,
     sanitizeHostColors: () => sanitizeHostColors,
     sendJson: () => sendJson,
+    spawnTargetKey: () => spawnTargetKey,
     withFetchTimeout: () => withFetchTimeout
   });
 
@@ -1765,6 +1769,197 @@ var PiDishBrowser = (() => {
       root.appendChild(makeNode(owner, "~", "~", 0));
     }
     return { reset, dispose, isCurrent: () => !!owner && owns(owner) };
+  }
+
+  // src/browser/spawn-targets.ts
+  var HEADLESS = { label: "pi-dish (headless)", target: null, pinned: true };
+  function spawnTargetKey(choice) {
+    if (!choice.target) return "headless";
+    return `${choice.target.socket}::${choice.needsName ? "new" : choice.target.tmuxSession}`;
+  }
+  function record4(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+  }
+  function decodeSpawnChoices(value) {
+    if (!record4(value) || !value.available || !Array.isArray(value.servers)) return [HEADLESS];
+    const values = value.servers;
+    const servers = values.flatMap((server) => record4(server) && typeof server.name === "string" && typeof server.socket === "string" && server.socket ? [{ name: server.name, socket: server.socket, sessions: server.sessions }] : []);
+    const choices = [HEADLESS];
+    for (const server of servers) choices.push({
+      label: `tmux:${server.name} \u2014 new session\u2026`,
+      target: { type: "tmux", socket: server.socket },
+      needsName: true,
+      pinned: true
+    });
+    for (const server of servers) {
+      const sessions = Array.isArray(server.sessions) ? server.sessions : [];
+      for (const session of sessions) if (record4(session) && typeof session.name === "string" && session.name) {
+        choices.push({
+          label: `tmux:${server.name} \u2014 ${session.name}`,
+          target: { type: "tmux", socket: server.socket, tmuxSession: session.name }
+        });
+      }
+    }
+    return choices;
+  }
+  function createSpawnTargets(options) {
+    let sequence = 0;
+    let owner = null;
+    let choices = [HEADLESS];
+    let choiceKey = "headless";
+    function currentChoices() {
+      return sameDirectoryHost(owner, options.host()) ? choices : [HEADLESS];
+    }
+    function current() {
+      return currentChoices().find((choice) => spawnTargetKey(choice) === choiceKey) || HEADLESS;
+    }
+    function retire() {
+      sequence++;
+    }
+    async function load() {
+      const requestSequence = ++sequence;
+      owner = null;
+      choices = [HEADLESS];
+      choiceKey = "headless";
+      options.changed();
+      const selected2 = options.host();
+      if (!selected2 || !options.supportsTmux()) return;
+      const host = Object.freeze({ ...selected2 });
+      const owns = () => sequence === requestSequence && sameDirectoryHost(host, options.host());
+      let next;
+      try {
+        const response = await options.request(host, "/api/tmux/targets");
+        if (!response.ok || !owns()) return;
+        const data = await response.json();
+        if (!owns()) return;
+        next = decodeSpawnChoices(data);
+      } catch {
+        return;
+      }
+      owner = host;
+      choices = next;
+      const saved = options.readSaved();
+      choiceKey = choices.some((choice) => spawnTargetKey(choice) === saved) ? saved || "headless" : "headless";
+      options.changed();
+    }
+    function choose(key) {
+      if (!currentChoices().some((choice) => spawnTargetKey(choice) === key)) return false;
+      choiceKey = key;
+      options.save(key);
+      options.changed();
+      return true;
+    }
+    function selected(name) {
+      const choice = current();
+      if (!choice.target) return null;
+      if (choice.needsName) {
+        const trimmed = name.trim();
+        if (!trimmed) throw new Error("Enter a name for the new tmux session");
+        return { type: "tmux", socket: choice.target.socket, newTmuxSession: trimmed };
+      }
+      return choice.target.tmuxSession ? { type: "tmux", socket: choice.target.socket, tmuxSession: choice.target.tmuxSession } : null;
+    }
+    function resume(host) {
+      if (!sameDirectoryHost(owner, host)) return null;
+      const saved = options.readSaved();
+      const choice = choices.find((item) => spawnTargetKey(item) === saved);
+      if (!choice?.target?.tmuxSession || choice.needsName) return null;
+      return { type: "tmux", socket: choice.target.socket, tmuxSession: choice.target.tmuxSession };
+    }
+    return { load, retire, choices: currentChoices, current, choose, selected, resume };
+  }
+  function createSpawnTargetPicker(options) {
+    const { input, nameInput, wrap, dropdown, targets } = options;
+    const listeners = new AbortController();
+    let rowListeners = new AbortController();
+    let blurTimer = null;
+    let activeIndex = -1;
+    let rendered = null;
+    function hide() {
+      rowListeners.abort();
+      rendered = null;
+      dropdown.style.display = "none";
+      activeIndex = -1;
+      if (blurTimer !== null) clearTimeout(blurTimer);
+      blurTimer = null;
+    }
+    function sync() {
+      hide();
+      input.value = targets.current().label;
+      nameInput.style.display = targets.current().needsName ? "" : "none";
+      wrap.style.display = targets.choices().length > 1 ? "" : "none";
+    }
+    function choose(key) {
+      if (!rendered || rendered !== targets.choices()) {
+        sync();
+        return;
+      }
+      if (!targets.choose(key)) return;
+      sync();
+      if (targets.current().needsName) nameInput.focus();
+    }
+    function render(query) {
+      hide();
+      const choices = targets.choices();
+      if (choices.length < 2) {
+        sync();
+        return;
+      }
+      rendered = choices;
+      const q = query.trim();
+      let named = choices.filter((choice) => !choice.pinned).flatMap((choice) => {
+        const indices = q ? options.match(q, choice.label) : [];
+        return indices ? [{ choice, indices, score: q ? options.score(indices, choice.label) : 0 }] : [];
+      });
+      if (q) named = named.sort((a, b) => b.score - a.score);
+      const rows = [...choices.filter((choice) => choice.pinned).map((choice) => ({ choice, indices: [] })), ...named];
+      dropdown.innerHTML = rows.map(({ choice, indices }) => `<div class="cwd-option" data-key="${options.escapeHtml(spawnTargetKey(choice))}">${indices.length ? options.highlight(choice.label, indices) : options.escapeHtml(choice.label)}</div>`).join("");
+      dropdown.style.display = "block";
+      rowListeners = new AbortController();
+      for (const row of Array.from(dropdown.querySelectorAll(".cwd-option"))) {
+        row.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          if (dropdown.contains(row)) choose(row.dataset.key || "");
+        }, { signal: rowListeners.signal });
+      }
+    }
+    const listener = { signal: listeners.signal };
+    input.addEventListener("focus", () => {
+      input.select();
+      render("");
+    }, listener);
+    input.addEventListener("input", () => render(input.value), listener);
+    input.addEventListener("blur", () => {
+      if (blurTimer !== null) clearTimeout(blurTimer);
+      blurTimer = setTimeout(sync, 150);
+    }, listener);
+    input.addEventListener("keydown", (event) => {
+      if (dropdown.style.display === "none") return;
+      if (rendered !== targets.choices()) {
+        sync();
+        return;
+      }
+      const rows = Array.from(dropdown.querySelectorAll(".cwd-option"));
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        if (!rows.length) return;
+        activeIndex = Math.max(0, Math.min(activeIndex + (event.key === "ArrowDown" ? 1 : -1), rows.length - 1));
+        rows.forEach((row, index) => row.classList.toggle("active", index === activeIndex));
+        rows[activeIndex].scrollIntoView({ block: "nearest" });
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        const row = rows[activeIndex];
+        if (row) choose(row.dataset.key || "");
+        else sync();
+      } else if (event.key === "Escape") {
+        event.stopPropagation();
+        sync();
+      }
+    }, listener);
+    return { sync, render, hide, dispose() {
+      hide();
+      listeners.abort();
+    } };
   }
   return __toCommonJS(index_exports);
 })();

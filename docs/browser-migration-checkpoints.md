@@ -105,7 +105,7 @@ are not completion percentages.
   fix in `6831418` and cleared both commits before push.
 - Next: remaining new-session directory, target, model/config and spawn controllers.
 
-## Checkpoint 5 — directory controllers (local verification complete)
+## Checkpoint 5 — directory controllers
 
 - Boundary: known cwd catalog, shared new-session/routine autocomplete and the
   new-session lazy directory tree. Wire path/name fields are decoded before use.
@@ -128,5 +128,21 @@ are not completion percentages.
   Catalog/token changes and late self identity renew open directories. Four
   additional browser regressions cover these triggers. Strict checks, all 873
   backend tests, 79 browser regressions, independent UI scenarios and full
-  desktop/mobile smoke pass. Fable re-review is required before either commit
-  is pushed.
+  desktop/mobile smoke pass. Fable confirmed both findings resolved in `f3f9399`
+  and cleared both directory commits before push.
+
+## Checkpoint 6 — tmux targets
+
+- Boundary: tmux target payload decoding, current choice, saved resume target
+  resolution and run-in combobox DOM/listeners. Rows and descriptors are readonly.
+- Refresh immediately clears old choices; delayed responses retain their host
+  id/route/token and request generation. Failed or unsupported reads leave only
+  headless operation. Resume requires the selected session's explicit host.
+- Picker rows retain their catalog identity. Refresh and close retire row
+  listeners and blur timers; keyboard/fuzzy/pinned-row behavior is preserved.
+- Six unit tests and four browser regressions cover request replacement, delayed
+  bodies, host-aware resume, unavailable targets, retained rows and keyboard picks.
+- Verification: strict build/lint/type checks, all 879 backend tests, 83 browser
+  regressions, all independent UI scenarios and desktop/mobile smoke passed.
+  Fable review of the local commit is required before push.
+- Next: shared model catalog and new-session model/config/spawn controllers.

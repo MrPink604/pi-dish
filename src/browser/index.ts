@@ -15,3 +15,5 @@ export { HOST_COLOR_SLOTS, sanitizeHostColors, sanitizeHostColorOrder, assignHos
 export { createDirectoryCatalog, decodeKnownDirectories, decodeDirectoryChildren } from './directory-catalog';
 export { createCwdAutocomplete } from './cwd-autocomplete';
 export { createDirectoryTree } from './directory-tree';
+
+export { createSpawnTargets, createSpawnTargetPicker, decodeSpawnChoices, spawnTargetKey } from './spawn-targets';

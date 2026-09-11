@@ -736,6 +736,13 @@ checks its originating tree and host before rendering or selecting a cwd.
 Host catalog/token edits and late identity discovery renew an open directory tree
 and known-cwd catalog when their captured endpoint changes.
 
+Tmux target catalog and run-in picker ownership live in
+`src/browser/spawn-targets.ts`. Refresh resets to headless before awaiting and
+captures host id/route/token plus a sequence; failure cannot leave an old host's
+target active. Resume passes its selected session host explicitly and only uses
+a concrete saved target from that host's catalog. Picker refresh/close retires
+row listeners and the blur timer, and closing the takeover retires pending reads.
+
 Harness discovery in `src/browser/harness-discovery.ts` captures the selected
 host, resolved cache key and a request sequence before
 awaiting `/api/harnesses`. Only the latest request for the still-selected host

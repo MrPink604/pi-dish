@@ -2302,7 +2302,7 @@ async function loadResumeModelOptions(session) {
 async function resumeSession() {
   if (!sessionState.currentSession) return;
   const owner = sessionState.captureSelection();
-  const target = savedResumeTarget();
+  const target = savedResumeTarget(owner.host);
   const model = sessionState.currentSession.harnessId === 'omp'
     ? (document.getElementById('resumeModelSelect')?.value || undefined) : undefined;
   setStatus(target ? 'Resuming in tmux…' : 'Resuming session...', 'working');
@@ -9371,6 +9371,8 @@ function openNewSessionView(opts = {}) {
 }
 
 function closeNewSessionView() {
+  spawnTargetsController.retire();
+  spawnTargetPicker.hide();
   directoryCatalog.retire();
   nsDirectoryTree?.dispose();
   nsDirectoryTree = null;
@@ -9600,171 +9602,28 @@ function hideCwdDropdown() { nsCwdAutocomplete?.hide(); }
 // "new session…" per tmux server) stay pinned at the top, and typing
 // fuzzy-filters the named tmux sessions listed below them.
 // =========================================================================
-// Each entry: { label, target, needsName, pinned }. target === null = headless.
-const SPAWN_HEADLESS = { label: 'pi-dish (headless)', target: null, pinned: true };
-let spawnTargets = [SPAWN_HEADLESS];
-let spawnChoiceKey = 'headless';
-let spawnDropdownIdx = -1;
-
-// Stable key so a saved choice survives target re-fetches/reorders.
-function spawnTargetKey(t) {
-  if (!t || !t.target) return 'headless';
-  if (t.needsName) return `${t.target.socket}::new`;
-  return `${t.target.socket}::${t.target.tmuxSession}`;
-}
-
-function currentSpawnTarget() {
-  return spawnTargets.find(t => spawnTargetKey(t) === spawnChoiceKey) || spawnTargets[0];
-}
-
-async function loadSpawnTargets() {
-  const wrap = document.getElementById('newSessionTargetWrap');
-  const input = document.getElementById('newSessionTarget');
-  if (!wrap || !input) return;
-  let data;
-  // A host that doesn't advertise tmux has no targets to offer — don't ask.
-  if (!nsHostSupports('tmux')) { wrap.style.display = 'none'; spawnTargets = [SPAWN_HEADLESS]; spawnChoiceKey = 'headless'; return; }
-  try {
-    const res = await apiFetch(nsHostId(), '/api/tmux/targets');
-    data = await res.json();
-  } catch { data = { available: false }; }
-
-  // Hide the control when tmux is missing or no tmux servers are running —
-  // headless is the only option anyway.
-  if (!data || !data.available || !data.servers?.length) {
-    wrap.style.display = 'none';
-    return;
-  }
-
-  spawnTargets = [{ label: 'pi-dish (headless)', target: null, pinned: true }];
-  for (const srv of data.servers) {
-    spawnTargets.push({
-      label: `tmux:${srv.name} — new session…`,
-      target: { type: 'tmux', socket: srv.socket },
-      needsName: true,
-      pinned: true,
-    });
-  }
-  for (const srv of data.servers) {
-    for (const s of srv.sessions || []) {
-      spawnTargets.push({
-        label: `tmux:${srv.name} — ${s.name}`,
-        target: { type: 'tmux', socket: srv.socket, tmuxSession: s.name },
-      });
-    }
-  }
-
-  // Restore last choice if its server/session still exists; else headless.
-  const saved = localStorage.getItem('pi-dish-spawn-target');
-  spawnChoiceKey = (saved && spawnTargets.some(t => spawnTargetKey(t) === saved)) ? saved : 'headless';
-  syncSpawnTargetInput();
-  wrap.style.display = '';
-}
-
-// Reflect the current choice: input shows its label, the tmux-session-name
-// input reveals for "new session…" choices, and the choice persists.
-function syncSpawnTargetInput() {
-  const input = document.getElementById('newSessionTarget');
-  const nameInput = document.getElementById('newSessionTmuxName');
-  const t = currentSpawnTarget();
-  if (input) input.value = t.label;
-  if (nameInput) nameInput.style.display = t.needsName ? '' : 'none';
-  localStorage.setItem('pi-dish-spawn-target', spawnTargetKey(t));
-}
-
-function renderSpawnTargetDropdown(query) {
-  const dropdown = document.getElementById('spawnTargetDropdown');
-  if (!dropdown) return;
-  const q = (query || '').trim();
-  let named = spawnTargets.filter(t => !t.pinned).map(t => ({ t, indices: [] }));
-  if (q) {
-    named = named.map(({ t }) => {
-      const indices = fuzzyMatch(q, t.label);
-      return indices && { t, indices, score: fuzzyScore(indices, t.label) };
-    }).filter(Boolean).sort((a, b) => b.score - a.score);
-  }
-  const rows = [...spawnTargets.filter(t => t.pinned).map(t => ({ t, indices: [] })), ...named];
-  spawnDropdownIdx = -1;
-  dropdown.innerHTML = rows.map(({ t, indices }) =>
-    `<div class="cwd-option" data-key="${escapeHtml(spawnTargetKey(t))}">${indices.length ? highlightFuzzy(t.label, indices) : escapeHtml(t.label)}</div>`
-  ).join('');
-  dropdown.style.display = 'block';
-  dropdown.querySelectorAll('.cwd-option').forEach(el => {
-    el.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      chooseSpawnTarget(el.dataset.key);
-    });
-  });
-}
-
-function chooseSpawnTarget(key) {
-  spawnChoiceKey = key;
-  syncSpawnTargetInput();
-  hideSpawnTargetDropdown();
-  if (currentSpawnTarget().needsName) document.getElementById('newSessionTmuxName')?.focus();
-}
-
-function hideSpawnTargetDropdown() {
-  const dropdown = document.getElementById('spawnTargetDropdown');
-  if (dropdown) dropdown.style.display = 'none';
-}
-
-// Wire up the run-in combobox (same conventions as the cwd input above).
-(function() {
-  const input = document.getElementById('newSessionTarget');
-  if (!input) return;
-  // Focus selects the label so typing starts a fresh filter; blur restores
-  // the chosen label over whatever filter text was left behind.
-  input.addEventListener('focus', () => { input.select(); renderSpawnTargetDropdown(''); });
-  input.addEventListener('input', () => renderSpawnTargetDropdown(input.value));
-  input.addEventListener('blur', () => setTimeout(() => { hideSpawnTargetDropdown(); syncSpawnTargetInput(); }, 150));
-  input.addEventListener('keydown', (e) => {
-    const dropdown = document.getElementById('spawnTargetDropdown');
-    if (!dropdown || dropdown.style.display === 'none') return;
-    const options = dropdown.querySelectorAll('.cwd-option');
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      spawnDropdownIdx = moveActiveItem(options, spawnDropdownIdx, e.key === 'ArrowDown' ? 1 : -1);
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      if (spawnDropdownIdx >= 0 && options[spawnDropdownIdx]) {
-        chooseSpawnTarget(options[spawnDropdownIdx].dataset.key);
-      } else {
-        hideSpawnTargetDropdown();
-        syncSpawnTargetInput();
-      }
-    } else if (e.key === 'Escape') {
-      e.stopPropagation(); // close the dropdown, not the enclosing takeover
-      hideSpawnTargetDropdown();
-      syncSpawnTargetInput();
-    }
-  });
-})();
-
-// The target descriptor to send with /new. Throws if a new-tmux-session choice
-// is missing its name. Returns null (headless) when the control is hidden.
+const spawnTargetsController = PiDishBrowser.createSpawnTargets({
+  host: () => nsHost(),
+  supportsTmux: () => nsHostSupports('tmux'),
+  request: (...args) => apiFetch(...args),
+  readSaved: () => localStorage.getItem('pi-dish-spawn-target'),
+  save: key => localStorage.setItem('pi-dish-spawn-target', key),
+  changed: () => spawnTargetPicker.sync(),
+});
+const spawnTargetPicker = PiDishBrowser.createSpawnTargetPicker({
+  input: document.getElementById('newSessionTarget'),
+  nameInput: document.getElementById('newSessionTmuxName'),
+  wrap: document.getElementById('newSessionTargetWrap'),
+  dropdown: document.getElementById('spawnTargetDropdown'),
+  targets: spawnTargetsController,
+  match: fuzzyMatch, score: fuzzyScore, highlight: highlightFuzzy, escapeHtml,
+});
+function loadSpawnTargets() { return spawnTargetsController.load(); }
+function hideSpawnTargetDropdown() { spawnTargetPicker.hide(); }
 function selectedSpawnTarget() {
-  const wrap = document.getElementById('newSessionTargetWrap');
-  if (!wrap || wrap.style.display === 'none') return null;
-  const t = currentSpawnTarget();
-  if (!t || !t.target) return null;
-  if (t.needsName) {
-    const name = (document.getElementById('newSessionTmuxName')?.value || '').trim();
-    if (!name) throw new Error('Enter a name for the new tmux session');
-    return { type: 'tmux', socket: t.target.socket, newTmuxSession: name };
-  }
-  return { type: 'tmux', socket: t.target.socket, tmuxSession: t.target.tmuxSession };
+  return spawnTargetsController.selected(document.getElementById('newSessionTmuxName').value);
 }
-
-// For resume: the saved target if it still resolves to a concrete tmux
-// session (a pending "new session…" choice has no name here → headless).
-function savedResumeTarget() {
-  const saved = localStorage.getItem('pi-dish-spawn-target');
-  if (!saved || saved === 'headless') return null;
-  const t = spawnTargets.find(x => spawnTargetKey(x) === saved);
-  if (!t || !t.target || t.needsName) return null;
-  return { type: 'tmux', socket: t.target.socket, tmuxSession: t.target.tmuxSession };
-}
+function savedResumeTarget(host) { return spawnTargetsController.resume(hostEntryFor(host)); }
 
 // =========================================================================
 // Utilities

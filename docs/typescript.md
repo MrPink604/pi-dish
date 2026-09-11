@@ -284,3 +284,12 @@ write to or select a path for the new host. Host catalog changes and late self
 discovery renew open directories when the captured endpoint changes. The app supplies selected-host,
 transport, fuzzy formatting and selection callbacks. Workspace chips and routine
 CRUD remain in JavaScript pending their own feature migration.
+
+`src/browser/spawn-targets.ts` owns tmux payload decoding, target catalog and
+choice state, selected descriptors and the run-in combobox. Every refresh clears
+previous choices immediately and captures its host endpoint and sequence. Both
+response and body publication require that owner; unavailable/failed reads stay
+headless. Saved resume targets require an explicit matching session host. The
+picker owns row/input listeners and blur cleanup, and retained rows can act only
+on their current catalog. Preference access and selected-host/capability reads
+remain explicit callbacks supplied by the app.
