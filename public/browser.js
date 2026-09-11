@@ -55,6 +55,7 @@ var PiDishBrowser = (() => {
     createSkills: () => createSkills,
     createSpawnTargetPicker: () => createSpawnTargetPicker,
     createSpawnTargets: () => createSpawnTargets,
+    createUsageView: () => createUsageView,
     decodeBounceOperation: () => decodeBounceOperation,
     decodeBounceOperations: () => decodeBounceOperations,
     decodeBouncePreview: () => decodeBouncePreview,
@@ -75,6 +76,8 @@ var PiDishBrowser = (() => {
     decodeSpawnChoices: () => decodeSpawnChoices,
     decodeSpawnId: () => decodeSpawnId,
     decodeSpawnStatus: () => decodeSpawnStatus,
+    decodeUsageLimits: () => decodeUsageLimits,
+    decodeUsageSummary: () => decodeUsageSummary,
     hostConnReduce: () => hostConnReduce,
     hostKeyOf: () => hostKeyOf,
     hostSettingsHtml: () => hostSettingsHtml,
@@ -291,14 +294,14 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/model-selector.ts
-  function mountModelSelector(root, actions, formatTokens) {
+  function mountModelSelector(root, actions, formatTokens2) {
     const doc = root.ownerDocument;
     let view = null;
     let disposed = false;
-    function element(tag, className, text9) {
+    function element(tag, className, text10) {
       const node = doc.createElement(tag);
       node.className = className;
-      if (text9 !== void 0) node.textContent = text9;
+      if (text10 !== void 0) node.textContent = text10;
       return node;
     }
     const search = element("input", "model-search");
@@ -315,8 +318,8 @@ var PiDishBrowser = (() => {
       node.dataset.value = value;
       return node;
     }
-    function button(text9, name, value = "", primary = false) {
-      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text9);
+    function button(text10, name, value = "", primary = false) {
+      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text10);
       node.type = "button";
       return action(node, name, value);
     }
@@ -360,7 +363,7 @@ var PiDishBrowser = (() => {
           const copy = element("span", "model-option-copy");
           copy.append(
             element("span", "model-option-name", model.id),
-            element("span", "model-option-context", model.contextWindow ? `${formatTokens(model.contextWindow)} context` : "context unknown")
+            element("span", "model-option-context", model.contextWindow ? `${formatTokens2(model.contextWindow)} context` : "context unknown")
           );
           row.append(copy);
           if (model.free) row.append(element("span", "model-badge free", "free"));
@@ -551,8 +554,8 @@ var PiDishBrowser = (() => {
     const state = prev && typeof prev === "object" ? prev : null;
     const errText = (value) => {
       if (value == null) return null;
-      const text9 = String(typeof value === "object" && "message" in value && value.message || value);
-      return text9 || null;
+      const text10 = String(typeof value === "object" && "message" in value && value.message || value);
+      return text10 || null;
     };
     const eventError = event && typeof event === "object" && "error" in event ? errText(event.error) : null;
     if (kind === "blocked") {
@@ -2746,9 +2749,35 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/helper-format.ts
-  function escapeHtml(text9) {
-    if (text9 == null || text9 === "") return "";
-    return String(text9).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  function escapeHtml(text10) {
+    if (text10 == null || text10 === "") return "";
+    return String(text10).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function formatTokens(tokens2) {
+    if (!tokens2 || tokens2 === 0) return "0";
+    if (tokens2 >= 1e6) return `${(tokens2 / 1e6).toFixed(1)}M`;
+    if (tokens2 >= 1e3) return `${(tokens2 / 1e3).toFixed(1)}k`;
+    return `${tokens2}`;
+  }
+  function formatCacheStat(cacheRead, cacheWrite, input) {
+    const read = cacheRead || 0;
+    const write = cacheWrite || 0;
+    const prompt = read + write + (input || 0);
+    if (prompt === 0) return "\u2014";
+    let s = `${formatTokens(read)} read (${Math.round(read / prompt * 100)}% hit)`;
+    if (write > 0) s += ` \xB7 ${formatTokens(write)} written`;
+    else if (read > 0) s += " \xB7 writes not reported";
+    return s;
+  }
+  function formatEstimatedCost(value, digits = 4) {
+    if (!finite2(value)) return "Unavailable";
+    if (value === 0) return "~$0";
+    const precision = value < 1e-4 ? Math.max(digits, 6) : value < 0.01 ? Math.max(digits, 4) : 2;
+    return `~$${value.toFixed(precision)}`;
+  }
+  function formatUsageCost(value, unavailable = 0) {
+    const formatted = formatEstimatedCost(value);
+    return finite2(value) && unavailable ? `${formatted}*` : formatted;
   }
   function formatRelativeTime(ts) {
     if (!ts) return "";
@@ -2898,22 +2927,22 @@ var PiDishBrowser = (() => {
     }
     return true;
   }
-  function countOccurrences(text9, token) {
-    if (!text9 || !token) return 0;
-    let n = 0, i = text9.indexOf(token);
+  function countOccurrences(text10, token) {
+    if (!text10 || !token) return 0;
+    let n = 0, i = text10.indexOf(token);
     while (i !== -1) {
       n++;
-      i = text9.indexOf(token, i + token.length);
+      i = text10.indexOf(token, i + token.length);
     }
     return n;
   }
   function scoreSessionMatch(parsed, session, contentText) {
-    const tokens = positiveQueryTokens(parsed);
-    if (!tokens.length) return 0;
+    const tokens2 = positiveQueryTokens(parsed);
+    if (!tokens2.length) return 0;
     const name = String(session.name || "").toLowerCase();
     const other = [session.cwd, session.model, session.id].join(" ").toLowerCase();
     let total = 0;
-    for (const token of tokens) {
+    for (const token of tokens2) {
       if (name.includes(token)) total += 100;
       if (other.includes(token)) total += 30;
       const n = countOccurrences(contentText, token);
@@ -2963,11 +2992,11 @@ var PiDishBrowser = (() => {
     result += escapeHtml(str.slice(last));
     return result;
   }
-  function highlightTokens(text9, tokens) {
-    const str = String(text9);
+  function highlightTokens(text10, tokens2) {
+    const str = String(text10);
     const lower = str.toLowerCase();
     const ranges = [];
-    for (const t of tokens) {
+    for (const t of tokens2) {
       if (!t) continue;
       const needle = String(t).toLowerCase();
       for (let i = lower.indexOf(needle); i !== -1; i = lower.indexOf(needle, i + 1)) {
@@ -4412,7 +4441,7 @@ var PiDishBrowser = (() => {
       }
     }
     async function jump() {
-      const owner = sessionState.captureSelection(), match = matches[pos], seq = sequence, tokens = query.split(/\s+/).filter(Boolean);
+      const owner = sessionState.captureSelection(), match = matches[pos], seq = sequence, tokens2 = query.split(/\s+/).filter(Boolean);
       const resolved = owner && options.endpoint(owner.host);
       if (disposed || !owner || !match || !resolved) return;
       const endpoint = Object.freeze({ ...resolved });
@@ -4442,7 +4471,7 @@ var PiDishBrowser = (() => {
         if (group) group.open = true;
         clearMarks();
         el.classList.add("search-current");
-        markSearchTokens(el, tokens);
+        markSearchTokens(el, tokens2);
         options.stopFollowing();
         el.scrollIntoView({ block: "center" });
         options.updateJumpButton(container);
@@ -4498,8 +4527,8 @@ var PiDishBrowser = (() => {
       }
     };
   }
-  function markSearchTokens(el, tokens) {
-    if (!tokens.length) return;
+  function markSearchTokens(el, tokens2) {
+    if (!tokens2.length) return;
     const document2 = el.ownerDocument;
     const walker = document2.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
       acceptNode: (n) => n.parentElement?.closest("mark, script, style") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
@@ -4507,10 +4536,10 @@ var PiDishBrowser = (() => {
     const textNodes = [];
     while (walker.nextNode()) textNodes.push(walker.currentNode);
     for (const node of textNodes) {
-      const text9 = node.textContent || "";
-      const lower = text9.toLowerCase();
+      const text10 = node.textContent || "";
+      const lower = text10.toLowerCase();
       const ranges = [];
-      for (const token of tokens) {
+      for (const token of tokens2) {
         let from = 0, at;
         while ((at = lower.indexOf(token, from)) !== -1) {
           ranges.push([at, at + token.length]);
@@ -4523,14 +4552,14 @@ var PiDishBrowser = (() => {
       let cursor = 0;
       for (const [start, end] of ranges) {
         if (start < cursor) continue;
-        frag.appendChild(document2.createTextNode(text9.slice(cursor, start)));
+        frag.appendChild(document2.createTextNode(text10.slice(cursor, start)));
         const mark = document2.createElement("mark");
         mark.className = "search-mark";
-        mark.textContent = text9.slice(start, end);
+        mark.textContent = text10.slice(start, end);
         frag.appendChild(mark);
         cursor = end;
       }
-      frag.appendChild(document2.createTextNode(text9.slice(cursor)));
+      frag.appendChild(document2.createTextNode(text10.slice(cursor)));
       node.replaceWith(frag);
     }
   }
@@ -5301,7 +5330,7 @@ var PiDishBrowser = (() => {
       const listener = { signal: rowEvents.signal };
       const body = element("searchViewBody");
       body.classList.remove("usage-refreshing");
-      const tokens = positiveQueryTokens(parseSessionQuery(query));
+      const tokens2 = positiveQueryTokens(parseSessionQuery(query));
       const shown = d.results || [];
       const scopesHidden = Number(d.hiddenByScopes) || 0;
       const automationHidden = Number(d.hiddenByAutomation) || 0;
@@ -5310,10 +5339,10 @@ var PiDishBrowser = (() => {
         if (s.turnInProgress || s.compacting) dot = '<span class="session-item-status working"></span>';
         else if (s.isActive) dot = '<span class="live-dot"></span>';
         const count = s.matchCount ? `<span class="search-result-count">${s.matchCount} ${s.matchCount === 1 ? "match" : "matches"}</span>` : "";
-        const snippets = (s.snippets || []).map((sn) => `<div class="search-result-snippet">${highlightTokens(sn, tokens)}</div>`).join("");
+        const snippets = (s.snippets || []).map((sn) => `<div class="search-result-snippet">${highlightTokens(sn, tokens2)}</div>`).join("");
         return `<div class="search-result" data-id="${escapeHtml(s.id)}"${s.host ? ` data-host="${escapeHtml(s.host)}"` : ""} data-content-matches="${s.matchCount > 0 ? "1" : "0"}">
         <div class="search-result-header">
-          ${dot}<span class="search-result-name">${highlightTokens(s.name || "Unnamed", tokens)}</span>
+          ${dot}<span class="search-result-name">${highlightTokens(s.name || "Unnamed", tokens2)}</span>
           ${count}<span class="search-result-time">${formatRelativeTime(s.lastActivity)}</span>
         </div>
         <div class="search-result-meta">${hostChipHtml(s.host)}${escapeHtml(shortCwd(s.cwd || "~"))} \xB7 ${escapeHtml(s.model)}</div>
@@ -5325,7 +5354,7 @@ var PiDishBrowser = (() => {
       ${d.indexing ? '<div class="usage-notice">History is indexing; results will refresh\u2026</div>' : ""}
       ${d.hostErrors?.length ? `<div class="usage-notice">Not searched: ${escapeHtml(d.hostErrors.join(", "))} did not answer.</div>` : ""}
       ${d.hostPending?.length ? `<div class="usage-notice">Still searching ${escapeHtml(d.hostPending.join(", "))}\u2026</div>` : ""}
-      <div class="search-count-line">${shown.length === 1 ? "1 session" : `${shown.length} sessions`}${d.total > d.results.length ? ` \u2014 showing the ${d.results.length} ${tokens.length ? "best matches" : "most recent"}, narrow the query for the rest` : ""}</div>
+      <div class="search-count-line">${shown.length === 1 ? "1 session" : `${shown.length} sessions`}${d.total > d.results.length ? ` \u2014 showing the ${d.results.length} ${tokens2.length ? "best matches" : "most recent"}, narrow the query for the rest` : ""}</div>
       ${cards || '<div class="usage-state">No matching sessions.</div>'}
       ${scopesHidden > 0 ? `<div class="scope-hidden-note">${scopesHidden} hidden by scopes</div>` : ""}
       ${automationHidden > 0 ? `<div class="scope-hidden-note">${automationHidden} automation run${automationHidden === 1 ? "" : "s"} hidden (is:automation shows them)</div>` : ""}
@@ -5355,7 +5384,7 @@ var PiDishBrowser = (() => {
     async function openSearchResult(id, hasContentMatches, host = null, renderedQuery = searchViewRenderedQuery, endpoint = options.host(host)) {
       if (!isSearchViewOpen() || !endpoint || !sameHost(endpoint)) return;
       const captured = Object.freeze({ ...endpoint });
-      const tokens = positiveQueryTokens(parseSessionQuery(renderedQuery));
+      const tokens2 = positiveQueryTokens(parseSessionQuery(renderedQuery));
       closeSearchView();
       const navigation = searchViewSeq;
       if (!sessionState.findSession(id, host)) await options.loadPrevious();
@@ -5365,10 +5394,10 @@ var PiDishBrowser = (() => {
       const selecting = options.selectSession(id, { host: entry.host || null });
       const owner = sessionState.captureSelection(), selectedView = view;
       await selecting;
-      if (tokens.length && hasContentMatches && owner && selectedView === view && sessionState.ownsSelection(owner) && owner.id === id && owner.host === (entry.host || null)) {
+      if (tokens2.length && hasContentMatches && owner && selectedView === view && sessionState.ownsSelection(owner) && owner.id === id && owner.host === (entry.host || null)) {
         options.sessionSearch.open();
         const input2 = element("searchInput");
-        input2.value = tokens.join(" ");
+        input2.value = tokens2.join(" ");
         await options.sessionSearch.run(input2.value.trim().toLowerCase(), { mode: "any", closeIfEmpty: true });
       }
     }
@@ -5388,6 +5417,1123 @@ var PiDishBrowser = (() => {
       dispose() {
         closeSearchView();
         events.abort();
+        disposed = true;
+      }
+    };
+  }
+
+  // src/browser/helper-usage.ts
+  var USAGE_MERGE_COST_KEYS = ["input", "output", "cacheRead", "cacheWrite", "total"];
+  var USAGE_MERGE_TOKEN_KEYS = ["input", "output", "cacheRead", "cacheWrite", "reasoning"];
+  function createFanoutRenderQueue(states, render, delayMs = 100) {
+    let timer;
+    let disposed = false;
+    const queue = () => {
+      if (disposed) return;
+      clearTimeout(timer);
+      if (states.every((state) => state !== "pending")) render();
+      else timer = setTimeout(render, delayMs);
+    };
+    return Object.assign(queue, { dispose() {
+      disposed = true;
+      clearTimeout(timer);
+    } });
+  }
+  function emptyTokens() {
+    return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 };
+  }
+  function emptyCosts() {
+    return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+  }
+  function emptyMergedUsage() {
+    return {
+      tokens: emptyTokens(),
+      costs: emptyCosts(),
+      costUnavailable: emptyCosts(),
+      calls: 0,
+      measured: 0,
+      durationMs: 0,
+      slowestMs: 0
+    };
+  }
+  function addMergedUsage(to, from) {
+    if (!from) return to;
+    for (const k of USAGE_MERGE_TOKEN_KEYS) to.tokens[k] += from.tokens?.[k] || 0;
+    for (const k of USAGE_MERGE_COST_KEYS) {
+      to.costUnavailable[k] += from.costUnavailable?.[k] || 0;
+      const value = from.costs?.[k];
+      if (finite2(value)) {
+        to.costs[k] = (finite2(to.costs[k]) ? to.costs[k] : 0) + value;
+      }
+    }
+    for (const k of ["calls", "measured", "durationMs"]) to[k] += from[k] || 0;
+    to.slowestMs = Math.max(to.slowestMs, from.slowestMs || 0);
+    return to;
+  }
+  function pricedUsageFields(bucket2) {
+    bucket2.unpricedCalls = bucket2.costUnavailable?.total || 0;
+    bucket2.priced = !bucket2.unpricedCalls;
+    return bucket2;
+  }
+  function usageDisplayTokens(tokens2) {
+    return (tokens2?.input || 0) + (tokens2?.output || 0) + (tokens2?.cacheRead || 0) + (tokens2?.cacheWrite || 0);
+  }
+  function usageUnattributedCost(costs2) {
+    if (!finite2(costs2?.total)) return 0;
+    const attributed = ["input", "output", "cacheRead", "cacheWrite"].reduce((sum, key) => sum + (finite2(costs2[key]) ? costs2[key] : 0), 0);
+    return Math.max(0, costs2.total - attributed);
+  }
+  function compareUsageBuckets(a, b, sort) {
+    if (sort === "tokens") return usageDisplayTokens(b.tokens) - usageDisplayTokens(a.tokens) || b.calls - a.calls;
+    const aKnown = finite2(a.costs?.total), bKnown = finite2(b.costs?.total);
+    if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
+    return (bKnown ? b.costs.total - a.costs.total : 0) || b.calls - a.calls;
+  }
+  function mergeUsageSummaries(list) {
+    const items = Array.isArray(list) ? list : [];
+    const entries = items.map((item) => item && typeof item === "object" && "summary" in item && item.summary ? item : { summary: item }).filter((item) => !!item.summary && typeof item.summary === "object");
+    if (!entries.length) return null;
+    if (entries.length === 1) return entries[0].summary;
+    const first = entries[0].summary;
+    const sort = first.sort === "tokens" ? "tokens" : "cost";
+    const totals = emptyMergedUsage();
+    let unpricedModelCalls = 0;
+    const headlineKeys = /* @__PURE__ */ new Set();
+    const headlineCosts = /* @__PURE__ */ Object.create(null), headlineCostUnavailable = /* @__PURE__ */ Object.create(null);
+    const headlineCostsByBucket = /* @__PURE__ */ Object.create(null);
+    const days = /* @__PURE__ */ new Map();
+    const models = /* @__PURE__ */ new Map();
+    const workspaces = /* @__PURE__ */ new Map();
+    const sessionRows = /* @__PURE__ */ new Map();
+    let indexing = false, discoveryTruncated = false, discoverySkipped = 0;
+    let monthlyBudgetUsd = null;
+    for (const { summary, hostId = null, hostLabel = null } of entries) {
+      addMergedUsage(totals, summary.totals);
+      unpricedModelCalls += summary.unpricedModelCalls || 0;
+      for (const [key, value] of Object.entries(summary.headlineCosts || {})) {
+        headlineKeys.add(key);
+        headlineCostUnavailable[key] = (headlineCostUnavailable[key] || 0) + (summary.headlineCostUnavailable?.[key] || 0);
+        if (finite2(value)) {
+          headlineCosts[key] = (finite2(headlineCosts[key]) ? headlineCosts[key] : 0) + value;
+        }
+      }
+      for (const [key, costs2] of Object.entries(summary.headlineCostsByBucket || {})) {
+        headlineKeys.add(key);
+        const row = headlineCostsByBucket[key] || (headlineCostsByBucket[key] = emptyCosts());
+        for (const k of USAGE_MERGE_COST_KEYS) if (finite2(costs2?.[k])) row[k] += costs2[k];
+      }
+      for (const day of summary.daily || []) {
+        if (!day || !day.day) continue;
+        let slot = days.get(day.day);
+        if (!slot) {
+          slot = { bucket: emptyMergedUsage(), models: /* @__PURE__ */ new Map() };
+          days.set(day.day, slot);
+        }
+        addMergedUsage(slot.bucket, day);
+        for (const model of day.models || []) {
+          if (!model || !model.ref) continue;
+          let row = slot.models.get(model.ref);
+          if (!row) {
+            row = {
+              ref: model.ref,
+              provider: model.provider,
+              model: model.model,
+              calls: 0,
+              cost: 0,
+              costUnavailable: emptyCosts(),
+              tokens: emptyTokens()
+            };
+            slot.models.set(model.ref, row);
+          }
+          row.calls += model.calls || 0;
+          for (const k of USAGE_MERGE_TOKEN_KEYS) row.tokens[k] += model.tokens?.[k] || 0;
+          for (const k of USAGE_MERGE_COST_KEYS) row.costUnavailable[k] = (row.costUnavailable[k] || 0) + (model.costUnavailable?.[k] || 0);
+          if (finite2(model.cost)) {
+            row.cost = (finite2(row.cost) ? row.cost : 0) + model.cost;
+          }
+        }
+      }
+      for (const bucket2 of summary.groups?.models || []) {
+        if (!bucket2 || !bucket2.key) continue;
+        let row = models.get(bucket2.key);
+        if (!row) {
+          row = { key: bucket2.key, provider: bucket2.provider, model: bucket2.model, ...emptyMergedUsage() };
+          models.set(bucket2.key, row);
+        }
+        addMergedUsage(row, bucket2);
+      }
+      for (const bucket2 of summary.groups?.workspaces || []) {
+        if (!bucket2 || bucket2.key == null) continue;
+        const key = hostId + " " + bucket2.key;
+        let row = workspaces.get(key);
+        if (!row) {
+          row = { key: bucket2.key, host: hostId, hostLabel, ...emptyMergedUsage() };
+          workspaces.set(key, row);
+        }
+        addMergedUsage(row, bucket2);
+      }
+      for (const bucket2 of summary.groups?.sessions || []) {
+        if (!bucket2 || bucket2.id == null) continue;
+        const key = hostId + " " + bucket2.id;
+        let row = sessionRows.get(key);
+        if (!row) {
+          row = { ...bucket2, host: hostId, hostLabel, ...emptyMergedUsage() };
+          sessionRows.set(key, row);
+        }
+        addMergedUsage(row, bucket2);
+      }
+      if (summary.indexing) indexing = true;
+      if (summary.discoveryTruncated) discoveryTruncated = true;
+      discoverySkipped += Number(summary.discoverySkipped) || 0;
+      if (monthlyBudgetUsd == null && summary.monthlyBudgetUsd != null) monthlyBudgetUsd = summary.monthlyBudgetUsd;
+    }
+    pricedUsageFields(totals);
+    totals.unpricedCalls = unpricedModelCalls;
+    const daily = [...days.entries()].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0).map(([day, slot]) => ({
+      day,
+      ...slot.bucket,
+      models: [...slot.models.values()].sort((a, b) => Number(finite2(b.cost)) - Number(finite2(a.cost)) || (finite2(b.cost) ? b.cost - a.cost : 0) || b.calls - a.calls)
+    }));
+    const rank = (rows) => rows.map(pricedUsageFields).sort((a, b) => compareUsageBuckets(a, b, sort)).slice(0, 20);
+    return {
+      range: first.range,
+      sort: first.sort,
+      models: first.models || null,
+      totals,
+      groups: {
+        models: rank([...models.values()]),
+        workspaces: rank([...workspaces.values()]),
+        sessions: rank([...sessionRows.values()])
+      },
+      headlineCosts: Object.fromEntries([...headlineKeys].map((k) => [k, headlineCosts[k] ?? null])),
+      headlineCostsByBucket: Object.fromEntries([...headlineKeys].map((k) => [k, headlineCostsByBucket[k] || null])),
+      headlineCostUnavailable: Object.fromEntries([...headlineKeys].map((k) => [k, headlineCostUnavailable[k] || 0])),
+      daily,
+      unpricedModelCalls,
+      indexing,
+      discoveryTruncated,
+      discoverySkipped,
+      monthlyBudgetUsd
+    };
+  }
+  function shortModelName(model) {
+    if (!model) return "unknown";
+    let name = String(model);
+    const slash = name.lastIndexOf("/");
+    if (slash >= 0) name = name.slice(slash + 1);
+    name = name.replace(/^(?:[a-z]{2,3}\.)?(?:anthropic|amazon|meta|mistral|cohere|ai21|google|deepseek|qwen)\./, "");
+    name = name.replace(/-v\d+:\d+$/, "");
+    name = name.replace(/[-@](?:20\d{6}|20\d{2}-\d{2}-\d{2})$/, "");
+    return name || String(model);
+  }
+  function niceTicks(max, target = 4) {
+    if (!finite2(max) || max <= 0) return { step: 1, top: 1, ticks: [0, 1] };
+    const rawStep = max / target;
+    const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    let step = 10 * mag;
+    for (const m of [1, 2, 2.5, 5]) {
+      if (rawStep <= m * mag) {
+        step = m * mag;
+        break;
+      }
+    }
+    const ticks = [];
+    const top = Math.ceil(max / step - 1e-9) * step;
+    for (let i = 0; i * step <= top + step / 2; i++) ticks.push(Math.round(i * step * 1e9) / 1e9);
+    return { step, top: ticks[ticks.length - 1], ticks };
+  }
+  var USAGE_MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var USAGE_WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  function formatUsageDay(day, style = "short") {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day || ""));
+    if (!m) return String(day || "");
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    const label = `${USAGE_MONTH_NAMES[mo - 1] || m[2]} ${d}`;
+    if (style !== "long") return label;
+    return `${USAGE_WEEKDAY_NAMES[new Date(y, mo - 1, d, 12).getDay()]}, ${label}, ${y}`;
+  }
+  function aggregateUsageWeekly(daily) {
+    const out = [];
+    const tokenKeys = USAGE_MERGE_TOKEN_KEYS;
+    const costKeys = USAGE_MERGE_COST_KEYS;
+    for (let end = daily.length; end > 0; end -= 7) {
+      const chunk = daily.slice(Math.max(0, end - 7), end);
+      const models = /* @__PURE__ */ new Map();
+      const agg = {
+        day: chunk[0].day,
+        days: chunk.length,
+        calls: 0,
+        tokens: emptyTokens(),
+        costs: emptyCosts(),
+        costUnavailable: emptyCosts(),
+        models: []
+      };
+      for (const d of chunk) {
+        agg.calls += d.calls || 0;
+        for (const k of tokenKeys) agg.tokens[k] += d.tokens?.[k] || 0;
+        for (const k of costKeys) {
+          agg.costUnavailable[k] += d.costUnavailable?.[k] || 0;
+          const value = d.costs?.[k];
+          if (finite2(value)) {
+            agg.costs[k] = (finite2(agg.costs[k]) ? agg.costs[k] : 0) + value;
+          }
+        }
+        for (const dm of d.models || []) {
+          const t = models.get(dm.ref) || { ref: dm.ref, provider: dm.provider, model: dm.model, calls: 0, cost: 0, costUnavailable: { total: 0 }, tokens: emptyTokens() };
+          t.calls += dm.calls || 0;
+          t.costUnavailable.total = (t.costUnavailable.total || 0) + (dm.costUnavailable?.total || 0);
+          if (finite2(dm.cost)) {
+            t.cost = (finite2(t.cost) ? t.cost : 0) + dm.cost;
+          }
+          for (const k of tokenKeys) t.tokens[k] += dm.tokens?.[k] || 0;
+          models.set(dm.ref, t);
+        }
+      }
+      agg.models = [...models.values()].sort((a, b) => Number(finite2(b.cost)) - Number(finite2(a.cost)) || (finite2(b.cost) ? b.cost - a.cost : 0) || b.calls - a.calls);
+      out.unshift(agg);
+    }
+    return out;
+  }
+  function formatLimitReset(resetsAt, now = Date.now()) {
+    const ms = Number(resetsAt) - now;
+    if (!finite2(ms) || ms <= 0) return "now";
+    const mins = Math.ceil(ms / 6e4);
+    if (mins < 60) return `in ${mins}m`;
+    const h = Math.floor(mins / 60), m = mins % 60;
+    if (h < 24) return m ? `in ${h}h ${m}m` : `in ${h}h`;
+    const d = Math.floor(h / 24), rh = h % 24;
+    return rh ? `in ${d}d ${rh}h` : `in ${d}d`;
+  }
+  function mergeUsageLimits(entries, { fractionTolerance = 0.02, resetToleranceMs = 15 * 6e4 } = {}) {
+    const providers = /* @__PURE__ */ new Map();
+    const errors = [];
+    for (const entry of entries || []) {
+      for (const h of entry?.payload?.harnesses || []) {
+        if (h.error) {
+          errors.push({ hostLabel: entry.hostLabel, harnessLabel: h.label || h.harness, error: h.error });
+          continue;
+        }
+        for (const report of h.reports || []) {
+          let prov = providers.get(report.provider);
+          if (!prov) providers.set(report.provider, prov = { provider: report.provider, planTypes: /* @__PURE__ */ new Set(), groups: /* @__PURE__ */ new Map() });
+          if (report.planType) prov.planTypes.add(report.planType);
+          for (const limit of report.limits || []) {
+            const key = `${limit.label}${limit.windowLabel || ""}`;
+            let group = prov.groups.get(key);
+            if (!group) prov.groups.set(key, group = { rows: [] });
+            group.rows.push({
+              ...limit,
+              planType: report.planType || null,
+              fetchedAt: report.fetchedAt || 0,
+              hostLabel: entry.hostLabel
+            });
+          }
+        }
+      }
+    }
+    const equivalent = (a, b) => a.planType === b.planType && Math.abs(a.usedFraction - b.usedFraction) <= fractionTolerance && (a.resetsAt == null && b.resetsAt == null || a.resetsAt != null && b.resetsAt != null && Math.abs(a.resetsAt - b.resetsAt) <= resetToleranceMs);
+    const reports = [...providers.values()].map((prov) => {
+      const hostCount = new Set([...prov.groups.values()].flatMap((g) => g.rows.map((r) => r.hostLabel))).size;
+      const limits = [...prov.groups.values()].flatMap((group) => {
+        const clusters = [];
+        for (const row of [...group.rows].sort((a, b) => b.fetchedAt - a.fetchedAt)) {
+          const cluster = clusters.find((c) => equivalent(c.rep, row));
+          if (cluster) cluster.hosts.push(row.hostLabel);
+          else clusters.push({ rep: row, hosts: [row.hostLabel] });
+        }
+        return clusters.map((c) => ({
+          ...c.rep,
+          hosts: c.hosts.length >= hostCount ? null : [...new Set(c.hosts)].sort()
+        }));
+      });
+      return {
+        provider: prov.provider,
+        planType: prov.planTypes.size === 1 ? [...prov.planTypes][0] : null,
+        limits
+      };
+    }).filter((p) => p.limits.length);
+    return { reports, errors };
+  }
+  function usageLimitsHtml(entries, { now = Date.now() } = {}) {
+    const { reports, errors } = mergeUsageLimits(entries);
+    if (!reports.length && !errors.length) return "";
+    const body = reports.map((report) => {
+      const rows = report.limits.map((limit) => {
+        const pct = Math.min(100, Math.max(0, limit.usedFraction * 100));
+        const cls = pct >= 100 ? " over" : pct >= 80 ? " warn" : "";
+        const reset = limit.resetsAt ? ` \xB7 resets ${formatLimitReset(limit.resetsAt, now)}` : "";
+        const host = limit.hosts ? ` \xB7 ${escapeHtml(limit.hosts.join(", "))}` : "";
+        return `<div class="usage-limit-row"><div class="usage-limit-head"><span>${escapeHtml(limit.label)}</span><small>${Math.round(limit.usedFraction * 100)}% used${escapeHtml(reset)}${host}</small></div><div class="usage-limit-track"><div class="usage-limit-fill${cls}" style="width:${pct.toFixed(1)}%"></div></div></div>`;
+      }).join("");
+      const plan = report.planType ? ` <small>${escapeHtml(report.planType)}</small>` : "";
+      return `<div class="usage-limits-provider"><div class="usage-limits-provider-name">${escapeHtml(report.provider)}${plan}</div>${rows}</div>`;
+    }).join("");
+    const errHtml = errors.map((e) => `<div class="usage-limits-error">${escapeHtml(e.harnessLabel)} on ${escapeHtml(e.hostLabel)}: ${escapeHtml(e.error)}</div>`).join("");
+    return `<section class="usage-section usage-limits"><h4>Subscription limits <span class="usage-hint">reported by the harness CLI \u2014 quota, not spend</span></h4>${body}${errHtml}</section>`;
+  }
+
+  // src/browser/usage-data.ts
+  var object3 = (value) => record8(value) ? value : {};
+  var text9 = (value) => typeof value === "string" ? value : "";
+  var number3 = (value) => finite2(value) ? value : 0;
+  function costs(value) {
+    const row = object3(value);
+    return Object.fromEntries(USAGE_MERGE_COST_KEYS.map((key) => [key, finite2(row[key]) ? row[key] : null]));
+  }
+  function counts(value) {
+    const row = object3(value);
+    return Object.fromEntries(USAGE_MERGE_COST_KEYS.map((key) => [key, number3(row[key])]));
+  }
+  function tokens(value) {
+    const row = object3(value);
+    return Object.fromEntries(USAGE_MERGE_TOKEN_KEYS.map((key) => [key, number3(row[key])]));
+  }
+  function bucket(value) {
+    const row = object3(value);
+    return {
+      tokens: tokens(row.tokens),
+      costs: costs(row.costs),
+      costUnavailable: counts(row.costUnavailable),
+      calls: number3(row.calls),
+      measured: number3(row.measured),
+      durationMs: number3(row.durationMs),
+      slowestMs: number3(row.slowestMs),
+      priced: row.priced === true,
+      unpricedCalls: number3(row.unpricedCalls)
+    };
+  }
+  function decodeUsageSummary(value, host) {
+    if (!record8(value)) throw new Error("Invalid usage summary");
+    const groups = object3(value.groups);
+    const decodeGroups = (value2, kind) => Array.isArray(value2) ? value2.flatMap((row) => {
+      if (!record8(row) || (kind === "sessions" ? typeof row.id !== "string" : typeof row.key !== "string")) return [];
+      return [{
+        ...bucket(row),
+        key: text9(row.key),
+        id: text9(row.id),
+        name: text9(row.name),
+        workspace: text9(row.workspace),
+        provider: text9(row.provider),
+        model: text9(row.model),
+        ...kind === "models" ? {} : { host: host.hostId, hostLabel: host.label }
+      }];
+    }) : [];
+    const daily = Array.isArray(value.daily) ? value.daily.flatMap((row) => {
+      if (!record8(row) || typeof row.day !== "string") return [];
+      return [{ ...bucket(row), day: row.day, days: number3(row.days) || 1, models: Array.isArray(row.models) ? row.models.flatMap((model) => {
+        if (!record8(model) || typeof model.ref !== "string") return [];
+        return [{
+          ref: model.ref,
+          provider: text9(model.provider),
+          model: text9(model.model),
+          calls: number3(model.calls),
+          cost: finite2(model.cost) ? model.cost : null,
+          tokens: tokens(model.tokens),
+          costUnavailable: counts(model.costUnavailable)
+        }];
+      }) : [] }];
+    }) : [];
+    return {
+      range: text9(value.range),
+      sort: text9(value.sort),
+      models: Array.isArray(value.models) ? value.models.filter((value2) => typeof value2 === "string") : null,
+      totals: bucket(value.totals),
+      groups: { models: decodeGroups(groups.models, "models"), workspaces: decodeGroups(groups.workspaces, "workspaces"), sessions: decodeGroups(groups.sessions, "sessions") },
+      daily,
+      headlineCosts: Object.fromEntries(Object.entries(object3(value.headlineCosts)).map(([key, value2]) => [key, finite2(value2) ? value2 : null])),
+      headlineCostsByBucket: Object.fromEntries(Object.entries(object3(value.headlineCostsByBucket)).map(([key, value2]) => [key, costs(value2)])),
+      headlineCostUnavailable: Object.fromEntries(Object.entries(object3(value.headlineCostUnavailable)).map(([key, value2]) => [key, number3(value2)])),
+      unpricedModelCalls: number3(value.unpricedModelCalls),
+      indexing: value.indexing === true,
+      discoveryTruncated: value.discoveryTruncated === true,
+      discoverySkipped: number3(value.discoverySkipped),
+      monthlyBudgetUsd: finite2(value.monthlyBudgetUsd) ? value.monthlyBudgetUsd : null
+    };
+  }
+  function decodeUsageLimits(value) {
+    if (!record8(value) || !Array.isArray(value.harnesses)) return { harnesses: [] };
+    return { harnesses: value.harnesses.flatMap((harness) => {
+      if (!record8(harness)) return [];
+      return [{ harness: text9(harness.harness), label: text9(harness.label), error: text9(harness.error), reports: Array.isArray(harness.reports) ? harness.reports.flatMap((report) => {
+        if (!record8(report) || typeof report.provider !== "string") return [];
+        return [{ provider: report.provider, planType: text9(report.planType), fetchedAt: number3(report.fetchedAt), limits: Array.isArray(report.limits) ? report.limits.flatMap((limit) => {
+          if (!record8(limit) || typeof limit.label !== "string" || !finite2(limit.usedFraction)) return [];
+          return [{ label: limit.label, windowLabel: text9(limit.windowLabel), usedFraction: limit.usedFraction, resetsAt: finite2(limit.resetsAt) ? limit.resetsAt : null }];
+        }) : [] }];
+      }) : [] }];
+    }) };
+  }
+
+  // src/browser/usage-view.ts
+  function createUsageView(options) {
+    const document2 = options.root.ownerDocument, window = document2.defaultView;
+    const localStorage = options.storage, isMultiHost = options.multiHost;
+    const element = (id) => {
+      const value = document2.getElementById(id);
+      if (!value) throw new Error("Missing usage element: " + id);
+      return value;
+    };
+    const message2 = (error) => error instanceof Error ? error.message : String(error);
+    let disposed = false, dataSequence = 0;
+    let bodyEvents = new AbortController(), chartEvents = new AbortController(), detailEvents = new AbortController();
+    const events = new AbortController();
+    let renderGeneration = 0;
+    let renderQueue = null;
+    let usageRange = "30", usageTimer;
+    let usageData = null, usageChart = null, usageSelectedDay = null;
+    let usageHostErrors = [], usageHostPending = [];
+    let usageLimitsEntries = [], usageFetchSeq = 0;
+    let usageSort = localStorage.getItem("pi-dish-usage-sort") === "tokens" ? "tokens" : "cost";
+    let usageStack = localStorage.getItem("pi-dish-usage-stack") === "buckets" ? "buckets" : "models";
+    const usageModelFilter = /* @__PURE__ */ new Set();
+    function sameHost(host) {
+      const current = options.host(host.hostId);
+      return !!current && current.hostId === host.hostId && current.base === host.base && (current.token || "") === (host.token || "");
+    }
+    function retireRender() {
+      renderGeneration++;
+      bodyEvents.abort();
+      chartEvents.abort();
+      detailEvents.abort();
+      hideUsageTooltip();
+    }
+    const USAGE_RANGES = [["1", "Today"], ["7", "7 days"], ["30", "30 days"], ["all", "All time"]];
+    const USAGE_RANGE_LABELS = { 1: "today", 7: "the last 7 days", 30: "the last 30 days", all: "all time" };
+    function isUsageViewOpen() {
+      return !disposed && options.root.classList.contains("usage-open");
+    }
+    function openUsageView() {
+      if (disposed) return;
+      options.closeOtherViews();
+      if (isUsageViewOpen()) return;
+      options.root.classList.add("usage-open");
+      loadUsageView();
+    }
+    function closeUsageView() {
+      if (disposed) return;
+      usageFetchSeq++;
+      retireRender();
+      renderQueue?.dispose();
+      renderQueue = null;
+      clearTimeout(usageResizeTimer);
+      options.root.classList.remove("usage-open");
+      clearTimeout(usageTimer);
+      usageTimer = void 0;
+      hideUsageTooltip();
+    }
+    function setUsageRange(range) {
+      if (!isUsageViewOpen()) return;
+      usageRange = range;
+      usageSelectedDay = null;
+      loadUsageView();
+    }
+    function setUsageSort(sort) {
+      if (!isUsageViewOpen()) return;
+      if (usageSort === sort) return;
+      usageSort = sort;
+      localStorage.setItem("pi-dish-usage-sort", sort);
+      loadUsageView();
+    }
+    function setUsageStack(stack) {
+      if (!isUsageViewOpen()) return;
+      if (usageStack === stack) return;
+      usageStack = stack;
+      localStorage.setItem("pi-dish-usage-stack", stack);
+      if (usageData) renderUsageView(usageData);
+    }
+    function usageModelsKey() {
+      return [...usageModelFilter].join(",");
+    }
+    function toggleUsageModelFilter(ref) {
+      if (!isUsageViewOpen()) return;
+      if (usageModelFilter.has(ref)) usageModelFilter.delete(ref);
+      else usageModelFilter.add(ref);
+      loadUsageView();
+    }
+    function clearUsageModelFilter() {
+      if (!isUsageViewOpen()) return;
+      if (!usageModelFilter.size) return;
+      usageModelFilter.clear();
+      loadUsageView();
+    }
+    async function loadUsageLimits(fetchSeq) {
+      const stale = () => fetchSeq !== usageFetchSeq || !isUsageViewOpen();
+      usageLimitsEntries = [];
+      await options.fleetReady();
+      if (stale()) return;
+      const hosts = options.hosts().filter((host) => host.capabilities?.usageLimits).map((host) => Object.freeze({ ...host }));
+      const entries = [];
+      await Promise.all(hosts.map(async (host) => {
+        try {
+          const response = await options.request(host, "/api/usage-limits", { timeoutMs: 2e4 });
+          if (response.status === 401) {
+            if (sameHost(host)) options.connection(host, "blocked");
+            throw new Error("needs a token");
+          }
+          const data = await response.json();
+          if (!response.ok || stale() || !sameHost(host)) return;
+          const payload = decodeUsageLimits(data);
+          if (payload.harnesses?.length) entries.push({ hostLabel: hostDisplayLabel(host), payload });
+        } catch {
+        }
+        if (stale()) return;
+        usageLimitsEntries = [...entries].sort((a, b) => a.hostLabel.localeCompare(b.hostLabel));
+        if (usageData && dataSequence === fetchSeq) renderUsageView(usageData);
+      }));
+    }
+    async function loadUsageView() {
+      if (!isUsageViewOpen()) return;
+      const fetchSeq = ++usageFetchSeq;
+      clearTimeout(usageTimer);
+      renderQueue?.dispose();
+      renderQueue = null;
+      void loadUsageLimits(fetchSeq);
+      const range = usageRange, sort = usageSort, models = usageModelsKey();
+      const stale = () => fetchSeq !== usageFetchSeq || range !== usageRange || sort !== usageSort || models !== usageModelsKey() || !isUsageViewOpen();
+      const body = element("usageViewBody");
+      if (body.childElementCount) body.classList.add("usage-refreshing");
+      else body.innerHTML = '<div class="usage-state">Loading estimated usage\u2026</div>';
+      try {
+        await options.fleetReady();
+        if (stale()) return;
+        const url = "/api/usage-summary?days=" + range + "&sort=" + sort + (models ? "&models=" + encodeURIComponent(models) : "");
+        const hosts = options.hosts().map((host) => Object.freeze({ ...host }));
+        const status = hosts.map(() => "pending");
+        const entries = new Array(hosts.length), reasons = new Array(hosts.length);
+        let indexing = false, rendered = false;
+        const render = () => {
+          if (stale()) return;
+          const ok = entries.filter((entry, i) => status[i] === "ok" && !!entry);
+          const data = mergeUsageSummaries(ok);
+          if (!data) return;
+          usageHostErrors = hosts.filter((_, i) => status[i] === "error").map(hostDisplayLabel);
+          usageHostPending = hosts.filter((_, i) => status[i] === "pending").map(hostDisplayLabel);
+          usageData = data;
+          dataSequence = fetchSeq;
+          rendered = true;
+          indexing = data.indexing === true;
+          renderUsageView(data);
+        };
+        const queueRender = renderQueue = createFanoutRenderQueue(status, render);
+        await Promise.all(hosts.map(async (host, i) => {
+          try {
+            const response = await options.request(host, url, { timeoutMs: 2e4 });
+            if (response.status === 401) {
+              if (sameHost(host)) options.connection(host, "blocked");
+              throw new Error("needs a token");
+            }
+            const data = await response.json();
+            if (!sameHost(host)) throw new Error("host connection changed");
+            if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
+            entries[i] = { hostId: host.hostId, hostLabel: hostDisplayLabel(host), summary: decodeUsageSummary(data, { hostId: host.hostId, label: hostDisplayLabel(host) }) };
+            status[i] = "ok";
+            options.connection(host, "success");
+          } catch (error) {
+            status[i] = "error";
+            reasons[i] = error;
+            if (!host.self && sameHost(host)) options.connection(host, "failure", error);
+          }
+          queueRender();
+        }));
+        if (!status.some((state) => state === "ok")) throw reasons.find(Boolean) || new Error("no hosts answered");
+        if (stale() || !rendered) return;
+        if (indexing) usageTimer = setTimeout(() => {
+          if (!stale()) void loadUsageView();
+        }, 1e3);
+      } catch (error) {
+        if (stale()) return;
+        retireRender();
+        body.classList.remove("usage-refreshing");
+        body.innerHTML = `<div class="usage-state">Could not load usage: ${escapeHtml(message2(error))}</div>`;
+      }
+    }
+    function usageMetricValue(bucket2, metric) {
+      if (metric === "cost") return finite2(bucket2.costs?.total) ? bucket2.costs.total : 0;
+      if (metric === "tokens") return usageTokensTotal(bucket2.tokens);
+      return bucket2.calls || 0;
+    }
+    const USAGE_METRIC_LABELS = { cost: "Estimated spend", tokens: "Tokens", calls: "Calls" };
+    const USAGE_COST_BUCKETS = [
+      ["input", "Read", "c1"],
+      ["cacheRead", "Cached read", "c2"],
+      ["output", "Output", "c3"],
+      ["cacheWrite", "Cache write", "c4"]
+    ];
+    function usageCostBreakdown(costs2) {
+      if (!costs2 || !finite2(costs2.total)) return null;
+      const parts = USAGE_COST_BUCKETS.map(([key, label]) => `${label} ${formatEstimatedCost(costs2[key])}`);
+      const unattributed = usageUnattributedCost(costs2);
+      if (unattributed > 1e-12) parts.push(`Unattributed ${formatEstimatedCost(unattributed)}`);
+      return parts.join(" \xB7 ");
+    }
+    function usageModelValue(m, metric) {
+      if (metric === "cost") return finite2(m?.cost) ? m.cost : 0;
+      if (metric === "tokens") return usageTokensTotal(m?.tokens);
+      return m?.calls || 0;
+    }
+    function usageTokensTotal(tokens2) {
+      return ["input", "output", "cacheRead", "cacheWrite"].reduce((s, k) => s + (tokens2?.[k] || 0), 0);
+    }
+    function usageTokensDetail(tokens2) {
+      const t = tokens2 || {};
+      const parts = [`${formatTokens(t.input)} in / ${formatTokens(t.output)} out`];
+      const prompt = (t.input || 0) + (t.cacheRead || 0) + (t.cacheWrite || 0);
+      if (prompt > 0 && (t.cacheRead || 0) > 0) parts.push(`${Math.round((t.cacheRead || 0) / prompt * 100)}% cached`);
+      return parts.join(" \xB7 ");
+    }
+    function renderUsageView(d) {
+      if (!isUsageViewOpen()) return;
+      retireRender();
+      bodyEvents = new AbortController();
+      const generation = renderGeneration;
+      const owns = () => generation === renderGeneration && isUsageViewOpen();
+      const listener = { signal: bodyEvents.signal };
+      const body = element("usageViewBody");
+      body.classList.remove("usage-refreshing");
+      const t = d.totals || {}, h = d.headlineCosts || {};
+      const hu = d.headlineCostUnavailable || {};
+      const budget = d.monthlyBudgetUsd;
+      const hbb = d.headlineCostsByBucket || {};
+      const kpis = [["Today", "today"], ["Last 7 days", "days7"], ["Last 30 days", "days30"], ["This month", "month"]].map(([label, key]) => {
+        const title = [
+          usageCostBreakdown(hbb[key]),
+          hu[key] ? `${hu[key]} unpriced calls are omitted from this estimate` : null
+        ].filter(Boolean).join("\n");
+        return `<div class="usage-kpi"${title ? ` title="${escapeHtml(title)}"` : ""}><small>${label}</small><strong>${formatUsageCost(h[key], hu[key])}</strong></div>`;
+      }).join("");
+      let budgetHtml = "";
+      if (budget) {
+        if (finite2(h.month)) {
+          const pct = Math.min(100, h.month / budget * 100);
+          const cls = pct >= 100 ? " over" : pct >= 80 ? " warn" : "";
+          const partial = hu.month ? ` \xB7 ${hu.month} unpriced calls omitted` : "";
+          budgetHtml = `<div class="usage-budget${cls}"><div class="usage-budget-track"><div class="usage-budget-fill" style="width:${pct.toFixed(1)}%"></div></div><small>${formatUsageCost(h.month, hu.month)} of ~$${Number(budget).toFixed(2)} monthly budget${partial}${pct >= 100 ? " \u2014 over budget" : ""}</small></div>`;
+        } else {
+          budgetHtml = `<div class="usage-budget"><small>Budget tracking unavailable${hu.month ? ` \u2014 ${hu.month} calls have unavailable pricing` : ""}.</small></div>`;
+        }
+      }
+      const summary = `<div class="usage-total-line"><strong>${formatUsageCost(t.costs?.total, t.costUnavailable?.total)}</strong> \xB7 ${t.calls || 0} calls \xB7 ${formatTokens(usageTokensTotal(t.tokens))} tokens in ${USAGE_RANGE_LABELS[d.range || ""] || "the selected range"}</div><div class="usage-token-line">${formatTokens(t.tokens?.input)} in \xB7 ${formatTokens(t.tokens?.output)} out \xB7 cache ${formatCacheStat(t.tokens?.cacheRead, t.tokens?.cacheWrite, t.tokens?.input)}</div>`;
+      const filterNote = usageModelFilter.size ? `<div class="usage-filter-note">Filtered to ${[...usageModelFilter].map((r) => `<b title="${escapeHtml(r)}">${escapeHtml(shortModelName(r))}</b>`).join(", ")}<button class="usage-range-btn" data-clear-models>\u2715 clear</button></div>` : "";
+      const metric = usageSort === "tokens" ? "tokens" : finite2(t.costs?.total) && t.costs.total > 0 ? "cost" : "calls";
+      const ranges = USAGE_RANGES.map(([v, l]) => `<button class="usage-range-btn${usageRange === v ? " active" : ""}" data-range="${v}">${l}</button>`).join("");
+      const sortCtl = `<span class="usage-sort"><small>Show</small>${[["cost", "Cost"], ["tokens", "Tokens"]].map(([v, l]) => `<button class="usage-range-btn${usageSort === v ? " active" : ""}" data-sort="${v}">${l}</button>`).join("")}</span>`;
+      const activeModels = (d.groups?.models || []).filter((m) => !usageModelFilter.size || usageModelFilter.has(m.key || ""));
+      const daily = d.daily || [];
+      const buckets = daily.length > 90 ? aggregateUsageWeekly(daily) : daily;
+      const seriesRefs = activeModels.slice(0, 5).map((m) => m.key || "");
+      usageChart = { buckets, seriesRefs, metric, activeModelCount: activeModels.length, stack: metric === "cost" ? usageStack : "models" };
+      const showChart = d.range !== "1" && buckets.length > 1 && (t.calls || 0) > 0;
+      const stackCtl = showChart && metric === "cost" ? `<span class="usage-sort"><small>Stack</small>${[["models", "Models"], ["buckets", "Cost buckets"]].map(([v, l]) => `<button class="usage-range-btn${usageChart?.stack === v ? " active" : ""}" data-stack="${v}">${l}</button>`).join("")}</span>` : "";
+      const chartSection = showChart ? `<section class="usage-section"><h4>${USAGE_METRIC_LABELS[metric]} per ${buckets === daily ? "day" : "week"}</h4><div class="usage-chart" id="usageChart"></div></section>` : "";
+      if (d.range === "1" && daily.length) usageSelectedDay = daily[daily.length - 1].day;
+      body.innerHTML = `
+      <div class="usage-kpis">${kpis}</div>
+      ${budgetHtml}
+      ${d.indexing ? '<div class="usage-notice">History is indexing; totals will refresh\u2026</div>' : ""}
+      ${usageHostErrors.length ? `<div class="usage-notice">Not counted: ${escapeHtml(usageHostErrors.join(", "))} did not answer.</div>` : ""}
+      ${usageHostPending.length ? `<div class="usage-notice">Still counting ${escapeHtml(usageHostPending.join(", "))}\u2026</div>` : ""}
+      <div class="usage-ranges">${ranges}${sortCtl}${stackCtl}</div>
+      ${(t.calls || 0) === 0 ? '<div class="usage-state">No usage in this range.</div>' : summary}
+      ${filterNote}
+      ${usageBucketShareHtml(t)}
+      ${chartSection}
+      <div id="usageDayDetail"></div>
+      ${usageModelShareHtml(d, metric, seriesRefs)}
+      <div class="usage-columns">
+        ${usageGroupListHtml("Workspaces", d.groups?.workspaces, "workspace", metric)}
+        ${usageGroupListHtml("Sessions", d.groups?.sessions, "session", metric)}
+      </div>
+      ${d.unpricedModelCalls ? `<div class="usage-notice">* Known priced usage only; ${d.unpricedModelCalls} call${d.unpricedModelCalls === 1 ? "" : "s"} ${d.unpricedModelCalls === 1 ? "has" : "have"} unavailable pricing and ${d.unpricedModelCalls === 1 ? "is" : "are"} omitted.</div>` : ""}
+      ${usageLimitsHtml(usageLimitsEntries)}
+    `;
+      body.querySelectorAll("[data-range]").forEach((button) => button.addEventListener("click", () => {
+        const range = button.dataset.range;
+        if (owns() && (range === "1" || range === "7" || range === "30" || range === "all")) setUsageRange(range);
+      }, listener));
+      body.querySelectorAll("[data-sort]").forEach((button) => button.addEventListener("click", () => {
+        const sort = button.dataset.sort;
+        if (owns() && (sort === "cost" || sort === "tokens")) setUsageSort(sort);
+      }, listener));
+      body.querySelectorAll("[data-stack]").forEach((button) => button.addEventListener("click", () => {
+        const stack = button.dataset.stack;
+        if (owns() && (stack === "models" || stack === "buckets")) setUsageStack(stack);
+      }, listener));
+      body.querySelector("[data-clear-models]")?.addEventListener("click", () => {
+        if (owns()) clearUsageModelFilter();
+      }, listener);
+      body.querySelectorAll("[data-model-ref]").forEach((row) => {
+        const ref = row.dataset.modelRef;
+        const activate = () => {
+          if (owns() && ref) toggleUsageModelFilter(ref);
+        };
+        row.addEventListener("click", activate, listener);
+        row.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            activate();
+          }
+        }, listener);
+      });
+      body.querySelectorAll("[data-session-id]").forEach((row) => {
+        const id = row.dataset.sessionId, host = row.dataset.sessionHost || null;
+        const endpoint = options.host(host);
+        const captured = endpoint ? Object.freeze({ ...endpoint }) : null;
+        row.addEventListener("click", () => {
+          if (!owns() || !id || !captured || !sameHost(captured)) return;
+          closeUsageView();
+          void options.selectSession(id, { host });
+        }, listener);
+      });
+      if (showChart) drawUsageChart();
+      renderUsageDayDetail();
+    }
+    function drawUsageChart() {
+      if (!isUsageViewOpen()) return;
+      chartEvents.abort();
+      chartEvents = new AbortController();
+      const generation = renderGeneration;
+      const owns = () => generation === renderGeneration && isUsageViewOpen();
+      const holder = document2.getElementById("usageChart");
+      if (!holder || !usageChart) return;
+      const { buckets, seriesRefs, metric } = usageChart;
+      const stackBuckets = usageChart.stack === "buckets";
+      const width = Math.max(280, holder.clientWidth || 0);
+      const max = Math.max(...buckets.map((b) => usageMetricValue(b, metric)));
+      const { step, top, ticks } = niceTicks(max);
+      const dec = (String(step).split(".")[1] || "").length;
+      const fmtTick = (v) => metric === "cost" ? v === 0 ? "$0" : "$" + v.toFixed(dec) : formatTokens(v);
+      const yLabelW = Math.max(...ticks.map((v) => fmtTick(v).length)) * 6.5 + 12;
+      const margin = { top: 8, right: 4, bottom: 22, left: Math.ceil(yLabelW) };
+      const plotH = 170;
+      const height = margin.top + plotH + margin.bottom;
+      const plotW = Math.max(60, width - margin.left - margin.right);
+      const n = buckets.length;
+      const band = plotW / n;
+      const barW = Math.max(2, Math.min(24, band - 2));
+      const yFor = (v) => margin.top + plotH - (top > 0 ? v / top * plotH : 0);
+      const parts = [];
+      for (const v of ticks) {
+        const y = yFor(v);
+        if (v > 0) parts.push(`<line class="grid" x1="${margin.left}" x2="${margin.left + plotW}" y1="${y}" y2="${y}"/>`);
+        parts.push(`<text class="tick" x="${margin.left - 6}" y="${y + 3}" text-anchor="end">${fmtTick(v)}</text>`);
+      }
+      parts.push(`<line class="axis" x1="${margin.left}" x2="${margin.left + plotW}" y1="${yFor(0)}" y2="${yFor(0)}"/>`);
+      const stride = Math.max(1, Math.ceil(n / Math.max(3, Math.floor(plotW / 80))));
+      for (let i = 0; i < n; i++) {
+        if ((n - 1 - i) % stride !== 0) continue;
+        const x = margin.left + band * (i + 0.5);
+        parts.push(`<text class="tick" x="${x}" y="${margin.top + plotH + 15}" text-anchor="middle">${formatUsageDay(buckets[i].day)}</text>`);
+      }
+      let anyOther = false;
+      for (let i = 0; i < n; i++) {
+        const b = buckets[i];
+        const total = usageMetricValue(b, metric);
+        const segs = [];
+        if (stackBuckets) {
+          USAGE_COST_BUCKETS.forEach(([key, , cls]) => {
+            const v = finite2(b.costs?.[key]) ? b.costs[key] : 0;
+            if (v > 0) segs.push({ cls, v });
+          });
+          const unattributed = usageUnattributedCost(b.costs);
+          if (unattributed > 1e-12) {
+            segs.push({ cls: "sother", v: unattributed });
+            anyOther = true;
+          }
+        } else {
+          const byRef = new Map((b.models || []).map((m) => [m.ref, m]));
+          let known = 0;
+          seriesRefs.forEach((ref, s) => {
+            const v = byRef.has(ref) ? usageModelValue(byRef.get(ref), metric) : 0;
+            known += v;
+            if (v > 0) segs.push({ cls: "s" + (s + 1), v });
+          });
+          const other = Math.max(0, total - known);
+          if (other > 0) {
+            segs.push({ cls: "sother", v: other });
+            anyOther = true;
+          }
+        }
+        const x = margin.left + band * i + (band - barW) / 2;
+        const label = ((b.days || 1) > 1 ? `Week of ${formatUsageDay(b.day)}` : formatUsageDay(b.day, "long")) + ": " + (metric === "cost" ? formatUsageCost(b.costs?.total, b.costUnavailable?.total) : metric === "tokens" ? `${formatTokens(usageTokensTotal(b.tokens))} tokens` : `${b.calls} calls`);
+        const seg = [];
+        let cursor = yFor(0);
+        for (let sI = 0; sI < segs.length; sI++) {
+          const hPx = top > 0 ? segs[sI].v / top * plotH : 0;
+          if (hPx <= 0) continue;
+          const isTop = sI === segs.length - 1;
+          const drawH = Math.max(0.75, hPx - (isTop ? 0 : 2));
+          const yTop = cursor - hPx;
+          if (isTop) {
+            const r = Math.min(3, barW / 2, drawH);
+            seg.push(`<path class="seg ${segs[sI].cls}" d="M${x},${(yTop + drawH).toFixed(1)} V${(yTop + r).toFixed(1)} Q${x},${yTop.toFixed(1)} ${x + r},${yTop.toFixed(1)} H${(x + barW - r).toFixed(1)} Q${x + barW},${yTop.toFixed(1)} ${x + barW},${(yTop + r).toFixed(1)} V${(yTop + drawH).toFixed(1)} Z"/>`);
+          } else {
+            seg.push(`<rect class="seg ${segs[sI].cls}" x="${x}" y="${yTop.toFixed(1)}" width="${barW.toFixed(1)}" height="${drawH.toFixed(1)}"/>`);
+          }
+          cursor = yTop;
+        }
+        parts.push(`<g class="usage-col${b.day === usageSelectedDay ? " selected" : ""}" data-i="${i}" tabindex="0" role="button" aria-label="${escapeHtml(label)}"><rect class="hit" x="${margin.left + band * i}" y="${margin.top}" width="${band.toFixed(2)}" height="${plotH}"/>${seg.join("")}</g>`);
+      }
+      const legendItems = stackBuckets ? USAGE_COST_BUCKETS.map(([, label, cls]) => `<span class="usage-legend-item"><i class="swatch ${cls}"></i>${escapeHtml(label)}</span>`) : seriesRefs.map((ref, i) => `<span class="usage-legend-item" title="${escapeHtml(ref)}"><i class="swatch s${i + 1}"></i>${escapeHtml(shortModelName(ref))}</span>`);
+      if (stackBuckets && anyOther)
+        legendItems.push('<span class="usage-legend-item"><i class="swatch sother"></i>Unattributed</span>');
+      else if (!stackBuckets && (anyOther || (usageChart.activeModelCount || 0) > seriesRefs.length))
+        legendItems.push('<span class="usage-legend-item"><i class="swatch sother"></i>other</span>');
+      holder.innerHTML = `<svg width="${width}" height="${height}" role="img" aria-label="${USAGE_METRIC_LABELS[metric]} per ${(buckets[0]?.days || 1) > 1 ? "week" : "day"}">${parts.join("")}</svg>` + (legendItems.length > 1 ? `<div class="usage-legend">${legendItems.join("")}</div>` : "");
+      const listener = { signal: chartEvents.signal };
+      const column = (event) => event.target instanceof Element ? event.target.closest(".usage-col") : null;
+      holder.addEventListener("pointermove", (event) => {
+        if (!owns()) return;
+        const g = column(event), bucket2 = g ? buckets[Number(g.dataset.i)] : null;
+        if (!bucket2) {
+          hideUsageTooltip();
+          return;
+        }
+        showUsageTooltip(bucket2, event);
+      }, listener);
+      holder.addEventListener("pointerleave", () => {
+        if (owns()) hideUsageTooltip();
+      }, listener);
+      const activate = (event) => {
+        const g = column(event), bucket2 = g ? buckets[Number(g.dataset.i)] : null;
+        if (owns() && bucket2) toggleUsageDay(bucket2.day);
+      };
+      holder.addEventListener("click", activate, listener);
+      holder.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          activate(event);
+        }
+      }, listener);
+    }
+    function toggleUsageDay(day) {
+      if (!isUsageViewOpen()) return;
+      usageSelectedDay = usageSelectedDay === day ? null : day;
+      document2.querySelectorAll("#usageChart .usage-col").forEach((g) => {
+        g.classList.toggle("selected", usageChart?.buckets[Number(g.dataset.i)]?.day === usageSelectedDay);
+      });
+      renderUsageDayDetail();
+    }
+    function renderUsageDayDetail() {
+      if (!isUsageViewOpen()) return;
+      detailEvents.abort();
+      detailEvents = new AbortController();
+      const generation = renderGeneration, day = usageSelectedDay;
+      const holder = document2.getElementById("usageDayDetail");
+      if (!holder) return;
+      const bucket2 = usageChart?.buckets?.find((b) => b.day === usageSelectedDay) || (usageData?.range === "1" ? usageData.daily?.[usageData.daily.length - 1] : null);
+      if (!bucket2 || !usageSelectedDay) {
+        holder.innerHTML = "";
+        return;
+      }
+      const metric = usageChart?.metric || "cost";
+      const title = (bucket2.days || 1) > 1 ? `Week of ${formatUsageDay(bucket2.day)} <small>\xB7 ${bucket2.days} days</small>` : formatUsageDay(bucket2.day, "long");
+      const tok = bucket2.tokens || {};
+      const stats = [
+        ["Estimated spend", formatUsageCost(bucket2.costs?.total, bucket2.costUnavailable?.total)],
+        ["Calls", String(bucket2.calls || 0)],
+        ["Tokens in / out", `${formatTokens(tok.input)} / ${formatTokens(tok.output)}`],
+        ["Cache", formatCacheStat(tok.cacheRead, tok.cacheWrite, tok.input)],
+        // Per-bucket spend keeps the day detail pivoted like the range totals.
+        ...finite2(bucket2.costs?.total) ? [
+          ...USAGE_COST_BUCKETS.map(([key, label]) => [label, formatEstimatedCost(bucket2.costs?.[key])]),
+          ...usageUnattributedCost(bucket2.costs) > 1e-12 ? [["Unattributed", formatEstimatedCost(usageUnattributedCost(bucket2.costs))]] : []
+        ] : []
+      ].map(([k, v]) => `<div><small>${k}</small><strong>${v}</strong></div>`).join("");
+      const slotFor = (ref) => {
+        const i = (usageChart?.seriesRefs || []).indexOf(ref || "");
+        return i >= 0 ? "s" + (i + 1) : "sother";
+      };
+      const rows = (bucket2.models || []).map((m) => {
+        const meta = [`${m.calls} calls`, `${formatTokens(usageTokensTotal(m.tokens))} tok`];
+        if (usageTokensTotal(m.tokens) > 0) meta.push(usageTokensDetail(m.tokens));
+        if (metric === "cost") meta.push(formatUsageCost(m.cost, m.costUnavailable?.total));
+        return `
+      <div class="usage-row" title="${escapeHtml(m.ref)}">
+        <i class="swatch ${slotFor(m.ref)}"></i>
+        <span class="usage-row-name">${escapeHtml(shortModelName(m.model || m.ref))}<small>${escapeHtml(m.provider || "")}</small></span>
+        <span class="usage-row-meta">${meta.join(" \xB7 ")}</span>
+      </div>`;
+      }).join("");
+      holder.innerHTML = `<section class="usage-day-detail">
+      <div class="usage-day-detail-header"><h4>${title}</h4><button class="btn-icon" title="Close details" data-close-day>\u2715</button></div>
+      <div class="usage-day-stats">${stats}</div>
+      ${rows || '<small class="usage-empty">No usage this day.</small>'}
+    </section>`;
+      holder.querySelector("[data-close-day]")?.addEventListener("click", () => {
+        if (generation === renderGeneration && day === usageSelectedDay) toggleUsageDay(day);
+      }, { signal: detailEvents.signal });
+    }
+    function usageBucketShareHtml(t) {
+      if (!finite2(t.costs?.total) || t.costs.total <= 0) return "";
+      const total = t.costs.total, unpriced = t.costUnavailable?.total || 0;
+      const segs = [], legend = [];
+      for (const [key, label, cls] of USAGE_COST_BUCKETS) {
+        const v = finite2(t.costs[key]) ? t.costs[key] : 0;
+        const share = v / total;
+        if (share > 4e-3) segs.push(`<span class="${cls}" style="flex-grow:${(share * 1e3).toFixed(1)}" title="${escapeHtml(label)}"></span>`);
+        legend.push(`<span class="usage-legend-item"><i class="swatch ${cls}"></i>${escapeHtml(label)} <b>${formatEstimatedCost(v)}</b> <small>${Math.round(share * 100)}%</small></span>`);
+      }
+      const unattributed = usageUnattributedCost(t.costs);
+      if (unattributed > 1e-12) {
+        const share = unattributed / total;
+        if (share > 4e-3) segs.push(`<span class="sother" style="flex-grow:${(share * 1e3).toFixed(1)}" title="Unattributed"></span>`);
+        legend.push(`<span class="usage-legend-item"><i class="swatch sother"></i>Unattributed <b>${formatEstimatedCost(unattributed)}</b> <small>${Math.round(share * 100)}%</small></span>`);
+      }
+      return `<section class="usage-section"><h4>Spend by bucket${unpriced ? ` <small class="usage-hint">${unpriced} unpriced call${unpriced === 1 ? "" : "s"} omitted</small>` : ""}</h4>
+      <div class="usage-share-bar">${segs.join("")}</div>
+      <div class="usage-legend">${legend.join("")}</div></section>`;
+    }
+    function usageModelShareHtml(d, metric, seriesRefs) {
+      const models = d.groups?.models || [];
+      const filtered = usageModelFilter.size > 0;
+      if (!models.length && !filtered) return "";
+      const isOn = (ref) => !filtered || usageModelFilter.has(ref || "");
+      const val = (m) => usageModelValue({ cost: m.costs?.total, calls: m.calls, tokens: m.tokens }, metric);
+      const slotFor = (ref) => {
+        const i = seriesRefs.indexOf(ref || "");
+        return i >= 0 ? "s" + (i + 1) : "sother";
+      };
+      const active = models.filter((m) => isOn(m.key));
+      const total = active.reduce((s, m) => s + val(m), 0);
+      const segs = [];
+      active.slice(0, 5).forEach((m) => {
+        const share = total > 0 ? val(m) / total : 0;
+        if (share > 4e-3) segs.push(`<span class="${slotFor(m.key)}" style="flex-grow:${(share * 1e3).toFixed(1)}" title="${escapeHtml(shortModelName(m.key))}"></span>`);
+      });
+      const restShare = total > 0 ? active.slice(5).reduce((s, m) => s + val(m), 0) / total : 0;
+      if (restShare > 4e-3) segs.push(`<span class="sother" style="flex-grow:${(restShare * 1e3).toFixed(1)}" title="other models"></span>`);
+      const rowHtml = (m, on) => {
+        const share = on && total > 0 ? val(m) / total : 0;
+        const pct = share > 0 ? (share * 100 < 1 ? (share * 100).toFixed(1) : Math.round(share * 100)) + "%" : "\u2014";
+        const spend = `${formatUsageCost(m.costs?.total, m.unpricedCalls)}${m.unpricedCalls ? ` \xB7 ${m.unpricedCalls} unpriced` : ""}`;
+        const detail = usageTokensTotal(m.tokens) > 0 ? ` \xB7 ${usageTokensDetail(m.tokens)}` : "";
+        const breakdown = usageCostBreakdown(m.costs);
+        return `<div class="usage-row model-toggle${filtered ? on ? " on" : " off" : ""}" data-model-ref="${escapeHtml(m.key)}" role="button" tabindex="0" aria-pressed="${on}" title="${escapeHtml([m.key, breakdown].filter(Boolean).join("\n"))} \u2014 click to toggle model filter">
+        <i class="swatch ${on ? slotFor(m.key) : "soff"}"></i>
+        <span class="usage-row-name">${escapeHtml(shortModelName(m.model || m.key))}<small>${escapeHtml(m.provider || "")}</small></span>
+        <span class="usage-row-meta">${pct} \xB7 ${m.calls} calls \xB7 ${formatTokens(usageTokensTotal(m.tokens))} tok${detail} \xB7 ${escapeHtml(spend)}</span>
+      </div>`;
+      };
+      const rows = models.map((m) => rowHtml(m, isOn(m.key))).join("");
+      const missing = [...usageModelFilter].filter((ref) => !models.some((m) => m.key === ref)).map((ref) => rowHtml({ key: ref, calls: 0, tokens: {}, costs: { total: 0 } }, true)).join("");
+      return `<section class="usage-section"><h4>Models <small class="usage-hint">click to filter</small></h4>
+      ${segs.length ? `<div class="usage-share-bar">${segs.join("")}</div>` : ""}
+      ${rows}${missing}</section>`;
+    }
+    function usageGroupListHtml(title, rows, kind, metric) {
+      const list = (rows || []).slice(0, 12);
+      const val = (x) => usageModelValue({ cost: x.costs?.total, calls: x.calls, tokens: x.tokens }, metric);
+      const maxV = Math.max(1e-9, ...list.map(val));
+      const items = list.map((x) => {
+        const name = kind === "workspace" ? shortCwd(x.key) : x.name || x.id;
+        const sub = kind === "session" && x.workspace ? shortCwd(x.workspace) : "";
+        const spend = `${formatUsageCost(x.costs?.total, x.unpricedCalls)}${x.unpricedCalls ? ` \xB7 ${x.unpricedCalls} unpriced` : ""}`;
+        const attrs = kind === "session" ? ` data-session-id="${escapeHtml(x.id)}"${x.host ? ` data-session-host="${escapeHtml(x.host)}"` : ""} role="button" tabindex="0"` : "";
+        const hostTag = isMultiHost() && x.hostLabel ? `<small class="usage-row-host">${escapeHtml(x.hostLabel)}</small>` : "";
+        const detail = usageTokensTotal(x.tokens) > 0 ? ` \xB7 ${usageTokensDetail(x.tokens)}` : "";
+        const breakdown = usageCostBreakdown(x.costs);
+        return `<div class="usage-row usage-bar-row${kind === "session" ? " clickable" : ""}"${attrs} title="${escapeHtml([x.key || x.name || x.id, breakdown].filter(Boolean).join("\n"))}">
+        <span class="usage-row-name">${escapeHtml(name)}${sub ? `<small>${escapeHtml(sub)}</small>` : ""}${hostTag}</span>
+        <span class="usage-row-meta">${x.calls} calls \xB7 ${formatTokens(usageTokensTotal(x.tokens))} tok${detail} \xB7 ${escapeHtml(spend)}</span>
+        <span class="usage-row-bar" style="width:${(val(x) / maxV * 100).toFixed(1)}%"></span>
+      </div>`;
+      }).join("");
+      return `<section class="usage-section"><h4>${title}</h4>${items || '<small class="usage-empty">No usage in this range.</small>'}</section>`;
+    }
+    function ensureUsageTooltip() {
+      let el = document2.getElementById("usageTooltip");
+      if (!el) {
+        el = document2.createElement("div");
+        el.id = "usageTooltip";
+        el.className = "usage-tooltip";
+        document2.body.appendChild(el);
+      }
+      return el;
+    }
+    function showUsageTooltip(bucket2, e) {
+      if (!bucket2) return;
+      const el = ensureUsageTooltip();
+      el.replaceChildren();
+      const metric = usageChart?.metric || "cost";
+      const head = document2.createElement("div");
+      head.className = "tt-day";
+      head.textContent = (bucket2.days || 1) > 1 ? `Week of ${formatUsageDay(bucket2.day)} \xB7 ${bucket2.days} days` : formatUsageDay(bucket2.day, "long");
+      const total = document2.createElement("div");
+      total.className = "tt-total";
+      total.textContent = metric === "cost" ? `${formatUsageCost(bucket2.costs?.total, bucket2.costUnavailable?.total)} \xB7 ${bucket2.calls || 0} calls` : metric === "tokens" ? `${formatTokens(usageTokensTotal(bucket2.tokens))} tokens \xB7 ${bucket2.calls || 0} calls` : `${bucket2.calls} calls`;
+      el.append(head, total);
+      const rows = [];
+      if (usageChart?.stack === "buckets" && metric === "cost") {
+        USAGE_COST_BUCKETS.forEach(([key, label, cls]) => {
+          rows.push([cls, label, finite2(bucket2.costs?.[key]) ? bucket2.costs[key] : 0]);
+        });
+        const unattributed = usageUnattributedCost(bucket2.costs);
+        if (unattributed > 1e-12) rows.push(["sother", "Unattributed", unattributed]);
+      } else {
+        const seriesRefs = usageChart?.seriesRefs || [];
+        const byRef = new Map((bucket2.models || []).map((m) => [m.ref, m]));
+        seriesRefs.forEach((ref, i) => {
+          const m = byRef.get(ref);
+          if (m) rows.push(["s" + (i + 1), shortModelName(ref), usageModelValue(m, metric)]);
+        });
+        let otherV = 0, extra = 0;
+        for (const m of bucket2.models || []) {
+          if (!seriesRefs.includes(m.ref)) {
+            otherV += usageModelValue(m, metric);
+            extra++;
+          }
+        }
+        if (extra) rows.push(["sother", `other (${extra} model${extra > 1 ? "s" : ""})`, otherV]);
+      }
+      for (const [cls, name, v] of rows) {
+        const row = document2.createElement("div");
+        row.className = "tt-row";
+        const key = document2.createElement("i");
+        key.className = "tt-key " + cls;
+        const value = document2.createElement("strong");
+        value.textContent = metric === "cost" ? formatEstimatedCost(v) : metric === "tokens" ? formatTokens(v) : String(v);
+        const label = document2.createElement("span");
+        label.textContent = name;
+        row.append(key, value, label);
+        el.appendChild(row);
+      }
+      el.style.display = "block";
+      const pad = 12, r = el.getBoundingClientRect();
+      let x = e.clientX + pad;
+      if (x + r.width > window.innerWidth - 8) x = Math.max(8, e.clientX - r.width - pad);
+      let y = e.clientY - r.height - pad;
+      if (y < 8) y = e.clientY + pad;
+      el.style.left = x + "px";
+      el.style.top = y + "px";
+    }
+    function hideUsageTooltip() {
+      const el = document2.getElementById("usageTooltip");
+      if (el) el.style.display = "none";
+    }
+    let usageResizeTimer;
+    window.addEventListener("resize", () => {
+      if (!isUsageViewOpen()) return;
+      clearTimeout(usageResizeTimer);
+      usageResizeTimer = setTimeout(drawUsageChart, 150);
+    }, { signal: events.signal });
+    return {
+      open: openUsageView,
+      close: closeUsageView,
+      isOpen: isUsageViewOpen,
+      load: loadUsageView,
+      setRange: setUsageRange,
+      setSort: setUsageSort,
+      setStack: setUsageStack,
+      get data() {
+        return usageData;
+      },
+      get chart() {
+        return usageChart;
+      },
+      dispose() {
+        closeUsageView();
+        events.abort();
+        document2.getElementById("usageTooltip")?.remove();
         disposed = true;
       }
     };

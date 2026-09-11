@@ -42,3 +42,6 @@ export { decodeSkillDirectory, decodeSkillCoverage } from './skills-data';
 
 export { createSearchView } from './search-view';
 export { decodeSearchPayload, mergeSearchPayloads, queryHosts } from './search-data';
+
+export { createUsageView } from './usage-view';
+export { decodeUsageSummary, decodeUsageLimits } from './usage-data';

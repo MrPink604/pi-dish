@@ -2088,3 +2088,10 @@ and host pruning in `search-data.ts`. Query typing retires earlier requests
 before debounce. Fan-out preserves partial results and uses frozen endpoints.
 Cards/facets/input listeners are owned by the view, with disposal clearing
 indexing/debounce timers and navigation guarded through lazy session loading.
+
+The usage takeover is owned by `src/browser/usage-view.ts`, with payload narrowing
+in `usage-data.ts`. Summary and limit fan-outs retain their fetch sequence and
+frozen endpoints. Limit results cannot merge into another range, and a summary
+must belong to that fetch before limits may re-render it. Chart/render listeners,
+indexing/resize timers and fan-out coalescers retire on close or replacement.
+Even a single answering peer's workspace/session groups retain host identity.

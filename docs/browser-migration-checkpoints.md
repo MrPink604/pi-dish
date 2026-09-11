@@ -425,3 +425,24 @@ Fable 5.1 cleared session-navigation commit `fa5316a`, which is pushed.
   passed again. Fable review is required before push.
 - Fable 5.1 cleared skills commit `3893e90`, which is pushed.
 - Next: usage, then remaining features and rendering.
+
+## Checkpoint 19 — usage dashboard
+
+- `usage-view.ts` owns range/sort/filter state, progressive summary fan-out,
+  subscription-limit reads, indexing/resize timers, charts and their controls.
+  `usage-data.ts` narrows usage/pricing/limit payloads and qualifies workspace
+  and session rows before merging, including when just one peer has answered.
+- Each limit request accumulates its own results; an old response body cannot
+  enter a newer range. A current quota response only re-renders summary data
+  belonging to that same fetch. Summary coalescers are explicitly disposable.
+- Rendered model/session/day controls and chart pointer/keyboard listeners
+  retire with their view or render. Session rows retain their endpoint and host.
+  Four browser regressions cover late limits, peer-only partial navigation,
+  retained controls, indexing and disposal; decoder/strict contracts cover
+  unavailable prices, malformed limits, readonly endpoints and queue disposal.
+- Strict checks, 911 backend tests, 133 browser regressions, independent UI
+  scenarios and full desktop/mobile smoke passed. Integrated runtime/config/test
+  files match the verified draft byte for byte; strict checks passed again.
+  Fable review is required before push.
+- Fable 5.1 cleared advanced-search commit `99b7373`, which is pushed.
+- Next: display preferences and panel resizing, then remaining features/rendering.

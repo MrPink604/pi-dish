@@ -71,7 +71,7 @@ export interface MergedUsage extends UsageBucket {
 export interface UsageModel { ref: string; provider?: string; model?: string; calls?: number; cost?: number | null; costUnavailable?: Partial<Record<CostKey, number>>; tokens?: Tokens }
 export interface MergedUsageModel extends UsageModel { calls: number; cost: number; costUnavailable: Partial<Record<CostKey, number>>; tokens: Record<TokenKey, number> }
 export interface UsageDay extends UsageBucket { day: string; days?: number; models?: readonly UsageModel[] }
-export interface UsageGroup extends UsageBucket { key?: string; id?: string; provider?: string; model?: string; host?: string | null; hostLabel?: string | null }
+export interface UsageGroup extends UsageBucket { name?: string; workspace?: string; key?: string; id?: string; provider?: string; model?: string; host?: string | null; hostLabel?: string | null }
 export interface UsageSummary {
   range?: string;
   sort?: string;

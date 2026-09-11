@@ -19,11 +19,14 @@ export const USAGE_MERGE_TOKEN_KEYS: readonly TokenKey[] = ['input', 'output', '
  */
 export function createFanoutRenderQueue(states: readonly string[], render: () => void, delayMs = 100) {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  return () => {
+  let disposed = false;
+  const queue = () => {
+    if (disposed) return;
     clearTimeout(timer);
     if (states.every(state => state !== 'pending')) render();
     else timer = setTimeout(render, delayMs);
   };
+  return Object.assign(queue, { dispose() { disposed = true; clearTimeout(timer); } });
 }
 
 

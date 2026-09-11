@@ -1168,11 +1168,17 @@ ${block}` : block;
   var USAGE_MERGE_TOKEN_KEYS = ["input", "output", "cacheRead", "cacheWrite", "reasoning"];
   function createFanoutRenderQueue(states, render, delayMs = 100) {
     let timer;
-    return () => {
+    let disposed = false;
+    const queue = () => {
+      if (disposed) return;
       clearTimeout(timer);
       if (states.every((state) => state !== "pending")) render();
       else timer = setTimeout(render, delayMs);
     };
+    return Object.assign(queue, { dispose() {
+      disposed = true;
+      clearTimeout(timer);
+    } });
   }
   function emptyTokens() {
     return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 };

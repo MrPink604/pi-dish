@@ -21,7 +21,8 @@ Checkpoint 14 migrates host recovery preferences and the recovery report.
 Checkpoint 15 migrates bounce previews, queued operations and restart reconciliation.
 Checkpoint 16 migrates related-session navigation and in-session search.
 Checkpoint 17 migrates the skills directory, coverage detail and refinement launcher.
-Checkpoint 18 migrates fleet advanced search and its facets/results. See
+Checkpoint 18 migrates fleet advanced search and its facets/results.
+Checkpoint 19 migrates usage summaries, subscription limits and chart interactions. See
 [the checkpoint log](docs/browser-migration-checkpoints.md) for implementation
 verification and the complete browser entrypoint inventory. The last confirmed
 CI checkpoint is recorded below; final CI must pass before the goal is complete.
@@ -32,7 +33,7 @@ CI checkpoint is recorded below; final CI must pass before the goal is complete.
 | --- | --- | --- |
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
-| Browser migration | In progress — current stage | Forty-three implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
+| Browser migration | In progress — current stage | Forty-five implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
 | Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -50,7 +51,7 @@ in `lib/`. Its full module inventory is in [the migration guide](docs/typescript
 Most JavaScript callers of these modules are not yet type checked; `lib/cron.js`
 is an explicitly checked exception.
 
-These forty-three browser implementation modules compile strictly into local
+These forty-five browser implementation modules compile strictly into local
 `public/browser.js`, `public/helpers.js` and `public/artifact-comments.js` scripts.
 The entries are `index.ts`, `shared-helpers.ts` and `artifact-comments.ts`;
 `shared-helper-types.ts` supplies their pure-helper contracts:
@@ -86,6 +87,8 @@ The entries are `index.ts`, `shared-helpers.ts` and `artifact-comments.ts`;
 | `bounce.ts` | Host snapshots, selected bounce targets, operation polling and restart reconciliation |
 | `session-relations.ts` | Related-session wire rows, header/modal controls, indexing refresh and navigation |
 | `session-search.ts` | Query/match state, request sequencing, marks and serialized paging jumps |
+| `usage-data.ts` | Explicit usage/limit payloads and host-qualified grouping |
+| `usage-view.ts` | Range/filter requests, progressive summaries, charts and quota ownership |
 | `search-data.ts` | Explicit search payloads, host pruning and result merging |
 | `search-view.ts` | Fleet query lifecycle, facets and host-scoped result navigation |
 | `skills-data.ts` | Narrowed directory, coverage, usage and refinement payloads |

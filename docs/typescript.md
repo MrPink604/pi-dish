@@ -369,3 +369,8 @@ timers follow the owning view; refinement requires matching-path coverage.
 result controls. `search-data.ts` decodes payloads and attaches the answering
 host before merging. Input changes immediately invalidate prior responses;
 result activation retains the query and endpoint that rendered its card.
+
+`usage-view.ts` owns summary/limit request sequences, chart state, render listeners
+and indexing/resize timers. `usage-data.ts` keeps unavailable costs explicit and
+stamps host identity before partial merges. Render coalescers expose disposal so
+closed or superseded fan-outs cannot leave a timer running.
