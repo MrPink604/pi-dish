@@ -884,7 +884,7 @@ and detached dismissal controls retire with the panel.
 Verification: strict checks, 936 backend tests, 257 browser tests, all independent
 UI scenarios and full desktop/mobile smoke passed. Five browser cases and strict
 contracts cover compaction/turn overlap, ticker disposal, abort gate reuse,
-replacement questions and clipboard/disposal ownership. Fable reviews before push.
+replacement questions and clipboard/disposal ownership. Kimi K3 cleared this checkpoint in the final combined review.
 
 ## Checkpoint 40 — composer delivery
 
@@ -899,7 +899,7 @@ boundary and ledger writers instead of mutating the former pending Map.
 Verification: strict checks, 936 backend tests, 262 browser tests, all independent
 UI scenarios and full desktop/mobile smoke passed. Five new browser cases and
 strict contracts cover malformed queues, detached controls, endpoint/disposal
-ownership and overlapping side commands. Fable review and push remain pending.
+ownership and overlapping side commands. Kimi K3 cleared this checkpoint in the final combined review.
 
 ## Checkpoint 41 — stream lifecycle
 
@@ -913,7 +913,7 @@ queue and transcript catch-up paths call their typed controllers.
 Verification: strict checks, 936 backend tests, 268 browser tests, all independent
 UI scenarios and full desktop/mobile smoke passed. Six new browser cases and
 strict contracts cover tickets, endpoints, retired sources, reconnect timers,
-completion deduplication and session-switch ordering. Review and push pending.
+completion deduplication and session-switch ordering. Kimi K3 cleared this checkpoint in the final combined review.
 
 ## Checkpoint 42 — selection, resume and header projection
 
@@ -931,7 +931,7 @@ and start time even after the active map was cleared. Other hosts cannot adopt i
 Verification: strict checks, 936 backend tests, 273 browser tests, all independent
 UI scenarios and full desktop/mobile smoke passed. Five new browser cases and
 strict contracts cover resume ownership, endpoints/disposal, malformed headers
-and retained tool adoption. Review and push pending.
+and retained tool adoption. Kimi K3 cleared this checkpoint in the final combined review.
 
 ## Checkpoint 43 — application entrypoint and static bindings
 
@@ -954,4 +954,19 @@ UI scenarios and full desktop/mobile smoke passed.
 Four browser cases, host/action inventory units and strict contracts cover startup,
 panel generations, listener disposal and projection. Build regressions cover all
 five outputs, stale/type failures and classic-script runtime import rejection.
-Documentation file links and whitespace checks passed. Review and push pending.
+Documentation file links and whitespace checks passed. Kimi K3 cleared this checkpoint in the final combined review.
+
+## Final implementation review
+
+The operator-authorized Kimi K3 reviewer ran through OMP using its registered
+`kimi-code/k3` identifier and read-only tools. It cleared the complete five-commit
+range `fab8947..28627d125479f6bb62164de0ad69b94baec34e88` with no blocking
+correctness or ownership findings. The review covered authored TypeScript, the
+old app bodies in the diff, static markup, generated delivery and regression
+coverage. Two unused bindings were identified as pre-existing and required no
+change. The earlier Fable cached-tool observation was resolved in checkpoint 42.
+
+CI acceptance requires every backend matrix job (Node 22.19.0, 22.x, 24.x and
+26.x) and the Node 24 browser job to pass on the exact final pushed commit.
+[Main-branch workflow runs](https://github.com/MrPink604/pi-dish/actions/workflows/tests.yml?query=branch%3Amain)
+record that evidence separately from these local verification results.

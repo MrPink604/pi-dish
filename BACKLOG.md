@@ -1,7 +1,7 @@
 # pi-dish roadmap and migration status
 
-Updated 2026-09-11. **Browser application source migration is implemented locally.
-External review, push and CI on the final commit remain pending.**
+Updated 2026-09-11. **Browser application source migration is complete and
+independently reviewed.**
 
 All first-party browser application logic is authored in `src/browser/`, including
 the application entrypoint and static control bindings. The five scripts shipped
@@ -12,8 +12,9 @@ migration stage.
 
 Work was divided into 43 checkpoints. See
 [the checkpoint log](docs/browser-migration-checkpoints.md) for scope, verification
-and review/push status. Checkpoints through 38 are reviewed and pushed; 39–43
-await external review. The last confirmed CI checkpoint is recorded below.
+and review status. Fable 5.1 reviewed checkpoints through 38; the authorized
+substitute, Kimi K3 through OMP, cleared checkpoints 39–43 without blocking
+findings. CI requirements and the earlier passing baseline are recorded below.
 
 ## Status at a glance
 
@@ -21,7 +22,7 @@ await external review. The last confirmed CI checkpoint is recorded below.
 | --- | --- | --- |
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
-| Browser migration | Source implementation complete; delivery pending | All first-party application logic and bindings are typed. Review, final push and exact-commit CI remain. |
+| Browser migration | Source implementation complete and reviewed | All first-party application logic and bindings are typed. Local strict, backend, browser and UI checks pass; each push must also pass the CI matrix. |
 | Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -125,13 +126,16 @@ tracked separately in the checkpoint log.
 | `helper-models.ts` | Model refs, thinking levels, scope patterns and role values |
 | `helper-markdown.ts` | Markdown URLs, math/diagram detection, file mentions and diff markup |
 
-## Remaining delivery steps
+## Browser delivery
 
-1. Review the local commits and resolve any findings. Kimi K3 through OMP is
-   authorized as the substitute for Fable 5.1 on the final pending checkpoints.
-2. Push the reviewed commits on the selected branch.
-3. Verify all five CI jobs on the exact final commit before marking the browser
-   completion goal finished.
+The final implementation passed strict checks, 938 backend tests, 277 browser
+regressions, all independent UI scenarios and full desktop/mobile smoke. Kimi K3
+through OMP (`kimi-code/k3`) cleared the five-commit implementation range
+`fab8947..28627d1` without blocking findings.
+
+The [main-branch CI runs](https://github.com/MrPink604/pi-dish/actions/workflows/tests.yml?query=branch%3Amain)
+provide delivery evidence. The browser completion goal requires all five jobs to
+pass on the exact final pushed commit; a passing earlier checkpoint is insufficient.
 
 The source finish line is met: first-party browser application logic is authored
 in TypeScript with explicit state, request and view owners. `public/app.js` is
@@ -148,23 +152,23 @@ plan.
 ## Review and verification
 
 For each implementation chunk: define the boundary, migrate it, run the relevant checks,
-commit locally, get Fable 5.1 review of the commit(s), resolve findings and
-re-review any fixes before pushing. Preserve
+commit locally, get the authorized external review of the commit(s), resolve
+findings and re-review any fixes before pushing. Preserve
 host/session ownership, local browser assets and existing deployment paths.
 Follow [AGENTS.md](AGENTS.md) and [the test matrix](docs/testing.md) for required
 checks. Documentation-only changes need content and link checks. After a chunk
 ships, update this page's checkpoint, completed inventory and next step so the
 status stays current.
 
-Last confirmed CI checkpoint: `fab8947` (transcript pagination).
+Earlier CI baseline: `fab8947` (transcript pagination).
 
 - Fable 5.1 cleared the checkpoint before push.
 - Strict checks, 936 backend tests, 252 browser regressions, independent UI
   scenarios and full desktop/mobile smoke passed locally.
 - [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34626615561):
   backend on Node 22.19.0, 22.x, 24.x and 26.x, plus the Node 24 browser job.
-- This verifies checkpoint 38; final CI is still required after the remaining
-  reviewed commits are pushed.
+- This is checkpoint 38 evidence only. Use the CI run for the exact final commit
+  to verify the completed browser delivery.
 
 ## Completed work before the current stage
 

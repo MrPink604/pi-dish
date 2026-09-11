@@ -5,7 +5,7 @@ For current completion status and the ordered work queue, start with
 build conventions and compatibility rules already implemented.
 
 The shared foundation is complete within its defined scope. Browser application
-source migration is implemented; review/push and final CI status are tracked in
+source migration is complete; scope, review and CI requirements are tracked in
 the roadmap. The server application and feature stores remain largely JavaScript.
 The original foundation introduced no UI framework, ESM runtime
 migration or wire/store format change. Subsequent browser extractions use
