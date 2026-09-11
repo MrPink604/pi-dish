@@ -16,7 +16,6 @@ function scriptGlobals(file) {
   return helperGlobals;
 }
 const helperGlobals = scriptGlobals('public/helpers.js');
-const sessionStateGlobals = scriptGlobals('public/session-state.js');
 const browserGlobals = scriptGlobals('public/browser.js');
 const appGlobals = scriptGlobals('public/app.js');
 module.exports = [
@@ -32,8 +31,8 @@ module.exports = [
     },
   },
   { files: ['**/*.mjs'], languageOptions: { sourceType: 'module' } },
-  { files: ['public/**/*.js'], languageOptions: { sourceType: 'script', globals: { ...globals.browser, ...helperGlobals, ...sessionStateGlobals, ...browserGlobals, marked: 'readonly', hljs: 'readonly', katex: 'readonly', mermaid: 'readonly', Terminal: 'readonly', FitAddon: 'readonly' } } },
+  { files: ['public/**/*.js'], languageOptions: { sourceType: 'script', globals: { ...globals.browser, ...helperGlobals, ...browserGlobals, marked: 'readonly', hljs: 'readonly', katex: 'readonly', mermaid: 'readonly', Terminal: 'readonly', FitAddon: 'readonly' } } },
   // Test evaluations share the actual browser script surface. Deriving these
   // names makes renamed/removed app functions fail lint in their callers too.
-  { files: ['test/ui-smoke.js', 'test/ui-scenarios/*.js', 'test/browser/*.js', 'scripts/readme-shots.js'], languageOptions: { globals: { ...globals.browser, ...helperGlobals, ...sessionStateGlobals, ...browserGlobals, ...appGlobals } } },
+  { files: ['test/ui-smoke.js', 'test/ui-scenarios/*.js', 'test/browser/*.js', 'scripts/readme-shots.js'], languageOptions: { globals: { ...globals.browser, ...helperGlobals, ...browserGlobals, ...appGlobals } } },
 ];

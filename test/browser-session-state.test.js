@@ -1,6 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createSessionState } = require('../public/session-state');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const context = {};
+vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
+const { createSessionState } = context.PiDishBrowser;
 
 function fixture() {
   let selfHostId = 'self';
@@ -144,7 +149,7 @@ test('captured browser ownership is immutable and distinguishes hosts even withi
   ]);
   state.setCurrentSession('same', 'self');
   const owner = state.captureSelection();
-  assert.deepEqual(owner, { id: 'same', host: 'self', generation: 0 });
+  assert.deepEqual({ ...owner }, { id: 'same', host: 'self', generation: 0 });
   assert.equal(Object.isFrozen(owner), true);
   assert.equal(Reflect.set(owner, 'host', 'peer'), false);
   state.patchSession('same', { name: 'fresh metadata' }, 'self');

@@ -475,7 +475,7 @@ function hostChipHtml(hostId, { note = false } = {}) {
 
 // All session list/selection writes and their rendering hooks share one store.
 // Read its snapshots freely; mutate them only through its four state writers.
-const sessionState = createSessionState({
+const sessionState = PiDishBrowser.createSessionState({
   getSelfHostId: () => selfHost.hostId,
   getHostLabel: hostLabelFor,
   onListsChanged: renderSessions,

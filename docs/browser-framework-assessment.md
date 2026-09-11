@@ -6,12 +6,16 @@ now implements the preparation boundary and records repeatable measurements.
 
 ## Decision
 
-Keep the current production rendering approach. A component framework is now
-practical to evaluate at a feature boundary, but this refactoring has not
-measured a rendering or maintenance benefit from one. Prefer a contained Preact
-model-selector experiment when component work resumes, compared against an
-extracted ordinary DOM implementation of the same feature. This document
-specifies the framework experiment; that pilot has not been implemented.
+Continue with vanilla TypeScript as the implementation base and migrate the
+remaining browser modules into `src/browser/`. Keep ordinary DOM rendering and
+explicit ownership boundaries. No framework has demonstrated a maintenance or
+runtime benefit in this repository, and a framework pilot is not the next stage.
+
+Preact remains a possible later experiment for leaf UI if extraction exposes a
+specific maintenance problem. Svelte is not an intended destination either.
+The pilot criteria below are retained for that future decision; they do not
+schedule or authorize framework adoption. The model-selector baseline is
+already implemented in ordinary TypeScript.
 
 The state extraction addressed a concrete source of defects: asynchronous
 callbacks carrying the wrong host/session or applying after navigation.
@@ -20,8 +24,8 @@ adoption should depend on simpler feature code and acceptable runtime costs.
 
 ## What the code now supports
 
-- `public/session-state.js` owns lists, detached selection, the four writers,
-  and immutable `SelectionOwner` tokens. Its strict JSDoc interface and unit/type
+- `src/browser/session-state.ts` owns lists, detached selection, the four writers,
+  and immutable `SelectionOwner` tokens. Its strict TypeScript interface and unit/type
   tests provide a usable integration boundary. Metadata remains `unknown`;
   feature adapters must narrow fields they consume.
 - `public/app.js` still owns requests, rendering and feature interaction state.
@@ -45,7 +49,7 @@ These are architectural observations, not performance measurements.
 
 | Option | Fit for this code | Cost to evaluate |
 | --- | --- | --- |
-| Extract a plain-JavaScript model-selector module | Preserves current script delivery, DOM and CSS conventions; establishes the comparison baseline | Requires explicit render/update/dispose and action interfaces, with manual DOM interaction code |
+| Extracted vanilla TypeScript model-selector module | Preserves current script delivery, DOM and CSS conventions; establishes the comparison baseline | Requires explicit render/update/dispose and action interfaces, with manual DOM interaction code |
 | Preact in one dedicated DOM root | Its renderer accepts a container node, so the selector can own one subtree using the existing light-DOM styles | Requires local dependency delivery, lifecycle cleanup and a choice of template syntax; existing imperative writes inside that subtree must be removed |
 | Lit custom element | Provides a component render root and template/lifecycle model | Shadow DOM defaults would change existing selector CSS and document queries; light DOM is possible but gives up that scoping, and module delivery still needs handling |
 
@@ -65,8 +69,8 @@ CSS/query conventions, not a claim of measured speed or general superiority.
 
 The ordinary DOM implementation now follows this boundary; use it as the
 comparison baseline. Use only the model dropdown. Keep its header trigger and the thinking menu in
-the existing shell. First extract the current implementation with an interface
-that the Preact version can implement unchanged:
+the existing shell. The current implementation exposes an interface
+that a future component version can implement unchanged:
 
 - `mount(root, actions)`, `update(viewModel)` and `dispose()` give one module
   exclusive ownership of the root's children. The shell owns visibility,
@@ -114,7 +118,7 @@ handling, new state/effect code, duplicated state, and tooling changes. A shorte
 component alone is insufficient if its adapter absorbs the complexity. Keep the
 pilot only if reviewers can identify a concrete simplification, required
 behaviors pass, and measured costs fit the agreed baseline tolerances. Otherwise
-retain the extracted plain-JavaScript module and remove the experiment.
+retain the extracted vanilla TypeScript module and remove the experiment.
 
 Transcript rendering, streaming coalescing, retained DOM, pagination, file/diff
 views and terminal integration remain separate work. Passing a model-selector

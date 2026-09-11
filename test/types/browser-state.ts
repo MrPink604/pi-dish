@@ -1,5 +1,14 @@
-// Compile-only consumers of the browser's strict JavaScript boundary.
-import { createSessionState } from '../../public/session-state';
+// Compile-only consumers of the browser's strict TypeScript state boundary.
+import { createSessionState } from '../../src/browser/session-state';
+import type { SessionStateOptions } from '../../src/browser/session-state';
+
+// Host identity can be unknown before discovery; callbacks must accept null.
+declare const options: SessionStateOptions;
+createSessionState({
+  ...options,
+  // @ts-expect-error A string-only callback cannot label an unidentified host.
+  getHostLabel: (host: string) => host,
+});
 
 const state = createSessionState({
   getSelfHostId: () => 'self', getHostLabel: host => host,

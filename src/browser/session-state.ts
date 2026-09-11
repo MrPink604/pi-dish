@@ -1,32 +1,27 @@
-/**
- * Browser session state, shared with the node tests. No DOM or transport.
- * Metadata stays opaque; this boundary owns list/selection identity and writes.
- * @typedef {{ id: string, host?: string | null, hostLabel?: string } & Record<string, unknown>} SessionEntry
- * @typedef {{ active: SessionEntry[], previous: SessionEntry[] }} SessionLists
- * @typedef {{ hostId?: string | null, active?: SessionEntry[], previous?: SessionEntry[] }} HostSessionLists
- * @typedef {Readonly<{ id: string, host: string | null, generation: number }>} SelectionOwner
- * @typedef {{ getSelfHostId: () => string | null, getHostLabel: (host: string | null) => string | null,
- *   onListsChanged: () => void, onCurrentChanged: () => void }} SessionStateOptions
- */
+/** Browser list/selection identity and writes. No DOM or transport. */
+export type SessionEntry = { id: string; host?: string | null; hostLabel?: string } & Record<string, unknown>;
+export interface SessionLists { active: SessionEntry[]; previous: SessionEntry[] }
+export interface HostSessionLists { hostId?: string | null; active?: SessionEntry[]; previous?: SessionEntry[] }
+export type SelectionOwner = Readonly<{ id: string; host: string | null; generation: number }>;
+export interface SessionStateOptions {
+  getSelfHostId: () => string | null;
+  getHostLabel: (host: string | null) => string | null;
+  onListsChanged: () => void;
+  onCurrentChanged: () => void;
+}
 
-/** @param {SessionStateOptions} options */
-function createSessionState(options) {
-  /** @type {SessionLists} */
-  let sessions = { active: [], previous: [] };
-  /** @type {SessionEntry | null} */
-  let currentSession = null;
+export function createSessionState(options: SessionStateOptions) {
+  let sessions: SessionLists = { active: [], previous: [] };
+  let currentSession: SessionEntry | null = null;
   let generation = 0;
 
   /**
    * A qualified miss never falls back to another host. Unqualified lookup
    * prefers the selected host, otherwise it requires an unambiguous identity.
-   * @param {string | null} [id]
-   * @param {string | null} [host]
    */
-  function findSession(id, host) {
+  function findSession(id?: string | null, host?: string | null) {
     if (!host && currentSession && currentSession.id === id) host = currentSession.host;
-    /** @type {SessionEntry | undefined} */
-    let found;
+    let found: SessionEntry | undefined;
     for (const list of [sessions.active, sessions.previous]) {
       for (const session of list) {
         if (session.id !== id || (host && (session.host || null) !== host)) continue;
@@ -38,8 +33,7 @@ function createSessionState(options) {
     return found;
   }
 
-  /** @param {string | null} [id] */
-  function sessionHostId(id) {
+  function sessionHostId(id?: string | null) {
     if (id && currentSession?.id === id && currentSession.host) return currentSession.host;
     return findSession(id)?.host || options.getSelfHostId();
   }
@@ -47,10 +41,8 @@ function createSessionState(options) {
   /**
    * Stamping happens only in the four writers. Labels refresh on each write
    * because the host can be relabelled while its sessions remain in state.
-   * @param {SessionEntry} session
-   * @param {string | null} [hostId]
    */
-  function stampSessionHost(session, hostId = options.getSelfHostId()) {
+  function stampSessionHost(session: SessionEntry, hostId = options.getSelfHostId()) {
     if (!session.host && hostId) session.host = hostId;
     const label = options.getHostLabel(session.host || hostId);
     if (label) session.hostLabel = label;
@@ -59,13 +51,10 @@ function createSessionState(options) {
 
   /**
    * Polls replace lists and fold fresh metadata into the detached selection.
-   * @param {HostSessionLists | HostSessionLists[]} next
-   * @param {string | null} [hostId]
    */
-  function setSessionLists(next, hostId = options.getSelfHostId()) {
+  function setSessionLists(next: HostSessionLists | HostSessionLists[], hostId = options.getSelfHostId()) {
     const parts = Array.isArray(next) ? next : [{ hostId, active: next.active, previous: next.previous }];
-    /** @type {SessionLists} */
-    const merged = { active: [], previous: [] };
+    const merged: SessionLists = { active: [], previous: [] };
     for (const part of parts) {
       for (const session of part.active || []) merged.active.push(stampSessionHost(session, part.hostId));
       for (const session of part.previous || []) merged.previous.push(stampSessionHost(session, part.hostId));
@@ -82,10 +71,8 @@ function createSessionState(options) {
   /**
    * Selection returns a detached copy. The caller owns its broader view reset
    * and rendering, including invalidation before that reset starts.
-   * @param {string | null} id
-   * @param {string | null} [host]
    */
-  function setCurrentSession(id, host) {
+  function setCurrentSession(id: string | null, host?: string | null) {
     const entry = findSession(id, host);
     currentSession = entry ? stampSessionHost({ ...entry }) : null;
     return currentSession;
@@ -93,13 +80,9 @@ function createSessionState(options) {
 
   /**
    * Local mutations patch both lists and the selected copy for one host.
-   * @param {string} id
-   * @param {Partial<SessionEntry>} patch
-   * @param {string | null} [host]
    */
-  function patchSession(id, patch, host = sessionHostId(id)) {
-    /** @param {SessionEntry | null} session */
-    const matches = session => session !== null && session.id === id && (session.host || null) === (host || null);
+  function patchSession(id: string, patch: Partial<SessionEntry>, host = sessionHostId(id)) {
+    const matches = (session: SessionEntry | null) => session !== null && session.id === id && (session.host || null) === (host || null);
     for (const list of [sessions.active, sessions.previous]) {
       const session = list.find(matches);
       if (session) stampSessionHost(Object.assign(session, patch));
@@ -112,10 +95,8 @@ function createSessionState(options) {
   /**
    * Transcript metadata refreshes the header only. Registry-aware list fields
    * retain their own source of truth, and wire fields cannot change identity.
-   * @param {SelectionOwner | null | undefined} owner
-   * @param {Partial<SessionEntry> | null | undefined} fields
    */
-  function mergeCurrentSession(owner, fields) {
+  function mergeCurrentSession(owner: SelectionOwner | null | undefined, fields: Partial<SessionEntry> | null | undefined) {
     if (!fields || !ownsSelection(owner) || !currentSession) return;
     const { id, host } = currentSession;
     Object.assign(currentSession, fields);
@@ -130,15 +111,13 @@ function createSessionState(options) {
   // prove that asynchronous work still owns the pane.
   function advanceSelection() { generation += 1; }
 
-  /** @returns {SelectionOwner | null} */
-  function captureSelection() {
+  function captureSelection(): SelectionOwner | null {
     return currentSession
       ? Object.freeze({ id: currentSession.id, host: currentSession.host || null, generation })
       : null;
   }
 
-  /** @param {SelectionOwner | null | undefined} owner */
-  function ownsSelection(owner) {
+  function ownsSelection(owner: SelectionOwner | null | undefined) {
     return !!owner && !!currentSession && owner.id === currentSession.id
       && owner.host === (currentSession.host || null) && owner.generation === generation;
   }
@@ -152,4 +131,4 @@ function createSessionState(options) {
   };
 }
 
-if (typeof module !== 'undefined') module.exports = { createSessionState };
+export type SessionState = ReturnType<typeof createSessionState>;

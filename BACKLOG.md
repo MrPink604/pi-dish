@@ -1,6 +1,6 @@
 # pi-dish maintenance backlog
 
-Updated 2026-09-09. This is the current work order. The original RPC feature
+Updated 2026-09-10. This is the current work order. The original RPC feature
 audit is preserved in [docs/history/2026-07-rpc-gap-audit.md](docs/history/2026-07-rpc-gap-audit.md);
 its descriptions of missing features are historical.
 
@@ -76,8 +76,8 @@ the message-count and session-spend badges. Spec and mock:
   basics and adopted identities are validated; v2 connections must prove their
   original claim before events can change session state. Socket regressions
   cover pre-hello claim rewriting, malformed updates and replay ordering.
-- Browser list/selection state now lives in `public/session-state.js`, with
-  strict JavaScript/JSDoc checks, host-aware lookup, the four existing writers
+- Browser list/selection state now lives in `src/browser/session-state.ts`, with
+  strict TypeScript checks, host-aware lookup, the four existing writers
   and generation invalidation. DOM rendering stays in `app.js` via callbacks;
   state regressions and the host-collision browser scenarios cover the boundary.
 - Transcript loads, stream connections/retries, relations and metadata mutations
@@ -93,11 +93,14 @@ the message-count and session-spend badges. Spec and mock:
 - Extend the typed foundation into application event and request-ownership contracts.
 - Extract frontend state/transport and server application/lifecycle boundaries
   in small changes guarded by the preceding tests.
-- Framework reassessment completed: retain the current production renderer.
-  [The assessment](docs/browser-framework-assessment.md) specifies a future
-  model-selector pilot comparing Preact with an extracted plain-JavaScript
-  baseline, including ownership, local delivery and measurement requirements.
-  No component framework has been adopted; transcript work stays separate.
+- Continue vanilla TypeScript migration through `src/browser/`. The typed API
+  adapter, session store and model selector establish the current pattern:
+  explicit owner-bearing actions, ordinary DOM rendering and cleanup.
+  Move remaining state/controllers and leaf UI out of `app.js` in separately
+  reviewed changes. Preserve imperative transcript and terminal ownership.
+- Framework work is deferred. [The assessment](docs/browser-framework-assessment.md)
+  retains a possible future leaf-component experiment and comparison criteria;
+  neither Preact nor Svelte is an intended migration destination.
 
 ## Product limitations to revisit separately
 
@@ -122,5 +125,17 @@ design history and may include work that has already shipped.
 3. Extracted model-selector baseline with explicit actions and cleanup: complete
    after Fable review and full checks.
 4. [Readiness checkpoint and baseline evidence](docs/model-selector-baseline.md):
-   complete; the contained framework experiment can start from this baseline.
-   No framework has been adopted.
+   complete; retained as evidence for any later framework experiment.
+   The current next work is vanilla TypeScript migration.
+
+## Vanilla TypeScript continuation
+
+- Session store migration: completed 2026-09-10 after Fable review, strict type
+  checks, 825 backend tests, 55 browser regressions, all independent UI scenarios,
+  desktop/mobile smoke and OMP/Prime fake-provider canaries.
+  Moved the existing writers and immutable selection owners into `src/browser/`,
+  removed the standalone JavaScript script, and routed production and unit-test
+  consumers through the existing browser bundle. No state behavior changes.
+- Next: extract remaining host/request controllers and leaf UI through explicit
+  typed interfaces. Keep each extraction independently reviewable; preserve
+  selection guards, streaming coalescing, pagination and retained DOM.

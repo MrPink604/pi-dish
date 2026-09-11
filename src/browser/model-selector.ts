@@ -1,5 +1,5 @@
 import type { CatalogModel } from '../core/session-api';
-import type { SelectionOwner } from '../../public/session-state';
+import type { SelectionOwner } from './session-state';
 
 export interface ModelSelectorView {
   owner: SelectionOwner;

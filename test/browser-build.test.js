@@ -26,11 +26,13 @@ test('browser build detects stale output and preserves it on type failure', () =
     fs.appendFileSync(output, '\n// stale');
     const stale = run('--check');
     assert.equal(stale.status, 1);
-    assert.match(stale.stderr, /Browser output is stale/);
+    assert.match(stale.stderr, /Browser output is stale/, stale.stdout + stale.stderr);
     assert.match(fs.readFileSync(output, 'utf8'), /stale/);
     assert.equal(run().status, 0);
     assert.equal(fs.readFileSync(output, 'utf8'), original);
     fs.writeFileSync(path.join(root, 'public/legacy.js'), 'export const answer = 42;');
+    // A declaration can type a legacy import, but must not permit bundling it.
+    fs.writeFileSync(path.join(root, 'public/legacy.d.ts'), 'export const answer: number;');
     fs.writeFileSync(source, "export { answer } from '../../public/legacy.js';");
     const legacy = run();
     assert.notEqual(legacy.status, 0);

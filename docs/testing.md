@@ -67,9 +67,15 @@ CommonJS files. Run `npm run build:core` to regenerate after source edits.
 The same command checks compile-only consumers in `test/types/core.ts`, including
 negative cases for mixed identity types and unvalidated response/store payloads.
 It also retains strict `checkJs` without emission for `lib/cron.js`; JSDoc covers
-parser inputs, parsed fields, matching, and next-run results. The application,
-browser and remaining JavaScript modules are not yet type checked. See
+parser inputs, parsed fields, matching, and next-run results. Most application
+and remaining JavaScript modules are not yet type checked.
+The browser modules in `src/browser/` compile strictly, including session state,
+the API adapter and the model selector. See
 [Typed foundation](typescript.md) for the exact migrated scope.
+
+Browser API and state unit tests execute the checked-in `public/browser.js`.
+After editing `src/browser/`, run `npm run build:browser` before `npm test`;
+`npm run check` catches stale output without regenerating it.
 
 ## Coverage map for refactoring
 

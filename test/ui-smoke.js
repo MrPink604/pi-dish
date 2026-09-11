@@ -3385,7 +3385,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       const key = sessionKey(hostId, id);
       const bareLeft = Object.keys(localStorage).filter((k) =>
         /^pi-dish-(draft|history|terminal-mode)-/.test(k) && !k.includes(' ') && !k.includes('spawn:'));
-      const freshState = createSessionState({
+      const freshState = PiDishBrowser.createSessionState({
         getSelfHostId: () => selfHost.hostId, getHostLabel: hostLabelFor,
         onListsChanged() {}, onCurrentChanged() {},
       });

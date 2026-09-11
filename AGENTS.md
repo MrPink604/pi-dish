@@ -9,10 +9,10 @@ files are checked in at the existing `lib/` paths. Edit the TypeScript source,
 run `npm run build:core`, and include both source and generated output in the
 commit. `npm run check` rejects stale output. See [docs/typescript.md](docs/typescript.md)
 for the exact boundary; the application and feature modules remain JavaScript.
-Browser session state lives in `public/session-state.js` with strict JSDoc type
-checks; use its writers and selection guards from `app.js`. Typed browser
-modules live in `src/browser/`; regenerate and commit `public/browser.js` with
-`npm run build:browser`. Its drift/type checks are included in `npm run check`.
+Browser session state lives in `src/browser/session-state.ts`; use its writers
+and selection guards from `app.js` via `PiDishBrowser.createSessionState`. Continue
+with vanilla TypeScript modules in `src/browser/`; regenerate and commit
+`public/browser.js` with `npm run build:browser`. Its drift/type checks are included in `npm run check`.
 
 ## Start here
 

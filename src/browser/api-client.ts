@@ -1,7 +1,7 @@
 import { decodeSessionList, decodeModelCatalog, decodeMutationResult, decodeThinkingResult,
   decodeEnabledModelsResult } from '../core/session-api';
 import type { ModelChangeRequest, ThinkingChangeRequest, EnabledModelsRequest } from '../core/session-api';
-import type { SelectionOwner } from '../../public/session-state';
+import type { SelectionOwner } from './session-state';
 
 export interface HostEndpoint { base: string; token?: string | null }
 export type HostTarget = string | HostEndpoint | null;

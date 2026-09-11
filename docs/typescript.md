@@ -21,9 +21,9 @@ format change.
 | `line-splitter.ts` | Incremental UTF-8 LF framing |
 | `running-tool-calls.ts` | Shared bridge/RPC reconnect snapshots |
 
-`public/session-state.js` now owns browser list/selection state and the existing
-generation guards. It uses strict JavaScript/JSDoc checking, like cron, and loads
-as a local plain script before `app.js`; there is no browser compilation step.
+`src/browser/session-state.ts` owns browser list/selection state and the existing
+generation guards. It compiles strictly into the local `public/browser.js` bundle;
+`app.js` creates the store through `PiDishBrowser.createSessionState`.
 Its metadata fields stay unknown, and `test/types/browser-state.ts` checks its
 public interface. Browser route/host ids are strings here, without claiming the
 server's branded validation. `captureSelection()` returns a frozen host/id/
@@ -38,8 +38,9 @@ modal instances, file requests and comment drafts within a selected session.
 Tree/branch operations and model/thinking menu loads also carry selection
 owners; a late branch preserves returned editor text in its original draft.
 
-`server.js`, browser transport/rendering, feature stores and harness
-extensions remain in their existing form. The foundation's declarations
+`server.js`, most browser controllers/rendering, feature stores and harness
+extensions remain JavaScript. The typed browser adapter and model-selector DOM
+module are described below. The foundation's declarations
 do not mean that all its JavaScript callers have been checked.
 
 ## Source and runtime
@@ -133,7 +134,7 @@ migrate; adapt setup/imports without weakening behavioral coverage. See
 [Testing](testing.md) for the full matrix and scope limitations.
 
 The [browser framework assessment](browser-framework-assessment.md) records the
-post-extraction decision and a contained future model-selector experiment.
+vanilla TypeScript direction and a deferred model-selector experiment.
 
 The session/model API slice now has explicit decoded response contracts. Server
 client-list projection and harness model normalization use this boundary; malformed
@@ -141,7 +142,7 @@ model identities are discarded. Client projection rejects malformed control
 fields per row, so a damaged history file cannot break the entire sidebar list.
 Missing capabilities remain optional, and thinking acknowledgements fall back
 to the validated requested level when a harness returns an unusable value.
-Browser response adoption is the next stage. This does not validate transcript
+The typed browser adapter consumes these contracts. This does not validate transcript
 content, every endpoint, or lifecycle authority.
 
 ## Browser build and API adapter
@@ -158,7 +159,11 @@ and decoded session-list/model reads and model/thinking/rename mutations.
 Selection/view guards remain with callers; typed mutation methods retain the
 captured host and route id. Enabled-model preferences retain server-local scope.
 Other response payloads and transcript content remain outside this API slice.
-The browser state store keeps its separate strict JSDoc check.
+The browser state store and its compile-only consumers use the same strict
+TypeScript build. `SelectionOwner` is exported directly from the typed store;
+the API adapter and model selector share that contract. The legacy standalone
+`public/session-state.js` script has been removed. State unit tests execute the
+generated browser bundle, matching the implementation loaded by the app.
 
 Model, thinking, rename and enabled-model sends use `sessionApi`; intercept
 `apiFetch` in integration tests for these operations, rather than `apiSend`.
@@ -167,4 +172,9 @@ type-only imports to avoid bundling a second copy of their runtime state.
 
 The model-selector DOM implementation is also strictly checked under
 `src/browser/`. Its view/actions interface and ordinary DOM baseline are
-[ready for a contained framework comparison](model-selector-baseline.md).
+[documented with a repeatable behavior and timing baseline](model-selector-baseline.md).
+
+Continue migrating coherent state, controller and DOM modules from `public/app.js`
+into `src/browser/`, preserving owner-bearing actions and explicit cleanup.
+Plain TypeScript is the current implementation choice. A leaf component pilot
+can be reconsidered separately if a concrete maintenance problem warrants it.

@@ -48,7 +48,7 @@ Each iteration asserts that the dropdown opens with the expected 187 visible
 rows and closes with zero children. Separate lifecycle
 assertions check callback cleanup; this is not a heap-leak measurement.
 
-Three development runs (2026-09-10), Chromium 153.0.8010.12, 1280×900,
+Three development runs at commit `7785282` (2026-09-10), Chromium 153.0.8010.12, 1280×900,
 Linux x64 on AMD Ryzen AI Max+ 395 (full-suite, focused-selector and standalone
 measurement runs, all with the open/row-count assertions):
 
@@ -63,13 +63,15 @@ measurement runs, all with the open/row-count assertions):
 These local headless results are a starting observation, not an adoption budget
 or evidence of phone performance. Repeat both implementations on the same
 machine/browser and use multiple runs to establish variability. The full
-browser bundle also contains the API adapter; compare its raw/gzip byte delta
-when a framework implementation is introduced.
+browser bundle at that commit also contains the API adapter. Later TypeScript
+extractions can move additional code into it, so use the same base commit when
+comparing asset bytes for a future framework experiment.
 
 ## Evaluation checkpoint
 
-The next change can implement the Preact version of this one boundary against
-the same view/actions, keeping the current implementation as the comparator.
+Vanilla TypeScript migration is the current work; the framework experiment is
+deferred. A later Preact pilot can implement this one boundary against the same
+view/actions, keeping the current implementation as the comparator.
 Before accepting it, run the behavior/ownership suites for both versions and
 compare component plus adapter complexity, asset bytes, repeated measurements,
 cleanup, desktop/mobile behavior and packaged local-asset delivery. Revisit

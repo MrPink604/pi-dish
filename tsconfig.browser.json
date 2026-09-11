@@ -9,14 +9,13 @@
     ],
     "types": [],
     "strict": true,
-    "allowJs": true,
-    "checkJs": false,
     "noEmit": true,
     "skipLibCheck": true,
     "verbatimModuleSyntax": true
   },
   "include": [
     "src/browser/**/*.ts",
-    "test/types/browser-api.ts"
+    "test/types/browser-api.ts",
+    "test/types/browser-state.ts"
   ]
 }
