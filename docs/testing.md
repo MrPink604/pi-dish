@@ -173,3 +173,5 @@ complete application coverage.
 `transcript.spec.js` covers tail/older/catch-up races, retained cache bounds, endpoint identity and disposal.
 
 `session-activity.spec.js` covers activity/abort gates, replacement questions and panel disposal.
+
+`prompt-delivery.spec.js` covers queue row and submit ownership, including replacement and disposal.

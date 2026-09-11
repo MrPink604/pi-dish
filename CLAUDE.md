@@ -2210,3 +2210,6 @@ requests before stashing, and preserve the later group anchor during prepend.
 
 Browser activity/abort gates and `/btw` panels use typed owners. Keep per-question
 response tokens separate from the session identity and dispose clipboard timers.
+
+Prompt delivery uses the typed optimistic ledger; queue rows capture raw text and
+endpoint identity. Do not mutate ledger internals from callers or tests.

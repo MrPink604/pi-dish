@@ -1811,301 +1811,23 @@ function migratePromptState(from, to) { composerDrafts.migrate(from, to); }
 function restorePromptToSession(id, message, images) { composerDrafts.restorePayload(id, message, images); }
 function navigateHistory(direction, input) { return composerDrafts.navigate(direction, input); }
 
-let clientPromptSequence = 0;
-const pendingOptimisticPrompts = new Map();
-
-function nextClientPromptId() {
-  clientPromptSequence += 1;
-  return `prompt-${Date.now().toString(36)}-${clientPromptSequence.toString(36)}`;
-}
-
-function discardOptimisticPrompt(clientPromptId) {
-  const pending = pendingOptimisticPrompts.get(clientPromptId);
-  if (!pending) return;
-  pendingOptimisticPrompts.delete(clientPromptId);
-  pending.element?.remove();
-}
-
-// The composer never sends the <session-refs> block — the server appends it —
-// so every echoed prompt has to be compared with the block stripped back off.
-// Comparison runs on the text blocks only: extractTextContent pads a phantom
-// '\n' per image block, which never equals the composer's trimmed text and so
-// let an image prompt's echo render as a second bubble.
-function consumePendingSelfEcho(sessionId, content) {
-  const text = splitSessionRefContext(extractTextBlocks(content)).text;
-  for (const [clientPromptId, pending] of pendingOptimisticPrompts) {
-    if (pending.sessionKey !== keyForSessionId(sessionId) || pending.message !== text) continue;
-    pendingOptimisticPrompts.delete(clientPromptId);
-    return true;
-  }
-  return false;
-}
-
-async function sendPrompt() {
-  const input = document.getElementById('promptInput');
-  const message = input.value.trim();
-  if (currentSessionSpawnId) {
-    if (message || composerDrafts.images.current().length) {
-      const starting = pendingSessionSpawns.has(currentSessionSpawnId);
-      setStatus(starting
-        ? 'Pi is still starting — your prompt is saved'
-        : 'Pi did not start — your prompt is preserved', starting ? 'working' : 'error');
-    }
-    return;
-  }
-  if ((!message && !composerDrafts.images.current().length) || !sessionState.currentSession) return;
-  const owner = sessionState.captureSelection();
-  const { id: sessionId, host: hostId } = owner;
-  const ownerKey = sessionRefKey(owner);
-  if (sessionActivity.isAborting(ownerKey)) {
-    setStatus('Wait for the current turn to finish stopping', 'working');
-    return;
-  }
-
-  if (message === '/tree') { input.value = ''; openTreeModal(); return; }
-  hideAutocomplete();
-
-  // Slash commands go to the command endpoint, never to the model as text.
-  if (message.startsWith('/')) {
-    // The bridge refuses a /compact while one runs (concurrent compactions
-    // race pi's message rewrite); fail fast here too so the composer text
-    // survives and the feedback is immediate.
-    if (sessionActivity.compacting && /^\/compact(\s|$)/.test(message)) {
-      setStatus('Compaction already in progress', 'error');
-      return;
-    }
-    input.value = '';
-    input.style.height = '';
-    recordPrompt(message, ownerKey);
-    clearDraft(ownerKey);
-    setStatus('Running ' + message.split(' ')[0] + '...', 'working');
-    // /btw's answer rides the command response, not the transcript: show the
-    // question panel immediately so a long side turn has visible pending UI.
-    const btwQuestion = message.match(/^\/btw\s+([\s\S]*)$/)?.[1]?.trim();
-    const btwOwner = btwQuestion ? showBtwPanel(btwQuestion) : null;
-    try {
-      const data = await apiSend(hostId, `/api/sessions/${encodeURIComponent(sessionId)}/command`, { message });
-      if (!sessionState.ownsSelection(owner)) return;
-      if (btwQuestion) {
-        if (typeof data.answer === 'string' && data.answer) resolveBtwPanel(data.answer, btwOwner);
-        else failBtwPanel('(no answer)', btwOwner);
-      }
-      setStatus(data.info || 'Done');
-      refreshSessions();
-    } catch (e) {
-      restorePromptToSession(ownerKey, message, null);
-      if (btwQuestion) failBtwPanel(e.message, btwOwner);
-      if (sessionState.ownsSelection(owner)) {
-        setStatus(`${message.split(' ')[0]}: ${e.message}`, 'error');
-      }
-    }
-    return;
-  }
-
-  input.value = '';
-  input.style.height = '';
-  recordPrompt(message, ownerKey);
-  clearDraft(ownerKey);
-  const images = takePendingImages();
-  const refs = sessionRefHints(message);
-  setStatus('Sending...', 'working');
-
-  const container = document.getElementById('messages');
-  const emptyState = container.querySelector('.empty-state');
-  if (emptyState) emptyState.remove();
-  const optimisticContent = [];
-  if (message) optimisticContent.push({ type: 'text', text: message });
-  for (const img of images || []) optimisticContent.push({ type: 'image', data: img.data, mimeType: img.mimeType });
-  const clientPromptId = nextClientPromptId();
-  const template = document.createElement('template');
-  template.innerHTML = renderUserMessage({
-    role: 'user', content: optimisticContent, timestamp: Date.now(), sessionRefs: refs,
-  }, formatTime(Date.now()), ` data-client-prompt-id="${clientPromptId}"`);
-  const optimisticElement = template.content.firstElementChild;
-  container.appendChild(optimisticElement);
-  // Arm the echo suppressor: pi re-emits this prompt as a user message_end
-  // when the turn starts, and we've already rendered it. '' is a valid value
-  // (images-only prompt). The stable id also lets queue Edit remove exactly
-  // this optimistic bubble even when several prompts have identical text.
-  pendingOptimisticPrompts.set(clientPromptId, {
-    clientPromptId, sessionId, sessionKey: ownerKey, message, element: optimisticElement, status: 'sending',
-  });
-  followStream = true; // sending means: follow the stream from here on
-  scrollToBottom(container);
-
-  setTurnInProgress(true);
-
-  try {
-    const body = images ? { message, images } : { message };
-    if (refs.length) body.refs = refs;
-    const resp = await apiSend(hostId, `/api/sessions/${encodeURIComponent(sessionId)}/prompt`, body);
-    const pending = pendingOptimisticPrompts.get(clientPromptId);
-    if (pending) pending.status = resp?.result?.queued ? 'queued' : 'accepted';
-    if (!sessionState.ownsSelection(owner)) return;
-    if (resp?.result?.queued) {
-      // Held by the bridge until compaction finishes; no turn is running yet.
-      // Raise the compacting indicator before undoing the optimistic
-      // "Working" badge so the turn-off path doesn't blank the strip/status.
-      setCompacting(true);
-      setTurnInProgress(false);
-      setStatus('Queued — will send when compaction finishes', 'working');
-      renderQueueStatus(lastQueueData);
-    } else {
-      setStatus('Waiting for response...', 'working');
-    }
-  } catch (e) {
-    discardOptimisticPrompt(clientPromptId); // no echo is coming for a failed send
-    restorePromptToSession(ownerKey, message, images);
-    if (sessionState.ownsSelection(owner)) {
-      setStatus(`Error: ${e.message}`, 'error');
-      setTurnInProgress(false);
-    }
-  }
-}
+const promptDelivery = PiDishBrowser.createPromptDelivery({ document, sessionState, request: (...args) => apiFetch(...args), endpoint: resolveHost,
+  restore: (key, text) => restorePromptToSession(key, text, null), status: (message, type) => setStatus(message, type),
+});
+function discardOptimisticPrompt(id) { promptDelivery.discard(id); }
+function consumePendingSelfEcho(id, content) { return promptDelivery.consume(keyForSessionId(id), content); }
+function sendPrompt() { return composerSubmit.sendPrompt(); }
 
 const sessionActivity = PiDishBrowser.createSessionActivity({ document, sessionState, clearQueue: () => renderQueueStatus(null), status: message => setStatus(message) });
 function updateWorkingIndicator() { sessionActivity.update(); }
 function setTurnInProgress(active) { sessionActivity.setTurn(!!active); }
 function setCompacting(active) { sessionActivity.setCompacting(!!active); }
 
-// Steer and follow-up share everything but the endpoint and status strings.
-async function sendQueuedMessage(kind) {
-  const steer = kind === 'steer';
-  const input = document.getElementById('promptInput');
-  const message = input.value.trim();
-  if (currentSessionSpawnId) {
-    if (message || composerDrafts.images.current().length) {
-      const starting = pendingSessionSpawns.has(currentSessionSpawnId);
-      setStatus(starting
-        ? 'Pi is still starting — your prompt is saved'
-        : 'Pi did not start — your prompt is preserved', starting ? 'working' : 'error');
-    }
-    return;
-  }
-  if ((!message && !composerDrafts.images.current().length) || !sessionState.currentSession || !sessionState.currentSession.isActive) return;
-  const owner = sessionState.captureSelection();
-  const { id: sessionId, host: hostId } = owner;
-  const ownerKey = sessionRefKey(owner);
-  if (sessionActivity.isAborting(ownerKey)) {
-    setStatus('Wait for the current turn to finish stopping', 'working');
-    return;
-  }
-
-  input.value = '';
-  input.style.height = '';
-  recordPrompt(message, ownerKey);
-  clearDraft(ownerKey);
-  const images = takePendingImages();
-  setStatus(steer ? 'Steering...' : 'Queueing follow-up...', 'working');
-
-  const body = steer ? { message } : { message, deliverAs: 'followUp' };
-  if (images) body.images = images;
-  const refs = sessionRefHints(message);
-  if (refs.length) body.refs = refs;
-  try {
-    const resp = await apiSend(hostId, `/api/sessions/${encodeURIComponent(sessionId)}${steer ? '/steer' : '/prompt'}`, body);
-    if (!sessionState.ownsSelection(owner)) return;
-    if (resp?.result?.queued) setStatus('Queued — will send when compaction finishes');
-    else setStatus(steer ? 'Steered' : 'Queued for after this turn');
-  } catch (e) {
-    restorePromptToSession(ownerKey, message, images);
-    if (sessionState.ownsSelection(owner)) {
-      setStatus(`${steer ? 'Steer' : 'Follow-up'} failed: ${e.message}`, 'error');
-    }
-  }
-}
-
-function sendSteer() { return sendQueuedMessage('steer'); }
-function sendFollowUp() { return sendQueuedMessage('followUp'); }
-
-// Pending steering/follow-up queue strip (from queue_update events, including
-// messages typed in the TUI). Always visible above the composer while the
-// queue is non-empty; each row's Edit button pulls the message back out of
-// pi's queue and into the composer.
-var lastQueueData = null;
-
-function renderQueueStatus(data) {
-  lastQueueData = data;
-  const panel = document.getElementById('queuePanel');
-  if (!panel) return;
-  const steering = data?.steering || [];
-  const followUp = data?.followUp || [];
-  if (!steering.length && !followUp.length) {
-    panel.style.display = 'none';
-    panel.innerHTML = '';
-    return;
-  }
-  const rows = [];
-  const associated = new Set();
-  // pi's queue holds what the server sent, block and all; the strip and the
-  // composer only ever deal in the text as it was typed.
-  const row = (kind, label, raw, index) => {
-    const text = splitSessionRefContext(raw).text;
-    let clientPromptId = null;
-    for (const [id, pending] of pendingOptimisticPrompts) {
-      if (associated.has(id) || pending.sessionKey !== sessionRefKey(sessionState.currentSession) ||
-          pending.status !== 'queued' || pending.message !== text) continue;
-      clientPromptId = id;
-      associated.add(id);
-      break;
-    }
-    rows.push(queueRowHtml(kind, label, text, index, clientPromptId));
-  };
-  steering.forEach((text, i) => row('steering', 'steer', text, i));
-  followUp.forEach((text, i) => row('followUp', 'follow-up', text, i));
-  panel.innerHTML = rows.join('');
-  panel.style.display = '';
-}
-
-function queueRowHtml(kind, label, text, index, clientPromptId = null) {
-  const clientAttr = clientPromptId ? ` data-client-prompt-id="${escapeHtml(clientPromptId)}"` : '';
-  const edit = sessionSupports(sessionState.currentSession, 'queueCancel')
-    ? '<button class="queue-item-edit" onclick="editQueuedMessage(this)" title="Remove from queue and edit">↩ Edit</button>' : '';
-  return `<div class="queue-item" data-kind="${kind}" data-index="${index}"${clientAttr}>
-    <span class="queue-item-kind">${label}</span>
-    <span class="queue-item-text" onclick="this.classList.toggle('expanded')" title="Click to expand">${escapeHtml(text)}</span>
-    ${edit}
-  </div>`;
-}
-
-// Cancel a queued message on the bridge and return its text to the composer.
-async function editQueuedMessage(btn) {
-  if (!sessionState.currentSession) return;
-  const owner = sessionState.captureSelection();
-  const { id: sessionId, host: hostId } = owner;
-  const ownerKey = sessionRefKey(owner);
-  const row = btn.closest('.queue-item');
-  if (!row) return;
-  const kind = row.dataset.kind;
-  const index = Number(row.dataset.index);
-  // Cancelling keys on pi's own queue entry, so it needs the text pi holds —
-  // the rendered row shows the stripped form. lastQueueData is the same
-  // snapshot the row was rendered from.
-  const raw = (lastQueueData?.[kind] || [])[index];
-  const text = typeof raw === 'string' && raw
-    ? raw
-    : (row.querySelector('.queue-item-text')?.textContent || '');
-  const clientPromptId = row.dataset.clientPromptId || null;
-  if (!text) return;
-  const clientPrompt = clientPromptId ? pendingOptimisticPrompts.get(clientPromptId) : null;
-  const previousPromptStatus = clientPrompt?.status;
-  // queue_update can arrive before the cancel HTTP response. Exclude the row
-  // being edited from duplicate-text reassociation while cancellation is in
-  // flight, so a remaining identical prompt keeps its own client id.
-  if (clientPrompt) clientPrompt.status = 'cancelling';
-  try {
-    await apiSend(hostId, `/api/sessions/${encodeURIComponent(sessionId)}/queue/cancel`, { kind, index, text });
-    if (clientPromptId) discardOptimisticPrompt(clientPromptId);
-    restorePromptToSession(ownerKey, splitSessionRefContext(text).text, null);
-    // The follow-up queue_update reconciles the strip; no manual removal needed.
-  } catch (e) {
-    if (clientPrompt && pendingOptimisticPrompts.has(clientPromptId)) {
-      clientPrompt.status = previousPromptStatus;
-      renderQueueStatus(lastQueueData);
-    }
-    if (sessionState.ownsSelection(owner)) setStatus(e.message, 'error');
-  }
-}
+function sendQueuedMessage(kind) { return composerSubmit.sendQueuedMessage(kind); }
+function sendSteer() { return composerSubmit.sendSteer(); }
+function sendFollowUp() { return composerSubmit.sendFollowUp(); }
+function renderQueueStatus(data) { promptDelivery.render(data); }
+function editQueuedMessage(button) { return promptDelivery.edit(button); }
 
 // ---------------------------------------------------------------------------
 // /btw panel — ephemeral side question (OMP). The answer never lands in the
@@ -2120,27 +1842,12 @@ function failBtwPanel(error, owner) { btwPanel.fail(error, owner); }
 function closeBtwPanel() { btwPanel.close(); }
 function copyBtwAnswer(button) { return btwPanel.copy(button); }
 
-async function abortTurn() {
-  // Compaction counts: the bridge cancels a running compaction on abort, and
-  // its compaction_end (aborted) event clears the compacting indicator.
-  if (!sessionState.currentSession || (!sessionActivity.turn && !sessionActivity.compacting)) return;
-  const owner = sessionState.captureSelection();
-  const { id: sessionId, host: hostId } = owner;
-  const ownerKey = sessionRefKey(owner);
-  if (sessionActivity.isAborting(ownerKey)) return;
-  const abortOwner = sessionActivity.beginAbort(ownerKey);
-  if (!abortOwner) return;
-  setStatus('Stopping...', 'working');
-  try {
-    await apiSend(hostId, '/api/sessions/' + encodeURIComponent(sessionId) + '/abort');
-    // HTTP acknowledgement only means the abort request was accepted. Keep
-    // the turn owned by the stream until turn_end/agent_end performs cleanup
-    // and JSONL catch-up.
-  } catch (e) {
-    sessionActivity.endAbort(ownerKey, abortOwner);
-    if (sessionState.ownsSelection(owner)) setStatus('Stop failed: ' + e.message, 'error');
-  }
-}
+const composerSubmit = PiDishBrowser.createComposerSubmit({ document, sessionState, drafts: composerDrafts, delivery: promptDelivery, activity: sessionActivity, btw: btwPanel,
+  request: (...args) => apiFetch(...args), endpoint: resolveHost, spawnId: () => currentSessionSpawnId, spawnPending: () => pendingSessionSpawns.has(currentSessionSpawnId),
+  refs: message => sessionRefHints(message), status: (message, type) => setStatus(message, type), openTree: () => openTreeModal(), hideAutocomplete: () => hideAutocomplete(),
+  refresh: () => refreshSessions(), follow: () => { followStream = true; }, scroll: scrollToBottom, renderUser: (message, time, attrs) => renderUserMessage(message, time, attrs),
+});
+function abortTurn() { return composerSubmit.abortTurn(); }
 
 const pendingSessionSpawns = PiDishBrowser.createSessionSpawns({
   request: apiFetch, delay: () => new Promise(resolve => setTimeout(resolve, 250)), harnessLabel,

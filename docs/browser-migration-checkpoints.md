@@ -881,3 +881,18 @@ Verification: strict checks, 936 backend tests, 257 browser tests, all independe
 UI scenarios and full desktop/mobile smoke passed. Five browser cases and strict
 contracts cover compaction/turn overlap, ticker disposal, abort gate reuse,
 replacement questions and clipboard/disposal ownership. Fable reviews before push.
+
+## Checkpoint 40 — composer delivery
+
+Moved prompt/command/steer/follow-up/abort submission and the optimistic echo/queue
+ledger into two strict modules. Mutations capture endpoint and selection; feedback
+has a request sequence while failed payloads return to the original draft. Queue
+rows retain raw cancellation text, host endpoint, generation and prompt identity.
+Replaced controls are inert, repeated cancellation is serialized and disposal
+retires response effects. Legacy smoke instrumentation now uses the typed request
+boundary and ledger writers instead of mutating the former pending Map.
+
+Verification: strict checks, 936 backend tests, 262 browser tests, all independent
+UI scenarios and full desktop/mobile smoke passed. Five new browser cases and
+strict contracts cover malformed queues, detached controls, endpoint/disposal
+ownership and overlapping side commands. Fable review and push remain pending.

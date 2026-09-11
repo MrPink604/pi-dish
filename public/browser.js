@@ -41,6 +41,7 @@ var PiDishBrowser = (() => {
     createComposerImages: () => createComposerImages,
     createComposerNotes: () => createComposerNotes,
     createComposerSpeech: () => createComposerSpeech,
+    createComposerSubmit: () => createComposerSubmit,
     createCwdAutocomplete: () => createCwdAutocomplete,
     createDiagrams: () => createDiagrams,
     createDirectoryCatalog: () => createDirectoryCatalog,
@@ -65,6 +66,7 @@ var PiDishBrowser = (() => {
     createNewSessionConfigPreview: () => createNewSessionConfigPreview,
     createNewSessionPreferences: () => createNewSessionPreferences,
     createPanelResize: () => createPanelResize,
+    createPromptDelivery: () => createPromptDelivery,
     createRecovery: () => createRecovery,
     createResponseDetails: () => createResponseDetails,
     createRichText: () => createRichText,
@@ -115,6 +117,7 @@ var PiDishBrowser = (() => {
     decodeMessageUsage: () => decodeMessageUsage,
     decodeModelCatalog: () => decodeModelCatalog,
     decodePublishedPages: () => decodePublishedPages,
+    decodeQueueData: () => decodeQueueData,
     decodeRecoveryMode: () => decodeRecoveryMode,
     decodeRecoveryReport: () => decodeRecoveryReport,
     decodeRenderMessage: () => decodeRenderMessage,
@@ -14987,6 +14990,13 @@ ${restored}`;
     }
     return "";
   }
+  function extractTextBlocks(content) {
+    if (!content) return "";
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) return "";
+    const blocks = content;
+    return blocks.filter((c) => typeof c === "string" || record8(c) && c.type === "text").map((c) => typeof c === "string" ? c : record8(c) && typeof c.text === "string" ? c.text : "").join("\n");
+  }
   function ipythonCodeSummary(code) {
     if (typeof code !== "string" || !code) return "";
     const m = /(?:^|[^A-Za-z0-9_])bash\(\s*(['"])((?:\\.|(?!\1).)*)\1/.exec(code);
@@ -16310,6 +16320,331 @@ ${restored}`;
       disposed = true;
     }
     return { show, resolve, fail, close, copy, owns, dispose };
+  }
+
+  // src/browser/prompt-delivery.ts
+  function decodeQueueData(value) {
+    const strings = (items) => Array.isArray(items) ? items.filter((item) => typeof item === "string") : [];
+    return { steering: strings(record8(value) ? value.steering : null), followUp: strings(record8(value) ? value.followUp : null) };
+  }
+  function createPromptDelivery(options2) {
+    const { document: document2, sessionState } = options2, pending = /* @__PURE__ */ new Map();
+    const panel = document2.getElementById("queuePanel");
+    let sequence = 0, generation = 0, disposed = false, events = new AbortController();
+    let data = decodeQueueData(null);
+    const rows = /* @__PURE__ */ new WeakMap(), cancelling = /* @__PURE__ */ new Set();
+    function add(key, message3, element, id = nextId()) {
+      if (!disposed) pending.set(id, { key, message: message3, element, status: "sending" });
+      return id;
+    }
+    function nextId() {
+      return `prompt-${Date.now().toString(36)}-${(++sequence).toString(36)}`;
+    }
+    function acknowledge(id, queued) {
+      const entry = pending.get(id);
+      if (entry && entry.status === "sending") entry.status = queued ? "queued" : "accepted";
+    }
+    function discard(id) {
+      const entry = pending.get(id);
+      if (!entry) return;
+      pending.delete(id);
+      entry.element?.remove();
+    }
+    function consume(key, content) {
+      const text17 = splitSessionRefContext(extractTextBlocks(content)).text;
+      for (const [id, entry] of pending) {
+        if (entry.key === key && entry.message === text17) {
+          pending.delete(id);
+          return true;
+        }
+      }
+      return false;
+    }
+    function canCancelQueue() {
+      const caps = sessionState.currentSession?.capabilities;
+      return !record8(caps) || caps.queueCancel !== false;
+    }
+    function owns(row) {
+      return !disposed && row.generation === generation && sessionState.ownsSelection(row.owner) && options2.endpoint(row.owner.host).base === row.endpoint.base;
+    }
+    function render(value) {
+      if (disposed) return;
+      data = decodeQueueData(value);
+      generation++;
+      events.abort();
+      events = new AbortController();
+      panel.innerHTML = "";
+      panel.style.display = "none";
+      const owner = sessionState.captureSelection();
+      if (!owner) return;
+      const endpoint = Object.freeze({ ...options2.endpoint(owner.host) }), key = sessionRefKey(owner), associated = /* @__PURE__ */ new Set();
+      const canCancel = canCancelQueue();
+      for (const kind of ["steering", "followUp"]) data[kind].forEach((text17, index) => {
+        const stripped = splitSessionRefContext(text17).text;
+        let clientId = null;
+        for (const [id, entry] of pending) {
+          if (!associated.has(id) && entry.key === key && entry.status === "queued" && entry.message === stripped) {
+            clientId = id;
+            associated.add(id);
+            break;
+          }
+        }
+        const element = document2.createElement("div");
+        element.className = "queue-item";
+        element.dataset.kind = kind;
+        element.dataset.index = String(index);
+        if (clientId) element.dataset.clientPromptId = clientId;
+        element.innerHTML = `<span class="queue-item-kind">${kind === "steering" ? "steer" : "follow-up"}</span><span class="queue-item-text" title="Click to expand">${escapeHtml(stripped)}</span>${canCancel ? '<button class="queue-item-edit" title="Remove from queue and edit">\u21A9 Edit</button>' : ""}`;
+        const row = Object.freeze({ owner, endpoint, generation, kind, index, text: text17, clientId });
+        rows.set(element, row);
+        const label = element.querySelector(".queue-item-text");
+        label.addEventListener("click", () => {
+          if (owns(row)) label.classList.toggle("expanded");
+        }, { signal: events.signal });
+        const button = element.querySelector(".queue-item-edit");
+        button?.addEventListener("click", () => {
+          void edit(button);
+        }, { signal: events.signal });
+        panel.append(element);
+      });
+      if (panel.childElementCount) panel.style.display = "";
+    }
+    async function edit(button) {
+      const element = button.closest(".queue-item"), row = element && rows.get(element);
+      if (!row || !owns(row) || !panel.contains(button) || cancelling.has(row) || !row.text || !canCancelQueue()) return;
+      cancelling.add(row);
+      const prompt = row.clientId ? pending.get(row.clientId) : void 0, previous = prompt?.status;
+      if (prompt) prompt.status = "cancelling";
+      if (button instanceof HTMLButtonElement) button.disabled = true;
+      try {
+        await sendJson(options2.request, Object.freeze({ ...options2.endpoint(row.owner.host) }), `/api/sessions/${encodeURIComponent(row.owner.id)}/queue/cancel`, { kind: row.kind, index: row.index, text: row.text });
+        if (disposed) return;
+        if (row.clientId) discard(row.clientId);
+        options2.restore(sessionRefKey(row.owner), splitSessionRefContext(row.text).text);
+      } catch (error) {
+        if (disposed) return;
+        if (prompt && row.clientId && pending.get(row.clientId) === prompt && previous) prompt.status = previous;
+        if (sessionState.ownsSelection(row.owner) && options2.endpoint(row.owner.host).base === row.endpoint.base) {
+          render(data);
+          options2.status(error instanceof Error ? error.message : String(error), "error");
+        }
+      } finally {
+        cancelling.delete(row);
+        if (owns(row) && button instanceof HTMLButtonElement) button.disabled = false;
+      }
+    }
+    function dispose() {
+      if (disposed) return;
+      disposed = true;
+      generation++;
+      events.abort();
+      pending.clear();
+      cancelling.clear();
+    }
+    return { add, nextId, acknowledge, discard, consume, render, edit, dispose, has: (id) => pending.has(id), get queue() {
+      return data;
+    } };
+  }
+
+  // src/browser/composer-submit.ts
+  function createComposerSubmit(options2) {
+    const { document: document2, sessionState, delivery, drafts: composerDrafts, activity: sessionActivity, btw: btwPanel } = options2;
+    let disposed = false, feedbackSequence = 0;
+    async function send(endpoint, path, body) {
+      const value = await sendJson(options2.request, endpoint, path, body), data = record8(value) ? value : {};
+      return { info: typeof data.info === "string" ? data.info : "", answer: typeof data.answer === "string" ? data.answer : "", result: { queued: record8(data.result) && data.result.queued === true } };
+    }
+    async function sendPrompt() {
+      const input = document2.getElementById("promptInput");
+      if (disposed) return;
+      const message3 = input.value.trim();
+      if (options2.spawnId()) {
+        if (message3 || composerDrafts.images.current().length) {
+          const starting = options2.spawnPending();
+          options2.status(starting ? "Pi is still starting \u2014 your prompt is saved" : "Pi did not start \u2014 your prompt is preserved", starting ? "working" : "error");
+        }
+        return;
+      }
+      if (!message3 && !composerDrafts.images.current().length || !sessionState.currentSession) return;
+      const owner = sessionState.captureSelection();
+      if (!owner || disposed) return;
+      const endpoint = Object.freeze({ ...options2.endpoint(owner.host) }), sequence = ++feedbackSequence;
+      const owns = () => !disposed && sequence === feedbackSequence && sessionState.ownsSelection(owner) && options2.endpoint(owner.host).base === endpoint.base;
+      const { id: sessionId } = owner;
+      const ownerKey = sessionRefKey(owner);
+      if (sessionActivity.isAborting(ownerKey)) {
+        options2.status("Wait for the current turn to finish stopping", "working");
+        return;
+      }
+      if (message3 === "/tree") {
+        input.value = "";
+        options2.openTree();
+        return;
+      }
+      options2.hideAutocomplete();
+      if (message3.startsWith("/")) {
+        if (sessionActivity.compacting && /^\/compact(\s|$)/.test(message3)) {
+          options2.status("Compaction already in progress", "error");
+          return;
+        }
+        input.value = "";
+        input.style.height = "";
+        composerDrafts.record(message3, ownerKey);
+        composerDrafts.clearDraft(ownerKey);
+        options2.status("Running " + message3.split(" ")[0] + "...", "working");
+        const btwQuestion = message3.match(/^\/btw\s+([\s\S]*)$/)?.[1]?.trim();
+        const btwOwner = btwQuestion ? btwPanel.show(btwQuestion) : null;
+        try {
+          const data = await send(endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/command`, { message: message3 });
+          if (disposed || !sessionState.ownsSelection(owner) || options2.endpoint(owner.host).base !== endpoint.base) return;
+          if (btwQuestion) {
+            if (typeof data.answer === "string" && data.answer) btwPanel.resolve(data.answer, btwOwner);
+            else btwPanel.fail("(no answer)", btwOwner);
+          }
+          if (owns()) options2.status(data.info || "Done");
+          options2.refresh();
+        } catch (error) {
+          if (disposed) return;
+          const e = { message: error instanceof Error ? error.message : String(error) };
+          composerDrafts.restorePayload(ownerKey, message3, null);
+          if (btwQuestion && options2.endpoint(owner.host).base === endpoint.base) btwPanel.fail(e.message, btwOwner);
+          if (owns()) {
+            options2.status(`${message3.split(" ")[0]}: ${e.message}`, "error");
+          }
+        }
+        return;
+      }
+      input.value = "";
+      input.style.height = "";
+      composerDrafts.record(message3, ownerKey);
+      composerDrafts.clearDraft(ownerKey);
+      const images = composerDrafts.images.take();
+      const refs = options2.refs(message3);
+      options2.status("Sending...", "working");
+      const container = document2.getElementById("messages");
+      const emptyState = container.querySelector(".empty-state");
+      if (emptyState) emptyState.remove();
+      const optimisticContent = [];
+      if (message3) optimisticContent.push({ type: "text", text: message3 });
+      for (const img of images || []) optimisticContent.push({ type: "image", data: img.data, mimeType: img.mimeType });
+      const clientPromptId = delivery.nextId();
+      const template = document2.createElement("template");
+      template.innerHTML = options2.renderUser({
+        role: "user",
+        content: optimisticContent,
+        timestamp: Date.now(),
+        sessionRefs: refs
+      }, formatTime(Date.now()), ` data-client-prompt-id="${clientPromptId}"`);
+      const optimisticElement = template.content.firstElementChild;
+      if (optimisticElement) container.appendChild(optimisticElement);
+      delivery.add(ownerKey, message3, optimisticElement, clientPromptId);
+      options2.follow();
+      options2.scroll(container);
+      sessionActivity.setTurn(true);
+      try {
+        const body = images ? { message: message3, images } : { message: message3 };
+        if (refs.length) body.refs = refs;
+        const resp = await send(endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/prompt`, body);
+        if (!disposed) delivery.acknowledge(clientPromptId, !!resp.result?.queued);
+        if (!owns()) return;
+        if (resp?.result?.queued) {
+          sessionActivity.setCompacting(true);
+          sessionActivity.setTurn(false);
+          options2.status("Queued \u2014 will send when compaction finishes", "working");
+          delivery.render(delivery.queue);
+        } else {
+          options2.status("Waiting for response...", "working");
+        }
+      } catch (error) {
+        if (disposed) return;
+        const e = { message: error instanceof Error ? error.message : String(error) };
+        delivery.discard(clientPromptId);
+        composerDrafts.restorePayload(ownerKey, message3, images);
+        if (owns()) {
+          options2.status(`Error: ${e.message}`, "error");
+          sessionActivity.setTurn(false);
+        }
+      }
+    }
+    async function sendQueuedMessage(kind) {
+      const steer = kind === "steer";
+      const input = document2.getElementById("promptInput");
+      if (disposed) return;
+      const message3 = input.value.trim();
+      if (options2.spawnId()) {
+        if (message3 || composerDrafts.images.current().length) {
+          const starting = options2.spawnPending();
+          options2.status(starting ? "Pi is still starting \u2014 your prompt is saved" : "Pi did not start \u2014 your prompt is preserved", starting ? "working" : "error");
+        }
+        return;
+      }
+      if (!message3 && !composerDrafts.images.current().length || !sessionState.currentSession || !sessionState.currentSession.isActive) return;
+      const owner = sessionState.captureSelection();
+      if (!owner || disposed) return;
+      const endpoint = Object.freeze({ ...options2.endpoint(owner.host) }), sequence = ++feedbackSequence;
+      const owns = () => !disposed && sequence === feedbackSequence && sessionState.ownsSelection(owner) && options2.endpoint(owner.host).base === endpoint.base;
+      const { id: sessionId } = owner;
+      const ownerKey = sessionRefKey(owner);
+      if (sessionActivity.isAborting(ownerKey)) {
+        options2.status("Wait for the current turn to finish stopping", "working");
+        return;
+      }
+      input.value = "";
+      input.style.height = "";
+      composerDrafts.record(message3, ownerKey);
+      composerDrafts.clearDraft(ownerKey);
+      const images = composerDrafts.images.take();
+      options2.status(steer ? "Steering..." : "Queueing follow-up...", "working");
+      const body = steer ? { message: message3 } : { message: message3, deliverAs: "followUp" };
+      if (images) body.images = images;
+      const refs = options2.refs(message3);
+      if (refs.length) body.refs = refs;
+      try {
+        const resp = await send(endpoint, `/api/sessions/${encodeURIComponent(sessionId)}${steer ? "/steer" : "/prompt"}`, body);
+        if (!owns()) return;
+        if (resp?.result?.queued) options2.status("Queued \u2014 will send when compaction finishes");
+        else options2.status(steer ? "Steered" : "Queued for after this turn");
+      } catch (error) {
+        if (disposed) return;
+        const e = { message: error instanceof Error ? error.message : String(error) };
+        composerDrafts.restorePayload(ownerKey, message3, images);
+        if (owns()) {
+          options2.status(`${steer ? "Steer" : "Follow-up"} failed: ${e.message}`, "error");
+        }
+      }
+    }
+    function sendSteer() {
+      return sendQueuedMessage("steer");
+    }
+    function sendFollowUp() {
+      return sendQueuedMessage("followUp");
+    }
+    async function abortTurn() {
+      if (disposed) return;
+      if (!sessionState.currentSession || !sessionActivity.turn && !sessionActivity.compacting) return;
+      const owner = sessionState.captureSelection();
+      if (!owner || disposed) return;
+      const endpoint = Object.freeze({ ...options2.endpoint(owner.host) }), sequence = ++feedbackSequence;
+      const owns = () => !disposed && sequence === feedbackSequence && sessionState.ownsSelection(owner) && options2.endpoint(owner.host).base === endpoint.base;
+      const { id: sessionId } = owner;
+      const ownerKey = sessionRefKey(owner);
+      if (sessionActivity.isAborting(ownerKey)) return;
+      const abortOwner = sessionActivity.beginAbort(ownerKey);
+      if (!abortOwner) return;
+      options2.status("Stopping...", "working");
+      try {
+        await send(endpoint, "/api/sessions/" + encodeURIComponent(sessionId) + "/abort");
+      } catch (error) {
+        if (disposed) return;
+        const e = { message: error instanceof Error ? error.message : String(error) };
+        sessionActivity.endAbort(ownerKey, abortOwner);
+        if (owns()) options2.status("Stop failed: " + e.message, "error");
+      }
+    }
+    return { sendPrompt, sendQueuedMessage, sendSteer, sendFollowUp, abortTurn, dispose() {
+      disposed = true;
+      feedbackSequence++;
+    } };
   }
   return __toCommonJS(index_exports);
 })();

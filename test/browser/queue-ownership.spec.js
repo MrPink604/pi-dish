@@ -22,7 +22,7 @@ test('identical queued prompts retain their own bubbles and cancellation owner',
   await route.fulfill({ json: { success: true } });
   await page.evaluate(() => window.editRequest);
   await expect(page.locator('#promptInput')).toHaveValue('self work');
-  expect(await page.evaluate(ids => [pendingOptimisticPrompts.has(ids.self), pendingOptimisticPrompts.has(ids.peer)], ids)).toEqual([true, false]);
+  expect(await page.evaluate(ids => [promptDelivery.has(ids.self), promptDelivery.has(ids.peer)], ids)).toEqual([true, false]);
   await fleet.select(fleet.peer);
   await expect(page.locator('#promptInput')).toHaveValue('identical queued message');
 });
@@ -37,7 +37,7 @@ test('a peer echo cannot consume the selected host-independent pending prompt', 
   await page.waitForFunction(() => messageStream?.readyState === 1);
   fleet.peer.emit('message_end', { message: { role: 'user', content: 'shared echo text' } });
   await expect(page.locator('#messages')).toContainText('shared echo text');
-  expect(await page.evaluate(id => pendingOptimisticPrompts.has(id), id)).toBe(true);
+  expect(await page.evaluate(id => promptDelivery.has(id), id)).toBe(true);
 });
 
 test('stopping one host does not block stopping its same-id peer', async ({ page, fleet }) => {

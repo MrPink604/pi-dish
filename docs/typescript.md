@@ -471,3 +471,7 @@ the outgoing transcript’s cursors. Replaced paging controls remain inert.
 `session-activity.ts` owns turn/compaction flags, working timers and abort gates.
 `btw-panel.ts` gives each ephemeral question its own response/control lifetime;
 late answers, errors and clipboard feedback cannot alter a replacement question.
+
+`composer-submit.ts` owns captured sends, commands, queued messages and aborts.
+`prompt-delivery.ts` owns optimistic prompt associations and rendered queue rows;
+cancellation preserves raw server text and restores the originating composer.

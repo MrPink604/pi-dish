@@ -2547,17 +2547,18 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.evaluate(({ a, image }) => {
       composerDrafts.images.replace(composerDrafts.key, [{ data: image, mimeType: 'image/png' }]);
       renderAttachmentStrip();
-      const realApiSend = apiSend;
-      window.__auditRealApiSend = realApiSend;
-      apiSend = (host, url, ...args) => {
+      const realApiFetch = apiFetch;
+      window.__auditRealApiFetch = realApiFetch;
+      apiFetch = (host, url, ...args) => {
         if (url === `/api/sessions/${a}/prompt`) {
           return new Promise((resolve, reject) => {
             window.__rejectAuditPrompt = () => reject(new Error('audit send failure'));
           });
         }
-        return realApiSend(host, url, ...args);
+        return realApiFetch(host, url, ...args);
       };
       window.__auditFailedPrompt = sendPrompt();
+      window.__auditFailedPromptId = document.querySelector('#messages [data-client-prompt-id]:last-child')?.dataset.clientPromptId;
     }, { a: SESSION_ID, image: TINY_PNG });
     await desktop.waitForFunction(() => typeof window.__rejectAuditPrompt === 'function' &&
       document.querySelector('[data-client-prompt-id]'));
@@ -2565,13 +2566,13 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.evaluate(async () => {
       window.__rejectAuditPrompt();
       await window.__auditFailedPrompt;
-      apiSend = window.__auditRealApiSend;
+      apiFetch = window.__auditRealApiFetch;
     });
     const failedOwnership = await desktop.evaluate((a) => ({
       currentText: document.getElementById('promptInput').value,
       originDraft: localStorage.getItem(draftKey(a)),
       originImages: composerDrafts.images.stored(keyForSessionId(a)).length || 0,
-      pendingMatch: [...pendingOptimisticPrompts.values()].some((p) => p.message === 'failed prompt from A'),
+      pendingMatch: promptDelivery.has(window.__auditFailedPromptId),
     }), SESSION_ID);
     check(!failedOwnership.currentText.includes('failed prompt from A') &&
       failedOwnership.originDraft === 'failed prompt from A' && failedOwnership.originImages === 1 &&
@@ -2600,21 +2601,20 @@ let remoteHost = null; // second pi-dish (multi-host section)
         el.dataset.clientPromptId = id;
         el.textContent = 'duplicate buffered prompt';
         container.appendChild(el);
-        pendingOptimisticPrompts.set(id, {
-          clientPromptId: id, sessionId: a, sessionKey: keyForSessionId(a), message: 'duplicate buffered prompt', element: el, status: 'queued',
-        });
+        promptDelivery.add(keyForSessionId(a), 'duplicate buffered prompt', el, id);
+        promptDelivery.acknowledge(id, true);
         return el;
       };
       window.__auditQueuedFirst = makePending('audit-buffered-first');
       window.__auditQueuedSecond = makePending('audit-buffered-second');
       renderQueueStatus({ followUp: ['duplicate buffered prompt'] });
-      const realApiSend = apiSend;
-      window.__auditRealApiSend = realApiSend;
-      apiSend = (host, url, ...args) => {
+      const realApiFetch = apiFetch;
+      window.__auditRealApiFetch = realApiFetch;
+      apiFetch = (host, url, ...args) => {
         if (url.endsWith('/queue/cancel')) {
-          return new Promise((resolve) => { window.__resolveAuditQueueEdit = () => resolve({ success: true }); });
+          return new Promise((resolve) => { window.__resolveAuditQueueEdit = () => resolve(new Response(JSON.stringify({ success: true }))); });
         }
-        return realApiSend(host, url, ...args);
+        return realApiFetch(host, url, ...args);
       };
       const row = document.querySelector('.queue-item');
       window.__auditQueueAssociation = row.dataset.clientPromptId;
@@ -2632,13 +2632,13 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.evaluate(async () => {
       window.__resolveAuditQueueEdit();
       await window.__auditQueueEdit;
-      apiSend = window.__auditRealApiSend;
+      apiFetch = window.__auditRealApiFetch;
     });
     const queueOwnership = await desktop.evaluate((a) => ({
       currentText: document.getElementById('promptInput').value,
       originDraft: localStorage.getItem(draftKey(a)),
-      firstPending: pendingOptimisticPrompts.has('audit-buffered-first'),
-      secondPending: pendingOptimisticPrompts.has('audit-buffered-second'),
+      firstPending: promptDelivery.has('audit-buffered-first'),
+      secondPending: promptDelivery.has('audit-buffered-second'),
       firstRemoved: window.__auditQueuedFirst.parentNode === null,
       secondRetained: window.__auditQueuedSecond.parentNode !== null,
     }), SESSION_ID);
