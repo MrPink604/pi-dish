@@ -290,7 +290,6 @@ try {
     if (key?.startsWith('pi-dish-draft-spawn:')) localStorage.removeItem(key);
   }
 } catch {}
-let sessionRelationsSeq = 0;
 const RESPONSE_MODE_KEY = 'pi-dish-response-metadata';
 const RESPONSE_MODES = new Set(['hidden', 'compact', 'performance', 'performance-cost']);
 let responseMetadataMode = RESPONSE_MODES.has(localStorage.getItem(RESPONSE_MODE_KEY)) ? localStorage.getItem(RESPONSE_MODE_KEY) : 'compact';
@@ -2019,7 +2018,7 @@ function showPendingSessionView(spawnId) {
   if (!spawn) return;
   const harnessLabel = spawn.harnessLabel || 'Pi';
   sessionState.advanceSelection();
-  search.navigating = false;
+  sessionSearch.reset();
   loadingOlder = false;
   loadingOlderGeneration += 1;
   stashPromptState();
@@ -2124,7 +2123,7 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   // intact instead of stashing the transcript and then bailing on a blank pane.
   if (!sessionState.findSession(id, host)) return;
   sessionState.advanceSelection();
-  search.navigating = false;
+  sessionSearch.reset();
   loadingOlder = false;
   loadingOlderGeneration += 1;
   stashPromptState();
@@ -2356,228 +2355,16 @@ function loadModels(sessionId, harnessId, cwd, host) {
 // Session Header
 // =========================================================================
 
-function clearSessionRelations() {
-  sessionRelationsSeq += 1;
-  sessionRelations = [];
-  closeRelationsModal();
-  const el = document.getElementById('sessionRelations');
-  if (!el) return;
-  el.replaceChildren();
-  el.style.display = 'none';
-}
-
-const RELATION_LABELS = {
-  parent: 'Parent',
-  child: 'Child',
-  startedFrom: 'Started from',
-  startedHere: 'Started here',
-};
-
-// Plural forms for the overflow modal's group headings.
-const RELATION_GROUP_LABELS = {
-  parent: 'Parent',
-  child: 'Children',
-  startedFrom: 'Started from',
-  startedHere: 'Started here',
-};
-
-// Subagent fan-outs can relate a session to dozens of children. The header
-// fills one physical row with live child chips; closed children and any live
-// chips that do not fit go behind a "+N more" chip that opens the relations
-// modal. The fallback is only used if the header has no measurable width yet.
-const RELATION_FALLBACK_VISIBLE_CHIPS = 6;
-let sessionRelations = [];
-let relationResizeTimer = null;
-
-function createRelationChip(relation) {
-  const target = relation?.session;
-  if (!target?.id) return null;
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'session-relation-chip';
-  button.title = `${RELATION_LABELS[relation.kind] || 'Related session'} · ${relation.source || 'session metadata'}`;
-  const kind = document.createElement('span');
-  kind.className = 'session-relation-kind';
-  kind.textContent = RELATION_LABELS[relation.kind] || 'Related';
-  const name = document.createElement('span');
-  name.className = 'session-relation-name';
-  name.textContent = target.name || target.id.slice(0, 8);
-  button.append(kind, name);
-  button.addEventListener('click', () => {
-    openRelatedSession(target.id, sessionState.captureSelection());
-  });
-  return button;
-}
-
-function createMoreRelationChip(hiddenCount) {
-  const more = document.createElement('button');
-  more.type = 'button';
-  more.className = 'session-relation-chip session-relation-more';
-  more.title = `Show ${hiddenCount} hidden related session${hiddenCount === 1 ? '' : 's'}`;
-  const count = document.createElement('span');
-  count.className = 'session-relation-kind';
-  count.textContent = `+${hiddenCount}`;
-  const label = document.createElement('span');
-  label.className = 'session-relation-name';
-  label.textContent = 'more';
-  more.append(count, label);
-  more.addEventListener('click', openRelationsModal);
-  return more;
-}
-
-// Pick the largest prefix that fits in one row, reserving room for the
-// overflow chip when any relation is hidden. The buttons are measured after
-// insertion so long/short child names naturally determine how many fit.
-function fitRelationChipCount(el, chips, totalCount) {
-  const available = el.clientWidth;
-  if (!available) return Math.min(chips.length, RELATION_FALLBACK_VISIBLE_CHIPS);
-
-  const style = getComputedStyle(el);
-  const gap = parseFloat(style.columnGap || style.gap || '0') || 0;
-  const moreProbe = createMoreRelationChip(totalCount);
-  el.replaceChildren(...chips, moreProbe);
-  const widths = chips.map(chip => chip.offsetWidth);
-  const prefixWidths = [0];
-  for (const width of widths) prefixWidths.push(prefixWidths[prefixWidths.length - 1] + width);
-
-  let chosen = 0;
-  for (let count = chips.length; count >= 0; count -= 1) {
-    const hiddenCount = totalCount - count;
-    let needed = prefixWidths[count] + Math.max(0, count - 1) * gap;
-    if (hiddenCount > 0) {
-      moreProbe.querySelector('.session-relation-kind').textContent = `+${hiddenCount}`;
-      needed += (count ? gap : 0) + moreProbe.offsetWidth;
-    }
-    if (needed <= available) {
-      chosen = count;
-      break;
-    }
-  }
-  return chosen;
-}
-
-function renderSessionRelations(relations) {
-  const el = document.getElementById('sessionRelations');
-  if (!el) return;
-  // Keep all valid relations for the modal, but only live child relations are
-  // eligible for the header. Parent/started-from links remain useful even
-  // when those sessions are no longer active.
-  sessionRelations = sortRelations(relations).filter(relation => relation?.session?.id);
-  el.replaceChildren();
-  if (!sessionRelations.length) {
-    el.style.display = 'none';
-    return;
-  }
-  el.style.display = '';
-
-  const headerRelations = [
-    // Keep live child bubbles visible when the row is tight; parent/source
-    // links can still be reached from the overflow modal.
-    ...sessionRelations.filter(relation => isChildRelation(relation) && relation.session.isActive),
-    ...sessionRelations.filter(relation => !isChildRelation(relation)),
-  ];
-  const chips = headerRelations.map(createRelationChip).filter(Boolean);
-  const visibleCount = fitRelationChipCount(el, chips, sessionRelations.length);
-  const hiddenCount = sessionRelations.length - visibleCount;
-  el.replaceChildren(...chips.slice(0, visibleCount));
-  if (hiddenCount > 0) el.appendChild(createMoreRelationChip(hiddenCount));
-
-  // The indexing re-poll can grow the list while the modal is open.
-  const modal = document.getElementById('relationsModal');
-  if (modal && modal.style.display !== 'none') renderRelationsModal();
-}
-
-window.addEventListener('resize', () => {
-  if (!sessionRelations.length) return;
-  clearTimeout(relationResizeTimer);
-  relationResizeTimer = setTimeout(() => {
-    const el = document.getElementById('sessionRelations');
-    if (sessionState.currentSession && el?.style.display !== 'none') renderSessionRelations(sessionRelations);
-  }, 100);
+const sessionRelationsController = PiDishBrowser.createSessionRelations({
+  document, window, sessionState, request: (host, path, init) => apiFetch(host, path, init), endpoint: hostEntryFor,
+  loadPrevious: () => loadSessions(undefined, { withPrevious: true }),
+  selectSession: (id, options) => selectSession(id, options), status: setStatus,
 });
-
-function openRelationsModal() {
-  if (!sessionState.currentSession || !sessionRelations.length) return;
-  document.getElementById('relationsModal').style.display = 'flex';
-  renderRelationsModal();
-}
-
-function closeRelationsModal() {
-  const modal = document.getElementById('relationsModal');
-  if (modal) modal.style.display = 'none';
-}
-
-function renderRelationsModal() {
-  const body = document.getElementById('relationsBody');
-  if (!body) return;
-  body.replaceChildren();
-  const owner = sessionState.captureSelection();
-  for (const group of groupRelations(sessionRelations)) {
-    const title = document.createElement('div');
-    title.className = 'stats-share-title relation-group-title';
-    const label = RELATION_GROUP_LABELS[group.kind] || RELATION_LABELS[group.kind] || 'Related';
-    title.textContent = group.relations.length > 1 ? `${label} (${group.relations.length})` : label;
-    body.appendChild(title);
-    for (const relation of group.relations) {
-      const target = relation?.session;
-      if (!target?.id) continue;
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'relation-row';
-      row.title = target.cwd || target.id;
-      if (target.isActive) {
-        const dot = document.createElement('span');
-        dot.className = 'live-dot';
-        row.appendChild(dot);
-      }
-      const name = document.createElement('span');
-      name.className = 'relation-row-name';
-      name.textContent = target.name || target.id.slice(0, 8);
-      row.appendChild(name);
-      const meta = document.createElement('span');
-      meta.className = 'relation-row-meta';
-      meta.textContent = formatRelativeTime(target.lastActivity);
-      row.appendChild(meta);
-      row.addEventListener('click', () => {
-        closeRelationsModal();
-        openRelatedSession(target.id, owner);
-      });
-      body.appendChild(row);
-    }
-  }
-}
-
-async function loadSessionRelations(owner) {
-  if (!sessionState.ownsSelection(owner)) return;
-  const { id: sessionId, host } = owner;
-  const seq = ++sessionRelationsSeq;
-  try {
-    const res = await apiFetch(host, `/api/sessions/${encodeURIComponent(sessionId)}/related`);
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-    if (seq !== sessionRelationsSeq || !sessionState.ownsSelection(owner)) return;
-    renderSessionRelations(data.relations);
-    if (data.indexing) {
-      setTimeout(() => {
-        if (sessionState.ownsSelection(owner)) loadSessionRelations(owner);
-      }, 1000);
-    }
-  } catch (e) {
-    if (seq === sessionRelationsSeq && sessionState.ownsSelection(owner)) renderSessionRelations([]);
-    console.error('Failed to load related sessions:', e);
-  }
-}
-
-async function openRelatedSession(sessionId, owner) {
-  if (!sessionState.ownsSelection(owner)) return;
-  if (!sessionState.findSession(sessionId, owner.host)) await loadSessions(undefined, { withPrevious: true });
-  if (!sessionState.ownsSelection(owner)) return;
-  if (!sessionState.findSession(sessionId, owner.host)) {
-    setStatus('Related session is not available yet', 'error');
-    return;
-  }
-  selectSession(sessionId, { host: owner.host });
-}
+function clearSessionRelations() { sessionRelationsController.clear(); }
+function loadSessionRelations(owner) { return sessionRelationsController.load(owner); }
+function openRelatedSession(id, owner) { return sessionRelationsController.openRelated(id, owner); }
+function openRelationsModal() { sessionRelationsController.openModal(); }
+function closeRelationsModal() { sessionRelationsController.closeModal(); }
 
 /**
  * Most model signal that fits the chip. The provider slug is the least
@@ -2781,182 +2568,22 @@ function setFocusMode(on) {
   if (state) state.textContent = focusMode ? 'on' : 'off';
 }
 
-// --- In-session text search ---
-// Server-side match list (whole session, not just loaded pages); the client
-// pages older messages in as needed and jumps between matches. Enter walks
-// backwards (most recent first), Shift+Enter forwards.
-const search = { query: '', matches: [], pos: -1, navigating: false };
-
-function toggleSearchBar() {
-  const bar = document.getElementById('searchBar');
-  if (!bar) return;
-  if (bar.style.display === 'none') openSearch(); else closeSearch();
-}
-
-function openSearch() {
-  if (!sessionState.currentSession) return;
-  const bar = document.getElementById('searchBar');
-  bar.style.display = '';
-  const input = document.getElementById('searchInput');
-  input.focus();
-  input.select();
-}
-
-function closeSearch() {
-  const bar = document.getElementById('searchBar');
-  if (!bar || bar.style.display === 'none') return;
-  bar.style.display = 'none';
-  search.query = '';
-  search.matches = [];
-  search.pos = -1;
-  clearSearchMarks();
-  updateSearchCount();
-}
-
-function clearSearchMarks() {
-  document.querySelectorAll('.message.search-current').forEach(el => el.classList.remove('search-current'));
-  document.querySelectorAll('mark.search-mark').forEach(mark => {
-    const parent = mark.parentNode;
-    mark.replaceWith(document.createTextNode(mark.textContent));
-    parent.normalize();
-  });
-}
-
-function updateSearchCount(msg) {
-  const el = document.getElementById('searchCount');
-  if (!el) return;
-  if (msg != null) { el.textContent = msg; return; }
-  el.textContent = search.matches.length
-    ? `${search.pos + 1}/${search.matches.length}`
-    : (search.query ? 'no matches' : '');
-}
-
-async function runSessionSearch(query, { mode = 'message', closeIfEmpty = false } = {}) {
-  if (!sessionState.currentSession) return;
-  const owner = sessionState.captureSelection();
-  const sessionId = owner.id;
-  updateSearchCount('searching…');
-  try {
-    const params = new URLSearchParams({ q: query });
-    if (mode !== 'message') params.set('mode', mode);
-    const res = await apiFetch(owner.host, `/api/sessions/${encodeURIComponent(sessionId)}/search?${params}`);
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    if (!sessionState.ownsSelection(owner)) return;
-    search.query = query;
-    search.matches = visibleSearchMatchesOf(data.matches || []);
-    search.pos = search.matches.length - 1; // start from the latest match
-    if (search.matches.length) await jumpToSearchResult();
-    else if (closeIfEmpty) { closeSearch(); return; }
-    if (!sessionState.ownsSelection(owner)) return;
-    updateSearchCount();
-  } catch (e) {
-    if (!sessionState.ownsSelection(owner)) return;
-    updateSearchCount('search failed');
-    console.error('Session search failed:', e);
-  }
-}
-
-// In focus mode tool results are hidden — skip matches we couldn't show.
-function visibleSearchMatchesOf(matches) {
-  return focusMode ? matches.filter(m => m.role !== 'toolResult') : matches;
-}
-
-function searchPrev() { moveSearch(-1); }
-function searchNext() { moveSearch(1); }
-
-async function moveSearch(delta) {
-  // While a jump is paging older messages in, advancing pos would move the
-  // counter without moving the highlight (the in-flight jump already captured
-  // its match) — swallow the keypress until navigation settles.
-  if (!search.matches.length || search.navigating) return;
-  search.pos = (search.pos + delta + search.matches.length) % search.matches.length;
-  updateSearchCount();
-  await jumpToSearchResult();
-}
-
-async function jumpToSearchResult() {
-  if (search.navigating) return;
-  const match = search.matches[search.pos];
-  if (!match || !sessionState.currentSession) return;
-  const owner = sessionState.captureSelection();
-  search.navigating = true;
-  try {
-    const container = document.getElementById('messages');
-    // Page older messages in until the match is loaded.
-    let guard = 0;
-    while (sessionState.ownsSelection(owner) && oldestLoadedIndex != null && match.index < oldestLoadedIndex && hasMoreOlder && guard++ < 200) {
-      await loadOlderMessages();
-    }
-    if (!sessionState.ownsSelection(owner)) return;
-    const el = container.querySelector(`[data-msg-index="${match.index}"]`);
-    if (!el) { updateSearchCount('not loaded'); return; }
-    // A match folded into a collapsed tool-group is invisible — open it first.
-    const group = el.closest('details.tool-group');
-    if (group) group.open = true;
-    clearSearchMarks();
-    el.classList.add('search-current');
-    markSearchTokens(el, search.query.split(/\s+/).filter(Boolean));
-    followStream = false; // navigating to a match must not get yanked back down
-    el.scrollIntoView({ block: 'center' });
-    updateJumpButton(container);
-    updateSearchCount();
-  } finally {
-    if (sessionState.ownsSelection(owner)) search.navigating = false;
-  }
-}
-
-// Wrap occurrences of each token in <mark> within el's text nodes.
-function markSearchTokens(el, tokens) {
-  if (!tokens.length) return;
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
-    acceptNode: (n) => n.parentElement.closest('mark, script, style')
-      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
-  });
-  const textNodes = [];
-  while (walker.nextNode()) textNodes.push(walker.currentNode);
-  for (const node of textNodes) {
-    const text = node.textContent;
-    const lower = text.toLowerCase();
-    const ranges = [];
-    for (const token of tokens) {
-      let from = 0, at;
-      while ((at = lower.indexOf(token, from)) !== -1) {
-        ranges.push([at, at + token.length]);
-        from = at + token.length;
-      }
-    }
-    if (!ranges.length) continue;
-    ranges.sort((a, b) => a[0] - b[0]);
-    const frag = document.createDocumentFragment();
-    let cursor = 0;
-    for (const [start, end] of ranges) {
-      if (start < cursor) continue; // overlapping token match
-      frag.appendChild(document.createTextNode(text.slice(cursor, start)));
-      const mark = document.createElement('mark');
-      mark.className = 'search-mark';
-      mark.textContent = text.slice(start, end);
-      frag.appendChild(mark);
-      cursor = end;
-    }
-    frag.appendChild(document.createTextNode(text.slice(cursor)));
-    node.replaceWith(frag);
-  }
-}
-
-function handleSearchKey(e) {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    const q = document.getElementById('searchInput').value.trim().toLowerCase();
-    if (!q) return;
-    if (q !== search.query) runSessionSearch(q);
-    else if (e.shiftKey) searchNext();
-    else searchPrev();
-  } else if (e.key === 'Escape') {
-    e.preventDefault();
-    closeSearch();
-  }
-}
+// Whole-transcript search owns query requests, marks and serialized paging jumps.
+const sessionSearch = PiDishBrowser.createSessionSearch({
+  document, sessionState, request: (host, path, init) => apiFetch(host, path, init), endpoint: hostEntryFor,
+  focusMode: () => focusMode, oldestIndex: () => oldestLoadedIndex, hasOlder: () => hasMoreOlder,
+  loadOlder: () => loadOlderMessages(), stopFollowing: () => { followStream = false; }, updateJumpButton,
+});
+const search = sessionSearch.state;
+function toggleSearchBar() { sessionSearch.toggle(); }
+function openSearch() { sessionSearch.open(); }
+function closeSearch() { sessionSearch.close(); }
+function updateSearchCount(message) { sessionSearch.updateCount(message); }
+function runSessionSearch(query, options) { return sessionSearch.run(query, options); }
+function searchPrev() { return sessionSearch.move(-1); }
+function searchNext() { return sessionSearch.move(1); }
+function jumpToSearchResult() { return sessionSearch.jump(); }
+function handleSearchKey(event) { sessionSearch.key(event); }
 
 // --- Mobile control panel (model/thinking/context/focus/tree/export) ---
 let controlPanelOpen = false;

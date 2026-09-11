@@ -353,3 +353,9 @@ invalidate old requests and controls; submitted mutations retain their endpoints
 status polling and selected-session reconciliation. `bounce-data.ts` narrows wire
 rows into readonly contracts. The app supplies host/session accessors and reload
 callbacks; the controller retains endpoint/view ownership across asynchronous work.
+
+`session-relations.ts` owns related-session controls, overflow and refresh timers;
+`session-search.ts` owns the whole-transcript search bar, match state and paging
+navigation. The app provides transcript paging/scroll callbacks and session/host
+accessors. Query results and rendered navigation controls retain their original
+selection/endpoint instead of borrowing whichever session is current later.

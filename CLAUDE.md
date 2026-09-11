@@ -1966,7 +1966,9 @@ recognition errors are the user's to fix before the agent sees them.
   fff fuzzy search under the cwd. Reads are gated to the cwd subtree +
   tool-touched paths (lexical containment — `..` normalizes away before the
   check; a LAN client must not read arbitrary files).
-- **In-session search**: 🔍 header button / Ctrl+F. `GET
+- **In-session search**: 🔍 header button / Ctrl+F; owned by
+  `src/browser/session-search.ts`. Query sequences retire old results and marks;
+  close/reopen shares any page load already in flight. `GET
   /api/sessions/:id/search?q=` returns `{ matches: [{index, role}] }` over the
   whole session; the client walks matches (Enter = backwards, Shift+Enter =
   forwards), auto-paging older messages in via `loadOlderMessages()` until the
@@ -2068,3 +2070,8 @@ view refresh/close retires row listeners and status timers. The operation read
 sequence prevents an older poll from erasing accepted mutations. Completed
 restart reconciliation keeps the bounce surface open and only reconnects the
 transcript when the originating host/session selection still owns the view.
+
+Related-session header chips and the overflow modal live in
+`src/browser/session-relations.ts`. Chips retain their rendered selection/host,
+and modal/header re-renders retire prior controls. Indexing/resize timers belong
+to that controller; clear/dispose retires them before the next session view.

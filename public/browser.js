@@ -47,6 +47,8 @@ var PiDishBrowser = (() => {
     createNewSessionPreferences: () => createNewSessionPreferences,
     createRecovery: () => createRecovery,
     createSessionApi: () => createSessionApi,
+    createSessionRelations: () => createSessionRelations,
+    createSessionSearch: () => createSessionSearch,
     createSessionSpawns: () => createSessionSpawns,
     createSessionState: () => createSessionState,
     createSpawnTargetPicker: () => createSpawnTargetPicker,
@@ -63,6 +65,8 @@ var PiDishBrowser = (() => {
     decodeModelCatalog: () => decodeModelCatalog,
     decodeRecoveryMode: () => decodeRecoveryMode,
     decodeRecoveryReport: () => decodeRecoveryReport,
+    decodeSessionRelations: () => decodeSessionRelations,
+    decodeSessionSearch: () => decodeSessionSearch,
     decodeSpawnChoices: () => decodeSpawnChoices,
     decodeSpawnId: () => decodeSpawnId,
     decodeSpawnStatus: () => decodeSpawnStatus,
@@ -284,10 +288,10 @@ var PiDishBrowser = (() => {
     const doc = root.ownerDocument;
     let view = null;
     let disposed = false;
-    function element(tag, className, text6) {
+    function element(tag, className, text7) {
       const node = doc.createElement(tag);
       node.className = className;
-      if (text6 !== void 0) node.textContent = text6;
+      if (text7 !== void 0) node.textContent = text7;
       return node;
     }
     const search = element("input", "model-search");
@@ -304,8 +308,8 @@ var PiDishBrowser = (() => {
       node.dataset.value = value;
       return node;
     }
-    function button(text6, name, value = "", primary = false) {
-      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text6);
+    function button(text7, name, value = "", primary = false) {
+      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text7);
       node.type = "button";
       return action(node, name, value);
     }
@@ -540,8 +544,8 @@ var PiDishBrowser = (() => {
     const state = prev && typeof prev === "object" ? prev : null;
     const errText = (value) => {
       if (value == null) return null;
-      const text6 = String(typeof value === "object" && "message" in value && value.message || value);
-      return text6 || null;
+      const text7 = String(typeof value === "object" && "message" in value && value.message || value);
+      return text7 || null;
     };
     const eventError = event && typeof event === "object" && "error" in event ? errText(event.error) : null;
     if (kind === "blocked") {
@@ -2732,9 +2736,20 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/helper-format.ts
-  function escapeHtml(text6) {
-    if (text6 == null || text6 === "") return "";
-    return String(text6).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  function escapeHtml(text7) {
+    if (text7 == null || text7 === "") return "";
+    return String(text7).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function formatRelativeTime(ts) {
+    if (!ts) return "";
+    const diff = Math.max(0, Date.now() - new Date(ts).getTime());
+    const s = Math.floor(diff / 1e3), m = Math.floor(s / 60), h = Math.floor(m / 60), d = Math.floor(h / 24);
+    if (s < 60) return "just now";
+    if (m < 60) return m + "m ago";
+    if (h < 24) return h + "h ago";
+    if (d === 1) return "yesterday";
+    if (d < 7) return d + "d ago";
+    return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
   }
   function shortCwd(cwd) {
     if (!cwd) return "";
@@ -3855,6 +3870,513 @@ var PiDishBrowser = (() => {
         bouncePendingRestarts.clear();
       }
     };
+  }
+
+  // src/browser/helper-sessions.ts
+  var RELATION_KIND_ORDER = { parent: 0, startedFrom: 1, child: 2, startedHere: 3 };
+  var RELATION_CHILD_KINDS = /* @__PURE__ */ new Set(["child", "startedHere"]);
+  function relationKindRank(kind) {
+    const rank = kind && Object.hasOwn(RELATION_KIND_ORDER, kind) ? RELATION_KIND_ORDER[kind] : void 0;
+    return rank === void 0 ? 99 : rank;
+  }
+  function sortRelations(relations) {
+    return (relations || []).map((relation, index) => ({ relation, index })).sort((a, b) => relationKindRank(a.relation && a.relation.kind) - relationKindRank(b.relation && b.relation.kind) || a.index - b.index).map(({ relation }) => relation);
+  }
+  function isChildRelation(relation) {
+    return RELATION_CHILD_KINDS.has(relation?.kind || "");
+  }
+  function groupRelations(relations) {
+    const groups = [];
+    const byKind = /* @__PURE__ */ new Map();
+    for (const relation of relations || []) {
+      const kind = relation && relation.kind || "related";
+      let group = byKind.get(kind);
+      if (!group) {
+        group = { kind, relations: [] };
+        byKind.set(kind, group);
+        groups.push(group);
+      }
+      group.relations.push(relation);
+    }
+    groups.sort((a, b) => relationKindRank(a.kind) - relationKindRank(b.kind));
+    return groups;
+  }
+
+  // src/browser/session-relations.ts
+  var text6 = (value) => typeof value === "string" ? value : "";
+  function decodeSessionRelations(value) {
+    if (!Array.isArray(value)) return [];
+    return value.flatMap((row) => {
+      if (!record8(row) || !record8(row.session) || typeof row.session.id !== "string" || !row.session.id) return [];
+      const session = row.session;
+      return [{ kind: text6(row.kind), source: text6(row.source), session: {
+        id: session.id,
+        name: text6(session.name),
+        cwd: text6(session.cwd),
+        isActive: session.isActive === true,
+        lastActivity: typeof session.lastActivity === "string" || typeof session.lastActivity === "number" ? session.lastActivity : null
+      } }];
+    });
+  }
+  function createSessionRelations(options) {
+    const { document: document2, window, sessionState } = options;
+    const element = (id) => document2.getElementById(id);
+    let sessionRelationsSeq = 0;
+    let disposed = false;
+    let renderOwner = null;
+    let renderEndpoint = null;
+    let headerEvents = new AbortController(), modalEvents = new AbortController();
+    const events = new AbortController();
+    let indexingTimer;
+    function sameEndpoint(host, endpoint) {
+      const current = options.endpoint(host);
+      return !!endpoint && !!current && current.base === endpoint.base && (current.token || "") === (endpoint.token || "");
+    }
+    const owns = (owner, endpoint = renderEndpoint) => !disposed && sessionState.ownsSelection(owner) && !!owner && sameEndpoint(owner.host, endpoint);
+    const label = (labels, kind, fallback2) => Object.hasOwn(labels, kind) ? labels[kind] : fallback2;
+    function clearSessionRelations() {
+      sessionRelationsSeq += 1;
+      clearTimeout(indexingTimer);
+      clearTimeout(relationResizeTimer);
+      headerEvents.abort();
+      renderOwner = null;
+      renderEndpoint = null;
+      sessionRelations = [];
+      closeRelationsModal();
+      const el = document2.getElementById("sessionRelations");
+      if (!el) return;
+      el.replaceChildren();
+      el.style.display = "none";
+    }
+    const RELATION_LABELS = {
+      parent: "Parent",
+      child: "Child",
+      startedFrom: "Started from",
+      startedHere: "Started here"
+    };
+    const RELATION_GROUP_LABELS = {
+      parent: "Parent",
+      child: "Children",
+      startedFrom: "Started from",
+      startedHere: "Started here"
+    };
+    const RELATION_FALLBACK_VISIBLE_CHIPS = 6;
+    let sessionRelations = [];
+    let relationResizeTimer;
+    function createRelationChip(relation) {
+      const target = relation?.session;
+      if (!target?.id) return null;
+      const button = document2.createElement("button");
+      button.type = "button";
+      button.className = "session-relation-chip";
+      button.title = `${label(RELATION_LABELS, relation.kind, "Related session")} \xB7 ${relation.source || "session metadata"}`;
+      const kind = document2.createElement("span");
+      kind.className = "session-relation-kind";
+      kind.textContent = label(RELATION_LABELS, relation.kind, "Related");
+      const name = document2.createElement("span");
+      name.className = "session-relation-name";
+      name.textContent = target.name || target.id.slice(0, 8);
+      button.append(kind, name);
+      const owner = renderOwner, endpoint = renderEndpoint;
+      button.addEventListener("click", () => {
+        if (owns(owner, endpoint)) void openRelatedSession(target.id, owner, endpoint);
+      }, { signal: headerEvents.signal });
+      return button;
+    }
+    function createMoreRelationChip(hiddenCount) {
+      const more = document2.createElement("button");
+      more.type = "button";
+      more.className = "session-relation-chip session-relation-more";
+      more.title = `Show ${hiddenCount} hidden related session${hiddenCount === 1 ? "" : "s"}`;
+      const count = document2.createElement("span");
+      count.className = "session-relation-kind";
+      count.textContent = `+${hiddenCount}`;
+      const label2 = document2.createElement("span");
+      label2.className = "session-relation-name";
+      label2.textContent = "more";
+      more.append(count, label2);
+      const owner = renderOwner, endpoint = renderEndpoint;
+      more.addEventListener("click", () => {
+        if (owns(owner, endpoint)) openRelationsModal();
+      }, { signal: headerEvents.signal });
+      return more;
+    }
+    function fitRelationChipCount(el, chips, totalCount) {
+      const available = el.clientWidth;
+      if (!available) return Math.min(chips.length, RELATION_FALLBACK_VISIBLE_CHIPS);
+      const style = getComputedStyle(el);
+      const gap = parseFloat(style.columnGap || style.gap || "0") || 0;
+      const moreProbe = createMoreRelationChip(totalCount);
+      el.replaceChildren(...chips, moreProbe);
+      const widths = chips.map((chip) => chip.offsetWidth);
+      const prefixWidths = [0];
+      for (const width of widths) prefixWidths.push(prefixWidths[prefixWidths.length - 1] + width);
+      let chosen = 0;
+      for (let count = chips.length; count >= 0; count -= 1) {
+        const hiddenCount = totalCount - count;
+        let needed = prefixWidths[count] + Math.max(0, count - 1) * gap;
+        if (hiddenCount > 0) {
+          moreProbe.querySelector(".session-relation-kind").textContent = `+${hiddenCount}`;
+          needed += (count ? gap : 0) + moreProbe.offsetWidth;
+        }
+        if (needed <= available) {
+          chosen = count;
+          break;
+        }
+      }
+      return chosen;
+    }
+    function renderSessionRelations(relations, owner = renderOwner, endpoint = renderEndpoint) {
+      if (!owns(owner, endpoint)) return;
+      renderOwner = owner;
+      renderEndpoint = endpoint;
+      headerEvents.abort();
+      headerEvents = new AbortController();
+      const el = element("sessionRelations");
+      if (!el) return;
+      sessionRelations = sortRelations(relations).filter((relation) => relation?.session?.id);
+      el.replaceChildren();
+      if (!sessionRelations.length) {
+        closeRelationsModal();
+        el.style.display = "none";
+        return;
+      }
+      el.style.display = "";
+      const headerRelations = [
+        // Keep live child bubbles visible when the row is tight; parent/source
+        // links can still be reached from the overflow modal.
+        ...sessionRelations.filter((relation) => isChildRelation(relation) && relation.session.isActive),
+        ...sessionRelations.filter((relation) => !isChildRelation(relation))
+      ];
+      const chips = headerRelations.map(createRelationChip).filter((chip) => chip !== null);
+      const visibleCount = fitRelationChipCount(el, chips, sessionRelations.length);
+      const hiddenCount = sessionRelations.length - visibleCount;
+      el.replaceChildren(...chips.slice(0, visibleCount));
+      if (hiddenCount > 0) el.appendChild(createMoreRelationChip(hiddenCount));
+      const modal = document2.getElementById("relationsModal");
+      if (modal && modal.style.display !== "none") renderRelationsModal();
+    }
+    window.addEventListener("resize", () => {
+      if (!owns(renderOwner) || !sessionRelations.length) return;
+      clearTimeout(relationResizeTimer);
+      relationResizeTimer = setTimeout(() => {
+        const el = document2.getElementById("sessionRelations");
+        if (sessionState.currentSession && el?.style.display !== "none") renderSessionRelations(sessionRelations);
+      }, 100);
+    }, { signal: events.signal });
+    function openRelationsModal() {
+      if (!owns(renderOwner) || !sessionRelations.length) return;
+      const modal = element("relationsModal");
+      if (!modal) return;
+      modal.style.display = "flex";
+      renderRelationsModal();
+    }
+    function closeRelationsModal() {
+      modalEvents.abort();
+      const modal = document2.getElementById("relationsModal");
+      if (modal) modal.style.display = "none";
+    }
+    function renderRelationsModal() {
+      if (!owns(renderOwner)) return;
+      modalEvents.abort();
+      modalEvents = new AbortController();
+      const body = document2.getElementById("relationsBody");
+      if (!body) return;
+      body.replaceChildren();
+      const owner = renderOwner, endpoint = renderEndpoint;
+      for (const group of groupRelations(sessionRelations)) {
+        const title = document2.createElement("div");
+        title.className = "stats-share-title relation-group-title";
+        const groupLabel = label(RELATION_GROUP_LABELS, group.kind || "", label(RELATION_LABELS, group.kind || "", "Related"));
+        title.textContent = group.relations.length > 1 ? `${groupLabel} (${group.relations.length})` : groupLabel;
+        body.appendChild(title);
+        for (const relation of group.relations) {
+          const target = relation?.session;
+          if (!target?.id) continue;
+          const row = document2.createElement("button");
+          row.type = "button";
+          row.className = "relation-row";
+          row.title = target.cwd || target.id;
+          if (target.isActive) {
+            const dot = document2.createElement("span");
+            dot.className = "live-dot";
+            row.appendChild(dot);
+          }
+          const name = document2.createElement("span");
+          name.className = "relation-row-name";
+          name.textContent = target.name || target.id.slice(0, 8);
+          row.appendChild(name);
+          const meta = document2.createElement("span");
+          meta.className = "relation-row-meta";
+          meta.textContent = formatRelativeTime(target.lastActivity);
+          row.appendChild(meta);
+          row.addEventListener("click", () => {
+            if (!owns(owner, endpoint)) return;
+            closeRelationsModal();
+            void openRelatedSession(target.id, owner, endpoint);
+          }, { signal: modalEvents.signal });
+          body.appendChild(row);
+        }
+      }
+    }
+    async function loadSessionRelations(owner) {
+      if (disposed || !owner || !sessionState.ownsSelection(owner)) return;
+      const resolved = options.endpoint(owner.host);
+      if (!resolved) return;
+      const endpoint = Object.freeze({ ...resolved });
+      const seq = ++sessionRelationsSeq;
+      clearTimeout(indexingTimer);
+      const current = () => seq === sessionRelationsSeq && owns(owner, endpoint);
+      try {
+        const res = await options.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/related`);
+        const data = await res.json();
+        if (!current()) return;
+        if (!res.ok) throw new Error(record8(data) && text6(data.error) || `HTTP ${res.status}`);
+        renderSessionRelations(decodeSessionRelations(record8(data) ? data.relations : null), owner, endpoint);
+        if (record8(data) && data.indexing === true) indexingTimer = setTimeout(() => {
+          if (current()) void loadSessionRelations(owner);
+        }, 1e3);
+      } catch (error) {
+        if (current()) {
+          renderSessionRelations([], owner, endpoint);
+          console.error("Failed to load related sessions:", error);
+        }
+      }
+    }
+    async function openRelatedSession(id, owner, endpoint = owner ? options.endpoint(owner.host) : null) {
+      if (!owns(owner, endpoint) || !owner) return;
+      const captured = endpoint ? Object.freeze({ ...endpoint }) : null;
+      if (!sessionState.findSession(id, owner.host)) await options.loadPrevious();
+      if (!owns(owner, captured)) return;
+      if (!sessionState.findSession(id, owner.host)) {
+        options.status("Related session is not available yet", "error");
+        return;
+      }
+      await options.selectSession(id, { host: owner.host });
+    }
+    return {
+      clear: clearSessionRelations,
+      load: loadSessionRelations,
+      openRelated: openRelatedSession,
+      openModal: openRelationsModal,
+      closeModal: closeRelationsModal,
+      dispose() {
+        clearSessionRelations();
+        events.abort();
+        disposed = true;
+      }
+    };
+  }
+
+  // src/browser/session-search.ts
+  function decodeSessionSearch(value) {
+    if (!record8(value) || !Array.isArray(value.matches)) throw new Error("Invalid session search response");
+    return value.matches.flatMap((match) => record8(match) && typeof match.index === "number" && Number.isInteger(match.index) && match.index >= 0 ? [{ index: match.index, role: typeof match.role === "string" ? match.role : "" }] : []);
+  }
+  function createSessionSearch(options) {
+    const { document: document2, sessionState } = options;
+    const element = (id) => {
+      const value = document2.getElementById(id);
+      if (!value) throw new Error("Missing search element: " + id);
+      return value;
+    };
+    let query = "", matches = [], pos = -1;
+    let sequence = 0, disposed = false;
+    let navigation = null;
+    function updateCount(message2) {
+      if (disposed) return;
+      element("searchCount").textContent = message2 !== void 0 ? message2 : matches.length ? `${pos + 1}/${matches.length}` : query ? "no matches" : "";
+    }
+    function clearMarks() {
+      document2.querySelectorAll(".message.search-current").forEach((el) => el.classList.remove("search-current"));
+      document2.querySelectorAll("mark.search-mark").forEach((mark) => {
+        const parent = mark.parentNode;
+        mark.replaceWith(document2.createTextNode(mark.textContent || ""));
+        parent?.normalize();
+      });
+    }
+    function open() {
+      if (disposed || !sessionState.currentSession) return;
+      element("searchBar").style.display = "";
+      const input = element("searchInput");
+      input.focus();
+      input.select();
+    }
+    function close() {
+      if (disposed) return;
+      sequence++;
+      element("searchBar").style.display = "none";
+      query = "";
+      matches = [];
+      pos = -1;
+      clearMarks();
+      updateCount();
+    }
+    function reset() {
+      close();
+      navigation = null;
+    }
+    function toggle() {
+      if (element("searchBar").style.display === "none") open();
+      else close();
+    }
+    function sameEndpoint(owner, endpoint) {
+      const current = options.endpoint(owner.host);
+      return !!current && current.base === endpoint.base && (current.token || "") === (endpoint.token || "");
+    }
+    async function run(value, { mode = "message", closeIfEmpty = false } = {}) {
+      const owner = sessionState.captureSelection();
+      const resolved = owner && options.endpoint(owner.host);
+      if (disposed || !owner || !resolved) return;
+      const endpoint = Object.freeze({ ...resolved }), seq = ++sequence;
+      const owns = () => !disposed && seq === sequence && sessionState.ownsSelection(owner) && sameEndpoint(owner, endpoint);
+      updateCount("searching\u2026");
+      try {
+        const params = new URLSearchParams({ q: value });
+        if (mode !== "message") params.set("mode", mode);
+        const response = await options.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/search?${params}`);
+        const data = await response.json();
+        if (!owns()) return;
+        if (!response.ok || record8(data) && typeof data.error === "string" && data.error) throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
+        query = value;
+        const decoded = decodeSessionSearch(data);
+        matches = options.focusMode() ? decoded.filter((match) => match.role !== "toolResult") : decoded;
+        pos = matches.length - 1;
+        if (matches.length) await jump();
+        else if (closeIfEmpty) {
+          close();
+          return;
+        }
+        if (owns()) updateCount();
+      } catch (error) {
+        if (owns()) {
+          updateCount("search failed");
+          console.error("Session search failed:", error);
+        }
+      }
+    }
+    async function jump() {
+      const owner = sessionState.captureSelection(), match = matches[pos], seq = sequence, tokens = query.split(/\s+/).filter(Boolean);
+      const resolved = owner && options.endpoint(owner.host);
+      if (disposed || !owner || !match || !resolved) return;
+      const endpoint = Object.freeze({ ...resolved });
+      const owns = () => !disposed && seq === sequence && sessionState.ownsSelection(owner) && sameEndpoint(owner, endpoint);
+      if (navigation) {
+        const pending = navigation;
+        await pending.done;
+        if (owns()) await jump();
+        return;
+      }
+      let finish;
+      const active = { owner, done: new Promise((resolve) => {
+        finish = resolve;
+      }) };
+      navigation = active;
+      try {
+        const container = element("messages");
+        let guard = 0;
+        while (owns() && options.oldestIndex() !== null && match.index < options.oldestIndex() && options.hasOlder() && guard++ < 200) await options.loadOlder();
+        if (!owns()) return;
+        const el = container.querySelector(`[data-msg-index="${match.index}"]`);
+        if (!el) {
+          updateCount("not loaded");
+          return;
+        }
+        const group = el.closest("details.tool-group");
+        if (group) group.open = true;
+        clearMarks();
+        el.classList.add("search-current");
+        markSearchTokens(el, tokens);
+        options.stopFollowing();
+        el.scrollIntoView({ block: "center" });
+        options.updateJumpButton(container);
+        updateCount();
+      } finally {
+        if (navigation === active) navigation = null;
+        finish();
+      }
+    }
+    async function move(delta) {
+      if (disposed || !matches.length || navigation) return;
+      pos = (pos + delta + matches.length) % matches.length;
+      updateCount();
+      await jump();
+    }
+    function key(event) {
+      if (disposed) return;
+      if (event.key === "Enter") {
+        event.preventDefault();
+        const value = element("searchInput").value.trim().toLowerCase();
+        if (!value) return;
+        if (value !== query) void run(value);
+        else void move(event.shiftKey ? 1 : -1);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+      }
+    }
+    const state = Object.freeze({ get query() {
+      return query;
+    }, get matches() {
+      return matches;
+    }, get pos() {
+      return pos;
+    }, get navigating() {
+      return navigation !== null;
+    } });
+    return {
+      state,
+      open,
+      close,
+      reset,
+      toggle,
+      run,
+      jump,
+      move,
+      key,
+      clearMarks,
+      updateCount,
+      dispose() {
+        reset();
+        disposed = true;
+      }
+    };
+  }
+  function markSearchTokens(el, tokens) {
+    if (!tokens.length) return;
+    const document2 = el.ownerDocument;
+    const walker = document2.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => n.parentElement?.closest("mark, script, style") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+    });
+    const textNodes = [];
+    while (walker.nextNode()) textNodes.push(walker.currentNode);
+    for (const node of textNodes) {
+      const text7 = node.textContent || "";
+      const lower = text7.toLowerCase();
+      const ranges = [];
+      for (const token of tokens) {
+        let from = 0, at;
+        while ((at = lower.indexOf(token, from)) !== -1) {
+          ranges.push([at, at + token.length]);
+          from = at + token.length;
+        }
+      }
+      if (!ranges.length) continue;
+      ranges.sort((a, b) => a[0] - b[0]);
+      const frag = document2.createDocumentFragment();
+      let cursor = 0;
+      for (const [start, end] of ranges) {
+        if (start < cursor) continue;
+        frag.appendChild(document2.createTextNode(text7.slice(cursor, start)));
+        const mark = document2.createElement("mark");
+        mark.className = "search-mark";
+        mark.textContent = text7.slice(start, end);
+        frag.appendChild(mark);
+        cursor = end;
+      }
+      frag.appendChild(document2.createTextNode(text7.slice(cursor)));
+      node.replaceWith(frag);
+    }
   }
   return __toCommonJS(index_exports);
 })();

@@ -33,3 +33,6 @@ export { createRecovery, decodeRecoveryMode, decodeRecoveryReport } from './reco
 
 export { createBounce } from './bounce';
 export { decodeBouncePreview, decodeBounceOperation, decodeBounceOperations } from './bounce-data';
+
+export { createSessionRelations, decodeSessionRelations } from './session-relations';
+export { createSessionSearch, decodeSessionSearch } from './session-search';

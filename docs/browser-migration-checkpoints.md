@@ -360,3 +360,26 @@ commit `861d799` passed all five CI jobs (run `34598941974`).
 - Next: session navigation/search, then remaining browser feature controllers.
 
 Fable 5.1 cleared recovery commit `b8faac4`, which is pushed.
+
+## Checkpoint 16 — session navigation (verified locally; review pending)
+
+- `session-relations.ts` owns decoded relations, header fitting, the overflow
+  modal, indexing/resize timers and navigation. Rendered chips/rows retain their
+  originating selection and endpoint; refresh/close/disposal retires listeners.
+  An empty refreshed relation list closes its old modal and retires row actions.
+- `session-search.ts` owns query/results/position and marks. Requests retain
+  selection, endpoint and query sequence; a late same-session query cannot
+  replace newer results or revive a closed bar. Paging remains serialized when
+  the bar closes/reopens; an old jump retires its highlight before a new query
+  resumes against the loaded transcript. Selection changes reset navigation.
+- Existing ownership tests use actual search requests instead of assigning
+  mutable state. Four new browser cases cover retained relation controls,
+  timer disposal, competing queries and closed-bar requests. Decoder units and
+  strict contracts narrow identities/indices and reject external state writes.
+- Strict checks, 904 backend tests, 121 browser regressions, independent UI
+  scenarios and full desktop/mobile smoke passed. Integrated runtime/config/test
+  files match the verified draft byte for byte; strict checks passed again.
+  Fable review is required before push.
+- Next: skills and advanced search, then remaining feature/rendering controllers.
+
+Fable 5.1 cleared bounce commit `2e46f5d`, which is pushed.

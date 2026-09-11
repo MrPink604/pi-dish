@@ -64,7 +64,7 @@ test('a delayed search cannot replace the query on a same-id peer', async ({ pag
   });
   const route = await received;
   await fleet.select(fleet.self);
-  await page.evaluate(() => { openSearch(); search.query = 'self-query'; updateSearchCount(); });
+  await page.evaluate(async () => { openSearch(); await runSessionSearch('self-query'); });
   await route.fulfill({ json: { matches: [] } });
   await page.evaluate(() => window.pendingSessionSearch);
   expect(await page.evaluate(() => search.query)).toBe('self-query');
@@ -74,30 +74,34 @@ test('closing and reopening search preserves its single paging jump within a sel
   await fleet.select(fleet.self);
   const result = await page.evaluate(async () => {
     const load = loadOlderMessages;
+    const fetch = apiFetch;
+    let started;
+    const loading = new Promise(resolve => { started = resolve; });
+    apiFetch = (host, path, init) => path.includes('/search?')
+      ? Promise.resolve(new Response(JSON.stringify({ matches: [{ index: 0, role: 'user' }] }))) : fetch(host, path, init);
     const oldIndex = oldestLoadedIndex;
     const oldMore = hasMoreOlder;
     let release;
     let calls = 0;
     const pending = new Promise(resolve => { release = resolve; });
-    loadOlderMessages = () => { calls += 1; return pending.then(() => { hasMoreOlder = false; }); };
+    loadOlderMessages = () => { calls += 1; started(); return pending.then(() => { hasMoreOlder = false; }); };
     try {
       oldestLoadedIndex = 10;
       hasMoreOlder = true;
       openSearch();
-      search.matches = [{ index: 0 }];
-      search.pos = 0;
-      const first = jumpToSearchResult();
+      const first = runSessionSearch('first');
+      await loading;
       closeSearch();
       openSearch();
-      search.matches = [{ index: 0 }];
-      search.pos = 0;
-      const second = jumpToSearchResult();
+      const second = runSessionSearch('second');
+      await new Promise(resolve => setTimeout(resolve, 0));
       const beforeRelease = { calls, navigating: search.navigating };
       release();
       await Promise.all([first, second]);
       return { ...beforeRelease, settled: !search.navigating };
     } finally {
       loadOlderMessages = load;
+      apiFetch = fetch;
       oldestLoadedIndex = oldIndex;
       hasMoreOlder = oldMore;
       closeSearch();
