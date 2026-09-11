@@ -458,3 +458,7 @@ Message projection lives in `message-render.ts`, with wire narrowing in
 `message-data.ts`, bounded identity-owned telemetry in `response-details.ts` and
 idempotent DOM grouping in `message-groups.ts`. Retained detail buttons remain
 usable when their host-qualified transcript is restored.
+
+Live tool panels and coalesced assistant frames live in `live-tools.ts` and
+`streaming-render.ts`. Both capture selected-session ownership; retained details
+preserve user expansion. `mood.ts` owns the composer mood projection.

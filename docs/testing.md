@@ -167,3 +167,5 @@ boundary change. Passing this baseline establishes regression protection, not
 complete application coverage.
 
 `message-render.spec.js` covers message projection, retained telemetry identity, grouping and disposal.
+
+`live-transcript.spec.js` covers coalesced frame ownership, cumulative tools, retained panels and disposal.

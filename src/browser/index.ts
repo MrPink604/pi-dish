@@ -101,3 +101,7 @@ export { decodeRenderMessage, decodeMessageContent, decodeMessageUsage } from '.
 export { createMessageRenderer } from './message-render';
 export { createResponseDetails } from './response-details';
 export { groupToolActivity, updateToolGroupSummary } from './message-groups';
+
+export { createLiveTools } from './live-tools';
+export { createStreamingRenderer } from './streaming-render';
+export { createMood } from './mood';

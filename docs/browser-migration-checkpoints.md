@@ -834,3 +834,18 @@ five browser cases and strict contracts cover narrowing, telemetry identity,
 metadata disposal, custom upserts and idempotent grouping. The inherited sidebar
 button correction passed its extended focused regression and strict check.
 Fable review is required before push.
+
+## Checkpoint 37 — live transcript rendering
+
+Moved coalesced assistant frames, live tool panels and mood projection into three
+strict modules. Frames capture selection before the 80ms coalescing timer. Tool
+panels retain their selected host/session owner, reuse cumulative start updates,
+replace image output on partial updates and do not invent completion-only duration.
+Tool signatures include the name and arguments, preserving expanded DOM details.
+Disposal retires pending frames, live panels and subsequent mutations.
+
+Verification: strict checks, 934 backend tests, 244 browser tests, all independent
+UI scenarios and full desktop/mobile smoke passed. Seven focused browser cases
+and strict contracts cover frame replacement, host ownership, cumulative panels,
+renamed tools, mood text and disposal. Later combined pagination and activity drafts
+passed 252/257 browser cases plus all UI checks. Fable reviews before push.

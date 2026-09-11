@@ -2201,3 +2201,6 @@ Use read-only query/list getters rather than mutating former app globals.
 Browser message rendering is authored in `src/browser/message-render.ts` with
 narrowed inputs, host-owned response detail caches and deterministic tool grouping.
 Keep retained transcript anchors and custom-message upsert identity intact.
+
+Live browser frames and tool panels are typed controllers; retire coalescing timers
+and preserve retained panel identity when resetting selection.

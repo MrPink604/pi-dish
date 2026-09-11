@@ -282,8 +282,7 @@ try {
 } catch {}
 const responseDetailsController = PiDishBrowser.createResponseDetails({ document, sessionState, mode: () => displayPreferences.responseMode });
 
-// Live tool panel tracking: toolCallId -> { el, startTime }
-let liveToolPanels = new Map();
+
 
 // =========================================================================
 // Scroll pinning — only follow streaming output while the user is at the
@@ -1687,177 +1686,14 @@ function closeResponseDetails() { responseDetailsController.close(); }
 // Live Tool Panels (streaming tool execution)
 // =========================================================================
 
-// One place for the output escaping + truncation — a freshly appended panel
-// and an incrementally updated one must render output identically. Prime's
-// ipython results land here as a BashResult repr once complete; the parse
-// only matches the full text, so streaming prefixes fall through raw.
-function liveToolOutputHtml(output) {
-  const parsed = parseIpythonResult(output);
-  return escapeHtml(truncate(parsed ? parsed.output : output, 8000));
-}
-
-function buildLiveToolPanel(toolCallId, toolName, args, output, isError, isComplete, durationMs, imagesHtml = '') {
-  const stateClass = isComplete ? (isError ? 'error' : 'complete') : 'running';
-  const summary = getToolSummary(toolName, args);
-  const openAttr = (output || imagesHtml) ? ' open' : '';
-
-  let statusHtml = '';
-  if (isComplete) {
-    if (isError) {
-      statusHtml = '<span class="live-tool-status error-label">✗ error</span>';
-    } else {
-      const dur = durationMs != null ? (durationMs / 1000).toFixed(1) + 's' : '';
-      statusHtml = '<span class="live-tool-status success-label">✓</span>' +
-        (dur ? '<span class="live-tool-status duration">' + dur + '</span>' : '');
-    }
-  } else {
-    statusHtml = '<span class="live-tool-status running-label">running</span>';
-  }
-
-  const cursorHtml = isComplete ? '' : '<span class="live-tool-cursor"></span>';
-  const outputHtml = output
-    ? '<div class="live-tool-output">' + liveToolOutputHtml(output) + cursorHtml + '</div>'
-    : (!isComplete ? '<div class="live-tool-output"><span class="live-tool-cursor"></span></div>' : '');
-
-  return '<details class="live-tool-panel ' + stateClass + '" data-tool-call-id="' + escapeHtml(toolCallId) + '"' + openAttr + '>' +
-    '<summary class="live-tool-header">' +
-      '<span class="live-tool-icon">⚡</span>' +
-      '<span class="live-tool-name">' + escapeHtml(toolName) + '</span>' +
-      (summary ? '<span class="live-tool-summary">' + escapeHtml(summary) + '</span>' : '') +
-      statusHtml +
-      '<span class="live-tool-status-dot"></span>' +
-    '</summary>' +
-    outputHtml +
-    imagesHtml +
-  '</details>';
-}
-
-function appendLiveToolPanel(data, { completionOnly = false } = {}) {
-  const { toolCallId, toolName, args } = data;
-  if (!toolCallId) return null;
-  const existing = liveToolPanels.get(toolCallId);
-  const resolvedName = toolName || existing?.toolName || 'tool';
-  const resolvedArgs = args ?? existing?.args ?? {};
-  runningTools.set(toolCallId, resolvedName);
-  updateWorkingIndicator();
-  if (existing?.el?.isConnected && existing.el.classList.contains('running')) {
-    return existing; // cumulative/repeated starts never duplicate a panel
-  }
-
-  const container = document.getElementById('messages');
-  if (!container) return null;
-
-  const wasPinned = isPinnedToBottom(container);
-  const html = buildLiveToolPanel(toolCallId, resolvedName, resolvedArgs, '', false, false);
-  let el;
-  if (existing?.el?.isConnected) {
-    const tmp = document.createElement('div');
-    tmp.innerHTML = html;
-    el = tmp.firstElementChild;
-    existing.el.replaceWith(el);
-  } else {
-    container.insertAdjacentHTML('beforeend', html);
-    el = container.lastElementChild;
-  }
-
-  const parsedStartedAt = Number.isFinite(data.startedAt)
-    ? data.startedAt : (typeof data.startedAt === 'string' ? Date.parse(data.startedAt) : NaN);
-  const entry = {
-    el,
-    startTime: Number.isFinite(parsedStartedAt) ? parsedStartedAt : (completionOnly ? null : Date.now()),
-    toolName: resolvedName,
-    args: resolvedArgs,
-  };
-  liveToolPanels.set(toolCallId, entry);
-  if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
-  return entry;
-}
-
-function updateLiveToolPanel(data) {
-  const { toolCallId, partialResult } = data;
-  let entry = liveToolPanels.get(toolCallId);
-  if (!entry?.el?.isConnected || !entry.el.classList.contains('running')) {
-    // OMP may emit completion/background updates without a start, or after
-    // turn-end JSONL cleanup removed the original panel. Re-open by id.
-    entry = appendLiveToolPanel({
-      ...data,
-      toolName: data.toolName || entry?.toolName,
-      args: data.args ?? entry?.args,
-    });
-  }
-  if (!entry?.el) return;
-
-  const output = getToolOutputText(partialResult);
-  // Images derive idempotently from the latest partial result — the whole
-  // `.msg-images` row is replaced each update so images never accumulate.
-  const imagesHtml = imageBlocksHtml(partialResult && partialResult.content, 'tool result image');
-  if (!output && !imagesHtml) return;
-
-  const container = document.getElementById('messages');
-  const wasPinned = container ? isPinnedToBottom(container) : false;
-
-  let outputEl = entry.el.querySelector('.live-tool-output');
-  if (output && !outputEl) {
-    // Create output area if it doesn't exist
-    const cursorHtml = '<span class="live-tool-cursor"></span>';
-    outputEl = document.createElement('div');
-    outputEl.className = 'live-tool-output';
-    outputEl.innerHTML = liveToolOutputHtml(output) + cursorHtml;
-    entry.el.appendChild(outputEl);
-    // Open the details so output is visible
-    entry.el.setAttribute('open', '');
-  } else if (output) {
-    const cursorEl = outputEl.querySelector('.live-tool-cursor');
-    outputEl.innerHTML = liveToolOutputHtml(output);
-    // Re-add cursor
-    if (cursorEl) outputEl.appendChild(cursorEl);
-    else outputEl.insertAdjacentHTML('beforeend', '<span class="live-tool-cursor"></span>');
-  }
-
-  if (imagesHtml) {
-    const existing = entry.el.querySelector('.msg-images');
-    if (existing) existing.outerHTML = imagesHtml;
-    else entry.el.insertAdjacentHTML('beforeend', imagesHtml);
-    entry.el.setAttribute('open', '');
-  }
-
-  // Follow output only while the user hasn't scrolled away.
-  if (outputEl) outputEl.scrollTop = outputEl.scrollHeight;
-  if (container && wasPinned) scrollToBottom(container);
-}
-
-function finalizeLiveToolPanel(data) {
-  const { toolCallId, toolName, args, result, isError } = data;
-  let entry = liveToolPanels.get(toolCallId);
-  if (!entry?.el?.isConnected) {
-    // Provider-resolved tools can legitimately be completion-only. The same
-    // path also recreates a background job panel after turn-end cleanup.
-    entry = appendLiveToolPanel(data, { completionOnly: true });
-  }
-  runningTools.delete(toolCallId);
-  updateWorkingIndicator();
-  const resolvedName = toolName || entry?.toolName || 'tool';
-  const resolvedArgs = args ?? entry?.args ?? {};
-  applyMoodFromTool(resolvedName, resolvedArgs);
-  if (!entry?.el) return;
-
-  const output = getToolOutputText(result);
-  const imagesHtml = imageBlocksHtml(result && result.content, 'tool result image');
-  const durationMs = entry.startTime ? (Date.now() - entry.startTime) : null;
-
-  // Rebuild the panel in its final state
-  const newHtml = buildLiveToolPanel(toolCallId, resolvedName, resolvedArgs, output, isError, true, durationMs, imagesHtml);
-  const tmp = document.createElement('div');
-  tmp.innerHTML = newHtml;
-  const newEl = tmp.firstElementChild;
-
-  entry.el.replaceWith(newEl);
-  entry.el = newEl;
-  entry.toolName = resolvedName;
-  entry.args = resolvedArgs;
-
-  // Keep in map for dedup — will be cleaned up on turn_end
-}
+const liveToolsController = PiDishBrowser.createLiveTools({
+  document, sessionState, started: (id, name) => { runningTools.set(id, name); updateWorkingIndicator(); },
+  finished: id => { runningTools.delete(id); updateWorkingIndicator(); }, pinned: isPinnedToBottom, scroll: scrollToBottom, jump: updateJumpButton,
+  images: (content, alt) => imageBlocksHtml(content, alt), mood: (name, args) => applyMoodFromTool(name, args),
+});
+function appendLiveToolPanel(data, options) { return liveToolsController.append(data, options); }
+function updateLiveToolPanel(data) { liveToolsController.update(data); }
+function finalizeLiveToolPanel(data) { liveToolsController.finish(data); }
 
 // =========================================================================
 // SSE Streaming (RPC events only)
@@ -1960,17 +1796,7 @@ function openMessageStream(url, owner) {
       abortingSessions.delete(sessionKey(hostId, sessionId));
       setTurnInProgress(false);
       cancelStreamingRender();
-      // Clean up any orphaned running panels (defensive)
-      for (const [id, entry] of liveToolPanels) {
-        if (entry.el && entry.el.classList.contains('running')) {
-          entry.el.classList.remove('running');
-          entry.el.classList.add('complete');
-          const dot = entry.el.querySelector('.live-tool-status-dot');
-          if (dot) dot.style.display = 'none';
-          const cursor = entry.el.querySelector('.live-tool-cursor');
-          if (cursor) cursor.remove();
-        }
-      }
+      liveToolsController.finishRunning();
       // Incrementally pull only new messages from JSONL — full reload
       // stalls long sessions.
       fetchNewMessagesSince(owner);
@@ -2953,8 +2779,7 @@ function readJSONPref(key, fallback) {
  * so the next turn starts fresh.
  */
 function removeDuplicatedLiveContent(container) {
-  container.querySelectorAll('details.live-tool-panel').forEach(el => el.remove());
-  liveToolPanels.clear();
+  liveToolsController.clear(container);
 }
 
 /**
@@ -2992,115 +2817,13 @@ function updateToolGroupSummary(group) { PiDishBrowser.updateToolGroupSummary(gr
 // open/closed state survives naturally and layout work stays minimal.
 // =========================================================================
 
-const STREAM_RENDER_INTERVAL_MS = 80;
-let streamPendingMessage = null;
-let streamRenderTimer = null;
-
-function queueStreamingRender(message) {
-  streamPendingMessage = message;
-  if (!streamRenderTimer) flushStreamingRender();
-}
-
-function flushStreamingRender() {
-  streamRenderTimer = null;
-  if (!streamPendingMessage) return;
-  const msg = streamPendingMessage;
-  streamPendingMessage = null;
-  try { renderStreamingMessage(msg); } catch (e) { console.error('streaming render failed:', e); }
-  streamRenderTimer = setTimeout(flushStreamingRender, STREAM_RENDER_INTERVAL_MS);
-}
-
-function cancelStreamingRender() {
-  streamPendingMessage = null;
-  if (streamRenderTimer) { clearTimeout(streamRenderTimer); streamRenderTimer = null; }
-}
-
-function ensureStreamingElement(container) {
-  let el = container.querySelector('.message.assistant[data-streaming="true"]');
-  if (el) return el;
-  const ts = Date.now();
-  container.insertAdjacentHTML('beforeend',
-    `<div class="message assistant streaming no-text" data-streaming="true" data-timestamp="${ts}">
-      <div class="message-header">
-        <span class="message-role assistant">π</span>
-        <span class="badge streaming">●</span>
-        <span class="message-time">${formatTime(ts)}</span>
-      </div>
-    </div>`);
-  return container.querySelector('.message.assistant[data-streaming="true"]');
-}
-
-function renderStreamingMessage(message) {
-  const container = document.getElementById('messages');
-  if (!container) return;
-  const wasPinned = isPinnedToBottom(container);
-  const el = ensureStreamingElement(container);
-
-  const blocks = Array.isArray(message.content)
-    ? message.content
-    : (typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : []);
-
-  blocks.forEach((block, i) => {
-    let blockEl = el.querySelector(`[data-block-index="${i}"]`);
-    if (blockEl && blockEl.dataset.blockType !== block.type) { blockEl.remove(); blockEl = null; }
-
-    if (block.type === 'thinking') {
-      const text = block.thinking || '';
-      if (!blockEl) {
-        el.insertAdjacentHTML('beforeend',
-          `<details class="thinking-block" data-block-index="${i}" data-block-type="thinking">
-            <summary class="thinking-header"><span class="thinking-label">Thinking</span><span class="thinking-preview"></span></summary>
-            <div class="thinking-text"></div>
-          </details>`);
-        blockEl = el.querySelector(`[data-block-index="${i}"]`);
-      }
-      if (blockEl._src !== text) {
-        blockEl._src = text;
-        blockEl.querySelector('.thinking-preview').textContent = text.substring(0, 80).replace(/\n/g, ' ') + '…';
-        blockEl.querySelector('.thinking-text').textContent = text;
-      }
-    } else if (block.type === 'text') {
-      const text = block.text || '';
-      if (!blockEl) {
-        el.insertAdjacentHTML('beforeend',
-          `<div class="message-content" data-block-index="${i}" data-block-type="text"><div class="markdown-body"></div></div>`);
-        blockEl = el.querySelector(`[data-block-index="${i}"]`);
-      }
-      if (blockEl._src !== text) {
-        blockEl._src = text;
-        blockEl.querySelector('.markdown-body').innerHTML = formatMarkdown(text);
-      }
-    } else if (block.type === 'toolCall') {
-      const args = block.arguments || {};
-      const argsJson = JSON.stringify(args, null, 2);
-      // Match the static renderer: prime's ipython tool shows its `code`
-      // argument directly instead of the JSON wrapper.
-      const bodyText = block.name === 'ipython' && typeof args.code === 'string' ? args.code : argsJson;
-      if (!blockEl) {
-        el.insertAdjacentHTML('beforeend',
-          `<details class="tool-call" data-block-index="${i}" data-block-type="toolCall">
-            <summary class="tool-call-header">
-              <span class="tool-call-icon">⚡</span><span class="tool-call-name"></span>
-              <span class="tool-call-summary"></span>
-            </summary>
-            <div class="tool-call-content"><pre><code></code></pre></div>
-          </details>`);
-        blockEl = el.querySelector(`[data-block-index="${i}"]`);
-      }
-      if (blockEl._src !== argsJson) {
-        blockEl._src = argsJson;
-        blockEl.querySelector('.tool-call-name').textContent = block.name || 'tool';
-        blockEl.querySelector('.tool-call-summary').textContent = getToolSummary(block.name, args);
-        blockEl.querySelector('.tool-call-content code').textContent = bodyText;
-      }
-    }
-  });
-
-  // Same predicate as the static renderer (helpers.js) — the two maintaining
-  // this independently is how they drifted on errorMessage handling.
-  el.classList.toggle('no-text', !messageHasVisibleText(message));
-  if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
-}
+const streamingRenderer = PiDishBrowser.createStreamingRenderer({
+  document, sessionState, markdown: text => formatMarkdown(text), pinned: isPinnedToBottom, scroll: scrollToBottom, jump: updateJumpButton,
+});
+function queueStreamingRender(message) { streamingRenderer.queue(message); }
+function flushStreamingRender() { streamingRenderer.flush(); }
+function cancelStreamingRender() { streamingRenderer.cancel(); }
+function renderStreamingMessage(message) { streamingRenderer.render(message); }
 
 function setStatus(message, type = '') {
   const status = document.getElementById('status');
@@ -3112,47 +2835,10 @@ function setStatus(message, type = '') {
 // Mood indicator — web fallback for the mood extension's custom editor
 // =========================================================================
 
-function setMoodIndicator(description, face) {
-  const inputArea = document.querySelector('.input-area');
-  if (!inputArea) return;
-
-  let el = document.getElementById('moodIndicator');
-  const mood = normalizeMood(description, face);
-  if (!mood) {
-    el?.remove();
-    return;
-  }
-
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'moodIndicator';
-    el.className = 'mood-indicator';
-    inputArea.insertBefore(el, inputArea.firstChild);
-  }
-
-  el.dataset.moodDescription = mood.description;
-  el.dataset.moodFace = mood.face;
-  el.textContent = `${mood.description} ${mood.face}`.trim();
-}
-
-function applyMoodFromTool(toolName, args) {
-  if (toolName !== 'set_mood') return;
-  // Known set_mood arg shapes: {description, kaomoji} (the mood extension)
-  // and {mood, label?} (footer-style variants — mood word or kaomoji, plus
-  // an optional label).
-  setMoodIndicator(args?.description ?? args?.label, args?.kaomoji || args?.face || args?.mood);
-}
-
-function updateMoodFromMessages(messages) {
-  for (const msg of messages || []) {
-    const content = Array.isArray(msg.content) ? msg.content : [];
-    for (const block of content) {
-      if (block?.type === 'toolCall' && block.name === 'set_mood') {
-        applyMoodFromTool(block.name, block.arguments || {});
-      }
-    }
-  }
-}
+const moodController = PiDishBrowser.createMood(document);
+function setMoodIndicator(description, face) { moodController.set(description, face); }
+function applyMoodFromTool(name, args) { moodController.fromTool(name, args); }
+function updateMoodFromMessages(messages) { moodController.fromMessages(messages); }
 
 // =========================================================================
 // Extension UI — unobtrusive hidable cards

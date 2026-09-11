@@ -56,8 +56,10 @@ var PiDishBrowser = (() => {
     createHostSessionLoader: () => createHostSessionLoader,
     createHostSettings: () => createHostSettings,
     createHostTransport: () => createHostTransport,
+    createLiveTools: () => createLiveTools,
     createMessageRenderer: () => createMessageRenderer,
     createModelCatalog: () => createModelCatalog,
+    createMood: () => createMood,
     createNewSession: () => createNewSession,
     createNewSessionConfigPreview: () => createNewSessionConfigPreview,
     createNewSessionPreferences: () => createNewSessionPreferences,
@@ -82,6 +84,7 @@ var PiDishBrowser = (() => {
     createSkills: () => createSkills,
     createSpawnTargetPicker: () => createSpawnTargetPicker,
     createSpawnTargets: () => createSpawnTargets,
+    createStreamingRenderer: () => createStreamingRenderer,
     createTerminalController: () => createTerminalController,
     createThemes: () => createThemes,
     createTranscriptTree: () => createTranscriptTree,
@@ -2928,6 +2931,12 @@ var PiDishBrowser = (() => {
   }
   function contextClass(percent) {
     return percent > 66 ? "critical" : percent > 33 ? "high" : "";
+  }
+  function normalizeMood(description, face) {
+    description = String(description || "").trim().split(/\s+/)[0]?.toLowerCase() || "";
+    face = String(face || "").trim().replace(/[\r\n\t]/g, " ").replace(/\s+/g, " ");
+    if (!description && !face) return null;
+    return { description, face };
   }
   function pushPromptHistory(list, message3, cap) {
     const out = Array.isArray(list) ? list.filter((value) => typeof value === "string") : [];
@@ -15008,6 +15017,11 @@ ${restored}`;
     if (typeof msg.content === "string") return !!msg.content;
     return Array.isArray(msg.content) && msg.content.some((b) => record8(b) && b.type === "text" && typeof b.text === "string" && !!b.text);
   }
+  function getToolOutputText(partialResult) {
+    if (!record8(partialResult) || !Array.isArray(partialResult.content)) return "";
+    const blocks = partialResult.content;
+    return blocks.filter((c) => record8(c) && c.type === "text").map((c) => typeof c.text === "string" ? c.text : "").join("");
+  }
   function extractImageBlocks(content) {
     if (!Array.isArray(content)) return [];
     const out = [];
@@ -15444,6 +15458,363 @@ ${restored}`;
     )];
     group.querySelector(".tool-group-label").textContent = n ? `\u26A1 ${n} tool use${n === 1 ? "" : "s"}` : "\u{1F9E0} thinking";
     group.querySelector(".tool-group-preview").textContent = names.slice(0, 4).join(", ") + (names.length > 4 ? "\u2026" : "");
+  }
+
+  // src/browser/live-tools.ts
+  function decode(value) {
+    if (!record8(value) || typeof value.toolCallId !== "string" || !value.toolCallId) return null;
+    return {
+      toolCallId: value.toolCallId,
+      toolName: typeof value.toolName === "string" ? value.toolName : void 0,
+      args: value.args,
+      startedAt: typeof value.startedAt === "string" || finite2(value.startedAt) ? value.startedAt : void 0,
+      partialResult: record8(value.partialResult) ? { content: value.partialResult.content } : void 0,
+      result: record8(value.result) ? { content: value.result.content } : void 0,
+      isError: value.isError === true
+    };
+  }
+  function createLiveTools(options2) {
+    const { document: document2, sessionState } = options2;
+    let disposed = false;
+    const liveToolPanels = /* @__PURE__ */ new Map();
+    const owns = (owner) => !disposed && sessionState.ownsSelection(owner);
+    function liveToolOutputHtml(output) {
+      const parsed = parseIpythonResult(output);
+      return escapeHtml(truncate(parsed ? parsed.output : output, 8e3));
+    }
+    function buildLiveToolPanel(toolCallId, toolName, args, output, isError, isComplete, durationMs = null, imagesHtml = "") {
+      const stateClass = isComplete ? isError ? "error" : "complete" : "running";
+      const summary = getToolSummary(toolName, args);
+      const openAttr = output || imagesHtml ? " open" : "";
+      let statusHtml = "";
+      if (isComplete) {
+        if (isError) {
+          statusHtml = '<span class="live-tool-status error-label">\u2717 error</span>';
+        } else {
+          const dur = durationMs != null ? (durationMs / 1e3).toFixed(1) + "s" : "";
+          statusHtml = '<span class="live-tool-status success-label">\u2713</span>' + (dur ? '<span class="live-tool-status duration">' + dur + "</span>" : "");
+        }
+      } else {
+        statusHtml = '<span class="live-tool-status running-label">running</span>';
+      }
+      const cursorHtml = isComplete ? "" : '<span class="live-tool-cursor"></span>';
+      const outputHtml = output ? '<div class="live-tool-output">' + liveToolOutputHtml(output) + cursorHtml + "</div>" : !isComplete ? '<div class="live-tool-output"><span class="live-tool-cursor"></span></div>' : "";
+      return '<details class="live-tool-panel ' + stateClass + '" data-tool-call-id="' + escapeHtml(toolCallId) + '"' + openAttr + '><summary class="live-tool-header"><span class="live-tool-icon">\u26A1</span><span class="live-tool-name">' + escapeHtml(toolName) + "</span>" + (summary ? '<span class="live-tool-summary">' + escapeHtml(summary) + "</span>" : "") + statusHtml + '<span class="live-tool-status-dot"></span></summary>' + outputHtml + imagesHtml + "</details>";
+    }
+    function appendLiveToolPanel(data, { completionOnly = false } = {}) {
+      const owner = sessionState.captureSelection();
+      if (disposed || !owner) return null;
+      const { toolCallId, toolName, args } = data;
+      if (!toolCallId) return null;
+      const stored = liveToolPanels.get(toolCallId), existing = stored && owns(stored.owner) ? stored : null;
+      const resolvedName = toolName || existing?.toolName || "tool";
+      const resolvedArgs = args ?? existing?.args ?? {};
+      options2.started(toolCallId, resolvedName);
+      if (existing?.el?.isConnected && existing.el.classList.contains("running")) {
+        return existing;
+      }
+      const container = document2.getElementById("messages");
+      if (!container) return null;
+      const wasPinned = options2.pinned(container);
+      const html = buildLiveToolPanel(toolCallId, resolvedName, resolvedArgs, "", false, false);
+      let el;
+      if (existing?.el?.isConnected) {
+        const tmp = document2.createElement("div");
+        tmp.innerHTML = html;
+        el = tmp.firstElementChild;
+        existing.el.replaceWith(el);
+      } else {
+        container.insertAdjacentHTML("beforeend", html);
+        el = container.lastElementChild;
+      }
+      const parsedStartedAt = finite2(data.startedAt) ? data.startedAt : typeof data.startedAt === "string" ? Date.parse(data.startedAt) : NaN;
+      const entry = {
+        owner,
+        el,
+        startTime: finite2(parsedStartedAt) ? parsedStartedAt : completionOnly ? null : Date.now(),
+        toolName: resolvedName,
+        args: resolvedArgs
+      };
+      liveToolPanels.set(toolCallId, entry);
+      if (wasPinned) options2.scroll(container);
+      else options2.jump(container);
+      return entry;
+    }
+    function updateLiveToolPanel(data) {
+      if (disposed || !sessionState.captureSelection()) return;
+      const { toolCallId, partialResult } = data;
+      const stored = liveToolPanels.get(toolCallId);
+      let entry = stored && owns(stored.owner) ? stored : null;
+      if (!entry?.el?.isConnected || !entry.el.classList.contains("running")) {
+        entry = appendLiveToolPanel({
+          ...data,
+          toolName: data.toolName || entry?.toolName,
+          args: data.args ?? entry?.args
+        });
+      }
+      if (!entry?.el) return;
+      const output = getToolOutputText(partialResult);
+      const imagesHtml = options2.images(partialResult && partialResult.content, "tool result image");
+      if (!output && !imagesHtml) return;
+      const container = document2.getElementById("messages");
+      const wasPinned = container ? options2.pinned(container) : false;
+      let outputEl = entry.el.querySelector(".live-tool-output");
+      if (output && !outputEl) {
+        const cursorHtml = '<span class="live-tool-cursor"></span>';
+        outputEl = document2.createElement("div");
+        outputEl.className = "live-tool-output";
+        outputEl.innerHTML = liveToolOutputHtml(output) + cursorHtml;
+        entry.el.appendChild(outputEl);
+        entry.el.setAttribute("open", "");
+      } else if (output && outputEl) {
+        const cursorEl = outputEl.querySelector(".live-tool-cursor");
+        outputEl.innerHTML = liveToolOutputHtml(output);
+        if (cursorEl) outputEl.appendChild(cursorEl);
+        else outputEl.insertAdjacentHTML("beforeend", '<span class="live-tool-cursor"></span>');
+      }
+      if (imagesHtml) {
+        const existing = entry.el.querySelector(".msg-images");
+        if (existing) existing.outerHTML = imagesHtml;
+        else entry.el.insertAdjacentHTML("beforeend", imagesHtml);
+        entry.el.setAttribute("open", "");
+      }
+      if (outputEl) outputEl.scrollTop = outputEl.scrollHeight;
+      if (container && wasPinned) options2.scroll(container);
+    }
+    function finalizeLiveToolPanel(data) {
+      if (disposed || !sessionState.captureSelection()) return;
+      const { toolCallId, toolName, args, result, isError } = data;
+      const stored = liveToolPanels.get(toolCallId);
+      let entry = stored && owns(stored.owner) ? stored : null;
+      if (!entry?.el?.isConnected) {
+        entry = appendLiveToolPanel(data, { completionOnly: true });
+      }
+      options2.finished(toolCallId);
+      const resolvedName = toolName || entry?.toolName || "tool";
+      const resolvedArgs = args ?? entry?.args ?? {};
+      options2.mood(resolvedName, resolvedArgs);
+      if (!entry?.el) return;
+      const output = getToolOutputText(result);
+      const imagesHtml = options2.images(result && result.content, "tool result image");
+      const durationMs = entry.startTime ? Date.now() - entry.startTime : null;
+      const newHtml = buildLiveToolPanel(toolCallId, resolvedName, resolvedArgs, output, isError, true, durationMs, imagesHtml);
+      const tmp = document2.createElement("div");
+      tmp.innerHTML = newHtml;
+      const newEl = tmp.firstElementChild;
+      entry.el.replaceWith(newEl);
+      entry.el = newEl;
+      entry.toolName = resolvedName;
+      entry.args = resolvedArgs;
+    }
+    function clear(container) {
+      container?.querySelectorAll("details.live-tool-panel").forEach((el) => el.remove());
+      liveToolPanels.clear();
+    }
+    function finishRunning() {
+      for (const entry of liveToolPanels.values()) {
+        if (!owns(entry.owner) || !entry.el.classList.contains("running")) continue;
+        entry.el.classList.remove("running");
+        entry.el.classList.add("complete");
+        const dot = entry.el.querySelector(".live-tool-status-dot");
+        if (dot) dot.style.display = "none";
+        entry.el.querySelector(".live-tool-cursor")?.remove();
+      }
+    }
+    return {
+      append(value, options3) {
+        const data = decode(value);
+        return data ? appendLiveToolPanel(data, options3) : null;
+      },
+      update(value) {
+        const data = decode(value);
+        if (data) updateLiveToolPanel(data);
+      },
+      finish(value) {
+        const data = decode(value);
+        if (data) finalizeLiveToolPanel(data);
+      },
+      clear,
+      finishRunning,
+      get count() {
+        return liveToolPanels.size;
+      },
+      dispose() {
+        if (disposed) return;
+        disposed = true;
+        liveToolPanels.clear();
+      }
+    };
+  }
+
+  // src/browser/streaming-render.ts
+  function createStreamingRenderer(options2) {
+    const { document: document2, sessionState } = options2;
+    const sources = /* @__PURE__ */ new WeakMap();
+    let disposed = false, timer = null;
+    let pending = null;
+    function queue(value) {
+      const owner = sessionState.captureSelection();
+      if (disposed || !owner) return;
+      pending = { message: decodeRenderMessage(value), owner };
+      if (!timer) flush();
+    }
+    function flush() {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      const frame = pending;
+      pending = null;
+      if (disposed || !frame || !sessionState.ownsSelection(frame.owner)) return;
+      try {
+        renderStreamingMessage(frame.message, frame.owner);
+      } catch (error) {
+        console.error("streaming render failed:", error);
+      }
+      timer = setTimeout(flush, 80);
+    }
+    function cancel() {
+      pending = null;
+      if (timer) clearTimeout(timer);
+      timer = null;
+    }
+    function ensureStreamingElement(container) {
+      let el = container.querySelector('.message.assistant[data-streaming="true"]');
+      if (el) return el;
+      const ts = Date.now();
+      container.insertAdjacentHTML(
+        "beforeend",
+        `<div class="message assistant streaming no-text" data-streaming="true" data-timestamp="${ts}">
+      <div class="message-header">
+        <span class="message-role assistant">\u03C0</span>
+        <span class="badge streaming">\u25CF</span>
+        <span class="message-time">${formatTime(ts)}</span>
+      </div>
+    </div>`
+      );
+      return container.querySelector('.message.assistant[data-streaming="true"]');
+    }
+    function renderStreamingMessage(message3, owner = sessionState.captureSelection()) {
+      if (disposed || !sessionState.ownsSelection(owner)) return;
+      const container = document2.getElementById("messages");
+      if (!container) return;
+      const wasPinned = options2.pinned(container);
+      const el = ensureStreamingElement(container);
+      const blocks = Array.isArray(message3.content) ? message3.content : typeof message3.content === "string" ? [{ type: "text", text: message3.content }] : [];
+      blocks.forEach((block, i) => {
+        if (typeof block === "string") return;
+        let blockEl = el.querySelector(`[data-block-index="${i}"]`);
+        if (blockEl && blockEl.dataset.blockType !== block.type) {
+          blockEl.remove();
+          blockEl = null;
+        }
+        if (block.type === "thinking") {
+          const text17 = block.thinking || "";
+          if (!blockEl) {
+            el.insertAdjacentHTML(
+              "beforeend",
+              `<details class="thinking-block" data-block-index="${i}" data-block-type="thinking">
+            <summary class="thinking-header"><span class="thinking-label">Thinking</span><span class="thinking-preview"></span></summary>
+            <div class="thinking-text"></div>
+          </details>`
+            );
+            blockEl = el.querySelector(`[data-block-index="${i}"]`);
+          }
+          if (!blockEl) return;
+          if (sources.get(blockEl) !== text17) {
+            sources.set(blockEl, text17);
+            blockEl.querySelector(".thinking-preview").textContent = text17.substring(0, 80).replace(/\n/g, " ") + "\u2026";
+            blockEl.querySelector(".thinking-text").textContent = text17;
+          }
+        } else if (block.type === "text") {
+          const text17 = block.text || "";
+          if (!blockEl) {
+            el.insertAdjacentHTML(
+              "beforeend",
+              `<div class="message-content" data-block-index="${i}" data-block-type="text"><div class="markdown-body"></div></div>`
+            );
+            blockEl = el.querySelector(`[data-block-index="${i}"]`);
+          }
+          if (!blockEl) return;
+          if (sources.get(blockEl) !== text17) {
+            sources.set(blockEl, text17);
+            blockEl.querySelector(".markdown-body").innerHTML = options2.markdown(text17);
+          }
+        } else if (block.type === "toolCall") {
+          const args = block.arguments || {};
+          const argsJson = JSON.stringify(args, null, 2);
+          const bodyText = block.name === "ipython" && typeof args.code === "string" ? args.code : argsJson;
+          if (!blockEl) {
+            el.insertAdjacentHTML(
+              "beforeend",
+              `<details class="tool-call" data-block-index="${i}" data-block-type="toolCall">
+            <summary class="tool-call-header">
+              <span class="tool-call-icon">\u26A1</span><span class="tool-call-name"></span>
+              <span class="tool-call-summary"></span>
+            </summary>
+            <div class="tool-call-content"><pre><code></code></pre></div>
+          </details>`
+            );
+            blockEl = el.querySelector(`[data-block-index="${i}"]`);
+          }
+          if (!blockEl) return;
+          const signature = JSON.stringify([block.name, args]);
+          if (sources.get(blockEl) !== signature) {
+            sources.set(blockEl, signature);
+            blockEl.querySelector(".tool-call-name").textContent = block.name || "tool";
+            blockEl.querySelector(".tool-call-summary").textContent = getToolSummary(block.name || "", args);
+            blockEl.querySelector(".tool-call-content code").textContent = bodyText;
+          }
+        }
+      });
+      el.classList.toggle("no-text", !messageHasVisibleText(message3));
+      if (wasPinned) options2.scroll(container);
+      else options2.jump(container);
+    }
+    return { queue, flush, cancel, render(value) {
+      renderStreamingMessage(decodeRenderMessage(value));
+    }, dispose() {
+      cancel();
+      disposed = true;
+    } };
+  }
+
+  // src/browser/mood.ts
+  function createMood(document2) {
+    function setMoodIndicator(description, face) {
+      const inputArea = document2.querySelector(".input-area");
+      if (!inputArea) return;
+      let el = document2.getElementById("moodIndicator");
+      const mood = normalizeMood(description, face);
+      if (!mood) {
+        el?.remove();
+        return;
+      }
+      if (!el) {
+        el = document2.createElement("div");
+        el.id = "moodIndicator";
+        el.className = "mood-indicator";
+        inputArea.insertBefore(el, inputArea.firstChild);
+      }
+      el.dataset.moodDescription = String(mood.description);
+      el.dataset.moodFace = String(mood.face);
+      el.textContent = `${mood.description} ${mood.face}`.trim();
+    }
+    function applyMoodFromTool(toolName, value) {
+      const args = record8(value) ? value : {};
+      if (toolName !== "set_mood") return;
+      setMoodIndicator(args?.description ?? args?.label, args?.kaomoji || args?.face || args?.mood);
+    }
+    function updateMoodFromMessages(messages) {
+      for (const value of messages || []) {
+        const msg = decodeRenderMessage(value);
+        const content = Array.isArray(msg.content) ? msg.content : [];
+        for (const block of content) {
+          if (typeof block !== "string" && block?.type === "toolCall" && block.name === "set_mood") {
+            applyMoodFromTool(block.name, block.arguments || {});
+          }
+        }
+      }
+    }
+    return { set: setMoodIndicator, fromTool: applyMoodFromTool, fromMessages: updateMoodFromMessages };
   }
   return __toCommonJS(index_exports);
 })();
