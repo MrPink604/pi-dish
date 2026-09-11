@@ -268,3 +268,8 @@ are not completion percentages.
   review of the local commit is required before push.
 - Next: shared helpers, remaining new-session shell, other feature controllers
   and transcript/streaming/startup ownership.
+
+- Fable cleared spawn implementation `454ce1c` and identified two stale references.
+  The follow-up names the typed polling owner in this guide and captures the
+  failed provisional composer key before test cleanup switches sessions. Strict
+  checks and desktop/mobile smoke passed again; follow-up review precedes push.

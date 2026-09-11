@@ -1699,8 +1699,9 @@ let remoteHost = null; // second pi-dish (multi-host section)
       await desktop.locator('#btnSend').isDisabled(),
       'failed spawn keeps its provisional draft accessible');
     await desktop.evaluate(async (id) => {
+      const owner = pendingComposerKey(currentSessionSpawnId);
       await selectSession(id);
-      localStorage.removeItem('pi-dish-draft-spawn:ui-spawn-1');
+      localStorage.removeItem(draftKey(owner));
     }, SESSION_ID);
     await desktop.unroute('**/api/sessions/new');
     await desktop.unroute('**/api/session-spawns/ui-spawn-1');

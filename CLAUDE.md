@@ -718,7 +718,7 @@ through the shared async path (`submitNewSession`): POST `/api/sessions/new`
 with `async:true` → `{ spawnId }`, register the provisional sidebar row, swap
 in the pending composer pane (`showPendingSessionView`, which closes this
 takeover like the other `<main>`-level surfaces), and let
-`monitorSessionSpawn` poll `/api/session-spawns/:id` to reconcile the row and
+the typed spawn controller poll `/api/session-spawns/:id` to reconcile the row and
 migrate the draft onto the real session. A rejected POST shows an inline
 error and the takeover stays open. The workspace-header `+` button
 direct-spawns via `createSession(cwd)` (same async path, default model)
