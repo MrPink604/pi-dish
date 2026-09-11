@@ -2082,3 +2082,9 @@ Latest-activation links and refinement setup retain that host identity even when
 a same-id session on a peer is selected. Refine requires coverage for the current
 skill and only prepares a draft; it does not send a prompt. Header/detail/list
 controls and indexing/entry-focus timers are retired with their owning view.
+
+Advanced search is owned by `src/browser/search-view.ts`, with payload decoding
+and host pruning in `search-data.ts`. Query typing retires earlier requests
+before debounce. Fan-out preserves partial results and uses frozen endpoints.
+Cards/facets/input listeners are owned by the view, with disposal clearing
+indexing/debounce timers and navigation guarded through lazy session loading.

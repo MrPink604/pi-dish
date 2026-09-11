@@ -407,3 +407,21 @@ Fable 5.1 cleared bounce commit `2e46f5d`, which is pushed.
 - Next: advanced search and usage, then remaining features and rendering.
 
 Fable 5.1 cleared session-navigation commit `fa5316a`, which is pushed.
+
+## Checkpoint 18 — advanced search
+
+- `search-view.ts` owns query/debounce/indexing state, fan-out results, facet
+  listeners and result navigation. `search-data.ts` narrows wire payloads,
+  applies the shared host grammar and stamps results with their actual host.
+- Typing retires the preceding query before the next debounce runs. Progressive
+  host results remain supported; late failures cannot replace newer input.
+  Captured endpoints and query/view checks guard navigation and fan-out renders.
+- Facet, card and input listeners and timers retire on replacement/close/dispose.
+  Three browser regressions cover retained actions, old failures and disposal;
+  unit/strict contracts cover malformed results, host stamping and host pruning.
+- Strict checks, 908 backend tests, 129 browser regressions, independent UI
+  scenarios and full desktop/mobile smoke passed on the verified draft. The
+  integrated runtime/config/test files match it byte for byte; strict checks
+  passed again. Fable review is required before push.
+- Fable 5.1 cleared skills commit `3893e90`, which is pushed.
+- Next: usage, then remaining features and rendering.

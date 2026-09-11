@@ -364,3 +364,8 @@ selection/endpoint instead of borrowing whichever session is current later.
 for unknown payload decoding. The entry host remains explicit through requests,
 activation navigation and refinement setup. Rendered controls and indexing/focus
 timers follow the owning view; refinement requires matching-path coverage.
+
+`search-view.ts` owns fleet advanced-search requests, query/facet state and
+result controls. `search-data.ts` decodes payloads and attaches the answering
+host before merging. Input changes immediately invalidate prior responses;
+result activation retains the query and endpoint that rendered its card.

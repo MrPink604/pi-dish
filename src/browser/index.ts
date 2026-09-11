@@ -39,3 +39,6 @@ export { createSessionSearch, decodeSessionSearch } from './session-search';
 
 export { createSkills } from './skills';
 export { decodeSkillDirectory, decodeSkillCoverage } from './skills-data';
+
+export { createSearchView } from './search-view';
+export { decodeSearchPayload, mergeSearchPayloads, queryHosts } from './search-data';

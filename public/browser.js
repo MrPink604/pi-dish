@@ -46,6 +46,7 @@ var PiDishBrowser = (() => {
     createNewSessionConfigPreview: () => createNewSessionConfigPreview,
     createNewSessionPreferences: () => createNewSessionPreferences,
     createRecovery: () => createRecovery,
+    createSearchView: () => createSearchView,
     createSessionApi: () => createSessionApi,
     createSessionRelations: () => createSessionRelations,
     createSessionSearch: () => createSessionSearch,
@@ -66,6 +67,7 @@ var PiDishBrowser = (() => {
     decodeModelCatalog: () => decodeModelCatalog,
     decodeRecoveryMode: () => decodeRecoveryMode,
     decodeRecoveryReport: () => decodeRecoveryReport,
+    decodeSearchPayload: () => decodeSearchPayload,
     decodeSessionRelations: () => decodeSessionRelations,
     decodeSessionSearch: () => decodeSessionSearch,
     decodeSkillCoverage: () => decodeSkillCoverage,
@@ -77,6 +79,7 @@ var PiDishBrowser = (() => {
     hostKeyOf: () => hostKeyOf,
     hostSettingsHtml: () => hostSettingsHtml,
     mergeHostEntries: () => mergeHostEntries,
+    mergeSearchPayloads: () => mergeSearchPayloads,
     modelCatalogUrl: () => modelCatalogUrl,
     modelHiddenNote: () => modelHiddenNote,
     modelSelectOptionsHtml: () => modelSelectOptionsHtml,
@@ -84,6 +87,7 @@ var PiDishBrowser = (() => {
     mountModelSelector: () => mountModelSelector,
     mountThinkingSelector: () => mountThinkingSelector,
     normalizeHostBase: () => normalizeHostBase,
+    queryHosts: () => queryHosts,
     reconcileHostCatalog: () => reconcileHostCatalog,
     resolveColorToHex: () => resolveColorToHex,
     rgbStringToHex: () => rgbStringToHex,
@@ -291,10 +295,10 @@ var PiDishBrowser = (() => {
     const doc = root.ownerDocument;
     let view = null;
     let disposed = false;
-    function element(tag, className, text8) {
+    function element(tag, className, text9) {
       const node = doc.createElement(tag);
       node.className = className;
-      if (text8 !== void 0) node.textContent = text8;
+      if (text9 !== void 0) node.textContent = text9;
       return node;
     }
     const search = element("input", "model-search");
@@ -311,8 +315,8 @@ var PiDishBrowser = (() => {
       node.dataset.value = value;
       return node;
     }
-    function button(text8, name, value = "", primary = false) {
-      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text8);
+    function button(text9, name, value = "", primary = false) {
+      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text9);
       node.type = "button";
       return action(node, name, value);
     }
@@ -547,8 +551,8 @@ var PiDishBrowser = (() => {
     const state = prev && typeof prev === "object" ? prev : null;
     const errText = (value) => {
       if (value == null) return null;
-      const text8 = String(typeof value === "object" && "message" in value && value.message || value);
-      return text8 || null;
+      const text9 = String(typeof value === "object" && "message" in value && value.message || value);
+      return text9 || null;
     };
     const eventError = event && typeof event === "object" && "error" in event ? errText(event.error) : null;
     if (kind === "blocked") {
@@ -2742,9 +2746,9 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/helper-format.ts
-  function escapeHtml(text8) {
-    if (text8 == null || text8 === "") return "";
-    return String(text8).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  function escapeHtml(text9) {
+    if (text9 == null || text9 === "") return "";
+    return String(text9).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
   function formatRelativeTime(ts) {
     if (!ts) return "";
@@ -2773,6 +2777,9 @@ var PiDishBrowser = (() => {
     if (host.name) return String(host.name);
     if (!host.base) return "this host";
     return String(host.base).replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+  }
+  function sessionMetaText(session) {
+    return [session.name, session.cwd, session.model, session.id].join(" ").toLowerCase();
   }
 
   // src/browser/helper-models.ts
@@ -2804,6 +2811,123 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/helper-query.ts
+  var QUERY_FIELDS = /* @__PURE__ */ new Set(["name", "cwd", "model", "id", "is", "host", "routine"]);
+  function parseQueryDate(value, now) {
+    const rel = /^(\d+)([hdw])$/.exec(value);
+    if (rel) {
+      const ms = Number(rel[1]) * (rel[2] === "h" ? 36e5 : rel[2] === "d" ? 864e5 : 7 * 864e5);
+      return now - ms;
+    }
+    const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (iso) {
+      const year = Number(iso[1]), month = Number(iso[2]), day = Number(iso[3]);
+      const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+      const maxDay = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+      if (!maxDay || day < 1 || day > maxDay) return null;
+      const t = (/* @__PURE__ */ new Date(value + "T00:00:00")).getTime();
+      return finite2(t) ? t : null;
+    }
+    return null;
+  }
+  function queryTokenRe() {
+    return /(-?)([a-zA-Z]+:)?("([^"]*)"|\S+)/g;
+  }
+  function stripQueryField(query, field) {
+    if (!query) return "";
+    const want = String(field || "").toLowerCase();
+    const tokenRe = queryTokenRe();
+    const kept = [];
+    let m;
+    while ((m = tokenRe.exec(query)) !== null) {
+      const prefix = m[2] ? m[2].slice(0, -1).toLowerCase() : null;
+      if (prefix !== want) kept.push(m[0]);
+    }
+    return kept.join(" ");
+  }
+  function parseSessionQuery(query, now = Date.now()) {
+    const parsed = { terms: [], since: null, before: null };
+    if (!query) return parsed;
+    const tokenRe = queryTokenRe();
+    let m;
+    while ((m = tokenRe.exec(query)) !== null) {
+      const neg = m[1] === "-";
+      const rawPrefix = m[2] ? m[2].slice(0, -1).toLowerCase() : null;
+      const value = (m[4] !== void 0 ? m[4] : m[3]).toLowerCase();
+      if (!neg && (rawPrefix === "since" || rawPrefix === "before")) {
+        const t = parseQueryDate(value, now);
+        if (t !== null) {
+          if (rawPrefix === "since") parsed.since = Math.max(parsed.since ?? -Infinity, t);
+          else parsed.before = Math.min(parsed.before ?? Infinity, t);
+          continue;
+        }
+      }
+      if (rawPrefix && QUERY_FIELDS.has(rawPrefix)) {
+        if (value) parsed.terms.push({ neg, field: rawPrefix, value });
+        continue;
+      }
+      const literal = (rawPrefix ? rawPrefix + ":" : "") + value;
+      if (literal) parsed.terms.push({ neg, field: null, value: literal });
+    }
+    return parsed;
+  }
+  function positiveQueryTokens(parsed) {
+    return parsed.terms.filter((t) => !t.neg && !t.field).map((t) => t.value);
+  }
+  function isAutomationSession(session) {
+    return !!(session && (session.routine || session.routineId));
+  }
+  function evaluateSessionQuery(parsed, session, contentText) {
+    if (parsed.since !== null || parsed.before !== null) {
+      const t = new Date(session.lastActivity || 0).getTime();
+      if (parsed.since !== null && !(t >= parsed.since)) return false;
+      if (parsed.before !== null && !(t < parsed.before)) return false;
+    }
+    const meta = sessionMetaText(session);
+    for (const term of parsed.terms) {
+      let hit;
+      if (term.field === "host") {
+        hit = String(session.hostLabel || session.host || "").toLowerCase().includes(term.value);
+      } else if (term.field === "is") {
+        hit = term.value === "active" && !!session.isActive || term.value === "automation" && isAutomationSession(session);
+      } else {
+        const hay = term.field ? String(session[term.field] || "").toLowerCase() : meta;
+        hit = hay.includes(term.value);
+        if (!hit && !term.neg && !term.field && contentText) hit = contentText.includes(term.value);
+      }
+      if (hit === term.neg) return false;
+    }
+    return true;
+  }
+  function countOccurrences(text9, token) {
+    if (!text9 || !token) return 0;
+    let n = 0, i = text9.indexOf(token);
+    while (i !== -1) {
+      n++;
+      i = text9.indexOf(token, i + token.length);
+    }
+    return n;
+  }
+  function scoreSessionMatch(parsed, session, contentText) {
+    const tokens = positiveQueryTokens(parsed);
+    if (!tokens.length) return 0;
+    const name = String(session.name || "").toLowerCase();
+    const other = [session.cwd, session.model, session.id].join(" ").toLowerCase();
+    let total = 0;
+    for (const token of tokens) {
+      if (name.includes(token)) total += 100;
+      if (other.includes(token)) total += 30;
+      const n = countOccurrences(contentText, token);
+      if (n > 0) total += 20 + Math.min(30, Math.round(8 * Math.log2(n)));
+    }
+    return Math.round(total);
+  }
+  function applyHostTerms(list, query) {
+    if (!query) return list;
+    const terms = parseSessionQuery(query).terms.filter((t) => t.field === "host");
+    if (!terms.length) return list;
+    const parsed = { terms, since: null, before: null };
+    return list.filter((s) => evaluateSessionQuery(parsed, s));
+  }
   function fuzzyMatch(query, str) {
     query = query.toLowerCase();
     str = str.toLowerCase();
@@ -2838,6 +2962,32 @@ var PiDishBrowser = (() => {
     }
     result += escapeHtml(str.slice(last));
     return result;
+  }
+  function highlightTokens(text9, tokens) {
+    const str = String(text9);
+    const lower = str.toLowerCase();
+    const ranges = [];
+    for (const t of tokens) {
+      if (!t) continue;
+      const needle = String(t).toLowerCase();
+      for (let i = lower.indexOf(needle); i !== -1; i = lower.indexOf(needle, i + 1)) {
+        ranges.push([i, i + needle.length]);
+      }
+    }
+    if (!ranges.length) return escapeHtml(str);
+    ranges.sort((a, b) => a[0] - b[0]);
+    const merged = [ranges[0]];
+    for (const [s, e] of ranges.slice(1)) {
+      const last = merged[merged.length - 1];
+      if (s <= last[1]) last[1] = Math.max(last[1], e);
+      else merged.push([s, e]);
+    }
+    let out = "", pos = 0;
+    for (const [s, e] of merged) {
+      out += escapeHtml(str.slice(pos, s)) + "<mark>" + escapeHtml(str.slice(s, e)) + "</mark>";
+      pos = e;
+    }
+    return out + escapeHtml(str.slice(pos));
   }
 
   // src/browser/new-session.ts
@@ -4357,8 +4507,8 @@ var PiDishBrowser = (() => {
     const textNodes = [];
     while (walker.nextNode()) textNodes.push(walker.currentNode);
     for (const node of textNodes) {
-      const text8 = node.textContent || "";
-      const lower = text8.toLowerCase();
+      const text9 = node.textContent || "";
+      const lower = text9.toLowerCase();
       const ranges = [];
       for (const token of tokens) {
         let from = 0, at;
@@ -4373,14 +4523,14 @@ var PiDishBrowser = (() => {
       let cursor = 0;
       for (const [start, end] of ranges) {
         if (start < cursor) continue;
-        frag.appendChild(document2.createTextNode(text8.slice(cursor, start)));
+        frag.appendChild(document2.createTextNode(text9.slice(cursor, start)));
         const mark = document2.createElement("mark");
         mark.className = "search-mark";
-        mark.textContent = text8.slice(start, end);
+        mark.textContent = text9.slice(start, end);
         frag.appendChild(mark);
         cursor = end;
       }
-      frag.appendChild(document2.createTextNode(text8.slice(cursor)));
+      frag.appendChild(document2.createTextNode(text9.slice(cursor)));
       node.replaceWith(frag);
     }
   }
@@ -4909,6 +5059,335 @@ var PiDishBrowser = (() => {
       activation: openSkillActivation,
       dispose() {
         closeSkillsView();
+        disposed = true;
+      }
+    };
+  }
+
+  // src/browser/search-data.ts
+  var text8 = (value) => typeof value === "string" ? value : "";
+  var number2 = (value) => finite2(value) ? value : 0;
+  function decodeSearchPayload(value) {
+    if (!record8(value) || !Array.isArray(value.results)) throw new Error("Invalid search response");
+    const results = value.results.flatMap((row) => record8(row) && typeof row.id === "string" && row.id ? [{
+      id: row.id,
+      name: text8(row.name),
+      cwd: text8(row.cwd),
+      model: text8(row.model),
+      lastActivity: typeof row.lastActivity === "string" || finite2(row.lastActivity) ? row.lastActivity : null,
+      isActive: row.isActive === true,
+      turnInProgress: row.turnInProgress === true,
+      compacting: row.compacting === true,
+      searchScore: finite2(row.searchScore) ? row.searchScore : void 0,
+      matchCount: number2(row.matchCount),
+      snippets: Array.isArray(row.snippets) ? row.snippets.filter((value2) => typeof value2 === "string") : []
+    }] : []);
+    return { results, total: number2(value.total) || results.length, hiddenByScopes: number2(value.hiddenByScopes), hiddenByAutomation: number2(value.hiddenByAutomation), indexing: value.indexing === true };
+  }
+  function queryHosts(hosts, query) {
+    if (!query) return hosts;
+    const terms = parseSessionQuery(query).terms.filter((term) => term.field === "host" && !term.neg);
+    if (!terms.length) return hosts;
+    const parsed = { terms, since: null, before: null };
+    return hosts.filter((host) => evaluateSessionQuery(parsed, { id: "", hostLabel: hostDisplayLabel(host), host: host.hostId || null }));
+  }
+  function mergeSearchPayloads(entries, query) {
+    const parsed = parseSessionQuery(query), results = [];
+    let total = 0, hiddenByScopes = 0, hiddenByAutomation = 0, indexing = false;
+    for (const { host, payload } of entries) {
+      for (const session of payload.results) results.push({ ...session, host: host.hostId, hostLabel: hostDisplayLabel(host) });
+      total += payload.total;
+      hiddenByScopes += payload.hiddenByScopes;
+      hiddenByAutomation += payload.hiddenByAutomation;
+      if (payload.indexing) indexing = true;
+    }
+    if (!(entries.length === 1 && !entries[0].host.hostId)) results.sort((a, b) => (b.searchScore ?? scoreSessionMatch(parsed, b)) - (a.searchScore ?? scoreSessionMatch(parsed, a)) || new Date(b.lastActivity || 0).getTime() - new Date(a.lastActivity || 0).getTime());
+    return { results, total, hiddenByScopes, hiddenByAutomation, indexing };
+  }
+
+  // src/browser/search-view.ts
+  function createSearchView(options) {
+    const document2 = options.root.ownerDocument, sessionState = options.sessionState;
+    const element = (id) => {
+      const value = document2.getElementById(id);
+      if (!value) throw new Error("Missing search view element: " + id);
+      return value;
+    };
+    const effectiveHosts = options.hosts, fanoutHosts = options.fanout, scopeQuery = options.scope;
+    const hostChipHtml = (host) => options.hostChip(host || null);
+    const isMultiHost = () => effectiveHosts().length > 1;
+    let disposed = false;
+    let rowEvents = new AbortController();
+    const events = new AbortController();
+    let view = 0;
+    function sameHost(host) {
+      const current = options.host(host.hostId);
+      return !!current && current.hostId === host.hostId && current.base === host.base && (current.token || "") === (host.token || "");
+    }
+    const message2 = (error) => error instanceof Error ? error.message : String(error);
+    let searchViewSeq = 0;
+    let searchViewQuery = "";
+    let searchViewRenderedQuery = "";
+    let searchViewTimer;
+    let searchViewRepollTimer;
+    function isSearchViewOpen() {
+      return !disposed && options.root.classList.contains("search-open");
+    }
+    function openSearchView(initialQuery) {
+      if (disposed) return;
+      closeSearchView();
+      options.closeOtherViews();
+      view++;
+      if (typeof initialQuery === "string") searchViewQuery = initialQuery;
+      const input2 = element("searchViewInput");
+      input2.value = searchViewQuery;
+      options.root.classList.add("search-open");
+      input2.focus();
+      input2.select();
+      runSearchView();
+    }
+    function closeSearchView() {
+      if (disposed) return;
+      view++;
+      rowEvents.abort();
+      searchViewSeq += 1;
+      options.root.classList.remove("search-open");
+      clearTimeout(searchViewTimer);
+      clearTimeout(searchViewRepollTimer);
+    }
+    function onSearchViewInput({ immediate = false } = {}) {
+      if (!isSearchViewOpen()) return;
+      ++searchViewSeq;
+      clearTimeout(searchViewRepollTimer);
+      searchViewQuery = element("searchViewInput").value;
+      clearTimeout(searchViewTimer);
+      if (immediate) runSearchView();
+      else searchViewTimer = setTimeout(runSearchView, 300);
+    }
+    async function runSearchView() {
+      if (!isSearchViewOpen()) return;
+      clearTimeout(searchViewRepollTimer);
+      const seq = ++searchViewSeq;
+      const query = searchViewQuery.trim();
+      const scope = scopeQuery().trim();
+      const body = element("searchViewBody");
+      if (body.childElementCount) body.classList.add("usage-refreshing");
+      else body.innerHTML = '<div class="usage-state">Searching\u2026</div>';
+      const params = new URLSearchParams({ q: stripQueryField(query, "host") });
+      params.set("hideAutomation", "1");
+      const wireScope = stripQueryField(scope, "host");
+      if (wireScope) params.set("scope", wireScope);
+      const hosts = queryHosts(queryHosts(fanoutHosts(), query), scope).map((host) => Object.freeze({ ...host }));
+      const stale = () => seq !== searchViewSeq || !isSearchViewOpen() || query !== searchViewQuery.trim() || scope !== scopeQuery().trim();
+      const status = hosts.map(() => "pending");
+      const payloads = new Array(hosts.length);
+      const reasons = new Array(hosts.length);
+      let renderedIndexing = false;
+      let didRender = false;
+      const render = () => {
+        if (stale()) return;
+        const ok = hosts.flatMap((host, i) => {
+          const payload = payloads[i];
+          return status[i] === "ok" && payload ? [{ host, payload }] : [];
+        });
+        const d = ok.length ? mergeSearchPayloads(ok, query) : { results: [], total: 0, hiddenByScopes: 0, hiddenByAutomation: 0, indexing: false };
+        d.results = applyHostTerms(d.results, query);
+        const inScope = applyHostTerms(d.results, scope);
+        d.hiddenByScopes += d.results.length - inScope.length;
+        d.results = inScope;
+        d.hostErrors = hosts.filter((_, i) => status[i] === "error").map(hostDisplayLabel);
+        d.hostPending = hosts.filter((_, i) => status[i] === "pending").map(hostDisplayLabel);
+        searchViewRenderedQuery = query;
+        didRender = true;
+        renderedIndexing = d.indexing;
+        renderSearchView(d, query, hosts);
+      };
+      try {
+        await Promise.all(hosts.map(async (host, i) => {
+          try {
+            const r = await options.request(host, "/api/search?" + params, { timeoutMs: 2e4 });
+            if (r.status === 401) {
+              if (sameHost(host)) options.connection(host, "blocked");
+              throw new Error("needs a token");
+            }
+            const data = await r.json();
+            if (!sameHost(host)) throw new Error("host connection changed");
+            if (!r.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${r.status}`);
+            payloads[i] = decodeSearchPayload(data);
+            status[i] = "ok";
+            options.connection(host, "success");
+          } catch (e) {
+            status[i] = "error";
+            reasons[i] = e;
+            if (!host.self && sameHost(host)) options.connection(host, "failure", e);
+          }
+          if (status.some((s) => s === "ok")) render();
+        }));
+        if (!status.some((s) => s === "ok")) {
+          if (hosts.length) throw reasons.find(Boolean) || new Error("no hosts answered");
+          render();
+        }
+        if (stale() || !didRender) return;
+        if (renderedIndexing) searchViewRepollTimer = setTimeout(() => {
+          if (!stale()) void runSearchView();
+        }, 1e3);
+      } catch (e) {
+        if (stale()) return;
+        body.classList.remove("usage-refreshing");
+        body.innerHTML = `<div class="usage-state">Search failed: ${escapeHtml(message2(e))}</div>`;
+      }
+    }
+    function setSearchToken(prefix, value) {
+      if (!isSearchViewOpen()) return;
+      const input2 = element("searchViewInput");
+      let q = input2.value.replace(new RegExp(`(^|\\s)-?${prefix}:("[^"]*"|\\S+)`, "gi"), " ").replace(/\s{2,}/g, " ").trim();
+      if (value) q = (q ? q + " " : "") + prefix + ":" + (/\s/.test(value) ? `"${value}"` : value);
+      input2.value = q;
+      onSearchViewInput({ immediate: true });
+    }
+    const SEARCH_DATE_PRESETS = [["", "Any time"], ["1d", "24h"], ["7d", "7 days"], ["30d", "30 days"]];
+    function searchFacetState() {
+      const parsed = parseSessionQuery(searchViewQuery);
+      const val = (f) => parsed.terms.find((t) => t.field === f && !t.neg)?.value || "";
+      return {
+        cwd: val("cwd"),
+        model: val("model"),
+        host: val("host"),
+        activeOnly: parsed.terms.some((t) => t.field === "is" && !t.neg && t.value === "active"),
+        automationOnly: parsed.terms.some((t) => t.field === "is" && !t.neg && t.value === "automation"),
+        since: (searchViewQuery.match(/(?:^|\s)since:(\S+)/i) || [])[1] || ""
+      };
+    }
+    function searchFacetOptions() {
+      const all = [...sessionState.sessions.active, ...sessionState.sessions.previous];
+      const cwds = /* @__PURE__ */ new Map(), models = /* @__PURE__ */ new Set();
+      for (const s of all) {
+        if (typeof s.cwd === "string" && s.cwd) cwds.set(s.cwd, shortCwd(s.cwd));
+        if (typeof s.model === "string" && s.model && s.model !== "unknown") models.add(s.model);
+      }
+      return {
+        cwds: [...cwds.entries()].sort((a, b) => a[1].localeCompare(b[1])),
+        models: [...models].sort()
+      };
+    }
+    function renderSearchFacetsHtml() {
+      const st = searchFacetState();
+      const opts = searchFacetOptions();
+      const presets = SEARCH_DATE_PRESETS.map(([v, l]) => `<button class="usage-range-btn${st.since === v ? " active" : ""}" data-since="${v}">${l}</button>`).join("");
+      const cwdOptions = [
+        '<option value="">All workspaces</option>',
+        ...opts.cwds.map(([cwd, label]) => `<option value="${escapeHtml(cwd)}"${cwd.toLowerCase() === st.cwd ? " selected" : ""}>${escapeHtml(label)}</option>`)
+      ].join("");
+      const modelOptions = [
+        '<option value="">All models</option>',
+        ...opts.models.map((m) => `<option value="${escapeHtml(m)}"${m.toLowerCase() === st.model ? " selected" : ""}>${escapeHtml(m)}</option>`)
+      ].join("");
+      const hostSelect = !isMultiHost() ? "" : `<select class="search-facet-select" id="searchFacetHost">${['<option value="">All hosts</option>', ...effectiveHosts().map((h) => hostDisplayLabel(h)).filter(Boolean).map((label) => `<option value="${escapeHtml(label)}"${label.toLowerCase() === st.host ? " selected" : ""}>${escapeHtml(label)}</option>`)].join("")}</select>`;
+      return `<div class="search-facets">
+      <div class="usage-ranges">${presets}</div>
+      <select class="search-facet-select" id="searchFacetCwd">${cwdOptions}</select>
+      <select class="search-facet-select" id="searchFacetModel">${modelOptions}</select>
+      ${hostSelect}
+      <button class="scope-chip${st.activeOnly ? " active" : ""}" id="searchFacetActive" title="is:active">Active only</button>
+      <button class="scope-chip${st.automationOnly ? " active" : ""}" id="searchFacetAutomation" title="is:automation">Automation</button>
+    </div>`;
+    }
+    function renderSearchView(d, query, hosts) {
+      if (!isSearchViewOpen()) return;
+      rowEvents.abort();
+      rowEvents = new AbortController();
+      const renderedView = view;
+      const owns = () => renderedView === view && isSearchViewOpen();
+      const listener = { signal: rowEvents.signal };
+      const body = element("searchViewBody");
+      body.classList.remove("usage-refreshing");
+      const tokens = positiveQueryTokens(parseSessionQuery(query));
+      const shown = d.results || [];
+      const scopesHidden = Number(d.hiddenByScopes) || 0;
+      const automationHidden = Number(d.hiddenByAutomation) || 0;
+      const cards = shown.map((s) => {
+        let dot = "";
+        if (s.turnInProgress || s.compacting) dot = '<span class="session-item-status working"></span>';
+        else if (s.isActive) dot = '<span class="live-dot"></span>';
+        const count = s.matchCount ? `<span class="search-result-count">${s.matchCount} ${s.matchCount === 1 ? "match" : "matches"}</span>` : "";
+        const snippets = (s.snippets || []).map((sn) => `<div class="search-result-snippet">${highlightTokens(sn, tokens)}</div>`).join("");
+        return `<div class="search-result" data-id="${escapeHtml(s.id)}"${s.host ? ` data-host="${escapeHtml(s.host)}"` : ""} data-content-matches="${s.matchCount > 0 ? "1" : "0"}">
+        <div class="search-result-header">
+          ${dot}<span class="search-result-name">${highlightTokens(s.name || "Unnamed", tokens)}</span>
+          ${count}<span class="search-result-time">${formatRelativeTime(s.lastActivity)}</span>
+        </div>
+        <div class="search-result-meta">${hostChipHtml(s.host)}${escapeHtml(shortCwd(s.cwd || "~"))} \xB7 ${escapeHtml(s.model)}</div>
+        ${snippets}
+      </div>`;
+      }).join("");
+      body.innerHTML = `
+      ${renderSearchFacetsHtml()}
+      ${d.indexing ? '<div class="usage-notice">History is indexing; results will refresh\u2026</div>' : ""}
+      ${d.hostErrors?.length ? `<div class="usage-notice">Not searched: ${escapeHtml(d.hostErrors.join(", "))} did not answer.</div>` : ""}
+      ${d.hostPending?.length ? `<div class="usage-notice">Still searching ${escapeHtml(d.hostPending.join(", "))}\u2026</div>` : ""}
+      <div class="search-count-line">${shown.length === 1 ? "1 session" : `${shown.length} sessions`}${d.total > d.results.length ? ` \u2014 showing the ${d.results.length} ${tokens.length ? "best matches" : "most recent"}, narrow the query for the rest` : ""}</div>
+      ${cards || '<div class="usage-state">No matching sessions.</div>'}
+      ${scopesHidden > 0 ? `<div class="scope-hidden-note">${scopesHidden} hidden by scopes</div>` : ""}
+      ${automationHidden > 0 ? `<div class="scope-hidden-note">${automationHidden} automation run${automationHidden === 1 ? "" : "s"} hidden (is:automation shows them)</div>` : ""}
+    `;
+      body.querySelectorAll("[data-since]").forEach((button) => button.addEventListener("click", () => {
+        if (owns()) setSearchToken("since", button.dataset.since || null);
+      }, listener));
+      for (const [id, prefix] of [["searchFacetCwd", "cwd"], ["searchFacetModel", "model"], ["searchFacetHost", "host"]]) {
+        const select = body.querySelector("#" + id);
+        select?.addEventListener("change", () => {
+          if (owns()) setSearchToken(prefix, select.value || null);
+        }, listener);
+      }
+      body.querySelector("#searchFacetActive")?.addEventListener("click", () => {
+        if (owns()) setSearchToken("is", searchFacetState().activeOnly ? null : "active");
+      }, listener);
+      body.querySelector("#searchFacetAutomation")?.addEventListener("click", () => {
+        if (owns()) setSearchToken("is", searchFacetState().automationOnly ? null : "automation");
+      }, listener);
+      body.querySelectorAll(".search-result").forEach((card) => {
+        const id = card.dataset.id, host = card.dataset.host || null, endpoint = hosts.find((value) => value.hostId === host);
+        card.addEventListener("click", () => {
+          if (owns() && id && endpoint && sameHost(endpoint)) void openSearchResult(id, card.dataset.contentMatches === "1", host, query, endpoint);
+        }, listener);
+      });
+    }
+    async function openSearchResult(id, hasContentMatches, host = null, renderedQuery = searchViewRenderedQuery, endpoint = options.host(host)) {
+      if (!isSearchViewOpen() || !endpoint || !sameHost(endpoint)) return;
+      const captured = Object.freeze({ ...endpoint });
+      const tokens = positiveQueryTokens(parseSessionQuery(renderedQuery));
+      closeSearchView();
+      const navigation = searchViewSeq;
+      if (!sessionState.findSession(id, host)) await options.loadPrevious();
+      if (disposed || navigation !== searchViewSeq || !sameHost(captured)) return;
+      const entry = sessionState.findSession(id, host);
+      if (!entry) return;
+      const selecting = options.selectSession(id, { host: entry.host || null });
+      const owner = sessionState.captureSelection(), selectedView = view;
+      await selecting;
+      if (tokens.length && hasContentMatches && owner && selectedView === view && sessionState.ownsSelection(owner) && owner.id === id && owner.host === (entry.host || null)) {
+        options.sessionSearch.open();
+        const input2 = element("searchInput");
+        input2.value = tokens.join(" ");
+        await options.sessionSearch.run(input2.value.trim().toLowerCase(), { mode: "any", closeIfEmpty: true });
+      }
+    }
+    const input = element("searchViewInput");
+    input.addEventListener("input", () => onSearchViewInput(), { signal: events.signal });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") onSearchViewInput({ immediate: true });
+    }, { signal: events.signal });
+    return {
+      open: openSearchView,
+      close: closeSearchView,
+      isOpen: isSearchViewOpen,
+      run: runSearchView,
+      input: onSearchViewInput,
+      setToken: setSearchToken,
+      openResult: openSearchResult,
+      dispose() {
+        closeSearchView();
+        events.abort();
         disposed = true;
       }
     };
