@@ -736,6 +736,12 @@ checks its originating tree and host before rendering or selecting a cwd.
 Host catalog/token edits and late identity discovery renew an open directory tree
 and known-cwd catalog when their captured endpoint changes.
 
+Submitted session operations live in `src/browser/session-spawns.ts`. Each owns
+its copied endpoint and launch data through kickoff and status polling. Provisional
+composer keys include both host and wire spawn id; only the registered session on
+that host receives the draft/attachments. Capture takeover and selection ownership
+before kickoff so a late acceptance cannot consume or replace a newer form draft.
+
 The shared harness settings editor lives in `src/browser/harness-settings.ts`,
 with wire narrowing in `harness-settings-data.ts`. Editor instances own reads
 and DOM completion. Save snapshots patches and endpoint once, so its second

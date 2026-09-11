@@ -1661,7 +1661,8 @@ let remoteHost = null; // second pi-dish (multi-host section)
       (await desktop.locator('#status').textContent()).includes('still starting'),
       'typing and Enter preserve the prompt while Pi starts');
     await desktop.waitForTimeout(400); // debounced provisional draft save
-    check(await desktop.evaluate((id) => localStorage.getItem('pi-dish-draft-spawn:' + id), 'ui-spawn-1') === startupDraft,
+    const provisionalKey = await desktop.evaluate(() => pendingComposerKey(currentSessionSpawnId));
+    check(await desktop.evaluate(key => localStorage.getItem(draftKey(key)), provisionalKey) === startupDraft,
       'provisional composer owns its draft before registration');
     spawnResult = 'ready';
     await desktop.waitForFunction(() => !document.querySelector('.session-item.starting'), null, { timeout: 3000 });
@@ -1670,9 +1671,9 @@ let remoteHost = null; // second pi-dish (multi-host section)
       document.getElementById('promptInput').value === draft,
     { id: SESSION_ID, draft: startupDraft }, { timeout: 3000 });
     const migratedDraft = await desktop.evaluate(({ spawnId, sessionId }) => ({
-      provisional: localStorage.getItem('pi-dish-draft-spawn:' + spawnId),
+      provisional: localStorage.getItem(draftKey(spawnId)),
       session: localStorage.getItem(draftKey(sessionId)),
-    }), { spawnId: 'ui-spawn-1', sessionId: SESSION_ID });
+    }), { spawnId: provisionalKey, sessionId: SESSION_ID });
     check(migratedDraft.provisional === null && migratedDraft.session === startupDraft &&
       !(await desktop.locator('#btnSend').isDisabled()),
       'draft transfers to the registered session and Send becomes ready');

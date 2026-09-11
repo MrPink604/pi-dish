@@ -281,7 +281,6 @@ const sessionState = PiDishBrowser.createSessionState({
 });
 // Provisional rows for asynchronous harness launches. They are presentation state,
 // not sessions: the durable source of truth remains tmux + the bridge registry.
-const pendingSessionSpawns = new Map(); // spawn id -> { cwd, target, harness, harnessLabel }
 let currentSessionSpawnId = null;
 // Spawn operations are server-process-local and cannot be resumed after a
 // page reload, so their old draft keys have no view that could restore them.
@@ -8589,128 +8588,63 @@ async function abortTurn() {
   }
 }
 
-const SESSION_SPAWN_POLL_MS = 250;
-
-async function monitorSessionSpawn(spawnId, host = null) {
-  try {
-    for (;;) {
-      let res;
-      try {
-        res = await apiFetch(host, `/api/session-spawns/${encodeURIComponent(spawnId)}`);
-      } catch {
-        await new Promise(r => setTimeout(r, SESSION_SPAWN_POLL_MS));
-        continue;
-      }
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok && res.status !== 202) throw new Error(data.error || `spawn status failed (${res.status})`);
-      if (data.status === 'starting') {
-        await new Promise(r => setTimeout(r, SESSION_SPAWN_POLL_MS));
-        continue;
-      }
-
-      if (data.status === 'error') throw new Error(data.error || 'Session failed to start');
-      if (data.status !== 'ready' || !data.sessionId) throw new Error('Session spawn returned an invalid result');
-
-      // Registration is already complete, but ride out any overlapping list
-      // request before selecting the authoritative session row.
-      for (;;) {
-        await loadSessions();
-        if (sessionState.findSession(data.sessionId, host)) {
-          pendingSessionSpawns.delete(spawnId);
-          renderSessions();
-          const showingSpawn = currentSessionSpawnId === spawnId;
-          // Capture the visible provisional composer before moving its draft
-          // and attachments onto the bridge's authoritative session id.
-          if (showingSpawn) stashPromptState();
-          migratePromptState(pendingComposerKey(spawnId), sessionKey(host || hostDirectory.self.hostId, data.sessionId));
-          // Do not yank the user away if they selected another session (or a
-          // newer spawn) while this process was starting.
-          if (showingSpawn) {
-            setStatus('Session created');
-            selectSession(data.sessionId, { host });
-          }
-          return;
-        }
-        if (currentSessionSpawnId === spawnId) {
-          setStatus('Session created — connecting the UI…', 'working');
-        }
-        await new Promise(r => setTimeout(r, SESSION_SPAWN_POLL_MS));
-      }
-    }
-  } catch (e) {
-    const spawn = pendingSessionSpawns.get(spawnId);
-    pendingSessionSpawns.delete(spawnId);
-    renderSessions();
-    if (currentSessionSpawnId === spawnId) {
-      showPendingSessionFailure(spawnId, e.message, spawn);
-      setStatus(`Session start failed: ${e.message}`, 'error');
-    } else {
-      const ownerId = pendingComposerKey(spawnId);
-      clearDraft(ownerId);
-      pendingImagesBySession.delete(ownerId);
-    }
-  }
+const pendingSessionSpawns = PiDishBrowser.createSessionSpawns({
+  request: apiFetch, delay: () => new Promise(resolve => setTimeout(resolve, 250)), harnessLabel,
+  current: () => currentSessionSpawnId, changed: renderSessions,
+  showPending: key => { switchTab('active'); showPendingSessionView(key); if (window.innerWidth <= 768) closeSidebar(); },
+  loadSessions, hasSession: (id, host) => !!sessionState.findSession(id, host),
+  selectSession: (id, host) => { void selectSession(id, { host }); },
+  stashPrompt: stashPromptState,
+  saveDraft: (key, draft) => { try { localStorage.setItem(draftKey(pendingComposerKey(key)), draft); } catch {} },
+  migratePrompt: (key, host, id) => migratePromptState(pendingComposerKey(key), sessionKey(host || hostDirectory.self.hostId, id)),
+  discardPrompt: key => { const owner = pendingComposerKey(key); clearDraft(owner); pendingImagesBySession.delete(owner); },
+  showFailure: showPendingSessionFailure, status: setStatus,
+});
+function captureSpawnView() {
+  const generation = newSessionViewGeneration;
+  const open = isNewSessionViewOpen();
+  const selection = sessionState.captureSelection();
+  const pending = currentSessionSpawnId;
+  const endpoint = Object.freeze({ ...nsHost() });
+  const harness = selectedHarnessId(), cwd = nsCwdValue();
+  return () => (!open || (PiDishBrowser.sameDirectoryHost(endpoint, nsHost())
+      && harness === selectedHarnessId() && cwd === nsCwdValue()))
+    && generation === newSessionViewGeneration && open === isNewSessionViewOpen()
+    && pending === currentSessionSpawnId
+    && (selection ? sessionState.ownsSelection(selection) : !sessionState.currentSession);
 }
-
-// Shared async-spawn kickoff (the workspace-header + button and the
-// new-session takeover): POST /new with async:true — `model` is a canonical
-// provider/id ref and `name` is an optional initial display name — then
-// register the provisional row, open the pending composer pane, and hand the
-// wait for bridge readiness to monitorSessionSpawn. Throws when the server
-// rejects the request so callers surface the message their own way (status
-// line vs the takeover's inline error).
-async function submitNewSession({ name, cwd, model, thinking, target, harness, host = nsHostId() }) {
-  const harnessId = harness || 'pi';
-  const data = await apiSend(host, '/api/sessions/new', {
-    name: name || undefined,
-    cwd: cwd || undefined,
-    model: model || undefined,
-    thinking: thinking || undefined,
-    target: target || undefined,
-    harness: harnessId,
-    async: true,
+function submitNewSession({ name, cwd, model, thinking, target, harness, host = nsHostId(),
+  ownsView = captureSpawnView(), draft = nsPendingDraft } = {}) {
+  const endpoint = host && typeof host === 'object' ? host : hostEntryFor(host);
+  if (!endpoint) return Promise.reject(new Error('Host is no longer available'));
+  const generation = newSessionViewGeneration;
+  return pendingSessionSpawns.submit({ host: endpoint, name, cwd, model, thinking, target, harness, draft, ownsView,
+    onAccepted: () => { if (generation === newSessionViewGeneration && nsPendingDraft === draft) nsPendingDraft = null; },
   });
-  if (!data.spawnId) throw new Error('Failed to start session');
-  pendingSessionSpawns.set(data.spawnId, {
-    cwd: cwd || '~', target: !!target, harness: harnessId, harnessLabel: harnessLabel(harnessId),
-    host: host || null,
-  });
-  // A stashed refine draft rides onto the provisional composer before
-  // showPendingSessionView restores it (it never auto-sends).
-  if (nsPendingDraft) {
-    try { localStorage.setItem(draftKey(pendingComposerKey(data.spawnId)), nsPendingDraft); } catch {}
-    nsPendingDraft = null;
-  }
-  switchTab('active');
-  showPendingSessionView(data.spawnId);
-  if (window.innerWidth <= 768) closeSidebar();
-  void monitorSessionSpawn(data.spawnId, host || null);
-  return data.spawnId;
 }
 
 // Direct spawn used by the workspace-header + button (explicit cwd, default
 // model). The full new-session takeover uses spawnNewSession() instead.
 async function createSession(cwd, host = nsHostId()) {
-  let target;
+  const selectedHost = hostEntryFor(host);
+  if (!selectedHost) { setStatus('Host is no longer available', 'error'); return; }
+  const endpoint = Object.freeze({ ...selectedHost });
+  const ownsView = captureSpawnView();
+  let harness = localStorage.getItem(HARNESS_KEY) || 'pi';
+  let target = null;
   try {
-    // Keep boot cheap: direct workspace spawns load their persisted harness
-    // and tmux choice only when the user actually asks to spawn.
-    if (cwd !== undefined && host === nsHostId()) {
+    if (cwd !== undefined && PiDishBrowser.sameDirectoryHost(endpoint, nsHost())) {
       await Promise.all([loadSpawnTargets(), loadHarnesses()]);
     }
-    // The "Run in" choice belongs to the host it was listed from; spawning
-    // straight into another host's workspace goes headless.
-    target = host === nsHostId() ? selectedSpawnTarget() : null;
-  } catch (e) { setStatus(e.message, 'error'); return; }
-  try {
-    setStatus(target ? 'Spawning in tmux…' : 'Creating session...', 'working');
-    if (cwd === undefined) {
-      const cwdInput = document.getElementById('newSessionCwd');
-      cwd = cwdInput ? cwdInput.value.trim() : '';
+    if (PiDishBrowser.sameDirectoryHost(endpoint, nsHost())) {
+      target = selectedSpawnTarget();
+      harness = selectedHarnessId();
     }
+    if (ownsView()) setStatus(target ? 'Spawning in tmux…' : 'Creating session...', 'working');
+    if (cwd === undefined) cwd = nsCwdValue();
     if (cwd) localStorage.setItem('pi-dish-cwd', cwd);
-    await submitNewSession({ cwd, target, harness: selectedHarnessId(), host });
-  } catch (e) { setStatus(`Error: ${e.message}`, 'error'); }
+    await submitNewSession({ cwd, target, harness, host: endpoint, ownsView, draft: null });
+  } catch (e) { if (ownsView()) setStatus(`Error: ${e.message}`, 'error'); }
 }
 
 // =========================================================================
@@ -8936,6 +8870,8 @@ let newSessionViewGeneration = 0;
 
 function openNewSessionView(opts = {}) {
   newSessionViewGeneration++;
+  const spawnButton = document.getElementById('nsSpawnBtn');
+  if (spawnButton) { spawnButton.disabled = false; spawnButton.textContent = '+ New session'; }
   closeSidebar(); // on mobile the footer button lives in the drawer
   closeUsageView(); // takeovers are mutually exclusive
   closeSearchView();
@@ -9067,23 +9003,24 @@ function nsError(msg) {
 
 async function spawnNewSession() {
   const btn = document.getElementById('nsSpawnBtn');
+  if (btn?.disabled) return;
+  const generation = newSessionViewGeneration;
+  const ownsView = captureSpawnView();
   let target;
   try { target = selectedSpawnTarget(); } catch (e) { nsError(e.message); return; }
   const name = (document.getElementById('newSessionName')?.value || '').trim();
-  const cwd = (document.getElementById('newSessionCwd')?.value || '').trim();
+  const cwd = nsCwdValue();
   nsError('');
   if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
   try {
     if (cwd) localStorage.setItem('pi-dish-cwd', cwd);
     const model = document.getElementById('nsModelSelect')?.value || undefined;
     const thinking = document.getElementById('nsThinkingSelect')?.value || undefined;
-    await submitNewSession({ name, cwd, model, thinking, target, harness: selectedHarnessId() });
-    // Success: submitNewSession swapped in the provisional composer pane
-    // (which closes this takeover); monitorSessionSpawn owns the rest.
+    await submitNewSession({ name, cwd, model, thinking, target, harness: selectedHarnessId(), ownsView });
   } catch (e) {
-    nsError(e.message);
+    if (ownsView()) nsError(e.message);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '+ New session'; }
+    if (generation === newSessionViewGeneration && btn) { btn.disabled = false; btn.textContent = '+ New session'; }
   }
 }
 

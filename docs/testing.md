@@ -89,6 +89,7 @@ After editing `src/browser/`, run `npm run build:browser` before `npm test`;
 | Wire envelope validation, malformed responses, unknown events and transport survival | `test/transport-frames.test.js` plus existing bridge/RPC protocol suites |
 | Typed RPC startup validation, failed-child cleanup, delta snapshots and recovery ownership | `test/rpc-session.test.js`, `test/transport-frames.test.js`, `test/session-recovery.test.js` |
 | Typed bridge registry validation, pre-hello claim protection and session-switch replay ordering | `test/bridge-session.test.js` |
+| Spawn acceptance/status decoding, provisional keys and retained launch owners | `test/browser-session-spawns.test.js`, `test/browser/session-spawns.spec.js`, `test/types/browser-session-spawns.ts`, async-spawn UI smoke |
 | Harness settings decoding, modal replacement and captured save endpoints | `test/browser-harness-settings.test.js`, `test/browser/harness-settings.spec.js`, `test/types/browser-harness-settings.ts`, models UI scenario |
 | New-session model/thinking preferences, defaults owners and blur/pointer layout | `test/browser-new-session-options.test.js`, `test/browser/new-session-options.spec.js`, `test/types/browser-new-session-options.ts`, models UI scenario |
 | Published-page comment decoding, cross-node anchors, mobile drafts and delayed refresh/delete ownership | `test/browser/artifact-comments.spec.js`, `test/types/browser-artifact-comments.ts`, `test/browser-build.test.js` |

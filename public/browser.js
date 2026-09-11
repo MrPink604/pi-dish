@@ -43,6 +43,7 @@ var PiDishBrowser = (() => {
     createNewSessionConfigPreview: () => createNewSessionConfigPreview,
     createNewSessionPreferences: () => createNewSessionPreferences,
     createSessionApi: () => createSessionApi,
+    createSessionSpawns: () => createSessionSpawns,
     createSessionState: () => createSessionState,
     createSpawnTargetPicker: () => createSpawnTargetPicker,
     createSpawnTargets: () => createSpawnTargets,
@@ -54,6 +55,8 @@ var PiDishBrowser = (() => {
     decodeKnownDirectories: () => decodeKnownDirectories,
     decodeModelCatalog: () => decodeModelCatalog,
     decodeSpawnChoices: () => decodeSpawnChoices,
+    decodeSpawnId: () => decodeSpawnId,
+    decodeSpawnStatus: () => decodeSpawnStatus,
     hostConnReduce: () => hostConnReduce,
     hostKeyOf: () => hostKeyOf,
     hostSettingsHtml: () => hostSettingsHtml,
@@ -73,6 +76,7 @@ var PiDishBrowser = (() => {
     sanitizeHostColorOrder: () => sanitizeHostColorOrder,
     sanitizeHostColors: () => sanitizeHostColors,
     sendJson: () => sendJson,
+    sessionSpawnKey: () => sessionSpawnKey,
     spawnTargetKey: () => spawnTargetKey,
     withFetchTimeout: () => withFetchTimeout
   });
@@ -2599,6 +2603,118 @@ var PiDishBrowser = (() => {
       close();
       listeners.abort();
     } };
+  }
+
+  // src/browser/session-spawns.ts
+  function record7(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+  }
+  function decodeSpawnId(value) {
+    if (!record7(value) || typeof value.spawnId !== "string" || !value.spawnId) throw new Error("Failed to start session");
+    return value.spawnId;
+  }
+  function decodeSpawnStatus(value) {
+    if (record7(value)) {
+      if (value.status === "starting") return { status: "starting" };
+      if (value.status === "error") return { status: "error", error: typeof value.error === "string" && value.error ? value.error : "Session failed to start" };
+      if (value.status === "ready" && typeof value.sessionId === "string" && value.sessionId) return { status: "ready", sessionId: value.sessionId };
+    }
+    throw new Error("Session spawn returned an invalid result");
+  }
+  function sessionSpawnKey(host, spawnId) {
+    return JSON.stringify([host, spawnId]);
+  }
+  function createSessionSpawns(options) {
+    const pending = /* @__PURE__ */ new Map();
+    async function monitor(key, spawn) {
+      try {
+        let sessionId;
+        for (; ; ) {
+          let response;
+          try {
+            response = await options.request(spawn.endpoint, `/api/session-spawns/${encodeURIComponent(spawn.spawnId)}`);
+          } catch {
+            await options.delay();
+            continue;
+          }
+          const data = await response.json().catch(() => null);
+          if (!response.ok && response.status !== 202) throw new Error(record7(data) && typeof data.error === "string" && data.error ? data.error : `spawn status failed (${response.status})`);
+          const status = decodeSpawnStatus(data);
+          if (status.status === "starting") {
+            await options.delay();
+            continue;
+          }
+          if (status.status === "error") throw new Error(status.error);
+          sessionId = status.sessionId;
+          break;
+        }
+        for (; ; ) {
+          await options.loadSessions();
+          if (options.hasSession(sessionId, spawn.host)) {
+            pending.delete(key);
+            options.changed();
+            const showing = options.current() === key;
+            if (showing) options.stashPrompt();
+            options.migratePrompt(key, spawn.host, sessionId);
+            if (showing) {
+              options.status("Session created");
+              options.selectSession(sessionId, spawn.host);
+            }
+            return;
+          }
+          if (options.current() === key) options.status("Session created \u2014 connecting the UI\u2026", "working");
+          await options.delay();
+        }
+      } catch (error) {
+        pending.delete(key);
+        options.changed();
+        const message = error instanceof Error ? error.message : String(error);
+        if (options.current() === key) {
+          options.showFailure(key, message, spawn);
+          options.status(`Session start failed: ${message}`, "error");
+        } else options.discardPrompt(key);
+      }
+    }
+    async function submit(input) {
+      const host = Object.freeze({ ...input.host });
+      const target = input.target ? Object.freeze({ ...input.target }) : void 0;
+      const { name, cwd, model, thinking, draft, ownsView, onAccepted } = input;
+      const harness = input.harness || "pi";
+      const label = options.harnessLabel(harness);
+      const data = await sendJson(options.request, host, "/api/sessions/new", {
+        name: name || void 0,
+        cwd: cwd || void 0,
+        model: model || void 0,
+        thinking: thinking || void 0,
+        target,
+        harness,
+        async: true
+      });
+      const spawnId = decodeSpawnId(data);
+      const key = sessionSpawnKey(host.hostId || null, spawnId);
+      const spawn = Object.freeze({
+        spawnId,
+        endpoint: host,
+        host: host.hostId || null,
+        cwd: cwd || "~",
+        target: !!target,
+        harness,
+        harnessLabel: label
+      });
+      pending.set(key, spawn);
+      if (draft) options.saveDraft(key, draft);
+      onAccepted?.();
+      if (ownsView()) options.showPending(key);
+      else options.changed();
+      void monitor(key, spawn);
+      return key;
+    }
+    return {
+      submit,
+      has: (key) => pending.has(key),
+      get: (key) => pending.get(key),
+      entries: () => [...pending.entries()]
+    };
   }
   return __toCommonJS(index_exports);
 })();

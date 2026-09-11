@@ -24,3 +24,5 @@ export { createNewSessionPreferences, createNewSessionConfigPreview, decodeHarne
 
 export { createHarnessSettings } from './harness-settings';
 export { decodeHarnessConfig, decodeHarnessAgents } from './harness-settings-data';
+
+export { createSessionSpawns, decodeSpawnId, decodeSpawnStatus, sessionSpawnKey } from './session-spawns';

@@ -245,5 +245,26 @@ are not completion percentages.
   the captured-scope notification after all successful writes, while modal
   completion still requires the owning view. A fifth browser regression covers
   closing during save. Strict checks, 892 backend tests, 101 browser regressions,
-  independent UI scenarios and desktop/mobile smoke passed again. Fable review
-  of this follow-up is required before either harness-settings commit is pushed.
+  independent UI scenarios and desktop/mobile smoke passed again. Fable cleared
+  `3d56bdd` and follow-up `1d50e5d` together before both commits were pushed.
+
+## Checkpoint 11 — session spawn operations
+
+- Boundary: async kickoff payloads, response/status decoding, provisional row
+  storage, captured-host status polling and composer-state reconciliation.
+- Submitted operations retain endpoint, target, cwd, harness and refine draft.
+  A late POST cannot consume a replacement draft, open over a new takeover or
+  restore an old error/button state. Direct workspace launches also retain their
+  endpoint through lazy target/harness discovery.
+- Provisional keys include the owning host, keeping equal wire operation ids on
+  two hosts separate. Polling continues on the submitted endpoint and reconciles
+  only against the authoritative session row on that host. Completion transfers
+  draft/attachments and selects only the still-selected provisional operation.
+- Four unit tests, strict contracts and four browser regressions cover malformed
+  replies, replaced views, captured drafts, failed kickoff/button ownership and
+  same-id multi-host readiness. UI smoke now reads the captured provisional key.
+- Verification: strict build/lint/type checks, all 896 backend tests, 105 browser
+  regressions, independent UI scenarios and desktop/mobile smoke passed. Fable
+  review of the local commit is required before push.
+- Next: shared helpers, remaining new-session shell, other feature controllers
+  and transcript/streaming/startup ownership.

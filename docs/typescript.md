@@ -323,3 +323,9 @@ at the wire boundary. `harness-settings.ts` owns editor DOM/listeners, captured
 read scopes and serialized save patches. A submitted save retains its endpoint
 and both patches through modal replacement, while UI completion requires the
 same editor instance. Fallback models also require a matching host and harness.
+
+`src/browser/session-spawns.ts` owns submitted operations independently of the
+current pane. It snapshots request data/endpoint, narrows acceptance/status replies,
+keys provisional rows by host plus wire operation id and reconciles registered
+sessions against their owning host. App integration captures takeover/selection
+ownership before kickoff and retains the submitted refine draft through the POST.

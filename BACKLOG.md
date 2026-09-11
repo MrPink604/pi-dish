@@ -13,7 +13,8 @@ Checkpoint 6 migrates the tmux target catalog and picker.
 Checkpoint 7 migrates shared model catalog state and request ownership.
 Checkpoint 8 converts the standalone published-page comments entrypoint.
 Checkpoint 9 migrates new-session model/thinking preferences and defaults preview.
-Checkpoint 10 migrates the shared harness settings editor. See
+Checkpoint 10 migrates the shared harness settings editor.
+Checkpoint 11 migrates submitted spawn operations and provisional-state ownership. See
 [the checkpoint log](docs/browser-migration-checkpoints.md) for implementation
 verification and the complete browser entrypoint inventory. The last confirmed
 CI checkpoint is recorded below; final CI must pass before the goal is complete.
@@ -24,7 +25,7 @@ CI checkpoint is recorded below; final CI must pass before the goal is complete.
 | --- | --- | --- |
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
-| Browser migration | In progress — current stage | Twenty-two implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
+| Browser migration | In progress — current stage | Twenty-three implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
 | Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -42,7 +43,7 @@ in `lib/`. Its full module inventory is in [the migration guide](docs/typescript
 Most JavaScript callers of these modules are not yet type checked; `lib/cron.js`
 is an explicitly checked exception.
 
-These twenty-two browser implementation modules compile strictly into local
+These twenty-three browser implementation modules compile strictly into local
 `public/browser.js` and `public/artifact-comments.js` scripts; `index.ts` is the
 main bundle entrypoint and `artifact-comments.ts` is the standalone page entry:
 
@@ -70,6 +71,7 @@ main bundle entrypoint and `artifact-comments.ts` is the standalone page entry:
 | `new-session-options.ts` | Per-harness model/thinking preferences, select rendering and owned defaults preview |
 | `harness-settings-data.ts` | Harness defaults, agent settings and custom-role wire decoding |
 | `harness-settings.ts` | Shared settings editor, captured view/endpoint reads and serialized save ownership |
+| `session-spawns.ts` | Submitted spawn snapshots, provisional rows, polling and composer reconciliation |
 
 The checkpoint log distinguishes local implementation from completed review and push.
 A completed module means that boundary has moved, been reviewed and verified.
@@ -114,14 +116,15 @@ checks. Documentation-only changes need content and link checks. After a chunk
 ships, update this page's checkpoint, completed inventory and next step so the
 status stays current.
 
-Last confirmed CI checkpoint, `338addd` (newer local work is in the checkpoint log):
+Last confirmed CI checkpoint, `5e983d6` (newer local work is in the checkpoint log):
 
-- Fable 5.1 cleared the standalone artifact-comment commit before push.
-  New-session options commit `5e983d6` is also reviewed and pushed.
-- 886 backend tests and 92 browser regressions passed, along with independent UI
+- Fable 5.1 cleared the new-session options checkpoint before push. Both harness
+  editor commits, including preview-refresh follow-up `1d50e5d`, are also cleared
+  and pushed.
+- 890 backend tests and 96 browser regressions passed, along with independent UI
   scenarios and desktop/mobile smoke. OMP/Prime fake-provider canaries last passed
   at `53b5ae0`; they will run again for the final browser audit.
-- [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34594283525):
+- [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34595067807):
   backend Node 22.19.0/22.x/24.x/26.x and browser/UI on Node 24.
 
 These results establish a verified checkpoint, not exhaustive application coverage
