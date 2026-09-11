@@ -55,9 +55,9 @@ test('typing retires an old directory body before the next debounce starts', asy
     input.dispatchEvent(new Event('input', { bubbles: true }));
     window.releaseDirectoryBody();
     await new Promise(resolve => setTimeout(resolve, 0));
-    return document.getElementById('cwdDropdown').style.display;
+    return document.getElementById('cwdDropdown').textContent;
   });
-  expect(afterOldBody).toBe('none');
+  expect(afterOldBody).not.toContain('~/older');
   await expect.poll(() => !!next).toBe(true);
   await next.fulfill({ json: [{ path: '/newer', short: '~/newer' }] });
   await expect(page.locator('#cwdDropdown .cwd-option')).toHaveText('~/newer');
@@ -94,4 +94,83 @@ test('a retired directory tree cannot publish children or act on the current hos
   await page.locator('#nsTree .ns-tree-row').filter({ hasText: 'peer-dir' }).click();
   await page.evaluate(() => window.retiredTreeRow.click());
   await expect(page.locator('#newSessionCwd')).toHaveValue('/peer-dir');
+});
+
+test('existing cwd suggestions remain navigable during debounce and Escape only closes the dropdown', async ({ page, fleet }) => {
+  await page.route(`${fleet.self.base}/api/cwds`, route => route.fulfill({ json: [] }));
+  await page.route(`${fleet.self.base}/api/dirs?q=shown`, route => route.fulfill({ json: [{ path: '/shown', short: '~/shown' }] }));
+  let pending;
+  await page.route(`${fleet.self.base}/api/dirs?q=pending`, route => { pending = route; });
+  await page.evaluate(() => openNewSessionView());
+  const input = page.locator('#newSessionCwd');
+  await input.fill('shown');
+  await expect(page.locator('#cwdDropdown .cwd-option')).toHaveText('~/shown');
+  await input.fill('pending');
+  await expect(page.locator('#cwdDropdown')).toBeVisible();
+  await input.press('ArrowDown');
+  await expect(page.locator('#cwdDropdown .cwd-option')).toHaveClass(/active/);
+  await input.press('Escape');
+  await expect(page.locator('#cwdDropdown')).toBeHidden();
+  await expect(page.locator('.main')).toHaveClass(/new-session-open/);
+  if (pending) await pending.fulfill({ json: [] });
+});
+
+test('visible cwd paths can still be picked while a replacement query is pending', async ({ page, fleet }) => {
+  await page.route(`${fleet.self.base}/api/cwds`, route => route.fulfill({ json: [] }));
+  await page.route('**/api/dirs?q=*', route => route.fulfill({ json: [{ path: '/shown', short: '~/shown' }] }));
+  await page.evaluate(() => openNewSessionView());
+  const input = page.locator('#newSessionCwd');
+  await input.fill('shown');
+  await expect(page.locator('#cwdDropdown .cwd-option')).toHaveText('~/shown');
+  await page.evaluate(() => {
+    const input = document.getElementById('newSessionCwd');
+    input.value = 'pending';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    const row = document.querySelector('#cwdDropdown .cwd-option');
+    row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  });
+  await expect(input).toHaveValue('~/shown');
+  await expect(page.locator('#cwdDropdown')).toBeHidden();
+});
+
+test('catalog edits renew an open directory tree with the current host token', async ({ page, fleet }) => {
+  const auth = [], cwds = [];
+  await page.route(`${fleet.peer.base}/api/dirs/children?path=~`, route => {
+    auth.push(route.request().headers().authorization);
+    return route.fulfill({ json: { dirs: [{ path: '/peer', name: 'peer' }] } });
+  });
+  await page.route(`${fleet.peer.base}/api/cwds`, route => {
+    cwds.push(route.request().headers().authorization);
+    return route.fulfill({ json: [{ path: '/peer', short: '~/peer' }] });
+  });
+  await page.evaluate(() => openNewSessionView());
+  await page.selectOption('#nsHostSelect', fleet.peer.hostId);
+  await page.locator('#nsTree .ns-tree-chevron').first().click();
+  await expect(page.locator('#nsTree .ns-tree-name')).toHaveText(['~', 'peer']);
+  await page.evaluate(id => {
+    hostDirectory.setToken(id, 'rotated-fixture');
+    saveHostCatalog();
+  }, fleet.peer.hostId);
+  await expect(page.locator('#nsTree .ns-tree-name')).toHaveText(['~']);
+  await page.locator('#nsTree .ns-tree-chevron').first().click();
+  await expect(page.locator('#nsTree .ns-tree-name')).toHaveText(['~', 'peer']);
+  expect(auth.at(-1)).toBe('Bearer rotated-fixture');
+  await expect.poll(() => cwds.at(-1)).toBe('Bearer rotated-fixture');
+});
+
+test('learning self identity renews directories opened before startup discovery completes', async ({ page, fleet }) => {
+  let identity;
+  await page.route(`${fleet.self.base}/api/host`, route => { identity = route; });
+  await page.route(`${fleet.self.base}/api/dirs/children?path=~`, route => route.fulfill({ json: { dirs: [{ path: '/early', name: 'early' }] } }));
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect.poll(() => !!identity).toBe(true);
+  await page.evaluate(() => openNewSessionView());
+  await page.locator('#nsTree .ns-tree-chevron').first().click();
+  await expect(page.locator('#nsTree .ns-tree-name')).toHaveText(['~', 'early']);
+  await identity.fulfill({ json: { hostId: fleet.self.hostId, label: 'self' } });
+  await expect(page.locator('#nsTree .ns-tree-name')).toHaveText(['~']);
+  await page.locator('#nsTree .ns-tree-chevron').first().click();
+  await expect(page.locator('#nsTree .ns-tree-name')).toHaveText(['~', 'early']);
+  await page.locator('#nsTree .ns-tree-row').filter({ hasText: 'early' }).click();
+  await expect(page.locator('#newSessionCwd')).toHaveValue('/early');
 });

@@ -1537,14 +1537,19 @@ var PiDishBrowser = (() => {
     let timer = null;
     let blurTimer = null;
     let sequence = 0;
+    let viewGeneration = 0;
     let disposed = false;
     let activeIndex = -1;
     let resultOwner = null;
     const mounted = () => !disposed && input.isConnected && dropdown.isConnected;
-    function hide() {
+    function retireRequest() {
       sequence++;
       if (timer !== null) clearTimeout(timer);
       timer = null;
+    }
+    function hide() {
+      retireRequest();
+      viewGeneration++;
       rowsController.abort();
       dropdown.style.display = "none";
       activeIndex = -1;
@@ -1559,7 +1564,7 @@ var PiDishBrowser = (() => {
       hide();
       options.onPick?.(path);
     }
-    function render(query, dirs, owns) {
+    function render(query, dirs, owns, ownsRows) {
       if (!owns()) return;
       const seen = /* @__PURE__ */ new Set();
       let results = [];
@@ -1579,7 +1584,7 @@ var PiDishBrowser = (() => {
       rowsController.abort();
       rowsController = new AbortController();
       activeIndex = -1;
-      resultOwner = owns;
+      resultOwner = ownsRows;
       if (!results.length) {
         dropdown.style.display = "none";
         return;
@@ -1594,13 +1599,16 @@ var PiDishBrowser = (() => {
       }
     }
     function show(query) {
-      hide();
+      retireRequest();
+      if (resultOwner && !resultOwner()) hide();
       if (blurTimer !== null) clearTimeout(blurTimer);
       blurTimer = null;
       const selected = options.host();
       if (!mounted() || !selected) return;
       const host = Object.freeze({ ...selected });
       const requestSequence = sequence;
+      const rowGeneration = viewGeneration;
+      const ownsRows = () => mounted() && viewGeneration === rowGeneration && sameDirectoryHost(host, options.host());
       const owns = () => mounted() && sequence === requestSequence && sameDirectoryHost(host, options.host());
       timer = setTimeout(async () => {
         timer = null;
@@ -1612,7 +1620,7 @@ var PiDishBrowser = (() => {
           if (response.ok) rows = decodeKnownDirectories(await response.json());
         } catch {
         }
-        render(query, rows, owns);
+        render(query, rows, owns, ownsRows);
       }, 120);
     }
     const listener = { signal: listeners.signal };
@@ -1756,7 +1764,7 @@ var PiDishBrowser = (() => {
       owner = { host: Object.freeze({ ...host }), events: new AbortController() };
       root.appendChild(makeNode(owner, "~", "~", 0));
     }
-    return { reset, dispose };
+    return { reset, dispose, isCurrent: () => !!owner && owns(owner) };
   }
   return __toCommonJS(index_exports);
 })();

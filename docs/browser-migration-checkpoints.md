@@ -121,3 +121,12 @@ are not completion percentages.
   regressions, all independent UI scenarios and desktop/mobile smoke passed.
   Fable review of the local commit is required before push.
 - Next: new-session target, model/config and spawn controllers.
+
+- Fable review of `f787f81` found dropdown continuity and host-route renewal
+  issues. The follow-up separates pending-read retirement from rendered-row
+  ownership, preserving visible suggestions and keyboard actions while typing.
+  Catalog/token changes and late self identity renew open directories. Four
+  additional browser regressions cover these triggers. Strict checks, all 873
+  backend tests, 79 browser regressions, independent UI scenarios and full
+  desktop/mobile smoke pass. Fable re-review is required before either commit
+  is pushed.

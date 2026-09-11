@@ -727,11 +727,14 @@ without the takeover.
 Directory state and UI controllers live in `src/browser/directory-catalog.ts`,
 `cwd-autocomplete.ts` and `directory-tree.ts`. Known paths retain their owning
 host id/route/token. Autocomplete retires requests at each input event, before
-its 120ms debounce; closing or switching hosts also retires delayed bodies.
+its 120ms debounce; existing visible paths stay selectable until replaced.
+Closing or switching hosts also retires delayed bodies.
 The shared controller owns listeners and timers. Routine detail replacement
 must dispose its previous instance; hiding a retained form only hides/retires it.
 Tree reset/close aborts the previous tree's requests and listeners, and each node
 checks its originating tree and host before rendering or selecting a cwd.
+Host catalog/token edits and late identity discovery renew an open directory tree
+and known-cwd catalog when their captured endpoint changes.
 
 Harness discovery in `src/browser/harness-discovery.ts` captures the selected
 host, resolved cache key and a request sequence before

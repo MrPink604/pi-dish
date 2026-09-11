@@ -204,12 +204,15 @@ const hostDiscovery = PiDishBrowser.createHostDiscovery({
   onSelf: data => {
     hostDirectory.setSelf(data);
     migrateClientKeys();
+    if (isNewSessionViewOpen()) renderNsHosts();
   },
   onFleet: data => {
     hostDirectory.setFleet(data);
     seedHostConnFromFleet();
   },
-  onIdentified: hostDirectory.applyDescriptor,
+  onIdentified: (...args) => {
+    if (hostDirectory.applyDescriptor(...args) && isNewSessionViewOpen()) renderNsHosts();
+  },
   onConnection: (host, event) => hostConnections.note(host, event),
   afterFleet: () => {
     pruneHostCaches();
@@ -3330,6 +3333,7 @@ const hostSettings = PiDishBrowser.createHostSettings({
   color: hostColorFor, customColor: hostColorIsCustom, resolveColor: resolveColorToHex,
   setColor: setHostColorOverride,
   onCatalogSaved: () => {
+    if (isNewSessionViewOpen()) renderNsHosts();
     pruneHostCaches();
     renderHostsSection();
     renderSessions();
@@ -8784,6 +8788,12 @@ function nsHostOptions() {
 }
 
 function renderNsHosts() {
+  if (isNewSessionViewOpen() && nsDirectoryTree && !nsDirectoryTree.isCurrent()) {
+    hideCwdDropdown();
+    initNsTree();
+    void loadKnownCwds();
+    renderNsWorkspaces();
+  }
   const row = document.getElementById('nsHostRow');
   const sel = document.getElementById('nsHostSelect');
   if (!row || !sel) return;
@@ -9363,6 +9373,7 @@ function openNewSessionView(opts = {}) {
 function closeNewSessionView() {
   directoryCatalog.retire();
   nsDirectoryTree?.dispose();
+  nsDirectoryTree = null;
   document.querySelector('.main').classList.remove('new-session-open');
   closeHarnessSettings();
   clearTimeout(nsPilotRefreshTimer);

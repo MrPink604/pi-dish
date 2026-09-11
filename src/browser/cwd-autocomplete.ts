@@ -26,14 +26,19 @@ export function createCwdAutocomplete(options: CwdAutocompleteOptions) {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let blurTimer: ReturnType<typeof setTimeout> | null = null;
   let sequence = 0;
+  let viewGeneration = 0;
   let disposed = false;
   let activeIndex = -1;
   let resultOwner: (() => boolean) | null = null;
   const mounted = () => !disposed && input.isConnected && dropdown.isConnected;
-  function hide(): void {
+  function retireRequest(): void {
     sequence++;
     if (timer !== null) clearTimeout(timer);
     timer = null;
+  }
+  function hide(): void {
+    retireRequest();
+    viewGeneration++;
     rowsController.abort();
     dropdown.style.display = 'none';
     activeIndex = -1;
@@ -45,7 +50,7 @@ export function createCwdAutocomplete(options: CwdAutocompleteOptions) {
     hide();
     options.onPick?.(path);
   }
-  function render(query: string, dirs: readonly KnownDirectory[], owns: () => boolean): void {
+  function render(query: string, dirs: readonly KnownDirectory[], owns: () => boolean, ownsRows: () => boolean): void {
     if (!owns()) return;
     const seen = new Set<string>();
     let results: Result[] = [];
@@ -63,7 +68,7 @@ export function createCwdAutocomplete(options: CwdAutocompleteOptions) {
     rowsController.abort();
     rowsController = new AbortController();
     activeIndex = -1;
-    resultOwner = owns;
+    resultOwner = ownsRows;
     if (!results.length) { dropdown.style.display = 'none'; return; }
     dropdown.innerHTML = results.map(row =>
       `<div class="cwd-option" data-path="${options.escapeHtml(row.short)}">${row.known ? '<span class="cwd-known">★</span>' : ''}${options.highlight(row.short, row.indices)}</div>`).join('');
@@ -77,13 +82,17 @@ export function createCwdAutocomplete(options: CwdAutocompleteOptions) {
   }
   function show(query: string): void {
     // Retire at the keystroke, not when the debounce eventually starts its read.
-    hide();
+    retireRequest();
+    if (resultOwner && !resultOwner()) hide();
     if (blurTimer !== null) clearTimeout(blurTimer);
     blurTimer = null;
     const selected = options.host();
     if (!mounted() || !selected) return;
     const host = Object.freeze({ ...selected });
     const requestSequence = sequence;
+    const rowGeneration = viewGeneration;
+    // Existing paths stay selectable while a new query is pending on this host.
+    const ownsRows = () => mounted() && viewGeneration === rowGeneration && sameDirectoryHost(host, options.host());
     const owns = () => mounted() && sequence === requestSequence && sameDirectoryHost(host, options.host());
     timer = setTimeout(async () => {
       timer = null;
@@ -94,7 +103,7 @@ export function createCwdAutocomplete(options: CwdAutocompleteOptions) {
         if (!owns()) return;
         if (response.ok) rows = decodeKnownDirectories(await response.json());
       } catch {} // Known paths remain useful when the directory service fails.
-      render(query, rows, owns);
+      render(query, rows, owns, ownsRows);
     }, 120);
   }
   const listener = { signal: listeners.signal };

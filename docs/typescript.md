@@ -275,10 +275,12 @@ validated overrides, including host keys that match Object prototype names.
 decoding. Reads capture the selected host id, route, token and request generation;
 readonly rows are hidden immediately when their host is no longer selected.
 `cwd-autocomplete.ts` owns shared cwd input/row listeners and debounce/blur timers.
-Every keystroke retires earlier reads before the next debounce begins. Suggestions
+Every keystroke retires earlier reads before the next debounce begins, while
+existing visible paths remain selectable on their originating host. Suggestions
 and picks retain host/query ownership, and disposal retires requests and listeners.
 `directory-tree.ts` owns lazy tree DOM, node actions and tree-scoped abort signals.
 Reset and close retire the old tree; delayed bodies and retained old nodes cannot
-write to or select a path for the new host. The app supplies selected-host,
+write to or select a path for the new host. Host catalog changes and late self
+discovery renew open directories when the captured endpoint changes. The app supplies selected-host,
 transport, fuzzy formatting and selection callbacks. Workspace chips and routine
 CRUD remain in JavaScript pending their own feature migration.

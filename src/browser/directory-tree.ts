@@ -93,5 +93,5 @@ export function createDirectoryTree(options: DirectoryTreeOptions) {
     owner = { host: Object.freeze({ ...host }), events: new AbortController() };
     root.appendChild(makeNode(owner, '~', '~', 0));
   }
-  return { reset, dispose };
+  return { reset, dispose, isCurrent: () => !!owner && owns(owner) };
 }
