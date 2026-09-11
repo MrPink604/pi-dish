@@ -36,3 +36,6 @@ export { decodeBouncePreview, decodeBounceOperation, decodeBounceOperations } fr
 
 export { createSessionRelations, decodeSessionRelations } from './session-relations';
 export { createSessionSearch, decodeSessionSearch } from './session-search';
+
+export { createSkills } from './skills';
+export { decodeSkillDirectory, decodeSkillCoverage } from './skills-data';

@@ -383,3 +383,27 @@ Fable 5.1 cleared recovery commit `b8faac4`, which is pushed.
 - Next: skills and advanced search, then remaining feature/rendering controllers.
 
 Fable 5.1 cleared bounce commit `2e46f5d`, which is pushed.
+
+## Checkpoint 17 — skills view (verified locally; review pending)
+
+- `skills.ts` owns directory/detail state, filtering/sorting, indexing timers,
+  coverage presentation and refinement drafts. `skills-data.ts` narrows skill,
+  coverage, activation and refinement fields into explicit contracts.
+- All rendered actions use owned listeners, including header controls and latest
+  activation links. Close/re-render/disposal retires old actions and timers.
+  Detail requests cannot replace a newer skill or the directory; Refine stays
+  disabled until coverage belongs to the selected skill.
+- Activation navigation targets the entry host that supplied the skill data,
+  checks ownership through lazy session lookup and guards delayed entry focus.
+  Refinement initializes the new-session form on that same host with its path
+  and evidence draft; it still never sends the draft automatically.
+- Five browser regressions cover old coverage/refine state, retained controls,
+  same-id cross-host activation links, indexing disposal and delayed navigation.
+  Decoder/strict contracts cover malformed payloads and readonly identities.
+- Strict checks, 906 backend tests, 126 browser regressions, independent UI
+  scenarios and full desktop/mobile smoke passed. Integrated runtime/config/test
+  files match the verified draft byte for byte; strict checks passed again.
+  Fable review is required before push.
+- Next: advanced search and usage, then remaining features and rendering.
+
+Fable 5.1 cleared session-navigation commit `fa5316a`, which is pushed.

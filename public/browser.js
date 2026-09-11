@@ -51,6 +51,7 @@ var PiDishBrowser = (() => {
     createSessionSearch: () => createSessionSearch,
     createSessionSpawns: () => createSessionSpawns,
     createSessionState: () => createSessionState,
+    createSkills: () => createSkills,
     createSpawnTargetPicker: () => createSpawnTargetPicker,
     createSpawnTargets: () => createSpawnTargets,
     decodeBounceOperation: () => decodeBounceOperation,
@@ -67,6 +68,8 @@ var PiDishBrowser = (() => {
     decodeRecoveryReport: () => decodeRecoveryReport,
     decodeSessionRelations: () => decodeSessionRelations,
     decodeSessionSearch: () => decodeSessionSearch,
+    decodeSkillCoverage: () => decodeSkillCoverage,
+    decodeSkillDirectory: () => decodeSkillDirectory,
     decodeSpawnChoices: () => decodeSpawnChoices,
     decodeSpawnId: () => decodeSpawnId,
     decodeSpawnStatus: () => decodeSpawnStatus,
@@ -288,10 +291,10 @@ var PiDishBrowser = (() => {
     const doc = root.ownerDocument;
     let view = null;
     let disposed = false;
-    function element(tag, className, text7) {
+    function element(tag, className, text8) {
       const node = doc.createElement(tag);
       node.className = className;
-      if (text7 !== void 0) node.textContent = text7;
+      if (text8 !== void 0) node.textContent = text8;
       return node;
     }
     const search = element("input", "model-search");
@@ -308,8 +311,8 @@ var PiDishBrowser = (() => {
       node.dataset.value = value;
       return node;
     }
-    function button(text7, name, value = "", primary = false) {
-      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text7);
+    function button(text8, name, value = "", primary = false) {
+      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text8);
       node.type = "button";
       return action(node, name, value);
     }
@@ -544,8 +547,8 @@ var PiDishBrowser = (() => {
     const state = prev && typeof prev === "object" ? prev : null;
     const errText = (value) => {
       if (value == null) return null;
-      const text7 = String(typeof value === "object" && "message" in value && value.message || value);
-      return text7 || null;
+      const text8 = String(typeof value === "object" && "message" in value && value.message || value);
+      return text8 || null;
     };
     const eventError = event && typeof event === "object" && "error" in event ? errText(event.error) : null;
     if (kind === "blocked") {
@@ -2734,11 +2737,14 @@ var PiDishBrowser = (() => {
   function record8(value) {
     return !!value && typeof value === "object" && !Array.isArray(value);
   }
+  function finite2(value) {
+    return typeof value === "number" && Number.isFinite(value);
+  }
 
   // src/browser/helper-format.ts
-  function escapeHtml(text7) {
-    if (text7 == null || text7 === "") return "";
-    return String(text7).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  function escapeHtml(text8) {
+    if (text8 == null || text8 === "") return "";
+    return String(text8).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
   function formatRelativeTime(ts) {
     if (!ts) return "";
@@ -4351,8 +4357,8 @@ var PiDishBrowser = (() => {
     const textNodes = [];
     while (walker.nextNode()) textNodes.push(walker.currentNode);
     for (const node of textNodes) {
-      const text7 = node.textContent || "";
-      const lower = text7.toLowerCase();
+      const text8 = node.textContent || "";
+      const lower = text8.toLowerCase();
       const ranges = [];
       for (const token of tokens) {
         let from = 0, at;
@@ -4367,16 +4373,545 @@ var PiDishBrowser = (() => {
       let cursor = 0;
       for (const [start, end] of ranges) {
         if (start < cursor) continue;
-        frag.appendChild(document2.createTextNode(text7.slice(cursor, start)));
+        frag.appendChild(document2.createTextNode(text8.slice(cursor, start)));
         const mark = document2.createElement("mark");
         mark.className = "search-mark";
-        mark.textContent = text7.slice(start, end);
+        mark.textContent = text8.slice(start, end);
         frag.appendChild(mark);
         cursor = end;
       }
-      frag.appendChild(document2.createTextNode(text7.slice(cursor)));
+      frag.appendChild(document2.createTextNode(text8.slice(cursor)));
       node.replaceWith(frag);
     }
+  }
+
+  // src/browser/skills-data.ts
+  var text7 = (value) => typeof value === "string" ? value : "";
+  var number = (value) => finite2(value) ? value : 0;
+  var object2 = (value) => record8(value) ? value : {};
+  var numbers = (value) => Array.isArray(value) ? value.map(number) : [];
+  function decodeSkillDirectory(value) {
+    if (!record8(value) || !Array.isArray(value.skills)) throw new Error("Invalid skills directory");
+    const summary = object2(value.summary), refine = object2(value.refine);
+    return {
+      scope: text7(value.scope),
+      indexing: value.indexing === true,
+      refine: { mode: refine.mode === "skill" || refine.mode === "path" ? refine.mode : "default", discovered: refine.discovered === true, skillName: text7(refine.skillName), mdPath: text7(refine.mdPath) },
+      summary: { discovered: number(summary.discovered), advertised: number(summary.advertised), catalogTokensEst: number(summary.catalogTokensEst), activations30d: number(summary.activations30d), quiet60d: number(summary.quiet60d) },
+      skills: value.skills.flatMap((row) => {
+        if (!record8(row) || typeof row.skill !== "string" || !row.skill) return [];
+        const usage = object2(row.usage);
+        return [{
+          skill: row.skill,
+          filePath: text7(row.filePath) || row.skill,
+          baseDir: text7(row.baseDir),
+          name: text7(row.name),
+          description: text7(row.description),
+          source: text7(row.source),
+          advertised: row.advertised === true,
+          bodyTokensEst: number(row.bodyTokensEst),
+          bodyBytes: number(row.bodyBytes),
+          catalogTokensEst: number(row.catalogTokensEst),
+          usage: {
+            lastUsedTs: finite2(usage.lastUsedTs) ? usage.lastUsedTs : null,
+            count30d: number(usage.count30d),
+            total: number(usage.total),
+            sessionCount: number(usage.sessionCount),
+            cwdCount: number(usage.cwdCount),
+            topCwd: text7(usage.topCwd),
+            weeks12: numbers(usage.weeks12)
+          }
+        }];
+      })
+    };
+  }
+  function decodeSkillCoverage(value) {
+    if (!record8(value) || typeof value.skill !== "string" || !value.skill) throw new Error("Invalid skill coverage");
+    const kinds = object2(value.kindSplit), latest = object2(value.latest);
+    const sections = Array.isArray(value.sections) ? value.sections : [];
+    return {
+      skill: value.skill,
+      numMapped: number(value.numMapped),
+      excludedBeforeMtime: number(value.excludedBeforeMtime),
+      flatFullRead: value.flatFullRead === true,
+      unreadTokensEst: number(value.unreadTokensEst),
+      targetedTouches: number(value.targetedTouches),
+      cwdCount: number(value.cwdCount),
+      topCwd: text7(value.topCwd),
+      mtimeMs: number(value.mtimeMs),
+      weeks26: numbers(value.weeks26),
+      kindSplit: { read: number(kinds.read), explicit: number(kinds.explicit) },
+      sessionCount: number(value.sessionCount),
+      latest: typeof latest.sessionId === "string" && latest.sessionId ? { sessionId: latest.sessionId, entryId: text7(latest.entryId), name: text7(latest.name), ts: number(latest.ts), model: text7(latest.model) } : null,
+      sections: sections.flatMap((section) => {
+        if (!record8(section)) return [];
+        const lines = Array.isArray(section.lines) ? section.lines : [];
+        return [{
+          heading: text7(section.heading),
+          startLine: number(section.startLine),
+          endLine: number(section.endLine),
+          reads: number(section.reads),
+          fraction: Math.max(0, Math.min(1, number(section.fraction))),
+          neverRead: section.neverRead === true,
+          lines: lines.flatMap((line) => record8(line) ? [{ text: text7(line.text), hits: number(line.hits) }] : [])
+        }];
+      })
+    };
+  }
+
+  // src/browser/skills.ts
+  function createSkills(options) {
+    const document2 = options.root.ownerDocument, sessionState = options.sessionState;
+    const element = (id) => {
+      const value = document2.getElementById(id);
+      if (!value) throw new Error("Missing skills element: " + id);
+      return value;
+    };
+    let disposed = false;
+    let viewHost = null;
+    let bodyEvents = new AbortController(), headerEvents = new AbortController();
+    let indexingTimer, activationTimer;
+    const message2 = (error) => error instanceof Error ? error.message : String(error);
+    function owns(seq = skillsSeq) {
+      const current = options.self();
+      return seq === skillsSeq && isSkillsViewOpen() && !!viewHost && current.hostId === viewHost.hostId && current.base === viewHost.base && (current.token || "") === (viewHost.token || "");
+    }
+    function retireBody() {
+      bodyEvents.abort();
+      bodyEvents = new AbortController();
+    }
+    async function read(path) {
+      const host = viewHost;
+      if (!host) throw new Error("Skills host is no longer available");
+      const response = await options.request(host, path);
+      const data = await response.json();
+      if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
+      return data;
+    }
+    let skillsData = null;
+    let skillsRefine = null;
+    let skillsSort = "recent";
+    let skillsFilter = "";
+    let skillsDetailPath = null;
+    let skillsDetail = null;
+    let skillsSeq = 0;
+    function isSkillsViewOpen() {
+      return !disposed && options.root.classList.contains("skills-open");
+    }
+    function openSkillsView() {
+      if (disposed) return;
+      closeSkillsView();
+      options.closeOtherViews();
+      viewHost = Object.freeze({ ...options.self() });
+      options.root.classList.add("skills-open");
+      skillsDetailPath = null;
+      loadSkillsDirectory();
+    }
+    function closeSkillsView() {
+      if (disposed) return;
+      ++skillsSeq;
+      bodyEvents.abort();
+      headerEvents.abort();
+      clearTimeout(indexingTimer);
+      clearTimeout(activationTimer);
+      options.root.classList.remove("skills-open");
+    }
+    function refreshSkillsView() {
+      if (skillsDetailPath) openSkillDetail(skillsDetailPath, { force: true });
+      else loadSkillsDirectory();
+    }
+    function skillsViewEscape() {
+      if (skillsDetailPath) {
+        backToSkillsDirectory();
+        return true;
+      }
+      closeSkillsView();
+      return true;
+    }
+    function fmtTok(n) {
+      n = Number(n) || 0;
+      if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1).replace(/\.0$/, "") + "k";
+      return String(n);
+    }
+    function fmtBytes(n) {
+      n = Number(n) || 0;
+      if (n >= 1024 * 1024) return (n / 1048576).toFixed(1) + " MB";
+      if (n >= 1024) return (n / 1024).toFixed(1) + " KB";
+      return n + " B";
+    }
+    function fmtEditedDate(ms) {
+      if (!ms) return "\u2014";
+      const d = new Date(ms);
+      return d.toLocaleDateString(void 0, { month: "short", day: "numeric" });
+    }
+    function renderSpark(weeks, { maxPx = 22, cls = "spark", pct = false } = {}) {
+      const max = Math.max(1, ...weeks);
+      const bars = weeks.map((w) => {
+        if (!w) return '<i class="z"></i>';
+        if (pct) return `<i style="height:${Math.max(9, Math.round(w / max * 100))}%"></i>`;
+        return `<i style="height:${Math.max(3, Math.round(w / max * maxPx))}px"></i>`;
+      }).join("");
+      return `<div class="${cls}">${bars}</div>`;
+    }
+    async function loadSkillsDirectory() {
+      if (!owns() || skillsDetailPath) return;
+      clearTimeout(indexingTimer);
+      retireBody();
+      const seq = ++skillsSeq;
+      const body = element("skillsViewBody");
+      renderSkillsHeader("directory");
+      if (!body.childElementCount) body.innerHTML = '<div class="usage-state">Loading skills\u2026</div>';
+      else body.classList.add("usage-refreshing");
+      try {
+        const data = await read("/api/skills");
+        if (!owns(seq)) return;
+        const d = decodeSkillDirectory(data);
+        if (!owns(seq) || skillsDetailPath) return;
+        skillsData = d;
+        skillsRefine = d.refine;
+        renderSkillsDirectory(d);
+        if (d.indexing) indexingTimer = setTimeout(() => {
+          if (owns(seq) && !skillsDetailPath) void loadSkillsDirectory();
+        }, 1e3);
+      } catch (e) {
+        if (!owns(seq)) return;
+        body.classList.remove("usage-refreshing");
+        body.innerHTML = `<div class="usage-state">Could not load skills: ${escapeHtml(message2(e))}</div>`;
+      }
+    }
+    function renderSkillsHeader(mode, skill) {
+      headerEvents.abort();
+      headerEvents = new AbortController();
+      const seq = skillsSeq;
+      const el = document2.getElementById("skillsViewHeader");
+      if (!el) return;
+      if (mode === "detail" && skill) {
+        const chips = `<span class="chip ${skill.advertised ? "adv" : ""}">${skill.advertised ? "advertised" : "manual only"}</span><span class="chip">${escapeHtml(skill.source)}</span>`;
+        el.innerHTML = `
+        <a class="skills-back" data-skills-action="back">\u2039 Skills</a>
+        <h1 class="skills-detail-title">${escapeHtml(skill.name)} ${chips}</h1>
+        <div class="skills-header-spacer"></div>
+        <button class="btn refine-btn" data-skills-action="refine"${skillsDetail?.skill === skillsDetailPath ? "" : " disabled"}>\u270E Refine with an agent</button>
+        <button class="btn-icon" data-skills-action="refresh" title="Refresh">\u27F3</button>
+        <button class="btn-icon" data-skills-action="close" title="Close (Esc)">\u2715</button>`;
+      } else {
+        el.innerHTML = `
+        <span class="usage-view-title">Skills</span>
+        <span class="skills-scope">${escapeHtml(skillsData?.scope === "all" ? "all workspaces" : skillsData?.scope || "all workspaces")}</span>
+        <div class="skills-header-spacer"></div>
+        <button class="btn-icon" data-skills-action="refresh" title="Refresh">\u27F3</button>
+        <button class="btn-icon" data-skills-action="close" title="Close (Esc)">\u2715</button>`;
+      }
+      const actions = { back: backToSkillsDirectory, refine: startSkillRefine, refresh: refreshSkillsView, close: closeSkillsView };
+      el.querySelectorAll("[data-skills-action]").forEach((button) => button.addEventListener("click", () => {
+        const action = button.dataset.skillsAction || "";
+        if (owns(seq) && Object.hasOwn(actions, action)) actions[action]();
+      }, { signal: headerEvents.signal }));
+    }
+    function sortedSkills(d) {
+      let list = d.skills.slice();
+      const q = skillsFilter.trim().toLowerCase();
+      if (q) list = list.filter((s) => s.name.toLowerCase().includes(q) || (s.description || "").toLowerCase().includes(q) || s.filePath.toLowerCase().includes(q));
+      const byRecent = (a, b) => (b.usage.lastUsedTs || 0) - (a.usage.lastUsedTs || 0);
+      const comparisons = {
+        recent: byRecent,
+        most: (a, b) => b.usage.count30d - a.usage.count30d || byRecent(a, b),
+        least: (a, b) => a.usage.count30d - b.usage.count30d || byRecent(a, b),
+        largest: (a, b) => b.bodyTokensEst - a.bodyTokensEst || byRecent(a, b),
+        name: (a, b) => a.name.localeCompare(b.name)
+      };
+      return list.sort(Object.hasOwn(comparisons, skillsSort) ? comparisons[skillsSort] : byRecent);
+    }
+    const STALE_MS = 60 * 864e5;
+    function renderSkillsDirectory(d) {
+      if (!owns() || skillsDetailPath) return;
+      retireBody();
+      const seq = skillsSeq;
+      const body = element("skillsViewBody");
+      body.classList.remove("usage-refreshing");
+      const s = d.summary;
+      const now = Date.now();
+      const sortOpts = [["recent", "Recently used"], ["most", "Most used (30d)"], ["least", "Least used"], ["largest", "Largest"], ["name", "Name"]].map(([v, l]) => `<option value="${v}"${skillsSort === v ? " selected" : ""}>${l}</option>`).join("");
+      const rows = sortedSkills(d).map((sk) => {
+        const u = sk.usage;
+        const last = u.lastUsedTs ? formatRelativeTime(u.lastUsedTs) : "\u2014";
+        const stale = u.lastUsedTs == null || now - u.lastUsedTs > STALE_MS;
+        const manual = sk.advertised ? "" : '<span class="manual">manual</span>';
+        return `<div class="sk-row" data-skill="${escapeHtml(sk.skill)}">
+        <div><div class="sk-name">${escapeHtml(sk.name)}${manual}</div><div class="sk-desc">${escapeHtml(sk.description || "")}</div></div>
+        <div class="src">${escapeHtml(sk.source)}</div>
+        <div class="tok">${fmtTok(sk.bodyTokensEst)}</div>
+        ${renderSpark(u.weeks12)}
+        <div class="num">${u.count30d}</div>
+        <div class="last${stale ? " stale" : ""}">${escapeHtml(last)}</div>
+      </div>`;
+      }).join("");
+      body.innerHTML = `
+      <div class="sk-summary">
+        <div class="stat"><b>${s.discovered}</b><span>discovered</span></div>
+        <div class="stat"><b>${s.advertised}</b><span>advertised \xB7 catalog ~${fmtTok(s.catalogTokensEst)} tok est</span></div>
+        <div class="stat"><b>${s.activations30d}</b><span>activations \xB7 30d</span></div>
+        <div class="stat"><b>${s.quiet60d}</b><span>quiet &gt; 60d</span></div>
+        <span class="badge-inferred" title="Usage is inferred from mined read/bash tool calls, not telemetry">inferred from tool calls</span>
+      </div>
+      <div class="sk-controls">
+        <input id="skillsFilterInput" placeholder="Filter skills\u2026" value="${escapeHtml(skillsFilter)}">
+        <select id="skillsSortSelect">${sortOpts}</select>
+      </div>
+      <div class="sk-list">
+        <div class="sk-colhead">
+          <div>Skill</div><div>Source</div><div class="num">~Tok est</div><div>12 weeks</div><div class="num">30d</div><div style="text-align:right">Last used</div>
+        </div>
+        ${rows || '<div class="usage-state">No skills match.</div>'}
+      </div>
+      <div class="sk-foot">GET /api/skills \xB7 GET /api/skills/activations \u2014 NDJSON, filters: skill, since, cwd, kind</div>`;
+      const filt = element("skillsFilterInput");
+      filt.addEventListener("input", () => {
+        if (!owns(seq)) return;
+        skillsFilter = filt.value;
+        renderSkillsDirectory(d);
+      }, { signal: bodyEvents.signal });
+      filt.focus();
+      filt.setSelectionRange(filt.value.length, filt.value.length);
+      const sort = element("skillsSortSelect");
+      sort.addEventListener("change", () => {
+        if (!owns(seq)) return;
+        skillsSort = sort.value;
+        renderSkillsDirectory(d);
+      }, { signal: bodyEvents.signal });
+      body.querySelectorAll(".sk-row").forEach((row) => row.addEventListener("click", () => {
+        if (owns(seq) && row.dataset.skill) void openSkillDetail(row.dataset.skill);
+      }, { signal: bodyEvents.signal }));
+    }
+    async function openSkillDetail(skillPath, { force = false } = {}) {
+      if (!owns()) return;
+      clearTimeout(indexingTimer);
+      retireBody();
+      const seq = ++skillsSeq;
+      skillsDetailPath = skillPath;
+      const skill = (skillsData?.skills || []).find((s) => s.skill === skillPath);
+      renderSkillsHeader("detail", skill);
+      const body = element("skillsViewBody");
+      body.classList.remove("usage-refreshing");
+      if (force || !skillsDetail || skillsDetail.skill !== skillPath) {
+        body.innerHTML = '<div class="usage-state">Loading coverage\u2026</div>';
+      }
+      try {
+        const data = await read("/api/skills/coverage?skill=" + encodeURIComponent(skillPath));
+        if (!owns(seq)) return;
+        const cov = decodeSkillCoverage(data);
+        if (cov.skill !== skillPath) throw new Error("Coverage belongs to another skill");
+        if (!owns(seq) || skillsDetailPath !== skillPath) return;
+        skillsDetail = cov;
+        renderSkillsHeader("detail", skill);
+        renderSkillDetail(skill, cov);
+      } catch (e) {
+        if (!owns(seq) || skillsDetailPath !== skillPath) return;
+        body.innerHTML = `<div class="usage-state">Could not load coverage: ${escapeHtml(message2(e))}</div>`;
+      }
+    }
+    function backToSkillsDirectory() {
+      if (!owns()) return;
+      skillsSeq++;
+      clearTimeout(indexingTimer);
+      retireBody();
+      skillsDetailPath = null;
+      skillsDetail = null;
+      renderSkillsHeader("directory");
+      if (skillsData) renderSkillsDirectory(skillsData);
+      else loadSkillsDirectory();
+    }
+    function heatClass(hits, numMapped) {
+      if (!hits) return "h0";
+      const r = hits / Math.max(1, numMapped);
+      if (r >= 0.75) return "h12";
+      if (r >= 0.4) return "h9";
+      return "h4";
+    }
+    function renderSkillDetail(skill, cov) {
+      if (!owns() || skillsDetailPath !== cov.skill) return;
+      retireBody();
+      const seq = skillsSeq;
+      const body = element("skillsViewBody");
+      const u = skill?.usage;
+      let coverageHtml;
+      if (cov.numMapped === 0) {
+        coverageHtml = `<div class="cov-cap">No ranged reads recorded since this file was last edited${cov.excludedBeforeMtime ? ` (${cov.excludedBeforeMtime} older read${cov.excludedBeforeMtime === 1 ? "" : "s"} predate it)` : ""}.</div>`;
+      } else if (cov.flatFullRead) {
+        coverageHtml = `<div class="cov-flat">This skill is short enough that every one of the last
+        ${cov.numMapped} read${cov.numMapped === 1 ? "" : "s"} loaded it in full \u2014 nothing has been
+        skipped, so there is no partial-coverage map to show.</div>`;
+      } else {
+        const secRows = cov.sections.map((sec, i) => {
+          const pct = Math.round(sec.fraction * 100);
+          const cold = sec.neverRead ? " cold" : "";
+          const never = sec.neverRead ? '<span class="never">never read</span>' : "";
+          const heads = escapeHtml(sec.heading === "(intro)" ? "(intro)" : sec.heading);
+          return `<div class="sec-row${cold}" data-sec="${i}">
+            <span class="sec-name">${heads} <span class="lines">${sec.startLine}\u2013${sec.endLine}</span>${never}</span>
+            <div class="cov-bar">${sec.reads ? `<i style="width:${pct}%"></i>` : ""}</div>
+            <span class="sec-frac">${sec.reads}/${cov.numMapped}</span>
+          </div>
+          <div class="sec-open" id="skSecOpen${i}" style="display:none"></div>`;
+        }).join("");
+        coverageHtml = `
+        <div class="cov-headline"><b>~${fmtTok(cov.unreadTokensEst)} tok</b> (est) never entered context across the last ${cov.numMapped} read${cov.numMapped === 1 ? "" : "s"}</div>
+        <div class="cov-cap">${cov.numMapped} ranged read${cov.numMapped === 1 ? "" : "s"} mapped \xB7 ${cov.targetedTouches} targeted access${cov.targetedTouches === 1 ? "" : "es"} (counted as touches, not mapped)${cov.excludedBeforeMtime ? ` \xB7 ${cov.excludedBeforeMtime} older read${cov.excludedBeforeMtime === 1 ? "" : "s"} predate this version` : ""}</div>
+        ${secRows}
+        <div class="d-note">Coverage maps ranged reads against the current file version only \u2014
+          activations before the last edit count toward totals but aren't mapped. A short skill
+          that's always read in full shows a single line here instead of a map.</div>`;
+      }
+      const kinds = cov.kindSplit || {};
+      const wsLine = u?.topCwd ? `Used in ${cov.cwdCount || u.cwdCount || 1} workspace${(cov.cwdCount || u.cwdCount || 1) === 1 ? "" : "s"}, mostly <span class="mono">${escapeHtml(shortCwd(cov.topCwd))}</span>` : "No workspace activity recorded yet";
+      let latestHtml = "";
+      if (cov.latest && cov.latest.sessionId) {
+        const label = cov.latest.name || "session";
+        latestHtml = `<div class="latest"><a class="skill-activation">latest activation: ${escapeHtml(label)} \u2192</a>
+        <span>${formatRelativeTime(cov.latest.ts)}${cov.latest.model ? " \xB7 " + escapeHtml(cov.latest.model) : ""}</span></div>`;
+      }
+      const apiUrl = options.origin() + "/api/skills/activations?skill=" + encodeURIComponent(skill ? skill.skill : cov.skill);
+      const covUrl = options.origin() + "/api/skills/coverage?skill=" + encodeURIComponent(skill ? skill.skill : cov.skill);
+      body.innerHTML = `<div class="skills-detail-wrap"><div class="cols">
+      <div class="main-col">
+        <div class="d-path" data-path="${escapeHtml(cov.skill)}" title="Copy path">${escapeHtml(cov.skill)}</div>
+        <div class="d-meta">
+          body <b>${fmtBytes(skill ? skill.bodyBytes : 0)}</b> \xB7 <b>~${fmtTok(skill ? skill.bodyTokensEst : 0)} tok</b> <span class="badge-inferred">est</span>
+          ${skill && skill.advertised ? `&nbsp;\xB7&nbsp; catalog entry <b>~${fmtTok(skill.catalogTokensEst)} tok</b> <span class="badge-inferred">est</span>` : ""}
+          &nbsp;\xB7&nbsp; last edited <b>${fmtEditedDate(cov.mtimeMs)}</b>
+        </div>
+        <div class="d-sec">Read coverage \xB7 since last edit <span class="badge-inferred">inferred</span></div>
+        ${coverageHtml}
+      </div>
+      <div class="side-col">
+        <div class="d-sec">Activity \xB7 26 weeks <span class="badge-inferred">inferred</span></div>
+        ${renderSpark(cov.weeks26, { cls: "spark-lg", pct: true })}
+        <div class="spark-cap"><span>${cov.weeks26.length}w ago</span><span>peak ${Math.max(0, ...cov.weeks26)}/wk</span><span>now</span></div>
+
+        <div class="d-sec">Usage</div>
+        <div class="kind-split">
+          <div><b>${kinds.read || 0}</b>auto reads</div>
+          <div><b>${kinds.explicit || 0}</b>explicit</div>
+          <div><b>${cov.sessionCount || 0}</b>sessions</div>
+        </div>
+        <div class="ws-line">${wsLine}</div>
+        ${latestHtml}
+
+        <div class="d-sec">The primitive</div>
+        <div class="api-box" data-copy="${escapeHtml(apiUrl)}"><span class="copy-hint">\u29C9</span><span class="c"># activations, NDJSON</span>
+  ${escapeHtml(apiUrl)}
+
+  <span class="c"># current coverage rollup</span>
+  ${escapeHtml(covUrl)}</div>
+        <div class="d-note">The \u270E button opens a new session with a drafted prompt carrying this
+          evidence (path, stats, cold sections) \u2014 the refinement methodology itself is pluggable.</div>
+      </div>
+    </div></div>`;
+      body.querySelector(".d-path")?.addEventListener("click", () => {
+        if (!owns(seq)) return;
+        options.copy(cov.skill);
+        options.status("Skill path copied");
+      }, { signal: bodyEvents.signal });
+      body.querySelector(".api-box")?.addEventListener("click", () => {
+        if (!owns(seq)) return;
+        options.copy(apiUrl);
+        options.status("Activations URL copied");
+      }, { signal: bodyEvents.signal });
+      body.querySelector(".skill-activation")?.addEventListener("click", () => {
+        if (owns(seq) && cov.latest) void openSkillActivation(cov.latest.sessionId, cov.latest.entryId);
+      }, { signal: bodyEvents.signal });
+      body.querySelectorAll(".sec-row[data-sec]").forEach((row) => {
+        row.addEventListener("click", () => {
+          if (!owns(seq)) return;
+          const i = Number(row.dataset.sec);
+          const open = document2.getElementById("skSecOpen" + i);
+          if (!open) return;
+          if (open.style.display !== "none") {
+            open.style.display = "none";
+            open.innerHTML = "";
+            return;
+          }
+          const sec = cov.sections[i];
+          open.innerHTML = sec.lines.map((ln) => `<div class="ln ${heatClass(ln.hits, cov.numMapped)}"><span class="g"></span><span class="t">${escapeHtml(ln.text || " ")}</span></div>`).join("");
+          open.style.display = "";
+        }, { signal: bodyEvents.signal });
+      });
+    }
+    function startSkillRefine() {
+      if (!owns() || !viewHost) return;
+      const skill = (skillsData?.skills || []).find((s) => s.skill === skillsDetailPath);
+      if (!skill || !skillsDetail || skillsDetail.skill !== skillsDetailPath) return;
+      const draft = buildRefineDraft(skill, skillsDetail, skillsRefine || { mode: "default", discovered: false, skillName: "", mdPath: "" });
+      const cwd = skill.baseDir || skill.filePath.replace(/\/SKILL\.md$/, "");
+      closeSkillsView();
+      options.refine({ cwd, draft, host: viewHost.hostId });
+    }
+    function buildRefineDraft(skill, cov, refine) {
+      const u = skill.usage || {};
+      const lead = [];
+      const usesSkillLead = refine.mode === "skill" || refine.mode === "default" && refine.discovered;
+      if (usesSkillLead) lead.push("/skill:" + refine.skillName, "");
+      const cold = (cov.sections || []).filter((s) => s.neverRead).map((s) => s.heading);
+      const parts = [
+        "Help me refine this skill based on how it is actually being used.",
+        "",
+        "Skill: " + skill.filePath,
+        "Source: " + skill.source + (skill.advertised ? " \xB7 advertised" : " \xB7 manual only"),
+        "Body: " + fmtBytes(skill.bodyBytes) + " \xB7 ~" + skill.bodyTokensEst + " tok (est)",
+        "Usage (inferred from tool calls): " + (u.total || 0) + " activations, " + (u.count30d || 0) + " in the last 30d, across " + (u.sessionCount || 0) + " session(s); last used " + (u.lastUsedTs ? formatRelativeTime(u.lastUsedTs) : "never"),
+        "~" + cov.unreadTokensEst + " tok (est) never entered context across the last " + cov.numMapped + " mapped read(s)."
+      ];
+      if (cold.length) parts.push("Sections never read since the last edit: " + cold.join("; "));
+      parts.push(
+        "Coverage detail: " + options.origin() + "/api/skills/coverage?skill=" + encodeURIComponent(skill.filePath),
+        "Raw activations (NDJSON): " + options.origin() + "/api/skills/activations?skill=" + encodeURIComponent(skill.filePath),
+        ""
+      );
+      if (!usesSkillLead) {
+        const ref = refine.mdPath || (refine.mode === "path" ? refine.mdPath : null);
+        if (ref) parts.push("Read " + ref + " and follow its methodology.");
+      }
+      parts.push("Note: read-coverage is not the same as adherence \u2014 ground-truth any cold section against a recent transcript before trimming it.");
+      return lead.join("\n") + parts.join("\n");
+    }
+    async function openSkillActivation(id, entryId) {
+      if (!owns() || !viewHost) return;
+      const endpoint = viewHost;
+      closeSkillsView();
+      const navigation = skillsSeq;
+      const current = () => !disposed && navigation === skillsSeq && options.self().hostId === endpoint.hostId && options.self().base === endpoint.base && (options.self().token || "") === (endpoint.token || "");
+      if (!sessionState.findSession(id, endpoint.hostId)) await options.loadPrevious();
+      if (!current() || !sessionState.findSession(id, endpoint.hostId)) return;
+      const selecting = options.selectSession(id, { host: endpoint.hostId });
+      const owner = sessionState.captureSelection(), selectedView = skillsSeq;
+      await selecting;
+      if (!entryId || !owner || !sessionState.ownsSelection(owner) || owner.id !== id || owner.host !== endpoint.hostId) return;
+      activationTimer = setTimeout(() => {
+        if (disposed || selectedView !== skillsSeq || !sessionState.ownsSelection(owner)) return;
+        const el = document2.querySelector(`[data-entry-id="${CSS.escape(entryId)}"]`);
+        const msg = el?.closest(".message");
+        if (msg) {
+          msg.scrollIntoView({ block: "center" });
+          msg.classList.add("search-current");
+        }
+      }, 400);
+    }
+    return {
+      open: openSkillsView,
+      close: closeSkillsView,
+      isOpen: isSkillsViewOpen,
+      refresh: refreshSkillsView,
+      escape: skillsViewEscape,
+      load: loadSkillsDirectory,
+      detail: openSkillDetail,
+      back: backToSkillsDirectory,
+      refine: startSkillRefine,
+      activation: openSkillActivation,
+      dispose() {
+        closeSkillsView();
+        disposed = true;
+      }
+    };
   }
   return __toCommonJS(index_exports);
 })();

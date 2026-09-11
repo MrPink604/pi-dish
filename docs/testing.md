@@ -89,6 +89,7 @@ After editing `src/browser/`, run `npm run build:browser` before `npm test`;
 | Wire envelope validation, malformed responses, unknown events and transport survival | `test/transport-frames.test.js` plus existing bridge/RPC protocol suites |
 | Typed RPC startup validation, failed-child cleanup, delta snapshots and recovery ownership | `test/rpc-session.test.js`, `test/transport-frames.test.js`, `test/session-recovery.test.js` |
 | Typed bridge registry validation, pre-hello claim protection and session-switch replay ordering | `test/bridge-session.test.js` |
+| Skills payloads, detail/refine ownership and host-scoped activation | `test/browser-skills.test.js`, `test/browser/skills.spec.js`, `test/types/browser-skills.ts`, `test/ui-scenarios/skills.js` |
 | Related-session controls and in-session query/paging ownership | `test/browser-session-navigation.test.js`, `test/browser/session-navigation.spec.js`, `test/browser/feature-ownership.spec.js`, `test/types/browser-session-navigation.ts` |
 | Bounce wire data, queued snapshots, polling and retired controls | `test/browser-bounce.test.js`, `test/browser/bounce.spec.js`, `test/types/browser-bounce.ts`, `test/ui-scenarios/bounce.js` |
 | Recovery wire data, settings/report owners and retired actions | `test/browser-recovery.test.js`, `test/browser/recovery.spec.js`, `test/types/browser-recovery.ts` |

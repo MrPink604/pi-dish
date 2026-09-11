@@ -2075,3 +2075,10 @@ Related-session header chips and the overflow modal live in
 `src/browser/session-relations.ts`. Chips retain their rendered selection/host,
 and modal/header re-renders retire prior controls. Indexing/resize timers belong
 to that controller; clear/dispose retires them before the next session view.
+
+The skills directory and coverage takeover are owned by `src/browser/skills.ts`,
+with payloads narrowed in `skills-data.ts`. Requests remain on the entry host.
+Latest-activation links and refinement setup retain that host identity even when
+a same-id session on a peer is selected. Refine requires coverage for the current
+skill and only prepares a draft; it does not send a prompt. Header/detail/list
+controls and indexing/entry-focus timers are retired with their owning view.

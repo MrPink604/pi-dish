@@ -359,3 +359,8 @@ callbacks; the controller retains endpoint/view ownership across asynchronous wo
 navigation. The app provides transcript paging/scroll callbacks and session/host
 accessors. Query results and rendered navigation controls retain their original
 selection/endpoint instead of borrowing whichever session is current later.
+
+`skills.ts` owns the skills directory and coverage detail, using `skills-data.ts`
+for unknown payload decoding. The entry host remains explicit through requests,
+activation navigation and refinement setup. Rendered controls and indexing/focus
+timers follow the owning view; refinement requires matching-path coverage.
