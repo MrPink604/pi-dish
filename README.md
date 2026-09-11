@@ -667,8 +667,15 @@ Shared identity, harness, and transport primitives are authored in TypeScript
 under `src/core/`. Their generated CommonJS files and declarations are checked
 in under `lib/`, preserving direct Node startup and the existing package layout.
 Run `npm run build:core` after source changes; `npm run check` verifies that the
-committed runtime matches the source. See [Typed foundation](docs/typescript.md)
-for scope and conventions. Browser and feature modules remain JavaScript.
+committed runtime matches the source. See [TypeScript migration guide](docs/typescript.md)
+for scope and conventions. Browser migration is in progress: modules under
+`src/browser/` are typed, while most browser controllers/rendering,
+the server application and feature stores remain JavaScript. See
+[the migration status and next steps](BACKLOG.md) for the current checkpoint.
+
+Run `npm run build:browser` after browser TypeScript changes and commit the
+generated `public/browser.js`. `npm run check` verifies both types and output
+consistency.
 
 Browser setup is reproducible from the lockfile:
 
@@ -750,7 +757,7 @@ for Prime's verified coverage and outstanding gaps.
 
 Start with [AGENTS.md](AGENTS.md) for contributor commands and invariants.
 [CLAUDE.md](CLAUDE.md) documents the architecture in detail, and
-[BACKLOG.md](BACKLOG.md) tracks the maintenance stages. Historical task plans
+[BACKLOG.md](BACKLOG.md) tracks migration status and the next implementation steps. Historical task plans
 are retained separately from the current work order.
 
 ## License
@@ -758,7 +765,3 @@ are retained separately from the current work order.
 [Vibecoded / 0BSD](LICENSE) — it's mostly agent output, so it's probably
 only barely copyrightable anyway. Do whatever you want with it. Vendored
 third-party code (`public/vendor/`) keeps its own MIT/BSD licenses.
-
-Browser TypeScript modules in `src/browser/` use `npm run build:browser`; commit
-the generated `public/browser.js` with source changes. `npm run check` verifies
-types and output consistency. See [the migration guide](docs/typescript.md).

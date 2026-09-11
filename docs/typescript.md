@@ -1,8 +1,14 @@
-# Typed foundation
+# TypeScript migration guide
 
-The first migration is limited to existing shared primitives. It introduces no
-feature-module extraction, UI framework, ESM runtime migration, or wire/store
-format change.
+For current completion status and the ordered work queue, start with
+[the roadmap](../BACKLOG.md). This document describes the typed boundaries,
+build conventions and compatibility rules already implemented.
+
+The shared foundation is complete within its defined scope. Browser migration
+is in progress; the server application and feature stores remain largely
+JavaScript. The original foundation introduced no UI framework, ESM runtime
+migration or wire/store format change. Subsequent browser extractions use
+vanilla TypeScript and ordinary DOM rendering.
 
 | TypeScript source in `src/core/` | Responsibility |
 | --- | --- |
@@ -38,10 +44,12 @@ modal instances, file requests and comment drafts within a selected session.
 Tree/branch operations and model/thinking menu loads also carry selection
 owners; a late branch preserves returned editor text in its original draft.
 
-`server.js`, most browser controllers/rendering, feature stores and harness
-extensions remain JavaScript. The typed browser adapter and model-selector DOM
-module are described below. The foundation's declarations
-do not mean that all its JavaScript callers have been checked.
+`server.js`, most browser controllers/rendering and feature stores remain
+JavaScript. Most harness extension sources are already TypeScript, loaded by
+the harnesses outside the `src/` build; their remaining migration/checking scope
+needs a separate audit. The typed browser adapter and model-selector DOM module
+are described below. The foundation's declarations do not mean that all its
+JavaScript callers have been checked.
 
 ## Source and runtime
 

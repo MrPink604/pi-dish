@@ -8,7 +8,8 @@ The typed foundation lives in `src/core/`. Its generated CommonJS and `.d.ts`
 files are checked in at the existing `lib/` paths. Edit the TypeScript source,
 run `npm run build:core`, and include both source and generated output in the
 commit. `npm run check` rejects stale output. See [docs/typescript.md](docs/typescript.md)
-for the exact boundary; the application and feature modules remain JavaScript.
+for the implemented boundaries. Browser migration is in progress; most browser
+controllers/rendering, the server application and feature stores remain JavaScript.
 Browser session state lives in `src/browser/session-state.ts`; use its writers
 and selection guards from `app.js` via `PiDishBrowser.createSessionState`. Continue
 with vanilla TypeScript modules in `src/browser/`; regenerate and commit
@@ -17,7 +18,7 @@ with vanilla TypeScript modules in `src/browser/`; regenerate and commit
 ## Start here
 
 - [README.md](README.md): setup, supported behavior, development commands.
-- [BACKLOG.md](BACKLOG.md): current priorities and the staged maintenance plan.
+- [BACKLOG.md](BACKLOG.md): migration status, completed boundaries and next steps.
 - [CLAUDE.md](CLAUDE.md): detailed architecture and implementation invariants;
   read the sections relevant to the code you change.
 - `TASKS/` and `docs/history/` contain design and implementation history.

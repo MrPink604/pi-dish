@@ -1,168 +1,130 @@
-# pi-dish maintenance backlog
+# pi-dish roadmap and migration status
 
-Updated 2026-09-11. This is the current work order. The original RPC feature
-audit is preserved in [docs/history/2026-07-rpc-gap-audit.md](docs/history/2026-07-rpc-gap-audit.md);
-its descriptions of missing features are historical.
+Updated 2026-09-11. **The TypeScript migration is in progress. The shared
+foundation is complete; browser migration is the current stage. Most application
+code still lives in JavaScript.**
 
-## 1. Baseline maintenance (completed 2026-09-09)
+The latest completed implementation is harness discovery (`53b5ae0`), merged
+and pushed to `main`. There is no unfinished implementation from that stage.
+The next implementation is host identity and fleet discovery, described below.
 
-- Restored SSH-forward cleanup on process termination, covering SIGTERM and SIGINT.
-- Scoped selected-session metadata, transcript caches, family grouping, and row
-  close actions to the owning host; preserved request ownership across delayed
-  metadata updates.
-- Corrected stale capability documentation and added a short contributor entrypoint.
+## Status at a glance
 
-These changes establish the baseline before broader testing or refactoring work.
-Each behavior fix includes a focused regression check.
+| Area | Status | What that means |
+| --- | --- | --- |
+| Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
+| Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
+| Browser migration | In progress — current stage | Eight implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
+| Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
+| Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
+| UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
 
-## 2. Testing and coverage (completed 2026-09-09)
+The foundations and several browser boundaries have
+shipped; substantial application migration remains. At `53b5ae0`, `public/app.js`
+still has about 13,800 lines and `server.js` about 7,400. These are scope indicators,
+not a completion percentage. The remaining work is not divided into equal-sized
+units, so a percentage or completion date would imply precision we do not have.
 
-- Pinned local Playwright and managed Chromium; 26 independent browser
-  regressions cover same-id host collisions and delayed metadata writes.
-- Extracted eight independently runnable smoke features while retaining the
-  complete desktop/mobile integration flow. Each standalone run owns fresh
-  fixtures; shared prompt history and selection-order dependencies were removed.
-- Added family regressions and fixes for cross-host pinning, expansion,
-  ancestor lookup, and drag ordering.
-- Scoped composer drafts/attachments, queued prompts, pending sends/aborts,
-  and extension dialogs to their owning hosts, with focused regressions for
-  collisions and asynchronous completion after switching sessions. Harness
-  discovery also rejects stale responses and failures after newer requests
-  or host switches.
-- Covered listener startup, bind retry, alias failure, advertised URLs,
-  and SIGINT/SIGTERM port release together in an isolated suite. CI exposed
-  a race while binding the loopback alias; automatically selected callback
-  URLs now use a listening address.
-- Made real OMP/Prime canaries independently runnable; verified OMP 18.1.15
-  against a local fake provider, including live-tree reads and resume.
-  Prime remains an opt-in check requiring its own installation.
-- Added CI for the Node 22.19 minimum and current 22/24/26 patches, plus browser
-  regressions, independent features, and desktop/mobile smoke on Node 24.
-- Introduced correctness lint and strict incremental JavaScript type checking
-  for the cron boundary, without formatting churn or a framework migration.
+## What is already in TypeScript
 
-See [docs/testing.md](docs/testing.md) for the tooling matrix, coverage map,
-commands, and checks to preserve during refactoring. Structural work can now
-proceed in small changes; this baseline does not claim exhaustive coverage.
+The foundation lives in `src/core/`, with generated CommonJS and declarations
+in `lib/`. Its full module inventory is in [the migration guide](docs/typescript.md).
+Most JavaScript callers of these modules are not yet type checked; `lib/cron.js`
+is an explicitly checked exception.
 
-## 3. Session chrome and composer redesign (completed 2026-09-10)
+These eight browser implementation modules compile strictly into the local
+`public/browser.js` bundle (`src/browser/index.ts` is the bundle entrypoint):
 
-Three-row mobile header (title · fixed host/harness/model/reasoning · scrolling
-chips), a field-only composer with in-field attach/dictate/context/stop and
-stacked steer/follow-up glyphs, new context-percentage tiers, and removal of
-the message-count and session-spend badges. Spec and mock:
-[docs/design/mobile-chrome-composer.md](docs/design/mobile-chrome-composer.md).
+| Completed browser module | Responsibility now owned by TypeScript |
+| --- | --- |
+| `api-client.ts` | Host/auth resolution, JSON requests, decoded session/model reads and selected mutations |
+| `session-state.ts` | Session lists, selected session, state writers and immutable selection ownership tokens |
+| `model-selector.ts` | Model-selector DOM, actions and disposal |
+| `thinking-selector.ts` | Thinking-selector DOM, actions and disposal |
+| `host-connections.ts` | Connection observations, retry/backoff and poll eligibility |
+| `host-session-loader.ts` | Per-host shared requests, cached rows and request retirement |
+| `host-catalog.ts` | Host URL normalization, stored catalog projection and source merging |
+| `harness-discovery.ts` | Harness-picker requests, ownership and the per-host settings-badge cache |
 
-## 4. Structural work (after the test baseline)
+A completed module means that boundary has moved, been reviewed and verified.
+It does **not** mean its entire feature is migrated: for example, model-selector
+DOM is typed, while model discovery and menu orchestration still have JavaScript
+in the app. Selection ownership guards are already used throughout the browser,
+but many guarded feature implementations themselves remain JavaScript.
 
-- First bounded TypeScript foundation: existing identity, harness metadata,
-  process proof, request correlation and stream helpers now live in `src/core/`,
-  with generated CommonJS/declarations at the original `lib/` paths and CI
-  consistency checks. See [docs/typescript.md](docs/typescript.md). Feature modules
-  and browser state/transport are outside this first conversion.
-- Session capability policy now lives in the typed foundation. Bridge defaults
-  and API projection share one policy; lifecycle authorization stays with the
-  server callers. Harness/state/flag regressions and Fable review cover this
-  extraction.
-- Shared RPC/bridge envelope decoding now validates response correlation and
-  separates response/event/hello frames, while keeping payloads unknown and
-  preserving bridge ownership proofs. Malformed-frame transport regressions
-  and Fable review cover the boundary.
-- The RPC session class, startup/pool and launch helpers now compile strictly.
-  Native ids are validated before registration; startup state and streaming
-  deltas are narrowed where consumed. Fable-reviewed regressions preserve
-  retry/child cleanup, snapshot reconstruction and recovery ownership.
-- The bridge session class, registry and pool now compile strictly. Registry
-  basics and adopted identities are validated; v2 connections must prove their
-  original claim before events can change session state. Socket regressions
-  cover pre-hello claim rewriting, malformed updates and replay ordering.
-- Browser list/selection state now lives in `src/browser/session-state.ts`, with
-  strict TypeScript checks, host-aware lookup, the four existing writers
-  and generation invalidation. DOM rendering stays in `app.js` via callbacks;
-  state regressions and the host-collision browser scenarios cover the boundary.
-- Transcript loads, stream connections/retries, relations and metadata mutations
-  now capture immutable host/id/generation owners. The store guards transcript
-  merges and pins identity; stale entrypoints cannot replace the current view.
-  Composer, queue, file/diff, terminal, dialog and bounce guards use the same
-  tokens, retiring the old id-plus-counter interface. Resume, search, stats,
-  shares/pages and comments also retain their originating owner through later
-  requests and view updates; feature counters still distinguish work inside a
-  selection. Delayed-response browser regressions cover the boundary.
-- Tree/branch operations and model/thinking menus now retain selection ownership;
-  stale branch replies preserve only the originating draft and cannot reselect.
-- Extend the typed foundation into application event and request-ownership contracts.
-- Extract frontend state/transport and server application/lifecycle boundaries
-  in small changes guarded by the preceding tests.
-- Continue vanilla TypeScript migration through `src/browser/`. The typed API
-  adapter, session store and model selector establish the current pattern:
-  explicit owner-bearing actions, ordinary DOM rendering and cleanup.
-  Move remaining state/controllers and leaf UI out of `app.js` in separately
-  reviewed changes. Preserve imperative transcript and terminal ownership.
-- Framework work is deferred. [The assessment](docs/browser-framework-assessment.md)
-  retains a possible future leaf-component experiment and comparison criteria;
-  neither Preact nor Svelte is an intended migration destination.
+## Next implementation steps
 
-## Product limitations to revisit separately
+This is the intended order. Each row may require several independently reviewed
+commits; it is not a promise that one row equals one change.
+
+| Order | Work | Completion criterion |
+| --- | --- | --- |
+| 1 — next | Host identity and fleet discovery: `loadHostIdentity`, `loadHostFleet`, `identifyHosts` and their request state | Typed controller owns descriptor requests and their captured host/source identities; catalog persistence and UI callbacks remain explicit. Old-server fallback, refresh timing and stale-response behavior are verified. |
+| 2 | Host catalog editing and settings UI: persistence, add/remove/token actions and host-section rendering | Storage and network boundaries are typed; each action retains its intended host, and view listeners have explicit cleanup. |
+| 3 | Remaining new-session request controllers: workspace/directory lookup, spawn targets, model/config discovery and spawn coordination | Requests retain host, harness, cwd and operation ownership; delayed results cannot change a newer configuration or retarget a spawn. |
+| 4 | Remaining browser features, extracted one feature at a time | Composer/queue, dialogs, search/usage, shares/pages/comments, tree and other feature state, requests and UI move behind typed contracts. Each feature gets its own scope before implementation. |
+| 5 | Transcript/streaming, file/diff and terminal surfaces, then the remaining app shell | Rendering and transport ownership move without losing streaming coalescing, retained transcript DOM, pagination, scroll state or terminal cleanup. |
+
+**Browser-stage finish line:** first-party browser application logic is authored
+in TypeScript, with typed state, request and view boundaries. `public/app.js` no
+longer contains the remaining feature implementations. JavaScript generated for
+runtime delivery and vendored libraries are expected to remain.
+
+**After the browser stage:** plan the remaining server application/lifecycle and
+feature-store migrations separately. Existing typed RPC/bridge internals do not
+make the Express server, session index/recovery, routines, shares or other stores
+fully typed. Audit extensions and the Electron shell before declaring a whole-
+application migration complete. These later areas are not yet a commit-by-commit
+plan.
+
+## Review and verification
+
+For each implementation chunk: define the boundary, migrate it, get Fable 5.1
+review, resolve findings, run the relevant checks, then commit and push. Preserve
+host/session ownership, local browser assets and existing deployment paths.
+Follow [AGENTS.md](AGENTS.md) and [the test matrix](docs/testing.md) for required
+checks. Documentation-only changes need content and link checks. After a chunk
+ships, update this page's checkpoint, completed inventory and next step so the
+status stays current.
+
+Latest implementation evidence, for `53b5ae0`:
+
+- Fable 5.1 reviewed the harness-discovery extraction and its follow-up fixes.
+- 841 backend tests and 62 browser regressions passed; independent UI scenarios,
+  desktop/mobile smoke and OMP/Prime fake-provider canaries passed locally.
+- [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34580832058):
+  backend Node 22.19.0/22.x/24.x/26.x and browser/UI on Node 24.
+
+These results establish a verified checkpoint, not exhaustive application coverage
+or completion of the remaining migration.
+
+## Completed work before the current stage
+
+- Baseline maintenance and test isolation/CI: completed 2026-09-09, including
+  SSH-forward cleanup and host-aware session/composer/family ownership fixes.
+- Mobile session chrome and composer redesign: completed 2026-09-10;
+  [design and mock](docs/design/mobile-chrome-composer.md).
+- Typed session/model API contracts, browser build and model-selector baseline:
+  completed 2026-09-10; [baseline evidence](docs/model-selector-baseline.md).
+- Session-store migration: completed 2026-09-10. Host connections, per-host session
+  loading, thinking selector, host catalog and harness discovery: completed
+  2026-09-11. Their current responsibilities are listed above.
+- CI synchronization fixes: completed in `ac0d272`, before harness discovery.
+
+The [framework assessment](docs/browser-framework-assessment.md) records the
+vanilla TypeScript decision and retains criteria for a possible future experiment.
+Historical plans in `TASKS/` and `docs/history/`, including the
+[original RPC gap audit](docs/history/2026-07-rpc-gap-audit.md), are not the current
+work queue. Check current code and tests before treating an old gap as open work.
+
+## Product limitations outside the migration
 
 - OMP/Prime do not expose the bridge queue-list/cancellation capabilities.
-  Avoid promising Pi's queue controls for these harnesses.
-- General terminal component factories and custom tool/message renderers have no
-  browser serialization path. See [EXTENSION_WEB_UI_SCOPING.md](EXTENSION_WEB_UI_SCOPING.md)
-  for the historical design discussion.
-- Re-evaluate additional OMP host commands individually; a command that opens a
-  TUI-only interaction must not strand a web user.
+- General terminal component factories and custom tool/message renderers have
+  no browser serialization path; see [the historical scoping](EXTENSION_WEB_UI_SCOPING.md).
+- Additional OMP host commands need individual evaluation; a command that opens
+  a TUI-only interaction must not strand a web user.
 
-Current capabilities are defined by the harness wrappers and the server's
-capability projection; README summarizes supported behavior. `TASKS/` records
-design history and may include work that has already shipped.
-
-## Framework evaluation preparation (completed 2026-09-10)
-
-1. Session/model API contracts: complete after Fable review and full checks;
-   invalid history rows are isolated and optional capability flags stay optional.
-2. Typed browser request adapter and local browser build: complete after Fable
-   review and full checks, including malformed/unauthorized peer responses.
-3. Extracted model-selector baseline with explicit actions and cleanup: complete
-   after Fable review and full checks.
-4. [Readiness checkpoint and baseline evidence](docs/model-selector-baseline.md):
-   complete; retained as evidence for any later framework experiment.
-   The current next work is vanilla TypeScript migration.
-
-## Vanilla TypeScript continuation
-
-- Session store migration: completed 2026-09-10 after Fable review, strict type
-  checks, 825 backend tests, 55 browser regressions, all independent UI scenarios,
-  desktop/mobile smoke and OMP/Prime fake-provider canaries.
-  Moved the existing writers and immutable selection owners into `src/browser/`,
-  removed the standalone JavaScript script, and routed production and unit-test
-  consumers through the existing browser bundle. No state behavior changes.
-- Host connection policy/controller: completed 2026-09-11 after Fable review
-  and full verification (828 backend tests, 55 browser regressions, all UI
-  scenarios/smoke and OMP/Prime canaries). Moves retry/backoff, fleet seeding,
-  poll eligibility and observation storage into `src/browser/host-connections.ts`.
-- Per-host session loader: completed 2026-09-11 after Fable review and full
-  verification (835 backend tests, 56 browser regressions, all UI scenarios/smoke
-  and OMP/Prime canaries).
-  Moves shared requests, cached rows, indexing state and active-only family/child
-  merging into TypeScript. Unique request owners also prevent retired replies
-  from restoring pruned caches or replacing newer connection outcomes.
-- Thinking-level selector: completed 2026-09-11 after Fable review and full
-  verification (835 backend tests, 60 browser regressions, all UI scenarios/smoke
-  and OMP/Prime canaries).
-  Moves DOM/listeners behind typed owner-bearing actions and cleanup. Uses native
-  buttons and literal level text; an unsupported current level stays local to
-  its view instead of changing the shared Pi vocabulary.
-- Host catalog normalization/merge: completed 2026-09-11 after Fable review and
-  full verification (835 backend tests, 60 browser regressions, all UI
-  scenarios/smoke and OMP/Prime canaries).
-  Moves URL normalization, catalog projection and self/fleet/user merge
-  into TypeScript without changing source precedence or routing policy.
-- Harness discovery controller: completed 2026-09-11 after Fable review, strict
-  checks, 841 backend tests, 62 browser regressions, all UI scenarios/smoke
-  and OMP/Prime fake-provider canaries.
-  Moves the picker catalog, request ownership and settings-badge cache into
-  TypeScript. Background reads cannot overwrite newer picker catalogs, and
-  malformed rows are isolated before rendering.
-- Next: remaining host/request controllers and leaf UI. Keep each extraction
-  independently reviewable; preserve selection guards, streaming coalescing,
-  pagination and retained DOM.
+Current supported behavior comes from the harness wrappers and server capability
+projection; [README.md](README.md) summarizes it. A TypeScript conversion alone
+does not add harness capabilities.

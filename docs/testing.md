@@ -71,7 +71,7 @@ parser inputs, parsed fields, matching, and next-run results. Most application
 and remaining JavaScript modules are not yet type checked.
 The browser modules in `src/browser/` compile strictly, including session state,
 the API adapter and the model selector. See
-[Typed foundation](typescript.md) for the exact migrated scope.
+[TypeScript migration guide](typescript.md) for the exact migrated scope.
 
 Browser API and state unit tests execute the checked-in `public/browser.js`.
 After editing `src/browser/`, run `npm run build:browser` before `npm test`;
