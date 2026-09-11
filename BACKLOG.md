@@ -4,9 +4,11 @@ Updated 2026-09-11. **The TypeScript migration is in progress. The shared
 foundation is complete; browser migration is the current stage. Most application
 code still lives in JavaScript.**
 
-The latest completed implementation is harness discovery (`53b5ae0`), merged
-and pushed to `main`. There is no unfinished implementation from that stage.
-The next implementation is host identity and fleet discovery, described below.
+The browser-completion goal is active. Host identity and fleet discovery is
+checkpoint 1; host catalog state/editing and settings UI is next. See
+[the checkpoint log](docs/browser-migration-checkpoints.md) for implementation
+verification and the complete browser entrypoint inventory. The last confirmed
+CI checkpoint is recorded below; final CI must pass before the goal is complete.
 
 ## Status at a glance
 
@@ -14,7 +16,7 @@ The next implementation is host identity and fleet discovery, described below.
 | --- | --- | --- |
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
-| Browser migration | In progress — current stage | Eight implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
+| Browser migration | In progress — current stage | Nine implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
 | Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -32,7 +34,7 @@ in `lib/`. Its full module inventory is in [the migration guide](docs/typescript
 Most JavaScript callers of these modules are not yet type checked; `lib/cron.js`
 is an explicitly checked exception.
 
-These eight browser implementation modules compile strictly into the local
+These nine browser implementation modules compile strictly into the local
 `public/browser.js` bundle (`src/browser/index.ts` is the bundle entrypoint):
 
 | Completed browser module | Responsibility now owned by TypeScript |
@@ -45,6 +47,7 @@ These eight browser implementation modules compile strictly into the local
 | `host-session-loader.ts` | Per-host shared requests, cached rows and request retirement |
 | `host-catalog.ts` | Host URL normalization, stored catalog projection and source merging |
 | `harness-discovery.ts` | Harness-picker requests, ownership and the per-host settings-badge cache |
+| `host-discovery.ts` | Self/fleet request sequences, descriptor ownership and refresh timing |
 
 A completed module means that boundary has moved, been reviewed and verified.
 It does **not** mean its entire feature is migrated: for example, model-selector
@@ -59,8 +62,8 @@ commits; it is not a promise that one row equals one change.
 
 | Order | Work | Completion criterion |
 | --- | --- | --- |
-| 1 — next | Host identity and fleet discovery: `loadHostIdentity`, `loadHostFleet`, `identifyHosts` and their request state | Typed controller owns descriptor requests and their captured host/source identities; catalog persistence and UI callbacks remain explicit. Old-server fallback, refresh timing and stale-response behavior are verified. |
-| 2 | Host catalog editing and settings UI: persistence, add/remove/token actions and host-section rendering | Storage and network boundaries are typed; each action retains its intended host, and view listeners have explicit cleanup. |
+| 1 — implemented | Host identity and fleet discovery: `loadHostIdentity`, `loadHostFleet`, `identifyHosts` and their request state | Typed controller owns descriptor requests and their captured host/source identities; catalog persistence and UI callbacks remain explicit. Old-server fallback, refresh timing and stale-response behavior are verified. |
+| 2 — next | Host catalog editing and settings UI: persistence, add/remove/token actions and host-section rendering | Storage and network boundaries are typed; each action retains its intended host, and view listeners have explicit cleanup. |
 | 3 | Remaining new-session request controllers: workspace/directory lookup, spawn targets, model/config discovery and spawn coordination | Requests retain host, harness, cwd and operation ownership; delayed results cannot change a newer configuration or retarget a spawn. |
 | 4 | Remaining browser features, extracted one feature at a time | Composer/queue, dialogs, search/usage, shares/pages/comments, tree and other feature state, requests and UI move behind typed contracts. Each feature gets its own scope before implementation. |
 | 5 | Transcript/streaming, file/diff and terminal surfaces, then the remaining app shell | Rendering and transport ownership move without losing streaming coalescing, retained transcript DOM, pagination, scroll state or terminal cleanup. |
@@ -87,7 +90,7 @@ checks. Documentation-only changes need content and link checks. After a chunk
 ships, update this page's checkpoint, completed inventory and next step so the
 status stays current.
 
-Latest implementation evidence, for `53b5ae0`:
+Last confirmed CI checkpoint, `53b5ae0` (newer local verification is in the checkpoint log):
 
 - Fable 5.1 reviewed the harness-discovery extraction and its follow-up fixes.
 - 841 backend tests and 62 browser regressions passed; independent UI scenarios,

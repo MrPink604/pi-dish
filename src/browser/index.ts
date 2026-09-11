@@ -7,3 +7,4 @@ export { createHostSessionLoader } from './host-session-loader';
 export { mountThinkingSelector } from './thinking-selector';
 export { normalizeHostBase, sanitizeHostCatalog, mergeHostEntries } from './host-catalog';
 export { createHarnessDiscovery } from './harness-discovery';
+export { createHostDiscovery, decodeHostDescriptor } from './host-discovery';

@@ -232,3 +232,11 @@ empty catalogs leave the existing picker intact. Rows require a nonempty string
 id, labels are narrowed, and capability/availability payloads remain opaque with
 the existing truthiness/exact-false policies. The app supplies transport,
 preference storage, host selection and rendering callbacks.
+
+`src/browser/host-discovery.ts` owns self/fleet request sequences, fleet refresh
+timing and direct-host descriptor requests. Each peer request captures its
+endpoint and catalog source; replaced sources, changed credentials/routes and
+superseding requests retire prior results, including failures. Fleet refreshes
+also reject obsolete results and post-discovery render callbacks. Descriptor
+identity is validated while optional metadata remains opaque. The app retains
+source mutation, persistence and rendering callbacks.

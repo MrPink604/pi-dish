@@ -95,25 +95,7 @@ async function mintHostTicket(host, purpose) {
  * Identify the serving host. A 404 (or any failure) means an older server:
  * hostId stays null, client keys stay bare, everything else is unaffected.
  */
-async function loadHostIdentity() {
-  try {
-    // The one deliberate raw fetch: this call is what *defines* the self
-    // entry apiFetch would otherwise resolve against.
-    const res = await fetch('/api/host');
-    if (!res.ok) return;
-    const data = await res.json();
-    if (!data || typeof data.hostId !== 'string' || !data.hostId) return;
-    selfHost = {
-      hostId: data.hostId,
-      base: '',
-      label: typeof data.label === 'string' ? data.label : null,
-      version: data.version || null,
-      capabilities: data.capabilities || null,
-    };
-    invalidateHosts();
-    migrateClientKeys();
-  } catch {}
-}
+function loadHostIdentity() { return hostDiscovery.loadIdentity(); }
 
 /**
  * One-time rewrite of bare session-id client keys to composite ones, once
@@ -177,7 +159,6 @@ const hostConnections = PiDishBrowser.createHostConnections({ onChange: () => re
 // capabilities belong to the host, not to this browser's catalog entry (the
 // catalog deliberately persists only base/id/label/token), so they are
 // overlaid onto the merged list instead of being written back into it.
-const hostDescriptors = new Map();
 
 function invalidateHosts() { effectiveHostsCache = null; }
 
@@ -185,7 +166,7 @@ function effectiveHosts() {
   if (!effectiveHostsCache) {
     effectiveHostsCache = mergeHostEntries(selfHost, fleetHosts, hostCatalog);
     for (const host of effectiveHostsCache) {
-      const descriptor = host.hostId && hostDescriptors.get(host.hostId);
+      const descriptor = host.hostId && hostDiscovery.descriptor(host.hostId);
       if (!descriptor) continue;
       for (const field of ['label', 'version', 'capabilities']) {
         if (host[field] == null && descriptor[field] != null) host[field] = descriptor[field];
@@ -233,13 +214,50 @@ function fanoutHosts() {
   return pollableHosts();
 }
 
-let hostFleetTimer = 0;
 // The controls are usable before async initialization finishes. Fan-out
 // views wait on this first catalog load so an early click cannot capture
 // self as the whole fleet and then remain permanently under-counted.
 let resolveHostFleetReady;
 const hostFleetReady = new Promise(resolve => { resolveHostFleetReady = resolve; });
-const HOST_FLEET_REFRESH_MS = 60000;
+const hostDiscovery = PiDishBrowser.createHostDiscovery({
+  request: (...args) => apiFetch(...args),
+  requestSelf: () => fetch('/api/host'),
+  hosts: effectiveHosts,
+  pollableHosts,
+  sourceFor: host => host.source === 'user'
+    ? hostCatalog.find(entry => entry.base === host.base) || null
+    : fleetHosts.find(entry => normalizeHostBase(entry.base) === host.base) || null,
+  onSelf: data => {
+    selfHost = { ...data, base: '', label: typeof data.label === 'string' ? data.label : null };
+    invalidateHosts();
+    migrateClientKeys();
+  },
+  onFleet: ({ hosts, selfLabel }) => {
+    fleetHosts = hosts;
+    if (selfLabel && !selfHost.label) selfHost = { ...selfHost, label: selfLabel };
+    invalidateHosts();
+    seedHostConnFromFleet();
+  },
+  onIdentified: (host, source, data) => {
+    host.hostId = data.hostId;
+    for (const field of ['label', 'version', 'capabilities']) {
+      if (!host[field] && data[field]) host[field] = data[field];
+    }
+    source.hostId = data.hostId;
+    if (!source.label && data.label) source.label = data.label;
+    if (host.source === 'user') localStorage.setItem(HOSTS_KEY, JSON.stringify(hostCatalog));
+    invalidateHosts();
+  },
+  onConnection: (host, event) => hostConnections.note(host, event),
+  afterFleet: () => {
+    pruneHostCaches();
+    renderHostsSection();
+    updateRoutinesButton();
+    updateMicButton();
+    if (isNewSessionViewOpen()) renderNsHosts();
+    renderSessions();
+  },
+});
 
 /**
  * The fleet this server knows about. Runtime only: a peer list is the
@@ -247,76 +265,11 @@ const HOST_FLEET_REFRESH_MS = 60000;
  * than cached in localStorage. Piggybacked on the sidebar poll at a much
  * lower rate — reachability there costs the server real probes.
  */
-async function loadHostFleet() {
-  hostFleetTimer = Date.now();
-  try {
-    const res = await apiFetch(null, '/api/hosts', { timeoutMs: 10000 });
-    if (!res.ok) return; // older server: self only, exactly as before
-    const data = await res.json();
-    if (!Array.isArray(data?.hosts)) return;
-    fleetHosts = data.hosts.filter(h => h && !h.self);
-    const own = data.hosts.find(h => h && h.self);
-    if (own && own.label && !selfHost.label) selfHost = { ...selfHost, label: own.label };
-    invalidateHosts();
-    seedHostConnFromFleet();
-    await identifyHosts(true);
-    pruneHostCaches();
-    renderHostsSection();
-    updateRoutinesButton();
-    updateMicButton(); // a peer may be the only host with a transcription endpoint
-    if (isNewSessionViewOpen()) renderNsHosts();
-    renderSessions();
-  } catch {}
-}
+function loadHostFleet() { return hostDiscovery.loadFleet(); }
 
-/**
- * Learn missing identities and refresh direct-host descriptors. The browser
- * persists ids but not capabilities, so a known id still needs /api/host
- * after a reload. Fleet descriptors already arrive in /api/hosts.
- * Identity stamps sessions, keys client storage, and routes session-scoped
- * requests, so this runs before the first fan-out.
- */
-async function identifyHosts(refresh = false) {
-  const pending = pollableHosts().filter(host => !host.self &&
-    (!host.hostId || (host.source === 'user' && (refresh || !hostDescriptors.has(host.hostId)))));
-  if (!pending.length) return;
-  await Promise.allSettled(pending.map(async (host) => {
-    try {
-      const res = await apiFetch(host, '/api/host', { timeoutMs: 8000 });
-      if (res.status === 401) { noteHostBlocked(host); return; }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      if (!data || typeof data.hostId !== 'string' || !data.hostId) return;
-      hostDescriptors.set(data.hostId, {
-        label: data.label || null, version: data.version || null, capabilities: data.capabilities || null,
-      });
-      // Update both the entry this pass is holding and the source it came
-      // from, so the next merge keeps the identity (and the catalog persists it).
-      host.hostId = data.hostId;
-      if (!host.label && data.label) host.label = data.label;
-      if (!host.version && data.version) host.version = data.version;
-      if (!host.capabilities && data.capabilities) host.capabilities = data.capabilities;
-      const source = host.source === 'user'
-        ? hostCatalog.find(entry => entry.base === host.base)
-        : fleetHosts.find(entry => normalizeHostBase(entry.base) === host.base);
-      if (source) {
-        source.hostId = data.hostId;
-        if (!source.label && data.label) source.label = data.label;
-        if (host.source === 'user') localStorage.setItem(HOSTS_KEY, JSON.stringify(hostCatalog));
-      }
-      noteHostReachable(host);
-      invalidateHosts();
-    } catch (e) {
-      noteHostFailure(host, e);
-    }
-  }));
-}
-
-function refreshHostFleetSoon() {
-  if (Date.now() - hostFleetTimer < HOST_FLEET_REFRESH_MS) return;
-  hostFleetTimer = Date.now();
-  void loadHostFleet();
-}
+/** Resolve missing identities and refresh direct-host capabilities before fan-out. */
+function identifyHosts(refresh = false) { return hostDiscovery.identify(refresh); }
+function refreshHostFleetSoon() { hostDiscovery.refreshSoon(); }
 
 /** Drop cached rows/state for hosts that left the effective list. */
 function pruneHostCaches() {
@@ -3598,10 +3551,7 @@ async function addHostFromForm() {
     return;
   }
   if (descriptor.hostId === selfHost.hostId) { hostStatus('That is this host.', true); return; }
-  hostDescriptors.set(descriptor.hostId, {
-    label: descriptor.label || null, version: descriptor.version || null,
-    capabilities: descriptor.capabilities || null,
-  });
+  hostDiscovery.rememberDescriptor(descriptor);
   hostCatalog = hostCatalog.filter(entry => entry.hostId !== descriptor.hostId && entry.base !== base);
   hostCatalog.push({ base, hostId: descriptor.hostId, label: label || descriptor.label || null, token: token || null });
   hostConnections.reset(descriptor.hostId);

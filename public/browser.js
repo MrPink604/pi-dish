@@ -26,10 +26,12 @@ var PiDishBrowser = (() => {
     HOST_BACKOFF_RESET_MS: () => HOST_BACKOFF_RESET_MS,
     createHarnessDiscovery: () => createHarnessDiscovery,
     createHostConnections: () => createHostConnections,
+    createHostDiscovery: () => createHostDiscovery,
     createHostSessionLoader: () => createHostSessionLoader,
     createHostTransport: () => createHostTransport,
     createSessionApi: () => createSessionApi,
     createSessionState: () => createSessionState,
+    decodeHostDescriptor: () => decodeHostDescriptor,
     decodeModelCatalog: () => decodeModelCatalog,
     hostConnReduce: () => hostConnReduce,
     hostKeyOf: () => hostKeyOf,
@@ -912,6 +914,105 @@ var PiDishBrowser = (() => {
       rows: () => rows,
       cachedRows: (host) => cache.get(keyOf(host)),
       row: (host, harness) => cache.get(keyOf(host))?.find((row) => row.id === harness) || null
+    };
+  }
+
+  // src/browser/host-discovery.ts
+  var REFRESH_MS = 6e4;
+  function record2(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+  }
+  function decodeHostDescriptor(value) {
+    if (!record2(value) || typeof value.hostId !== "string" || !value.hostId) return null;
+    return {
+      hostId: value.hostId,
+      label: value.label || null,
+      version: value.version || null,
+      capabilities: value.capabilities || null
+    };
+  }
+  function createHostDiscovery(options) {
+    const descriptors = /* @__PURE__ */ new Map();
+    const requests = /* @__PURE__ */ new Map();
+    const now = options.now || Date.now;
+    let selfSequence = 0;
+    let fleetSequence = 0;
+    let fleetRequestedAt = 0;
+    function rememberDescriptor(value) {
+      const descriptor = decodeHostDescriptor(value);
+      if (descriptor) descriptors.set(descriptor.hostId, descriptor);
+      return descriptor;
+    }
+    async function loadIdentity() {
+      const sequence = ++selfSequence;
+      try {
+        const response = await options.requestSelf();
+        if (!response.ok) return;
+        const descriptor = decodeHostDescriptor(await response.json());
+        if (sequence === selfSequence && descriptor) options.onSelf(descriptor);
+      } catch {
+      }
+    }
+    async function identify(refresh = false) {
+      const pending = options.pollableHosts().filter((host) => !host.self && (!host.hostId || host.source === "user" && (refresh || !descriptors.has(host.hostId))));
+      await Promise.allSettled(pending.map(async (host) => {
+        const captured = Object.freeze({ ...host });
+        const source = options.sourceFor(captured);
+        if (!source) return;
+        const sourceFields = { base: source.base, hostId: source.hostId, token: source.token };
+        const owner = {};
+        requests.set(source, owner);
+        const ownsSource = () => requests.get(source) === owner && options.sourceFor(captured) === source && source.base === sourceFields.base && source.token === sourceFields.token;
+        const owns = () => ownsSource() && source.hostId === sourceFields.hostId && options.hosts().some((current) => current.base === captured.base && current.hostId === captured.hostId && current.source === captured.source && current.token === captured.token);
+        let applying = false;
+        try {
+          const response = await options.request(captured, "/api/host", { timeoutMs: 8e3 });
+          if (!owns()) return;
+          if (response.status === 401) {
+            options.onConnection(captured, "blocked");
+            return;
+          }
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const descriptor = decodeHostDescriptor(await response.json());
+          if (!owns() || !descriptor) return;
+          descriptors.set(descriptor.hostId, descriptor);
+          applying = true;
+          options.onIdentified(host, source, descriptor);
+          options.onConnection(host, "success");
+        } catch (error) {
+          if (applying ? ownsSource() : owns()) options.onConnection(captured, { type: "failure", error });
+        } finally {
+          if (requests.get(source) === owner) requests.delete(source);
+        }
+      }));
+    }
+    async function loadFleet() {
+      fleetRequestedAt = now();
+      const sequence = ++fleetSequence;
+      try {
+        const response = await options.request(null, "/api/hosts", { timeoutMs: 1e4 });
+        if (!response.ok) return;
+        const data = await response.json();
+        if (sequence !== fleetSequence || !record2(data) || !Array.isArray(data.hosts)) return;
+        const rows = data.hosts;
+        const hosts = rows.filter(record2);
+        options.onFleet({ hosts: hosts.filter((host) => !host.self), selfLabel: hosts.find((host) => host.self)?.label });
+        await identify(true);
+        if (sequence === fleetSequence) options.afterFleet();
+      } catch {
+      }
+    }
+    function refreshSoon() {
+      if (now() - fleetRequestedAt < REFRESH_MS) return;
+      void loadFleet();
+    }
+    return {
+      loadIdentity,
+      loadFleet,
+      identify,
+      refreshSoon,
+      rememberDescriptor,
+      descriptor: (hostId) => descriptors.get(hostId)
     };
   }
   return __toCommonJS(index_exports);
