@@ -434,3 +434,8 @@ Draft/history persistence and attachment batches live in `composer-drafts.ts` an
 `composer-images.ts`. Draft timers and history are composer-owned; provisional
 keys migrate dirty text and in-flight images together. Retired image controls and
 batches cannot modify a later composer, and bitmap/read resources are released.
+
+Autocomplete lives in `composer-autocomplete.ts`, with explicit command/file data
+in `composer-autocomplete-data.ts` and host-qualified session references in
+`session-references.ts`. Query tokens capture selection, composer, text/caret and
+endpoint before debounce; completion acceptance emits input for draft persistence.

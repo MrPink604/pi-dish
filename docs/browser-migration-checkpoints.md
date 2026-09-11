@@ -742,3 +742,21 @@ Verification: strict checks, 927 backend tests, 210 browser tests, every isolate
 UI scenario and full desktop/mobile smoke passed. Added two pure regressions,
 strict contracts and six browser ownership cases. The actual worktree matches
 the verified runtime and test files byte for byte. Fable review is required before push.
+
+## Checkpoint 32 — composer autocomplete and session references
+
+Moved command/file/session completion and reference resolution into three strict
+TypeScript modules. File queries capture composer, selection, text/caret and host
+endpoint before debounce; menus retire row and blur callbacks. Directory drilling
+retains focus, and file acceptance emits input for draft/autosize persistence.
+Reference grammar and cross-host prefix widening preserve existing behavior.
+
+Verification: strict checks, 929 backend tests, 218 browser tests, all isolated
+UI scenarios and full desktop/mobile smoke passed. Two pure checks, strict
+contracts and eight ownership regressions cover stale debounce/catalog results,
+retained rows, directory drilling, malformed wire data, drafts and disposal.
+Actual runtime/tests match the verified draft byte for byte. Fable reviews before push.
+
+Fable also noted that caret movement retired acceptance without hiding a painted
+menu. Selection/select listeners now hide it immediately; an eighth regression
+and the complete suite passed after this correction.

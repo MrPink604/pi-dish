@@ -35,6 +35,7 @@ var PiDishBrowser = (() => {
     createAnchoredComments: () => createAnchoredComments,
     createBounce: () => createBounce,
     createBrowserAssets: () => createBrowserAssets,
+    createComposerAutocomplete: () => createComposerAutocomplete,
     createComposerDrafts: () => createComposerDrafts,
     createComposerImages: () => createComposerImages,
     createComposerNotes: () => createComposerNotes,
@@ -67,6 +68,7 @@ var PiDishBrowser = (() => {
     createSessionApi: () => createSessionApi,
     createSessionControls: () => createSessionControls,
     createSessionInfo: () => createSessionInfo,
+    createSessionReferences: () => createSessionReferences,
     createSessionRelations: () => createSessionRelations,
     createSessionSearch: () => createSessionSearch,
     createSessionSpawns: () => createSessionSpawns,
@@ -89,6 +91,7 @@ var PiDishBrowser = (() => {
     decodeDiffView: () => decodeDiffView,
     decodeDirectoryChildren: () => decodeDirectoryChildren,
     decodeExtensionRequest: () => decodeExtensionRequest,
+    decodeFileCompletions: () => decodeFileCompletions,
     decodeFilePreview: () => decodeFilePreview,
     decodeHarnessAgents: () => decodeHarnessAgents,
     decodeHarnessConfig: () => decodeHarnessConfig,
@@ -110,6 +113,7 @@ var PiDishBrowser = (() => {
     decodeSessionStats: () => decodeSessionStats,
     decodeSkillCoverage: () => decodeSkillCoverage,
     decodeSkillDirectory: () => decodeSkillDirectory,
+    decodeSlashCommands: () => decodeSlashCommands,
     decodeSpawnChoices: () => decodeSpawnChoices,
     decodeSpawnId: () => decodeSpawnId,
     decodeSpawnStatus: () => decodeSpawnStatus,
@@ -346,10 +350,10 @@ var PiDishBrowser = (() => {
     const doc = root.ownerDocument;
     let view = null;
     let disposed = false;
-    function element(tag, className, text16) {
+    function element(tag, className, text17) {
       const node = doc.createElement(tag);
       node.className = className;
-      if (text16 !== void 0) node.textContent = text16;
+      if (text17 !== void 0) node.textContent = text17;
       return node;
     }
     const search = element("input", "model-search");
@@ -366,8 +370,8 @@ var PiDishBrowser = (() => {
       node.dataset.value = value;
       return node;
     }
-    function button(text16, name, value = "", primary = false) {
-      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text16);
+    function button(text17, name, value = "", primary = false) {
+      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text17);
       node.type = "button";
       return action(node, name, value);
     }
@@ -602,8 +606,8 @@ var PiDishBrowser = (() => {
     const state = prev && typeof prev === "object" ? prev : null;
     const errText = (value) => {
       if (value == null) return null;
-      const text16 = String(typeof value === "object" && "message" in value && value.message || value);
-      return text16 || null;
+      const text17 = String(typeof value === "object" && "message" in value && value.message || value);
+      return text17 || null;
     };
     const eventError = event && typeof event === "object" && "error" in event ? errText(event.error) : null;
     if (kind === "blocked") {
@@ -2797,13 +2801,13 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/helper-format.ts
-  function escapeHtml(text16) {
-    if (text16 == null || text16 === "") return "";
-    return String(text16).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  function escapeHtml(text17) {
+    if (text17 == null || text17 === "") return "";
+    return String(text17).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
-  function stripAnsi(text16) {
-    if (text16 == null || text16 === "") return "";
-    return String(text16).replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "").replace(/\x1b\[[0-9;:?]*[ -\/]*[@-~]/g, "").replace(/\x1b[ -\/]*./g, "");
+  function stripAnsi(text17) {
+    if (text17 == null || text17 === "") return "";
+    return String(text17).replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "").replace(/\x1b\[[0-9;:?]*[ -\/]*[@-~]/g, "").replace(/\x1b[ -\/]*./g, "");
   }
   function formatTokens(tokens2) {
     if (!tokens2 || tokens2 === 0) return "0";
@@ -2877,9 +2881,9 @@ var PiDishBrowser = (() => {
     if (!cwd) return "";
     return cwd.replace(/^\/home\/[^/]+\//, "~/").replace(/^\/home\/[^/]+$/, "~");
   }
-  function truncate(text16, maxLen, suffix = " \u2026 (truncated)") {
-    if (!text16 || text16.length <= maxLen) return text16;
-    return text16.slice(0, maxLen) + suffix;
+  function truncate(text17, maxLen, suffix = " \u2026 (truncated)") {
+    if (!text17 || text17.length <= maxLen) return text17;
+    return text17.slice(0, maxLen) + suffix;
   }
   function pushPromptHistory(list, message3, cap) {
     const out = Array.isArray(list) ? list.filter((value) => typeof value === "string") : [];
@@ -2902,9 +2906,9 @@ var PiDishBrowser = (() => {
     if (!hasMediaRecorder) return { code: "no-recorder", message: "This browser can't record audio (no MediaRecorder)." };
     return null;
   }
-  function insertAtCaret(value, selectionStart, selectionEnd, text16) {
+  function insertAtCaret(value, selectionStart, selectionEnd, text17) {
     const source = typeof value === "string" ? value : "";
-    const insert = typeof text16 === "string" ? text16 : "";
+    const insert = typeof text17 === "string" ? text17 : "";
     const max = source.length;
     let start = finite2(selectionStart) ? Math.max(0, Math.min(max, selectionStart)) : max;
     let end = finite2(selectionEnd) ? Math.max(0, Math.min(max, selectionEnd)) : start;
@@ -3109,12 +3113,12 @@ var PiDishBrowser = (() => {
     }
     return true;
   }
-  function countOccurrences(text16, token) {
-    if (!text16 || !token) return 0;
-    let n = 0, i = text16.indexOf(token);
+  function countOccurrences(text17, token) {
+    if (!text17 || !token) return 0;
+    let n = 0, i = text17.indexOf(token);
     while (i !== -1) {
       n++;
-      i = text16.indexOf(token, i + token.length);
+      i = text17.indexOf(token, i + token.length);
     }
     return n;
   }
@@ -3174,8 +3178,8 @@ var PiDishBrowser = (() => {
     result += escapeHtml(str.slice(last));
     return result;
   }
-  function highlightTokens(text16, tokens2) {
-    const str = String(text16);
+  function highlightTokens(text17, tokens2) {
+    const str = String(text17);
     const lower = str.toLowerCase();
     const ranges = [];
     for (const t of tokens2) {
@@ -4718,8 +4722,8 @@ var PiDishBrowser = (() => {
     const textNodes = [];
     while (walker.nextNode()) textNodes.push(walker.currentNode);
     for (const node of textNodes) {
-      const text16 = node.textContent || "";
-      const lower = text16.toLowerCase();
+      const text17 = node.textContent || "";
+      const lower = text17.toLowerCase();
       const ranges = [];
       for (const token of tokens2) {
         let from = 0, at;
@@ -4734,14 +4738,14 @@ var PiDishBrowser = (() => {
       let cursor = 0;
       for (const [start, end] of ranges) {
         if (start < cursor) continue;
-        frag.appendChild(document2.createTextNode(text16.slice(cursor, start)));
+        frag.appendChild(document2.createTextNode(text17.slice(cursor, start)));
         const mark = document2.createElement("mark");
         mark.className = "search-mark";
-        mark.textContent = text16.slice(start, end);
+        mark.textContent = text17.slice(start, end);
         frag.appendChild(mark);
         cursor = end;
       }
-      frag.appendChild(document2.createTextNode(text16.slice(cursor)));
+      frag.appendChild(document2.createTextNode(text17.slice(cursor)));
       node.replaceWith(frag);
     }
   }
@@ -7105,10 +7109,10 @@ var PiDishBrowser = (() => {
       })();
       return assets;
     }
-    function status(text16 = "", cls = "") {
+    function status(text17 = "", cls = "") {
       const value = document2.getElementById("terminalStatus");
       if (!value) return;
-      value.textContent = text16;
+      value.textContent = text17;
       value.className = "terminal-status" + (cls ? " " + cls : "");
     }
     function setCtrl(on) {
@@ -9112,10 +9116,10 @@ var PiDishBrowser = (() => {
       }
       body.innerHTML = html;
       body.querySelectorAll(".artifact-copy").forEach((button) => {
-        const text16 = button.dataset.copy || "";
+        const text17 = button.dataset.copy || "";
         button.addEventListener("click", () => {
           if (!current()) return;
-          void copyTextToClipboard2(text16).then(() => {
+          void copyTextToClipboard2(text17).then(() => {
             if (current()) setStatus("Link copied");
           }, () => {
             if (current()) setStatus("Copy failed (clipboard blocked)", "error");
@@ -9295,8 +9299,8 @@ var PiDishBrowser = (() => {
           if (node.type === "message" && node.role === "assistant" && !node.text && !node.isLeaf) return false;
         }
         if (tokens2.length > 0) {
-          var text16 = getNodeSearchText(node).toLowerCase();
-          return tokens2.every((t) => text16.includes(t));
+          var text17 = getNodeSearchText(node).toLowerCase();
+          return tokens2.every((t) => text17.includes(t));
         }
         return true;
       });
@@ -9351,17 +9355,17 @@ var PiDishBrowser = (() => {
       if (node.type === "message") {
         if (node.role === "user") return '<span class="tree-role user">user:</span><span class="tree-text">' + escapeHtml(node.text || "(empty)") + "</span>";
         if (node.role === "assistant") {
-          var text16 = node.text || "";
-          if (!text16 && node.stopReason === "aborted") text16 = "(aborted)";
-          if (!text16 && node.errorMessage) return '<span class="tree-role assistant">assistant:</span><span class="tree-text error-text">' + escapeHtml(node.errorMessage.substring(0, 80)) + "</span>";
-          if (!text16 && node.toolCalls && node.toolCalls.length) {
+          var text17 = node.text || "";
+          if (!text17 && node.stopReason === "aborted") text17 = "(aborted)";
+          if (!text17 && node.errorMessage) return '<span class="tree-role assistant">assistant:</span><span class="tree-text error-text">' + escapeHtml(node.errorMessage.substring(0, 80)) + "</span>";
+          if (!text17 && node.toolCalls && node.toolCalls.length) {
             var calls = node.toolCalls.map(function(tc2) {
               return tc2.args ? tc2.name + ": " + tc2.args : tc2.name;
             }).join(" \xB7 ");
             return '<span class="tree-role assistant">assistant:</span><span class="tree-text muted">' + escapeHtml(calls) + "</span>";
           }
-          if (!text16) text16 = "(empty)";
-          return '<span class="tree-role assistant">assistant:</span><span class="tree-text">' + escapeHtml(text16) + "</span>";
+          if (!text17) text17 = "(empty)";
+          return '<span class="tree-role assistant">assistant:</span><span class="tree-text">' + escapeHtml(text17) + "</span>";
         }
         if (node.role === "toolResult") {
           var tc = node.toolCallId ? treeToolCallMap.get(node.toolCallId) : null;
@@ -9519,8 +9523,8 @@ var PiDishBrowser = (() => {
     /^(?:sequenceDiagram|classDiagram(?:-v2)?|stateDiagram(?:-v2)?|erDiagram|journey|gantt|mindmap|timeline|kanban|zenuml|quadrantChart|requirementDiagram|gitGraph|architecture-beta|block-beta|packet(?:-beta)?|radar-beta|sankey-beta|treemap(?:-beta)?|xychart-beta|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment)\b/,
     /^pie(?:\s+(?:title|showData)\b|\s*$)/
   ];
-  function mermaidDeclarationLine(text16) {
-    const lines = String(text16 == null ? "" : text16).split("\n");
+  function mermaidDeclarationLine(text17) {
+    const lines = String(text17 == null ? "" : text17).split("\n");
     let i = 0;
     if (lines[0] !== void 0 && lines[0].trim() === "---") {
       const end = lines.findIndex((l, idx) => idx > 0 && l.trim() === "---");
@@ -9533,8 +9537,8 @@ var PiDishBrowser = (() => {
     }
     return "";
   }
-  function looksLikeMermaid(text16) {
-    const decl = mermaidDeclarationLine(text16);
+  function looksLikeMermaid(text17) {
+    const decl = mermaidDeclarationLine(text17);
     return !!decl && MERMAID_DECLARATIONS.some((re) => re.test(decl));
   }
   function diagramKindForFence(lang, source) {
@@ -9563,11 +9567,11 @@ var PiDishBrowser = (() => {
       tokenizer(src) {
         const match = /^(?:\$\$([\s\S]*?)\$\$|\\\[([\s\S]*?)\\\])/.exec(src);
         if (match) {
-          const text16 = match[1] !== void 0 ? match[1] : match[2];
+          const text17 = match[1] !== void 0 ? match[1] : match[2];
           return {
             type: "blockMath",
             raw: match[0],
-            text: text16.trim()
+            text: text17.trim()
           };
         }
       },
@@ -9643,8 +9647,8 @@ var PiDishBrowser = (() => {
   }
   var FILE_MENTION_RE = /^(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?$/;
   var FILE_EXT_RE = /\.[A-Za-z][A-Za-z0-9]{0,7}$/;
-  function looksLikeFilePath(text16) {
-    const s = String(text16 == null ? "" : text16).trim();
+  function looksLikeFilePath(text17) {
+    const s = String(text17 == null ? "" : text17).trim();
     if (!s || s.length > 260) return false;
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return false;
     if (!FILE_MENTION_RE.test(s)) return false;
@@ -9653,8 +9657,8 @@ var PiDishBrowser = (() => {
   }
   var PATH_TOKEN_RE = /(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?/g;
   var BARE_EXT_STOPLIST = /* @__PURE__ */ new Set(["com", "org", "net", "io", "ai", "dev", "co", "app"]);
-  function findPathTokens(text16) {
-    const s = String(text16 == null ? "" : text16);
+  function findPathTokens(text17) {
+    const s = String(text17 == null ? "" : text17);
     const out = [];
     PATH_TOKEN_RE.lastIndex = 0;
     let m;
@@ -9781,15 +9785,15 @@ var PiDishBrowser = (() => {
       },
       extensions: createMathExtensions()
     });
-    function formatMarkdown(text16) {
-      if (!text16) return "";
+    function formatMarkdown(text17) {
+      if (!text17) return "";
       if (options2.marked) {
         try {
-          return options2.marked.parse(text16);
+          return options2.marked.parse(text17);
         } catch (e) {
         }
       }
-      let html = escapeHtml(text16);
+      let html = escapeHtml(text17);
       html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => `<pre><code class="language-${lang}">${code.trim()}</code></pre>`);
       html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
       html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
@@ -9955,7 +9959,7 @@ var PiDishBrowser = (() => {
       const bg = hex("--bg-darker", "#00212b");
       const card = hex("--bg-card", "#073642");
       const hover = hex("--bg-hover", "#0b4354");
-      const text16 = hex("--text-bright", "#dbe5e6");
+      const text17 = hex("--text-bright", "#dbe5e6");
       const muted = hex("--text-muted", "#6f8b93");
       const border = hex("--accent-dim", "#1c6ba3");
       const line = hex("--border", "#11475a");
@@ -9974,30 +9978,30 @@ var PiDishBrowser = (() => {
           darkMode: isDarkColorHex(bg),
           background: bg,
           primaryColor: card,
-          primaryTextColor: text16,
+          primaryTextColor: text17,
           primaryBorderColor: border,
           secondaryColor: hover,
-          secondaryTextColor: text16,
+          secondaryTextColor: text17,
           tertiaryColor: bg,
-          tertiaryTextColor: text16,
+          tertiaryTextColor: text17,
           lineColor: muted,
-          textColor: text16,
+          textColor: text17,
           mainBkg: card,
           nodeBorder: border,
           clusterBkg: bg,
           clusterBorder: line,
-          titleColor: text16,
+          titleColor: text17,
           edgeLabelBackground: bg,
           labelBoxBkgColor: card,
           labelBoxBorderColor: border,
           actorBkg: card,
           actorBorder: border,
-          actorTextColor: text16,
+          actorTextColor: text17,
           signalColor: muted,
-          signalTextColor: text16,
+          signalTextColor: text17,
           noteBkgColor: hover,
           noteBorderColor: border,
-          noteTextColor: text16,
+          noteTextColor: text17,
           fontSize: "14px"
         }
       };
@@ -10129,10 +10133,10 @@ var PiDishBrowser = (() => {
         scale = Math.min(8, Math.max(0.1, scale * factor));
         apply();
       };
-      const button = (text16, title, onClick) => {
+      const button = (text17, title, onClick) => {
         const b = document2.createElement("button");
         b.className = "diagram-btn";
-        b.textContent = text16;
+        b.textContent = text17;
         b.title = title;
         b.addEventListener("click", () => {
           if (current()) onClick();
@@ -10189,13 +10193,13 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/clipboard.ts
-  function copyTextToClipboard(text16, document2 = globalThis.document, navigator = globalThis.navigator) {
+  function copyTextToClipboard(text17, document2 = globalThis.document, navigator = globalThis.navigator) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard.writeText(text16);
+      return navigator.clipboard.writeText(text17);
     }
     return new Promise((resolve, reject) => {
       const ta = document2.createElement("textarea");
-      ta.value = text16;
+      ta.value = text17;
       ta.setAttribute("readonly", "");
       ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
       document2.body.appendChild(ta);
@@ -10680,8 +10684,8 @@ var PiDishBrowser = (() => {
         widgets.set(key, entry);
       }
       entry.el.classList.remove("hidden");
-      const body = entry.el.querySelector(".ext-ui-widget-body"), text16 = lines.join("\n");
-      if (body.textContent !== text16) body.textContent = text16;
+      const body = entry.el.querySelector(".ext-ui-widget-body"), text17 = lines.join("\n");
+      if (body.textContent !== text17) body.textContent = text17;
     }
     function measure() {
       if (disposed) return;
@@ -10727,7 +10731,7 @@ var PiDishBrowser = (() => {
       sync();
     }
     document2.getElementById("extUiStatusToggle")?.addEventListener("click", toggleStatus, { signal: events.signal });
-    function status(key, text16) {
+    function status(key, text17) {
       if (disposed) return;
       const items = document2.getElementById("extUiStatusItems");
       if (!items) return;
@@ -10737,7 +10741,7 @@ var PiDishBrowser = (() => {
         statuses.delete(key);
         entry = void 0;
       }
-      if (!text16) {
+      if (!text17) {
         if (!entry) {
           sync();
           return;
@@ -10763,8 +10767,8 @@ var PiDishBrowser = (() => {
         entry = { el, timer: null };
         statuses.set(key, entry);
       }
-      if (entry.el.textContent !== text16) entry.el.textContent = text16;
-      const title = `${text16}
+      if (entry.el.textContent !== text17) entry.el.textContent = text17;
+      const title = `${text17}
 (status from ${key})`;
       if (entry.el.title !== title) entry.el.title = title;
       sync();
@@ -11347,13 +11351,13 @@ var PiDishBrowser = (() => {
       acceptNode: (node) => node.parentElement?.closest("script, style") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
     });
     const runs = [];
-    let text16 = "";
+    let text17 = "";
     while (walker.nextNode()) {
       const node = walker.currentNode;
-      runs.push({ node, start: text16.length, end: text16.length + node.textContent.length });
-      text16 += node.textContent;
+      runs.push({ node, start: text17.length, end: text17.length + node.textContent.length });
+      text17 += node.textContent;
     }
-    return { runs, text: text16 };
+    return { runs, text: text17 };
   }
   function commonSuffixLength(a, b) {
     let n = 0;
@@ -11365,13 +11369,13 @@ var PiDishBrowser = (() => {
     while (n < a.length && n < b.length && a[n] === b[n]) n++;
     return n;
   }
-  function findQuoteOffset(text16, anchor) {
+  function findQuoteOffset(text17, anchor) {
     const quote = anchor?.quote;
     if (!quote) return -1;
     const hits = [];
     let from = 0;
     let at;
-    while ((at = text16.indexOf(quote, from)) !== -1) {
+    while ((at = text17.indexOf(quote, from)) !== -1) {
       hits.push(at);
       from = at + Math.max(1, quote.length);
     }
@@ -11381,8 +11385,8 @@ var PiDishBrowser = (() => {
     let best = hits[0];
     let bestScore = -1;
     for (const hit of hits) {
-      const before = text16.slice(Math.max(0, hit - prefix.length), hit);
-      const after = text16.slice(hit + quote.length, hit + quote.length + suffix.length);
+      const before = text17.slice(Math.max(0, hit - prefix.length), hit);
+      const after = text17.slice(hit + quote.length, hit + quote.length + suffix.length);
       const score = commonSuffixLength(before, prefix) + commonPrefixLength(after, suffix);
       if (score > bestScore) {
         bestScore = score;
@@ -11394,8 +11398,8 @@ var PiDishBrowser = (() => {
   function markCommentQuote(root, anchor, commentId) {
     const quote = anchor?.quote;
     if (!quote) return false;
-    const { runs, text: text16 } = collectTextRuns(root);
-    const start = findQuoteOffset(text16, anchor);
+    const { runs, text: text17 } = collectTextRuns(root);
+    const start = findQuoteOffset(text17, anchor);
     if (start < 0) return false;
     const end = start + quote.length;
     let marked = false;
@@ -11574,8 +11578,8 @@ var PiDishBrowser = (() => {
       if (!selection || selection.isCollapsed || !selection.rangeCount) return;
       const root = element("fileViewBody"), range = selection.getRangeAt(0);
       if (!root.contains(range.commonAncestorContainer)) return;
-      const text16 = range.toString();
-      if (!text16.trim() || text16.length > 12e3) return;
+      const text17 = range.toString();
+      if (!text17.trim() || text17.length > 12e3) return;
       const base = selectionTextAnchor(root, range), first = raw.indexOf(base.quote);
       const startLine = first >= 0 && raw.indexOf(base.quote, first + 1) < 0 ? raw.slice(0, first).split("\n").length : null;
       const anchor = startLine === null ? base : { ...base, startLine, endLine: startLine + base.quote.split("\n").length - 1 };
@@ -12318,7 +12322,7 @@ var PiDishBrowser = (() => {
         element.textContent = "";
       }
     }
-    function show(text16) {
+    function show(text17) {
       if (disposed) return;
       const element = document2.getElementById("composerNote");
       if (!element) return;
@@ -12327,7 +12331,7 @@ var PiDishBrowser = (() => {
       const owned = events;
       const message3 = document2.createElement("span");
       message3.className = "composer-note-text";
-      message3.textContent = text16;
+      message3.textContent = text17;
       const dismiss = document2.createElement("button");
       dismiss.type = "button";
       dismiss.className = "composer-note-dismiss";
@@ -12556,12 +12560,12 @@ var PiDishBrowser = (() => {
         const value = await response.json().catch(() => null);
         if (!current()) return;
         if (!response.ok) throw new Error(record8(value) && typeof value.error === "string" ? value.error : `Transcription failed (HTTP ${response.status})`);
-        const text16 = record8(value) && typeof value.text === "string" ? value.text.trim() : "";
-        if (!text16) {
+        const text17 = record8(value) && typeof value.text === "string" ? value.text.trim() : "";
+        if (!text17) {
           options2.showNote("No speech detected.");
           return;
         }
-        insert(text16);
+        insert(text17);
       } catch (error) {
         if (current()) options2.showNote(error instanceof Error ? error.message : "Transcription failed");
       } finally {
@@ -12572,11 +12576,11 @@ var PiDishBrowser = (() => {
         }
       }
     }
-    function insert(text16) {
+    function insert(text17) {
       if (disposed) return;
       const input = document2.getElementById("promptInput");
       if (!input) return;
-      const result = insertAtCaret(input.value, input.selectionStart, input.selectionEnd, text16);
+      const result = insertAtCaret(input.value, input.selectionStart, input.selectionEnd, text17);
       input.value = result.value;
       try {
         input.setSelectionRange(result.caret, result.caret);
@@ -13079,6 +13083,445 @@ ${restored}`;
         stash();
         disposed = true;
         images.dispose();
+      }
+    };
+  }
+
+  // src/browser/helper-refs.ts
+  function uniqueSessionPrefix(id, peerIds, minLen = 8) {
+    const self = String(id == null ? "" : id);
+    if (!self) return "";
+    const peers = (peerIds || []).filter((peer) => peer && peer !== self);
+    for (let len = Math.min(minLen, self.length); len < self.length; len++) {
+      const candidate = self.slice(0, len);
+      if (!peers.some((peer) => String(peer).startsWith(candidate))) return candidate;
+    }
+    return self;
+  }
+  var SESSION_ROUTE_KEY_PREFIX = "~sk1_";
+  var SESSION_UUID_TAIL_RE = /(?:^|[_-])([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+  function decodeBase64Url(value) {
+    const normalized = String(value == null ? "" : value).replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
+    if (typeof Buffer !== "undefined") return Buffer.from(padded, "base64").toString("utf8");
+    if (typeof atob !== "function") return "";
+    return atob(padded);
+  }
+  function decodeRouteSessionId(id) {
+    const raw = String(id == null ? "" : id);
+    if (!raw.startsWith(SESSION_ROUTE_KEY_PREFIX)) return null;
+    try {
+      const tuple = JSON.parse(decodeBase64Url(raw.slice(SESSION_ROUTE_KEY_PREFIX.length)));
+      if (!Array.isArray(tuple)) return null;
+      if (typeof tuple[0] !== "string" || !tuple[0]) return null;
+      if (typeof tuple[1] !== "string" || !tuple[1]) return null;
+      return { harnessId: tuple[0], nativeSessionId: tuple[1] };
+    } catch {
+      return null;
+    }
+  }
+  function sessionRefAliases(id) {
+    const routeId = String(id == null ? "" : id);
+    if (!routeId) return [];
+    const aliases = [routeId];
+    const decoded = decodeRouteSessionId(routeId);
+    const native = decoded ? decoded.nativeSessionId : routeId;
+    if (native !== routeId) aliases.push(native);
+    const uuid = SESSION_UUID_TAIL_RE.exec(native);
+    if (uuid) aliases.push(uuid[1]);
+    return aliases;
+  }
+  function shortSessionRef(id, peerIds, minLen = 8) {
+    const self = String(id == null ? "" : id);
+    if (!self) return "";
+    const peers = [];
+    for (const peer of peerIds || []) {
+      const other = String(peer == null ? "" : peer);
+      if (!other || other === self) continue;
+      peers.push(...sessionRefAliases(other));
+    }
+    let best = self;
+    for (const alias of sessionRefAliases(self).slice().reverse()) {
+      const candidate = uniqueSessionPrefix(alias, peers, minLen);
+      if (candidate && candidate.length < best.length) best = candidate;
+    }
+    return best;
+  }
+  var SESSION_REF_TOKEN_RE = /(?:^|[\s(\[{<"'])#([A-Za-z0-9][A-Za-z0-9._:/-]{3,})/g;
+  function parseSessionRefTokens(text17) {
+    const out = [];
+    if (!text17) return out;
+    const seen = /* @__PURE__ */ new Set();
+    SESSION_REF_TOKEN_RE.lastIndex = 0;
+    let match;
+    while ((match = SESSION_REF_TOKEN_RE.exec(String(text17))) !== null) {
+      const ref = match[1].replace(/[.:/]+$/, "");
+      if (ref.length < 4 || seen.has(ref)) continue;
+      seen.add(ref);
+      out.push({ token: "#" + ref, ref });
+    }
+    return out;
+  }
+  var SESSION_REF_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  function parseSessionRefParts(raw) {
+    const ref = String(raw == null ? "" : raw).trim();
+    if (!ref) return null;
+    const slash = ref.indexOf("/");
+    if (slash !== -1) {
+      const hostPart = ref.slice(0, slash);
+      const id = ref.slice(slash + 1);
+      return hostPart && id ? { hostPart, hostIdForm: false, id } : null;
+    }
+    const colon = ref.indexOf(":");
+    if (colon > 0) {
+      const head = ref.slice(0, colon);
+      const rest = ref.slice(colon + 1);
+      if (SESSION_REF_UUID_RE.test(head) && rest) return { hostPart: head, hostIdForm: true, id: rest };
+    }
+    return { hostPart: null, hostIdForm: false, id: ref };
+  }
+  var SESSION_REF_PREAMBLE = [
+    "The message above references other pi-dish sessions by `#ref`. Each is a real",
+    "peer session, not a label: use the pi-dish-sessions skill CLI to read its",
+    "transcript (`read <ref>`) or to message it (`send` / `steer` / `follow-up`",
+    "<ref>). Never guess what a referenced session holds \u2014 read it."
+  ].join("\n");
+  function searchSessionsForRef(list, query, limit = 8) {
+    const q = String(query == null ? "" : query).trim();
+    const lower = q.toLowerCase();
+    const rows = [];
+    for (const session of list || []) {
+      if (!session || !session.id) continue;
+      let score = 0;
+      let indices = null;
+      if (q) {
+        const name = String(session.name || "");
+        indices = fuzzyMatch(q, name);
+        if (indices) {
+          score = 1e3 + fuzzyScore(indices, name);
+        } else {
+          const cwd = String(session.cwd || "");
+          const cwdIndices = fuzzyMatch(q, cwd);
+          if (cwdIndices) score = 500 + fuzzyScore(cwdIndices, cwd);
+          else if (sessionRefAliases(session.id).some((alias) => alias.toLowerCase().startsWith(lower))) score = 250;
+          else continue;
+        }
+      }
+      rows.push({ session, score, indices });
+    }
+    rows.sort((a, b) => b.score - a.score || (b.session.isActive ? 1 : 0) - (a.session.isActive ? 1 : 0) || new Date(b.session.lastActivity || 0).getTime() - new Date(a.session.lastActivity || 0).getTime());
+    return rows.slice(0, Math.max(0, limit));
+  }
+
+  // src/browser/session-references.ts
+  function createSessionReferences(options2) {
+    const { sessionState } = options2;
+    function hostId(session) {
+      return session?.host || options2.selfId();
+    }
+    function all() {
+      return [...sessionState.sessions.active, ...sessionState.sessions.previous].map((row) => ({
+        id: row.id,
+        host: row.host || null,
+        name: typeof row.name === "string" ? row.name : "",
+        cwd: typeof row.cwd === "string" ? row.cwd : "",
+        isActive: row.isActive === true,
+        lastActivity: typeof row.lastActivity === "number" || typeof row.lastActivity === "string" ? row.lastActivity : 0
+      }));
+    }
+    function candidates() {
+      const current = sessionState.currentSession;
+      return all().filter((row) => !current || row.id !== current.id || hostId(row) !== hostId(current));
+    }
+    function sameHostIds(session) {
+      return all().filter((row) => hostId(row) === hostId(session)).map((row) => row.id);
+    }
+    function prefix(session) {
+      const endpoint = options2.host(hostId(session)), ids = sameHostIds(session);
+      const aliases = endpoint && (record8(endpoint.capabilities) ? endpoint.capabilities.refAliases === true : (endpoint.self === true || endpoint.base === "") && !!options2.config().refAliases);
+      return aliases ? shortSessionRef(session.id, ids) : uniqueSessionPrefix(session.id, ids);
+    }
+    function ref(session, target) {
+      const sourceHost = hostId(session), targetHost = hostId(target), short = prefix(session);
+      if (sourceHost === targetHost) return short;
+      if (targetHost === options2.selfId()) {
+        const entry = options2.host(sourceHost);
+        if (entry?.name) return `${entry.name}/${short}`;
+      }
+      return `${sourceHost}:${session.id}`;
+    }
+    function match(value, localHostId = sessionState.currentSession ? hostId(sessionState.currentSession) : options2.selfId()) {
+      const parts = parseSessionRefParts(value);
+      if (!parts) return null;
+      const onHost = all().filter((session) => {
+        const host = hostId(session);
+        if (!parts.hostPart) return host === localHostId;
+        if (parts.hostIdForm) return host === parts.hostPart;
+        if (parts.hostPart.toLowerCase() === "self") return host === localHostId;
+        const entry = options2.host(host);
+        return !!entry && String(entry.name || "").toLowerCase() === parts.hostPart.toLowerCase();
+      });
+      const exact = onHost.find((row) => row.id === parts.id);
+      if (exact || parts.hostIdForm) return exact || null;
+      const matches = onHost.filter((row) => row.id.startsWith(parts.id));
+      return matches.length === 1 ? matches[0] : null;
+    }
+    function hints(message3) {
+      return parseSessionRefTokens(message3).flatMap(({ ref: ref2 }) => {
+        const session = match(ref2);
+        return session ? [{ ref: ref2, name: session.name, host: options2.hostLabel(session.host) || "", cwd: session.cwd, isActive: session.isActive }] : [];
+      });
+    }
+    return { all, hostId, candidates, sameHostIds, prefix, ref, match, hints, search: (token) => searchSessionsForRef(candidates(), token, 8) };
+  }
+
+  // src/browser/composer-autocomplete-data.ts
+  var text16 = (v) => typeof v === "string" ? v : "";
+  function decodeSlashCommands(value) {
+    return Array.isArray(value) ? value.flatMap((v) => record8(v) && typeof v.name === "string" && v.name ? [{ name: v.name, description: text16(v.description), source: text16(v.source), args: text16(v.args) }] : []) : [];
+  }
+  function decodeFileCompletions(value) {
+    return Array.isArray(value) ? value.flatMap((v) => record8(v) && typeof v.path === "string" ? [{ path: v.path, isDir: v.isDir === true, gitStatus: text16(v.gitStatus) }] : []) : [];
+  }
+
+  // src/browser/composer-autocomplete.ts
+  function createComposerAutocomplete(options2) {
+    const { document: document2, sessionState, references } = options2;
+    const input = () => document2.getElementById("promptInput");
+    let disposed = false, visible = false, index = 0, fileSequence = 0, commandSequence = 0;
+    let fileTimer = null, events = new AbortController(), view = null, commandOwner = null;
+    let commands = [];
+    const lifetime = new AbortController(), blurTimers = /* @__PURE__ */ new Set();
+    const choices = /* @__PURE__ */ new WeakMap();
+    function captureRequest() {
+      const selection = sessionState.captureSelection();
+      if (disposed || !selection) return null;
+      const endpoint = options2.host(selection.host);
+      return endpoint ? { selection, endpoint: Object.freeze({ ...endpoint }) } : null;
+    }
+    function ownsRequest(owner) {
+      return !!owner && !disposed && sessionState.ownsSelection(owner.selection) && options2.host(owner.selection.host)?.base === owner.endpoint.base;
+    }
+    function capture() {
+      const owner = captureRequest(), composer = options2.composerKey();
+      return owner && composer && !options2.provisional() ? { ...owner, composer, text: input().value, caret: input().selectionStart } : null;
+    }
+    function owns(owner) {
+      return ownsRequest(owner) && !!owner && !options2.provisional() && owner.composer === options2.composerKey() && owner.text === input().value && owner.caret === input().selectionStart;
+    }
+    function container() {
+      let root = document2.getElementById("autocomplete");
+      if (!root) {
+        root = document2.createElement("div");
+        root.id = "autocomplete";
+        root.className = "autocomplete-dropdown";
+        document2.querySelector(".input-area").appendChild(root);
+      }
+      return root;
+    }
+    function hide() {
+      for (const timer of blurTimers) clearTimeout(timer);
+      blurTimers.clear();
+      visible = false;
+      view = null;
+      fileSequence++;
+      if (fileTimer !== null) clearTimeout(fileTimer);
+      fileTimer = null;
+      events.abort();
+      const root = document2.getElementById("autocomplete");
+      if (root) {
+        root.style.display = "none";
+        root.innerHTML = "";
+      }
+    }
+    function render(rows, owner = capture()) {
+      hide();
+      if (!owns(owner) || !rows.length) return;
+      view = owner;
+      visible = true;
+      index = 0;
+      events = new AbortController();
+      const ownedEvents = events, root = container();
+      rows.forEach((row, i) => {
+        const element = document2.createElement("div");
+        element.className = "autocomplete-item" + (i === 0 ? " active" : "");
+        const { choice } = row;
+        choices.set(element, choice);
+        if (choice.kind === "file") {
+          element.dataset.file = choice.path;
+          if (choice.directory) element.dataset.dir = "1";
+        } else if (choice.kind === "ref") element.dataset.sessionRef = choice.ref;
+        else element.dataset.name = choice.name;
+        element.innerHTML = `<span class="autocomplete-icon${choice.kind === "ref" ? " session-ref-dot" + (row.live ? " live" : "") : ""}">${row.icon}</span><span class="autocomplete-name">${row.nameHtml}</span><span class="autocomplete-desc">${escapeHtml(row.description)}</span>`;
+        element.addEventListener("click", () => {
+          if (!ownedEvents.signal.aborted && view === owner && owns(owner)) accept(element);
+        }, { signal: ownedEvents.signal });
+        root.append(element);
+      });
+      root.style.display = "block";
+    }
+    function showCommands(value) {
+      const rows = decodeSlashCommands(value);
+      render(rows.map((command) => ({ choice: { kind: "command", name: command.name }, icon: command.source === "builtin" || command.source === "host" ? "\u2699\uFE0F" : command.source === "extension" ? "\u{1F9E9}" : command.source === "skill" ? "\u{1F4DA}" : "\u{1F4DD}", nameHtml: "/" + escapeHtml(command.name) + (command.args ? ` <span class="autocomplete-args">${escapeHtml(command.args)}</span>` : ""), description: command.description })));
+    }
+    function showFiles(value, owner = capture()) {
+      const labels = { modified: "\xB1 modified", untracked: "+ new", staged: "\u25CF staged" };
+      render(decodeFileCompletions(value).map((file) => ({ choice: { kind: "file", path: file.path, directory: file.isDir }, icon: file.isDir ? "\u{1F4C1}" : "\u{1F4C4}", nameHtml: escapeHtml(file.path) + (file.isDir ? "/" : ""), description: Object.hasOwn(labels, file.gitStatus) ? labels[file.gitStatus] : "" })), owner);
+    }
+    function showRefs(token) {
+      const current = sessionState.currentSession;
+      if (!current) {
+        hide();
+        return;
+      }
+      render(references.search(token).map(({ session, indices }) => {
+        const ref = references.ref(session, current), name = session.name || session.id.slice(0, 8);
+        return { choice: { kind: "ref", ref }, icon: "\u25CF", nameHtml: indices ? highlightFuzzy(name, indices) : escapeHtml(name), description: [options2.multiHost() ? options2.hostLabel(session.host) : "", ref, shortCwd(session.cwd)].filter(Boolean).join(" \xB7 "), live: session.isActive };
+      }));
+    }
+    async function loadCommands(id) {
+      const owner = captureRequest(), sequence = ++commandSequence;
+      commands = [];
+      commandOwner = null;
+      if (!owner || id && owner.selection.id !== id) return;
+      try {
+        const response = await options2.request(owner.endpoint, "/api/commands" + (id ? "?sessionId=" + encodeURIComponent(id) : ""));
+        const value = await response.json();
+        if (!response.ok || !ownsRequest(owner) || sequence !== commandSequence) return;
+        commands = decodeSlashCommands(value);
+        commandOwner = owner;
+      } catch (error) {
+        if (ownsRequest(owner) && sequence === commandSequence) options2.failed(error);
+      }
+    }
+    function queueFile(token) {
+      hide();
+      const owner = capture();
+      if (!owner) return;
+      const sequence = ++fileSequence;
+      fileTimer = setTimeout(() => {
+        fileTimer = null;
+        if (!owns(owner) || sequence !== fileSequence) return;
+        const endpoint = options2.host(owner.selection.host);
+        if (!endpoint || endpoint.base !== owner.endpoint.base) return;
+        void options2.request({ ...owner.endpoint, token: endpoint.token }, `/api/sessions/${encodeURIComponent(owner.selection.id)}/files?q=${encodeURIComponent(token)}`).then(async (response) => {
+          const value = await response.json();
+          if (!owns(owner) || sequence !== fileSequence) return;
+          if (document2.activeElement !== input()) {
+            hide();
+            return;
+          }
+          if (response.ok && record8(value)) showFiles(value.files, owner);
+          else hide();
+        }).catch(() => {
+          if (owns(owner) && sequence === fileSequence) hide();
+        });
+      }, 120);
+    }
+    function handle(text17) {
+      if (disposed || options2.provisional()) {
+        hide();
+        return;
+      }
+      const caret = input().selectionStart, at = text17.slice(0, caret).match(/(?:^|\s)@([^\s@]*)$/);
+      if (at && sessionState.currentSession) {
+        queueFile(at[1]);
+        return;
+      }
+      const hash = text17.slice(0, caret).match(/(?:^|\s)#([^\s#]*)$/);
+      if (hash && sessionState.currentSession) {
+        showRefs(hash[1]);
+        return;
+      }
+      if (!text17.startsWith("/") || text17.includes(" ") || !ownsRequest(commandOwner)) {
+        hide();
+        return;
+      }
+      const query = text17.slice(1), matches = commands.filter((command) => command.name.toLowerCase().startsWith(query.toLowerCase()));
+      if (!matches.length || matches.length === 1 && matches[0].name === query) {
+        hide();
+        return;
+      }
+      showCommands(matches);
+    }
+    function insert(choice) {
+      const owner = view;
+      if (!owns(owner)) return;
+      const target = input(), caret = target.selectionStart;
+      if (choice.kind === "command") {
+        hide();
+        target.value = "/" + choice.name + " ";
+        target.focus();
+        target.dispatchEvent(new Event("input"));
+        return;
+      }
+      const token = choice.kind === "file" ? "@" : "#", match = target.value.slice(0, caret).match(choice.kind === "file" ? /(?:^|\s)@([^\s@]*)$/ : /(?:^|\s)#([^\s#]*)$/);
+      hide();
+      if (!match) return;
+      const start = caret - match[1].length - 1, value = choice.kind === "file" ? choice.path + (choice.directory ? "/" : " ") : choice.ref + " ";
+      target.value = target.value.slice(0, start) + token + value + target.value.slice(caret);
+      const position = start + 1 + value.length;
+      target.focus();
+      target.setSelectionRange(position, position);
+      target.dispatchEvent(new Event("input"));
+    }
+    function accept(element) {
+      if (!visible || !owns(view) || !container().contains(element)) return;
+      const choice = choices.get(element);
+      if (choice) insert(choice);
+    }
+    function move(delta) {
+      if (!visible || !owns(view)) return;
+      const rows = [...container().querySelectorAll(".autocomplete-item")];
+      if (!rows.length) return;
+      index = (index + delta + rows.length) % rows.length;
+      rows.forEach((row, i) => row.classList.toggle("active", i === index));
+      rows[index].scrollIntoView({ block: "nearest" });
+    }
+    input().addEventListener("blur", () => {
+      const owner = view, timer = setTimeout(() => {
+        blurTimers.delete(timer);
+        if (!disposed && view === owner && document2.activeElement !== input()) hide();
+      }, 200);
+      blurTimers.add(timer);
+    }, { signal: lifetime.signal });
+    const retireMovedCaret = () => {
+      if (view && !owns(view)) hide();
+    };
+    document2.addEventListener("selectionchange", retireMovedCaret, { signal: lifetime.signal });
+    input().addEventListener("select", retireMovedCaret, { signal: lifetime.signal });
+    function retireCommands() {
+      commandSequence++;
+      commands = [];
+      commandOwner = null;
+    }
+    return {
+      retireCommands,
+      loadCommands,
+      handle,
+      queueFile,
+      showFiles,
+      showRefs,
+      showCommands,
+      hide,
+      move,
+      accept,
+      acceptFile: (path, directory) => insert({ kind: "file", path, directory }),
+      acceptRef: (ref) => insert({ kind: "ref", ref }),
+      acceptCommand: (name) => insert({ kind: "command", name }),
+      get visible() {
+        return visible && owns(view);
+      },
+      get index() {
+        return index;
+      },
+      dispose() {
+        hide();
+        lifetime.abort();
+        commandSequence++;
+        commands = [];
+        commandOwner = null;
+        disposed = true;
       }
     };
   }

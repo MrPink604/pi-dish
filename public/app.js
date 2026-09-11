@@ -296,11 +296,6 @@ const responseDetails = new Map();
 // Live tool panel tracking: toolCallId -> { el, startTime }
 let liveToolPanels = new Map();
 
-// Slash commands cache
-let slashCommands = [];
-let autocompleteVisible = false;
-let autocompleteIndex = 0;
-
 // =========================================================================
 // Scroll pinning — only follow streaming output while the user is at the
 // bottom. Scrolling up "unpins"; new content then accumulates below without
@@ -351,23 +346,7 @@ function updateJumpButton(messagesEl) {
   btn.style.display = '';
 }
 
-// Load slash commands — when a session is given, the server asks the live
-// session so the list matches exactly what that session supports. The seq
-// guard drops out-of-order responses: switching sessions quickly must not
-// let the previous session's slower reply clobber the new session's list.
-let commandsSeq = 0;
-async function loadCommands(sessionId) {
-  const seq = ++commandsSeq;
-  try {
-    const qs = sessionId ? ('?sessionId=' + encodeURIComponent(sessionId)) : '';
-    const res = await apiFetch(sessionState.sessionHostId(sessionId), '/api/commands' + qs);
-    const data = await res.json();
-    if (seq !== commandsSeq) return; // superseded by a newer session's fetch
-    if (Array.isArray(data)) slashCommands = data;
-  } catch (e) {
-    console.error('Failed to load commands:', e);
-  }
-}
+function loadCommands(id) { return composerAutocomplete.loadCommands(id); }
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
@@ -408,14 +387,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   const promptInput = document.getElementById('promptInput');
 
   promptInput.addEventListener('keydown', (e) => {
-    if (autocompleteVisible) {
+    if (composerAutocomplete.visible) {
       if (e.key === 'ArrowDown') { e.preventDefault(); moveAutocomplete(1); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); moveAutocomplete(-1); return; }
       if (e.key === 'Tab' || e.key === 'Enter') {
         var items = document.querySelectorAll('.autocomplete-item');
-        if (items.length > 0 && autocompleteIndex >= 0) {
+        if (items.length > 0 && composerAutocomplete.index >= 0) {
           e.preventDefault();
-          acceptAutocomplete(items[autocompleteIndex]);
+          acceptAutocomplete(items[composerAutocomplete.index]);
           return;
         }
       }
@@ -424,11 +403,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     // History recall: ArrowUp with the caret at the very start (or empty box)
     // steps back through sent prompts; ArrowDown at the end steps forward and
     // finally restores whatever was being typed.
-    if (!autocompleteVisible && e.key === 'ArrowUp' &&
+    if (!composerAutocomplete.visible && e.key === 'ArrowUp' &&
         promptInput.selectionStart === 0 && promptInput.selectionEnd === 0) {
       if (navigateHistory(-1, promptInput)) { e.preventDefault(); return; }
     }
-    if (!autocompleteVisible && e.key === 'ArrowDown' && composerDrafts.historyIndex !== -1 &&
+    if (!composerAutocomplete.visible && e.key === 'ArrowDown' && composerDrafts.historyIndex !== -1 &&
         promptInput.selectionStart === promptInput.value.length) {
       if (navigateHistory(1, promptInput)) { e.preventDefault(); return; }
     }
@@ -438,7 +417,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     // While dictating, Escape cancels the recording (handled by the document
     // listener) — it must not also abort the turn.
-    if (e.key === 'Escape' && !autocompleteVisible && !isRecording() && turnInProgress) { e.preventDefault(); abortTurn(); }
+    if (e.key === 'Escape' && !composerAutocomplete.visible && !isRecording() && turnInProgress) { e.preventDefault(); abortTurn(); }
   });
 
   // Global Ctrl+C to abort
@@ -576,7 +555,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (chip) toggleScope(chip.dataset.name);
   });
 
-  promptInput.addEventListener('blur', () => { setTimeout(hideAutocomplete, 200); });
 
   const messagesEl = document.getElementById('messages');
   if (messagesEl) {
@@ -618,278 +596,34 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 });
 
-// =========================================================================
-// Autocomplete — slash commands at the start of the input, @file mentions
-// anywhere (fuzzy file search under the session cwd via fff; @/abs, @~/ and
-// @../ tokens get shell-style path completion anywhere on the filesystem),
-// and #session refs anywhere (fuzzy search over the sessions this client
-// already holds — no fetch, the sidebar list is the index).
-// =========================================================================
-
-function handleAutocomplete(text) {
-  // A provisional composer has no session cwd or live command set yet.
-  if (currentSessionSpawnId) { hideAutocomplete(); return; }
-  // @token ending at the caret → file mention
-  const input = document.getElementById('promptInput');
-  const caret = input.selectionStart ?? text.length;
-  const at = text.slice(0, caret).match(/(?:^|\s)@([^\s@]*)$/);
-  if (at && sessionState.currentSession) { queueFileAutocomplete(at[1]); return; }
-  // #token ending at the caret → session ref. `# ` (a markdown heading) can't
-  // reach here: the token charset excludes the space.
-  const hash = text.slice(0, caret).match(/(?:^|\s)#([^\s#]*)$/);
-  if (hash && sessionState.currentSession) { showSessionRefAutocomplete(hash[1]); return; }
-
-  if (!text.startsWith('/')) { hideAutocomplete(); return; }
-  var spaceIdx = text.indexOf(' ');
-  var query = spaceIdx > 0 ? text.slice(1, spaceIdx) : text.slice(1);
-  if (spaceIdx > 0) { hideAutocomplete(); return; }
-  var matches = slashCommands.filter(cmd => cmd.name.toLowerCase().startsWith(query.toLowerCase()));
-  if (matches.length === 0 || (matches.length === 1 && matches[0].name === query)) { hideAutocomplete(); return; }
-  showAutocomplete(matches);
-}
-
-// --- @file mentions ---
-const fileAcFetcher = debouncedFetcher(120,
-  async (token) => {
-    const res = await apiFetch(sessionState.currentSession.host, `/api/sessions/${encodeURIComponent(sessionState.currentSession.id)}/files?q=${encodeURIComponent(token)}`);
-    const data = await res.json();
-    return res.ok ? data.files : null;
-  },
-  (files) => { files?.length ? showFileAutocomplete(files) : hideAutocomplete(); });
-
-function queueFileAutocomplete(token) { fileAcFetcher.fire(token); }
-
-const GIT_STATUS_LABEL = { modified: '± modified', untracked: '+ new', staged: '● staged' };
-
-function showFileAutocomplete(files) {
-  showAutocompleteList(files.map((f, i) =>
-    `<div class="autocomplete-item${i === 0 ? ' active' : ''}" data-file="${escapeHtml(f.path)}"${f.isDir ? ' data-dir="1"' : ''}>
-      <span class="autocomplete-icon">${f.isDir ? '📁' : '📄'}</span>
-      <span class="autocomplete-name">${escapeHtml(f.path)}${f.isDir ? '/' : ''}</span>
-      <span class="autocomplete-desc">${GIT_STATUS_LABEL[f.gitStatus] || ''}</span>
-    </div>`).join(''));
-}
-
-// Replace the @token at the caret with the chosen path. Files close the
-// mention with a trailing space; directories append a '/' and re-fire the
-// input event so the completion drills one level deeper.
-function acceptFileMention(relPath, isDir) {
-  const input = document.getElementById('promptInput');
-  const caret = input.selectionStart ?? input.value.length;
-  const m = input.value.slice(0, caret).match(/(?:^|\s)@([^\s@]*)$/);
-  hideAutocomplete();
-  if (!m) return;
-  const start = caret - m[1].length - 1; // include the '@'
-  const insert = relPath + (isDir ? '/' : ' ');
-  input.value = input.value.slice(0, start) + '@' + insert + input.value.slice(caret);
-  const pos = start + 1 + insert.length;
-  input.focus();
-  input.setSelectionRange(pos, pos);
-  if (isDir) input.dispatchEvent(new Event('input'));
-}
-
-// --- #session refs ---
-// The picker is local: every session this client can address is already in
-// `sessions` (the fleet is aggregated client-side), so ranking them is a sort,
-// not a round trip. Knowing the whole corpus is also what lets the picker
-// write a ref that resolves — see refPrefixFor.
-
-function allKnownSessions() {
-  return [...sessionState.sessions.active, ...sessionState.sessions.previous];
-}
-
-function sessionHostIdOf(session) {
-  return (session && session.host) || hostDirectory.self.hostId;
-}
-
-function sessionRefCandidates() {
-  const all = allKnownSessions();
-  if (!sessionState.currentSession) return all;
-  const currentHost = sessionHostIdOf(sessionState.currentSession);
-  return all.filter(s => s.id !== sessionState.currentSession.id || sessionHostIdOf(s) !== currentHost);
-}
-
-/** Ids sharing a session's host — the only ones a ref has to beat. */
-function sameHostSessionIds(session) {
-  const hostId = sessionHostIdOf(session);
-  return allKnownSessions().filter(s => sessionHostIdOf(s) === hostId).map(s => s.id);
-}
-
-/**
- * The short id part of a ref, from the point of view of the host that will
- * expand it — always the session's owner. `shortSessionRef` may name the
- * native id or uuid tail inside an encoded route id, which only a host
- * advertising `refAliases` resolves; an older peer gets the route-id prefix
- * it understands (long for a non-Pi session, but resolvable there).
- */
-function refPrefixFor(session) {
-  const ids = sameHostSessionIds(session);
-  const owner = hostEntryFor(sessionHostIdOf(session));
-  return hostSupportsCapability(owner, 'refAliases', appConfig)
-    ? shortSessionRef(session.id, ids)
-    : uniqueSessionPrefix(session.id, ids);
-}
-
-/**
- * The ref to insert for `session` while composing into `target`. A ref is
- * resolved by the *target's* server, so it must read from that server's point
- * of view, not this client's: same host is a bare prefix, and a cross-host ref
- * takes the name-independent `hostId:fullId` form — except when the target is
- * this client's own host, whose fleet names are exactly the ones this client
- * knows and can therefore write.
- */
-function composerSessionRef(session, target) {
-  const sessionHost = sessionHostIdOf(session);
-  const targetHost = sessionHostIdOf(target);
-  const prefix = refPrefixFor(session);
-  if (sessionHost === targetHost) return prefix;
-  if (targetHost === hostDirectory.self.hostId) {
-    const entry = hostEntryFor(sessionHost);
-    if (entry && entry.name) return `${entry.name}/${prefix}`;
-  }
-  return `${sessionHost}:${session.id}`;
-}
-
-function showSessionRefAutocomplete(token) {
-  const rows = searchSessionsForRef(sessionRefCandidates(), token, 8);
-  if (!rows.length) { hideAutocomplete(); return; }
-  showAutocompleteList(rows.map(({ session, indices }, i) => {
-    const ref = composerSessionRef(session, sessionState.currentSession);
-    const name = session.name || session.id.slice(0, 8);
-    const desc = [
-      isMultiHost() ? hostLabelFor(session.host) : '',
-      ref,
-      shortCwd(session.cwd || ''),
-    ].filter(Boolean).join(' · ');
-    return `<div class="autocomplete-item${i === 0 ? ' active' : ''}" data-session-ref="${escapeHtml(ref)}">
-      <span class="autocomplete-icon session-ref-dot${session.isActive ? ' live' : ''}">●</span>
-      <span class="autocomplete-name">${indices ? highlightFuzzy(name, indices) : escapeHtml(name)}</span>
-      <span class="autocomplete-desc">${escapeHtml(desc)}</span>
-    </div>`;
-  }).join(''));
-}
-
-/** Replace the #token at the caret with the chosen ref. */
-function acceptSessionRefMention(ref) {
-  const input = document.getElementById('promptInput');
-  const caret = input.selectionStart ?? input.value.length;
-  const m = input.value.slice(0, caret).match(/(?:^|\s)#([^\s#]*)$/);
-  hideAutocomplete();
-  if (!m) return;
-  const start = caret - m[1].length - 1; // include the '#'
-  const insert = ref + ' ';
-  input.value = input.value.slice(0, start) + '#' + insert + input.value.slice(caret);
-  const pos = start + 1 + insert.length;
-  input.focus();
-  input.setSelectionRange(pos, pos);
-  input.dispatchEvent(new Event('input')); // resize, save the draft, close
-}
-
-/** The session a ref addresses, resolved the way its owning server would. */
-function sessionMatchingRef(ref, localHostId = sessionState.currentSession ? sessionHostIdOf(sessionState.currentSession) : hostDirectory.self.hostId) {
-  const parts = parseSessionRefParts(ref);
-  if (!parts) return null;
-  const onHost = allKnownSessions().filter((session) => {
-    const hostId = sessionHostIdOf(session);
-    // Bare and self/ refs are local to the server that owns the transcript,
-    // which is not necessarily the browser's serving host.
-    if (!parts.hostPart) return hostId === localHostId;
-    if (parts.hostIdForm) return hostId === parts.hostPart;
-    if (parts.hostPart.toLowerCase() === 'self') return hostId === localHostId;
-    const entry = hostEntryFor(hostId);
-    return !!entry && String(entry.name || '').toLowerCase() === parts.hostPart.toLowerCase();
-  });
-  const exact = onHost.find(s => s.id === parts.id);
-  if (exact || parts.hostIdForm) return exact || null;
-  const matches = onHost.filter(s => s.id.startsWith(parts.id));
-  return matches.length === 1 ? matches[0] : null;
-}
-
-/**
- * Metadata for the `#ref` tokens in a prompt, sent alongside it. The target's
- * server resolves its own sessions itself; these hints exist so a *peer's*
- * session can still be named in the block, since this client is the only
- * party that aggregates the fleet.
- */
-function sessionRefHints(message) {
-  const hints = [];
-  for (const { ref } of parseSessionRefTokens(message)) {
-    const session = sessionMatchingRef(ref);
-    if (!session) continue;
-    hints.push({
-      ref,
-      name: session.name || '',
-      host: hostLabelFor(session.host) || '',
-      cwd: session.cwd || '',
-      isActive: !!session.isActive,
-    });
-  }
-  return hints;
-}
-
-function ensureAutocompleteContainer() {
-  var container = document.getElementById('autocomplete');
-  if (!container) {
-    container = document.createElement('div');
-    container.id = 'autocomplete';
-    container.className = 'autocomplete-dropdown';
-    document.querySelector('.input-area').appendChild(container);
-  }
-  return container;
-}
-
-function showAutocomplete(matches) {
-  showAutocompleteList(matches.map((cmd, i) => {
-    var icon = cmd.source === 'builtin' || cmd.source === 'host' ? '⚙️' : cmd.source === 'extension' ? '🧩' : cmd.source === 'skill' ? '📚' : '📝';
-    var active = i === 0 ? ' active' : '';
-    var args = cmd.args ? ' <span class="autocomplete-args">' + escapeHtml(cmd.args) + '</span>' : '';
-    return '<div class="autocomplete-item' + active + '" data-name="' + escapeHtml(cmd.name) + '">'
-      + '<span class="autocomplete-icon">' + icon + '</span>'
-      + '<span class="autocomplete-name">/' + escapeHtml(cmd.name) + args + '</span>'
-      + '<span class="autocomplete-desc">' + escapeHtml(cmd.description) + '</span></div>';
-  }).join(''));
-}
-
-// Shared tail of both composer autocompletes (slash commands, @files): fill
-// the container, bind clicks through the one accept path, show it.
-function showAutocompleteList(html) {
-  const container = ensureAutocompleteContainer();
-  autocompleteIndex = 0;
-  autocompleteVisible = true;
-  container.innerHTML = html;
-  container.querySelectorAll('.autocomplete-item').forEach(el => {
-    el.onclick = () => acceptAutocomplete(el);
-  });
-  container.style.display = 'block';
-}
-
-function hideAutocomplete() {
-  autocompleteVisible = false;
-  fileAcFetcher.cancel(); // invalidate any in-flight file search
-  var c = document.getElementById('autocomplete');
-  if (c) c.style.display = 'none';
-}
-
-function moveAutocomplete(delta) {
-  var items = document.querySelectorAll('.autocomplete-item');
-  autocompleteIndex = moveActiveItem(items, autocompleteIndex, delta, { wrap: true });
-}
-
-function acceptAutocomplete(el) {
-  const file = el.getAttribute('data-file');
-  if (file != null) { acceptFileMention(file, el.hasAttribute('data-dir')); return; }
-  const ref = el.getAttribute('data-session-ref');
-  if (ref != null) { acceptSessionRefMention(ref); return; }
-  acceptAutocompleteByName(el.getAttribute('data-name'));
-}
-
-function acceptAutocompleteByName(name) {
-  var input = document.getElementById('promptInput');
-  input.value = '/' + name + ' ';
-  input.focus();
-  hideAutocomplete();
-  input.dispatchEvent(new Event('input'));
-}
+// Reference syntax is relative to the server owning the composing session.
+const sessionReferences = PiDishBrowser.createSessionReferences({
+  sessionState, selfId: () => hostDirectory.self.hostId, host: hostEntryFor, hostLabel: hostLabelFor, config: () => appConfig,
+});
+const composerAutocomplete = PiDishBrowser.createComposerAutocomplete({
+  document, sessionState, composerKey: () => composerDrafts.key, provisional: () => !!currentSessionSpawnId,
+  request: (host, path, options) => apiFetch(host, path, options), host: hostEntryFor, references: sessionReferences,
+  multiHost: isMultiHost, hostLabel: hostLabelFor, failed: error => console.error('Failed to load commands:', error),
+});
+function handleAutocomplete(text) { composerAutocomplete.handle(text); }
+function queueFileAutocomplete(token) { composerAutocomplete.queueFile(token); }
+function showFileAutocomplete(files) { composerAutocomplete.showFiles(files); }
+function acceptFileMention(path, directory) { composerAutocomplete.acceptFile(path, directory); }
+function allKnownSessions() { return sessionReferences.all(); }
+function sessionHostIdOf(session) { return sessionReferences.hostId(session); }
+function sessionRefCandidates() { return sessionReferences.candidates(); }
+function sameHostSessionIds(session) { return sessionReferences.sameHostIds(session); }
+function refPrefixFor(session) { return sessionReferences.prefix(session); }
+function composerSessionRef(session, target) { return sessionReferences.ref(session, target); }
+function showSessionRefAutocomplete(token) { composerAutocomplete.showRefs(token); }
+function acceptSessionRefMention(ref) { composerAutocomplete.acceptRef(ref); }
+function sessionMatchingRef(ref, host) { return sessionReferences.match(ref, host); }
+function sessionRefHints(message) { return sessionReferences.hints(message); }
+function showAutocomplete(matches) { composerAutocomplete.showCommands(matches); }
+function hideAutocomplete() { composerAutocomplete.hide(); }
+function moveAutocomplete(delta) { composerAutocomplete.move(delta); }
+function acceptAutocomplete(element) { composerAutocomplete.accept(element); }
+function acceptAutocompleteByName(name) { composerAutocomplete.acceptCommand(name); }
 
 // =========================================================================
 // Sidebar
@@ -1997,7 +1731,7 @@ function showPendingSessionView(spawnId) {
   closeControlPanel();
   hideAutocomplete();
   modelCatalog.retire();
-  commandsSeq += 1;
+  composerAutocomplete.retireCommands();
 
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('sessionView').style.display = 'flex';

@@ -2179,3 +2179,8 @@ Composer draft/history and image attachment ownership live in `src/browser/compo
 and `composer-images.ts`. Use controller methods rather than mutable image arrays.
 A provisional spawn migrates dirty text and pending image ownership together;
 foreign draft/history actions must not cancel the currently selected draft timer.
+
+Autocomplete uses `src/browser/composer-autocomplete.ts` to own file debounce,
+command catalog refresh, menu rows and blur timers. Every accepted choice emits
+input so plain file mentions persist in drafts. Session references retain the
+existing exact host-id grammar and owning-host prefix disambiguation.
