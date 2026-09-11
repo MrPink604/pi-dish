@@ -78,3 +78,6 @@ export { decodeAnchoredComments, decodeCommentTarget, decodeCommentIndex } from 
 export { selectionTextAnchor, findQuoteOffset, markCommentQuote } from './comment-anchors';
 
 export { createSessionControls } from './session-controls';
+
+export { createComposerNotes } from './composer-notes';
+export { createComposerSpeech } from './composer-speech';

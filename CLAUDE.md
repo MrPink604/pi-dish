@@ -2167,3 +2167,10 @@ selection at open; pending menu loads and per-field mutations have independent
 owners. Enabled-model persistence belongs to the serving Pi instance regardless
 of selection. Export byte delivery retains the requested session, while feedback
 is selection-owned and object URLs retire after delayed download or disposal.
+
+Dictation lives in `src/browser/composer-speech.ts`. Permission requests, takes
+and transcription retain the originating composer/selection. Cancellation must
+also retire pending permission and transcription; late streams stop their tracks,
+and old recorder events cannot affect a newer take. Batch transcription inserts
+text at the caret without sending. `composer-notes.ts` owns text-only notices and
+retires obsolete dismiss controls. Disposal releases listeners, timers and tracks.

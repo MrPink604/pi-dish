@@ -707,3 +707,25 @@ passed again after the fix. AGENTS.md now includes the pre-paint output.
   only feedback uses that sequence. An overlapping-export regression and the
   repeated full checks pass. Tokenless navigation retains the original arguments.
 - Next: dictation/media, composer and transcript orchestration, and shell wiring.
+
+## Checkpoint 30 — Dictation and composer notes
+
+- `composer-speech.ts` owns microphone permission, recording tracks/chunks,
+  recorder listeners, duration timers and transcription requests. Each take and
+  request retains its composer key and selection; late results cannot retarget.
+- Cancellation includes pending permission. A late stream is stopped without
+  creating a recorder; releasing touch before permission cancels the held take.
+  Retired recorder events cannot release a newer take or transcribe old chunks.
+- Track/timer/listener cleanup covers cancellation, recording errors and disposal.
+  Transcription remains batch-based and inserts at the caret for review without
+  sending. Host capability and secure-origin gating retain their existing behavior.
+- `composer-notes.ts` keeps text-only error notes and retires replaced dismiss
+  buttons. Seven browser cases use fake media objects to cover these lifetimes.
+- Strict checks, 925 backend tests, 204 browser regressions, every independent UI
+  scenario and full desktop/mobile smoke passed on the corrected header baseline.
+  An earlier rename smoke timeout did not recur in a complete diagnostic run or
+  the repeated full suite. Synthetic-microphone smoke exercises actual encoding
+  and the fake STT endpoint. Integrated runtime/config/test files match the draft;
+  strict checks passed again.
+- Fable 5.1 cleared amended header commit `102375e` before push.
+- Next: drafts/attachments, autocomplete, transcript/composer and shell wiring.

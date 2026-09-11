@@ -425,3 +425,7 @@ menus, rename editors, field-specific mutation ordering, serving-host preference
 saves and export resource lifetimes. Existing typed selector components retain DOM
 ownership. Tokenless exports navigate; authenticated exports retain captured bytes
 and filenames while status feedback follows the originating selection.
+
+Dictation lives in `composer-speech.ts`, which retains permission/take/transcription
+owners and releases streams, listeners and timers on cancellation or disposal.
+`composer-notes.ts` owns persistent text-only notes and their dismiss controls.

@@ -35,6 +35,8 @@ var PiDishBrowser = (() => {
     createAnchoredComments: () => createAnchoredComments,
     createBounce: () => createBounce,
     createBrowserAssets: () => createBrowserAssets,
+    createComposerNotes: () => createComposerNotes,
+    createComposerSpeech: () => createComposerSpeech,
     createCwdAutocomplete: () => createCwdAutocomplete,
     createDiagrams: () => createDiagrams,
     createDirectoryCatalog: () => createDirectoryCatalog,
@@ -2874,6 +2876,33 @@ var PiDishBrowser = (() => {
   function truncate(text16, maxLen, suffix = " \u2026 (truncated)") {
     if (!text16 || text16.length <= maxLen) return text16;
     return text16.slice(0, maxLen) + suffix;
+  }
+  function sttUnavailableReason({ isSecureContext, hasGetUserMedia, hasMediaRecorder, origin } = {}) {
+    if (!isSecureContext) {
+      const where = origin || "this origin";
+      return {
+        code: "insecure",
+        message: `Microphone needs a secure origin. This page is on ${where}, so the browser withholds the mic. Open pi-dish over https or localhost, or in Chrome (desktop and Android) add ${where} at chrome://flags/#unsafely-treat-insecure-origin-as-secure and relaunch. iOS Safari has no override \u2014 use https (tailscale serve, cloudflared, or a self-signed cert).`
+      };
+    }
+    if (!hasGetUserMedia) return { code: "no-getusermedia", message: "This browser exposes no microphone API." };
+    if (!hasMediaRecorder) return { code: "no-recorder", message: "This browser can't record audio (no MediaRecorder)." };
+    return null;
+  }
+  function insertAtCaret(value, selectionStart, selectionEnd, text16) {
+    const source = typeof value === "string" ? value : "";
+    const insert = typeof text16 === "string" ? text16 : "";
+    const max = source.length;
+    let start = finite2(selectionStart) ? Math.max(0, Math.min(max, selectionStart)) : max;
+    let end = finite2(selectionEnd) ? Math.max(0, Math.min(max, selectionEnd)) : start;
+    if (end < start) [start, end] = [end, start];
+    const before = source.slice(0, start);
+    const after = source.slice(end);
+    if (!insert) return { value: before + after, caret: before.length };
+    const prefix = before && !/\s$/.test(before) ? " " : "";
+    const suffix = after && !/^\s/.test(after) ? " " : "";
+    const middle = prefix + insert + suffix;
+    return { value: before + middle + after, caret: before.length + prefix.length + insert.length };
   }
   function tmuxPrefixSeq(prefix) {
     if (typeof prefix !== "string") return null;
@@ -12261,6 +12290,348 @@ var PiDishBrowser = (() => {
         timers.clear();
         for (const url of urls.keys()) URL.revokeObjectURL(url);
         urls.clear();
+      }
+    };
+  }
+
+  // src/browser/composer-notes.ts
+  function createComposerNotes(document2) {
+    let disposed = false, events = new AbortController();
+    function hide() {
+      events.abort();
+      const element = document2.getElementById("composerNote");
+      if (element) {
+        element.style.display = "none";
+        element.textContent = "";
+      }
+    }
+    function show(text16) {
+      if (disposed) return;
+      const element = document2.getElementById("composerNote");
+      if (!element) return;
+      hide();
+      events = new AbortController();
+      const owned = events;
+      const message3 = document2.createElement("span");
+      message3.className = "composer-note-text";
+      message3.textContent = text16;
+      const dismiss = document2.createElement("button");
+      dismiss.type = "button";
+      dismiss.className = "composer-note-dismiss";
+      dismiss.title = "Dismiss";
+      dismiss.textContent = "\u2715";
+      dismiss.addEventListener("click", () => {
+        if (!owned.signal.aborted && element.contains(dismiss)) hide();
+      }, { signal: owned.signal });
+      element.append(message3, dismiss);
+      element.style.display = "";
+    }
+    return { show, hide, dispose() {
+      hide();
+      disposed = true;
+    } };
+  }
+
+  // src/browser/composer-speech.ts
+  function createComposerSpeech(options2) {
+    const { document: document2, sessionState } = options2, window = document2.defaultView, navigator = window.navigator;
+    const button = () => document2.getElementById("btnMic");
+    let disposed = false, mounted = false, take = null, transcription = null, pointerType = "";
+    const lifetime = new AbortController();
+    const MIME_TYPES = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus", "audio/ogg"];
+    const errorName = (e) => record8(e) && typeof e.name === "string" ? e.name : "unknown";
+    function capture() {
+      const key = options2.composerKey();
+      return !disposed && key ? { key, selection: sessionState.captureSelection() } : null;
+    }
+    function owns(owner) {
+      return !disposed && options2.composerKey() === owner.key && (!owner.selection || sessionState.ownsSelection(owner.selection));
+    }
+    function host() {
+      return options2.hosts().find((entry) => record8(entry.capabilities) ? entry.capabilities.stt === true : (entry.self === true || entry.base === "") && !!options2.config().stt) || null;
+    }
+    function reason() {
+      return sttUnavailableReason({ isSecureContext: !!window.isSecureContext, hasGetUserMedia: !!navigator.mediaDevices?.getUserMedia, hasMediaRecorder: typeof window.MediaRecorder === "function", origin: window.location.origin });
+    }
+    function isRecording() {
+      return !!take;
+    }
+    function updateButton() {
+      const btn = button();
+      if (!btn || disposed) return;
+      if (!host()) {
+        btn.style.display = "none";
+        return;
+      }
+      const unavailable = reason();
+      btn.style.display = "inline-flex";
+      btn.classList.toggle("unavailable", !!unavailable);
+      if (unavailable) btn.setAttribute("aria-disabled", "true");
+      else btn.removeAttribute("aria-disabled");
+      btn.classList.toggle("recording", !!take?.recorder);
+      btn.classList.toggle("busy", !!transcription);
+      btn.title = unavailable ? unavailable.message : take ? "Stop recording" : transcription ? "Transcribing\u2026" : "Dictate (speech to text)";
+    }
+    function stopTracks(stream) {
+      if (stream) for (const track of stream.getTracks()) {
+        try {
+          track.stop();
+        } catch {
+        }
+      }
+    }
+    function retire(entry, stopRecorder = false) {
+      entry.events.abort();
+      if (entry.timer !== null) clearInterval(entry.timer);
+      entry.timer = null;
+      if (take === entry) take = null;
+      if (stopRecorder && entry.recorder && entry.recorder.state !== "inactive") {
+        try {
+          entry.recorder.stop();
+        } catch {
+        }
+      }
+      stopTracks(entry.stream);
+      entry.stream = null;
+      entry.chunks = [];
+    }
+    function release() {
+      if (take) retire(take, true);
+      updateButton();
+    }
+    function cancel() {
+      const active = !!take || !!transcription;
+      if (take) retire(take, true);
+      if (transcription) {
+        transcription.events.abort();
+        transcription = null;
+      }
+      if (active) options2.status("");
+      updateButton();
+    }
+    function updateStatus() {
+      const entry = take;
+      if (!entry?.recorder) return;
+      if (!owns(entry.owner)) {
+        retire(entry, true);
+        updateButton();
+        return;
+      }
+      const elapsed = Date.now() - entry.started;
+      if (elapsed >= 5 * 60 * 1e3) {
+        stop();
+        return;
+      }
+      options2.status(`Recording ${formatDuration(elapsed)}`);
+    }
+    async function start() {
+      if (disposed || take || transcription) return;
+      const owner = capture();
+      if (!owner || !host()) return;
+      const unavailable = reason();
+      if (unavailable) {
+        options2.showNote(unavailable.message);
+        return;
+      }
+      options2.hideNote();
+      const entry = { owner, stream: null, recorder: null, chunks: [], started: 0, timer: null, events: new AbortController() };
+      take = entry;
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (error) {
+        if (take !== entry) return;
+        retire(entry);
+        if (!owns(owner)) {
+          updateButton();
+          return;
+        }
+        const name = errorName(error);
+        options2.showNote(name === "NotAllowedError" ? "Microphone access was denied. Allow the microphone for this site in the browser's site settings and try again." : name === "NotFoundError" ? "No microphone found." : `Microphone error: ${name}`);
+        updateButton();
+        return;
+      }
+      if (take !== entry || !owns(owner)) {
+        stopTracks(stream);
+        if (take === entry) retire(entry);
+        updateButton();
+        return;
+      }
+      entry.stream = stream;
+      const mime = MIME_TYPES.find((type) => typeof window.MediaRecorder.isTypeSupported === "function" && window.MediaRecorder.isTypeSupported(type));
+      let recorder;
+      try {
+        recorder = mime ? new window.MediaRecorder(stream, { mimeType: mime }) : new window.MediaRecorder(stream);
+      } catch {
+        try {
+          recorder = new window.MediaRecorder(stream);
+        } catch (error) {
+          retire(entry);
+          if (owns(owner)) options2.showNote(`Microphone error: ${errorName(error)}`);
+          updateButton();
+          return;
+        }
+      }
+      entry.recorder = recorder;
+      entry.started = Date.now();
+      recorder.addEventListener("dataavailable", (event) => {
+        if (take === entry && owns(owner) && event.data?.size) entry.chunks.push(event.data);
+      }, { signal: entry.events.signal });
+      recorder.addEventListener("stop", () => finish(recorder), { signal: entry.events.signal });
+      recorder.addEventListener("error", (event) => {
+        if (take !== entry) return;
+        retire(entry);
+        if (owns(owner)) options2.showNote(`Microphone error: ${"error" in event ? errorName(event.error) : "unknown"}`);
+        updateButton();
+      }, { signal: entry.events.signal });
+      try {
+        recorder.start();
+      } catch (error) {
+        retire(entry);
+        if (owns(owner)) options2.showNote(`Microphone error: ${errorName(error)}`);
+        updateButton();
+        return;
+      }
+      if (take !== entry) return;
+      entry.timer = setInterval(updateStatus, 1e3);
+      updateStatus();
+      updateButton();
+    }
+    function stop() {
+      const entry = take;
+      if (!entry) return;
+      if (!entry.recorder) {
+        cancel();
+        return;
+      }
+      try {
+        if (entry.recorder.state !== "inactive") entry.recorder.stop();
+      } catch {
+        retire(entry);
+        updateButton();
+      }
+    }
+    function finish(recorder) {
+      const entry = take;
+      if (!entry || entry.recorder !== recorder) return;
+      const chunks = [...entry.chunks], owner = entry.owner, mime = recorder.mimeType || "audio/webm";
+      retire(entry);
+      updateButton();
+      if (!owns(owner)) return;
+      const blob = new Blob(chunks, { type: mime });
+      if (blob.size < 1024) {
+        options2.status("");
+        options2.showNote("Nothing was recorded.");
+        return;
+      }
+      void transcribe(blob, mime, owner);
+    }
+    async function transcribe(blob, mime, owner = capture()) {
+      if (!owner || !owns(owner) || transcription) return;
+      const endpoint = host();
+      if (!endpoint) {
+        options2.status("");
+        return;
+      }
+      const entry = { owner, host: Object.freeze({ ...endpoint }), events: new AbortController() };
+      transcription = entry;
+      const current = () => transcription === entry && owns(owner) && options2.hosts().some((host2) => host2.hostId === entry.host.hostId && host2.base === entry.host.base);
+      updateButton();
+      options2.status("Transcribing\u2026");
+      try {
+        const response = await options2.request(entry.host, "/api/stt", { method: "POST", headers: { "Content-Type": mime }, body: blob, signal: entry.events.signal });
+        const value = await response.json().catch(() => null);
+        if (!current()) return;
+        if (!response.ok) throw new Error(record8(value) && typeof value.error === "string" ? value.error : `Transcription failed (HTTP ${response.status})`);
+        const text16 = record8(value) && typeof value.text === "string" ? value.text.trim() : "";
+        if (!text16) {
+          options2.showNote("No speech detected.");
+          return;
+        }
+        insert(text16);
+      } catch (error) {
+        if (current()) options2.showNote(error instanceof Error ? error.message : "Transcription failed");
+      } finally {
+        if (transcription === entry) {
+          transcription = null;
+          if (owns(owner)) options2.status("");
+          updateButton();
+        }
+      }
+    }
+    function insert(text16) {
+      if (disposed) return;
+      const input = document2.getElementById("promptInput");
+      if (!input) return;
+      const result = insertAtCaret(input.value, input.selectionStart, input.selectionEnd, text16);
+      input.value = result.value;
+      try {
+        input.setSelectionRange(result.caret, result.caret);
+      } catch {
+      }
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.focus();
+    }
+    function mount() {
+      const btn = button();
+      if (!btn || disposed || mounted) return;
+      mounted = true;
+      const signal = lifetime.signal;
+      btn.addEventListener("pointerdown", (event) => {
+        pointerType = event.pointerType || "mouse";
+        const unavailable = reason();
+        if (unavailable) {
+          options2.showNote(unavailable.message);
+          return;
+        }
+        if (pointerType === "touch") {
+          event.preventDefault();
+          try {
+            btn.setPointerCapture(event.pointerId);
+          } catch {
+          }
+          void start();
+        }
+      }, { signal });
+      const releaseHold = (event) => {
+        if ((event.pointerType || pointerType) === "touch") stop();
+      };
+      btn.addEventListener("pointerup", releaseHold, { signal });
+      btn.addEventListener("pointercancel", releaseHold, { signal });
+      btn.addEventListener("pointerleave", releaseHold, { signal });
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        const held = pointerType === "touch";
+        pointerType = "";
+        if (held) return;
+        const unavailable = reason();
+        if (unavailable) {
+          options2.showNote(unavailable.message);
+          return;
+        }
+        if (transcription) return;
+        if (take) stop();
+        else void start();
+      }, { signal });
+    }
+    return {
+      host,
+      reason,
+      isRecording,
+      updateButton,
+      mount,
+      updateStatus,
+      start,
+      stop,
+      cancel,
+      release,
+      finish,
+      transcribe,
+      insert,
+      dispose() {
+        cancel();
+        lifetime.abort();
+        disposed = true;
       }
     };
   }
