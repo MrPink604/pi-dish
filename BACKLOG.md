@@ -7,7 +7,8 @@ code still lives in JavaScript.**
 The browser-completion goal is active. Host identity and fleet discovery is
 checkpoint 1; host catalog state/editing is checkpoint 2. Both are pushed after
 Fable review. Host settings UI and add-host request owners are checkpoint 3,
-also pushed after review. Checkpoint 4 completes host color state/presentation. See
+also pushed after review. Checkpoint 4 completes host color state/presentation and is pushed after review.
+Checkpoint 5 migrates directory lookup, autocomplete and the lazy tree. See
 [the checkpoint log](docs/browser-migration-checkpoints.md) for implementation
 verification and the complete browser entrypoint inventory. The last confirmed
 CI checkpoint is recorded below; final CI must pass before the goal is complete.
@@ -18,7 +19,7 @@ CI checkpoint is recorded below; final CI must pass before the goal is complete.
 | --- | --- | --- |
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
-| Browser migration | In progress — current stage | Twelve implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
+| Browser migration | In progress — current stage | Fifteen implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
 | Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -36,7 +37,7 @@ in `lib/`. Its full module inventory is in [the migration guide](docs/typescript
 Most JavaScript callers of these modules are not yet type checked; `lib/cron.js`
 is an explicitly checked exception.
 
-These twelve browser implementation modules compile strictly into the local
+These fifteen browser implementation modules compile strictly into the local
 `public/browser.js` bundle (`src/browser/index.ts` is the bundle entrypoint):
 
 | Completed browser module | Responsibility now owned by TypeScript |
@@ -53,7 +54,11 @@ These twelve browser implementation modules compile strictly into the local
 | `host-directory.ts` | Catalog/fleet/self state, effective lookups and owned source writers |
 | `host-settings.ts` | Host settings DOM, catalog actions and add-host request/view ownership |
 | `host-presentation.ts` | Device color state, palette order, host chips/dots and native color resolution |
+| `directory-catalog.ts` | Host-owned known paths and directory response decoding |
+| `cwd-autocomplete.ts` | Shared cwd suggestions, request/query ownership and listener/timer cleanup |
+| `directory-tree.ts` | Lazy directory DOM, captured host actions and tree disposal |
 
+The checkpoint log distinguishes local implementation from completed review and push.
 A completed module means that boundary has moved, been reviewed and verified.
 It does **not** mean its entire feature is migrated: for example, model-selector
 DOM is typed, while model discovery and menu orchestration still have JavaScript

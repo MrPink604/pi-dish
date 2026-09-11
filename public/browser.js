@@ -26,6 +26,9 @@ var PiDishBrowser = (() => {
     HOST_BACKOFF_RESET_MS: () => HOST_BACKOFF_RESET_MS,
     HOST_COLOR_SLOTS: () => HOST_COLOR_SLOTS,
     assignHostColor: () => assignHostColor,
+    createCwdAutocomplete: () => createCwdAutocomplete,
+    createDirectoryCatalog: () => createDirectoryCatalog,
+    createDirectoryTree: () => createDirectoryTree,
     createHarnessDiscovery: () => createHarnessDiscovery,
     createHostConnections: () => createHostConnections,
     createHostDirectory: () => createHostDirectory,
@@ -36,7 +39,9 @@ var PiDishBrowser = (() => {
     createHostTransport: () => createHostTransport,
     createSessionApi: () => createSessionApi,
     createSessionState: () => createSessionState,
+    decodeDirectoryChildren: () => decodeDirectoryChildren,
     decodeHostDescriptor: () => decodeHostDescriptor,
+    decodeKnownDirectories: () => decodeKnownDirectories,
     decodeModelCatalog: () => decodeModelCatalog,
     hostConnReduce: () => hostConnReduce,
     hostKeyOf: () => hostKeyOf,
@@ -1476,6 +1481,282 @@ var PiDishBrowser = (() => {
     } finally {
       probe.remove();
     }
+  }
+
+  // src/browser/directory-catalog.ts
+  function sameDirectoryHost(a, b) {
+    return !!a && !!b && a.hostId === b.hostId && a.base === b.base && a.token === b.token;
+  }
+  function record3(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+  }
+  function decodeKnownDirectories(value) {
+    if (!Array.isArray(value)) return [];
+    const rows = value;
+    return rows.flatMap((row) => record3(row) && typeof row.path === "string" && typeof row.short === "string" ? [{ path: row.path, short: row.short }] : []);
+  }
+  function decodeDirectoryChildren(value) {
+    if (!record3(value)) return { dirs: [], error: true };
+    const rows = Array.isArray(value.dirs) ? value.dirs : [];
+    return { dirs: rows.flatMap((row) => record3(row) && typeof row.path === "string" && typeof row.name === "string" ? [{ path: row.path, name: row.name }] : []), error: !!value.error };
+  }
+  function createDirectoryCatalog(options) {
+    let sequence = 0;
+    let owner = null;
+    let rows = [];
+    function current() {
+      return sameDirectoryHost(owner, options.host()) ? rows : [];
+    }
+    function retire() {
+      sequence++;
+    }
+    async function load() {
+      const requestSequence = ++sequence;
+      const selected = options.host();
+      if (!selected) return;
+      const host = Object.freeze({ ...selected });
+      const owns = () => requestSequence === sequence && sameDirectoryHost(host, options.host());
+      try {
+        const response = await options.request(host, "/api/cwds");
+        if (!response.ok || !owns()) return;
+        const data = await response.json();
+        if (!owns()) return;
+        rows = decodeKnownDirectories(data);
+        owner = host;
+      } catch {
+      }
+    }
+    return { current, load, retire };
+  }
+
+  // src/browser/cwd-autocomplete.ts
+  function createCwdAutocomplete(options) {
+    const { input, dropdown } = options;
+    const listeners = new AbortController();
+    let rowsController = new AbortController();
+    let timer = null;
+    let blurTimer = null;
+    let sequence = 0;
+    let disposed = false;
+    let activeIndex = -1;
+    let resultOwner = null;
+    const mounted = () => !disposed && input.isConnected && dropdown.isConnected;
+    function hide() {
+      sequence++;
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      rowsController.abort();
+      dropdown.style.display = "none";
+      activeIndex = -1;
+      resultOwner = null;
+    }
+    function pick(path) {
+      if (!resultOwner?.()) {
+        hide();
+        return;
+      }
+      input.value = path;
+      hide();
+      options.onPick?.(path);
+    }
+    function render(query, dirs, owns) {
+      if (!owns()) return;
+      const seen = /* @__PURE__ */ new Set();
+      let results = [];
+      const candidates = [
+        ...options.known().map((row) => ({ ...row, known: true })),
+        ...dirs.map((row) => ({ ...row, known: false }))
+      ];
+      for (const row of candidates) {
+        if (seen.has(row.short)) continue;
+        seen.add(row.short);
+        const indices = query ? options.match(query, row.short) : [];
+        if (!indices) continue;
+        results.push({ ...row, indices, score: query ? options.score(indices, row.short) + (row.known ? 5 : 0) : 0 });
+      }
+      if (query) results.sort((a, b) => b.score - a.score);
+      results = results.slice(0, 15);
+      rowsController.abort();
+      rowsController = new AbortController();
+      activeIndex = -1;
+      resultOwner = owns;
+      if (!results.length) {
+        dropdown.style.display = "none";
+        return;
+      }
+      dropdown.innerHTML = results.map((row) => `<div class="cwd-option" data-path="${options.escapeHtml(row.short)}">${row.known ? '<span class="cwd-known">\u2605</span>' : ""}${options.highlight(row.short, row.indices)}</div>`).join("");
+      dropdown.style.display = "block";
+      for (const row of Array.from(dropdown.querySelectorAll(".cwd-option"))) {
+        row.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          if (dropdown.contains(row)) pick(row.dataset.path || "");
+        }, { signal: rowsController.signal });
+      }
+    }
+    function show(query) {
+      hide();
+      if (blurTimer !== null) clearTimeout(blurTimer);
+      blurTimer = null;
+      const selected = options.host();
+      if (!mounted() || !selected) return;
+      const host = Object.freeze({ ...selected });
+      const requestSequence = sequence;
+      const owns = () => mounted() && sequence === requestSequence && sameDirectoryHost(host, options.host());
+      timer = setTimeout(async () => {
+        timer = null;
+        if (!owns()) return;
+        let rows = [];
+        try {
+          const response = await options.request(host, "/api/dirs?q=" + encodeURIComponent(query));
+          if (!owns()) return;
+          if (response.ok) rows = decodeKnownDirectories(await response.json());
+        } catch {
+        }
+        render(query, rows, owns);
+      }, 120);
+    }
+    const listener = { signal: listeners.signal };
+    input.addEventListener("focus", () => show(input.value), listener);
+    input.addEventListener("input", () => show(input.value), listener);
+    input.addEventListener("blur", () => {
+      if (blurTimer !== null) clearTimeout(blurTimer);
+      blurTimer = setTimeout(() => {
+        blurTimer = null;
+        hide();
+      }, 150);
+      options.onBlur?.();
+    }, listener);
+    input.addEventListener("keydown", (event) => {
+      if (resultOwner && !resultOwner()) hide();
+      if (dropdown.style.display === "none") {
+        if (event.key === "Enter" && options.onSubmit) {
+          event.preventDefault();
+          options.onSubmit();
+        }
+        return;
+      }
+      const rows = Array.from(dropdown.querySelectorAll(".cwd-option"));
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        if (!rows.length) {
+          activeIndex = -1;
+          return;
+        }
+        const delta = event.key === "ArrowDown" ? 1 : -1;
+        activeIndex = Math.max(0, Math.min(activeIndex + delta, rows.length - 1));
+        rows.forEach((row, index) => row.classList.toggle("active", index === activeIndex));
+        rows[activeIndex].scrollIntoView({ block: "nearest" });
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        const selected = rows[activeIndex];
+        if (selected) pick(selected.dataset.path || "");
+        else {
+          hide();
+          options.onSubmit?.();
+        }
+      } else if (event.key === "Escape") {
+        event.stopPropagation();
+        hide();
+      }
+    }, listener);
+    function dispose() {
+      disposed = true;
+      hide();
+      if (blurTimer !== null) clearTimeout(blurTimer);
+      blurTimer = null;
+      listeners.abort();
+    }
+    return { show, hide, dispose };
+  }
+
+  // src/browser/directory-tree.ts
+  function createDirectoryTree(options) {
+    const { root } = options;
+    const doc = root.ownerDocument;
+    let owner = null;
+    function owns(target) {
+      return owner === target && root.isConnected && sameDirectoryHost(target.host, options.host());
+    }
+    function makeNode(target, path, label, depth) {
+      const node = doc.createElement("div");
+      node.className = "ns-tree-node";
+      const row = doc.createElement("div");
+      row.className = "ns-tree-row";
+      row.style.paddingLeft = 8 + depth * 16 + "px";
+      row.dataset.path = path;
+      const chevron = doc.createElement("span");
+      chevron.className = "ns-tree-chevron";
+      chevron.textContent = "\u25B8";
+      const name = doc.createElement("span");
+      name.className = "ns-tree-name";
+      name.textContent = label;
+      const children = doc.createElement("div");
+      children.className = "ns-tree-children";
+      children.style.display = "none";
+      let loaded = false;
+      chevron.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (!owns(target) || !root.contains(node)) return;
+        if (loaded) {
+          const open = children.style.display !== "none";
+          children.style.display = open ? "none" : "";
+          chevron.classList.toggle("open", !open);
+          return;
+        }
+        loaded = true;
+        node.dataset.loaded = "1";
+        chevron.classList.add("open");
+        children.style.display = "";
+        const pending = doc.createElement("div");
+        pending.className = "ns-tree-empty";
+        pending.style.paddingLeft = 8 + (depth + 1) * 16 + "px";
+        pending.textContent = "\u2026";
+        children.replaceChildren(pending);
+        void load();
+      }, { signal: target.events.signal });
+      row.addEventListener("click", () => {
+        if (!owns(target) || !root.contains(node)) return;
+        options.onPick(path);
+        root.querySelectorAll(".ns-tree-row.selected").forEach((item) => item.classList.remove("selected"));
+        row.classList.add("selected");
+      }, { signal: target.events.signal });
+      row.append(chevron, name);
+      node.append(row, children);
+      async function load() {
+        let data = { dirs: [], error: true };
+        try {
+          const response = await options.request(target.host, "/api/dirs/children?path=" + encodeURIComponent(path), { signal: target.events.signal });
+          if (!owns(target) || !root.contains(node)) return;
+          data = decodeDirectoryChildren(await response.json());
+        } catch {
+        }
+        if (!owns(target) || !root.contains(node)) return;
+        children.replaceChildren();
+        if (!data.dirs.length) {
+          const empty = doc.createElement("div");
+          empty.className = "ns-tree-empty";
+          empty.style.paddingLeft = 8 + (depth + 1) * 16 + "px";
+          empty.textContent = data.error ? "(unreadable)" : "(empty)";
+          children.appendChild(empty);
+          return;
+        }
+        for (const child of data.dirs) children.appendChild(makeNode(target, child.path, child.name, depth + 1));
+      }
+      return node;
+    }
+    function dispose() {
+      owner?.events.abort();
+      owner = null;
+    }
+    function reset() {
+      dispose();
+      root.replaceChildren();
+      const host = options.host();
+      if (!host) return;
+      owner = { host: Object.freeze({ ...host }), events: new AbortController() };
+      root.appendChild(makeNode(owner, "~", "~", 0));
+    }
+    return { reset, dispose };
   }
   return __toCommonJS(index_exports);
 })();

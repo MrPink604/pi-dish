@@ -8796,6 +8796,7 @@ function renderNsHosts() {
 }
 
 function onNsHostChange(value) {
+  hideCwdDropdown();
   newSessionHostId = value || null;
   if (newSessionHostId) localStorage.setItem(NS_HOST_KEY, newSessionHostId);
   else localStorage.removeItem(NS_HOST_KEY);
@@ -9360,6 +9361,8 @@ function openNewSessionView(opts = {}) {
 }
 
 function closeNewSessionView() {
+  directoryCatalog.retire();
+  nsDirectoryTree?.dispose();
   document.querySelector('.main').classList.remove('new-session-open');
   closeHarnessSettings();
   clearTimeout(nsPilotRefreshTimer);
@@ -9390,79 +9393,14 @@ function renderNsWorkspaces() {
 // --- Directory tree (lazy, hand-rolled — no tree dependency) ---
 // Roots at ~; every dir row carries a chevron (expand, fetch children once
 // and cache in the DOM) and selects the cwd on a name click.
+let nsDirectoryTree = null;
 function initNsTree() {
+  nsDirectoryTree?.dispose();
   const root = document.getElementById('nsTree');
-  if (!root) return;
-  root.innerHTML = '';
-  root.appendChild(makeNsTreeNode('~', '~', 0));
-}
-
-function makeNsTreeNode(pathValue, label, depth) {
-  const node = document.createElement('div');
-  node.className = 'ns-tree-node';
-
-  const row = document.createElement('div');
-  row.className = 'ns-tree-row';
-  row.style.paddingLeft = (8 + depth * 16) + 'px';
-  row.dataset.path = pathValue;
-
-  const chevron = document.createElement('span');
-  chevron.className = 'ns-tree-chevron';
-  chevron.textContent = '▸';
-  chevron.addEventListener('click', (e) => { e.stopPropagation(); toggleNsTreeNode(node, pathValue, depth); });
-
-  const name = document.createElement('span');
-  name.className = 'ns-tree-name';
-  name.textContent = label;
-  row.addEventListener('click', () => {
-    setNsCwd(pathValue);
-    document.querySelectorAll('#nsTree .ns-tree-row.selected').forEach(el => el.classList.remove('selected'));
-    row.classList.add('selected');
-  });
-
-  row.appendChild(chevron);
-  row.appendChild(name);
-
-  const children = document.createElement('div');
-  children.className = 'ns-tree-children';
-  children.style.display = 'none';
-
-  node.appendChild(row);
-  node.appendChild(children);
-  return node;
-}
-
-async function toggleNsTreeNode(node, pathValue, depth) {
-  const children = node.querySelector(':scope > .ns-tree-children');
-  const chevron = node.querySelector(':scope > .ns-tree-row > .ns-tree-chevron');
-  if (node.dataset.loaded) {
-    const open = children.style.display !== 'none';
-    children.style.display = open ? 'none' : '';
-    chevron.classList.toggle('open', !open);
-    return;
-  }
-  node.dataset.loaded = '1';
-  chevron.classList.add('open');
-  children.style.display = '';
-  children.innerHTML = `<div class="ns-tree-empty" style="padding-left:${8 + (depth + 1) * 16}px">…</div>`;
-
-  let data;
-  try {
-    const r = await apiFetch(nsHostId(), '/api/dirs/children?path=' + encodeURIComponent(pathValue));
-    data = await r.json();
-  } catch { data = { dirs: [], error: 'failed' }; }
-
-  children.innerHTML = '';
-  const dirs = data.dirs || [];
-  if (!dirs.length) {
-    const empty = document.createElement('div');
-    empty.className = 'ns-tree-empty';
-    empty.style.paddingLeft = (8 + (depth + 1) * 16) + 'px';
-    empty.textContent = data.error ? '(unreadable)' : '(empty)';
-    children.appendChild(empty);
-    return;
-  }
-  for (const d of dirs) children.appendChild(makeNsTreeNode(d.path, d.name, depth + 1));
+  if (!root) { nsDirectoryTree = null; return; }
+  nsDirectoryTree = PiDishBrowser.createDirectoryTree({ root, host: nsHost,
+    request: apiFetch, onPick: setNsCwd });
+  nsDirectoryTree.reset();
 }
 
 function setNsCwd(pathValue) {
@@ -9597,14 +9535,8 @@ async function spawnNewSession() {
 // =========================================================================
 // CWD autocomplete
 // =========================================================================
-let knownCwds = []; // [{path, short}]
-
-async function loadKnownCwds() {
-  try {
-    const res = await apiFetch(nsHostId(), '/api/cwds');
-    if (res.ok) knownCwds = await res.json();
-  } catch {}
-}
+const directoryCatalog = PiDishBrowser.createDirectoryCatalog({ host: nsHost, request: apiFetch });
+function loadKnownCwds() { return directoryCatalog.load(); }
 
 /**
  * The cwd combobox, as a factory: fuzzy /api/dirs matches on the *chosen*
@@ -9615,90 +9547,14 @@ async function loadKnownCwds() {
  * is a function because the host can change under a live control.
  */
 function createCwdAutocomplete({
-  input, dropdown, hostId = () => nsHostId(), known = () => [],
+  input, dropdown, hostId = nsHostId, known = () => [],
   onPick = () => {}, onSubmit = null, onBlur = null,
 }) {
-  let activeIdx = -1;
-
-  const fetcher = debouncedFetcher(120,
-    async (query) => {
-      const res = await apiFetch(hostId(), '/api/dirs?q=' + encodeURIComponent(query));
-      return res.ok ? await res.json() : [];
-    },
-    (dirs, query) => render(query, dirs || []));
-
-  function render(query, dirs) {
-    const seen = new Set();
-    let results = [];
-    for (const c of [...known().map(c => ({ ...c, known: true })), ...dirs]) {
-      if (seen.has(c.short)) continue;
-      seen.add(c.short);
-      if (!query) { results.push({ ...c, indices: [] }); continue; }
-      const indices = fuzzyMatch(query, c.short);
-      if (!indices) continue;
-      results.push({ ...c, indices, score: fuzzyScore(indices, c.short) + (c.known ? 5 : 0) });
-    }
-    if (query) results.sort((a, b) => b.score - a.score);
-    results = results.slice(0, 15);
-
-    if (results.length === 0) { dropdown.style.display = 'none'; return; }
-
-    activeIdx = -1;
-    dropdown.innerHTML = results.map((c) =>
-      `<div class="cwd-option" data-path="${escapeHtml(c.short)}">${c.known ? '<span class="cwd-known">★</span>' : ''}${highlightFuzzy(c.short, c.indices)}</div>`
-    ).join('');
-    dropdown.style.display = 'block';
-
-    dropdown.querySelectorAll('.cwd-option').forEach(el => {
-      el.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        pick(el.dataset.path);
-      });
-    });
-  }
-
-  function pick(pathValue) {
-    input.value = pathValue;
-    hide();
-    onPick(pathValue);
-  }
-
-  function show(query) { fetcher.fire(query); }
-
-  function hide() {
-    fetcher.cancel(); // invalidate any in-flight dir search
-    dropdown.style.display = 'none';
-    activeIdx = -1;
-  }
-
-  input.addEventListener('focus', () => show(input.value));
-  input.addEventListener('input', () => show(input.value));
-  input.addEventListener('blur', () => {
-    setTimeout(hide, 150);
-    if (onBlur) onBlur();
+  return PiDishBrowser.createCwdAutocomplete({ input, dropdown,
+    host: () => hostEntryFor(hostId()), request: apiFetch, known,
+    match: fuzzyMatch, score: fuzzyScore, highlight: highlightFuzzy, escapeHtml,
+    onPick, onSubmit, onBlur,
   });
-  input.addEventListener('keydown', (e) => {
-    if (dropdown.style.display === 'none') {
-      if (e.key === 'Enter' && onSubmit) { e.preventDefault(); onSubmit(); }
-      return;
-    }
-    const options = dropdown.querySelectorAll('.cwd-option');
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      activeIdx = moveActiveItem(options, activeIdx, e.key === 'ArrowDown' ? 1 : -1);
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      if (activeIdx >= 0 && options[activeIdx]) pick(options[activeIdx].dataset.path);
-      else { hide(); if (onSubmit) onSubmit(); }
-    } else if (e.key === 'Escape') {
-      // Close the dropdown only — don't let Escape bubble to the takeover's
-      // global Escape-to-close handler while a suggestion list is open.
-      e.stopPropagation();
-      hide();
-    }
-  });
-
-  return { show, hide };
 }
 
 // The new-session takeover's instance; the wrapper keeps its one outside
@@ -9717,7 +9573,7 @@ function hideCwdDropdown() { nsCwdAutocomplete?.hide(); }
     input: cwdInput,
     dropdown,
     hostId: () => nsHostId(),
-    known: () => knownCwds,
+    known: () => directoryCatalog.current(),
     onPick: (pathValue) => {
       localStorage.setItem('pi-dish-cwd', pathValue);
       scheduleNsPilotRefresh();
@@ -12276,6 +12132,10 @@ const routineModelCatalogs = new Map();
 const routineHarnessCatalogs = new Map();
 let routineModelSeq = 0;
 let routineCwdAutocomplete = null;
+function disposeRoutineCwdAutocomplete() {
+  routineCwdAutocomplete?.dispose();
+  routineCwdAutocomplete = null;
+}
 let routineCreateHostId = null;   // host picked in the create form
 
 const ROUTINE_CRON_PRESETS = [
@@ -12340,6 +12200,7 @@ function openRoutinesView() {
 }
 
 function closeRoutinesView() {
+  routineCwdAutocomplete?.hide();
   document.querySelector('.main').classList.remove('routines-open');
   stopRoutineInvocationPoll();
 }
@@ -12361,6 +12222,7 @@ function routinesViewEscape() {
 }
 
 function backToRoutinesList() {
+  routineCwdAutocomplete?.hide();
   document.getElementById('routinesView')?.classList.remove('detail-open');
 }
 
@@ -12515,6 +12377,7 @@ async function selectRoutine(host, id) {
     return;
   }
   if (!confirmLeaveRoutineForm()) return;
+  disposeRoutineCwdAutocomplete();
   routineSelKey = key;
   routineCreating = false;
   routineSelected = null;
@@ -12671,6 +12534,7 @@ function routineFormDefaults() {
 }
 
 function renderRoutineDetail() {
+  disposeRoutineCwdAutocomplete();
   const el = document.getElementById('routinesDetail');
   if (!el) return;
   if (!routineSelected && !routineCreating) {
@@ -12808,6 +12672,7 @@ function wireRoutineForm(values) {
 
   const hostSel = el.querySelector('#rtHost');
   if (hostSel) hostSel.addEventListener('change', () => {
+    routineCwdAutocomplete?.hide();
     routineCreateHostId = hostSel.value || null;
     // Everything under the picker is host-scoped — harnesses, catalogs, dirs.
     const harness = el.querySelector('#rtHarness')?.value || values.harness;

@@ -90,7 +90,7 @@ are not completion percentages.
   on that commit.
 - Next: host color state, then remaining new-session request controllers.
 
-## Checkpoint 4 — host colors and presentation (local verification complete)
+## Checkpoint 4 — host colors and presentation
 
 - Boundary: device color state, first-seen palette order, chip/dot markup and
   native color resolution. Shared pure color helpers retain their CommonJS API.
@@ -101,5 +101,23 @@ are not completion percentages.
   regressions, all independent UI scenarios and desktop/mobile smoke passed.
 - Fable reviewed `4487019` with no blocking findings. A follow-up makes
   persistence snapshots stable after color reset; strict checks, all backend and
-  browser tests and desktop/mobile smoke pass again. It needs review before push.
+  browser tests and desktop/mobile smoke pass again. Fable confirmed the snapshot
+  fix in `6831418` and cleared both commits before push.
 - Next: remaining new-session directory, target, model/config and spawn controllers.
+
+## Checkpoint 5 — directory controllers (local verification complete)
+
+- Boundary: known cwd catalog, shared new-session/routine autocomplete and the
+  new-session lazy directory tree. Wire path/name fields are decoded before use.
+- Catalog reads retain host route/token and request ownership. Suggestions retire
+  at the keystroke, including during debounce; host switches and closed views
+  retire delayed bodies. Tree rows retain their originating host and tree.
+- Autocomplete owns input/row listeners and debounce/blur timers. Replacing a
+  routine detail disposes its old controller; hiding a retained form retires reads.
+  Tree reset/close aborts listeners and pending directory requests.
+- Focused verification: five catalog unit tests and four browser regressions pass,
+  including overlapping host loads, delayed bodies and retired tree actions.
+- Full verification: strict build/lint/type checks, 873 backend tests, 75 browser
+  regressions, all independent UI scenarios and desktop/mobile smoke passed.
+  Fable review of the local commit is required before push.
+- Next: new-session target, model/config and spawn controllers.
