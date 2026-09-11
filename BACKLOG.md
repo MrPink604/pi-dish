@@ -35,7 +35,8 @@ Checkpoint 28 migrates anchored comment selection, editors and rendered marks.
 Checkpoint 29 migrates session header menus, rename, model/thinking actions and export.
 Checkpoint 30 migrates dictation and composer-note ownership.
 Checkpoint 31 migrates prompt drafts, history and image attachments.
-Checkpoint 32 migrates autocomplete, file completions and session references. See
+Checkpoint 32 migrates autocomplete, file completions and session references.
+Checkpoint 33 migrates the sidebar metadata/family/workspace projection. See
 [the checkpoint log](docs/browser-migration-checkpoints.md) for implementation
 verification and the complete browser entrypoint inventory. The last confirmed
 CI checkpoint is recorded below; final CI must pass before the goal is complete.
@@ -46,7 +47,7 @@ CI checkpoint is recorded below; final CI must pass before the goal is complete.
 | --- | --- | --- |
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
-| Browser migration | In progress — current stage | Seventy-eight implementation modules are typed. Transcript/composer orchestration and shell wiring remain in `public/app.js`. |
+| Browser migration | In progress — current stage | Seventy-nine implementation modules are typed. Transcript/composer orchestration and shell wiring remain in `public/app.js`. |
 | Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -64,7 +65,7 @@ in `lib/`. Its full module inventory is in [the migration guide](docs/typescript
 Most JavaScript callers of these modules are not yet type checked; `lib/cron.js`
 is an explicitly checked exception.
 
-These seventy-eight browser implementation modules compile strictly into local
+These seventy-nine browser implementation modules compile strictly into local
 `public/browser.js`, `public/helpers.js`, `public/artifact-comments.js` and
 `public/theme-prepaint.js` scripts.
 The entries are `index.ts`, `shared-helpers.ts`, `artifact-comments.ts` and
@@ -110,6 +111,7 @@ pure-helper and vendored runtime contracts:
 | `composer-speech.ts`, `composer-notes.ts` | Dictation permission/recording/transcription ownership and persistent composer notes |
 | `composer-drafts.ts`, `composer-images.ts` | Host-qualified drafts/history, spawn migration and asynchronous image batches |
 | `composer-autocomplete.ts`, `composer-autocomplete-data.ts`, `session-references.ts` | Composer query/menu ownership and typed session references |
+| `sidebar-render.ts` | Explicit row metadata and sidebar family, host, workspace and date projection |
 | `rich-text.ts` | Markdown configuration, final highlighting, file links and copy controls |
 | `diagrams.ts` | Diagram rendering/theme generations and lightbox controls |
 | `clipboard.ts` | Native clipboard and insecure-context textarea fallback |
@@ -182,12 +184,12 @@ checks. Documentation-only changes need content and link checks. After a chunk
 ships, update this page's checkpoint, completed inventory and next step so the
 status stays current.
 
-Last confirmed CI checkpoint, `b15c5a5` (newer work is in the checkpoint log):
+Last confirmed CI checkpoint, `fc174c6` (newer work is in the checkpoint log):
 
 - Fable 5.1 cleared rich text/diagram rendering before push.
-- Strict checks, 919 backend tests, 169 browser regressions, independent UI
+- Strict checks, 919 backend tests, 210 browser regressions, independent UI
   scenarios and full desktop/mobile smoke passed on that checkpoint.
-- [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34612052395):
+- [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34619395546):
   backend on Node 22.19.0, 22.x, 24.x and 26.x, plus the Node 24 browser job.
 - This verifies that checkpoint; final CI must pass on the completed browser
   migration before the goal is marked done.

@@ -124,6 +124,7 @@ var PiDishBrowser = (() => {
     decodeUsageLimits: () => decodeUsageLimits,
     decodeUsageSummary: () => decodeUsageSummary,
     findQuoteOffset: () => findQuoteOffset,
+    harnessBadgeInnerHtml: () => harnessBadgeInnerHtml,
     hostConnReduce: () => hostConnReduce,
     hostKeyOf: () => hostKeyOf,
     hostSettingsHtml: () => hostSettingsHtml,
@@ -141,6 +142,8 @@ var PiDishBrowser = (() => {
     queryHosts: () => queryHosts,
     reconcileHostCatalog: () => reconcileHostCatalog,
     renderDiffViewHtml: () => renderDiffViewHtml,
+    renderHarnessBadge: () => renderHarnessBadge,
+    renderSidebar: () => renderSidebar,
     resolveColorToHex: () => resolveColorToHex,
     responseMode: () => responseMode,
     rgbStringToHex: () => rgbStringToHex,
@@ -151,6 +154,7 @@ var PiDishBrowser = (() => {
     selectionTextAnchor: () => selectionTextAnchor,
     sendJson: () => sendJson,
     sessionSpawnKey: () => sessionSpawnKey,
+    sidebarSession: () => sidebarSession,
     spawnTargetKey: () => spawnTargetKey,
     terminalTheme: () => terminalTheme,
     withFetchTimeout: () => withFetchTimeout
@@ -2799,6 +2803,9 @@ var PiDishBrowser = (() => {
   function finite2(value) {
     return typeof value === "number" && Number.isFinite(value);
   }
+  function timestampMillis(value) {
+    return new Date(value === void 0 ? NaN : value === null ? 0 : value).getTime();
+  }
 
   // src/browser/helper-format.ts
   function escapeHtml(text17) {
@@ -2884,6 +2891,9 @@ var PiDishBrowser = (() => {
   function truncate(text17, maxLen, suffix = " \u2026 (truncated)") {
     if (!text17 || text17.length <= maxLen) return text17;
     return text17.slice(0, maxLen) + suffix;
+  }
+  function contextClass(percent) {
+    return percent > 66 ? "critical" : percent > 33 ? "high" : "";
   }
   function pushPromptHistory(list, message3, cap) {
     const out = Array.isArray(list) ? list.filter((value) => typeof value === "string") : [];
@@ -2986,8 +2996,34 @@ var PiDishBrowser = (() => {
     const isSelf = !!hostEntry && (hostEntry.self === true || hostEntry.base === "");
     return isSelf ? !!(config && config[capability]) : false;
   }
+  function sortHostSections(hosts) {
+    const rows = Array.isArray(hosts) ? [...hosts] : [];
+    return rows.sort((a, b) => {
+      if (!!a.self !== !!b.self) return a.self ? -1 : 1;
+      const byLabel = hostDisplayLabel(a).localeCompare(hostDisplayLabel(b), void 0, { sensitivity: "base" });
+      if (byLabel) return byLabel;
+      return String(a.hostId || a.base || "").localeCompare(String(b.hostId || b.base || ""));
+    });
+  }
+  function hostSectionKey(hostKey) {
+    return "host:" + (hostKey || "self");
+  }
   function sessionMetaText(session) {
     return [session.name, session.cwd, session.model, session.id].join(" ").toLowerCase();
+  }
+  function sessionSupports(session, capability) {
+    return session?.capabilities?.[capability] !== false;
+  }
+  function harnessBadgeInfo(harnessId, harnessLabel) {
+    const known = {
+      pi: { label: "Pi", icon: "vendor/harness-pi.svg" },
+      omp: { label: "OMP", icon: "vendor/harness-omp.svg" },
+      prime: { label: "Prime", icon: "vendor/harness-prime.svg" }
+    };
+    return (harnessId && Object.hasOwn(known, harnessId) ? known[harnessId] : null) || {
+      label: harnessLabel || harnessId || "Agent",
+      icon: null
+    };
   }
 
   // src/browser/helper-models.ts
@@ -3091,6 +3127,9 @@ var PiDishBrowser = (() => {
   function isAutomationSession(session) {
     return !!(session && (session.routine || session.routineId));
   }
+  function queryAsksForAutomation(parsed) {
+    return (parsed?.terms || []).some((term) => !term.neg && (term.field === "routine" || term.field === "is" && term.value === "automation"));
+  }
   function evaluateSessionQuery(parsed, session, contentText) {
     if (parsed.since !== null || parsed.before !== null) {
       const t = new Date(session.lastActivity || 0).getTime();
@@ -3135,6 +3174,13 @@ var PiDishBrowser = (() => {
       if (n > 0) total += 20 + Math.min(30, Math.round(8 * Math.log2(n)));
     }
     return Math.round(total);
+  }
+  function applyLocalFilter(list, query) {
+    if (!query) return list;
+    const parsed = parseSessionQuery(query);
+    const out = list.filter((s) => evaluateSessionQuery(parsed, s));
+    if (!positiveQueryTokens(parsed).length) return out;
+    return out.map((s) => [s, scoreSessionMatch(parsed, s)]).sort((a, b) => b[1] - a[1] || new Date(b[0].lastActivity || 0).getTime() - new Date(a[0].lastActivity || 0).getTime()).map(([s]) => s);
   }
   function applyHostTerms(list, query) {
     if (!query) return list;
@@ -4244,6 +4290,199 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/helper-sessions.ts
+  function groupByWorkspace(list, collapsedSet) {
+    const groups = /* @__PURE__ */ new Map();
+    for (const s of list) {
+      const key = s.cwd || "~";
+      let group = groups.get(key);
+      if (!group) {
+        group = [];
+        groups.set(key, group);
+      }
+      group.push(s);
+    }
+    for (const [, sessions] of groups) {
+      sessions.sort((a, b) => timestampMillis(b.lastActivity) - timestampMillis(a.lastActivity));
+    }
+    const collapsed = (cwd) => collapsedSet?.has(cwd) ? 1 : 0;
+    return [...groups.entries()].sort((a, b) => collapsed(a[0]) - collapsed(b[0]) || timestampMillis(b[1][0].lastActivity) - timestampMillis(a[1][0].lastActivity));
+  }
+  function buildWorkspaceTree(groups, collapsedSet) {
+    const root = { label: "", path: "", sessions: null, children: /* @__PURE__ */ new Map(), order: 0 };
+    groups.forEach(([cwd, sessions], order) => {
+      let segs = cwd.split("/").filter(Boolean);
+      if (segs.length === 0) segs = [cwd];
+      let node = root;
+      for (const seg of segs) {
+        const path = node === root ? cwd[0] === "/" && seg !== cwd ? "/" + seg : seg : node.path + "/" + seg;
+        let child = node.children.get(seg);
+        if (!child) {
+          child = { label: seg, path, sessions: null, children: /* @__PURE__ */ new Map(), order };
+          node.children.set(seg, child);
+        }
+        node = child;
+        node.order = Math.min(node.order, order);
+      }
+      node.sessions = sessions;
+    });
+    const flatten = (node) => {
+      while (node.children.size === 1 && !node.sessions) {
+        const child = node.children.values().next().value;
+        if (!child) break;
+        node.label = node.label ? node.label + "/" + child.label : child.label;
+        node.path = child.path;
+        node.sessions = child.sessions;
+        node.children = child.children;
+      }
+      for (const child of node.children.values()) flatten(child);
+    };
+    for (const top of root.children.values()) flatten(top);
+    const tops = [...root.children.values()];
+    const homeIdx = tops.findIndex((t) => shortCwd(t.path) === "~" && !t.sessions && t.children.size);
+    if (homeIdx !== -1) tops.splice(homeIdx, 1, ...tops[homeIdx].children.values());
+    const collapsed = (path) => collapsedSet?.has(path) ? 1 : 0;
+    const finalize = (node, topLevel) => {
+      const children = [...node.children.values()].map((child) => finalize(child, false));
+      children.sort((a, b) => collapsed(a.path) - collapsed(b.path) || a.order - b.order);
+      return {
+        ...node,
+        children,
+        count: (node.sessions ? node.sessions.length : 0) + children.reduce((n, child) => n + child.count, 0),
+        label: topLevel ? shortCwd(node.path) : node.label
+      };
+    };
+    return tops.map((top) => finalize(top, true)).sort((a, b) => collapsed(a.path) - collapsed(b.path) || a.order - b.order);
+  }
+  function groupSessionsByDate(list, now = Date.now()) {
+    const day = (t) => {
+      const d = new Date(t);
+      d.setHours(0, 0, 0, 0);
+      return d.getTime();
+    };
+    const today = day(now);
+    const yesterday = today - 864e5;
+    const weekStart = today - (new Date(today).getDay() + 6) % 7 * 864e5;
+    const lastWeekStart = weekStart - 7 * 864e5;
+    const bucketOf = (t) => {
+      if (!finite2(t) || t <= 0) return { key: "undated", label: "Undated" };
+      if (t >= today) return { key: "today", label: "Today" };
+      if (t >= yesterday) return { key: "yesterday", label: "Yesterday" };
+      if (t >= weekStart) return { key: "week", label: "This week" };
+      if (t >= lastWeekStart) return { key: "lastweek", label: "Last week" };
+      const d = new Date(t);
+      return {
+        key: `m:${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+        label: d.toLocaleDateString(void 0, { month: "long", year: "numeric" })
+      };
+    };
+    const timestampOf = (item) => finite2(item?.activity) ? item.activity : new Date(item?.lastActivity || 0).getTime();
+    const sorted = [...list].sort((a, b) => timestampOf(b) - timestampOf(a));
+    const buckets = /* @__PURE__ */ new Map();
+    for (const s of sorted) {
+      const b = bucketOf(timestampOf(s));
+      let bucket2 = buckets.get(b.key);
+      if (!bucket2) {
+        bucket2 = { ...b, sessions: [] };
+        buckets.set(b.key, bucket2);
+      }
+      bucket2.sessions.push(s);
+    }
+    const out = [...buckets.values()];
+    const u = out.findIndex((b) => b.key === "undated");
+    if (u !== -1) out.push(out.splice(u, 1)[0]);
+    return out;
+  }
+  function collectTreeSessions(node, out = []) {
+    if (node.sessions) out.push(...node.sessions);
+    for (const child of node.children) collectTreeSessions(child, out);
+    return out;
+  }
+  function sessionFamilyParentId(session) {
+    return Object.prototype.hasOwnProperty.call(session || {}, "familyParentId") ? session?.familyParentId : session?.parentId;
+  }
+  function buildSessionFamilies(list) {
+    const nodes = /* @__PURE__ */ new Map();
+    (list || []).forEach((session, order) => {
+      if (session?.id && !nodes.has(sessionRefKey(session))) {
+        nodes.set(sessionRefKey(session), { session, children: [], activity: 0, size: 1, order });
+      }
+    });
+    const attached = /* @__PURE__ */ new Set();
+    for (const node of nodes.values()) {
+      const parent = nodes.get(sessionKey(node.session.host, sessionFamilyParentId(node.session)));
+      if (!parent || parent === node || (parent.session.cwd || "~") !== (node.session.cwd || "~")) continue;
+      let cursor = parent;
+      const seen = /* @__PURE__ */ new Set();
+      let cyclic = false;
+      while (cursor && !seen.has(cursor)) {
+        if (cursor === node) {
+          cyclic = true;
+          break;
+        }
+        seen.add(cursor);
+        const next = nodes.get(sessionKey(cursor.session.host, sessionFamilyParentId(cursor.session)));
+        cursor = next && (next.session.cwd || "~") === (cursor.session.cwd || "~") ? next : null;
+      }
+      if (cyclic) continue;
+      parent.children.push(node);
+      attached.add(sessionRefKey(node.session));
+    }
+    const activityMs = (session) => {
+      const value = new Date(session.lastActivity || 0).getTime();
+      return finite2(value) ? value : 0;
+    };
+    const finalize = (node) => {
+      node.activity = activityMs(node.session);
+      node.size = 1;
+      for (const child of node.children) {
+        finalize(child);
+        node.activity = Math.max(node.activity, child.activity);
+        node.size += child.size;
+      }
+      node.children.sort((a, b) => b.activity - a.activity || a.order - b.order);
+      return node;
+    };
+    const roots = [...nodes.values()].filter((node) => !attached.has(sessionRefKey(node.session))).map(finalize);
+    return roots.sort((a, b) => b.activity - a.activity || a.order - b.order);
+  }
+  function flattenSessionFamilies(families, out = []) {
+    for (const family of families || []) {
+      out.push(family.session);
+      flattenSessionFamilies(family.children, out);
+    }
+    return out;
+  }
+  function partitionPinnedFamilies(families, pinnedKeys) {
+    if (!pinnedKeys?.length) return [[], families || []];
+    const rootByMember = /* @__PURE__ */ new Map();
+    const index = (node, root) => {
+      rootByMember.set(sessionRefKey(node.session), root);
+      for (const child of node.children) index(child, root);
+    };
+    for (const root of families || []) index(root, root);
+    const rootsByMissingParent = /* @__PURE__ */ new Map();
+    for (const root of families || []) {
+      const parentId = sessionFamilyParentId(root.session);
+      if (!parentId) continue;
+      const parentKey = sessionKey(root.session.host, parentId);
+      if (rootByMember.has(parentKey)) continue;
+      const roots = rootsByMissingParent.get(parentKey) || [];
+      roots.push(root);
+      rootsByMissingParent.set(parentKey, roots);
+    }
+    const pinned = [];
+    const pinnedRoots = /* @__PURE__ */ new Set();
+    for (const id of pinnedKeys) {
+      const known = rootByMember.get(id);
+      const matches = known ? [known] : rootsByMissingParent.get(id) || [];
+      for (const root of matches) {
+        if (pinnedRoots.has(sessionRefKey(root.session))) continue;
+        pinned.push(root);
+        pinnedRoots.add(sessionRefKey(root.session));
+      }
+    }
+    return [pinned, (families || []).filter((root) => !pinnedRoots.has(sessionRefKey(root.session)))];
+  }
   var RELATION_KIND_ORDER = { parent: 0, startedFrom: 1, child: 2, startedHere: 3 };
   var RELATION_CHILD_KINDS = /* @__PURE__ */ new Set(["child", "startedHere"]);
   function relationKindRank(kind) {
@@ -8710,7 +8949,7 @@ var PiDishBrowser = (() => {
       const current = options2.host(owner.host);
       return !!current && current.base === host.base && (current.token || "") === (host.token || "");
     }
-    function sessionSupports(session, capability) {
+    function sessionSupports2(session, capability) {
       const capabilities = session?.capabilities;
       return !record8(capabilities) || capabilities[capability] !== false;
     }
@@ -8821,7 +9060,7 @@ var PiDishBrowser = (() => {
       if (!ownsStatsModal(owner, generation) || !statsEndpoint) return;
       const host = statsEndpoint, sequence = ++shareSequence, element2 = document2.getElementById("statsShare");
       if (!element2) return;
-      if (!sessionSupports(sessionState.findSession(owner.id, owner.host), "export")) {
+      if (!sessionSupports2(sessionState.findSession(owner.id, owner.host), "export")) {
         element2.remove();
         return;
       }
@@ -8915,7 +9154,7 @@ var PiDishBrowser = (() => {
       const el = document2.getElementById("statsClose");
       if (!el) return;
       const session = sessionState.findSession(sessionId, owner.host);
-      if (!session?.isActive || !sessionSupports(session, "close")) {
+      if (!session?.isActive || !sessionSupports2(session, "close")) {
         el.remove();
         return;
       }
@@ -11925,7 +12164,7 @@ var PiDishBrowser = (() => {
         capabilities: record8(row.capabilities) ? row.capabilities : {}
       };
     }
-    function sessionSupports(row, capability) {
+    function sessionSupports2(row, capability) {
       return row.capabilities[capability] !== false;
     }
     let disposed = false, modelOwner = null, thinkingOwner = null, renameOwner = null;
@@ -12010,7 +12249,7 @@ var PiDishBrowser = (() => {
         return;
       }
       const session = header(), owner = capture();
-      if (!owner || !session?.isActive || !sessionSupports(session, "setModel")) return;
+      if (!owner || !session?.isActive || !sessionSupports2(session, "setModel")) return;
       modelOwner = owner;
       try {
         await options2.loadModels(owner.selection.id, session.harnessId);
@@ -12103,7 +12342,7 @@ var PiDishBrowser = (() => {
     async function selectModel(selector) {
       const session = header(), owner = capture();
       closeModels();
-      if (!owner || !session || !sessionSupports(session, "setModel") || selector === session.model) return;
+      if (!owner || !session || !sessionSupports2(session, "setModel") || selector === session.model) return;
       const current = mutation(owner, "model");
       options2.status("Switching model...", "working");
       try {
@@ -12117,7 +12356,7 @@ var PiDishBrowser = (() => {
     }
     function updateThinking() {
       const session = header(), badge = element("sessionThinking");
-      badge.style.display = session?.isActive && sessionSupports(session, "setThinking") ? "" : "none";
+      badge.style.display = session?.isActive && sessionSupports2(session, "setThinking") ? "" : "none";
       badge.textContent = (session?.thinkingLevel || "?") + " \u25BE";
     }
     async function toggleThinking() {
@@ -12126,7 +12365,7 @@ var PiDishBrowser = (() => {
         return;
       }
       const session = header(), owner = capture();
-      if (!owner || !session?.isActive || !sessionSupports(session, "setThinking")) return;
+      if (!owner || !session?.isActive || !sessionSupports2(session, "setThinking")) return;
       thinkingOwner = owner;
       try {
         await options2.loadModels(owner.selection.id, session.harnessId);
@@ -12156,7 +12395,7 @@ var PiDishBrowser = (() => {
     async function selectThinking(level) {
       const session = header(), owner = capture();
       closeThinking();
-      if (!owner || !session || !sessionSupports(session, "setThinking")) return;
+      if (!owner || !session || !sessionSupports2(session, "setThinking")) return;
       const current = mutation(owner, "thinking");
       try {
         const result = await api(owner).setThinking(owner.selection, level);
@@ -12176,7 +12415,7 @@ var PiDishBrowser = (() => {
     }
     function startRename() {
       const session = header(), owner = capture();
-      if (!owner || !session?.isActive || !sessionSupports(session, "rename")) return;
+      if (!owner || !session?.isActive || !sessionSupports2(session, "rename")) return;
       cancelRename();
       renameOwner = owner;
       renameEvents = new AbortController();
@@ -12204,7 +12443,7 @@ var PiDishBrowser = (() => {
       const owner = renameOwner, value = element("sessionNameInput").value.trim();
       cancelRename();
       const session = header();
-      if (!owns(owner) || !session?.isActive || !sessionSupports(session, "rename") || !value || value === session.name) return;
+      if (!owns(owner) || !session?.isActive || !sessionSupports2(session, "rename") || !value || value === session.name) return;
       const current = mutation(owner, "rename");
       try {
         await api(owner).rename(owner.selection, value);
@@ -13524,6 +13763,320 @@ ${restored}`;
         disposed = true;
       }
     };
+  }
+
+  // src/browser/sidebar-render.ts
+  function sidebarSession(row) {
+    const string = (value) => typeof value === "string" ? value : "";
+    const capabilities = {};
+    if (record8(row.capabilities)) {
+      for (const [key, value] of Object.entries(row.capabilities)) if (typeof value === "boolean") capabilities[key] = value;
+    }
+    const parent = typeof row.familyParentId === "string" ? row.familyParentId : null;
+    return {
+      id: row.id,
+      host: row.host,
+      hostLabel: row.hostLabel,
+      name: string(row.name),
+      cwd: string(row.cwd),
+      model: string(row.model),
+      lastActivity: typeof row.lastActivity === "string" || finite2(row.lastActivity) ? row.lastActivity : null,
+      isActive: row.isActive === true,
+      turnInProgress: row.turnInProgress === true,
+      subagentLive: row.subagentLive === true,
+      compacting: row.compacting === true,
+      parentId: string(row.parentId),
+      ...Object.hasOwn(row, "familyParentId") ? { familyParentId: parent } : {},
+      routine: string(row.routine),
+      routineId: string(row.routineId),
+      capabilities,
+      contextPercent: finite2(row.contextPercent) ? row.contextPercent : 0,
+      contextTokens: finite2(row.contextTokens) ? row.contextTokens : void 0,
+      thinkingLevel: string(row.thinkingLevel),
+      closeMode: string(row.closeMode),
+      harnessId: string(row.harnessId),
+      harnessLabel: string(row.harnessLabel),
+      searchSnippet: string(row.searchSnippet),
+      searchScore: finite2(row.searchScore) ? row.searchScore : void 0
+    };
+  }
+  function harnessBadgeInnerHtml(info) {
+    const icon = info.icon ? `<img class="harness-badge-icon" src="${escapeHtml(info.icon)}" alt="">` : '<span class="harness-badge-icon harness-badge-icon-fallback" aria-hidden="true">\u25C6</span>';
+    return icon + `<span class="harness-badge-label">${escapeHtml(info.label)}</span>`;
+  }
+  function renderHarnessBadge(harnessId, harnessLabel) {
+    const id = harnessId || "pi";
+    const info = harnessBadgeInfo(id, harnessLabel);
+    const title = harnessLabel || info.label;
+    return `<span class="harness-badge harness-badge-${escapeHtml(id)}" title="${escapeHtml(title)} harness" aria-label="${escapeHtml(title)} harness">${harnessBadgeInnerHtml(info)}</span>`;
+  }
+  function renderSidebar(options2) {
+    const canonical = (key) => options2.roots.get(key) || key;
+    const hostIsDown = (host) => host.state === "blocked" || host.state === "backoff";
+    function renderSessionItem(session, opts = {}) {
+      const ctxClass = contextClass(session.contextPercent);
+      const activeClass = options2.selected && sessionRefKey(options2.selected) === sessionRefKey(session) ? "active" : "";
+      const inactiveClass = session.isActive || session.subagentLive ? "" : "inactive";
+      const familyNode = opts.familyNode || null;
+      const hasChildren = !!familyNode?.children?.length;
+      const familyExpanded = hasChildren && options2.expanded.has(sessionRefKey(session));
+      const statusSessions = hasChildren && !familyExpanded ? flattenSessionFamilies(familyNode ? [familyNode] : []) : [session];
+      let liveDot = "";
+      if (statusSessions.some((s) => s.compacting || s.turnInProgress)) {
+        liveDot = '<span class="session-item-status working" title="Session family working"></span>';
+      } else if (statusSessions.some(options2.unread)) {
+        liveDot = '<span class="session-item-status unread" title="New activity in session family"></span>';
+      } else if (options2.tab === "all" && statusSessions.some((s) => s.isActive)) {
+        liveDot = '<span class="live-dot" title="Active session family"></span>';
+      } else if (statusSessions.some((s) => s.subagentLive)) {
+        liveDot = '<span class="live-dot" title="Subagent still loaded in its parent session"></span>';
+      }
+      const displayName = session.name || "Unnamed";
+      const ctxText = options2.contextMetric === "tokens" && session.contextTokens ? `${formatTokens(session.contextTokens)} tok` : `${session.contextPercent}%`;
+      const ctxTitle = session.contextTokens ? `${session.contextPercent}% of context \xB7 ${formatTokens(session.contextTokens)} tokens` : `${session.contextPercent}% of context`;
+      const timeAgo = formatRelativeTime(hasChildren ? familyNode.activity : session.lastActivity);
+      const canonicalRootKey = canonical(opts.familyRootKey || sessionRefKey(session));
+      const isPinned = opts.familyPinned ?? options2.pinned.some((pin) => canonical(pin) === canonicalRootKey);
+      const pinBtn = `<button class="session-pin-btn${isPinned ? " pinned" : ""}" title="${isPinned ? "Unpin family" : "Pin family to top"}">\u{1F4CC}</button>`;
+      const familyToggle = hasChildren ? `<button class="session-family-toggle" data-family-id="${escapeHtml(session.id)}" aria-expanded="${familyExpanded}" aria-label="${familyExpanded ? "Collapse" : "Show"} ${familyNode.size - 1} child session${familyNode.size === 2 ? "" : "s"}" title="${familyExpanded ? "Collapse" : "Show"} ${familyNode.size - 1} child session${familyNode.size === 2 ? "" : "s"}"><span>${familyExpanded ? "\u25BE" : "\u25B8"}</span><small>${familyNode.size - 1}</small></button>` : (opts.familyDepth || 0) > 0 ? '<span class="session-family-leaf" aria-hidden="true">\u21B3</span>' : "";
+      const closeArmed = options2.closeConfirm === sessionRefKey(session);
+      const closeBusy = options2.closeBusy === sessionRefKey(session);
+      const detachClient = session.closeMode === "client-only";
+      const closeTitle = detachClient ? "Detach client" : session.closeMode === "owned-agent" ? "Stop this agent and its children (transcript stays resumable)" : "Close session (transcript stays resumable)";
+      const closeBtn = session.isActive && sessionSupports(session, "close") ? `<button class="session-close-btn${closeArmed ? " confirm" : ""}" title="${closeArmed ? "Tap again: " : ""}${closeTitle}">${closeBusy ? "\u2026" : closeArmed ? detachClient ? "detach?" : "close?" : "\u2715"}</button>` : "";
+      const harnessBadge = renderHarnessBadge(session.harnessId, session.harnessLabel);
+      const routineChip = session.routine ? `<span class="routine-chip" title="Started by the &quot;${escapeHtml(session.routine)}&quot; routine">\u23F1 ${escapeHtml(session.routine)}</span>` : "";
+      const dragHandle = opts.pinnedRow ? '<span class="session-drag-handle" title="Drag to reorder">\u283F</span>' : "";
+      const cwdHint = opts.pinnedRow || opts.showCwd ? `<span class="session-item-cwd">${escapeHtml(shortCwd(session.cwd || "~"))}</span>` : "";
+      const hostChip = opts.pinnedRow || opts.showCwd ? options2.hostChip(session.host) : "";
+      const staleHost = options2.hosts.some((host) => (host.hostId || null) === (session.host || null) && hostIsDown(host)) ? " stale-host" : "";
+      const snippetLine = session.searchSnippet ? `<div class="session-item-snippet">${highlightTokens(
+        session.searchSnippet,
+        positiveQueryTokens(parseSessionQuery(options2.query))
+      )}</div>` : "";
+      const thinkingChip = session.thinkingLevel ? `<span class="session-item-thinking" title="Thinking level: ${escapeHtml(session.thinkingLevel)}">${escapeHtml(session.thinkingLevel)}</span>` : "";
+      return `
+    <div class="session-item ${activeClass} ${inactiveClass}${closeBusy ? " closing" : ""}${staleHost}" data-id="${escapeHtml(session.id)}"${session.host ? ` data-host="${escapeHtml(session.host)}"` : ""}>
+      <div class="session-item-header">
+        ${dragHandle}${familyToggle}${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>
+        <span class="session-item-time">${timeAgo}</span>
+        ${pinBtn}${closeBtn}
+      </div>
+      <div class="session-item-meta">
+        <span class="session-item-model" title="${escapeHtml(session.model || "")}">${escapeHtml(shortModelName(session.model))}</span>
+        ${thinkingChip}
+        <span class="session-item-context ${ctxClass}" title="${escapeHtml(ctxTitle)}">${escapeHtml(ctxText)}</span>
+      </div>
+      <div class="session-item-tags${hostChip ? " with-host" : ""}">
+        ${hostChip}${harnessBadge}${routineChip}${cwdHint}
+      </div>
+      ${snippetLine}
+    </div>
+  `;
+    }
+    function renderSessionFamily(node, opts = {}, depth = 0, rootId = node.session.id, rootKey = sessionRefKey(node.session)) {
+      const expanded = node.children.length > 0 && options2.expanded.has(sessionRefKey(node.session));
+      const row = renderSessionItem(node.session, {
+        familyNode: node,
+        // Carried down so a row never has to look its root's host back up: the
+        // sidebar renders thousands of rows and findSession is a linear scan.
+        familyRootKey: rootKey,
+        familyDepth: depth,
+        familyPinned: !!opts.pinnedFamily,
+        pinnedRow: !!opts.pinnedFamily && depth === 0,
+        showCwd: !!opts.showCwd && depth === 0
+      });
+      const children = expanded ? `<div class="session-family-children">${node.children.map((child) => renderSessionFamily(child, opts, depth + 1, rootId, rootKey)).join("")}</div>` : "";
+      const classes = depth === 0 ? "session-family session-family-root" : "session-family session-family-child";
+      const familyAttr = depth === 0 ? ` data-family-id="${escapeHtml(rootId)}" data-family-key="${escapeHtml(rootKey)}"` : "";
+      return `<div class="${classes}"${familyAttr}>${row}${children}</div>`;
+    }
+    function renderPendingSessionItem(spawnId, spawn) {
+      const cwd = spawn.cwd || "~";
+      const label = spawn.harnessLabel || "Pi";
+      const harnessBadge = renderHarnessBadge(spawn.harness, label);
+      return `
+    <div class="session-item starting${options2.selectedSpawn === spawnId ? " active" : ""}" data-spawn-id="${escapeHtml(spawnId)}">
+      <div class="session-item-header">
+        <span class="session-item-status working" title="Starting session"></span>
+        <span class="session-item-name">Starting ${escapeHtml(label)}\u2026</span>${harnessBadge}
+        <span class="session-item-time">now</span>
+      </div>
+      <div class="session-item-meta">
+        ${options2.hostChip(spawn.host)}<span class="session-item-cwd" title="${escapeHtml(cwd)}">${escapeHtml(shortCwd(cwd))}</span>
+        <span>${spawn.target ? "tmux" : "headless"}</span>
+      </div>
+    </div>
+  `;
+    }
+    function renderSessions() {
+      hostSectionsShown = null;
+      const active = options2.active.map(sidebarSession), previous = options2.previous.map(sidebarSession);
+      const showing = options2.tab === "active" ? [...active, ...previous.filter((session) => session.subagentLive)] : [...active, ...previous];
+      const pending = options2.pending;
+      const sq = options2.scope;
+      const scopeParsed = sq ? parseSessionQuery(sq) : null;
+      const asksAutomation = queryAsksForAutomation(parseSessionQuery(options2.query)) || (scopeParsed ? queryAsksForAutomation(scopeParsed) : false);
+      let visible = showing, automationHidden = 0;
+      if (!asksAutomation) {
+        visible = showing.filter((session) => {
+          if (session.isActive || !isAutomationSession(session)) return true;
+          automationHidden++;
+          return false;
+        });
+      }
+      const queried = options2.query && options2.queriedFor === options2.query ? applyHostTerms(visible, options2.query) : applyLocalFilter(visible, options2.query);
+      const filtered = scopeParsed ? queried.filter((s) => evaluateSessionQuery(scopeParsed, s)) : queried;
+      const scopesHidden = queried.length - filtered.length;
+      let html = "";
+      if (options2.tab === "all" && options2.indexing) {
+        html += '<div class="indexing-note">Indexing sessions\u2026</div>';
+      }
+      if (pending.length) {
+        html += `<div class="session-segment starting-segment">
+      <div class="workspace-group-header starting-header">
+        <span class="workspace-group-label">Starting</span>
+        <span class="workspace-group-count">${pending.length}</span>
+      </div>
+      ${pending.map(([id, spawn]) => renderPendingSessionItem(id, spawn)).join("")}
+    </div>`;
+      }
+      if (filtered.length === 0 && pending.length === 0) {
+        const msg = options2.tab === "active" ? active.length === 0 && !options2.query ? 'No active sessions<br><span style="font-size:11px">Click "+ New Session" or resume one from All</span>' : "No matches" : visible.length === 0 && !options2.query ? "No sessions found" : "No matches";
+        html += `<div class="empty-session"><p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">${msg}</p></div>`;
+      } else if (options2.query) {
+        const parsed = parseSessionQuery(options2.query);
+        const ranked = filtered.map((s) => [s, s.searchScore ?? scoreSessionMatch(parsed, s)]).sort((a, b) => b[1] - a[1] || new Date(b[0].lastActivity || 0).getTime() - new Date(a[0].lastActivity || 0).getTime());
+        html += `<div class="session-segment ranked-segment">
+      ${ranked.map(([s]) => renderSessionItem(s, { showCwd: true })).join("")}
+    </div>`;
+      } else {
+        const families = buildSessionFamilies(filtered);
+        const [pinnedFamilies, restFamilies] = partitionPinnedFamilies(families, options2.pinned);
+        if (pinnedFamilies.length > 0) {
+          html += `<div class="session-segment pinned-segment">
+        <div class="workspace-group-header pinned-header">
+          <span class="workspace-group-label">\u{1F4CC} Pinned</span>
+          <span class="workspace-group-count">${pinnedFamilies.length}</span>
+        </div>
+        ${pinnedFamilies.map((family) => renderSessionFamily(family, { pinnedFamily: true, showCwd: true })).join("")}
+      </div>`;
+        }
+        if (options2.view === "recent") {
+          html += groupSessionsByDate(restFamilies).map(renderDateBucket).join("");
+        } else {
+          html += renderWorkspaceTrees(flattenSessionFamilies(restFamilies));
+        }
+      }
+      html += hostOfflineNotesHtml();
+      if (automationHidden > 0) {
+        html += `<div class="scope-hidden-note">${automationHidden} automation run${automationHidden === 1 ? "" : "s"} hidden (is:automation shows them)</div>`;
+      }
+      if (scopesHidden > 0) {
+        html += `<div class="scope-hidden-note">${scopesHidden} hidden by scopes</div>`;
+      }
+      return { html, count: active.length + pending.length };
+    }
+    function workspaceGroupKey(hostId, path) {
+      return options2.multiHost && hostId ? sessionKey(hostId, path) : path;
+    }
+    let hostSectionsShown = null;
+    function renderWorkspaceTrees(list) {
+      if (!options2.multiHost) {
+        const tree = buildWorkspaceTree(groupByWorkspace(list, options2.collapsed), options2.collapsed);
+        return tree.map((node) => renderWorkspaceNode(node)).join("");
+      }
+      hostSectionsShown = /* @__PURE__ */ new Set();
+      let html = "";
+      for (const host of sortHostSections(options2.hosts)) {
+        const hostId = host.hostId || null;
+        const mine = list.filter((s) => (s.host || null) === hostId);
+        const down = hostIsDown(host);
+        if (!mine.length && !down) continue;
+        hostSectionsShown.add(host.key);
+        const key = hostSectionKey(host.key);
+        const isCollapsed = options2.collapsed.has(key);
+        let body = "";
+        if (!isCollapsed) {
+          const collapsedView = hostId ? new Set([...options2.collapsed].filter((key2) => key2.startsWith(hostId + " ")).map((key2) => key2.slice((hostId + " ").length))) : options2.collapsed;
+          body = buildWorkspaceTree(groupByWorkspace(mine, collapsedView), collapsedView).map((node) => renderWorkspaceNode(node, { hostId })).join("");
+          if (!mine.length) {
+            body = `<div class="host-section-empty">${escapeHtml(host.state === "blocked" ? "Enter this host\u2019s token in Settings." : "Nothing cached from this host yet.")}</div>`;
+          }
+        }
+        let headerDot = "";
+        if (isCollapsed && mine.length) {
+          if (mine.some((s) => s.turnInProgress || s.compacting)) headerDot = '<span class="session-item-status working" title="Agent working"></span>';
+          else if (mine.some(options2.unread)) headerDot = '<span class="session-item-status unread" title="New activity"></span>';
+        }
+        const stateNote = down ? `<span class="host-section-state">${host.state === "blocked" ? "needs a token" : "unreachable"}</span>` : "";
+        html += `<div class="host-section${isCollapsed ? " collapsed" : ""}${down ? " offline" : ""}" style="--host-color:${escapeHtml(host.color)}">
+      <div class="host-section-header" data-host-section="${escapeHtml(key)}" title="${escapeHtml(hostDisplayLabel(host) + (down ? " \u2014 showing last known sessions" : ""))}">
+        <span class="host-section-chevron">${isCollapsed ? "\u25B8" : "\u25BE"}</span>
+        ${host.dot}
+        <span class="host-section-name">${escapeHtml(hostDisplayLabel(host))}</span>
+        ${stateNote}${headerDot}<span class="host-section-count">${mine.length}</span>
+      </div>
+      ${isCollapsed ? "" : `<div class="host-section-body">${body}</div>`}
+    </div>`;
+      }
+      return html;
+    }
+    function hostOfflineNotesHtml() {
+      if (!options2.multiHost) return "";
+      return options2.hosts.filter((host) => {
+        if (!hostIsDown(host)) return false;
+        if (hostSectionsShown && hostSectionsShown.has(host.key)) return false;
+        return !host.hasCache;
+      }).map((host) => `<div class="host-offline-note">${escapeHtml(hostDisplayLabel(host))} \u2014 ${host.state === "blocked" ? "needs a token (Settings)" : "unreachable"}</div>`).join("");
+    }
+    function renderWorkspaceNode(node, opts = {}) {
+      const hostId = opts.hostId || null;
+      const groupKey = workspaceGroupKey(hostId, node.path);
+      const isCollapsed = options2.collapsed.has(groupKey);
+      let headerDot = "";
+      if (isCollapsed) {
+        const all = collectTreeSessions(node);
+        if (all.some((s) => s.turnInProgress || s.compacting)) headerDot = '<span class="session-item-status working" title="Agent working"></span>';
+        else if (all.some(options2.unread)) headerDot = '<span class="session-item-status unread" title="New activity"></span>';
+      }
+      let body = "";
+      if (!isCollapsed) {
+        if (node.children.length) {
+          body = `<div class="workspace-children">${node.children.map((child) => renderWorkspaceNode(child, { hostId })).join("")}</div>`;
+        }
+        body += buildSessionFamilies(node.sessions || []).map((family) => renderSessionFamily(family)).join("");
+      }
+      return `<div class="session-segment${isCollapsed ? " collapsed" : ""}">
+    <div class="workspace-group-header" data-cwd="${escapeHtml(groupKey)}">
+      <span class="workspace-group-chevron">${isCollapsed ? "\u25B8" : "\u25BE"}</span>
+      <span class="workspace-group-label" title="${escapeHtml(node.path)}">${escapeHtml(node.label)}</span>
+      ${headerDot}<span class="workspace-group-count">${node.count}</span>
+      <button class="workspace-new-btn" data-path="${escapeHtml(node.path)}"${hostId ? ` data-host="${escapeHtml(hostId)}"` : ""} title="New session in ${escapeHtml(node.path)}">+</button>
+    </div>
+    ${body}
+  </div>`;
+    }
+    function renderDateBucket(bucket2) {
+      const key = "date:" + bucket2.key;
+      const isCollapsed = options2.collapsed.has(key);
+      const bucketMembers = flattenSessionFamilies(bucket2.sessions);
+      let headerDot = "";
+      if (isCollapsed) {
+        if (bucketMembers.some((s) => s.turnInProgress || s.compacting)) headerDot = '<span class="session-item-status working" title="Agent working"></span>';
+        else if (bucketMembers.some(options2.unread)) headerDot = '<span class="session-item-status unread" title="New activity"></span>';
+      }
+      const body = isCollapsed ? "" : bucket2.sessions.map((family) => renderSessionFamily(family, { showCwd: true })).join("");
+      return `<div class="session-segment${isCollapsed ? " collapsed" : ""}">
+    <div class="workspace-group-header" data-cwd="${escapeHtml(key)}">
+      <span class="workspace-group-chevron">${isCollapsed ? "\u25B8" : "\u25BE"}</span>
+      <span class="workspace-group-label">${escapeHtml(bucket2.label)}</span>
+      ${headerDot}<span class="workspace-group-count">${bucketMembers.length}</span>
+    </div>
+    ${body}
+  </div>`;
+    }
+    return renderSessions();
   }
   return __toCommonJS(index_exports);
 })();

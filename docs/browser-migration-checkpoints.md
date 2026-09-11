@@ -760,3 +760,17 @@ Actual runtime/tests match the verified draft byte for byte. Fable reviews befor
 Fable also noted that caret movement retired acceptance without hiding a painted
 menu. Selection/select listeners now hide it immediately; an eighth regression
 and the complete suite passed after this correction.
+
+## Checkpoint 33 — sidebar projection
+
+Moved session rows, family blocks, pending launches, workspace/host/date groups,
+search ranking and hidden-row notes into a strict TypeScript projection. Narrowed
+metadata remains separate from the authoritative session store. Read-only snapshots
+carry pin/expansion/collapse state; unchanged HTML still avoids sidebar DOM churn.
+
+Verification: strict checks, 932 backend tests, all browser/UI scenarios and full
+desktop/mobile smoke passed. Three pure regressions cover malformed metadata,
+independent host collapse/families and server-search/scoping authority. The later
+sidebar-control draft also passed 225 browser tests on the corrected autocomplete
+baseline. Actual runtime and test files match the verified projection draft.
+Latest confirmed CI: `fc174c6`, all four Node jobs and the browser job passed.

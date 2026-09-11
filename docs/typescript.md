@@ -439,3 +439,7 @@ Autocomplete lives in `composer-autocomplete.ts`, with explicit command/file dat
 in `composer-autocomplete-data.ts` and host-qualified session references in
 `session-references.ts`. Query tokens capture selection, composer, text/caret and
 endpoint before debounce; completion acceptance emits input for draft persistence.
+
+Sidebar HTML projection lives in `sidebar-render.ts`. One render receives narrowed
+row metadata, host state and read-only preference snapshots; family grouping,
+server-search authority, automation notes and host-qualified collapse stay intact.

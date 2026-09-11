@@ -2184,3 +2184,7 @@ Autocomplete uses `src/browser/composer-autocomplete.ts` to own file debounce,
 command catalog refresh, menu rows and blur timers. Every accepted choice emits
 input so plain file mentions persist in drafts. Session references retain the
 existing exact host-id grammar and owning-host prefix disambiguation.
+
+`src/browser/sidebar-render.ts` renders the sidebar from a single typed metadata
+projection. It owns no requests, persistent preferences or DOM listeners. Keep
+server-filtered content matches authoritative and collapse keys host-qualified.
