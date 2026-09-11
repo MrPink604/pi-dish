@@ -17,7 +17,16 @@ export function createLiveTools(options: {
   images: (content: unknown, alt: string) => string; mood: (tool: string, args: unknown) => void;
 }) {
   const { document, sessionState } = options; let disposed = false;
-  const liveToolPanels = new Map<string, ToolPanel>(); const owns = (owner: SelectionOwner) => !disposed && sessionState.ownsSelection(owner);
+  const liveToolPanels = new Map<string, ToolPanel>(), retained = new WeakMap<HTMLDetailsElement, ToolPanel>();
+  const owns = (owner: SelectionOwner) => !disposed && sessionState.ownsSelection(owner);
+  function lookup(id: string): ToolPanel | null {
+    const owner = sessionState.captureSelection(), container = document.getElementById('messages'); if (disposed || !owner || !container) return null;
+    const matches = (entry: ToolPanel | undefined) => !!entry && entry.owner.id === owner.id && entry.owner.host === owner.host && container.contains(entry.el);
+    let entry = liveToolPanels.get(id);
+    if (!matches(entry)) entry = Array.from(container.querySelectorAll<HTMLDetailsElement>('details.live-tool-panel')).filter(el => el.dataset.toolCallId === id).map(el => retained.get(el)).find(matches);
+    if (!entry || !matches(entry)) return null;
+    entry.owner = owner; liveToolPanels.set(id, entry); return entry;
+  }
 function liveToolOutputHtml(output: string) {
   const parsed = parseIpythonResult(output);
   return escapeHtml(truncate(parsed ? parsed.output : output, 8000));
@@ -63,7 +72,7 @@ function appendLiveToolPanel(data: ToolEvent, { completionOnly = false } = {}): 
   const owner = sessionState.captureSelection(); if (disposed || !owner) return null;
   const { toolCallId, toolName, args } = data;
   if (!toolCallId) return null;
-  const stored = liveToolPanels.get(toolCallId), existing = stored && owns(stored.owner) ? stored : null;
+  const existing = lookup(toolCallId);
   const resolvedName = toolName || existing?.toolName || 'tool';
   const resolvedArgs = args ?? existing?.args ?? {};
   options.started(toolCallId, resolvedName);
@@ -95,7 +104,7 @@ function appendLiveToolPanel(data: ToolEvent, { completionOnly = false } = {}): 
     toolName: resolvedName,
     args: resolvedArgs,
   };
-  liveToolPanels.set(toolCallId, entry);
+  liveToolPanels.set(toolCallId, entry); retained.set(el, entry);
   if (wasPinned) options.scroll(container); else options.jump(container);
   return entry;
 }
@@ -103,8 +112,7 @@ function appendLiveToolPanel(data: ToolEvent, { completionOnly = false } = {}): 
 function updateLiveToolPanel(data: ToolEvent) {
   if (disposed || !sessionState.captureSelection()) return;
   const { toolCallId, partialResult } = data;
-  const stored = liveToolPanels.get(toolCallId);
-  let entry = stored && owns(stored.owner) ? stored : null;
+  let entry = lookup(toolCallId);
   if (!entry?.el?.isConnected || !entry.el.classList.contains('running')) {
     // OMP may emit completion/background updates without a start, or after
     // turn-end JSONL cleanup removed the original panel. Re-open by id.
@@ -158,8 +166,7 @@ function updateLiveToolPanel(data: ToolEvent) {
 function finalizeLiveToolPanel(data: ToolEvent) {
   if (disposed || !sessionState.captureSelection()) return;
   const { toolCallId, toolName, args, result, isError } = data;
-  const stored = liveToolPanels.get(toolCallId);
-  let entry = stored && owns(stored.owner) ? stored : null;
+  let entry = lookup(toolCallId);
   if (!entry?.el?.isConnected) {
     // Provider-resolved tools can legitimately be completion-only. The same
     // path also recreates a background job panel after turn-end cleanup.
@@ -182,7 +189,7 @@ function finalizeLiveToolPanel(data: ToolEvent) {
   const newEl = tmp.firstElementChild as HTMLDetailsElement;
 
   entry.el.replaceWith(newEl);
-  entry.el = newEl;
+  entry.el = newEl; retained.set(newEl, entry);
   entry.toolName = resolvedName;
   entry.args = resolvedArgs;
 

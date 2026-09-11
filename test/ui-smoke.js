@@ -1661,7 +1661,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       (await desktop.locator('#status').textContent()).includes('still starting'),
       'typing and Enter preserve the prompt while Pi starts');
     await desktop.waitForTimeout(400); // debounced provisional draft save
-    const provisionalKey = await desktop.evaluate(() => pendingComposerKey(currentSessionSpawnId));
+    const provisionalKey = await desktop.evaluate(() => pendingComposerKey(sessionView.spawnId));
     check(await desktop.evaluate(key => localStorage.getItem(draftKey(key)), provisionalKey) === startupDraft,
       'provisional composer owns its draft before registration');
     spawnResult = 'ready';
@@ -1699,7 +1699,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       await desktop.locator('#btnSend').isDisabled(),
       'failed spawn keeps its provisional draft accessible');
     await desktop.evaluate(async (id) => {
-      const owner = pendingComposerKey(currentSessionSpawnId);
+      const owner = pendingComposerKey(sessionView.spawnId);
       await selectSession(id);
       localStorage.removeItem(draftKey(owner));
     }, SESSION_ID);

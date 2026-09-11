@@ -76,12 +76,15 @@ var PiDishBrowser = (() => {
     createSessionActivity: () => createSessionActivity,
     createSessionApi: () => createSessionApi,
     createSessionControls: () => createSessionControls,
+    createSessionHeader: () => createSessionHeader,
     createSessionInfo: () => createSessionInfo,
     createSessionReferences: () => createSessionReferences,
     createSessionRelations: () => createSessionRelations,
+    createSessionResume: () => createSessionResume,
     createSessionSearch: () => createSessionSearch,
     createSessionSpawns: () => createSessionSpawns,
     createSessionState: () => createSessionState,
+    createSessionView: () => createSessionView,
     createSidebarActivity: () => createSidebarActivity,
     createSidebarControls: () => createSidebarControls,
     createSidebarLists: () => createSidebarLists,
@@ -3350,7 +3353,7 @@ var PiDishBrowser = (() => {
     const hostId = () => host().hostId || null;
     const cwd = () => cwdInput.value.trim();
     const selectedHarness = () => harnessSelect.value || harnessId || "pi";
-    const supports = (capability) => !host().capabilities || host().capabilities?.[capability] === true;
+    const supports2 = (capability) => !host().capabilities || host().capabilities?.[capability] === true;
     const hostOptions = () => options2.hosts().filter((row) => row.self || !options2.hostDown(row));
     const error = (value) => {
       if (!disposed) element("nsError").textContent = value;
@@ -3377,7 +3380,7 @@ var PiDishBrowser = (() => {
     const directories = createDirectoryCatalog({ host, request });
     const targets = createSpawnTargets({
       host,
-      supportsTmux: () => supports("tmux"),
+      supportsTmux: () => supports2("tmux"),
       request,
       readSaved: () => storage.getItem("pi-dish-spawn-target"),
       save: (key) => storage.setItem("pi-dish-spawn-target", key),
@@ -3686,7 +3689,7 @@ var PiDishBrowser = (() => {
       host,
       hostId,
       hostOptions,
-      supports,
+      supports: supports2,
       setHostId,
       changeHost,
       cwd,
@@ -13856,7 +13859,7 @@ ${restored}`;
 
   // src/browser/sidebar-render.ts
   function sidebarSession(row) {
-    const string2 = (value) => typeof value === "string" ? value : "";
+    const string3 = (value) => typeof value === "string" ? value : "";
     const capabilities = {};
     if (record8(row.capabilities)) {
       for (const [key, value] of Object.entries(row.capabilities)) if (typeof value === "boolean") capabilities[key] = value;
@@ -13866,26 +13869,26 @@ ${restored}`;
       id: row.id,
       host: row.host,
       hostLabel: row.hostLabel,
-      name: string2(row.name),
-      cwd: string2(row.cwd),
-      model: string2(row.model),
+      name: string3(row.name),
+      cwd: string3(row.cwd),
+      model: string3(row.model),
       lastActivity: typeof row.lastActivity === "string" || finite2(row.lastActivity) ? row.lastActivity : null,
       isActive: row.isActive === true,
       turnInProgress: row.turnInProgress === true,
       subagentLive: row.subagentLive === true,
       compacting: row.compacting === true,
-      parentId: string2(row.parentId),
+      parentId: string3(row.parentId),
       ...Object.hasOwn(row, "familyParentId") ? { familyParentId: parent } : {},
-      routine: string2(row.routine),
-      routineId: string2(row.routineId),
+      routine: string3(row.routine),
+      routineId: string3(row.routineId),
       capabilities,
       contextPercent: finite2(row.contextPercent) ? row.contextPercent : 0,
       contextTokens: finite2(row.contextTokens) ? row.contextTokens : void 0,
-      thinkingLevel: string2(row.thinkingLevel),
-      closeMode: string2(row.closeMode),
-      harnessId: string2(row.harnessId),
-      harnessLabel: string2(row.harnessLabel),
-      searchSnippet: string2(row.searchSnippet),
+      thinkingLevel: string3(row.thinkingLevel),
+      closeMode: string3(row.closeMode),
+      harnessId: string3(row.harnessId),
+      harnessLabel: string3(row.harnessLabel),
+      searchSnippet: string3(row.searchSnippet),
       searchScore: finite2(row.searchScore) ? row.searchScore : void 0
     };
   }
@@ -15492,8 +15495,19 @@ ${restored}`;
   function createLiveTools(options2) {
     const { document: document2, sessionState } = options2;
     let disposed = false;
-    const liveToolPanels = /* @__PURE__ */ new Map();
+    const liveToolPanels = /* @__PURE__ */ new Map(), retained = /* @__PURE__ */ new WeakMap();
     const owns = (owner) => !disposed && sessionState.ownsSelection(owner);
+    function lookup(id) {
+      const owner = sessionState.captureSelection(), container = document2.getElementById("messages");
+      if (disposed || !owner || !container) return null;
+      const matches = (entry2) => !!entry2 && entry2.owner.id === owner.id && entry2.owner.host === owner.host && container.contains(entry2.el);
+      let entry = liveToolPanels.get(id);
+      if (!matches(entry)) entry = Array.from(container.querySelectorAll("details.live-tool-panel")).filter((el) => el.dataset.toolCallId === id).map((el) => retained.get(el)).find(matches);
+      if (!entry || !matches(entry)) return null;
+      entry.owner = owner;
+      liveToolPanels.set(id, entry);
+      return entry;
+    }
     function liveToolOutputHtml(output) {
       const parsed = parseIpythonResult(output);
       return escapeHtml(truncate(parsed ? parsed.output : output, 8e3));
@@ -15522,7 +15536,7 @@ ${restored}`;
       if (disposed || !owner) return null;
       const { toolCallId, toolName, args } = data;
       if (!toolCallId) return null;
-      const stored = liveToolPanels.get(toolCallId), existing = stored && owns(stored.owner) ? stored : null;
+      const existing = lookup(toolCallId);
       const resolvedName = toolName || existing?.toolName || "tool";
       const resolvedArgs = args ?? existing?.args ?? {};
       options2.started(toolCallId, resolvedName);
@@ -15552,6 +15566,7 @@ ${restored}`;
         args: resolvedArgs
       };
       liveToolPanels.set(toolCallId, entry);
+      retained.set(el, entry);
       if (wasPinned) options2.scroll(container);
       else options2.jump(container);
       return entry;
@@ -15559,8 +15574,7 @@ ${restored}`;
     function updateLiveToolPanel(data) {
       if (disposed || !sessionState.captureSelection()) return;
       const { toolCallId, partialResult } = data;
-      const stored = liveToolPanels.get(toolCallId);
-      let entry = stored && owns(stored.owner) ? stored : null;
+      let entry = lookup(toolCallId);
       if (!entry?.el?.isConnected || !entry.el.classList.contains("running")) {
         entry = appendLiveToolPanel({
           ...data,
@@ -15600,8 +15614,7 @@ ${restored}`;
     function finalizeLiveToolPanel(data) {
       if (disposed || !sessionState.captureSelection()) return;
       const { toolCallId, toolName, args, result, isError } = data;
-      const stored = liveToolPanels.get(toolCallId);
-      let entry = stored && owns(stored.owner) ? stored : null;
+      let entry = lookup(toolCallId);
       if (!entry?.el?.isConnected) {
         entry = appendLiveToolPanel(data, { completionOnly: true });
       }
@@ -15619,6 +15632,7 @@ ${restored}`;
       const newEl = tmp.firstElementChild;
       entry.el.replaceWith(newEl);
       entry.el = newEl;
+      retained.set(newEl, entry);
       entry.toolName = resolvedName;
       entry.args = resolvedArgs;
     }
@@ -16952,6 +16966,354 @@ ${restored}`;
     }, dispose() {
       if (disposed) return;
       stop();
+      disposed = true;
+    } };
+  }
+
+  // src/browser/session-view.ts
+  function createSessionView(options2) {
+    const { document: document2, sessionState } = options2;
+    const element = (id) => document2.getElementById(id);
+    let currentSessionSpawnId = null, disposed = false;
+    function pendingComposerKey(spawnId) {
+      return `spawn:${spawnId}`;
+    }
+    function showPendingSessionView(spawnId) {
+      if (disposed) return;
+      const spawn = options2.spawn(spawnId);
+      if (!spawn) return;
+      const harnessLabel = spawn.harnessLabel || "Pi";
+      sessionState.advanceSelection();
+      options2.resetSearch();
+      options2.transcript.retire();
+      options2.drafts.stash();
+      options2.cancelStreaming();
+      options2.cancelRecording();
+      options2.hideNote();
+      options2.closeViews(true, false);
+      options2.transcript.stash();
+      sessionState.setCurrentSession(null);
+      currentSessionSpawnId = spawnId;
+      options2.stream.stop();
+      options2.stopFollowing();
+      options2.closeTerminal();
+      options2.clearExtension();
+      options2.clearRelations();
+      options2.closeControls();
+      options2.hideAutocomplete();
+      options2.retireModels();
+      options2.retireCommands();
+      element("emptyState").style.display = "none";
+      element("sessionView").style.display = "flex";
+      document2.querySelector(".input-area").style.display = "";
+      element("resumeBar").style.display = "none";
+      document2.querySelector(".session-actions").style.display = "none";
+      options2.queue(null);
+      options2.closeBtw();
+      options2.activity.setCompacting(false);
+      options2.activity.setTurn(false);
+      options2.resetArtifacts();
+      const nameEl = element("sessionName");
+      nameEl.textContent = "Starting session\u2026";
+      nameEl.classList.remove("editable-name");
+      nameEl.title = "";
+      const modelBtn = element("sessionModel");
+      modelBtn.textContent = `${harnessLabel} starting`;
+      modelBtn.style.cursor = "default";
+      const ctxReset = element("sessionContext");
+      ctxReset.textContent = "0%";
+      ctxReset.className = "tool-btn tool-ctx";
+      options2.thinking();
+      options2.terminal();
+      options2.mic();
+      options2.transcript.reset();
+      options2.mood("", "");
+      const targetLabel = spawn.target ? "tmux" : "the headless session";
+      element("messages").innerHTML = `<div class="empty-state pending-session-state" style="padding: 48px;">
+    <p>Starting ${escapeHtml(harnessLabel)} in ${targetLabel}\u2026</p>
+    <small>You can write your prompt while it starts.</small>
+  </div>`;
+      options2.drafts.restore(pendingComposerKey(spawnId));
+      options2.drafts.waiting(true);
+      options2.status(`${harnessLabel} is starting \u2014 your draft will be ready when it connects`, "working");
+      options2.render();
+      element("promptInput").focus();
+    }
+    function showPendingSessionFailure(spawnId, message3, spawn) {
+      if (disposed || currentSessionSpawnId !== spawnId) return;
+      const harnessLabel = spawn?.harnessLabel || "Agent";
+      element("sessionName").textContent = "Session failed to start";
+      element("messages").innerHTML = `<div class="empty-state pending-session-state" style="padding: 48px;">
+    <p>${escapeHtml(harnessLabel)} could not start.</p>
+    <small>${escapeHtml(message3)}</small>
+  </div>`;
+      const input = element("promptInput");
+      input.placeholder = "Your draft is preserved here so you can copy it";
+      const btn = element("btnSend");
+      btn.disabled = true;
+      btn.title = message3;
+    }
+    async function selectSession(id, { forceTranscriptReload = false, host = null, keepBounceView = false } = {}) {
+      if (disposed || !sessionState.findSession(id, host)) return;
+      sessionState.advanceSelection();
+      options2.resetSearch();
+      options2.transcript.retire();
+      options2.drafts.stash();
+      currentSessionSpawnId = null;
+      options2.drafts.waiting(false);
+      options2.cancelStreaming();
+      options2.cancelRecording();
+      options2.hideNote();
+      options2.closeViews(false, keepBounceView);
+      options2.transcript.stash();
+      const current = sessionState.setCurrentSession(id, host);
+      if (!current) return;
+      const owner = sessionState.captureSelection();
+      if (!owner) return;
+      const endpoint = Object.freeze({ ...options2.endpoint(owner.host) });
+      const owns = () => !disposed && sessionState.ownsSelection(owner) && options2.endpoint(owner.host).base === endpoint.base;
+      if (forceTranscriptReload) options2.transcript.deleteCached(sessionRefKey(current));
+      const mathAssetsReady = options2.math().catch(() => {
+      });
+      options2.reveal(id, current.host);
+      options2.stream.stop();
+      options2.stopFollowing();
+      options2.closeTerminal();
+      options2.clearExtension();
+      options2.clearRelations();
+      options2.storage.setItem("pi-dish-session", sessionRefKey(current));
+      options2.seen(current);
+      element("emptyState").style.display = "none";
+      element("sessionView").style.display = "flex";
+      const inputArea = document2.querySelector(".input-area");
+      const resumeBar = element("resumeBar");
+      const sessionActions = document2.querySelector(".session-actions");
+      options2.closeControls();
+      if (current.isActive) {
+        if (inputArea) inputArea.style.display = "";
+        if (resumeBar) resumeBar.style.display = "none";
+        options2.resume.reset();
+        options2.drafts.restore();
+      } else {
+        options2.drafts.clear();
+        if (inputArea) inputArea.style.display = "none";
+        const caps = current.capabilities, resumable = !record8(caps) || caps.resume !== false;
+        if (resumeBar) {
+          resumeBar.style.display = "";
+          const cwdSpan = resumeBar.querySelector(".resume-cwd");
+          if (cwdSpan) cwdSpan.textContent = typeof current.cwd === "string" && current.cwd || "~";
+          const label = resumeBar.querySelector(".resume-label");
+          if (label) {
+            label.textContent = resumable ? "Read-only \u2014 session is inactive" : "Read-only \u2014 a live session owns this transcript";
+          }
+          const resumeBtn = resumeBar.querySelector("#resumeSessionBtn");
+          if (resumeBtn) resumeBtn.style.display = resumable ? "" : "none";
+        }
+        if (resumable) options2.resume.load(current);
+        else options2.resume.reset();
+      }
+      if (sessionActions) sessionActions.style.display = current.isActive ? "" : "none";
+      options2.queue(null);
+      options2.closeBtw();
+      options2.activity.setCompacting(!!current.isActive && !!current.compacting);
+      options2.activity.setTurn(!!current.isActive && !!current.turnInProgress);
+      options2.resetArtifacts();
+      options2.artifacts(owner);
+      options2.render();
+      options2.header();
+      options2.relations(owner);
+      if (current.isActive) {
+        options2.models(id, typeof current.harnessId === "string" ? current.harnessId : void 0);
+        options2.commands(id);
+      }
+      await mathAssetsReady;
+      if (!owns()) return;
+      await options2.transcript.load(owner);
+      if (!owns()) return;
+      if (sessionState.currentSession?.isActive) {
+        options2.stream.start(owner);
+      } else {
+        options2.stream.stop();
+      }
+    }
+    return { select: selectSession, pending: showPendingSessionView, failure: showPendingSessionFailure, get spawnId() {
+      return currentSessionSpawnId;
+    }, dispose() {
+      if (disposed) return;
+      disposed = true;
+      options2.stream.stop();
+      options2.transcript.retire();
+      options2.resume.dispose();
+    } };
+  }
+
+  // src/browser/session-resume.ts
+  function createSessionResume(options2) {
+    const { document: document2, sessionState } = options2, api = createSessionApi(options2.request);
+    const wrap = document2.getElementById("resumeModelWrap"), select = document2.getElementById("resumeModelSelect");
+    let sequence = 0, disposed = false;
+    const pending = /* @__PURE__ */ new Map();
+    function reset() {
+      sequence++;
+      if (wrap) wrap.style.display = "none";
+      if (select) {
+        select.disabled = true;
+        select.innerHTML = '<option value="">Session model</option>';
+      }
+    }
+    async function load(session) {
+      if (disposed) return;
+      reset();
+      const owner = sessionState.captureSelection();
+      if (!session || session.harnessId !== "omp" || !owner || owner.id !== session.id || owner.host !== (session.host || null) || !wrap || !select) return;
+      const generation = sequence, endpoint = Object.freeze({ ...options2.endpoint(owner.host) });
+      const owns = () => !disposed && generation === sequence && sessionState.ownsSelection(owner) && options2.endpoint(owner.host).base === endpoint.base;
+      wrap.style.display = "flex";
+      select.title = "Loading Oh My Pi models\u2026";
+      try {
+        const models = await api.models(endpoint, { harnessId: "omp", cwd: typeof session.cwd === "string" ? session.cwd : void 0 });
+        if (!owns()) return;
+        const current = typeof session.model === "string" && session.model !== "unknown" && session.model ? ` (${session.model})` : "";
+        select.innerHTML = `<option value="">Session model${escapeHtml(current)}</option>` + models.map((model) => {
+          const name = model.selector || `${model.provider}/${model.id}`;
+          return `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`;
+        }).join("");
+        select.disabled = false;
+        select.title = "Optionally override the model while resuming this OMP session";
+      } catch (error) {
+        if (owns()) {
+          select.disabled = true;
+          select.title = `Could not load Oh My Pi models: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      }
+    }
+    async function resume() {
+      const owner = sessionState.captureSelection();
+      if (disposed || !owner) return;
+      const caps = sessionState.currentSession?.capabilities;
+      if (record8(caps) && caps.resume === false) return;
+      const key = sessionRefKey(owner);
+      if (pending.has(key)) return;
+      const token = /* @__PURE__ */ Symbol(), endpoint = Object.freeze({ ...options2.endpoint(owner.host) }), target = options2.target(owner.host);
+      const model = sessionState.currentSession?.harnessId === "omp" ? select?.value || void 0 : void 0;
+      const owns = () => !disposed && pending.get(key) === token && sessionState.ownsSelection(owner) && options2.endpoint(owner.host).base === endpoint.base;
+      pending.set(key, token);
+      options2.status(target ? "Resuming in tmux\u2026" : "Resuming session...", "working");
+      try {
+        const data = await sendJson(options2.request, endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/resume`, { ...target ? { target: { ...target } } : {}, ...model ? { model } : {} });
+        if (disposed) return;
+        if (!record8(data) || typeof data.id !== "string" || !data.id) throw new Error("Resume returned an invalid session");
+        await options2.refresh();
+        if (!owns()) return;
+        options2.status("Session resumed");
+        options2.select(data.id, { host: owner.host });
+      } catch (error) {
+        if (owns()) options2.status("Resume failed: " + (error instanceof Error ? error.message : String(error)), "error");
+      } finally {
+        if (pending.get(key) === token) pending.delete(key);
+      }
+    }
+    return { reset, load, resume, dispose() {
+      if (disposed) return;
+      reset();
+      disposed = true;
+      pending.clear();
+    } };
+  }
+
+  // src/browser/session-header.ts
+  function string2(value) {
+    return typeof value === "string" ? value : "";
+  }
+  function number8(value) {
+    return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  }
+  function supports(session, capability) {
+    const caps = session.capabilities;
+    return !record8(caps) || caps[capability] !== false;
+  }
+  function createSessionHeader(options2) {
+    const { document: document2, sessionState } = options2;
+    let disposed = false;
+    const element = (id) => document2.getElementById(id);
+    function setModelChipLabel(btn, model, suffix) {
+      const full = String(model || "");
+      btn.title = full ? `${full} \u2014 change model` : "Change model";
+      btn.textContent = full + suffix;
+      if (btn.clientWidth && btn.scrollWidth > btn.clientWidth) {
+        const short = shortModelName(full);
+        if (short !== full) btn.textContent = short + suffix;
+      }
+    }
+    function updateSessionHeader() {
+      if (disposed || !sessionState.currentSession) return;
+      const raw = sessionState.currentSession, current = {
+        ...raw,
+        name: string2(raw.name),
+        model: string2(raw.model),
+        cwd: string2(raw.cwd),
+        harnessId: string2(raw.harnessId),
+        harnessLabel: string2(raw.harnessLabel),
+        contextPercent: number8(raw.contextPercent),
+        contextTokens: number8(raw.contextTokens),
+        isActive: !!raw.isActive
+      };
+      element("sessionName").textContent = current.name || "Unnamed";
+      const hostEl = element("sessionHost");
+      if (hostEl) {
+        const showHost = options2.multi() && !!options2.host(current.host);
+        hostEl.style.display = showHost ? "" : "none";
+        hostEl.className = "badge host-badge" + (options2.down(current.host) ? " offline" : "");
+        hostEl.style.setProperty("--host-color", showHost ? options2.color(current.host) : "");
+        hostEl.textContent = showHost ? options2.label(current.host) : "";
+      }
+      const harnessEl = element("sessionHarness");
+      const showHarness = current.harnessId && current.harnessId !== "pi";
+      harnessEl.style.display = showHarness ? "" : "none";
+      if (showHarness) {
+        const info = harnessBadgeInfo(current.harnessId, current.harnessLabel);
+        const title = current.harnessLabel || info.label;
+        options2.ensureHarness(current.host || null);
+        const configurable = options2.settings(raw);
+        harnessEl.className = `badge harness-badge harness-badge-${current.harnessId}` + (configurable ? " clickable" : "");
+        harnessEl.title = configurable ? `${title} settings: agents and models` : `${title} harness`;
+        harnessEl.setAttribute("aria-label", configurable ? `${title} settings` : `${title} harness`);
+        if (configurable) harnessEl.setAttribute("role", "button");
+        else harnessEl.removeAttribute("role");
+        harnessEl.innerHTML = harnessBadgeInnerHtml(info);
+      } else {
+        harnessEl.textContent = "";
+      }
+      const cpTree = element("cpTreeRow");
+      if (cpTree) cpTree.style.display = supports(raw, "tree") ? "" : "none";
+      const cpHarness = element("cpHarnessRow");
+      if (cpHarness) cpHarness.style.display = options2.settings(raw) ? "" : "none";
+      element("btnExport").style.display = supports(raw, "export") ? "" : "none";
+      const nameEl = element("sessionName");
+      const canRename = current.isActive && supports(raw, "rename");
+      nameEl.classList.toggle("editable-name", canRename);
+      nameEl.title = canRename ? "Click to rename" : "";
+      const modelBtn = element("sessionModel");
+      const canSetModel = current.isActive && supports(raw, "setModel");
+      setModelChipLabel(modelBtn, current.model, canSetModel ? " \u25BE" : "");
+      modelBtn.style.cursor = canSetModel ? "pointer" : "default";
+      const ctxClass = contextClass(current.contextPercent);
+      const contextEl = element("sessionContext");
+      contextEl.textContent = `${current.contextPercent}%`;
+      contextEl.className = "tool-btn tool-ctx" + (ctxClass ? " " + ctxClass : "");
+      contextEl.title = current.contextTokens ? `Session stats \u2014 ${formatTokens(current.contextTokens)} tokens of context` : "Session stats";
+      options2.thinking();
+      options2.terminal();
+      options2.mic();
+      const cwdChip = element("sessionCwdChip");
+      if (cwdChip) {
+        const cwd = current.cwd || "";
+        cwdChip.style.display = cwd ? "" : "none";
+        cwdChip.textContent = cwd ? cwd.split("/").filter(Boolean).pop() || cwd : "";
+        cwdChip.title = cwd ? `${cwd} \u2014 session stats` : "Session stats";
+      }
+    }
+    return { update: updateSessionHeader, label: setModelChipLabel, dispose() {
       disposed = true;
     } };
   }

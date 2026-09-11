@@ -271,7 +271,7 @@ const sessionState = PiDishBrowser.createSessionState({
 });
 // Provisional rows for asynchronous harness launches. They are presentation state,
 // not sessions: the durable source of truth remains tmux + the bridge registry.
-let currentSessionSpawnId = null;
+
 // Spawn operations are server-process-local and cannot be resumed after a
 // page reload, so their old draft keys have no view that could restore them.
 try {
@@ -519,7 +519,7 @@ const sessionReferences = PiDishBrowser.createSessionReferences({
   sessionState, selfId: () => hostDirectory.self.hostId, host: hostEntryFor, hostLabel: hostLabelFor, config: () => appConfig,
 });
 const composerAutocomplete = PiDishBrowser.createComposerAutocomplete({
-  document, sessionState, composerKey: () => composerDrafts.key, provisional: () => !!currentSessionSpawnId,
+  document, sessionState, composerKey: () => composerDrafts.key, provisional: () => !!sessionView.spawnId,
   request: (host, path, options) => apiFetch(host, path, options), host: hostEntryFor, references: sessionReferences,
   multiHost: isMultiHost, hostLabel: hostLabelFor, failed: error => console.error('Failed to load commands:', error),
 });
@@ -617,7 +617,7 @@ function renderSessions() {
   const { html, count } = PiDishBrowser.renderSidebar({
     ...sessionState.sessions, selected: sessionState.currentSession,
     tab: sidebarQuery.tab, view: sidebarQuery.view, query: sidebarQuery.query, queriedFor: sidebarLists.queriedFor, scope: scopeQuery(), indexing: sidebarLists.indexing,
-    contextMetric: displayPreferences.contextMetric, pending: [...pendingSessionSpawns.entries()], selectedSpawn: currentSessionSpawnId,
+    contextMetric: displayPreferences.contextMetric, pending: [...pendingSessionSpawns.entries()], selectedSpawn: sessionView.spawnId,
     expanded: sidebarControls.expanded, collapsed: sidebarControls.collapsed, pinned: sidebarControls.pinned, roots: sidebarFamilyRootMap,
     closeConfirm: sidebarControls.closeConfirm, closeBusy: sidebarControls.closeBusy, multiHost: isMultiHost(),
     unread: isUnread, hostChip: hostChipHtml,
@@ -642,307 +642,29 @@ function workspaceGroupKey(hostId, path) { return isMultiHost() && hostId ? sess
 // Session Selection
 // =========================================================================
 
-function pendingComposerKey(spawnId) { return `spawn:${spawnId}`; }
-
-// Show a usable pane before the bridge has produced a real session id. Keep
-// currentSession null so no transcript/stream/action can accidentally target
-// the operation id; only the composer is owned by the provisional key.
-function showPendingSessionView(spawnId) {
-  const spawn = pendingSessionSpawns.get(spawnId);
-  if (!spawn) return;
-  const harnessLabel = spawn.harnessLabel || 'Pi';
-  sessionState.advanceSelection();
-  sessionSearch.reset();
-  transcriptController.retire();
-  stashPromptState();
-  cancelStreamingRender();
-  closeSearch();
-  closeDiffView();
-  closeFileView();
-  closeStatsModal();
-  closeTreeModal();
-  closeModelDropdown();
-  closeThinkingDropdown();
-  closeArtifactsModal();
-  closeUsageView();
-  closeSearchView();
-  closeNewSessionView(); // the provisional pane replaces the takeover
-  closeSkillsView();
-  closeRoutinesView();
-  closeRecoveryView();
-  closeBounceView();
-  stashCurrentTranscript();
-  sessionState.setCurrentSession(null);
-  currentSessionSpawnId = spawnId;
-
-  messageStreamController.stop();
-  followStream = false;
-  closeTerminal();
-  clearExtensionUI();
-  // The provisional pane has no session identity yet. Do not leave the
-  // previously selected session's parent/child chips in its header.
-  clearSessionRelations();
-  closeControlPanel();
-  hideAutocomplete();
-  modelCatalog.retire();
-  composerAutocomplete.retireCommands();
-
-  document.getElementById('emptyState').style.display = 'none';
-  document.getElementById('sessionView').style.display = 'flex';
-  document.querySelector('.input-area').style.display = '';
-  document.getElementById('resumeBar').style.display = 'none';
-  document.querySelector('.session-actions').style.display = 'none';
-
-  renderQueueStatus(null);
-  closeBtwPanel();
-  setCompacting(false);
-  setTurnInProgress(false);
-  sessionInfo.resetArtifacts();
-
-  const nameEl = document.getElementById('sessionName');
-  nameEl.textContent = 'Starting session…';
-  nameEl.classList.remove('editable-name');
-  nameEl.title = '';
-  const modelBtn = document.getElementById('sessionModel');
-  modelBtn.textContent = `${harnessLabel} starting`;
-  modelBtn.style.cursor = 'default';
-  const ctxReset = document.getElementById('sessionContext');
-  ctxReset.textContent = '0%';
-  ctxReset.className = 'tool-btn tool-ctx';
-  updateThinkingBadges();
-  updateTerminalButtons();
-  updateMicButton();
-
-  transcriptController.reset();
-  setMoodIndicator('', '');
-  const targetLabel = spawn.target ? 'tmux' : 'the headless session';
-  document.getElementById('messages').innerHTML = `<div class="empty-state pending-session-state" style="padding: 48px;">
-    <p>Starting ${escapeHtml(harnessLabel)} in ${targetLabel}…</p>
-    <small>You can write your prompt while it starts.</small>
-  </div>`;
-
-  restorePromptState(pendingComposerKey(spawnId));
-  setComposerWaiting(true);
-  setStatus(`${harnessLabel} is starting — your draft will be ready when it connects`, 'working');
-  renderSessions();
-  document.getElementById('promptInput').focus();
-}
-
-function showPendingSessionFailure(spawnId, message, spawn) {
-  if (currentSessionSpawnId !== spawnId) return;
-  const harnessLabel = spawn?.harnessLabel || 'Agent';
-  document.getElementById('sessionName').textContent = 'Session failed to start';
-  document.getElementById('messages').innerHTML = `<div class="empty-state pending-session-state" style="padding: 48px;">
-    <p>${escapeHtml(harnessLabel)} could not start.</p>
-    <small>${escapeHtml(message)}</small>
-  </div>`;
-  const input = document.getElementById('promptInput');
-  input.placeholder = 'Your draft is preserved here so you can copy it';
-  const btn = document.getElementById('btnSend');
-  btn.disabled = true;
-  btn.title = message;
-}
-
-async function selectSession(id, { forceTranscriptReload = false, host = null, keepBounceView = false } = {}) {
-  // Validate the target before tearing anything down: a stale id (a resume
-  // racing a filtered refresh, a pruned session) must leave the current view
-  // intact instead of stashing the transcript and then bailing on a blank pane.
-  if (!sessionState.findSession(id, host)) return;
-  sessionState.advanceSelection();
-  sessionSearch.reset();
-  transcriptController.retire();
-  stashPromptState();
-  currentSessionSpawnId = null;
-  setComposerWaiting(false);
-  // Search marks are transient UI, but the pages search loaded are not. Clear
-  // the marks before moving the current transcript into its short-lived DOM
-  // cache so revisiting restores clean, already-finalized message nodes.
-  cancelStreamingRender();
-  // A recording belongs to the composer it was started from — switching away
-  // discards it and releases the mic rather than dictating into a new session.
-  cancelRecording();
-  hideComposerNote();
-  closeSearch();
-  // The diff and file views show the previous session's workspace — close them
-  // before stashing: their takeover CSS display:nones #messages, whose
-  // scrollTop reads 0 while hidden and would be cached as the reader's spot.
-  closeDiffView();
-  closeFileView();
-  closeStatsModal();
-  closeTreeModal();
-  closeModelDropdown();
-  closeThinkingDropdown();
-  closeArtifactsModal();
-  closeUsageView(); // picking a session while the usage takeover is up means "show me that session"
-  closeSearchView();
-  closeNewSessionView();
-  closeSkillsView();
-  closeRoutinesView();
-  closeRecoveryView();
-  if (!keepBounceView) closeBounceView();
-  stashCurrentTranscript();
-  if (!sessionState.setCurrentSession(id, host)) return;
-  const owner = sessionState.captureSelection();
-  if (forceTranscriptReload) transcriptController.deleteCached(sessionRefKey(sessionState.currentSession));
-  // Math rendering is transcript-only. Start its one-shot load while the
-  // synchronous session chrome is updated, then gate markdown hydration on it.
-  const mathAssetsReady = loadMathAssets().catch(() => {});
-  revealSessionInFamily(id, sessionState.currentSession.host);
-  // Tear down the previous session's stream up front, before the awaits below.
-  // Left open, its in-flight turn_end/message_update events fire against the
-  // session we're switching to (loadMessages has already reset the cursors).
-  messageStreamController.stop();
-  followStream = false; // forced follow doesn't carry across sessions
-  // The terminal panel is per-session (its PTY keeps running server-side;
-  // reopening reattaches with scrollback).
-  closeTerminal();
-  // Extension widgets/statuses/dialogs and relation navigation are
-  // per-session; clear them before the new session's projections arrive.
-  clearExtensionUI();
-  clearSessionRelations();
-  localStorage.setItem('pi-dish-session', sessionRefKey(sessionState.currentSession));
-  markSessionSeen(sessionState.currentSession);
-  
-  document.getElementById('emptyState').style.display = 'none';
-  document.getElementById('sessionView').style.display = 'flex';
-  
-  // Show/hide input area vs resume bar based on active state
-  const inputArea = document.querySelector('.input-area');
-  const resumeBar = document.getElementById('resumeBar');
-  const sessionActions = document.querySelector('.session-actions');
-  
-  closeControlPanel();
-
-  if (sessionState.currentSession.isActive) {
-    if (inputArea) inputArea.style.display = '';
-    if (resumeBar) resumeBar.style.display = 'none';
-    resetResumeModelPicker();
-    restorePromptState();
-  } else {
-    clearPromptComposer();
-    if (inputArea) inputArea.style.display = 'none';
-    // A live subagent's transcript belongs to the session running it, so
-    // resuming would put a second harness process on a file that process
-    // keeps appending to. The bar keeps the read-only label and Stats; only
-    // the Resume affordance goes.
-    const resumable = sessionSupports(sessionState.currentSession, 'resume');
-    if (resumeBar) {
-      resumeBar.style.display = '';
-      const cwdSpan = resumeBar.querySelector('.resume-cwd');
-      if (cwdSpan) cwdSpan.textContent = sessionState.currentSession.cwd || '~';
-      const label = resumeBar.querySelector('.resume-label');
-      if (label) {
-        label.textContent = resumable
-          ? 'Read-only — session is inactive'
-          : 'Read-only — a live session owns this transcript';
-      }
-      const resumeBtn = resumeBar.querySelector('#resumeSessionBtn');
-      if (resumeBtn) resumeBtn.style.display = resumable ? '' : 'none';
-    }
-    if (resumable) loadResumeModelOptions(sessionState.currentSession);
-    else resetResumeModelPicker();
-  }
-  if (sessionActions) sessionActions.style.display = sessionState.currentSession.isActive ? '' : 'none';
-
-  // Working state and queue strip are per-session — seed from the list data
-  // instead of leaking the previous session's state until the init event.
-  renderQueueStatus(null);
-  closeBtwPanel();
-  setCompacting(sessionState.currentSession.isActive && !!sessionState.currentSession.compacting);
-  setTurnInProgress(sessionState.currentSession.isActive && !!sessionState.currentSession.turnInProgress);
-
-  // Artifacts are per-session; clear the previous session's badge before the
-  // fetch lands so a stale count never shows against the new session.
-  sessionInfo.resetArtifacts();
-  refreshArtifacts(owner);
-
-  renderSessions();
-  updateSessionHeader();
-  loadSessionRelations(owner); // summary-only; don't stall transcript hydration
-  if (sessionState.currentSession.isActive) {
-    // Fire-and-forget: nothing below needs the results, and both can ask the
-    // live session over its socket — don't stall the transcript on them.
-    loadModels(id, sessionState.currentSession.harnessId);
-    loadCommands(id); // refresh autocomplete with this session's commands
-  }
-  await mathAssetsReady;
-  if (!sessionState.ownsSelection(owner)) return;
-  await loadMessages(owner);
-  if (!sessionState.ownsSelection(owner)) return;
-  
-  if (sessionState.currentSession.isActive) {
-    startMessageStream(owner);
-  } else {
-    messageStreamController.stop();
-  }
-}
-
-// Resume a previous session
-let resumeModelsSeq = 0;
-
-function resetResumeModelPicker() {
-  resumeModelsSeq += 1;
-  const wrap = document.getElementById('resumeModelWrap');
-  const select = document.getElementById('resumeModelSelect');
-  if (wrap) wrap.style.display = 'none';
-  if (select) {
-    select.disabled = true;
-    select.innerHTML = '<option value="">Session model</option>';
-  }
-}
-
-async function loadResumeModelOptions(session) {
-  resetResumeModelPicker();
-  const owner = sessionState.captureSelection();
-  if (!session || session.harnessId !== 'omp' || !owner || owner.id !== session.id || owner.host !== (session.host || null)) return;
-  const seq = resumeModelsSeq;
-  const wrap = document.getElementById('resumeModelWrap');
-  const select = document.getElementById('resumeModelSelect');
-  if (!wrap || !select) return;
-  wrap.style.display = 'flex';
-  select.title = 'Loading Oh My Pi models…';
-  try {
-    const models = await sessionApi.models(owner.host, { harnessId: 'omp', cwd: session.cwd });
-    if (seq !== resumeModelsSeq || !sessionState.ownsSelection(owner)) return;
-    const current = session.model && session.model !== 'unknown' ? ` (${session.model})` : '';
-    let html = `<option value="">Session model${escapeHtml(current)}</option>`;
-    for (const model of Array.isArray(models) ? models : []) {
-      const selector = model.selector || `${model.provider}/${model.id}`;
-      html += `<option value="${escapeHtml(selector)}">${escapeHtml(selector)}</option>`;
-    }
-    select.innerHTML = html;
-    select.disabled = false;
-    select.title = 'Optionally override the model while resuming this OMP session';
-  } catch (e) {
-    if (seq !== resumeModelsSeq || !sessionState.ownsSelection(owner)) return;
-    select.disabled = true;
-    select.title = `Could not load Oh My Pi models: ${e.message}`;
-  }
-}
-
-async function resumeSession() {
-  if (!sessionState.currentSession) return;
-  const owner = sessionState.captureSelection();
-  const target = savedResumeTarget(owner.host);
-  const model = sessionState.currentSession.harnessId === 'omp'
-    ? (document.getElementById('resumeModelSelect')?.value || undefined) : undefined;
-  setStatus(target ? 'Resuming in tmux…' : 'Resuming session...', 'working');
-
-  try {
-    const data = await apiSend(owner.host, `/api/sessions/${encodeURIComponent(owner.id)}/resume`, {
-      ...(target ? { target } : {}),
-      ...(model ? { model } : {}),
-    });
-    // Reload sessions and re-select (it's now active); refreshSessions
-    // keeps an in-flight All-tab search intact.
-    await refreshSessions();
-    if (!sessionState.ownsSelection(owner)) return;
-    setStatus('Session resumed');
-    selectSession(data.id, { host: owner.host });
-  } catch (e) {
-    if (sessionState.ownsSelection(owner)) setStatus('Resume failed: ' + e.message, 'error');
-  }
-}
+function pendingComposerKey(id) { return `spawn:${id}`; }
+const sessionView = PiDishBrowser.createSessionView({ document, sessionState, storage: localStorage, endpoint: resolveHost,
+  get drafts() { return composerDrafts; }, get activity() { return sessionActivity; }, get transcript() { return transcriptController; }, get stream() { return messageStreamController; }, get resume() { return sessionResume; },
+  spawn: id => pendingSessionSpawns.get(id), resetSearch: () => sessionSearch.reset(), cancelStreaming: () => cancelStreamingRender(), stopFollowing: () => { followStream = false; },
+  closeViews: (_pending, keepBounce) => {
+    closeSearch(); closeDiffView(); closeFileView(); closeStatsModal(); closeTreeModal(); closeModelDropdown(); closeThinkingDropdown(); closeArtifactsModal();
+    closeUsageView(); closeSearchView(); closeNewSessionView(); closeSkillsView(); closeRoutinesView(); closeRecoveryView(); if (!keepBounce) closeBounceView();
+  },
+  closeTerminal: () => closeTerminal(), clearExtension: () => clearExtensionUI(), clearRelations: () => clearSessionRelations(), closeControls: () => closeControlPanel(), hideAutocomplete: () => hideAutocomplete(),
+  retireModels: () => modelCatalog.retire(), retireCommands: () => composerAutocomplete.retireCommands(), queue: data => renderQueueStatus(data), closeBtw: () => closeBtwPanel(), resetArtifacts: () => sessionInfo.resetArtifacts(),
+  thinking: () => updateThinkingBadges(), terminal: () => updateTerminalButtons(), mic: () => updateMicButton(), mood: (description, face) => setMoodIndicator(description, face), status: (message, type) => setStatus(message, type),
+  render: () => renderSessions(), cancelRecording: () => cancelRecording(), hideNote: () => hideComposerNote(), math: () => loadMathAssets(), reveal: (id, host) => revealSessionInFamily(id, host),
+  seen: session => markSessionSeen(session), artifacts: owner => refreshArtifacts(owner), header: () => updateSessionHeader(), relations: owner => loadSessionRelations(owner), models: (id, harness) => loadModels(id, harness), commands: id => loadCommands(id),
+});
+function showPendingSessionView(id) { sessionView.pending(id); }
+function showPendingSessionFailure(id, message, spawn) { sessionView.failure(id, message, spawn); }
+function selectSession(id, options) { return sessionView.select(id, options); }
+const sessionResume = PiDishBrowser.createSessionResume({ document, sessionState, request: (...args) => apiFetch(...args), endpoint: resolveHost,
+  target: host => savedResumeTarget(host), refresh: () => refreshSessions(), select: (id, options) => selectSession(id, options), status: (message, type) => setStatus(message, type),
+});
+function resetResumeModelPicker() { sessionResume.reset(); }
+function loadResumeModelOptions(session) { return sessionResume.load(session); }
+function resumeSession() { return sessionResume.resume(); }
 
 // =========================================================================
 // Models
@@ -994,97 +716,11 @@ function closeRelationsModal() { sessionRelationsController.closeModal(); }
  * informative part, so it is dropped before the name is allowed to
  * ellipsize (CSS does the truncation). Full ref stays in the tooltip.
  */
-function setModelChipLabel(btn, model, suffix) {
-  const full = String(model || '');
-  btn.title = full ? `${full} — change model` : 'Change model';
-  btn.textContent = full + suffix;
-  // scrollWidth is 0 while the header is hidden; then the full ref stands
-  // and the next header update (the view is visible by then) trims it.
-  if (btn.clientWidth && btn.scrollWidth > btn.clientWidth) {
-    const short = shortModelName(full);
-    if (short !== full) btn.textContent = short + suffix;
-  }
-}
-
-function updateSessionHeader() {
-  if (!sessionState.currentSession) return;
-
-  document.getElementById('sessionName').textContent = sessionState.currentSession.name || 'Unnamed';
-  const hostEl = document.getElementById('sessionHost');
-  if (hostEl) {
-    const showHost = isMultiHost() && !!hostEntryFor(sessionState.currentSession.host);
-    hostEl.style.display = showHost ? '' : 'none';
-    hostEl.className = 'badge host-badge' + (hostIdIsDown(sessionState.currentSession.host) ? ' offline' : '');
-    // Same color the sidebar gave this host; the dot is a ::before, so the
-    // badge stays a textContent write.
-    hostEl.style.setProperty('--host-color', showHost ? hostColorFor(sessionState.currentSession.host) : '');
-    hostEl.textContent = showHost ? hostLabelFor(sessionState.currentSession.host) : '';
-  }
-  const harnessEl = document.getElementById('sessionHarness');
-  const showHarness = sessionState.currentSession.harnessId && sessionState.currentSession.harnessId !== 'pi';
-  harnessEl.style.display = showHarness ? '' : 'none';
-  if (showHarness) {
-    const info = harnessBadgeInfo(sessionState.currentSession.harnessId, sessionState.currentSession.harnessLabel);
-    const title = sessionState.currentSession.harnessLabel || info.label;
-    ensureHarnessRows(sessionHostIdOf(sessionState.currentSession));
-    // Clickable only where the host reports a settings view for this harness
-    // (OMP's /agents + /models hubs today).
-    const configurable = harnessSupportsSettings(sessionState.currentSession);
-    harnessEl.className = `badge harness-badge harness-badge-${sessionState.currentSession.harnessId}`
-      + (configurable ? ' clickable' : '');
-    harnessEl.title = configurable ? `${title} settings: agents and models` : `${title} harness`;
-    harnessEl.setAttribute('aria-label', configurable ? `${title} settings` : `${title} harness`);
-    if (configurable) harnessEl.setAttribute('role', 'button');
-    else harnessEl.removeAttribute('role');
-    // Icon only in the header — the label span is CSS-hidden here, the name
-    // lives in the tooltip. Sidebar rows show the full badge.
-    harnessEl.innerHTML = harnessBadgeInnerHtml(info);
-  } else {
-    harnessEl.textContent = '';
-  }
-  // The tree has no header button any more (type /tree in the composer); the
-  // mobile control panel keeps its row, so it still follows harness support.
-  const cpTree = document.getElementById('cpTreeRow');
-  if (cpTree) cpTree.style.display = sessionSupports(sessionState.currentSession, 'tree') ? '' : 'none';
-  // Phone parity for the header badge: same modal from the control panel.
-  const cpHarness = document.getElementById('cpHarnessRow');
-  if (cpHarness) cpHarness.style.display = harnessSupportsSettings(sessionState.currentSession) ? '' : 'none';
-  document.getElementById('btnExport').style.display = sessionSupports(sessionState.currentSession, 'export') ? '' : 'none';
-
-  const nameEl = document.getElementById('sessionName');
-  const canRename = sessionState.currentSession.isActive && sessionSupports(sessionState.currentSession, 'rename');
-  nameEl.classList.toggle('editable-name', canRename);
-  nameEl.title = canRename ? 'Click to rename' : '';
-
-  const modelBtn = document.getElementById('sessionModel');
-  const canSetModel = sessionState.currentSession.isActive && sessionSupports(sessionState.currentSession, 'setModel');
-  setModelChipLabel(modelBtn, sessionState.currentSession.model, canSetModel ? ' ▾' : '');
-  modelBtn.style.cursor = canSetModel ? 'pointer' : 'default';
-
-  // One readout, in the composer field: percent only (its slot is fixed
-  // width), with the token count in the tooltip.
-  const ctxClass = contextClass(sessionState.currentSession.contextPercent);
-  const contextEl = document.getElementById('sessionContext');
-  contextEl.textContent = `${sessionState.currentSession.contextPercent}%`;
-  contextEl.className = 'tool-btn tool-ctx' + (ctxClass ? ' ' + ctxClass : '');
-  contextEl.title = sessionState.currentSession.contextTokens
-    ? `Session stats — ${formatTokens(sessionState.currentSession.contextTokens)} tokens of context`
-    : 'Session stats';
-
-  updateThinkingBadges();
-  updateTerminalButtons();
-  updateMicButton();
-
-  // Phone chip row: the working directory is the one piece of session
-  // context the header used to hide behind the stats modal.
-  const cwdChip = document.getElementById('sessionCwdChip');
-  if (cwdChip) {
-    const cwd = sessionState.currentSession.cwd || '';
-    cwdChip.style.display = cwd ? '' : 'none';
-    cwdChip.textContent = cwd ? (cwd.split('/').filter(Boolean).pop() || cwd) : '';
-    cwdChip.title = cwd ? `${cwd} — session stats` : 'Session stats';
-  }
-}
+const sessionHeader = PiDishBrowser.createSessionHeader({ document, sessionState, multi: isMultiHost, host: hostEntryFor, down: hostIdIsDown, color: hostColorFor, label: hostLabelFor,
+  settings: session => harnessSupportsSettings(session), ensureHarness: id => ensureHarnessRows(id), thinking: () => updateThinkingBadges(), terminal: () => updateTerminalButtons(), mic: () => updateMicButton(),
+});
+function setModelChipLabel(button, model, suffix) { sessionHeader.label(button, model, suffix); }
+function updateSessionHeader() { sessionHeader.update(); }
 
 // Header actions capture their selection before opening editors or dispatching.
 const sessionControls = PiDishBrowser.createSessionControls({
@@ -1513,7 +1149,7 @@ function closeBtwPanel() { btwPanel.close(); }
 function copyBtwAnswer(button) { return btwPanel.copy(button); }
 
 const composerSubmit = PiDishBrowser.createComposerSubmit({ document, sessionState, drafts: composerDrafts, delivery: promptDelivery, activity: sessionActivity, btw: btwPanel,
-  request: (...args) => apiFetch(...args), endpoint: resolveHost, spawnId: () => currentSessionSpawnId, spawnPending: () => pendingSessionSpawns.has(currentSessionSpawnId),
+  request: (...args) => apiFetch(...args), endpoint: resolveHost, spawnId: () => sessionView.spawnId, spawnPending: () => pendingSessionSpawns.has(sessionView.spawnId),
   refs: message => sessionRefHints(message), status: (message, type) => setStatus(message, type), openTree: () => openTreeModal(), hideAutocomplete: () => hideAutocomplete(),
   refresh: () => refreshSessions(), follow: () => { followStream = true; }, scroll: scrollToBottom, renderUser: (message, time, attrs) => renderUserMessage(message, time, attrs),
 });
@@ -1521,7 +1157,7 @@ function abortTurn() { return composerSubmit.abortTurn(); }
 
 const pendingSessionSpawns = PiDishBrowser.createSessionSpawns({
   request: apiFetch, delay: () => new Promise(resolve => setTimeout(resolve, 250)), harnessLabel,
-  current: () => currentSessionSpawnId, changed: renderSessions,
+  current: () => sessionView.spawnId, changed: renderSessions,
   showPending: key => { switchTab('active'); showPendingSessionView(key); if (window.innerWidth <= 768) closeSidebar(); },
   loadSessions, hasSession: (id, host) => !!sessionState.findSession(id, host),
   selectSession: (id, host) => { void selectSession(id, { host }); },
@@ -1535,7 +1171,7 @@ const pendingSessionSpawns = PiDishBrowser.createSessionSpawns({
 const newSessionController = PiDishBrowser.createNewSession({
   root: document.querySelector('.main'), storage: localStorage, request: apiFetch,
   self: selfHostEntry, host: hostEntryFor, hosts: effectiveHosts, hostDown: hostIsDown, multiHost: isMultiHost,
-  sessionState, currentSpawn: () => currentSessionSpawnId, spawns: pendingSessionSpawns, models: modelCatalog,
+  sessionState, currentSpawn: () => sessionView.spawnId, spawns: pendingSessionSpawns, models: modelCatalog,
   closeOtherViews: () => { closeSidebar(); closeUsageView(); closeSearchView(); closeSkillsView(); closeRoutinesView(); closeRecoveryView(); closeBounceView(); },
   closeSettings: () => closeHarnessSettings(),
   harnessCacheChanged: () => { if (sessionState.currentSession) updateSessionHeader(); }, status: setStatus,

@@ -177,3 +177,5 @@ complete application coverage.
 `prompt-delivery.spec.js` covers queue row and submit ownership, including replacement and disposal.
 
 `message-stream.spec.js` covers ticket/source ownership, reconnects, completion deduplication and switch ordering.
+
+`session-view.spec.js` covers resume/selection ownership, header narrowing and cached tool adoption.

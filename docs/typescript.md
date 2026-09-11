@@ -479,3 +479,8 @@ cancellation preserves raw server text and restores the originating composer.
 `message-stream.ts` owns source connections, ticket/reconnect generations and
 selected-session event dispatch. Completion deduplication spans a turn, while
 session-switch navigation also has an event sequence within the connection.
+
+`session-view.ts` owns selected/provisional view transitions and their awaited
+hydration. `session-resume.ts` owns picker/launch requests and `session-header.ts`
+projects narrowed metadata. Retained live-tool metadata follows cached nodes and
+may be adopted only by the same host/session under its new selection generation.

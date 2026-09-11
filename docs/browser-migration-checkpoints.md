@@ -910,3 +910,21 @@ Verification: strict checks, 936 backend tests, 268 browser tests, all independe
 UI scenarios and full desktop/mobile smoke passed. Six new browser cases and
 strict contracts cover tickets, endpoints, retired sources, reconnect timers,
 completion deduplication and session-switch ordering. Review and push pending.
+
+## Checkpoint 42 — selection, resume and header projection
+
+Moved selected/provisional session views, resume model/launch requests and header
+projection into three strict controllers. Selection validates before teardown,
+retires requests before stashing, and checks generation and endpoint after awaits.
+Provisional views also release dictation. Resume serializes its captured target
+and cannot navigate a later selection; model picker requests retire by owner.
+Header projection narrows unknown metadata before DOM writes.
+
+Addressed Fable’s cached-tool observation from checkpoint 37: a WeakMap keeps panel
+metadata with retained DOM, so a restored same-host/session tool reuses its node
+and start time even after the active map was cleared. Other hosts cannot adopt it.
+
+Verification: strict checks, 936 backend tests, 273 browser tests, all independent
+UI scenarios and full desktop/mobile smoke passed. Five new browser cases and
+strict contracts cover resume ownership, endpoints/disposal, malformed headers
+and retained tool adoption. Review and push pending.

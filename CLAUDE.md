@@ -2216,3 +2216,6 @@ endpoint identity. Do not mutate ledger internals from callers or tests.
 
 The typed stream controller owns connections and event delivery. Stop it on
 selection retirement; never assign its source or reconnect state externally.
+
+Session selection, resume and header projection are typed. Validate a target
+before teardown, retain request endpoints and reuse cached tools only by identity.
