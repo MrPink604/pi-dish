@@ -152,6 +152,11 @@ design history and may include work that has already shipped.
   Moves DOM/listeners behind typed owner-bearing actions and cleanup. Uses native
   buttons and literal level text; an unsupported current level stays local to
   its view instead of changing the shared Pi vocabulary.
+- Host catalog normalization/merge: completed 2026-09-11 after Fable review and
+  full verification (835 backend tests, 60 browser regressions, all UI
+  scenarios/smoke and OMP/Prime canaries).
+  Moves URL normalization, catalog projection and self/fleet/user merge
+  into TypeScript without changing source precedence or routing policy.
 - Next: remaining host/request controllers and leaf UI. Keep each extraction
   independently reviewable; preserve selection guards, streaming coalescing,
   pagination and retained DOM.

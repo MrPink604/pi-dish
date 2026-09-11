@@ -1,6 +1,6 @@
 /**
- * Unit tests for pure frontend helpers and the migrated host connection reducer.
- * The reducer runs from public/browser.js; the remaining helpers run in
+ * Unit tests for pure frontend helpers and migrated host connection/catalog modules.
+ * The migrated modules run from public/browser.js; the remaining helpers run in
  * node — the file exports CommonJS when `module` exists and defines globals
  * in the browser.
  *
@@ -12,7 +12,7 @@ const H = require('../public/helpers.js');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const browserContext = {};
+const browserContext = { URL };
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), browserContext);
 const B = browserContext.PiDishBrowser;
 
@@ -880,24 +880,24 @@ test('sessionKey/parseSessionKey round-trip and tolerate bare (pre-multi-host) i
 });
 
 test('normalizeHostBase yields a prefixable base and rejects garbage', () => {
-  assert.equal(H.normalizeHostBase('http://tycho:3333/'), 'http://tycho:3333');
-  assert.equal(H.normalizeHostBase('https://box.tail.ts.net'), 'https://box.tail.ts.net');
-  assert.equal(H.normalizeHostBase('  http://a.b:1/x/y/  '), 'http://a.b:1/x/y');
+  assert.equal(B.normalizeHostBase('http://tycho:3333/'), 'http://tycho:3333');
+  assert.equal(B.normalizeHostBase('https://box.tail.ts.net'), 'https://box.tail.ts.net');
+  assert.equal(B.normalizeHostBase('  http://a.b:1/x/y/  '), 'http://a.b:1/x/y');
   // hub-proxied peers are path bases on the serving origin
-  assert.equal(H.normalizeHostBase('/hosts/tycho/'), '/hosts/tycho');
+  assert.equal(B.normalizeHostBase('/hosts/tycho/'), '/hosts/tycho');
   // '' is the self host and stays ''
-  assert.equal(H.normalizeHostBase(''), '');
-  assert.equal(H.normalizeHostBase(null), '');
+  assert.equal(B.normalizeHostBase(''), '');
+  assert.equal(B.normalizeHostBase(null), '');
   // no guessing: a scheme-less or malformed base is an error, not localhost
-  assert.equal(H.normalizeHostBase('tycho:3333'), null);
-  assert.equal(H.normalizeHostBase('garbage'), null);
-  assert.equal(H.normalizeHostBase('ftp://tycho'), null);
-  assert.equal(H.normalizeHostBase('http://a b'), null);
-  assert.equal(H.normalizeHostBase('/hosts/../etc'), null);
+  assert.equal(B.normalizeHostBase('tycho:3333'), null);
+  assert.equal(B.normalizeHostBase('garbage'), null);
+  assert.equal(B.normalizeHostBase('ftp://tycho'), null);
+  assert.equal(B.normalizeHostBase('http://a b'), null);
+  assert.equal(B.normalizeHostBase('/hosts/../etc'), null);
 });
 
 test('sanitizeHostCatalog drops broken entries instead of throwing', () => {
-  assert.deepEqual(H.sanitizeHostCatalog([
+  assert.deepEqual(B.sanitizeHostCatalog([
     { hostId: 'a', label: 'Tycho', base: 'http://tycho:3333/', token: ' t ' },
     { base: '/hosts/b' },
     { hostId: 'c', base: 'nonsense' },      // unusable base
@@ -908,9 +908,9 @@ test('sanitizeHostCatalog drops broken entries instead of throwing', () => {
     { base: 'http://tycho:3333', hostId: 'a', label: 'Tycho', token: 't' },
     { base: '/hosts/b' },
   ]);
-  assert.deepEqual(H.sanitizeHostCatalog(null), []);
-  assert.deepEqual(H.sanitizeHostCatalog('nope'), []);
-  assert.deepEqual(H.sanitizeHostCatalog([{ base: 'http://a:1', label: 7, token: 7 }]),
+  assert.deepEqual(B.sanitizeHostCatalog(null), []);
+  assert.deepEqual(B.sanitizeHostCatalog('nope'), []);
+  assert.deepEqual(B.sanitizeHostCatalog([{ base: 'http://a:1', label: 7, token: 7 }]),
     [{ base: 'http://a:1' }]);
 });
 
@@ -1680,7 +1680,7 @@ test('searchSessionsForRef ranks name matches over cwd, live over historical', (
 });
 
 test('mergeHostEntries puts self first and keys on hostId, then base', () => {
-  const hosts = H.mergeHostEntries(
+  const hosts = B.mergeHostEntries(
     { hostId: 'self-id', label: 'laptop', capabilities: { tmux: true } },
     [{ name: 'tycho', base: '/hosts/tycho', kind: 'ssh', hostId: 'tycho-id', reachable: true },
      { self: true, base: '', hostId: 'self-id' }],
@@ -1696,7 +1696,7 @@ test('mergeHostEntries puts self first and keys on hostId, then base', () => {
 });
 
 test('mergeHostEntries folds duplicates but keeps the fields only the loser had', () => {
-  const hosts = H.mergeHostEntries(
+  const hosts = B.mergeHostEntries(
     { hostId: 'self-id' },
     [{ name: 'tycho', base: '/hosts/tycho', hostId: 'tycho-id' }],
     [{ base: 'http://tycho:3333', hostId: 'tycho-id', token: 'tok', label: 'Tycho (direct)' }],
@@ -1708,7 +1708,7 @@ test('mergeHostEntries folds duplicates but keeps the fields only the loser had'
 });
 
 test('mergeHostEntries drops garbage bases instead of guessing', () => {
-  const hosts = H.mergeHostEntries({ hostId: 'self-id' },
+  const hosts = B.mergeHostEntries({ hostId: 'self-id' },
     [{ name: 'bad', base: 'tycho:3333' }, null, { name: 'ok', base: 'http://ok:1' }],
     [{ base: 'not a url' }, { nope: true }]);
   assert.deepEqual(hosts.map(h => h.base), ['', 'http://ok:1']);

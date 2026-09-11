@@ -979,8 +979,8 @@ exactly single-host pi-dish.
   `reason` vocabulary `/api/hosts` uses.
 - **Client**: effective hosts = self + `/api/hosts` fleet entries (runtime
   only) + user catalog (`localStorage['pi-dish-hosts']`, validated by
-  `sanitizeHostCatalog`), deduped by hostId — the same peer reachable two
-  ways is one host. All API touches go through `apiFetch(host, path)`;
+  `sanitizeHostCatalog` in `src/browser/host-catalog.ts`), deduped by hostId —
+  the same peer reachable two ways is one host. All API touches go through `apiFetch(host, path)`;
   sessions carry `host`, stamped only by the four state writers. A *download*
   is the one API touch that isn't a fetch: session export
   (`exportSession`) resolves the owning host and navigates to

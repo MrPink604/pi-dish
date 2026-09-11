@@ -908,66 +908,6 @@ function sessionRefKey(session) {
 }
 
 /**
- * Normalize a catalog host base to something that can simply be prefixed to
- * an "/api/..." path: an http(s) origin (plus optional path prefix, which is
- * what the hub proxy's /hosts/<name> entries look like) with no trailing
- * slash. '' is the self host and stays ''. Anything that isn't explicitly
- * one of those forms is garbage and returns null rather than being guessed
- * at — a mistyped base must fail loudly at add time, not silently resolve
- * against the serving origin.
- */
-function normalizeHostBase(input) {
-  if (input == null) return '';
-  const raw = String(input).trim();
-  if (!raw) return '';
-  if (/\s/.test(raw)) return null;
-  const segmentsOk = (path) => path.split('/').filter(Boolean)
-    .every(seg => seg !== '.' && seg !== '..' && /^[\w.~%\-]+$/.test(seg));
-  if (raw.startsWith('/')) {
-    if (!segmentsOk(raw)) return null;
-    return raw.replace(/\/+$/, '');
-  }
-  if (!/^https?:\/\//i.test(raw)) return null;
-  let url;
-  try { url = new URL(raw); } catch { return null; }
-  if (!url.hostname) return null;
-  const path = url.pathname.replace(/\/+$/, '');
-  if (!segmentsOk(path)) return null;
-  return url.origin + path;
-}
-
-/**
- * Validate the localStorage host catalog. Broken entries are dropped, never
- * thrown on: a corrupt catalog must degrade to "fewer hosts", not a client
- * that won't boot. The self host is implicit (base ''), so entries without a
- * reachable base are dropped too.
- */
-function sanitizeHostCatalog(raw) {
-  const out = [];
-  const seen = new Set();
-  if (!Array.isArray(raw)) return out;
-  for (const item of raw) {
-    if (!item || typeof item !== 'object') continue;
-    let base;
-    try { base = normalizeHostBase(item.base); } catch { continue; }
-    if (!base) continue;
-    const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
-    const hostId = str(item.hostId);
-    const dedupe = hostId || base;
-    if (seen.has(dedupe)) continue;
-    seen.add(dedupe);
-    const entry = { base };
-    if (hostId) entry.hostId = hostId;
-    const label = str(item.label);
-    if (label) entry.label = label;
-    const token = str(item.token);
-    if (token) entry.token = token;
-    out.push(entry);
-  }
-  return out;
-}
-
-/**
  * Human label for a host entry: the server's own label if it gave one, else
  * the fleet name, else the bare authority of its base. The self host has no
  * base, so it says so rather than rendering an empty chip.
@@ -1360,71 +1300,6 @@ function searchSessionsForRef(list, query, limit = 8) {
     || (b.session.isActive ? 1 : 0) - (a.session.isActive ? 1 : 0)
     || new Date(b.session.lastActivity || 0) - new Date(a.session.lastActivity || 0));
   return rows.slice(0, Math.max(0, limit));
-}
-
-/**
- * The effective host list: self, then the fleet entries a host advertises
- * over GET /api/hosts (runtime only - never persisted), then the catalog of
- * directly-added hosts from localStorage. Identity is `hostId` when known
- * and the base otherwise, so the same host reached two ways (as a fleet
- * remote and as a directly-added URL) is one row.
- *
- * First source wins on conflict - a host reached through the fleet proxy is
- * same-origin, which is the connection least likely to be blocked - but a
- * later duplicate still contributes fields the winner lacks (most usefully
- * a user-entered token and label).
- */
-function mergeHostEntries(self, fleet, catalog) {
-  const out = [];
-  const byId = new Map();
-  const byBase = new Map();
-  const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
-
-  const absorb = (into, extra) => {
-    for (const key of ['label', 'name', 'token', 'version', 'capabilities', 'kind', 'error']) {
-      if (into[key] == null && extra[key] != null) into[key] = extra[key];
-    }
-    return into;
-  };
-
-  const push = (entry) => {
-    if (!entry) return;
-    const hostId = str(entry.hostId);
-    const base = typeof entry.base === 'string' ? entry.base : null;
-    if (base == null) return;
-    const existing = (hostId && byId.get(hostId)) || byBase.get(base);
-    if (existing) { absorb(existing, entry); return; }
-    const merged = { ...entry, base, hostId: hostId || null, key: hostId || base || 'self' };
-    if (hostId) byId.set(hostId, merged);
-    byBase.set(base, merged);
-    out.push(merged);
-  };
-
-  push({
-    hostId: self && self.hostId ? self.hostId : null,
-    base: '',
-    label: (self && self.label) || null,
-    version: (self && self.version) || null,
-    capabilities: (self && self.capabilities) || null,
-    source: 'self',
-    self: true,
-    reachable: true,
-  });
-  for (const entry of Array.isArray(fleet) ? fleet : []) {
-    if (!entry || typeof entry !== 'object' || entry.self) continue;
-    let base;
-    try { base = normalizeHostBase(entry.base); } catch { continue; }
-    if (base == null) continue;
-    push({
-      hostId: str(entry.hostId), base, label: str(entry.label), name: str(entry.name),
-      kind: str(entry.kind), version: entry.version || null,
-      capabilities: entry.capabilities || null,
-      reachable: entry.reachable !== false, error: str(entry.error),
-      source: 'fleet',
-    });
-  }
-  for (const entry of sanitizeHostCatalog(catalog)) push({ ...entry, source: 'user' });
-  return out;
 }
 
 /**
@@ -2676,8 +2551,8 @@ if (typeof module !== 'undefined' && module.exports) {
     parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch, stripQueryField,
     isAutomationSession, queryAsksForAutomation,
     highlightFuzzy, normalizeMood, isUnreadSession, THINKING_LEVEL_NAMES, thinkingLevelsFor,
-    sessionKey, parseSessionKey, sessionRefKey, normalizeHostBase, sanitizeHostCatalog,
-    hostDisplayLabel, sessionRef, uniqueSessionPrefix, mergeHostEntries, mergeUsageSummaries, createFanoutRenderQueue,
+    sessionKey, parseSessionKey, sessionRefKey,
+    hostDisplayLabel, sessionRef, uniqueSessionPrefix, mergeUsageSummaries, createFanoutRenderQueue,
     decodeRouteSessionId, sessionRefAliases, resolveSessionRefAmong, shortSessionRef, stableSessionRef,
     usageUnattributedCost,
     parseSessionRefTokens, parseSessionRefParts, formatSessionRefContext,

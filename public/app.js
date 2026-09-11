@@ -5,6 +5,11 @@
 // host (base '', no token) and the wire traffic is exactly what a
 // single-host client always sent.
 // =========================================================================
+// Catalog values enter through the typed normalization/merge boundary.
+function normalizeHostBase(input) { return PiDishBrowser.normalizeHostBase(input); }
+function sanitizeHostCatalog(raw) { return PiDishBrowser.sanitizeHostCatalog(raw); }
+function mergeHostEntries(self, fleet, catalog) { return PiDishBrowser.mergeHostEntries(self, fleet, catalog); }
+
 const HOSTS_KEY = 'pi-dish-hosts';
 const KEYS_MIGRATED_KEY = 'pi-dish-keys-migrated';
 // Directly-added hosts (phase 2 owns the editor UI); self is always implicit.
@@ -156,7 +161,7 @@ function migrateClientKeys() {
 // =========================================================================
 // Effective host list + per-host connection state (multi-host phase 2)
 // =========================================================================
-// Three sources feed one list (mergeHostEntries in helpers.js): this server
+// Three sources feed one list (mergeHostEntries in src/browser/host-catalog.ts): this server
 // (always), the fleet it advertises over GET /api/hosts (runtime only, never
 // persisted — an older server 404s and we simply stay single-host), and the
 // directly-added hosts in the localStorage catalog. Everything downstream —

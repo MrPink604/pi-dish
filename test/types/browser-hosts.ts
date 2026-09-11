@@ -2,6 +2,7 @@ import { createHostConnections, hostKeyOf } from '../../src/browser/host-connect
 import type { HostConnectionRecord, HostConnectionState } from '../../src/browser/host-connections';
 import { createHostSessionLoader } from '../../src/browser/host-session-loader';
 import type { HostSessionLoaderOptions, SessionHost } from '../../src/browser/host-session-loader';
+import { mergeHostEntries, sanitizeHostCatalog } from '../../src/browser/host-catalog';
 
 const connections = createHostConnections({ onChange() {}, now: () => 1000 });
 const host = { hostId: 'peer', base: '/hosts/peer', label: 'Peer' };
@@ -39,3 +40,16 @@ createHostSessionLoader({
   // @ts-expect-error Decoded list rows must carry string session identities.
   requestList: async () => ({ active: [{ id: 7 }], previous: [] }),
 });
+
+const catalog = sanitizeHostCatalog([{ base: '/hosts/peer', token: 'fixture' }]);
+const effective = mergeHostEntries({ hostId: 'self' }, [], catalog);
+for (const target of connections.pollable(effective)) loader.load(target, undefined, true, 1);
+const token: string | undefined = catalog[0]?.token;
+void token;
+// @ts-expect-error Effective routes always carry a string base.
+effective[0].base = 7;
+// @ts-expect-error User catalog tokens have been narrowed to strings.
+catalog[0].token = {};
+// @ts-expect-error Descriptor capability payloads still need a feature-specific check.
+const capability: boolean = effective[0].capabilities;
+void capability;

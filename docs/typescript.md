@@ -205,3 +205,10 @@ an unsupported current level; session-specific values cannot contaminate the
 shared Pi vocabulary. Labels use text properties and native buttons, replacing
 inline JavaScript handlers. The app still owns model discovery, level policy,
 placement and API feedback, and checks each action's captured selection owner.
+
+`src/browser/host-catalog.ts` owns host URL normalization, the persisted catalog
+projection and merging self/fleet/user sources. The first route for an id/base
+wins and later entries only fill missing metadata. It preserves the existing URL
+policy and drops broken catalog rows without mutating inputs. Normalized routes
+and tokens are typed for the transport/loaders; descriptor capabilities, version
+and self labels remain opaque until their consuming feature narrows them.

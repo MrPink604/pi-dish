@@ -32,9 +32,12 @@ var PiDishBrowser = (() => {
     decodeModelCatalog: () => decodeModelCatalog,
     hostConnReduce: () => hostConnReduce,
     hostKeyOf: () => hostKeyOf,
+    mergeHostEntries: () => mergeHostEntries,
     modelCatalogUrl: () => modelCatalogUrl,
     mountModelSelector: () => mountModelSelector,
     mountThinkingSelector: () => mountThinkingSelector,
+    normalizeHostBase: () => normalizeHostBase,
+    sanitizeHostCatalog: () => sanitizeHostCatalog,
     sendJson: () => sendJson,
     withFetchTimeout: () => withFetchTimeout
   });
@@ -233,10 +236,10 @@ var PiDishBrowser = (() => {
     const doc = root.ownerDocument;
     let view = null;
     let disposed = false;
-    function element(tag, className, text2) {
+    function element(tag, className, text3) {
       const node = doc.createElement(tag);
       node.className = className;
-      if (text2 !== void 0) node.textContent = text2;
+      if (text3 !== void 0) node.textContent = text3;
       return node;
     }
     const search = element("input", "model-search");
@@ -253,8 +256,8 @@ var PiDishBrowser = (() => {
       node.dataset.value = value;
       return node;
     }
-    function button(text2, name, value = "", primary = false) {
-      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text2);
+    function button(text3, name, value = "", primary = false) {
+      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text3);
       node.type = "button";
       return action(node, name, value);
     }
@@ -489,8 +492,8 @@ var PiDishBrowser = (() => {
     const state = prev && typeof prev === "object" ? prev : null;
     const errText = (value) => {
       if (value == null) return null;
-      const text2 = String(typeof value === "object" && "message" in value && value.message || value);
-      return text2 || null;
+      const text3 = String(typeof value === "object" && "message" in value && value.message || value);
+      return text3 || null;
     };
     const eventError = event && typeof event === "object" && "error" in event ? errText(event.error) : null;
     if (kind === "blocked") {
@@ -714,6 +717,123 @@ var PiDishBrowser = (() => {
         root.replaceChildren();
       }
     };
+  }
+
+  // src/browser/host-catalog.ts
+  function object(value) {
+    return value !== null && typeof value === "object";
+  }
+  function text2(value) {
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+  }
+  function normalizeHostBase(input) {
+    if (input == null) return "";
+    const raw = String(input).trim();
+    if (!raw) return "";
+    if (/\s/.test(raw)) return null;
+    const segmentsOk = (path2) => path2.split("/").filter(Boolean).every((seg) => seg !== "." && seg !== ".." && /^[\w.~%\-]+$/.test(seg));
+    if (raw.startsWith("/")) {
+      if (!segmentsOk(raw)) return null;
+      return raw.replace(/\/+$/, "");
+    }
+    if (!/^https?:\/\//i.test(raw)) return null;
+    let url;
+    try {
+      url = new URL(raw);
+    } catch {
+      return null;
+    }
+    if (!url.hostname) return null;
+    const path = url.pathname.replace(/\/+$/, "");
+    if (!segmentsOk(path)) return null;
+    return url.origin + path;
+  }
+  function sanitizeHostCatalog(raw) {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    if (!Array.isArray(raw)) return out;
+    const rows = raw;
+    for (const item of rows) {
+      if (!object(item)) continue;
+      let base;
+      try {
+        base = normalizeHostBase(item.base);
+      } catch {
+        continue;
+      }
+      if (!base) continue;
+      const hostId = text2(item.hostId);
+      const dedupe = hostId || base;
+      if (seen.has(dedupe)) continue;
+      seen.add(dedupe);
+      const entry = { base };
+      if (hostId) entry.hostId = hostId;
+      const label = text2(item.label);
+      if (label) entry.label = label;
+      const token = text2(item.token);
+      if (token) entry.token = token;
+      out.push(entry);
+    }
+    return out;
+  }
+  function mergeHostEntries(self, fleet, catalog) {
+    const out = [];
+    const byId = /* @__PURE__ */ new Map();
+    const byBase = /* @__PURE__ */ new Map();
+    function absorb(into, extra) {
+      function field(key) {
+        if (into[key] == null && extra[key] != null) into[key] = extra[key];
+      }
+      for (const key of ["label", "name", "token", "version", "capabilities", "kind", "error"]) field(key);
+    }
+    function push(entry) {
+      const hostId = text2(entry.hostId);
+      const base = entry.base;
+      const existing = hostId && byId.get(hostId) || byBase.get(base);
+      if (existing) {
+        absorb(existing, entry);
+        return;
+      }
+      const merged = { ...entry, base, hostId: hostId || null, key: hostId || base || "self" };
+      if (hostId) byId.set(hostId, merged);
+      byBase.set(base, merged);
+      out.push(merged);
+    }
+    push({
+      hostId: text2(self && self.hostId),
+      base: "",
+      label: self && self.label || null,
+      version: self && self.version || null,
+      capabilities: self && self.capabilities || null,
+      source: "self",
+      self: true,
+      reachable: true
+    });
+    const rows = Array.isArray(fleet) ? fleet : [];
+    for (const entry of rows) {
+      if (!object(entry) || entry.self) continue;
+      let base;
+      try {
+        base = normalizeHostBase(entry.base);
+      } catch {
+        continue;
+      }
+      if (base == null) continue;
+      push({
+        hostId: text2(entry.hostId),
+        base,
+        label: text2(entry.label),
+        name: text2(entry.name),
+        kind: text2(entry.kind),
+        version: entry.version || null,
+        capabilities: entry.capabilities || null,
+        reachable: entry.reachable !== false,
+        error: text2(entry.error),
+        source: "fleet"
+      });
+    }
+    for (const entry of sanitizeHostCatalog(catalog)) push({ ...entry, hostId: entry.hostId || null, source: "user" });
+    return out;
   }
   return __toCommonJS(index_exports);
 })();
