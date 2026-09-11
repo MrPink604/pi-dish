@@ -2690,18 +2690,28 @@ function updateArtifactsBadge() { sessionInfo.updateBadge(); }
 function openArtifactsModal() { sessionInfo.openArtifacts(); }
 function closeArtifactsModal() { sessionInfo.closeArtifacts(); }
 
-// --- File view (main-pane takeover) ---
-// Opens a file mentioned in the chat (clickable .file-link spans) in place
-// of the transcript, same pattern as the diff view. The server resolves the
-// mention against the session's tool calls — see GET /api/sessions/:id/file.
-// Markdown renders rendered; code highlights; images display inline. The
-// raw text is kept for the copy button.
-let fileViewRaw = null;
-let fileViewAbsPath = null; // resolved path of the viewed file (publish target)
-let fileViewRelPath = null;
-let fileViewSessionId = null;
-let fileViewGeneration = 0;
-let fileViewOwner = null;
+// File and diff takeovers share a typed owner and keep comment coordination explicit.
+const fileViews = PiDishBrowser.createFileViews({
+  document, sessionState, request: (host, path, options) => apiFetch(host, path, options), host: hostEntryFor,
+  markdown: text => formatMarkdown(text), highlight: root => applyHighlight(root), copy: text => copyTextToClipboard(text),
+  status: (message, type) => setStatus(message, type), refreshArtifacts: owner => refreshArtifacts(owner),
+  closeComments: () => closeCommentBubble(), clearComments: () => setAnchoredComments([]),
+  refreshComments: () => refreshAnchoredComments(), markComments: () => applyCommentMarks(),
+});
+function isFileViewOpen() { return fileViews.isFileOpen(); }
+function ownsFileView(id, generation) { return fileViews.ownsFile(id, generation); }
+function openFileViewer(mention) { return fileViews.openFile(mention); }
+function closeFileView() { fileViews.closeFile(); }
+function publishFileView() { return fileViews.publish(); }
+function copyFileViewContent(button) { fileViews.copy(button); }
+function isDiffViewOpen() { return fileViews.isDiffOpen(); }
+function ownsDiffView(id, generation) { return fileViews.ownsDiff(id, generation); }
+function toggleDiffView() { fileViews.toggleDiff(); }
+function openDiffView() { return fileViews.openDiff(); }
+function closeDiffView() { fileViews.closeDiff(); }
+function loadDiffView() { return fileViews.loadDiff(); }
+function loadDeferredDiffPatch(details) { return fileViews.loadPatch(details); }
+
 let anchoredCommentDraft = null;
 let commentOwner = null;
 let commentAnchorRange = null;
@@ -2711,109 +2721,6 @@ let commentEditTarget = null;     // non-null while the bubble edits an existing
 let commentDeleteArmed = false;
 let commentDeleteTimer = null;
 
-function isFileViewOpen() {
-  return document.getElementById('sessionView').classList.contains('file-open');
-}
-
-function ownsFileView(sessionId, generation) {
-  return fileViewSessionId === sessionId && fileViewGeneration === generation &&
-    sessionState.ownsSelection(fileViewOwner) && isFileViewOpen();
-}
-
-async function openFileViewer(mention) {
-  if (!sessionState.currentSession) return;
-  const owner = sessionState.captureSelection();
-  const sessionId = owner.id;
-  const generation = ++fileViewGeneration;
-  fileViewSessionId = sessionId;
-  fileViewOwner = owner;
-  const body = document.getElementById('fileViewBody');
-  const title = document.getElementById('fileViewTitle');
-  const pathEl = document.getElementById('fileViewPath');
-  fileViewRaw = null;
-  fileViewAbsPath = null;
-  fileViewRelPath = null;
-  closeCommentBubble();
-  document.getElementById('fileViewPublish').style.display = 'none';
-  const rawLink = document.getElementById('fileViewRaw');
-  rawLink.style.display = 'none';
-  rawLink.removeAttribute('href');
-  renderFilePageRow(null);
-  title.textContent = mention.replace(/:\d+(?::\d+)?$/, '').split('/').pop();
-  pathEl.textContent = '';
-  pathEl.title = '';
-  body.innerHTML = '<div class="loading">Loading…</div>';
-  closeDiffView(); // the two takeover panes are mutually exclusive
-  document.getElementById('sessionView').classList.add('file-open');
-  try {
-    const res = await apiFetch(owner.host, `/api/sessions/${encodeURIComponent(sessionId)}/file?path=${encodeURIComponent(mention)}`);
-    const data = await res.json();
-    if (!ownsFileView(sessionId, generation)) return;
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    title.textContent = data.path.split('/').pop();
-    fileViewAbsPath = data.path;
-    fileViewRelPath = data.relPath;
-    rawLink.href = hostAssetUrl(owner.host,
-      `/api/sessions/${encodeURIComponent(sessionId)}/file/content?path=${encodeURIComponent(data.path)}&v=${data.mtime}-${data.size}`);
-    rawLink.style.display = '';
-    document.getElementById('fileViewPublish').style.display = '';
-    // Already published (by the agent or a previous click)? Show its link.
-    apiFetch(owner.host, '/api/pages')
-      .then((r) => r.json())
-      .then((list) => {
-        if (!ownsFileView(sessionId, generation) || fileViewAbsPath !== data.path) return;
-        const page = Array.isArray(list) && list.find((p) => p.root === data.path);
-        if (page) renderFilePageRow(page, sessionId, generation);
-      })
-      .catch(() => {});
-    const kb = data.size >= 10240 ? `${Math.round(data.size / 1024)} KB` : `${data.size} B`;
-    pathEl.textContent = `${shortCwd(data.path)} · ${kb}${data.truncated ? ' · truncated preview' : ''}`;
-    pathEl.title = data.path;
-    if (data.image) {
-      const src = data.image.url
-        ? hostAssetUrl(owner.host, data.image.url)
-        : `data:${data.image.mimeType};base64,${data.image.data}`;
-      body.innerHTML = `<img class="file-view-img" src="${escapeHtml(src)}" decoding="async" alt="">`;
-      return;
-    }
-    fileViewRaw = data.content;
-    const ext = (data.path.match(/\.([A-Za-z0-9]+)$/) || [])[1]?.toLowerCase();
-    if (ext === 'md' || ext === 'markdown') {
-      body.innerHTML = `<div class="markdown-body">${formatMarkdown(data.content)}</div>`;
-    } else {
-      // Skip hljs on huge files (data-highlighted makes applyHighlight leave
-      // it alone) — highlighting half a megabyte janks phones.
-      const skipHl = data.content.length > 80000 ? ' data-highlighted="skip"' : '';
-      const lang = ext ? ` class="language-${escapeHtml(ext)}"` : '';
-      body.innerHTML = `<div class="markdown-body"><pre><code${lang}${skipHl}>${escapeHtml(data.content)}</code></pre></div>`;
-    }
-    // Same post-pass as the transcript: copy buttons, highlighting — and a
-    // markdown file's own file references become clickable in turn.
-    applyHighlight(body);
-    // Marks go on last, over the final DOM this produced.
-    refreshAnchoredComments();
-  } catch (e) {
-    if (!ownsFileView(sessionId, generation)) return;
-    body.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
-  }
-}
-
-function closeFileView() {
-  fileViewGeneration += 1;
-  fileViewSessionId = null;
-  fileViewOwner = null;
-  document.getElementById('sessionView').classList.remove('file-open');
-  document.getElementById('fileViewBody').innerHTML = '';
-  fileViewRaw = null;
-  fileViewAbsPath = null;
-  fileViewRelPath = null;
-  const rawLink = document.getElementById('fileViewRaw');
-  rawLink.style.display = 'none';
-  rawLink.removeAttribute('href');
-  closeCommentBubble();
-  setAnchoredComments([]);
-  renderFilePageRow(null);
-}
 
 // --- Anchored review comments (file + diff views) ---
 // A valid selection immediately opens a compact composer beside it.
@@ -2843,7 +2750,7 @@ function isCommentBubbleOpen() {
 
 function captureFileCommentSelection(focusComposer = false) {
   if (isCommentBubbleOpen()) return;
-  if (!isFileViewOpen() || !fileViewAbsPath || fileViewRaw == null) return;
+  if (!isFileViewOpen() || !fileViews.file.path || fileViews.file.raw == null) return;
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || !selection.rangeCount) return;
   const root = document.getElementById('fileViewBody');
@@ -2856,15 +2763,15 @@ function captureFileCommentSelection(focusComposer = false) {
   // Plain text/code previews preserve file text exactly, so add line numbers
   // when the selected quote is unambiguous. Markdown still has the durable
   // quote/prefix/suffix selector after rendering removed its source markup.
-  const first = fileViewRaw.indexOf(anchor.quote);
-  if (first >= 0 && fileViewRaw.indexOf(anchor.quote, first + 1) < 0) {
-    anchor.startLine = fileViewRaw.slice(0, first).split('\n').length;
+  const first = fileViews.file.raw.indexOf(anchor.quote);
+  if (first >= 0 && fileViews.file.raw.indexOf(anchor.quote, first + 1) < 0) {
+    anchor.startLine = fileViews.file.raw.slice(0, first).split('\n').length;
     anchor.endLine = anchor.startLine + anchor.quote.split('\n').length - 1;
   }
   openCommentBubble({
-    sessionId: fileViewSessionId,
+    sessionId: fileViews.file.sessionId,
     quote: anchor.quote,
-    target: { kind: 'file', path: fileViewAbsPath, relPath: fileViewRelPath, anchor },
+    target: { kind: 'file', path: fileViews.file.path, relPath: fileViews.file.relPath, anchor },
   }, range, focusComposer);
 }
 
@@ -2885,7 +2792,7 @@ function captureDiffCommentSelection(focusComposer = false) {
   const newNums = nums('newLine');
   const quote = lines.map((line) => line.textContent).join('\n').slice(0, 12000);
   openCommentBubble({
-    sessionId: diffViewSessionId,
+    sessionId: fileViews.diff.sessionId,
     quote,
     target: {
       kind: 'diff', repo: patch.dataset.repo, path: patch.dataset.path,
@@ -3073,15 +2980,15 @@ async function refreshAnchoredComments() {
   const fileOpen = isFileViewOpen();
   const diffOpen = !fileOpen && isDiffViewOpen();
   if (!fileOpen && !diffOpen) return setAnchoredComments([]);
-  const sessionId = fileOpen ? fileViewSessionId : diffViewSessionId;
-  const owner = fileOpen ? fileViewOwner : diffViewOwner;
-  const generation = fileOpen ? fileViewGeneration : diffViewGeneration;
-  const filePath = fileViewAbsPath;
+  const sessionId = fileOpen ? fileViews.file.sessionId : fileViews.diff.sessionId;
+  const owner = fileOpen ? fileViews.file.owner : fileViews.diff.owner;
+  const generation = fileOpen ? fileViews.file.generation : fileViews.diff.generation;
+  const filePath = fileViews.file.path;
   if (!sessionId || !sessionState.ownsSelection(owner) || (fileOpen && !filePath)) return setAnchoredComments([]);
   // The view can be closed, refreshed, or pointed at another file while these
   // two round trips are in flight — same generation guard as the views.
   const owns = () => (fileOpen
-    ? ownsFileView(sessionId, generation) && fileViewAbsPath === filePath
+    ? ownsFileView(sessionId, generation) && fileViews.file.path === filePath
     : ownsDiffView(sessionId, generation));
   try {
     const indexRes = await apiFetch(owner.host, `/api/comments/index?sessionId=${encodeURIComponent(sessionId)}`);
@@ -3290,8 +3197,8 @@ async function focusAnchoredComment(id) {
   const comment = anchoredComments.find((entry) => entry.id === id);
   if (!comment) return;
   const fileOpen = isFileViewOpen();
-  const owner = fileOpen ? fileViewOwner : diffViewOwner;
-  const generation = fileOpen ? fileViewGeneration : diffViewGeneration;
+  const owner = fileOpen ? fileViews.file.owner : fileViews.diff.owner;
+  const generation = fileOpen ? fileViews.file.generation : fileViews.diff.generation;
   const owns = () => owner && (fileOpen
     ? ownsFileView(owner.id, generation) : ownsDiffView(owner.id, generation));
   if (!owns()) return;
@@ -3380,248 +3287,6 @@ async function handleCommentDelete() {
     }
   } finally {
     if (draftVersion === commentDraftVersion && sessionState.ownsSelection(owner)) button.disabled = false;
-  }
-}
-
-// --- Published pages (file viewer + stats modal) ---
-// The agent's flow is the API itself (write plan.html, then
-// `curl -X POST …/api/pages`); these are the user-initiated equivalents:
-// 🌐 in the file viewer publishes the viewed file, the stats modal lists a
-// session's published pages with copy/revoke.
-
-function renderFilePageRow(page, sessionId, generation) {
-  const el = document.getElementById('fileViewPage');
-  if (!page) { el.style.display = 'none'; el.innerHTML = ''; return; }
-  if (!ownsFileView(sessionId, generation)) return;
-  const owner = fileViewOwner;
-  const link = page.url || (location.origin + page.path);
-  el.style.display = '';
-  el.innerHTML = 'Published: ' +
-    `<button type="button" class="stats-copy stats-share-link" data-copy="${escapeHtml(link)}" title="Click to copy">${escapeHtml(link)}</button>` +
-    '<button type="button" class="btn-small btn-danger" id="filePageRevoke">Unpublish</button>';
-  el.querySelector('.stats-copy').addEventListener('click', function () {
-    copyTextToClipboard(this.dataset.copy).then(
-      () => setStatus('Page link copied'),
-      () => setStatus('Copy failed (clipboard blocked)', 'error'),
-    );
-  });
-  el.querySelector('#filePageRevoke').addEventListener('click', () => {
-    if (!ownsFileView(sessionId, generation)) return;
-    apiFetch(owner.host, `/api/pages/${encodeURIComponent(page.token)}`, { method: 'DELETE' })
-      .then(() => {
-        if (!ownsFileView(sessionId, generation)) return;
-        renderFilePageRow(null, sessionId, generation);
-        refreshArtifacts(owner);
-      })
-      .catch((e) => {
-        if (ownsFileView(sessionId, generation)) setStatus('Failed to unpublish: ' + e.message, 'error');
-      });
-  });
-}
-
-async function publishFileView() {
-  if (!fileViewAbsPath || !sessionState.currentSession) return;
-  const sessionId = fileViewSessionId;
-  const generation = fileViewGeneration;
-  const path = fileViewAbsPath;
-  if (!ownsFileView(sessionId, generation)) return;
-  const owner = fileViewOwner;
-  try {
-    const res = await apiFetch(owner.host, '/api/pages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        path,
-        sessionId,
-        title: path.split('/').pop(),
-        renderer: 'file',
-      }),
-    });
-    const data = await res.json();
-    if (!ownsFileView(sessionId, generation)) return;
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    renderFilePageRow(data, sessionId, generation);
-    refreshArtifacts(owner);
-  } catch (e) {
-    if (ownsFileView(sessionId, generation)) setStatus('Publish failed: ' + e.message, 'error');
-  }
-}
-
-function copyFileViewContent(btn) {
-  if (fileViewRaw == null) return;
-  copyTextToClipboard(fileViewRaw).then(
-    () => { btn.textContent = '✓'; setTimeout(() => { btn.textContent = '⧉'; }, 1200); },
-    () => setStatus('Copy failed (clipboard blocked)', 'error'),
-  );
-}
-
-// --- Diff view (main-pane takeover) ---
-// Aggregate uncommitted changes for every git repo under the session cwd
-// (GET /api/sessions/:id/diff — polyrepo workspaces hold several checkouts
-// side by side). The ± header button swaps the transcript for this view;
-// `.session-view.diff-open` does the hiding in CSS. Fetched on open and on
-// the ⟳ button; no polling. Closed by ✕/Escape/session switch.
-let diffViewSessionId = null;
-let diffViewGeneration = 0;
-let diffViewOwner = null;
-let diffPatchRequestGeneration = 0;
-
-function isDiffViewOpen() {
-  return document.getElementById('sessionView').classList.contains('diff-open');
-}
-
-function ownsDiffView(sessionId, generation) {
-  return diffViewSessionId === sessionId && diffViewGeneration === generation &&
-    sessionState.ownsSelection(diffViewOwner) && isDiffViewOpen();
-}
-
-function toggleDiffView() {
-  if (isDiffViewOpen()) closeDiffView();
-  else openDiffView();
-}
-
-async function openDiffView() {
-  if (!sessionState.currentSession) return;
-  closeFileView(); // the two takeover panes are mutually exclusive
-  document.getElementById('sessionView').classList.add('diff-open');
-  document.getElementById('btnDiff')?.classList.add('active');
-  await loadDiffView();
-}
-
-function closeDiffView() {
-  diffViewGeneration += 1;
-  diffViewSessionId = null;
-  diffViewOwner = null;
-  document.getElementById('sessionView').classList.remove('diff-open');
-  document.getElementById('btnDiff')?.classList.remove('active');
-  document.getElementById('diffViewBody').innerHTML = '';
-  closeCommentBubble();
-  setAnchoredComments([]);
-}
-
-async function loadDiffView() {
-  if (!sessionState.currentSession || !isDiffViewOpen()) return;
-  const owner = sessionState.captureSelection();
-  const sessionId = owner.id;
-  const generation = ++diffViewGeneration;
-  diffViewSessionId = sessionId;
-  diffViewOwner = owner;
-  const body = document.getElementById('diffViewBody');
-  const rootEl = document.getElementById('diffViewRoot');
-  closeCommentBubble();
-  body.innerHTML = '<div class="loading">Loading…</div>';
-  try {
-    const res = await apiFetch(owner.host, `/api/sessions/${encodeURIComponent(sessionId)}/diff`);
-    const data = await res.json();
-    if (!ownsDiffView(sessionId, generation)) return;
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    rootEl.textContent = shortCwd(data.root);
-    body.innerHTML = renderDiffViewHtml(data);
-    body.querySelectorAll('details.diff-file').forEach(details => {
-      details.addEventListener('toggle', () => {
-        if (details.open) loadDeferredDiffPatch(details);
-      });
-    });
-    refreshAnchoredComments();
-  } catch (e) {
-    if (!ownsDiffView(sessionId, generation)) return;
-    body.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
-  }
-}
-
-function renderDiffViewHtml(data) {
-  if (!data.gitAvailable) return '<div class="diff-empty">git is not available on the server</div>';
-  if (!data.repos.length) return '<div class="diff-empty">No git repositories under this session\'s cwd</div>';
-
-  const dirty = data.repos.filter(r => r.files.length > 0 || r.error);
-  const clean = data.repos.filter(r => r.files.length === 0 && !r.error);
-  // Few files → open every patch; a big changeset starts collapsed.
-  const totalFiles = dirty.reduce((n, r) => n + r.files.length, 0);
-  const openAttr = totalFiles <= 6 ? ' open' : '';
-
-  let html = '';
-  if (!dirty.length) html += '<div class="diff-empty">All repositories are clean ✓</div>';
-  for (const repo of dirty) {
-    const ab = (repo.ahead ? ` <span class="diff-repo-ab" title="Commits ahead of upstream">↑${repo.ahead}</span>` : '')
-      + (repo.behind ? ` <span class="diff-repo-ab" title="Commits behind upstream">↓${repo.behind}</span>` : '');
-    html += `<section class="diff-repo"><div class="diff-repo-header">`
-      + `<span class="diff-repo-path">${escapeHtml(repo.path)}</span>`
-      + (repo.branch ? `<span class="diff-repo-branch">${escapeHtml(repo.branch)}</span>` : '')
-      + ab
-      + `<span class="diff-repo-stat"><span class="diff-plus">+${repo.additions}</span> <span class="diff-minus">−${repo.deletions}</span></span>`
-      + `</div>`;
-    if (repo.error) html += `<div class="diff-repo-error">⚠ ${escapeHtml(repo.error)}</div>`;
-    for (const f of repo.files) {
-      const name = f.oldPath
-        ? `${escapeHtml(f.oldPath)} → ${escapeHtml(f.path)}`
-        : escapeHtml(f.path);
-      const counts = f.binary
-        ? '<span class="diff-file-note">binary</span>'
-        : `<span class="diff-plus">+${f.additions}</span> <span class="diff-minus">−${f.deletions}</span>`;
-      const patchAttrs = `data-repo="${escapeHtml(repo.path)}" data-path="${escapeHtml(f.path)}" data-old-path="${escapeHtml(f.oldPath || '')}" data-snapshot="${escapeHtml(data.snapshotId || '')}"`;
-      const patchHtml = f.patch
-        ? `<div class="diff-patch" ${patchAttrs}>${renderDiffHtml(f.patch)}${f.truncated ? '<div class="diff-file-note">… patch truncated</div>' : ''}</div>`
-        : f.patchDeferred
-          ? `<div class="diff-patch" ${patchAttrs} data-deferred="1"><div class="loading">Loading patch…</div></div>`
-          : `<div class="diff-file-note diff-patch-missing">${f.binary ? 'Binary file' : f.truncated ? 'Too large to preview' : 'No patch available'}</div>`;
-      html += `<details class="diff-file"${f.patch ? openAttr : ''}>`
-        + `<summary><span class="diff-status diff-status-${diffStatusClass(f.status)}">${escapeHtml(f.status)}</span>`
-        + `<span class="diff-file-path">${name}</span>`
-        + `<span class="diff-file-counts">${counts}</span></summary>`
-        + patchHtml
-        + `</details>`;
-    }
-    if (repo.moreUntracked) {
-      html += `<div class="diff-file-note">… and ${repo.moreUntracked} more untracked files</div>`;
-    }
-    html += '</section>';
-  }
-  if (clean.length) {
-    const names = clean.map(r =>
-      escapeHtml(r.path) + (r.ahead ? ` <span class="diff-repo-ab">↑${r.ahead}</span>` : '')).join(', ');
-    html += `<div class="diff-clean">clean: ${names}</div>`;
-  }
-  return html;
-}
-
-async function loadDeferredDiffPatch(details) {
-  const patch = details.querySelector('.diff-patch[data-deferred="1"]');
-  if (!patch || patch.dataset.loading || !sessionState.currentSession || !diffViewSessionId) return;
-  const sessionId = diffViewSessionId;
-  const viewGeneration = diffViewGeneration;
-  const requestGeneration = ++diffPatchRequestGeneration;
-  if (!ownsDiffView(sessionId, viewGeneration)) return;
-  const owner = diffViewOwner;
-  patch.dataset.loading = '1';
-  patch.dataset.requestGeneration = String(requestGeneration);
-  try {
-    const query = new URLSearchParams({
-      repo: patch.dataset.repo,
-      path: patch.dataset.path,
-      snapshot: patch.dataset.snapshot,
-    });
-    const res = await apiFetch(owner.host, `/api/sessions/${encodeURIComponent(sessionId)}/diff/patch?${query}`);
-    const data = await res.json();
-    if (!ownsDiffView(sessionId, viewGeneration) || !patch.isConnected ||
-        patch.dataset.requestGeneration !== String(requestGeneration)) return;
-    if (res.status === 409 && data.stale) {
-      patch.innerHTML = '<div class="diff-file-note">Working tree changed — refreshing the diff…</div>';
-      await loadDiffView();
-      return;
-    }
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    patch.innerHTML = renderDiffHtml(data.patch) +
-      (data.truncated ? '<div class="diff-file-note">… patch truncated</div>' : '');
-    delete patch.dataset.deferred;
-    delete patch.dataset.loading;
-    delete patch.dataset.requestGeneration;
-    applyCommentMarks(); // the rows this patch just built may carry comments
-  } catch (e) {
-    if (!ownsDiffView(sessionId, viewGeneration) || !patch.isConnected ||
-        patch.dataset.requestGeneration !== String(requestGeneration)) return;
-    delete patch.dataset.loading;
-    delete patch.dataset.requestGeneration;
-    patch.innerHTML = `<div class="diff-file-note diff-patch-missing">Could not load patch: ${escapeHtml(e.message)}. Collapse and reopen to retry.</div>`;
   }
 }
 

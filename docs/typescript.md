@@ -409,3 +409,8 @@ Extension UI is split into typed wire requests (`extension-ui-data.ts`), host-aw
 routing (`extension-ui.ts`), timed widget/status display (`extension-display.ts`)
 and persistent, selection-owned dialog cards (`extension-dialogs.ts`). Stashing
 preserves answers while listeners and endpoint guards retire obsolete controls.
+
+File and diff takeovers live in `file-views.ts`, with explicit wire narrowing in
+`file-view-data.ts` and escaped diff output in `file-view-render.ts`. Publication
+operations, clipboard feedback and deferred patches retain independent ownership
+under read-only view snapshots used by anchored-comment coordination.

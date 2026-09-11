@@ -40,6 +40,7 @@ var PiDishBrowser = (() => {
     createDirectoryTree: () => createDirectoryTree,
     createDisplayPreferences: () => createDisplayPreferences,
     createExtensionUI: () => createExtensionUI,
+    createFileViews: () => createFileViews,
     createHarnessDiscovery: () => createHarnessDiscovery,
     createHarnessSettings: () => createHarnessSettings,
     createHostConnections: () => createHostConnections,
@@ -74,8 +75,11 @@ var PiDishBrowser = (() => {
     decodeBounceOperation: () => decodeBounceOperation,
     decodeBounceOperations: () => decodeBounceOperations,
     decodeBouncePreview: () => decodeBouncePreview,
+    decodeDiffPatch: () => decodeDiffPatch,
+    decodeDiffView: () => decodeDiffView,
     decodeDirectoryChildren: () => decodeDirectoryChildren,
     decodeExtensionRequest: () => decodeExtensionRequest,
+    decodeFilePreview: () => decodeFilePreview,
     decodeHarnessAgents: () => decodeHarnessAgents,
     decodeHarnessConfig: () => decodeHarnessConfig,
     decodeHarnessConfigPreview: () => decodeHarnessConfigPreview,
@@ -119,6 +123,7 @@ var PiDishBrowser = (() => {
     normalizeHostBase: () => normalizeHostBase,
     queryHosts: () => queryHosts,
     reconcileHostCatalog: () => reconcileHostCatalog,
+    renderDiffViewHtml: () => renderDiffViewHtml,
     resolveColorToHex: () => resolveColorToHex,
     responseMode: () => responseMode,
     rgbStringToHex: () => rgbStringToHex,
@@ -327,10 +332,10 @@ var PiDishBrowser = (() => {
     const doc = root.ownerDocument;
     let view = null;
     let disposed = false;
-    function element(tag, className, text14) {
+    function element(tag, className, text15) {
       const node = doc.createElement(tag);
       node.className = className;
-      if (text14 !== void 0) node.textContent = text14;
+      if (text15 !== void 0) node.textContent = text15;
       return node;
     }
     const search = element("input", "model-search");
@@ -347,8 +352,8 @@ var PiDishBrowser = (() => {
       node.dataset.value = value;
       return node;
     }
-    function button(text14, name, value = "", primary = false) {
-      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text14);
+    function button(text15, name, value = "", primary = false) {
+      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text15);
       node.type = "button";
       return action(node, name, value);
     }
@@ -583,8 +588,8 @@ var PiDishBrowser = (() => {
     const state = prev && typeof prev === "object" ? prev : null;
     const errText = (value) => {
       if (value == null) return null;
-      const text14 = String(typeof value === "object" && "message" in value && value.message || value);
-      return text14 || null;
+      const text15 = String(typeof value === "object" && "message" in value && value.message || value);
+      return text15 || null;
     };
     const eventError = event && typeof event === "object" && "error" in event ? errText(event.error) : null;
     if (kind === "blocked") {
@@ -2778,13 +2783,13 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/helper-format.ts
-  function escapeHtml(text14) {
-    if (text14 == null || text14 === "") return "";
-    return String(text14).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  function escapeHtml(text15) {
+    if (text15 == null || text15 === "") return "";
+    return String(text15).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
-  function stripAnsi(text14) {
-    if (text14 == null || text14 === "") return "";
-    return String(text14).replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "").replace(/\x1b\[[0-9;:?]*[ -\/]*[@-~]/g, "").replace(/\x1b[ -\/]*./g, "");
+  function stripAnsi(text15) {
+    if (text15 == null || text15 === "") return "";
+    return String(text15).replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "").replace(/\x1b\[[0-9;:?]*[ -\/]*[@-~]/g, "").replace(/\x1b[ -\/]*./g, "");
   }
   function formatTokens(tokens2) {
     if (!tokens2 || tokens2 === 0) return "0";
@@ -2858,9 +2863,9 @@ var PiDishBrowser = (() => {
     if (!cwd) return "";
     return cwd.replace(/^\/home\/[^/]+\//, "~/").replace(/^\/home\/[^/]+$/, "~");
   }
-  function truncate(text14, maxLen, suffix = " \u2026 (truncated)") {
-    if (!text14 || text14.length <= maxLen) return text14;
-    return text14.slice(0, maxLen) + suffix;
+  function truncate(text15, maxLen, suffix = " \u2026 (truncated)") {
+    if (!text15 || text15.length <= maxLen) return text15;
+    return text15.slice(0, maxLen) + suffix;
   }
   function tmuxPrefixSeq(prefix) {
     if (typeof prefix !== "string") return null;
@@ -3017,12 +3022,12 @@ var PiDishBrowser = (() => {
     }
     return true;
   }
-  function countOccurrences(text14, token) {
-    if (!text14 || !token) return 0;
-    let n = 0, i = text14.indexOf(token);
+  function countOccurrences(text15, token) {
+    if (!text15 || !token) return 0;
+    let n = 0, i = text15.indexOf(token);
     while (i !== -1) {
       n++;
-      i = text14.indexOf(token, i + token.length);
+      i = text15.indexOf(token, i + token.length);
     }
     return n;
   }
@@ -3082,8 +3087,8 @@ var PiDishBrowser = (() => {
     result += escapeHtml(str.slice(last));
     return result;
   }
-  function highlightTokens(text14, tokens2) {
-    const str = String(text14);
+  function highlightTokens(text15, tokens2) {
+    const str = String(text15);
     const lower = str.toLowerCase();
     const ranges = [];
     for (const t of tokens2) {
@@ -4626,8 +4631,8 @@ var PiDishBrowser = (() => {
     const textNodes = [];
     while (walker.nextNode()) textNodes.push(walker.currentNode);
     for (const node of textNodes) {
-      const text14 = node.textContent || "";
-      const lower = text14.toLowerCase();
+      const text15 = node.textContent || "";
+      const lower = text15.toLowerCase();
       const ranges = [];
       for (const token of tokens2) {
         let from = 0, at;
@@ -4642,14 +4647,14 @@ var PiDishBrowser = (() => {
       let cursor = 0;
       for (const [start, end] of ranges) {
         if (start < cursor) continue;
-        frag.appendChild(document2.createTextNode(text14.slice(cursor, start)));
+        frag.appendChild(document2.createTextNode(text15.slice(cursor, start)));
         const mark = document2.createElement("mark");
         mark.className = "search-mark";
-        mark.textContent = text14.slice(start, end);
+        mark.textContent = text15.slice(start, end);
         frag.appendChild(mark);
         cursor = end;
       }
-      frag.appendChild(document2.createTextNode(text14.slice(cursor)));
+      frag.appendChild(document2.createTextNode(text15.slice(cursor)));
       node.replaceWith(frag);
     }
   }
@@ -7013,10 +7018,10 @@ var PiDishBrowser = (() => {
       })();
       return assets;
     }
-    function status(text14 = "", cls = "") {
+    function status(text15 = "", cls = "") {
       const value = document2.getElementById("terminalStatus");
       if (!value) return;
-      value.textContent = text14;
+      value.textContent = text15;
       value.className = "terminal-status" + (cls ? " " + cls : "");
     }
     function setCtrl(on) {
@@ -9020,10 +9025,10 @@ var PiDishBrowser = (() => {
       }
       body.innerHTML = html;
       body.querySelectorAll(".artifact-copy").forEach((button) => {
-        const text14 = button.dataset.copy || "";
+        const text15 = button.dataset.copy || "";
         button.addEventListener("click", () => {
           if (!current()) return;
-          void copyTextToClipboard2(text14).then(() => {
+          void copyTextToClipboard2(text15).then(() => {
             if (current()) setStatus("Link copied");
           }, () => {
             if (current()) setStatus("Copy failed (clipboard blocked)", "error");
@@ -9203,8 +9208,8 @@ var PiDishBrowser = (() => {
           if (node.type === "message" && node.role === "assistant" && !node.text && !node.isLeaf) return false;
         }
         if (tokens2.length > 0) {
-          var text14 = getNodeSearchText(node).toLowerCase();
-          return tokens2.every((t) => text14.includes(t));
+          var text15 = getNodeSearchText(node).toLowerCase();
+          return tokens2.every((t) => text15.includes(t));
         }
         return true;
       });
@@ -9259,17 +9264,17 @@ var PiDishBrowser = (() => {
       if (node.type === "message") {
         if (node.role === "user") return '<span class="tree-role user">user:</span><span class="tree-text">' + escapeHtml(node.text || "(empty)") + "</span>";
         if (node.role === "assistant") {
-          var text14 = node.text || "";
-          if (!text14 && node.stopReason === "aborted") text14 = "(aborted)";
-          if (!text14 && node.errorMessage) return '<span class="tree-role assistant">assistant:</span><span class="tree-text error-text">' + escapeHtml(node.errorMessage.substring(0, 80)) + "</span>";
-          if (!text14 && node.toolCalls && node.toolCalls.length) {
+          var text15 = node.text || "";
+          if (!text15 && node.stopReason === "aborted") text15 = "(aborted)";
+          if (!text15 && node.errorMessage) return '<span class="tree-role assistant">assistant:</span><span class="tree-text error-text">' + escapeHtml(node.errorMessage.substring(0, 80)) + "</span>";
+          if (!text15 && node.toolCalls && node.toolCalls.length) {
             var calls = node.toolCalls.map(function(tc2) {
               return tc2.args ? tc2.name + ": " + tc2.args : tc2.name;
             }).join(" \xB7 ");
             return '<span class="tree-role assistant">assistant:</span><span class="tree-text muted">' + escapeHtml(calls) + "</span>";
           }
-          if (!text14) text14 = "(empty)";
-          return '<span class="tree-role assistant">assistant:</span><span class="tree-text">' + escapeHtml(text14) + "</span>";
+          if (!text15) text15 = "(empty)";
+          return '<span class="tree-role assistant">assistant:</span><span class="tree-text">' + escapeHtml(text15) + "</span>";
         }
         if (node.role === "toolResult") {
           var tc = node.toolCallId ? treeToolCallMap.get(node.toolCallId) : null;
@@ -9427,8 +9432,8 @@ var PiDishBrowser = (() => {
     /^(?:sequenceDiagram|classDiagram(?:-v2)?|stateDiagram(?:-v2)?|erDiagram|journey|gantt|mindmap|timeline|kanban|zenuml|quadrantChart|requirementDiagram|gitGraph|architecture-beta|block-beta|packet(?:-beta)?|radar-beta|sankey-beta|treemap(?:-beta)?|xychart-beta|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment)\b/,
     /^pie(?:\s+(?:title|showData)\b|\s*$)/
   ];
-  function mermaidDeclarationLine(text14) {
-    const lines = String(text14 == null ? "" : text14).split("\n");
+  function mermaidDeclarationLine(text15) {
+    const lines = String(text15 == null ? "" : text15).split("\n");
     let i = 0;
     if (lines[0] !== void 0 && lines[0].trim() === "---") {
       const end = lines.findIndex((l, idx) => idx > 0 && l.trim() === "---");
@@ -9441,8 +9446,8 @@ var PiDishBrowser = (() => {
     }
     return "";
   }
-  function looksLikeMermaid(text14) {
-    const decl = mermaidDeclarationLine(text14);
+  function looksLikeMermaid(text15) {
+    const decl = mermaidDeclarationLine(text15);
     return !!decl && MERMAID_DECLARATIONS.some((re) => re.test(decl));
   }
   function diagramKindForFence(lang, source) {
@@ -9471,11 +9476,11 @@ var PiDishBrowser = (() => {
       tokenizer(src) {
         const match = /^(?:\$\$([\s\S]*?)\$\$|\\\[([\s\S]*?)\\\])/.exec(src);
         if (match) {
-          const text14 = match[1] !== void 0 ? match[1] : match[2];
+          const text15 = match[1] !== void 0 ? match[1] : match[2];
           return {
             type: "blockMath",
             raw: match[0],
-            text: text14.trim()
+            text: text15.trim()
           };
         }
       },
@@ -9551,8 +9556,8 @@ var PiDishBrowser = (() => {
   }
   var FILE_MENTION_RE = /^(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?$/;
   var FILE_EXT_RE = /\.[A-Za-z][A-Za-z0-9]{0,7}$/;
-  function looksLikeFilePath(text14) {
-    const s = String(text14 == null ? "" : text14).trim();
+  function looksLikeFilePath(text15) {
+    const s = String(text15 == null ? "" : text15).trim();
     if (!s || s.length > 260) return false;
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return false;
     if (!FILE_MENTION_RE.test(s)) return false;
@@ -9561,8 +9566,8 @@ var PiDishBrowser = (() => {
   }
   var PATH_TOKEN_RE = /(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?/g;
   var BARE_EXT_STOPLIST = /* @__PURE__ */ new Set(["com", "org", "net", "io", "ai", "dev", "co", "app"]);
-  function findPathTokens(text14) {
-    const s = String(text14 == null ? "" : text14);
+  function findPathTokens(text15) {
+    const s = String(text15 == null ? "" : text15);
     const out = [];
     PATH_TOKEN_RE.lastIndex = 0;
     let m;
@@ -9580,6 +9585,53 @@ var PiDishBrowser = (() => {
       out.push({ start: m.index, end: m.index + token.length, token });
     }
     return out;
+  }
+  function renderDiffHtml(patch) {
+    if (!patch) return "";
+    const out = [];
+    let inHunk = false;
+    let oldLine = null, newLine = null;
+    const lines = String(patch).split("\n");
+    if (lines.at(-1) === "") lines.pop();
+    for (const line of lines) {
+      if (line.startsWith("@@")) {
+        inHunk = true;
+        const match = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+        oldLine = match ? Number(match[1]) : null;
+        newLine = match ? Number(match[2]) : null;
+        out.push(`<div class="diff-line diff-hunk" data-diff-line="1">${escapeHtml(line)}</div>`);
+        continue;
+      }
+      if (!inHunk) continue;
+      if (line[0] === "\\") {
+        out.push(`<div class="diff-line diff-note">${escapeHtml(line)}</div>`);
+        continue;
+      }
+      const cls = line[0] === "+" ? " diff-add" : line[0] === "-" ? " diff-del" : "";
+      const oldAt = line[0] === "+" ? null : oldLine;
+      const newAt = line[0] === "-" ? null : newLine;
+      const attrs = ` data-diff-line="1" data-old-line="${oldAt ?? ""}" data-new-line="${newAt ?? ""}"`;
+      out.push(`<div class="diff-line${cls}"${attrs}>${escapeHtml(line) || " "}</div>`);
+      if (line[0] !== "+" && oldLine != null) oldLine++;
+      if (line[0] !== "-" && newLine != null) newLine++;
+    }
+    return out.join("");
+  }
+  function diffStatusClass(letter) {
+    switch (letter) {
+      case "A":
+      case "?":
+        return "add";
+      case "D":
+        return "del";
+      case "R":
+      case "C":
+        return "ren";
+      case "U":
+        return "conflict";
+      default:
+        return "mod";
+    }
   }
 
   // src/browser/rich-text.ts
@@ -9642,15 +9694,15 @@ var PiDishBrowser = (() => {
       },
       extensions: createMathExtensions()
     });
-    function formatMarkdown(text14) {
-      if (!text14) return "";
+    function formatMarkdown(text15) {
+      if (!text15) return "";
       if (options2.marked) {
         try {
-          return options2.marked.parse(text14);
+          return options2.marked.parse(text15);
         } catch (e) {
         }
       }
-      let html = escapeHtml(text14);
+      let html = escapeHtml(text15);
       html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => `<pre><code class="language-${lang}">${code.trim()}</code></pre>`);
       html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
       html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
@@ -9816,7 +9868,7 @@ var PiDishBrowser = (() => {
       const bg = hex("--bg-darker", "#00212b");
       const card = hex("--bg-card", "#073642");
       const hover = hex("--bg-hover", "#0b4354");
-      const text14 = hex("--text-bright", "#dbe5e6");
+      const text15 = hex("--text-bright", "#dbe5e6");
       const muted = hex("--text-muted", "#6f8b93");
       const border = hex("--accent-dim", "#1c6ba3");
       const line = hex("--border", "#11475a");
@@ -9835,30 +9887,30 @@ var PiDishBrowser = (() => {
           darkMode: isDarkColorHex(bg),
           background: bg,
           primaryColor: card,
-          primaryTextColor: text14,
+          primaryTextColor: text15,
           primaryBorderColor: border,
           secondaryColor: hover,
-          secondaryTextColor: text14,
+          secondaryTextColor: text15,
           tertiaryColor: bg,
-          tertiaryTextColor: text14,
+          tertiaryTextColor: text15,
           lineColor: muted,
-          textColor: text14,
+          textColor: text15,
           mainBkg: card,
           nodeBorder: border,
           clusterBkg: bg,
           clusterBorder: line,
-          titleColor: text14,
+          titleColor: text15,
           edgeLabelBackground: bg,
           labelBoxBkgColor: card,
           labelBoxBorderColor: border,
           actorBkg: card,
           actorBorder: border,
-          actorTextColor: text14,
+          actorTextColor: text15,
           signalColor: muted,
-          signalTextColor: text14,
+          signalTextColor: text15,
           noteBkgColor: hover,
           noteBorderColor: border,
-          noteTextColor: text14,
+          noteTextColor: text15,
           fontSize: "14px"
         }
       };
@@ -9990,10 +10042,10 @@ var PiDishBrowser = (() => {
         scale = Math.min(8, Math.max(0.1, scale * factor));
         apply();
       };
-      const button = (text14, title, onClick) => {
+      const button = (text15, title, onClick) => {
         const b = document2.createElement("button");
         b.className = "diagram-btn";
-        b.textContent = text14;
+        b.textContent = text15;
         b.title = title;
         b.addEventListener("click", () => {
           if (current()) onClick();
@@ -10050,13 +10102,13 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/clipboard.ts
-  function copyTextToClipboard(text14, document2 = globalThis.document, navigator = globalThis.navigator) {
+  function copyTextToClipboard(text15, document2 = globalThis.document, navigator = globalThis.navigator) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard.writeText(text14);
+      return navigator.clipboard.writeText(text15);
     }
     return new Promise((resolve, reject) => {
       const ta = document2.createElement("textarea");
-      ta.value = text14;
+      ta.value = text15;
       ta.setAttribute("readonly", "");
       ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
       document2.body.appendChild(ta);
@@ -10541,8 +10593,8 @@ var PiDishBrowser = (() => {
         widgets.set(key, entry);
       }
       entry.el.classList.remove("hidden");
-      const body = entry.el.querySelector(".ext-ui-widget-body"), text14 = lines.join("\n");
-      if (body.textContent !== text14) body.textContent = text14;
+      const body = entry.el.querySelector(".ext-ui-widget-body"), text15 = lines.join("\n");
+      if (body.textContent !== text15) body.textContent = text15;
     }
     function measure() {
       if (disposed) return;
@@ -10588,7 +10640,7 @@ var PiDishBrowser = (() => {
       sync();
     }
     document2.getElementById("extUiStatusToggle")?.addEventListener("click", toggleStatus, { signal: events.signal });
-    function status(key, text14) {
+    function status(key, text15) {
       if (disposed) return;
       const items = document2.getElementById("extUiStatusItems");
       if (!items) return;
@@ -10598,7 +10650,7 @@ var PiDishBrowser = (() => {
         statuses.delete(key);
         entry = void 0;
       }
-      if (!text14) {
+      if (!text15) {
         if (!entry) {
           sync();
           return;
@@ -10624,8 +10676,8 @@ var PiDishBrowser = (() => {
         entry = { el, timer: null };
         statuses.set(key, entry);
       }
-      if (entry.el.textContent !== text14) entry.el.textContent = text14;
-      const title = `${text14}
+      if (entry.el.textContent !== text15) entry.el.textContent = text15;
+      const title = `${text15}
 (status from ${key})`;
       if (entry.el.title !== title) entry.el.title = title;
       sync();
@@ -10758,6 +10810,398 @@ var PiDishBrowser = (() => {
         disposed = true;
         display.dispose();
         dialogs.dispose();
+      }
+    };
+  }
+
+  // src/browser/file-view-data.ts
+  var text14 = (v) => typeof v === "string" ? v : "";
+  var number6 = (v) => finite2(v) ? v : 0;
+  function decodeFilePreview(v) {
+    if (!record8(v) || typeof v.path !== "string" || !v.path) throw new Error("Invalid file preview");
+    return {
+      path: v.path,
+      relPath: text14(v.relPath),
+      content: text14(v.content),
+      size: number6(v.size),
+      mtime: number6(v.mtime),
+      truncated: v.truncated === true,
+      image: record8(v.image) ? { url: text14(v.image.url), mimeType: text14(v.image.mimeType), data: text14(v.image.data) } : null
+    };
+  }
+  function decodeDiffView(v) {
+    if (!record8(v) || !Array.isArray(v.repos)) throw new Error("Invalid diff response");
+    return { root: text14(v.root), gitAvailable: v.gitAvailable === true, snapshotId: text14(v.snapshotId), repos: v.repos.flatMap((r) => record8(r) && typeof r.path === "string" ? [{
+      path: r.path,
+      branch: text14(r.branch),
+      ahead: number6(r.ahead),
+      behind: number6(r.behind),
+      additions: number6(r.additions),
+      deletions: number6(r.deletions),
+      error: text14(r.error),
+      moreUntracked: number6(r.moreUntracked),
+      files: Array.isArray(r.files) ? r.files.flatMap((f) => record8(f) && typeof f.path === "string" ? [{ path: f.path, oldPath: text14(f.oldPath), status: text14(f.status), additions: number6(f.additions), deletions: number6(f.deletions), binary: f.binary === true, truncated: f.truncated === true, patch: text14(f.patch), patchDeferred: f.patchDeferred === true }] : []) : []
+    }] : []) };
+  }
+  function decodeDiffPatch(v) {
+    const p = record8(v) ? v : {};
+    return { patch: text14(p.patch), stale: p.stale === true, truncated: p.truncated === true };
+  }
+
+  // src/browser/file-view-render.ts
+  function renderDiffViewHtml(data) {
+    if (!data.gitAvailable) return '<div class="diff-empty">git is not available on the server</div>';
+    if (!data.repos.length) return `<div class="diff-empty">No git repositories under this session's cwd</div>`;
+    const dirty = data.repos.filter((r) => r.files.length > 0 || r.error);
+    const clean = data.repos.filter((r) => r.files.length === 0 && !r.error);
+    const totalFiles = dirty.reduce((n, r) => n + r.files.length, 0);
+    const openAttr = totalFiles <= 6 ? " open" : "";
+    let html = "";
+    if (!dirty.length) html += '<div class="diff-empty">All repositories are clean \u2713</div>';
+    for (const repo of dirty) {
+      const ab = (repo.ahead ? ` <span class="diff-repo-ab" title="Commits ahead of upstream">\u2191${repo.ahead}</span>` : "") + (repo.behind ? ` <span class="diff-repo-ab" title="Commits behind upstream">\u2193${repo.behind}</span>` : "");
+      html += `<section class="diff-repo"><div class="diff-repo-header"><span class="diff-repo-path">${escapeHtml(repo.path)}</span>` + (repo.branch ? `<span class="diff-repo-branch">${escapeHtml(repo.branch)}</span>` : "") + ab + `<span class="diff-repo-stat"><span class="diff-plus">+${repo.additions}</span> <span class="diff-minus">\u2212${repo.deletions}</span></span></div>`;
+      if (repo.error) html += `<div class="diff-repo-error">\u26A0 ${escapeHtml(repo.error)}</div>`;
+      for (const f of repo.files) {
+        const name = f.oldPath ? `${escapeHtml(f.oldPath)} \u2192 ${escapeHtml(f.path)}` : escapeHtml(f.path);
+        const counts2 = f.binary ? '<span class="diff-file-note">binary</span>' : `<span class="diff-plus">+${f.additions}</span> <span class="diff-minus">\u2212${f.deletions}</span>`;
+        const patchAttrs = `data-repo="${escapeHtml(repo.path)}" data-path="${escapeHtml(f.path)}" data-old-path="${escapeHtml(f.oldPath || "")}" data-snapshot="${escapeHtml(data.snapshotId || "")}"`;
+        const patchHtml = f.patch ? `<div class="diff-patch" ${patchAttrs}>${renderDiffHtml(f.patch)}${f.truncated ? '<div class="diff-file-note">\u2026 patch truncated</div>' : ""}</div>` : f.patchDeferred ? `<div class="diff-patch" ${patchAttrs} data-deferred="1"><div class="loading">Loading patch\u2026</div></div>` : `<div class="diff-file-note diff-patch-missing">${f.binary ? "Binary file" : f.truncated ? "Too large to preview" : "No patch available"}</div>`;
+        html += `<details class="diff-file"${f.patch ? openAttr : ""}><summary><span class="diff-status diff-status-${diffStatusClass(f.status)}">${escapeHtml(f.status)}</span><span class="diff-file-path">${name}</span><span class="diff-file-counts">${counts2}</span></summary>` + patchHtml + `</details>`;
+      }
+      if (repo.moreUntracked) {
+        html += `<div class="diff-file-note">\u2026 and ${repo.moreUntracked} more untracked files</div>`;
+      }
+      html += "</section>";
+    }
+    if (clean.length) {
+      const names = clean.map((r) => escapeHtml(r.path) + (r.ahead ? ` <span class="diff-repo-ab">\u2191${r.ahead}</span>` : "")).join(", ");
+      html += `<div class="diff-clean">clean: ${names}</div>`;
+    }
+    return html;
+  }
+
+  // src/browser/file-views.ts
+  function createFileViews(options2) {
+    const { document: document2, sessionState } = options2;
+    const element = (id) => {
+      const value = document2.getElementById(id);
+      if (!value) throw new Error("Missing file view element: " + id);
+      return value;
+    };
+    const errorText = (e) => e instanceof Error ? e.message : String(e);
+    const file = { owner: null, endpoint: null, sessionId: null, generation: 0, raw: null, path: null, relPath: null };
+    const diff = { owner: null, endpoint: null, sessionId: null, generation: 0 };
+    let disposed = false, pageSequence = 0, copySequence = 0;
+    let displayedPage = null;
+    let fileEvents = new AbortController(), pageEvents = new AbortController(), diffEvents = new AbortController();
+    const timers = /* @__PURE__ */ new Set();
+    const patchOwners = /* @__PURE__ */ new WeakMap();
+    function isOpen(kind) {
+      return !disposed && element("sessionView").classList.contains(kind + "-open");
+    }
+    function owns(view, kind, id, generation) {
+      if (disposed || !view.owner || !view.endpoint || view.sessionId !== id || view.generation !== generation || !isOpen(kind) || !sessionState.ownsSelection(view.owner)) return false;
+      const current = options2.host(view.owner.host);
+      return !!current && current.base === view.endpoint.base;
+    }
+    const ownsFile = (id, generation) => owns(file, "file", id, generation);
+    const ownsDiff = (id, generation) => owns(diff, "diff", id, generation);
+    function capture(view) {
+      const owner = sessionState.captureSelection();
+      if (!owner) return null;
+      const endpoint = options2.host(owner.host);
+      if (!endpoint) return null;
+      view.owner = owner;
+      view.sessionId = owner.id;
+      view.endpoint = Object.freeze({ ...endpoint });
+      view.generation++;
+      return { owner, endpoint: view.endpoint, id: owner.id, generation: view.generation };
+    }
+    function request(owner, endpoint, path, init) {
+      const current = options2.host(owner.host);
+      if (disposed || !current || current.base !== endpoint.base) return Promise.reject(new Error("Host connection changed; reopen this view"));
+      return options2.request({ ...endpoint, token: current.token }, path, init);
+    }
+    async function json(response) {
+      const value = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(record8(value) && typeof value.error === "string" ? value.error : `HTTP ${response.status}`);
+      return value;
+    }
+    function closeFile() {
+      file.generation++;
+      file.owner = null;
+      file.endpoint = null;
+      file.sessionId = null;
+      file.raw = null;
+      file.path = null;
+      file.relPath = null;
+      fileEvents.abort();
+      pageEvents.abort();
+      pageSequence++;
+      copySequence++;
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+      element("sessionView").classList.remove("file-open");
+      element("fileViewBody").innerHTML = "";
+      const raw = element("fileViewRaw");
+      raw.style.display = "none";
+      raw.removeAttribute("href");
+      const publish2 = element("fileViewPublish");
+      publish2.disabled = false;
+      publish2.style.display = "none";
+      element("fileViewCopy").textContent = "\u29C9";
+      clearPage();
+      options2.closeComments();
+      options2.clearComments();
+    }
+    function closeDiff() {
+      diff.generation++;
+      diff.owner = null;
+      diff.endpoint = null;
+      diff.sessionId = null;
+      diffEvents.abort();
+      element("sessionView").classList.remove("diff-open");
+      element("btnDiff").classList.remove("active");
+      element("diffViewBody").innerHTML = "";
+      options2.closeComments();
+      options2.clearComments();
+    }
+    function clearPage() {
+      displayedPage = null;
+      pageEvents.abort();
+      const row = element("fileViewPage");
+      row.style.display = "none";
+      row.innerHTML = "";
+    }
+    function renderPage(page, id, generation) {
+      if (!ownsFile(id, generation) || !file.owner || !file.endpoint) return;
+      clearPage();
+      displayedPage = page;
+      pageEvents = new AbortController();
+      const events = pageEvents, owner = file.owner, endpoint = file.endpoint, sequence = ++pageSequence;
+      const current = () => !events.signal.aborted && sequence === pageSequence && ownsFile(id, generation);
+      const link = page.url || document2.defaultView.location.origin + page.path, row = element("fileViewPage");
+      row.style.display = "";
+      row.innerHTML = `Published: <button type="button" class="stats-copy stats-share-link" title="Click to copy">${escapeHtml(link)}</button><button type="button" class="btn-small btn-danger" id="filePageRevoke">Unpublish</button>`;
+      row.querySelector(".stats-copy").addEventListener("click", () => {
+        if (!current()) return;
+        void options2.copy(link).then(() => {
+          if (current()) options2.status("Page link copied");
+        }, () => {
+          if (current()) options2.status("Copy failed (clipboard blocked)", "error");
+        });
+      }, { signal: events.signal });
+      const revoke = row.querySelector("#filePageRevoke");
+      revoke.addEventListener("click", () => {
+        if (!current() || revoke.disabled) return;
+        revoke.disabled = true;
+        void request(owner, endpoint, `/api/pages/${encodeURIComponent(page.token)}`, { method: "DELETE" }).then(json).then(() => {
+          if (!current()) return;
+          pageSequence++;
+          clearPage();
+          options2.refreshArtifacts(owner);
+        }).catch((e) => {
+          if (current()) {
+            revoke.disabled = false;
+            options2.status("Failed to unpublish: " + errorText(e), "error");
+          }
+        });
+      }, { signal: events.signal });
+    }
+    async function publish() {
+      const { owner, endpoint, sessionId: id, generation, path } = file;
+      const button = element("fileViewPublish");
+      if (!owner || !endpoint || !id || !path || !ownsFile(id, generation) || button.disabled) return;
+      const previousPage = displayedPage;
+      const sequence = ++pageSequence;
+      pageEvents.abort();
+      button.disabled = true;
+      const current = () => ownsFile(id, generation) && pageSequence === sequence;
+      try {
+        const value = await json(await request(owner, endpoint, "/api/pages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, sessionId: id, title: path.split("/").pop(), renderer: "file" }) }));
+        if (!current()) return;
+        const page = decodePublishedPages([value])[0];
+        if (!page) throw new Error("Invalid published page");
+        button.disabled = false;
+        renderPage(page, id, generation);
+        options2.refreshArtifacts(owner);
+      } catch (e) {
+        if (current()) {
+          button.disabled = false;
+          if (previousPage) renderPage(previousPage, id, generation);
+          options2.status("Publish failed: " + errorText(e), "error");
+        }
+      }
+    }
+    function copy(button) {
+      const { sessionId: id, generation, raw } = file;
+      if (raw === null || !ownsFile(id, generation) || !button.isConnected || !element("fileView").contains(button)) return;
+      const sequence = ++copySequence;
+      const current = () => ownsFile(id, generation) && sequence === copySequence && button.isConnected;
+      void options2.copy(raw).then(() => {
+        if (!current()) return;
+        button.textContent = "\u2713";
+        const timer = setTimeout(() => {
+          timers.delete(timer);
+          if (current()) button.textContent = "\u29C9";
+        }, 1200);
+        timers.add(timer);
+      }, () => {
+        if (current()) options2.status("Copy failed (clipboard blocked)", "error");
+      });
+    }
+    async function openFile(mention) {
+      if (disposed || !sessionState.currentSession) return;
+      closeFile();
+      closeDiff();
+      const captured = capture(file);
+      if (!captured) return;
+      const { owner, endpoint, id, generation } = captured;
+      element("sessionView").classList.add("file-open");
+      fileEvents = new AbortController();
+      element("fileViewPublish").addEventListener("click", () => {
+        if (ownsFile(id, generation)) void publish();
+      }, { signal: fileEvents.signal });
+      const copyButton = element("fileViewCopy");
+      copyButton.addEventListener("click", () => {
+        if (ownsFile(id, generation)) copy(copyButton);
+      }, { signal: fileEvents.signal });
+      const body = element("fileViewBody"), title = element("fileViewTitle"), path = element("fileViewPath"), rawLink = element("fileViewRaw");
+      title.textContent = mention.replace(/:\d+(?::\d+)?$/, "").split("/").pop() || "";
+      path.textContent = "";
+      path.title = "";
+      body.innerHTML = '<div class="loading">Loading\u2026</div>';
+      try {
+        const data = decodeFilePreview(await json(await request(owner, endpoint, `/api/sessions/${encodeURIComponent(id)}/file?path=${encodeURIComponent(mention)}`)));
+        if (!ownsFile(id, generation)) return;
+        title.textContent = data.path.split("/").pop() || "";
+        file.path = data.path;
+        file.relPath = data.relPath;
+        rawLink.href = endpoint.base + `/api/sessions/${encodeURIComponent(id)}/file/content?path=${encodeURIComponent(data.path)}&v=${data.mtime}-${data.size}`;
+        rawLink.style.display = "";
+        element("fileViewPublish").style.display = "";
+        const sequence = pageSequence;
+        void request(owner, endpoint, "/api/pages").then(json).then((value) => {
+          if (!ownsFile(id, generation) || file.path !== data.path || sequence !== pageSequence) return;
+          const page = decodePublishedPages(value).find((page2) => page2.root === data.path);
+          if (page) renderPage(page, id, generation);
+        }).catch(() => {
+        });
+        const size = data.size >= 10240 ? `${Math.round(data.size / 1024)} KB` : `${data.size} B`;
+        path.textContent = `${shortCwd(data.path)} \xB7 ${size}${data.truncated ? " \xB7 truncated preview" : ""}`;
+        path.title = data.path;
+        if (data.image) {
+          const src = data.image.url ? endpoint.base + data.image.url : `data:${data.image.mimeType};base64,${data.image.data}`;
+          body.innerHTML = `<img class="file-view-img" src="${escapeHtml(src)}" decoding="async" alt="">`;
+          return;
+        }
+        file.raw = data.content;
+        const ext = data.path.match(/\.([A-Za-z0-9]+)$/)?.[1]?.toLowerCase();
+        if (ext === "md" || ext === "markdown") body.innerHTML = `<div class="markdown-body">${options2.markdown(data.content)}</div>`;
+        else body.innerHTML = `<div class="markdown-body"><pre><code${ext ? ` class="language-${escapeHtml(ext)}"` : ""}${data.content.length > 8e4 ? ' data-highlighted="skip"' : ""}>${escapeHtml(data.content)}</code></pre></div>`;
+        options2.highlight(body);
+        options2.refreshComments();
+      } catch (e) {
+        if (ownsFile(id, generation)) body.innerHTML = `<div class="error">${escapeHtml(errorText(e))}</div>`;
+      }
+    }
+    async function openDiff() {
+      if (disposed || !sessionState.currentSession) return;
+      closeFile();
+      element("sessionView").classList.add("diff-open");
+      element("btnDiff").classList.add("active");
+      await loadDiff();
+    }
+    function toggleDiff() {
+      if (isOpen("diff")) closeDiff();
+      else void openDiff();
+    }
+    async function loadDiff() {
+      if (disposed || !sessionState.currentSession || !isOpen("diff")) return;
+      const captured = capture(diff);
+      if (!captured) return;
+      const { owner, endpoint, id, generation } = captured;
+      diffEvents.abort();
+      diffEvents = new AbortController();
+      const body = element("diffViewBody");
+      options2.closeComments();
+      body.innerHTML = '<div class="loading">Loading\u2026</div>';
+      try {
+        const data = decodeDiffView(await json(await request(owner, endpoint, `/api/sessions/${encodeURIComponent(id)}/diff`)));
+        if (!ownsDiff(id, generation)) return;
+        element("diffViewRoot").textContent = shortCwd(data.root);
+        body.innerHTML = renderDiffViewHtml(data);
+        body.querySelectorAll("details.diff-file").forEach((details) => {
+          const patch = details.querySelector(".diff-patch");
+          if (patch) patchOwners.set(patch, { generation, owner, endpoint, request: null });
+          details.addEventListener("toggle", () => {
+            if (ownsDiff(id, generation) && body.contains(details) && details.open) void loadPatch(details);
+          }, { signal: diffEvents.signal });
+        });
+        options2.refreshComments();
+      } catch (e) {
+        if (ownsDiff(id, generation)) body.innerHTML = `<div class="error">${escapeHtml(errorText(e))}</div>`;
+      }
+    }
+    async function loadPatch(details) {
+      const patch = details.querySelector('.diff-patch[data-deferred="1"]');
+      if (!patch || !element("diffViewBody").contains(details)) return;
+      const owned = patchOwners.get(patch);
+      if (!owned || owned.request || !ownsDiff(owned.owner.id, owned.generation)) return;
+      const token = /* @__PURE__ */ Symbol("patch");
+      owned.request = token;
+      patch.dataset.loading = "1";
+      const { repo = "", path = "", snapshot = "" } = patch.dataset;
+      const current = () => ownsDiff(owned.owner.id, owned.generation) && element("diffViewBody").contains(patch) && patchOwners.get(patch) === owned && owned.request === token && patch.dataset.repo === repo && patch.dataset.path === path && patch.dataset.snapshot === snapshot;
+      try {
+        const query = new URLSearchParams({ repo, path, snapshot });
+        const response = await request(owned.owner, owned.endpoint, `/api/sessions/${encodeURIComponent(owned.owner.id)}/diff/patch?${query}`);
+        const value = await response.json();
+        const data = decodeDiffPatch(value);
+        if (!current()) return;
+        if (response.status === 409 && data.stale) {
+          patch.innerHTML = '<div class="diff-file-note">Working tree changed \u2014 refreshing the diff\u2026</div>';
+          await loadDiff();
+          return;
+        }
+        if (!response.ok) throw new Error(record8(value) && typeof value.error === "string" ? value.error : `HTTP ${response.status}`);
+        patch.innerHTML = renderDiffHtml(data.patch) + (data.truncated ? '<div class="diff-file-note">\u2026 patch truncated</div>' : "");
+        delete patch.dataset.deferred;
+        delete patch.dataset.loading;
+        owned.request = null;
+        options2.markComments();
+      } catch (e) {
+        if (!current()) return;
+        delete patch.dataset.loading;
+        owned.request = null;
+        patch.innerHTML = `<div class="diff-file-note diff-patch-missing">Could not load patch: ${escapeHtml(errorText(e))}. Collapse and reopen to retry.</div>`;
+      }
+    }
+    return {
+      openFile,
+      closeFile,
+      publish,
+      copy,
+      openDiff,
+      closeDiff,
+      toggleDiff,
+      loadDiff,
+      loadPatch,
+      ownsFile,
+      ownsDiff,
+      isFileOpen: () => isOpen("file"),
+      isDiffOpen: () => isOpen("diff"),
+      get file() {
+        return file;
+      },
+      get diff() {
+        return diff;
+      },
+      dispose() {
+        closeFile();
+        closeDiff();
+        disposed = true;
       }
     };
   }

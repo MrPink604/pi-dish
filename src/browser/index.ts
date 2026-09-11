@@ -68,3 +68,7 @@ export { copyTextToClipboard } from './clipboard';
 
 export { createExtensionUI } from './extension-ui';
 export { decodeExtensionRequest } from './extension-ui-data';
+
+export { createFileViews } from './file-views';
+export { decodeFilePreview, decodeDiffView, decodeDiffPatch } from './file-view-data';
+export { renderDiffViewHtml } from './file-view-render';

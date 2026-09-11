@@ -131,11 +131,9 @@ test('a search-result list reload cannot hijack a newer selection', async ({ pag
 
 test('a delayed diff comment focus cannot reopen its editor on another host', async ({ page, fleet }) => {
   await fleet.select(fleet.peer);
-  await page.evaluate(id => {
-    diffViewOwner = sessionState.captureSelection();
-    diffViewSessionId = id;
-    diffViewGeneration += 1;
-    document.getElementById('sessionView').classList.add('diff-open');
+  await page.route('**/api/sessions/*/diff', route => route.fulfill({ json: { root: '/fixture', gitAvailable: true, repos: [] } }));
+  await page.evaluate(async id => {
+    await openDiffView();
     document.getElementById('diffViewBody').innerHTML = '<details class="diff-file"><div class="diff-patch" data-repo="repo" data-path="file.txt"></div></details>';
     anchoredComments = [{ id: 'fixture-comment', sessionId: id, body: 'peer comment',
       target: { kind: 'diff', repo: 'repo', path: 'file.txt', anchor: { quote: 'text' } } }];

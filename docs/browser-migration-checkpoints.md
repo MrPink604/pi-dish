@@ -630,3 +630,27 @@ passed again after the fix. AGENTS.md now includes the pre-paint output.
   files match the verified draft byte for byte; strict checks passed again.
 - Fable 5.1 cleared renderer commit `b15c5a5` before push.
 - Next: file/diff views, anchored comments and remaining transcript/shell logic.
+
+## Checkpoint 27 — File previews and lazy diffs
+
+- `file-views.ts` owns mutually exclusive file/diff views, captured host endpoints,
+  read-only view snapshots, request generations and per-render listener lifetimes.
+  `file-view-data.ts` narrows wire data and `file-view-render.ts` renders escaped
+  repository/file metadata while preserving deferred patch snapshots.
+- Publication lookup cannot overwrite a newer publish or unpublish. Duplicate
+  publishes are suppressed, HTTP revoke errors keep the link, and failed publishes
+  restore existing row controls. Replaced rows and clipboard completions retire.
+- Lazy patches carry row/request ownership plus repository/path/snapshot identity.
+  Closed/refreshed rows cannot fetch or publish a late response. Stale snapshots
+  refresh the current diff; failed patches remain retryable.
+- Endpoint bases stay captured while credentials refresh at dispatch. Disposal
+  retires view listeners, rows and clipboard feedback timers.
+- Two decoder/render tests and seven browser cases cover overlapping views,
+  publication races/errors, retained controls, patch refresh/retry and disposal.
+  The existing delayed-comment focus case now opens a real fixture diff instead
+  of assigning private view state.
+- Strict checks, 923 backend tests, 182 browser regressions, every independent UI
+  scenario and full desktop/mobile smoke passed. Integrated runtime/config/test
+  files match the verified draft byte for byte; strict checks passed again.
+- Fable 5.1 cleared extension UI commit `0c1e3a0` before push.
+- Next: anchored comments, transcript/composer orchestration and shell wiring.

@@ -2144,3 +2144,11 @@ widget/status removal and toast timers, and `extension-dialogs.ts` owns cards by
 host/session/request. Stashing preserves edits; redocking renews the selection
 owner. Reconcile only the named host/session, ignore malformed authoritative lists,
 and abort retired card listeners. Credential refresh cannot change a captured base.
+
+File/diff takeovers live in `src/browser/file-views.ts`; their state is exposed as
+read-only snapshots for comment coordination. View generations and captured bases
+own asynchronous effects; fresh credentials are resolved only at dispatch. Page
+lookup and mutations share a sequence, replaced controls abort their listeners,
+and deferred patch owners include their row, view, repo/path and snapshot. Revoke
+HTTP failures keep the published link; stale patch responses refresh only their
+current diff. Wire narrowing and escaped diff HTML live in companion modules.
