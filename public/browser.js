@@ -35,6 +35,8 @@ var PiDishBrowser = (() => {
     createAnchoredComments: () => createAnchoredComments,
     createBounce: () => createBounce,
     createBrowserAssets: () => createBrowserAssets,
+    createComposerDrafts: () => createComposerDrafts,
+    createComposerImages: () => createComposerImages,
     createComposerNotes: () => createComposerNotes,
     createComposerSpeech: () => createComposerSpeech,
     createCwdAutocomplete: () => createCwdAutocomplete,
@@ -82,6 +84,7 @@ var PiDishBrowser = (() => {
     decodeBouncePreview: () => decodeBouncePreview,
     decodeCommentIndex: () => decodeCommentIndex,
     decodeCommentTarget: () => decodeCommentTarget,
+    decodeComposerImages: () => decodeComposerImages,
     decodeDiffPatch: () => decodeDiffPatch,
     decodeDiffView: () => decodeDiffView,
     decodeDirectoryChildren: () => decodeDirectoryChildren,
@@ -121,6 +124,7 @@ var PiDishBrowser = (() => {
     hostKeyOf: () => hostKeyOf,
     hostSettingsHtml: () => hostSettingsHtml,
     markCommentQuote: () => markCommentQuote,
+    mergeComposerText: () => mergeComposerText,
     mergeHostEntries: () => mergeHostEntries,
     mergeSearchPayloads: () => mergeSearchPayloads,
     modelCatalogUrl: () => modelCatalogUrl,
@@ -2876,6 +2880,15 @@ var PiDishBrowser = (() => {
   function truncate(text16, maxLen, suffix = " \u2026 (truncated)") {
     if (!text16 || text16.length <= maxLen) return text16;
     return text16.slice(0, maxLen) + suffix;
+  }
+  function pushPromptHistory(list, message3, cap) {
+    const out = Array.isArray(list) ? list.filter((value) => typeof value === "string") : [];
+    const msg = String(message3 || "").trim();
+    if (!msg) return out;
+    if (out[out.length - 1] === msg) return out;
+    out.push(msg);
+    const max = typeof cap === "number" && cap > 0 ? cap : 50;
+    return out.length > max ? out.slice(out.length - max) : out;
   }
   function sttUnavailableReason({ isSecureContext, hasGetUserMedia, hasMediaRecorder, origin } = {}) {
     if (!isSecureContext) {
@@ -12632,6 +12645,440 @@ var PiDishBrowser = (() => {
         cancel();
         lifetime.abort();
         disposed = true;
+      }
+    };
+  }
+
+  // src/browser/composer-images.ts
+  function decodeComposerImages(value) {
+    return Array.isArray(value) ? value.flatMap((image) => record8(image) && typeof image.data === "string" && typeof image.mimeType === "string" && image.mimeType.startsWith("image/") ? [{ data: image.data, mimeType: image.mimeType }] : []) : [];
+  }
+  function createComposerImages(options2) {
+    const { document: document2 } = options2;
+    const stored = /* @__PURE__ */ new Map(), aliases = /* @__PURE__ */ new Map();
+    const batches = /* @__PURE__ */ new Set(), readers = /* @__PURE__ */ new Set();
+    let disposed = false, renderEvents = new AbortController(), lightbox = null;
+    function resolve(key) {
+      const seen = /* @__PURE__ */ new Set();
+      while (aliases.has(key) && !seen.has(key)) {
+        seen.add(key);
+        key = aliases.get(key);
+      }
+      return key;
+    }
+    function currentKey() {
+      const key = options2.owner();
+      return key ? resolve(key) : null;
+    }
+    function current() {
+      const key = currentKey();
+      return key ? stored.get(key) || [] : [];
+    }
+    function render() {
+      renderEvents.abort();
+      const strip = document2.getElementById("attachmentStrip");
+      if (!strip) return;
+      strip.innerHTML = "";
+      const key = currentKey(), images = current();
+      if (disposed || !key || !images.length) {
+        strip.style.display = "none";
+        return;
+      }
+      renderEvents = new AbortController();
+      const events = renderEvents;
+      for (const image of images) {
+        const thumb = document2.createElement("span");
+        thumb.className = "attachment-thumb";
+        const img = document2.createElement("img");
+        img.src = `data:${image.mimeType};base64,${image.data}`;
+        img.alt = "";
+        const remove2 = document2.createElement("button");
+        remove2.className = "attachment-remove";
+        remove2.title = "Remove";
+        remove2.textContent = "\u2715";
+        remove2.addEventListener("click", () => {
+          if (events.signal.aborted || currentKey() !== key || stored.get(key) !== images || !strip.contains(remove2)) return;
+          stored.set(key, images.filter((candidate) => candidate !== image));
+          render();
+        }, { signal: events.signal });
+        thumb.append(img, remove2);
+        strip.append(thumb);
+      }
+      strip.style.display = "";
+    }
+    function replace(key, value) {
+      if (disposed) return;
+      stored.set(resolve(key), decodeComposerImages(value));
+      if (currentKey() === resolve(key)) render();
+    }
+    function append(key, value, prepend = true) {
+      if (disposed) return;
+      key = resolve(key);
+      const images = decodeComposerImages(value), before = stored.get(key) || [];
+      if (images.length) stored.set(key, prepend ? [...images, ...before] : [...before, ...images]);
+      if (currentKey() === key) render();
+    }
+    function discard(key) {
+      key = resolve(key);
+      stored.delete(key);
+      for (const batch of batches) if (batch.key === key) batch.retired = true;
+      if (currentKey() === key) render();
+    }
+    function migrate(from, to) {
+      from = resolve(from);
+      to = resolve(to);
+      if (disposed || from === to) return;
+      const source = stored.get(from) || [];
+      if (source.length) stored.set(to, [...source, ...stored.get(to) || []]);
+      stored.delete(from);
+      aliases.set(from, to);
+      for (const batch of batches) if (batch.key === from) batch.key = to;
+      render();
+    }
+    function take() {
+      const key = currentKey(), images = current();
+      if (!key || !images.length || disposed) return null;
+      stored.delete(key);
+      render();
+      return images;
+    }
+    function remove(index) {
+      const key = currentKey(), images = current();
+      if (disposed || !key || !Number.isInteger(index) || index < 0 || index >= images.length) return;
+      stored.set(key, images.filter((_, i) => i !== index));
+      render();
+    }
+    function read(file) {
+      if (disposed) return Promise.reject(new Error("Image attachments disposed"));
+      return new Promise((resolve2, reject) => {
+        const reader = new FileReader();
+        readers.add(reader);
+        const cleanup = () => {
+          readers.delete(reader);
+          reader.onload = null;
+          reader.onerror = null;
+          reader.onabort = null;
+        };
+        reader.onload = () => {
+          const value = String(reader.result);
+          cleanup();
+          resolve2(value.slice(value.indexOf(",") + 1));
+        };
+        reader.onerror = reader.onabort = () => {
+          cleanup();
+          reject(new Error("read failed"));
+        };
+        try {
+          reader.readAsDataURL(file);
+        } catch (error) {
+          cleanup();
+          reject(error);
+        }
+      });
+    }
+    async function prepare(file) {
+      if (disposed) throw new Error("Image attachments disposed");
+      const bitmap = typeof createImageBitmap === "function" ? await createImageBitmap(file).catch(() => null) : null;
+      if (disposed) {
+        bitmap?.close();
+        throw new Error("Image attachments disposed");
+      }
+      if (!bitmap) return { data: await read(file), mimeType: file.type };
+      try {
+        const scale = Math.min(1, 1568 / Math.max(bitmap.width, bitmap.height));
+        if (scale === 1 && file.size <= 512 * 1024) return { data: await read(file), mimeType: file.type };
+        const canvas = document2.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+        const context = canvas.getContext("2d");
+        if (!context) throw new Error("Image canvas unavailable");
+        context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        const url = canvas.toDataURL("image/jpeg", 0.85);
+        return { data: url.slice(url.indexOf(",") + 1), mimeType: "image/jpeg" };
+      } finally {
+        bitmap.close();
+      }
+    }
+    async function add(files) {
+      const key = currentKey();
+      if (disposed || !key) return;
+      const batch = { key, retired: false };
+      batches.add(batch);
+      try {
+        for (const file of Array.from(files || [])) {
+          if (disposed || batch.retired) break;
+          if (!file?.type?.startsWith("image/")) continue;
+          try {
+            const image = await prepare(file);
+            if (!disposed && !batch.retired) append(batch.key, [image], false);
+          } catch (error) {
+            if (!disposed && !batch.retired && currentKey() === batch.key) options2.status(`Could not attach ${file.name || "image"}: ${error instanceof Error ? error.message : String(error)}`, "error");
+          }
+        }
+      } finally {
+        batches.delete(batch);
+      }
+    }
+    function closeLightbox() {
+      if (lightbox) {
+        lightbox.events.abort();
+        lightbox.element.remove();
+        lightbox = null;
+      }
+    }
+    function openLightbox(src) {
+      if (disposed) return;
+      closeLightbox();
+      const overlay = document2.createElement("div");
+      overlay.className = "lightbox-overlay";
+      const image = document2.createElement("img");
+      image.src = src;
+      overlay.append(image);
+      const entry = { element: overlay, events: new AbortController() };
+      lightbox = entry;
+      overlay.addEventListener("click", () => {
+        if (lightbox === entry) closeLightbox();
+      }, { signal: entry.events.signal });
+      document2.body.append(overlay);
+    }
+    return {
+      current,
+      render,
+      replace,
+      append,
+      discard,
+      migrate,
+      take,
+      remove,
+      prepare,
+      read,
+      add,
+      openLightbox,
+      closeLightbox,
+      stored: (key) => stored.get(resolve(key)) || [],
+      dispose() {
+        disposed = true;
+        for (const batch of batches) batch.retired = true;
+        for (const reader of [...readers]) reader.abort();
+        stored.clear();
+        aliases.clear();
+        renderEvents.abort();
+        render();
+        closeLightbox();
+      }
+    };
+  }
+
+  // src/browser/composer-drafts.ts
+  function mergeComposerText(existing, restored) {
+    const current = existing.trim();
+    return !current || current === restored ? restored : `${existing}
+
+${restored}`;
+  }
+  function createComposerDrafts(options2) {
+    const { document: document2, storage } = options2;
+    let key = null, dirty = false, history = [], historyIndex = -1, historyStash = "", timer = null, generation = 0, disposed = false;
+    const images = createComposerImages({ document: document2, owner: () => key, status: options2.status });
+    const input = () => document2.getElementById("promptInput");
+    function ownerKey(id) {
+      return id.startsWith("spawn:") || id.includes(" ") ? id : options2.keyForSession(id);
+    }
+    function draftKey(id) {
+      return "pi-dish-draft-" + ownerKey(id);
+    }
+    function historyKey(id) {
+      return "pi-dish-history-" + ownerKey(id);
+    }
+    function read(name) {
+      try {
+        return storage.getItem(name) || "";
+      } catch {
+        return "";
+      }
+    }
+    function readHistory(id) {
+      try {
+        const value = JSON.parse(read(historyKey(id)) || "[]");
+        return Array.isArray(value) ? value.filter((value2) => typeof value2 === "string").slice(-50) : [];
+      } catch {
+        return [];
+      }
+    }
+    function cancelTimer() {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+    }
+    function write(id, value) {
+      if (disposed || !id) return;
+      try {
+        if (value.trim() && value.length < 5e4) storage.setItem(draftKey(id), value);
+        else storage.removeItem(draftKey(id));
+      } catch {
+      }
+    }
+    function stash() {
+      cancelTimer();
+      generation++;
+      if (!key) return;
+      if (dirty) write(key, input().value);
+      key = null;
+      dirty = false;
+      images.render();
+    }
+    function clear() {
+      cancelTimer();
+      generation++;
+      if (key) images.discard(key);
+      key = null;
+      dirty = false;
+      input().value = "";
+      input().style.height = "";
+      images.render();
+    }
+    function waiting(value) {
+      input().placeholder = value ? "Write your prompt while Pi starts\u2026" : "Send a message...";
+      const button = document2.getElementById("btnSend");
+      if (button) {
+        button.disabled = value;
+        button.title = value ? "Your draft will be preserved until Pi connects" : "Send";
+      }
+    }
+    function saveSoon() {
+      if (disposed) return;
+      cancelTimer();
+      const owner = key, version = generation;
+      dirty = true;
+      timer = setTimeout(() => {
+        timer = null;
+        if (disposed || !owner || key !== owner || generation !== version) return;
+        write(owner, input().value);
+        dirty = false;
+      }, 300);
+    }
+    function clearDraft(id = key) {
+      if (disposed || !id) return;
+      const owner = ownerKey(id);
+      if (key === owner) {
+        cancelTimer();
+        dirty = false;
+      }
+      try {
+        storage.removeItem(draftKey(owner));
+      } catch {
+      }
+    }
+    function restore(id = options2.currentSessionId()) {
+      if (disposed || !id) return;
+      const owner = ownerKey(id);
+      if (key && dirty) write(key, input().value);
+      cancelTimer();
+      key = owner;
+      dirty = false;
+      generation++;
+      input().value = read(draftKey(owner));
+      images.render();
+      options2.autosize(input());
+      historyIndex = -1;
+      historyStash = "";
+      history = readHistory(owner);
+    }
+    function record9(message3, id = key) {
+      if (disposed || !id) return;
+      const owner = ownerKey(id), next = pushPromptHistory(key === owner ? history : readHistory(owner), message3, 50);
+      if (key === owner) {
+        history = next;
+        historyIndex = -1;
+      }
+      try {
+        storage.setItem(historyKey(owner), JSON.stringify(next));
+      } catch {
+      }
+    }
+    function migrate(from, to) {
+      if (disposed) return;
+      from = ownerKey(from);
+      to = ownerKey(to);
+      if (from === to) return;
+      if (key === from && dirty) {
+        cancelTimer();
+        write(from, input().value);
+        dirty = false;
+      }
+      const source = read(draftKey(from)), destination = read(draftKey(to));
+      try {
+        storage.removeItem(draftKey(from));
+      } catch {
+      }
+      if (source) {
+        const merged = mergeComposerText(key === to ? input().value : destination, source);
+        write(to, merged);
+        if (key === to) {
+          input().value = merged;
+          dirty = false;
+          options2.autosize(input());
+        }
+      }
+      images.migrate(from, to);
+    }
+    function restorePayload(id, message3, attachments) {
+      if (disposed || !id) return;
+      const owner = ownerKey(id), saved = read(draftKey(owner));
+      write(owner, message3 ? mergeComposerText(saved, message3) : saved);
+      if (attachments?.length) images.append(owner, attachments);
+      if (key === owner && message3) {
+        input().value = mergeComposerText(input().value, message3);
+        input().dispatchEvent(new Event("input", { bubbles: true }));
+        input().focus();
+      }
+    }
+    function navigate(direction, target = input()) {
+      if (disposed || !key || !history.length || target !== input()) return false;
+      if (direction < 0) {
+        if (historyIndex === -1) {
+          historyStash = target.value;
+          historyIndex = history.length - 1;
+        } else if (historyIndex > 0) historyIndex--;
+        else return true;
+      } else {
+        historyIndex++;
+        if (historyIndex >= history.length) historyIndex = -1;
+      }
+      const value = historyIndex === -1 ? historyStash : history[historyIndex];
+      target.value = value;
+      target.setSelectionRange(value.length, value.length);
+      options2.autosize(target);
+      return true;
+    }
+    return {
+      images,
+      ownerKey,
+      draftKey,
+      historyKey,
+      write,
+      stash,
+      clear,
+      waiting,
+      saveSoon,
+      clearDraft,
+      restore,
+      record: record9,
+      migrate,
+      restorePayload,
+      navigate,
+      exitHistory() {
+        historyIndex = -1;
+      },
+      get key() {
+        return key;
+      },
+      get historyIndex() {
+        return historyIndex;
+      },
+      dispose() {
+        stash();
+        disposed = true;
+        images.dispose();
       }
     };
   }

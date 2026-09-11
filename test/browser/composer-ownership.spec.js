@@ -53,9 +53,9 @@ for (const kind of ['prompt', 'command', 'steer', 'followUp']) {
 test('an image finishing preparation after navigation belongs to its starting composer', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
   await page.evaluate(() => {
-    const prepare = prepareImageAttachment;
-    prepareImageAttachment = file => new Promise(resolve => {
-      window.finishImage = async () => resolve(await prepare(file));
+    const prepare = createImageBitmap;
+    createImageBitmap = file => new Promise(resolve => {
+      window.finishImage = async () => resolve(await prepare(file).catch(() => null));
     });
   });
   await page.locator('input[type=file][accept*="image"]').setInputFiles(attachment);

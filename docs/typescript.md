@@ -429,3 +429,8 @@ and filenames while status feedback follows the originating selection.
 Dictation lives in `composer-speech.ts`, which retains permission/take/transcription
 owners and releases streams, listeners and timers on cancellation or disposal.
 `composer-notes.ts` owns persistent text-only notes and their dismiss controls.
+
+Draft/history persistence and attachment batches live in `composer-drafts.ts` and
+`composer-images.ts`. Draft timers and history are composer-owned; provisional
+keys migrate dirty text and in-flight images together. Retired image controls and
+batches cannot modify a later composer, and bitmap/read resources are released.

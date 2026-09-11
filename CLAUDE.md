@@ -2174,3 +2174,8 @@ also retire pending permission and transcription; late streams stop their tracks
 and old recorder events cannot affect a newer take. Batch transcription inserts
 text at the caret without sending. `composer-notes.ts` owns text-only notices and
 retires obsolete dismiss controls. Disposal releases listeners, timers and tracks.
+
+Composer draft/history and image attachment ownership live in `src/browser/composer-drafts.ts`
+and `composer-images.ts`. Use controller methods rather than mutable image arrays.
+A provisional spawn migrates dirty text and pending image ownership together;
+foreign draft/history actions must not cancel the currently selected draft timer.

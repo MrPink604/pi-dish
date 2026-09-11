@@ -729,3 +729,16 @@ passed again after the fix. AGENTS.md now includes the pre-paint output.
   strict checks passed again.
 - Fable 5.1 cleared amended header commit `102375e` before push.
 - Next: drafts/attachments, autocomplete, transcript/composer and shell wiring.
+
+## Checkpoint 31 — composer drafts and images
+
+Moved drafts, bounded history, attachment preparation, clipboard file reads and
+image lightboxes into two strict TypeScript controllers. Host-qualified composer
+keys own timers and batches; spawn migration carries pending images and dirty text.
+Discard retires pending additions, and replaced image buttons cannot remove a
+new owner’s attachment. Foreign history/clear operations preserve current drafts.
+
+Verification: strict checks, 927 backend tests, 210 browser tests, every isolated
+UI scenario and full desktop/mobile smoke passed. Added two pure regressions,
+strict contracts and six browser ownership cases. The actual worktree matches
+the verified runtime and test files byte for byte. Fable review is required before push.

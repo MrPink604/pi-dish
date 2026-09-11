@@ -33,7 +33,8 @@ Checkpoint 26 migrates extension widgets, status entries and interactive dialogs
 Checkpoint 27 migrates file previews, publication controls and lazy diff views.
 Checkpoint 28 migrates anchored comment selection, editors and rendered marks.
 Checkpoint 29 migrates session header menus, rename, model/thinking actions and export.
-Checkpoint 30 migrates dictation and composer-note ownership. See
+Checkpoint 30 migrates dictation and composer-note ownership.
+Checkpoint 31 migrates prompt drafts, history and image attachments. See
 [the checkpoint log](docs/browser-migration-checkpoints.md) for implementation
 verification and the complete browser entrypoint inventory. The last confirmed
 CI checkpoint is recorded below; final CI must pass before the goal is complete.
@@ -44,7 +45,7 @@ CI checkpoint is recorded below; final CI must pass before the goal is complete.
 | --- | --- | --- |
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
-| Browser migration | In progress — current stage | Seventy-three implementation modules are typed. Transcript/composer orchestration and shell wiring remain in `public/app.js`. |
+| Browser migration | In progress — current stage | Seventy-five implementation modules are typed. Transcript/composer orchestration and shell wiring remain in `public/app.js`. |
 | Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -62,7 +63,7 @@ in `lib/`. Its full module inventory is in [the migration guide](docs/typescript
 Most JavaScript callers of these modules are not yet type checked; `lib/cron.js`
 is an explicitly checked exception.
 
-These sixty browser implementation modules compile strictly into local
+These seventy-five browser implementation modules compile strictly into local
 `public/browser.js`, `public/helpers.js`, `public/artifact-comments.js` and
 `public/theme-prepaint.js` scripts.
 The entries are `index.ts`, `shared-helpers.ts`, `artifact-comments.ts` and
@@ -106,6 +107,7 @@ pure-helper and vendored runtime contracts:
 | `anchored-comments.ts`, `anchored-comment-data.ts`, `comment-anchors.ts` | Comment selection/editing, refresh ownership and durable quote/line marks |
 | `session-controls.ts` | Header menu lifetimes, owned rename/model/thinking mutations and export resources |
 | `composer-speech.ts`, `composer-notes.ts` | Dictation permission/recording/transcription ownership and persistent composer notes |
+| `composer-drafts.ts`, `composer-images.ts` | Host-qualified drafts/history, spawn migration and asynchronous image batches |
 | `rich-text.ts` | Markdown configuration, final highlighting, file links and copy controls |
 | `diagrams.ts` | Diagram rendering/theme generations and lightbox controls |
 | `clipboard.ts` | Native clipboard and insecure-context textarea fallback |

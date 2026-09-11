@@ -89,6 +89,7 @@ After editing `src/browser/`, run `npm run build:browser` before `npm test`;
 | Wire envelope validation, malformed responses, unknown events and transport survival | `test/transport-frames.test.js` plus existing bridge/RPC protocol suites |
 | Typed RPC startup validation, failed-child cleanup, delta snapshots and recovery ownership | `test/rpc-session.test.js`, `test/transport-frames.test.js`, `test/session-recovery.test.js` |
 | Typed bridge registry validation, pre-hello claim protection and session-switch replay ordering | `test/bridge-session.test.js` |
+| Composer drafts/history, spawn migration and image batch ownership | `test/browser-composer-drafts.test.js`, `test/types/browser-composer-drafts.ts`, `test/browser/composer-drafts.spec.js` |
 | Dictation permission/take/transcription and persistent-note lifetimes | `test/types/browser-composer-speech.ts`, `test/browser/composer-speech.spec.js`, synthetic-microphone UI smoke |
 | Header menu attempts, rename/mutation ordering, preference debounce and export lifetimes | `test/types/browser-session-controls.ts`, `test/browser/session-controls.spec.js`, existing selector/identity specs |
 | Anchored comment decoding, refresh/editor races, selection and mark lifetimes | `test/browser-anchored-comments.test.js`, `test/types/browser-anchored-comments.ts`, `test/browser/anchored-comments.spec.js` |

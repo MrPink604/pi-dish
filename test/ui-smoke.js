@@ -2544,7 +2544,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     console.log('send/queue async ownership:');
     await desktop.fill('#promptInput', 'failed prompt from A');
     await desktop.evaluate(({ a, image }) => {
-      pendingImages = [{ data: image, mimeType: 'image/png' }];
+      composerDrafts.images.replace(composerDrafts.key, [{ data: image, mimeType: 'image/png' }]);
       renderAttachmentStrip();
       const realApiSend = apiSend;
       window.__auditRealApiSend = realApiSend;
@@ -2569,7 +2569,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     const failedOwnership = await desktop.evaluate((a) => ({
       currentText: document.getElementById('promptInput').value,
       originDraft: localStorage.getItem(draftKey(a)),
-      originImages: pendingImagesBySession.get(keyForSessionId(a))?.length || 0,
+      originImages: composerDrafts.images.stored(keyForSessionId(a)).length || 0,
       pendingMatch: [...pendingOptimisticPrompts.values()].some((p) => p.message === 'failed prompt from A'),
     }), SESSION_ID);
     check(!failedOwnership.currentText.includes('failed prompt from A') &&
@@ -2582,8 +2582,8 @@ let remoteHost = null; // second pi-dish (multi-host section)
       'originating session restores the failed payload when revisited');
     await desktop.evaluate((a) => {
       document.getElementById('promptInput').value = '';
-      pendingImages = [];
-      pendingImagesBySession.delete(keyForSessionId(a));
+      composerDrafts.images.take();
+      composerDrafts.images.discard(keyForSessionId(a));
       clearDraft(a);
       renderAttachmentStrip();
     }, SESSION_ID);

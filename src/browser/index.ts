@@ -81,3 +81,6 @@ export { createSessionControls } from './session-controls';
 
 export { createComposerNotes } from './composer-notes';
 export { createComposerSpeech } from './composer-speech';
+
+export { createComposerImages, decodeComposerImages } from './composer-images';
+export { createComposerDrafts, mergeComposerText } from './composer-drafts';

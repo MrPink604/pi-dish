@@ -428,7 +428,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         promptInput.selectionStart === 0 && promptInput.selectionEnd === 0) {
       if (navigateHistory(-1, promptInput)) { e.preventDefault(); return; }
     }
-    if (!autocompleteVisible && e.key === 'ArrowDown' && historyIndex !== -1 &&
+    if (!autocompleteVisible && e.key === 'ArrowDown' && composerDrafts.historyIndex !== -1 &&
         promptInput.selectionStart === promptInput.value.length) {
       if (navigateHistory(1, promptInput)) { e.preventDefault(); return; }
     }
@@ -460,7 +460,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   promptInput.addEventListener('input', () => {
     autosizePromptInput(promptInput);
     handleAutocomplete(promptInput.value);
-    historyIndex = -1; // typing exits history browsing
+    composerDrafts.exitHistory(); // typing exits history browsing
     saveDraftSoon();
   });
 
@@ -3926,97 +3926,23 @@ function openMessageStream(url, owner) {
 // Prompt / Turn / Abort
 // =========================================================================
 
-// --- Image attachments -------------------------------------------------
-
-var pendingImages = []; // { data: base64 (no data: prefix), mimeType }
-const pendingImagesBySession = new Map();
-let composerSessionKey = null;
-let composerDraftDirty = false;
-
-async function addImageFiles(files) {
-  const owner = composerSessionKey;
-  if (!owner) return;
-  for (const file of Array.from(files || [])) {
-    if (!file || !file.type || !file.type.startsWith('image/')) continue;
-    try {
-      const image = await prepareImageAttachment(file);
-      if (composerSessionKey === owner) {
-        pendingImages.push(image);
-        renderAttachmentStrip();
-      } else {
-        pendingImagesBySession.set(owner, [...(pendingImagesBySession.get(owner) || []), image]);
-      }
-    } catch (e) {
-      if (composerSessionKey === owner) setStatus(`Could not attach ${file.name || 'image'}: ${e.message}`, 'error');
-    }
-  }
-}
-
-// Phone photos are routinely 10MB+; downscale to a sane long edge and
-// re-encode as JPEG before base64ing. Small images pass through untouched.
-async function prepareImageAttachment(file) {
-  const MAX_EDGE = 1568, PASSTHROUGH_BYTES = 512 * 1024;
-  const bitmap = await createImageBitmap(file).catch(() => null);
-  if (!bitmap) return { data: await fileToBase64(file), mimeType: file.type };
-  const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height));
-  if (scale === 1 && file.size <= PASSTHROUGH_BYTES) {
-    bitmap.close();
-    return { data: await fileToBase64(file), mimeType: file.type };
-  }
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-  canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  bitmap.close();
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-  return { data: dataUrl.slice(dataUrl.indexOf(',') + 1), mimeType: 'image/jpeg' };
-}
-
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => { const s = String(r.result); resolve(s.slice(s.indexOf(',') + 1)); };
-    r.onerror = () => reject(new Error('read failed'));
-    r.readAsDataURL(file);
-  });
-}
-
-function renderAttachmentStrip() {
-  const strip = document.getElementById('attachmentStrip');
-  if (!strip) return;
-  if (!pendingImages.length) { strip.style.display = 'none'; strip.innerHTML = ''; return; }
-  strip.innerHTML = pendingImages.map((img, i) =>
-    `<span class="attachment-thumb"><img src="data:${escapeHtml(img.mimeType)};base64,${img.data}" alt="">` +
-    `<button class="attachment-remove" onclick="removeAttachment(${i})" title="Remove">✕</button></span>`
-  ).join('');
-  strip.style.display = '';
-}
-
-function removeAttachment(i) { pendingImages.splice(i, 1); renderAttachmentStrip(); }
-
-/** Detach and clear the pending attachments (returns null when empty). */
-function takePendingImages() {
-  if (!pendingImages.length) return null;
-  const imgs = pendingImages;
-  pendingImages = [];
-  renderAttachmentStrip();
-  return imgs;
-}
-
-function openImageLightbox(src) {
-  const overlay = document.createElement('div');
-  overlay.className = 'lightbox-overlay';
-  const img = document.createElement('img');
-  img.src = src;
-  overlay.appendChild(img);
-  overlay.addEventListener('click', () => overlay.remove());
-  document.body.appendChild(overlay);
-}
+// Drafts and attachments share a host-qualified composer owner.
+const composerDrafts = PiDishBrowser.createComposerDrafts({
+  document, storage: localStorage, keyForSession: keyForSessionId, currentSessionId: () => sessionState.currentSession?.id || null,
+  autosize: input => autosizePromptInput(input), status: (message, type) => setStatus(message, type),
+});
+function addImageFiles(files) { return composerDrafts.images.add(files); }
+function prepareImageAttachment(file) { return composerDrafts.images.prepare(file); }
+function fileToBase64(file) { return composerDrafts.images.read(file); }
+function renderAttachmentStrip() { composerDrafts.images.render(); }
+function removeAttachment(index) { composerDrafts.images.remove(index); }
+function takePendingImages() { return composerDrafts.images.take(); }
+function openImageLightbox(src) { composerDrafts.images.openLightbox(src); }
 
 // Dictation retains the composer that requested permission and transcription.
 const composerNotes = PiDishBrowser.createComposerNotes(document);
 const composerSpeech = PiDishBrowser.createComposerSpeech({
-  document, sessionState, composerKey: () => composerSessionKey, hosts: effectiveHosts, config: () => appConfig,
+  document, sessionState, composerKey: () => composerDrafts.key, hosts: effectiveHosts, config: () => appConfig,
   request: (host, path, options) => apiFetch(host, path, options), status: message => setStatus(message),
   showNote: text => showComposerNote(text), hideNote: () => hideComposerNote(),
 });
@@ -4036,193 +3962,21 @@ function finishRecording(recorder) { composerSpeech.finish(recorder); }
 function transcribeRecording(blob, mime) { return composerSpeech.transcribe(blob, mime); }
 function insertTranscript(text) { composerSpeech.insert(text); }
 
-// --- Prompt drafts & history --------------------------------------------
-
-var promptHistory = [];  // sent prompts for the current session (oldest first)
-var historyIndex = -1;   // -1 = not browsing history
-var historyStash = '';   // in-progress text stashed while browsing
-var draftSaveTimer = null;
-
-// Composer owners are captured host-qualified session keys or `spawn:<id>`
-// operation keys. Bare wire ids are normalized at synchronous call boundaries.
-// Spawn operations are server-process-local and never outlive a reload (cleared at boot).
-function composerOwnerKey(owner) {
-  return String(owner).startsWith('spawn:') || String(owner).includes(' ') ? owner : keyForSessionId(owner);
-}
-function draftKey(id) { return `pi-dish-draft-${composerOwnerKey(id)}`; }
-function historyKey(id) { return `pi-dish-history-${composerOwnerKey(id)}`; }
-
-function writeSessionDraft(sessionId, value) {
-  if (sessionId) sessionId = composerOwnerKey(sessionId);
-  if (!sessionId) return;
-  try {
-    if (value.trim() && value.length < 50000) localStorage.setItem(draftKey(sessionId), value);
-    else localStorage.removeItem(draftKey(sessionId));
-  } catch {}
-}
-
-// Save the visible composer before currentSession changes. Attachments are
-// memory-only but, like text drafts, belong to the session where they were
-// added and must not follow a rapid session switch.
-function stashPromptState() {
-  clearTimeout(draftSaveTimer);
-  if (!composerSessionKey) return;
-  const input = document.getElementById('promptInput');
-  if (composerDraftDirty) writeSessionDraft(composerSessionKey, input?.value || '');
-  if (pendingImages.length) pendingImagesBySession.set(composerSessionKey, pendingImages);
-  else pendingImagesBySession.delete(composerSessionKey);
-  pendingImages = [];
-  composerSessionKey = null;
-  composerDraftDirty = false;
-  renderAttachmentStrip();
-}
-
-function clearPromptComposer() {
-  composerSessionKey = null;
-  composerDraftDirty = false;
-  pendingImages = [];
-  const input = document.getElementById('promptInput');
-  if (input) { input.value = ''; input.style.height = ''; }
-  renderAttachmentStrip();
-}
-
-function setComposerWaiting(waiting) {
-  const input = document.getElementById('promptInput');
-  if (input) input.placeholder = waiting ? 'Write your prompt while Pi starts…' : 'Send a message...';
-  const btn = document.getElementById('btnSend');
-  if (!btn) return;
-  btn.disabled = waiting;
-  btn.title = waiting ? 'Your draft will be preserved until Pi connects' : 'Send';
-}
-
-function saveDraftSoon() {
-  clearTimeout(draftSaveTimer);
-  const sessionId = composerSessionKey;
-  composerDraftDirty = true;
-  draftSaveTimer = setTimeout(() => {
-    if (!sessionId || composerSessionKey !== sessionId) return;
-    const v = document.getElementById('promptInput').value;
-    writeSessionDraft(sessionId, v);
-    composerDraftDirty = false;
-  }, 300);
-}
-
-function clearDraft(sessionId = composerSessionKey) {
-  if (sessionId) sessionId = composerOwnerKey(sessionId);
-  clearTimeout(draftSaveTimer);
-  if (sessionId) try { localStorage.removeItem(draftKey(sessionId)); } catch {}
-  if (composerSessionKey === sessionId) composerDraftDirty = false;
-}
-
-/** On session switch: load that session's draft + history into the input. */
-function restorePromptState(ownerId = sessionState.currentSession?.id) {
-  if (!ownerId) return;
-  ownerId = composerOwnerKey(ownerId);
-  const input = document.getElementById('promptInput');
-  composerSessionKey = ownerId;
-  composerDraftDirty = false;
-  let draft = '';
-  try { draft = localStorage.getItem(draftKey(ownerId)) || ''; } catch {}
-  input.value = draft;
-  pendingImages = pendingImagesBySession.get(ownerId) || [];
-  pendingImagesBySession.delete(ownerId);
-  renderAttachmentStrip();
-  autosizePromptInput(input);
-  historyIndex = -1;
-  historyStash = '';
-  promptHistory = readJSONPref(historyKey(ownerId), []);
-  if (!Array.isArray(promptHistory)) promptHistory = [];
-}
-
-function recordPrompt(message, sessionId = composerSessionKey) {
-  if (sessionId) sessionId = composerOwnerKey(sessionId);
-  if (!sessionId) return;
-  promptHistory = pushPromptHistory(promptHistory, message, 50);
-  historyIndex = -1;
-  try { localStorage.setItem(historyKey(sessionId), JSON.stringify(promptHistory)); } catch {}
-}
-
-function mergeComposerText(existing, restored) {
-  const current = (existing || '').trim();
-  if (!current || current === restored) return restored;
-  return `${existing}\n\n${restored}`;
-}
-
-function migratePromptState(fromId, toId) {
-  fromId = composerOwnerKey(fromId);
-  toId = composerOwnerKey(toId);
-  let sourceDraft = '', destinationDraft = '';
-  try {
-    sourceDraft = localStorage.getItem(draftKey(fromId)) || '';
-    destinationDraft = localStorage.getItem(draftKey(toId)) || '';
-    localStorage.removeItem(draftKey(fromId));
-  } catch {}
-  const destinationVisible = composerSessionKey === toId;
-  if (sourceDraft) {
-    const input = document.getElementById('promptInput');
-    const merged = mergeComposerText(destinationVisible ? input.value : destinationDraft, sourceDraft);
-    writeSessionDraft(toId, merged);
-    if (destinationVisible) {
-      input.value = merged;
-      composerDraftDirty = false;
-      autosizePromptInput(input);
-    }
-  }
-
-  const sourceImages = pendingImagesBySession.get(fromId) || [];
-  if (sourceImages.length) {
-    if (destinationVisible) {
-      pendingImages = sourceImages.concat(pendingImages);
-      renderAttachmentStrip();
-    } else {
-      pendingImagesBySession.set(toId, sourceImages.concat(pendingImagesBySession.get(toId) || []));
-    }
-  }
-  pendingImagesBySession.delete(fromId);
-}
-
-// Failed sends and queue edits complete asynchronously. Restore their payload
-// to the originating session even if another session now owns the composer.
-function restorePromptToSession(sessionId, message, images) {
-  if (sessionId) sessionId = composerOwnerKey(sessionId);
-  let saved = '';
-  try { saved = localStorage.getItem(draftKey(sessionId)) || ''; } catch {}
-  const restored = message ? mergeComposerText(saved, message) : saved;
-  writeSessionDraft(sessionId, restored);
-
-  if (images?.length) {
-    if (composerSessionKey === sessionId) {
-      pendingImages = images.concat(pendingImages);
-      renderAttachmentStrip();
-    } else {
-      pendingImagesBySession.set(sessionId, images.concat(pendingImagesBySession.get(sessionId) || []));
-    }
-  }
-
-  if (composerSessionKey === sessionId && message) {
-    const input = document.getElementById('promptInput');
-    input.value = mergeComposerText(input.value, message);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.focus();
-  }
-}
-
-function navigateHistory(dir, input) {
-  if (!promptHistory.length) return false;
-  if (dir < 0) {
-    if (historyIndex === -1) { historyStash = input.value; historyIndex = promptHistory.length - 1; }
-    else if (historyIndex > 0) historyIndex--;
-    else return true; // already at oldest — swallow the keypress
-  } else {
-    historyIndex++;
-    if (historyIndex >= promptHistory.length) historyIndex = -1; // back to the stashed draft
-  }
-  const val = historyIndex === -1 ? historyStash : promptHistory[historyIndex];
-  input.value = val;
-  input.setSelectionRange(val.length, val.length);
-  autosizePromptInput(input);
-  return true;
-}
+function composerOwnerKey(owner) { return composerDrafts.ownerKey(owner); }
+function draftKey(id) { return composerDrafts.draftKey(id); }
+function historyKey(id) { return composerDrafts.historyKey(id); }
+function writeSessionDraft(id, value) { composerDrafts.write(id, value); }
+function stashPromptState() { composerDrafts.stash(); }
+function clearPromptComposer() { composerDrafts.clear(); }
+function setComposerWaiting(waiting) { composerDrafts.waiting(waiting); }
+function saveDraftSoon() { composerDrafts.saveSoon(); }
+function clearDraft(id) { composerDrafts.clearDraft(id); }
+function restorePromptState(id) { composerDrafts.restore(id); }
+function recordPrompt(message, id) { composerDrafts.record(message, id); }
+function mergeComposerText(existing, restored) { return PiDishBrowser.mergeComposerText(existing, restored); }
+function migratePromptState(from, to) { composerDrafts.migrate(from, to); }
+function restorePromptToSession(id, message, images) { composerDrafts.restorePayload(id, message, images); }
+function navigateHistory(direction, input) { return composerDrafts.navigate(direction, input); }
 
 let clientPromptSequence = 0;
 const pendingOptimisticPrompts = new Map();
@@ -4258,7 +4012,7 @@ async function sendPrompt() {
   const input = document.getElementById('promptInput');
   const message = input.value.trim();
   if (currentSessionSpawnId) {
-    if (message || pendingImages.length) {
+    if (message || composerDrafts.images.current().length) {
       const starting = pendingSessionSpawns.has(currentSessionSpawnId);
       setStatus(starting
         ? 'Pi is still starting — your prompt is saved'
@@ -4266,7 +4020,7 @@ async function sendPrompt() {
     }
     return;
   }
-  if ((!message && !pendingImages.length) || !sessionState.currentSession) return;
+  if ((!message && !composerDrafts.images.current().length) || !sessionState.currentSession) return;
   const owner = sessionState.captureSelection();
   const { id: sessionId, host: hostId } = owner;
   const ownerKey = sessionRefKey(owner);
@@ -4494,7 +4248,7 @@ async function sendQueuedMessage(kind) {
   const input = document.getElementById('promptInput');
   const message = input.value.trim();
   if (currentSessionSpawnId) {
-    if (message || pendingImages.length) {
+    if (message || composerDrafts.images.current().length) {
       const starting = pendingSessionSpawns.has(currentSessionSpawnId);
       setStatus(starting
         ? 'Pi is still starting — your prompt is saved'
@@ -4502,7 +4256,7 @@ async function sendQueuedMessage(kind) {
     }
     return;
   }
-  if ((!message && !pendingImages.length) || !sessionState.currentSession || !sessionState.currentSession.isActive) return;
+  if ((!message && !composerDrafts.images.current().length) || !sessionState.currentSession || !sessionState.currentSession.isActive) return;
   const owner = sessionState.captureSelection();
   const { id: sessionId, host: hostId } = owner;
   const ownerKey = sessionRefKey(owner);
@@ -4712,7 +4466,7 @@ const pendingSessionSpawns = PiDishBrowser.createSessionSpawns({
   stashPrompt: stashPromptState,
   saveDraft: (key, draft) => { try { localStorage.setItem(draftKey(pendingComposerKey(key)), draft); } catch {} },
   migratePrompt: (key, host, id) => migratePromptState(pendingComposerKey(key), sessionKey(host || hostDirectory.self.hostId, id)),
-  discardPrompt: key => { const owner = pendingComposerKey(key); clearDraft(owner); pendingImagesBySession.delete(owner); },
+  discardPrompt: key => { const owner = pendingComposerKey(key); clearDraft(owner); composerDrafts.images.discard(owner); },
   showFailure: showPendingSessionFailure, status: setStatus,
 });
 // The typed takeover owns form state, controls, caches and launch view tokens.
