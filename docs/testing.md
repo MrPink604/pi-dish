@@ -69,8 +69,8 @@ negative cases for mixed identity types and unvalidated response/store payloads.
 It also retains strict `checkJs` without emission for `lib/cron.js`; JSDoc covers
 parser inputs, parsed fields, matching, and next-run results. Most application
 and remaining JavaScript modules are not yet type checked.
-The browser modules in `src/browser/` compile strictly, including session state,
-the API adapter and the model selector. See
+All browser implementation in `src/browser/` compiles strictly, including the
+application entrypoint, static bindings, state, transport and feature controllers. See
 [TypeScript migration guide](typescript.md) for the exact migrated scope.
 
 Browser API and state unit tests execute the checked-in `public/browser.js`.
@@ -179,3 +179,9 @@ complete application coverage.
 `message-stream.spec.js` covers ticket/source ownership, reconnects, completion deduplication and switch ordering.
 
 `session-view.spec.js` covers resume/selection ownership, header narrowing and cached tool adoption.
+
+`app-shell.spec.js` covers delayed startup restoration, mobile panel lifetimes,
+viewport/focus disposal and static binding ownership. The build regression checks
+all five emitted scripts, classic-script binding compatibility and rejection of
+runtime imports in `app.ts`. The static action inventory test rejects executable
+HTML handlers and unregistered or unused action names.

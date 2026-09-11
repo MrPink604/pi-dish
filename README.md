@@ -653,8 +653,9 @@ for what crosses the bridge and what stays TUI-only.
 ## Development
 
 ```bash
-npm run check         # correctness lint, core types/output, incremental JS types
+npm run check         # correctness lint, strict core/browser types and generated output
 npm run build:core    # regenerate lib/ after editing src/core/
+npm run build:browser # regenerate first-party public/ scripts after src/browser/ edits
 npm test              # API + unit tests (node:test)
 npm run test:browser  # isolated browser scenarios (Playwright)
 npm run test:ui:scenarios # feature scenarios, each with fresh fixtures
@@ -668,14 +669,16 @@ under `src/core/`. Their generated CommonJS files and declarations are checked
 in under `lib/`, preserving direct Node startup and the existing package layout.
 Run `npm run build:core` after source changes; `npm run check` verifies that the
 committed runtime matches the source. See [TypeScript migration guide](docs/typescript.md)
-for scope and conventions. Browser migration is in progress: modules under
-`src/browser/` are typed, while most browser controllers/rendering,
-the server application and feature stores remain JavaScript. See
-[the migration status and next steps](BACKLOG.md) for the current checkpoint.
+for scope and conventions. First-party browser application logic is authored in
+TypeScript under `src/browser/`, including `app.ts`, feature controllers and
+static control bindings. The server application and feature stores remain a
+separate migration stage. See [migration status and delivery checks](BACKLOG.md).
 
-Run `npm run build:browser` after browser TypeScript changes and commit the
-generated `public/browser.js`. `npm run check` verifies both types and output
-consistency.
+Run `npm run build:browser` after browser source changes and commit all generated
+scripts: `public/app.js`, `public/browser.js`, `public/helpers.js`,
+`public/artifact-comments.js` and `public/theme-prepaint.js`. `npm run check`
+verifies strict types and byte-for-byte output consistency. Normal startup and
+Electron packaging use the committed scripts directly.
 
 Browser setup is reproducible from the lockfile:
 

@@ -8,12 +8,13 @@ The typed foundation lives in `src/core/`. Its generated CommonJS and `.d.ts`
 files are checked in at the existing `lib/` paths. Edit the TypeScript source,
 run `npm run build:core`, and include both source and generated output in the
 commit. `npm run check` rejects stale output. See [docs/typescript.md](docs/typescript.md)
-for the implemented boundaries. Browser migration is in progress; most browser
-controllers/rendering, the server application and feature stores remain JavaScript.
+for the implemented boundaries. First-party browser application logic is authored
+in strict TypeScript under `src/browser/`; the server application and feature
+stores remain a separate migration stage.
 Browser session state lives in `src/browser/session-state.ts`; use its writers
-and selection guards from `app.js` via `PiDishBrowser.createSessionState`. Continue
+and selection guards from `app.ts` via `PiDishBrowser.createSessionState`. Continue
 with vanilla TypeScript modules in `src/browser/`; regenerate and commit
-`public/browser.js`, `public/helpers.js`, `public/artifact-comments.js` and
+`public/app.js`, `public/browser.js`, `public/helpers.js`, `public/artifact-comments.js` and
 `public/theme-prepaint.js` with
 `npm run build:browser`. Shared helper source lives in `src/browser/helper-*.ts`;
 keep the generated helper CommonJS/browser exports stable. Its drift/type checks are included in `npm run check`.

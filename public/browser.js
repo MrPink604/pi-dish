@@ -21,6 +21,7 @@ var PiDishBrowser = (() => {
   // src/browser/index.ts
   var index_exports = {};
   __export(index_exports, {
+    APP_ACTION_NAMES: () => APP_ACTION_NAMES,
     ApiHttpError: () => ApiHttpError,
     HOST_BACKOFF_LADDER: () => HOST_BACKOFF_LADDER,
     HOST_BACKOFF_RESET_MS: () => HOST_BACKOFF_RESET_MS,
@@ -33,6 +34,8 @@ var PiDishBrowser = (() => {
     clampTerminalHeight: () => clampTerminalHeight,
     copyTextToClipboard: () => copyTextToClipboard,
     createAnchoredComments: () => createAnchoredComments,
+    createAppBindings: () => createAppBindings,
+    createAppChrome: () => createAppChrome,
     createBounce: () => createBounce,
     createBrowserAssets: () => createBrowserAssets,
     createBtwPanel: () => createBtwPanel,
@@ -58,6 +61,7 @@ var PiDishBrowser = (() => {
     createHostSessionLoader: () => createHostSessionLoader,
     createHostSettings: () => createHostSettings,
     createHostTransport: () => createHostTransport,
+    createHostView: () => createHostView,
     createLiveTools: () => createLiveTools,
     createMessageRenderer: () => createMessageRenderer,
     createMessageStream: () => createMessageStream,
@@ -13868,7 +13872,7 @@ ${restored}`;
     return {
       id: row.id,
       host: row.host,
-      hostLabel: row.hostLabel,
+      hostLabel: typeof row.hostLabel === "string" ? row.hostLabel : void 0,
       name: string3(row.name),
       cwd: string3(row.cwd),
       model: string3(row.model),
@@ -17315,6 +17319,250 @@ ${restored}`;
     }
     return { update: updateSessionHeader, label: setModelChipLabel, dispose() {
       disposed = true;
+    } };
+  }
+
+  // src/browser/host-view.ts
+  function createHostView() {
+    const cache = /* @__PURE__ */ new WeakMap();
+    return (host) => {
+      const prior = cache.get(host);
+      if (prior) return prior;
+      const raw = host.capabilities, capabilities = raw && typeof raw === "object" ? Object.fromEntries(Object.entries(raw).filter((entry) => typeof entry[1] === "boolean")) : void 0;
+      const value = Object.freeze({ ...host, label: host.label ? String(host.label) : void 0, capabilities });
+      cache.set(host, value);
+      return value;
+    };
+  }
+
+  // src/browser/app-chrome.ts
+  function createAppChrome(options2) {
+    const { document: document2, storage } = options2, messages = document2.getElementById("messages");
+    const lifetime = new AbortController();
+    let panelEvents = new AbortController();
+    let following = false, focus = false, panelOpen = false, mounted = false, disposed = false, panelGeneration = 0;
+    let panelTimer = null;
+    function pinned(container) {
+      return following || container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+    }
+    function scroll(container) {
+      if (disposed) return;
+      container.scrollTop = container.scrollHeight;
+      jump(container);
+    }
+    function jump(container) {
+      if (disposed) return;
+      let button = document2.getElementById("jumpToBottom");
+      if (pinned(container)) {
+        if (button) button.style.display = "none";
+        return;
+      }
+      if (!button) {
+        button = document2.createElement("button");
+        button.id = "jumpToBottom";
+        button.className = "jump-to-bottom";
+        button.textContent = "\u2193";
+        button.title = "Jump to latest";
+        button.addEventListener("click", () => {
+          following = true;
+          scroll(messages);
+        }, { signal: lifetime.signal });
+        (document2.getElementById("sessionView") || document2.body).append(button);
+      }
+      button.style.display = "";
+    }
+    function setFocus(on) {
+      if (disposed) return;
+      focus = !!on;
+      storage.setItem("pi-dish-focus", focus ? "1" : "0");
+      messages.classList.toggle("focus-mode", focus);
+      for (const id of ["btnFocus", "btnFocusMobile"]) document2.getElementById(id)?.classList.toggle("active", focus);
+      const state = document2.getElementById("focusModeState");
+      if (state) state.textContent = focus ? "on" : "off";
+    }
+    function toggleFocus() {
+      setFocus(!focus);
+      if (pinned(messages)) scroll(messages);
+    }
+    function closePanel() {
+      panelGeneration++;
+      panelOpen = false;
+      panelEvents.abort();
+      if (panelTimer) clearTimeout(panelTimer);
+      panelTimer = null;
+      document2.getElementById("controlPanel")?.classList.remove("open");
+      document2.getElementById("btnPanel")?.classList.remove("active");
+    }
+    function openPanel() {
+      if (disposed) return;
+      closePanel();
+      panelOpen = true;
+      const generation = panelGeneration;
+      panelEvents = new AbortController();
+      document2.getElementById("controlPanel")?.classList.add("open");
+      document2.getElementById("btnPanel")?.classList.add("active");
+      panelTimer = setTimeout(() => {
+        panelTimer = null;
+        if (disposed || !panelOpen || generation !== panelGeneration) return;
+        document2.addEventListener("click", (event) => {
+          if (disposed || !panelOpen || generation !== panelGeneration) return;
+          const target = event.target instanceof Node ? event.target : null;
+          const inside = !document2.body.contains(target) || ["controlPanel", "btnPanel", "modelDropdown", "thinkingDropdown"].some((id) => document2.getElementById(id)?.contains(target));
+          if (!inside) closePanel();
+        }, { signal: panelEvents.signal });
+      }, 0);
+    }
+    function stopFollowing() {
+      following = false;
+    }
+    function mount() {
+      if (disposed || mounted) return;
+      mounted = true;
+      const { signal } = lifetime;
+      messages.addEventListener("scroll", () => {
+        jump(messages);
+        options2.older(messages);
+      }, { passive: true, signal });
+      messages.addEventListener("wheel", (event) => {
+        stopFollowing();
+        if (event.deltaY < 0) options2.older(messages);
+      }, { passive: true, signal });
+      messages.addEventListener("touchmove", () => {
+        stopFollowing();
+        options2.older(messages);
+      }, { passive: true, signal });
+      messages.addEventListener("mousedown", stopFollowing, { passive: true, signal });
+    }
+    return {
+      pinned,
+      scroll,
+      jump,
+      setFocus,
+      toggleFocus,
+      closePanel,
+      openPanel,
+      togglePanel() {
+        if (panelOpen) closePanel();
+        else openPanel();
+      },
+      mount,
+      follow() {
+        if (!disposed) following = true;
+      },
+      stopFollowing,
+      get following() {
+        return following;
+      },
+      get focus() {
+        return focus;
+      },
+      get panelOpen() {
+        return panelOpen;
+      },
+      dispose() {
+        if (disposed) return;
+        closePanel();
+        disposed = true;
+        lifetime.abort();
+      }
+    };
+  }
+
+  // src/browser/app-bindings.ts
+  var APP_ACTION_NAMES = [
+    "openUsageView",
+    "openSkillsView",
+    "openRoutinesView",
+    "openSettingsModal",
+    "refreshSessions",
+    "openNewSessionView",
+    "openSessionHarnessSettings",
+    "openStatsModal",
+    "toggleSearchBar",
+    "toggleControlPanel",
+    "toggleTerminal",
+    "toggleFocusMode",
+    "toggleDiffView",
+    "openArtifactsModal",
+    "exportSession",
+    "searchKey",
+    "searchPrev",
+    "searchNext",
+    "closeSearch",
+    "loadDiffView",
+    "closeDiffView",
+    "closeFileView",
+    "switchTerminalMode",
+    "restartTerminalShell",
+    "closeTerminal",
+    "resumeSession",
+    "panelOpenSearch",
+    "panelToggleTerminal",
+    "panelOpenDiffView",
+    "panelOpenArtifactsModal",
+    "panelOpenTreeModal",
+    "panelOpenSessionHarnessSettings",
+    "panelExportSession",
+    "attachImage",
+    "abortTurn",
+    "sendSteer",
+    "sendFollowUp",
+    "sendPrompt",
+    "loadUsageView",
+    "closeUsageView",
+    "closeSearchView",
+    "closeNewSessionView",
+    "onNsHostChange",
+    "onNsHarnessChange",
+    "onNsModelChange",
+    "onNsThinkingChange",
+    "editHarnessAgents",
+    "editHarnessModels",
+    "spawnNewSession",
+    "refreshRoutinesView",
+    "closeRoutinesView",
+    "loadRecoveryView",
+    "closeRecoveryView",
+    "backdropCloseTreeModal",
+    "closeTreeModal",
+    "backdropCloseArtifactsModal",
+    "closeArtifactsModal",
+    "backdropCloseRelationsModal",
+    "closeRelationsModal",
+    "backdropCloseStatsModal",
+    "closeStatsModal",
+    "backdropCloseSettingsModal",
+    "closeSettingsModal",
+    "bounceToggle",
+    "refreshBounceView",
+    "bounceSelect",
+    "bounceClear",
+    "submitBounceTargets",
+    "backdropCloseHarnessSettings",
+    "closeHarnessSettings",
+    "harnessTabAgents",
+    "harnessTabModels",
+    "saveHarnessSettings",
+    "backdropCloseResponseDetails",
+    "closeResponseDetails"
+  ];
+  function createAppBindings(options2) {
+    const lifetime = new AbortController();
+    let disposed = false;
+    for (const event of ["click", "change", "keydown", "toggle"]) {
+      for (const node of Array.from(options2.document.querySelectorAll(`[data-app-${event}]`))) {
+        const name = node.getAttribute(`data-app-${event}`);
+        const action = APP_ACTION_NAMES.find((action2) => action2 === name);
+        if (!action) throw new Error("Unknown app action: " + name);
+        node.addEventListener(event, (value) => {
+          if (!disposed && node.isConnected) options2.actions[action](value, node);
+        }, { signal: lifetime.signal });
+      }
+    }
+    return { dispose() {
+      if (disposed) return;
+      disposed = true;
+      lifetime.abort();
     } };
   }
   return __toCommonJS(index_exports);

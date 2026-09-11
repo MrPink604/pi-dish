@@ -5,7 +5,7 @@ Contributor entrypoint: [AGENTS.md](AGENTS.md). Current work order:
 implementation notes; historical task plans may describe superseded behavior.
 
 Web/phone remote control for pi coding-agent sessions. Express server (`server.js`)
-+ vanilla JS frontend (`public/`), plus an Electron shell (`electron/`) that loads
++ vanilla TypeScript frontend (`src/browser/`, generated scripts in `public/`), plus an Electron shell (`electron/`) that loads
 the same server. Sessions are discovered three ways: live sessions via the
 pi-dish-bridge extension registry (`~/.pi/dish/sessions/*.json`, one Unix socket
 per session), historical sessions by scanning the harness session stores
@@ -22,6 +22,7 @@ npm test           # API + helper unit tests (node:test, test/*.test.js)
 npm run test:browser  # isolated Playwright scenarios
 npm run test:ui    # full desktop/mobile browser smoke
 npm run build:core  # regenerate typed foundation CommonJS/declarations in lib/
+npm run build:browser # regenerate all first-party browser scripts in public/
 npm run build:vendor  # regenerate public/vendor/ from node_modules
 ```
 
@@ -50,6 +51,17 @@ immutable selection owners for its asynchronous callers. Details: [docs/typescri
 Once you've verified your changes work (tests pass; UI changes validated via
 the smoke test or CDP), commit and push them — don't leave verified work
 sitting uncommitted.
+
+## Browser source and runtime
+
+All first-party browser application logic is authored under `src/browser/`.
+`app.ts` composes typed feature controllers; static HTML carries registered action
+names wired through `app-bindings.ts`. `app-chrome.ts` owns viewport, focus and
+mobile-panel state. Run `npm run build:browser` and commit all five generated
+scripts; `npm run check` rejects stale output. The app remains a classic script
+for existing callers and isolated test instrumentation, with type-only imports.
+References to app functions below describe their typed implementations or thin
+entrypoint wrappers, not permission to edit generated `public/app.js`.
 
 ## Frontend libraries (public/vendor/)
 

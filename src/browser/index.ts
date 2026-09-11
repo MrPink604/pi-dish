@@ -121,3 +121,9 @@ export { createMessageStream } from './message-stream';
 export { createSessionView } from './session-view';
 export { createSessionResume } from './session-resume';
 export { createSessionHeader } from './session-header';
+
+export { createHostView } from './host-view';
+
+export { createAppChrome } from './app-chrome';
+
+export { createAppBindings, APP_ACTION_NAMES } from './app-bindings';

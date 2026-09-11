@@ -4,6 +4,10 @@ Goal started 2026-09-11: finish the browser portion of the migration, checkpoint
 bounded changes, get Fable 5.1 review of local commit(s) before each push, and
 confirm CI passes on the final implementation before declaring completion.
 
+The operator authorized `kimi-coding/kimi-k3` through OMP as a substitute for
+Fable 5.1 for the final pending checkpoints. The review-before-push requirement
+and final CI requirement remain in force.
+
 ## Completion criteria
 
 - First-party browser application logic has TypeScript sources under strict
@@ -16,7 +20,7 @@ confirm CI passes on the final implementation before declaring completion.
 - Moving files alone, disabling type checks, or replacing contracts with blanket
   `any` declarations does not complete the migration. Unknown wire payloads are
   narrowed at the feature boundary that consumes them.
-- Every pushed implementation checkpoint has Fable review and the relevant
+- Every pushed implementation checkpoint has the authorized external review and the relevant
   verification from [AGENTS.md](../AGENTS.md). Findings are resolved before push.
 - The final audit accounts for all first-party browser entrypoints, and the final
   pushed implementation has passing CI. Backend migration and framework adoption
@@ -928,3 +932,26 @@ Verification: strict checks, 936 backend tests, 273 browser tests, all independe
 UI scenarios and full desktop/mobile smoke passed. Five new browser cases and
 strict contracts cover resume ownership, endpoints/disposal, malformed headers
 and retained tool adoption. Review and push pending.
+
+## Checkpoint 43 — application entrypoint and static bindings
+
+Moved the remaining application composition and startup into strict `app.ts`.
+The chrome controller owns viewport following, focus preferences and mobile-panel
+listeners. Startup restoration captures its selection generation; a delayed list
+cannot replace a newer selection. Host presentation narrows discovery metadata
+without mutating the raw descriptor. Static HTML uses 75 registered action names
+with a complete typed callback map and disposable event bindings.
+
+All five first-party browser scripts are now generated from TypeScript:
+`app.js`, `browser.js`, `helpers.js`, `artifact-comments.js` and
+`theme-prepaint.js`. The app remains a classic script with shared bindings for
+existing callers and isolated browser instrumentation. Only type imports are
+allowed in that entrypoint; runtime imports fail before any output is written.
+Third-party vendor assets remain outside the migration.
+
+Verification: strict checks, 938 backend tests, 277 browser tests, all independent
+UI scenarios and full desktop/mobile smoke passed.
+Four browser cases, host/action inventory units and strict contracts cover startup,
+panel generations, listener disposal and projection. Build regressions cover all
+five outputs, stale/type failures and classic-script runtime import rejection.
+Documentation file links and whitespace checks passed. Review and push pending.

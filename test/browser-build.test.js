@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
 const { spawnSync } = require('node:child_process');
 const { sanitizeTestEnv } = require('./test-env');
 
@@ -14,6 +15,8 @@ test('browser build detects stale output and preserves it on type failure', () =
     fs.copyFileSync(path.join(__dirname, '../tsconfig.browser.json'), path.join(root, 'tsconfig.browser.json'));
     fs.symlinkSync(path.join(__dirname, '../node_modules'), path.join(root, 'node_modules'), 'junction');
     fs.writeFileSync(path.join(root, 'src/browser/theme-prepaint.ts'), 'const themeAnswer: number = 3; console.log(themeAnswer);');
+    const appSource = path.join(root, 'src/browser/app.ts');
+    fs.writeFileSync(appSource, 'let fixtureState = 0; function fixtureApp(value: number) { fixtureState += value; return fixtureState; }');
     const source = path.join(root, 'src/browser/index.ts');
     fs.writeFileSync(source, 'export const answer: number = 42;');
     const commentsSource = path.join(root, 'src/browser/artifact-comments.ts');
@@ -28,13 +31,18 @@ test('browser build detects stale output and preserves it on type failure', () =
     const output = path.join(root, 'public/browser.js');
     const original = fs.readFileSync(output, 'utf8');
     assert.equal(run('--check').status, 0);
+    const appOutput = path.join(root, 'public/app.js');
+    const appOriginal = fs.readFileSync(appOutput, 'utf8');
+    const context = vm.createContext({}); vm.runInContext(appOriginal, context);
+    assert.equal(vm.runInContext('fixtureApp(2)', context), 2);
+    assert.equal(vm.runInContext('fixtureApp = () => 7; fixtureApp()', context), 7, 'classic script bindings remain shared by existing callers and test instrumentation');
     const commentsOutput = path.join(root, 'public/artifact-comments.js');
     const commentsOriginal = fs.readFileSync(commentsOutput, 'utf8');
     const helpersOutput = path.join(root, 'public/helpers.js');
     const helpersOriginal = fs.readFileSync(helpersOutput, 'utf8');
     const themeOutput = path.join(root, 'public/theme-prepaint.js');
     const themeOriginal = fs.readFileSync(themeOutput, 'utf8');
-    for (const target of [output, commentsOutput, helpersOutput, themeOutput]) {
+    for (const target of [output, commentsOutput, helpersOutput, themeOutput, appOutput]) {
       fs.appendFileSync(target, '\n// stale');
       const stale = run('--check');
       assert.equal(stale.status, 1);
@@ -45,7 +53,13 @@ test('browser build detects stale output and preserves it on type failure', () =
       assert.equal(fs.readFileSync(commentsOutput, 'utf8'), commentsOriginal);
       assert.equal(fs.readFileSync(helpersOutput, 'utf8'), helpersOriginal);
       assert.equal(fs.readFileSync(themeOutput, 'utf8'), themeOriginal);
+      assert.equal(fs.readFileSync(appOutput, 'utf8'), appOriginal);
     }
+    fs.writeFileSync(appSource, "import { answer } from './index'; console.log(answer);");
+    const importedApp = run(); assert.notEqual(importedApp.status, 0);
+    assert.match(importedApp.stderr, /self-contained local script/);
+    assert.equal(fs.readFileSync(appOutput, 'utf8'), appOriginal);
+    fs.writeFileSync(appSource, 'let fixtureState = 0; function fixtureApp(value: number) { fixtureState += value; return fixtureState; }');
     fs.writeFileSync(path.join(root, 'public/legacy.js'), 'export const answer = 42;');
     // A declaration can type a legacy import, but must not permit bundling it.
     fs.writeFileSync(path.join(root, 'public/legacy.d.ts'), 'export const answer: number;');

@@ -1,202 +1,142 @@
-// =========================================================================
-// Hosts (TASKS/multi-host.md phase 1) — every API touch resolves a host
-// entry first, so a later phase can point this client at several pi-dish
-// servers at once. With an empty catalog every request resolves to the self
-// host (base '', no token) and the wire traffic is exactly what a
-// single-host client always sent.
-// =========================================================================
-// Catalog values enter through the typed normalization/merge boundary.
-
-const HOSTS_KEY = 'pi-dish-hosts';
-const KEYS_MIGRATED_KEY = 'pi-dish-keys-migrated';
-// Directly-added hosts (phase 2 owns the editor UI); self is always implicit.
+// Generated from src/browser/; edit sources and run npm run build:browser.
+const hostView = PiDishBrowser.createHostView();
+function appRecord(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+const HOSTS_KEY = "pi-dish-hosts";
+const KEYS_MIGRATED_KEY = "pi-dish-keys-migrated";
 const hostDirectory = PiDishBrowser.createHostDirectory({
   initialCatalog: readJSONPref(HOSTS_KEY, []),
-  descriptor: id => hostDiscovery.descriptor(id),
-  persistCatalog: catalog => localStorage.setItem(HOSTS_KEY, JSON.stringify(catalog)),
+  descriptor: (id) => hostDiscovery.descriptor(id),
+  persistCatalog: (catalog) => localStorage.setItem(HOSTS_KEY, JSON.stringify(catalog))
 });
-// hostId stays null until GET /api/host answers — and forever on a server
-// too old to serve it, which is why every key path tolerates host-less keys.
-// The directory owns self identity, source catalogs and their effective list.
-
-/** Effective-list (or self) entry for a host id; unknown ids fall back to self. */
-function hostById(id) { return hostDirectory.hostById(id); }
-
-/** Accepts a host id, a host entry, or nothing (self). */
-function resolveHost(host) { return hostDirectory.resolveHost(host); }
-
-/**
- * The one fetch entry point for /api paths. Nothing else in this file may
- * call fetch() for the API: the host's base and bearer token are attached
- * here, so a request can't accidentally go to the serving origin when the
- * session lives elsewhere. Returns fetch's promise unchanged.
- */
+function hostById(...args) {
+  return hostDirectory.hostById(...args);
+}
+function resolveHost(...args) {
+  return hostDirectory.resolveHost(...args);
+}
 const apiTransport = PiDishBrowser.createHostTransport({ resolveHost, fetch: (...args) => fetch(...args) });
 const sessionApi = PiDishBrowser.createSessionApi((...args) => apiFetch(...args));
-
 function apiFetch(host, path, opts = {}) {
   return apiTransport.request(host, path, opts);
 }
-
-/**
- * The `<img src>` / `<a href>` counterpart to apiFetch: a host-relative /api
- * path (or a resource URL the owning host emitted, which is the same thing)
- * resolved against that host's base. Element-driven requests never pass
- * through apiFetch, so rendering one of these verbatim points the browser at
- * the serving origin — every remote session's transcript images and file
- * links then 404 against a hub that has no such session. Token hosts stay
- * unauthenticated here exactly as window.open'd exports do: an element
- * carries no Authorization header, and a 60s ticket outlives neither a lazy
- * image nor a reopened tab.
- */
 function hostAssetUrl(host, path) {
   return resolveHost(host).base + path;
 }
-
-/**
- * `opts.timeoutMs` for the fan-out paths only. A sleeping tailnet peer
- * black-holes TCP: with no deadline that request holds one of the origin's
- * six HTTP/1.1 connections for minutes and everything queued behind it reads
- * as sitewide lag. Streams, transcripts and file reads are legitimately long
- * and never pass it. Feature-detected, because an old phone browser without
- * AbortSignal.timeout must keep working exactly as before; a caller-supplied
- * signal always wins.
- */
-function withFetchTimeout(opts) { return PiDishBrowser.withFetchTimeout(opts); }
-
-/** ws(s) URL for a host path — scheme/authority come from the host's base. */
+function withFetchTimeout(...args) {
+  return PiDishBrowser.withFetchTimeout(...args);
+}
 function hostWsUrl(host, path) {
   const base = resolveHost(host).base;
-  const localProto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const localProto = location.protocol === "https:" ? "wss" : "ws";
   if (!base) return `${localProto}://${location.host}${path}`;
-  if (base.startsWith('/')) return `${localProto}://${location.host}${base}${path}`;
+  if (base.startsWith("/")) return `${localProto}://${location.host}${base}${path}`;
   const url = new URL(base);
-  return `${url.protocol === 'https:' ? 'wss' : 'ws'}://${url.host}${url.pathname.replace(/\/+$/, '')}${path}`;
+  return `${url.protocol === "https:" ? "wss" : "ws"}://${url.host}${url.pathname.replace(/\/+$/, "")}${path}`;
 }
-
-/**
- * EventSource can't set headers and a bearer token must never sit in a URL,
- * so a token host hands out a short single-purpose ticket per connect. Every
- * (re)connect mints a fresh one — a remembered stream URL's ticket is spent
- * or expired by the time a reconnect would reuse it.
- */
 async function mintHostTicket(host, purpose) {
-  const data = await apiSend(host, '/api/auth/ticket', { purpose });
-  if (!data || !data.ticket) throw new Error('no ticket');
+  const data = await apiSend(host, "/api/auth/ticket", { purpose });
+  if (!appRecord(data) || typeof data.ticket !== "string" || !data.ticket) throw new Error("no ticket");
   return data.ticket;
 }
-
-/**
- * Identify the serving host. A 404 (or any failure) means an older server:
- * hostId stays null, client keys stay bare, everything else is unaffected.
- */
-function loadHostIdentity() { return hostDiscovery.loadIdentity(); }
-
-/**
- * One-time rewrite of bare session-id client keys to composite ones, once
- * this host's id is known. Lossless — values move, keys that already carry a
- * host are left alone — and idempotent via the migrated flag. Everything
- * here keeps working unmigrated: sessionKey(null, id) is the bare form.
- */
+function loadHostIdentity() {
+  return hostDiscovery.loadIdentity();
+}
 function migrateClientKeys() {
   if (!hostDirectory.self.hostId) return;
   try {
     if (localStorage.getItem(KEYS_MIGRATED_KEY) === hostDirectory.self.hostId) return;
     const isBare = (key) => parseSessionKey(key).hostId === null;
     const compose = (id) => sessionKey(hostDirectory.self.hostId, id);
-    const prefixes = ['pi-dish-draft-', 'pi-dish-history-', 'pi-dish-terminal-mode-'];
+    const prefixes = ["pi-dish-draft-", "pi-dish-history-", "pi-dish-terminal-mode-"];
     const keys = [];
     for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
     for (const key of keys) {
-      const prefix = key && prefixes.find(pre => key.startsWith(pre));
+      const prefix = key && prefixes.find((pre) => key.startsWith(pre));
       if (!prefix) continue;
       const owner = key.slice(prefix.length);
-      // Spawn composer keys are operation-local, never session ids.
-      if (!owner || owner.startsWith('spawn:') || !isBare(owner)) continue;
+      if (!owner || owner.startsWith("spawn:") || !isBare(owner)) continue;
       const value = localStorage.getItem(key);
       localStorage.removeItem(key);
       if (value !== null) localStorage.setItem(prefix + compose(owner), value);
     }
     sidebarActivity.migrate(hostDirectory.self.hostId);
     sidebarControls.migrate(hostDirectory.self.hostId);
-    const selected = localStorage.getItem('pi-dish-session');
-    if (selected && isBare(selected)) localStorage.setItem('pi-dish-session', compose(selected));
+    const selected = localStorage.getItem("pi-dish-session");
+    if (selected && isBare(selected)) localStorage.setItem("pi-dish-session", compose(selected));
     localStorage.setItem(KEYS_MIGRATED_KEY, hostDirectory.self.hostId);
-  } catch {}
+  } catch {
+  }
 }
-
-// =========================================================================
-// Effective host list + per-host connection state (multi-host phase 2)
-// =========================================================================
-// Three sources feed one list (mergeHostEntries in src/browser/host-catalog.ts): this server
-// (always), the fleet it advertises over GET /api/hosts (runtime only, never
-// persisted — an older server 404s and we simply stay single-host), and the
-// directly-added hosts in the localStorage catalog. Everything downstream —
-// the poll fan-out, the sidebar's host chips, the new-session picker, the
-// settings section — reads effectiveHosts(), so "which hosts are there" has
-// exactly one answer. With only self in it, every branch below is a no-op
-// and the UI is byte-identical to the single-host one.
-
 const hostConnections = PiDishBrowser.createHostConnections({ onChange: () => renderHostsSection() });
-// GET /api/host descriptors, by hostId. Runtime only: label/version/
-// capabilities belong to the host, not to this browser's catalog entry (the
-// catalog deliberately persists only base/id/label/token), so they are
-// overlaid onto the merged list instead of being written back into it.
-
-function invalidateHosts() { hostDirectory.invalidate(); }
-function effectiveHosts() { return hostDirectory.effectiveHosts(); }
-
-function hostKeyOf(host) { return PiDishBrowser.hostKeyOf(host); }
-function isMultiHost() { return effectiveHosts().length > 1; }
-function selfHostEntry() { return effectiveHosts()[0]; }
-
-/** Effective entry for a host id — null when nothing in the list claims it. */
-function hostEntryFor(hostId) { return hostDirectory.entryFor(hostId); }
-
+function invalidateHosts() {
+  hostDirectory.invalidate();
+}
+function effectiveHosts() {
+  return hostDirectory.effectiveHosts().map(hostView);
+}
+function hostKeyOf(...args) {
+  return PiDishBrowser.hostKeyOf(...args);
+}
+function isMultiHost() {
+  return effectiveHosts().length > 1;
+}
+function selfHostEntry() {
+  return effectiveHosts()[0];
+}
+function hostEntryFor(...args) {
+  const host = hostDirectory.entryFor(...args);
+  return host ? hostView(host) : null;
+}
 function hostLabelFor(hostId) {
   const entry = hostEntryFor(hostId);
-  return entry ? hostDisplayLabel(entry) : '';
+  return entry ? hostDisplayLabel(entry) : "";
 }
-
-/** reachable | connecting | backoff | blocked — one host's connection state. */
-function hostState(host) { return hostConnections.stateOf(host); }
-
-/** Down = its rows are last-known, not live (backoff or blocked). */
-function hostIsDown(host) { return hostConnections.isDown(host); }
+function hostState(...args) {
+  return hostConnections.stateOf(...args);
+}
+function hostIsDown(...args) {
+  return hostConnections.isDown(...args);
+}
 function hostIdIsDown(hostId) {
   const entry = hostEntryFor(hostId);
   return entry ? hostIsDown(entry) : false;
 }
-
-// Connection observations and poll eligibility share the typed retry policy.
-function noteHostReachable(host) { hostConnections.note(host, 'success'); }
-function noteHostBlocked(host) { hostConnections.note(host, 'blocked'); }
-function noteHostFailure(host, error) { hostConnections.note(host, { type: 'failure', error }); }
-function seedHostConnFromFleet() { hostConnections.seed(effectiveHosts()); }
-function pollableHosts() { return hostConnections.pollable(effectiveHosts()); }
-
-/** Hosts whose data may be fetched for search/usage fan-out. */
+function noteHostReachable(host) {
+  hostConnections.note(host, "success");
+}
+function noteHostBlocked(host) {
+  hostConnections.note(host, "blocked");
+}
+function noteHostFailure(host, error) {
+  hostConnections.note(host, { type: "failure", error });
+}
+function seedHostConnFromFleet() {
+  hostConnections.seed(effectiveHosts());
+}
+function pollableHosts() {
+  return hostConnections.pollable(effectiveHosts());
+}
 function fanoutHosts() {
   return pollableHosts();
 }
-
-// The controls are usable before async initialization finishes. Fan-out
-// views wait on this first catalog load so an early click cannot capture
-// self as the whole fleet and then remain permanently under-counted.
 let resolveHostFleetReady;
-const hostFleetReady = new Promise(resolve => { resolveHostFleetReady = resolve; });
+const hostFleetReady = new Promise((resolve) => {
+  resolveHostFleetReady = resolve;
+});
 const hostDiscovery = PiDishBrowser.createHostDiscovery({
   request: (...args) => apiFetch(...args),
-  requestSelf: () => fetch('/api/host'),
+  requestSelf: () => fetch("/api/host"),
   hosts: effectiveHosts,
   pollableHosts,
   sourceFor: hostDirectory.sourceFor,
-  onSelf: data => {
+  onSelf: (data) => {
     hostDirectory.setSelf(data);
     migrateClientKeys();
     if (isNewSessionViewOpen()) renderNsHosts();
   },
-  onFleet: data => {
+  onFleet: (data) => {
     hostDirectory.setFleet(data);
     seedHostConnFromFleet();
   },
@@ -211,632 +151,859 @@ const hostDiscovery = PiDishBrowser.createHostDiscovery({
     updateMicButton();
     if (isNewSessionViewOpen()) renderNsHosts();
     renderSessions();
-  },
+  }
 });
-
-/**
- * The fleet this server knows about. Runtime only: a peer list is the
- * serving host's configuration, not this browser's, so it is re-read rather
- * than cached in localStorage. Piggybacked on the sidebar poll at a much
- * lower rate — reachability there costs the server real probes.
- */
-function loadHostFleet() { return hostDiscovery.loadFleet(); }
-
-/** Resolve missing identities and refresh direct-host capabilities before fan-out. */
-function identifyHosts(refresh = false) { return hostDiscovery.identify(refresh); }
-function refreshHostFleetSoon() { hostDiscovery.refreshSoon(); }
-
-/** Drop cached rows/state for hosts that left the effective list. */
+function loadHostFleet() {
+  return hostDiscovery.loadFleet();
+}
+function identifyHosts(refresh = false) {
+  return hostDiscovery.identify(refresh);
+}
+function refreshHostFleetSoon() {
+  hostDiscovery.refreshSoon();
+}
 function pruneHostCaches() {
   const live = new Set(effectiveHosts().map(hostKeyOf));
   hostConnections.prune(live);
   hostSessionLoader.prune(live);
 }
-
-// --- Host colors ---------------------------------------------------------
-// Each host wears one color across the sidebar (section headings, chips), so
-// "which machine is this?" lands before the label is read. Auto colors come
-// from the theme's chart slots by first-seen order — tokens, so they follow
-// the theme, and an order that is persisted so they never reshuffle. A user
-// override is a concrete hex (user data, stored verbatim). Nothing here is
-// a status light: the tint is faint, and liveness stays the dots' job.
-const HOST_COLORS_KEY = 'pi-dish-host-colors';
-const HOST_COLOR_ORDER_KEY = 'pi-dish-host-color-order';
+const HOST_COLORS_KEY = "pi-dish-host-colors";
+const HOST_COLOR_ORDER_KEY = "pi-dish-host-color-order";
 const hostPresentation = PiDishBrowser.createHostPresentation({
   directory: hostDirectory,
   initialColors: readJSONPref(HOST_COLORS_KEY, {}),
   initialOrder: readJSONPref(HOST_COLOR_ORDER_KEY, []),
-  persistColors: colors => localStorage.setItem(HOST_COLORS_KEY, JSON.stringify(colors)),
-  persistOrder: order => localStorage.setItem(HOST_COLOR_ORDER_KEY, JSON.stringify(order)),
-  onColorChanged: rows => {
+  persistColors: (colors) => localStorage.setItem(HOST_COLORS_KEY, JSON.stringify(colors)),
+  persistOrder: (order) => localStorage.setItem(HOST_COLOR_ORDER_KEY, JSON.stringify(order)),
+  onColorChanged: (rows) => {
     if (rows) renderHostsSection();
     renderSessions();
   },
-  escapeHtml, displayLabel: hostDisplayLabel, isDown: hostIsDown,
+  escapeHtml,
+  displayLabel: (host) => hostDisplayLabel(hostView(host)),
+  isDown: hostIsDown
 });
-function hostColorFor(hostId) { return hostPresentation.colorFor(hostId); }
-function hostColorIsCustom(hostId) { return hostPresentation.isCustom(hostId); }
-function setHostColorOverride(hostId, hex, options) { hostPresentation.setColor(hostId, hex, options); }
-function resolveColorToHex(color) { return PiDishBrowser.resolveColorToHex(color); }
-function hostDotHtml(hostId, className) { return hostPresentation.dotHtml(hostId, className); }
-function hostChipHtml(hostId, options) { return hostPresentation.chipHtml(hostId, options); }
-
-// All session list/selection writes and their rendering hooks share one store.
-// Read its snapshots freely; mutate them only through its four state writers.
+function hostColorFor(...args) {
+  return hostPresentation.colorFor(...args);
+}
+function hostColorIsCustom(...args) {
+  return hostPresentation.isCustom(...args);
+}
+function setHostColorOverride(...args) {
+  hostPresentation.setColor(...args);
+}
+function resolveColorToHex(...args) {
+  return PiDishBrowser.resolveColorToHex(...args);
+}
+function hostDotHtml(...args) {
+  return hostPresentation.dotHtml(...args);
+}
+function hostChipHtml(...args) {
+  return hostPresentation.chipHtml(...args);
+}
 const sessionState = PiDishBrowser.createSessionState({
   getSelfHostId: () => hostDirectory.self.hostId,
   getHostLabel: hostLabelFor,
   onListsChanged: renderSessions,
-  onCurrentChanged: updateSessionHeader,
+  onCurrentChanged: updateSessionHeader
 });
-// Provisional rows for asynchronous harness launches. They are presentation state,
-// not sessions: the durable source of truth remains tmux + the bridge registry.
-
-// Spawn operations are server-process-local and cannot be resumed after a
-// page reload, so their old draft keys have no view that could restore them.
 try {
   for (let i = localStorage.length - 1; i >= 0; i--) {
     const key = localStorage.key(i);
-    if (key?.startsWith('pi-dish-draft-spawn:')) localStorage.removeItem(key);
+    if (key?.startsWith("pi-dish-draft-spawn:")) localStorage.removeItem(key);
   }
-} catch {}
+} catch {
+}
 const responseDetailsController = PiDishBrowser.createResponseDetails({ document, sessionState, mode: () => displayPreferences.responseMode });
-
-
-
-// =========================================================================
-// Scroll pinning — only follow streaming output while the user is at the
-// bottom. Scrolling up "unpins"; new content then accumulates below without
-// yanking the viewport, and a jump-to-bottom button appears.
-// =========================================================================
-
-// Set when the user sends a prompt (or hits jump-to-bottom): follow the
-// stream unconditionally, even if a mobile keyboard resize left the viewport
-// short of the 80px pin threshold. Cleared by any deliberate scroll gesture.
-let followStream = false;
-
-/**
- * Grow the prompt textarea with its content, capped at 160px. The control
- * row is a sibling strip below the textarea, so this cap is text only.
- */
+const appChrome = PiDishBrowser.createAppChrome({ document, storage: localStorage, older: (container) => maybeLoadOlderMessages(container) });
 function autosizePromptInput(input) {
-  input.style.height = 'auto';
+  input.style.height = "auto";
   input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
 }
-
-function isPinnedToBottom(el) {
-  if (followStream) return true;
-  return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+function isPinnedToBottom(container) {
+  return appChrome.pinned(container);
 }
-
-function scrollToBottom(el) {
-  el.scrollTop = el.scrollHeight;
-  updateJumpButton(el);
+function scrollToBottom(container) {
+  appChrome.scroll(container);
 }
-
-function updateJumpButton(messagesEl) {
-  let btn = document.getElementById('jumpToBottom');
-  const pinned = isPinnedToBottom(messagesEl);
-  if (pinned) { if (btn) btn.style.display = 'none'; return; }
-  if (!btn) {
-    btn = document.createElement('button');
-    btn.id = 'jumpToBottom';
-    btn.className = 'jump-to-bottom';
-    btn.textContent = '↓';
-    btn.title = 'Jump to latest';
-    btn.addEventListener('click', () => {
-      followStream = true;
-      scrollToBottom(document.getElementById('messages'));
-    });
-    const view = document.getElementById('sessionView') || document.body;
-    view.appendChild(btn);
-  }
-  btn.style.display = '';
+function updateJumpButton(container) {
+  appChrome.jump(container);
 }
-
-function loadCommands(id) { return composerAutocomplete.loadCommands(id); }
-
-// Initialize
-document.addEventListener('DOMContentLoaded', async () => {
-  // Who is serving us — and so which host stamps/keys the sessions below.
-  // Awaited before the first list load so client keys never straddle the
-  // bare/composite migration mid-render.
+function loadCommands(...args) {
+  return composerAutocomplete.loadCommands(...args);
+}
+document.addEventListener("DOMContentLoaded", async () => {
+  const startupSelection = sessionState.selectionGeneration;
   try {
     await loadHostIdentity();
-    await loadHostFleet(); // peers this server knows about (404 on old servers)
-    await identifyHosts();  // and who the catalog's own entries actually are
+    await loadHostFleet();
+    await identifyHosts();
   } finally {
     resolveHostFleetReady();
-    updateRoutinesButton(); // capability-gated sidebar icon
-    updateMicButton();      // …and the capability-gated composer mic
+    updateRoutinesButton();
+    updateMicButton();
   }
-  loadConfig(); // feature flags (terminal) — fire-and-forget
-  loadThemes(); // theme picker options + refresh custom-theme tokens
+  loadConfig();
+  loadThemes();
   updateViewToggle();
-  renderScopeChips(); // cached definitions paint immediately…
-  loadSavedFilters(); // …then the server copy replaces them
+  renderScopeChips();
+  loadSavedFilters();
   initMicButton();
   initTerminalKeybar();
   initTerminalResize();
   initSidebarResize();
   initCommentSelections();
-  // The default Active view needs only live rows. Fetch history only when a
-  // saved inactive session must be restored; opening All fetches it on demand.
-  const saved = parseSessionKey(localStorage.getItem('pi-dish-session') || '');
+  const saved = parseSessionKey(localStorage.getItem("pi-dish-session") || "");
   await loadSessions();
   if (saved.sessionId && !sessionState.findSession(saved.sessionId, saved.hostId)) {
-    await loadSessions(undefined, { withPrevious: true });
+    await loadSessions(void 0, { withPrevious: true });
   }
-  if (saved.sessionId) {
+  if (saved.sessionId && startupSelection === sessionState.selectionGeneration) {
     const found = sessionState.findSession(saved.sessionId, saved.hostId);
     if (found) selectSession(saved.sessionId, { host: found.host || null });
   }
-  
-  const promptInput = document.getElementById('promptInput');
-
-  promptInput.addEventListener('keydown', (e) => {
+  const promptInput = document.getElementById("promptInput");
+  promptInput.addEventListener("keydown", (e) => {
     if (composerAutocomplete.visible) {
-      if (e.key === 'ArrowDown') { e.preventDefault(); moveAutocomplete(1); return; }
-      if (e.key === 'ArrowUp') { e.preventDefault(); moveAutocomplete(-1); return; }
-      if (e.key === 'Tab' || e.key === 'Enter') {
-        var items = document.querySelectorAll('.autocomplete-item');
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        moveAutocomplete(1);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        moveAutocomplete(-1);
+        return;
+      }
+      if (e.key === "Tab" || e.key === "Enter") {
+        var items = document.querySelectorAll(".autocomplete-item");
         if (items.length > 0 && composerAutocomplete.index >= 0) {
           e.preventDefault();
           acceptAutocomplete(items[composerAutocomplete.index]);
           return;
         }
       }
-      if (e.key === 'Escape') { e.preventDefault(); hideAutocomplete(); return; }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        hideAutocomplete();
+        return;
+      }
     }
-    // History recall: ArrowUp with the caret at the very start (or empty box)
-    // steps back through sent prompts; ArrowDown at the end steps forward and
-    // finally restores whatever was being typed.
-    if (!composerAutocomplete.visible && e.key === 'ArrowUp' &&
-        promptInput.selectionStart === 0 && promptInput.selectionEnd === 0) {
-      if (navigateHistory(-1, promptInput)) { e.preventDefault(); return; }
+    if (!composerAutocomplete.visible && e.key === "ArrowUp" && promptInput.selectionStart === 0 && promptInput.selectionEnd === 0) {
+      if (navigateHistory(-1, promptInput)) {
+        e.preventDefault();
+        return;
+      }
     }
-    if (!composerAutocomplete.visible && e.key === 'ArrowDown' && composerDrafts.historyIndex !== -1 &&
-        promptInput.selectionStart === promptInput.value.length) {
-      if (navigateHistory(1, promptInput)) { e.preventDefault(); return; }
+    if (!composerAutocomplete.visible && e.key === "ArrowDown" && composerDrafts.historyIndex !== -1 && promptInput.selectionStart === promptInput.value.length) {
+      if (navigateHistory(1, promptInput)) {
+        e.preventDefault();
+        return;
+      }
     }
-    if (e.key === 'Enter' && !e.shiftKey) {
-      if (e.ctrlKey) { e.preventDefault(); sendSteer(); }
-      else { e.preventDefault(); sendPrompt(); }
+    if (e.key === "Enter" && !e.shiftKey) {
+      if (e.ctrlKey) {
+        e.preventDefault();
+        sendSteer();
+      } else {
+        e.preventDefault();
+        sendPrompt();
+      }
     }
-    // While dictating, Escape cancels the recording (handled by the document
-    // listener) — it must not also abort the turn.
-    if (e.key === 'Escape' && !composerAutocomplete.visible && !isRecording() && sessionActivity.turn) { e.preventDefault(); abortTurn(); }
+    if (e.key === "Escape" && !composerAutocomplete.visible && !isRecording() && sessionActivity.turn) {
+      e.preventDefault();
+      abortTurn();
+    }
   });
-
-  // Global Ctrl+C to abort
-  document.addEventListener('keydown', function(e) {
-    // Keys typed into the terminal belong to the shell (Ctrl+C = SIGINT,
-    // Ctrl+F = forward), not to the app-level shortcuts.
-    if (e.target.closest && e.target.closest('.terminal-panel')) return;
-    if (e.ctrlKey && e.key === 'c' && sessionActivity.turn) {
+  document.addEventListener("keydown", function(e) {
+    if (e.target instanceof Element && e.target.closest(".terminal-panel")) return;
+    if (e.ctrlKey && e.key === "c" && sessionActivity.turn) {
       var sel = window.getSelection();
-      if (!sel || sel.isCollapsed) { e.preventDefault(); abortTurn(); }
+      if (!sel || sel.isCollapsed) {
+        e.preventDefault();
+        abortTurn();
+      }
     }
-    // Ctrl+F opens in-session search when a session is showing
-    if (e.ctrlKey && e.key === 'f' && sessionState.currentSession) {
+    if (e.ctrlKey && e.key === "f" && sessionState.currentSession) {
       e.preventDefault();
       openSearch();
     }
   });
-
-  promptInput.addEventListener('input', () => {
+  promptInput.addEventListener("input", () => {
     autosizePromptInput(promptInput);
     handleAutocomplete(promptInput.value);
-    composerDrafts.exitHistory(); // typing exits history browsing
+    composerDrafts.exitHistory();
     saveDraftSoon();
   });
-
-  // Pasted screenshots become attachments instead of getting dropped.
-  promptInput.addEventListener('paste', (e) => {
-    const files = Array.from(e.clipboardData?.items || [])
-      .filter((it) => it.type && it.type.startsWith('image/'))
-      .map((it) => it.getAsFile()).filter(Boolean);
+  promptInput.addEventListener("paste", (e) => {
+    const files = Array.from(e.clipboardData?.items || []).filter((it) => it.type && it.type.startsWith("image/")).map((it) => it.getAsFile()).filter((file) => file !== null);
     if (!files.length) return;
     e.preventDefault();
     addImageFiles(files);
   });
-
-  document.getElementById('imageFileInput').addEventListener('change', (e) => {
-    addImageFiles(e.target.files);
-    e.target.value = ''; // allow re-picking the same file
+  document.getElementById("imageFileInput").addEventListener("change", (e) => {
+    const input = e.currentTarget;
+    addImageFiles(input.files || []);
+    input.value = "";
   });
-
-  // Tap any transcript image to view it full-size.
-  document.addEventListener('click', (e) => {
-    const img = e.target.closest('img.msg-image');
+  document.addEventListener("click", (e) => {
+    const img = e.target instanceof Element ? e.target.closest("img.msg-image") : null;
     if (img) openImageLightbox(img.src);
   });
-
-  // Tap a linkified file mention to open it in the viewer. preventDefault
-  // keeps a link inside a <summary> (tool-call headers) from toggling the
-  // enclosing <details>.
-  document.addEventListener('click', (e) => {
-    const link = e.target.closest('.file-link');
+  document.addEventListener("click", (e) => {
+    const link = e.target instanceof Element ? e.target.closest(".file-link") : null;
     if (!link || !sessionState.currentSession) return;
     e.preventDefault();
-    openFileViewer(link.textContent.trim());
+    openFileViewer((link.textContent || "").trim());
   });
-
-  // Per-message share link (the hover 🔗 in turn headers).
-  document.addEventListener('click', (e) => {
-    const btn = e.target.closest('.msg-link-btn');
+  document.addEventListener("click", (e) => {
+    const btn = e.target instanceof Element ? e.target.closest(".msg-link-btn") : null;
     if (btn) copyMessageShareLink(btn);
   });
-
-  // Periodic refresh must preserve an in-flight server search, or the list
-  // resets to unfiltered mid-search.
   sidebarLists.mount();
-
   sidebarControls.mount();
-
-  const messagesEl = document.getElementById('messages');
+  const messagesEl = document.getElementById("messages");
   if (messagesEl) {
-    messagesEl.addEventListener('scroll', () => {
-      updateJumpButton(messagesEl);
-      maybeLoadOlderMessages(messagesEl);
-    }, { passive: true });
-    // Any deliberate gesture in the feed cancels forced follow. Harmless when
-    // already at the bottom — normal proximity pinning takes over seamlessly.
-    const cancelFollow = () => { followStream = false; };
-    messagesEl.addEventListener('wheel', (e) => {
-      cancelFollow();
-      if (e.deltaY < 0) maybeLoadOlderMessages(messagesEl);
-    }, { passive: true });
-    messagesEl.addEventListener('touchmove', () => {
-      cancelFollow();
-      maybeLoadOlderMessages(messagesEl);
-    }, { passive: true });
-    messagesEl.addEventListener('mousedown', cancelFollow, { passive: true });
-    // Open the session a #ref chip names. Cross-host chips carry the host in
-    // the ref, so the lookup — not the click — decides which host to switch to.
-    messagesEl.addEventListener('click', (e) => {
-      const chip = e.target.closest('.session-ref-chip');
+    appChrome.mount();
+    messagesEl.addEventListener("click", (e) => {
+      const chip = e.target instanceof Element ? e.target.closest(".session-ref-chip") : null;
       if (!chip) return;
-      const ref = chip.getAttribute('data-session-ref') || '';
+      const ref = chip.getAttribute("data-session-ref") || "";
       const session = sessionMatchingRef(ref);
-      if (!session) { setStatus(`No session here matches ${ref}`, 'error'); return; }
+      if (!session) {
+        setStatus(`No session here matches ${ref}`, "error");
+        return;
+      }
       selectSession(session.id, { host: session.host || null });
     });
   }
-
-  // Restore focus mode (hide tool calls/results) preference
-  setFocusMode(localStorage.getItem('pi-dish-focus') === '1');
-
-  // Coming back to the tab: refresh the list so unread dots resolve against
-  // what's now actually on screen.
-  document.addEventListener('visibilitychange', () => {
+  setFocusMode(localStorage.getItem("pi-dish-focus") === "1");
+  document.addEventListener("visibilitychange", () => {
     if (!document.hidden) refreshSessions();
   });
 });
-
-// Reference syntax is relative to the server owning the composing session.
 const sessionReferences = PiDishBrowser.createSessionReferences({
-  sessionState, selfId: () => hostDirectory.self.hostId, host: hostEntryFor, hostLabel: hostLabelFor, config: () => appConfig,
+  sessionState,
+  selfId: () => hostDirectory.self.hostId,
+  host: hostEntryFor,
+  hostLabel: hostLabelFor,
+  config: () => appConfig
 });
 const composerAutocomplete = PiDishBrowser.createComposerAutocomplete({
-  document, sessionState, composerKey: () => composerDrafts.key, provisional: () => !!sessionView.spawnId,
-  request: (host, path, options) => apiFetch(host, path, options), host: hostEntryFor, references: sessionReferences,
-  multiHost: isMultiHost, hostLabel: hostLabelFor, failed: error => console.error('Failed to load commands:', error),
+  document,
+  sessionState,
+  composerKey: () => composerDrafts.key,
+  provisional: () => !!sessionView.spawnId,
+  request: (host, path, options) => apiFetch(host, path, options),
+  host: hostEntryFor,
+  references: sessionReferences,
+  multiHost: isMultiHost,
+  hostLabel: hostLabelFor,
+  failed: (error) => console.error("Failed to load commands:", error)
 });
-function handleAutocomplete(text) { composerAutocomplete.handle(text); }
-function queueFileAutocomplete(token) { composerAutocomplete.queueFile(token); }
-function showFileAutocomplete(files) { composerAutocomplete.showFiles(files); }
-function acceptFileMention(path, directory) { composerAutocomplete.acceptFile(path, directory); }
-function allKnownSessions() { return sessionReferences.all(); }
-function sessionHostIdOf(session) { return sessionReferences.hostId(session); }
-function sessionRefCandidates() { return sessionReferences.candidates(); }
-function sameHostSessionIds(session) { return sessionReferences.sameHostIds(session); }
-function refPrefixFor(session) { return sessionReferences.prefix(session); }
-function composerSessionRef(session, target) { return sessionReferences.ref(session, target); }
-function showSessionRefAutocomplete(token) { composerAutocomplete.showRefs(token); }
-function acceptSessionRefMention(ref) { composerAutocomplete.acceptRef(ref); }
-function sessionMatchingRef(ref, host) { return sessionReferences.match(ref, host); }
-function sessionRefHints(message) { return sessionReferences.hints(message); }
-function showAutocomplete(matches) { composerAutocomplete.showCommands(matches); }
-function hideAutocomplete() { composerAutocomplete.hide(); }
-function moveAutocomplete(delta) { composerAutocomplete.move(delta); }
-function acceptAutocomplete(element) { composerAutocomplete.accept(element); }
-function acceptAutocompleteByName(name) { composerAutocomplete.acceptCommand(name); }
-
-// =========================================================================
-// Sidebar
-// =========================================================================
-
-// Query, list fan-out and seen activity have separate typed owners.
+function handleAutocomplete(...args) {
+  composerAutocomplete.handle(...args);
+}
+function queueFileAutocomplete(...args) {
+  composerAutocomplete.queueFile(...args);
+}
+function showFileAutocomplete(...args) {
+  composerAutocomplete.showFiles(...args);
+}
+function acceptFileMention(...args) {
+  composerAutocomplete.acceptFile(...args);
+}
+function allKnownSessions() {
+  return sessionReferences.all();
+}
+function sessionHostIdOf(...args) {
+  return sessionReferences.hostId(...args);
+}
+function sessionRefCandidates() {
+  return sessionReferences.candidates();
+}
+function sameHostSessionIds(...args) {
+  return sessionReferences.sameHostIds(...args);
+}
+function refPrefixFor(...args) {
+  return sessionReferences.prefix(...args);
+}
+function composerSessionRef(...args) {
+  return sessionReferences.ref(...args);
+}
+function showSessionRefAutocomplete(...args) {
+  composerAutocomplete.showRefs(...args);
+}
+function acceptSessionRefMention(...args) {
+  composerAutocomplete.acceptRef(...args);
+}
+function sessionMatchingRef(...args) {
+  return sessionReferences.match(...args);
+}
+function sessionRefHints(...args) {
+  return sessionReferences.hints(...args);
+}
+function showAutocomplete(...args) {
+  composerAutocomplete.showCommands(...args);
+}
+function hideAutocomplete() {
+  composerAutocomplete.hide();
+}
+function moveAutocomplete(...args) {
+  composerAutocomplete.move(...args);
+}
+function acceptAutocomplete(...args) {
+  composerAutocomplete.accept(...args);
+}
+function acceptAutocompleteByName(...args) {
+  composerAutocomplete.acceptCommand(...args);
+}
 const sidebarActivity = PiDishBrowser.createSidebarActivity({ document, storage: localStorage, sessionState });
 const sidebarQuery = PiDishBrowser.createSidebarQuery({
-  document, storage: localStorage, request: (host, path, options) => apiFetch(host, path, options), host: () => hostEntryFor(null),
-  render: () => renderSessions(), reload: query => loadSessions(query), queriedFor: () => sidebarLists.queriedFor,
-  invalidateLists: () => sidebarLists.invalidate(), busy: value => setSearchBusy(value),
-  searchChanged: () => { if (isSearchViewOpen()) runSearchView(); }, openSearch: query => openSearchView(query),
-  prompt: (label, initial) => window.prompt(label, initial), alert: message => alert(message),
+  document,
+  storage: localStorage,
+  request: (host, path, options) => apiFetch(host, path, options),
+  host: () => hostEntryFor(null),
+  render: () => renderSessions(),
+  reload: (query) => loadSessions(query),
+  queriedFor: () => sidebarLists.queriedFor,
+  invalidateLists: () => sidebarLists.invalidate(),
+  busy: (value) => setSearchBusy(value),
+  searchChanged: () => {
+    if (isSearchViewOpen()) runSearchView();
+  },
+  openSearch: (query) => openSearchView(query),
+  prompt: (label, initial) => window.prompt(label, initial),
+  alert: (message) => alert(message)
 });
 sidebarQuery.mount();
 const sidebarLists = PiDishBrowser.createSidebarLists({
-  document, request: (host, path, options) => apiFetch(host, path, options), sessionState, activity: sidebarActivity,
-  hosts: effectiveHosts, pollable: pollableHosts, selfId: () => hostDirectory.self.hostId,
-  query: () => sidebarQuery.query, all: () => sidebarQuery.tab === 'all', refreshFleet: refreshHostFleetSoon,
-  connection: (host, event) => hostConnections.note(host, event),
+  document,
+  request: (host, path, options) => apiFetch(host, path, options),
+  sessionState,
+  activity: sidebarActivity,
+  hosts: effectiveHosts,
+  pollable: pollableHosts,
+  selfId: () => hostDirectory.self.hostId,
+  query: () => sidebarQuery.query,
+  all: () => sidebarQuery.tab === "all",
+  refreshFleet: refreshHostFleetSoon,
+  connection: (host, event) => hostConnections.note(host, event)
 });
 const hostSessionLoader = sidebarLists.loader;
-function toggleSidebarView() { sidebarQuery.toggleView(); }
-function updateViewToggle() { sidebarQuery.updateView(); }
-function loadSavedFilters() { return sidebarQuery.loadFilters(); }
-function persistSavedFilters(next, host) { return sidebarQuery.persistFilters(next, host || undefined); }
-function scopeQuery() { return sidebarQuery.scope(); }
-function toggleScope(name) { sidebarQuery.toggleScope(name); }
-function saveCurrentFilterAsScope() { return sidebarQuery.saveCurrent(); }
-function renderScopeChips() { sidebarQuery.renderChips(); }
-function markSessionSeen(session, lastActivity) { sidebarActivity.mark(session, lastActivity); }
-function isUnread(session) { return sidebarActivity.unread(session); }
-function updateUnreadTitle() { sidebarActivity.title(); }
-function toggleSidebar() { sidebarQuery.toggle(); }
-function closeSidebar() { sidebarQuery.close(); }
-function switchTab(tab) { sidebarQuery.switchTab(tab); }
-function onFilterInput() { sidebarQuery.onInput(); }
-function setSearchBusy(value) { sidebarLists.busy(value); }
-function loadSessions(query, options) { return sidebarLists.load(query, options); }
-function queryHosts(hosts, query) { return PiDishBrowser.queryHosts(hosts, query); }
-function loadHostSessions(host, query, withPrevious, sequence) { return hostSessionLoader.load(host, query, withPrevious, sequence); }
-function publishSessionLists() { sidebarLists.publish(); }
-function refreshSessions() { return sidebarLists.refresh(); }
-
-// Sidebar row controls own preferences, family pins, confirmation, drag and menus.
+function toggleSidebarView() {
+  sidebarQuery.toggleView();
+}
+function updateViewToggle() {
+  sidebarQuery.updateView();
+}
+function loadSavedFilters() {
+  return sidebarQuery.loadFilters();
+}
+function persistSavedFilters(next, host) {
+  return sidebarQuery.persistFilters(next, host || void 0);
+}
+function scopeQuery() {
+  return sidebarQuery.scope();
+}
+function toggleScope(...args) {
+  sidebarQuery.toggleScope(...args);
+}
+function saveCurrentFilterAsScope() {
+  return sidebarQuery.saveCurrent();
+}
+function renderScopeChips() {
+  sidebarQuery.renderChips();
+}
+function markSessionSeen(...args) {
+  sidebarActivity.mark(...args);
+}
+function isUnread(...args) {
+  return sidebarActivity.unread(...args);
+}
+function updateUnreadTitle() {
+  sidebarActivity.title();
+}
+function toggleSidebar() {
+  sidebarQuery.toggle();
+}
+function closeSidebar() {
+  sidebarQuery.close();
+}
+function switchTab(...args) {
+  sidebarQuery.switchTab(...args);
+}
+function onFilterInput() {
+  sidebarQuery.onInput();
+}
+function setSearchBusy(...args) {
+  sidebarLists.busy(...args);
+}
+function loadSessions(...args) {
+  return sidebarLists.load(...args);
+}
+function queryHosts(...args) {
+  return PiDishBrowser.queryHosts(...args);
+}
+function loadHostSessions(...args) {
+  return hostSessionLoader.load(...args);
+}
+function publishSessionLists() {
+  sidebarLists.publish();
+}
+function refreshSessions() {
+  return sidebarLists.refresh();
+}
 const sidebarControls = PiDishBrowser.createSidebarControls({
-  document, storage: localStorage, sessionState, request: (host, path, options) => apiFetch(host, path, options),
-  host: hostEntryFor, render: () => renderSessions(), closeSidebar: () => closeSidebar(),
-  select: (id, host) => selectSession(id, { host }), pending: id => showPendingSessionView(id), create: (cwd, host) => createSession(cwd, host),
-  finishClose: (id, host, owner) => finishSessionClose(id, host, owner), refresh: () => loadSessions(undefined, { withPrevious: true }),
-  ref: session => sessionRefFor(session), copy: text => copyTextToClipboard(text), status: (message, type) => setStatus(message, type),
+  document,
+  storage: localStorage,
+  sessionState,
+  request: (host, path, options) => apiFetch(host, path, options),
+  host: hostEntryFor,
+  render: () => renderSessions(),
+  closeSidebar: () => closeSidebar(),
+  select: (id, host) => selectSession(id, { host }),
+  pending: (id) => showPendingSessionView(id),
+  create: (cwd, host) => createSession(cwd, host),
+  finishClose: (id, host, owner) => finishSessionClose(id, host, owner),
+  refresh: () => loadSessions(void 0, { withPrevious: true }),
+  ref: (session) => sessionRefFor(session),
+  copy: (text) => copyTextToClipboard(text),
+  status: (message, type) => setStatus(message, type)
 });
-function harnessBadgeInnerHtml(info) { return PiDishBrowser.harnessBadgeInnerHtml(info); }
-function renderHarnessBadge(id, label) { return PiDishBrowser.renderHarnessBadge(id, label); }
-function keyForSessionId(id) { return sessionKey(sessionState.sessionHostId(id), id); }
-function toggleGroupCollapsed(key) { sidebarControls.toggleGroup(key); }
-function toggleSessionFamilyExpanded(id, host) { sidebarControls.toggleFamily(id, host); }
-function currentFamilyRootMap() { return sidebarControls.familyRoots(); }
-function revealSessionInFamily(id, host) { sidebarControls.reveal(id, host); }
-function toggleSessionPinned(id, root, members, host) { sidebarControls.togglePin(id, root, members, host); }
-function handleRowCloseClick(id, host) { sidebarControls.closeClick(id, host); }
-function performRowClose(id, host) { return sidebarControls.performClose(id, host); }
-function sessionRefFor(session) { return session?.id ? sessionRef(session, hostEntryFor(session.host || null), refPrefixFor(session)) : ''; }
-function isSessionMenuOpen() { return sidebarControls.menuOpen; }
-function closeSessionMenu() { sidebarControls.closeMenu(); }
-function openSessionMenu(session, x, y) { sidebarControls.openMenu(session, x, y); }
-
-// Render one metadata snapshot through the typed sidebar projection.
-let lastSessionListHtml = '';
+function harnessBadgeInnerHtml(...args) {
+  return PiDishBrowser.harnessBadgeInnerHtml(...args);
+}
+function renderHarnessBadge(...args) {
+  return PiDishBrowser.renderHarnessBadge(...args);
+}
+function keyForSessionId(id) {
+  return sessionKey(sessionState.sessionHostId(id), id);
+}
+function toggleGroupCollapsed(...args) {
+  sidebarControls.toggleGroup(...args);
+}
+function toggleSessionFamilyExpanded(...args) {
+  sidebarControls.toggleFamily(...args);
+}
+function currentFamilyRootMap() {
+  return sidebarControls.familyRoots();
+}
+function revealSessionInFamily(...args) {
+  sidebarControls.reveal(...args);
+}
+function toggleSessionPinned(...args) {
+  sidebarControls.togglePin(...args);
+}
+function handleRowCloseClick(...args) {
+  sidebarControls.closeClick(...args);
+}
+function performRowClose(...args) {
+  return sidebarControls.performClose(...args);
+}
+function sessionRefFor(session) {
+  return session?.id ? sessionRef(session, hostEntryFor(session.host || null), refPrefixFor(session)) : "";
+}
+function isSessionMenuOpen() {
+  return sidebarControls.menuOpen;
+}
+function closeSessionMenu() {
+  sidebarControls.closeMenu();
+}
+function openSessionMenu(...args) {
+  sidebarControls.openMenu(...args);
+}
+let lastSessionListHtml = "";
 function renderSessions() {
   if (sidebarControls.dragging) return;
   const sidebarFamilyRootMap = currentFamilyRootMap();
   const { html, count } = PiDishBrowser.renderSidebar({
-    ...sessionState.sessions, selected: sessionState.currentSession,
-    tab: sidebarQuery.tab, view: sidebarQuery.view, query: sidebarQuery.query, queriedFor: sidebarLists.queriedFor, scope: scopeQuery(), indexing: sidebarLists.indexing,
-    contextMetric: displayPreferences.contextMetric, pending: [...pendingSessionSpawns.entries()], selectedSpawn: sessionView.spawnId,
-    expanded: sidebarControls.expanded, collapsed: sidebarControls.collapsed, pinned: sidebarControls.pinned, roots: sidebarFamilyRootMap,
-    closeConfirm: sidebarControls.closeConfirm, closeBusy: sidebarControls.closeBusy, multiHost: isMultiHost(),
-    unread: isUnread, hostChip: hostChipHtml,
-    hosts: effectiveHosts().map(host => {
+    ...sessionState.sessions,
+    selected: sessionState.currentSession,
+    tab: sidebarQuery.tab,
+    view: sidebarQuery.view,
+    query: sidebarQuery.query,
+    queriedFor: sidebarLists.queriedFor,
+    scope: scopeQuery(),
+    indexing: sidebarLists.indexing,
+    contextMetric: displayPreferences.contextMetric,
+    pending: [...pendingSessionSpawns.entries()],
+    selectedSpawn: sessionView.spawnId,
+    expanded: sidebarControls.expanded,
+    collapsed: sidebarControls.collapsed,
+    pinned: sidebarControls.pinned,
+    roots: sidebarFamilyRootMap,
+    closeConfirm: sidebarControls.closeConfirm,
+    closeBusy: sidebarControls.closeBusy,
+    multiHost: isMultiHost(),
+    unread: isUnread,
+    hostChip: hostChipHtml,
+    hosts: effectiveHosts().map((host) => {
       const cache = hostSessionLoader.getCache(host);
-      return { ...host, state: hostState(host), key: hostKeyOf(host), color: hostColorFor(host.hostId || null),
-        dot: hostDotHtml(host.hostId || null, 'host-section-dot'), hasCache: !!cache && !!(cache.active.length || cache.previous.length) };
-    }),
+      return {
+        ...host,
+        state: hostState(host),
+        key: hostKeyOf(host),
+        color: hostColorFor(host.hostId || null),
+        dot: hostDotHtml(host.hostId || null, "host-section-dot"),
+        hasCache: !!cache && !!(cache.active.length || cache.previous.length)
+      };
+    })
   });
-  const countEl = document.getElementById('countActive');
-  if (countEl) countEl.textContent = count || '';
+  const countEl = document.getElementById("countActive");
+  if (countEl) countEl.textContent = count ? String(count) : "";
   if (html !== lastSessionListHtml) {
     closeSessionMenu();
-    document.getElementById('sessionList').innerHTML = html;
+    document.getElementById("sessionList").innerHTML = html;
     lastSessionListHtml = html;
   }
   updateUnreadTitle();
 }
-function workspaceGroupKey(hostId, path) { return isMultiHost() && hostId ? sessionKey(hostId, path) : path; }
-
-// =========================================================================
-// Session Selection
-// =========================================================================
-
-function pendingComposerKey(id) { return `spawn:${id}`; }
-const sessionView = PiDishBrowser.createSessionView({ document, sessionState, storage: localStorage, endpoint: resolveHost,
-  get drafts() { return composerDrafts; }, get activity() { return sessionActivity; }, get transcript() { return transcriptController; }, get stream() { return messageStreamController; }, get resume() { return sessionResume; },
-  spawn: id => pendingSessionSpawns.get(id), resetSearch: () => sessionSearch.reset(), cancelStreaming: () => cancelStreamingRender(), stopFollowing: () => { followStream = false; },
-  closeViews: (_pending, keepBounce) => {
-    closeSearch(); closeDiffView(); closeFileView(); closeStatsModal(); closeTreeModal(); closeModelDropdown(); closeThinkingDropdown(); closeArtifactsModal();
-    closeUsageView(); closeSearchView(); closeNewSessionView(); closeSkillsView(); closeRoutinesView(); closeRecoveryView(); if (!keepBounce) closeBounceView();
+function workspaceGroupKey(hostId, path) {
+  return isMultiHost() && hostId ? sessionKey(hostId, path) : path;
+}
+function pendingComposerKey(id) {
+  return `spawn:${id}`;
+}
+const sessionView = PiDishBrowser.createSessionView({
+  document,
+  sessionState,
+  storage: localStorage,
+  endpoint: resolveHost,
+  get drafts() {
+    return composerDrafts;
   },
-  closeTerminal: () => closeTerminal(), clearExtension: () => clearExtensionUI(), clearRelations: () => clearSessionRelations(), closeControls: () => closeControlPanel(), hideAutocomplete: () => hideAutocomplete(),
-  retireModels: () => modelCatalog.retire(), retireCommands: () => composerAutocomplete.retireCommands(), queue: data => renderQueueStatus(data), closeBtw: () => closeBtwPanel(), resetArtifacts: () => sessionInfo.resetArtifacts(),
-  thinking: () => updateThinkingBadges(), terminal: () => updateTerminalButtons(), mic: () => updateMicButton(), mood: (description, face) => setMoodIndicator(description, face), status: (message, type) => setStatus(message, type),
-  render: () => renderSessions(), cancelRecording: () => cancelRecording(), hideNote: () => hideComposerNote(), math: () => loadMathAssets(), reveal: (id, host) => revealSessionInFamily(id, host),
-  seen: session => markSessionSeen(session), artifacts: owner => refreshArtifacts(owner), header: () => updateSessionHeader(), relations: owner => loadSessionRelations(owner), models: (id, harness) => loadModels(id, harness), commands: id => loadCommands(id),
+  get activity() {
+    return sessionActivity;
+  },
+  get transcript() {
+    return transcriptController;
+  },
+  get stream() {
+    return messageStreamController;
+  },
+  get resume() {
+    return sessionResume;
+  },
+  spawn: (id) => pendingSessionSpawns.get(id),
+  resetSearch: () => sessionSearch.reset(),
+  cancelStreaming: () => cancelStreamingRender(),
+  stopFollowing: () => {
+    appChrome.stopFollowing();
+  },
+  closeViews: (_pending, keepBounce) => {
+    closeSearch();
+    closeDiffView();
+    closeFileView();
+    closeStatsModal();
+    closeTreeModal();
+    closeModelDropdown();
+    closeThinkingDropdown();
+    closeArtifactsModal();
+    closeUsageView();
+    closeSearchView();
+    closeNewSessionView();
+    closeSkillsView();
+    closeRoutinesView();
+    closeRecoveryView();
+    if (!keepBounce) closeBounceView();
+  },
+  closeTerminal: () => closeTerminal(),
+  clearExtension: () => clearExtensionUI(),
+  clearRelations: () => clearSessionRelations(),
+  closeControls: () => closeControlPanel(),
+  hideAutocomplete: () => hideAutocomplete(),
+  retireModels: () => modelCatalog.retire(),
+  retireCommands: () => composerAutocomplete.retireCommands(),
+  queue: (data) => renderQueueStatus(data),
+  closeBtw: () => closeBtwPanel(),
+  resetArtifacts: () => sessionInfo.resetArtifacts(),
+  thinking: () => updateThinkingBadges(),
+  terminal: () => updateTerminalButtons(),
+  mic: () => updateMicButton(),
+  mood: (description, face) => setMoodIndicator(description, face),
+  status: (message, type) => setStatus(message, type),
+  render: () => renderSessions(),
+  cancelRecording: () => cancelRecording(),
+  hideNote: () => hideComposerNote(),
+  math: () => loadMathAssets(),
+  reveal: (id, host) => revealSessionInFamily(id, host),
+  seen: (session) => markSessionSeen(session),
+  artifacts: (owner) => refreshArtifacts(owner),
+  header: () => updateSessionHeader(),
+  relations: (owner) => loadSessionRelations(owner),
+  models: (id, harness) => loadModels(id, harness),
+  commands: (id) => loadCommands(id)
 });
-function showPendingSessionView(id) { sessionView.pending(id); }
-function showPendingSessionFailure(id, message, spawn) { sessionView.failure(id, message, spawn); }
-function selectSession(id, options) { return sessionView.select(id, options); }
-const sessionResume = PiDishBrowser.createSessionResume({ document, sessionState, request: (...args) => apiFetch(...args), endpoint: resolveHost,
-  target: host => savedResumeTarget(host), refresh: () => refreshSessions(), select: (id, options) => selectSession(id, options), status: (message, type) => setStatus(message, type),
+function showPendingSessionView(...args) {
+  sessionView.pending(...args);
+}
+function showPendingSessionFailure(...args) {
+  sessionView.failure(...args);
+}
+function selectSession(...args) {
+  return sessionView.select(...args);
+}
+const sessionResume = PiDishBrowser.createSessionResume({
+  document,
+  sessionState,
+  request: (...args) => apiFetch(...args),
+  endpoint: resolveHost,
+  target: (host) => savedResumeTarget(host),
+  refresh: () => refreshSessions(),
+  select: (id, options) => selectSession(id, options),
+  status: (message, type) => setStatus(message, type)
 });
-function resetResumeModelPicker() { sessionResume.reset(); }
-function loadResumeModelOptions(session) { return sessionResume.load(session); }
-function resumeSession() { return sessionResume.resume(); }
-
-// =========================================================================
-// Models
-// =========================================================================
-
+function resetResumeModelPicker() {
+  sessionResume.reset();
+}
+function loadResumeModelOptions(...args) {
+  return sessionResume.load(...args);
+}
+function resumeSession() {
+  return sessionResume.resume();
+}
 const modelCatalog = PiDishBrowser.createModelCatalog({
-  read: scope => sessionApi.models(scope.host, scope),
+  read: (scope) => sessionApi.models(scope.host, scope),
   persist: (scope, models) => localStorage.setItem(modelsCacheKey(scope.harnessId, scope.host.hostId), JSON.stringify(models)),
   changed: refreshResponsePricingState,
-  failed: error => console.error('Failed to load models:', error),
+  failed: (error) => console.error("Failed to load models:", error)
 });
-function modelCatalogUrl(harnessId, cwd) { return PiDishBrowser.modelCatalogUrl(harnessId, cwd); }
+function modelCatalogUrl(...args) {
+  return PiDishBrowser.modelCatalogUrl(...args);
+}
 function modelsCacheKey(harnessId, hostId) {
   return PiDishBrowser.modelsCacheKey(harnessId, hostId, hostDirectory.self.hostId);
 }
 function loadModels(sessionId, harnessId, cwd, host) {
   const owner = sessionId ? sessionState.captureSelection() : null;
-  const requestedHarnessId = harnessId || (sessionId ? sessionState.findSession(sessionId)?.harnessId : null) || 'pi';
-  const requestedHost = sessionId ? sessionState.sessionHostId(sessionId) : (host === undefined ? null : host);
+  const storedHarness = sessionId ? sessionState.findSession(sessionId)?.harnessId : null;
+  const requestedHarnessId = harnessId || (typeof storedHarness === "string" ? storedHarness : "") || "pi";
+  const requestedHost = sessionId ? sessionState.sessionHostId(sessionId) : host === void 0 ? null : host;
   const endpoint = hostEntryFor(requestedHost);
-  if (!endpoint) { modelCatalog.clear(); return Promise.resolve(); }
+  if (!endpoint) {
+    modelCatalog.clear();
+    return Promise.resolve();
+  }
   const captured = Object.freeze({ ...endpoint });
   const generation = newSessionController.generation;
-  const ownsRows = () => PiDishBrowser.sameDirectoryHost(captured, hostEntryFor(requestedHost))
-    && (sessionId ? owner && owner.id === sessionId && sessionState.ownsSelection(owner)
-      : generation === newSessionController.generation && isNewSessionViewOpen()
-        && nsHostId() === captured.hostId && selectedHarnessId() === requestedHarnessId);
-  const ownsRequest = () => ownsRows() && (!!sessionId || nsCwdValue() === (cwd || ''));
-  return modelCatalog.load({ host: captured, sessionId, harnessId: requestedHarnessId, cwd }, ownsRequest, ownsRows);
+  const ownsRows = () => PiDishBrowser.sameDirectoryHost(captured, hostEntryFor(requestedHost)) && (sessionId ? !!owner && owner.id === sessionId && sessionState.ownsSelection(owner) : generation === newSessionController.generation && isNewSessionViewOpen() && nsHostId() === captured.hostId && selectedHarnessId() === requestedHarnessId);
+  const ownsRequest = () => ownsRows() && (!!sessionId || nsCwdValue() === (cwd || ""));
+  return modelCatalog.load({ host: captured, sessionId: sessionId || void 0, harnessId: requestedHarnessId, cwd }, ownsRequest, ownsRows);
 }
-
-// =========================================================================
-// Session Header
-// =========================================================================
-
 const sessionRelationsController = PiDishBrowser.createSessionRelations({
-  document, window, sessionState, request: (host, path, init) => apiFetch(host, path, init), endpoint: hostEntryFor,
-  loadPrevious: () => loadSessions(undefined, { withPrevious: true }),
-  selectSession: (id, options) => selectSession(id, options), status: setStatus,
+  document,
+  window,
+  sessionState,
+  request: (host, path, init) => apiFetch(host, path, init),
+  endpoint: hostEntryFor,
+  loadPrevious: () => loadSessions(void 0, { withPrevious: true }),
+  selectSession: (id, options) => selectSession(id, options),
+  status: setStatus
 });
-function clearSessionRelations() { sessionRelationsController.clear(); }
-function loadSessionRelations(owner) { return sessionRelationsController.load(owner); }
-function openRelatedSession(id, owner) { return sessionRelationsController.openRelated(id, owner); }
-function openRelationsModal() { sessionRelationsController.openModal(); }
-function closeRelationsModal() { sessionRelationsController.closeModal(); }
-
-/**
- * Most model signal that fits the chip. The provider slug is the least
- * informative part, so it is dropped before the name is allowed to
- * ellipsize (CSS does the truncation). Full ref stays in the tooltip.
- */
-const sessionHeader = PiDishBrowser.createSessionHeader({ document, sessionState, multi: isMultiHost, host: hostEntryFor, down: hostIdIsDown, color: hostColorFor, label: hostLabelFor,
-  settings: session => harnessSupportsSettings(session), ensureHarness: id => ensureHarnessRows(id), thinking: () => updateThinkingBadges(), terminal: () => updateTerminalButtons(), mic: () => updateMicButton(),
-});
-function setModelChipLabel(button, model, suffix) { sessionHeader.label(button, model, suffix); }
-function updateSessionHeader() { sessionHeader.update(); }
-
-// Header actions capture their selection before opening editors or dispatching.
-const sessionControls = PiDishBrowser.createSessionControls({
-  document, sessionState, catalog: modelCatalog, request: (host, path, options) => apiFetch(host, path, options), host: hostEntryFor,
-  loadModels: (id, harness) => loadModels(id, harness), status: (message, type) => setStatus(message, type),
-});
-function updateThinkingBadges() { sessionControls.updateThinking(); }
-function toggleThinkingDropdown() { return sessionControls.toggleThinking(); }
-function closeThinkingDropdown() { sessionControls.closeThinking(); }
-function selectThinkingLevel(level) { return sessionControls.selectThinking(level); }
-
-// --- Focus mode: hide tool calls/results so only user/assistant text shows ---
-let focusMode = false;
-
-function setFocusMode(on) {
-  focusMode = !!on;
-  localStorage.setItem('pi-dish-focus', focusMode ? '1' : '0');
-  const messages = document.getElementById('messages');
-  if (messages) messages.classList.toggle('focus-mode', focusMode);
-  for (const id of ['btnFocus', 'btnFocusMobile']) {
-    const el = document.getElementById(id);
-    if (el) el.classList.toggle('active', focusMode);
-  }
-  const state = document.getElementById('focusModeState');
-  if (state) state.textContent = focusMode ? 'on' : 'off';
+function clearSessionRelations() {
+  sessionRelationsController.clear();
 }
-
-// Whole-transcript search owns query requests, marks and serialized paging jumps.
+function loadSessionRelations(...args) {
+  return sessionRelationsController.load(...args);
+}
+function openRelatedSession(...args) {
+  return sessionRelationsController.openRelated(...args);
+}
+function openRelationsModal() {
+  sessionRelationsController.openModal();
+}
+function closeRelationsModal() {
+  sessionRelationsController.closeModal();
+}
+const sessionHeader = PiDishBrowser.createSessionHeader({
+  document,
+  sessionState,
+  multi: isMultiHost,
+  host: hostEntryFor,
+  down: hostIdIsDown,
+  color: hostColorFor,
+  label: hostLabelFor,
+  settings: (session) => harnessSupportsSettings(session),
+  ensureHarness: (id) => ensureHarnessRows(id),
+  thinking: () => updateThinkingBadges(),
+  terminal: () => updateTerminalButtons(),
+  mic: () => updateMicButton()
+});
+function setModelChipLabel(...args) {
+  sessionHeader.label(...args);
+}
+function updateSessionHeader() {
+  sessionHeader.update();
+}
+const sessionControls = PiDishBrowser.createSessionControls({
+  document,
+  sessionState,
+  catalog: modelCatalog,
+  request: (host, path, options) => apiFetch(host, path, options),
+  host: hostEntryFor,
+  loadModels: (id, harness) => loadModels(id, harness),
+  status: (message, type) => setStatus(message, type)
+});
+function updateThinkingBadges() {
+  sessionControls.updateThinking();
+}
+function toggleThinkingDropdown() {
+  return sessionControls.toggleThinking();
+}
+function closeThinkingDropdown() {
+  sessionControls.closeThinking();
+}
+function selectThinkingLevel(...args) {
+  return sessionControls.selectThinking(...args);
+}
+function setFocusMode(on) {
+  appChrome.setFocus(on);
+}
 const sessionSearch = PiDishBrowser.createSessionSearch({
-  document, sessionState, request: (host, path, init) => apiFetch(host, path, init), endpoint: hostEntryFor,
-  focusMode: () => focusMode, oldestIndex: () => transcriptController.oldestIndex, hasOlder: () => transcriptController.hasOlder,
-  loadOlder: () => loadOlderMessages(), stopFollowing: () => { followStream = false; }, updateJumpButton,
+  document,
+  sessionState,
+  request: (host, path, init) => apiFetch(host, path, init),
+  endpoint: hostEntryFor,
+  focusMode: () => appChrome.focus,
+  oldestIndex: () => transcriptController.oldestIndex,
+  hasOlder: () => transcriptController.hasOlder,
+  loadOlder: () => loadOlderMessages(),
+  stopFollowing: () => {
+    appChrome.stopFollowing();
+  },
+  updateJumpButton
 });
 const search = sessionSearch.state;
-function toggleSearchBar() { sessionSearch.toggle(); }
-function openSearch() { sessionSearch.open(); }
-function closeSearch() { sessionSearch.close(); }
-function updateSearchCount(message) { sessionSearch.updateCount(message); }
-function runSessionSearch(query, options) { return sessionSearch.run(query, options); }
-function searchPrev() { return sessionSearch.move(-1); }
-function searchNext() { return sessionSearch.move(1); }
-function jumpToSearchResult() { return sessionSearch.jump(); }
-function handleSearchKey(event) { sessionSearch.key(event); }
-
-// --- Mobile control panel (model/thinking/context/focus/tree/export) ---
-let controlPanelOpen = false;
-
+function toggleSearchBar() {
+  sessionSearch.toggle();
+}
+function openSearch() {
+  sessionSearch.open();
+}
+function closeSearch() {
+  sessionSearch.close();
+}
+function updateSearchCount(...args) {
+  sessionSearch.updateCount(...args);
+}
+function runSessionSearch(...args) {
+  return sessionSearch.run(...args);
+}
+function searchPrev() {
+  return sessionSearch.move(-1);
+}
+function searchNext() {
+  return sessionSearch.move(1);
+}
+function jumpToSearchResult() {
+  return sessionSearch.jump();
+}
+function handleSearchKey(...args) {
+  sessionSearch.key(...args);
+}
 function toggleControlPanel() {
-  controlPanelOpen ? closeControlPanel() : openControlPanel();
+  appChrome.togglePanel();
 }
-
 function openControlPanel() {
-  controlPanelOpen = true;
-  document.getElementById('controlPanel').classList.add('open');
-  document.getElementById('btnPanel')?.classList.add('active');
-  // Dropdowns opened from the panel float above it — clicks there keep it open.
-  armOutsideClickClose(['controlPanel', 'btnPanel', 'modelDropdown', 'thinkingDropdown'],
-    closeControlPanel, () => controlPanelOpen);
+  appChrome.openPanel();
 }
-
 function closeControlPanel() {
-  controlPanelOpen = false;
-  document.getElementById('controlPanel')?.classList.remove('open');
-  document.getElementById('btnPanel')?.classList.remove('active');
+  appChrome.closePanel();
 }
-
 function toggleFocusMode() {
-  setFocusMode(!focusMode);
-  // Keep the reading position sane when large blocks appear/disappear.
-  const container = document.getElementById('messages');
-  if (container && isPinnedToBottom(container)) scrollToBottom(container);
+  appChrome.toggleFocus();
 }
-
-// Display preferences own modal requests, rendered controls and device readouts.
 const displayPreferences = PiDishBrowser.createDisplayPreferences({
-  document, storage: localStorage, request: (host, url, options) => apiFetch(host, url, options), host: () => hostEntryFor(null),
-  beforeOpen: () => { closeSidebar(); closeBounceView(); },
-  unmountSections: () => { recoveryController.unmountPreferences(); hostSettings.unmount(); },
-  mountSections: body => { hostSettings.mount(body); refreshRecoveryHosts(); renderRecoveryPreferences(); },
-  themes: { render: select => renderThemeSelect(select), apply: id => applyTheme(id) },
-  filters: () => sidebarQuery.filters, setFilters: value => sidebarQuery.setFilters(value),
+  document,
+  storage: localStorage,
+  request: (host, url, options) => apiFetch(host, url, options),
+  host: () => hostEntryFor(null),
+  beforeOpen: () => {
+    closeSidebar();
+    closeBounceView();
+  },
+  unmountSections: () => {
+    recoveryController.unmountPreferences();
+    hostSettings.unmount();
+  },
+  mountSections: (body) => {
+    hostSettings.mount(body);
+    refreshRecoveryHosts();
+    renderRecoveryPreferences();
+  },
+  themes: { render: (select) => renderThemeSelect(select), apply: (id) => applyTheme(id) },
+  filters: () => sidebarQuery.filters,
+  setFilters: (value) => sidebarQuery.setFilters(value),
   persistFilters: (value, host) => persistSavedFilters([...value], host),
-  metadataChanged: () => updateRenderedResponseMetadata(), contextChanged: () => renderSessions(), alert: message => alert(message),
+  metadataChanged: () => updateRenderedResponseMetadata(),
+  contextChanged: () => renderSessions(),
+  alert: (message) => alert(message)
 });
-function openSettingsModal() { displayPreferences.open(); }
-function closeSettingsModal() { closeBounceView(); displayPreferences.close(); }
-function renderPreferences() { return displayPreferences.render(); }
-
-// Recovery owns its preferences/report views and captured host endpoints.
+function openSettingsModal() {
+  displayPreferences.open();
+}
+function closeSettingsModal() {
+  closeBounceView();
+  displayPreferences.close();
+}
+function renderPreferences() {
+  return displayPreferences.render();
+}
 const recoveryController = PiDishBrowser.createRecovery({
-  root: document.querySelector('.main'), request: apiFetch, hosts: effectiveHosts,
-  supports: host => hostSupportsCapability(host, 'recovery', appConfig), down: hostIsDown,
-  fleetReady: () => hostFleetReady, refreshFleet: loadHostFleet,
+  root: document.querySelector(".main"),
+  request: apiFetch,
+  hosts: effectiveHosts,
+  supports: (host) => hostSupportsCapability(host, "recovery", appConfig),
+  down: hostIsDown,
+  fleetReady: () => hostFleetReady,
+  refreshFleet: loadHostFleet,
   selectedHost: () => sessionState.currentSession?.host || null,
-  settingsOpen: () => document.getElementById('settingsModal').style.display !== 'none',
-  closeOtherViews: () => { closeSettingsModal(); closeSidebar(); closeUsageView(); closeSearchView(); closeNewSessionView(); closeSkillsView(); closeRoutinesView(); closeBounceView(); closeDiffView(); closeFileView(); },
-  confirm: message => confirm(message),
+  settingsOpen: () => document.getElementById("settingsModal").style.display !== "none",
+  closeOtherViews: () => {
+    closeSettingsModal();
+    closeSidebar();
+    closeUsageView();
+    closeSearchView();
+    closeNewSessionView();
+    closeSkillsView();
+    closeRoutinesView();
+    closeBounceView();
+    closeDiffView();
+    closeFileView();
+  },
+  confirm: (message) => confirm(message)
 });
-function refreshRecoveryHosts() { recoveryController.refreshHosts(); }
-function renderRecoveryPreferences() { return recoveryController.mountPreferences(); }
-function isRecoveryViewOpen() { return recoveryController.isOpen(); }
-function closeRecoveryView() { recoveryController.close(); }
-function openRecoveryView(hostId) { recoveryController.open(hostId); }
-function loadRecoveryView() { return recoveryController.load(); }
-
-// --- Hosts (settings section, not a takeover: it is a short list plus one
-// add form). The catalog is device-local by design — a browser's own list of
-// machines it can reach, tokens included; fleet entries come from the
-// server's config and are shown read-only. ---------------------------------
-
+function refreshRecoveryHosts() {
+  recoveryController.refreshHosts();
+}
+function renderRecoveryPreferences() {
+  return recoveryController.mountPreferences();
+}
+function isRecoveryViewOpen() {
+  return recoveryController.isOpen();
+}
+function closeRecoveryView() {
+  recoveryController.close();
+}
+function openRecoveryView(...args) {
+  recoveryController.open(...args);
+}
+function loadRecoveryView() {
+  return recoveryController.load();
+}
 const hostSettings = PiDishBrowser.createHostSettings({
-  directory: hostDirectory, connections: hostConnections, discovery: hostDiscovery,
-  request: apiFetch, protocol: () => location.protocol,
-  promptToken: label => prompt(`Token for ${label}`, ''),
-  displayLabel: hostDisplayLabel, escapeHtml,
-  color: hostColorFor, customColor: hostColorIsCustom, resolveColor: resolveColorToHex,
+  directory: hostDirectory,
+  connections: hostConnections,
+  discovery: hostDiscovery,
+  request: apiFetch,
+  protocol: () => location.protocol,
+  promptToken: (label) => prompt(`Token for ${label}`, ""),
+  displayLabel: (host) => hostDisplayLabel({ base: host.base, label: host.label ? String(host.label) : "", name: host.name ? String(host.name) : "" }),
+  escapeHtml,
+  color: hostColorFor,
+  customColor: hostColorIsCustom,
+  resolveColor: resolveColorToHex,
   setColor: setHostColorOverride,
   onCatalogSaved: () => {
     if (isNewSessionViewOpen()) renderNsHosts();
@@ -844,337 +1011,796 @@ const hostSettings = PiDishBrowser.createHostSettings({
     renderHostsSection();
     renderSessions();
   },
-  refreshSessions, renderNewSessionHosts: renderNsHosts,
+  refreshSessions,
+  renderNewSessionHosts: renderNsHosts
 });
-function saveHostCatalog() { hostSettings.save(); }
+function saveHostCatalog() {
+  hostSettings.save();
+}
 function renderHostsSection() {
   refreshRecoveryHosts();
   hostSettings.render();
 }
-
-// Advanced search owns fleet query results, facet controls and click-through.
 const searchViewController = PiDishBrowser.createSearchView({
-  root: document.querySelector('.main'), request: apiFetch, sessionState,
-  hosts: effectiveHosts, fanout: fanoutHosts, host: hostEntryFor, scope: scopeQuery,
+  root: document.querySelector(".main"),
+  request: apiFetch,
+  sessionState,
+  hosts: effectiveHosts,
+  fanout: fanoutHosts,
+  host: hostEntryFor,
+  scope: scopeQuery,
   connection: (host, event, error) => {
-    if (event === 'success') noteHostReachable(host);
-    else if (event === 'blocked') noteHostBlocked(host);
+    if (event === "success") noteHostReachable(host);
+    else if (event === "blocked") noteHostBlocked(host);
     else noteHostFailure(host, error);
   },
   hostChip: hostChipHtml,
-  closeOtherViews: () => { closeSidebar(); closeUsageView(); closeNewSessionView(); closeSkillsView(); closeRoutinesView(); closeRecoveryView(); closeBounceView(); },
-  loadPrevious: () => loadSessions(undefined, { withPrevious: true }),
-  selectSession: (id, options) => selectSession(id, options), sessionSearch,
-});
-function isSearchViewOpen() { return searchViewController.isOpen(); }
-function openSearchView(query) { searchViewController.open(query); }
-function closeSearchView() { searchViewController.close(); }
-function onSearchViewInput(options) { searchViewController.input(options); }
-function runSearchView() { return searchViewController.run(); }
-function setSearchToken(prefix, value) { searchViewController.setToken(prefix, value); }
-function openSearchResult(id, matches, host) { return searchViewController.openResult(id, matches, host); }
-
-// The skills directory and coverage view retain their entry-host ownership.
-const skillsController = PiDishBrowser.createSkills({
-  root: document.querySelector('.main'), request: apiFetch, self: selfHostEntry, origin: () => location.origin,
-  sessionState, loadPrevious: () => loadSessions(undefined, { withPrevious: true }),
+  closeOtherViews: () => {
+    closeSidebar();
+    closeUsageView();
+    closeNewSessionView();
+    closeSkillsView();
+    closeRoutinesView();
+    closeRecoveryView();
+    closeBounceView();
+  },
+  loadPrevious: () => loadSessions(void 0, { withPrevious: true }),
   selectSession: (id, options) => selectSession(id, options),
-  closeOtherViews: () => { closeSidebar(); closeUsageView(); closeSearchView(); closeNewSessionView(); closeRoutinesView(); closeRecoveryView(); closeBounceView(); },
-  refine: ({ cwd, draft, host }) => { newSessionController.setHostId(host); openNewSessionView({ cwd, draft }); },
-  copy: copyTextToClipboard, status: setStatus,
+  sessionSearch
 });
-function isSkillsViewOpen() { return skillsController.isOpen(); }
-function openSkillsView() { skillsController.open(); }
-function closeSkillsView() { skillsController.close(); }
-function refreshSkillsView() { skillsController.refresh(); }
-function skillsViewEscape() { return skillsController.escape(); }
-function backToSkillsDirectory() { skillsController.back(); }
-function startSkillRefine() { skillsController.refine(); }
-function openSkillDetail(path, options) { return skillsController.detail(path, options); }
-function openSkillActivation(id, entryId) { return skillsController.activation(id, entryId); }
-
-// Usage owns range/filter state, progressive fleet results and chart controls.
+function isSearchViewOpen() {
+  return searchViewController.isOpen();
+}
+function openSearchView(...args) {
+  searchViewController.open(...args);
+}
+function closeSearchView() {
+  searchViewController.close();
+}
+function onSearchViewInput(...args) {
+  searchViewController.input(...args);
+}
+function runSearchView() {
+  return searchViewController.run();
+}
+function setSearchToken(...args) {
+  searchViewController.setToken(...args);
+}
+function openSearchResult(...args) {
+  return searchViewController.openResult(...args);
+}
+const skillsController = PiDishBrowser.createSkills({
+  root: document.querySelector(".main"),
+  request: apiFetch,
+  self: selfHostEntry,
+  origin: () => location.origin,
+  sessionState,
+  loadPrevious: () => loadSessions(void 0, { withPrevious: true }),
+  selectSession: (id, options) => selectSession(id, options),
+  closeOtherViews: () => {
+    closeSidebar();
+    closeUsageView();
+    closeSearchView();
+    closeNewSessionView();
+    closeRoutinesView();
+    closeRecoveryView();
+    closeBounceView();
+  },
+  refine: ({ cwd, draft, host }) => {
+    newSessionController.setHostId(host);
+    openNewSessionView({ cwd, draft });
+  },
+  copy: copyTextToClipboard,
+  status: setStatus
+});
+function isSkillsViewOpen() {
+  return skillsController.isOpen();
+}
+function openSkillsView() {
+  skillsController.open();
+}
+function closeSkillsView() {
+  skillsController.close();
+}
+function refreshSkillsView() {
+  skillsController.refresh();
+}
+function skillsViewEscape() {
+  return skillsController.escape();
+}
+function backToSkillsDirectory() {
+  skillsController.back();
+}
+function startSkillRefine() {
+  skillsController.refine();
+}
+function openSkillDetail(...args) {
+  return skillsController.detail(...args);
+}
+function openSkillActivation(...args) {
+  return skillsController.activation(...args);
+}
 const usageController = PiDishBrowser.createUsageView({
-  root: document.querySelector('.main'), request: apiFetch, storage: localStorage,
-  fleetReady: () => hostFleetReady, hosts: fanoutHosts, host: hostEntryFor, multiHost: isMultiHost,
-  closeOtherViews: () => { closeSidebar(); closeSearchView(); closeNewSessionView(); closeSkillsView(); closeRoutinesView(); closeRecoveryView(); closeBounceView(); },
+  root: document.querySelector(".main"),
+  request: apiFetch,
+  storage: localStorage,
+  fleetReady: () => hostFleetReady,
+  hosts: fanoutHosts,
+  host: hostEntryFor,
+  multiHost: isMultiHost,
+  closeOtherViews: () => {
+    closeSidebar();
+    closeSearchView();
+    closeNewSessionView();
+    closeSkillsView();
+    closeRoutinesView();
+    closeRecoveryView();
+    closeBounceView();
+  },
   connection: (host, event, error) => {
-    if (event === 'success') noteHostReachable(host);
-    else if (event === 'blocked') noteHostBlocked(host);
+    if (event === "success") noteHostReachable(host);
+    else if (event === "blocked") noteHostBlocked(host);
     else noteHostFailure(host, error);
   },
-  selectSession: (id, options) => selectSession(id, options),
+  selectSession: (id, options) => selectSession(id, options)
 });
-function isUsageViewOpen() { return usageController.isOpen(); }
-function openUsageView() { usageController.open(); }
-function closeUsageView() { usageController.close(); }
-function loadUsageView() { return usageController.load(); }
-function setUsageRange(range) { usageController.setRange(range); }
-function setUsageSort(sort) { usageController.setSort(sort); }
-function setUsageStack(stack) { usageController.setStack(stack); }
-
-// Session information owns stats/process/share controls and artifact discovery.
+function isUsageViewOpen() {
+  return usageController.isOpen();
+}
+function openUsageView() {
+  usageController.open();
+}
+function closeUsageView() {
+  usageController.close();
+}
+function loadUsageView() {
+  return usageController.load();
+}
+function setUsageRange(...args) {
+  usageController.setRange(...args);
+}
+function setUsageSort(...args) {
+  usageController.setSort(...args);
+}
+function setUsageStack(...args) {
+  usageController.setStack(...args);
+}
 const sessionInfo = PiDishBrowser.createSessionInfo({
-  document, request: (host, path, options) => apiFetch(host, path, options), sessionState, host: hostEntryFor,
-  reference: session => sessionRefFor(session), copy: text => copyTextToClipboard(text), status: (text, type) => setStatus(text, type), confirm: text => confirm(text),
-  loadPrevious: () => loadSessions(undefined, { withPrevious: true }), refreshSessions: () => refreshSessions(), selectSession: (id, options) => selectSession(id, options),
+  document,
+  request: (host, path, options) => apiFetch(host, path, options),
+  sessionState,
+  host: hostEntryFor,
+  reference: (session) => sessionRefFor(session),
+  copy: (text) => copyTextToClipboard(text),
+  status: (text, type) => setStatus(text, type),
+  confirm: (text) => confirm(text),
+  loadPrevious: () => loadSessions(void 0, { withPrevious: true }),
+  refreshSessions: () => refreshSessions(),
+  selectSession: (id, options) => selectSession(id, options)
 });
-function openStatsModal() { sessionInfo.openStats(); }
-function closeStatsModal() { sessionInfo.closeStats(); }
-function copyMessageShareLink(button) { return sessionInfo.copyMessage(button); }
-function finishSessionClose(id, host, owner) { return sessionInfo.finishClose(id, host, owner); }
-function refreshArtifacts(owner) { return sessionInfo.refreshArtifacts(owner); }
-function updateArtifactsBadge() { sessionInfo.updateBadge(); }
-function openArtifactsModal() { sessionInfo.openArtifacts(); }
-function closeArtifactsModal() { sessionInfo.closeArtifacts(); }
-
-// File and diff takeovers share a typed owner and keep comment coordination explicit.
+function openStatsModal() {
+  sessionInfo.openStats();
+}
+function closeStatsModal() {
+  sessionInfo.closeStats();
+}
+function copyMessageShareLink(...args) {
+  return sessionInfo.copyMessage(...args);
+}
+function finishSessionClose(...args) {
+  return sessionInfo.finishClose(...args);
+}
+function refreshArtifacts(...args) {
+  return sessionInfo.refreshArtifacts(...args);
+}
+function updateArtifactsBadge() {
+  sessionInfo.updateBadge();
+}
+function openArtifactsModal() {
+  sessionInfo.openArtifacts();
+}
+function closeArtifactsModal() {
+  sessionInfo.closeArtifacts();
+}
 const fileViews = PiDishBrowser.createFileViews({
-  document, sessionState, request: (host, path, options) => apiFetch(host, path, options), host: hostEntryFor,
-  markdown: text => formatMarkdown(text), highlight: root => applyHighlight(root), copy: text => copyTextToClipboard(text),
-  status: (message, type) => setStatus(message, type), refreshArtifacts: owner => refreshArtifacts(owner),
-  closeComments: () => closeCommentBubble(), clearComments: () => setAnchoredComments([]),
-  refreshComments: () => refreshAnchoredComments(), markComments: () => applyCommentMarks(),
+  document,
+  sessionState,
+  request: (host, path, options) => apiFetch(host, path, options),
+  host: hostEntryFor,
+  markdown: (text) => formatMarkdown(text),
+  highlight: (root) => applyHighlight(root),
+  copy: (text) => copyTextToClipboard(text),
+  status: (message, type) => setStatus(message, type),
+  refreshArtifacts: (owner) => refreshArtifacts(owner),
+  closeComments: () => closeCommentBubble(),
+  clearComments: () => setAnchoredComments([]),
+  refreshComments: () => refreshAnchoredComments(),
+  markComments: () => applyCommentMarks()
 });
-function isFileViewOpen() { return fileViews.isFileOpen(); }
-function ownsFileView(id, generation) { return fileViews.ownsFile(id, generation); }
-function openFileViewer(mention) { return fileViews.openFile(mention); }
-function closeFileView() { fileViews.closeFile(); }
-function publishFileView() { return fileViews.publish(); }
-function copyFileViewContent(button) { fileViews.copy(button); }
-function isDiffViewOpen() { return fileViews.isDiffOpen(); }
-function ownsDiffView(id, generation) { return fileViews.ownsDiff(id, generation); }
-function toggleDiffView() { fileViews.toggleDiff(); }
-function openDiffView() { return fileViews.openDiff(); }
-function closeDiffView() { fileViews.closeDiff(); }
-function loadDiffView() { return fileViews.loadDiff(); }
-function loadDeferredDiffPatch(details) { return fileViews.loadPatch(details); }
-
-// Anchored comments retain their view, request and editor lifetimes.
+function isFileViewOpen() {
+  return fileViews.isFileOpen();
+}
+function ownsFileView(...args) {
+  return fileViews.ownsFile(...args);
+}
+function openFileViewer(...args) {
+  return fileViews.openFile(...args);
+}
+function closeFileView() {
+  fileViews.closeFile();
+}
+function publishFileView() {
+  return fileViews.publish();
+}
+function copyFileViewContent(...args) {
+  fileViews.copy(...args);
+}
+function isDiffViewOpen() {
+  return fileViews.isDiffOpen();
+}
+function ownsDiffView(...args) {
+  return fileViews.ownsDiff(...args);
+}
+function toggleDiffView() {
+  fileViews.toggleDiff();
+}
+function openDiffView() {
+  return fileViews.openDiff();
+}
+function closeDiffView() {
+  fileViews.closeDiff();
+}
+function loadDiffView() {
+  return fileViews.loadDiff();
+}
+function loadDeferredDiffPatch(...args) {
+  return fileViews.loadPatch(...args);
+}
 const anchoredCommentController = PiDishBrowser.createAnchoredComments({
-  document, sessionState, views: fileViews, request: (host, path, options) => apiFetch(host, path, options), host: hostEntryFor,
-  status: (message, type) => setStatus(message, type), loadPatch: details => loadDeferredDiffPatch(details),
+  document,
+  sessionState,
+  views: fileViews,
+  request: (host, path, options) => apiFetch(host, path, options),
+  host: hostEntryFor,
+  status: (message, type) => setStatus(message, type),
+  loadPatch: (details) => loadDeferredDiffPatch(details)
 });
-function selectionTextAnchor(root, range) { return PiDishBrowser.selectionTextAnchor(root, range); }
-function isCommentBubbleOpen() { return anchoredCommentController.isOpen(); }
-function captureFileCommentSelection(focus) { anchoredCommentController.captureFile(focus); }
-function captureDiffCommentSelection(focus) { anchoredCommentController.captureDiff(focus); }
-function initCommentSelections() { anchoredCommentController.mount(); }
-function positionCommentBubble() { anchoredCommentController.position(); }
-function openCommentBubble(draft, range, focus) { anchoredCommentController.openDraft(draft, range, focus); }
-function closeCommentBubble() { anchoredCommentController.close(); }
-function handleCommentKey(event) { anchoredCommentController.key(event); }
-function submitAnchoredComment() { return anchoredCommentController.submit(); }
-function setAnchoredComments(list) { anchoredCommentController.set(list); }
-function refreshAnchoredComments() { return anchoredCommentController.refresh(); }
-function applyCommentMarks() { anchoredCommentController.applyMarks(); }
-function renderCommentCountChips() { anchoredCommentController.renderChips(); }
-function isCommentListPopoverOpen() { return anchoredCommentController.isListOpen(); }
-function closeCommentListPopover() { anchoredCommentController.closeList(); }
-function toggleCommentListPopover(chip) { anchoredCommentController.toggleList(chip); }
-function renderCommentListPopover() { anchoredCommentController.renderList(); }
-function focusAnchoredComment(id) { return anchoredCommentController.focus(id); }
-function openCommentEditor(comment, anchor) { anchoredCommentController.openEditor(comment, anchor); }
-function disarmCommentDelete() { anchoredCommentController.disarmDelete(); }
-function handleCommentDelete() { return anchoredCommentController.remove(); }
-
-function exportSession() { return sessionControls.export(); }
-function downloadBlob(blob, name) { sessionControls.download(blob, name); }
-function startRename() { sessionControls.startRename(); }
-function handleRenameKey(event) { sessionControls.renameKey(event); }
-function commitRename() { return sessionControls.commitRename(); }
-function cancelRename() { sessionControls.cancelRename(); }
-function toggleModelDropdown() { return sessionControls.toggleModels(); }
-function renderModelDropdown(query) { sessionControls.renderModels(query); }
-function enterModelEditMode() { sessionControls.setEditMode(true); }
-function exitModelEditMode() { sessionControls.setEditMode(false); }
-function currentModelQuery() { return sessionControls.query; }
-function toggleModelEnabled(selector) { sessionControls.toggleModel(selector); }
-function setAllModelsEnabled(enabled) { sessionControls.setAll(enabled); }
-function toggleProviderEnabled(provider) { sessionControls.toggleProvider(provider); }
-function saveEnabledModels() { sessionControls.saveEnabled(); }
-function closeModelDropdown() { sessionControls.closeModels(); }
-function selectModel(selector) { return sessionControls.selectModel(selector); }
-
-// =========================================================================
-// Messages
-// =========================================================================
-
+function selectionTextAnchor(...args) {
+  return PiDishBrowser.selectionTextAnchor(...args);
+}
+function isCommentBubbleOpen() {
+  return anchoredCommentController.isOpen();
+}
+function captureFileCommentSelection(...args) {
+  anchoredCommentController.captureFile(...args);
+}
+function captureDiffCommentSelection(...args) {
+  anchoredCommentController.captureDiff(...args);
+}
+function initCommentSelections() {
+  anchoredCommentController.mount();
+}
+function positionCommentBubble() {
+  anchoredCommentController.position();
+}
+function openCommentBubble(...args) {
+  anchoredCommentController.openDraft(...args);
+}
+function closeCommentBubble() {
+  anchoredCommentController.close();
+}
+function handleCommentKey(...args) {
+  anchoredCommentController.key(...args);
+}
+function submitAnchoredComment() {
+  return anchoredCommentController.submit();
+}
+function setAnchoredComments(...args) {
+  anchoredCommentController.set(...args);
+}
+function refreshAnchoredComments() {
+  return anchoredCommentController.refresh();
+}
+function applyCommentMarks() {
+  anchoredCommentController.applyMarks();
+}
+function renderCommentCountChips() {
+  anchoredCommentController.renderChips();
+}
+function isCommentListPopoverOpen() {
+  return anchoredCommentController.isListOpen();
+}
+function closeCommentListPopover() {
+  anchoredCommentController.closeList();
+}
+function toggleCommentListPopover(...args) {
+  anchoredCommentController.toggleList(...args);
+}
+function renderCommentListPopover() {
+  anchoredCommentController.renderList();
+}
+function focusAnchoredComment(...args) {
+  return anchoredCommentController.focus(...args);
+}
+function openCommentEditor(...args) {
+  anchoredCommentController.openEditor(...args);
+}
+function disarmCommentDelete() {
+  anchoredCommentController.disarmDelete();
+}
+function handleCommentDelete() {
+  return anchoredCommentController.remove();
+}
+function exportSession() {
+  return sessionControls.export();
+}
+function downloadBlob(...args) {
+  sessionControls.download(...args);
+}
+function startRename() {
+  sessionControls.startRename();
+}
+function handleRenameKey(...args) {
+  sessionControls.renameKey(...args);
+}
+function commitRename() {
+  return sessionControls.commitRename();
+}
+function cancelRename() {
+  sessionControls.cancelRename();
+}
+function toggleModelDropdown() {
+  return sessionControls.toggleModels();
+}
+function renderModelDropdown(...args) {
+  sessionControls.renderModels(...args);
+}
+function enterModelEditMode() {
+  sessionControls.setEditMode(true);
+}
+function exitModelEditMode() {
+  sessionControls.setEditMode(false);
+}
+function currentModelQuery() {
+  return sessionControls.query;
+}
+function toggleModelEnabled(...args) {
+  sessionControls.toggleModel(...args);
+}
+function setAllModelsEnabled(...args) {
+  sessionControls.setAll(...args);
+}
+function toggleProviderEnabled(...args) {
+  sessionControls.toggleProvider(...args);
+}
+function saveEnabledModels() {
+  sessionControls.saveEnabled();
+}
+function closeModelDropdown() {
+  sessionControls.closeModels();
+}
+function selectModel(...args) {
+  return sessionControls.selectModel(...args);
+}
 const transcriptController = PiDishBrowser.createTranscript({
-  document, sessionState, request: (host, path, options) => apiFetch(host, path, options), host: hostEntryFor,
-  renderMessage: message => renderMessageHtml(message), finalize: (root, options) => finalizeRender(root, options),
-  closeSearch: () => closeSearch(), cancelStreaming: () => cancelStreamingRender(), mood: (description, face) => setMoodIndicator(description, face),
-  updateMood: messages => updateMoodFromMessages(messages), pinned: isPinnedToBottom, scroll: scrollToBottom, jump: updateJumpButton,
-  consumeEcho: (id, content) => consumePendingSelfEcho(id, content),
+  document,
+  sessionState,
+  request: (host, path, options) => apiFetch(host, path, options),
+  host: hostEntryFor,
+  renderMessage: (message) => renderMessageHtml(message),
+  finalize: (root, options) => finalizeRender(root, options),
+  closeSearch: () => closeSearch(),
+  cancelStreaming: () => cancelStreamingRender(),
+  mood: (description, face) => setMoodIndicator(description, face),
+  updateMood: (messages) => updateMoodFromMessages(messages),
+  pinned: isPinnedToBottom,
+  scroll: scrollToBottom,
+  jump: updateJumpButton,
+  consumeEcho: (id, content) => consumePendingSelfEcho(id, content)
 });
-function stashCurrentTranscript() { transcriptController.stash(); }
-function restoreCachedTranscript(id) { return transcriptController.restore(id); }
-function pruneTranscriptCache(id) { transcriptController.pruneCache(id); }
-function maybeLoadOlderMessages(container) { transcriptController.maybeOlder(container); }
-function renderMessageHtml(message) { return messageRenderer.message(message); }
-function loadMessages(owner) { return transcriptController.load(owner); }
-function renderLoadOlderBar() { return transcriptController.barHtml(); }
-function renderMessages(messages) { transcriptController.render(messages); }
-function loadOlderMessages() { return transcriptController.loadOlder(); }
-function fetchNewMessagesSince(owner) { return transcriptController.catchup(owner); }
-
-// Typed message projection and telemetry retain only their own render data.
+function stashCurrentTranscript() {
+  transcriptController.stash();
+}
+function restoreCachedTranscript(...args) {
+  return transcriptController.restore(...args);
+}
+function pruneTranscriptCache(...args) {
+  transcriptController.pruneCache(...args);
+}
+function maybeLoadOlderMessages(...args) {
+  transcriptController.maybeOlder(...args);
+}
+function renderMessageHtml(...args) {
+  return messageRenderer.message(...args);
+}
+function loadMessages(...args) {
+  return transcriptController.load(...args);
+}
+function renderLoadOlderBar() {
+  return transcriptController.barHtml();
+}
+function renderMessages(...args) {
+  transcriptController.render(...args);
+}
+function loadOlderMessages() {
+  return transcriptController.loadOlder();
+}
+function fetchNewMessagesSince(...args) {
+  return transcriptController.catchup(...args);
+}
 const messageRenderer = PiDishBrowser.createMessageRenderer({
-  document, sessionState, details: responseDetailsController, markdown: text => formatMarkdown(text),
-  assetUrl: hostAssetUrl, matchRef: ref => sessionMatchingRef(ref), pinned: isPinnedToBottom,
-  follow: () => followStream, scroll: scrollToBottom, jump: updateJumpButton,
+  document,
+  sessionState,
+  details: responseDetailsController,
+  markdown: (text) => formatMarkdown(text),
+  assetUrl: hostAssetUrl,
+  matchRef: (ref) => sessionMatchingRef(ref),
+  pinned: isPinnedToBottom,
+  follow: () => appChrome.following,
+  scroll: scrollToBottom,
+  jump: updateJumpButton
 });
-function imageBlocksHtml(content, alt) { return messageRenderer.images(content, alt); }
-function renderUserMessage(message, time, attrs) { return messageRenderer.user(message, time, attrs); }
-function renderAssistantMessage(message, time, options) { return messageRenderer.assistant(message, time, options); }
-function renderCustomMessage(message, time, attrs) { return messageRenderer.custom(message, time, attrs); }
-function renderThinkingBlock(text) { return messageRenderer.thinking(text); }
-function renderToolCall(block) { return messageRenderer.tool(block); }
-function upsertLiveCustomMessage(message, options) { messageRenderer.upsertCustom(message, options); }
-function updateRenderedResponseMetadata() { responseDetailsController.update(); }
-function refreshResponsePricingState() { responseDetailsController.refreshPricing(); }
-function openResponseDetails(id) { responseDetailsController.open(id); }
-function closeResponseDetails() { responseDetailsController.close(); }
-
-// =========================================================================
-// Live Tool Panels (streaming tool execution)
-// =========================================================================
-
+function imageBlocksHtml(...args) {
+  return messageRenderer.images(...args);
+}
+function renderUserMessage(...args) {
+  return messageRenderer.user(...args);
+}
+function renderAssistantMessage(...args) {
+  return messageRenderer.assistant(...args);
+}
+function renderCustomMessage(...args) {
+  return messageRenderer.custom(...args);
+}
+function renderThinkingBlock(...args) {
+  return messageRenderer.thinking(...args);
+}
+function renderToolCall(...args) {
+  return messageRenderer.tool(...args);
+}
+function upsertLiveCustomMessage(...args) {
+  messageRenderer.upsertCustom(...args);
+}
+function updateRenderedResponseMetadata() {
+  responseDetailsController.update();
+}
+function refreshResponsePricingState() {
+  responseDetailsController.refreshPricing();
+}
+function openResponseDetails(...args) {
+  responseDetailsController.open(...args);
+}
+function closeResponseDetails() {
+  responseDetailsController.close();
+}
 const liveToolsController = PiDishBrowser.createLiveTools({
-  document, sessionState, started: (id, name) => sessionActivity.toolStarted(id, name),
-  finished: id => sessionActivity.toolFinished(id), pinned: isPinnedToBottom, scroll: scrollToBottom, jump: updateJumpButton,
-  images: (content, alt) => imageBlocksHtml(content, alt), mood: (name, args) => applyMoodFromTool(name, args),
+  document,
+  sessionState,
+  started: (id, name) => sessionActivity.toolStarted(id, name),
+  finished: (id) => sessionActivity.toolFinished(id),
+  pinned: isPinnedToBottom,
+  scroll: scrollToBottom,
+  jump: updateJumpButton,
+  images: (content, alt) => imageBlocksHtml(content, alt),
+  mood: (name, args) => applyMoodFromTool(name, args)
 });
-function appendLiveToolPanel(data, options) { return liveToolsController.append(data, options); }
-function updateLiveToolPanel(data) { liveToolsController.update(data); }
-function finalizeLiveToolPanel(data) { liveToolsController.finish(data); }
-
-// =========================================================================
-// SSE Streaming (RPC events only)
-// =========================================================================
-
-const messageStreamController = PiDishBrowser.createMessageStream({ document, sessionState, endpoint: resolveHost, ticket: host => mintHostTicket(host, 'stream'),
-  get activity() { return sessionActivity; }, renderer: messageRenderer, get streaming() { return streamingRenderer; }, tools: liveToolsController, get delivery() { return promptDelivery; }, get extensionUI() { return extensionUI; },
-  status: (message, type) => setStatus(message, type), catchup: owner => fetchNewMessagesSince(owner), refresh: () => refreshSessions(), artifacts: owner => refreshArtifacts(owner),
-  pinned: isPinnedToBottom, follow: () => followStream, scroll: scrollToBottom, jump: updateJumpButton, highlight: root => applyHighlight(root),
-  select: (id, options) => selectSession(id, options), deleteCached: key => transcriptController.deleteCached(key), loadSessions: (query, options) => loadSessions(query, options),
+function appendLiveToolPanel(...args) {
+  return liveToolsController.append(...args);
+}
+function updateLiveToolPanel(...args) {
+  liveToolsController.update(...args);
+}
+function finalizeLiveToolPanel(...args) {
+  liveToolsController.finish(...args);
+}
+const messageStreamController = PiDishBrowser.createMessageStream({
+  document,
+  sessionState,
+  endpoint: resolveHost,
+  ticket: (host) => mintHostTicket(host, "stream"),
+  get activity() {
+    return sessionActivity;
+  },
+  renderer: messageRenderer,
+  get streaming() {
+    return streamingRenderer;
+  },
+  tools: liveToolsController,
+  get delivery() {
+    return promptDelivery;
+  },
+  get extensionUI() {
+    return extensionUI;
+  },
+  status: (message, type) => setStatus(message, type),
+  catchup: (owner) => fetchNewMessagesSince(owner),
+  refresh: () => refreshSessions(),
+  artifacts: (owner) => refreshArtifacts(owner),
+  pinned: isPinnedToBottom,
+  follow: () => appChrome.following,
+  scroll: scrollToBottom,
+  jump: updateJumpButton,
+  highlight: (root) => applyHighlight(root),
+  select: (id, options) => selectSession(id, options),
+  deleteCached: (key) => transcriptController.deleteCached(key),
+  loadSessions: (query, options) => loadSessions(query, options)
 });
-function startMessageStream(owner) { return messageStreamController.start(owner); }
-
-// =========================================================================
-// Prompt / Turn / Abort
-// =========================================================================
-
-// Drafts and attachments share a host-qualified composer owner.
+function startMessageStream(...args) {
+  return messageStreamController.start(...args);
+}
 const composerDrafts = PiDishBrowser.createComposerDrafts({
-  document, storage: localStorage, keyForSession: keyForSessionId, currentSessionId: () => sessionState.currentSession?.id || null,
-  autosize: input => autosizePromptInput(input), status: (message, type) => setStatus(message, type),
+  document,
+  storage: localStorage,
+  keyForSession: keyForSessionId,
+  currentSessionId: () => sessionState.currentSession?.id || null,
+  autosize: (input) => autosizePromptInput(input),
+  status: (message, type) => setStatus(message, type)
 });
-function addImageFiles(files) { return composerDrafts.images.add(files); }
-function prepareImageAttachment(file) { return composerDrafts.images.prepare(file); }
-function fileToBase64(file) { return composerDrafts.images.read(file); }
-function renderAttachmentStrip() { composerDrafts.images.render(); }
-function removeAttachment(index) { composerDrafts.images.remove(index); }
-function takePendingImages() { return composerDrafts.images.take(); }
-function openImageLightbox(src) { composerDrafts.images.openLightbox(src); }
-
-// Dictation retains the composer that requested permission and transcription.
+function addImageFiles(...args) {
+  return composerDrafts.images.add(...args);
+}
+function prepareImageAttachment(...args) {
+  return composerDrafts.images.prepare(...args);
+}
+function fileToBase64(...args) {
+  return composerDrafts.images.read(...args);
+}
+function renderAttachmentStrip() {
+  composerDrafts.images.render();
+}
+function removeAttachment(...args) {
+  composerDrafts.images.remove(...args);
+}
+function takePendingImages() {
+  return composerDrafts.images.take();
+}
+function openImageLightbox(...args) {
+  composerDrafts.images.openLightbox(...args);
+}
 const composerNotes = PiDishBrowser.createComposerNotes(document);
 const composerSpeech = PiDishBrowser.createComposerSpeech({
-  document, sessionState, composerKey: () => composerDrafts.key, hosts: effectiveHosts, config: () => appConfig,
-  request: (host, path, options) => apiFetch(host, path, options), status: message => setStatus(message),
-  showNote: text => showComposerNote(text), hideNote: () => hideComposerNote(),
+  document,
+  sessionState,
+  composerKey: () => composerDrafts.key,
+  hosts: effectiveHosts,
+  config: () => appConfig,
+  request: (host, path, options) => apiFetch(host, path, options),
+  status: (message) => setStatus(message),
+  showNote: (text) => showComposerNote(text),
+  hideNote: () => hideComposerNote()
 });
-function showComposerNote(text) { composerNotes.show(text); }
-function hideComposerNote() { composerNotes.hide(); }
-function sttHostFor() { return composerSpeech.host(); }
-function micUnavailableReason() { return composerSpeech.reason(); }
-function isRecording() { return composerSpeech.isRecording(); }
-function updateMicButton() { composerSpeech.updateButton(); }
-function initMicButton() { composerSpeech.mount(); }
-function updateMicStatus() { composerSpeech.updateStatus(); }
-function startRecording() { return composerSpeech.start(); }
-function stopRecording() { composerSpeech.stop(); }
-function cancelRecording() { composerSpeech.cancel(); }
-function releaseMic() { composerSpeech.release(); }
-function finishRecording(recorder) { composerSpeech.finish(recorder); }
-function transcribeRecording(blob, mime) { return composerSpeech.transcribe(blob, mime); }
-function insertTranscript(text) { composerSpeech.insert(text); }
-
-function composerOwnerKey(owner) { return composerDrafts.ownerKey(owner); }
-function draftKey(id) { return composerDrafts.draftKey(id); }
-function historyKey(id) { return composerDrafts.historyKey(id); }
-function writeSessionDraft(id, value) { composerDrafts.write(id, value); }
-function stashPromptState() { composerDrafts.stash(); }
-function clearPromptComposer() { composerDrafts.clear(); }
-function setComposerWaiting(waiting) { composerDrafts.waiting(waiting); }
-function saveDraftSoon() { composerDrafts.saveSoon(); }
-function clearDraft(id) { composerDrafts.clearDraft(id); }
-function restorePromptState(id) { composerDrafts.restore(id); }
-function recordPrompt(message, id) { composerDrafts.record(message, id); }
-function mergeComposerText(existing, restored) { return PiDishBrowser.mergeComposerText(existing, restored); }
-function migratePromptState(from, to) { composerDrafts.migrate(from, to); }
-function restorePromptToSession(id, message, images) { composerDrafts.restorePayload(id, message, images); }
-function navigateHistory(direction, input) { return composerDrafts.navigate(direction, input); }
-
-const promptDelivery = PiDishBrowser.createPromptDelivery({ document, sessionState, request: (...args) => apiFetch(...args), endpoint: resolveHost,
-  restore: (key, text) => restorePromptToSession(key, text, null), status: (message, type) => setStatus(message, type),
+function showComposerNote(...args) {
+  composerNotes.show(...args);
+}
+function hideComposerNote() {
+  composerNotes.hide();
+}
+function sttHostFor() {
+  return composerSpeech.host();
+}
+function micUnavailableReason() {
+  return composerSpeech.reason();
+}
+function isRecording() {
+  return composerSpeech.isRecording();
+}
+function updateMicButton() {
+  composerSpeech.updateButton();
+}
+function initMicButton() {
+  composerSpeech.mount();
+}
+function updateMicStatus() {
+  composerSpeech.updateStatus();
+}
+function startRecording() {
+  return composerSpeech.start();
+}
+function stopRecording() {
+  composerSpeech.stop();
+}
+function cancelRecording() {
+  composerSpeech.cancel();
+}
+function releaseMic() {
+  composerSpeech.release();
+}
+function finishRecording(...args) {
+  composerSpeech.finish(...args);
+}
+function transcribeRecording(...args) {
+  return composerSpeech.transcribe(...args);
+}
+function insertTranscript(...args) {
+  composerSpeech.insert(...args);
+}
+function composerOwnerKey(...args) {
+  return composerDrafts.ownerKey(...args);
+}
+function draftKey(...args) {
+  return composerDrafts.draftKey(...args);
+}
+function historyKey(...args) {
+  return composerDrafts.historyKey(...args);
+}
+function writeSessionDraft(...args) {
+  composerDrafts.write(...args);
+}
+function stashPromptState() {
+  composerDrafts.stash();
+}
+function clearPromptComposer() {
+  composerDrafts.clear();
+}
+function setComposerWaiting(...args) {
+  composerDrafts.waiting(...args);
+}
+function saveDraftSoon() {
+  composerDrafts.saveSoon();
+}
+function clearDraft(...args) {
+  composerDrafts.clearDraft(...args);
+}
+function restorePromptState(...args) {
+  composerDrafts.restore(...args);
+}
+function recordPrompt(...args) {
+  composerDrafts.record(...args);
+}
+function mergeComposerText(...args) {
+  return PiDishBrowser.mergeComposerText(...args);
+}
+function migratePromptState(...args) {
+  composerDrafts.migrate(...args);
+}
+function restorePromptToSession(...args) {
+  composerDrafts.restorePayload(...args);
+}
+function navigateHistory(...args) {
+  return composerDrafts.navigate(...args);
+}
+const promptDelivery = PiDishBrowser.createPromptDelivery({
+  document,
+  sessionState,
+  request: (...args) => apiFetch(...args),
+  endpoint: resolveHost,
+  restore: (key, text) => restorePromptToSession(key, text, null),
+  status: (message, type) => setStatus(message, type)
 });
-function discardOptimisticPrompt(id) { promptDelivery.discard(id); }
-function consumePendingSelfEcho(id, content) { return promptDelivery.consume(keyForSessionId(id), content); }
-function sendPrompt() { return composerSubmit.sendPrompt(); }
-
-const sessionActivity = PiDishBrowser.createSessionActivity({ document, sessionState, clearQueue: () => renderQueueStatus(null), status: message => setStatus(message) });
-function updateWorkingIndicator() { sessionActivity.update(); }
-function setTurnInProgress(active) { sessionActivity.setTurn(!!active); }
-function setCompacting(active) { sessionActivity.setCompacting(!!active); }
-
-function sendQueuedMessage(kind) { return composerSubmit.sendQueuedMessage(kind); }
-function sendSteer() { return composerSubmit.sendSteer(); }
-function sendFollowUp() { return composerSubmit.sendFollowUp(); }
-function renderQueueStatus(data) { promptDelivery.render(data); }
-function editQueuedMessage(button) { return promptDelivery.edit(button); }
-
-// ---------------------------------------------------------------------------
-// /btw panel — ephemeral side question (OMP). The answer never lands in the
-// transcript; it lives in this dismissible card above the composer, mirroring
-// the TUI's btw panel. A new question replaces the panel; a session switch
-// drops it (see the two selection reset points).
-// ---------------------------------------------------------------------------
-const btwPanel = PiDishBrowser.createBtwPanel({ document, sessionState, markdown: text => formatMarkdown(text), copy: text => copyTextToClipboard(text) });
-function showBtwPanel(question) { return btwPanel.show(question); }
-function resolveBtwPanel(answer, owner) { btwPanel.resolve(answer, owner); }
-function failBtwPanel(error, owner) { btwPanel.fail(error, owner); }
-function closeBtwPanel() { btwPanel.close(); }
-function copyBtwAnswer(button) { return btwPanel.copy(button); }
-
-const composerSubmit = PiDishBrowser.createComposerSubmit({ document, sessionState, drafts: composerDrafts, delivery: promptDelivery, activity: sessionActivity, btw: btwPanel,
-  request: (...args) => apiFetch(...args), endpoint: resolveHost, spawnId: () => sessionView.spawnId, spawnPending: () => pendingSessionSpawns.has(sessionView.spawnId),
-  refs: message => sessionRefHints(message), status: (message, type) => setStatus(message, type), openTree: () => openTreeModal(), hideAutocomplete: () => hideAutocomplete(),
-  refresh: () => refreshSessions(), follow: () => { followStream = true; }, scroll: scrollToBottom, renderUser: (message, time, attrs) => renderUserMessage(message, time, attrs),
+function discardOptimisticPrompt(...args) {
+  promptDelivery.discard(...args);
+}
+function consumePendingSelfEcho(id, content) {
+  return promptDelivery.consume(keyForSessionId(id), content);
+}
+function sendPrompt() {
+  return composerSubmit.sendPrompt();
+}
+const sessionActivity = PiDishBrowser.createSessionActivity({ document, sessionState, clearQueue: () => renderQueueStatus(null), status: (message) => setStatus(message) });
+function updateWorkingIndicator() {
+  sessionActivity.update();
+}
+function setTurnInProgress(active) {
+  sessionActivity.setTurn(!!active);
+}
+function setCompacting(active) {
+  sessionActivity.setCompacting(!!active);
+}
+function sendQueuedMessage(...args) {
+  return composerSubmit.sendQueuedMessage(...args);
+}
+function sendSteer() {
+  return composerSubmit.sendSteer();
+}
+function sendFollowUp() {
+  return composerSubmit.sendFollowUp();
+}
+function renderQueueStatus(...args) {
+  promptDelivery.render(...args);
+}
+function editQueuedMessage(...args) {
+  return promptDelivery.edit(...args);
+}
+const btwPanel = PiDishBrowser.createBtwPanel({ document, sessionState, markdown: (text) => formatMarkdown(text), copy: (text) => copyTextToClipboard(text) });
+function showBtwPanel(...args) {
+  return btwPanel.show(...args);
+}
+function resolveBtwPanel(...args) {
+  btwPanel.resolve(...args);
+}
+function failBtwPanel(...args) {
+  btwPanel.fail(...args);
+}
+function closeBtwPanel() {
+  btwPanel.close();
+}
+function copyBtwAnswer(...args) {
+  return btwPanel.copy(...args);
+}
+const composerSubmit = PiDishBrowser.createComposerSubmit({
+  document,
+  sessionState,
+  drafts: composerDrafts,
+  delivery: promptDelivery,
+  activity: sessionActivity,
+  btw: btwPanel,
+  request: (...args) => apiFetch(...args),
+  endpoint: resolveHost,
+  spawnId: () => sessionView.spawnId,
+  spawnPending: () => !!sessionView.spawnId && pendingSessionSpawns.has(sessionView.spawnId),
+  refs: (message) => sessionRefHints(message),
+  status: (message, type) => setStatus(message, type),
+  openTree: () => openTreeModal(),
+  hideAutocomplete: () => hideAutocomplete(),
+  refresh: () => refreshSessions(),
+  follow: () => {
+    appChrome.follow();
+  },
+  scroll: scrollToBottom,
+  renderUser: (message, time, attrs) => renderUserMessage(message, time, attrs)
 });
-function abortTurn() { return composerSubmit.abortTurn(); }
-
+function abortTurn() {
+  return composerSubmit.abortTurn();
+}
 const pendingSessionSpawns = PiDishBrowser.createSessionSpawns({
-  request: apiFetch, delay: () => new Promise(resolve => setTimeout(resolve, 250)), harnessLabel,
-  current: () => sessionView.spawnId, changed: renderSessions,
-  showPending: key => { switchTab('active'); showPendingSessionView(key); if (window.innerWidth <= 768) closeSidebar(); },
-  loadSessions, hasSession: (id, host) => !!sessionState.findSession(id, host),
-  selectSession: (id, host) => { void selectSession(id, { host }); },
+  request: apiFetch,
+  delay: () => new Promise((resolve) => setTimeout(resolve, 250)),
+  harnessLabel,
+  current: () => sessionView.spawnId,
+  changed: renderSessions,
+  showPending: (key) => {
+    switchTab("active");
+    showPendingSessionView(key);
+    if (window.innerWidth <= 768) closeSidebar();
+  },
+  loadSessions,
+  hasSession: (id, host) => !!sessionState.findSession(id, host),
+  selectSession: (id, host) => {
+    void selectSession(id, { host });
+  },
   stashPrompt: stashPromptState,
-  saveDraft: (key, draft) => { try { localStorage.setItem(draftKey(pendingComposerKey(key)), draft); } catch {} },
+  saveDraft: (key, draft) => {
+    try {
+      localStorage.setItem(draftKey(pendingComposerKey(key)), draft);
+    } catch {
+    }
+  },
   migratePrompt: (key, host, id) => migratePromptState(pendingComposerKey(key), sessionKey(host || hostDirectory.self.hostId, id)),
-  discardPrompt: key => { const owner = pendingComposerKey(key); clearDraft(owner); composerDrafts.images.discard(owner); },
-  showFailure: showPendingSessionFailure, status: setStatus,
+  discardPrompt: (key) => {
+    const owner = pendingComposerKey(key);
+    clearDraft(owner);
+    composerDrafts.images.discard(owner);
+  },
+  showFailure: showPendingSessionFailure,
+  status: setStatus
 });
-// The typed takeover owns form state, controls, caches and launch view tokens.
 const newSessionController = PiDishBrowser.createNewSession({
-  root: document.querySelector('.main'), storage: localStorage, request: apiFetch,
-  self: selfHostEntry, host: hostEntryFor, hosts: effectiveHosts, hostDown: hostIsDown, multiHost: isMultiHost,
-  sessionState, currentSpawn: () => sessionView.spawnId, spawns: pendingSessionSpawns, models: modelCatalog,
-  closeOtherViews: () => { closeSidebar(); closeUsageView(); closeSearchView(); closeSkillsView(); closeRoutinesView(); closeRecoveryView(); closeBounceView(); },
+  root: document.querySelector(".main"),
+  storage: localStorage,
+  request: apiFetch,
+  self: selfHostEntry,
+  host: hostEntryFor,
+  hosts: effectiveHosts,
+  hostDown: hostIsDown,
+  multiHost: isMultiHost,
+  sessionState,
+  currentSpawn: () => sessionView.spawnId,
+  spawns: pendingSessionSpawns,
+  models: modelCatalog,
+  closeOtherViews: () => {
+    closeSidebar();
+    closeUsageView();
+    closeSearchView();
+    closeSkillsView();
+    closeRoutinesView();
+    closeRecoveryView();
+    closeBounceView();
+  },
   closeSettings: () => closeHarnessSettings(),
-  harnessCacheChanged: () => { if (sessionState.currentSession) updateSessionHeader(); }, status: setStatus,
+  harnessCacheChanged: () => {
+    if (sessionState.currentSession) updateSessionHeader();
+  },
+  status: setStatus
 });
 const HARNESS_KEY = PiDishBrowser.NEW_SESSION_HARNESS_KEY;
 const NS_THINKING_LABELS = PiDishBrowser.NS_THINKING_LABELS;
@@ -1183,65 +1809,156 @@ const newSessionConfigPreview = newSessionController.config;
 const spawnTargetsController = newSessionController.targets;
 const spawnTargetPicker = newSessionController.targetPicker;
 const directoryCatalog = newSessionController.directories;
-function captureSpawnView() { return newSessionController.captureView(); }
-function submitNewSession(value) { return newSessionController.submit(value); }
-function createSession(cwd, host) { return newSessionController.create(cwd, host); }
-function spawnNewSession() { return newSessionController.spawn(); }
-function nsHost() { return newSessionController.host(); }
-function nsHostId() { return newSessionController.hostId(); }
-function nsHostSupports(capability) { return newSessionController.supports(capability); }
-function nsHostOptions() { return newSessionController.hostOptions(); }
-function nsCwdValue() { return newSessionController.cwd(); }
-function setNsCwd(value) { newSessionController.setCwd(value); }
-function selectedHarnessId() { return newSessionController.selectedHarness(); }
-function harnessLabel(id) { return newSessionController.harnessLabel(id); }
-function renderNsHosts() { newSessionController.renderHosts(); }
-function renderNsHarnesses() { newSessionController.renderHarnesses(); }
-function renderNsWorkspaces() { newSessionController.renderWorkspaces(); }
-function onNsHostChange(value) { newSessionController.changeHost(value); }
-function onNsHarnessChange(value) { newSessionController.changeHarness(value); }
-function onNsModelChange(value) { newSessionController.preferences.selectModel(value); }
-function onNsThinkingChange(value) { newSessionController.preferences.selectThinking(value); }
-function syncNsThinking() { newSessionController.preferences.syncThinking(); }
-function renderNsModel() { newSessionController.preferences.render(); }
-function isNewSessionViewOpen() { return newSessionController.isOpen(); }
-function openNewSessionView(value) { newSessionController.open(value); }
-function closeNewSessionView() { newSessionController.close(); }
-function refreshNsPilotOptions() { newSessionController.refresh(); }
-function scheduleNsPilotRefresh() { newSessionController.scheduleRefresh(); }
-function initNsTree() { newSessionController.initTree(); }
-function hideCwdDropdown() { newSessionController.hideCwd(); }
-function nsError(value) { newSessionController.error(value); }
-function loadKnownCwds() { return directoryCatalog.load(); }
-function loadSpawnTargets() { return spawnTargetsController.load(); }
-function hideSpawnTargetDropdown() { spawnTargetPicker.hide(); }
-function selectedSpawnTarget() { return newSessionController.selectedTarget(); }
-function savedResumeTarget(host) { return spawnTargetsController.resume(hostEntryFor(host)); }
-function loadHarnesses() { return harnessDiscovery.load(); }
-function loadNsHarnessConfig(cwd = nsCwdValue()) { return newSessionConfigPreview.load(cwd); }
-function harnessRow(hostId, harnessId) { return harnessDiscovery.row(hostId, harnessId); }
-function ensureHarnessRows(hostId) { void harnessDiscovery.ensure(hostId); }
-function harnessSupportsSettings(session) {
-  return !!session?.harnessId && !!harnessRow(sessionHostIdOf(session), session.harnessId)?.pilotConfig;
+function captureSpawnView() {
+  return newSessionController.captureView();
 }
-function modelSelectOptionsHtml(models) { return PiDishBrowser.modelSelectOptionsHtml(models, escapeHtml); }
-function modelHiddenNote(hidden) { return PiDishBrowser.modelHiddenNote(hidden); }
-
-// One typed editor serves session settings and the new-session takeover.
+function submitNewSession(...args) {
+  return newSessionController.submit(...args);
+}
+function createSession(...args) {
+  return newSessionController.create(...args);
+}
+function spawnNewSession() {
+  return newSessionController.spawn();
+}
+function nsHost() {
+  return newSessionController.host();
+}
+function nsHostId() {
+  return newSessionController.hostId();
+}
+function nsHostSupports(...args) {
+  return newSessionController.supports(...args);
+}
+function nsHostOptions() {
+  return newSessionController.hostOptions();
+}
+function nsCwdValue() {
+  return newSessionController.cwd();
+}
+function setNsCwd(...args) {
+  newSessionController.setCwd(...args);
+}
+function selectedHarnessId() {
+  return newSessionController.selectedHarness();
+}
+function harnessLabel(...args) {
+  return newSessionController.harnessLabel(...args);
+}
+function renderNsHosts() {
+  newSessionController.renderHosts();
+}
+function renderNsHarnesses() {
+  newSessionController.renderHarnesses();
+}
+function renderNsWorkspaces() {
+  newSessionController.renderWorkspaces();
+}
+function onNsHostChange(...args) {
+  newSessionController.changeHost(...args);
+}
+function onNsHarnessChange(...args) {
+  newSessionController.changeHarness(...args);
+}
+function onNsModelChange(...args) {
+  newSessionController.preferences.selectModel(...args);
+}
+function onNsThinkingChange(...args) {
+  newSessionController.preferences.selectThinking(...args);
+}
+function syncNsThinking() {
+  newSessionController.preferences.syncThinking();
+}
+function renderNsModel() {
+  newSessionController.preferences.render();
+}
+function isNewSessionViewOpen() {
+  return newSessionController.isOpen();
+}
+function openNewSessionView(...args) {
+  newSessionController.open(...args);
+}
+function closeNewSessionView() {
+  newSessionController.close();
+}
+function refreshNsPilotOptions() {
+  newSessionController.refresh();
+}
+function scheduleNsPilotRefresh() {
+  newSessionController.scheduleRefresh();
+}
+function initNsTree() {
+  newSessionController.initTree();
+}
+function hideCwdDropdown() {
+  newSessionController.hideCwd();
+}
+function nsError(...args) {
+  newSessionController.error(...args);
+}
+function loadKnownCwds() {
+  return directoryCatalog.load();
+}
+function loadSpawnTargets() {
+  return spawnTargetsController.load();
+}
+function hideSpawnTargetDropdown() {
+  spawnTargetPicker.hide();
+}
+function selectedSpawnTarget() {
+  return newSessionController.selectedTarget();
+}
+function savedResumeTarget(host) {
+  return spawnTargetsController.resume(hostEntryFor(host));
+}
+function loadHarnesses() {
+  return harnessDiscovery.load();
+}
+function loadNsHarnessConfig(cwd = nsCwdValue()) {
+  return newSessionConfigPreview.load(cwd);
+}
+function harnessRow(...args) {
+  return harnessDiscovery.row(...args);
+}
+function ensureHarnessRows(hostId) {
+  void harnessDiscovery.ensure(hostId);
+}
+function harnessSupportsSettings(session) {
+  return !!session && typeof session.harnessId === "string" && !!session.harnessId && !!harnessRow(sessionHostIdOf(session), session.harnessId)?.pilotConfig;
+}
+function modelSelectOptionsHtml(models) {
+  return PiDishBrowser.modelSelectOptionsHtml(models, escapeHtml);
+}
+function modelHiddenNote(...args) {
+  return PiDishBrowser.modelHiddenNote(...args);
+}
 const harnessSettingsController = PiDishBrowser.createHarnessSettings({
-  root: document.getElementById('harnessSettingsModal'), host: hostEntryFor, request: apiFetch,
-  fallbackModels: (host, harness) => modelCatalog.scope?.harnessId === harness
-    && PiDishBrowser.sameDirectoryHost(modelCatalog.scope?.host || null, host) ? modelCatalog.rows() : [],
-  escapeHtml, shortCwd, roleDefinitions: OMP_MODEL_ROLES, parseModelRoleRef, composeModelRoleRef, modelRoleLevels,
-  onSaved: scope => {
-    if (isNewSessionViewOpen() && selectedHarnessId() === scope.harnessId
-        && nsHostId() === scope.hostId && nsCwdValue() === scope.cwd) void loadNsHarnessConfig();
-  },
+  root: document.getElementById("harnessSettingsModal"),
+  host: hostEntryFor,
+  request: apiFetch,
+  fallbackModels: (host, harness) => modelCatalog.scope?.harnessId === harness && PiDishBrowser.sameDirectoryHost(modelCatalog.scope?.host || null, host) ? modelCatalog.rows() : [],
+  escapeHtml,
+  shortCwd,
+  roleDefinitions: OMP_MODEL_ROLES,
+  parseModelRoleRef,
+  composeModelRoleRef,
+  modelRoleLevels,
+  onSaved: (scope) => {
+    if (isNewSessionViewOpen() && selectedHarnessId() === scope.harnessId && nsHostId() === scope.hostId && nsCwdValue() === scope.cwd) void loadNsHarnessConfig();
+  }
 });
-function isHarnessSettingsOpen() { return harnessSettingsController.isOpen(); }
-function showHarnessSettingsTab(tab) { harnessSettingsController.showTab(tab); }
-function closeHarnessSettings() { harnessSettingsController.close(); }
-function saveHarnessSettings() { return harnessSettingsController.save(); }
+function isHarnessSettingsOpen() {
+  return harnessSettingsController.isOpen();
+}
+function showHarnessSettingsTab(...args) {
+  harnessSettingsController.showTab(...args);
+}
+function closeHarnessSettings() {
+  harnessSettingsController.close();
+}
+function saveHarnessSettings() {
+  return harnessSettingsController.save();
+}
 async function harnessSettingsFetch(hostId, url) {
   const res = await apiFetch(hostId, url);
   const data = await res.json().catch(() => null);
@@ -1251,384 +1968,594 @@ async function harnessSettingsFetch(hostId, url) {
 function openSessionHarnessSettings() {
   const session = sessionState.currentSession;
   if (!session || !harnessSupportsSettings(session)) return;
-  return openHarnessSettings({ harnessId: session.harnessId, hostId: sessionHostIdOf(session), cwd: session.cwd || '',
-    label: session.harnessLabel || harnessBadgeInfo(session.harnessId).label });
+  return openHarnessSettings({
+    harnessId: typeof session.harnessId === "string" ? session.harnessId : "pi",
+    hostId: sessionHostIdOf(session),
+    cwd: typeof session.cwd === "string" ? session.cwd : "",
+    label: typeof session.harnessLabel === "string" && session.harnessLabel || harnessBadgeInfo(typeof session.harnessId === "string" ? session.harnessId : null).label
+  });
 }
 function openHarnessSettings(opts = {}) {
-  const harnessId = opts.harnessId || 'omp';
-  return harnessSettingsController.open({ harnessId,
-    hostId: opts.hostId !== undefined ? opts.hostId : nsHostId(),
-    cwd: (opts.cwd !== undefined ? opts.cwd : (newSessionConfigPreview.config?.cwd ?? nsCwdValue())) || '',
-    label: opts.label || harnessLabel(harnessId), tab: opts.tab,
+  const harnessId = opts.harnessId || "omp";
+  return harnessSettingsController.open({
+    harnessId,
+    hostId: opts.hostId !== void 0 ? opts.hostId : nsHostId(),
+    cwd: (opts.cwd !== void 0 ? opts.cwd : newSessionConfigPreview.config?.cwd ?? nsCwdValue()) || "",
+    label: opts.label || harnessLabel(harnessId),
+    tab: opts.tab
   });
 }
-
 function createCwdAutocomplete({
-  input, dropdown, hostId = nsHostId, known = () => [],
-  onPick = () => {}, onSubmit = null, onBlur = null,
+  input,
+  dropdown,
+  hostId = nsHostId,
+  known = () => [],
+  onPick = () => {
+  },
+  onSubmit = null,
+  onBlur = null
 }) {
-  return PiDishBrowser.createCwdAutocomplete({ input, dropdown,
-    host: () => hostEntryFor(hostId()), request: apiFetch, known,
-    match: fuzzyMatch, score: fuzzyScore, highlight: highlightFuzzy, escapeHtml,
-    onPick, onSubmit, onBlur,
+  return PiDishBrowser.createCwdAutocomplete({
+    input,
+    dropdown,
+    host: () => hostEntryFor(hostId()),
+    request: apiFetch,
+    known,
+    match: fuzzyMatch,
+    score: fuzzyScore,
+    highlight: highlightFuzzy,
+    escapeHtml,
+    onPick,
+    onSubmit,
+    onBlur
   });
 }
-
-// =========================================================================
-// Utilities
-// =========================================================================
-
-/**
- * POST/PUT a JSON body to a host and parse the JSON reply. Throws
- * Error(data.error) on a non-2xx status so callers get the server's message
- * without each hand-rolling the res.ok / res.json().catch(() => ({})) dance
- * (they used to, with a slightly different fallback at every site).
- */
-async function apiSend(host, path, body, method = 'POST') {
+async function apiSend(host, path, body, method = "POST") {
   return PiDishBrowser.sendJson((...args) => apiFetch(...args), host, path, body, method);
 }
-
-/**
- * Arm a document-level "click outside closes this" chain. Clicks inside any
- * of the `ids` containers re-arm the listener; anything else calls close().
- * A target detached from the document counts as inside — an inside handler
- * that re-renders innerHTML before the click bubbles to the document (the
- * model dropdown's edit-mode toggles) must not read as an outside click.
- * `isOpen` stops a stale armed listener from acting after the panel was
- * already closed by other means.
- */
-function armOutsideClickClose(ids, close, isOpen) {
-  const onClick = (e) => {
-    if (isOpen && !isOpen()) return;
-    const inside = !document.body.contains(e.target) ||
-      ids.some(id => document.getElementById(id)?.contains(e.target));
-    if (inside) arm();
-    else close();
-  };
-  const arm = () => setTimeout(() => document.addEventListener('click', onClick, { once: true }), 0);
-  arm();
-}
-
-/**
- * Debounced, sequence-guarded async lookup for type-ahead dropdowns:
- * fire(args) runs fetchFn after `ms` of quiet and hands the result to
- * applyFn only if no newer fire()/cancel() superseded it — a slow response
- * can never render over a newer keystroke. cancel() also invalidates any
- * in-flight result (call it from the dropdown's hide path).
- */
-function debouncedFetcher(ms, fetchFn, applyFn) {
-  let timer = null;
-  let seq = 0;
-  return {
-    fire(...args) {
-      clearTimeout(timer);
-      timer = setTimeout(async () => {
-        const mySeq = ++seq;
-        let result = null;
-        try { result = await fetchFn(...args); } catch {}
-        if (mySeq !== seq) return;
-        applyFn(result, ...args);
-      }, ms);
-    },
-    cancel() {
-      seq++;
-      clearTimeout(timer);
-    },
-  };
-}
-
-/**
- * Shared listbox keyboard nav: move the .active class by delta and scroll
- * the new item into view. Returns the new index. `wrap` cycles past the
- * ends (composer autocomplete); without it the index clamps (cwd picker).
- */
-function moveActiveItem(items, currentIdx, delta, { wrap = false } = {}) {
-  if (!items.length) return -1;
-  let idx = currentIdx + delta;
-  if (wrap) idx = (idx + items.length) % items.length;
-  else idx = Math.max(0, Math.min(idx, items.length - 1));
-  items.forEach((el, i) => el.classList.toggle('active', i === idx));
-  items[idx].scrollIntoView({ block: 'nearest' });
-  return idx;
-}
-
-/** localStorage JSON read that can't throw on a corrupt/missing value. */
 function readJSONPref(key, fallback) {
-  try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
+  try {
+    return JSON.parse(localStorage.getItem(key) || "null") ?? fallback;
+  } catch {
+    return fallback;
+  }
 }
-
-/**
- * After a JSONL-based render the on-disk messages are authoritative: drop
- * the live tool panels (their content is duplicated by the indexed
- * tool-call/tool-result messages that just landed) and stop tracking them
- * so the next turn starts fresh.
- */
 function removeDuplicatedLiveContent(container) {
   liveToolsController.clear(container);
 }
-
-/**
- * The ordered DOM post-pass pipeline every JSONL-backed render runs:
- * strip superseded live panels, fold tool activity into accordions, then
- * highlight + decorate code blocks. One owner so a new pass can't be wired
- * into some render paths and missed in others. `stripLive: false` is for
- * prepending older pages — the live panels at the bottom belong to the
- * in-flight turn and must survive.
- */
 function finalizeRender(container, { stripLive = true } = {}) {
   if (stripLive) removeDuplicatedLiveContent(container);
   groupToolActivity(container);
   applyHighlight(container);
 }
-
-/**
- * Collapse finished tool activity into one accordion per turn. Runs of
- * indexed tool-only assistant messages (.no-text) and tool results between
- * prose messages get wrapped in a closed <details class="tool-group">, so
- * past turns read prompt → "N tool uses" → answer. Idempotent — safe to
- * re-run after every append/prepend; adjacent groups merge so pagination
- * and incremental catch-up don't fragment a turn. Streaming elements
- * (no data-msg-index) are never grouped.
- */
-function groupToolActivity(container) { PiDishBrowser.groupToolActivity(container); }
-function updateToolGroupSummary(group) { PiDishBrowser.updateToolGroupSummary(group); }
-
-// =========================================================================
-// Streaming assistant renderer — incremental, block-level, throttled.
-//
-// Every message_update carries the full message so far, so we keep one
-// streaming DOM element and update only the content blocks that changed
-// (the growing tail block in practice). No outerHTML swaps: <details>
-// open/closed state survives naturally and layout work stays minimal.
-// =========================================================================
-
+function groupToolActivity(...args) {
+  PiDishBrowser.groupToolActivity(...args);
+}
+function updateToolGroupSummary(...args) {
+  PiDishBrowser.updateToolGroupSummary(...args);
+}
 const streamingRenderer = PiDishBrowser.createStreamingRenderer({
-  document, sessionState, markdown: text => formatMarkdown(text), pinned: isPinnedToBottom, scroll: scrollToBottom, jump: updateJumpButton,
+  document,
+  sessionState,
+  markdown: (text) => formatMarkdown(text),
+  pinned: isPinnedToBottom,
+  scroll: scrollToBottom,
+  jump: updateJumpButton
 });
-function queueStreamingRender(message) { streamingRenderer.queue(message); }
-function flushStreamingRender() { streamingRenderer.flush(); }
-function cancelStreamingRender() { streamingRenderer.cancel(); }
-function renderStreamingMessage(message) { streamingRenderer.render(message); }
-
-function setStatus(message, type = '') {
-  const status = document.getElementById('status');
+function queueStreamingRender(...args) {
+  streamingRenderer.queue(...args);
+}
+function flushStreamingRender() {
+  streamingRenderer.flush();
+}
+function cancelStreamingRender() {
+  streamingRenderer.cancel();
+}
+function renderStreamingMessage(...args) {
+  streamingRenderer.render(...args);
+}
+function setStatus(message, type = "") {
+  const status = document.getElementById("status");
   status.textContent = message;
   status.className = `status ${type}`;
 }
-
-// =========================================================================
-// Mood indicator — web fallback for the mood extension's custom editor
-// =========================================================================
-
 const moodController = PiDishBrowser.createMood(document);
-function setMoodIndicator(description, face) { moodController.set(description, face); }
-function applyMoodFromTool(name, args) { moodController.fromTool(name, args); }
-function updateMoodFromMessages(messages) { moodController.fromMessages(messages); }
-
-// =========================================================================
-// Extension UI — unobtrusive hidable cards
-// =========================================================================
-
+function setMoodIndicator(...args) {
+  moodController.set(...args);
+}
+function applyMoodFromTool(...args) {
+  moodController.fromTool(...args);
+}
+function updateMoodFromMessages(...args) {
+  moodController.fromMessages(...args);
+}
 const extensionUI = PiDishBrowser.createExtensionUI({
-  document, sessionState, storage: localStorage, request: (host, path, options) => apiFetch(host, path, options), host: hostEntryFor,
-  status: (message, type) => setStatus(message, type),
+  document,
+  sessionState,
+  storage: localStorage,
+  request: (host, path, options) => apiFetch(host, path, options),
+  host: hostEntryFor,
+  status: (message, type) => setStatus(message, type)
 });
-function clearExtensionUI() { extensionUI.clear(); }
-function handleExtensionUI(request, id, host = sessionState.sessionHostId(id)) { extensionUI.handle(request, { id, host }); }
-
-// Rich text keeps the local vendor loaders, final render passes and diagram
-// lifetimes separate from the transcript's streaming and retained DOM state.
+function clearExtensionUI() {
+  extensionUI.clear();
+}
+function handleExtensionUI(request, id, host = sessionState.sessionHostId(id)) {
+  extensionUI.handle(request, { id, host });
+}
 const browserAssets = PiDishBrowser.createBrowserAssets(document);
 const diagramRenderer = PiDishBrowser.createDiagrams({
-  document, assets: browserAssets, runtime: () => typeof mermaid === 'undefined' ? null : mermaid,
-  retainedRoots: () => transcriptController.retainedRoots(), isPinned: feed => isPinnedToBottom(feed), scrollBottom: feed => scrollToBottom(feed),
+  document,
+  assets: browserAssets,
+  runtime: () => typeof mermaid === "undefined" ? null : mermaid,
+  retainedRoots: () => transcriptController.retainedRoots(),
+  isPinned: (feed) => isPinnedToBottom(feed),
+  scrollBottom: (feed) => scrollToBottom(feed)
 });
 const richText = PiDishBrowser.createRichText({
-  document, marked: typeof marked === 'undefined' ? null : marked, highlight: () => typeof hljs === 'undefined' ? null : hljs,
-  assets: browserAssets, diagrams: diagramRenderer, sessionState, copy: text => copyTextToClipboard(text), status: (message, type) => setStatus(message, type),
+  document,
+  marked: typeof marked === "undefined" ? null : marked,
+  highlight: () => typeof hljs === "undefined" ? null : hljs,
+  assets: browserAssets,
+  diagrams: diagramRenderer,
+  sessionState,
+  copy: (text) => copyTextToClipboard(text),
+  status: (message, type) => setStatus(message, type)
 });
-function formatMarkdown(text) { return richText.format(text); }
-function applyHighlight(root) { richText.highlight(root); }
-function loadMathAssets() { return richText.loadMath(); }
-function loadVendorAsset(tag, attributes) { return browserAssets.load(tag, attributes); }
-function refreshDiagramTheme() { diagramRenderer.refreshTheme(); }
-function copyTextToClipboard(text) { return PiDishBrowser.copyTextToClipboard(text, document, navigator); }
-
-// =========================================================================
-// Tree Modal
-// =========================================================================
+function formatMarkdown(...args) {
+  return richText.format(...args);
+}
+function applyHighlight(...args) {
+  richText.highlight(...args);
+}
+function loadMathAssets() {
+  return richText.loadMath();
+}
+function loadVendorAsset(...args) {
+  return browserAssets.load(...args);
+}
+function refreshDiagramTheme() {
+  diagramRenderer.refreshTheme();
+}
+function copyTextToClipboard(text) {
+  return PiDishBrowser.copyTextToClipboard(text, document, navigator);
+}
 const transcriptTree = PiDishBrowser.createTranscriptTree({
-  document, storage: localStorage, sessionState, request: (host, path, options) => apiFetch(host, path, options), host: hostEntryFor,
-  status: (message, type) => setStatus(message, type), selectSession: (id, options) => selectSession(id, options),
+  document,
+  storage: localStorage,
+  sessionState,
+  request: (host, path, options) => apiFetch(host, path, options),
+  host: hostEntryFor,
+  status: (message, type) => setStatus(message, type),
+  selectSession: (id, options) => selectSession(id, options),
   saveEditorDraft: (owner, text) => {
-    try { const key = draftKey(sessionRefKey(owner)); if (!(localStorage.getItem(key) || '').trim()) localStorage.setItem(key, text); } catch {}
-  },
-});
-function openTreeModal() { return transcriptTree.open(); }
-function closeTreeModal() { transcriptTree.close(); }
-function selectTreeNode(id) { transcriptTree.select(id); }
-function confirmBranch() { return transcriptTree.confirm(); }
-
-document.addEventListener('keydown', function(e) {
-  if (e.key !== 'Escape') return;
-  // A live microphone capture outranks every overlay: Escape gets the hardware
-  // released (and the take discarded) before it dismisses any chrome.
-  if (isRecording()) { e.preventDefault(); cancelRecording(); updateMicButton(); return; }
-  // A lightbox (image or diagram zoom) floats above every modal — it goes
-  // first, and it alone, so Escape never dismisses it *and* what's underneath.
-  const lightbox = document.querySelector('.lightbox-overlay');
-  if (lightbox) {
-    e.preventDefault(); lightbox.remove();
-  } else if (isSessionMenuOpen()) {
-    e.preventDefault(); closeSessionMenu();
-  } else if (isCommentListPopoverOpen()) {
-    e.preventDefault(); closeCommentListPopover();
-  } else if (document.getElementById('commentBubble').style.display !== 'none') {
-    e.preventDefault(); closeCommentBubble();
-  } else if (document.getElementById('responseDetailsModal').style.display !== 'none') {
-    e.preventDefault(); closeResponseDetails();
-  } else if (isHarnessSettingsOpen()) {
-    // Modal only — the new-session takeover underneath stays open.
-    e.preventDefault(); closeHarnessSettings();
-  } else if (document.getElementById('settingsModal').style.display !== 'none') {
-    e.preventDefault(); closeSettingsModal();
-  } else if (document.getElementById('relationsModal').style.display !== 'none') {
-    e.preventDefault(); closeRelationsModal();
-  } else if (document.getElementById('treeModal').style.display !== 'none') {
-    e.preventDefault(); closeTreeModal();
-  } else if (document.getElementById('statsModal').style.display !== 'none') {
-    e.preventDefault(); closeStatsModal();
-  } else if (document.getElementById('artifactsModal').style.display !== 'none') {
-    e.preventDefault(); closeArtifactsModal();
-  } else if (isRecoveryViewOpen()) {
-    e.preventDefault(); closeRecoveryView();
-  } else if (isRoutinesViewOpen()) {
-    e.preventDefault(); routinesViewEscape();
-  } else if (isSkillsViewOpen()) {
-    e.preventDefault(); skillsViewEscape();
-  } else if (isNewSessionViewOpen()) {
-    e.preventDefault(); closeNewSessionView();
-  } else if (isSearchViewOpen()) {
-    e.preventDefault(); closeSearchView();
-  } else if (isUsageViewOpen()) {
-    e.preventDefault(); closeUsageView();
-  } else if (isFileViewOpen()) {
-    e.preventDefault(); closeFileView();
-  } else if (isDiffViewOpen()) {
-    e.preventDefault(); closeDiffView();
+    try {
+      const key = draftKey(sessionRefKey(owner));
+      if (!(localStorage.getItem(key) || "").trim()) localStorage.setItem(key, text);
+    } catch {
+    }
   }
 });
-
-// =========================================================================
-// Terminal (feature-flagged: /api/config .terminal → PI_DISH_TERMINAL=1).
-// One panel, one PTY per session server-side. The PTY survives socket drops
-// (phone screen lock), so reopening reattaches and replays scrollback.
-// =========================================================================
-
+function openTreeModal() {
+  return transcriptTree.open();
+}
+function closeTreeModal() {
+  transcriptTree.close();
+}
+function selectTreeNode(...args) {
+  transcriptTree.select(...args);
+}
+function confirmBranch() {
+  return transcriptTree.confirm();
+}
+document.addEventListener("keydown", function(e) {
+  if (e.key !== "Escape") return;
+  if (isRecording()) {
+    e.preventDefault();
+    cancelRecording();
+    updateMicButton();
+    return;
+  }
+  const lightbox = document.querySelector(".lightbox-overlay");
+  if (lightbox) {
+    e.preventDefault();
+    lightbox.remove();
+  } else if (isSessionMenuOpen()) {
+    e.preventDefault();
+    closeSessionMenu();
+  } else if (isCommentListPopoverOpen()) {
+    e.preventDefault();
+    closeCommentListPopover();
+  } else if (document.getElementById("commentBubble").style.display !== "none") {
+    e.preventDefault();
+    closeCommentBubble();
+  } else if (document.getElementById("responseDetailsModal").style.display !== "none") {
+    e.preventDefault();
+    closeResponseDetails();
+  } else if (isHarnessSettingsOpen()) {
+    e.preventDefault();
+    closeHarnessSettings();
+  } else if (document.getElementById("settingsModal").style.display !== "none") {
+    e.preventDefault();
+    closeSettingsModal();
+  } else if (document.getElementById("relationsModal").style.display !== "none") {
+    e.preventDefault();
+    closeRelationsModal();
+  } else if (document.getElementById("treeModal").style.display !== "none") {
+    e.preventDefault();
+    closeTreeModal();
+  } else if (document.getElementById("statsModal").style.display !== "none") {
+    e.preventDefault();
+    closeStatsModal();
+  } else if (document.getElementById("artifactsModal").style.display !== "none") {
+    e.preventDefault();
+    closeArtifactsModal();
+  } else if (isRecoveryViewOpen()) {
+    e.preventDefault();
+    closeRecoveryView();
+  } else if (isRoutinesViewOpen()) {
+    e.preventDefault();
+    routinesViewEscape();
+  } else if (isSkillsViewOpen()) {
+    e.preventDefault();
+    skillsViewEscape();
+  } else if (isNewSessionViewOpen()) {
+    e.preventDefault();
+    closeNewSessionView();
+  } else if (isSearchViewOpen()) {
+    e.preventDefault();
+    closeSearchView();
+  } else if (isUsageViewOpen()) {
+    e.preventDefault();
+    closeUsageView();
+  } else if (isFileViewOpen()) {
+    e.preventDefault();
+    closeFileView();
+  } else if (isDiffViewOpen()) {
+    e.preventDefault();
+    closeDiffView();
+  }
+});
 let appConfig = { terminal: false };
 async function loadConfig() {
   try {
-    const res = await apiFetch(null, '/api/config');
-    appConfig = await res.json();
-  } catch { /* feature stays hidden */ }
+    const res = await apiFetch(null, "/api/config");
+    const data = await res.json();
+    if (res.ok && appRecord(data)) appConfig = data;
+  } catch {
+  }
   updateTerminalButtons();
   updateRoutinesButton();
   updateMicButton();
 }
-
-/**
- * The terminal is a *per-host* feature: a session on a peer with
- * PI_DISH_TERMINAL on is reachable from an entry host that has it off, and
- * vice versa (the WS URL and ticket already follow the session's host). Gate
- * on the owning host's advertised capabilities, falling back to this host's
- * /api/config only for self — see hostSupportsTerminal in helpers.js.
- */
 function sessionHostSupportsTerminal(session) {
   return hostSupportsTerminal(hostEntryFor(session?.host), appConfig);
 }
-
-/** Same rule for the pi-tmux view button: tmux is the owning host's, too. */
 function sessionHostSupportsTmux(session) {
-  return hostSupportsCapability(hostEntryFor(session?.host), 'tmux', appConfig);
+  return hostSupportsCapability(hostEntryFor(session?.host), "tmux", appConfig);
 }
-
-function updateTerminalButtons() { terminalController.updateButtons(); }
-
-// =========================================================================
-// Theme payloads and pre-paint cache restoration share typed token decoding.
-const themesController = PiDishBrowser.createThemes({ document, storage: localStorage, request: (host, url, options) => apiFetch(host, url, options), host: () => hostEntryFor(null),
-  changed: () => { terminalController.refreshTheme(); refreshDiagramTheme(); },
+function updateTerminalButtons() {
+  terminalController.updateButtons();
+}
+const themesController = PiDishBrowser.createThemes({
+  document,
+  storage: localStorage,
+  request: (host, url, options) => apiFetch(host, url, options),
+  host: () => hostEntryFor(null),
+  changed: () => {
+    terminalController.refreshTheme();
+    refreshDiagramTheme();
+  }
 });
-function loadThemes() { return themesController.load(); }
-function renderThemeSelect(select) { themesController.render(select); }
-function applyTheme(id) { themesController.apply(id); }
-function terminalTheme() { return PiDishBrowser.terminalTheme(document); }
-
-// Terminal lifecycle owns pending opens, host endpoints, sockets and reconnects.
+function loadThemes() {
+  return themesController.load();
+}
+function renderThemeSelect(...args) {
+  themesController.render(...args);
+}
+function applyTheme(...args) {
+  themesController.apply(...args);
+}
+function terminalTheme() {
+  return PiDishBrowser.terminalTheme(document);
+}
 const terminalController = PiDishBrowser.createTerminalController({
-  document, storage: localStorage, sessionState, host: host => hostEntryFor(host),
-  supportsTerminal: session => sessionHostSupportsTerminal(session), supportsTmux: session => sessionHostSupportsTmux(session),
+  document,
+  storage: localStorage,
+  sessionState,
+  host: (host) => hostEntryFor(host),
+  supportsTerminal: (session) => sessionHostSupportsTerminal(session),
+  supportsTmux: (session) => sessionHostSupportsTmux(session),
   asset: (tag, attributes) => loadVendorAsset(tag, attributes),
-  createTerminal: options => typeof Terminal === 'undefined' ? null : new Terminal(options),
-  createFitAddon: () => { const Ctor = window.FitAddon && (window.FitAddon.FitAddon || window.FitAddon); return Ctor ? new Ctor() : null; },
-  socket: url => new WebSocket(url), socketUrl: (host, path) => hostWsUrl(host, path), ticket: (host, purpose) => mintHostTicket(host, purpose),
-  theme: () => terminalTheme(), applySize: panel => applySavedTerminalSize(panel), confirm: message => confirm(message),
+  createTerminal: (options) => typeof Terminal === "undefined" ? null : new Terminal(options),
+  createFitAddon: () => {
+    const runtime = typeof FitAddon === "undefined" ? null : FitAddon;
+    const Ctor = typeof runtime === "function" ? runtime : runtime?.FitAddon;
+    return Ctor ? new Ctor() : null;
+  },
+  socket: (url) => new WebSocket(url),
+  socketUrl: (host, path) => hostWsUrl(host, path),
+  ticket: (host, purpose) => mintHostTicket(host, purpose),
+  theme: () => terminalTheme(),
+  applySize: (panel) => applySavedTerminalSize(panel),
+  confirm: (message) => confirm(message)
 });
-function terminalModeKey(id) { return terminalController.modeKey(id); }
-function loadTerminalAssets() { return terminalController.loadAssets(); }
-function toggleTerminal() { terminalController.toggle(); }
-function openTerminal(mode) { return terminalController.open(mode); }
-function closeTerminal() { terminalController.close(); }
-function fitTerminal() { terminalController.fit(); }
-function termSend(message) { terminalController.send(message); }
-function connectTerminalWS() { terminalController.connect(); }
-function updateTerminalModeUI() { terminalController.updateMode(); }
-function switchTerminalMode() { terminalController.switchMode(); }
-function restartTerminalShell() { terminalController.restart(); }
-function termKeybarPress(key) { terminalController.key(key); }
-
-// Resize controllers own each pointer capture and release listeners on disposal.
+function terminalModeKey(...args) {
+  return terminalController.modeKey(...args);
+}
+function loadTerminalAssets() {
+  return terminalController.loadAssets();
+}
+function toggleTerminal() {
+  terminalController.toggle();
+}
+function openTerminal(...args) {
+  return terminalController.open(...args);
+}
+function closeTerminal() {
+  terminalController.close();
+}
+function fitTerminal() {
+  terminalController.fit();
+}
+function termSend(...args) {
+  terminalController.send(...args);
+}
+function connectTerminalWS() {
+  terminalController.connect();
+}
+function updateTerminalModeUI() {
+  terminalController.updateMode();
+}
+function switchTerminalMode() {
+  terminalController.switchMode();
+}
+function restartTerminalShell() {
+  terminalController.restart();
+}
+function termKeybarPress(...args) {
+  terminalController.key(...args);
+}
 const panelResize = PiDishBrowser.createPanelResize({ document, storage: localStorage, fitTerminal: () => fitTerminal() });
-function clampSidebarWidth(px) { return PiDishBrowser.clampSidebarWidth(px, window.innerWidth); }
-function applySavedSidebarWidth() { panelResize.sidebarWidth(); }
-function initSidebarResize() { panelResize.sidebar(); }
-function initTerminalResize() { panelResize.terminal(); }
-function clampTerminalHeight(px, parentHeight) { return PiDishBrowser.clampTerminalHeight(px, parentHeight); }
-function applySavedTerminalSize(panel) { panelResize.terminalSize(panel); }
-
-function initTerminalKeybar() { terminalController.mountKeybar(); }
-
-// =========================================================================
-// Routines own their host-qualified form, catalogs, mutations and run ledger.
+function clampSidebarWidth(px) {
+  return PiDishBrowser.clampSidebarWidth(px, window.innerWidth);
+}
+function applySavedSidebarWidth() {
+  panelResize.sidebarWidth();
+}
+function initSidebarResize() {
+  panelResize.sidebar();
+}
+function initTerminalResize() {
+  panelResize.terminal();
+}
+function clampTerminalHeight(...args) {
+  return PiDishBrowser.clampTerminalHeight(...args);
+}
+function applySavedTerminalSize(...args) {
+  panelResize.terminalSize(...args);
+}
+function initTerminalKeybar() {
+  terminalController.mountKeybar();
+}
 const routinesController = PiDishBrowser.createRoutinesView({
-  root: document.querySelector('.main'), request: (host, url, options) => apiFetch(host, url, options), storage: localStorage, sessionState,
-  hosts: fanoutHosts, effectiveHosts, host: hostEntryFor, fleetReady: () => hostFleetReady, config: () => appConfig, multiHost: isMultiHost,
-  hostChip: host => hostChipHtml(host),
-  closeOtherViews: () => { closeSidebar(); closeUsageView(); closeSearchView(); closeNewSessionView(); closeSkillsView(); closeRecoveryView(); closeBounceView(); },
-  connection: (host, event, error) => { if (event === 'success') noteHostReachable(host); else if (event === 'blocked') noteHostBlocked(host); else noteHostFailure(host, error); },
-  autocomplete: options => createCwdAutocomplete(options), copy: text => copyTextToClipboard(text), status: text => setStatus(text), confirm: text => confirm(text),
-  loadPrevious: () => loadSessions(undefined, { withPrevious: true }), selectSession: (id, options) => selectSession(id, options),
+  root: document.querySelector(".main"),
+  request: (host, url, options) => apiFetch(host, url, options),
+  storage: localStorage,
+  sessionState,
+  hosts: fanoutHosts,
+  effectiveHosts,
+  host: hostEntryFor,
+  fleetReady: () => hostFleetReady,
+  config: () => appConfig,
+  multiHost: isMultiHost,
+  hostChip: (host) => hostChipHtml(host),
+  closeOtherViews: () => {
+    closeSidebar();
+    closeUsageView();
+    closeSearchView();
+    closeNewSessionView();
+    closeSkillsView();
+    closeRecoveryView();
+    closeBounceView();
+  },
+  connection: (host, event, error) => {
+    if (event === "success") noteHostReachable(host);
+    else if (event === "blocked") noteHostBlocked(host);
+    else noteHostFailure(host, error);
+  },
+  autocomplete: (options) => createCwdAutocomplete(options),
+  copy: (text) => copyTextToClipboard(text),
+  status: (text) => setStatus(text),
+  confirm: (text) => confirm(text),
+  loadPrevious: () => loadSessions(void 0, { withPrevious: true }),
+  selectSession: (id, options) => selectSession(id, options)
 });
-function updateRoutinesButton() { routinesController.updateButton(); }
-function isRoutinesViewOpen() { return routinesController.isOpen(); }
-function openRoutinesView() { routinesController.open(); }
-function closeRoutinesView() { routinesController.close(); }
-function refreshRoutinesView() { routinesController.refresh(); }
-function routinesViewEscape() { return routinesController.escape(); }
-function backToRoutinesList() { routinesController.back(); }
-function selectRoutine(host, id) { return routinesController.select(host, id); }
-function startRoutineCreate() { routinesController.create(); }
-function saveRoutine() { return routinesController.save(); }
-function runRoutineNow() { return routinesController.run(); }
-function deleteRoutine() { return routinesController.delete(); }
-
-// Bounce owns host snapshots, selected targets, status polling and view disposal.
+function updateRoutinesButton() {
+  routinesController.updateButton();
+}
+function isRoutinesViewOpen() {
+  return routinesController.isOpen();
+}
+function openRoutinesView() {
+  routinesController.open();
+}
+function closeRoutinesView() {
+  routinesController.close();
+}
+function refreshRoutinesView() {
+  routinesController.refresh();
+}
+function routinesViewEscape() {
+  return routinesController.escape();
+}
+function backToRoutinesList() {
+  routinesController.back();
+}
+function selectRoutine(...args) {
+  return routinesController.select(...args);
+}
+function startRoutineCreate() {
+  routinesController.create();
+}
+function saveRoutine() {
+  return routinesController.save();
+}
+function runRoutineNow() {
+  return routinesController.run();
+}
+function deleteRoutine() {
+  return routinesController.delete();
+}
 const bounceController = PiDishBrowser.createBounce({
-  document, request: apiFetch, hosts: effectiveHosts, fleetReady: () => hostFleetReady,
-  sessionState, refreshSessions, loadPrevious: () => loadSessions(undefined, { withPrevious: true }), selectSession,
+  document,
+  request: apiFetch,
+  hosts: effectiveHosts,
+  fleetReady: () => hostFleetReady,
+  sessionState,
+  refreshSessions,
+  loadPrevious: () => loadSessions(void 0, { withPrevious: true }),
+  selectSession
 });
-function isBounceViewOpen() { return bounceController.isOpen(); }
-function closeBounceView() { bounceController.close(); }
-function refreshBounceView() { return bounceController.refresh(); }
-function selectBounceTargets(selected) { bounceController.select(selected); }
-function submitBounceTargets() { return bounceController.submit(); }
+function isBounceViewOpen() {
+  return bounceController.isOpen();
+}
+function closeBounceView() {
+  bounceController.close();
+}
+function refreshBounceView() {
+  return bounceController.refresh();
+}
+function selectBounceTargets(...args) {
+  bounceController.select(...args);
+}
+function submitBounceTargets() {
+  return bounceController.submit();
+}
+const appBindings = PiDishBrowser.createAppBindings({ document, actions: {
+  openUsageView: () => openUsageView(),
+  openSkillsView: () => openSkillsView(),
+  openRoutinesView: () => openRoutinesView(),
+  openSettingsModal: () => openSettingsModal(),
+  refreshSessions: () => refreshSessions(),
+  openNewSessionView: () => openNewSessionView(),
+  openSessionHarnessSettings: () => openSessionHarnessSettings(),
+  openStatsModal: () => openStatsModal(),
+  toggleSearchBar: () => toggleSearchBar(),
+  toggleControlPanel: () => toggleControlPanel(),
+  toggleTerminal: () => toggleTerminal(),
+  toggleFocusMode: () => toggleFocusMode(),
+  toggleDiffView: () => toggleDiffView(),
+  openArtifactsModal: () => openArtifactsModal(),
+  exportSession: () => exportSession(),
+  searchKey: (event) => {
+    if (event instanceof KeyboardEvent) handleSearchKey(event);
+  },
+  searchPrev: () => searchPrev(),
+  searchNext: () => searchNext(),
+  closeSearch: () => closeSearch(),
+  loadDiffView: () => loadDiffView(),
+  closeDiffView: () => closeDiffView(),
+  closeFileView: () => closeFileView(),
+  switchTerminalMode: () => switchTerminalMode(),
+  restartTerminalShell: () => restartTerminalShell(),
+  closeTerminal: () => closeTerminal(),
+  resumeSession: () => resumeSession(),
+  panelOpenSearch: () => {
+    closeControlPanel();
+    openSearch();
+  },
+  panelToggleTerminal: () => {
+    closeControlPanel();
+    toggleTerminal();
+  },
+  panelOpenDiffView: () => {
+    closeControlPanel();
+    openDiffView();
+  },
+  panelOpenArtifactsModal: () => {
+    closeControlPanel();
+    openArtifactsModal();
+  },
+  panelOpenTreeModal: () => {
+    closeControlPanel();
+    openTreeModal();
+  },
+  panelOpenSessionHarnessSettings: () => {
+    closeControlPanel();
+    openSessionHarnessSettings();
+  },
+  panelExportSession: () => {
+    closeControlPanel();
+    exportSession();
+  },
+  attachImage: () => document.getElementById("imageFileInput").click(),
+  abortTurn: () => abortTurn(),
+  sendSteer: () => sendSteer(),
+  sendFollowUp: () => sendFollowUp(),
+  sendPrompt: () => sendPrompt(),
+  loadUsageView: () => loadUsageView(),
+  closeUsageView: () => closeUsageView(),
+  closeSearchView: () => closeSearchView(),
+  closeNewSessionView: () => closeNewSessionView(),
+  onNsHostChange: (_event, node) => {
+    if (node instanceof HTMLSelectElement) onNsHostChange(node.value);
+  },
+  onNsHarnessChange: (_event, node) => {
+    if (node instanceof HTMLSelectElement) onNsHarnessChange(node.value);
+  },
+  onNsModelChange: (_event, node) => {
+    if (node instanceof HTMLSelectElement) onNsModelChange(node.value);
+  },
+  onNsThinkingChange: (_event, node) => {
+    if (node instanceof HTMLSelectElement) onNsThinkingChange(node.value);
+  },
+  editHarnessAgents: () => openHarnessSettings({ tab: "agents" }),
+  editHarnessModels: () => openHarnessSettings({ tab: "models" }),
+  spawnNewSession: () => spawnNewSession(),
+  refreshRoutinesView: () => refreshRoutinesView(),
+  closeRoutinesView: () => closeRoutinesView(),
+  loadRecoveryView: () => loadRecoveryView(),
+  closeRecoveryView: () => closeRecoveryView(),
+  backdropCloseTreeModal: (event, node) => {
+    if (event.target === node) closeTreeModal();
+  },
+  closeTreeModal: () => closeTreeModal(),
+  backdropCloseArtifactsModal: (event, node) => {
+    if (event.target === node) closeArtifactsModal();
+  },
+  closeArtifactsModal: () => closeArtifactsModal(),
+  backdropCloseRelationsModal: (event, node) => {
+    if (event.target === node) closeRelationsModal();
+  },
+  closeRelationsModal: () => closeRelationsModal(),
+  backdropCloseStatsModal: (event, node) => {
+    if (event.target === node) closeStatsModal();
+  },
+  closeStatsModal: () => closeStatsModal(),
+  backdropCloseSettingsModal: (event, node) => {
+    if (event.target === node) closeSettingsModal();
+  },
+  closeSettingsModal: () => closeSettingsModal(),
+  bounceToggle: (_event, node) => {
+    if (node instanceof HTMLDetailsElement) {
+      if (node.open) refreshBounceView();
+      else closeBounceView();
+    }
+  },
+  refreshBounceView: () => refreshBounceView(),
+  bounceSelect: () => selectBounceTargets(true),
+  bounceClear: () => selectBounceTargets(false),
+  submitBounceTargets: () => submitBounceTargets(),
+  backdropCloseHarnessSettings: (event, node) => {
+    if (event.target === node) closeHarnessSettings();
+  },
+  closeHarnessSettings: () => closeHarnessSettings(),
+  harnessTabAgents: () => showHarnessSettingsTab("agents"),
+  harnessTabModels: () => showHarnessSettingsTab("models"),
+  saveHarnessSettings: () => saveHarnessSettings(),
+  backdropCloseResponseDetails: (event, node) => {
+    if (event.target === node) closeResponseDetails();
+  },
+  closeResponseDetails: () => closeResponseDetails()
+} });

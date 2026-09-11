@@ -12,12 +12,12 @@ export interface SidebarSession extends HelperSession {
   thinkingLevel: string; closeMode: string; harnessId: string; harnessLabel: string; searchSnippet: string; searchScore?: number;
 }
 /** Narrow list metadata once before grouping; the session store retains its original payloads. */
-export function sidebarSession(row: SessionEntry): SidebarSession {
+export function sidebarSession(row: Pick<SessionEntry, 'id' | 'host'> & Record<string, unknown>): SidebarSession {
   const string = (value: unknown) => typeof value === 'string' ? value : '';
   const capabilities: Record<string, boolean> = {};
   if (record(row.capabilities)) for (const [key, value] of Object.entries(row.capabilities)) if (typeof value === 'boolean') capabilities[key] = value;
   const parent = typeof row.familyParentId === 'string' ? row.familyParentId : null;
-  return { id: row.id, host: row.host, hostLabel: row.hostLabel, name: string(row.name), cwd: string(row.cwd), model: string(row.model),
+  return { id: row.id, host: row.host, hostLabel: typeof row.hostLabel === 'string' ? row.hostLabel : undefined, name: string(row.name), cwd: string(row.cwd), model: string(row.model),
     lastActivity: typeof row.lastActivity === 'string' || finite(row.lastActivity) ? row.lastActivity : null,
     isActive: row.isActive === true, turnInProgress: row.turnInProgress === true, subagentLive: row.subagentLive === true, compacting: row.compacting === true,
     parentId: string(row.parentId), ...(Object.hasOwn(row, 'familyParentId') ? { familyParentId: parent } : {}),

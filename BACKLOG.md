@@ -1,54 +1,19 @@
 # pi-dish roadmap and migration status
 
-Updated 2026-09-11. **The TypeScript migration is in progress. The shared
-foundation is complete; browser migration is the current stage. Most application
-code still lives in JavaScript.**
+Updated 2026-09-11. **Browser application source migration is implemented locally.
+External review, push and CI on the final commit remain pending.**
 
-The browser-completion goal is active. Host identity and fleet discovery is
-checkpoint 1; host catalog state/editing is checkpoint 2. Both are pushed after
-Fable review. Host settings UI and add-host request owners are checkpoint 3,
-also pushed after review. Checkpoint 4 completes host color state/presentation and is pushed after review.
-Checkpoint 5 migrates directory lookup, autocomplete and the lazy tree.
-Checkpoint 6 migrates the tmux target catalog and picker.
-Checkpoint 7 migrates shared model catalog state and request ownership.
-Checkpoint 8 converts the standalone published-page comments entrypoint.
-Checkpoint 9 migrates new-session model/thinking preferences and defaults preview.
-Checkpoint 10 migrates the shared harness settings editor.
-Checkpoint 11 migrates submitted spawn operations and provisional-state ownership.
-Checkpoint 12 migrates the shared helper entrypoint and its pure implementation modules.
-Checkpoint 13 migrates the new-session form and discovery-control orchestration.
-Checkpoint 14 migrates host recovery preferences and the recovery report.
-Checkpoint 15 migrates bounce previews, queued operations and restart reconciliation.
-Checkpoint 16 migrates related-session navigation and in-session search.
-Checkpoint 17 migrates the skills directory, coverage detail and refinement launcher.
-Checkpoint 18 migrates fleet advanced search and its facets/results.
-Checkpoint 19 migrates usage summaries, subscription limits and chart interactions.
-Checkpoint 20 migrates display preferences, themes/pre-paint and panel resizing.
-Checkpoint 21 migrates terminal opens, sockets, reconnects and mobile key input.
-Checkpoint 22 migrates routine forms, catalogs, mutations and invocation history.
-Checkpoint 23 migrates session statistics, sharing and artifact controls.
-Checkpoint 24 migrates transcript tree rendering and branch navigation.
-Checkpoint 25 migrates rich text, lazy assets, diagrams and clipboard delivery.
-Checkpoint 26 migrates extension widgets, status entries and interactive dialogs.
-Checkpoint 27 migrates file previews, publication controls and lazy diff views.
-Checkpoint 28 migrates anchored comment selection, editors and rendered marks.
-Checkpoint 29 migrates session header menus, rename, model/thinking actions and export.
-Checkpoint 30 migrates dictation and composer-note ownership.
-Checkpoint 31 migrates prompt drafts, history and image attachments.
-Checkpoint 32 migrates autocomplete, file completions and session references.
-Checkpoint 33 migrates the sidebar metadata/family/workspace projection.
-Checkpoint 34 migrates sidebar pins, menus, close confirmations and drag ownership.
-Checkpoint 35 migrates sidebar query/scopes, list polling and seen activity.
-Checkpoint 36 migrates message projection, response details and tool grouping.
-Checkpoint 37 migrates streaming frames, live tool panels and mood state.
-Checkpoint 38 migrates transcript loading, pagination and retained DOM caches.
-Checkpoint 39 migrates activity indicators, abort gates and side-question panels.
-Checkpoint 40 migrates prompt sends, optimistic echoes and queue cancellation.
-Checkpoint 41 migrates stream connections, event dispatch and reconnect ownership.
-Checkpoint 42 migrates selection, resume and header projection. See
-[the checkpoint log](docs/browser-migration-checkpoints.md) for implementation
-verification and the complete browser entrypoint inventory. The last confirmed
-CI checkpoint is recorded below; final CI must pass before the goal is complete.
+All first-party browser application logic is authored in `src/browser/`, including
+the application entrypoint and static control bindings. The five scripts shipped
+under `public/` are generated and checked against strict TypeScript source.
+Vanilla DOM rendering, local assets and the existing server/Electron delivery
+paths remain supported. The backend application and feature stores are a separate
+migration stage.
+
+Work was divided into 43 checkpoints. See
+[the checkpoint log](docs/browser-migration-checkpoints.md) for scope, verification
+and review/push status. Checkpoints through 38 are reviewed and pushed; 39–43
+await external review. The last confirmed CI checkpoint is recorded below.
 
 ## Status at a glance
 
@@ -56,16 +21,14 @@ CI checkpoint is recorded below; final CI must pass before the goal is complete.
 | --- | --- | --- |
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
-| Browser migration | In progress — current stage | One hundred and one implementation modules are typed. Transcript/composer orchestration and shell wiring remain in `public/app.js`. |
+| Browser migration | Source implementation complete; delivery pending | All first-party application logic and bindings are typed. Review, final push and exact-commit CI remain. |
 | Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
 
-The foundations and several browser boundaries have
-shipped; substantial application migration remains. At `53b5ae0`, `public/app.js`
-still has about 13,800 lines and `server.js` about 7,400. These are scope indicators,
-not a completion percentage. The remaining work is not divided into equal-sized
-units, so a percentage or completion date would imply precision we do not have.
+The completed browser source migration does not imply a whole-application
+conversion. `server.js`, feature stores, extension checking and Electron shell
+scope still need their own audit and bounded implementation stages.
 
 ## What is already in TypeScript
 
@@ -74,12 +37,13 @@ in `lib/`. Its full module inventory is in [the migration guide](docs/typescript
 Most JavaScript callers of these modules are not yet type checked; `lib/cron.js`
 is an explicitly checked exception.
 
-These one hundred and one browser implementation modules compile strictly into local
-`public/browser.js`, `public/helpers.js`, `public/artifact-comments.js` and
-`public/theme-prepaint.js` scripts.
-The entries are `index.ts`, `shared-helpers.ts`, `artifact-comments.ts` and
-`theme-prepaint.ts`; `shared-helper-types.ts` and `rich-text-vendors.ts` supply
-pure-helper and vendored runtime contracts:
+Browser source compiles strictly into five committed local scripts:
+`public/app.js`, `public/browser.js`, `public/helpers.js`,
+`public/artifact-comments.js` and `public/theme-prepaint.js`.
+`app.ts` composes the controllers; `index.ts` and `shared-helpers.ts` are export
+surfaces. `shared-helper-types.ts` and `rich-text-vendors.ts` describe helper and
+vendor contracts. The table lists authored implementations; review/push status is
+tracked separately in the checkpoint log.
 
 | Completed browser module | Responsibility now owned by TypeScript |
 | --- | --- |
@@ -130,6 +94,7 @@ pure-helper and vendored runtime contracts:
 | `composer-submit.ts`, `prompt-delivery.ts` | Captured prompt/command/abort requests, optimistic ledger and owned queue rows |
 | `message-stream.ts` | Captured stream tickets, event ownership, deduplication and reconnect timing |
 | `session-view.ts`, `session-resume.ts`, `session-header.ts` | Selection/provisional view ownership, resume requests and narrowed header metadata |
+| `app.ts`, `app-chrome.ts`, `app-bindings.ts`, `host-view.ts` | Typed composition/startup, page chrome ownership, registered static actions and host presentation |
 | `rich-text.ts` | Markdown configuration, final highlighting, file links and copy controls |
 | `diagrams.ts` | Diagram rendering/theme generations and lightbox controls |
 | `clipboard.ts` | Native clipboard and insecure-context textarea fallback |
@@ -160,29 +125,18 @@ pure-helper and vendored runtime contracts:
 | `helper-models.ts` | Model refs, thinking levels, scope patterns and role values |
 | `helper-markdown.ts` | Markdown URLs, math/diagram detection, file mentions and diff markup |
 
-The checkpoint log distinguishes local implementation from completed review and push.
-A completed module means that boundary has moved, been reviewed and verified.
-It does **not** mean its entire feature is migrated: for example, model-selector
-DOM, catalog and new-session preferences are typed; transcript and composer orchestration still have JavaScript in the app. Selection ownership guards are already used throughout the browser,
-but many guarded feature implementations themselves remain JavaScript.
+## Remaining delivery steps
 
-## Next implementation steps
+1. Review the local commits and resolve any findings. Kimi K3 through OMP is
+   authorized as the substitute for Fable 5.1 on the final pending checkpoints.
+2. Push the reviewed commits on the selected branch.
+3. Verify all five CI jobs on the exact final commit before marking the browser
+   completion goal finished.
 
-This is the intended order. Each row may require several independently reviewed
-commits; it is not a promise that one row equals one change.
-
-| Order | Work | Completion criterion |
-| --- | --- | --- |
-| 1 — implemented | Host identity and fleet discovery: `loadHostIdentity`, `loadHostFleet`, `identifyHosts` and their request state | Typed controller owns descriptor requests and their captured host/source identities; catalog persistence and UI callbacks remain explicit. Old-server fallback, refresh timing and stale-response behavior are verified. |
-| 2 — implemented | Host catalog editing and settings UI: persistence, add/remove/token actions and host-section rendering | Storage and network boundaries are typed; each action retains its intended host, and view listeners have explicit cleanup. |
-| 3 — implemented | New-session form and request controllers: workspace/directory lookup, spawn targets, model/config discovery and spawn coordination | Requests retain host, harness, cwd and operation ownership; delayed results cannot change a newer configuration or retarget a spawn. |
-| 4 | Remaining browser features, extracted one feature at a time | Composer/queue, dialogs, search/usage, shares/pages/comments, tree and other feature state, requests and UI move behind typed contracts. Each feature gets its own scope before implementation. |
-| 5 | Transcript/streaming, file/diff and terminal surfaces, then the remaining app shell | Rendering and transport ownership move without losing streaming coalescing, retained transcript DOM, pagination, scroll state or terminal cleanup. |
-
-**Browser-stage finish line:** first-party browser application logic is authored
-in TypeScript, with typed state, request and view boundaries. `public/app.js` no
-longer contains the remaining feature implementations. JavaScript generated for
-runtime delivery and vendored libraries are expected to remain.
+The source finish line is met: first-party browser application logic is authored
+in TypeScript with explicit state, request and view owners. `public/app.js` is
+generated; edit `src/browser/app.ts` and rebuild. Static HTML contains action
+names instead of executable event handlers.
 
 **After the browser stage:** plan the remaining server application/lifecycle and
 feature-store migrations separately. Existing typed RPC/bridge internals do not
@@ -202,15 +156,15 @@ checks. Documentation-only changes need content and link checks. After a chunk
 ships, update this page's checkpoint, completed inventory and next step so the
 status stays current.
 
-Last confirmed CI checkpoint, `fc174c6` (newer work is in the checkpoint log):
+Last confirmed CI checkpoint: `fab8947` (transcript pagination).
 
-- Fable 5.1 cleared composer draft/image ownership before push.
-- Strict checks, 927 backend tests, 210 browser regressions, independent UI
-  scenarios and full desktop/mobile smoke passed on that checkpoint.
-- [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34619395546):
+- Fable 5.1 cleared the checkpoint before push.
+- Strict checks, 936 backend tests, 252 browser regressions, independent UI
+  scenarios and full desktop/mobile smoke passed locally.
+- [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34626615561):
   backend on Node 22.19.0, 22.x, 24.x and 26.x, plus the Node 24 browser job.
-- This verifies that checkpoint; final CI must pass on the completed browser
-  migration before the goal is marked done.
+- This verifies checkpoint 38; final CI is still required after the remaining
+  reviewed commits are pushed.
 
 ## Completed work before the current stage
 

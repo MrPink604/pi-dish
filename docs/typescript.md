@@ -4,9 +4,10 @@ For current completion status and the ordered work queue, start with
 [the roadmap](../BACKLOG.md). This document describes the typed boundaries,
 build conventions and compatibility rules already implemented.
 
-The shared foundation is complete within its defined scope. Browser migration
-is in progress; the server application and feature stores remain largely
-JavaScript. The original foundation introduced no UI framework, ESM runtime
+The shared foundation is complete within its defined scope. Browser application
+source migration is implemented; review/push and final CI status are tracked in
+the roadmap. The server application and feature stores remain largely JavaScript.
+The original foundation introduced no UI framework, ESM runtime
 migration or wire/store format change. Subsequent browser extractions use
 vanilla TypeScript and ordinary DOM rendering.
 
@@ -30,7 +31,7 @@ vanilla TypeScript and ordinary DOM rendering.
 
 `src/browser/session-state.ts` owns browser list/selection state and the existing
 generation guards. It compiles strictly into the local `public/browser.js` bundle;
-`app.js` creates the store through `PiDishBrowser.createSessionState`.
+`src/browser/app.ts` creates the store through `PiDishBrowser.createSessionState`.
 Its metadata fields stay unknown, and `test/types/browser-state.ts` checks its
 public interface. Browser route/host ids are strings here, without claiming the
 server's branded validation. `captureSelection()` returns a frozen host/id/
@@ -45,8 +46,9 @@ modal instances, file requests and comment drafts within a selected session.
 Tree/branch operations and model/thinking menu loads also carry selection
 owners; a late branch preserves returned editor text in its original draft.
 
-`server.js`, most browser controllers/rendering and feature stores remain
-JavaScript. Most harness extension sources are already TypeScript, loaded by
+`server.js` and server feature stores remain JavaScript. First-party browser
+controllers, rendering, composition and static bindings are TypeScript. Most
+harness extension sources are already TypeScript, loaded by
 the harnesses outside the `src/` build; their remaining migration/checking scope
 needs a separate audit. The typed browser adapter and model-selector DOM module
 are described below. The foundation's declarations do not mean that all its
@@ -158,9 +160,14 @@ content, every endpoint, or lifecycle authority.
 
 `src/browser/` compiles strictly using `tsconfig.browser.json`.
 `npm run build:browser` checks types, then uses the pinned esbuild dependency to
-emit the self-contained `public/browser.js` script, loaded before `app.js`,
-and the standalone `public/artifact-comments.js` page entrypoint. All entrypoints
-are validated before any generated output is written.
+emit five local entrypoints: `public/app.js`, `public/browser.js`,
+`public/helpers.js`, `public/artifact-comments.js` and `public/theme-prepaint.js`.
+All entrypoints are validated before any generated output is written. The
+application entrypoint is emitted as a classic script so existing callers and
+isolated browser instrumentation share its real bindings. Its imports are type-only;
+runtime imports fail the build. Typed modules are bundled through `index.ts`.
+Static HTML declares action names; `app-bindings.ts` validates the names and owns
+their listeners, while `app.ts` supplies a complete, type-checked callback map.
 The output is committed; normal server startup and Electron packaging continue
 to use `public/` directly. `npm run check` rejects stale output without repairing
 it. esbuild is a build dependency, not an application framework.
@@ -185,8 +192,8 @@ The model-selector DOM implementation is also strictly checked under
 `src/browser/`. Its view/actions interface and ordinary DOM baseline are
 [documented with a repeatable behavior and timing baseline](model-selector-baseline.md).
 
-Continue migrating coherent state, controller and DOM modules from `public/app.js`
-into `src/browser/`, preserving owner-bearing actions and explicit cleanup.
+Edit browser implementation in `src/browser/`, preserving owner-bearing actions
+and explicit cleanup. Never hand-edit the generated scripts in `public/`.
 Plain TypeScript is the current implementation choice. A leaf component pilot
 can be reconsidered separately if a concrete maintenance problem warrants it.
 
@@ -285,7 +292,7 @@ Reset and close retire the old tree; delayed bodies and retained old nodes canno
 write to or select a path for the new host. Host catalog changes and late self
 discovery renew open directories when the captured endpoint changes. The app supplies selected-host,
 transport, fuzzy formatting and selection callbacks. Workspace chips and routine
-CRUD remain in JavaScript pending their own feature migration.
+CRUD are owned by `new-session.ts` and `routines-view.ts`.
 
 `src/browser/spawn-targets.ts` owns tmux payload decoding, target catalog and
 choice state, selected descriptors and the run-in combobox. Every refresh clears
@@ -484,3 +491,10 @@ session-switch navigation also has an event sequence within the connection.
 hydration. `session-resume.ts` owns picker/launch requests and `session-header.ts`
 projects narrowed metadata. Retained live-tool metadata follows cached nodes and
 may be adopted only by the same host/session under its new selection generation.
+
+The final application composition lives in `app.ts`. `app-chrome.ts` owns viewport
+following, focus preferences and mobile panel listeners/timers; `app-bindings.ts`
+owns static control events. Startup restoration retains the selection generation
+that began initialization, so a delayed list cannot replace a newer selection.
+`host-view.ts` narrows discovery metadata for presentation without changing the
+raw directory descriptor or copying state into another owner.

@@ -10,6 +10,9 @@ if (compiled.error) throw compiled.error;
 if (compiled.status !== 0) process.exit(compiled.status || 1);
 const esbuild = require('esbuild');
 const entries = [
+  // app remains a classic script: existing callers and isolated test instrumentation
+  // share its real bindings. Type-only imports are erased; runtime imports fail below.
+  { source: 'src/browser/app.ts', target: 'public/app.js', script: true },
   { source: 'src/browser/theme-prepaint.ts', target: 'public/theme-prepaint.js' },
   { source: 'src/browser/index.ts', target: 'public/browser.js', globalName: 'PiDishBrowser' },
   { source: 'src/browser/artifact-comments.ts', target: 'public/artifact-comments.js' },
@@ -18,8 +21,8 @@ const entries = [
 ];
 const outputs = entries.map(entry => {
   const result = esbuild.buildSync({
-    absWorkingDir: root, entryPoints: [entry.source], bundle: true,
-    platform: 'browser', format: 'iife', globalName: entry.globalName, target: 'es2022',
+    absWorkingDir: root, entryPoints: [entry.source], bundle: !entry.script,
+    platform: 'browser', format: entry.script ? undefined : 'iife', globalName: entry.globalName, target: 'es2022',
     outfile: entry.target, write: false, metafile: true,
     footer: entry.footer ? { js: entry.footer } : undefined,
     banner: { js: '// Generated from src/browser/; edit sources and run npm run build:browser.' },

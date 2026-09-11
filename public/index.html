@@ -32,13 +32,13 @@
       <div class="sidebar-header">
         <h1><span class="wordmark-pi">π</span>-dish</h1>
         <div class="sidebar-header-actions">
-          <button class="btn-icon" onclick="openUsageView()" title="Usage and spend" aria-label="Usage and spend">
+          <button class="btn-icon" data-app-click="openUsageView" title="Usage and spend" aria-label="Usage and spend">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <path d="M5 20v-8M12 20V5M19 20v-5"/>
               <path d="M3 20h18"/>
             </svg>
           </button>
-          <button class="btn-icon" onclick="openSkillsView()" title="Skills" aria-label="Skills">
+          <button class="btn-icon" data-app-click="openSkillsView" title="Skills" aria-label="Skills">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 7c-1.6-1.6-3.9-2.5-6-2.5H3v13h3c2.1 0 4.4.9 6 2.5 1.6-1.6 3.9-2.5 6-2.5h3v-13h-3c-2.1 0-4.4.9-6 2.5z"/>
               <path d="M12 7v13"/>
@@ -46,14 +46,14 @@
           </button>
           <!-- Routines: hidden until some effective host advertises the
                `routines` capability (fleet rule — absent means unsupported). -->
-          <button class="btn-icon" id="btnRoutines" style="display:none" onclick="openRoutinesView()" title="Routines" aria-label="Routines">
+          <button class="btn-icon" id="btnRoutines" style="display:none" data-app-click="openRoutinesView" title="Routines" aria-label="Routines">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="9"/>
               <path d="M12 7.5V12l3 1.8"/>
             </svg>
           </button>
-          <button class="btn-icon global-settings-btn" onclick="openSettingsModal()" title="Settings" aria-label="Settings">⚙</button>
-          <button class="btn-icon" onclick="refreshSessions()" title="Refresh">
+          <button class="btn-icon global-settings-btn" data-app-click="openSettingsModal" title="Settings" aria-label="Settings">⚙</button>
+          <button class="btn-icon" data-app-click="refreshSessions" title="Refresh">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 12a9 9 0 11-2.636-6.364"/>
               <path d="M21 3v6h-6"/>
@@ -84,7 +84,7 @@
       </div>
       
       <div class="sidebar-footer">
-        <button class="btn" onclick="openNewSessionView()">+ New session</button>
+        <button class="btn" data-app-click="openNewSessionView">+ New session</button>
       </div>
       <div class="sidebar-resize" id="sidebarResizeHandle" role="separator" aria-orientation="vertical" aria-label="Resize session list" title="Drag to resize (double-click to reset)"></div>
     </aside>
@@ -115,7 +115,7 @@
               >
             <div class="session-meta session-meta-desktop">
               <span class="badge host-badge" id="sessionHost" style="display:none"></span>
-              <span class="badge harness-badge" id="sessionHarness" style="display:none" onclick="openSessionHarnessSettings()"></span>
+              <span class="badge harness-badge" id="sessionHarness" style="display:none" data-app-click="openSessionHarnessSettings"></span>
               <div class="model-selector" id="modelSelector">
                 <button class="badge badge-model" id="sessionModel" title="Change model">model ▾</button>
               </div>
@@ -130,7 +130,7 @@
             <div class="session-chips" id="sessionChips">
               <span class="badge badge-working" id="sessionWorkingMobile"><span class="spinner-dot"></span><span class="spinner-text"></span></span>
               <span class="status" id="status"></span>
-              <button class="badge mobile-only" id="sessionCwdChip" onclick="openStatsModal()" title="Session stats" style="display:none"></button>
+              <button class="badge mobile-only" id="sessionCwdChip" data-app-click="openStatsModal" title="Session stats" style="display:none"></button>
             </div>
             <div class="ext-ui-status-row collapsed" id="extUiStatuses" style="display:none">
               <div class="ext-ui-status-items" id="extUiStatusItems"></div>
@@ -140,7 +140,7 @@
             <nav class="session-relations" id="sessionRelations" aria-label="Related sessions" style="display:none"></nav>
           </div>
           <div class="session-actions">
-            <button class="btn-icon" id="btnSearch" onclick="toggleSearchBar()" title="Search in session (Ctrl+F)">
+            <button class="btn-icon" id="btnSearch" data-app-click="toggleSearchBar" title="Search in session (Ctrl+F)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="11" cy="11" r="7"/>
                 <path d="M21 21l-4.35-4.35"/>
@@ -148,30 +148,30 @@
             </button>
             <!-- Phone only: the control panel used to be reachable from the
                  composer row, which no longer exists. -->
-            <button class="btn-icon mobile-only" id="btnPanel" onclick="toggleControlPanel()" title="Session controls" aria-label="Session controls">
+            <button class="btn-icon mobile-only" id="btnPanel" data-app-click="toggleControlPanel" title="Session controls" aria-label="Session controls">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
                 <circle cx="12" cy="12" r="3.2"/>
                 <path d="M19.4 15a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.7 1.7 0 00-1.87-.34 1.7 1.7 0 00-1.03 1.56V21a2 2 0 11-4 0v-.09A1.7 1.7 0 008.4 19.3a1.7 1.7 0 00-1.87.34l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.7 1.7 0 00.34-1.87 1.7 1.7 0 00-1.56-1.03H2a2 2 0 110-4h.09A1.7 1.7 0 003.7 8.4a1.7 1.7 0 00-.34-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06a1.7 1.7 0 001.87.34H8a1.7 1.7 0 001.03-1.56V2a2 2 0 114 0v.09A1.7 1.7 0 0015.6 3.7a1.7 1.7 0 001.87-.34l.06-.06a2 2 0 112.83 2.83l-.06.06a1.7 1.7 0 00-.34 1.87V8c.2.63.79 1.05 1.45 1.05H21a2 2 0 110 4h-.09c-.66 0-1.25.42-1.51 1.02z"/>
               </svg>
             </button>
-            <button class="btn-icon" id="btnTerminal" onclick="toggleTerminal()" title="Terminal at session cwd" style="display:none">
+            <button class="btn-icon" id="btnTerminal" data-app-click="toggleTerminal" title="Terminal at session cwd" style="display:none">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="3" y="4" width="18" height="16" rx="2"/>
                 <path d="M7 9l3 3-3 3M13 15h4"/>
               </svg>
             </button>
-            <button class="btn-icon" id="btnFocus" onclick="toggleFocusMode()" title="Focus mode: hide tool calls/results">
+            <button class="btn-icon" id="btnFocus" data-app-click="toggleFocusMode" title="Focus mode: hide tool calls/results">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M4 6h16M7 12h10M10 18h4"/>
               </svg>
             </button>
-            <button class="btn-icon" id="btnDiff" onclick="toggleDiffView()" title="Uncommitted changes (all repos under cwd)">
+            <button class="btn-icon" id="btnDiff" data-app-click="toggleDiffView" title="Uncommitted changes (all repos under cwd)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
                 <path d="M12 3.5v8M8 7.5h8"/>
                 <path d="M8 18h8"/>
               </svg>
             </button>
-            <button class="btn-icon" id="btnArtifacts" onclick="openArtifactsModal()" title="Shared artifacts (published pages & links)" style="display:none">
+            <button class="btn-icon" id="btnArtifacts" data-app-click="openArtifactsModal" title="Shared artifacts (published pages & links)" style="display:none">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
                 <path d="M21 8l-9-5-9 5 9 5 9-5z"/>
                 <path d="M3 8v8l9 5 9-5V8"/>
@@ -179,7 +179,7 @@
               </svg>
               <span class="artifact-count" id="artifactCount"></span>
             </button>
-            <button class="btn-icon" id="btnExport" onclick="exportSession()" title="Export session as HTML">
+            <button class="btn-icon" id="btnExport" data-app-click="exportSession" title="Export session as HTML">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
                 <path d="M7 10l5 5 5-5"/>
@@ -192,11 +192,11 @@
         <!-- In-session search (toggle: 🔍 button or Ctrl+F) -->
         <div class="search-bar" id="searchBar" style="display:none">
           <input type="text" class="search-input" id="searchInput" placeholder="Search in session… (Enter = previous match, Shift+Enter = next)"
-            onkeydown="handleSearchKey(event)" spellcheck="false" autocomplete="off">
+            data-app-keydown="searchKey" spellcheck="false" autocomplete="off">
           <span class="search-count" id="searchCount"></span>
-          <button class="btn-icon" onclick="searchPrev()" title="Previous match (Enter)">↑</button>
-          <button class="btn-icon" onclick="searchNext()" title="Next match (Shift+Enter)">↓</button>
-          <button class="btn-icon" onclick="closeSearch()" title="Close (Esc)">✕</button>
+          <button class="btn-icon" data-app-click="searchPrev" title="Previous match (Enter)">↑</button>
+          <button class="btn-icon" data-app-click="searchNext" title="Next match (Shift+Enter)">↓</button>
+          <button class="btn-icon" data-app-click="closeSearch" title="Close (Esc)">✕</button>
         </div>
 
         <!-- Messages -->
@@ -213,13 +213,13 @@
             <span class="diff-view-root" id="diffViewRoot"></span>
             <button class="view-comment-chip" id="diffViewComments" style="display:none"
                     title="Open comments for the agent"></button>
-            <button class="btn-icon" onclick="loadDiffView()" title="Refresh">
+            <button class="btn-icon" data-app-click="loadDiffView" title="Refresh">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 12a9 9 0 11-2.636-6.364"/>
                 <path d="M21 3v6h-6"/>
               </svg>
             </button>
-            <button class="btn-icon" onclick="closeDiffView()" title="Close (Esc)">✕</button>
+            <button class="btn-icon" data-app-click="closeDiffView" title="Close (Esc)">✕</button>
           </div>
           <div class="diff-view-body" id="diffViewBody"></div>
         </div>
@@ -236,7 +236,7 @@
             <a class="file-view-raw" id="fileViewRaw" href="#" target="_blank" rel="noopener" style="display:none">Raw</a>
             <button class="btn-icon" id="fileViewPublish" title="Publish as page (anyone with the link can view)" style="display:none">🌐</button>
             <button class="btn-icon" id="fileViewCopy" title="Copy contents">⧉</button>
-            <button class="btn-icon" onclick="closeFileView()" title="Close (Esc)">✕</button>
+            <button class="btn-icon" data-app-click="closeFileView" title="Close (Esc)">✕</button>
           </div>
           <div class="file-view-page" id="fileViewPage" style="display:none"></div>
           <div class="file-view-body" id="fileViewBody"></div>
@@ -251,14 +251,14 @@
             <span class="terminal-title">&gt;_</span>
             <span class="terminal-cwd" id="terminalCwd"></span>
             <span class="terminal-status" id="terminalStatus"></span>
-            <button class="btn-icon terminal-mode-btn" id="termModeBtn" onclick="switchTerminalMode()" style="display:none"></button>
-            <button class="btn-icon" id="termRestartBtn" onclick="restartTerminalShell()" title="Restart shell (kills anything running in it)">
+            <button class="btn-icon terminal-mode-btn" id="termModeBtn" data-app-click="switchTerminalMode" style="display:none"></button>
+            <button class="btn-icon" id="termRestartBtn" data-app-click="restartTerminalShell" title="Restart shell (kills anything running in it)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 12a9 9 0 11-2.636-6.364"/>
                 <path d="M21 3v6h-6"/>
               </svg>
             </button>
-            <button class="btn-icon" id="termCloseBtn" onclick="closeTerminal()" title="Close terminal (shell keeps running)">✕</button>
+            <button class="btn-icon" id="termCloseBtn" data-app-click="closeTerminal" title="Close terminal (shell keeps running)">✕</button>
           </div>
           <div class="terminal-container" id="terminalContainer"></div>
           <!-- Soft keyboards can't type these; shown on touch layouts only.
@@ -290,8 +290,8 @@
                 <option value="">Session model</option>
               </select>
             </label>
-            <button class="btn" id="inactiveStatsBtn" onclick="openStatsModal()">Stats</button>
-            <button class="btn btn-primary" id="resumeSessionBtn" onclick="resumeSession()">Resume</button>
+            <button class="btn" id="inactiveStatsBtn" data-app-click="openStatsModal">Stats</button>
+            <button class="btn btn-primary" id="resumeSessionBtn" data-app-click="resumeSession">Resume</button>
           </div>
         </div>
 
@@ -301,35 +301,35 @@
                Model + thinking live in the header on mobile, context in the
                input row. -->
           <div class="control-panel" id="controlPanel">
-            <button class="cp-row" onclick="closeControlPanel(); openSearch()" title="Search in session">
+            <button class="cp-row" data-app-click="panelOpenSearch" title="Search in session">
               <span class="cp-label">Search in session</span>
               <span class="cp-value">🔍</span>
             </button>
-            <button class="cp-row" id="cpTerminalRow" onclick="closeControlPanel(); toggleTerminal()" title="Terminal at session cwd" style="display:none">
+            <button class="cp-row" id="cpTerminalRow" data-app-click="panelToggleTerminal" title="Terminal at session cwd" style="display:none">
               <span class="cp-label">Terminal</span>
               <span class="cp-value">&gt;_</span>
             </button>
-            <button class="cp-row" id="btnFocusMobile" onclick="toggleFocusMode()" title="Hide tool calls/results">
+            <button class="cp-row" id="btnFocusMobile" data-app-click="toggleFocusMode" title="Hide tool calls/results">
               <span class="cp-label">Focus mode</span>
               <span class="cp-value" id="focusModeState">off</span>
             </button>
-            <button class="cp-row" onclick="closeControlPanel(); openDiffView()" title="Uncommitted changes (all repos under cwd)">
+            <button class="cp-row" data-app-click="panelOpenDiffView" title="Uncommitted changes (all repos under cwd)">
               <span class="cp-label">Changes</span>
               <span class="cp-value">±</span>
             </button>
-            <button class="cp-row" id="cpArtifactsRow" onclick="closeControlPanel(); openArtifactsModal()" title="Shared artifacts (published pages & links)" style="display:none">
+            <button class="cp-row" id="cpArtifactsRow" data-app-click="panelOpenArtifactsModal" title="Shared artifacts (published pages & links)" style="display:none">
               <span class="cp-label">Shared artifacts</span>
               <span class="cp-value" id="artifactCountMobile"></span>
             </button>
-            <button class="cp-row" id="cpTreeRow" onclick="closeControlPanel(); openTreeModal()" title="Session tree">
+            <button class="cp-row" id="cpTreeRow" data-app-click="panelOpenTreeModal" title="Session tree">
               <span class="cp-label">Session tree</span>
               <span class="cp-value">⑂</span>
             </button>
-            <button class="cp-row" id="cpHarnessRow" onclick="closeControlPanel(); openSessionHarnessSettings()" title="Harness settings: agents and models" style="display:none">
+            <button class="cp-row" id="cpHarnessRow" data-app-click="panelOpenSessionHarnessSettings" title="Harness settings: agents and models" style="display:none">
               <span class="cp-label">Harness settings</span>
               <span class="cp-value">◆</span>
             </button>
-            <button class="cp-row" onclick="closeControlPanel(); exportSession()" title="Export session as HTML">
+            <button class="cp-row" data-app-click="panelExportSession" title="Export session as HTML">
               <span class="cp-label">Export HTML</span>
               <span class="cp-value">↓</span>
             </button>
@@ -355,7 +355,7 @@
             <textarea id="promptInput" placeholder="Send a message..." rows="2"></textarea>
             <input type="file" id="imageFileInput" accept="image/*" multiple style="display:none">
             <div class="composer-tools">
-              <button class="tool-btn" id="btnAttach" onclick="document.getElementById('imageFileInput').click()" title="Attach images" aria-label="Attach images">
+              <button class="tool-btn" id="btnAttach" data-app-click="attachImage" title="Attach images" aria-label="Attach images">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.2-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
               </button>
               <!-- Dictation. No inline onclick: desktop toggles on click while
@@ -364,20 +364,20 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21"/><path class="mic-slash" d="M4 4l16 16"/></svg>
               </button>
               <span class="composer-gap"></span>
-              <button class="tool-btn tool-ctx" id="sessionContext" onclick="openStatsModal()" title="Session stats">0%</button>
+              <button class="tool-btn tool-ctx" id="sessionContext" data-app-click="openStatsModal" title="Session stats">0%</button>
               <!-- Keeps its slot when idle (visibility, not display): the
                    context readout must not shift when a turn starts. -->
-              <button class="tool-btn tool-stop" id="btnStop" onclick="abortTurn()" title="Stop (Esc)" aria-label="Stop">
+              <button class="tool-btn tool-stop" id="btnStop" data-app-click="abortTurn" title="Stop (Esc)" aria-label="Stop">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>
               </button>
               <div class="composer-act">
-                <button class="tool-btn" id="btnSteer" onclick="sendSteer()" style="display:none" title="Steer (Ctrl+Enter)" aria-label="Steer">
+                <button class="tool-btn" id="btnSteer" data-app-click="sendSteer" style="display:none" title="Steer (Ctrl+Enter)" aria-label="Steer">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8.6"/><circle cx="12" cy="12" r="2.4"/><path d="M3.4 12h6.2M14.4 12h6.2M12 14.4V20.6" stroke-linecap="round"/></svg>
                 </button>
-                <button class="tool-btn" id="btnFollowUp" onclick="sendFollowUp()" style="display:none" title="Queue after agent finishes" aria-label="Follow-up">
+                <button class="tool-btn" id="btnFollowUp" data-app-click="sendFollowUp" style="display:none" title="Queue after agent finishes" aria-label="Follow-up">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 5v6a4 4 0 01-4 4H5"/><path d="M9 11l-4 4 4 4"/></svg>
                 </button>
-                <button class="composer-send" id="btnSend" onclick="sendPrompt()" title="Send" aria-label="Send">
+                <button class="composer-send" id="btnSend" data-app-click="sendPrompt" title="Send" aria-label="Send">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
                 </button>
               </div>
@@ -399,13 +399,13 @@
           </button>
           <span class="usage-view-title">Usage</span>
           <span class="usage-view-note">Estimated from Pi's model catalog — not billed spend</span>
-          <button class="btn-icon" onclick="loadUsageView()" title="Refresh">
+          <button class="btn-icon" data-app-click="loadUsageView" title="Refresh">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 12a9 9 0 11-2.636-6.364"/>
               <path d="M21 3v6h-6"/>
             </svg>
           </button>
-          <button class="btn-icon" onclick="closeUsageView()" title="Close (Esc)">✕</button>
+          <button class="btn-icon" data-app-click="closeUsageView" title="Close (Esc)">✕</button>
         </div>
         <div class="usage-view-body" id="usageViewBody"></div>
       </div>
@@ -425,7 +425,7 @@
           <input type="text" class="search-view-input" id="searchViewInput"
             placeholder='Search sessions… ("phrase", -term, name:, cwd:, model:, is:active, since:7d)'
             spellcheck="false" autocomplete="off">
-          <button class="btn-icon" onclick="closeSearchView()" title="Close (Esc)">✕</button>
+          <button class="btn-icon" data-app-click="closeSearchView" title="Close (Esc)">✕</button>
         </div>
         <div class="search-view-body" id="searchViewBody"></div>
       </div>
@@ -443,7 +443,7 @@
             </svg>
           </button>
           <span class="usage-view-title">New session</span>
-          <button class="btn-icon" onclick="closeNewSessionView()" title="Close (Esc)" style="margin-left:auto">✕</button>
+          <button class="btn-icon" data-app-click="closeNewSessionView" title="Close (Esc)" style="margin-left:auto">✕</button>
         </div>
         <div class="new-session-body">
           <div class="ns-section">
@@ -452,11 +452,11 @@
           </div>
           <div class="ns-section" id="nsHostRow" style="display:none">
             <label class="ns-label" for="nsHostSelect">Host</label>
-            <select id="nsHostSelect" class="ns-select" onchange="onNsHostChange(this.value)"></select>
+            <select id="nsHostSelect" class="ns-select" data-app-change="onNsHostChange"></select>
           </div>
           <div class="ns-section">
             <label class="ns-label" for="nsHarnessSelect">Agent</label>
-            <select id="nsHarnessSelect" class="ns-select" onchange="onNsHarnessChange(this.value)">
+            <select id="nsHarnessSelect" class="ns-select" data-app-change="onNsHarnessChange">
               <option value="pi">Pi</option>
             </select>
           </div>
@@ -473,12 +473,12 @@
           <div class="ns-section ns-choice-row">
             <div class="ns-choice">
               <label class="ns-label" for="nsModelSelect">Model</label>
-              <select id="nsModelSelect" class="ns-select" onchange="onNsModelChange(this.value)"></select>
+              <select id="nsModelSelect" class="ns-select" data-app-change="onNsModelChange"></select>
               <div class="ns-hidden-note" id="nsModelHidden"></div>
             </div>
             <div class="ns-choice">
               <label class="ns-label" for="nsThinkingSelect">Thinking level</label>
-              <select id="nsThinkingSelect" class="ns-select" onchange="onNsThinkingChange(this.value)">
+              <select id="nsThinkingSelect" class="ns-select" data-app-change="onNsThinkingChange">
                 <option value="">(default)</option>
                 <option value="off">Off</option>
                 <option value="minimal">Minimal</option>
@@ -497,8 +497,8 @@
             <div class="ns-config-values" id="nsHarnessConfigValues">Loading…</div>
             <div class="ns-config-roles" id="nsHarnessRoles"></div>
             <div class="ns-config-actions">
-              <button class="btn-small" id="nsEditAgents" style="display:none" onclick="openHarnessSettings({ tab: 'agents' })">Edit agents</button>
-              <button class="btn-small" id="nsEditRoles" style="display:none" onclick="openHarnessSettings({ tab: 'models' })">Edit model roles</button>
+              <button class="btn-small" id="nsEditAgents" style="display:none" data-app-click="editHarnessAgents">Edit agents</button>
+              <button class="btn-small" id="nsEditRoles" style="display:none" data-app-click="editHarnessModels">Edit model roles</button>
             </div>
             <div class="ns-hidden-note">Used only when model or thinking stays at (default). Editing roles writes OMP's global config; a project <code>.omp/config.yml</code> still wins in its own directory.</div>
           </div>
@@ -514,7 +514,7 @@
 
           <div class="ns-actions">
             <span class="ns-error" id="nsError"></span>
-            <button class="btn btn-primary" id="nsSpawnBtn" onclick="spawnNewSession()">+ New session</button>
+            <button class="btn btn-primary" id="nsSpawnBtn" data-app-click="spawnNewSession">+ New session</button>
           </div>
         </div>
       </div>
@@ -551,13 +551,13 @@
           </button>
           <span class="usage-view-title">Routines</span>
           <span class="usage-view-note">Session templates with a schedule and an invocation ledger</span>
-          <button class="btn-icon" onclick="refreshRoutinesView()" title="Refresh">
+          <button class="btn-icon" data-app-click="refreshRoutinesView" title="Refresh">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 12a9 9 0 11-2.636-6.364"/>
               <path d="M21 3v6h-6"/>
             </svg>
           </button>
-          <button class="btn-icon" onclick="closeRoutinesView()" title="Close (Esc)">✕</button>
+          <button class="btn-icon" data-app-click="closeRoutinesView" title="Close (Esc)">✕</button>
         </div>
         <div class="routines-view-body">
           <div class="routines-list" id="routinesList"></div>
@@ -573,8 +573,8 @@
           </button>
           <span class="usage-view-title">Recovery</span>
           <span class="usage-view-note">Host-local session outcomes</span>
-          <button class="btn-small" onclick="loadRecoveryView()" title="Refresh recovery report">Refresh</button>
-          <button class="btn-icon" onclick="closeRecoveryView()" title="Close (Esc)" aria-label="Close recovery report">✕</button>
+          <button class="btn-small" data-app-click="loadRecoveryView" title="Refresh recovery report">Refresh</button>
+          <button class="btn-icon" data-app-click="closeRecoveryView" title="Close (Esc)" aria-label="Close recovery report">✕</button>
         </div>
         <div class="recovery-host-bar"><label for="recoveryReportHost">Host</label><select class="ns-select" id="recoveryReportHost"></select></div>
         <div class="usage-view-body" id="recoveryViewBody"></div>
@@ -584,7 +584,7 @@
   </div>
 
   <!-- Tree Modal -->
-  <div class="modal-overlay" id="treeModal" style="display:none" onclick="if(event.target===this)closeTreeModal()">
+  <div class="modal-overlay" id="treeModal" style="display:none" data-app-click="backdropCloseTreeModal">
     <div class="modal tree-modal">
       <div class="modal-header">
         <h3>Session Tree</h3>
@@ -596,7 +596,7 @@
             <option value="user-only">User Only</option>
             <option value="all">All</option>
           </select>
-          <button class="btn-icon" onclick="closeTreeModal()" title="Close (Esc)">✕</button>
+          <button class="btn-icon" data-app-click="closeTreeModal" title="Close (Esc)">✕</button>
         </div>
       </div>
       <div class="tree-body" id="treeBody">
@@ -610,11 +610,11 @@
   </div>
 
   <!-- Artifacts Modal: everything published/shared from the session -->
-  <div class="modal-overlay" id="artifactsModal" style="display:none" onclick="if(event.target===this)closeArtifactsModal()">
+  <div class="modal-overlay" id="artifactsModal" style="display:none" data-app-click="backdropCloseArtifactsModal">
     <div class="modal stats-modal">
       <div class="modal-header">
         <h3>Shared artifacts</h3>
-        <button class="btn-icon" onclick="closeArtifactsModal()" title="Close (Esc)">✕</button>
+        <button class="btn-icon" data-app-click="closeArtifactsModal" title="Close (Esc)">✕</button>
       </div>
       <div class="stats-body" id="artifactsBody">Loading...</div>
     </div>
@@ -622,11 +622,11 @@
 
   <!-- Related-sessions overflow: every relation grouped by kind, opened from
        the "+N more" chip when the header strip overflows. -->
-  <div class="modal-overlay" id="relationsModal" style="display:none" onclick="if(event.target===this)closeRelationsModal()">
+  <div class="modal-overlay" id="relationsModal" style="display:none" data-app-click="backdropCloseRelationsModal">
     <div class="modal stats-modal" role="dialog" aria-modal="true" aria-labelledby="relationsTitle">
       <div class="modal-header">
         <h3 id="relationsTitle">Related sessions</h3>
-        <button class="btn-icon" onclick="closeRelationsModal()" title="Close (Esc)">✕</button>
+        <button class="btn-icon" data-app-click="closeRelationsModal" title="Close (Esc)">✕</button>
       </div>
       <div class="stats-body relations-body" id="relationsBody"></div>
     </div>
@@ -657,32 +657,32 @@
   <div class="comment-list-popover" id="commentListPopover" style="display:none"></div>
 
   <!-- Stats Modal -->
-  <div class="modal-overlay" id="statsModal" style="display:none" onclick="if(event.target===this)closeStatsModal()">
+  <div class="modal-overlay" id="statsModal" style="display:none" data-app-click="backdropCloseStatsModal">
     <div class="modal stats-modal">
       <div class="modal-header">
         <h3>Session Stats</h3>
-        <button class="btn-icon" onclick="closeStatsModal()" title="Close (Esc)">✕</button>
+        <button class="btn-icon" data-app-click="closeStatsModal" title="Close (Esc)">✕</button>
       </div>
       <div class="stats-body" id="statsBody">Loading...</div>
     </div>
   </div>
 
-  <div class="modal-overlay" id="settingsModal" style="display:none" onclick="if(event.target===this)closeSettingsModal()">
+  <div class="modal-overlay" id="settingsModal" style="display:none" data-app-click="backdropCloseSettingsModal">
     <div class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
-      <div class="modal-header"><h3 id="settingsTitle">Settings</h3><button class="btn-icon" onclick="closeSettingsModal()" title="Close (Esc)">✕</button></div>
+      <div class="modal-header"><h3 id="settingsTitle">Settings</h3><button class="btn-icon" data-app-click="closeSettingsModal" title="Close (Esc)">✕</button></div>
       <div class="settings-body">
-        <details class="bounce-settings" id="bounceView" ontoggle="this.open ? refreshBounceView() : closeBounceView()">
+        <details class="bounce-settings" id="bounceView" data-app-toggle="bounceToggle">
           <summary id="openBounceAgents">Bounce agents</summary>
           <p class="bounce-help">Waits for idle agents and exited OMP children. Use Restart for OMP updates.</p>
           <div class="bounce-controls">
-            <select id="bounceMode" aria-label="Action" onchange="refreshBounceView()">
+            <select id="bounceMode" aria-label="Action" data-app-change="refreshBounceView">
               <option value="reload">Reload</option>
               <option value="restart">Restart</option>
             </select>
-            <button class="btn-small" id="bounceSelectEligible" onclick="selectBounceTargets(true)">Select all</button>
-            <button class="btn-small" id="bounceClearSelection" onclick="selectBounceTargets(false)">Clear</button>
-            <button class="btn-small" id="bounceRefresh" onclick="refreshBounceView()">Refresh</button>
-            <button class="btn-small" id="bounceSubmit" onclick="submitBounceTargets()" disabled>Queue Reload (0)</button>
+            <button class="btn-small" id="bounceSelectEligible" data-app-click="bounceSelect">Select all</button>
+            <button class="btn-small" id="bounceClearSelection" data-app-click="bounceClear">Clear</button>
+            <button class="btn-small" id="bounceRefresh" data-app-click="refreshBounceView">Refresh</button>
+            <button class="btn-small" id="bounceSubmit" data-app-click="submitBounceTargets" disabled>Queue Reload (0)</button>
           </div>
           <div id="bounceNotice" class="usage-notice" role="status"></div>
           <div id="bounceHosts"></div>
@@ -697,12 +697,12 @@
        override, prewalk, advisor) and the model-role assignments. Opened from
        the session header's harness badge and from the new-session takeover;
        both entries land on the same editor, scoped to a working directory. -->
-  <div class="modal-overlay" id="harnessSettingsModal" style="display:none" onclick="if(event.target===this)closeHarnessSettings()">
+  <div class="modal-overlay" id="harnessSettingsModal" style="display:none" data-app-click="backdropCloseHarnessSettings">
     <div class="modal harness-settings-modal" role="dialog" aria-modal="true" aria-labelledby="harnessSettingsTitle">
-      <div class="modal-header"><h3 id="harnessSettingsTitle">Harness settings</h3><button class="btn-icon" onclick="closeHarnessSettings()" title="Close (Esc)">✕</button></div>
+      <div class="modal-header"><h3 id="harnessSettingsTitle">Harness settings</h3><button class="btn-icon" data-app-click="closeHarnessSettings" title="Close (Esc)">✕</button></div>
       <div class="hs-tabs" role="tablist">
-        <button class="hs-tab" id="hsTabAgents" role="tab" onclick="showHarnessSettingsTab('agents')">Agents</button>
-        <button class="hs-tab" id="hsTabModels" role="tab" onclick="showHarnessSettingsTab('models')">Models</button>
+        <button class="hs-tab" id="hsTabAgents" role="tab" data-app-click="harnessTabAgents">Agents</button>
+        <button class="hs-tab" id="hsTabModels" role="tab" data-app-click="harnessTabModels">Models</button>
         <span class="hs-scope" id="harnessSettingsScope"></span>
       </div>
       <div class="hs-pane" id="hsPaneAgents"><div class="hs-agents-body" id="harnessAgentsBody">Loading…</div></div>
@@ -712,14 +712,14 @@
       </div>
       <div class="modal-footer model-roles-footer">
         <span class="model-roles-error" id="modelRolesError"></span>
-        <button class="btn-small" id="modelRolesSave" onclick="saveHarnessSettings()">Save</button>
+        <button class="btn-small" id="modelRolesSave" data-app-click="saveHarnessSettings">Save</button>
       </div>
     </div>
   </div>
 
-  <div class="modal-overlay" id="responseDetailsModal" style="display:none" onclick="if(event.target===this)closeResponseDetails()">
+  <div class="modal-overlay" id="responseDetailsModal" style="display:none" data-app-click="backdropCloseResponseDetails">
     <div class="modal response-details-modal" role="dialog" aria-modal="true" aria-labelledby="responseDetailsTitle">
-      <div class="modal-header"><h3 id="responseDetailsTitle">Response details</h3><button class="btn-icon" onclick="closeResponseDetails()" title="Close (Esc)">✕</button></div>
+      <div class="modal-header"><h3 id="responseDetailsTitle">Response details</h3><button class="btn-icon" data-app-click="closeResponseDetails" title="Close (Esc)">✕</button></div>
       <div class="stats-body" id="responseDetailsBody"></div>
     </div>
   </div>

@@ -1,3 +1,4 @@
+import type { VendorAttributes } from './browser-assets';
 import type { Terminal, ITerminalOptions, ITheme } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
 import type { HostEndpoint } from './api-client';
@@ -27,7 +28,7 @@ interface TerminalState {
 export function createTerminalController(options: {
   document: Document; storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>; sessionState: SessionState;
   host: (id: string | null) => HostEndpoint | null; supportsTerminal: (session: SessionEntry | null) => boolean; supportsTmux: (session: SessionEntry | null) => boolean;
-  asset: (tag: 'link' | 'script', attributes: Record<string, string>) => Promise<unknown>;
+  asset: (tag: 'link' | 'script', attributes: VendorAttributes) => Promise<unknown>;
   createTerminal: (options: ITerminalOptions) => Terminal | null; createFitAddon: () => FitAddon | null;
   socket: (url: string) => WebSocket; socketUrl: (host: Readonly<HostEndpoint>, path: string) => string;
   ticket: (host: Readonly<HostEndpoint>, purpose: 'terminal') => Promise<string>;
