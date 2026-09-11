@@ -7,8 +7,7 @@ for (const blocked of [false, true]) {
     await page.evaluate(() => { window.oldIdentity = identifyHosts(true); });
     await expect.poll(() => routes.length).toBe(1);
     await page.evaluate(() => {
-      hostCatalog = hostCatalog.map(entry => ({ ...entry }));
-      invalidateHosts();
+      hostDirectory.replaceCatalog(hostDirectory.catalog);
       window.newIdentity = identifyHosts(true);
     });
     await expect.poll(() => routes.length).toBe(2);
@@ -20,7 +19,7 @@ for (const blocked of [false, true]) {
     await page.evaluate(() => window.oldIdentity);
     expect(await page.evaluate(host => hostState(hostEntryFor(host)), fleet.peer.hostId)).toBe('reachable');
     expect(await page.evaluate(host => hostDiscovery.descriptor(host).label, fleet.peer.hostId)).toBe('Fresh descriptor');
-    expect(await page.evaluate(() => hostCatalog[0].hostId)).toBe(fleet.peer.hostId);
+    expect(await page.evaluate(() => hostDirectory.catalog[0].hostId)).toBe(fleet.peer.hostId);
   });
 }
 
@@ -42,8 +41,7 @@ test('a replacement fleet request cannot release startup readiness before it fin
   await expect.poll(() => routes.length).toBe(1);
   await page.evaluate(() => {
     // This peer will be learned only through the fleet, not the device catalog.
-    hostCatalog = [];
-    invalidateHosts();
+    hostDirectory.replaceCatalog([]);
     window.fleetReadyObserved = false;
     window.fleetBodiesDecoded = 0;
     hostFleetReady.then(() => { window.fleetReadyObserved = true; });

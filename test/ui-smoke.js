@@ -3308,9 +3308,9 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // RPC sessions are pi-dish-owned. Restart must replace the managed child
     // directly, retain the session id, and never divert into tmux.
     const rpcRestartId = await desktop.evaluate(async (id) => {
-      await apiSend(selfHost.hostId, `/api/sessions/${encodeURIComponent(id)}/resume`);
+      await apiSend(hostDirectory.self.hostId, `/api/sessions/${encodeURIComponent(id)}/resume`);
       await loadSessions(undefined, { withPrevious: true });
-      await selectSession(id, { host: selfHost.hostId });
+      await selectSession(id, { host: hostDirectory.self.hostId });
       return id;
     }, BETA_ID);
     await desktop.waitForFunction((id) => sessionState.currentSession?.id === id && sessionState.currentSession.isActive,
@@ -3366,8 +3366,8 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // helpers agree with what it wrote.
     console.log('host-aware client keys:');
     const keys = await desktop.evaluate((id) => {
-      const hostId = selfHost.hostId || 'ui-host';
-      if (!selfHost.hostId) selfHost = { hostId, base: '', label: null };
+      const hostId = hostDirectory.self.hostId || 'ui-host';
+      if (!hostDirectory.self.hostId) hostDirectory.setSelf({ hostId, label: null, version: null, capabilities: null });
       localStorage.setItem('pi-dish-draft-' + id, 'bare draft');
       localStorage.setItem('pi-dish-history-' + id, JSON.stringify(['bare prompt']));
       localStorage.setItem('pi-dish-terminal-mode-' + id, 'tmux');
@@ -3386,7 +3386,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       const bareLeft = Object.keys(localStorage).filter((k) =>
         /^pi-dish-(draft|history|terminal-mode)-/.test(k) && !k.includes(' ') && !k.includes('spawn:'));
       const freshState = PiDishBrowser.createSessionState({
-        getSelfHostId: () => selfHost.hostId, getHostLabel: hostLabelFor,
+        getSelfHostId: () => hostDirectory.self.hostId, getHostLabel: hostLabelFor,
         onListsChanged() {}, onCurrentChanged() {},
       });
       freshState.setSessionLists({ active: [{ id: 'fresh' }] });
@@ -3626,7 +3626,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       const bare = sessionMatchingRef(remoteId.slice(0, 12));
       // A same-id session on another host is still a valid picker candidate;
       // only the current host+id pair is excluded.
-      const shadow = { ...sessionState.currentSession, host: selfHost.hostId };
+      const shadow = { ...sessionState.currentSession, host: hostDirectory.self.hostId };
       sessionState.sessions.previous.push(shadow);
       const candidates = sessionRefCandidates().filter((s) => s.id === remoteId)
         .map((s) => sessionHostIdOf(s));
@@ -3729,7 +3729,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
         { type: 'message', message: { role: 'user', content: `COLLISION ${index ? 'REMOTE' : 'SELF'} TRANSCRIPT` } },
       ].map(entry => JSON.stringify(entry)).join('\n') + '\n');
     }
-    const selfId = await multi.evaluate(() => selfHost.hostId);
+    const selfId = await multi.evaluate(() => hostDirectory.self.hostId);
     const remoteId = remoteDescriptor.hostId;
     await multi.evaluate(() => loadSessions(undefined, { withPrevious: true }));
     await multi.evaluate(({ id, host }) => selectSession(id, { host }), { id: collisionId, host: selfId });

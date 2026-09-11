@@ -51,6 +51,24 @@ are not completion percentages.
   explicit callbacks until their own modules migrate.
 - Verification: strict build/lint/type checks, 856 backend tests, 66 browser
   regressions, all independent UI scenarios and desktop/mobile smoke passed.
-  Fable 5.1 commit review is required before pushing, as specified above.
+- Commits `fdf1402` and `54c5a66` passed Fable 5.1 review before push. The
+  follow-up review cleared the readiness/source-ownership fixes.
+- [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34585526645)
+  on `54c5a66`.
 - Next: host catalog state/editing and settings UI, then remaining new-session
   request controllers.
+
+
+## Checkpoint 2 — host directory (local verification complete)
+
+- Boundary: self/fleet/catalog state, effective host caching and lookup, and
+  catalog add/remove/token/discovery writers.
+- Public views are readonly, and descriptor updates require an owned source.
+  Saves retain unrelated source owners; explicit catalog replacement retires
+  old requests. Fleet payloads are copied before becoming mutable source rows.
+- The app uses directory writers and retains storage/connection/render callbacks.
+  Existing smoke fixtures use the same accessors instead of old global variables.
+- Verification: strict build/lint/type checks, 862 backend tests, 66 browser
+  regressions, all independent UI scenarios and desktop/mobile smoke passed.
+- Fable commit review is required before pushing this checkpoint.
+- Next: host settings DOM and add-host request/view ownership.

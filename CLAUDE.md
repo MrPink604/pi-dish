@@ -1030,9 +1030,11 @@ exactly single-host pi-dish.
   the ladder instead of resetting it every cycle. The typed controller owns
   observations, seeding, token resets and pruning; its callback re-renders the
   Hosts section only when `state`/`error` actually changed. `app.js` supplies
-  the effective host list. `src/browser/host-discovery.ts` owns descriptor/fleet
-  request lifetimes and refresh timing; the app retains source mutation, catalog
-  persistence and rendering callbacks. Peer requests capture the originating
+  the effective host list through `src/browser/host-directory.ts`, which owns
+  self/catalog/fleet state and source mutations. Its public views are readonly;
+  catalog saves preserve unchanged source objects and explicit replacements
+  retire them. `src/browser/host-discovery.ts` owns descriptor/fleet request
+  lifetimes and refresh timing. The app supplies storage and rendering callbacks. Peer requests capture the originating
   catalog object and endpoint, so a removed/re-added host, changed token or newer
   request retires the old success/failure. Fleet/self request sequences also
   prevent older responses from replacing newer identity or fleet results. A fleet entry

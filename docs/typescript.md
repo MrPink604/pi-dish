@@ -243,3 +243,13 @@ Fleet waiters follow replacement requests before releasing startup readiness.
 Catalog saves preserve unchanged source objects while still removing changed
 or extra fields. Descriptor identity is validated while optional metadata remains opaque. The app retains
 source mutation, persistence and rendering callbacks.
+
+`src/browser/host-directory.ts` owns self identity, the device catalog, fleet
+source rows and the cached effective host list. It supplies exact lookups and
+the existing transport fallback to self. Public catalog/host views are readonly;
+add/remove/token, identity and fleet changes go through its writers. Catalog
+saves retain unchanged source objects, while explicit replacement retires them.
+Discovery updates must refer to a currently owned source and persist only device
+catalog fields. Persisted labels are strings immediately after discovery; opaque
+labels/version/capabilities remain available through descriptor overlays. The app
+supplies storage and rendering/connection callbacks; settings DOM is still JavaScript.

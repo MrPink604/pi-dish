@@ -8,3 +8,4 @@ export { mountThinkingSelector } from './thinking-selector';
 export { normalizeHostBase, sanitizeHostCatalog, reconcileHostCatalog, mergeHostEntries } from './host-catalog';
 export { createHarnessDiscovery } from './harness-discovery';
 export { createHostDiscovery, decodeHostDescriptor } from './host-discovery';
+export { createHostDirectory } from './host-directory';

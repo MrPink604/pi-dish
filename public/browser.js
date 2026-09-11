@@ -26,6 +26,7 @@ var PiDishBrowser = (() => {
     HOST_BACKOFF_RESET_MS: () => HOST_BACKOFF_RESET_MS,
     createHarnessDiscovery: () => createHarnessDiscovery,
     createHostConnections: () => createHostConnections,
+    createHostDirectory: () => createHostDirectory,
     createHostDiscovery: () => createHostDiscovery,
     createHostSessionLoader: () => createHostSessionLoader,
     createHostTransport: () => createHostTransport,
@@ -1042,6 +1043,136 @@ var PiDishBrowser = (() => {
       refreshSoon,
       rememberDescriptor,
       descriptor: (hostId) => descriptors.get(hostId)
+    };
+  }
+
+  // src/browser/host-directory.ts
+  function createHostDirectory(options) {
+    let self = { base: "", hostId: null, label: null, version: null, capabilities: null };
+    let catalog = sanitizeHostCatalog(options.initialCatalog);
+    let fleet = [];
+    let cache = null;
+    function invalidate() {
+      cache = null;
+    }
+    function effectiveHosts() {
+      if (!cache) {
+        cache = mergeHostEntries(self, fleet, catalog);
+        for (const host of cache) {
+          const descriptor = host.hostId && options.descriptor(host.hostId);
+          if (!descriptor) continue;
+          for (const field of ["label", "version", "capabilities"]) {
+            if (host[field] == null && descriptor[field] != null) host[field] = descriptor[field];
+          }
+        }
+      }
+      return cache;
+    }
+    function entryFor(hostId) {
+      const hosts = effectiveHosts();
+      return hostId ? hosts.find((host) => host.hostId === hostId) || null : hosts[0];
+    }
+    function hostById(hostId) {
+      if (!hostId || hostId === self.hostId) return self;
+      return entryFor(hostId) || self;
+    }
+    function resolveHost(target) {
+      if (!target) return self;
+      return typeof target === "string" ? hostById(target) : target;
+    }
+    function sourceFor(host) {
+      if (host.source === "user") return catalog.find((row) => row.base === host.base) || null;
+      if (host.source !== "fleet") return null;
+      return fleet.find((row) => {
+        try {
+          return normalizeHostBase(row.base) === host.base;
+        } catch {
+          return false;
+        }
+      }) || null;
+    }
+    function setSelf(descriptor) {
+      self = { ...descriptor, base: "", label: typeof descriptor.label === "string" ? descriptor.label : null };
+      invalidate();
+    }
+    function setFleet(data) {
+      fleet = data.hosts.map((row) => ({ ...row }));
+      if (data.selfLabel && !self.label) self = { ...self, label: data.selfLabel };
+      invalidate();
+    }
+    function replaceCatalog(value) {
+      catalog = sanitizeHostCatalog(value);
+      invalidate();
+    }
+    function saveCatalog() {
+      catalog = reconcileHostCatalog(catalog);
+      options.persistCatalog(catalog);
+      invalidate();
+    }
+    function remove(key) {
+      const next = catalog.filter((row) => (row.hostId || row.base) !== key);
+      if (next.length === catalog.length) return false;
+      catalog = next;
+      invalidate();
+      return true;
+    }
+    function setToken(key, token) {
+      const row = catalog.find((entry) => (entry.hostId || entry.base) === key);
+      if (!row) return false;
+      row.token = token;
+      invalidate();
+      return true;
+    }
+    function add(value) {
+      const row = sanitizeHostCatalog([value])[0];
+      if (!row) return false;
+      catalog = catalog.filter((entry) => (!row.hostId || entry.hostId !== row.hostId) && entry.base !== row.base);
+      catalog.push(row);
+      invalidate();
+      return true;
+    }
+    function applyDescriptor(host, source, data) {
+      if (sourceFor(host) !== source) return false;
+      const user = catalog.find((row) => row === source);
+      const remote = fleet.find((row) => row === source);
+      if (!user && !remote) return false;
+      host.hostId = data.hostId;
+      for (const field of ["label", "version", "capabilities"]) {
+        if (!host[field] && data[field]) host[field] = data[field];
+      }
+      if (user) {
+        user.hostId = data.hostId;
+        if (!user.label && typeof data.label === "string" && data.label) user.label = data.label;
+      }
+      if (remote) {
+        remote.hostId = data.hostId;
+        if (!remote.label && data.label) remote.label = data.label;
+      }
+      invalidate();
+      if (user) options.persistCatalog(catalog);
+      return true;
+    }
+    return {
+      get self() {
+        return self;
+      },
+      get catalog() {
+        return catalog;
+      },
+      effectiveHosts,
+      entryFor,
+      hostById,
+      resolveHost,
+      sourceFor,
+      invalidate,
+      setSelf,
+      setFleet,
+      replaceCatalog,
+      saveCatalog,
+      remove,
+      setToken,
+      add,
+      applyDescriptor
     };
   }
   return __toCommonJS(index_exports);

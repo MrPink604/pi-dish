@@ -7,28 +7,24 @@
 // =========================================================================
 // Catalog values enter through the typed normalization/merge boundary.
 function normalizeHostBase(input) { return PiDishBrowser.normalizeHostBase(input); }
-function sanitizeHostCatalog(raw) { return PiDishBrowser.sanitizeHostCatalog(raw); }
-function mergeHostEntries(self, fleet, catalog) { return PiDishBrowser.mergeHostEntries(self, fleet, catalog); }
 
 const HOSTS_KEY = 'pi-dish-hosts';
 const KEYS_MIGRATED_KEY = 'pi-dish-keys-migrated';
 // Directly-added hosts (phase 2 owns the editor UI); self is always implicit.
-let hostCatalog = sanitizeHostCatalog(readJSONPref(HOSTS_KEY, []));
+const hostDirectory = PiDishBrowser.createHostDirectory({
+  initialCatalog: readJSONPref(HOSTS_KEY, []),
+  descriptor: id => hostDiscovery.descriptor(id),
+  persistCatalog: catalog => localStorage.setItem(HOSTS_KEY, JSON.stringify(catalog)),
+});
 // hostId stays null until GET /api/host answers — and forever on a server
 // too old to serve it, which is why every key path tolerates host-less keys.
-let selfHost = { hostId: null, base: '', label: null, version: null, capabilities: null };
+// The directory owns self identity, source catalogs and their effective list.
 
 /** Effective-list (or self) entry for a host id; unknown ids fall back to self. */
-function hostById(id) {
-  if (!id || id === selfHost.hostId) return selfHost;
-  return effectiveHosts().find(h => h.hostId === id) || selfHost;
-}
+function hostById(id) { return hostDirectory.hostById(id); }
 
 /** Accepts a host id, a host entry, or nothing (self). */
-function resolveHost(host) {
-  if (!host) return selfHost;
-  return typeof host === 'string' ? hostById(host) : host;
-}
+function resolveHost(host) { return hostDirectory.resolveHost(host); }
 
 /**
  * The one fetch entry point for /api paths. Nothing else in this file may
@@ -104,11 +100,11 @@ function loadHostIdentity() { return hostDiscovery.loadIdentity(); }
  * here keeps working unmigrated: sessionKey(null, id) is the bare form.
  */
 function migrateClientKeys() {
-  if (!selfHost.hostId) return;
+  if (!hostDirectory.self.hostId) return;
   try {
-    if (localStorage.getItem(KEYS_MIGRATED_KEY) === selfHost.hostId) return;
+    if (localStorage.getItem(KEYS_MIGRATED_KEY) === hostDirectory.self.hostId) return;
     const isBare = (key) => parseSessionKey(key).hostId === null;
-    const compose = (id) => sessionKey(selfHost.hostId, id);
+    const compose = (id) => sessionKey(hostDirectory.self.hostId, id);
     const prefixes = ['pi-dish-draft-', 'pi-dish-history-', 'pi-dish-terminal-mode-'];
     const keys = [];
     for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
@@ -136,7 +132,7 @@ function migrateClientKeys() {
     localStorage.setItem('pi-dish-expanded-session-families', JSON.stringify(families));
     const selected = localStorage.getItem('pi-dish-session');
     if (selected && isBare(selected)) localStorage.setItem('pi-dish-session', compose(selected));
-    localStorage.setItem(KEYS_MIGRATED_KEY, selfHost.hostId);
+    localStorage.setItem(KEYS_MIGRATED_KEY, hostDirectory.self.hostId);
   } catch {}
 }
 
@@ -152,40 +148,21 @@ function migrateClientKeys() {
 // exactly one answer. With only self in it, every branch below is a no-op
 // and the UI is byte-identical to the single-host one.
 
-let fleetHosts = [];                // GET /api/hosts entries (never persisted)
-let effectiveHostsCache = null;     // rebuilt whenever a source changes
 const hostConnections = PiDishBrowser.createHostConnections({ onChange: () => renderHostsSection() });
 // GET /api/host descriptors, by hostId. Runtime only: label/version/
 // capabilities belong to the host, not to this browser's catalog entry (the
 // catalog deliberately persists only base/id/label/token), so they are
 // overlaid onto the merged list instead of being written back into it.
 
-function invalidateHosts() { effectiveHostsCache = null; }
-
-function effectiveHosts() {
-  if (!effectiveHostsCache) {
-    effectiveHostsCache = mergeHostEntries(selfHost, fleetHosts, hostCatalog);
-    for (const host of effectiveHostsCache) {
-      const descriptor = host.hostId && hostDiscovery.descriptor(host.hostId);
-      if (!descriptor) continue;
-      for (const field of ['label', 'version', 'capabilities']) {
-        if (host[field] == null && descriptor[field] != null) host[field] = descriptor[field];
-      }
-    }
-  }
-  return effectiveHostsCache;
-}
+function invalidateHosts() { hostDirectory.invalidate(); }
+function effectiveHosts() { return hostDirectory.effectiveHosts(); }
 
 function hostKeyOf(host) { return PiDishBrowser.hostKeyOf(host); }
 function isMultiHost() { return effectiveHosts().length > 1; }
 function selfHostEntry() { return effectiveHosts()[0]; }
 
 /** Effective entry for a host id — null when nothing in the list claims it. */
-function hostEntryFor(hostId) {
-  const hosts = effectiveHosts();
-  if (!hostId) return hosts[0];
-  return hosts.find(h => h.hostId === hostId) || null;
-}
+function hostEntryFor(hostId) { return hostDirectory.entryFor(hostId); }
 
 function hostLabelFor(hostId) {
   const entry = hostEntryFor(hostId);
@@ -224,30 +201,16 @@ const hostDiscovery = PiDishBrowser.createHostDiscovery({
   requestSelf: () => fetch('/api/host'),
   hosts: effectiveHosts,
   pollableHosts,
-  sourceFor: host => host.source === 'user'
-    ? hostCatalog.find(entry => entry.base === host.base) || null
-    : fleetHosts.find(entry => normalizeHostBase(entry.base) === host.base) || null,
+  sourceFor: hostDirectory.sourceFor,
   onSelf: data => {
-    selfHost = { ...data, base: '', label: typeof data.label === 'string' ? data.label : null };
-    invalidateHosts();
+    hostDirectory.setSelf(data);
     migrateClientKeys();
   },
-  onFleet: ({ hosts, selfLabel }) => {
-    fleetHosts = hosts;
-    if (selfLabel && !selfHost.label) selfHost = { ...selfHost, label: selfLabel };
-    invalidateHosts();
+  onFleet: data => {
+    hostDirectory.setFleet(data);
     seedHostConnFromFleet();
   },
-  onIdentified: (host, source, data) => {
-    host.hostId = data.hostId;
-    for (const field of ['label', 'version', 'capabilities']) {
-      if (!host[field] && data[field]) host[field] = data[field];
-    }
-    source.hostId = data.hostId;
-    if (!source.label && data.label) source.label = data.label;
-    if (host.source === 'user') localStorage.setItem(HOSTS_KEY, JSON.stringify(hostCatalog));
-    invalidateHosts();
-  },
+  onIdentified: hostDirectory.applyDescriptor,
   onConnection: (host, event) => hostConnections.note(host, event),
   afterFleet: () => {
     pruneHostCaches();
@@ -367,7 +330,7 @@ function hostChipHtml(hostId, { note = false } = {}) {
 // All session list/selection writes and their rendering hooks share one store.
 // Read its snapshots freely; mutate them only through its four state writers.
 const sessionState = PiDishBrowser.createSessionState({
-  getSelfHostId: () => selfHost.hostId,
+  getSelfHostId: () => hostDirectory.self.hostId,
   getHostLabel: hostLabelFor,
   onListsChanged: renderSessions,
   onCurrentChanged: updateSessionHeader,
@@ -842,7 +805,7 @@ function allKnownSessions() {
 }
 
 function sessionHostIdOf(session) {
-  return (session && session.host) || selfHost.hostId;
+  return (session && session.host) || hostDirectory.self.hostId;
 }
 
 function sessionRefCandidates() {
@@ -886,7 +849,7 @@ function composerSessionRef(session, target) {
   const targetHost = sessionHostIdOf(target);
   const prefix = refPrefixFor(session);
   if (sessionHost === targetHost) return prefix;
-  if (targetHost === selfHost.hostId) {
+  if (targetHost === hostDirectory.self.hostId) {
     const entry = hostEntryFor(sessionHost);
     if (entry && entry.name) return `${entry.name}/${prefix}`;
   }
@@ -929,7 +892,7 @@ function acceptSessionRefMention(ref) {
 }
 
 /** The session a ref addresses, resolved the way its owning server would. */
-function sessionMatchingRef(ref, localHostId = sessionState.currentSession ? sessionHostIdOf(sessionState.currentSession) : selfHost.hostId) {
+function sessionMatchingRef(ref, localHostId = sessionState.currentSession ? sessionHostIdOf(sessionState.currentSession) : hostDirectory.self.hostId) {
   const parts = parseSessionRefParts(ref);
   if (!parts) return null;
   const onHost = allKnownSessions().filter((session) => {
@@ -1322,7 +1285,7 @@ function publishSessionLists() {
     if (!cache) continue;
     parts.push({ hostId: host.hostId || null, active: cache.active, previous: cache.previous });
   }
-  sessionState.setSessionLists(parts.length ? parts : [{ hostId: selfHost.hostId, active: [], previous: [] }]);
+  sessionState.setSessionLists(parts.length ? parts : [{ hostId: hostDirectory.self.hostId, active: [], previous: [] }]);
 }
 
 // Refresh the list, preserving an in-flight server-side search so a
@@ -2435,7 +2398,7 @@ function modelCatalogUrl(harnessId, cwd) { return PiDishBrowser.modelCatalogUrl(
  */
 function modelsCacheKey(harnessId, hostId) {
   const base = harnessId === 'pi' ? 'pi-dish-models-cache' : `pi-dish-models-cache:${harnessId}`;
-  return hostId && hostId !== selfHost.hostId ? `${base}@${hostId}` : base;
+  return hostId && hostId !== hostDirectory.self.hostId ? `${base}@${hostId}` : base;
 }
 
 async function loadModels(sessionId, harnessId, cwd, host) {
@@ -3427,9 +3390,7 @@ async function loadRecoveryView() {
 // server's config and are shown read-only. ---------------------------------
 
 function saveHostCatalog() {
-  hostCatalog = PiDishBrowser.reconcileHostCatalog(hostCatalog);
-  localStorage.setItem(HOSTS_KEY, JSON.stringify(hostCatalog));
-  invalidateHosts();
+  hostDirectory.saveCatalog();
   pruneHostCaches();
   renderHostsSection();
   renderSessions();
@@ -3482,7 +3443,7 @@ function renderHostsSection() {
   }
   for (const btn of list.querySelectorAll('.host-remove-btn')) {
     btn.addEventListener('click', () => {
-      hostCatalog = hostCatalog.filter(entry => (entry.hostId || entry.base) !== btn.dataset.key);
+      hostDirectory.remove(btn.dataset.key);
       saveHostCatalog();
     });
   }
@@ -3496,14 +3457,14 @@ function renderHostsSection() {
  * retried on their own, so this is also what un-parks one.
  */
 function promptHostToken(key) {
-  const entry = hostCatalog.find(item => (item.hostId || item.base) === key);
+  const entry = hostDirectory.catalog.find(item => (item.hostId || item.base) === key);
   if (!entry) {
     hostStatus('That host comes from this server’s config — set its token there.');
     return;
   }
   const token = prompt(`Token for ${hostDisplayLabel(entry)}`, '');
   if (token === null) return;
-  entry.token = token.trim() || undefined;
+  hostDirectory.setToken(key, token.trim() || undefined);
   hostConnections.reset(key);
   saveHostCatalog();
   refreshSessions();
@@ -3550,10 +3511,9 @@ async function addHostFromForm() {
     hostStatus(`Could not reach that host: ${e.message}. A host on another origin must allowlist this one (allowedOrigins in its settings).`, true);
     return;
   }
-  if (descriptor.hostId === selfHost.hostId) { hostStatus('That is this host.', true); return; }
+  if (descriptor.hostId === hostDirectory.self.hostId) { hostStatus('That is this host.', true); return; }
   hostDiscovery.rememberDescriptor(descriptor);
-  hostCatalog = hostCatalog.filter(entry => entry.hostId !== descriptor.hostId && entry.base !== base);
-  hostCatalog.push({ base, hostId: descriptor.hostId, label: label || descriptor.label || null, token: token || null });
+  hostDirectory.add({ base, hostId: descriptor.hostId, label: label || descriptor.label || null, token: token || null });
   hostConnections.reset(descriptor.hostId);
   saveHostCatalog();
   if (baseInput) baseInput.value = '';
@@ -8880,7 +8840,7 @@ async function monitorSessionSpawn(spawnId, host = null) {
           // Capture the visible provisional composer before moving its draft
           // and attachments onto the bridge's authoritative session id.
           if (showingSpawn) stashPromptState();
-          migratePromptState(pendingComposerKey(spawnId), sessionKey(host || selfHost.hostId, data.sessionId));
+          migratePromptState(pendingComposerKey(spawnId), sessionKey(host || hostDirectory.self.hostId, data.sessionId));
           // Do not yank the user away if they selected another session (or a
           // newer spawn) while this process was starting.
           if (showingSpawn) {
@@ -9061,7 +9021,7 @@ function harnessLabel(harnessId) {
 // promises an editor a 501 would refuse.
 const harnessDiscovery = PiDishBrowser.createHarnessDiscovery({
   selectedHostId: nsHostId,
-  selfHostId: () => selfHost.hostId,
+  selfHostId: () => hostDirectory.self.hostId,
   requestPicker: async host => {
     const res = await apiFetch(host, '/api/harnesses');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
