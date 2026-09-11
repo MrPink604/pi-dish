@@ -24,6 +24,7 @@ var PiDishBrowser = (() => {
     ApiHttpError: () => ApiHttpError,
     HOST_BACKOFF_LADDER: () => HOST_BACKOFF_LADDER,
     HOST_BACKOFF_RESET_MS: () => HOST_BACKOFF_RESET_MS,
+    createHarnessDiscovery: () => createHarnessDiscovery,
     createHostConnections: () => createHostConnections,
     createHostSessionLoader: () => createHostSessionLoader,
     createHostTransport: () => createHostTransport,
@@ -182,11 +183,11 @@ var PiDishBrowser = (() => {
     };
     return { request };
   }
-  async function jsonResponse(response, fallback) {
+  async function jsonResponse(response, fallback2) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       const error = data && typeof data === "object" && "error" in data ? data.error : null;
-      throw new ApiHttpError(typeof error === "string" && error ? error : `${fallback} (${response.status})`, response.status);
+      throw new ApiHttpError(typeof error === "string" && error ? error : `${fallback2} (${response.status})`, response.status);
     }
     return data;
   }
@@ -834,6 +835,84 @@ var PiDishBrowser = (() => {
     }
     for (const entry of sanitizeHostCatalog(catalog)) push({ ...entry, hostId: entry.hostId || null, source: "user" });
     return out;
+  }
+
+  // src/browser/harness-discovery.ts
+  function decodeRows(data) {
+    if (!data || typeof data !== "object" || !("harnesses" in data) || !Array.isArray(data.harnesses)) return [];
+    const rows = data.harnesses;
+    return rows.flatMap((value) => {
+      if (!value || typeof value !== "object" || !("id" in value) || typeof value.id !== "string" || !value.id) return [];
+      const row = {
+        ...value,
+        id: value.id,
+        label: "label" in value && typeof value.label === "string" ? value.label : void 0
+      };
+      return [row];
+    });
+  }
+  var fallback = () => [{ id: "pi", label: "Pi", available: true }];
+  function createHarnessDiscovery(options) {
+    let rows = fallback();
+    let sequence = 0;
+    const cache = /* @__PURE__ */ new Map();
+    const pending = /* @__PURE__ */ new Map();
+    const cacheOwners = /* @__PURE__ */ new Map();
+    const keyOf = (host) => host || options.selfHostId();
+    async function load() {
+      const host = options.selectedHostId();
+      const key = keyOf(host);
+      const seq = ++sequence;
+      const ownsDiscovery = () => seq === sequence && host === options.selectedHostId();
+      try {
+        const data = await options.requestPicker(host);
+        if (!ownsDiscovery()) return;
+        if (data == null) throw new Error("Missing harness catalog");
+        const discovered = decodeRows(data);
+        if (discovered.length) {
+          rows = discovered;
+          cache.set(key, discovered);
+          cacheOwners.set(key, {});
+          options.onCacheChange();
+          const preferred = options.preferredHarness();
+          if (preferred && rows.some((row) => row.id === preferred && row.available !== false)) {
+            options.onPreferredHarness(preferred);
+          }
+        }
+      } catch {
+        if (!ownsDiscovery()) return;
+        rows = fallback();
+      }
+      options.onPickerChange();
+    }
+    function ensure(host) {
+      const key = keyOf(host);
+      if (cache.has(key)) return Promise.resolve();
+      const existing = pending.get(key);
+      if (existing) return existing;
+      const owner = {};
+      cacheOwners.set(key, owner);
+      const request = (async () => {
+        try {
+          const data = await options.requestBackground(key);
+          if (cacheOwners.get(key) !== owner) return;
+          cache.set(key, decodeRows(data));
+          options.onCacheChange();
+        } catch {
+        }
+      })().finally(() => {
+        pending.delete(key);
+      });
+      pending.set(key, request);
+      return request;
+    }
+    return {
+      load,
+      ensure,
+      rows: () => rows,
+      cachedRows: (host) => cache.get(keyOf(host)),
+      row: (host, harness) => cache.get(keyOf(host))?.find((row) => row.id === harness) || null
+    };
   }
   return __toCommonJS(index_exports);
 })();

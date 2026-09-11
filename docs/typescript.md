@@ -212,3 +212,15 @@ wins and later entries only fill missing metadata. It preserves the existing URL
 policy and drops broken catalog rows without mutating inputs. Normalized routes
 and tokens are typed for the transport/loaders; descriptor capabilities, version
 and self labels remain opaque until their consuming feature narrows them.
+
+`src/browser/harness-discovery.ts` owns the new-session harness catalog, request
+sequence and per-host settings-badge cache. Picker requests capture the host and
+cache key before awaiting; only the latest request for the still-selected host
+can publish. Background reads share pending work per host and cannot overwrite
+a newer picker catalog. Both cache writers refresh the settings badge.
+Failed background reads remain retryable; successful
+empty catalogs are cached. Failed picker reads retain the Pi fallback, while
+empty catalogs leave the existing picker intact. Rows require a nonempty string
+id, labels are narrowed, and capability/availability payloads remain opaque with
+the existing truthiness/exact-false policies. The app supplies transport,
+preference storage, host selection and rendering callbacks.

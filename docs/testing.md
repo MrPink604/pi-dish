@@ -103,7 +103,7 @@ After editing `src/browser/`, run `npm run build:browser` before `npm test`;
 | Composer drafts, attachments, delayed preparation and send | `test/browser/composer-ownership.spec.js` |
 | Queue edit/cancel/send and abort ownership | `test/browser/queue-ownership.spec.js` |
 | Reused extension dialog ids, responses and replay | `test/browser/extension-dialogs.spec.js` |
-| New-session harness discovery order and host ownership | `test/browser/harness-discovery.spec.js` |
+| Harness discovery order, host ownership, background cache races and malformed rows | `test/browser-harness-discovery.test.js`, `test/types/browser-harnesses.ts`, `test/browser/harness-discovery.spec.js` |
 | Prime owned-root close/restart, replacement-failure guards, legacy detach labels, unowned controls and host-bound requests | `test/browser/prime-close.spec.js`, `test/tmux.test.js`, `npm run test:lineage -- prime` |
 | Listener startup, bind retry, delayed/failed aliases, advertised URLs, signal release | `test/listener-lifecycle.test.js` |
 | Bridge, lifecycle, capabilities and API behavior | `npm test` (`test/*.test.js`) |

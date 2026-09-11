@@ -43,6 +43,41 @@ test('harness discovery finishing after a host switch cannot overwrite that host
   await oldRoute.fulfill({ json: catalog('omp') });
   await page.evaluate(() => window.oldDiscovery);
   await expect(page.locator('#nsHarnessSelect')).toHaveValue('prime');
-  expect(await page.evaluate(host => harnessRowsByHost.get(host).map(row => row.id), fleet.peer.hostId))
+  expect(await page.evaluate(host => harnessDiscovery.cachedRows(host).map(row => row.id), fleet.peer.hostId))
     .toEqual(['pi', 'prime']);
+});
+
+test('malformed harness rows do not break discovery or erase valid alternatives', async ({ page, fleet }) => {
+  await page.route(`${fleet.self.base}/api/harnesses`, route => route.fulfill({ json: {
+    harnesses: [null, 7, {}, { id: 5 }, { id: '' },
+      { id: 'pi', label: 'Pi' }, { id: 'omp', label: 'OMP', available: true }],
+  } }));
+  await page.evaluate(async () => {
+    localStorage.setItem(HARNESS_KEY, 'omp');
+    await loadHarnesses();
+  });
+  await expect(page.locator('#nsHarnessSelect')).toHaveValue('omp');
+  await expect(page.locator('#nsHarnessSelect option')).toHaveText(['Pi', 'OMP']);
+});
+
+test('a picker catalog refreshes the settings badge while an older background read is pending', async ({ page, fleet }) => {
+  const routes = [];
+  await page.route(`${fleet.peer.base}/api/harnesses`, route => routes.push(route));
+  await fleet.select(fleet.peer);
+  await page.evaluate(host => {
+    sessionState.mergeCurrentSession(sessionState.captureSelection(), { harnessId: 'omp' });
+    updateSessionHeader();
+    window.backgroundDiscovery = harnessDiscovery.ensure(host);
+    newSessionHostId = host;
+    window.pickerDiscovery = loadHarnesses();
+  }, fleet.peer.hostId);
+  await expect.poll(() => routes.length).toBe(2);
+  await expect(page.locator('#sessionHarness')).not.toHaveClass(/clickable/);
+  await routes[1].fulfill({ json: { harnesses: [{ id: 'omp', label: 'OMP', pilotConfig: true }] } });
+  await page.evaluate(() => window.pickerDiscovery);
+  await expect(page.locator('#sessionHarness')).toHaveClass(/clickable/);
+  await routes[0].fulfill({ json: { harnesses: [{ id: 'omp', pilotConfig: false }] } });
+  await page.evaluate(() => window.backgroundDiscovery);
+  expect(await page.evaluate(host => harnessRow(host, 'omp').pilotConfig, fleet.peer.hostId)).toBe(true);
+  await expect(page.locator('#sessionHarness')).toHaveClass(/clickable/);
 });

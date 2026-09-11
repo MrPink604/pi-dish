@@ -724,11 +724,15 @@ error and the takeover stays open. The workspace-header `+` button
 direct-spawns via `createSession(cwd)` (same async path, default model)
 without the takeover.
 
-Harness discovery captures the selected host and a request sequence before
+Harness discovery in `src/browser/harness-discovery.ts` captures the selected
+host, resolved cache key and a request sequence before
 awaiting `/api/harnesses`. Only the latest request for the still-selected host
 may update the picker and its catalog; stale failures must also leave the
 newer selection intact. The host catalog cache is written under that captured
-host, never whichever host is selected when the response arrives.
+host, never whichever host is selected when the response arrives. Background
+settings-badge reads share pending work per host; a delayed background result
+cannot overwrite a newer picker catalog. Malformed rows without string ids are
+isolated before rendering. The app retains transport and preference/DOM callbacks.
 
 ### Harness settings: agents + model roles (`#harnessSettingsModal`)
 
@@ -741,7 +745,7 @@ control panel's `#cpHarnessRow`) and the takeover's `#nsEditAgents` /
 cwd, or the takeover's — because the *effective* view depends on that
 directory's project config. The badge is only clickable where the session's own
 host reports `pilotConfig` for its harness (`/api/harnesses`, cached per host in
-`harnessRowsByHost`), so it never promises an editor a 501 would refuse.
+`harnessDiscovery`), so it never promises an editor a 501 would refuse.
 Escape closes the modal only.
 
 **Model roles** (`GET /api/harnesses/:id/config`, `PUT …/model-roles`): OMP

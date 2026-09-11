@@ -6,3 +6,4 @@ export { createHostConnections, hostKeyOf, hostConnReduce, HOST_BACKOFF_LADDER, 
 export { createHostSessionLoader } from './host-session-loader';
 export { mountThinkingSelector } from './thinking-selector';
 export { normalizeHostBase, sanitizeHostCatalog, mergeHostEntries } from './host-catalog';
+export { createHarnessDiscovery } from './harness-discovery';

@@ -9087,10 +9087,8 @@ function onNsHostChange(value) {
 let newSessionModel = ''; // '' = default (omit --model); else provider/id
 let newSessionThinking = ''; // '' = default (omit --thinking)
 const HARNESS_KEY = 'pi-dish-new-harness';
-let knownHarnesses = [{ id: 'pi', label: 'Pi', available: true }];
 let newSessionHarness = 'pi';
 let nsConfigSeq = 0;
-let nsHarnessSeq = 0;
 let nsPilotRefreshTimer = null;
 
 const NS_THINKING_LABELS = {
@@ -9103,7 +9101,7 @@ function selectedHarnessId() {
 }
 
 function harnessLabel(harnessId) {
-  return knownHarnesses.find(harness => harness.id === harnessId)?.label
+  return harnessDiscovery.rows().find(harness => harness.id === harnessId)?.label
     || (harnessId === 'pi' ? 'Pi' : harnessId);
 }
 
@@ -9111,61 +9109,38 @@ function harnessLabel(harnessId) {
 // a settings view at all. The session header only offers the modal when the
 // session's own host says its harness is configurable, so the badge never
 // promises an editor a 501 would refuse.
-const harnessRowsByHost = new Map();
-const harnessRowFetches = new Set();
+const harnessDiscovery = PiDishBrowser.createHarnessDiscovery({
+  selectedHostId: nsHostId,
+  selfHostId: () => selfHost.hostId,
+  requestPicker: async host => {
+    const res = await apiFetch(host, '/api/harnesses');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  },
+  requestBackground: host => harnessSettingsFetch(host, '/api/harnesses'),
+  preferredHarness: () => localStorage.getItem(HARNESS_KEY),
+  onPreferredHarness: id => { newSessionHarness = id; },
+  onPickerChange: () => {
+    renderNsHarnesses();
+    if (isNewSessionViewOpen()) onNsHarnessChange(selectedHarnessId());
+  },
+  onCacheChange: () => { if (sessionState.currentSession) updateSessionHeader(); },
+});
 
-function harnessRow(hostId, harnessId) {
-  return (harnessRowsByHost.get(hostId || selfHost.hostId) || []).find(row => row?.id === harnessId) || null;
-}
-
-function ensureHarnessRows(hostId) {
-  const key = hostId || selfHost.hostId;
-  if (harnessRowsByHost.has(key) || harnessRowFetches.has(key)) return;
-  harnessRowFetches.add(key);
-  harnessSettingsFetch(key, '/api/harnesses').then(data => {
-    harnessRowsByHost.set(key, Array.isArray(data?.harnesses) ? data.harnesses : []);
-    if (sessionState.currentSession) updateSessionHeader();
-  }).catch(() => {}).finally(() => harnessRowFetches.delete(key));
-}
+function harnessRow(hostId, harnessId) { return harnessDiscovery.row(hostId, harnessId); }
+function ensureHarnessRows(hostId) { void harnessDiscovery.ensure(hostId); }
 
 function harnessSupportsSettings(session) {
   if (!session?.harnessId) return false;
   return !!harnessRow(sessionHostIdOf(session), session.harnessId)?.pilotConfig;
 }
 
-async function loadHarnesses() {
-  const hostId = nsHostId();
-  const seq = ++nsHarnessSeq;
-  const ownsDiscovery = () => seq === nsHarnessSeq && hostId === nsHostId();
-  try {
-    const res = await apiFetch(hostId, '/api/harnesses');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (!ownsDiscovery()) return;
-    if (Array.isArray(data.harnesses) && data.harnesses.length) {
-      knownHarnesses = data.harnesses;
-      harnessRowsByHost.set(hostId || selfHost.hostId, data.harnesses);
-      // The takeover can open while this startup request is in flight. Its
-      // Pi-only fallback must not erase a saved alternative once discovery
-      // confirms that harness is available. Reading here also respects a
-      // choice the user made while this request was pending.
-      const preferred = localStorage.getItem(HARNESS_KEY);
-      if (knownHarnesses.some(h => h?.id === preferred && h.available !== false)) {
-        newSessionHarness = preferred;
-      }
-    }
-  } catch (_) {
-    if (!ownsDiscovery()) return;
-    knownHarnesses = [{ id: 'pi', label: 'Pi', available: true }];
-  }
-  renderNsHarnesses();
-  if (isNewSessionViewOpen()) onNsHarnessChange(selectedHarnessId());
-}
+function loadHarnesses() { return harnessDiscovery.load(); }
 
 function renderNsHarnesses() {
   const sel = document.getElementById('nsHarnessSelect');
   if (!sel) return;
-  const available = knownHarnesses.filter(h => h?.available !== false);
+  const available = harnessDiscovery.rows().filter(h => h.available !== false);
   sel.innerHTML = available.map(h => `<option value="${escapeHtml(h.id)}">${escapeHtml(h.label || h.id)}</option>`).join('');
   if (!available.some(h => h.id === newSessionHarness)) newSessionHarness = available[0]?.id || 'pi';
   sel.value = newSessionHarness;

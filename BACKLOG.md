@@ -157,6 +157,12 @@ design history and may include work that has already shipped.
   scenarios/smoke and OMP/Prime canaries).
   Moves URL normalization, catalog projection and self/fleet/user merge
   into TypeScript without changing source precedence or routing policy.
+- Harness discovery controller: completed 2026-09-11 after Fable review, strict
+  checks, 841 backend tests, 62 browser regressions, all UI scenarios/smoke
+  and OMP/Prime fake-provider canaries.
+  Moves the picker catalog, request ownership and settings-badge cache into
+  TypeScript. Background reads cannot overwrite newer picker catalogs, and
+  malformed rows are isolated before rendering.
 - Next: remaining host/request controllers and leaf UI. Keep each extraction
   independently reviewable; preserve selection guards, streaming coalescing,
   pagination and retained DOM.
