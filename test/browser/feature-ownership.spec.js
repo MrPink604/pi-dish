@@ -135,8 +135,8 @@ test('a delayed diff comment focus cannot reopen its editor on another host', as
   await page.evaluate(async id => {
     await openDiffView();
     document.getElementById('diffViewBody').innerHTML = '<details class="diff-file"><div class="diff-patch" data-repo="repo" data-path="file.txt"></div></details>';
-    anchoredComments = [{ id: 'fixture-comment', sessionId: id, body: 'peer comment',
-      target: { kind: 'diff', repo: 'repo', path: 'file.txt', anchor: { quote: 'text' } } }];
+    setAnchoredComments([{ id: 'fixture-comment', sessionId: id, body: 'peer comment',
+      target: { kind: 'diff', repo: 'repo', path: 'file.txt', anchor: { quote: 'text' } } }]);
     const load = loadDeferredDiffPatch;
     loadDeferredDiffPatch = () => new Promise(resolve => {
       window.releaseCommentPatch = () => { loadDeferredDiffPatch = load; resolve(); };
@@ -147,5 +147,5 @@ test('a delayed diff comment focus cannot reopen its editor on another host', as
   await fleet.select(fleet.self);
   await page.evaluate(async () => { window.releaseCommentPatch(); await window.pendingCommentFocus; });
   await expect(page.locator('#commentBubble')).toBeHidden();
-  expect(await page.evaluate(() => commentEditTarget)).toBeNull();
+  expect(await page.evaluate(() => anchoredCommentController.editing)).toBeNull();
 });

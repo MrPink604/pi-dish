@@ -414,3 +414,8 @@ File and diff takeovers live in `file-views.ts`, with explicit wire narrowing in
 `file-view-data.ts` and escaped diff output in `file-view-render.ts`. Publication
 operations, clipboard feedback and deferred patches retain independent ownership
 under read-only view snapshots used by anchored-comment coordination.
+
+Anchored comment selection, edits and marks live in `anchored-comments.ts` with
+explicit file/diff targets in `anchored-comment-data.ts` and durable quote matching
+in `comment-anchors.ts`. Editors and comment lists retain view owners; overlapping
+refreshes, delayed selections and mutation completion effects have separate guards.

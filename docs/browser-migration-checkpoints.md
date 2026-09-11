@@ -654,3 +654,26 @@ passed again after the fix. AGENTS.md now includes the pre-paint output.
   files match the verified draft byte for byte; strict checks passed again.
 - Fable 5.1 cleared extension UI commit `0c1e3a0` before push.
 - Next: anchored comments, transcript/composer orchestration and shell wiring.
+
+## Checkpoint 28 — Anchored comment selection and editors
+
+- `anchored-comment-data.ts` narrows comment/index targets and positive line
+  coordinates. `comment-anchors.ts` owns exact quote extents, context-based
+  disambiguation and marks spanning multiple rendered text nodes.
+- `anchored-comments.ts` captures the file/diff view and endpoint for every
+  selection, editor, list and request. Overlapping index/body refreshes publish
+  only the newest marks; comments from another session or file are filtered.
+- Save/delete share an editor busy state. Closing/reopening resets both controls;
+  old completion effects cannot disable or close a newer editor. Successful
+  mutations still refresh their current originating view.
+- Pointer/keyboard selection callbacks, delete confirmation and reposition timers
+  are owned and cancelled. Replaced/closed list rows abort their listeners;
+  disposal retires listeners, marks, timers and resize observation.
+- Two decoder/quote tests and seven browser regressions cover refresh overlap,
+  same-id host changes, busy/delete recovery, retained rows, delayed selection,
+  split-node anchors and disposal. Existing UI create/edit/delete flows pass.
+- Strict checks, 925 backend tests, 189 browser regressions, every independent UI
+  scenario and full desktop/mobile smoke passed. Integrated runtime/config/test
+  files match the verified draft byte for byte; strict checks passed again.
+- Fable 5.1 cleared file/diff commit `63f9893` before push.
+- Next: session header controls, transcript/composer orchestration and shell wiring.

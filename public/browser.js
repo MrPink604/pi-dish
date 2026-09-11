@@ -32,6 +32,7 @@ var PiDishBrowser = (() => {
     clampSidebarWidth: () => clampSidebarWidth,
     clampTerminalHeight: () => clampTerminalHeight,
     copyTextToClipboard: () => copyTextToClipboard,
+    createAnchoredComments: () => createAnchoredComments,
     createBounce: () => createBounce,
     createBrowserAssets: () => createBrowserAssets,
     createCwdAutocomplete: () => createCwdAutocomplete,
@@ -72,9 +73,12 @@ var PiDishBrowser = (() => {
     createThemes: () => createThemes,
     createTranscriptTree: () => createTranscriptTree,
     createUsageView: () => createUsageView,
+    decodeAnchoredComments: () => decodeAnchoredComments,
     decodeBounceOperation: () => decodeBounceOperation,
     decodeBounceOperations: () => decodeBounceOperations,
     decodeBouncePreview: () => decodeBouncePreview,
+    decodeCommentIndex: () => decodeCommentIndex,
+    decodeCommentTarget: () => decodeCommentTarget,
     decodeDiffPatch: () => decodeDiffPatch,
     decodeDiffView: () => decodeDiffView,
     decodeDirectoryChildren: () => decodeDirectoryChildren,
@@ -109,9 +113,11 @@ var PiDishBrowser = (() => {
     decodeTranscriptTree: () => decodeTranscriptTree,
     decodeUsageLimits: () => decodeUsageLimits,
     decodeUsageSummary: () => decodeUsageSummary,
+    findQuoteOffset: () => findQuoteOffset,
     hostConnReduce: () => hostConnReduce,
     hostKeyOf: () => hostKeyOf,
     hostSettingsHtml: () => hostSettingsHtml,
+    markCommentQuote: () => markCommentQuote,
     mergeHostEntries: () => mergeHostEntries,
     mergeSearchPayloads: () => mergeSearchPayloads,
     modelCatalogUrl: () => modelCatalogUrl,
@@ -131,6 +137,7 @@ var PiDishBrowser = (() => {
     sanitizeHostCatalog: () => sanitizeHostCatalog,
     sanitizeHostColorOrder: () => sanitizeHostColorOrder,
     sanitizeHostColors: () => sanitizeHostColors,
+    selectionTextAnchor: () => selectionTextAnchor,
     sendJson: () => sendJson,
     sessionSpawnKey: () => sessionSpawnKey,
     spawnTargetKey: () => spawnTargetKey,
@@ -332,10 +339,10 @@ var PiDishBrowser = (() => {
     const doc = root.ownerDocument;
     let view = null;
     let disposed = false;
-    function element(tag, className, text15) {
+    function element(tag, className, text16) {
       const node = doc.createElement(tag);
       node.className = className;
-      if (text15 !== void 0) node.textContent = text15;
+      if (text16 !== void 0) node.textContent = text16;
       return node;
     }
     const search = element("input", "model-search");
@@ -352,8 +359,8 @@ var PiDishBrowser = (() => {
       node.dataset.value = value;
       return node;
     }
-    function button(text15, name, value = "", primary = false) {
-      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text15);
+    function button(text16, name, value = "", primary = false) {
+      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text16);
       node.type = "button";
       return action(node, name, value);
     }
@@ -588,8 +595,8 @@ var PiDishBrowser = (() => {
     const state = prev && typeof prev === "object" ? prev : null;
     const errText = (value) => {
       if (value == null) return null;
-      const text15 = String(typeof value === "object" && "message" in value && value.message || value);
-      return text15 || null;
+      const text16 = String(typeof value === "object" && "message" in value && value.message || value);
+      return text16 || null;
     };
     const eventError = event && typeof event === "object" && "error" in event ? errText(event.error) : null;
     if (kind === "blocked") {
@@ -2783,13 +2790,13 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/helper-format.ts
-  function escapeHtml(text15) {
-    if (text15 == null || text15 === "") return "";
-    return String(text15).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  function escapeHtml(text16) {
+    if (text16 == null || text16 === "") return "";
+    return String(text16).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
-  function stripAnsi(text15) {
-    if (text15 == null || text15 === "") return "";
-    return String(text15).replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "").replace(/\x1b\[[0-9;:?]*[ -\/]*[@-~]/g, "").replace(/\x1b[ -\/]*./g, "");
+  function stripAnsi(text16) {
+    if (text16 == null || text16 === "") return "";
+    return String(text16).replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "").replace(/\x1b\[[0-9;:?]*[ -\/]*[@-~]/g, "").replace(/\x1b[ -\/]*./g, "");
   }
   function formatTokens(tokens2) {
     if (!tokens2 || tokens2 === 0) return "0";
@@ -2863,9 +2870,9 @@ var PiDishBrowser = (() => {
     if (!cwd) return "";
     return cwd.replace(/^\/home\/[^/]+\//, "~/").replace(/^\/home\/[^/]+$/, "~");
   }
-  function truncate(text15, maxLen, suffix = " \u2026 (truncated)") {
-    if (!text15 || text15.length <= maxLen) return text15;
-    return text15.slice(0, maxLen) + suffix;
+  function truncate(text16, maxLen, suffix = " \u2026 (truncated)") {
+    if (!text16 || text16.length <= maxLen) return text16;
+    return text16.slice(0, maxLen) + suffix;
   }
   function tmuxPrefixSeq(prefix) {
     if (typeof prefix !== "string") return null;
@@ -3022,12 +3029,12 @@ var PiDishBrowser = (() => {
     }
     return true;
   }
-  function countOccurrences(text15, token) {
-    if (!text15 || !token) return 0;
-    let n = 0, i = text15.indexOf(token);
+  function countOccurrences(text16, token) {
+    if (!text16 || !token) return 0;
+    let n = 0, i = text16.indexOf(token);
     while (i !== -1) {
       n++;
-      i = text15.indexOf(token, i + token.length);
+      i = text16.indexOf(token, i + token.length);
     }
     return n;
   }
@@ -3087,8 +3094,8 @@ var PiDishBrowser = (() => {
     result += escapeHtml(str.slice(last));
     return result;
   }
-  function highlightTokens(text15, tokens2) {
-    const str = String(text15);
+  function highlightTokens(text16, tokens2) {
+    const str = String(text16);
     const lower = str.toLowerCase();
     const ranges = [];
     for (const t of tokens2) {
@@ -4631,8 +4638,8 @@ var PiDishBrowser = (() => {
     const textNodes = [];
     while (walker.nextNode()) textNodes.push(walker.currentNode);
     for (const node of textNodes) {
-      const text15 = node.textContent || "";
-      const lower = text15.toLowerCase();
+      const text16 = node.textContent || "";
+      const lower = text16.toLowerCase();
       const ranges = [];
       for (const token of tokens2) {
         let from = 0, at;
@@ -4647,14 +4654,14 @@ var PiDishBrowser = (() => {
       let cursor = 0;
       for (const [start, end] of ranges) {
         if (start < cursor) continue;
-        frag.appendChild(document2.createTextNode(text15.slice(cursor, start)));
+        frag.appendChild(document2.createTextNode(text16.slice(cursor, start)));
         const mark = document2.createElement("mark");
         mark.className = "search-mark";
-        mark.textContent = text15.slice(start, end);
+        mark.textContent = text16.slice(start, end);
         frag.appendChild(mark);
         cursor = end;
       }
-      frag.appendChild(document2.createTextNode(text15.slice(cursor)));
+      frag.appendChild(document2.createTextNode(text16.slice(cursor)));
       node.replaceWith(frag);
     }
   }
@@ -7018,10 +7025,10 @@ var PiDishBrowser = (() => {
       })();
       return assets;
     }
-    function status(text15 = "", cls = "") {
+    function status(text16 = "", cls = "") {
       const value = document2.getElementById("terminalStatus");
       if (!value) return;
-      value.textContent = text15;
+      value.textContent = text16;
       value.className = "terminal-status" + (cls ? " " + cls : "");
     }
     function setCtrl(on) {
@@ -9025,10 +9032,10 @@ var PiDishBrowser = (() => {
       }
       body.innerHTML = html;
       body.querySelectorAll(".artifact-copy").forEach((button) => {
-        const text15 = button.dataset.copy || "";
+        const text16 = button.dataset.copy || "";
         button.addEventListener("click", () => {
           if (!current()) return;
-          void copyTextToClipboard2(text15).then(() => {
+          void copyTextToClipboard2(text16).then(() => {
             if (current()) setStatus("Link copied");
           }, () => {
             if (current()) setStatus("Copy failed (clipboard blocked)", "error");
@@ -9208,8 +9215,8 @@ var PiDishBrowser = (() => {
           if (node.type === "message" && node.role === "assistant" && !node.text && !node.isLeaf) return false;
         }
         if (tokens2.length > 0) {
-          var text15 = getNodeSearchText(node).toLowerCase();
-          return tokens2.every((t) => text15.includes(t));
+          var text16 = getNodeSearchText(node).toLowerCase();
+          return tokens2.every((t) => text16.includes(t));
         }
         return true;
       });
@@ -9264,17 +9271,17 @@ var PiDishBrowser = (() => {
       if (node.type === "message") {
         if (node.role === "user") return '<span class="tree-role user">user:</span><span class="tree-text">' + escapeHtml(node.text || "(empty)") + "</span>";
         if (node.role === "assistant") {
-          var text15 = node.text || "";
-          if (!text15 && node.stopReason === "aborted") text15 = "(aborted)";
-          if (!text15 && node.errorMessage) return '<span class="tree-role assistant">assistant:</span><span class="tree-text error-text">' + escapeHtml(node.errorMessage.substring(0, 80)) + "</span>";
-          if (!text15 && node.toolCalls && node.toolCalls.length) {
+          var text16 = node.text || "";
+          if (!text16 && node.stopReason === "aborted") text16 = "(aborted)";
+          if (!text16 && node.errorMessage) return '<span class="tree-role assistant">assistant:</span><span class="tree-text error-text">' + escapeHtml(node.errorMessage.substring(0, 80)) + "</span>";
+          if (!text16 && node.toolCalls && node.toolCalls.length) {
             var calls = node.toolCalls.map(function(tc2) {
               return tc2.args ? tc2.name + ": " + tc2.args : tc2.name;
             }).join(" \xB7 ");
             return '<span class="tree-role assistant">assistant:</span><span class="tree-text muted">' + escapeHtml(calls) + "</span>";
           }
-          if (!text15) text15 = "(empty)";
-          return '<span class="tree-role assistant">assistant:</span><span class="tree-text">' + escapeHtml(text15) + "</span>";
+          if (!text16) text16 = "(empty)";
+          return '<span class="tree-role assistant">assistant:</span><span class="tree-text">' + escapeHtml(text16) + "</span>";
         }
         if (node.role === "toolResult") {
           var tc = node.toolCallId ? treeToolCallMap.get(node.toolCallId) : null;
@@ -9432,8 +9439,8 @@ var PiDishBrowser = (() => {
     /^(?:sequenceDiagram|classDiagram(?:-v2)?|stateDiagram(?:-v2)?|erDiagram|journey|gantt|mindmap|timeline|kanban|zenuml|quadrantChart|requirementDiagram|gitGraph|architecture-beta|block-beta|packet(?:-beta)?|radar-beta|sankey-beta|treemap(?:-beta)?|xychart-beta|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment)\b/,
     /^pie(?:\s+(?:title|showData)\b|\s*$)/
   ];
-  function mermaidDeclarationLine(text15) {
-    const lines = String(text15 == null ? "" : text15).split("\n");
+  function mermaidDeclarationLine(text16) {
+    const lines = String(text16 == null ? "" : text16).split("\n");
     let i = 0;
     if (lines[0] !== void 0 && lines[0].trim() === "---") {
       const end = lines.findIndex((l, idx) => idx > 0 && l.trim() === "---");
@@ -9446,8 +9453,8 @@ var PiDishBrowser = (() => {
     }
     return "";
   }
-  function looksLikeMermaid(text15) {
-    const decl = mermaidDeclarationLine(text15);
+  function looksLikeMermaid(text16) {
+    const decl = mermaidDeclarationLine(text16);
     return !!decl && MERMAID_DECLARATIONS.some((re) => re.test(decl));
   }
   function diagramKindForFence(lang, source) {
@@ -9476,11 +9483,11 @@ var PiDishBrowser = (() => {
       tokenizer(src) {
         const match = /^(?:\$\$([\s\S]*?)\$\$|\\\[([\s\S]*?)\\\])/.exec(src);
         if (match) {
-          const text15 = match[1] !== void 0 ? match[1] : match[2];
+          const text16 = match[1] !== void 0 ? match[1] : match[2];
           return {
             type: "blockMath",
             raw: match[0],
-            text: text15.trim()
+            text: text16.trim()
           };
         }
       },
@@ -9556,8 +9563,8 @@ var PiDishBrowser = (() => {
   }
   var FILE_MENTION_RE = /^(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?$/;
   var FILE_EXT_RE = /\.[A-Za-z][A-Za-z0-9]{0,7}$/;
-  function looksLikeFilePath(text15) {
-    const s = String(text15 == null ? "" : text15).trim();
+  function looksLikeFilePath(text16) {
+    const s = String(text16 == null ? "" : text16).trim();
     if (!s || s.length > 260) return false;
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return false;
     if (!FILE_MENTION_RE.test(s)) return false;
@@ -9566,8 +9573,8 @@ var PiDishBrowser = (() => {
   }
   var PATH_TOKEN_RE = /(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?/g;
   var BARE_EXT_STOPLIST = /* @__PURE__ */ new Set(["com", "org", "net", "io", "ai", "dev", "co", "app"]);
-  function findPathTokens(text15) {
-    const s = String(text15 == null ? "" : text15);
+  function findPathTokens(text16) {
+    const s = String(text16 == null ? "" : text16);
     const out = [];
     PATH_TOKEN_RE.lastIndex = 0;
     let m;
@@ -9694,15 +9701,15 @@ var PiDishBrowser = (() => {
       },
       extensions: createMathExtensions()
     });
-    function formatMarkdown(text15) {
-      if (!text15) return "";
+    function formatMarkdown(text16) {
+      if (!text16) return "";
       if (options2.marked) {
         try {
-          return options2.marked.parse(text15);
+          return options2.marked.parse(text16);
         } catch (e) {
         }
       }
-      let html = escapeHtml(text15);
+      let html = escapeHtml(text16);
       html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => `<pre><code class="language-${lang}">${code.trim()}</code></pre>`);
       html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
       html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
@@ -9868,7 +9875,7 @@ var PiDishBrowser = (() => {
       const bg = hex("--bg-darker", "#00212b");
       const card = hex("--bg-card", "#073642");
       const hover = hex("--bg-hover", "#0b4354");
-      const text15 = hex("--text-bright", "#dbe5e6");
+      const text16 = hex("--text-bright", "#dbe5e6");
       const muted = hex("--text-muted", "#6f8b93");
       const border = hex("--accent-dim", "#1c6ba3");
       const line = hex("--border", "#11475a");
@@ -9887,30 +9894,30 @@ var PiDishBrowser = (() => {
           darkMode: isDarkColorHex(bg),
           background: bg,
           primaryColor: card,
-          primaryTextColor: text15,
+          primaryTextColor: text16,
           primaryBorderColor: border,
           secondaryColor: hover,
-          secondaryTextColor: text15,
+          secondaryTextColor: text16,
           tertiaryColor: bg,
-          tertiaryTextColor: text15,
+          tertiaryTextColor: text16,
           lineColor: muted,
-          textColor: text15,
+          textColor: text16,
           mainBkg: card,
           nodeBorder: border,
           clusterBkg: bg,
           clusterBorder: line,
-          titleColor: text15,
+          titleColor: text16,
           edgeLabelBackground: bg,
           labelBoxBkgColor: card,
           labelBoxBorderColor: border,
           actorBkg: card,
           actorBorder: border,
-          actorTextColor: text15,
+          actorTextColor: text16,
           signalColor: muted,
-          signalTextColor: text15,
+          signalTextColor: text16,
           noteBkgColor: hover,
           noteBorderColor: border,
-          noteTextColor: text15,
+          noteTextColor: text16,
           fontSize: "14px"
         }
       };
@@ -10042,10 +10049,10 @@ var PiDishBrowser = (() => {
         scale = Math.min(8, Math.max(0.1, scale * factor));
         apply();
       };
-      const button = (text15, title, onClick) => {
+      const button = (text16, title, onClick) => {
         const b = document2.createElement("button");
         b.className = "diagram-btn";
-        b.textContent = text15;
+        b.textContent = text16;
         b.title = title;
         b.addEventListener("click", () => {
           if (current()) onClick();
@@ -10102,13 +10109,13 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/clipboard.ts
-  function copyTextToClipboard(text15, document2 = globalThis.document, navigator = globalThis.navigator) {
+  function copyTextToClipboard(text16, document2 = globalThis.document, navigator = globalThis.navigator) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard.writeText(text15);
+      return navigator.clipboard.writeText(text16);
     }
     return new Promise((resolve, reject) => {
       const ta = document2.createElement("textarea");
-      ta.value = text15;
+      ta.value = text16;
       ta.setAttribute("readonly", "");
       ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
       document2.body.appendChild(ta);
@@ -10593,8 +10600,8 @@ var PiDishBrowser = (() => {
         widgets.set(key, entry);
       }
       entry.el.classList.remove("hidden");
-      const body = entry.el.querySelector(".ext-ui-widget-body"), text15 = lines.join("\n");
-      if (body.textContent !== text15) body.textContent = text15;
+      const body = entry.el.querySelector(".ext-ui-widget-body"), text16 = lines.join("\n");
+      if (body.textContent !== text16) body.textContent = text16;
     }
     function measure() {
       if (disposed) return;
@@ -10640,7 +10647,7 @@ var PiDishBrowser = (() => {
       sync();
     }
     document2.getElementById("extUiStatusToggle")?.addEventListener("click", toggleStatus, { signal: events.signal });
-    function status(key, text15) {
+    function status(key, text16) {
       if (disposed) return;
       const items = document2.getElementById("extUiStatusItems");
       if (!items) return;
@@ -10650,7 +10657,7 @@ var PiDishBrowser = (() => {
         statuses.delete(key);
         entry = void 0;
       }
-      if (!text15) {
+      if (!text16) {
         if (!entry) {
           sync();
           return;
@@ -10676,8 +10683,8 @@ var PiDishBrowser = (() => {
         entry = { el, timer: null };
         statuses.set(key, entry);
       }
-      if (entry.el.textContent !== text15) entry.el.textContent = text15;
-      const title = `${text15}
+      if (entry.el.textContent !== text16) entry.el.textContent = text16;
+      const title = `${text16}
 (status from ${key})`;
       if (entry.el.title !== title) entry.el.title = title;
       sync();
@@ -11201,6 +11208,612 @@ var PiDishBrowser = (() => {
       dispose() {
         closeFile();
         closeDiff();
+        disposed = true;
+      }
+    };
+  }
+
+  // src/browser/anchored-comment-data.ts
+  var text15 = (v) => typeof v === "string" ? v : "";
+  function decodeCommentTarget(v) {
+    if (!record8(v) || v.kind !== "file" && v.kind !== "diff" || typeof v.path !== "string") return null;
+    const a = record8(v.anchor) ? v.anchor : {};
+    const positions = {};
+    for (const key of ["startLine", "endLine", "oldStart", "oldEnd", "newStart", "newEnd"]) if (typeof a[key] === "number" && Number.isInteger(a[key]) && a[key] > 0) positions[key] = a[key];
+    const anchor = { type: a.type === "lines" ? "lines" : "text", quote: text15(a.quote), prefix: text15(a.prefix), suffix: text15(a.suffix), ...positions };
+    return v.kind === "file" ? { kind: "file", path: v.path, relPath: typeof v.relPath === "string" ? v.relPath : null, anchor } : typeof v.repo === "string" ? { kind: "diff", repo: v.repo, path: v.path, oldPath: typeof v.oldPath === "string" ? v.oldPath : null, anchor } : null;
+  }
+  function decodeAnchoredComments(value) {
+    return Array.isArray(value) ? value.flatMap((v) => {
+      if (!record8(v) || typeof v.id !== "string" || typeof v.sessionId !== "string" || typeof v.body !== "string") return [];
+      const target = decodeCommentTarget(v.target);
+      return target ? [{ id: v.id, sessionId: v.sessionId, body: v.body, target }] : [];
+    }) : [];
+  }
+  function decodeCommentIndex(value) {
+    return record8(value) && Array.isArray(value.comments) ? value.comments.flatMap((v) => {
+      if (!record8(v) || typeof v.id !== "string") return [];
+      const target = decodeCommentTarget(v.target);
+      return target ? [{ id: v.id, target }] : [];
+    }) : [];
+  }
+
+  // src/browser/comment-anchors.ts
+  function selectionTextAnchor(root, range) {
+    const before = document.createRange();
+    before.selectNodeContents(root);
+    before.setEnd(range.startContainer, range.startOffset);
+    const after = document.createRange();
+    after.selectNodeContents(root);
+    after.setStart(range.endContainer, range.endOffset);
+    return {
+      type: "text",
+      // Keep the exact selected extent. Trimming would leave prefix/suffix
+      // relative to different boundaries and break exact re-anchoring.
+      quote: range.toString(),
+      prefix: before.toString().slice(-300),
+      suffix: after.toString().slice(0, 300)
+    };
+  }
+  function clearCommentMarks(root) {
+    root.querySelectorAll("mark.comment-mark").forEach((mark) => {
+      const parent = mark.parentNode;
+      mark.replaceWith(document.createTextNode(mark.textContent || ""));
+      parent?.normalize();
+    });
+  }
+  function collectTextRuns(root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) => node.parentElement?.closest("script, style") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+    });
+    const runs = [];
+    let text16 = "";
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      runs.push({ node, start: text16.length, end: text16.length + node.textContent.length });
+      text16 += node.textContent;
+    }
+    return { runs, text: text16 };
+  }
+  function commonSuffixLength(a, b) {
+    let n = 0;
+    while (n < a.length && n < b.length && a[a.length - 1 - n] === b[b.length - 1 - n]) n++;
+    return n;
+  }
+  function commonPrefixLength(a, b) {
+    let n = 0;
+    while (n < a.length && n < b.length && a[n] === b[n]) n++;
+    return n;
+  }
+  function findQuoteOffset(text16, anchor) {
+    const quote = anchor?.quote;
+    if (!quote) return -1;
+    const hits = [];
+    let from = 0;
+    let at;
+    while ((at = text16.indexOf(quote, from)) !== -1) {
+      hits.push(at);
+      from = at + Math.max(1, quote.length);
+    }
+    if (hits.length < 2) return hits.length ? hits[0] : -1;
+    const prefix = anchor.prefix || "";
+    const suffix = anchor.suffix || "";
+    let best = hits[0];
+    let bestScore = -1;
+    for (const hit of hits) {
+      const before = text16.slice(Math.max(0, hit - prefix.length), hit);
+      const after = text16.slice(hit + quote.length, hit + quote.length + suffix.length);
+      const score = commonSuffixLength(before, prefix) + commonPrefixLength(after, suffix);
+      if (score > bestScore) {
+        bestScore = score;
+        best = hit;
+      }
+    }
+    return best;
+  }
+  function markCommentQuote(root, anchor, commentId) {
+    const quote = anchor?.quote;
+    if (!quote) return false;
+    const { runs, text: text16 } = collectTextRuns(root);
+    const start = findQuoteOffset(text16, anchor);
+    if (start < 0) return false;
+    const end = start + quote.length;
+    let marked = false;
+    for (const run of runs) {
+      if (run.end <= start || run.start >= end) continue;
+      const from = Math.max(0, start - run.start);
+      const to = Math.min(run.node.textContent.length, end - run.start);
+      if (to <= from) continue;
+      const source = run.node.textContent;
+      const mark = document.createElement("mark");
+      mark.className = "comment-mark";
+      mark.dataset.commentId = commentId;
+      mark.textContent = source.slice(from, to);
+      const frag = document.createDocumentFragment();
+      if (from > 0) frag.appendChild(document.createTextNode(source.slice(0, from)));
+      frag.appendChild(mark);
+      if (to < source.length) frag.appendChild(document.createTextNode(source.slice(to)));
+      run.node.replaceWith(frag);
+      marked = true;
+    }
+    return marked;
+  }
+
+  // src/browser/anchored-comments.ts
+  function createAnchoredComments(options2) {
+    const { document: document2, sessionState, views } = options2, window = document2.defaultView;
+    const element = (id) => {
+      const value = document2.getElementById(id);
+      if (!value) throw new Error("Missing comment element: " + id);
+      return value;
+    };
+    let disposed = false, mounted = false, refreshSequence = 0, focusSequence = 0;
+    let bubble = null, comments = [], listOwner = null;
+    let deleteArmed = false, deleteTimer = null;
+    const timers = /* @__PURE__ */ new Set();
+    const lifetime = new AbortController();
+    let bubbleEvents = new AbortController(), listEvents = new AbortController();
+    let observer = null;
+    const marks = /* @__PURE__ */ new WeakMap();
+    function later(callback, ms = 0) {
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        if (!disposed) callback();
+      }, ms);
+      timers.add(timer);
+      return timer;
+    }
+    function cancelTimer(timer) {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timers.delete(timer);
+      }
+    }
+    function capture() {
+      if (disposed) return null;
+      const kind = views.isFileOpen() ? "file" : views.isDiffOpen() ? "diff" : null;
+      if (!kind) return null;
+      const view = kind === "file" ? views.file : views.diff;
+      if (!view.owner || !view.endpoint || !view.sessionId) return null;
+      const captured = { kind, owner: view.owner, endpoint: view.endpoint, id: view.sessionId, generation: view.generation, path: kind === "file" ? views.file.path : null };
+      return owns(captured) ? captured : null;
+    }
+    function owns(view) {
+      return !!view && !disposed && (view.kind === "file" ? views.ownsFile(view.id, view.generation) && views.file.path === view.path : views.ownsDiff(view.id, view.generation));
+    }
+    function belongs(comment, view) {
+      return comment.sessionId === view.id && (view.kind === "file" ? comment.target.kind === "file" && comment.target.path === view.path : comment.target.kind === "diff");
+    }
+    function ownsBubble(entry) {
+      return !!entry && bubble === entry && owns(entry.view) && isOpen();
+    }
+    function isOpen() {
+      return !disposed && element("commentBubble").style.display !== "none";
+    }
+    function isListOpen() {
+      return !disposed && element("commentListPopover").style.display !== "none";
+    }
+    async function request(view, path, init) {
+      const endpoint = options2.host(view.owner.host);
+      if (!owns(view) || !endpoint || endpoint.base !== view.endpoint.base) throw new Error("Comment view changed");
+      const response = await options2.request({ ...view.endpoint, token: endpoint.token }, path, init);
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
+      return data;
+    }
+    function position() {
+      const entry = bubble;
+      if (!ownsBubble(entry)) return;
+      const el = element("commentBubble");
+      let rect;
+      try {
+        rect = entry.range.getBoundingClientRect();
+      } catch {
+        return;
+      }
+      const viewport = window.visualViewport, left = viewport?.offsetLeft || 0, top = viewport?.offsetTop || 0;
+      const width = viewport?.width || window.innerWidth, height = viewport?.height || window.innerHeight, margin = 8, gap = 8;
+      el.style.maxWidth = `${Math.max(0, width - 2 * margin)}px`;
+      el.style.maxHeight = `${Math.max(0, height - 2 * margin)}px`;
+      el.style.left = `${Math.max(left + margin, Math.min(left + width - el.offsetWidth - margin, rect.left + (rect.width - el.offsetWidth) / 2))}px`;
+      const below = rect.bottom + gap, preferred = below + el.offsetHeight <= top + height - margin ? below : rect.top - el.offsetHeight - gap;
+      el.style.top = `${Math.max(top + margin, Math.min(top + height - el.offsetHeight - margin, preferred))}px`;
+    }
+    function disarmDelete() {
+      cancelTimer(deleteTimer);
+      deleteTimer = null;
+      deleteArmed = false;
+      const button = element("commentDeleteBtn");
+      button.textContent = "Delete";
+      button.classList.remove("armed");
+    }
+    function close() {
+      bubbleEvents.abort();
+      bubble = null;
+      focusSequence++;
+      element("commentBubble").style.display = "none";
+      element("commentStatus").textContent = "";
+      element("commentDeleteBtn").style.display = "none";
+      disarmDelete();
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+    }
+    function bindBubble(entry, focus2) {
+      bubbleEvents.abort();
+      bubbleEvents = new AbortController();
+      bubble = entry;
+      disarmDelete();
+      const { draft, editing } = entry;
+      element("commentBubbleTitle").textContent = editing ? "Edit comment" : "Comment for agent";
+      element("commentAnchorPreview").textContent = editing?.target.anchor.quote || draft?.quote || "";
+      element("commentBody").value = editing?.body || "";
+      element("commentStatus").textContent = "";
+      const send = element("commentSendBtn"), remove = element("commentDeleteBtn");
+      send.disabled = false;
+      remove.disabled = false;
+      remove.style.display = editing ? "" : "none";
+      element("commentBubble").style.display = "block";
+      position();
+      const signal = bubbleEvents.signal;
+      send.addEventListener("click", () => {
+        if (ownsBubble(entry)) void submit();
+      }, { signal });
+      remove.addEventListener("click", () => {
+        if (ownsBubble(entry)) void removeComment();
+      }, { signal });
+      element("commentBody").addEventListener("keydown", (event) => {
+        if (ownsBubble(entry)) key(event);
+      }, { signal });
+      element("commentBubble").querySelectorAll("[data-comment-close]").forEach((button) => button.addEventListener("click", () => {
+        if (ownsBubble(entry)) close();
+      }, { signal }));
+      if (focus2) {
+        element("commentBody").focus();
+        later(() => {
+          if (ownsBubble(entry)) position();
+        });
+      }
+    }
+    function openDraft(draft, range, focus2 = false) {
+      const view = capture();
+      if (!view || draft.sessionId !== view.id || draft.target.kind !== view.kind || draft.target.kind === "file" && draft.target.path !== view.path) return;
+      bindBubble({ view, draft, editing: null, range: range.cloneRange(), busy: false }, focus2);
+    }
+    function openEditor(comment, anchor) {
+      const view = capture();
+      if (!view || !owns(listOwner) || !comments.includes(comment) || !belongs(comment, view) || !anchor.isConnected) return;
+      const range = document2.createRange();
+      range.selectNodeContents(anchor);
+      bindBubble({ view, draft: null, editing: comment, range, busy: false }, true);
+    }
+    function captureFile(focus2 = false) {
+      if (isOpen()) return;
+      const view = capture(), raw = views.file.raw, path = views.file.path;
+      if (!view || view.kind !== "file" || !path || raw === null) return;
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || !selection.rangeCount) return;
+      const root = element("fileViewBody"), range = selection.getRangeAt(0);
+      if (!root.contains(range.commonAncestorContainer)) return;
+      const text16 = range.toString();
+      if (!text16.trim() || text16.length > 12e3) return;
+      const base = selectionTextAnchor(root, range), first = raw.indexOf(base.quote);
+      const startLine = first >= 0 && raw.indexOf(base.quote, first + 1) < 0 ? raw.slice(0, first).split("\n").length : null;
+      const anchor = startLine === null ? base : { ...base, startLine, endLine: startLine + base.quote.split("\n").length - 1 };
+      openDraft({ sessionId: view.id, quote: anchor.quote, target: { kind: "file", path, relPath: views.file.relPath, anchor } }, range, focus2);
+    }
+    function captureDiff(focus2 = false) {
+      if (isOpen()) return;
+      const view = capture();
+      if (!view || view.kind !== "diff") return;
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || !selection.rangeCount) return;
+      const range = selection.getRangeAt(0), node = range.commonAncestorContainer;
+      const patch = (node instanceof Element ? node : node.parentElement)?.closest(".diff-patch");
+      if (!patch || !element("diffViewBody").contains(patch)) return;
+      const lines = [...patch.querySelectorAll('.diff-line[data-diff-line="1"]:not(.diff-hunk)')].filter((line) => {
+        try {
+          return range.intersectsNode(line);
+        } catch {
+          return false;
+        }
+      });
+      if (!lines.length) return;
+      const nums = (key2) => lines.map((line) => Number(line.dataset[key2])).filter((n) => Number.isInteger(n) && n > 0);
+      const oldNums = nums("oldLine"), newNums = nums("newLine"), quote = lines.map((line) => line.textContent).join("\n").slice(0, 12e3);
+      openDraft({ sessionId: view.id, quote, target: {
+        kind: "diff",
+        repo: patch.dataset.repo || "",
+        path: patch.dataset.path || "",
+        oldPath: patch.dataset.oldPath || null,
+        anchor: { type: "lines", quote, ...oldNums.length ? { oldStart: Math.min(...oldNums), oldEnd: Math.max(...oldNums) } : {}, ...newNums.length ? { newStart: Math.min(...newNums), newEnd: Math.max(...newNums) } : {} }
+      } }, range, focus2);
+    }
+    function key(event) {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        void submit();
+      }
+    }
+    async function submit() {
+      const entry = bubble;
+      if (!ownsBubble(entry) || entry.busy) return;
+      const body = element("commentBody").value.trim();
+      if (!body) {
+        element("commentBody").focus();
+        return;
+      }
+      const { editing, draft, view } = entry;
+      if (!editing && !draft) return;
+      entry.busy = true;
+      element("commentSendBtn").disabled = true;
+      element("commentDeleteBtn").disabled = true;
+      element("commentStatus").textContent = "Saving\u2026";
+      try {
+        await request(view, editing ? `/api/comments/${encodeURIComponent(editing.id)}` : "/api/comments", { method: editing ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(editing ? { sessionId: editing.sessionId, body } : { sessionId: draft.sessionId, body, target: draft.target }) });
+        if (!owns(view)) return;
+        if (ownsBubble(entry)) {
+          close();
+          window.getSelection()?.removeAllRanges();
+        }
+        options2.status(editing ? "Comment updated" : "Comment saved");
+        void refresh();
+      } catch (error) {
+        if (ownsBubble(entry)) element("commentStatus").textContent = error instanceof Error ? error.message : String(error);
+      } finally {
+        entry.busy = false;
+        if (ownsBubble(entry)) {
+          element("commentSendBtn").disabled = false;
+          element("commentDeleteBtn").disabled = false;
+        }
+      }
+    }
+    async function removeComment() {
+      const entry = bubble;
+      if (!ownsBubble(entry) || entry.busy || !entry.editing) return;
+      const button = element("commentDeleteBtn");
+      if (!deleteArmed) {
+        deleteArmed = true;
+        button.textContent = "Delete?";
+        button.classList.add("armed");
+        deleteTimer = later(() => {
+          if (ownsBubble(entry)) disarmDelete();
+        }, 3e3);
+        return;
+      }
+      const { editing, view } = entry;
+      entry.busy = true;
+      button.disabled = true;
+      element("commentSendBtn").disabled = true;
+      element("commentStatus").textContent = "Deleting\u2026";
+      try {
+        await request(view, `/api/comments/${encodeURIComponent(editing.id)}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: editing.sessionId }) });
+        if (!owns(view)) return;
+        if (ownsBubble(entry)) close();
+        options2.status("Comment deleted");
+        void refresh();
+      } catch (error) {
+        if (ownsBubble(entry)) {
+          element("commentStatus").textContent = error instanceof Error ? error.message : String(error);
+          disarmDelete();
+        }
+      } finally {
+        entry.busy = false;
+        if (ownsBubble(entry)) {
+          button.disabled = false;
+          element("commentSendBtn").disabled = false;
+        }
+      }
+    }
+    function set(value) {
+      refreshSequence++;
+      listOwner = capture();
+      comments = listOwner ? decodeAnchoredComments(value).filter((comment) => belongs(comment, listOwner)) : [];
+      applyMarks();
+      renderChips();
+    }
+    async function refresh() {
+      const view = capture(), sequence = ++refreshSequence;
+      if (!view || view.kind === "file" && !view.path) {
+        set([]);
+        return;
+      }
+      const current = () => owns(view) && refreshSequence === sequence;
+      try {
+        const index = decodeCommentIndex(await request(view, `/api/comments/index?sessionId=${encodeURIComponent(view.id)}`));
+        if (!current()) return;
+        const ids = index.filter((entry) => view.kind === "file" ? entry.target.kind === "file" && entry.target.path === view.path : entry.target.kind === "diff").map((entry) => entry.id);
+        if (!ids.length) {
+          set([]);
+          return;
+        }
+        const full = await request(view, "/api/comments/get", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: view.id, ids }) });
+        if (!current()) return;
+        set(record8(full) ? full.comments : []);
+      } catch {
+      }
+    }
+    function diffPatch(comment) {
+      const target = comment.target;
+      return target.kind === "diff" ? [...element("diffViewBody").querySelectorAll(".diff-patch")].find((patch) => patch.dataset.repo === target.repo && patch.dataset.path === target.path) || null : null;
+    }
+    function applyMarks() {
+      if (disposed) return;
+      const current = owns(listOwner);
+      if (views.isFileOpen()) {
+        const root = element("fileViewBody");
+        clearCommentMarks(root);
+        if (current) {
+          for (const comment of comments) if (comment.target.kind === "file") {
+            markCommentQuote(root, comment.target.anchor, comment.id);
+            for (const mark of root.querySelectorAll("mark.comment-mark")) if (mark.dataset.commentId === comment.id) marks.set(mark, { view: listOwner, comment });
+          }
+        }
+      } else if (views.isDiffOpen()) {
+        for (const line of element("diffViewBody").querySelectorAll(".diff-line.comment-line")) {
+          line.classList.remove("comment-line");
+          delete line.dataset.commentId;
+        }
+        if (current) for (const comment of comments) {
+          if (comment.target.kind !== "diff") continue;
+          const patch = diffPatch(comment);
+          if (!patch) continue;
+          const anchor = comment.target.anchor;
+          const inRange = (value, from, to) => !!value && from !== void 0 && to !== void 0 && Number.isInteger(Number(value)) && Number(value) >= from && Number(value) <= to;
+          for (const line of patch.querySelectorAll(".diff-line")) {
+            const hit = inRange(line.dataset.newLine, anchor.newStart, anchor.newEnd) || anchor.newStart === void 0 && inRange(line.dataset.oldLine, anchor.oldStart, anchor.oldEnd);
+            if (hit) {
+              line.classList.add("comment-line");
+              line.dataset.commentId = comment.id;
+              marks.set(line, { view: listOwner, comment });
+            }
+          }
+        }
+      }
+    }
+    function renderChips() {
+      const active = owns(listOwner) ? listOwner.kind === "file" ? "fileViewComments" : "diffViewComments" : null;
+      for (const id of ["fileViewComments", "diffViewComments"]) {
+        const chip = element(id);
+        chip.style.display = id === active && comments.length ? "" : "none";
+        chip.textContent = `\u{1F4AC} ${comments.length}`;
+      }
+      if (!comments.length || !active) closeList();
+      else if (isListOpen()) renderList();
+    }
+    function closeList() {
+      listEvents.abort();
+      const popover = element("commentListPopover");
+      popover.style.display = "none";
+      popover.innerHTML = "";
+    }
+    function renderList() {
+      listEvents.abort();
+      listEvents = new AbortController();
+      const events = listEvents, view = listOwner;
+      const popover = element("commentListPopover");
+      popover.innerHTML = comments.map((comment) => {
+        const quote = comment.target.anchor.quote.replace(/\s+/g, " ").trim();
+        return `<button type="button" class="comment-list-row" data-comment-id="${escapeHtml(comment.id)}"><span class="comment-list-body">${escapeHtml(comment.body.slice(0, 160))}</span>${quote ? `<span class="comment-list-quote">${escapeHtml(quote.slice(0, 90))}</span>` : ""}</button>`;
+      }).join("");
+      for (const row of popover.querySelectorAll(".comment-list-row")) row.addEventListener("click", () => {
+        if (!events.signal.aborted && owns(view) && isListOpen()) void focus(row.dataset.commentId || "");
+      }, { signal: events.signal });
+    }
+    function toggleList(chip) {
+      if (isListOpen()) {
+        closeList();
+        return;
+      }
+      if (!owns(listOwner) || !comments.length || !chip.isConnected) return;
+      renderList();
+      const popover = element("commentListPopover");
+      popover.style.display = "block";
+      const rect = chip.getBoundingClientRect();
+      popover.style.left = `${Math.max(8, Math.min(window.innerWidth - popover.offsetWidth - 8, rect.left))}px`;
+      popover.style.top = `${rect.bottom + 6}px`;
+    }
+    async function focus(id) {
+      const view = listOwner, comment = comments.find((entry) => entry.id === id);
+      if (!owns(view) || !comment) return;
+      const sequence = ++focusSequence;
+      const current = () => owns(view) && comments.includes(comment) && focusSequence === sequence;
+      closeList();
+      if (comment.target.kind === "diff") {
+        const details = diffPatch(comment)?.closest("details.diff-file");
+        if (details && !details.open) {
+          details.open = true;
+          await options2.loadPatch(details);
+          if (!current()) return;
+          applyMarks();
+        }
+      }
+      if (!current()) return;
+      const root = element(view.kind === "file" ? "fileViewBody" : "diffViewBody");
+      const mark = [...root.querySelectorAll("[data-comment-id]")].find((el) => el.dataset.commentId === id);
+      mark?.scrollIntoView({ block: "center" });
+      openEditor(comment, mark || element(view.kind === "file" ? "fileViewComments" : "diffViewComments"));
+    }
+    function mount() {
+      if (disposed || mounted) return;
+      mounted = true;
+      const signal = lifetime.signal;
+      const queueSelection = (kind, focusComposer = false) => {
+        const view = capture();
+        if (!view || view.kind !== kind) return;
+        later(() => {
+          if (owns(view)) {
+            if (kind === "file") captureFile(focusComposer);
+            else captureDiff(focusComposer);
+          }
+        });
+      };
+      for (const kind of ["file", "diff"]) {
+        const body = element(kind + "ViewBody");
+        body.addEventListener("pointerup", () => queueSelection(kind), { signal });
+        body.addEventListener("scroll", position, { signal });
+        const chip = element(kind + "ViewComments");
+        chip.addEventListener("click", () => toggleList(chip), { signal });
+      }
+      document2.addEventListener("keyup", (event) => {
+        if (event.shiftKey) {
+          if (views.isFileOpen()) queueSelection("file", true);
+          else if (views.isDiffOpen()) queueSelection("diff", true);
+        }
+      }, { signal });
+      document2.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const marked = target.closest("mark.comment-mark, .diff-line.comment-line");
+        const entry = marked ? marks.get(marked) : null;
+        if (marked && entry && marked.isConnected && owns(entry.view) && comments.includes(entry.comment) && window.getSelection()?.isCollapsed !== false) {
+          openEditor(entry.comment, marked);
+          return;
+        }
+        if (isListOpen() && !target.closest(".view-comment-chip, .comment-list-popover")) closeList();
+      }, { signal });
+      const reposition = () => {
+        position();
+        closeList();
+      };
+      window.addEventListener("resize", reposition, { signal });
+      window.visualViewport?.addEventListener("resize", reposition, { signal });
+      window.visualViewport?.addEventListener("scroll", reposition, { signal });
+      if (typeof ResizeObserver !== "undefined") {
+        observer = new ResizeObserver(reposition);
+        observer.observe(element("commentBubble"));
+      }
+    }
+    return {
+      mount,
+      isOpen,
+      close,
+      openDraft,
+      openEditor,
+      captureFile,
+      captureDiff,
+      position,
+      key,
+      submit,
+      remove: removeComment,
+      disarmDelete,
+      set,
+      refresh,
+      applyMarks,
+      renderChips,
+      isListOpen,
+      closeList,
+      toggleList,
+      renderList,
+      focus,
+      get editing() {
+        return bubble?.editing || null;
+      },
+      dispose() {
+        close();
+        closeList();
+        set([]);
+        lifetime.abort();
+        observer?.disconnect();
         disposed = true;
       }
     };

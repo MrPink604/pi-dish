@@ -2152,3 +2152,10 @@ lookup and mutations share a sequence, replaced controls abort their listeners,
 and deferred patch owners include their row, view, repo/path and snapshot. Revoke
 HTTP failures keep the published link; stale patch responses refresh only their
 current diff. Wire narrowing and escaped diff HTML live in companion modules.
+
+Anchored comments live in `src/browser/anchored-comments.ts`, with narrowed wire
+targets in `anchored-comment-data.ts` and exact quote/context matching across text
+nodes in `comment-anchors.ts`. Capture the owning file/diff generation and endpoint
+before selection, list navigation or requests. Index/body refreshes share a
+sequence; save/delete share the current editor's busy state. Retire list listeners,
+queued selections, confirmation/reposition timers and observation on close/disposal.

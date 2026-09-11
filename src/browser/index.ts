@@ -72,3 +72,7 @@ export { decodeExtensionRequest } from './extension-ui-data';
 export { createFileViews } from './file-views';
 export { decodeFilePreview, decodeDiffView, decodeDiffPatch } from './file-view-data';
 export { renderDiffViewHtml } from './file-view-render';
+
+export { createAnchoredComments } from './anchored-comments';
+export { decodeAnchoredComments, decodeCommentTarget, decodeCommentIndex } from './anchored-comment-data';
+export { selectionTextAnchor, findQuoteOffset, markCommentQuote } from './comment-anchors';
