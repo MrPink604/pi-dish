@@ -158,7 +158,9 @@ content, every endpoint, or lifecycle authority.
 
 `src/browser/` compiles strictly using `tsconfig.browser.json`.
 `npm run build:browser` checks types, then uses the pinned esbuild dependency to
-emit the self-contained `public/browser.js` script, loaded before `app.js`.
+emit the self-contained `public/browser.js` script, loaded before `app.js`,
+and the standalone `public/artifact-comments.js` page entrypoint. All entrypoints
+are validated before any generated output is written.
 The output is committed; normal server startup and Electron packaging continue
 to use `public/` directly. `npm run check` rejects stale output without repairing
 it. esbuild is a build dependency, not an application framework.
@@ -302,3 +304,10 @@ equality guards reject stale replies while typing.
 Row ownership is separate so interim cached rows remain usable for the same
 host/harness/view. Peer cache reads use their own host suffix. Readonly rows and
 replacement writers preserve captured persistence snapshots across later edits.
+
+Published-page comments now have strict sources in `src/browser/artifact-comments.ts`
+and `artifact-comment-data.ts`. The server injects the same standalone local
+script path as before. Index/comment payloads and error text are narrowed before
+use. Refresh sequences protect marks, and submitted draft generations protect
+edit/delete completion. The shadow-root UI and its page-lifetime listeners remain
+independent of the main app.

@@ -175,4 +175,24 @@ are not completion percentages.
   leaves no partial scope, and docs now distinguish cwd equality guards from
   pick/blur refresh scheduling. Added unit/browser regressions pass along with
   strict checks, all 886 backend tests, 88 browser regressions, independent UI
-  scenarios and full desktop/mobile smoke. Follow-up Fable review precedes push.
+  scenarios and full desktop/mobile smoke. Fable confirmed the findings resolved
+  in `36cc348` and cleared both model-catalog commits before push.
+
+## Checkpoint 8 — published-page comments
+
+- The standalone comment entrypoint now compiles strictly from TypeScript; the
+  injected script path stays `public/artifact-comments.js`. It has no dependency
+  on the main app or its bundle. Wire comment/index/error fields are narrowed.
+- Selection ranges and submitted drafts are typed. Out-of-order list refreshes
+  cannot restore old marks; an old delete cannot enable a newer pending action.
+  The closed shadow root, cross-node anchors, mobile positioning and page-token
+  routing remain supported.
+- Browser build checks validate both outputs before writing either, and the
+  build regression verifies stale output and failure preservation for both.
+- Four browser regressions cover cross-node edit/delete, replacement drafts and
+  mobile bounds, out-of-order mark refreshes and overlapping delete completion.
+- Verification: strict build/lint/type checks, all 886 backend tests, 92 browser
+  regressions, all independent UI scenarios and desktop/mobile smoke passed.
+  Fable review of the local commit is required before push.
+- Next: new-session preferences/config/spawn controllers, followed by remaining
+  application features, shared helpers and startup shell.

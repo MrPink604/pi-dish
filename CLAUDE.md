@@ -1183,7 +1183,8 @@ record of what it was told and stays immutable). Deletion is a two-tap arm.
 reaches `/api/comments/get` and the edit routes; that's safe because `/api` is
 main-app only (the public share listener never mounts it).
 
-Main-server page responses inject `public/artifact-comments.js` into HTML
+Main-server page responses inject generated `public/artifact-comments.js` into HTML
+(strict source: `src/browser/artifact-comments.ts`, rebuilt with `npm run build:browser`)
 roots/indexes. Its shadow-DOM selection UI posts page-token anchors; the
 dedicated public share listener continues to serve raw, non-commentable page
 HTML. Published pages need a `sessionId` to route feedback; the pages skill

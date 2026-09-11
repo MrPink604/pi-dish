@@ -15,6 +15,8 @@ test('browser build detects stale output and preserves it on type failure', () =
     fs.symlinkSync(path.join(__dirname, '../node_modules'), path.join(root, 'node_modules'), 'junction');
     const source = path.join(root, 'src/browser/index.ts');
     fs.writeFileSync(source, 'export const answer: number = 42;');
+    const commentsSource = path.join(root, 'src/browser/artifact-comments.ts');
+    fs.writeFileSync(commentsSource, 'const pageAnswer: number = 7; console.log(pageAnswer);');
     const run = (...args) => spawnSync(process.execPath, ['scripts/build-browser.js', ...args], {
       cwd: root, env: sanitizeTestEnv(process.env), encoding: 'utf8', timeout: 30000,
     });
@@ -23,13 +25,18 @@ test('browser build detects stale output and preserves it on type failure', () =
     const output = path.join(root, 'public/browser.js');
     const original = fs.readFileSync(output, 'utf8');
     assert.equal(run('--check').status, 0);
-    fs.appendFileSync(output, '\n// stale');
-    const stale = run('--check');
-    assert.equal(stale.status, 1);
-    assert.match(stale.stderr, /Browser output is stale/, stale.stdout + stale.stderr);
-    assert.match(fs.readFileSync(output, 'utf8'), /stale/);
-    assert.equal(run().status, 0);
-    assert.equal(fs.readFileSync(output, 'utf8'), original);
+    const commentsOutput = path.join(root, 'public/artifact-comments.js');
+    const commentsOriginal = fs.readFileSync(commentsOutput, 'utf8');
+    for (const target of [output, commentsOutput]) {
+      fs.appendFileSync(target, '\n// stale');
+      const stale = run('--check');
+      assert.equal(stale.status, 1);
+      assert.match(stale.stderr, /Browser output is stale/, stale.stdout + stale.stderr);
+      assert.match(fs.readFileSync(target, 'utf8'), /stale/);
+      assert.equal(run().status, 0);
+      assert.equal(fs.readFileSync(output, 'utf8'), original);
+      assert.equal(fs.readFileSync(commentsOutput, 'utf8'), commentsOriginal);
+    }
     fs.writeFileSync(path.join(root, 'public/legacy.js'), 'export const answer = 42;');
     // A declaration can type a legacy import, but must not permit bundling it.
     fs.writeFileSync(path.join(root, 'public/legacy.d.ts'), 'export const answer: number;');
@@ -38,8 +45,15 @@ test('browser build detects stale output and preserves it on type failure', () =
     assert.notEqual(legacy.status, 0);
     assert.match(legacy.stderr, /legacy script imports must be type-only/);
     assert.equal(fs.readFileSync(output, 'utf8'), original);
-    fs.writeFileSync(source, 'export const answer: number = "wrong";');
+    // Failure in the second entry must not partially rewrite the first.
+    fs.writeFileSync(source, 'export const answer: number = 43;');
+    fs.writeFileSync(commentsSource, "export { answer } from '../../public/legacy.js';");
     assert.notEqual(run().status, 0);
     assert.equal(fs.readFileSync(output, 'utf8'), original);
+    assert.equal(fs.readFileSync(commentsOutput, 'utf8'), commentsOriginal);
+    fs.writeFileSync(commentsSource, 'const answer: number = "wrong";');
+    assert.notEqual(run().status, 0);
+    assert.equal(fs.readFileSync(output, 'utf8'), original);
+    assert.equal(fs.readFileSync(commentsOutput, 'utf8'), commentsOriginal);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

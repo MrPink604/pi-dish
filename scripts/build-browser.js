@@ -9,26 +9,34 @@ const compiled = spawnSync(process.execPath, [path.join(root, 'node_modules/type
 if (compiled.error) throw compiled.error;
 if (compiled.status !== 0) process.exit(compiled.status || 1);
 const esbuild = require('esbuild');
-const result = esbuild.buildSync({
-  absWorkingDir: root, entryPoints: ['src/browser/index.ts'], bundle: true,
-  platform: 'browser', format: 'iife', globalName: 'PiDishBrowser', target: 'es2022',
-  outfile: 'public/browser.js', write: false, metafile: true,
-  banner: { js: '// Generated from src/browser/; edit sources and run npm run build:browser.' },
+const entries = [
+  { source: 'src/browser/index.ts', target: 'public/browser.js', globalName: 'PiDishBrowser' },
+  { source: 'src/browser/artifact-comments.ts', target: 'public/artifact-comments.js' },
+];
+const outputs = entries.map(entry => {
+  const result = esbuild.buildSync({
+    absWorkingDir: root, entryPoints: [entry.source], bundle: true,
+    platform: 'browser', format: 'iife', globalName: entry.globalName, target: 'es2022',
+    outfile: entry.target, write: false, metafile: true,
+    banner: { js: '// Generated from src/browser/; edit sources and run npm run build:browser.' },
+  });
+  if (Object.keys(result.metafile.inputs).some(input => !input.startsWith('src/'))) {
+    throw new Error('Browser runtime imports must stay in src/; legacy script imports must be type-only');
+  }
+  if (result.outputFiles.length !== 1 || Object.values(result.metafile.outputs).some(out => out.imports.length)) {
+    throw new Error('Each browser entrypoint must produce one self-contained local script');
+  }
+  return { target: path.join(root, entry.target), contents: result.outputFiles[0].contents };
 });
-if (Object.keys(result.metafile.inputs).some(input => !input.startsWith('src/'))) {
-  throw new Error('Browser runtime imports must stay in src/; legacy script imports must be type-only');
-}
-if (result.outputFiles.length !== 1 || Object.values(result.metafile.outputs).some(out => out.imports.length)) {
-  throw new Error('Browser build must produce one self-contained local script');
-}
-const output = result.outputFiles[0];
-const target = path.join(root, 'public/browser.js');
+// Validate every entry before writing any output, including in check mode.
 if (check) {
-  if (!fs.existsSync(target) || !fs.readFileSync(target).equals(output.contents)) {
+  const stale = outputs.filter(output => !fs.existsSync(output.target)
+    || !fs.readFileSync(output.target).equals(output.contents));
+  if (stale.length) {
     console.error('Browser output is stale; run npm run build:browser');
     process.exitCode = 1;
-  } else console.log('Browser types and generated output match.');
+  } else console.log('Browser types and generated outputs match.');
 } else {
-  fs.writeFileSync(target, output.contents);
-  console.log('Browser script generated.');
+  for (const output of outputs) fs.writeFileSync(output.target, output.contents);
+  console.log('Browser scripts generated.');
 }
