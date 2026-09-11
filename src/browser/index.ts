@@ -26,3 +26,5 @@ export { createHarnessSettings } from './harness-settings';
 export { decodeHarnessConfig, decodeHarnessAgents } from './harness-settings-data';
 
 export { createSessionSpawns, decodeSpawnId, decodeSpawnStatus, sessionSpawnKey } from './session-spawns';
+
+export { createNewSession, NEW_SESSION_HARNESS_KEY } from './new-session';

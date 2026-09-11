@@ -68,7 +68,7 @@ test('a picker catalog refreshes the settings badge while an older background re
     sessionState.mergeCurrentSession(sessionState.captureSelection(), { harnessId: 'omp' });
     updateSessionHeader();
     window.backgroundDiscovery = harnessDiscovery.ensure(host);
-    newSessionHostId = host;
+    newSessionController.setHostId(host);
     window.pickerDiscovery = loadHarnesses();
   }, fleet.peer.hostId);
   await expect.poll(() => routes.length).toBe(2);

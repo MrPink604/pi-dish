@@ -12,7 +12,7 @@ test('a delayed spawn acceptance retains its submitted refine draft and leaves a
   await expect(page.locator('.main')).toHaveClass(/new-session-open/);
   await expect(page.locator('#newSessionCwd')).toHaveValue('/new');
   await expect(page.locator('#nsSpawnBtn')).toBeEnabled();
-  expect(await page.evaluate(() => nsPendingDraft)).toBe('replacement refine draft');
+  expect(await page.evaluate(() => newSessionController.pendingDraft)).toBe('replacement refine draft');
   const key = await page.evaluate(() => pendingSessionSpawns.entries()[0][0]);
   expect(await page.evaluate(key => localStorage.getItem(draftKey(pendingComposerKey(key))), key)).toBe('original refine draft');
   await expect.poll(() => !!status).toBe(true);

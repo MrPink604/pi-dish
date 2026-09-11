@@ -2343,10 +2343,10 @@ function loadModels(sessionId, harnessId, cwd, host) {
   const endpoint = hostEntryFor(requestedHost);
   if (!endpoint) { modelCatalog.clear(); return Promise.resolve(); }
   const captured = Object.freeze({ ...endpoint });
-  const generation = newSessionViewGeneration;
+  const generation = newSessionController.generation;
   const ownsRows = () => PiDishBrowser.sameDirectoryHost(captured, hostEntryFor(requestedHost))
     && (sessionId ? owner && owner.id === sessionId && sessionState.ownsSelection(owner)
-      : generation === newSessionViewGeneration && isNewSessionViewOpen()
+      : generation === newSessionController.generation && isNewSessionViewOpen()
         && nsHostId() === captured.hostId && selectedHarnessId() === requestedHarnessId);
   const ownsRequest = () => ownsRows() && (!!sessionId || nsCwdValue() === (cwd || ''));
   return modelCatalog.load({ host: captured, sessionId, harnessId: requestedHarnessId, cwd }, ownsRequest, ownsRows);
@@ -8600,212 +8600,65 @@ const pendingSessionSpawns = PiDishBrowser.createSessionSpawns({
   discardPrompt: key => { const owner = pendingComposerKey(key); clearDraft(owner); pendingImagesBySession.delete(owner); },
   showFailure: showPendingSessionFailure, status: setStatus,
 });
-function captureSpawnView() {
-  const generation = newSessionViewGeneration;
-  const open = isNewSessionViewOpen();
-  const selection = sessionState.captureSelection();
-  const pending = currentSessionSpawnId;
-  const endpoint = Object.freeze({ ...nsHost() });
-  const harness = selectedHarnessId(), cwd = nsCwdValue();
-  return () => (!open || (PiDishBrowser.sameDirectoryHost(endpoint, nsHost())
-      && harness === selectedHarnessId() && cwd === nsCwdValue()))
-    && generation === newSessionViewGeneration && open === isNewSessionViewOpen()
-    && pending === currentSessionSpawnId
-    && (selection ? sessionState.ownsSelection(selection) : !sessionState.currentSession);
-}
-function submitNewSession({ name, cwd, model, thinking, target, harness, host = nsHostId(),
-  ownsView = captureSpawnView(), draft = nsPendingDraft } = {}) {
-  const endpoint = host && typeof host === 'object' ? host : hostEntryFor(host);
-  if (!endpoint) return Promise.reject(new Error('Host is no longer available'));
-  const generation = newSessionViewGeneration;
-  return pendingSessionSpawns.submit({ host: endpoint, name, cwd, model, thinking, target, harness, draft, ownsView,
-    onAccepted: () => { if (generation === newSessionViewGeneration && nsPendingDraft === draft) nsPendingDraft = null; },
-  });
-}
-
-// Direct spawn used by the workspace-header + button (explicit cwd, default
-// model). The full new-session takeover uses spawnNewSession() instead.
-async function createSession(cwd, host = nsHostId()) {
-  const selectedHost = hostEntryFor(host);
-  if (!selectedHost) { setStatus('Host is no longer available', 'error'); return; }
-  const endpoint = Object.freeze({ ...selectedHost });
-  const ownsView = captureSpawnView();
-  let harness = localStorage.getItem(HARNESS_KEY) || 'pi';
-  let target = null;
-  try {
-    if (cwd !== undefined && PiDishBrowser.sameDirectoryHost(endpoint, nsHost())) {
-      await Promise.all([loadSpawnTargets(), loadHarnesses()]);
-    }
-    if (PiDishBrowser.sameDirectoryHost(endpoint, nsHost())) {
-      target = selectedSpawnTarget();
-      harness = selectedHarnessId();
-    }
-    if (ownsView()) setStatus(target ? 'Spawning in tmux…' : 'Creating session...', 'working');
-    if (cwd === undefined) cwd = nsCwdValue();
-    if (cwd) localStorage.setItem('pi-dish-cwd', cwd);
-    await submitNewSession({ cwd, target, harness, host: endpoint, ownsView, draft: null });
-  } catch (e) { if (ownsView()) setStatus(`Error: ${e.message}`, 'error'); }
-}
-
-// =========================================================================
-// New-session takeover (main-pane, usage-view pattern)
-// =========================================================================
-// Full-width configuration surface for a fresh session: a cwd text input
-// (single source of truth) backed by fuzzy /api/dirs matches and a lazy
-// directory tree, a model select fed by the cached /api/models catalog, and
-// the tmux "Run in" target. localStorage keys: pi-dish-cwd (chosen cwd),
-// pi-dish-new-model (chosen model), pi-dish-new-thinking (chosen reasoning
-// level), pi-dish-models-cache (catalog snapshot).
-// Which host the takeover configures and spawns on. Persisted (hostId), and
-// falls back to self whenever the saved host has left the list — a spawn must
-// never quietly land on a machine the user can no longer see.
-const NS_HOST_KEY = 'pi-dish-new-host';
-let newSessionHostId = localStorage.getItem(NS_HOST_KEY) || null;
-
-/** The takeover's current host entry — self unless a picker choice survives. */
-function nsHost() {
-  const chosen = newSessionHostId ? hostEntryFor(newSessionHostId) : null;
-  return chosen || selfHostEntry();
-}
-function nsHostId() { return nsHost().hostId || null; }
-function nsHostSupports(capability) {
-  const caps = nsHost().capabilities;
-  // Absent capabilities mean "unknown host build", not "unsupported": only an
-  // explicit advertisement that omits the flag hides a feature.
-  return !caps || caps[capability] === true;
-}
-
-/** Hosts worth offering: reachable ones (self always) — a picker of dead
- * machines is noise, and one host means no picker at all. */
-function nsHostOptions() {
-  return effectiveHosts().filter(host => host.self || !hostIsDown(host));
-}
-
-function renderNsHosts() {
-  if (isNewSessionViewOpen() && nsDirectoryTree && !nsDirectoryTree.isCurrent()) {
-    hideCwdDropdown();
-    initNsTree();
-    void loadKnownCwds();
-    renderNsWorkspaces();
-  }
-  const row = document.getElementById('nsHostRow');
-  const sel = document.getElementById('nsHostSelect');
-  if (!row || !sel) return;
-  const options = nsHostOptions();
-  if (options.length < 2) { row.style.display = 'none'; return; }
-  row.style.display = '';
-  sel.innerHTML = options.map(host =>
-    `<option value="${escapeHtml(host.hostId || '')}">${escapeHtml(hostDisplayLabel(host))}</option>`).join('');
-  sel.value = nsHost().hostId || '';
-}
-
-function onNsHostChange(value) {
-  hideCwdDropdown();
-  newSessionHostId = value || null;
-  if (newSessionHostId) localStorage.setItem(NS_HOST_KEY, newSessionHostId);
-  else localStorage.removeItem(NS_HOST_KEY);
-  // Everything under the picker is host-scoped: catalogs, directories, tmux
-  // targets and the harness list all belong to the machine being spawned on.
-  modelCatalog.clear();
-  loadKnownCwds();
-  loadSpawnTargets();
-  loadHarnesses();
-  renderNsWorkspaces();
-  initNsTree();
-  onNsHarnessChange(selectedHarnessId());
-}
-
-const HARNESS_KEY = 'pi-dish-new-harness';
-let newSessionHarness = 'pi';
-let nsPilotRefreshTimer = null;
-
+// The typed takeover owns form state, controls, caches and launch view tokens.
+const newSessionController = PiDishBrowser.createNewSession({
+  root: document.querySelector('.main'), storage: localStorage, request: apiFetch,
+  self: selfHostEntry, host: hostEntryFor, hosts: effectiveHosts, hostDown: hostIsDown, multiHost: isMultiHost,
+  sessionState, currentSpawn: () => currentSessionSpawnId, spawns: pendingSessionSpawns, models: modelCatalog,
+  closeOtherViews: () => { closeSidebar(); closeUsageView(); closeSearchView(); closeSkillsView(); closeRoutinesView(); closeRecoveryView(); closeBounceView(); },
+  closeSettings: () => closeHarnessSettings(),
+  harnessCacheChanged: () => { if (sessionState.currentSession) updateSessionHeader(); }, status: setStatus,
+});
+const HARNESS_KEY = PiDishBrowser.NEW_SESSION_HARNESS_KEY;
 const NS_THINKING_LABELS = PiDishBrowser.NS_THINKING_LABELS;
-const newSessionPreferences = PiDishBrowser.createNewSessionPreferences({
-  model: document.getElementById('nsModelSelect'), thinking: document.getElementById('nsThinkingSelect'),
-  hiddenNote: document.getElementById('nsModelHidden'), thinkingNote: document.getElementById('nsThinkingNote'),
-  rows: () => modelCatalog.rows(), read: key => localStorage.getItem(key),
-  write: (key, value) => localStorage.setItem(key, value), escapeHtml,
-});
-
-function selectedHarnessId() {
-  return document.getElementById('nsHarnessSelect')?.value || newSessionHarness || 'pi';
-}
-
-function harnessLabel(harnessId) {
-  return harnessDiscovery.rows().find(harness => harness.id === harnessId)?.label
-    || (harnessId === 'pi' ? 'Pi' : harnessId);
-}
-
-// Harness rows per host (`/api/harnesses`), including whether that harness has
-// a settings view at all. The session header only offers the modal when the
-// session's own host says its harness is configurable, so the badge never
-// promises an editor a 501 would refuse.
-const harnessDiscovery = PiDishBrowser.createHarnessDiscovery({
-  selectedHostId: nsHostId,
-  selfHostId: () => hostDirectory.self.hostId,
-  requestPicker: async host => {
-    const res = await apiFetch(host, '/api/harnesses');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  },
-  requestBackground: host => harnessSettingsFetch(host, '/api/harnesses'),
-  preferredHarness: () => localStorage.getItem(HARNESS_KEY),
-  onPreferredHarness: id => { newSessionHarness = id; },
-  onPickerChange: () => {
-    renderNsHarnesses();
-    if (isNewSessionViewOpen()) onNsHarnessChange(selectedHarnessId());
-  },
-  onCacheChange: () => { if (sessionState.currentSession) updateSessionHeader(); },
-});
-
+const harnessDiscovery = newSessionController.harnesses;
+const newSessionConfigPreview = newSessionController.config;
+const spawnTargetsController = newSessionController.targets;
+const spawnTargetPicker = newSessionController.targetPicker;
+const directoryCatalog = newSessionController.directories;
+function captureSpawnView() { return newSessionController.captureView(); }
+function submitNewSession(value) { return newSessionController.submit(value); }
+function createSession(cwd, host) { return newSessionController.create(cwd, host); }
+function spawnNewSession() { return newSessionController.spawn(); }
+function nsHost() { return newSessionController.host(); }
+function nsHostId() { return newSessionController.hostId(); }
+function nsHostSupports(capability) { return newSessionController.supports(capability); }
+function nsHostOptions() { return newSessionController.hostOptions(); }
+function nsCwdValue() { return newSessionController.cwd(); }
+function setNsCwd(value) { newSessionController.setCwd(value); }
+function selectedHarnessId() { return newSessionController.selectedHarness(); }
+function harnessLabel(id) { return newSessionController.harnessLabel(id); }
+function renderNsHosts() { newSessionController.renderHosts(); }
+function renderNsHarnesses() { newSessionController.renderHarnesses(); }
+function renderNsWorkspaces() { newSessionController.renderWorkspaces(); }
+function onNsHostChange(value) { newSessionController.changeHost(value); }
+function onNsHarnessChange(value) { newSessionController.changeHarness(value); }
+function onNsModelChange(value) { newSessionController.preferences.selectModel(value); }
+function onNsThinkingChange(value) { newSessionController.preferences.selectThinking(value); }
+function syncNsThinking() { newSessionController.preferences.syncThinking(); }
+function renderNsModel() { newSessionController.preferences.render(); }
+function isNewSessionViewOpen() { return newSessionController.isOpen(); }
+function openNewSessionView(value) { newSessionController.open(value); }
+function closeNewSessionView() { newSessionController.close(); }
+function refreshNsPilotOptions() { newSessionController.refresh(); }
+function scheduleNsPilotRefresh() { newSessionController.scheduleRefresh(); }
+function initNsTree() { newSessionController.initTree(); }
+function hideCwdDropdown() { newSessionController.hideCwd(); }
+function nsError(value) { newSessionController.error(value); }
+function loadKnownCwds() { return directoryCatalog.load(); }
+function loadSpawnTargets() { return spawnTargetsController.load(); }
+function hideSpawnTargetDropdown() { spawnTargetPicker.hide(); }
+function selectedSpawnTarget() { return newSessionController.selectedTarget(); }
+function savedResumeTarget(host) { return spawnTargetsController.resume(hostEntryFor(host)); }
+function loadHarnesses() { return harnessDiscovery.load(); }
+function loadNsHarnessConfig(cwd = nsCwdValue()) { return newSessionConfigPreview.load(cwd); }
 function harnessRow(hostId, harnessId) { return harnessDiscovery.row(hostId, harnessId); }
 function ensureHarnessRows(hostId) { void harnessDiscovery.ensure(hostId); }
-
 function harnessSupportsSettings(session) {
-  if (!session?.harnessId) return false;
-  return !!harnessRow(sessionHostIdOf(session), session.harnessId)?.pilotConfig;
+  return !!session?.harnessId && !!harnessRow(sessionHostIdOf(session), session.harnessId)?.pilotConfig;
 }
-
-function loadHarnesses() { return harnessDiscovery.load(); }
-
-function renderNsHarnesses() {
-  const sel = document.getElementById('nsHarnessSelect');
-  if (!sel) return;
-  const available = harnessDiscovery.rows().filter(h => h.available !== false);
-  sel.innerHTML = available.map(h => `<option value="${escapeHtml(h.id)}">${escapeHtml(h.label || h.id)}</option>`).join('');
-  if (!available.some(h => h.id === newSessionHarness)) newSessionHarness = available[0]?.id || 'pi';
-  sel.value = newSessionHarness;
-}
-
-function onNsHarnessChange(value) {
-  newSessionHarness = value || 'pi';
-  localStorage.setItem(HARNESS_KEY, newSessionHarness);
-  newSessionPreferences.restore(newSessionHarness);
-  modelCatalog.clear();
-  renderNsModel();
-  refreshNsPilotOptions();
-}
-
-function isNewSessionViewOpen() {
-  return document.querySelector('.main').classList.contains('new-session-open');
-}
-
-function nsCwdValue() {
-  return (document.getElementById('newSessionCwd')?.value || '').trim();
-}
-
-const newSessionConfigPreview = PiDishBrowser.createNewSessionConfigPreview({
-  wrap: document.getElementById('nsHarnessConfig'), values: document.getElementById('nsHarnessConfigValues'),
-  roles: document.getElementById('nsHarnessRoles'),
-  buttons: [document.getElementById('nsEditAgents'), document.getElementById('nsEditRoles')],
-  scope: () => {
-    const host = nsHost();
-    return host && isNewSessionViewOpen()
-      ? { host, harnessId: selectedHarnessId(), cwd: nsCwdValue(), view: newSessionViewGeneration } : null;
-  },
-  request: apiFetch, roleSummary: formatModelRoleSummary,
-});
-function loadNsHarnessConfig(cwd = nsCwdValue()) { return newSessionConfigPreview.load(cwd); }
+function modelSelectOptionsHtml(models) { return PiDishBrowser.modelSelectOptionsHtml(models, escapeHtml); }
+function modelHiddenNote(hidden) { return PiDishBrowser.modelHiddenNote(hidden); }
 
 // One typed editor serves session settings and the new-session takeover.
 const harnessSettingsController = PiDishBrowser.createHarnessSettings({
@@ -8843,201 +8696,6 @@ function openHarnessSettings(opts = {}) {
   });
 }
 
-function refreshNsPilotOptions() {
-  if (!isNewSessionViewOpen()) return;
-  const harnessId = selectedHarnessId();
-  const cwd = nsCwdValue();
-  modelCatalog.retire();
-  renderNsModel();
-  loadModels(undefined, harnessId, cwd, nsHostId()).then(() => {
-    if (isNewSessionViewOpen() && selectedHarnessId() === harnessId) renderNsModel();
-  });
-  loadNsHarnessConfig(cwd);
-}
-
-function scheduleNsPilotRefresh() {
-  modelCatalog.retire();
-  newSessionConfigPreview.retire();
-  clearTimeout(nsPilotRefreshTimer);
-  nsPilotRefreshTimer = setTimeout(refreshNsPilotOptions, 300);
-}
-
-// opts.cwd prefills the working directory (without overwriting the saved
-// default); opts.draft stashes an evidence-bundle prompt (the Skills refine
-// launcher) that lands in the composer once the session spawns.
-let nsPendingDraft = null;
-let newSessionViewGeneration = 0;
-
-function openNewSessionView(opts = {}) {
-  newSessionViewGeneration++;
-  const spawnButton = document.getElementById('nsSpawnBtn');
-  if (spawnButton) { spawnButton.disabled = false; spawnButton.textContent = '+ New session'; }
-  closeSidebar(); // on mobile the footer button lives in the drawer
-  closeUsageView(); // takeovers are mutually exclusive
-  closeSearchView();
-  closeSkillsView();
-  closeRoutinesView();
-  closeRecoveryView();
-  closeBounceView();
-  document.querySelector('.main').classList.add('new-session-open');
-  nsPendingDraft = opts.draft || null;
-
-  const nameInput = document.getElementById('newSessionName');
-  if (nameInput) nameInput.value = '';
-
-  renderNsHosts();
-  // These catalogs only serve this takeover. Paint cached/default controls
-  // immediately, then replace them as their host-scoped requests settle.
-  void loadKnownCwds().then(() => {
-    if (isNewSessionViewOpen()) renderNsWorkspaces();
-  });
-  void loadSpawnTargets();
-  void loadHarnesses();
-
-  // cwd input is the source of truth; prefill from a passed cwd, else last-used.
-  const cwdInput = document.getElementById('newSessionCwd');
-  if (cwdInput) cwdInput.value = opts.cwd || localStorage.getItem('pi-dish-cwd') || '';
-  document.getElementById('nsError').textContent = '';
-
-  // Model: render instantly from the cache (or an already-loaded catalog),
-  // then refresh in the background and re-render, preserving the selection.
-  newSessionHarness = localStorage.getItem(HARNESS_KEY) || 'pi';
-  renderNsHarnesses();
-  newSessionPreferences.restore(newSessionHarness);
-  if (modelCatalog.scope?.harnessId !== newSessionHarness
-      || !PiDishBrowser.sameDirectoryHost(modelCatalog.scope?.host || null, nsHost())) {
-    modelCatalog.clear();
-    try {
-      const endpoint = Object.freeze({ ...nsHost() });
-      const harnessId = newSessionHarness;
-      const generation = newSessionViewGeneration;
-      const cached = JSON.parse(localStorage.getItem(modelsCacheKey(harnessId, endpoint.hostId)) || 'null');
-      if (Array.isArray(cached)) modelCatalog.seed({ host: endpoint, harnessId }, cached,
-        () => generation === newSessionViewGeneration && isNewSessionViewOpen()
-          && PiDishBrowser.sameDirectoryHost(endpoint, nsHost()) && selectedHarnessId() === harnessId);
-    } catch {}
-  }
-  renderNsModel();
-
-  renderNsWorkspaces();
-  initNsTree();
-}
-
-function closeNewSessionView() {
-  if (isNewSessionViewOpen()) { newSessionViewGeneration++; modelCatalog.retire(); }
-  spawnTargetsController.retire();
-  spawnTargetPicker.hide();
-  directoryCatalog.retire();
-  nsDirectoryTree?.dispose();
-  nsDirectoryTree = null;
-  document.querySelector('.main').classList.remove('new-session-open');
-  closeHarnessSettings();
-  clearTimeout(nsPilotRefreshTimer);
-  newSessionConfigPreview.retire();
-  hideCwdDropdown();
-}
-
-// Distinct known-session cwds as a quick-pick row above the tree.
-function renderNsWorkspaces() {
-  const wrap = document.getElementById('nsWorkspaces');
-  if (!wrap) return;
-  const seen = new Set();
-  const cwds = [];
-  const hostId = nsHostId();
-  for (const s of [...sessionState.sessions.active, ...sessionState.sessions.previous]) {
-    // Another machine's paths are not quick-picks for this one.
-    if (isMultiHost() && (s.host || null) !== hostId) continue;
-    if (s.cwd && !seen.has(s.cwd)) { seen.add(s.cwd); cwds.push(s.cwd); }
-  }
-  if (!cwds.length) { wrap.innerHTML = ''; return; }
-  wrap.innerHTML = '<span class="ns-workspaces-label">Workspaces</span>' +
-    cwds.slice(0, 12).map(c =>
-      `<button class="ns-workspace-chip" data-cwd="${escapeHtml(c)}" title="${escapeHtml(c)}">${escapeHtml(shortCwd(c))}</button>`).join('');
-  wrap.querySelectorAll('.ns-workspace-chip').forEach(b =>
-    b.addEventListener('click', () => setNsCwd(b.dataset.cwd)));
-}
-
-// --- Directory tree (lazy, hand-rolled — no tree dependency) ---
-// Roots at ~; every dir row carries a chevron (expand, fetch children once
-// and cache in the DOM) and selects the cwd on a name click.
-let nsDirectoryTree = null;
-function initNsTree() {
-  nsDirectoryTree?.dispose();
-  const root = document.getElementById('nsTree');
-  if (!root) { nsDirectoryTree = null; return; }
-  nsDirectoryTree = PiDishBrowser.createDirectoryTree({ root, host: nsHost,
-    request: apiFetch, onPick: setNsCwd });
-  nsDirectoryTree.reset();
-}
-
-function setNsCwd(pathValue) {
-  const input = document.getElementById('newSessionCwd');
-  if (input) input.value = pathValue;
-  localStorage.setItem('pi-dish-cwd', pathValue);
-  scheduleNsPilotRefresh();
-}
-
-// --- Model select ---
-function onNsModelChange(value) { newSessionPreferences.selectModel(value); }
-function onNsThinkingChange(value) { newSessionPreferences.selectThinking(value); }
-function syncNsThinking() { newSessionPreferences.syncThinking(); }
-
-/**
- * Option markup for a model select: enabled models grouped by provider under
- * a "(default)" row (which omits `model` entirely), plus how many the host's
- * scoped-models setting hid. Shared by the new-session takeover and the
- * routines editor so both speak the same catalog vocabulary — neither one
- * sets `selected` here; callers assign `.value` after inserting the HTML.
- */
-function modelSelectOptionsHtml(models) {
-  return PiDishBrowser.modelSelectOptionsHtml(models, escapeHtml);
-}
-function modelHiddenNote(hidden) { return PiDishBrowser.modelHiddenNote(hidden); }
-
-function renderNsModel() { newSessionPreferences.render(); }
-
-function nsError(msg) {
-  const el = document.getElementById('nsError');
-  if (el) el.textContent = msg;
-}
-
-async function spawnNewSession() {
-  const btn = document.getElementById('nsSpawnBtn');
-  if (btn?.disabled) return;
-  const generation = newSessionViewGeneration;
-  const ownsView = captureSpawnView();
-  let target;
-  try { target = selectedSpawnTarget(); } catch (e) { nsError(e.message); return; }
-  const name = (document.getElementById('newSessionName')?.value || '').trim();
-  const cwd = nsCwdValue();
-  nsError('');
-  if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
-  try {
-    if (cwd) localStorage.setItem('pi-dish-cwd', cwd);
-    const model = document.getElementById('nsModelSelect')?.value || undefined;
-    const thinking = document.getElementById('nsThinkingSelect')?.value || undefined;
-    await submitNewSession({ name, cwd, model, thinking, target, harness: selectedHarnessId(), ownsView });
-  } catch (e) {
-    if (ownsView()) nsError(e.message);
-  } finally {
-    if (generation === newSessionViewGeneration && btn) { btn.disabled = false; btn.textContent = '+ New session'; }
-  }
-}
-
-// =========================================================================
-// CWD autocomplete
-// =========================================================================
-const directoryCatalog = PiDishBrowser.createDirectoryCatalog({ host: nsHost, request: apiFetch });
-function loadKnownCwds() { return directoryCatalog.load(); }
-
-/**
- * The cwd combobox, as a factory: fuzzy /api/dirs matches on the *chosen*
- * host merged with already-known session cwds (starred, score-boosted).
- * Factored out of the new-session takeover so the routines editor's working
- * directory field is literally the same control instead of a second copy
- * that drifts. Callers own the DOM elements and what a pick means; `hostId`
- * is a function because the host can change under a live control.
- */
 function createCwdAutocomplete({
   input, dropdown, hostId = nsHostId, known = () => [],
   onPick = () => {}, onSubmit = null, onBlur = null,
@@ -9048,61 +8706,6 @@ function createCwdAutocomplete({
     onPick, onSubmit, onBlur,
   });
 }
-
-// The new-session takeover's instance; the wrapper keeps its one outside
-// call site (closeNewSessionView) reading the same.
-let nsCwdAutocomplete = null;
-function hideCwdDropdown() { nsCwdAutocomplete?.hide(); }
-
-(function() {
-  const saved = localStorage.getItem('pi-dish-cwd');
-  const cwdInput = document.getElementById('newSessionCwd');
-  const dropdown = document.getElementById('cwdDropdown');
-  if (!cwdInput || !dropdown) return;
-  if (saved) cwdInput.value = saved;
-
-  nsCwdAutocomplete = createCwdAutocomplete({
-    input: cwdInput,
-    dropdown,
-    hostId: () => nsHostId(),
-    known: () => directoryCatalog.current(),
-    onPick: (pathValue) => {
-      localStorage.setItem('pi-dish-cwd', pathValue);
-      scheduleNsPilotRefresh();
-    },
-    onBlur: () => scheduleNsPilotRefresh(),
-    onSubmit: () => spawnNewSession(),
-  });
-})();
-
-// =========================================================================
-// Spawn target ("Run in") — headless RPC child (default) or a tmux window.
-// A combobox like the cwd picker above it: the action rows (headless, one
-// "new session…" per tmux server) stay pinned at the top, and typing
-// fuzzy-filters the named tmux sessions listed below them.
-// =========================================================================
-const spawnTargetsController = PiDishBrowser.createSpawnTargets({
-  host: () => nsHost(),
-  supportsTmux: () => nsHostSupports('tmux'),
-  request: (...args) => apiFetch(...args),
-  readSaved: () => localStorage.getItem('pi-dish-spawn-target'),
-  save: key => localStorage.setItem('pi-dish-spawn-target', key),
-  changed: () => spawnTargetPicker.sync(),
-});
-const spawnTargetPicker = PiDishBrowser.createSpawnTargetPicker({
-  input: document.getElementById('newSessionTarget'),
-  nameInput: document.getElementById('newSessionTmuxName'),
-  wrap: document.getElementById('newSessionTargetWrap'),
-  dropdown: document.getElementById('spawnTargetDropdown'),
-  targets: spawnTargetsController,
-  match: fuzzyMatch, score: fuzzyScore, highlight: highlightFuzzy, escapeHtml,
-});
-function loadSpawnTargets() { return spawnTargetsController.load(); }
-function hideSpawnTargetDropdown() { spawnTargetPicker.hide(); }
-function selectedSpawnTarget() {
-  return spawnTargetsController.selected(document.getElementById('newSessionTmuxName').value);
-}
-function savedResumeTarget(host) { return spawnTargetsController.resume(hostEntryFor(host)); }
 
 // =========================================================================
 // Utilities

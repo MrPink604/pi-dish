@@ -15,7 +15,8 @@ Checkpoint 8 converts the standalone published-page comments entrypoint.
 Checkpoint 9 migrates new-session model/thinking preferences and defaults preview.
 Checkpoint 10 migrates the shared harness settings editor.
 Checkpoint 11 migrates submitted spawn operations and provisional-state ownership.
-Checkpoint 12 migrates the shared helper entrypoint and its pure implementation modules. See
+Checkpoint 12 migrates the shared helper entrypoint and its pure implementation modules.
+Checkpoint 13 migrates the new-session form and discovery-control orchestration. See
 [the checkpoint log](docs/browser-migration-checkpoints.md) for implementation
 verification and the complete browser entrypoint inventory. The last confirmed
 CI checkpoint is recorded below; final CI must pass before the goal is complete.
@@ -26,7 +27,7 @@ CI checkpoint is recorded below; final CI must pass before the goal is complete.
 | --- | --- | --- |
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
-| Browser migration | In progress — current stage | Thirty-three implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
+| Browser migration | In progress — current stage | Thirty-four implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
 | Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -44,7 +45,7 @@ in `lib/`. Its full module inventory is in [the migration guide](docs/typescript
 Most JavaScript callers of these modules are not yet type checked; `lib/cron.js`
 is an explicitly checked exception.
 
-These thirty-three browser implementation modules compile strictly into local
+These thirty-four browser implementation modules compile strictly into local
 `public/browser.js`, `public/helpers.js` and `public/artifact-comments.js` scripts.
 The entries are `index.ts`, `shared-helpers.ts` and `artifact-comments.ts`;
 `shared-helper-types.ts` supplies their pure-helper contracts:
@@ -74,6 +75,7 @@ The entries are `index.ts`, `shared-helpers.ts` and `artifact-comments.ts`;
 | `harness-settings-data.ts` | Harness defaults, agent settings and custom-role wire decoding |
 | `harness-settings.ts` | Shared settings editor, captured view/endpoint reads and serialized save ownership |
 | `session-spawns.ts` | Submitted spawn snapshots, provisional rows, polling and composer reconciliation |
+| `new-session.ts` | Form state, host/harness controls, discovery coordination, workspace actions and submitted view ownership |
 | `helper-values.ts` | Unknown-value guards and compatible timestamp conversion |
 | `helper-format.ts` | Labels, durations, metadata, input insertion and download filenames |
 | `helper-content.ts` | Narrowed content blocks and tool summaries/results |
@@ -101,7 +103,7 @@ commits; it is not a promise that one row equals one change.
 | --- | --- | --- |
 | 1 — implemented | Host identity and fleet discovery: `loadHostIdentity`, `loadHostFleet`, `identifyHosts` and their request state | Typed controller owns descriptor requests and their captured host/source identities; catalog persistence and UI callbacks remain explicit. Old-server fallback, refresh timing and stale-response behavior are verified. |
 | 2 — implemented | Host catalog editing and settings UI: persistence, add/remove/token actions and host-section rendering | Storage and network boundaries are typed; each action retains its intended host, and view listeners have explicit cleanup. |
-| 3 | Remaining new-session request controllers: workspace/directory lookup, spawn targets, model/config discovery and spawn coordination | Requests retain host, harness, cwd and operation ownership; delayed results cannot change a newer configuration or retarget a spawn. |
+| 3 — implemented | New-session form and request controllers: workspace/directory lookup, spawn targets, model/config discovery and spawn coordination | Requests retain host, harness, cwd and operation ownership; delayed results cannot change a newer configuration or retarget a spawn. |
 | 4 | Remaining browser features, extracted one feature at a time | Composer/queue, dialogs, search/usage, shares/pages/comments, tree and other feature state, requests and UI move behind typed contracts. Each feature gets its own scope before implementation. |
 | 5 | Transcript/streaming, file/diff and terminal surfaces, then the remaining app shell | Rendering and transport ownership move without losing streaming coalescing, retained transcript DOM, pagination, scroll state or terminal cleanup. |
 
@@ -132,7 +134,8 @@ Last confirmed CI checkpoint, `1d50e5d` (newer local work is in the checkpoint l
 
 - Fable 5.1 cleared the new-session options checkpoint before push. Both harness
   editor commits, including preview-refresh follow-up `1d50e5d`, are also cleared
-  and pushed.
+  and pushed. Spawn commits `454ce1c`/`e3f30b1` and shared helpers `861d799`
+  are reviewed and pushed; their CI status is in the checkpoint log.
 - 892 backend tests and 101 browser regressions passed, along with independent UI
   scenarios and desktop/mobile smoke. OMP/Prime fake-provider canaries last passed
   at `53b5ae0`; they will run again for the final browser audit.

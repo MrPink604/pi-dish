@@ -78,7 +78,7 @@ test('new-session cached catalogs use the selected peer key', async ({ page, fle
   const held = [];
   await page.route('**/api/harnesses', route => held.push(route));
   await page.evaluate(peer => {
-    newSessionHostId = peer;
+    newSessionController.setHostId(peer);
     localStorage.setItem('pi-dish-new-harness', 'pi');
     localStorage.setItem('pi-dish-models-cache', JSON.stringify([{ id: 'self-cache', provider: 'fixture' }]));
     localStorage.setItem('pi-dish-models-cache@' + peer, JSON.stringify([{ id: 'peer-cache', provider: 'fixture' }]));

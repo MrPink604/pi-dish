@@ -2053,3 +2053,9 @@ compatibility exports. Build all browser entries after source changes and commit
 `public/helpers.js` alongside any other regenerated outputs. The generated helper
 file supports both `require('./public/helpers')` and browser globals; keep those
 paths and exports stable for server, published-page and app consumers.
+
+The new-session takeover is composed by `src/browser/new-session.ts`. Read its
+host/harness/draft/generation through controller accessors and use its lifecycle
+and selection writers; do not restore mutable globals in `app.js`. Workspace
+buttons, directory trees, pickers and debounced config/model refreshes follow the
+controller's captured host and view. Disposal retires their callbacks and inputs.

@@ -337,3 +337,9 @@ which still serves both CommonJS consumers and pre-app browser globals. Other
 TypeScript browser modules can import the specific helper modules directly.
 The build validates browser, comment and helper outputs together before writing;
 check mode rejects drift in any entrypoint.
+
+`new-session.ts` owns the new-session takeover itself, including its view
+lifecycle, selected host/harness, refine draft, workspace listeners and the
+configuration/discovery controllers it composes. `app.js` supplies host/session
+accessors, shared model/spawn controllers and cross-view callbacks. Submitted
+view guards stop owning their form on disposal as well as close/replacement.

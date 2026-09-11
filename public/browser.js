@@ -25,6 +25,7 @@ var PiDishBrowser = (() => {
     HOST_BACKOFF_LADDER: () => HOST_BACKOFF_LADDER,
     HOST_BACKOFF_RESET_MS: () => HOST_BACKOFF_RESET_MS,
     HOST_COLOR_SLOTS: () => HOST_COLOR_SLOTS,
+    NEW_SESSION_HARNESS_KEY: () => NEW_SESSION_HARNESS_KEY,
     NS_THINKING_LABELS: () => NS_THINKING_LABELS,
     assignHostColor: () => assignHostColor,
     createCwdAutocomplete: () => createCwdAutocomplete,
@@ -40,6 +41,7 @@ var PiDishBrowser = (() => {
     createHostSettings: () => createHostSettings,
     createHostTransport: () => createHostTransport,
     createModelCatalog: () => createModelCatalog,
+    createNewSession: () => createNewSession,
     createNewSessionConfigPreview: () => createNewSessionConfigPreview,
     createNewSessionPreferences: () => createNewSessionPreferences,
     createSessionApi: () => createSessionApi,
@@ -1231,7 +1233,7 @@ var PiDishBrowser = (() => {
     let view = null;
     let sequence = 0;
     let checking = false;
-    const { directory, connections, escapeHtml, displayLabel } = options;
+    const { directory, connections, escapeHtml: escapeHtml2, displayLabel } = options;
     function status(owner, message, error = false) {
       if (view !== owner) return;
       owner.status.textContent = message;
@@ -1359,20 +1361,20 @@ var PiDishBrowser = (() => {
         const version = host.version ? `v${host.version}` : "";
         const detail = [host.self ? "this server" : host.base, version].filter(Boolean).join(" \xB7 ");
         const actions = [];
-        if (state === "blocked") actions.push(`<button class="btn-small host-token-btn" data-key="${escapeHtml(host.key)}">token?</button>`);
-        if (host.source === "user") actions.push(`<button class="btn-icon host-remove-btn" data-key="${escapeHtml(host.key)}" title="Remove host">\u2715</button>`);
+        if (state === "blocked") actions.push(`<button class="btn-small host-token-btn" data-key="${escapeHtml2(host.key)}">token?</button>`);
+        if (host.source === "user") actions.push(`<button class="btn-icon host-remove-btn" data-key="${escapeHtml2(host.key)}" title="Remove host">\u2715</button>`);
         const hostId = host.hostId || null;
         const custom = options.customColor(hostId);
         const hex = options.resolveColor(options.color(hostId)) || "#888888";
         const colorControls = hosts.length > 1 ? `
-        <input type="color" class="host-color-input" data-host="${escapeHtml(hostId || "")}"
-          value="${escapeHtml(hex)}" style="background:${escapeHtml(hex)}"
+        <input type="color" class="host-color-input" data-host="${escapeHtml2(hostId || "")}"
+          value="${escapeHtml2(hex)}" style="background:${escapeHtml2(hex)}"
           title="${custom ? "Custom color for this host" : "Automatic color \u2014 pick one to override it"}">
-        <button class="btn-icon host-color-reset${custom ? "" : " hidden"}" data-host="${escapeHtml(hostId || "")}" title="Back to the automatic color">\u21BA</button>` : "";
+        <button class="btn-icon host-color-reset${custom ? "" : " hidden"}" data-host="${escapeHtml2(hostId || "")}" title="Back to the automatic color">\u21BA</button>` : "";
         return `<div class="host-row">
-        <span class="host-dot ${escapeHtml(state)}" title="${escapeHtml(STATE_TITLES[state] || state)}"></span>
-        <span class="host-row-name">${escapeHtml(displayLabel(host))}</span>
-        <span class="host-row-detail" title="${escapeHtml(host.base || "")}">${escapeHtml(detail)}</span>
+        <span class="host-dot ${escapeHtml2(state)}" title="${escapeHtml2(STATE_TITLES[state] || state)}"></span>
+        <span class="host-row-name">${escapeHtml2(displayLabel(host))}</span>
+        <span class="host-row-detail" title="${escapeHtml2(host.base || "")}">${escapeHtml2(detail)}</span>
         <span class="host-row-actions">${colorControls}${actions.join("")}</span>
       </div>`;
       }).join("");
@@ -2066,7 +2068,7 @@ var PiDishBrowser = (() => {
       return current() ? scope : null;
     }, load, seed, retire, clear, filter, toggle, setAll, toggleProvider, enabledIds };
   }
-  function modelSelectOptionsHtml(models, escapeHtml) {
+  function modelSelectOptionsHtml(models, escapeHtml2) {
     const enabled = models.filter((model) => model.enabled !== false);
     const byProvider = /* @__PURE__ */ new Map();
     for (const model of enabled) {
@@ -2076,9 +2078,9 @@ var PiDishBrowser = (() => {
     }
     let html = '<option value="">(default)</option>';
     for (const provider of [...byProvider.keys()].sort()) {
-      html += `<optgroup label="${escapeHtml(provider)}">`;
+      html += `<optgroup label="${escapeHtml2(provider)}">`;
       for (const model of byProvider.get(provider) || []) {
-        html += `<option value="${escapeHtml(model.selector || `${model.provider}/${model.id}`)}">${escapeHtml(model.name || model.id)}</option>`;
+        html += `<option value="${escapeHtml2(model.selector || `${model.provider}/${model.id}`)}">${escapeHtml2(model.name || model.id)}</option>`;
       }
       html += "</optgroup>";
     }
@@ -2265,7 +2267,7 @@ var PiDishBrowser = (() => {
 
   // src/browser/harness-settings.ts
   function createHarnessSettings(options) {
-    const { root, escapeHtml, shortCwd, parseModelRoleRef, composeModelRoleRef, modelRoleLevels } = options;
+    const { root, escapeHtml: escapeHtml2, shortCwd: shortCwd2, parseModelRoleRef, composeModelRoleRef, modelRoleLevels } = options;
     const AGENT_MODEL_ROLE_REFS = options.roleDefinitions.map((role) => `@${role.key}`);
     let harnessSettings = null;
     let sequence = 0;
@@ -2333,7 +2335,7 @@ var PiDishBrowser = (() => {
       const endpoint = options.host(scope.hostId);
       root.style.display = "flex";
       $("harnessSettingsTitle").textContent = `${scope.label} settings`;
-      $("harnessSettingsScope").textContent = scope.cwd ? shortCwd(scope.cwd) : "host default";
+      $("harnessSettingsScope").textContent = scope.cwd ? shortCwd2(scope.cwd) : "host default";
       $("harnessSettingsScope").title = scope.cwd || "No working directory: the harness reads its global config only";
       $("harnessAgentsBody").textContent = "Loading\u2026";
       $("harnessSettingsDefaults").textContent = "Loading\u2026";
@@ -2404,10 +2406,10 @@ var PiDishBrowser = (() => {
       const known = harnessSettingsModelSelectors();
       let html = `<option value=""${value ? "" : " selected"}>(unset)</option>`;
       if (value && !known.includes(value)) {
-        html += `<option value="${escapeHtml(value)}" selected>(current) ${escapeHtml(value)}</option>`;
+        html += `<option value="${escapeHtml2(value)}" selected>(current) ${escapeHtml2(value)}</option>`;
       }
       known.forEach((selector) => {
-        html += `<option value="${escapeHtml(selector)}"${selector === value ? " selected" : ""}>${escapeHtml(selector)}</option>`;
+        html += `<option value="${escapeHtml2(selector)}"${selector === value ? " selected" : ""}>${escapeHtml2(selector)}</option>`;
       });
       return html;
     }
@@ -2417,10 +2419,10 @@ var PiDishBrowser = (() => {
       const levels = modelRoleLevels(entry);
       let html = `<option value=""${level ? "" : " selected"}>(inherit)</option>`;
       if (level && keepUnknown && !levels.includes(level)) {
-        html += `<option value="${escapeHtml(level)}" selected>(current) ${escapeHtml(level)}</option>`;
+        html += `<option value="${escapeHtml2(level)}" selected>(current) ${escapeHtml2(level)}</option>`;
       }
       for (const name of levels) {
-        html += `<option value="${escapeHtml(name)}"${name === level ? " selected" : ""}>${escapeHtml(name)}</option>`;
+        html += `<option value="${escapeHtml2(name)}"${name === level ? " selected" : ""}>${escapeHtml2(name)}</option>`;
       }
       return html;
     }
@@ -2436,15 +2438,15 @@ var PiDishBrowser = (() => {
       const known = harnessSettingsModelSelectors();
       body.innerHTML = rows.map((row) => {
         const { model, level } = parseModelRoleRef(row.value, known);
-        return `<div class="model-role-row" data-role="${escapeHtml(row.key)}">
+        return `<div class="model-role-row" data-role="${escapeHtml2(row.key)}">
       <div class="model-role-label">
-        <strong>${escapeHtml(row.name)}</strong>
-        <code class="model-role-key">${escapeHtml(row.key)}</code>
-        <small>${escapeHtml(row.description)}</small>
-        ${row.override ? `<small class="model-role-override">project override: ${escapeHtml(row.override)} (.omp/config.yml wins here)</small>` : ""}
+        <strong>${escapeHtml2(row.name)}</strong>
+        <code class="model-role-key">${escapeHtml2(row.key)}</code>
+        <small>${escapeHtml2(row.description)}</small>
+        ${row.override ? `<small class="model-role-override">project override: ${escapeHtml2(row.override)} (.omp/config.yml wins here)</small>` : ""}
       </div>
-      <select class="model-role-select" data-role="${escapeHtml(row.key)}" data-initial="${escapeHtml(model)}">${modelRoleOptions(model)}</select>
-      <select class="model-role-level" data-role="${escapeHtml(row.key)}" data-initial="${escapeHtml(level)}"
+      <select class="model-role-select" data-role="${escapeHtml2(row.key)}" data-initial="${escapeHtml2(model)}">${modelRoleOptions(model)}</select>
+      <select class="model-role-level" data-role="${escapeHtml2(row.key)}" data-initial="${escapeHtml2(level)}"
               title="Thinking level for this role">${modelRoleLevelOptions(level, model, true)}</select>
     </div>`;
       }).join("");
@@ -2452,13 +2454,13 @@ var PiDishBrowser = (() => {
     function agentModelOptions(value, inherited) {
       const known = harnessSettingsModelSelectors();
       const inheritLabel = inherited ? `(inherit ${inherited})` : "(inherit)";
-      let html = `<option value=""${value ? "" : " selected"}>${escapeHtml(inheritLabel)}</option>`;
+      let html = `<option value=""${value ? "" : " selected"}>${escapeHtml2(inheritLabel)}</option>`;
       if (value && !known.includes(value) && !AGENT_MODEL_ROLE_REFS.includes(value)) {
-        html += `<option value="${escapeHtml(value)}" selected>(current) ${escapeHtml(value)}</option>`;
+        html += `<option value="${escapeHtml2(value)}" selected>(current) ${escapeHtml2(value)}</option>`;
       }
       const group = (label, values) => {
         if (!values.length) return "";
-        return `<optgroup label="${escapeHtml(label)}">` + values.map((entry) => `<option value="${escapeHtml(entry)}"${entry === value ? " selected" : ""}>${escapeHtml(entry)}</option>`).join("") + "</optgroup>";
+        return `<optgroup label="${escapeHtml2(label)}">` + values.map((entry) => `<option value="${escapeHtml2(entry)}"${entry === value ? " selected" : ""}>${escapeHtml2(entry)}</option>`).join("") + "</optgroup>";
       };
       return html + group("Roles", AGENT_MODEL_ROLE_REFS) + group("Models", known);
     }
@@ -2498,27 +2500,27 @@ var PiDishBrowser = (() => {
         const effectiveModel = effective?.modelOverrides?.[name] || "";
         if (effectiveModel !== model) overrides.push(`model ${effectiveModel || "inherited"}`);
         const definition = [agent.model, agent.thinkingLevel && `thinking ${agent.thinkingLevel}`].filter(Boolean).join(" \xB7 ");
-        return `<div class="hs-agent-row${isDisabled ? " disabled" : ""}" data-agent="${escapeHtml(name)}">
+        return `<div class="hs-agent-row${isDisabled ? " disabled" : ""}" data-agent="${escapeHtml2(name)}">
       <div class="hs-agent-label">
         <label class="hs-agent-enable">
-          <input type="checkbox" class="hs-agent-enabled" data-agent="${escapeHtml(name)}"
+          <input type="checkbox" class="hs-agent-enabled" data-agent="${escapeHtml2(name)}"
                  data-initial="${isDisabled ? "off" : "on"}"${isDisabled ? "" : " checked"}>
-          <strong>${escapeHtml(name)}</strong>
+          <strong>${escapeHtml2(name)}</strong>
         </label>
-        <span class="hs-agent-source hs-agent-source-${escapeHtml(agent.source || "bundled")}">${escapeHtml(agent.source || "bundled")}</span>
-        ${definition ? `<code class="hs-agent-definition">${escapeHtml(definition)}</code>` : ""}
-        <small>${escapeHtml(agent.description || "")}</small>
-        ${overrides.length ? `<small class="model-role-override">project override: ${escapeHtml(overrides.join(", "))} (.omp/config.yml wins here)</small>` : ""}
+        <span class="hs-agent-source hs-agent-source-${escapeHtml2(agent.source || "bundled")}">${escapeHtml2(agent.source || "bundled")}</span>
+        ${definition ? `<code class="hs-agent-definition">${escapeHtml2(definition)}</code>` : ""}
+        <small>${escapeHtml2(agent.description || "")}</small>
+        ${overrides.length ? `<small class="model-role-override">project override: ${escapeHtml2(overrides.join(", "))} (.omp/config.yml wins here)</small>` : ""}
       </div>
       <div class="hs-agent-controls">
         <label class="hs-agent-field">Model
-          <select class="hs-agent-model" data-agent="${escapeHtml(name)}" data-initial="${escapeHtml(model)}">${agentModelOptions(model, agent.model)}</select>
+          <select class="hs-agent-model" data-agent="${escapeHtml2(name)}" data-initial="${escapeHtml2(model)}">${agentModelOptions(model, agent.model)}</select>
         </label>
         <label class="hs-agent-field">Prewalk
-          <select class="hs-agent-prewalk" data-agent="${escapeHtml(name)}" data-initial="${prewalk === true ? "on" : prewalk === false ? "off" : ""}">${triStateOptions(prewalk)}</select>
+          <select class="hs-agent-prewalk" data-agent="${escapeHtml2(name)}" data-initial="${prewalk === true ? "on" : prewalk === false ? "off" : ""}">${triStateOptions(prewalk)}</select>
         </label>
         <label class="hs-agent-field">Advisor
-          <select class="hs-agent-advisor" data-agent="${escapeHtml(name)}" data-initial="${advisor === true ? "on" : advisor === false ? "off" : ""}">${triStateOptions(advisor)}</select>
+          <select class="hs-agent-advisor" data-agent="${escapeHtml2(name)}" data-initial="${advisor === true ? "on" : advisor === false ? "off" : ""}">${triStateOptions(advisor)}</select>
         </label>
       </div>
     </div>`;
@@ -2714,6 +2716,509 @@ var PiDishBrowser = (() => {
       has: (key) => pending.has(key),
       get: (key) => pending.get(key),
       entries: () => [...pending.entries()]
+    };
+  }
+
+  // src/browser/helper-format.ts
+  function escapeHtml(text4) {
+    if (text4 == null || text4 === "") return "";
+    return String(text4).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function shortCwd(cwd) {
+    if (!cwd) return "";
+    return cwd.replace(/^\/home\/[^/]+\//, "~/").replace(/^\/home\/[^/]+$/, "~");
+  }
+
+  // src/browser/helper-identity.ts
+  function hostDisplayLabel(host) {
+    if (!host) return "";
+    if (host.label) return String(host.label);
+    if (host.name) return String(host.name);
+    if (!host.base) return "this host";
+    return String(host.base).replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+  }
+
+  // src/browser/helper-models.ts
+  var OMP_MODEL_ROLES = [
+    { key: "default", name: "Default", description: "Main agent model" },
+    { key: "smol", name: "Fast", description: "Fast/cheap model for lightweight tasks, summaries, and fallbacks" },
+    { key: "slow", name: "Thinking", description: "Deep-reasoning model for thorough analysis" },
+    { key: "vision", name: "Vision", description: "Vision-capable model for image inspection and descriptions" },
+    { key: "plan", name: "Architect", description: "Planning/architecture mode" },
+    { key: "designer", name: "Designer", description: "UI and design tasks" },
+    { key: "commit", name: "Commit", description: "Commit message generation" },
+    { key: "tiny", name: "Tiny", description: "Session titles and micro-classifiers (falls back to smol)" },
+    { key: "task", name: "Subtask", description: "Default model for subagent tasks" },
+    { key: "advisor", name: "Advisor", description: "Paired reviewer model that watches each turn" }
+  ];
+  function modelRoleRecord(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter((entry) => typeof entry[1] === "string" && !!entry[1]));
+  }
+  function formatModelRoleSummary(roles, limit = 4) {
+    const record8 = modelRoleRecord(roles);
+    const order = OMP_MODEL_ROLES.map((role) => role.key);
+    const rank = (key) => order.indexOf(key) < 0 ? order.length : order.indexOf(key);
+    const entries = Object.keys(record8).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b)).map((key) => `${key} ${record8[key]}`);
+    if (!entries.length) return "No roles assigned";
+    const shown = entries.slice(0, limit);
+    const rest = entries.length - shown.length;
+    return shown.join(" \xB7 ") + (rest > 0 ? ` \xB7 +${rest} more` : "");
+  }
+
+  // src/browser/helper-query.ts
+  function fuzzyMatch(query, str) {
+    query = query.toLowerCase();
+    str = str.toLowerCase();
+    let qi = 0;
+    const indices = [];
+    for (let si = 0; si < str.length && qi < query.length; si++) {
+      if (str[si] === query[qi]) {
+        indices.push(si);
+        qi++;
+      }
+    }
+    return qi === query.length ? indices : null;
+  }
+  function fuzzyScore(indices, str) {
+    if (!indices) return -Infinity;
+    let score = 0;
+    for (let i = 1; i < indices.length; i++) {
+      if (indices[i] === indices[i - 1] + 1) score += 10;
+    }
+    score -= indices[0];
+    score -= str.length * 0.1;
+    return score;
+  }
+  function highlightFuzzy(str, indices) {
+    if (!indices || !indices.length) return escapeHtml(str);
+    let result = "";
+    let last = 0;
+    for (const idx of indices) {
+      result += escapeHtml(str.slice(last, idx));
+      result += `<span class="cwd-match">${escapeHtml(str[idx])}</span>`;
+      last = idx + 1;
+    }
+    result += escapeHtml(str.slice(last));
+    return result;
+  }
+
+  // src/browser/new-session.ts
+  var NEW_SESSION_HARNESS_KEY = "pi-dish-new-harness";
+  var HOST_KEY = "pi-dish-new-host";
+  function createNewSession(options) {
+    const { root, storage, models, request } = options;
+    function element(id) {
+      const node = root.querySelector("#" + id);
+      if (!(node instanceof HTMLElement)) throw new Error(`Missing new-session control: ${id}`);
+      return node;
+    }
+    function input(id) {
+      const node = element(id);
+      if (!(node instanceof HTMLInputElement)) throw new Error(`Invalid new-session input: ${id}`);
+      return node;
+    }
+    function select(id) {
+      const node = element(id);
+      if (!(node instanceof HTMLSelectElement)) throw new Error(`Invalid new-session select: ${id}`);
+      return node;
+    }
+    const cwdInput = input("newSessionCwd"), nameInput = input("newSessionName");
+    const hostSelect = select("nsHostSelect"), harnessSelect = select("nsHarnessSelect");
+    const modelSelect = select("nsModelSelect"), thinkingSelect = select("nsThinkingSelect");
+    const spawnElement = element("nsSpawnBtn");
+    if (!(spawnElement instanceof HTMLButtonElement)) throw new Error("Invalid spawn button");
+    const spawnButton = spawnElement;
+    const workspaceRoot = element("nsWorkspaces");
+    let selectedHostId = storage.getItem(HOST_KEY) || null;
+    let harnessId = "pi";
+    let generation = 0;
+    let draft = null;
+    let refreshTimer;
+    let directoryTree = null;
+    let workspaceEvents = new AbortController();
+    let disposed = false;
+    const message = (error2) => error2 instanceof Error ? error2.message : String(error2);
+    const isOpen = () => !disposed && root.classList.contains("new-session-open");
+    const host = () => (selectedHostId ? options.host(selectedHostId) : null) || options.self();
+    const hostId = () => host().hostId || null;
+    const cwd = () => cwdInput.value.trim();
+    const selectedHarness = () => harnessSelect.value || harnessId || "pi";
+    const supports = (capability) => !host().capabilities || host().capabilities?.[capability] === true;
+    const hostOptions = () => options.hosts().filter((row) => row.self || !options.hostDown(row));
+    const error = (value) => {
+      if (!disposed) element("nsError").textContent = value;
+    };
+    const preferences = createNewSessionPreferences({
+      model: modelSelect,
+      thinking: thinkingSelect,
+      hiddenNote: element("nsModelHidden"),
+      thinkingNote: element("nsThinkingNote"),
+      rows: () => models.rows(),
+      read: (key) => storage.getItem(key),
+      write: (key, value) => storage.setItem(key, value),
+      escapeHtml
+    });
+    const config = createNewSessionConfigPreview({
+      wrap: element("nsHarnessConfig"),
+      values: element("nsHarnessConfigValues"),
+      roles: element("nsHarnessRoles"),
+      buttons: [element("nsEditAgents"), element("nsEditRoles")],
+      scope: () => isOpen() ? { host: host(), harnessId: selectedHarness(), cwd: cwd(), view: generation } : null,
+      request,
+      roleSummary: formatModelRoleSummary
+    });
+    const directories = createDirectoryCatalog({ host, request });
+    const targets = createSpawnTargets({
+      host,
+      supportsTmux: () => supports("tmux"),
+      request,
+      readSaved: () => storage.getItem("pi-dish-spawn-target"),
+      save: (key) => storage.setItem("pi-dish-spawn-target", key),
+      changed: () => targetPicker.sync()
+    });
+    const targetPicker = createSpawnTargetPicker({
+      input: input("newSessionTarget"),
+      nameInput: input("newSessionTmuxName"),
+      wrap: element("newSessionTargetWrap"),
+      dropdown: element("spawnTargetDropdown"),
+      targets,
+      match: fuzzyMatch,
+      score: fuzzyScore,
+      highlight: highlightFuzzy,
+      escapeHtml
+    });
+    const selectedTarget = () => targets.selected(input("newSessionTmuxName").value);
+    async function readHarnesses(target) {
+      const response = await request(target, "/api/harnesses");
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    }
+    const harnesses = createHarnessDiscovery({
+      selectedHostId: hostId,
+      selfHostId: () => options.self().hostId,
+      requestPicker: readHarnesses,
+      requestBackground: readHarnesses,
+      preferredHarness: () => storage.getItem(NEW_SESSION_HARNESS_KEY),
+      onPreferredHarness: (value) => {
+        if (!disposed) harnessId = value;
+      },
+      onPickerChange: () => {
+        if (disposed) return;
+        renderHarnesses();
+        if (isOpen()) changeHarness(selectedHarness());
+      },
+      onCacheChange: () => {
+        if (!disposed) options.harnessCacheChanged();
+      }
+    });
+    const harnessLabel = (id) => harnesses.rows().find((row) => row.id === id)?.label || (id === "pi" ? "Pi" : id);
+    const autocomplete = createCwdAutocomplete({
+      input: cwdInput,
+      dropdown: element("cwdDropdown"),
+      host,
+      request,
+      known: () => directories.current(),
+      match: fuzzyMatch,
+      score: fuzzyScore,
+      highlight: highlightFuzzy,
+      escapeHtml,
+      onPick: (value) => {
+        storage.setItem("pi-dish-cwd", value);
+        scheduleRefresh();
+      },
+      onBlur: scheduleRefresh,
+      onSubmit: () => {
+        void spawn();
+      }
+    });
+    const savedCwd = storage.getItem("pi-dish-cwd");
+    if (savedCwd) cwdInput.value = savedCwd;
+    function renderHosts() {
+      if (disposed) return;
+      if (isOpen() && directoryTree && !directoryTree.isCurrent()) {
+        autocomplete.hide();
+        initTree();
+        void directories.load();
+        renderWorkspaces();
+      }
+      const row = element("nsHostRow"), available = hostOptions();
+      if (available.length < 2) {
+        row.style.display = "none";
+        return;
+      }
+      row.style.display = "";
+      hostSelect.innerHTML = available.map((value) => `<option value="${escapeHtml(value.hostId || "")}">${escapeHtml(hostDisplayLabel(value))}</option>`).join("");
+      hostSelect.value = hostId() || "";
+    }
+    function setHostId(value) {
+      if (disposed) return;
+      selectedHostId = value || null;
+      if (selectedHostId) storage.setItem(HOST_KEY, selectedHostId);
+      else storage.removeItem(HOST_KEY);
+    }
+    function changeHost(value) {
+      if (disposed) return;
+      autocomplete.hide();
+      setHostId(value);
+      models.clear();
+      void directories.load();
+      void targets.load();
+      void harnesses.load();
+      renderWorkspaces();
+      initTree();
+      changeHarness(selectedHarness());
+    }
+    function renderHarnesses() {
+      if (disposed) return;
+      const available = harnesses.rows().filter((row) => row.available !== false);
+      harnessSelect.innerHTML = available.map((row) => `<option value="${escapeHtml(row.id)}">${escapeHtml(row.label || row.id)}</option>`).join("");
+      if (!available.some((row) => row.id === harnessId)) harnessId = available[0]?.id || "pi";
+      harnessSelect.value = harnessId;
+    }
+    function changeHarness(value) {
+      if (disposed) return;
+      harnessId = value || "pi";
+      storage.setItem(NEW_SESSION_HARNESS_KEY, harnessId);
+      preferences.restore(harnessId);
+      models.clear();
+      preferences.render();
+      refresh();
+    }
+    function refresh() {
+      if (!isOpen()) return;
+      const endpoint = Object.freeze({ ...host() }), harness = selectedHarness(), directory = cwd(), view = generation;
+      const ownsRows = () => view === generation && isOpen() && selectedHarness() === harness && sameDirectoryHost(endpoint, host());
+      models.retire();
+      preferences.render();
+      void models.load({ host: endpoint, harnessId: harness, cwd: directory }, () => ownsRows() && cwd() === directory, ownsRows).then(() => {
+        if (ownsRows()) preferences.render();
+      });
+      void config.load(directory);
+    }
+    function scheduleRefresh() {
+      if (disposed) return;
+      models.retire();
+      config.retire();
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(refresh, 300);
+    }
+    function initTree() {
+      if (disposed) return;
+      directoryTree?.dispose();
+      directoryTree = createDirectoryTree({ root: element("nsTree"), host, request, onPick: setCwd });
+      directoryTree.reset();
+    }
+    function setCwd(value) {
+      if (disposed) return;
+      cwdInput.value = value;
+      storage.setItem("pi-dish-cwd", value);
+      scheduleRefresh();
+    }
+    function renderWorkspaces() {
+      if (disposed) return;
+      workspaceEvents.abort();
+      workspaceEvents = new AbortController();
+      const endpoint = Object.freeze({ ...host() }), view = generation;
+      const seen = /* @__PURE__ */ new Set(), values = [];
+      for (const session of [...options.sessionState.sessions.active, ...options.sessionState.sessions.previous]) {
+        if (options.multiHost() && (session.host || null) !== endpoint.hostId) continue;
+        if (typeof session.cwd === "string" && session.cwd && !seen.has(session.cwd)) {
+          seen.add(session.cwd);
+          values.push(session.cwd);
+        }
+      }
+      if (!values.length) {
+        workspaceRoot.innerHTML = "";
+        return;
+      }
+      workspaceRoot.innerHTML = '<span class="ns-workspaces-label">Workspaces</span>' + values.slice(0, 12).map((value) => `<button class="ns-workspace-chip" data-cwd="${escapeHtml(value)}" title="${escapeHtml(value)}">${escapeHtml(shortCwd(value))}</button>`).join("");
+      for (const button of workspaceRoot.querySelectorAll(".ns-workspace-chip")) {
+        const path = button.dataset.cwd;
+        button.addEventListener("click", () => {
+          if (path && isOpen() && view === generation && sameDirectoryHost(endpoint, host())) setCwd(path);
+        }, { signal: workspaceEvents.signal });
+      }
+    }
+    function open(value = {}) {
+      if (disposed) return;
+      generation++;
+      spawnButton.disabled = false;
+      spawnButton.textContent = "+ New session";
+      options.closeOtherViews();
+      root.classList.add("new-session-open");
+      draft = value.draft || null;
+      nameInput.value = "";
+      renderHosts();
+      void directories.load().then(() => {
+        if (isOpen()) renderWorkspaces();
+      });
+      void targets.load();
+      void harnesses.load();
+      cwdInput.value = value.cwd || storage.getItem("pi-dish-cwd") || "";
+      error("");
+      harnessId = storage.getItem(NEW_SESSION_HARNESS_KEY) || "pi";
+      renderHarnesses();
+      preferences.restore(harnessId);
+      if (models.scope?.harnessId !== harnessId || !sameDirectoryHost(models.scope?.host || null, host())) {
+        models.clear();
+        try {
+          const endpoint = Object.freeze({ ...host() }), harness = harnessId, view = generation;
+          const cached = JSON.parse(storage.getItem(modelsCacheKey(harness, endpoint.hostId, options.self().hostId)) || "null");
+          if (Array.isArray(cached)) models.seed(
+            { host: endpoint, harnessId: harness },
+            cached,
+            () => view === generation && isOpen() && sameDirectoryHost(endpoint, host()) && selectedHarness() === harness
+          );
+        } catch {
+        }
+      }
+      preferences.render();
+      renderWorkspaces();
+      initTree();
+    }
+    function close() {
+      if (isOpen()) {
+        generation++;
+        models.retire();
+      }
+      targets.retire();
+      targetPicker.hide();
+      directories.retire();
+      directoryTree?.dispose();
+      directoryTree = null;
+      workspaceEvents.abort();
+      root.classList.remove("new-session-open");
+      options.closeSettings();
+      clearTimeout(refreshTimer);
+      config.retire();
+      autocomplete.hide();
+    }
+    function captureView() {
+      const view = generation, open2 = isOpen(), selection = options.sessionState.captureSelection(), pending = options.currentSpawn();
+      const endpoint = Object.freeze({ ...host() }), harness = selectedHarness(), directory = cwd();
+      return () => !disposed && (!open2 || sameDirectoryHost(endpoint, host()) && harness === selectedHarness() && directory === cwd()) && view === generation && open2 === isOpen() && pending === options.currentSpawn() && (selection ? options.sessionState.ownsSelection(selection) : !options.sessionState.currentSession);
+    }
+    function submit(value = {}) {
+      if (disposed) return Promise.reject(new Error("New-session form is no longer available"));
+      const target = value.host === void 0 ? hostId() : value.host;
+      const endpoint = typeof target === "object" && target ? target : options.host(target);
+      if (!endpoint) return Promise.reject(new Error("Host is no longer available"));
+      const view = generation, submittedDraft = value.draft === void 0 ? draft : value.draft;
+      return options.spawns.submit({
+        ...value,
+        host: endpoint,
+        draft: submittedDraft,
+        ownsView: value.ownsView || captureView(),
+        onAccepted: () => {
+          if (view === generation && draft === submittedDraft) draft = null;
+        }
+      });
+    }
+    async function create(cwdValue, targetHost = hostId()) {
+      if (disposed) return;
+      const selected = options.host(targetHost);
+      if (!selected) {
+        options.status("Host is no longer available", "error");
+        return;
+      }
+      const endpoint = Object.freeze({ ...selected }), ownsView = captureView();
+      let harness = storage.getItem(NEW_SESSION_HARNESS_KEY) || "pi";
+      let target = null;
+      try {
+        if (cwdValue !== void 0 && sameDirectoryHost(endpoint, host())) await Promise.all([targets.load(), harnesses.load()]);
+        if (sameDirectoryHost(endpoint, host())) {
+          target = selectedTarget();
+          harness = selectedHarness();
+        }
+        if (ownsView()) options.status(target ? "Spawning in tmux\u2026" : "Creating session...", "working");
+        const directory = cwdValue === void 0 ? cwd() : cwdValue;
+        if (directory) storage.setItem("pi-dish-cwd", directory);
+        await submit({ cwd: directory, target, harness, host: endpoint, ownsView, draft: null });
+      } catch (error2) {
+        if (ownsView()) options.status(`Error: ${message(error2)}`, "error");
+      }
+    }
+    async function spawn() {
+      if (disposed || spawnButton.disabled) return;
+      const view = generation, ownsView = captureView();
+      let target;
+      try {
+        target = selectedTarget();
+      } catch (caught) {
+        error(message(caught));
+        return;
+      }
+      const name = nameInput.value.trim(), directory = cwd();
+      error("");
+      spawnButton.disabled = true;
+      spawnButton.textContent = "Starting\u2026";
+      try {
+        if (directory) storage.setItem("pi-dish-cwd", directory);
+        await submit({
+          name,
+          cwd: directory,
+          model: modelSelect.value || void 0,
+          thinking: thinkingSelect.value || void 0,
+          target,
+          harness: selectedHarness(),
+          ownsView
+        });
+      } catch (caught) {
+        if (ownsView()) error(message(caught));
+      } finally {
+        if (view === generation) {
+          spawnButton.disabled = false;
+          spawnButton.textContent = "+ New session";
+        }
+      }
+    }
+    return {
+      open,
+      close,
+      isOpen,
+      host,
+      hostId,
+      hostOptions,
+      supports,
+      setHostId,
+      changeHost,
+      cwd,
+      setCwd,
+      selectedHarness,
+      changeHarness,
+      harnessLabel,
+      renderHosts,
+      renderHarnesses,
+      renderWorkspaces,
+      refresh,
+      scheduleRefresh,
+      initTree,
+      selectedTarget,
+      captureView,
+      submit,
+      create,
+      spawn,
+      preferences,
+      config,
+      harnesses,
+      directories,
+      targets,
+      targetPicker,
+      hideCwd: () => autocomplete.hide(),
+      error,
+      get generation() {
+        return generation;
+      },
+      get pendingDraft() {
+        return draft;
+      },
+      dispose() {
+        close();
+        disposed = true;
+        autocomplete.dispose();
+        targetPicker.dispose();
+      }
     };
   }
   return __toCommonJS(index_exports);

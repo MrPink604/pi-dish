@@ -32,8 +32,8 @@ module.exports = async function skills({ desktop, check }) {
     document.querySelector('.main').classList.contains('new-session-open'), null, { timeout: 5000 });
   check(await desktop.evaluate(() => (document.getElementById('newSessionCwd').value || '').includes('smoke-skill')),
     'refine sets the new-session cwd to the skill directory');
-  check(await desktop.evaluate(() => typeof nsPendingDraft === 'string' &&
-    nsPendingDraft.includes('SKILL.md') && /coverage\?skill=/.test(nsPendingDraft)),
+  check(await desktop.evaluate(() => typeof newSessionController.pendingDraft === 'string' &&
+    newSessionController.pendingDraft.includes('SKILL.md') && /coverage\?skill=/.test(newSessionController.pendingDraft)),
     'refine stashes an evidence-bundle draft (path + coverage URL), never auto-sent');
   await desktop.keyboard.press('Escape');
   await desktop.waitForFunction(() => !document.querySelector('.main').classList.contains('new-session-open'),

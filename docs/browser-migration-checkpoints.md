@@ -295,3 +295,24 @@ are not completion percentages.
   followed by transcript/streaming and startup ownership.
 
 Spawn checkpoint commits `454ce1c` and `e3f30b1` were cleared by Fable 5.1 and pushed.
+
+## Checkpoint 13 — new-session form (verified locally; review pending)
+
+- `new-session.ts` owns the takeover's host/harness selection, generation, refine
+  draft, form controls, workspace buttons and its directory, target, harness,
+  preference and config-preview controllers. The app retains small integration
+  callbacks and the separate shared harness settings editor.
+- Workspace actions capture their rendered host and view. Re-render/close
+  retires listeners; disposal retires timers and autocomplete/picker handlers,
+  drops late harness callbacks and invalidates submitted view guards.
+- Existing discovery, model, preference and spawn regressions now use owned
+  controller readers/writers instead of mutable application globals. New browser
+  cases cover retained workspace buttons and disposal during held harness reads;
+  strict contracts reject external generation/draft writes and malformed launch
+  values.
+- Strict checks, 899 backend tests, 108 browser regressions, independent UI
+  scenarios and full desktop/mobile smoke passed. Fable review is required before push.
+- Next: recovery/bounce controls, then remaining feature controllers and rendering.
+
+Fable 5.1 cleared shared-helper commit `861d799`, which is pushed. Its newer CI
+run superseded the spawn run before that run finished its browser job.
