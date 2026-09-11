@@ -175,3 +175,5 @@ complete application coverage.
 `session-activity.spec.js` covers activity/abort gates, replacement questions and panel disposal.
 
 `prompt-delivery.spec.js` covers queue row and submit ownership, including replacement and disposal.
+
+`message-stream.spec.js` covers ticket/source ownership, reconnects, completion deduplication and switch ordering.

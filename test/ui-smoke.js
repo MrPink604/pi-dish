@@ -2370,7 +2370,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     });
     const rapidSelection = await desktop.evaluate((b) => ({
       currentId: sessionState.currentSession?.id,
-      streamUrl: messageStream?.url || '',
+      streamUrl: messageStreamController.source?.url || '',
       text: document.getElementById('messages').textContent,
       generation: sessionState.captureSelection()?.generation,
       expected: b,

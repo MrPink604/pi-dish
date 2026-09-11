@@ -475,3 +475,7 @@ late answers, errors and clipboard feedback cannot alter a replacement question.
 `composer-submit.ts` owns captured sends, commands, queued messages and aborts.
 `prompt-delivery.ts` owns optimistic prompt associations and rendered queue rows;
 cancellation preserves raw server text and restores the originating composer.
+
+`message-stream.ts` owns source connections, ticket/reconnect generations and
+selected-session event dispatch. Completion deduplication spans a turn, while
+session-switch navigation also has an event sequence within the connection.

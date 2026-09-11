@@ -2213,3 +2213,6 @@ response tokens separate from the session identity and dispose clipboard timers.
 
 Prompt delivery uses the typed optimistic ledger; queue rows capture raw text and
 endpoint identity. Do not mutate ledger internals from callers or tests.
+
+The typed stream controller owns connections and event delivery. Stop it on
+selection retirement; never assign its source or reconnect state externally.

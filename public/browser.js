@@ -60,6 +60,7 @@ var PiDishBrowser = (() => {
     createHostTransport: () => createHostTransport,
     createLiveTools: () => createLiveTools,
     createMessageRenderer: () => createMessageRenderer,
+    createMessageStream: () => createMessageStream,
     createModelCatalog: () => createModelCatalog,
     createMood: () => createMood,
     createNewSession: () => createNewSession,
@@ -16644,6 +16645,314 @@ ${restored}`;
     return { sendPrompt, sendQueuedMessage, sendSteer, sendFollowUp, abortTurn, dispose() {
       disposed = true;
       feedbackSequence++;
+    } };
+  }
+
+  // src/browser/message-stream.ts
+  function parseRecord(text17) {
+    const value = JSON.parse(text17);
+    return record8(value) ? value : {};
+  }
+  function createMessageStream(options2) {
+    const { document: document2, sessionState, renderer, tools } = options2;
+    let source = null, reconnect = null, connectionGeneration = 0, disposed = false;
+    function ownsConnection(owner, target, generation) {
+      return !disposed && generation === connectionGeneration && sessionState.ownsSelection(owner) && options2.endpoint(owner.host).base === target.base;
+    }
+    function stop() {
+      connectionGeneration++;
+      if (reconnect) clearTimeout(reconnect);
+      reconnect = null;
+      source?.close();
+      source = null;
+    }
+    async function start(owner = sessionState.captureSelection()) {
+      if (disposed || !owner || !sessionState.ownsSelection(owner)) return;
+      stop();
+      const generation = connectionGeneration, target = Object.freeze({ ...options2.endpoint(owner.host) });
+      const path = `/api/sessions/${encodeURIComponent(owner.id)}/stream`;
+      if (!target.token) {
+        open(target.base + path, owner, target, generation);
+        return;
+      }
+      try {
+        const ticket = await options2.ticket(target);
+        if (!ownsConnection(owner, target, generation)) return;
+        open(`${target.base}${path}?ticket=${encodeURIComponent(ticket)}`, owner, target, generation);
+      } catch {
+        if (ownsConnection(owner, target, generation)) options2.status("Stream failed", "error");
+      }
+    }
+    function open(url, owner, target, generation) {
+      if (!ownsConnection(owner, target, generation)) return;
+      const { id: sessionId, host: hostId } = owner;
+      try {
+        const evtSource = (options2.source || ((url2) => new EventSource(url2)))(url);
+        source = evtSource;
+        const ownsStream = () => source === evtSource && ownsConnection(owner, target, generation);
+        const addOwnedListener = (event, listener) => evtSource.addEventListener(event, (event2) => {
+          if (ownsStream() && event2 instanceof MessageEvent && typeof event2.data === "string") listener(event2);
+        });
+        let switchSequence = 0;
+        let turnCleanupDone = false;
+        const seenMessageEnds = /* @__PURE__ */ new Set();
+        const messageEndKey = (m) => JSON.stringify(m.role === "custom" ? [m.role, m.timestamp ?? null, m.content ?? null, m.errorMessage ?? null, m.customType ?? null, m.details ?? null] : [m.role, m.timestamp ?? null, m.content ?? null]);
+        evtSource.onopen = () => {
+          if (ownsStream()) options2.status("");
+        };
+        addOwnedListener("init", (e) => {
+          try {
+            const data = parseRecord(e.data);
+            turnCleanupDone = !data.turnInProgress;
+            if (!data.turnInProgress) options2.activity.endAbort(sessionKey(hostId, sessionId));
+            options2.activity.setCompacting(!!data.compacting);
+            options2.activity.setTurn(!!data.turnInProgress);
+            if (data.compacting) options2.status("Compacting context...", "working");
+            else if (data.turnInProgress) options2.status("Waiting for response...", "working");
+            if (!data.turnInProgress) {
+              options2.catchup(owner);
+            }
+          } catch {
+          }
+        });
+        addOwnedListener("stream_error", (e) => {
+          try {
+            const data = parseRecord(e.data || "{}");
+            options2.status(typeof data.error === "string" && data.error || "Stream error", "error");
+          } catch {
+            options2.status("Stream error", "error");
+          }
+          stop();
+        });
+        addOwnedListener("turn_start", () => {
+          seenMessageEnds.clear();
+          turnCleanupDone = false;
+          options2.activity.setTurn(true);
+        });
+        const handleTurnEnd = () => {
+          if (turnCleanupDone || !ownsStream()) return;
+          turnCleanupDone = true;
+          options2.activity.endAbort(sessionKey(hostId, sessionId));
+          options2.activity.setTurn(false);
+          options2.streaming.cancel();
+          tools.finishRunning();
+          options2.catchup(owner);
+          options2.refresh();
+          options2.artifacts(owner);
+          options2.status("");
+        };
+        addOwnedListener("turn_end", handleTurnEnd);
+        addOwnedListener("agent_end", handleTurnEnd);
+        addOwnedListener("message_update", (e) => {
+          try {
+            const message3 = decodeRenderMessage(parseRecord(e.data).message);
+            if (!message3) return;
+            if (message3.role === "custom") {
+              renderer.upsertCustom(message3, { streaming: true });
+              return;
+            }
+            if (message3.role !== "assistant") return;
+            if (seenMessageEnds.size && seenMessageEnds.has(messageEndKey(message3))) return;
+            if (turnCleanupDone) seenMessageEnds.clear();
+            turnCleanupDone = false;
+            if (!options2.activity.turn) options2.activity.setTurn(true);
+            options2.streaming.queue(message3);
+          } catch (err) {
+          }
+        });
+        addOwnedListener("message_end", (e) => {
+          try {
+            const message3 = decodeRenderMessage(parseRecord(e.data).message);
+            if (!message3) return;
+            const container = document2.getElementById("messages");
+            if (!container) return;
+            const messageKey = messageEndKey(message3);
+            if (seenMessageEnds.has(messageKey)) return;
+            seenMessageEnds.add(messageKey);
+            if (message3.role === "user") {
+              if (options2.delivery.consume(sessionKey(hostId, sessionId), message3.content)) {
+                return;
+              }
+              const wasPinned2 = options2.pinned(container);
+              const streaming2 = container.querySelector('.message.assistant[data-streaming="true"]');
+              const tmp2 = document2.createElement("template");
+              tmp2.innerHTML = renderer.user(message3, formatTime(message3.timestamp || Date.now()));
+              const el = tmp2.content.firstElementChild;
+              if (!el) return;
+              if (streaming2) streaming2.before(el);
+              else container.appendChild(el);
+              if (wasPinned2 || options2.follow()) options2.scroll(container);
+              else options2.jump(container);
+              return;
+            }
+            if (message3.role === "custom") {
+              renderer.upsertCustom(message3);
+              return;
+            }
+            if (message3.role !== "assistant") return;
+            options2.streaming.cancel();
+            if (Array.isArray(message3.content) && message3.content.length === 0 && !message3.errorMessage) {
+              container.querySelectorAll('.message.assistant[data-streaming="true"]').forEach((el) => el.remove());
+              return;
+            }
+            const wasPinned = options2.pinned(container);
+            const streaming = container.querySelectorAll('.message.assistant[data-streaming="true"]');
+            const tmp = document2.createElement("template");
+            tmp.innerHTML = renderer.assistant(message3, formatTime(message3.timestamp || Date.now()));
+            const finalEl = tmp.content.firstElementChild;
+            if (!finalEl) return;
+            if (streaming.length) streaming[streaming.length - 1].before(finalEl);
+            else container.appendChild(finalEl);
+            streaming.forEach((el) => el.remove());
+            options2.highlight(finalEl);
+            if (wasPinned) options2.scroll(container);
+            else options2.jump(container);
+          } catch (err) {
+          }
+        });
+        addOwnedListener("tool_execution_start", (e) => {
+          try {
+            const data = parseRecord(e.data);
+            tools.append(data);
+          } catch (err) {
+            console.error("tool_execution_start error:", err);
+          }
+        });
+        addOwnedListener("tool_execution_update", (e) => {
+          try {
+            const data = parseRecord(e.data);
+            tools.update(data);
+          } catch (err) {
+            console.error("tool_execution_update error:", err);
+          }
+        });
+        addOwnedListener("tool_execution_end", (e) => {
+          try {
+            const data = parseRecord(e.data);
+            tools.finish(data);
+          } catch (err) {
+            console.error("tool_execution_end error:", err);
+          }
+        });
+        addOwnedListener("extension_ui_request", (e) => {
+          try {
+            options2.extensionUI.handle(JSON.parse(e.data), { id: sessionId, host: hostId });
+          } catch (err) {
+            console.error("extension_ui_request error:", err);
+          }
+        });
+        addOwnedListener("queue_update", (e) => {
+          try {
+            options2.delivery.render(JSON.parse(e.data));
+          } catch {
+          }
+        });
+        addOwnedListener("extension_ui_resolved", (e) => {
+          try {
+            options2.extensionUI.resolve(parseRecord(e.data).id, { id: sessionId, host: hostId });
+          } catch {
+          }
+        });
+        addOwnedListener("extension_ui_state", (e) => {
+          try {
+            options2.extensionUI.reconcile(JSON.parse(e.data), { id: sessionId, host: hostId });
+          } catch {
+          }
+        });
+        addOwnedListener("compaction_start", () => {
+          options2.status("Compacting context...", "working");
+          options2.activity.setCompacting(true);
+        });
+        addOwnedListener("compaction_end", (e) => {
+          options2.activity.setCompacting(false);
+          if (!options2.activity.turn) options2.activity.endAbort(sessionKey(hostId, sessionId));
+          try {
+            const data = parseRecord(e.data);
+            if (data.errorMessage) {
+              options2.status("Compaction failed: " + data.errorMessage, "error");
+              return;
+            }
+            if (data.aborted) {
+              options2.status("Compaction cancelled");
+              return;
+            }
+            const r = record8(data.result) ? data.result : null;
+            let msg = "Compaction finished";
+            if (r && typeof r.tokensBefore === "number" && Number.isFinite(r.tokensBefore) && r.tokensBefore) {
+              msg = typeof r.estimatedTokensAfter === "number" && Number.isFinite(r.estimatedTokensAfter) ? `Compacted: ${formatTokens(r.tokensBefore)} \u2192 ~${formatTokens(r.estimatedTokensAfter)} tokens` : `Compacted (was ${formatTokens(r.tokensBefore)} tokens)`;
+            }
+            options2.status(msg);
+            options2.refresh();
+          } catch {
+            options2.status("Compaction finished");
+          }
+        });
+        addOwnedListener("session_tree", () => {
+          if (sessionState.currentSession && sessionState.currentSession.id === sessionId) {
+            options2.select(sessionId, { forceTranscriptReload: true, host: hostId });
+          }
+        });
+        addOwnedListener("session_switch", (e) => {
+          let data;
+          try {
+            data = JSON.parse(e.data);
+          } catch {
+            return;
+          }
+          const nextId = record8(data) && typeof data.sessionId === "string" ? data.sessionId : "";
+          const switchOwner = ++switchSequence;
+          if (!nextId || nextId === sessionId) return;
+          options2.deleteCached(sessionKey(hostId, nextId));
+          void options2.loadSessions(void 0, { withPrevious: true }).then(() => {
+            if (!ownsStream() || switchOwner !== switchSequence || !sessionState.findSession(nextId, hostId)) return;
+            options2.select(nextId, { forceTranscriptReload: true, host: hostId });
+          });
+        });
+        addOwnedListener("auto_retry_start", (e) => {
+          try {
+            const d = parseRecord(e.data);
+            options2.status(`Retrying (attempt ${d.attempt}/${d.maxAttempts})...`, "working");
+          } catch {
+          }
+        });
+        addOwnedListener("auto_retry_end", (e) => {
+          try {
+            const d = parseRecord(e.data);
+            if (d.success === false) options2.status("Retry failed: " + (d.finalError || "unknown"), "error");
+          } catch {
+          }
+        });
+        addOwnedListener("session_ended", () => {
+          options2.activity.endAbort(sessionKey(hostId, sessionId));
+          options2.activity.setCompacting(false);
+          options2.activity.setTurn(false);
+          options2.extensionUI.end({ id: sessionId, host: hostId });
+          options2.status("Session ended");
+          options2.refresh();
+        });
+        evtSource.onerror = () => {
+          if (!ownsStream()) return;
+          if (evtSource.readyState === EventSource.CLOSED) {
+            options2.status("Stream disconnected", "error");
+            if (reconnect) clearTimeout(reconnect);
+            reconnect = setTimeout(() => {
+              reconnect = null;
+              if (ownsStream()) start(owner);
+            }, 3e3);
+          }
+        };
+      } catch (err) {
+        if (!ownsConnection(owner, target, generation)) return;
+        console.error("Stream failed:", err);
+        options2.status("Stream failed", "error");
+      }
+    }
+    return { start, stop, get source() {
+      return source;
+    }, dispose() {
+      if (disposed) return;
+      stop();
+      disposed = true;
     } };
   }
   return __toCommonJS(index_exports);

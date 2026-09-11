@@ -34,7 +34,7 @@ test('a peer echo cannot consume the selected host-independent pending prompt', 
   await page.evaluate(() => sendPrompt());
   const id = await page.locator('#messages [data-client-prompt-id]').last().getAttribute('data-client-prompt-id');
   await fleet.select(fleet.peer);
-  await page.waitForFunction(() => messageStream?.readyState === 1);
+  await page.waitForFunction(() => messageStreamController.source?.readyState === 1);
   fleet.peer.emit('message_end', { message: { role: 'user', content: 'shared echo text' } });
   await expect(page.locator('#messages')).toContainText('shared echo text');
   expect(await page.evaluate(id => promptDelivery.has(id), id)).toBe(true);

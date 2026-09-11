@@ -17,9 +17,9 @@ test.describe('live selection ownership', () => {
     await fleet.select(fleet.peer);
     await page.evaluate(() => { window.staleSelection = sessionState.captureSelection(); });
     await fleet.select(fleet.self);
-    await expect.poll(() => page.evaluate(() => messageStream?.readyState)).toBe(1);
+    await expect.poll(() => page.evaluate(() => messageStreamController.source?.readyState)).toBe(1);
     const result = await page.evaluate(async () => {
-      const stream = messageStream;
+      const stream = messageStreamController.source;
       const before = document.getElementById('messages').innerHTML;
       const fetch = apiFetch;
       let requests = 0;
@@ -30,7 +30,7 @@ test.describe('live selection ownership', () => {
         await loadSessionRelations(window.staleSelection);
         startMessageStream(window.staleSelection);
         return { unchanged: before === document.getElementById('messages').innerHTML,
-          sameStream: stream === messageStream, host: sessionState.currentSession.host, requests };
+          sameStream: stream === messageStreamController.source, host: sessionState.currentSession.host, requests };
       } finally { apiFetch = fetch; }
     });
     expect(result).toEqual({ unchanged: true, sameStream: true, host: fleet.self.hostId, requests: 0 });
@@ -51,11 +51,11 @@ test.describe('live selection ownership', () => {
     await fleet.select(fleet.peer);
     const ticket = await received;
     await fleet.select(fleet.self);
-    await expect.poll(() => page.evaluate(() => messageStream?.readyState)).toBe(1);
-    const before = await page.evaluate(() => messageStream.url);
+    await expect.poll(() => page.evaluate(() => messageStreamController.source?.readyState)).toBe(1);
+    const before = await page.evaluate(() => messageStreamController.source.url);
     await ticket.fulfill({ json: { ticket: 'superseded-fixture-ticket' } });
     await page.evaluate(() => window.pendingStreamTicket);
-    expect(await page.evaluate(() => messageStream.url)).toBe(before);
+    expect(await page.evaluate(() => messageStreamController.source.url)).toBe(before);
     expect(before).toContain(fleet.self.base);
     await expect(fleet.row(fleet.self)).toHaveClass(/\bactive\b/);
   });

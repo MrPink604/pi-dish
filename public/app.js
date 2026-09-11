@@ -675,8 +675,7 @@ function showPendingSessionView(spawnId) {
   sessionState.setCurrentSession(null);
   currentSessionSpawnId = spawnId;
 
-  if (streamReconnectTimeout) { clearTimeout(streamReconnectTimeout); streamReconnectTimeout = null; }
-  if (messageStream) { messageStream.close(); messageStream = null; }
+  messageStreamController.stop();
   followStream = false;
   closeTerminal();
   clearExtensionUI();
@@ -792,8 +791,7 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   // Tear down the previous session's stream up front, before the awaits below.
   // Left open, its in-flight turn_end/message_update events fire against the
   // session we're switching to (loadMessages has already reset the cursors).
-  if (streamReconnectTimeout) { clearTimeout(streamReconnectTimeout); streamReconnectTimeout = null; }
-  if (messageStream) { messageStream.close(); messageStream = null; }
+  messageStreamController.stop();
   followStream = false; // forced follow doesn't carry across sessions
   // The terminal panel is per-session (its PTY keeps running server-side;
   // reopening reattaches with scrollback).
@@ -875,7 +873,7 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   if (sessionState.currentSession.isActive) {
     startMessageStream(owner);
   } else {
-    if (messageStream) { messageStream.close(); messageStream = null; }
+    messageStreamController.stop();
   }
 }
 
@@ -1419,341 +1417,13 @@ function finalizeLiveToolPanel(data) { liveToolsController.finish(data); }
 // SSE Streaming (RPC events only)
 // =========================================================================
 
-let messageStream = null;
-let streamReconnectTimeout = null;
-
-function startMessageStream(owner = sessionState.captureSelection()) {
-  if (!sessionState.ownsSelection(owner)) return;
-  const { id: sessionId, host: hostId } = owner;
-  if (streamReconnectTimeout) { clearTimeout(streamReconnectTimeout); streamReconnectTimeout = null; }
-  if (messageStream) { messageStream.close(); messageStream = null; }
-  const host = resolveHost(hostId);
-  const path = `/api/sessions/${encodeURIComponent(sessionId)}/stream`;
-  if (!host.token) { openMessageStream(host.base + path, owner); return; }
-  // Token host: the ticket is minted per connect, never remembered — the
-  // reconnect path lands back here and mints a fresh one.
-  mintHostTicket(host, 'stream').then((ticket) => {
-    if (messageStream || !sessionState.ownsSelection(owner)) return;
-    openMessageStream(`${host.base}${path}?ticket=${encodeURIComponent(ticket)}`, owner);
-  }).catch(() => {
-    if (sessionState.ownsSelection(owner)) setStatus('Stream failed', 'error');
-  });
-}
-
-function openMessageStream(url, owner) {
-  if (!sessionState.ownsSelection(owner)) return;
-  const { id: sessionId, host: hostId } = owner;
-  try {
-    const evtSource = new EventSource(url);
-    messageStream = evtSource;
-    const ownsStream = () => messageStream === evtSource && sessionState.ownsSelection(owner);
-    const addOwnedListener = (event, listener) => evtSource.addEventListener(event, (e) => {
-      if (ownsStream()) listener(e);
-    });
-    let turnCleanupDone = false;
-    // OMP can deliver the same completed message event more than once. Keep
-    // completion rendering idempotent for the whole turn, including a late
-    // repeat after turn_end's JSONL catch-up has installed the indexed copy.
-    // Two keys: the full key for custom messages (a redelivery with evolved
-    // details must reach upsertLiveCustomMessage), and the core signature —
-    // role/timestamp/content — for user/assistant, so a repeat that only
-    // gained usage/details metadata still dedups. The core signature is also
-    // what a late message_update for an already-finalized message carries
-    // (timestamp is stamped at API-call start, content complete by the last
-    // delta), which lets the update handler below refuse to resurrect a
-    // streaming bubble for it.
-    const seenMessageEnds = new Set();
-    const messageEndKey = (m) => JSON.stringify(m.role === 'custom'
-      ? [m.role, m.timestamp ?? null, m.content ?? null, m.errorMessage ?? null, m.customType ?? null, m.details ?? null]
-      : [m.role, m.timestamp ?? null, m.content ?? null]);
-
-    evtSource.onopen = () => { if (ownsStream()) setStatus(''); };
-
-    // Server sends current state on connect so we can catch up
-    addOwnedListener('init', (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        turnCleanupDone = !data.turnInProgress;
-        // Stale dialogs for this session are pruned by the extension_ui_state
-        // event that follows the connect replay — no per-init sweep needed.
-        if (!data.turnInProgress) sessionActivity.endAbort(sessionKey(hostId, sessionId));
-        // Both flags, independently: auto-compaction runs inside a turn
-        // (both true), a TUI /compact has neither turn nor stream events yet
-        // (compacting only), and a reconnect after either ended must clear
-        // stale indicators (both false). setCompacting first so the
-        // turn-off path doesn't wipe status a live compaction still owns.
-        setCompacting(!!data.compacting);
-        setTurnInProgress(!!data.turnInProgress);
-        if (data.compacting) setStatus('Compacting context...', 'working');
-        else if (data.turnInProgress) setStatus('Waiting for response...', 'working');
-        if (!data.turnInProgress) {
-          // No turn running — incremental catch-up for any messages written
-          // since our initial load (avoids full reload stall).
-          fetchNewMessagesSince(owner);
-        }
-      } catch {}
-    });
-
-    addOwnedListener('stream_error', (e) => {
-      try {
-        const data = JSON.parse(e.data || '{}');
-        setStatus(data.error || 'Stream error', 'error');
-      } catch {
-        setStatus('Stream error', 'error');
-      }
-      evtSource.close();
-    });
-
-    addOwnedListener('turn_start', () => {
-      seenMessageEnds.clear();
-      turnCleanupDone = false;
-      setTurnInProgress(true);
-    });
-
-    const handleTurnEnd = () => {
-      if (turnCleanupDone || !ownsStream()) return;
-      turnCleanupDone = true;
-      sessionActivity.endAbort(sessionKey(hostId, sessionId));
-      setTurnInProgress(false);
-      cancelStreamingRender();
-      liveToolsController.finishRunning();
-      // Incrementally pull only new messages from JSONL — full reload
-      // stalls long sessions.
-      fetchNewMessagesSince(owner);
-      refreshSessions();
-      refreshArtifacts(owner); // the agent may have published pages mid-turn
-      setStatus('');
-    };
-    addOwnedListener('turn_end', handleTurnEnd);
-    // An aborted/errored turn can end with agent_end and no paired turn_end;
-    // both server backends treat it as turn-terminating, so we must too. The
-    // guard avoids double catch-up when turn_end already ran.
-    addOwnedListener('agent_end', handleTurnEnd);
-
-    // message_update streams text, thinking, and partial tool calls live —
-    // rendered incrementally through the throttled streaming renderer.
-    addOwnedListener('message_update', (e) => {
-      try {
-        const { message } = JSON.parse(e.data);
-        if (!message) return;
-        if (message.role === 'custom') {
-          upsertLiveCustomMessage(message, { streaming: true });
-          return;
-        }
-        if (message.role !== 'assistant') return;
-        // A redelivered/late update for a message whose message_end already
-        // ran (OMP usage-enrichment repeats, delivery-timing corners) must not
-        // resurrect a streaming bubble: the finalized render — or, post
-        // turn_end, the indexed JSONL copy — is already on screen, and a
-        // bubble created now would never be stripped again. It also must not
-        // re-arm the turn state below.
-        if (seenMessageEnds.size && seenMessageEnds.has(messageEndKey(message))) return;
-        if (turnCleanupDone) seenMessageEnds.clear();
-        turnCleanupDone = false;
-        if (!sessionActivity.turn) setTurnInProgress(true);
-        queueStreamingRender(message);
-      } catch (err) {}
-    });
-
-    addOwnedListener('message_end', (e) => {
-      try {
-        const { message } = JSON.parse(e.data);
-        if (!message) return;
-        const container = document.getElementById('messages');
-        if (!container) return;
-        const messageKey = messageEndKey(message);
-        if (seenMessageEnds.has(messageKey)) return;
-        seenMessageEnds.add(messageKey);
-        if (message.role === 'user') {
-          // pi echoes every user message it processes — including the prompt
-          // this client just rendered optimistically in sendMessage. Skip that
-          // one echo or the prompt shows twice until the turn_end catch-up.
-          if (consumePendingSelfEcho(sessionId, message.content)) {
-            return;
-          }
-          // A steer/follow-up pi just delivered mid-turn (or a prompt typed in
-          // the TUI). Insert it un-indexed before the streaming placeholder
-          // (if any); the turn_end JSONL catch-up strips un-indexed .message
-          // nodes and re-inserts the authoritative indexed render, so this
-          // never duplicates.
-          const wasPinned = isPinnedToBottom(container);
-          const streaming = container.querySelector('.message.assistant[data-streaming="true"]');
-          const tmp = document.createElement('template');
-          tmp.innerHTML = renderUserMessage(message, formatTime(message.timestamp || Date.now()));
-          const el = tmp.content.firstElementChild;
-          if (streaming) streaming.before(el);
-          else container.appendChild(el);
-          if (wasPinned || followStream) scrollToBottom(container); else updateJumpButton(container);
-          return;
-        }
-        if (message.role === 'custom') {
-          upsertLiveCustomMessage(message);
-          return;
-        }
-        if (message.role !== 'assistant') return;
-        cancelStreamingRender();
-        // OMP ends an interrupted thinking turn with an empty assistant shell
-        // before its interrupted-thinking custom marker. Keep the API entry
-        // but do not flash a ghost π header in the live transcript.
-        if (Array.isArray(message.content) && message.content.length === 0 && !message.errorMessage) {
-          container.querySelectorAll('.message.assistant[data-streaming="true"]').forEach(el => el.remove());
-          return;
-        }
-        // Swap the streaming placeholder for the finalized render in place.
-        // It stays un-indexed, so the turn_end JSONL catch-up replaces it
-        // with the authoritative version (fetchNewMessagesSince strips all
-        // .message:not([data-msg-index]) once indexed messages land) —
-        // meanwhile the text never blinks out of the transcript.
-        const wasPinned = isPinnedToBottom(container);
-        const streaming = container.querySelectorAll('.message.assistant[data-streaming="true"]');
-        const tmp = document.createElement('template');
-        tmp.innerHTML = renderAssistantMessage(message, formatTime(message.timestamp || Date.now()));
-        const finalEl = tmp.content.firstElementChild;
-        if (streaming.length) streaming[streaming.length - 1].before(finalEl);
-        else container.appendChild(finalEl);
-        streaming.forEach(el => el.remove());
-        applyHighlight(finalEl);
-        if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
-      } catch (err) {}
-    });
-
-    addOwnedListener('tool_execution_start', (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        appendLiveToolPanel(data);
-      } catch (err) { console.error('tool_execution_start error:', err); }
-    });
-
-    addOwnedListener('tool_execution_update', (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        updateLiveToolPanel(data);
-      } catch (err) { console.error('tool_execution_update error:', err); }
-    });
-
-    addOwnedListener('tool_execution_end', (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        finalizeLiveToolPanel(data);
-      } catch (err) { console.error('tool_execution_end error:', err); }
-    });
-
-    addOwnedListener('extension_ui_request', (e) => {
-      try { handleExtensionUI(JSON.parse(e.data), sessionId, hostId); } catch (err) { console.error('extension_ui_request error:', err); }
-    });
-
-    addOwnedListener('queue_update', (e) => {
-      try { renderQueueStatus(JSON.parse(e.data)); } catch {}
-    });
-
-    // Dialog answered elsewhere (TUI or another browser) — dismiss ours.
-    addOwnedListener('extension_ui_resolved', (e) => {
-      try { extensionUI.resolve(JSON.parse(e.data).id, { id: sessionId, host: hostId }); } catch {}
-    });
-    // Authoritative list of this session's pending dialogs, sent on (re)connect
-    // after the replay burst. Prunes stashed dialogs that were answered or
-    // dismissed while we were away (or orphaned by an idle session), without
-    // touching other sessions' dialogs.
-    addOwnedListener('extension_ui_state', (e) => {
-      try {
-        extensionUI.reconcile(JSON.parse(e.data), { id: sessionId, host: hostId });
-      } catch {}
-    });
-
-    addOwnedListener('compaction_start', () => {
-      setStatus('Compacting context...', 'working');
-      setCompacting(true);
-    });
-    addOwnedListener('compaction_end', (e) => {
-      setCompacting(false);
-      // A manual compaction has no turn_end/agent_end boundary. Whether Stop
-      // won the race, compaction failed, or it completed first, its end is the
-      // authoritative point where a compaction-only abort gate can clear.
-      if (!sessionActivity.turn) sessionActivity.endAbort(sessionKey(hostId, sessionId));
-      try {
-        const data = JSON.parse(e.data);
-        if (data.errorMessage) {
-          setStatus('Compaction failed: ' + data.errorMessage, 'error');
-          return;
-        }
-        if (data.aborted) {
-          setStatus('Compaction cancelled');
-          return;
-        }
-        const r = data.result;
-        // The bridge path knows tokensBefore but not the post-compaction size
-        // (context tokens are unknown until the next LLM response).
-        let msg = 'Compaction finished';
-        if (r && r.tokensBefore) {
-          msg = r.estimatedTokensAfter != null
-            ? `Compacted: ${formatTokens(r.tokensBefore)} → ~${formatTokens(r.estimatedTokensAfter)} tokens`
-            : `Compacted (was ${formatTokens(r.tokensBefore)} tokens)`;
-        }
-        setStatus(msg);
-        refreshSessions();
-      } catch { setStatus('Compaction finished'); }
-    });
-    // Tree navigation (from any surface — this UI, the TUI, another client)
-    // rewrote the session's authoritative history: re-render the transcript
-    // from the JSONL. The UI's own branch flow also reloads after its POST
-    // resolves; a second forced reload of the same state is harmless.
-    addOwnedListener('session_tree', () => {
-      if (sessionState.currentSession && sessionState.currentSession.id === sessionId) {
-        selectSession(sessionId, { forceTranscriptReload: true, host: hostId });
-      }
-    });
-    addOwnedListener('session_switch', (e) => {
-      let data;
-      try { data = JSON.parse(e.data); } catch { return; }
-      const nextId = data?.sessionId;
-      if (!nextId || nextId === sessionId) return;
-      // The route identifies a different transcript even though the pane and
-      // bridge socket stayed put. Never restore a prior DOM stash for that id:
-      // the session may have changed since it was last viewed.
-      transcriptController.deleteCached(sessionKey(hostId, nextId));
-      void loadSessions(undefined, { withPrevious: true }).then(() => {
-        if (!sessionState.ownsSelection(owner) || !sessionState.findSession(nextId, hostId)) return;
-        selectSession(nextId, { forceTranscriptReload: true, host: hostId });
-      });
-    });
-
-    addOwnedListener('auto_retry_start', (e) => {
-      try {
-        const d = JSON.parse(e.data);
-        setStatus(`Retrying (attempt ${d.attempt}/${d.maxAttempts})...`, 'working');
-      } catch {}
-    });
-    addOwnedListener('auto_retry_end', (e) => {
-      try {
-        const d = JSON.parse(e.data);
-        if (d.success === false) setStatus('Retry failed: ' + (d.finalError || 'unknown'), 'error');
-      } catch {}
-    });
-
-    addOwnedListener('session_ended', () => {
-      sessionActivity.endAbort(sessionKey(hostId, sessionId));
-      setCompacting(false);
-      setTurnInProgress(false);
-      extensionUI.end({ id: sessionId, host: hostId });
-      setStatus('Session ended');
-      refreshSessions();
-    });
-
-    evtSource.onerror = () => {
-      if (!ownsStream()) return;
-      if (evtSource.readyState === EventSource.CLOSED) {
-        setStatus('Stream disconnected', 'error');
-        streamReconnectTimeout = setTimeout(() => {
-          if (sessionState.ownsSelection(owner)) startMessageStream(owner);
-        }, 3000);
-      }
-    };
-  } catch (err) {
-    if (!sessionState.ownsSelection(owner)) return;
-    console.error('Stream failed:', err);
-    setStatus('Stream failed', 'error');
-  }
-}
+const messageStreamController = PiDishBrowser.createMessageStream({ document, sessionState, endpoint: resolveHost, ticket: host => mintHostTicket(host, 'stream'),
+  get activity() { return sessionActivity; }, renderer: messageRenderer, get streaming() { return streamingRenderer; }, tools: liveToolsController, get delivery() { return promptDelivery; }, get extensionUI() { return extensionUI; },
+  status: (message, type) => setStatus(message, type), catchup: owner => fetchNewMessagesSince(owner), refresh: () => refreshSessions(), artifacts: owner => refreshArtifacts(owner),
+  pinned: isPinnedToBottom, follow: () => followStream, scroll: scrollToBottom, jump: updateJumpButton, highlight: root => applyHighlight(root),
+  select: (id, options) => selectSession(id, options), deleteCached: key => transcriptController.deleteCached(key), loadSessions: (query, options) => loadSessions(query, options),
+});
+function startMessageStream(owner) { return messageStreamController.start(owner); }
 
 // =========================================================================
 // Prompt / Turn / Abort

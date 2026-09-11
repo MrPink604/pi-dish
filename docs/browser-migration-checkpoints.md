@@ -896,3 +896,17 @@ Verification: strict checks, 936 backend tests, 262 browser tests, all independe
 UI scenarios and full desktop/mobile smoke passed. Five new browser cases and
 strict contracts cover malformed queues, detached controls, endpoint/disposal
 ownership and overlapping side commands. Fable review and push remain pending.
+
+## Checkpoint 41 — stream lifecycle
+
+Moved SSE connections and event dispatch into a strict controller. Connection
+generations and captured endpoints retire older ticket requests for the same
+selection. Closed-source errors share one reconnect timer, stale events cannot
+act after stop/disposal, and a newer session-switch event owns delayed navigation.
+Existing turn cleanup, completion deduplication, extension replay, compaction,
+queue and transcript catch-up paths call their typed controllers.
+
+Verification: strict checks, 936 backend tests, 268 browser tests, all independent
+UI scenarios and full desktop/mobile smoke passed. Six new browser cases and
+strict contracts cover tickets, endpoints, retired sources, reconnect timers,
+completion deduplication and session-switch ordering. Review and push pending.
