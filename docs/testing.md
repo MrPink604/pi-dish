@@ -89,6 +89,7 @@ After editing `src/browser/`, run `npm run build:browser` before `npm test`;
 | Wire envelope validation, malformed responses, unknown events and transport survival | `test/transport-frames.test.js` plus existing bridge/RPC protocol suites |
 | Typed RPC startup validation, failed-child cleanup, delta snapshots and recovery ownership | `test/rpc-session.test.js`, `test/transport-frames.test.js`, `test/session-recovery.test.js` |
 | Typed bridge registry validation, pre-hello claim protection and session-switch replay ordering | `test/bridge-session.test.js` |
+| New-session model/thinking preferences, defaults owners and blur/pointer layout | `test/browser-new-session-options.test.js`, `test/browser/new-session-options.spec.js`, `test/types/browser-new-session-options.ts`, models UI scenario |
 | Published-page comment decoding, cross-node anchors, mobile drafts and delayed refresh/delete ownership | `test/browser/artifact-comments.spec.js`, `test/types/browser-artifact-comments.ts`, `test/browser-build.test.js` |
 | Model catalog request/view/cache ownership, enabled-row snapshots and select markup | `test/browser-model-catalog.test.js`, `test/browser/model-catalog.spec.js`, `test/types/browser-model-catalog.ts`, model UI scenario |
 | Tmux target decoding, request/host ownership, saved resume routing and run-in keyboard/lifecycle | `test/browser-spawn-targets.test.js`, `test/browser/spawn-targets.spec.js`, `test/types/browser-targets.ts`, desktop/mobile smoke |

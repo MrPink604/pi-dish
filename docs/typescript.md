@@ -311,3 +311,9 @@ script path as before. Index/comment payloads and error text are narrowed before
 use. Refresh sequences protect marks, and submitted draft generations protect
 edit/delete completion. The shadow-root UI and its page-lifetime listeners remain
 independent of the main app.
+
+`src/browser/new-session-options.ts` owns launch model/thinking preferences and
+select rendering plus the OMP defaults preview. Preview records narrow wire fields;
+request owners capture host route/token, harness, cwd and takeover generation.
+Retiring a read invalidates its config immediately but preserves layout until a
+new load starts, keeping a cwd blur from moving the spawn button mid-click.

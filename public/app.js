@@ -8781,17 +8781,17 @@ function onNsHostChange(value) {
   onNsHarnessChange(selectedHarnessId());
 }
 
-let newSessionModel = ''; // '' = default (omit --model); else provider/id
-let newSessionThinking = ''; // '' = default (omit --thinking)
 const HARNESS_KEY = 'pi-dish-new-harness';
 let newSessionHarness = 'pi';
-let nsConfigSeq = 0;
 let nsPilotRefreshTimer = null;
 
-const NS_THINKING_LABELS = {
-  off: 'Off', minimal: 'Minimal', low: 'Low', medium: 'Medium',
-  high: 'High', xhigh: 'Extra high', max: 'Maximum',
-};
+const NS_THINKING_LABELS = PiDishBrowser.NS_THINKING_LABELS;
+const newSessionPreferences = PiDishBrowser.createNewSessionPreferences({
+  model: document.getElementById('nsModelSelect'), thinking: document.getElementById('nsThinkingSelect'),
+  hiddenNote: document.getElementById('nsModelHidden'), thinkingNote: document.getElementById('nsThinkingNote'),
+  rows: () => modelCatalog.rows(), read: key => localStorage.getItem(key),
+  write: (key, value) => localStorage.setItem(key, value), escapeHtml,
+});
 
 function selectedHarnessId() {
   return document.getElementById('nsHarnessSelect')?.value || newSessionHarness || 'pi';
@@ -8846,10 +8846,7 @@ function renderNsHarnesses() {
 function onNsHarnessChange(value) {
   newSessionHarness = value || 'pi';
   localStorage.setItem(HARNESS_KEY, newSessionHarness);
-  newSessionModel = localStorage.getItem(`pi-dish-new-model:${newSessionHarness}`)
-    || (newSessionHarness === 'pi' ? localStorage.getItem('pi-dish-new-model') : '') || '';
-  newSessionThinking = localStorage.getItem(`pi-dish-new-thinking:${newSessionHarness}`)
-    || (newSessionHarness === 'pi' ? localStorage.getItem('pi-dish-new-thinking') : '') || '';
+  newSessionPreferences.restore(newSessionHarness);
   modelCatalog.clear();
   renderNsModel();
   refreshNsPilotOptions();
@@ -8863,41 +8860,18 @@ function nsCwdValue() {
   return (document.getElementById('newSessionCwd')?.value || '').trim();
 }
 
-// Last successful /api/harnesses/omp/config payload for the takeover readout.
-let nsHarnessConfig = null;
-
-async function loadNsHarnessConfig(cwd = nsCwdValue()) {
-  const wrap = document.getElementById('nsHarnessConfig');
-  const values = document.getElementById('nsHarnessConfigValues');
-  const roles = document.getElementById('nsHarnessRoles');
-  const buttons = [document.getElementById('nsEditAgents'), document.getElementById('nsEditRoles')];
-  const seq = ++nsConfigSeq;
-  if (!wrap || !values) return;
-  if (selectedHarnessId() !== 'omp') {
-    wrap.style.display = 'none';
-    return;
-  }
-  wrap.style.display = '';
-  values.textContent = 'Loading…';
-  if (roles) roles.textContent = '';
-  for (const button of buttons) if (button) button.style.display = 'none';
-  try {
-    const params = new URLSearchParams();
-    if (cwd) params.set('cwd', cwd);
-    const res = await apiFetch(nsHostId(), '/api/harnesses/omp/config' + (params.size ? `?${params}` : ''));
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    if (seq !== nsConfigSeq || selectedHarnessId() !== 'omp') return;
-    nsHarnessConfig = { ...data, cwd: cwd || '' };
-    values.textContent = `Model: ${data.defaultModel || 'auto-select'} · Thinking: ${data.defaultThinkingLevel || 'host default'}`;
-    if (roles) roles.textContent = 'Roles: ' + formatModelRoleSummary(data.modelRoles);
-    for (const button of buttons) if (button) button.style.display = '';
-  } catch (e) {
-    if (seq !== nsConfigSeq || selectedHarnessId() !== 'omp') return;
-    nsHarnessConfig = null;
-    values.textContent = `Defaults unavailable: ${e.message}`;
-  }
-}
+const newSessionConfigPreview = PiDishBrowser.createNewSessionConfigPreview({
+  wrap: document.getElementById('nsHarnessConfig'), values: document.getElementById('nsHarnessConfigValues'),
+  roles: document.getElementById('nsHarnessRoles'),
+  buttons: [document.getElementById('nsEditAgents'), document.getElementById('nsEditRoles')],
+  scope: () => {
+    const host = nsHost();
+    return host && isNewSessionViewOpen()
+      ? { host, harnessId: selectedHarnessId(), cwd: nsCwdValue(), view: newSessionViewGeneration } : null;
+  },
+  request: apiFetch, roleSummary: formatModelRoleSummary,
+});
+function loadNsHarnessConfig(cwd = nsCwdValue()) { return newSessionConfigPreview.load(cwd); }
 
 // --- Harness settings: pi-dish's take on OMP's /agents and /models hubs ---
 //
@@ -8963,7 +8937,7 @@ function openSessionHarnessSettings() {
 async function openHarnessSettings(opts = {}) {
   const harnessId = opts.harnessId || 'omp';
   const hostId = opts.hostId !== undefined ? opts.hostId : nsHostId();
-  const cwd = (opts.cwd !== undefined ? opts.cwd : (nsHarnessConfig?.cwd ?? nsCwdValue())) || '';
+  const cwd = (opts.cwd !== undefined ? opts.cwd : (newSessionConfigPreview.config?.cwd ?? nsCwdValue())) || '';
   const label = opts.label || harnessLabel(harnessId);
   const seq = ++harnessSettingsSeq;
   harnessSettings = { hostId, cwd, harnessId, label, config: null, agents: [], settings: null, globalSettings: null, models: [] };
@@ -9263,6 +9237,7 @@ function refreshNsPilotOptions() {
 
 function scheduleNsPilotRefresh() {
   modelCatalog.retire();
+  newSessionConfigPreview.retire();
   clearTimeout(nsPilotRefreshTimer);
   nsPilotRefreshTimer = setTimeout(refreshNsPilotOptions, 300);
 }
@@ -9306,10 +9281,7 @@ function openNewSessionView(opts = {}) {
   // then refresh in the background and re-render, preserving the selection.
   newSessionHarness = localStorage.getItem(HARNESS_KEY) || 'pi';
   renderNsHarnesses();
-  newSessionModel = localStorage.getItem(`pi-dish-new-model:${newSessionHarness}`)
-    || (newSessionHarness === 'pi' ? localStorage.getItem('pi-dish-new-model') : '') || '';
-  newSessionThinking = localStorage.getItem(`pi-dish-new-thinking:${newSessionHarness}`)
-    || (newSessionHarness === 'pi' ? localStorage.getItem('pi-dish-new-thinking') : '') || '';
+  newSessionPreferences.restore(newSessionHarness);
   if (modelCatalog.scope?.harnessId !== newSessionHarness
       || !PiDishBrowser.sameDirectoryHost(modelCatalog.scope?.host || null, nsHost())) {
     modelCatalog.clear();
@@ -9339,7 +9311,7 @@ function closeNewSessionView() {
   document.querySelector('.main').classList.remove('new-session-open');
   closeHarnessSettings();
   clearTimeout(nsPilotRefreshTimer);
-  nsConfigSeq += 1;
+  newSessionConfigPreview.retire();
   hideCwdDropdown();
 }
 
@@ -9384,52 +9356,9 @@ function setNsCwd(pathValue) {
 }
 
 // --- Model select ---
-function onNsModelChange(value) {
-  newSessionModel = value || '';
-  const harnessId = selectedHarnessId();
-  localStorage.setItem(`pi-dish-new-model:${harnessId}`, newSessionModel);
-  if (harnessId === 'pi') localStorage.setItem('pi-dish-new-model', newSessionModel);
-  syncNsThinking();
-}
-
-function onNsThinkingChange(value) {
-  newSessionThinking = value || '';
-  const harnessId = selectedHarnessId();
-  localStorage.setItem(`pi-dish-new-thinking:${harnessId}`, newSessionThinking);
-  if (harnessId === 'pi') localStorage.setItem('pi-dish-new-thinking', newSessionThinking);
-}
-
-function syncNsThinking() {
-  const sel = document.getElementById('nsThinkingSelect');
-  if (!sel) return;
-  const harnessId = selectedHarnessId();
-  const selectedRef = document.getElementById('nsModelSelect')?.value || '';
-  const selectedModel = modelCatalog.rows().find(m => m && (m.selector || `${m.provider}/${m.id}`) === selectedRef);
-  const note = document.getElementById('nsThinkingNote');
-  let levels = Object.keys(NS_THINKING_LABELS);
-  let disabled = selectedModel?.reasoning === false;
-  let noteText = disabled ? 'The selected model does not support configurable thinking' : '';
-
-  if (harnessId === 'omp') {
-    levels = selectedModel && Array.isArray(selectedModel.thinking) ? selectedModel.thinking : [];
-    disabled = !selectedModel || levels.length === 0;
-    if (!selectedModel) noteText = 'Select a model to choose an explicit thinking level';
-    else if (!levels.length) noteText = 'This model has no configurable thinking levels';
-    else noteText = `Valid for this model: ${levels.map(level => NS_THINKING_LABELS[level] || level).join(', ')}`;
-  }
-
-  sel.innerHTML = '<option value="">(default)</option>' + levels.map(level =>
-    `<option value="${level}">${NS_THINKING_LABELS[level] || level}</option>`).join('');
-  if (!levels.includes(newSessionThinking)) {
-    newSessionThinking = '';
-    localStorage.setItem(`pi-dish-new-thinking:${harnessId}`, '');
-    if (harnessId === 'pi') localStorage.setItem('pi-dish-new-thinking', '');
-  }
-  sel.disabled = disabled;
-  sel.value = disabled ? '' : newSessionThinking;
-  if (note) note.textContent = noteText;
-}
-
+function onNsModelChange(value) { newSessionPreferences.selectModel(value); }
+function onNsThinkingChange(value) { newSessionPreferences.selectThinking(value); }
+function syncNsThinking() { newSessionPreferences.syncThinking(); }
 
 /**
  * Option markup for a model select: enabled models grouped by provider under
@@ -9443,24 +9372,7 @@ function modelSelectOptionsHtml(models) {
 }
 function modelHiddenNote(hidden) { return PiDishBrowser.modelHiddenNote(hidden); }
 
-function renderNsModel() {
-  const sel = document.getElementById('nsModelSelect');
-  if (!sel) return;
-  const { html, enabled, hidden } = modelSelectOptionsHtml(modelCatalog.rows());
-  sel.innerHTML = html;
-
-  // Show the saved selection when the rendered list has it; else display
-  // "(default)" but keep newSessionModel — the first render may be an interim
-  // list (session-scoped modelCatalog.rows(), or empty pre-cache), and clearing here
-  // would lose the selection before the full-catalog refresh re-renders.
-  // Spawning reads the select itself, so a never-restored model can't be sent.
-  sel.value = (newSessionModel && enabled.some(m =>
-    (m.selector || `${m.provider}/${m.id}`) === newSessionModel)) ? newSessionModel : '';
-
-  const note = document.getElementById('nsModelHidden');
-  if (note) note.textContent = modelHiddenNote(hidden);
-  syncNsThinking();
-}
+function renderNsModel() { newSessionPreferences.render(); }
 
 function nsError(msg) {
   const el = document.getElementById('nsError');

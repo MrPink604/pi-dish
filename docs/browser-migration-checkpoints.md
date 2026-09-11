@@ -196,3 +196,24 @@ are not completion percentages.
   Fable review of the local commit is required before push.
 - Next: new-session preferences/config/spawn controllers, followed by remaining
   application features, shared helpers and startup shell.
+
+- Fable 5.1 cleared artifact-comment commit `338addd` with no blocking findings
+  before push. All five CI jobs also passed on model follow-up `36cc348`.
+
+## Checkpoint 9 — new-session options
+
+- Boundary: saved model/thinking preferences by harness, model/thinking select
+  rendering and the OMP defaults readout. Inputs and decoded preview data are typed.
+- Defaults requests capture endpoint, harness, cwd, takeover generation and read
+  sequence. Stale success/failure bodies cannot restore an old configuration.
+  Edit actions use the current cwd when the last preview no longer owns it.
+- Retirement clears config ownership while retaining readout geometry until the
+  actual refresh begins. A focused pointer/blur regression protects spawn-button
+  clicks from layout movement between pointer-down and pointer-up.
+- Four unit tests and four browser regressions cover decoder ownership, delayed
+  cwd/host replies, preference keys, supported thinking levels and pointer stability.
+- Verification: strict build/lint/type checks, all 890 backend tests, 96 browser
+  regressions, all independent UI scenarios and desktop/mobile smoke passed.
+  Fable review of the local commit is required before push.
+- Next: harness settings editor and new-session spawn coordination, followed by
+  the remaining application features, shared helpers and startup shell.

@@ -736,6 +736,12 @@ checks its originating tree and host before rendering or selecting a cwd.
 Host catalog/token edits and late identity discovery renew an open directory tree
 and known-cwd catalog when their captured endpoint changes.
 
+New-session model/thinking preferences and the OMP defaults preview live in
+`src/browser/new-session-options.ts`. Preview requests retain endpoint, harness,
+cwd and takeover generation through response-body reads. Retiring a preview
+clears its config owner but preserves layout until the next load starts; hiding
+buttons during the cwd blur delay can move the spawn button mid-click.
+
 The shared model catalog lives in `src/browser/model-catalog.ts`; its readonly
 rows/scope replace the old global model arrays. Loads receive captured request
 and visible-row ownership callbacks. New-session request ownership includes cwd
