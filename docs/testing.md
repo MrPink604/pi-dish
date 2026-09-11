@@ -89,6 +89,7 @@ After editing `src/browser/`, run `npm run build:browser` before `npm test`;
 | Wire envelope validation, malformed responses, unknown events and transport survival | `test/transport-frames.test.js` plus existing bridge/RPC protocol suites |
 | Typed RPC startup validation, failed-child cleanup, delta snapshots and recovery ownership | `test/rpc-session.test.js`, `test/transport-frames.test.js`, `test/session-recovery.test.js` |
 | Typed bridge registry validation, pre-hello claim protection and session-switch replay ordering | `test/bridge-session.test.js` |
+| Extension request decoding, dialog stashing/response ownership and timed displays | `test/browser-extension-ui.test.js`, `test/types/browser-extension-ui.ts`, `test/browser/extension-ui.spec.js` |
 | Markdown escaping, local assets, diagram races/retention and copy lifetimes | `test/browser/rich-text.spec.js`, `test/types/browser-rich-text.ts`, `test/ui-smoke.js` |
 | Transcript tree filters/branches, retained controls and reopened views | `test/browser-transcript-tree.test.js`, `test/browser/transcript-tree.spec.js`, `test/types/browser-transcript-tree.ts`, `test/browser/menu-ownership.spec.js` |
 | Session stats/share/process/artifact ownership and mutation errors | `test/browser-session-info.test.js`, `test/browser/session-info.spec.js`, `test/types/browser-session-info.ts` |

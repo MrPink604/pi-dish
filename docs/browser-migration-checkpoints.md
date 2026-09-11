@@ -608,3 +608,25 @@ passed again after the fix. AGENTS.md now includes the pre-paint output.
   strict checks passed again before commit.
 - Fable 5.1 cleared tree commit `54264af` before push.
 - Next: extension widgets/status/dialogs, file/comment surfaces and remaining shell.
+
+## Checkpoint 26 — Extension display and dialogs
+
+- `extension-ui-data.ts` narrows extension requests/questions/options and strips
+  display ANSI without modifying wire objects. `extension-ui.ts` routes only the
+  captured host/session and composes display and interactive surfaces.
+- `extension-display.ts` owns widget/status entries, collapsed preferences,
+  removal grace/fade timers, toasts, listeners and resize observation. Reprojection
+  cancels both removal phases; disposal retires every owned resource.
+- `extension-dialogs.ts` keys cards by host/session/request. Stashed cards retain
+  edits and selections; redocking captures a new selection owner. Replaced or
+  detached controls cannot answer a later card with the same request id.
+- Responses retain their endpoint base and resolve current credentials at dispatch.
+  Authoritative dialog reconciliation prunes only the named host/session; malformed
+  state does not prune. Dialog retirement aborts card listeners.
+- Two decoder/type regressions and six browser cases cover stashing, duplicate
+  request ids, ask answers, host-scoped reconciliation, display timers and disposal.
+- Strict checks, 921 backend tests, 175 browser regressions, every independent UI
+  scenario and full desktop/mobile smoke passed. Integrated runtime/config/test
+  files match the verified draft byte for byte; strict checks passed again.
+- Fable 5.1 cleared renderer commit `b15c5a5` before push.
+- Next: file/diff views, anchored comments and remaining transcript/shell logic.

@@ -39,6 +39,7 @@ var PiDishBrowser = (() => {
     createDirectoryCatalog: () => createDirectoryCatalog,
     createDirectoryTree: () => createDirectoryTree,
     createDisplayPreferences: () => createDisplayPreferences,
+    createExtensionUI: () => createExtensionUI,
     createHarnessDiscovery: () => createHarnessDiscovery,
     createHarnessSettings: () => createHarnessSettings,
     createHostConnections: () => createHostConnections,
@@ -74,6 +75,7 @@ var PiDishBrowser = (() => {
     decodeBounceOperations: () => decodeBounceOperations,
     decodeBouncePreview: () => decodeBouncePreview,
     decodeDirectoryChildren: () => decodeDirectoryChildren,
+    decodeExtensionRequest: () => decodeExtensionRequest,
     decodeHarnessAgents: () => decodeHarnessAgents,
     decodeHarnessConfig: () => decodeHarnessConfig,
     decodeHarnessConfigPreview: () => decodeHarnessConfigPreview,
@@ -251,23 +253,23 @@ var PiDishBrowser = (() => {
     }
     status;
   };
-  function withFetchTimeout(options) {
-    const { timeoutMs, ...init } = options;
+  function withFetchTimeout(options2) {
+    const { timeoutMs, ...init } = options2;
     if (!init.signal && typeof timeoutMs === "number" && timeoutMs > 0 && typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
       init.signal = AbortSignal.timeout(timeoutMs);
     }
     return init;
   }
-  function createHostTransport(options) {
+  function createHostTransport(options2) {
     const request = (host, path, init = {}) => {
-      const { base, token } = options.resolveHost(host);
+      const { base, token } = options2.resolveHost(host);
       const requestInit = withFetchTimeout(init);
       if (token) {
         const headers = new Headers(requestInit.headers);
         headers.set("Authorization", `Bearer ${token}`);
         requestInit.headers = headers;
       }
-      return options.fetch(base + path, requestInit);
+      return options2.fetch(base + path, requestInit);
     };
     return { request };
   }
@@ -294,11 +296,11 @@ var PiDishBrowser = (() => {
       return sendJson(request, host, `/api/sessions/${encodeURIComponent(id)}/${operation}`, body);
     }
     return {
-      async list(host, path, options) {
-        return decodeSessionList(await jsonResponse(await request(host, path, options), "HTTP request failed"));
+      async list(host, path, options2) {
+        return decodeSessionList(await jsonResponse(await request(host, path, options2), "HTTP request failed"));
       },
-      async models(host, options = {}) {
-        const { sessionId, harnessId = "pi", cwd } = options;
+      async models(host, options2 = {}) {
+        const { sessionId, harnessId = "pi", cwd } = options2;
         const path = sessionId ? "/api/models?sessionId=" + encodeURIComponent(sessionId) : harnessId !== "pi" ? modelCatalogUrl(harnessId, cwd) : "/api/models";
         return decodeModelCatalog(await jsonResponse(await request(host, path), "Model catalog request failed"));
       },
@@ -325,10 +327,10 @@ var PiDishBrowser = (() => {
     const doc = root.ownerDocument;
     let view = null;
     let disposed = false;
-    function element(tag, className, text13) {
+    function element(tag, className, text14) {
       const node = doc.createElement(tag);
       node.className = className;
-      if (text13 !== void 0) node.textContent = text13;
+      if (text14 !== void 0) node.textContent = text14;
       return node;
     }
     const search = element("input", "model-search");
@@ -345,8 +347,8 @@ var PiDishBrowser = (() => {
       node.dataset.value = value;
       return node;
     }
-    function button(text13, name, value = "", primary = false) {
-      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text13);
+    function button(text14, name, value = "", primary = false) {
+      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text14);
       node.type = "button";
       return action(node, name, value);
     }
@@ -476,7 +478,7 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/session-state.ts
-  function createSessionState(options) {
+  function createSessionState(options2) {
     let sessions = { active: [], previous: [] };
     let currentSession = null;
     let generation = 0;
@@ -494,15 +496,15 @@ var PiDishBrowser = (() => {
     }
     function sessionHostId(id) {
       if (id && currentSession?.id === id && currentSession.host) return currentSession.host;
-      return findSession(id)?.host || options.getSelfHostId();
+      return findSession(id)?.host || options2.getSelfHostId();
     }
-    function stampSessionHost(session, hostId = options.getSelfHostId()) {
+    function stampSessionHost(session, hostId = options2.getSelfHostId()) {
       if (!session.host && hostId) session.host = hostId;
-      const label = options.getHostLabel(session.host || hostId);
+      const label = options2.getHostLabel(session.host || hostId);
       if (label) session.hostLabel = label;
       return session;
     }
-    function setSessionLists(next, hostId = options.getSelfHostId()) {
+    function setSessionLists(next, hostId = options2.getSelfHostId()) {
       const parts = Array.isArray(next) ? next : [{ hostId, active: next.active, previous: next.previous }];
       const merged = { active: [], previous: [] };
       for (const part of parts) {
@@ -514,8 +516,8 @@ var PiDishBrowser = (() => {
         const fresh = findSession(currentSession.id, currentSession.host);
         if (fresh) currentSession = { ...currentSession, ...fresh };
       }
-      options.onListsChanged();
-      options.onCurrentChanged();
+      options2.onListsChanged();
+      options2.onCurrentChanged();
     }
     function setCurrentSession(id, host) {
       const entry = findSession(id, host);
@@ -529,8 +531,8 @@ var PiDishBrowser = (() => {
         if (session) stampSessionHost(Object.assign(session, patch));
       }
       if (matches(currentSession) && currentSession) stampSessionHost(Object.assign(currentSession, patch));
-      options.onListsChanged();
-      if (matches(currentSession)) options.onCurrentChanged();
+      options2.onListsChanged();
+      if (matches(currentSession)) options2.onCurrentChanged();
     }
     function mergeCurrentSession(owner, fields) {
       if (!fields || !ownsSelection(owner) || !currentSession) return;
@@ -539,7 +541,7 @@ var PiDishBrowser = (() => {
       currentSession.id = id;
       currentSession.host = host;
       stampSessionHost(currentSession);
-      options.onCurrentChanged();
+      options2.onCurrentChanged();
     }
     function advanceSelection() {
       generation += 1;
@@ -581,8 +583,8 @@ var PiDishBrowser = (() => {
     const state = prev && typeof prev === "object" ? prev : null;
     const errText = (value) => {
       if (value == null) return null;
-      const text13 = String(typeof value === "object" && "message" in value && value.message || value);
-      return text13 || null;
+      const text14 = String(typeof value === "object" && "message" in value && value.message || value);
+      return text14 || null;
     };
     const eventError = event && typeof event === "object" && "error" in event ? errText(event.error) : null;
     if (kind === "blocked") {
@@ -612,9 +614,9 @@ var PiDishBrowser = (() => {
     }
     return state;
   }
-  function createHostConnections(options) {
+  function createHostConnections(options2) {
     const records = /* @__PURE__ */ new Map();
-    const now = options.now || Date.now;
+    const now = options2.now || Date.now;
     function stateOf(host) {
       const entry = records.get(hostKeyOf(host));
       if (entry) return entry.state;
@@ -632,7 +634,7 @@ var PiDishBrowser = (() => {
       const next = hostConnReduce(prev, event, now());
       if (!next || next === prev) return;
       records.set(key, next);
-      if (!prev || prev.state !== next.state || prev.error !== next.error) options.onChange();
+      if (!prev || prev.state !== next.state || prev.error !== next.error) options2.onChange();
     }
     function seed(hosts) {
       const at = now();
@@ -691,7 +693,7 @@ var PiDishBrowser = (() => {
       } : session;
     });
   }
-  function createHostSessionLoader(options) {
+  function createHostSessionLoader(options2) {
     const caches = /* @__PURE__ */ new Map();
     const owners = /* @__PURE__ */ new Map();
     const inflight = /* @__PURE__ */ new Map();
@@ -699,7 +701,7 @@ var PiDishBrowser = (() => {
     function load(host, query, withPrevious, sequence) {
       const target = Object.freeze({ ...host });
       const key = hostKeyOf(target);
-      const wireQuery = options.stripHostQuery(query);
+      const wireQuery = options2.stripHostQuery(query);
       const pending = inflight.get(key);
       if (pending && pending.wireQuery === wireQuery && pending.withPrevious === withPrevious && pending.host.base === target.base && pending.host.token === target.token && pending.host.hostId === target.hostId) {
         pending.owner.sequence = sequence;
@@ -720,32 +722,32 @@ var PiDishBrowser = (() => {
         if (wireQuery) params.set("q", wireQuery);
         if (!withPrevious) params.set("active", "1");
         params.set("view", "client");
-        const data = await options.requestList(host, "/api/sessions?" + params.toString(), { timeoutMs: 2e4 });
+        const data = await options2.requestList(host, "/api/sessions?" + params.toString(), { timeoutMs: 2e4 });
         if (owners.get(key) !== owner) return;
-        options.onConnection(host, "success");
-        if (owner.sequence !== options.currentSequence()) return;
+        options2.onConnection(host, "success");
+        if (owner.sequence !== options2.currentSequence()) return;
         const cached = caches.get(key) || { active: [], previous: [] };
         if (withPrevious) {
           indexing.set(key, !!data.indexing);
-          if (data.indexing) options.onIndexing();
+          if (data.indexing) options2.onIndexing();
         }
         const next = {
           active: withPrevious ? data.active : mergeActiveHints(data.active, cached.active),
           previous: withPrevious ? data.previous : mergeLiveSubagents(cached.previous, data.children)
         };
-        options.beforePublish(host, next, wireQuery);
+        options2.beforePublish(host, next, wireQuery);
         caches.set(key, next);
-        options.onPublish(owner.query);
+        options2.onPublish(owner.query);
       } catch (error) {
         if (owners.get(key) !== owner) return;
         if (error instanceof ApiHttpError && error.status === 401) {
-          options.onConnection(host, "blocked");
-          options.onPublish();
+          options2.onConnection(host, "blocked");
+          options2.onPublish();
           return;
         }
-        options.onConnection(host, { type: "failure", error });
-        options.onError(host, error);
-        if (owner.sequence === options.currentSequence()) options.onPublish();
+        options2.onConnection(host, { type: "failure", error });
+        options2.onError(host, error);
+        if (owner.sequence === options2.currentSequence()) options2.onPublish();
       }
     }
     function getCache(host) {
@@ -953,20 +955,20 @@ var PiDishBrowser = (() => {
     });
   }
   var fallback = () => [{ id: "pi", label: "Pi", available: true }];
-  function createHarnessDiscovery(options) {
+  function createHarnessDiscovery(options2) {
     let rows = fallback();
     let sequence = 0;
     const cache = /* @__PURE__ */ new Map();
     const pending = /* @__PURE__ */ new Map();
     const cacheOwners = /* @__PURE__ */ new Map();
-    const keyOf = (host) => host || options.selfHostId();
+    const keyOf = (host) => host || options2.selfHostId();
     async function load() {
-      const host = options.selectedHostId();
+      const host = options2.selectedHostId();
       const key = keyOf(host);
       const seq = ++sequence;
-      const ownsDiscovery = () => seq === sequence && host === options.selectedHostId();
+      const ownsDiscovery = () => seq === sequence && host === options2.selectedHostId();
       try {
-        const data = await options.requestPicker(host);
+        const data = await options2.requestPicker(host);
         if (!ownsDiscovery()) return;
         if (data == null) throw new Error("Missing harness catalog");
         const discovered = decodeRows(data);
@@ -974,17 +976,17 @@ var PiDishBrowser = (() => {
           rows = discovered;
           cache.set(key, discovered);
           cacheOwners.set(key, {});
-          options.onCacheChange();
-          const preferred = options.preferredHarness();
+          options2.onCacheChange();
+          const preferred = options2.preferredHarness();
           if (preferred && rows.some((row) => row.id === preferred && row.available !== false)) {
-            options.onPreferredHarness(preferred);
+            options2.onPreferredHarness(preferred);
           }
         }
       } catch {
         if (!ownsDiscovery()) return;
         rows = fallback();
       }
-      options.onPickerChange();
+      options2.onPickerChange();
     }
     function ensure(host) {
       const key = keyOf(host);
@@ -995,10 +997,10 @@ var PiDishBrowser = (() => {
       cacheOwners.set(key, owner);
       const request = (async () => {
         try {
-          const data = await options.requestBackground(key);
+          const data = await options2.requestBackground(key);
           if (cacheOwners.get(key) !== owner) return;
           cache.set(key, decodeRows(data));
-          options.onCacheChange();
+          options2.onCacheChange();
         } catch {
         }
       })().finally(() => {
@@ -1030,10 +1032,10 @@ var PiDishBrowser = (() => {
       capabilities: value.capabilities || null
     };
   }
-  function createHostDiscovery(options) {
+  function createHostDiscovery(options2) {
     const descriptors = /* @__PURE__ */ new Map();
     const requests = /* @__PURE__ */ new Map();
-    const now = options.now || Date.now;
+    const now = options2.now || Date.now;
     let selfSequence = 0;
     let fleetSequence = 0;
     let fleetPublication = 0;
@@ -1047,30 +1049,30 @@ var PiDishBrowser = (() => {
     async function loadIdentity() {
       const sequence = ++selfSequence;
       try {
-        const response = await options.requestSelf();
+        const response = await options2.requestSelf();
         if (!response.ok) return;
         const descriptor = decodeHostDescriptor(await response.json());
-        if (sequence === selfSequence && descriptor) options.onSelf(descriptor);
+        if (sequence === selfSequence && descriptor) options2.onSelf(descriptor);
       } catch {
       }
     }
     async function identify(refresh = false) {
-      const pending = options.pollableHosts().filter((host) => !host.self && (!host.hostId || host.source === "user" && (refresh || !descriptors.has(host.hostId))));
+      const pending = options2.pollableHosts().filter((host) => !host.self && (!host.hostId || host.source === "user" && (refresh || !descriptors.has(host.hostId))));
       await Promise.allSettled(pending.map(async (host) => {
         const captured = Object.freeze({ ...host });
-        const source = options.sourceFor(captured);
+        const source = options2.sourceFor(captured);
         if (!source) return;
         const sourceFields = { base: source.base, hostId: source.hostId, token: source.token };
         const owner = {};
         requests.set(source, owner);
-        const ownsSource = () => requests.get(source) === owner && options.sourceFor(captured) === source && source.base === sourceFields.base && source.token === sourceFields.token;
-        const owns = () => ownsSource() && source.hostId === sourceFields.hostId && options.hosts().some((current) => current.base === captured.base && current.hostId === captured.hostId && current.source === captured.source && current.token === captured.token);
+        const ownsSource = () => requests.get(source) === owner && options2.sourceFor(captured) === source && source.base === sourceFields.base && source.token === sourceFields.token;
+        const owns = () => ownsSource() && source.hostId === sourceFields.hostId && options2.hosts().some((current) => current.base === captured.base && current.hostId === captured.hostId && current.source === captured.source && current.token === captured.token);
         let applying = false;
         try {
-          const response = await options.request(captured, "/api/host", { timeoutMs: 8e3 });
+          const response = await options2.request(captured, "/api/host", { timeoutMs: 8e3 });
           if (!owns()) return;
           if (response.status === 401) {
-            options.onConnection(captured, "blocked");
+            options2.onConnection(captured, "blocked");
             return;
           }
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -1078,10 +1080,10 @@ var PiDishBrowser = (() => {
           if (!owns() || !descriptor) return;
           descriptors.set(descriptor.hostId, descriptor);
           applying = true;
-          options.onIdentified(host, source, descriptor);
-          options.onConnection(host, "success");
+          options2.onIdentified(host, source, descriptor);
+          options2.onConnection(host, "success");
         } catch (error) {
-          if (applying ? ownsSource() : owns()) options.onConnection(captured, { type: "failure", error });
+          if (applying ? ownsSource() : owns()) options2.onConnection(captured, { type: "failure", error });
         } finally {
           if (requests.get(source) === owner) requests.delete(source);
         }
@@ -1089,16 +1091,16 @@ var PiDishBrowser = (() => {
     }
     async function performFleet(sequence) {
       try {
-        const response = await options.request(null, "/api/hosts", { timeoutMs: 1e4 });
+        const response = await options2.request(null, "/api/hosts", { timeoutMs: 1e4 });
         if (!response.ok) return;
         const data = await response.json();
         if (sequence !== fleetSequence || !record2(data) || !Array.isArray(data.hosts)) return;
         const rows = data.hosts;
         const hosts = rows.filter(record2);
         fleetPublication = sequence;
-        options.onFleet({ hosts: hosts.filter((host) => !host.self), selfLabel: hosts.find((host) => host.self)?.label });
+        options2.onFleet({ hosts: hosts.filter((host) => !host.self), selfLabel: hosts.find((host) => host.self)?.label });
         await identify(true);
-        if (sequence === fleetPublication) options.afterFleet();
+        if (sequence === fleetPublication) options2.afterFleet();
       } catch {
       }
     }
@@ -1131,9 +1133,9 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/host-directory.ts
-  function createHostDirectory(options) {
+  function createHostDirectory(options2) {
     let self = { base: "", hostId: null, label: null, version: null, capabilities: null };
-    let catalog = sanitizeHostCatalog(options.initialCatalog);
+    let catalog = sanitizeHostCatalog(options2.initialCatalog);
     let fleet = [];
     let cache = null;
     function invalidate() {
@@ -1143,7 +1145,7 @@ var PiDishBrowser = (() => {
       if (!cache) {
         cache = mergeHostEntries(self, fleet, catalog);
         for (const host of cache) {
-          const descriptor = host.hostId && options.descriptor(host.hostId);
+          const descriptor = host.hostId && options2.descriptor(host.hostId);
           if (!descriptor) continue;
           for (const field of ["label", "version", "capabilities"]) {
             if (host[field] == null && descriptor[field] != null) host[field] = descriptor[field];
@@ -1190,7 +1192,7 @@ var PiDishBrowser = (() => {
     }
     function saveCatalog() {
       catalog = reconcileHostCatalog(catalog);
-      options.persistCatalog(catalog);
+      options2.persistCatalog(catalog);
       invalidate();
     }
     function remove(key) {
@@ -1233,7 +1235,7 @@ var PiDishBrowser = (() => {
         if (!remote.label && data.label) remote.label = data.label;
       }
       invalidate();
-      if (user) options.persistCatalog(catalog);
+      if (user) options2.persistCatalog(catalog);
       return true;
     }
     return {
@@ -1277,11 +1279,11 @@ var PiDishBrowser = (() => {
     backoff: "Unreachable \u2014 retrying",
     blocked: "Needs a token"
   };
-  function createHostSettings(options) {
+  function createHostSettings(options2) {
     let view = null;
     let sequence = 0;
     let checking = false;
-    const { directory, connections, escapeHtml: escapeHtml2, displayLabel } = options;
+    const { directory, connections, escapeHtml: escapeHtml2, displayLabel } = options2;
     function status(owner, message3, error = false) {
       if (view !== owner) return;
       owner.status.textContent = message3;
@@ -1324,7 +1326,7 @@ var PiDishBrowser = (() => {
     }
     function save() {
       directory.saveCatalog();
-      options.onCatalogSaved();
+      options2.onCatalogSaved();
     }
     function promptToken(key) {
       const owner = view;
@@ -1334,12 +1336,12 @@ var PiDishBrowser = (() => {
         status(owner, "That host comes from this server\u2019s config \u2014 set its token there.");
         return;
       }
-      const token = options.promptToken(displayLabel(entry));
+      const token = options2.promptToken(displayLabel(entry));
       if (token === null || view !== owner) return;
       directory.setToken(key, token.trim() || void 0);
       connections.reset(key);
       save();
-      options.refreshSessions();
+      options2.refreshSessions();
     }
     async function addFromForm() {
       const owner = view;
@@ -1356,7 +1358,7 @@ var PiDishBrowser = (() => {
         status(owner, "That is not a usable host URL.", true);
         return;
       }
-      if (options.protocol() === "https:" && base.startsWith("http://")) {
+      if (options2.protocol() === "https:" && base.startsWith("http://")) {
         status(owner, "This page is https, so the browser will block plain-http hosts. Serve that host over https (tailscale serve) or open pi-dish over http.", true);
         return;
       }
@@ -1367,7 +1369,7 @@ var PiDishBrowser = (() => {
       checking = true;
       let descriptor;
       try {
-        const response = await options.request(Object.freeze({ base, token: token || null }), "/api/host");
+        const response = await options2.request(Object.freeze({ base, token: token || null }), "/api/host");
         if (!owns()) return;
         if (response.status === 401) throw new Error("that host needs a token");
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -1385,7 +1387,7 @@ var PiDishBrowser = (() => {
         status(owner, "That is this host.", true);
         return;
       }
-      options.discovery.rememberDescriptor(descriptor);
+      options2.discovery.rememberDescriptor(descriptor);
       directory.add({ base, hostId: descriptor.hostId, label: label || descriptor.label || null, token: token || null });
       connections.reset(descriptor.hostId);
       save();
@@ -1393,8 +1395,8 @@ var PiDishBrowser = (() => {
       owner.label.value = "";
       owner.token.value = "";
       status(owner, `Added ${displayLabel({ label, base })}.`);
-      options.refreshSessions();
-      options.renderNewSessionHosts();
+      options2.refreshSessions();
+      options2.renderNewSessionHosts();
     }
     function render() {
       const owner = view;
@@ -1412,8 +1414,8 @@ var PiDishBrowser = (() => {
         if (state === "blocked") actions.push(`<button class="btn-small host-token-btn" data-key="${escapeHtml2(host.key)}">token?</button>`);
         if (host.source === "user") actions.push(`<button class="btn-icon host-remove-btn" data-key="${escapeHtml2(host.key)}" title="Remove host">\u2715</button>`);
         const hostId = host.hostId || null;
-        const custom = options.customColor(hostId);
-        const hex = options.resolveColor(options.color(hostId)) || "#888888";
+        const custom = options2.customColor(hostId);
+        const hex = options2.resolveColor(options2.color(hostId)) || "#888888";
         const colorControls = hosts.length > 1 ? `
         <input type="color" class="host-color-input" data-host="${escapeHtml2(hostId || "")}"
           value="${escapeHtml2(hex)}" style="background:${escapeHtml2(hex)}"
@@ -1430,15 +1432,15 @@ var PiDishBrowser = (() => {
         input.addEventListener("input", () => {
           if (view !== owner || !list.contains(input)) return;
           input.style.background = input.value;
-          options.setColor(input.dataset.host || null, input.value, { rows: false });
+          options2.setColor(input.dataset.host || null, input.value, { rows: false });
         }, listener);
         input.addEventListener("change", () => {
-          if (view === owner && list.contains(input)) options.setColor(input.dataset.host || null, input.value);
+          if (view === owner && list.contains(input)) options2.setColor(input.dataset.host || null, input.value);
         }, listener);
       }
       for (const btn of Array.from(list.querySelectorAll(".host-color-reset"))) {
         btn.addEventListener("click", () => {
-          if (view === owner && list.contains(btn)) options.setColor(btn.dataset.host || null, null);
+          if (view === owner && list.contains(btn)) options2.setColor(btn.dataset.host || null, null);
         }, listener);
       }
       for (const btn of Array.from(list.querySelectorAll(".host-remove-btn"))) {
@@ -1495,12 +1497,12 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/host-presentation.ts
-  function createHostPresentation(options) {
-    let overrides = sanitizeHostColors(options.initialColors);
-    let order = sanitizeHostColorOrder(options.initialOrder);
+  function createHostPresentation(options2) {
+    let overrides = sanitizeHostColors(options2.initialColors);
+    let order = sanitizeHostColorOrder(options2.initialOrder);
     function keyFor(hostId) {
       if (hostId) return hostId;
-      const entry = options.directory.entryFor(null);
+      const entry = options2.directory.entryFor(null);
       return entry && (entry.hostId || entry.key) || "self";
     }
     function colorFor(hostId) {
@@ -1508,7 +1510,7 @@ var PiDishBrowser = (() => {
       if (assigned.appended) {
         order = assigned.order;
         try {
-          options.persistOrder(order);
+          options2.persistOrder(order);
         } catch {
         }
       }
@@ -1520,22 +1522,22 @@ var PiDishBrowser = (() => {
     function setColor(hostId, hex, { rows = true } = {}) {
       overrides = sanitizeHostColors({ ...overrides, [keyFor(hostId)]: hex });
       try {
-        options.persistColors(overrides);
+        options2.persistColors(overrides);
       } catch {
       }
-      options.onColorChanged(rows);
+      options2.onColorChanged(rows);
     }
     function dotHtml(hostId, className = "host-chip-dot") {
-      return `<span class="${className}" style="--host-color:${options.escapeHtml(colorFor(hostId))}"></span>`;
+      return `<span class="${className}" style="--host-color:${options2.escapeHtml(colorFor(hostId))}"></span>`;
     }
     function chipHtml(hostId, { note = false } = {}) {
-      if (options.directory.effectiveHosts().length <= 1) return "";
-      const entry = options.directory.entryFor(hostId);
+      if (options2.directory.effectiveHosts().length <= 1) return "";
+      const entry = options2.directory.entryFor(hostId);
       if (!entry) return "";
-      const down = options.isDown(entry);
-      const label = options.displayLabel(entry);
+      const down = options2.isDown(entry);
+      const label = options2.displayLabel(entry);
       const title = label + (down ? " \u2014 unreachable, showing last known sessions" : "");
-      return `<span class="host-chip${down ? " offline" : ""}" style="--host-color:${options.escapeHtml(colorFor(hostId))}" title="${options.escapeHtml(title)}"><span class="host-chip-dot"></span>${options.escapeHtml(label)}${down && note ? " \xB7 unreachable" : ""}</span>`;
+      return `<span class="host-chip${down ? " offline" : ""}" style="--host-color:${options2.escapeHtml(colorFor(hostId))}" title="${options2.escapeHtml(title)}"><span class="host-chip-dot"></span>${options2.escapeHtml(label)}${down && note ? " \xB7 unreachable" : ""}</span>`;
     }
     return { colorFor, isCustom, setColor, dotHtml, chipHtml };
   }
@@ -1570,24 +1572,24 @@ var PiDishBrowser = (() => {
     const rows = Array.isArray(value.dirs) ? value.dirs : [];
     return { dirs: rows.flatMap((row) => record3(row) && typeof row.path === "string" && typeof row.name === "string" ? [{ path: row.path, name: row.name }] : []), error: !!value.error };
   }
-  function createDirectoryCatalog(options) {
+  function createDirectoryCatalog(options2) {
     let sequence = 0;
     let owner = null;
     let rows = [];
     function current() {
-      return sameDirectoryHost(owner, options.host()) ? rows : [];
+      return sameDirectoryHost(owner, options2.host()) ? rows : [];
     }
     function retire() {
       sequence++;
     }
     async function load() {
       const requestSequence = ++sequence;
-      const selected = options.host();
+      const selected = options2.host();
       if (!selected) return;
       const host = Object.freeze({ ...selected });
-      const owns = () => requestSequence === sequence && sameDirectoryHost(host, options.host());
+      const owns = () => requestSequence === sequence && sameDirectoryHost(host, options2.host());
       try {
-        const response = await options.request(host, "/api/cwds");
+        const response = await options2.request(host, "/api/cwds");
         if (!response.ok || !owns()) return;
         const data = await response.json();
         if (!owns()) return;
@@ -1600,8 +1602,8 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/cwd-autocomplete.ts
-  function createCwdAutocomplete(options) {
-    const { input, dropdown } = options;
+  function createCwdAutocomplete(options2) {
+    const { input, dropdown } = options2;
     const listeners = new AbortController();
     let rowsController = new AbortController();
     let timer = null;
@@ -1632,22 +1634,22 @@ var PiDishBrowser = (() => {
       }
       input.value = path;
       hide();
-      options.onPick?.(path);
+      options2.onPick?.(path);
     }
     function render(query, dirs, owns, ownsRows) {
       if (!owns()) return;
       const seen = /* @__PURE__ */ new Set();
       let results = [];
       const candidates = [
-        ...options.known().map((row) => ({ ...row, known: true })),
+        ...options2.known().map((row) => ({ ...row, known: true })),
         ...dirs.map((row) => ({ ...row, known: false }))
       ];
       for (const row of candidates) {
         if (seen.has(row.short)) continue;
         seen.add(row.short);
-        const indices = query ? options.match(query, row.short) : [];
+        const indices = query ? options2.match(query, row.short) : [];
         if (!indices) continue;
-        results.push({ ...row, indices, score: query ? options.score(indices, row.short) + (row.known ? 5 : 0) : 0 });
+        results.push({ ...row, indices, score: query ? options2.score(indices, row.short) + (row.known ? 5 : 0) : 0 });
       }
       if (query) results.sort((a, b) => b.score - a.score);
       results = results.slice(0, 15);
@@ -1659,7 +1661,7 @@ var PiDishBrowser = (() => {
         dropdown.style.display = "none";
         return;
       }
-      dropdown.innerHTML = results.map((row) => `<div class="cwd-option" data-path="${options.escapeHtml(row.short)}">${row.known ? '<span class="cwd-known">\u2605</span>' : ""}${options.highlight(row.short, row.indices)}</div>`).join("");
+      dropdown.innerHTML = results.map((row) => `<div class="cwd-option" data-path="${options2.escapeHtml(row.short)}">${row.known ? '<span class="cwd-known">\u2605</span>' : ""}${options2.highlight(row.short, row.indices)}</div>`).join("");
       dropdown.style.display = "block";
       for (const row of Array.from(dropdown.querySelectorAll(".cwd-option"))) {
         row.addEventListener("mousedown", (event) => {
@@ -1673,19 +1675,19 @@ var PiDishBrowser = (() => {
       if (resultOwner && !resultOwner()) hide();
       if (blurTimer !== null) clearTimeout(blurTimer);
       blurTimer = null;
-      const selected = options.host();
+      const selected = options2.host();
       if (!mounted() || !selected) return;
       const host = Object.freeze({ ...selected });
       const requestSequence = sequence;
       const rowGeneration = viewGeneration;
-      const ownsRows = () => mounted() && viewGeneration === rowGeneration && sameDirectoryHost(host, options.host());
-      const owns = () => mounted() && sequence === requestSequence && sameDirectoryHost(host, options.host());
+      const ownsRows = () => mounted() && viewGeneration === rowGeneration && sameDirectoryHost(host, options2.host());
+      const owns = () => mounted() && sequence === requestSequence && sameDirectoryHost(host, options2.host());
       timer = setTimeout(async () => {
         timer = null;
         if (!owns()) return;
         let rows = [];
         try {
-          const response = await options.request(host, "/api/dirs?q=" + encodeURIComponent(query));
+          const response = await options2.request(host, "/api/dirs?q=" + encodeURIComponent(query));
           if (!owns()) return;
           if (response.ok) rows = decodeKnownDirectories(await response.json());
         } catch {
@@ -1702,14 +1704,14 @@ var PiDishBrowser = (() => {
         blurTimer = null;
         hide();
       }, 150);
-      options.onBlur?.();
+      options2.onBlur?.();
     }, listener);
     input.addEventListener("keydown", (event) => {
       if (resultOwner && !resultOwner()) hide();
       if (dropdown.style.display === "none") {
-        if (event.key === "Enter" && options.onSubmit) {
+        if (event.key === "Enter" && options2.onSubmit) {
           event.preventDefault();
-          options.onSubmit();
+          options2.onSubmit();
         }
         return;
       }
@@ -1730,7 +1732,7 @@ var PiDishBrowser = (() => {
         if (selected) pick(selected.dataset.path || "");
         else {
           hide();
-          options.onSubmit?.();
+          options2.onSubmit?.();
         }
       } else if (event.key === "Escape") {
         event.stopPropagation();
@@ -1748,12 +1750,12 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/directory-tree.ts
-  function createDirectoryTree(options) {
-    const { root } = options;
+  function createDirectoryTree(options2) {
+    const { root } = options2;
     const doc = root.ownerDocument;
     let owner = null;
     function owns(target) {
-      return owner === target && root.isConnected && sameDirectoryHost(target.host, options.host());
+      return owner === target && root.isConnected && sameDirectoryHost(target.host, options2.host());
     }
     function makeNode(target, path, label, depth) {
       const node = doc.createElement("div");
@@ -1794,7 +1796,7 @@ var PiDishBrowser = (() => {
       }, { signal: target.events.signal });
       row.addEventListener("click", () => {
         if (!owns(target) || !root.contains(node)) return;
-        options.onPick(path);
+        options2.onPick(path);
         root.querySelectorAll(".ns-tree-row.selected").forEach((item) => item.classList.remove("selected"));
         row.classList.add("selected");
       }, { signal: target.events.signal });
@@ -1803,7 +1805,7 @@ var PiDishBrowser = (() => {
       async function load() {
         let data = { dirs: [], error: true };
         try {
-          const response = await options.request(target.host, "/api/dirs/children?path=" + encodeURIComponent(path), { signal: target.events.signal });
+          const response = await options2.request(target.host, "/api/dirs/children?path=" + encodeURIComponent(path), { signal: target.events.signal });
           if (!owns(target) || !root.contains(node)) return;
           data = decodeDirectoryChildren(await response.json());
         } catch {
@@ -1829,7 +1831,7 @@ var PiDishBrowser = (() => {
     function reset() {
       dispose();
       root.replaceChildren();
-      const host = options.host();
+      const host = options2.host();
       if (!host) return;
       owner = { host: Object.freeze({ ...host }), events: new AbortController() };
       root.appendChild(makeNode(owner, "~", "~", 0));
@@ -1868,13 +1870,13 @@ var PiDishBrowser = (() => {
     }
     return choices;
   }
-  function createSpawnTargets(options) {
+  function createSpawnTargets(options2) {
     let sequence = 0;
     let owner = null;
     let choices = [HEADLESS];
     let choiceKey = "headless";
     function currentChoices() {
-      return sameDirectoryHost(owner, options.host()) ? choices : [HEADLESS];
+      return sameDirectoryHost(owner, options2.host()) ? choices : [HEADLESS];
     }
     function current() {
       return currentChoices().find((choice) => spawnTargetKey(choice) === choiceKey) || HEADLESS;
@@ -1887,14 +1889,14 @@ var PiDishBrowser = (() => {
       owner = null;
       choices = [HEADLESS];
       choiceKey = "headless";
-      options.changed();
-      const selected2 = options.host();
-      if (!selected2 || !options.supportsTmux()) return;
+      options2.changed();
+      const selected2 = options2.host();
+      if (!selected2 || !options2.supportsTmux()) return;
       const host = Object.freeze({ ...selected2 });
-      const owns = () => sequence === requestSequence && sameDirectoryHost(host, options.host());
+      const owns = () => sequence === requestSequence && sameDirectoryHost(host, options2.host());
       let next;
       try {
-        const response = await options.request(host, "/api/tmux/targets");
+        const response = await options2.request(host, "/api/tmux/targets");
         if (!response.ok || !owns()) return;
         const data = await response.json();
         if (!owns()) return;
@@ -1904,15 +1906,15 @@ var PiDishBrowser = (() => {
       }
       owner = host;
       choices = next;
-      const saved = options.readSaved();
+      const saved = options2.readSaved();
       choiceKey = choices.some((choice) => spawnTargetKey(choice) === saved) ? saved || "headless" : "headless";
-      options.changed();
+      options2.changed();
     }
     function choose(key) {
       if (!currentChoices().some((choice) => spawnTargetKey(choice) === key)) return false;
       choiceKey = key;
-      options.save(key);
-      options.changed();
+      options2.save(key);
+      options2.changed();
       return true;
     }
     function selected(name) {
@@ -1927,15 +1929,15 @@ var PiDishBrowser = (() => {
     }
     function resume(host) {
       if (!sameDirectoryHost(owner, host)) return null;
-      const saved = options.readSaved();
+      const saved = options2.readSaved();
       const choice = choices.find((item) => spawnTargetKey(item) === saved);
       if (!choice?.target?.tmuxSession || choice.needsName) return null;
       return { type: "tmux", socket: choice.target.socket, tmuxSession: choice.target.tmuxSession };
     }
     return { load, retire, choices: currentChoices, current, choose, selected, resume };
   }
-  function createSpawnTargetPicker(options) {
-    const { input, nameInput, wrap, dropdown, targets } = options;
+  function createSpawnTargetPicker(options2) {
+    const { input, nameInput, wrap, dropdown, targets } = options2;
     const listeners = new AbortController();
     let rowListeners = new AbortController();
     let blurTimer = null;
@@ -1974,12 +1976,12 @@ var PiDishBrowser = (() => {
       rendered = choices;
       const q = query.trim();
       let named = choices.filter((choice) => !choice.pinned).flatMap((choice) => {
-        const indices = q ? options.match(q, choice.label) : [];
-        return indices ? [{ choice, indices, score: q ? options.score(indices, choice.label) : 0 }] : [];
+        const indices = q ? options2.match(q, choice.label) : [];
+        return indices ? [{ choice, indices, score: q ? options2.score(indices, choice.label) : 0 }] : [];
       });
       if (q) named = named.sort((a, b) => b.score - a.score);
       const rows = [...choices.filter((choice) => choice.pinned).map((choice) => ({ choice, indices: [] })), ...named];
-      dropdown.innerHTML = rows.map(({ choice, indices }) => `<div class="cwd-option" data-key="${options.escapeHtml(spawnTargetKey(choice))}">${indices.length ? options.highlight(choice.label, indices) : options.escapeHtml(choice.label)}</div>`).join("");
+      dropdown.innerHTML = rows.map(({ choice, indices }) => `<div class="cwd-option" data-key="${options2.escapeHtml(spawnTargetKey(choice))}">${indices.length ? options2.highlight(choice.label, indices) : options2.escapeHtml(choice.label)}</div>`).join("");
       dropdown.style.display = "block";
       rowListeners = new AbortController();
       for (const row of Array.from(dropdown.querySelectorAll(".cwd-option"))) {
@@ -2033,7 +2035,7 @@ var PiDishBrowser = (() => {
     const base = harnessId === "pi" ? "pi-dish-models-cache" : `pi-dish-models-cache:${harnessId}`;
     return hostId && hostId !== selfId ? `${base}@${hostId}` : base;
   }
-  function createModelCatalog(options) {
+  function createModelCatalog(options2) {
     let sequence = 0;
     let models = [];
     let scope = null;
@@ -2067,24 +2069,24 @@ var PiDishBrowser = (() => {
       const owner = snapshot(target);
       const valid = () => requestSequence === sequence && ownsRequest();
       try {
-        const data = await options.read(owner);
+        const data = await options2.read(owner);
         if (!valid()) return;
         models = decodeModelCatalog(data);
         scope = owner;
         currentOwner = ownsRows;
         if (models.length) {
           try {
-            options.persist(owner, models);
+            options2.persist(owner, models);
           } catch {
           }
         }
-        options.changed();
+        options2.changed();
       } catch (error) {
         if (!valid()) return;
         models = [];
         scope = null;
         currentOwner = null;
-        options.failed(error);
+        options2.failed(error);
       }
     }
     function filter(query) {
@@ -2149,14 +2151,14 @@ var PiDishBrowser = (() => {
     max: "Maximum"
   });
   var thinkingLabel = (level) => Object.hasOwn(NS_THINKING_LABELS, level) ? NS_THINKING_LABELS[level] : level;
-  function createNewSessionPreferences(options) {
+  function createNewSessionPreferences(options2) {
     let harness = "pi", model = "", thinking = "";
     function preference(kind) {
-      return options.read(`pi-dish-new-${kind}:${harness}`) || (harness === "pi" ? options.read(`pi-dish-new-${kind}`) : "") || "";
+      return options2.read(`pi-dish-new-${kind}:${harness}`) || (harness === "pi" ? options2.read(`pi-dish-new-${kind}`) : "") || "";
     }
     function persist(kind, value) {
-      options.write(`pi-dish-new-${kind}:${harness}`, value);
-      if (harness === "pi") options.write(`pi-dish-new-${kind}`, value);
+      options2.write(`pi-dish-new-${kind}:${harness}`, value);
+      if (harness === "pi") options2.write(`pi-dish-new-${kind}`, value);
     }
     function restore(harnessId) {
       harness = harnessId;
@@ -2164,7 +2166,7 @@ var PiDishBrowser = (() => {
       thinking = preference("thinking");
     }
     function syncThinking() {
-      const selected = options.rows().find((row) => (row.selector || `${row.provider}/${row.id}`) === options.model.value);
+      const selected = options2.rows().find((row) => (row.selector || `${row.provider}/${row.id}`) === options2.model.value);
       let levels = Object.keys(NS_THINKING_LABELS);
       let disabled = selected?.reasoning === false;
       let note = disabled ? "The selected model does not support configurable thinking" : "";
@@ -2175,20 +2177,20 @@ var PiDishBrowser = (() => {
         else if (!levels.length) note = "This model has no configurable thinking levels";
         else note = `Valid for this model: ${levels.map(thinkingLabel).join(", ")}`;
       }
-      options.thinking.innerHTML = '<option value="">(default)</option>' + levels.map((level) => `<option value="${options.escapeHtml(level)}">${options.escapeHtml(thinkingLabel(level))}</option>`).join("");
+      options2.thinking.innerHTML = '<option value="">(default)</option>' + levels.map((level) => `<option value="${options2.escapeHtml(level)}">${options2.escapeHtml(thinkingLabel(level))}</option>`).join("");
       if (!levels.includes(thinking)) {
         thinking = "";
         persist("thinking", "");
       }
-      options.thinking.disabled = disabled;
-      options.thinking.value = disabled ? "" : thinking;
-      if (options.thinkingNote) options.thinkingNote.textContent = note;
+      options2.thinking.disabled = disabled;
+      options2.thinking.value = disabled ? "" : thinking;
+      if (options2.thinkingNote) options2.thinkingNote.textContent = note;
     }
     function render() {
-      const { html, enabled, hidden } = modelSelectOptionsHtml(options.rows(), options.escapeHtml);
-      options.model.innerHTML = html;
-      options.model.value = model && enabled.some((row) => (row.selector || `${row.provider}/${row.id}`) === model) ? model : "";
-      if (options.hiddenNote) options.hiddenNote.textContent = modelHiddenNote(hidden);
+      const { html, enabled, hidden } = modelSelectOptionsHtml(options2.rows(), options2.escapeHtml);
+      options2.model.innerHTML = html;
+      options2.model.value = model && enabled.some((row) => (row.selector || `${row.provider}/${row.id}`) === model) ? model : "";
+      if (options2.hiddenNote) options2.hiddenNote.textContent = modelHiddenNote(hidden);
       syncThinking();
     }
     return {
@@ -2219,12 +2221,12 @@ var PiDishBrowser = (() => {
       modelRoles: roles
     };
   }
-  function createNewSessionConfigPreview(options) {
+  function createNewSessionConfigPreview(options2) {
     let sequence = 0;
     let config = null;
     let owner = null;
     function current(target) {
-      const now = options.scope();
+      const now = options2.scope();
       return !!target && !!now && target.view === now.view && target.cwd === now.cwd && target.harnessId === now.harnessId && sameDirectoryHost(target.host, now.host);
     }
     function retire() {
@@ -2234,35 +2236,35 @@ var PiDishBrowser = (() => {
     }
     async function load(cwd) {
       retire();
-      const now = options.scope();
+      const now = options2.scope();
       if (!now || now.harnessId !== "omp") {
-        options.wrap.style.display = "none";
+        options2.wrap.style.display = "none";
         return;
       }
       const target = Object.freeze({ ...now, cwd: cwd ?? now.cwd, host: Object.freeze({ ...now.host }) });
       const version = sequence;
       const owns = () => version === sequence && current(target);
-      options.wrap.style.display = "";
-      options.values.textContent = "Loading\u2026";
-      for (const button of options.buttons) button.style.display = "none";
-      if (options.roles) options.roles.textContent = "";
+      options2.wrap.style.display = "";
+      options2.values.textContent = "Loading\u2026";
+      for (const button of options2.buttons) button.style.display = "none";
+      if (options2.roles) options2.roles.textContent = "";
       try {
         const params = target.cwd ? `?cwd=${encodeURIComponent(target.cwd)}` : "";
-        const response = await options.request(target.host, "/api/harnesses/omp/config" + params);
+        const response = await options2.request(target.host, "/api/harnesses/omp/config" + params);
         if (!owns()) return;
         const data = await response.json();
         if (!owns()) return;
         if (!response.ok) throw new Error(record5(data) && typeof data.error === "string" && data.error ? data.error : `HTTP ${response.status}`);
         config = decodeHarnessConfigPreview(data, target.cwd);
         owner = target;
-        options.values.textContent = `Model: ${config.defaultModel || "auto-select"} \xB7 Thinking: ${config.defaultThinkingLevel || "host default"}`;
-        if (options.roles) options.roles.textContent = "Roles: " + options.roleSummary(config.modelRoles);
-        for (const button of options.buttons) button.style.display = "";
+        options2.values.textContent = `Model: ${config.defaultModel || "auto-select"} \xB7 Thinking: ${config.defaultThinkingLevel || "host default"}`;
+        if (options2.roles) options2.roles.textContent = "Roles: " + options2.roleSummary(config.modelRoles);
+        for (const button of options2.buttons) button.style.display = "";
       } catch (error) {
         if (!owns()) return;
         config = null;
         owner = null;
-        options.values.textContent = `Defaults unavailable: ${error instanceof Error ? error.message : String(error)}`;
+        options2.values.textContent = `Defaults unavailable: ${error instanceof Error ? error.message : String(error)}`;
       }
     }
     return { load, retire, get config() {
@@ -2314,9 +2316,9 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/harness-settings.ts
-  function createHarnessSettings(options) {
-    const { root, escapeHtml: escapeHtml2, shortCwd: shortCwd2, parseModelRoleRef, composeModelRoleRef, modelRoleLevels } = options;
-    const AGENT_MODEL_ROLE_REFS = options.roleDefinitions.map((role) => `@${role.key}`);
+  function createHarnessSettings(options2) {
+    const { root, escapeHtml: escapeHtml2, shortCwd: shortCwd2, parseModelRoleRef, composeModelRoleRef, modelRoleLevels } = options2;
+    const AGENT_MODEL_ROLE_REFS = options2.roleDefinitions.map((role) => `@${role.key}`);
     let harnessSettings = null;
     let sequence = 0;
     const listeners = new AbortController();
@@ -2336,7 +2338,7 @@ var PiDishBrowser = (() => {
       return harnessSettings === view && isOpen();
     }
     function ownsHost(view) {
-      return sameDirectoryHost(view.host, options.host(view.scope.hostId));
+      return sameDirectoryHost(view.host, options2.host(view.scope.hostId));
     }
     function harnessSettingsError(message3) {
       $("modelRolesError").textContent = message3;
@@ -2351,14 +2353,14 @@ var PiDishBrowser = (() => {
     }
     function buildRoleRows(config) {
       const global = stringRecord(config?.globalModelRoles), effective = stringRecord(config?.modelRoles);
-      const canonical = new Set(options.roleDefinitions.map((role) => role.key));
-      return [...options.roleDefinitions, ...Object.keys(global).filter((key) => !canonical.has(key)).sort().map((key) => ({ key, name: key, description: "Custom role" }))].map((role) => {
+      const canonical = new Set(options2.roleDefinitions.map((role) => role.key));
+      return [...options2.roleDefinitions, ...Object.keys(global).filter((key) => !canonical.has(key)).sort().map((key) => ({ key, name: key, description: "Custom role" }))].map((role) => {
         const value = global[role.key] || "", effectiveValue = effective[role.key] || "";
         return { ...role, value, override: effectiveValue && effectiveValue !== value ? effectiveValue : null };
       });
     }
     async function request(host, url, body) {
-      const response = await options.request(host, url, body === void 0 ? void 0 : {
+      const response = await options2.request(host, url, body === void 0 ? void 0 : {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
@@ -2380,7 +2382,7 @@ var PiDishBrowser = (() => {
     }
     async function open(scope) {
       const version = ++sequence;
-      const endpoint = options.host(scope.hostId);
+      const endpoint = options2.host(scope.hostId);
       root.style.display = "flex";
       $("harnessSettingsTitle").textContent = `${scope.label} settings`;
       $("harnessSettingsScope").textContent = scope.cwd ? shortCwd2(scope.cwd) : "host default";
@@ -2421,7 +2423,7 @@ var PiDishBrowser = (() => {
         return;
       }
       view.config = config.value || null;
-      view.models = models.value || options.fallbackModels(view.host, scope.harnessId);
+      view.models = models.value || options2.fallbackModels(view.host, scope.harnessId);
       if (agents.value) {
         view.agents = agents.value.agents;
         view.settings = agents.value.settings;
@@ -2631,7 +2633,7 @@ var PiDishBrowser = (() => {
         if (Object.keys(agents).length) await request(view.host, `${base}/agents`, { agents, cwd: cwd || void 0 });
         if (Object.keys(roles).length) await request(view.host, `${base}/model-roles`, { roles, cwd: cwd || void 0 });
         if (owns(view)) close();
-        options.onSaved(view.scope);
+        options2.onSaved(view.scope);
       } catch (error) {
         if (owns(view)) harnessSettingsError(errorMessage(error));
       } finally {
@@ -2674,7 +2676,7 @@ var PiDishBrowser = (() => {
   function sessionSpawnKey(host, spawnId) {
     return JSON.stringify([host, spawnId]);
   }
-  function createSessionSpawns(options) {
+  function createSessionSpawns(options2) {
     const pending = /* @__PURE__ */ new Map();
     async function monitor(key, spawn) {
       try {
@@ -2682,16 +2684,16 @@ var PiDishBrowser = (() => {
         for (; ; ) {
           let response;
           try {
-            response = await options.request(spawn.endpoint, `/api/session-spawns/${encodeURIComponent(spawn.spawnId)}`);
+            response = await options2.request(spawn.endpoint, `/api/session-spawns/${encodeURIComponent(spawn.spawnId)}`);
           } catch {
-            await options.delay();
+            await options2.delay();
             continue;
           }
           const data = await response.json().catch(() => null);
           if (!response.ok && response.status !== 202) throw new Error(record7(data) && typeof data.error === "string" && data.error ? data.error : `spawn status failed (${response.status})`);
           const status = decodeSpawnStatus(data);
           if (status.status === "starting") {
-            await options.delay();
+            await options2.delay();
             continue;
           }
           if (status.status === "error") throw new Error(status.error);
@@ -2699,30 +2701,30 @@ var PiDishBrowser = (() => {
           break;
         }
         for (; ; ) {
-          await options.loadSessions();
-          if (options.hasSession(sessionId, spawn.host)) {
+          await options2.loadSessions();
+          if (options2.hasSession(sessionId, spawn.host)) {
             pending.delete(key);
-            options.changed();
-            const showing = options.current() === key;
-            if (showing) options.stashPrompt();
-            options.migratePrompt(key, spawn.host, sessionId);
+            options2.changed();
+            const showing = options2.current() === key;
+            if (showing) options2.stashPrompt();
+            options2.migratePrompt(key, spawn.host, sessionId);
             if (showing) {
-              options.status("Session created");
-              options.selectSession(sessionId, spawn.host);
+              options2.status("Session created");
+              options2.selectSession(sessionId, spawn.host);
             }
             return;
           }
-          if (options.current() === key) options.status("Session created \u2014 connecting the UI\u2026", "working");
-          await options.delay();
+          if (options2.current() === key) options2.status("Session created \u2014 connecting the UI\u2026", "working");
+          await options2.delay();
         }
       } catch (error) {
         pending.delete(key);
-        options.changed();
+        options2.changed();
         const message3 = error instanceof Error ? error.message : String(error);
-        if (options.current() === key) {
-          options.showFailure(key, message3, spawn);
-          options.status(`Session start failed: ${message3}`, "error");
-        } else options.discardPrompt(key);
+        if (options2.current() === key) {
+          options2.showFailure(key, message3, spawn);
+          options2.status(`Session start failed: ${message3}`, "error");
+        } else options2.discardPrompt(key);
       }
     }
     async function submit(input) {
@@ -2730,8 +2732,8 @@ var PiDishBrowser = (() => {
       const target = input.target ? Object.freeze({ ...input.target }) : void 0;
       const { name, cwd, model, thinking, draft, ownsView, onAccepted } = input;
       const harness = input.harness || "pi";
-      const label = options.harnessLabel(harness);
-      const data = await sendJson(options.request, host, "/api/sessions/new", {
+      const label = options2.harnessLabel(harness);
+      const data = await sendJson(options2.request, host, "/api/sessions/new", {
         name: name || void 0,
         cwd: cwd || void 0,
         model: model || void 0,
@@ -2752,10 +2754,10 @@ var PiDishBrowser = (() => {
         harnessLabel: label
       });
       pending.set(key, spawn);
-      if (draft) options.saveDraft(key, draft);
+      if (draft) options2.saveDraft(key, draft);
       onAccepted?.();
-      if (ownsView()) options.showPending(key);
-      else options.changed();
+      if (ownsView()) options2.showPending(key);
+      else options2.changed();
       void monitor(key, spawn);
       return key;
     }
@@ -2776,9 +2778,13 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/helper-format.ts
-  function escapeHtml(text13) {
-    if (text13 == null || text13 === "") return "";
-    return String(text13).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  function escapeHtml(text14) {
+    if (text14 == null || text14 === "") return "";
+    return String(text14).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function stripAnsi(text14) {
+    if (text14 == null || text14 === "") return "";
+    return String(text14).replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "").replace(/\x1b\[[0-9;:?]*[ -\/]*[@-~]/g, "").replace(/\x1b[ -\/]*./g, "");
   }
   function formatTokens(tokens2) {
     if (!tokens2 || tokens2 === 0) return "0";
@@ -2852,9 +2858,9 @@ var PiDishBrowser = (() => {
     if (!cwd) return "";
     return cwd.replace(/^\/home\/[^/]+\//, "~/").replace(/^\/home\/[^/]+$/, "~");
   }
-  function truncate(text13, maxLen, suffix = " \u2026 (truncated)") {
-    if (!text13 || text13.length <= maxLen) return text13;
-    return text13.slice(0, maxLen) + suffix;
+  function truncate(text14, maxLen, suffix = " \u2026 (truncated)") {
+    if (!text14 || text14.length <= maxLen) return text14;
+    return text14.slice(0, maxLen) + suffix;
   }
   function tmuxPrefixSeq(prefix) {
     if (typeof prefix !== "string") return null;
@@ -2874,6 +2880,9 @@ var PiDishBrowser = (() => {
   function sessionKey(hostId, sessionId) {
     const id = sessionId == null ? "" : String(sessionId);
     return hostId ? `${hostId} ${id}` : id;
+  }
+  function sessionRefKey(session) {
+    return sessionKey(session && session.host, session && session.id);
   }
   function hostDisplayLabel(host) {
     if (!host) return "";
@@ -3008,12 +3017,12 @@ var PiDishBrowser = (() => {
     }
     return true;
   }
-  function countOccurrences(text13, token) {
-    if (!text13 || !token) return 0;
-    let n = 0, i = text13.indexOf(token);
+  function countOccurrences(text14, token) {
+    if (!text14 || !token) return 0;
+    let n = 0, i = text14.indexOf(token);
     while (i !== -1) {
       n++;
-      i = text13.indexOf(token, i + token.length);
+      i = text14.indexOf(token, i + token.length);
     }
     return n;
   }
@@ -3073,8 +3082,8 @@ var PiDishBrowser = (() => {
     result += escapeHtml(str.slice(last));
     return result;
   }
-  function highlightTokens(text13, tokens2) {
-    const str = String(text13);
+  function highlightTokens(text14, tokens2) {
+    const str = String(text14);
     const lower = str.toLowerCase();
     const ranges = [];
     for (const t of tokens2) {
@@ -3103,8 +3112,8 @@ var PiDishBrowser = (() => {
   // src/browser/new-session.ts
   var NEW_SESSION_HARNESS_KEY = "pi-dish-new-harness";
   var HOST_KEY = "pi-dish-new-host";
-  function createNewSession(options) {
-    const { root, storage, models, request } = options;
+  function createNewSession(options2) {
+    const { root, storage, models, request } = options2;
     function element(id) {
       const node = root.querySelector("#" + id);
       if (!(node instanceof HTMLElement)) throw new Error(`Missing new-session control: ${id}`);
@@ -3137,12 +3146,12 @@ var PiDishBrowser = (() => {
     let disposed = false;
     const message3 = (error2) => error2 instanceof Error ? error2.message : String(error2);
     const isOpen = () => !disposed && root.classList.contains("new-session-open");
-    const host = () => (selectedHostId ? options.host(selectedHostId) : null) || options.self();
+    const host = () => (selectedHostId ? options2.host(selectedHostId) : null) || options2.self();
     const hostId = () => host().hostId || null;
     const cwd = () => cwdInput.value.trim();
     const selectedHarness = () => harnessSelect.value || harnessId || "pi";
     const supports = (capability) => !host().capabilities || host().capabilities?.[capability] === true;
-    const hostOptions = () => options.hosts().filter((row) => row.self || !options.hostDown(row));
+    const hostOptions = () => options2.hosts().filter((row) => row.self || !options2.hostDown(row));
     const error = (value) => {
       if (!disposed) element("nsError").textContent = value;
     };
@@ -3193,7 +3202,7 @@ var PiDishBrowser = (() => {
     }
     const harnesses = createHarnessDiscovery({
       selectedHostId: hostId,
-      selfHostId: () => options.self().hostId,
+      selfHostId: () => options2.self().hostId,
       requestPicker: readHarnesses,
       requestBackground: readHarnesses,
       preferredHarness: () => storage.getItem(NEW_SESSION_HARNESS_KEY),
@@ -3206,7 +3215,7 @@ var PiDishBrowser = (() => {
         if (isOpen()) changeHarness(selectedHarness());
       },
       onCacheChange: () => {
-        if (!disposed) options.harnessCacheChanged();
+        if (!disposed) options2.harnessCacheChanged();
       }
     });
     const harnessLabel = (id) => harnesses.rows().find((row) => row.id === id)?.label || (id === "pi" ? "Pi" : id);
@@ -3318,8 +3327,8 @@ var PiDishBrowser = (() => {
       workspaceEvents = new AbortController();
       const endpoint = Object.freeze({ ...host() }), view = generation;
       const seen = /* @__PURE__ */ new Set(), values = [];
-      for (const session of [...options.sessionState.sessions.active, ...options.sessionState.sessions.previous]) {
-        if (options.multiHost() && (session.host || null) !== endpoint.hostId) continue;
+      for (const session of [...options2.sessionState.sessions.active, ...options2.sessionState.sessions.previous]) {
+        if (options2.multiHost() && (session.host || null) !== endpoint.hostId) continue;
         if (typeof session.cwd === "string" && session.cwd && !seen.has(session.cwd)) {
           seen.add(session.cwd);
           values.push(session.cwd);
@@ -3342,7 +3351,7 @@ var PiDishBrowser = (() => {
       generation++;
       spawnButton.disabled = false;
       spawnButton.textContent = "+ New session";
-      options.closeOtherViews();
+      options2.closeOtherViews();
       root.classList.add("new-session-open");
       draft = value.draft || null;
       nameInput.value = "";
@@ -3361,7 +3370,7 @@ var PiDishBrowser = (() => {
         models.clear();
         try {
           const endpoint = Object.freeze({ ...host() }), harness = harnessId, view = generation;
-          const cached = JSON.parse(storage.getItem(modelsCacheKey(harness, endpoint.hostId, options.self().hostId)) || "null");
+          const cached = JSON.parse(storage.getItem(modelsCacheKey(harness, endpoint.hostId, options2.self().hostId)) || "null");
           if (Array.isArray(cached)) models.seed(
             { host: endpoint, harnessId: harness },
             cached,
@@ -3386,23 +3395,23 @@ var PiDishBrowser = (() => {
       directoryTree = null;
       workspaceEvents.abort();
       root.classList.remove("new-session-open");
-      options.closeSettings();
+      options2.closeSettings();
       clearTimeout(refreshTimer);
       config.retire();
       autocomplete.hide();
     }
     function captureView() {
-      const view = generation, open2 = isOpen(), selection = options.sessionState.captureSelection(), pending = options.currentSpawn();
+      const view = generation, open2 = isOpen(), selection = options2.sessionState.captureSelection(), pending = options2.currentSpawn();
       const endpoint = Object.freeze({ ...host() }), harness = selectedHarness(), directory = cwd();
-      return () => !disposed && (!open2 || sameDirectoryHost(endpoint, host()) && harness === selectedHarness() && directory === cwd()) && view === generation && open2 === isOpen() && pending === options.currentSpawn() && (selection ? options.sessionState.ownsSelection(selection) : !options.sessionState.currentSession);
+      return () => !disposed && (!open2 || sameDirectoryHost(endpoint, host()) && harness === selectedHarness() && directory === cwd()) && view === generation && open2 === isOpen() && pending === options2.currentSpawn() && (selection ? options2.sessionState.ownsSelection(selection) : !options2.sessionState.currentSession);
     }
     function submit(value = {}) {
       if (disposed) return Promise.reject(new Error("New-session form is no longer available"));
       const target = value.host === void 0 ? hostId() : value.host;
-      const endpoint = typeof target === "object" && target ? target : options.host(target);
+      const endpoint = typeof target === "object" && target ? target : options2.host(target);
       if (!endpoint) return Promise.reject(new Error("Host is no longer available"));
       const view = generation, submittedDraft = value.draft === void 0 ? draft : value.draft;
-      return options.spawns.submit({
+      return options2.spawns.submit({
         ...value,
         host: endpoint,
         draft: submittedDraft,
@@ -3414,9 +3423,9 @@ var PiDishBrowser = (() => {
     }
     async function create(cwdValue, targetHost = hostId()) {
       if (disposed) return;
-      const selected = options.host(targetHost);
+      const selected = options2.host(targetHost);
       if (!selected) {
-        options.status("Host is no longer available", "error");
+        options2.status("Host is no longer available", "error");
         return;
       }
       const endpoint = Object.freeze({ ...selected }), ownsView = captureView();
@@ -3428,12 +3437,12 @@ var PiDishBrowser = (() => {
           target = selectedTarget();
           harness = selectedHarness();
         }
-        if (ownsView()) options.status(target ? "Spawning in tmux\u2026" : "Creating session...", "working");
+        if (ownsView()) options2.status(target ? "Spawning in tmux\u2026" : "Creating session...", "working");
         const directory = cwdValue === void 0 ? cwd() : cwdValue;
         if (directory) storage.setItem("pi-dish-cwd", directory);
         await submit({ cwd: directory, target, harness, host: endpoint, ownsView, draft: null });
       } catch (error2) {
-        if (ownsView()) options.status(`Error: ${message3(error2)}`, "error");
+        if (ownsView()) options2.status(`Error: ${message3(error2)}`, "error");
       }
     }
     async function spawn() {
@@ -3545,18 +3554,18 @@ var PiDishBrowser = (() => {
       totalRecords: typeof value.totalRecords === "number" && Number.isFinite(value.totalRecords) ? value.totalRecords : sessions.length
     };
   }
-  function createRecovery(options) {
-    const doc = options.root.ownerDocument;
+  function createRecovery(options2) {
+    const doc = options2.root.ownerDocument;
     const element = (id) => {
       const value = doc.getElementById(id);
       if (!value) throw new Error("Missing recovery element: " + id);
       return value;
     };
-    const apiFetch = options.request;
+    const apiFetch = options2.request;
     const apiSend = (host, path, payload, method) => sendJson(apiFetch, host, path, payload, method);
-    const effectiveHosts = options.hosts;
-    const hostIsDown = options.down;
-    const confirm = options.confirm;
+    const effectiveHosts = options2.hosts;
+    const hostIsDown = options2.down;
+    const confirm = options2.confirm;
     let disposed = false;
     let preferencesSeq = 0;
     let preferenceEvents = null;
@@ -3574,7 +3583,7 @@ var PiDishBrowser = (() => {
     let recoveryHostId = null;
     let recoveryViewSeq = 0;
     function recoveryCapableHosts() {
-      return effectiveHosts().filter((host) => options.supports(host));
+      return effectiveHosts().filter((host) => options2.supports(host));
     }
     function selectRecoveryHost(hosts, preferredId) {
       return hosts.find((host) => host.hostId === preferredId) || hosts.find((host) => host.hostId === recoveryHostId) || hosts[0];
@@ -3601,7 +3610,7 @@ var PiDishBrowser = (() => {
       }
       const unavailable = doc.getElementById("recoveryUnavailableHosts");
       if (unavailable) {
-        const missing = effectiveHosts().filter((host) => !options.supports(host));
+        const missing = effectiveHosts().filter((host) => !options2.supports(host));
         unavailable.textContent = missing.map((host) => {
           const reason = hostIsDown(host) ? "unreachable or needs a token" : host.capabilities ? "update and restart pi-dish to enable recovery" : "capabilities not yet available";
           return hostDisplayLabel(host) + ": " + reason + ".";
@@ -3614,8 +3623,8 @@ var PiDishBrowser = (() => {
       const mountSeq = preferencesSeq;
       const section = doc.getElementById("recoveryPreferences");
       if (!section || disposed) return;
-      await options.fleetReady();
-      if (disposed || mountSeq !== preferencesSeq || !section.isConnected || !options.settingsOpen()) return;
+      await options2.fleetReady();
+      if (disposed || mountSeq !== preferencesSeq || !section.isConnected || !options2.settingsOpen()) return;
       const events = preferenceEvents = new AbortController();
       const listener = { signal: events.signal };
       section.hidden = false;
@@ -3633,10 +3642,10 @@ var PiDishBrowser = (() => {
       const status = section.querySelector("#recoverySettingsStatus");
       const report = section.querySelector("#openRecoveryReport");
       hostSelect.innerHTML = recoveryHostOptions(recoveryCapableHosts());
-      hostSelect.value = selectRecoveryHost(recoveryCapableHosts(), options.selectedHost())?.hostId || "";
+      hostSelect.value = selectRecoveryHost(recoveryCapableHosts(), options2.selectedHost())?.hostId || "";
       let seq = 0;
       const selectedHost = () => recoveryCapableHosts().find((host) => (host.hostId || "") === hostSelect.value);
-      const ownsView = () => !disposed && mountSeq === preferencesSeq && section.isConnected && options.settingsOpen();
+      const ownsView = () => !disposed && mountSeq === preferencesSeq && section.isConnected && options2.settingsOpen();
       const owns = (request, host) => ownsView() && seq === request && sameHost(host, selectedHost());
       const load = async () => {
         if (!ownsView()) return;
@@ -3688,10 +3697,10 @@ var PiDishBrowser = (() => {
       }, listener);
       void load();
       refreshRecoveryHosts();
-      void options.refreshFleet();
+      void options2.refreshFleet();
     }
     function isRecoveryViewOpen() {
-      return !disposed && options.root.classList.contains("recovery-open");
+      return !disposed && options2.root.classList.contains("recovery-open");
     }
     function closeRecoveryView() {
       if (disposed) return;
@@ -3701,13 +3710,13 @@ var PiDishBrowser = (() => {
       reportEvents?.abort();
       reportEvents = null;
       reportEndpoint = void 0;
-      options.root.classList.remove("recovery-open");
+      options2.root.classList.remove("recovery-open");
     }
     function openRecoveryView(hostId) {
       const hosts = recoveryCapableHosts();
       if (disposed || !hosts.length) return;
-      options.closeOtherViews();
-      options.root.classList.add("recovery-open");
+      options2.closeOtherViews();
+      options2.root.classList.add("recovery-open");
       const hostSelect = element("recoveryReportHost");
       hostSelect.innerHTML = recoveryHostOptions(hosts);
       hostSelect.value = selectRecoveryHost(hosts, hostId)?.hostId || "";
@@ -3857,9 +3866,9 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/bounce.ts
-  function createBounce(options) {
-    const document2 = options.document, apiFetch = options.request, sessionState = options.sessionState;
-    const effectiveHosts = options.hosts, refreshSessions = options.refreshSessions, selectSession = options.selectSession;
+  function createBounce(options2) {
+    const document2 = options2.document, apiFetch = options2.request, sessionState = options2.sessionState;
+    const effectiveHosts = options2.hosts, refreshSessions = options2.refreshSessions, selectSession = options2.selectSession;
     const element = (id) => {
       const value = document2.getElementById(id);
       if (!value) throw new Error("Missing bounce element: " + id);
@@ -3896,7 +3905,7 @@ var PiDishBrowser = (() => {
       updateBounceSelection();
       element("bounceHosts").textContent = "Loading hosts\u2026";
       element("bounceNotice").textContent = "";
-      await options.fleetReady();
+      await options2.fleetReady();
       if (generation !== bounceGeneration || !isBounceViewOpen()) return;
       const mode = bounceMode(element("bounceMode").value);
       bounceHosts = effectiveHosts().map((host) => ({
@@ -4118,7 +4127,7 @@ var PiDishBrowser = (() => {
       await refreshSessions();
       if (!bounceHostElement(state)) return;
       const id = affected?.replacementId || affected?.sessionId;
-      if (affected && owner && id && !sessionState.findSession(id, owner.host)) await options.loadPrevious();
+      if (affected && owner && id && !sessionState.findSession(id, owner.host)) await options2.loadPrevious();
       if (!bounceHostElement(state)) return;
       for (const { key } of completed) bouncePendingRestarts.delete(key);
       if (!affected || !id || !owner || !sessionState.ownsSelection(owner)) return;
@@ -4184,8 +4193,8 @@ var PiDishBrowser = (() => {
       } }];
     });
   }
-  function createSessionRelations(options) {
-    const { document: document2, window, sessionState } = options;
+  function createSessionRelations(options2) {
+    const { document: document2, window, sessionState } = options2;
     const element = (id) => document2.getElementById(id);
     let sessionRelationsSeq = 0;
     let disposed = false;
@@ -4195,7 +4204,7 @@ var PiDishBrowser = (() => {
     const events = new AbortController();
     let indexingTimer;
     function sameEndpoint(host, endpoint) {
-      const current = options.endpoint(host);
+      const current = options2.endpoint(host);
       return !!endpoint && !!current && current.base === endpoint.base && (current.token || "") === (endpoint.token || "");
     }
     const owns = (owner, endpoint = renderEndpoint) => !disposed && sessionState.ownsSelection(owner) && !!owner && sameEndpoint(owner.host, endpoint);
@@ -4387,14 +4396,14 @@ var PiDishBrowser = (() => {
     }
     async function loadSessionRelations(owner) {
       if (disposed || !owner || !sessionState.ownsSelection(owner)) return;
-      const resolved = options.endpoint(owner.host);
+      const resolved = options2.endpoint(owner.host);
       if (!resolved) return;
       const endpoint = Object.freeze({ ...resolved });
       const seq = ++sessionRelationsSeq;
       clearTimeout(indexingTimer);
       const current = () => seq === sessionRelationsSeq && owns(owner, endpoint);
       try {
-        const res = await options.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/related`);
+        const res = await options2.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/related`);
         const data = await res.json();
         if (!current()) return;
         if (!res.ok) throw new Error(record8(data) && text6(data.error) || `HTTP ${res.status}`);
@@ -4409,16 +4418,16 @@ var PiDishBrowser = (() => {
         }
       }
     }
-    async function openRelatedSession(id, owner, endpoint = owner ? options.endpoint(owner.host) : null) {
+    async function openRelatedSession(id, owner, endpoint = owner ? options2.endpoint(owner.host) : null) {
       if (!owns(owner, endpoint) || !owner) return;
       const captured = endpoint ? Object.freeze({ ...endpoint }) : null;
-      if (!sessionState.findSession(id, owner.host)) await options.loadPrevious();
+      if (!sessionState.findSession(id, owner.host)) await options2.loadPrevious();
       if (!owns(owner, captured)) return;
       if (!sessionState.findSession(id, owner.host)) {
-        options.status("Related session is not available yet", "error");
+        options2.status("Related session is not available yet", "error");
         return;
       }
-      await options.selectSession(id, { host: owner.host });
+      await options2.selectSession(id, { host: owner.host });
     }
     return {
       clear: clearSessionRelations,
@@ -4439,8 +4448,8 @@ var PiDishBrowser = (() => {
     if (!record8(value) || !Array.isArray(value.matches)) throw new Error("Invalid session search response");
     return value.matches.flatMap((match) => record8(match) && typeof match.index === "number" && Number.isInteger(match.index) && match.index >= 0 ? [{ index: match.index, role: typeof match.role === "string" ? match.role : "" }] : []);
   }
-  function createSessionSearch(options) {
-    const { document: document2, sessionState } = options;
+  function createSessionSearch(options2) {
+    const { document: document2, sessionState } = options2;
     const element = (id) => {
       const value = document2.getElementById(id);
       if (!value) throw new Error("Missing search element: " + id);
@@ -4487,12 +4496,12 @@ var PiDishBrowser = (() => {
       else close();
     }
     function sameEndpoint(owner, endpoint) {
-      const current = options.endpoint(owner.host);
+      const current = options2.endpoint(owner.host);
       return !!current && current.base === endpoint.base && (current.token || "") === (endpoint.token || "");
     }
     async function run(value, { mode = "message", closeIfEmpty = false } = {}) {
       const owner = sessionState.captureSelection();
-      const resolved = owner && options.endpoint(owner.host);
+      const resolved = owner && options2.endpoint(owner.host);
       if (disposed || !owner || !resolved) return;
       const endpoint = Object.freeze({ ...resolved }), seq = ++sequence;
       const owns = () => !disposed && seq === sequence && sessionState.ownsSelection(owner) && sameEndpoint(owner, endpoint);
@@ -4500,13 +4509,13 @@ var PiDishBrowser = (() => {
       try {
         const params = new URLSearchParams({ q: value });
         if (mode !== "message") params.set("mode", mode);
-        const response = await options.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/search?${params}`);
+        const response = await options2.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/search?${params}`);
         const data = await response.json();
         if (!owns()) return;
         if (!response.ok || record8(data) && typeof data.error === "string" && data.error) throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
         query = value;
         const decoded = decodeSessionSearch(data);
-        matches = options.focusMode() ? decoded.filter((match) => match.role !== "toolResult") : decoded;
+        matches = options2.focusMode() ? decoded.filter((match) => match.role !== "toolResult") : decoded;
         pos = matches.length - 1;
         if (matches.length) await jump();
         else if (closeIfEmpty) {
@@ -4523,7 +4532,7 @@ var PiDishBrowser = (() => {
     }
     async function jump() {
       const owner = sessionState.captureSelection(), match = matches[pos], seq = sequence, tokens2 = query.split(/\s+/).filter(Boolean);
-      const resolved = owner && options.endpoint(owner.host);
+      const resolved = owner && options2.endpoint(owner.host);
       if (disposed || !owner || !match || !resolved) return;
       const endpoint = Object.freeze({ ...resolved });
       const owns = () => !disposed && seq === sequence && sessionState.ownsSelection(owner) && sameEndpoint(owner, endpoint);
@@ -4541,7 +4550,7 @@ var PiDishBrowser = (() => {
       try {
         const container = element("messages");
         let guard = 0;
-        while (owns() && options.oldestIndex() !== null && match.index < options.oldestIndex() && options.hasOlder() && guard++ < 200) await options.loadOlder();
+        while (owns() && options2.oldestIndex() !== null && match.index < options2.oldestIndex() && options2.hasOlder() && guard++ < 200) await options2.loadOlder();
         if (!owns()) return;
         const el = container.querySelector(`[data-msg-index="${match.index}"]`);
         if (!el) {
@@ -4553,9 +4562,9 @@ var PiDishBrowser = (() => {
         clearMarks();
         el.classList.add("search-current");
         markSearchTokens(el, tokens2);
-        options.stopFollowing();
+        options2.stopFollowing();
         el.scrollIntoView({ block: "center" });
-        options.updateJumpButton(container);
+        options2.updateJumpButton(container);
         updateCount();
       } finally {
         if (navigation === active) navigation = null;
@@ -4617,8 +4626,8 @@ var PiDishBrowser = (() => {
     const textNodes = [];
     while (walker.nextNode()) textNodes.push(walker.currentNode);
     for (const node of textNodes) {
-      const text13 = node.textContent || "";
-      const lower = text13.toLowerCase();
+      const text14 = node.textContent || "";
+      const lower = text14.toLowerCase();
       const ranges = [];
       for (const token of tokens2) {
         let from = 0, at;
@@ -4633,14 +4642,14 @@ var PiDishBrowser = (() => {
       let cursor = 0;
       for (const [start, end] of ranges) {
         if (start < cursor) continue;
-        frag.appendChild(document2.createTextNode(text13.slice(cursor, start)));
+        frag.appendChild(document2.createTextNode(text14.slice(cursor, start)));
         const mark = document2.createElement("mark");
         mark.className = "search-mark";
-        mark.textContent = text13.slice(start, end);
+        mark.textContent = text14.slice(start, end);
         frag.appendChild(mark);
         cursor = end;
       }
-      frag.appendChild(document2.createTextNode(text13.slice(cursor)));
+      frag.appendChild(document2.createTextNode(text14.slice(cursor)));
       node.replaceWith(frag);
     }
   }
@@ -4720,8 +4729,8 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/skills.ts
-  function createSkills(options) {
-    const document2 = options.root.ownerDocument, sessionState = options.sessionState;
+  function createSkills(options2) {
+    const document2 = options2.root.ownerDocument, sessionState = options2.sessionState;
     const element = (id) => {
       const value = document2.getElementById(id);
       if (!value) throw new Error("Missing skills element: " + id);
@@ -4733,7 +4742,7 @@ var PiDishBrowser = (() => {
     let indexingTimer, activationTimer;
     const message3 = (error) => error instanceof Error ? error.message : String(error);
     function owns(seq = skillsSeq) {
-      const current = options.self();
+      const current = options2.self();
       return seq === skillsSeq && isSkillsViewOpen() && !!viewHost && current.hostId === viewHost.hostId && current.base === viewHost.base && (current.token || "") === (viewHost.token || "");
     }
     function retireBody() {
@@ -4743,7 +4752,7 @@ var PiDishBrowser = (() => {
     async function read(path) {
       const host = viewHost;
       if (!host) throw new Error("Skills host is no longer available");
-      const response = await options.request(host, path);
+      const response = await options2.request(host, path);
       const data = await response.json();
       if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
       return data;
@@ -4756,14 +4765,14 @@ var PiDishBrowser = (() => {
     let skillsDetail = null;
     let skillsSeq = 0;
     function isSkillsViewOpen() {
-      return !disposed && options.root.classList.contains("skills-open");
+      return !disposed && options2.root.classList.contains("skills-open");
     }
     function openSkillsView() {
       if (disposed) return;
       closeSkillsView();
-      options.closeOtherViews();
-      viewHost = Object.freeze({ ...options.self() });
-      options.root.classList.add("skills-open");
+      options2.closeOtherViews();
+      viewHost = Object.freeze({ ...options2.self() });
+      options2.root.classList.add("skills-open");
       skillsDetailPath = null;
       loadSkillsDirectory();
     }
@@ -4774,7 +4783,7 @@ var PiDishBrowser = (() => {
       headerEvents.abort();
       clearTimeout(indexingTimer);
       clearTimeout(activationTimer);
-      options.root.classList.remove("skills-open");
+      options2.root.classList.remove("skills-open");
     }
     function refreshSkillsView() {
       if (skillsDetailPath) openSkillDetail(skillsDetailPath, { force: true });
@@ -5030,8 +5039,8 @@ var PiDishBrowser = (() => {
         latestHtml = `<div class="latest"><a class="skill-activation">latest activation: ${escapeHtml(label)} \u2192</a>
         <span>${formatRelativeTime(cov.latest.ts)}${cov.latest.model ? " \xB7 " + escapeHtml(cov.latest.model) : ""}</span></div>`;
       }
-      const apiUrl = options.origin() + "/api/skills/activations?skill=" + encodeURIComponent(skill ? skill.skill : cov.skill);
-      const covUrl = options.origin() + "/api/skills/coverage?skill=" + encodeURIComponent(skill ? skill.skill : cov.skill);
+      const apiUrl = options2.origin() + "/api/skills/activations?skill=" + encodeURIComponent(skill ? skill.skill : cov.skill);
+      const covUrl = options2.origin() + "/api/skills/coverage?skill=" + encodeURIComponent(skill ? skill.skill : cov.skill);
       body.innerHTML = `<div class="skills-detail-wrap"><div class="cols">
       <div class="main-col">
         <div class="d-path" data-path="${escapeHtml(cov.skill)}" title="Copy path">${escapeHtml(cov.skill)}</div>
@@ -5069,13 +5078,13 @@ var PiDishBrowser = (() => {
     </div></div>`;
       body.querySelector(".d-path")?.addEventListener("click", () => {
         if (!owns(seq)) return;
-        options.copy(cov.skill);
-        options.status("Skill path copied");
+        options2.copy(cov.skill);
+        options2.status("Skill path copied");
       }, { signal: bodyEvents.signal });
       body.querySelector(".api-box")?.addEventListener("click", () => {
         if (!owns(seq)) return;
-        options.copy(apiUrl);
-        options.status("Activations URL copied");
+        options2.copy(apiUrl);
+        options2.status("Activations URL copied");
       }, { signal: bodyEvents.signal });
       body.querySelector(".skill-activation")?.addEventListener("click", () => {
         if (owns(seq) && cov.latest) void openSkillActivation(cov.latest.sessionId, cov.latest.entryId);
@@ -5104,7 +5113,7 @@ var PiDishBrowser = (() => {
       const draft = buildRefineDraft(skill, skillsDetail, skillsRefine || { mode: "default", discovered: false, skillName: "", mdPath: "" });
       const cwd = skill.baseDir || skill.filePath.replace(/\/SKILL\.md$/, "");
       closeSkillsView();
-      options.refine({ cwd, draft, host: viewHost.hostId });
+      options2.refine({ cwd, draft, host: viewHost.hostId });
     }
     function buildRefineDraft(skill, cov, refine) {
       const u = skill.usage || {};
@@ -5123,8 +5132,8 @@ var PiDishBrowser = (() => {
       ];
       if (cold.length) parts.push("Sections never read since the last edit: " + cold.join("; "));
       parts.push(
-        "Coverage detail: " + options.origin() + "/api/skills/coverage?skill=" + encodeURIComponent(skill.filePath),
-        "Raw activations (NDJSON): " + options.origin() + "/api/skills/activations?skill=" + encodeURIComponent(skill.filePath),
+        "Coverage detail: " + options2.origin() + "/api/skills/coverage?skill=" + encodeURIComponent(skill.filePath),
+        "Raw activations (NDJSON): " + options2.origin() + "/api/skills/activations?skill=" + encodeURIComponent(skill.filePath),
         ""
       );
       if (!usesSkillLead) {
@@ -5139,10 +5148,10 @@ var PiDishBrowser = (() => {
       const endpoint = viewHost;
       closeSkillsView();
       const navigation = skillsSeq;
-      const current = () => !disposed && navigation === skillsSeq && options.self().hostId === endpoint.hostId && options.self().base === endpoint.base && (options.self().token || "") === (endpoint.token || "");
-      if (!sessionState.findSession(id, endpoint.hostId)) await options.loadPrevious();
+      const current = () => !disposed && navigation === skillsSeq && options2.self().hostId === endpoint.hostId && options2.self().base === endpoint.base && (options2.self().token || "") === (endpoint.token || "");
+      if (!sessionState.findSession(id, endpoint.hostId)) await options2.loadPrevious();
       if (!current() || !sessionState.findSession(id, endpoint.hostId)) return;
-      const selecting = options.selectSession(id, { host: endpoint.hostId });
+      const selecting = options2.selectSession(id, { host: endpoint.hostId });
       const owner = sessionState.captureSelection(), selectedView = skillsSeq;
       await selecting;
       if (!entryId || !owner || !sessionState.ownsSelection(owner) || owner.id !== id || owner.host !== endpoint.hostId) return;
@@ -5216,22 +5225,22 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/search-view.ts
-  function createSearchView(options) {
-    const document2 = options.root.ownerDocument, sessionState = options.sessionState;
+  function createSearchView(options2) {
+    const document2 = options2.root.ownerDocument, sessionState = options2.sessionState;
     const element = (id) => {
       const value = document2.getElementById(id);
       if (!value) throw new Error("Missing search view element: " + id);
       return value;
     };
-    const effectiveHosts = options.hosts, fanoutHosts = options.fanout, scopeQuery = options.scope;
-    const hostChipHtml = (host) => options.hostChip(host || null);
+    const effectiveHosts = options2.hosts, fanoutHosts = options2.fanout, scopeQuery = options2.scope;
+    const hostChipHtml = (host) => options2.hostChip(host || null);
     const isMultiHost = () => effectiveHosts().length > 1;
     let disposed = false;
     let rowEvents = new AbortController();
     const events = new AbortController();
     let view = 0;
     function sameHost(host) {
-      const current = options.host(host.hostId);
+      const current = options2.host(host.hostId);
       return !!current && current.hostId === host.hostId && current.base === host.base && (current.token || "") === (host.token || "");
     }
     const message3 = (error) => error instanceof Error ? error.message : String(error);
@@ -5241,17 +5250,17 @@ var PiDishBrowser = (() => {
     let searchViewTimer;
     let searchViewRepollTimer;
     function isSearchViewOpen() {
-      return !disposed && options.root.classList.contains("search-open");
+      return !disposed && options2.root.classList.contains("search-open");
     }
     function openSearchView(initialQuery) {
       if (disposed) return;
       closeSearchView();
-      options.closeOtherViews();
+      options2.closeOtherViews();
       view++;
       if (typeof initialQuery === "string") searchViewQuery = initialQuery;
       const input2 = element("searchViewInput");
       input2.value = searchViewQuery;
-      options.root.classList.add("search-open");
+      options2.root.classList.add("search-open");
       input2.focus();
       input2.select();
       runSearchView();
@@ -5261,7 +5270,7 @@ var PiDishBrowser = (() => {
       view++;
       rowEvents.abort();
       searchViewSeq += 1;
-      options.root.classList.remove("search-open");
+      options2.root.classList.remove("search-open");
       clearTimeout(searchViewTimer);
       clearTimeout(searchViewRepollTimer);
     }
@@ -5315,9 +5324,9 @@ var PiDishBrowser = (() => {
       try {
         await Promise.all(hosts.map(async (host, i) => {
           try {
-            const r = await options.request(host, "/api/search?" + params, { timeoutMs: 2e4 });
+            const r = await options2.request(host, "/api/search?" + params, { timeoutMs: 2e4 });
             if (r.status === 401) {
-              if (sameHost(host)) options.connection(host, "blocked");
+              if (sameHost(host)) options2.connection(host, "blocked");
               throw new Error("needs a token");
             }
             const data = await r.json();
@@ -5325,11 +5334,11 @@ var PiDishBrowser = (() => {
             if (!r.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${r.status}`);
             payloads[i] = decodeSearchPayload(data);
             status[i] = "ok";
-            options.connection(host, "success");
+            options2.connection(host, "success");
           } catch (e) {
             status[i] = "error";
             reasons[i] = e;
-            if (!host.self && sameHost(host)) options.connection(host, "failure", e);
+            if (!host.self && sameHost(host)) options2.connection(host, "failure", e);
           }
           if (status.some((s) => s === "ok")) render();
         }));
@@ -5462,24 +5471,24 @@ var PiDishBrowser = (() => {
         }, listener);
       });
     }
-    async function openSearchResult(id, hasContentMatches, host = null, renderedQuery = searchViewRenderedQuery, endpoint = options.host(host)) {
+    async function openSearchResult(id, hasContentMatches, host = null, renderedQuery = searchViewRenderedQuery, endpoint = options2.host(host)) {
       if (!isSearchViewOpen() || !endpoint || !sameHost(endpoint)) return;
       const captured = Object.freeze({ ...endpoint });
       const tokens2 = positiveQueryTokens(parseSessionQuery(renderedQuery));
       closeSearchView();
       const navigation = searchViewSeq;
-      if (!sessionState.findSession(id, host)) await options.loadPrevious();
+      if (!sessionState.findSession(id, host)) await options2.loadPrevious();
       if (disposed || navigation !== searchViewSeq || !sameHost(captured)) return;
       const entry = sessionState.findSession(id, host);
       if (!entry) return;
-      const selecting = options.selectSession(id, { host: entry.host || null });
+      const selecting = options2.selectSession(id, { host: entry.host || null });
       const owner = sessionState.captureSelection(), selectedView = view;
       await selecting;
       if (tokens2.length && hasContentMatches && owner && selectedView === view && sessionState.ownsSelection(owner) && owner.id === id && owner.host === (entry.host || null)) {
-        options.sessionSearch.open();
+        options2.sessionSearch.open();
         const input2 = element("searchInput");
         input2.value = tokens2.join(" ");
-        await options.sessionSearch.run(input2.value.trim().toLowerCase(), { mode: "any", closeIfEmpty: true });
+        await options2.sessionSearch.run(input2.value.trim().toLowerCase(), { mode: "any", closeIfEmpty: true });
       }
     }
     const input = element("searchViewInput");
@@ -5946,9 +5955,9 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/usage-view.ts
-  function createUsageView(options) {
-    const document2 = options.root.ownerDocument, window = document2.defaultView;
-    const localStorage = options.storage, isMultiHost = options.multiHost;
+  function createUsageView(options2) {
+    const document2 = options2.root.ownerDocument, window = document2.defaultView;
+    const localStorage = options2.storage, isMultiHost = options2.multiHost;
     const element = (id) => {
       const value = document2.getElementById(id);
       if (!value) throw new Error("Missing usage element: " + id);
@@ -5968,7 +5977,7 @@ var PiDishBrowser = (() => {
     let usageStack = localStorage.getItem("pi-dish-usage-stack") === "buckets" ? "buckets" : "models";
     const usageModelFilter = /* @__PURE__ */ new Set();
     function sameHost(host) {
-      const current = options.host(host.hostId);
+      const current = options2.host(host.hostId);
       return !!current && current.hostId === host.hostId && current.base === host.base && (current.token || "") === (host.token || "");
     }
     function retireRender() {
@@ -5981,13 +5990,13 @@ var PiDishBrowser = (() => {
     const USAGE_RANGES = [["1", "Today"], ["7", "7 days"], ["30", "30 days"], ["all", "All time"]];
     const USAGE_RANGE_LABELS = { 1: "today", 7: "the last 7 days", 30: "the last 30 days", all: "all time" };
     function isUsageViewOpen() {
-      return !disposed && options.root.classList.contains("usage-open");
+      return !disposed && options2.root.classList.contains("usage-open");
     }
     function openUsageView() {
       if (disposed) return;
-      options.closeOtherViews();
+      options2.closeOtherViews();
       if (isUsageViewOpen()) return;
-      options.root.classList.add("usage-open");
+      options2.root.classList.add("usage-open");
       loadUsageView();
     }
     function closeUsageView() {
@@ -5997,7 +6006,7 @@ var PiDishBrowser = (() => {
       renderQueue?.dispose();
       renderQueue = null;
       clearTimeout(usageResizeTimer);
-      options.root.classList.remove("usage-open");
+      options2.root.classList.remove("usage-open");
       clearTimeout(usageTimer);
       usageTimer = void 0;
       hideUsageTooltip();
@@ -6040,15 +6049,15 @@ var PiDishBrowser = (() => {
     async function loadUsageLimits(fetchSeq) {
       const stale = () => fetchSeq !== usageFetchSeq || !isUsageViewOpen();
       usageLimitsEntries = [];
-      await options.fleetReady();
+      await options2.fleetReady();
       if (stale()) return;
-      const hosts = options.hosts().filter((host) => host.capabilities?.usageLimits).map((host) => Object.freeze({ ...host }));
+      const hosts = options2.hosts().filter((host) => host.capabilities?.usageLimits).map((host) => Object.freeze({ ...host }));
       const entries = [];
       await Promise.all(hosts.map(async (host) => {
         try {
-          const response = await options.request(host, "/api/usage-limits", { timeoutMs: 2e4 });
+          const response = await options2.request(host, "/api/usage-limits", { timeoutMs: 2e4 });
           if (response.status === 401) {
-            if (sameHost(host)) options.connection(host, "blocked");
+            if (sameHost(host)) options2.connection(host, "blocked");
             throw new Error("needs a token");
           }
           const data = await response.json();
@@ -6075,10 +6084,10 @@ var PiDishBrowser = (() => {
       if (body.childElementCount) body.classList.add("usage-refreshing");
       else body.innerHTML = '<div class="usage-state">Loading estimated usage\u2026</div>';
       try {
-        await options.fleetReady();
+        await options2.fleetReady();
         if (stale()) return;
         const url = "/api/usage-summary?days=" + range + "&sort=" + sort + (models ? "&models=" + encodeURIComponent(models) : "");
-        const hosts = options.hosts().map((host) => Object.freeze({ ...host }));
+        const hosts = options2.hosts().map((host) => Object.freeze({ ...host }));
         const status = hosts.map(() => "pending");
         const entries = new Array(hosts.length), reasons = new Array(hosts.length);
         let indexing = false, rendered = false;
@@ -6098,9 +6107,9 @@ var PiDishBrowser = (() => {
         const queueRender = renderQueue = createFanoutRenderQueue(status, render);
         await Promise.all(hosts.map(async (host, i) => {
           try {
-            const response = await options.request(host, url, { timeoutMs: 2e4 });
+            const response = await options2.request(host, url, { timeoutMs: 2e4 });
             if (response.status === 401) {
-              if (sameHost(host)) options.connection(host, "blocked");
+              if (sameHost(host)) options2.connection(host, "blocked");
               throw new Error("needs a token");
             }
             const data = await response.json();
@@ -6108,11 +6117,11 @@ var PiDishBrowser = (() => {
             if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
             entries[i] = { hostId: host.hostId, hostLabel: hostDisplayLabel(host), summary: decodeUsageSummary(data, { hostId: host.hostId, label: hostDisplayLabel(host) }) };
             status[i] = "ok";
-            options.connection(host, "success");
+            options2.connection(host, "success");
           } catch (error) {
             status[i] = "error";
             reasons[i] = error;
-            if (!host.self && sameHost(host)) options.connection(host, "failure", error);
+            if (!host.self && sameHost(host)) options2.connection(host, "failure", error);
           }
           queueRender();
         }));
@@ -6257,12 +6266,12 @@ var PiDishBrowser = (() => {
       });
       body.querySelectorAll("[data-session-id]").forEach((row) => {
         const id = row.dataset.sessionId, host = row.dataset.sessionHost || null;
-        const endpoint = options.host(host);
+        const endpoint = options2.host(host);
         const captured = endpoint ? Object.freeze({ ...endpoint }) : null;
         row.addEventListener("click", () => {
           if (!owns() || !id || !captured || !sameHost(captured)) return;
           closeUsageView();
-          void options.selectSession(id, { host });
+          void options2.selectSession(id, { host });
         }, listener);
       });
       if (showChart) drawUsageChart();
@@ -6665,8 +6674,8 @@ var PiDishBrowser = (() => {
       brightWhite: "#fdf6e3"
     };
   }
-  function createThemes(options) {
-    const { document: document2, storage } = options;
+  function createThemes(options2) {
+    const { document: document2, storage } = options2;
     let disposed = false, sequence = 0;
     let available = [{ id: "solarized", builtin: true, tokens: {} }, { id: "graphite", builtin: true, tokens: {} }];
     function render(select = document2.querySelector("#settingsTheme")) {
@@ -6685,14 +6694,14 @@ var PiDishBrowser = (() => {
       storage.setItem("pi-dish-theme", theme.id);
       storage.setItem("pi-dish-theme-tokens", JSON.stringify(Object.keys(theme.tokens).length ? theme.tokens : null));
       render();
-      options.changed();
+      options2.changed();
     }
     async function load() {
       if (disposed) return;
-      const own = ++sequence, endpoint = Object.freeze({ ...options.host() });
-      const current = () => !disposed && own === sequence && endpoint.base === options.host().base && (endpoint.token || "") === (options.host().token || "");
+      const own = ++sequence, endpoint = Object.freeze({ ...options2.host() });
+      const current = () => !disposed && own === sequence && endpoint.base === options2.host().base && (endpoint.token || "") === (options2.host().token || "");
       try {
-        const response = await options.request(endpoint, "/api/themes");
+        const response = await options2.request(endpoint, "/api/themes");
         if (response.ok) {
           const data = await response.json();
           if (!current()) return;
@@ -6720,8 +6729,8 @@ var PiDishBrowser = (() => {
   function clampTerminalHeight(px, parentHeight) {
     return Math.min(Math.round(parentHeight * 0.8), Math.max(140, px));
   }
-  function createPanelResize(options) {
-    const { document: document2, storage } = options, window = document2.defaultView;
+  function createPanelResize(options2) {
+    const { document: document2, storage } = options2, window = document2.defaultView;
     const events = new AbortController();
     const mounts = /* @__PURE__ */ new Set();
     const drags = /* @__PURE__ */ new Set();
@@ -6749,7 +6758,7 @@ var PiDishBrowser = (() => {
         handle.addEventListener("dblclick", () => {
           storage.removeItem(SIDEBAR_WIDTH_KEY);
           panel.style.width = "";
-          options.fitTerminal();
+          options2.fitTerminal();
         }, { signal: events.signal });
       }
       let cancelDrag = null;
@@ -6779,7 +6788,7 @@ var PiDishBrowser = (() => {
             storage.setItem("pi-dish-terminal-size", pct);
             panel.style.flexBasis = pct + "%";
           }
-          options.fitTerminal();
+          options2.fitTerminal();
         };
         const cancel = () => finish(false);
         cancelDrag = cancel;
@@ -6789,7 +6798,7 @@ var PiDishBrowser = (() => {
           if (kind === "sidebar") panel.style.width = clampSidebarWidth(startWidth + move.clientX - startX, window.innerWidth) + "px";
           else {
             panel.style.flexBasis = clampTerminalHeight(startHeight + startY - move.clientY, parentHeight) + "px";
-            options.fitTerminal();
+            options2.fitTerminal();
           }
         }, { signal: dragEvents.signal });
         for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) handle.addEventListener(type, (end) => {
@@ -6820,8 +6829,8 @@ var PiDishBrowser = (() => {
   }
   var RESPONSE_MODE_KEY = "pi-dish-response-metadata";
   var CONTEXT_METRIC_KEY = "pi-dish-sidebar-context-metric";
-  function createDisplayPreferences(options) {
-    const { document: document2, storage } = options;
+  function createDisplayPreferences(options2) {
+    const { document: document2, storage } = options2;
     const modal = document2.getElementById("settingsModal"), body = document2.getElementById("settingsBody");
     let disposed = false, sequence = 0;
     let events = new AbortController(), filterEvents = new AbortController();
@@ -6834,7 +6843,7 @@ var PiDishBrowser = (() => {
       sequence++;
       events.abort();
       filterEvents.abort();
-      options.unmountSections();
+      options2.unmountSections();
     }
     function close() {
       if (disposed) return;
@@ -6843,7 +6852,7 @@ var PiDishBrowser = (() => {
     }
     function open() {
       if (disposed) return;
-      options.beforeOpen();
+      options2.beforeOpen();
       modal.style.display = "flex";
       void render();
       const scroll = modal.querySelector(".settings-body");
@@ -6853,8 +6862,8 @@ var PiDishBrowser = (() => {
       if (!isOpen()) return;
       retire();
       events = new AbortController();
-      const seq = sequence, endpoint = Object.freeze({ ...options.host() });
-      const owns = () => seq === sequence && isOpen() && endpoint.base === options.host().base && (endpoint.token || "") === (options.host().token || "");
+      const seq = sequence, endpoint = Object.freeze({ ...options2.host() });
+      const owns = () => seq === sequence && isOpen() && endpoint.base === options2.host().base && (endpoint.token || "") === (options2.host().token || "");
       const listener = { signal: events.signal };
       body.innerHTML = `<div class="preference-row"><label for="settingsTheme"><strong>Theme</strong><small>Stored on this device. Built-ins plus any token files in <code>~/.pi/dish/themes/</code>.</small></label>
     <select id="settingsTheme"></select></div>
@@ -6872,12 +6881,12 @@ var PiDishBrowser = (() => {
         if (!owns()) return;
         mode = responseMode(modeSelect.value);
         storage.setItem(RESPONSE_MODE_KEY, mode);
-        options.metadataChanged();
+        options2.metadataChanged();
       }, listener);
       const theme = body.querySelector("#settingsTheme");
-      options.themes.render(theme);
+      options2.themes.render(theme);
       theme.addEventListener("change", () => {
-        if (owns()) options.themes.apply(theme.value);
+        if (owns()) options2.themes.apply(theme.value);
       }, listener);
       const metric = body.querySelector("#sidebarContextMetric");
       metric.value = context;
@@ -6885,14 +6894,14 @@ var PiDishBrowser = (() => {
         if (!owns()) return;
         context = metric.value === "tokens" ? "tokens" : "percent";
         storage.setItem(CONTEXT_METRIC_KEY, context);
-        options.contextChanged();
+        options2.contextChanged();
       }, listener);
       function renderFilters() {
         if (!owns()) return;
         filterEvents.abort();
         filterEvents = new AbortController();
         const list = body.querySelector("#savedFiltersList");
-        const filters = options.filters();
+        const filters = options2.filters();
         list.innerHTML = filters.length ? filters.map((filter) => `<div class="saved-filter-row"><span class="saved-filter-name">${escapeHtml(filter.name)}</span><code class="saved-filter-query">${escapeHtml(filter.query)}</code><button class="btn-icon saved-filter-del" data-name="${escapeHtml(filter.name)}" title="Delete filter">\u2715</button></div>`).join("") : '<small class="saved-filters-empty">No saved filters yet.</small>';
         for (const button of list.querySelectorAll(".saved-filter-del")) {
           const name = button.dataset.name;
@@ -6900,29 +6909,29 @@ var PiDishBrowser = (() => {
             if (!owns() || button.disabled) return;
             button.disabled = true;
             try {
-              await options.persistFilters(options.filters().filter((filter) => filter.name !== name), endpoint);
+              await options2.persistFilters(options2.filters().filter((filter) => filter.name !== name), endpoint);
               if (owns()) renderFilters();
             } catch (error) {
               if (owns()) {
                 button.disabled = false;
-                options.alert("Could not delete filter: " + message2(error));
+                options2.alert("Could not delete filter: " + message2(error));
               }
             }
           }, { signal: filterEvents.signal });
         }
       }
       renderFilters();
-      options.mountSections(body);
+      options2.mountSections(body);
       const input = body.querySelector("#monthlyBudget"), status = body.querySelector("#budgetStatus"), save = body.querySelector("#saveBudget");
       save.disabled = true;
       try {
-        const response = await options.request(endpoint, "/api/settings");
+        const response = await options2.request(endpoint, "/api/settings");
         const data = await response.json();
         if (!owns()) return;
         if (!response.ok || !record8(data)) throw new Error("Could not load server setting.");
         input.value = finite2(data.monthlyBudgetUsd) ? String(data.monthlyBudgetUsd) : "";
         if (Array.isArray(data.savedFilters)) {
-          options.setFilters(decodeSavedFilters(data.savedFilters));
+          options2.setFilters(decodeSavedFilters(data.savedFilters));
           renderFilters();
         }
       } catch {
@@ -6935,7 +6944,7 @@ var PiDishBrowser = (() => {
         save.disabled = true;
         const value = input.value.trim() === "" ? null : Number(input.value);
         try {
-          const response = await options.request(endpoint, "/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ monthlyBudgetUsd: value }) });
+          const response = await options2.request(endpoint, "/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ monthlyBudgetUsd: value }) });
           const data = await response.json();
           if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : "Save failed");
           if (owns()) status.textContent = "Saved for all devices.";
@@ -6975,8 +6984,8 @@ var PiDishBrowser = (() => {
         return null;
     }
   }
-  function createTerminalController(options) {
-    const { document: document2, storage, sessionState } = options, window = document2.defaultView;
+  function createTerminalController(options2) {
+    const { document: document2, storage, sessionState } = options2, window = document2.defaultView;
     const element = (id) => {
       const value = document2.getElementById(id);
       if (!value) throw new Error("Missing terminal element: " + id);
@@ -6987,7 +6996,7 @@ var PiDishBrowser = (() => {
     const events = new AbortController();
     let keybarMounted = false;
     function sameHost(owner, endpoint) {
-      const host = options.host(owner.host);
+      const host = options2.host(owner.host);
       return !!host && host.base === endpoint.base && (host.token || "") === (endpoint.token || "");
     }
     function owns(value) {
@@ -6999,15 +7008,15 @@ var PiDishBrowser = (() => {
     function loadAssets() {
       if (disposed) return Promise.resolve();
       if (!assets) assets = (async () => {
-        await Promise.all([options.asset("link", { rel: "stylesheet", href: "vendor/xterm.css" }), options.asset("script", { src: "vendor/xterm.js" })]);
-        await options.asset("script", { src: "vendor/xterm-addon-fit.js" });
+        await Promise.all([options2.asset("link", { rel: "stylesheet", href: "vendor/xterm.css" }), options2.asset("script", { src: "vendor/xterm.js" })]);
+        await options2.asset("script", { src: "vendor/xterm-addon-fit.js" });
       })();
       return assets;
     }
-    function status(text13 = "", cls = "") {
+    function status(text14 = "", cls = "") {
       const value = document2.getElementById("terminalStatus");
       if (!value) return;
-      value.textContent = text13;
+      value.textContent = text14;
       value.className = "terminal-status" + (cls ? " " + cls : "");
     }
     function setCtrl(on) {
@@ -7016,7 +7025,7 @@ var PiDishBrowser = (() => {
     }
     function updateButtons() {
       if (disposed) return;
-      const show = options.supportsTerminal(sessionState.currentSession) && sessionState.currentSession?.isActive === true;
+      const show = options2.supportsTerminal(sessionState.currentSession) && sessionState.currentSession?.isActive === true;
       for (const id of ["btnTerminal", "cpTerminalRow"]) {
         const value = document2.getElementById(id);
         if (value) value.style.display = show ? "" : "none";
@@ -7026,7 +7035,7 @@ var PiDishBrowser = (() => {
       if (disposed) return;
       const button = document2.getElementById("termModeBtn");
       if (button) {
-        button.style.display = state && options.supportsTmux(sessionState.currentSession) && sessionState.currentSession?.isActive === true ? "" : "none";
+        button.style.display = state && options2.supportsTmux(sessionState.currentSession) && sessionState.currentSession?.isActive === true ? "" : "none";
         button.textContent = state?.mode === "tmux" ? "\u21C6 shell" : "\u21C6 pi tmux";
         button.title = state?.mode === "tmux" ? "Switch to a plain shell at the session cwd" : "Attach to the tmux pane the session's pi runs in";
       }
@@ -7049,12 +7058,12 @@ var PiDishBrowser = (() => {
       if (socket && socket.readyState === 1) socket.send(JSON.stringify(message3));
     }
     async function open(mode) {
-      if (disposed || state || !sessionState.currentSession || !options.supportsTerminal(sessionState.currentSession)) return;
+      if (disposed || state || !sessionState.currentSession || !options2.supportsTerminal(sessionState.currentSession)) return;
       cancelOpen?.();
       const own = ++generation;
       const session = sessionState.currentSession, owner = sessionState.captureSelection();
       if (!owner) return;
-      const resolved = options.host(owner.host);
+      const resolved = options2.host(owner.host);
       if (!resolved) return;
       const endpoint = Object.freeze({ ...resolved });
       let cancel;
@@ -7082,14 +7091,14 @@ var PiDishBrowser = (() => {
         }
         if (!current()) return;
         const css = window.getComputedStyle(document2.documentElement);
-        const term = options.createTerminal({ fontFamily: css.getPropertyValue("--font-mono").trim() + ", 'Symbols Nerd Font Mono'", fontSize: window.innerWidth <= 768 ? 12 : 13, theme: options.theme(), scrollback: 5e3, cursorBlink: true });
+        const term = options2.createTerminal({ fontFamily: css.getPropertyValue("--font-mono").trim() + ", 'Symbols Nerd Font Mono'", fontSize: window.innerWidth <= 768 ? 12 : 13, theme: options2.theme(), scrollback: 5e3, cursorBlink: true });
         if (!term) return;
-        const fitAddon = options.createFitAddon();
+        const fitAddon = options2.createFitAddon();
         if (fitAddon) term.loadAddon(fitAddon);
         const next = { term, fitAddon, sessionId: owner.id, owner, endpoint, mode, events: new AbortController(), ws: null, tmuxPrefix: null, reconnectTimer: void 0, attempts: 0, exited: false, connection: 0 };
         state = next;
         const panel = element("terminalPanel");
-        options.applySize(panel);
+        options2.applySize(panel);
         panel.style.display = "";
         element("terminalCwd").textContent = shortCwd(typeof session.cwd === "string" ? session.cwd : "~");
         updateMode();
@@ -7120,14 +7129,14 @@ var PiDishBrowser = (() => {
       clearTimeout(current.reconnectTimer);
       const sequence = ++current.connection;
       const query = current.mode === "tmux" ? "?mode=tmux" : "";
-      const url = options.socketUrl(current.endpoint, `/api/sessions/${encodeURIComponent(current.sessionId)}/terminal${query}`);
+      const url = options2.socketUrl(current.endpoint, `/api/sessions/${encodeURIComponent(current.sessionId)}/terminal${query}`);
       const ready = () => owns(current) && sequence === current.connection;
       if (!current.endpoint.token) {
         openSocket(current, url, sequence);
         return;
       }
       status(current.attempts ? "reconnecting\u2026" : "connecting\u2026", "reconnecting");
-      void options.ticket(current.endpoint, "terminal").then((ticket) => {
+      void options2.ticket(current.endpoint, "terminal").then((ticket) => {
         if (ready()) openSocket(current, `${url}${query ? "&" : "?"}ticket=${encodeURIComponent(ticket)}`, sequence);
       }).catch(() => {
         if (ready()) status("connect failed", "error");
@@ -7135,7 +7144,7 @@ var PiDishBrowser = (() => {
     }
     function openSocket(current, url, sequence) {
       if (!owns(current) || sequence !== current.connection) return;
-      const socket = options.socket(url), previous = current.ws;
+      const socket = options2.socket(url), previous = current.ws;
       current.ws = socket;
       try {
         previous?.close();
@@ -7206,7 +7215,7 @@ var PiDishBrowser = (() => {
       const current = state;
       if (!current || !owns(current)) return;
       const mode = current.mode === "tmux" ? "shell" : "tmux";
-      if (mode === "tmux" && !options.supportsTmux(sessionState.currentSession)) return;
+      if (mode === "tmux" && !options2.supportsTmux(sessionState.currentSession)) return;
       if (mode === "tmux") storage.setItem(modeKey(current.sessionId, current.owner.host), mode);
       else storage.removeItem(modeKey(current.sessionId, current.owner.host));
       close();
@@ -7215,7 +7224,7 @@ var PiDishBrowser = (() => {
     function restart() {
       const current = state;
       if (!current || !owns(current)) return;
-      if (!options.confirm(current.mode === "tmux" ? "Reattach the tmux client? (The tmux session and everything in it keeps running.)" : "Restart shell? Anything running in it will be killed.") || !owns(current)) return;
+      if (!options2.confirm(current.mode === "tmux" ? "Reattach the tmux client? (The tmux session and everything in it keeps running.)" : "Restart shell? Anything running in it will be killed.") || !owns(current)) return;
       current.exited = false;
       if (current.ws?.readyState === 1) send({ type: "restart" }, current);
       else {
@@ -7278,7 +7287,7 @@ var PiDishBrowser = (() => {
         else void open();
       },
       refreshTheme() {
-        if (state && owns(state)) state.term.options.theme = options.theme();
+        if (state && owns(state)) state.term.options.theme = options2.theme();
       },
       get state() {
         return state;
@@ -7355,20 +7364,20 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/routines-view.ts
-  function createRoutinesView(options) {
-    const document2 = options.root.ownerDocument, window = document2.defaultView, location = window.location;
-    const localStorage = options.storage, sessionState = options.sessionState;
+  function createRoutinesView(options2) {
+    const document2 = options2.root.ownerDocument, window = document2.defaultView, location = window.location;
+    const localStorage = options2.storage, sessionState = options2.sessionState;
     const apiFetch = (host, path, init) => {
       if (host && typeof host === "object" && "hostId" in host && (typeof host.hostId === "string" || host.hostId === null)) {
-        const current = options.host(host.hostId);
+        const current = options2.host(host.hostId);
         if (!current || current.base !== host.base) return Promise.reject(new Error("Routine host changed; select the routine again."));
-        return options.request({ ...host, token: current.token }, path, init);
+        return options2.request({ ...host, token: current.token }, path, init);
       }
-      return options.request(host, path, init);
+      return options2.request(host, path, init);
     };
-    const isMultiHost = options.multiHost, hostChipHtml = options.hostChip;
-    const copyTextToClipboard2 = options.copy, setStatus = options.status, confirm = options.confirm;
-    const createCwdAutocomplete2 = options.autocomplete;
+    const isMultiHost = options2.multiHost, hostChipHtml = options2.hostChip;
+    const copyTextToClipboard2 = options2.copy, setStatus = options2.status, confirm = options2.confirm;
+    const createCwdAutocomplete2 = options2.autocomplete;
     const modelSelectOptionsHtml2 = (models) => modelSelectOptionsHtml(models, escapeHtml);
     const field = (id) => document2.getElementById(id);
     const errorMessage = (error) => error instanceof Error ? error.message : String(error);
@@ -7378,17 +7387,17 @@ var PiDishBrowser = (() => {
     let listQueue = null;
     let invocationToken = null, mutationToken = null;
     function sameHost(id, endpoint) {
-      const current = options.host(id);
+      const current = options2.host(id);
       return !!current && current.hostId === id && current.base === endpoint.base;
     }
     function captureForm() {
-      const current = options.host(routineFormHostId());
+      const current = options2.host(routineFormHostId());
       if (!current) return null;
       const id = current.hostId;
       return { view: viewGeneration, form: formGeneration, key: routineSelKey, creating: routineCreating, id, endpoint: Object.freeze({ ...current, ...routineSelected?.host === id ? routineSelected.endpoint : {} }) };
     }
     function ownsForm(owner) {
-      return !!owner && isRoutinesViewOpen() && owner.view === viewGeneration && owner.form === formGeneration && owner.key === routineSelKey && owner.creating === routineCreating && owner.id === options.host(routineFormHostId())?.hostId && sameHost(owner.id, owner.endpoint);
+      return !!owner && isRoutinesViewOpen() && owner.view === viewGeneration && owner.form === formGeneration && owner.key === routineSelKey && owner.creating === routineCreating && owner.id === options2.host(routineFormHostId())?.hostId && sameHost(owner.id, owner.endpoint);
     }
     function retireForm() {
       formGeneration++;
@@ -7456,10 +7465,10 @@ var PiDishBrowser = (() => {
       return sessionKey(host || null, id);
     }
     function routinesCapableHosts() {
-      return options.hosts().filter((host) => hostSupportsCapability(host, "routines", options.config()));
+      return options2.hosts().filter((host) => hostSupportsCapability(host, "routines", options2.config()));
     }
     function anyHostSupportsRoutines() {
-      return options.effectiveHosts().some((host) => hostSupportsCapability(host, "routines", options.config()));
+      return options2.effectiveHosts().some((host) => hostSupportsCapability(host, "routines", options2.config()));
     }
     function updateRoutinesButton() {
       if (disposed) return;
@@ -7470,14 +7479,14 @@ var PiDishBrowser = (() => {
       if (!supported && isRoutinesViewOpen()) closeRoutinesView();
     }
     function isRoutinesViewOpen() {
-      return !disposed && options.root.classList.contains("routines-open");
+      return !disposed && options2.root.classList.contains("routines-open");
     }
     function openRoutinesView() {
       if (disposed) return;
-      options.closeOtherViews();
+      options2.closeOtherViews();
       if (isRoutinesViewOpen()) return;
       viewGeneration++;
-      options.root.classList.add("routines-open");
+      options2.root.classList.add("routines-open");
       if (!routineSelected && !routineCreating) backToRoutinesList();
       const retained = readRoutineForm();
       if (retained) wireRoutineForm(retained, false);
@@ -7497,7 +7506,7 @@ var PiDishBrowser = (() => {
       listQueue?.dispose();
       listQueue = null;
       retireForm();
-      options.root.classList.remove("routines-open");
+      options2.root.classList.remove("routines-open");
       stopRoutineInvocationPoll();
     }
     function refreshRoutinesView() {
@@ -7527,7 +7536,7 @@ var PiDishBrowser = (() => {
       const stale = () => seq !== routinesSeq || !isRoutinesViewOpen();
       const listEl = document2.getElementById("routinesList");
       if (listEl && !listEl.childElementCount) listEl.innerHTML = '<div class="usage-state">Loading routines\u2026</div>';
-      await options.fleetReady();
+      await options2.fleetReady();
       if (stale()) return;
       const hosts = routinesCapableHosts().map((host) => Object.freeze({ ...host }));
       if (!hosts.length) {
@@ -7553,7 +7562,7 @@ var PiDishBrowser = (() => {
         try {
           const res = await apiFetch(host, "/api/routines", { timeoutMs: 2e4 });
           if (res.status === 401) {
-            if (sameHost(host.hostId, host)) options.connection(host, "blocked");
+            if (sameHost(host.hostId, host)) options2.connection(host, "blocked");
             throw new Error("needs a token");
           }
           if (!res.ok) throw new Error(await httpError(res));
@@ -7561,11 +7570,11 @@ var PiDishBrowser = (() => {
           if (!sameHost(host.hostId, host)) throw new Error("host connection changed");
           entries[i] = decodeRoutineList(data, { ...host, label: hostDisplayLabel(host) });
           status[i] = "ok";
-          options.connection(host, "success");
+          options2.connection(host, "success");
         } catch (e) {
           status[i] = "error";
           reasons[i] = e;
-          if (!host.self && sameHost(host.hostId, host)) options.connection(host, "failure", e);
+          if (!host.self && sameHost(host.hostId, host)) options2.connection(host, "failure", e);
         }
         queueRender();
       }));
@@ -7642,9 +7651,9 @@ var PiDishBrowser = (() => {
       }, { signal: listEvents.signal });
       el.querySelectorAll(".rt-row").forEach((row) => {
         const id = row.dataset.routine || "", host = row.dataset.host || null;
-        const resolved = options.host(host), endpoint = resolved ? Object.freeze({ ...resolved }) : null;
+        const resolved = options2.host(host), endpoint = resolved ? Object.freeze({ ...resolved }) : null;
         row.addEventListener("click", () => {
-          if (isRoutinesViewOpen() && view === viewGeneration && endpoint && !!options.host(host)) void selectRoutine(host, id);
+          if (isRoutinesViewOpen() && view === viewGeneration && endpoint && !!options2.host(host)) void selectRoutine(host, id);
         }, { signal: listEvents.signal });
       });
     }
@@ -7659,7 +7668,7 @@ var PiDishBrowser = (() => {
     }
     async function selectRoutine(host, id) {
       if (!isRoutinesViewOpen()) return;
-      const resolved = options.host(host);
+      const resolved = options2.host(host);
       if (!resolved) return;
       host = resolved.hostId;
       const key = routineKey(host, id);
@@ -7741,7 +7750,7 @@ var PiDishBrowser = (() => {
       return out;
     }
     async function loadRoutineHarnesses(hostId) {
-      const resolved = options.host(hostId);
+      const resolved = options2.host(hostId);
       if (!resolved) return [];
       const endpoint = Object.freeze({ ...resolved });
       const key = JSON.stringify([hostId, endpoint.base, endpoint.token || ""]);
@@ -7759,7 +7768,7 @@ var PiDishBrowser = (() => {
       return list;
     }
     async function loadRoutineModels(hostId, harnessId, cwd) {
-      const resolved = options.host(hostId);
+      const resolved = options2.host(hostId);
       if (!resolved) return [];
       const endpoint = Object.freeze({ ...resolved });
       const key = JSON.stringify([hostId, endpoint.base, endpoint.token || "", harnessId, cwd]);
@@ -8190,7 +8199,7 @@ var PiDishBrowser = (() => {
       if (!isRoutinesViewOpen()) return;
       stopRoutineInvocationPoll();
       routineInvocationsTimer = setInterval(() => {
-        if (!isRoutinesViewOpen() || !routineSelected || !options.host(routineSelected.host)) {
+        if (!isRoutinesViewOpen() || !routineSelected || !options2.host(routineSelected.host)) {
           stopRoutineInvocationPoll();
           return;
         }
@@ -8306,14 +8315,14 @@ var PiDishBrowser = (() => {
     }
     async function openRoutineSession(sessionId, host) {
       if (!isRoutinesViewOpen() || !sessionId) return;
-      const resolved = options.host(host);
+      const resolved = options2.host(host);
       if (!resolved) return;
       const selection = sessionState.captureSelection(), endpoint = Object.freeze({ ...resolved });
       closeRoutinesView();
       const view = viewGeneration;
-      if (!sessionState.findSession(sessionId, host)) await options.loadPrevious();
+      if (!sessionState.findSession(sessionId, host)) await options2.loadPrevious();
       if (disposed || view !== viewGeneration || isRoutinesViewOpen() || !sameHost(host, endpoint) || (selection ? !sessionState.ownsSelection(selection) : sessionState.currentSession !== null)) return;
-      await options.selectSession(sessionId, { host });
+      await options2.selectSession(sessionId, { host });
     }
     function routineFormBody(values) {
       return {
@@ -8568,10 +8577,10 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/session-info.ts
-  function createSessionInfo(options) {
-    const { document: document2, sessionState } = options, location = document2.defaultView.location;
-    const copyTextToClipboard2 = options.copy, setStatus = options.status, confirm = options.confirm, sessionRefFor = options.reference;
-    const apiFetch = options.request, refreshSessions = options.refreshSessions, selectSession = options.selectSession;
+  function createSessionInfo(options2) {
+    const { document: document2, sessionState } = options2, location = document2.defaultView.location;
+    const copyTextToClipboard2 = options2.copy, setStatus = options2.status, confirm = options2.confirm, sessionRefFor = options2.reference;
+    const apiFetch = options2.request, refreshSessions = options2.refreshSessions, selectSession = options2.selectSession;
     const errorMessage = (error) => error instanceof Error ? error.message : String(error);
     const element = (id) => {
       const value = document2.getElementById(id);
@@ -8597,12 +8606,12 @@ var PiDishBrowser = (() => {
       timers.add(timer);
     }
     function endpoint(owner) {
-      const host = options.host(owner.host);
+      const host = options2.host(owner.host);
       return host ? Object.freeze({ ...host }) : null;
     }
     function owns(owner, host) {
       if (disposed || !owner || !host || !sessionState.ownsSelection(owner)) return false;
-      const current = options.host(owner.host);
+      const current = options2.host(owner.host);
       return !!current && current.base === host.base && (current.token || "") === (host.token || "");
     }
     function sessionSupports(session, capability) {
@@ -8794,7 +8803,7 @@ var PiDishBrowser = (() => {
     async function finishSessionClose(sessionId, host, owner) {
       if (disposed) return;
       if (!owner || sessionState.ownsSelection(owner)) setStatus("Session closed");
-      await options.loadPrevious();
+      await options2.loadPrevious();
       if (!disposed && owner && sessionState.ownsSelection(owner) && owner.id === sessionId && owner.host === (host || null)) {
         await selectSession(sessionId, { host });
       }
@@ -8863,7 +8872,7 @@ var PiDishBrowser = (() => {
           }
         } catch (e) {
           if (ownsStatsModal(owner, generation)) closeStatsModal();
-          await options.loadPrevious();
+          await options2.loadPrevious();
           if (owns(owner, endpoint2)) {
             void selectSession(sessionId, { host });
             setStatus("Restart failed: " + errorMessage(e), "error");
@@ -9011,10 +9020,10 @@ var PiDishBrowser = (() => {
       }
       body.innerHTML = html;
       body.querySelectorAll(".artifact-copy").forEach((button) => {
-        const text13 = button.dataset.copy || "";
+        const text14 = button.dataset.copy || "";
         button.addEventListener("click", () => {
           if (!current()) return;
-          void copyTextToClipboard2(text13).then(() => {
+          void copyTextToClipboard2(text14).then(() => {
             if (current()) setStatus("Link copied");
           }, () => {
             if (current()) setStatus("Copy failed (clipboard blocked)", "error");
@@ -9108,8 +9117,8 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/transcript-tree.ts
-  function createTranscriptTree(options) {
-    const { document: document2, sessionState, storage, status: setStatus } = options;
+  function createTranscriptTree(options2) {
+    const { document: document2, sessionState, storage, status: setStatus } = options2;
     const element = (id) => {
       const value = document2.getElementById(id);
       if (!value) throw new Error("Missing tree element: " + id);
@@ -9123,7 +9132,7 @@ var PiDishBrowser = (() => {
     let viewEvents = new AbortController(), rowEvents = new AbortController(), branchEvents = new AbortController();
     function ownsSelection(owner, host) {
       if (disposed || !owner || !host || !sessionState.ownsSelection(owner)) return false;
-      const current = options.host(owner.host);
+      const current = options2.host(owner.host);
       return !!current && current.base === host.base && (current.token || "") === (host.token || "");
     }
     function ownsView(owner, host, generation) {
@@ -9152,14 +9161,14 @@ var PiDishBrowser = (() => {
       operationGeneration++;
       const owner = sessionState.captureSelection();
       if (!owner) return;
-      const endpoint = options.host(owner.host);
+      const endpoint = options2.host(owner.host);
       if (!endpoint) return;
       const host = Object.freeze({ ...endpoint }), generation = ++treeViewGeneration;
       treeOwner = owner;
       treeEndpoint = host;
       setStatus("Loading tree...", "working");
       try {
-        const response = await options.request(host, "/api/sessions/" + encodeURIComponent(owner.id) + "/tree");
+        const response = await options2.request(host, "/api/sessions/" + encodeURIComponent(owner.id) + "/tree");
         if (!response.ok) throw new Error(await response.text());
         const data = decodeTranscriptTree(await response.json());
         if (!ownsView(owner, host, generation)) return;
@@ -9194,8 +9203,8 @@ var PiDishBrowser = (() => {
           if (node.type === "message" && node.role === "assistant" && !node.text && !node.isLeaf) return false;
         }
         if (tokens2.length > 0) {
-          var text13 = getNodeSearchText(node).toLowerCase();
-          return tokens2.every((t) => text13.includes(t));
+          var text14 = getNodeSearchText(node).toLowerCase();
+          return tokens2.every((t) => text14.includes(t));
         }
         return true;
       });
@@ -9250,17 +9259,17 @@ var PiDishBrowser = (() => {
       if (node.type === "message") {
         if (node.role === "user") return '<span class="tree-role user">user:</span><span class="tree-text">' + escapeHtml(node.text || "(empty)") + "</span>";
         if (node.role === "assistant") {
-          var text13 = node.text || "";
-          if (!text13 && node.stopReason === "aborted") text13 = "(aborted)";
-          if (!text13 && node.errorMessage) return '<span class="tree-role assistant">assistant:</span><span class="tree-text error-text">' + escapeHtml(node.errorMessage.substring(0, 80)) + "</span>";
-          if (!text13 && node.toolCalls && node.toolCalls.length) {
+          var text14 = node.text || "";
+          if (!text14 && node.stopReason === "aborted") text14 = "(aborted)";
+          if (!text14 && node.errorMessage) return '<span class="tree-role assistant">assistant:</span><span class="tree-text error-text">' + escapeHtml(node.errorMessage.substring(0, 80)) + "</span>";
+          if (!text14 && node.toolCalls && node.toolCalls.length) {
             var calls = node.toolCalls.map(function(tc2) {
               return tc2.args ? tc2.name + ": " + tc2.args : tc2.name;
             }).join(" \xB7 ");
             return '<span class="tree-role assistant">assistant:</span><span class="tree-text muted">' + escapeHtml(calls) + "</span>";
           }
-          if (!text13) text13 = "(empty)";
-          return '<span class="tree-role assistant">assistant:</span><span class="tree-text">' + escapeHtml(text13) + "</span>";
+          if (!text14) text14 = "(empty)";
+          return '<span class="tree-role assistant">assistant:</span><span class="tree-text">' + escapeHtml(text14) + "</span>";
         }
         if (node.role === "toolResult") {
           var tc = node.toolCallId ? treeToolCallMap.get(node.toolCallId) : null;
@@ -9322,12 +9331,12 @@ var PiDishBrowser = (() => {
       button.textContent = summarize ? "Summarizing\u2026" : "Branching\u2026";
       setStatus(summarize ? "Summarizing abandoned branch\u2026" : "Branching...", "working");
       try {
-        const data = await sendJson(options.request, host, "/api/sessions/" + encodeURIComponent(owner.id) + "/branch", { entryId, summarize, customInstructions });
-        if (!disposed && record8(data) && typeof data.editorText === "string" && data.editorText) options.saveEditorDraft(owner, data.editorText);
+        const data = await sendJson(options2.request, host, "/api/sessions/" + encodeURIComponent(owner.id) + "/branch", { entryId, summarize, customInstructions });
+        if (!disposed && record8(data) && typeof data.editorText === "string" && data.editorText) options2.saveEditorDraft(owner, data.editorText);
         if (operation !== operationGeneration || !ownsSelection(owner, host)) return;
         closeTreeModal();
         setStatus("Branched \u2014 reloading");
-        await options.selectSession(owner.id, { host: owner.host, forceTranscriptReload: true });
+        await options2.selectSession(owner.id, { host: owner.host, forceTranscriptReload: true });
       } catch (error) {
         if (operation !== operationGeneration || !ownsSelection(owner, host)) return;
         setStatus("Branch failed: " + errorMessage(error), "error");
@@ -9418,8 +9427,8 @@ var PiDishBrowser = (() => {
     /^(?:sequenceDiagram|classDiagram(?:-v2)?|stateDiagram(?:-v2)?|erDiagram|journey|gantt|mindmap|timeline|kanban|zenuml|quadrantChart|requirementDiagram|gitGraph|architecture-beta|block-beta|packet(?:-beta)?|radar-beta|sankey-beta|treemap(?:-beta)?|xychart-beta|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment)\b/,
     /^pie(?:\s+(?:title|showData)\b|\s*$)/
   ];
-  function mermaidDeclarationLine(text13) {
-    const lines = String(text13 == null ? "" : text13).split("\n");
+  function mermaidDeclarationLine(text14) {
+    const lines = String(text14 == null ? "" : text14).split("\n");
     let i = 0;
     if (lines[0] !== void 0 && lines[0].trim() === "---") {
       const end = lines.findIndex((l, idx) => idx > 0 && l.trim() === "---");
@@ -9432,8 +9441,8 @@ var PiDishBrowser = (() => {
     }
     return "";
   }
-  function looksLikeMermaid(text13) {
-    const decl = mermaidDeclarationLine(text13);
+  function looksLikeMermaid(text14) {
+    const decl = mermaidDeclarationLine(text14);
     return !!decl && MERMAID_DECLARATIONS.some((re) => re.test(decl));
   }
   function diagramKindForFence(lang, source) {
@@ -9462,11 +9471,11 @@ var PiDishBrowser = (() => {
       tokenizer(src) {
         const match = /^(?:\$\$([\s\S]*?)\$\$|\\\[([\s\S]*?)\\\])/.exec(src);
         if (match) {
-          const text13 = match[1] !== void 0 ? match[1] : match[2];
+          const text14 = match[1] !== void 0 ? match[1] : match[2];
           return {
             type: "blockMath",
             raw: match[0],
-            text: text13.trim()
+            text: text14.trim()
           };
         }
       },
@@ -9542,8 +9551,8 @@ var PiDishBrowser = (() => {
   }
   var FILE_MENTION_RE = /^(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?$/;
   var FILE_EXT_RE = /\.[A-Za-z][A-Za-z0-9]{0,7}$/;
-  function looksLikeFilePath(text13) {
-    const s = String(text13 == null ? "" : text13).trim();
+  function looksLikeFilePath(text14) {
+    const s = String(text14 == null ? "" : text14).trim();
     if (!s || s.length > 260) return false;
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return false;
     if (!FILE_MENTION_RE.test(s)) return false;
@@ -9552,8 +9561,8 @@ var PiDishBrowser = (() => {
   }
   var PATH_TOKEN_RE = /(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?/g;
   var BARE_EXT_STOPLIST = /* @__PURE__ */ new Set(["com", "org", "net", "io", "ai", "dev", "co", "app"]);
-  function findPathTokens(text13) {
-    const s = String(text13 == null ? "" : text13);
+  function findPathTokens(text14) {
+    const s = String(text14 == null ? "" : text14);
     const out = [];
     PATH_TOKEN_RE.lastIndex = 0;
     let m;
@@ -9574,8 +9583,8 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/rich-text.ts
-  function createRichText(options) {
-    const { document: document2, sessionState } = options;
+  function createRichText(options2) {
+    const { document: document2, sessionState } = options2;
     const events = new AbortController(), copyTimers = /* @__PURE__ */ new Set();
     let copies = /* @__PURE__ */ new WeakMap();
     document2.addEventListener("click", (event) => {
@@ -9586,7 +9595,7 @@ var PiDishBrowser = (() => {
         copies.set(copy, token);
         const current = () => !disposed && copy.isConnected && copies.get(copy) === token && (owner ? sessionState.ownsSelection(owner) : !sessionState.currentSession);
         const source = copy.closest(".code-block")?.querySelector("pre code")?.textContent || "";
-        void options.copy(source).then(() => {
+        void options2.copy(source).then(() => {
           if (!current()) return;
           copy.textContent = "\u2713";
           const timer = setTimeout(() => {
@@ -9595,17 +9604,17 @@ var PiDishBrowser = (() => {
           }, 1200);
           copyTimers.add(timer);
         }, () => {
-          if (current()) options.status("Copy failed (clipboard blocked)", "error");
+          if (current()) options2.status("Copy failed (clipboard blocked)", "error");
         });
         return;
       }
       const block = event.target.closest(".diagram-block");
       if (!block) return;
-      if (event.target.closest(".diagram-source-btn")) options.diagrams.toggleSource(block);
-      else if (event.target.closest(".diagram-zoom-btn")) options.diagrams.openLightbox(block);
+      if (event.target.closest(".diagram-source-btn")) options2.diagrams.toggleSource(block);
+      else if (event.target.closest(".diagram-zoom-btn")) options2.diagrams.openLightbox(block);
     }, { signal: events.signal });
     let disposed = false, mathAssetsPromise = null, highlightAssetsPromise = null;
-    options.marked?.use({
+    options2.marked?.use({
       breaks: true,
       gfm: true,
       // Marked's GFM tokenizer accepts both ~text~ and ~~text~~ as deletion.
@@ -9633,15 +9642,15 @@ var PiDishBrowser = (() => {
       },
       extensions: createMathExtensions()
     });
-    function formatMarkdown(text13) {
-      if (!text13) return "";
-      if (options.marked) {
+    function formatMarkdown(text14) {
+      if (!text14) return "";
+      if (options2.marked) {
         try {
-          return options.marked.parse(text13);
+          return options2.marked.parse(text14);
         } catch (e) {
         }
       }
-      let html = escapeHtml(text13);
+      let html = escapeHtml(text14);
       html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => `<pre><code class="language-${lang}">${code.trim()}</code></pre>`);
       html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
       html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
@@ -9666,11 +9675,11 @@ var PiDishBrowser = (() => {
         }
         const kind = diagramKindForFence(fenceLanguage(code), code.textContent);
         if (kind) {
-          options.diagrams.prepare(pre?.parentElement || null, kind);
+          options2.diagrams.prepare(pre?.parentElement || null, kind);
           code.dataset.highlighted = "diagram";
         }
         if (code.dataset.highlighted) return;
-        const hljs = options.highlight();
+        const hljs = options2.highlight();
         if (!hljs) {
           pendingHighlight.push({ code, source: code.textContent || "" });
           return;
@@ -9693,7 +9702,7 @@ var PiDishBrowser = (() => {
         }).catch(() => {
         });
       }
-      options.diagrams.render(root);
+      options2.diagrams.render(root);
       linkifyFilePaths(root);
     }
     function fenceLanguage(code) {
@@ -9739,8 +9748,8 @@ var PiDishBrowser = (() => {
     function loadMathAssets() {
       if (disposed) return Promise.reject(new Error("Rich text disposed"));
       return mathAssetsPromise ||= Promise.all([
-        options.assets.load("link", { rel: "stylesheet", href: "vendor/katex.min.css" }),
-        options.assets.load("script", { src: "vendor/katex.min.js" })
+        options2.assets.load("link", { rel: "stylesheet", href: "vendor/katex.min.css" }),
+        options2.assets.load("script", { src: "vendor/katex.min.js" })
       ]).catch((error) => {
         mathAssetsPromise = null;
         throw error;
@@ -9749,10 +9758,10 @@ var PiDishBrowser = (() => {
     function loadHighlightAssets() {
       if (disposed) return Promise.reject(new Error("Rich text disposed"));
       return highlightAssetsPromise ||= Promise.all([
-        options.assets.load("link", { rel: "stylesheet", href: "vendor/hljs-theme.min.css" }),
-        options.assets.load("script", { src: "vendor/highlight.js" })
+        options2.assets.load("link", { rel: "stylesheet", href: "vendor/hljs-theme.min.css" }),
+        options2.assets.load("script", { src: "vendor/highlight.js" })
       ]).then(() => {
-        const runtime = options.highlight();
+        const runtime = options2.highlight();
         if (!runtime) throw new Error("Syntax highlighter did not load");
         return runtime;
       }).catch((error) => {
@@ -9770,8 +9779,8 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/diagrams.ts
-  function createDiagrams(options) {
-    const { document: document2 } = options, window = document2.defaultView;
+  function createDiagrams(options2) {
+    const { document: document2 } = options2, window = document2.defaultView;
     let disposed = false, themeGeneration = 0;
     let renders = /* @__PURE__ */ new WeakMap();
     const tasks = /* @__PURE__ */ new Set();
@@ -9789,8 +9798,8 @@ var PiDishBrowser = (() => {
     function loadMermaid() {
       if (disposed) return Promise.reject(new Error("Diagrams disposed"));
       if (mermaidPromise) return mermaidPromise;
-      mermaidPromise = options.assets.load("script", { src: "vendor/mermaid.min.js" }).then(() => {
-        const mermaid = options.runtime();
+      mermaidPromise = options2.assets.load("script", { src: "vendor/mermaid.min.js" }).then(() => {
+        const mermaid = options2.runtime();
         if (!mermaid) throw new Error("mermaid did not load");
         if (disposed) throw new Error("Diagrams disposed");
         mermaid.initialize(mermaidConfig());
@@ -9807,7 +9816,7 @@ var PiDishBrowser = (() => {
       const bg = hex("--bg-darker", "#00212b");
       const card = hex("--bg-card", "#073642");
       const hover = hex("--bg-hover", "#0b4354");
-      const text13 = hex("--text-bright", "#dbe5e6");
+      const text14 = hex("--text-bright", "#dbe5e6");
       const muted = hex("--text-muted", "#6f8b93");
       const border = hex("--accent-dim", "#1c6ba3");
       const line = hex("--border", "#11475a");
@@ -9826,30 +9835,30 @@ var PiDishBrowser = (() => {
           darkMode: isDarkColorHex(bg),
           background: bg,
           primaryColor: card,
-          primaryTextColor: text13,
+          primaryTextColor: text14,
           primaryBorderColor: border,
           secondaryColor: hover,
-          secondaryTextColor: text13,
+          secondaryTextColor: text14,
           tertiaryColor: bg,
-          tertiaryTextColor: text13,
+          tertiaryTextColor: text14,
           lineColor: muted,
-          textColor: text13,
+          textColor: text14,
           mainBkg: card,
           nodeBorder: border,
           clusterBkg: bg,
           clusterBorder: line,
-          titleColor: text13,
+          titleColor: text14,
           edgeLabelBackground: bg,
           labelBoxBkgColor: card,
           labelBoxBorderColor: border,
           actorBkg: card,
           actorBorder: border,
-          actorTextColor: text13,
+          actorTextColor: text14,
           signalColor: muted,
-          signalTextColor: text13,
+          signalTextColor: text14,
           noteBkgColor: hover,
           noteBorderColor: border,
-          noteTextColor: text13,
+          noteTextColor: text14,
           fontSize: "14px"
         }
       };
@@ -9903,11 +9912,11 @@ var PiDishBrowser = (() => {
         return;
       }
       const feed = document2.getElementById("messages");
-      const pinned = feed && feed.contains(block) && options.isPinned(feed);
+      const pinned = feed && feed.contains(block) && options2.isPinned(feed);
       try {
         const { svg } = await m.render(`pi-dish-diagram-${++diagramSeq}`, owner.source);
         if (!owns(block, owner)) return;
-        const stillPinned = pinned && feed.contains(block) && options.isPinned(feed);
+        const stillPinned = pinned && feed.contains(block) && options2.isPinned(feed);
         let figure = block.querySelector(".diagram-render");
         if (!figure) {
           figure = document2.createElement("div");
@@ -9918,7 +9927,7 @@ var PiDishBrowser = (() => {
         block.querySelector(".diagram-error")?.remove();
         block.classList.remove("diagram-failed");
         block.dataset.diagramState = "rendered";
-        if (stillPinned) options.scrollBottom(feed);
+        if (stillPinned) options2.scrollBottom(feed);
       } catch (err) {
         if (!owns(block, owner)) return;
         setDiagramError(block, String(err instanceof Error ? err.message : err).split("\n")[0].replace(/:\s*$/, ""));
@@ -9981,10 +9990,10 @@ var PiDishBrowser = (() => {
         scale = Math.min(8, Math.max(0.1, scale * factor));
         apply();
       };
-      const button = (text13, title, onClick) => {
+      const button = (text14, title, onClick) => {
         const b = document2.createElement("button");
         b.className = "diagram-btn";
-        b.textContent = text13;
+        b.textContent = text14;
         b.title = title;
         b.addEventListener("click", () => {
           if (current()) onClick();
@@ -10012,7 +10021,7 @@ var PiDishBrowser = (() => {
       mermaidPromise.then((m) => {
         if (disposed || generation !== themeGeneration) return;
         m.initialize(mermaidConfig());
-        const roots = [document2, ...options.retainedRoots()];
+        const roots = [document2, ...options2.retainedRoots()];
         for (const root of roots) {
           root.querySelectorAll(".diagram-block[data-diagram-state]").forEach((block) => {
             block.querySelector(".diagram-render")?.remove();
@@ -10041,13 +10050,13 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/clipboard.ts
-  function copyTextToClipboard(text13, document2 = globalThis.document, navigator = globalThis.navigator) {
+  function copyTextToClipboard(text14, document2 = globalThis.document, navigator = globalThis.navigator) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard.writeText(text13);
+      return navigator.clipboard.writeText(text14);
     }
     return new Promise((resolve, reject) => {
       const ta = document2.createElement("textarea");
-      ta.value = text13;
+      ta.value = text14;
       ta.setAttribute("readonly", "");
       ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
       document2.body.appendChild(ta);
@@ -10063,6 +10072,694 @@ var PiDishBrowser = (() => {
       if (ok) resolve();
       else reject(new Error("execCommand copy rejected"));
     });
+  }
+
+  // src/browser/extension-dialogs.ts
+  function createExtensionDialogs(options2) {
+    const { document: document2, sessionState } = options2;
+    let disposed = false;
+    const openExtDialogs = /* @__PURE__ */ new Map();
+    function extDialogKey(requestId, sessionId, hostId) {
+      return JSON.stringify([hostId, sessionId, requestId]);
+    }
+    function extDialogSig(req) {
+      return req.method === "ask" ? "ask:" + JSON.stringify(req.questions) : `${req.method}:${JSON.stringify([req.title, req.message, req.options, req.placeholder, req.prefill])}`;
+    }
+    function matches(entry) {
+      const selected = sessionState.currentSession, host = options2.host(entry.hostId);
+      return !!selected && selected.id === entry.sessionId && (selected.host || null) === entry.hostId && !!host && host.base === entry.endpoint.base;
+    }
+    function currentCard(key, card) {
+      const entry = openExtDialogs.get(key);
+      return !disposed && !!entry && entry.el === card && card.isConnected && matches(entry) && sessionState.ownsSelection(entry.owner);
+    }
+    function findDuplicateExtDialog(req, session) {
+      const sig = extDialogSig(req), key = sessionKey(session.host, session.id);
+      return [...openExtDialogs.values()].find((entry) => entry.sessionKey === key && entry.sig === sig && matches(entry)) || null;
+    }
+    function getExtDialogDock() {
+      const inputArea = document2.querySelector(".input-area");
+      if (!inputArea) return null;
+      let dock = document2.getElementById("extUiDialogs");
+      if (!dock) {
+        dock = document2.createElement("div");
+        dock.id = "extUiDialogs";
+        dock.className = "ext-ui-dialog-dock";
+        inputArea.insertBefore(dock, document2.getElementById("attachmentStrip"));
+      }
+      return dock;
+    }
+    function updateExtDialogDock() {
+      const dock = document2.getElementById("extUiDialogs");
+      if (dock && !dock.children.length) dock.remove();
+    }
+    function dockExtDialog(entry) {
+      if (disposed || !matches(entry)) return;
+      const dock = getExtDialogDock();
+      if (!dock) return;
+      entry.owner = sessionState.captureSelection();
+      if (entry.el.parentNode !== dock) dock.appendChild(entry.el);
+      entry.el.classList.toggle("minimized", entry.minimized);
+      updateExtDialogDock();
+    }
+    function setExtDialogMinimized(requestId, minimized) {
+      const entry = openExtDialogs.get(requestId);
+      if (!entry) return;
+      entry.minimized = minimized;
+      entry.el.classList.toggle("minimized", minimized);
+      updateExtDialogDock();
+      if (!minimized) {
+        entry.el.querySelector(".ext-ui-ask-option, .ext-ui-dialog-option, .ext-ui-dialog-input, .ext-ui-dialog-editor")?.focus();
+      }
+    }
+    function sendExtDialogResponse(dialogKey, response, card) {
+      const entry = openExtDialogs.get(dialogKey);
+      if (!entry || !currentCard(dialogKey, card)) return;
+      const host = options2.host(entry.hostId);
+      if (!host || host.base !== entry.endpoint.base) return;
+      const owner = entry.owner;
+      void sendJson(options2.request, Object.freeze({ ...host }), `/api/sessions/${encodeURIComponent(entry.sessionId)}/ui-response`, { requestId: entry.requestId, ...response }).catch((error) => {
+        if (!disposed && sessionState.ownsSelection(owner)) options2.status("Dialog response failed: " + (error instanceof Error ? error.message : String(error)), "error");
+      });
+      dismissExtDialog(dialogKey);
+    }
+    function dismissExtDialog(requestId) {
+      const entry = openExtDialogs.get(requestId);
+      if (!entry) return;
+      entry.events.abort();
+      entry.el.remove();
+      openExtDialogs.delete(requestId);
+      updateExtDialogDock();
+    }
+    function buildExtDialogCard(requestId, events, { title, bodyHtml, footerHtml, collapsedLabel, onClose }) {
+      const card = document2.createElement("div");
+      card.className = "ext-ui-dialog-modal ext-ui-docked-dialog";
+      card.innerHTML = `
+    <div class="ext-ui-dialog-head">
+      <div class="ext-ui-dialog-title">${escapeHtml(title)}</div>
+      <button class="ext-ui-dialog-min" title="Background \u2014 keep the composer usable and answer later">\u2013</button>
+      <button class="ext-ui-dialog-close" title="Dismiss (cancel)">\xD7</button>
+    </div>
+    <div class="ext-ui-dialog-body">${bodyHtml}</div>
+    ${footerHtml ? `<div class="ext-ui-dialog-foot">${footerHtml}</div>` : ""}
+    <div class="ext-ui-dialog-collapsed-label">${escapeHtml(collapsedLabel)}</div>`;
+      card.querySelector(".ext-ui-dialog-min").addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (!currentCard(requestId, card)) return;
+        setExtDialogMinimized(requestId, true);
+      }, { signal: events.signal });
+      card.querySelector(".ext-ui-dialog-close").addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (!currentCard(requestId, card)) return;
+        onClose();
+      }, { signal: events.signal });
+      card.addEventListener("click", () => {
+        if (currentCard(requestId, card) && openExtDialogs.get(requestId)?.minimized) setExtDialogMinimized(requestId, false);
+      }, { signal: events.signal });
+      return card;
+    }
+    function showExtAskDialog(req, session) {
+      if (!req.id) return;
+      const { id: sessionId, host: hostId } = session;
+      const endpoint = options2.host(hostId);
+      if (disposed || !endpoint) return;
+      const dialogKey = extDialogKey(req.id, sessionId, hostId);
+      const previous = openExtDialogs.get(dialogKey);
+      if (previous && previous.endpoint.base !== endpoint.base) dismissExtDialog(dialogKey);
+      const existing = openExtDialogs.get(dialogKey);
+      if (existing) {
+        dockExtDialog(existing);
+        return;
+      }
+      const duplicate = findDuplicateExtDialog(req, session);
+      if (duplicate) {
+        dockExtDialog(duplicate);
+        return;
+      }
+      const questions = req.questions;
+      if (!questions.length) {
+        options2.toast("Ask dialog had no valid questions", "warning");
+        return;
+      }
+      const events = new AbortController();
+      const card = buildExtDialogCard(dialogKey, events, {
+        title: questions.length === 1 ? "Question" : `${questions.length} questions`,
+        collapsedLabel: questions.length === 1 ? `Question pending: ${questions[0].question || ""}` : `${questions.length} questions pending \u2014 click to answer`,
+        onClose: () => sendExtDialogResponse(dialogKey, { cancelled: true }, card),
+        bodyHtml: `
+    <div class="ext-ui-ask-questions">
+      ${questions.map((question, questionIndex) => {
+          const options3 = question.options;
+          return `<section class="ext-ui-ask-question" data-question-index="${questionIndex}">
+          ${question.header ? `<div class="ext-ui-ask-header">${escapeHtml(question.header)}</div>` : ""}
+          <div class="ext-ui-ask-prompt">${escapeHtml(question.question || "")}</div>
+          <div class="ext-ui-dialog-options">
+            ${options3.map((option, optionIndex) => {
+            const normalized = option;
+            const recommended = question.recommended === optionIndex;
+            return `<button type="button" class="ext-ui-dialog-option ext-ui-ask-option${recommended ? " recommended" : ""}"
+                data-question-index="${questionIndex}" data-option-index="${optionIndex}" aria-pressed="false">
+                <span class="ext-ui-ask-marker">${question.multi ? "\u2610" : "\u25CB"}</span>
+                <span class="ext-ui-ask-option-copy">
+                  <span class="ext-ui-ask-option-label">${escapeHtml(normalized.label || "")}${recommended ? ' <span class="ext-ui-ask-recommended">Recommended</span>' : ""}</span>
+                  ${normalized.description ? `<span class="ext-ui-ask-option-description">${escapeHtml(normalized.description)}</span>` : ""}
+                  ${normalized.preview ? `<pre class="ext-ui-ask-option-preview">${escapeHtml(normalized.preview)}</pre>` : ""}
+                </span>
+              </button>`;
+          }).join("")}
+          </div>
+          <input class="ext-ui-dialog-input ext-ui-ask-custom" data-question-index="${questionIndex}"
+            type="text" placeholder="Other (type your own)">
+          <input class="ext-ui-dialog-input ext-ui-ask-note" data-question-index="${questionIndex}"
+            type="text" placeholder="Optional note">
+          <div class="ext-ui-ask-error" hidden>Choose an option or enter your own answer.</div>
+        </section>`;
+        }).join("")}
+    </div>
+    `,
+        footerHtml: `
+    <div class="ext-ui-dialog-actions">
+      <button class="ext-ui-dialog-btn" data-action="chat">Chat about this</button>
+      <button class="ext-ui-dialog-btn primary" data-action="submit-ask">Submit</button>
+    </div>`
+      });
+      card.classList.add("ext-ui-ask-modal");
+      const selections = questions.map(() => /* @__PURE__ */ new Set());
+      card.querySelectorAll(".ext-ui-ask-option").forEach((button) => {
+        button.addEventListener("click", () => {
+          if (!currentCard(dialogKey, card)) return;
+          const questionIndex = Number(button.dataset.questionIndex);
+          const optionIndex = Number(button.dataset.optionIndex);
+          const question = questions[questionIndex];
+          if (!question || !Number.isInteger(optionIndex)) return;
+          const selected = selections[questionIndex];
+          if (question.multi) {
+            if (selected.has(optionIndex)) selected.delete(optionIndex);
+            else selected.add(optionIndex);
+          } else {
+            selected.clear();
+            selected.add(optionIndex);
+          }
+          card.querySelectorAll(`.ext-ui-ask-option[data-question-index="${questionIndex}"]`).forEach((candidate) => {
+            const index = Number(candidate.dataset.optionIndex);
+            const active = selected.has(index);
+            candidate.classList.toggle("selected", active);
+            candidate.setAttribute("aria-pressed", active ? "true" : "false");
+            candidate.querySelector(".ext-ui-ask-marker").textContent = question.multi ? active ? "\u2611" : "\u2610" : active ? "\u25CF" : "\u25CB";
+          });
+          const custom = card.querySelector(`.ext-ui-ask-custom[data-question-index="${questionIndex}"]`);
+          if (!question.multi && custom) custom.value = "";
+          card.querySelector(`.ext-ui-ask-question[data-question-index="${questionIndex}"] .ext-ui-ask-error`)?.setAttribute("hidden", "");
+        }, { signal: events.signal });
+      });
+      card.querySelectorAll(".ext-ui-ask-custom").forEach((input) => {
+        input.addEventListener("input", () => {
+          if (!currentCard(dialogKey, card)) return;
+          const questionIndex = Number(input.dataset.questionIndex);
+          const question = questions[questionIndex];
+          if (!question || question.multi || !input.value.trim()) return;
+          selections[questionIndex].clear();
+          card.querySelectorAll(`.ext-ui-ask-option[data-question-index="${questionIndex}"]`).forEach((candidate) => {
+            candidate.classList.remove("selected");
+            candidate.setAttribute("aria-pressed", "false");
+            candidate.querySelector(".ext-ui-ask-marker").textContent = "\u25CB";
+          });
+        }, { signal: events.signal });
+      });
+      card.querySelector('[data-action="chat"]').addEventListener("click", () => {
+        sendExtDialogResponse(dialogKey, { value: { kind: "chat" } }, card);
+      }, { signal: events.signal });
+      card.querySelector('[data-action="submit-ask"]').addEventListener("click", () => {
+        if (!currentCard(dialogKey, card)) return;
+        const invalidSections = [];
+        const results = questions.map((question, questionIndex) => {
+          const options3 = question.options;
+          const customField = card.querySelector(`.ext-ui-ask-custom[data-question-index="${questionIndex}"]`);
+          const noteField = card.querySelector(`.ext-ui-ask-note[data-question-index="${questionIndex}"]`);
+          const customInput = customField?.value.trim() || void 0;
+          const note = noteField?.value.trim() || void 0;
+          const selectedOptions = [...selections[questionIndex]].sort((a, b) => a - b).map((index) => {
+            const option = options3[index];
+            return option?.label;
+          }).filter((label) => typeof label === "string");
+          if (!question.multi && selectedOptions.length === 0 && customInput === void 0) {
+            const section = card.querySelector(`.ext-ui-ask-question[data-question-index="${questionIndex}"]`);
+            section?.querySelector(".ext-ui-ask-error")?.removeAttribute("hidden");
+            if (section) invalidSections.push(section);
+          }
+          return {
+            id: question.id,
+            question: question.question || "",
+            options: options3.map((option) => option.label),
+            multi: question.multi === true,
+            selectedOptions,
+            ...customInput !== void 0 ? { customInput } : {},
+            ...note !== void 0 ? { note } : {}
+          };
+        });
+        const invalid2 = invalidSections[0];
+        if (invalid2) {
+          invalid2.scrollIntoView({ block: "nearest" });
+          invalid2.querySelector(".ext-ui-ask-option, .ext-ui-ask-custom")?.focus();
+          return;
+        }
+        sendExtDialogResponse(dialogKey, { value: { kind: "submit", results } }, card);
+      }, { signal: events.signal });
+      const entry = { el: card, events, endpoint: Object.freeze({ ...endpoint }), owner: sessionState.captureSelection(), sessionId, hostId, sessionKey: sessionKey(hostId, sessionId), requestId: req.id, minimized: false, sig: extDialogSig(req) };
+      openExtDialogs.set(dialogKey, entry);
+      dockExtDialog(entry);
+      card.querySelector(".ext-ui-ask-option, .ext-ui-ask-custom")?.focus();
+    }
+    function showExtDialog(req, session) {
+      if (!req.id) return;
+      const { id: sessionId, host: hostId } = session;
+      const endpoint = options2.host(hostId);
+      if (disposed || !endpoint) return;
+      const dialogKey = extDialogKey(req.id, sessionId, hostId);
+      const previous = openExtDialogs.get(dialogKey);
+      if (previous && previous.endpoint.base !== endpoint.base) dismissExtDialog(dialogKey);
+      const existing = openExtDialogs.get(dialogKey);
+      if (existing) {
+        dockExtDialog(existing);
+        return;
+      }
+      const duplicate = findDuplicateExtDialog(req, session);
+      if (duplicate) {
+        dockExtDialog(duplicate);
+        return;
+      }
+      let bodyHtml = "";
+      if (req.message) bodyHtml += `<div class="ext-ui-dialog-message">${escapeHtml(req.message)}</div>`;
+      if (req.method === "select") {
+        bodyHtml += '<div class="ext-ui-dialog-options">' + req.options.map((opt, i) => {
+          const label = opt.label;
+          const description = opt.description ? `<span class="ext-ui-ask-option-description">${escapeHtml(opt.description)}</span>` : "";
+          return `<button class="ext-ui-dialog-option" data-option-index="${i}">
+          <span class="ext-ui-ask-option-label">${escapeHtml(label)}</span>${description}
+        </button>`;
+        }).join("") + "</div>";
+      } else if (req.method === "confirm") {
+        bodyHtml += `<div class="ext-ui-dialog-actions">
+      <button class="ext-ui-dialog-btn primary" data-action="yes">Yes</button>
+      <button class="ext-ui-dialog-btn" data-action="no">No</button>
+    </div>`;
+      } else if (req.method === "input") {
+        bodyHtml += `<input class="ext-ui-dialog-input" type="text" placeholder="${escapeHtml(req.placeholder || "")}">
+    <div class="ext-ui-dialog-actions">
+      <button class="ext-ui-dialog-btn primary" data-action="submit">Submit</button>
+      <button class="ext-ui-dialog-btn" data-action="cancel">Cancel</button>
+    </div>`;
+      } else if (req.method === "editor") {
+        bodyHtml += `<textarea class="ext-ui-dialog-editor" rows="8">${escapeHtml(req.prefill || "")}</textarea>
+    <div class="ext-ui-dialog-actions">
+      <button class="ext-ui-dialog-btn primary" data-action="submit">Submit</button>
+      <button class="ext-ui-dialog-btn" data-action="cancel">Cancel</button>
+    </div>`;
+      }
+      const titles = { select: "Select", confirm: "Confirm", input: "Input", editor: "Editor" };
+      const title = req.title || titles[req.method] || "Dialog";
+      const events = new AbortController();
+      const card = buildExtDialogCard(dialogKey, events, {
+        title,
+        bodyHtml,
+        collapsedLabel: `${title} pending \u2014 click to answer`,
+        onClose: () => sendExtDialogResponse(dialogKey, { cancelled: true }, card)
+      });
+      card.querySelectorAll(".ext-ui-dialog-option").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          if (!currentCard(dialogKey, card)) return;
+          const option = req.options[Number(btn.dataset.optionIndex)];
+          sendExtDialogResponse(dialogKey, { value: option?.label || "" }, card);
+        }, { signal: events.signal });
+      });
+      card.querySelectorAll(".ext-ui-dialog-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          if (!currentCard(dialogKey, card)) return;
+          const action = btn.dataset.action;
+          if (action === "yes") sendExtDialogResponse(dialogKey, { confirmed: true }, card);
+          else if (action === "no") sendExtDialogResponse(dialogKey, { confirmed: false }, card);
+          else if (action === "cancel") sendExtDialogResponse(dialogKey, { cancelled: true }, card);
+          else if (action === "submit") {
+            const field2 = card.querySelector(".ext-ui-dialog-input, .ext-ui-dialog-editor");
+            sendExtDialogResponse(dialogKey, { value: field2 ? field2.value : "" }, card);
+          }
+        }, { signal: events.signal });
+      });
+      const entry = { el: card, events, endpoint: Object.freeze({ ...endpoint }), owner: sessionState.captureSelection(), sessionId, hostId, sessionKey: sessionKey(hostId, sessionId), requestId: req.id, minimized: false, sig: extDialogSig(req) };
+      openExtDialogs.set(dialogKey, entry);
+      dockExtDialog(entry);
+      const field = card.querySelector(".ext-ui-dialog-input, .ext-ui-dialog-editor");
+      if (field) field.focus();
+    }
+    function removeSession(session) {
+      const key = sessionKey(session.host, session.id);
+      for (const [id, entry] of openExtDialogs) if (entry.sessionKey === key) dismissExtDialog(id);
+    }
+    return {
+      show(request, session) {
+        if (disposed) return;
+        if (request.method === "ask") showExtAskDialog(request, session);
+        else showExtDialog(request, session);
+      },
+      detach() {
+        for (const entry of openExtDialogs.values()) {
+          entry.el.remove();
+          entry.owner = null;
+        }
+        updateExtDialogDock();
+      },
+      resolved(id, session) {
+        if (typeof id === "string") dismissExtDialog(extDialogKey(id, session.id, session.host));
+      },
+      reconcile(value, session) {
+        if (disposed || !record8(value) || !Array.isArray(value.dialogs)) return;
+        const pending = new Set(value.dialogs.filter((id) => typeof id === "string")), key = sessionKey(session.host, session.id);
+        for (const [id, entry] of openExtDialogs) if (entry.sessionKey === key && !pending.has(entry.requestId)) dismissExtDialog(id);
+      },
+      removeSession,
+      dispose() {
+        disposed = true;
+        for (const id of [...openExtDialogs.keys()]) dismissExtDialog(id);
+      }
+    };
+  }
+
+  // src/browser/extension-display.ts
+  function createExtensionDisplay(options2) {
+    const { document: document2, sessionState, storage } = options2;
+    const widgets = /* @__PURE__ */ new Map(), statuses = /* @__PURE__ */ new Map(), collapsed = /* @__PURE__ */ new Map();
+    const toasts = /* @__PURE__ */ new Set(), toastTimers = /* @__PURE__ */ new Set(), events = new AbortController();
+    let disposed = false, preferenceApplied = false, observer = null;
+    const cancel = (timer) => {
+      if (timer !== null) clearTimeout(timer);
+    };
+    const current = (owner) => !disposed && sessionState.ownsSelection(owner);
+    function later(callback, delay) {
+      const timer = setTimeout(() => {
+        toastTimers.delete(timer);
+        if (!disposed) callback();
+      }, delay);
+      toastTimers.add(timer);
+      return timer;
+    }
+    function toast(message3, type) {
+      if (disposed) return;
+      let root = document2.getElementById("extUiToasts");
+      if (!root) {
+        root = document2.createElement("div");
+        root.id = "extUiToasts";
+        root.className = "ext-ui-toasts";
+        document2.body.append(root);
+      }
+      const node = document2.createElement("div");
+      node.className = "ext-ui-toast " + type;
+      const icons = { info: "\u2139", warning: "\u26A0", error: "\u2716" };
+      node.innerHTML = `<span class="ext-ui-toast-icon">${icons[type]}</span><span class="ext-ui-toast-body">${escapeHtml(message3)}</span><button class="ext-ui-toast-close" title="Dismiss">\xD7</button>`;
+      toasts.add(node);
+      root.append(node);
+      let hiding = false;
+      const hide = () => {
+        if (disposed || hiding || !toasts.has(node)) return;
+        hiding = true;
+        node.classList.add("hiding");
+        later(() => {
+          node.remove();
+          toasts.delete(node);
+        }, 200);
+      };
+      node.querySelector("button").addEventListener("click", hide, { signal: events.signal });
+      if (type === "info") later(hide, 6e3);
+    }
+    function widget(key, lines, placement) {
+      if (disposed) return;
+      let entry = widgets.get(key);
+      if (entry && !entry.el.isConnected) {
+        cancel(entry.timer);
+        entry.events.abort();
+        widgets.delete(key);
+        entry = void 0;
+      }
+      if (!lines.length) {
+        if (!entry) return;
+        cancel(entry.timer);
+        const retained = entry;
+        retained.timer = setTimeout(() => {
+          if (disposed || widgets.get(key) !== retained) return;
+          retained.el.classList.add("hidden");
+          retained.timer = setTimeout(() => {
+            if (disposed || widgets.get(key) !== retained) return;
+            retained.timer = null;
+            retained.events.abort();
+            retained.el.remove();
+            widgets.delete(key);
+          }, 200);
+        }, 500);
+        return;
+      }
+      if (entry) {
+        cancel(entry.timer);
+        entry.timer = null;
+      }
+      const owner = sessionState.captureSelection(), collapsedKey = sessionRefKey(owner) + "|" + key;
+      if (!entry) {
+        const el = document2.createElement("div");
+        el.className = "ext-ui-widget";
+        el.dataset.widgetKey = key;
+        entry = { el, collapsed: collapsed.get(collapsedKey) || false, timer: null, events: new AbortController(), owner };
+        el.classList.toggle("collapsed", entry.collapsed);
+        el.innerHTML = `<div class="ext-ui-widget-header"><span class="ext-ui-widget-label">${escapeHtml(key)}</span><span class="ext-ui-widget-toggle">\u25BC</span></div><pre class="ext-ui-widget-body"></pre>`;
+        const retained = entry;
+        el.querySelector(".ext-ui-widget-header").addEventListener("click", () => {
+          if (!current(retained.owner) || widgets.get(key) !== retained || !el.isConnected) return;
+          retained.collapsed = el.classList.toggle("collapsed");
+          collapsed.set(collapsedKey, retained.collapsed);
+        }, { signal: entry.events.signal });
+        const input = document2.querySelector(".input-area"), textarea = document2.getElementById("promptInput");
+        if (placement === "belowEditor" && input && textarea) input.insertBefore(el, textarea.nextSibling);
+        else if (input?.parentNode) input.parentNode.insertBefore(el, input);
+        else document2.getElementById("messages")?.insertAdjacentElement("beforebegin", el);
+        widgets.set(key, entry);
+      }
+      entry.el.classList.remove("hidden");
+      const body = entry.el.querySelector(".ext-ui-widget-body"), text14 = lines.join("\n");
+      if (body.textContent !== text14) body.textContent = text14;
+    }
+    function measure() {
+      if (disposed) return;
+      const row = document2.getElementById("extUiStatuses"), items = document2.getElementById("extUiStatusItems"), toggle = document2.getElementById("extUiStatusToggle");
+      if (!row || !items || !toggle) return;
+      const clipped = [...items.children].some((el) => el.scrollWidth > el.clientWidth + 1);
+      toggle.style.display = !row.classList.contains("collapsed") || clipped ? "" : "none";
+    }
+    function sync() {
+      if (disposed) return;
+      const row = document2.getElementById("extUiStatuses");
+      if (!row) return;
+      if (!preferenceApplied) {
+        preferenceApplied = true;
+        let open = false;
+        try {
+          open = storage.getItem("pi-dish-ext-status-open") === "1";
+        } catch {
+        }
+        if (open) toggleStatus();
+      }
+      const items = document2.getElementById("extUiStatusItems");
+      row.style.display = items?.children.length ? "" : "none";
+      measure();
+      if (!observer && items && typeof ResizeObserver !== "undefined") {
+        observer = new ResizeObserver(measure);
+        observer.observe(items);
+      }
+    }
+    function toggleStatus() {
+      if (disposed) return;
+      const row = document2.getElementById("extUiStatuses");
+      if (!row) return;
+      const isCollapsed = row.classList.toggle("collapsed"), toggle = document2.getElementById("extUiStatusToggle");
+      if (toggle) {
+        toggle.setAttribute("aria-expanded", String(!isCollapsed));
+        toggle.title = isCollapsed ? "Show full status" : "Collapse status";
+      }
+      try {
+        storage.setItem("pi-dish-ext-status-open", isCollapsed ? "0" : "1");
+      } catch {
+      }
+      sync();
+    }
+    document2.getElementById("extUiStatusToggle")?.addEventListener("click", toggleStatus, { signal: events.signal });
+    function status(key, text14) {
+      if (disposed) return;
+      const items = document2.getElementById("extUiStatusItems");
+      if (!items) return;
+      let entry = statuses.get(key);
+      if (entry && !entry.el.isConnected) {
+        cancel(entry.timer);
+        statuses.delete(key);
+        entry = void 0;
+      }
+      if (!text14) {
+        if (!entry) {
+          sync();
+          return;
+        }
+        cancel(entry.timer);
+        const retained = entry;
+        retained.timer = setTimeout(() => {
+          if (disposed || statuses.get(key) !== retained) return;
+          retained.el.remove();
+          statuses.delete(key);
+          sync();
+        }, 500);
+        return;
+      }
+      if (entry) {
+        cancel(entry.timer);
+        entry.timer = null;
+      } else {
+        const el = document2.createElement("span");
+        el.className = "ext-ui-status-badge";
+        el.dataset.statusKey = key;
+        items.append(el);
+        entry = { el, timer: null };
+        statuses.set(key, entry);
+      }
+      if (entry.el.textContent !== text14) entry.el.textContent = text14;
+      const title = `${text14}
+(status from ${key})`;
+      if (entry.el.title !== title) entry.el.title = title;
+      sync();
+    }
+    function clear() {
+      for (const entry of widgets.values()) {
+        cancel(entry.timer);
+        entry.events.abort();
+        entry.el.remove();
+      }
+      widgets.clear();
+      for (const entry of statuses.values()) {
+        cancel(entry.timer);
+        entry.el.remove();
+      }
+      statuses.clear();
+      sync();
+    }
+    return {
+      toast,
+      widget,
+      status,
+      clear,
+      toggleStatus,
+      dispose() {
+        clear();
+        disposed = true;
+        events.abort();
+        observer?.disconnect();
+        observer = null;
+        for (const timer of toastTimers) clearTimeout(timer);
+        toastTimers.clear();
+        for (const node of toasts) node.remove();
+        toasts.clear();
+        collapsed.clear();
+      }
+    };
+  }
+
+  // src/browser/extension-ui-data.ts
+  var text13 = (value) => typeof value === "string" ? stripAnsi(value) : "";
+  function options(value) {
+    return Array.isArray(value) ? value.map((row) => typeof row === "string" ? { label: text13(row), description: "", preview: "" } : { label: record8(row) ? text13(row.label) : "", description: record8(row) ? text13(row.description) : "", preview: record8(row) ? text13(row.preview) : "" }) : [];
+  }
+  function decodeExtensionRequest(value) {
+    if (!record8(value) || typeof value.method !== "string") return null;
+    return {
+      id: typeof value.id === "string" ? value.id : "",
+      method: value.method,
+      title: text13(value.title),
+      message: text13(value.message),
+      text: text13(value.text),
+      prefill: text13(value.prefill),
+      placeholder: text13(value.placeholder),
+      widgetKey: typeof value.widgetKey === "string" && value.widgetKey ? value.widgetKey : "default",
+      widgetLines: Array.isArray(value.widgetLines) ? value.widgetLines.map(text13) : [],
+      widgetPlacement: text13(value.widgetPlacement),
+      statusKey: typeof value.statusKey === "string" && value.statusKey ? value.statusKey : "default",
+      statusText: text13(value.statusText),
+      notifyType: value.notifyType === "warning" || value.notifyType === "error" ? value.notifyType : "info",
+      options: options(value.options),
+      questions: Array.isArray(value.questions) ? value.questions.flatMap((row) => {
+        if (!record8(row) || typeof row.id !== "string") return [];
+        return [{
+          id: row.id,
+          question: text13(row.question),
+          header: text13(row.header),
+          multi: row.multi === true,
+          recommended: finite2(row.recommended) && Number.isInteger(row.recommended) ? row.recommended : null,
+          options: options(row.options)
+        }];
+      }) : []
+    };
+  }
+
+  // src/browser/extension-ui.ts
+  function createExtensionUI(options2) {
+    const { document: document2, sessionState } = options2;
+    const display = createExtensionDisplay(options2), dialogs = createExtensionDialogs({ ...options2, toast: display.toast });
+    let disposed = false;
+    function handle(value, session) {
+      const selected = sessionState.currentSession;
+      if (disposed || !selected || selected.id !== session.id || (selected.host || null) !== session.host) return;
+      const request = decodeExtensionRequest(value);
+      if (!request) return;
+      switch (request.method) {
+        case "notify":
+          display.toast(request.message, request.notifyType);
+          break;
+        case "setWidget":
+          display.widget(request.widgetKey, request.widgetLines, request.widgetPlacement);
+          break;
+        case "setStatus":
+          display.status(request.statusKey, request.statusText);
+          break;
+        case "setTitle":
+          document2.title = request.title || "pi-dish";
+          break;
+        case "set_editor_text": {
+          const input = document2.getElementById("promptInput");
+          if (input) {
+            input.value = request.text;
+            input.dispatchEvent(new Event("input"));
+          }
+          break;
+        }
+        case "select":
+        case "confirm":
+        case "input":
+        case "editor":
+        case "ask":
+          dialogs.show(request, session);
+          break;
+        default:
+          display.toast(`[${request.method}] ${JSON.stringify(request).slice(0, 200)}`, "info");
+      }
+    }
+    return {
+      handle,
+      clear() {
+        if (!disposed) {
+          display.clear();
+          dialogs.detach();
+        }
+      },
+      resolve: dialogs.resolved,
+      reconcile: dialogs.reconcile,
+      end: dialogs.removeSession,
+      dispose() {
+        disposed = true;
+        display.dispose();
+        dialogs.dispose();
+      }
+    };
   }
   return __toCommonJS(index_exports);
 })();

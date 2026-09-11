@@ -404,3 +404,8 @@ Rich text is split across `rich-text.ts` (Markdown/final passes/copy controls),
 `diagrams.ts` (source/theme render owners and lightboxes), `browser-assets.ts`
 (local resource loading) and `clipboard.ts`. Vendored APIs have explicit contracts
 in `rich-text-vendors.ts`; the app retains its existing local vendor paths.
+
+Extension UI is split into typed wire requests (`extension-ui-data.ts`), host-aware
+routing (`extension-ui.ts`), timed widget/status display (`extension-display.ts`)
+and persistent, selection-owned dialog cards (`extension-dialogs.ts`). Stashing
+preserves answers while listeners and endpoint guards retire obsolete controls.

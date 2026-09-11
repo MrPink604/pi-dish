@@ -65,3 +65,6 @@ export { createBrowserAssets } from './browser-assets';
 export { createRichText } from './rich-text';
 export { createDiagrams } from './diagrams';
 export { copyTextToClipboard } from './clipboard';
+
+export { createExtensionUI } from './extension-ui';
+export { decodeExtensionRequest } from './extension-ui-data';

@@ -2137,3 +2137,10 @@ render tokens by source and theme generation, including detached retained roots.
 A render checks both its owner and current feed containment before effects; bottom
 pinning is measured before SVG insertion, not after its own height change.
 Lightboxes, copy feedback and deferred tasks retire on controller disposal.
+
+Extension requests enter `src/browser/extension-ui.ts` with the explicit stream
+host. `extension-ui-data.ts` narrows wire objects, `extension-display.ts` owns
+widget/status removal and toast timers, and `extension-dialogs.ts` owns cards by
+host/session/request. Stashing preserves edits; redocking renews the selection
+owner. Reconcile only the named host/session, ignore malformed authoritative lists,
+and abort retired card listeners. Credential refresh cannot change a captured base.

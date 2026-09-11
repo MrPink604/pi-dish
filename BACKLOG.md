@@ -28,7 +28,8 @@ Checkpoint 21 migrates terminal opens, sockets, reconnects and mobile key input.
 Checkpoint 22 migrates routine forms, catalogs, mutations and invocation history.
 Checkpoint 23 migrates session statistics, sharing and artifact controls.
 Checkpoint 24 migrates transcript tree rendering and branch navigation.
-Checkpoint 25 migrates rich text, lazy assets, diagrams and clipboard delivery. See
+Checkpoint 25 migrates rich text, lazy assets, diagrams and clipboard delivery.
+Checkpoint 26 migrates extension widgets, status entries and interactive dialogs. See
 [the checkpoint log](docs/browser-migration-checkpoints.md) for implementation
 verification and the complete browser entrypoint inventory. The last confirmed
 CI checkpoint is recorded below; final CI must pass before the goal is complete.
@@ -39,7 +40,7 @@ CI checkpoint is recorded below; final CI must pass before the goal is complete.
 | --- | --- | --- |
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
-| Browser migration | In progress — current stage | Sixty implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
+| Browser migration | In progress — current stage | Sixty-four implementation modules are typed. Transcript orchestration, file/comment views and shell wiring remain in `public/app.js`. |
 | Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -96,6 +97,7 @@ pure-helper and vendored runtime contracts:
 | `session-relations.ts` | Related-session wire rows, header/modal controls, indexing refresh and navigation |
 | `session-search.ts` | Query/match state, request sequencing, marks and serialized paging jumps |
 | `browser-assets.ts` | Local vendor load deduplication, retries and disposal |
+| `extension-ui.ts`, `extension-ui-data.ts`, `extension-display.ts`, `extension-dialogs.ts` | Typed extension requests, widgets/status, dialog cards and response ownership |
 | `rich-text.ts` | Markdown configuration, final highlighting, file links and copy controls |
 | `diagrams.ts` | Diagram rendering/theme generations and lightbox controls |
 | `clipboard.ts` | Native clipboard and insecure-context textarea fallback |
