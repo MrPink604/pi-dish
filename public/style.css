@@ -2063,10 +2063,59 @@ body.sidebar-open {
   color: var(--text-muted);
   white-space: nowrap;
 }
+
 .advisor-note + .advisor-note {
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--line);
+}
+
+/* IRC peer messages — incoming hub traffic from other agents. Conversation
+   content like the advisor card (so focus mode leaves it visible): hairline
+   left accent, sender carried as a chip in the header, body as markdown. */
+.message.custom-message.irc {
+  display: block;
+  padding: 0;
+  color: var(--text);
+}
+
+.irc-card {
+  margin: 8px 0;
+  padding: 5px 0 6px 12px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+
+.irc-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.irc-icon { color: var(--accent); }
+.irc-label {
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+}
+.irc-from {
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.irc-body {
+  margin-top: 5px;
+  font-size: 13.5px;
+  line-height: 1.55;
 }
 
 /* Tool call — collapsible <details> with icon + summary */

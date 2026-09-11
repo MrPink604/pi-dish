@@ -77,8 +77,54 @@ function sessionRefChipsHtml(refs?: readonly RefContextEntry[]) {
   return `<div class="session-ref-chips">${chips}</div>`;
 }
 
+// OMP peer messages arrive in two wire shapes: a visible `irc:incoming`
+// custom_message whose details carry the clean sender/body (its content keeps
+// the full <irc> envelope as fallback), and — when delivery interrupted a
+// wait — a plain user message with a fixed "Current interruptible wait
+// interrupted" envelope. Both render as one IRC card so a peer note never
+// poses as a prompt typed by the user.
+interface IrcEnvelope { from?: string; body: string }
+
+function parseIrcInterrupt(text: string): IrcEnvelope | null {
+  const match = /^Current interruptible wait interrupted: IRC message from (?:parent )?agent `([^`]+)`\.\n\n(?:Parent )?IRC message:\n\n([\s\S]+)$/.exec(text);
+  return match ? { from: match[1], body: match[2] } : null;
+}
+
+function parseIrcCustomContent(text: string): IrcEnvelope | null {
+  const inner = text.replace(/^<irc>\n?/, '').replace(/\n?<\/irc>\s*$/, '');
+  const match = /^Incoming IRC message from (?:parent )?agent `([^`]+)`:\n\n([\s\S]+)$/.exec(inner);
+  if (!match) return inner.trim() ? { body: inner.trim() } : null;
+  // The envelope appends delivery guidance for the model; it is noise for the
+  // reader, and details.message (the preferred source) already excludes it.
+  const body = match[2]
+    .replace(/\n*Sent while waiting\/working\.[\s\S]*$/, '')
+    .replace(/\n*If response expected, reply via `hub`[\s\S]*$/, '')
+    .trim();
+  return { from: match[1], body };
+}
+
+function renderIrcMessage(msg: RenderMessage, time: string, attrs: string, timestamp: Timestamp, envelope: IrcEnvelope | null) {
+  const from = msg.details?.from || envelope?.from || '';
+  const body = msg.details?.message || envelope?.body || '';
+  return `<div${attrs} class="message custom-message irc" data-timestamp="${escapeHtml(String(timestamp))}">
+    <div class="irc-card">
+      <div class="irc-header">
+        <span class="irc-icon">⇄</span>
+        <span class="irc-label">IRC</span>
+        ${from ? `<span class="irc-from">${escapeHtml(from)}</span>` : ''}
+        ${time ? `<span class="message-time">${time}</span>` : ''}
+        ${messageLinkBtnHtml(msg)}
+      </div>
+      ${body ? `<div class="irc-body"><div class="markdown-body">${options.markdown(body)}</div></div>` : ''}
+    </div>
+  </div>`;
+}
+
 function renderUserMessage(msg: RenderMessage, time: string, attrs = '') {
-  const { text, refs } = splitSessionRefContext(extractTextContent(msg.content));
+  const rawText = extractTextContent(msg.content);
+  const irc = parseIrcInterrupt(rawText);
+  if (irc) return renderIrcMessage(msg, time, attrs, msg.timestamp || Date.now(), irc);
+  const { text, refs } = splitSessionRefContext(rawText);
   const imagesHtml = imageBlocksHtml(msg.content, 'attached image');
   const chipsHtml = sessionRefChipsHtml(msg.sessionRefs || refs);
   return `<div${attrs} class="message user">
@@ -320,6 +366,9 @@ function renderCustomMessage(msg: RenderMessage, time: string, attrs = '') {
   // session-files applies the same explicit skip historically; enforce it
   // here too because live bridge events do not pass through that decoder.
   if (msg.display === false) return '';
+  if (customType === 'irc:incoming') {
+    return renderIrcMessage(msg, time, attrs, timestamp, parseIrcCustomContent(extractTextContent(msg.content)));
+  }
 
   if (customType === 'async-result') {
     const jobs = Array.isArray(msg.details?.jobs) ? msg.details.jobs : [];

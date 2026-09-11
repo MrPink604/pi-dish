@@ -12,6 +12,37 @@ test('message attributes and custom metadata stay literal while hidden messages 
   expect(result.images).toBe(0); expect(result.scripts).toBe(0); expect(result.label).toContain('<script>');
   expect(result.hidden).toBe(''); expect(result.empty).toBe(''); expect(result.interrupted).toContain('Interrupted'); expect(result.interrupted).not.toContain('hidden thinking');
 });
+test('IRC peer messages render as cards from both OMP wire shapes', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  const result = await page.evaluate(() => {
+    const structured = document.createElement('template');
+    structured.innerHTML = messageRenderer.message({ role: 'custom', customType: 'irc:incoming', id: 'irc-entry', timestamp: 1789160848919, display: true,
+      content: '<irc>\nIncoming IRC message from agent `SnapChromeOptions`:\n\nStale envelope copy.\n\nSent while waiting/working. Active interruptible wait stopped early for immediate reading.\n</irc>',
+      details: { id: 'x', from: 'SnapChromeOptions', message: 'Body with `code` spans.' } });
+    const card = structured.content.firstElementChild;
+    const interrupt = document.createElement('template');
+    interrupt.innerHTML = messageRenderer.message({ role: 'user', timestamp: 1789160848919, content: 'Current interruptible wait interrupted: IRC message from parent agent `Main`.\n\nParent IRC message:\n\nCorrection on the table.' });
+    const fallback = document.createElement('template');
+    fallback.innerHTML = messageRenderer.message({ role: 'custom', customType: 'irc:incoming', timestamp: 1789160848919,
+      content: '<irc>\nIncoming IRC message from agent `Evil<img src=x onerror=alert(1)>`:\n\nFallback body.\n\nSent while waiting/working. Active interruptible wait stopped early for immediate reading.\n\nIf response expected, reply via `hub` (`op: "send"`, `to: "Evil"`); may finish current step first. No one replies on your behalf.\n</irc>' });
+    return {
+      cls: card.className, from: card.querySelector('.irc-from')?.textContent, body: card.querySelector('.irc-body')?.textContent,
+      envelope: card.textContent.includes('<irc>') || card.textContent.includes('Sent while') || card.textContent.includes('Stale envelope'),
+      code: !!card.querySelector('.irc-body code'), link: !!card.querySelector('.msg-link-btn'),
+      interruptCls: interrupt.content.firstElementChild.className, interruptFrom: interrupt.content.querySelector('.irc-from')?.textContent,
+      interruptBody: interrupt.content.querySelector('.irc-body')?.textContent, interruptRole: !!interrupt.content.querySelector('.message-role'),
+      fallbackFrom: fallback.content.querySelector('.irc-from')?.textContent, fallbackImgs: fallback.content.querySelectorAll('img').length,
+      fallbackBody: fallback.content.querySelector('.irc-body')?.textContent,
+    };
+  });
+  expect(result.cls).toContain('custom-message irc'); expect(result.from).toBe('SnapChromeOptions');
+  expect(result.body).toContain('Body with'); expect(result.code).toBe(true); expect(result.envelope).toBe(false); expect(result.link).toBe(true);
+  expect(result.interruptCls).toContain('custom-message irc'); expect(result.interruptFrom).toBe('Main');
+  expect(result.interruptBody).toContain('Correction on the table.'); expect(result.interruptRole).toBe(false);
+  expect(result.fallbackFrom).toBe('Evil<img src=x onerror=alert(1)>'); expect(result.fallbackImgs).toBe(0);
+  expect(result.fallbackBody.trim()).toBe('Fallback body.');
+});
+
 test('transcript image resources and share controls use the selected owning host', async ({ page, fleet }) => {
   await fleet.select(fleet.peer);
   const html = await page.evaluate(() => messageRenderer.message({ role: 'user', id: 'entry', content: [{ type: 'image', url: '/api/image', mimeType: 'image/png' }] }));

@@ -14,9 +14,10 @@ test('message projection preserves text/image content but narrows identifiers an
   assert.equal(row.usage.input, undefined); assert.equal(row.usage.cost.total, null); raw.usage.cost.output = 99; assert.equal(row.usage.cost.output, 0.1);
 });
 test('custom-message projection separates hidden state, structured advisor notes and job metadata', () => {
-  const row = decodeRenderMessage({ role: 'custom', display: false, details: { notes: ['plain', { note: '<literal>', severity: 'concern', advisor: 'a' }, { note: {} }], jobs: [{ jobId: 'job', durationMs: 2500 }, { label: {}, durationMs: '3' }] } });
+  const row = decodeRenderMessage({ role: 'custom', display: false, details: { notes: ['plain', { note: '<literal>', severity: 'concern', advisor: 'a' }, { note: {} }], jobs: [{ jobId: 'job', durationMs: 2500 }, { label: {}, durationMs: '3' }], from: 'Main', message: 'body', extra: 'dropped' } });
   assert.equal(row.display, false); assert.equal(row.details.notes.length, 2); assert.equal(row.details.notes[0].note, 'plain'); assert.equal(row.details.notes[1].note, '<literal>');
   assert.equal(row.details.jobs[0].durationMs, 2500); assert.equal(row.details.jobs[1].label, undefined);
   assert.equal(decodeRenderMessage({ role: 'assistant', content: [] }).content.length, 0);
+  assert.equal(row.details.from, 'Main'); assert.equal(row.details.message, 'body'); assert.equal(row.details.extra, undefined);
   assert.equal(decodeRenderMessage({ role: 'assistant' }).content, undefined);
 });

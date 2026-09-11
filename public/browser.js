@@ -14989,7 +14989,9 @@ ${restored}`;
       sessionRefs: Array.isArray(row.sessionRefs) ? row.sessionRefs.flatMap((entry) => record8(entry) && typeof entry.ref === "string" ? [{ ref: entry.ref, name: string(entry.name), host: string(entry.host), cwd: string(entry.cwd), isActive: entry.isActive === true }] : []) : void 0,
       details: details ? {
         notes: Array.isArray(details.notes) ? details.notes.flatMap((note) => typeof note === "string" ? [{ note }] : record8(note) && typeof note.note === "string" ? [{ note: note.note, severity: string(note.severity), advisor: string(note.advisor) }] : []) : void 0,
-        jobs: Array.isArray(details.jobs) ? details.jobs.flatMap((job) => record8(job) ? [{ label: string(job.label), jobId: string(job.jobId), durationMs: number7(job.durationMs) }] : []) : void 0
+        jobs: Array.isArray(details.jobs) ? details.jobs.flatMap((job) => record8(job) ? [{ label: string(job.label), jobId: string(job.jobId), durationMs: number7(job.durationMs) }] : []) : void 0,
+        from: string(details.from),
+        message: string(details.message)
       } : void 0
     };
   }
@@ -15111,8 +15113,38 @@ ${restored}`;
       }).join("");
       return `<div class="session-ref-chips">${chips}</div>`;
     }
+    function parseIrcInterrupt(text17) {
+      const match = /^Current interruptible wait interrupted: IRC message from (?:parent )?agent `([^`]+)`\.\n\n(?:Parent )?IRC message:\n\n([\s\S]+)$/.exec(text17);
+      return match ? { from: match[1], body: match[2] } : null;
+    }
+    function parseIrcCustomContent(text17) {
+      const inner = text17.replace(/^<irc>\n?/, "").replace(/\n?<\/irc>\s*$/, "");
+      const match = /^Incoming IRC message from (?:parent )?agent `([^`]+)`:\n\n([\s\S]+)$/.exec(inner);
+      if (!match) return inner.trim() ? { body: inner.trim() } : null;
+      const body = match[2].replace(/\n*Sent while waiting\/working\.[\s\S]*$/, "").replace(/\n*If response expected, reply via `hub`[\s\S]*$/, "").trim();
+      return { from: match[1], body };
+    }
+    function renderIrcMessage(msg, time, attrs, timestamp, envelope) {
+      const from = msg.details?.from || envelope?.from || "";
+      const body = msg.details?.message || envelope?.body || "";
+      return `<div${attrs} class="message custom-message irc" data-timestamp="${escapeHtml(String(timestamp))}">
+    <div class="irc-card">
+      <div class="irc-header">
+        <span class="irc-icon">\u21C4</span>
+        <span class="irc-label">IRC</span>
+        ${from ? `<span class="irc-from">${escapeHtml(from)}</span>` : ""}
+        ${time ? `<span class="message-time">${time}</span>` : ""}
+        ${messageLinkBtnHtml(msg)}
+      </div>
+      ${body ? `<div class="irc-body"><div class="markdown-body">${options2.markdown(body)}</div></div>` : ""}
+    </div>
+  </div>`;
+    }
     function renderUserMessage(msg, time, attrs = "") {
-      const { text: text17, refs } = splitSessionRefContext(extractTextContent(msg.content));
+      const rawText = extractTextContent(msg.content);
+      const irc = parseIrcInterrupt(rawText);
+      if (irc) return renderIrcMessage(msg, time, attrs, msg.timestamp || Date.now(), irc);
+      const { text: text17, refs } = splitSessionRefContext(rawText);
       const imagesHtml = imageBlocksHtml(msg.content, "attached image");
       const chipsHtml = sessionRefChipsHtml(msg.sessionRefs || refs);
       return `<div${attrs} class="message user">
@@ -15294,6 +15326,9 @@ ${restored}`;
     </div>`;
       }
       if (msg.display === false) return "";
+      if (customType === "irc:incoming") {
+        return renderIrcMessage(msg, time, attrs, timestamp, parseIrcCustomContent(extractTextContent(msg.content)));
+      }
       if (customType === "async-result") {
         const jobs = Array.isArray(msg.details?.jobs) ? msg.details.jobs : [];
         const names = jobs.map((job) => job.label || job.jobId).filter(Boolean);

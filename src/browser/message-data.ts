@@ -3,7 +3,7 @@ import type { RefContextEntry, Timestamp } from './shared-helper-types';
 export interface MessageBlock { type: string; text?: string; thinking?: string; name?: string; id?: string; arguments?: Record<string, unknown>; url?: string; data?: string; mimeType?: string }
 export interface MessageUsage { input?: number; output?: number; reasoning?: number; cacheRead?: number; cacheWrite?: number; cost?: { input?: number | null; output?: number | null; cacheRead?: number | null; cacheWrite?: number | null; total?: number | null } }
 export interface AdvisorNote { note: string; severity?: string; advisor?: string }
-export interface MessageDetails { notes?: AdvisorNote[]; jobs?: { label?: string; jobId?: string; durationMs?: number }[] }
+export interface MessageDetails { notes?: AdvisorNote[]; jobs?: { label?: string; jobId?: string; durationMs?: number }[]; from?: string; message?: string }
 export interface RenderMessage {
   role: string; id?: string; index?: number; timestamp?: Timestamp; content?: string | (MessageBlock | string)[];
   model?: string; responseModel?: string; provider?: string; stopReason?: string; errorMessage?: string;
@@ -35,5 +35,6 @@ export function decodeRenderMessage(value: unknown): RenderMessage {
     usage: decodeMessageUsage(row.usage), durationMs: number(row.durationMs), outputTokens: number(row.outputTokens),
     sessionRefs: Array.isArray(row.sessionRefs) ? row.sessionRefs.flatMap((entry: unknown): RefContextEntry[] => record(entry) && typeof entry.ref === 'string' ? [{ ref: entry.ref, name: string(entry.name), host: string(entry.host), cwd: string(entry.cwd), isActive: entry.isActive === true }] : []) : undefined,
     details: details ? { notes: Array.isArray(details.notes) ? details.notes.flatMap((note: unknown): AdvisorNote[] => typeof note === 'string' ? [{ note }] : record(note) && typeof note.note === 'string' ? [{ note: note.note, severity: string(note.severity), advisor: string(note.advisor) }] : []) : undefined,
-      jobs: Array.isArray(details.jobs) ? details.jobs.flatMap((job: unknown) => record(job) ? [{ label: string(job.label), jobId: string(job.jobId), durationMs: number(job.durationMs) }] : []) : undefined } : undefined };
+      jobs: Array.isArray(details.jobs) ? details.jobs.flatMap((job: unknown) => record(job) ? [{ label: string(job.label), jobId: string(job.jobId), durationMs: number(job.durationMs) }] : []) : undefined,
+      from: string(details.from), message: string(details.message) } : undefined };
 }
