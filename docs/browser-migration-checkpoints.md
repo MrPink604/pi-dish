@@ -217,3 +217,25 @@ are not completion percentages.
   Fable review of the local commit is required before push.
 - Next: harness settings editor and new-session spawn coordination, followed by
   the remaining application features, shared helpers and startup shell.
+
+- Fable 5.1 cleared new-session options commit `5e983d6` with no blocking
+  findings before push. All five CI jobs passed on artifact commit `338addd`.
+
+## Checkpoint 10 — harness settings
+
+- Boundary: shared session/new-session harness editor, config/agent decoding,
+  role and agent form rendering, changed-field patches and save lifecycle.
+- Read owners capture the host endpoint, harness, cwd and editor instance.
+  Late reads cannot paint a replacement modal, and fallback model rows must
+  belong to the same host and harness. Custom role/agent names remain literal
+  record keys, including names inherited by ordinary JavaScript objects.
+- Save captures both patches and its endpoint before the first write. Closing
+  and reopening the modal does not retarget the second write or let an old
+  completion close, re-enable or report errors in the new editor. A failed
+  first patch stops the second and leaves the current form editable.
+- Two decoder units, strict type contracts and four focused browser regressions
+  cover these boundaries. Strict build/lint/type checks, all 892 backend tests,
+  100 browser regressions, independent UI scenarios and desktop/mobile smoke
+  passed. Fable review of the local commit is required before push.
+- Next: new-session spawn coordination, then remaining application features,
+  shared helpers and startup shell.

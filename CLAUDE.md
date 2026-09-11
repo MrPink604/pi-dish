@@ -736,6 +736,11 @@ checks its originating tree and host before rendering or selecting a cwd.
 Host catalog/token edits and late identity discovery renew an open directory tree
 and known-cwd catalog when their captured endpoint changes.
 
+The shared harness settings editor lives in `src/browser/harness-settings.ts`,
+with wire narrowing in `harness-settings-data.ts`. Editor instances own reads
+and DOM completion. Save snapshots patches and endpoint once, so its second
+write preserves submitted intent even if the user opens another editor.
+
 New-session model/thinking preferences and the OMP defaults preview live in
 `src/browser/new-session-options.ts`. Preview requests retain endpoint, harness,
 cwd and takeover generation through response-body reads. Retiring a preview

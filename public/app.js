@@ -8873,354 +8873,40 @@ const newSessionConfigPreview = PiDishBrowser.createNewSessionConfigPreview({
 });
 function loadNsHarnessConfig(cwd = nsCwdValue()) { return newSessionConfigPreview.load(cwd); }
 
-// --- Harness settings: pi-dish's take on OMP's /agents and /models hubs ---
-//
-// One modal, two panes, one Save. Both entries — the session header's harness
-// badge and the new-session takeover — open it against a { host, cwd } scope.
-// Every value behind it is a *global* harness config value, while the
-// effective view depends on that cwd's project config, so rows are initialized
-// from the global record and call out a differing effective value as the
-// project override the harness wins with in that directory.
-let harnessSettings = null;
-let harnessSettingsTab = 'agents';
-let harnessSettingsSeq = 0;
-
-// Role refs the harness resolves itself (`@smol` and friends): the agents hub
-// takes them wherever a concrete model selector goes, and they follow the role
-// assignments in the Models pane instead of pinning one model.
-const AGENT_MODEL_ROLE_REFS = OMP_MODEL_ROLES.map(role => `@${role.key}`);
-
-function isHarnessSettingsOpen() {
-  return document.getElementById('harnessSettingsModal')?.style.display === 'flex';
-}
-
-function harnessSettingsError(message) {
-  const el = document.getElementById('modelRolesError');
-  if (el) el.textContent = message || '';
-}
-
-function showHarnessSettingsTab(tab) {
-  harnessSettingsTab = tab === 'models' ? 'models' : 'agents';
-  for (const [name, tabId, paneId] of [
-    ['agents', 'hsTabAgents', 'hsPaneAgents'],
-    ['models', 'hsTabModels', 'hsPaneModels'],
-  ]) {
-    const active = name === harnessSettingsTab;
-    const tabEl = document.getElementById(tabId);
-    const paneEl = document.getElementById(paneId);
-    if (tabEl) {
-      tabEl.classList.toggle('active', active);
-      tabEl.setAttribute('aria-selected', active ? 'true' : 'false');
-    }
-    if (paneEl) paneEl.style.display = active ? '' : 'none';
-  }
-}
-
+// One typed editor serves session settings and the new-session takeover.
+const harnessSettingsController = PiDishBrowser.createHarnessSettings({
+  root: document.getElementById('harnessSettingsModal'), host: hostEntryFor, request: apiFetch,
+  fallbackModels: (host, harness) => modelCatalog.scope?.harnessId === harness
+    && PiDishBrowser.sameDirectoryHost(modelCatalog.scope?.host || null, host) ? modelCatalog.rows() : [],
+  escapeHtml, shortCwd, roleDefinitions: OMP_MODEL_ROLES, parseModelRoleRef, composeModelRoleRef, modelRoleLevels,
+  onSaved: scope => {
+    if (isNewSessionViewOpen() && selectedHarnessId() === scope.harnessId
+        && nsHostId() === scope.hostId && nsCwdValue() === scope.cwd) void loadNsHarnessConfig();
+  },
+});
+function isHarnessSettingsOpen() { return harnessSettingsController.isOpen(); }
+function showHarnessSettingsTab(tab) { harnessSettingsController.showTab(tab); }
+function closeHarnessSettings() { harnessSettingsController.close(); }
+function saveHarnessSettings() { return harnessSettingsController.save(); }
 async function harnessSettingsFetch(hostId, url) {
   const res = await apiFetch(hostId, url);
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
   return data;
 }
-
-/** Harness badge in the session header: same editor, scoped to the session. */
 function openSessionHarnessSettings() {
-  if (!sessionState.currentSession || !harnessSupportsSettings(sessionState.currentSession)) return;
-  openHarnessSettings({
-    harnessId: sessionState.currentSession.harnessId,
-    hostId: sessionHostIdOf(sessionState.currentSession),
-    cwd: sessionState.currentSession.cwd || '',
-    label: sessionState.currentSession.harnessLabel || harnessBadgeInfo(sessionState.currentSession.harnessId).label,
-  });
+  const session = sessionState.currentSession;
+  if (!session || !harnessSupportsSettings(session)) return;
+  return openHarnessSettings({ harnessId: session.harnessId, hostId: sessionHostIdOf(session), cwd: session.cwd || '',
+    label: session.harnessLabel || harnessBadgeInfo(session.harnessId).label });
 }
-
-async function openHarnessSettings(opts = {}) {
+function openHarnessSettings(opts = {}) {
   const harnessId = opts.harnessId || 'omp';
-  const hostId = opts.hostId !== undefined ? opts.hostId : nsHostId();
-  const cwd = (opts.cwd !== undefined ? opts.cwd : (newSessionConfigPreview.config?.cwd ?? nsCwdValue())) || '';
-  const label = opts.label || harnessLabel(harnessId);
-  const seq = ++harnessSettingsSeq;
-  harnessSettings = { hostId, cwd, harnessId, label, config: null, agents: [], settings: null, globalSettings: null, models: [] };
-  document.getElementById('harnessSettingsModal').style.display = 'flex';
-  document.getElementById('harnessSettingsTitle').textContent = `${label} settings`;
-  const scope = document.getElementById('harnessSettingsScope');
-  if (scope) {
-    scope.textContent = cwd ? shortCwd(cwd) : 'host default';
-    scope.title = cwd || 'No working directory: the harness reads its global config only';
-  }
-  document.getElementById('harnessAgentsBody').textContent = 'Loading…';
-  document.getElementById('harnessSettingsDefaults').textContent = 'Loading…';
-  document.getElementById('modelRolesBody').innerHTML = '';
-  harnessSettingsError('');
-  showHarnessSettingsTab(opts.tab);
-
-  const params = cwd ? `?cwd=${encodeURIComponent(cwd)}` : '';
-  const base = `/api/harnesses/${encodeURIComponent(harnessId)}`;
-  const settle = (promise) => promise.then(value => ({ value }), error => ({ error }));
-  const [config, agents, models] = await Promise.all([
-    settle(harnessSettingsFetch(hostId, `${base}/config${params}`)),
-    settle(harnessSettingsFetch(hostId, `${base}/agents${params}`)),
-    settle(harnessSettingsFetch(hostId, modelCatalogUrl(harnessId, cwd))),
-  ]);
-  if (seq !== harnessSettingsSeq || !isHarnessSettingsOpen()) return;
-  harnessSettings.config = config.value || null;
-  harnessSettings.models = Array.isArray(models.value) ? models.value
-    : (modelCatalog.scope?.harnessId === harnessId && Array.isArray(modelCatalog.rows()) ? modelCatalog.rows() : []);
-  if (agents.value) {
-    harnessSettings.agents = Array.isArray(agents.value.agents) ? agents.value.agents : [];
-    harnessSettings.settings = agents.value.settings || null;
-    harnessSettings.globalSettings = agents.value.globalSettings || null;
-  }
-  renderHarnessAgents(agents.error?.message);
-  renderHarnessDefaults(config.error?.message);
-  renderModelRoles();
-}
-
-function closeHarnessSettings() {
-  harnessSettingsSeq++;
-  document.getElementById('harnessSettingsModal').style.display = 'none';
-}
-
-function renderHarnessDefaults(error) {
-  const el = document.getElementById('harnessSettingsDefaults');
-  if (!el) return;
-  const config = harnessSettings?.config;
-  if (!config) {
-    el.textContent = `Defaults unavailable: ${error || 'no response'}`;
-    return;
-  }
-  el.textContent = `Default model: ${config.defaultModel || 'auto-select'} · Thinking: ${config.defaultThinkingLevel || 'host default'}`;
-}
-
-function harnessSettingsModelSelectors() {
-  const models = Array.isArray(harnessSettings?.models) ? harnessSettings.models : [];
-  return models.map(m => m.selector || `${m.provider}/${m.id}`);
-}
-
-function modelRoleOptions(value) {
-  const known = harnessSettingsModelSelectors();
-  let html = `<option value=""${value ? '' : ' selected'}>(unset)</option>`;
-  // A global assignment the catalog doesn't list stays selectable: the harness
-  // may resolve refs this catalog can't (aliases, a provider added out of band).
-  if (value && !known.includes(value)) {
-    html += `<option value="${escapeHtml(value)}" selected>(current) ${escapeHtml(value)}</option>`;
-  }
-  known.forEach(selector => {
-    html += `<option value="${escapeHtml(selector)}"${selector === value ? ' selected' : ''}>${escapeHtml(selector)}</option>`;
+  return harnessSettingsController.open({ harnessId,
+    hostId: opts.hostId !== undefined ? opts.hostId : nsHostId(),
+    cwd: (opts.cwd !== undefined ? opts.cwd : (newSessionConfigPreview.config?.cwd ?? nsCwdValue())) || '',
+    label: opts.label || harnessLabel(harnessId), tab: opts.tab,
   });
-  return html;
-}
-
-/**
- * Options for a role's thinking-level select: (inherit), then off/auto and
- * the model's supported ladder in OMP's /models roles order. `keepUnknown`
- * retains an off-ladder stored level as a "(current)" option — used on the
- * initial render only; switching the model rebuilds the ladder without it.
- */
-function modelRoleLevelOptions(level, modelSelector, keepUnknown) {
-  const models = Array.isArray(harnessSettings?.models) ? harnessSettings.models : [];
-  const entry = models.find(m => (m.selector || `${m.provider}/${m.id}`) === modelSelector);
-  const levels = modelRoleLevels(entry);
-  let html = `<option value=""${level ? '' : ' selected'}>(inherit)</option>`;
-  if (level && keepUnknown && !levels.includes(level)) {
-    html += `<option value="${escapeHtml(level)}" selected>(current) ${escapeHtml(level)}</option>`;
-  }
-  for (const name of levels) {
-    html += `<option value="${escapeHtml(name)}"${name === level ? ' selected' : ''}>${escapeHtml(name)}</option>`;
-  }
-  return html;
-}
-
-/** Model changed: re-derive the level ladder from the new model's catalog. */
-function modelRoleModelChanged(select) {
-  const levelSelect = select.closest('.model-role-row')?.querySelector('.model-role-level');
-  if (!levelSelect) return;
-  levelSelect.innerHTML = modelRoleLevelOptions(levelSelect.value, select.value, false);
-}
-
-function renderModelRoles() {
-  const body = document.getElementById('modelRolesBody');
-  if (!body) return;
-  const rows = buildModelRoleRows(harnessSettings?.config?.globalModelRoles, harnessSettings?.config?.modelRoles);
-  const known = harnessSettingsModelSelectors();
-  body.innerHTML = rows.map(row => {
-    const { model, level } = parseModelRoleRef(row.value, known);
-    return `<div class="model-role-row" data-role="${escapeHtml(row.key)}">
-      <div class="model-role-label">
-        <strong>${escapeHtml(row.name)}</strong>
-        <code class="model-role-key">${escapeHtml(row.key)}</code>
-        <small>${escapeHtml(row.description)}</small>
-        ${row.override ? `<small class="model-role-override">project override: ${escapeHtml(row.override)} (.omp/config.yml wins here)</small>` : ''}
-      </div>
-      <select class="model-role-select" data-role="${escapeHtml(row.key)}" data-initial="${escapeHtml(model)}"
-              onchange="modelRoleModelChanged(this)">${modelRoleOptions(model)}</select>
-      <select class="model-role-level" data-role="${escapeHtml(row.key)}" data-initial="${escapeHtml(level)}"
-              title="Thinking level for this role">${modelRoleLevelOptions(level, model, true)}</select>
-    </div>`;
-  }).join('');
-}
-
-/**
- * Agent-model options: inherit (the definition's own `model:`), the harness's
- * role refs, then the concrete catalog. An assignment the catalog doesn't list
- * stays selectable for the same reason the role editor keeps one.
- */
-function agentModelOptions(value, inherited) {
-  const known = harnessSettingsModelSelectors();
-  const inheritLabel = inherited ? `(inherit ${inherited})` : '(inherit)';
-  let html = `<option value=""${value ? '' : ' selected'}>${escapeHtml(inheritLabel)}</option>`;
-  if (value && !known.includes(value) && !AGENT_MODEL_ROLE_REFS.includes(value)) {
-    html += `<option value="${escapeHtml(value)}" selected>(current) ${escapeHtml(value)}</option>`;
-  }
-  const group = (label, values) => {
-    if (!values.length) return '';
-    return `<optgroup label="${escapeHtml(label)}">` + values.map(entry =>
-      `<option value="${escapeHtml(entry)}"${entry === value ? ' selected' : ''}>${escapeHtml(entry)}</option>`).join('') + '</optgroup>';
-  };
-  return html + group('Roles', AGENT_MODEL_ROLE_REFS) + group('Models', known);
-}
-
-function triStateOptions(value) {
-  const state = value === true ? 'on' : value === false ? 'off' : '';
-  return [['', 'Inherit'], ['on', 'On'], ['off', 'Off']].map(([option, label]) =>
-    `<option value="${option}"${option === state ? ' selected' : ''}>${label}</option>`).join('');
-}
-
-function triStateValue(state) {
-  return state === 'on' ? true : state === 'off' ? false : null;
-}
-
-function renderHarnessAgents(error) {
-  const body = document.getElementById('harnessAgentsBody');
-  if (!body) return;
-  const global = harnessSettings?.globalSettings;
-  const effective = harnessSettings?.settings;
-  const agents = harnessSettings?.agents || [];
-  if (!global) {
-    body.textContent = `Agents unavailable: ${error || 'no response'}`;
-    return;
-  }
-  if (!agents.length) {
-    body.textContent = 'No task agents discovered for this harness.';
-    return;
-  }
-  const disabled = new Set(global.disabled || []);
-  const effectiveDisabled = new Set(effective?.disabled || []);
-  body.innerHTML = agents.map(agent => {
-    const name = agent.name;
-    const model = global.modelOverrides?.[name] || '';
-    const prewalk = global.prewalk?.[name];
-    const advisor = global.advisor?.[name];
-    const isDisabled = disabled.has(name);
-    const overrides = [];
-    if (effectiveDisabled.has(name) !== isDisabled) {
-      overrides.push(effectiveDisabled.has(name) ? 'disabled here' : 'enabled here');
-    }
-    const effectiveModel = effective?.modelOverrides?.[name] || '';
-    if (effectiveModel !== model) overrides.push(`model ${effectiveModel || 'inherited'}`);
-    const definition = [agent.model, agent.thinkingLevel && `thinking ${agent.thinkingLevel}`]
-      .filter(Boolean).join(' · ');
-    return `<div class="hs-agent-row${isDisabled ? ' disabled' : ''}" data-agent="${escapeHtml(name)}">
-      <div class="hs-agent-label">
-        <label class="hs-agent-enable">
-          <input type="checkbox" class="hs-agent-enabled" data-agent="${escapeHtml(name)}"
-                 data-initial="${isDisabled ? 'off' : 'on'}"${isDisabled ? '' : ' checked'}
-                 onchange="this.closest('.hs-agent-row').classList.toggle('disabled', !this.checked)">
-          <strong>${escapeHtml(name)}</strong>
-        </label>
-        <span class="hs-agent-source hs-agent-source-${escapeHtml(agent.source || 'bundled')}">${escapeHtml(agent.source || 'bundled')}</span>
-        ${definition ? `<code class="hs-agent-definition">${escapeHtml(definition)}</code>` : ''}
-        <small>${escapeHtml(agent.description || '')}</small>
-        ${overrides.length ? `<small class="model-role-override">project override: ${escapeHtml(overrides.join(', '))} (.omp/config.yml wins here)</small>` : ''}
-      </div>
-      <div class="hs-agent-controls">
-        <label class="hs-agent-field">Model
-          <select class="hs-agent-model" data-agent="${escapeHtml(name)}" data-initial="${escapeHtml(model)}">${agentModelOptions(model, agent.model)}</select>
-        </label>
-        <label class="hs-agent-field">Prewalk
-          <select class="hs-agent-prewalk" data-agent="${escapeHtml(name)}" data-initial="${prewalk === true ? 'on' : prewalk === false ? 'off' : ''}">${triStateOptions(prewalk)}</select>
-        </label>
-        <label class="hs-agent-field">Advisor
-          <select class="hs-agent-advisor" data-agent="${escapeHtml(name)}" data-initial="${advisor === true ? 'on' : advisor === false ? 'off' : ''}">${triStateOptions(advisor)}</select>
-        </label>
-      </div>
-    </div>`;
-  }).join('');
-}
-
-/** Only the rows the user moved, in the PUT shapes the two endpoints take. */
-function collectHarnessSettingsPatch() {
-  const roles = {};
-  const levelSelects = new Map();
-  for (const select of document.querySelectorAll('#modelRolesBody .model-role-level')) {
-    levelSelects.set(select.dataset.role, select);
-  }
-  for (const select of document.querySelectorAll('#modelRolesBody .model-role-select')) {
-    const levelSelect = levelSelects.get(select.dataset.role);
-    const level = levelSelect?.value || '';
-    if (select.value === select.dataset.initial && level === (levelSelect?.dataset.initial || '')) continue;
-    // Inherit stores as the bare model ref; an unset model drops the role.
-    roles[select.dataset.role] = select.value ? composeModelRoleRef(select.value, level) : null;
-  }
-  const agents = {};
-  const field = (name, key, value) => {
-    agents[name] = agents[name] || {};
-    agents[name][key] = value;
-  };
-  for (const box of document.querySelectorAll('#harnessAgentsBody .hs-agent-enabled')) {
-    const state = box.checked ? 'on' : 'off';
-    if (state !== box.dataset.initial) field(box.dataset.agent, 'disabled', !box.checked);
-  }
-  for (const select of document.querySelectorAll('#harnessAgentsBody .hs-agent-model')) {
-    if (select.value === select.dataset.initial) continue;
-    field(select.dataset.agent, 'model', select.value || null);
-  }
-  for (const [cls, key] of [['hs-agent-prewalk', 'prewalk'], ['hs-agent-advisor', 'advisor']]) {
-    for (const select of document.querySelectorAll(`#harnessAgentsBody .${cls}`)) {
-      if (select.value === select.dataset.initial) continue;
-      field(select.dataset.agent, key, triStateValue(select.value));
-    }
-  }
-  return { roles, agents };
-}
-
-async function saveHarnessSettings() {
-  if (!harnessSettings) return;
-  const btn = document.getElementById('modelRolesSave');
-  const { roles, agents } = collectHarnessSettingsPatch();
-  const { hostId, cwd, harnessId } = harnessSettings;
-  if (!Object.keys(roles).length && !Object.keys(agents).length) { closeHarnessSettings(); return; }
-  harnessSettingsError('');
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-  const base = `/api/harnesses/${encodeURIComponent(harnessId)}`;
-  try {
-    // Writes are whole-record rewrites the server serializes per harness;
-    // sending them in sequence keeps a failure's blast radius to one record.
-    if (Object.keys(agents).length) {
-      await putHarnessSettings(hostId, `${base}/agents`, { agents, cwd: cwd || undefined });
-    }
-    if (Object.keys(roles).length) {
-      const data = await putHarnessSettings(hostId, `${base}/model-roles`, { roles, cwd: cwd || undefined });
-      if (harnessSettings) harnessSettings.config = { ...harnessSettings.config, ...data };
-    }
-    closeHarnessSettings();
-    if (isNewSessionViewOpen()) loadNsHarnessConfig();
-  } catch (e) {
-    harnessSettingsError(e.message);
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
-  }
-}
-
-async function putHarnessSettings(hostId, url, body) {
-  const res = await apiFetch(hostId, url, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json().catch(() => null);
-  if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-  return data;
 }
 
 function refreshNsPilotOptions() {

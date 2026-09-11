@@ -317,3 +317,9 @@ select rendering plus the OMP defaults preview. Preview records narrow wire fiel
 request owners capture host route/token, harness, cwd and takeover generation.
 Retiring a read invalidates its config immediately but preserves layout until a
 new load starts, keeping a cwd blur from moving the spawn button mid-click.
+
+`src/browser/harness-settings-data.ts` narrows harness defaults and agent settings
+at the wire boundary. `harness-settings.ts` owns editor DOM/listeners, captured
+read scopes and serialized save patches. A submitted save retains its endpoint
+and both patches through modal replacement, while UI completion requires the
+same editor instance. Fallback models also require a matching host and harness.

@@ -21,3 +21,6 @@ export { createSpawnTargets, createSpawnTargetPicker, decodeSpawnChoices, spawnT
 export { createModelCatalog, modelsCacheKey, modelSelectOptionsHtml, modelHiddenNote } from './model-catalog';
 
 export { createNewSessionPreferences, createNewSessionConfigPreview, decodeHarnessConfigPreview, NS_THINKING_LABELS } from './new-session-options';
+
+export { createHarnessSettings } from './harness-settings';
+export { decodeHarnessConfig, decodeHarnessAgents } from './harness-settings-data';
