@@ -97,6 +97,7 @@ browser and remaining JavaScript modules are not yet type checked. See
 | Prime owned-root close/restart, replacement-failure guards, legacy detach labels, unowned controls and host-bound requests | `test/browser/prime-close.spec.js`, `test/tmux.test.js`, `npm run test:lineage -- prime` |
 | Listener startup, bind retry, delayed/failed aliases, advertised URLs, signal release | `test/listener-lifecycle.test.js` |
 | Bridge, lifecycle, capabilities and API behavior | `npm test` (`test/*.test.js`) |
+| Extracted selector DOM/actions/disposal and repeatable timing baseline | `test/browser/model-selector.spec.js` |
 | Models, drafts, sidebar, usage, skills, routines, bounce, mobile | `test/ui-scenarios/` |
 | Streaming, retained transcripts, terminal and desktop/mobile integration | `test/ui-smoke.js` |
 

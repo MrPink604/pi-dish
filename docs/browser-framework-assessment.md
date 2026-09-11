@@ -1,7 +1,8 @@
 # Browser component framework assessment
 
 Assessed 2026-09-10 after the typed capability/transport work and browser
-selection-ownership migration.
+selection-ownership migration. The [ordinary DOM selector baseline](model-selector-baseline.md)
+now implements the preparation boundary and records repeatable measurements.
 
 ## Decision
 
@@ -9,8 +10,8 @@ Keep the current production rendering approach. A component framework is now
 practical to evaluate at a feature boundary, but this refactoring has not
 measured a rendering or maintenance benefit from one. Prefer a contained Preact
 model-selector experiment when component work resumes, compared against an
-extracted plain-JavaScript implementation of the same feature. This document
-specifies that experiment; it does not add a dependency or implement a pilot.
+extracted ordinary DOM implementation of the same feature. This document
+specifies the framework experiment; that pilot has not been implemented.
 
 The state extraction addressed a concrete source of defects: asynchronous
 callbacks carrying the wrong host/session or applying after navigation.
@@ -27,9 +28,9 @@ adoption should depend on simpler feature code and acceptable runtime costs.
   The store has initialization callbacks, not a general subscription API.
   A component therefore needs an explicit update adapter; it cannot assume a
   reactive store or mutate snapshots directly.
-- `toggleModelDropdown`, `renderModelDropdown`, `renderModelDropdownFooter`,
-  `toggleModelEnabled` and `selectModel` combine catalog, filtering, enabled-model
-  editing, selection and DOM updates. This is enough interaction to evaluate
+- `src/browser/model-selector.ts` now owns selector DOM; `toggleModelDropdown`,
+  `renderModelDropdown`, `toggleModelEnabled` and `selectModel` in the app form
+  its adapter for catalog, query/edit state, selection and API actions. This is enough interaction to evaluate
   component value without touching transcript ownership.
 - `stashCurrentTranscript`/`restoreCachedTranscript` and the streaming renderer
   preserve DOM nodes, open details, pagination and scroll state. They should
@@ -62,7 +63,8 @@ CSS/query conventions, not a claim of measured speed or general superiority.
 
 ## Contained pilot contract
 
-Use only the model dropdown. Keep its header trigger and the thinking menu in
+The ordinary DOM implementation now follows this boundary; use it as the
+comparison baseline. Use only the model dropdown. Keep its header trigger and the thinking menu in
 the existing shell. First extract the current implementation with an interface
 that the Preact version can implement unchanged:
 

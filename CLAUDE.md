@@ -1705,7 +1705,13 @@ before the ordinary app script and exposes `PiDishBrowser`; regenerate it with
 `npm run build:browser`. The app retains selection/view guards and the existing
 API wrapper names, while the adapter owns host resolution and typed reads/actions. Its checks do not replace capability gates or lifecycle proofs.
 
-## Model dropdown / scoped models (public/app.js)
+## Model dropdown / scoped models
+
+`src/browser/model-selector.ts` owns the dropdown DOM behind mount/update/dispose
+and explicit owner-bearing actions. `app.js` retains query/edit state, catalog
+writes, visibility and request feedback; its action adapter checks the captured
+owner. Closing disposes the instance and removes its listeners. The module is
+compiled into `public/browser.js`; see [the evaluation baseline](docs/model-selector-baseline.md).
 
 The header model dropdown mirrors pi's scoped-models feature (`/scoped-models`
 in the TUI). pi's extension/RPC APIs expose no way to read or set a live

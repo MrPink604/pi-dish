@@ -6645,6 +6645,8 @@ function cancelRename() {
 // --- Model dropdown ---
 let modelDropdownOpen = false;
 let modelEditMode = false; // scoped-models switcher: toggle which models are enabled
+let modelQuery = '';
+let modelSelector = null;
 
 async function toggleModelDropdown() {
   if (!sessionState.currentSession || !sessionState.currentSession.isActive || !sessionSupports(sessionState.currentSession, 'setModel')) return;
@@ -6654,7 +6656,7 @@ async function toggleModelDropdown() {
   modelDropdownOpen = !modelDropdownOpen;
   modelEditMode = false;
   const dropdown = document.getElementById('modelDropdown');
-  if (!modelDropdownOpen) { dropdown.style.display = 'none'; return; }
+  if (!modelDropdownOpen) { closeModelDropdown(); return; }
   // Desktop: anchored under the header button. Mobile: the stylesheet
   // positions it (full-width sheet), so just clear any desktop inline pos.
   if (window.innerWidth > 768) {
@@ -6664,96 +6666,32 @@ async function toggleModelDropdown() {
   }
   renderModelDropdown('');
   dropdown.style.display = 'flex';
-  var searchInput = dropdown.querySelector('.model-search');
-  if (searchInput) searchInput.focus();
+  modelSelector.focusSearch();
   armOutsideClickClose(['modelSelector', 'modelDropdown'], closeModelDropdown, () => modelDropdownOpen);
 }
 
-function isCurrentModel(m) {
-  var fullId = m.provider + '/' + m.id;
-  return m.id === sessionState.currentSession?.model || fullId === sessionState.currentSession?.model;
-}
-
 function renderModelDropdown(query) {
-  var dropdown = document.getElementById('modelDropdown');
-  var filtered = filterModels(query);
-  var scoped = knownModels.some(m => m && m.enabled === false);
-  var hidden = 0;
-  if (!modelEditMode && scoped) {
-    // Scoped view: only enabled models (the active one always shows).
-    var visible = filtered.filter(m => m.enabled !== false || isCurrentModel(m));
-    hidden = filtered.length - visible.length;
-    filtered = visible;
+  const owner = sessionState.captureSelection();
+  if (!owner) return;
+  modelQuery = query;
+  if (!modelSelector) {
+    // Every action is bound to the view that emitted it, before invoking the
+    // existing request/catalog writers. The component never reads global state.
+    const owned = action => (target, ...args) => {
+      if (sessionState.ownsSelection(target)) action(...args);
+    };
+    modelSelector = PiDishBrowser.mountModelSelector(document.getElementById('modelDropdown'), {
+      requestClose: owned(closeModelDropdown),
+      queryChanged: owned(renderModelDropdown),
+      editModeChanged: owned(editing => editing ? enterModelEditMode() : exitModelEditMode()),
+      selectModel: owned(selectModel),
+      toggleModel: owned(toggleModelEnabled),
+      toggleProvider: owned(toggleProviderEnabled),
+      setAllEnabled: owned(setAllModelsEnabled),
+    }, formatTokens);
   }
-  var searchInput = dropdown.querySelector('.model-search');
-  if (!searchInput) {
-    searchInput = document.createElement('input');
-    searchInput.type = 'text'; searchInput.className = 'model-search'; searchInput.placeholder = 'Search models...';
-    searchInput.addEventListener('input', function() { renderModelDropdown(this.value); });
-    searchInput.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeModelDropdown(); });
-    dropdown.appendChild(searchInput);
-  }
-  if (searchInput.value !== query) searchInput.value = query;
-  var results = dropdown.querySelector('.model-results');
-  if (!results) { results = document.createElement('div'); results.className = 'model-results'; dropdown.appendChild(results); }
-  var groups = {};
-  filtered.forEach(m => { if (!groups[m.provider]) groups[m.provider] = []; groups[m.provider].push(m); });
-  var html = '';
-  Object.keys(groups).sort().forEach(provider => {
-    if (modelEditMode) {
-      // Provider header doubles as a section toggle in edit mode: ✓ all
-      // enabled, – mixed, empty none. Clicking flips the listed models.
-      var provOn = groups[provider].filter(m => m.enabled !== false).length;
-      var provCheck = provOn === groups[provider].length ? '✓' : (provOn ? '–' : '');
-      html += '<div class="model-group-header model-group-toggle" onclick="toggleProviderEnabled(\'' + escapeHtml(provider) + '\')" ' +
-        'title="Toggle all ' + escapeHtml(provider) + ' models">' +
-        '<span class="model-check">' + provCheck + '</span>' + escapeHtml(provider) +
-        '<span class="model-group-count">' + provOn + '/' + groups[provider].length + '</span></div>';
-    } else {
-      html += '<div class="model-group-header">' + escapeHtml(provider) + '</div>';
-    }
-    groups[provider].forEach(m => {
-      // One row template for both modes — edit mode adds the checkbox span,
-      // the disabled dimming, and swaps the click handler.
-      var fullId = m.provider + '/' + m.id;
-      var badges = '';
-      if (m.free) badges += '<span class="model-badge free">free</span>';
-      if (m.reasoning) badges += '<span class="model-badge reasoning">🧠</span>';
-      var on = m.enabled !== false;
-      var cls = 'model-option' + (isCurrentModel(m) ? ' active' : '') + (modelEditMode && !on ? ' disabled' : '');
-      var check = modelEditMode ? '<span class="model-check">' + (on ? '✓' : '') + '</span>' : '';
-      var handler = modelEditMode ? 'toggleModelEnabled' : 'selectModel';
-      var context = m.contextWindow ? formatTokens(m.contextWindow) + ' context' : 'context unknown';
-      html += '<div class="' + cls + '" onclick="' + handler + '(\'' + escapeHtml(fullId) + '\')" title="' +
-        escapeHtml(fullId) + '">' + check + '<span class="model-option-copy"><span class="model-option-name">' + escapeHtml(m.id) + '</span><span class="model-option-context">' + escapeHtml(context) + '</span></span>' + badges + '</div>';
-    });
-  });
-  if (!filtered.length) html += '<div class="model-option" style="color:var(--text-muted);cursor:default">No models found</div>';
-  var scrollTop = results.scrollTop;
-  results.innerHTML = html;
-  results.scrollTop = scrollTop;
-  renderModelDropdownFooter(dropdown, hidden);
-}
-
-// Footer: entry point to the scoped-models switcher (pi's /scoped-models) and
-// its All/None/Done actions while editing.
-function renderModelDropdownFooter(dropdown, hidden) {
-  var footer = dropdown.querySelector('.model-dropdown-footer');
-  if (!footer) { footer = document.createElement('div'); footer.className = 'model-dropdown-footer'; dropdown.appendChild(footer); }
-  var html = '';
-  if (modelEditMode) {
-    var enabledCount = knownModels.filter(m => m && m.enabled !== false).length;
-    html += '<span class="model-footer-info">' + enabledCount + ' of ' + knownModels.length + ' enabled</span>';
-    html += '<button class="model-footer-btn" onclick="setAllModelsEnabled(true)">All</button>';
-    html += '<button class="model-footer-btn" onclick="setAllModelsEnabled(false)">None</button>';
-    html += '<button class="model-footer-btn primary" onclick="exitModelEditMode()">Done</button>';
-  } else {
-    if (hidden > 0) html += '<span class="model-footer-info">' + hidden + ' hidden</span>';
-    if (sessionState.currentSession?.harnessId === 'pi') {
-      html += '<button class="model-footer-btn" onclick="enterModelEditMode()" title="Choose which models are enabled (pi scoped models)">⚙ Edit models</button>';
-    }
-  }
-  footer.innerHTML = html;
+  modelSelector.update({ owner, models: knownModels, currentModel: sessionState.currentSession.model || null,
+    harnessId: sessionState.currentSession.harnessId || null, query, editMode: modelEditMode });
 }
 
 function enterModelEditMode() {
@@ -6767,10 +6705,7 @@ function exitModelEditMode() {
   renderModelDropdown(currentModelQuery());
 }
 
-function currentModelQuery() {
-  var input = document.getElementById('modelDropdown').querySelector('.model-search');
-  return input ? input.value : '';
-}
+function currentModelQuery() { return modelQuery; }
 
 function toggleModelEnabled(fullId) {
   var model = knownModels.find(m => m && (m.provider + '/' + m.id) === fullId);
@@ -6816,6 +6751,8 @@ function saveEnabledModels() {
 
 function closeModelDropdown() {
   modelDropdownOpen = false;
+  modelSelector?.dispose();
+  modelSelector = null;
   document.getElementById('modelDropdown').style.display = 'none';
 }
 

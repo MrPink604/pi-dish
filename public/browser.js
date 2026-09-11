@@ -26,6 +26,7 @@ var PiDishBrowser = (() => {
     createSessionApi: () => createSessionApi,
     decodeModelCatalog: () => decodeModelCatalog,
     modelCatalogUrl: () => modelCatalogUrl,
+    mountModelSelector: () => mountModelSelector,
     sendJson: () => sendJson,
     withFetchTimeout: () => withFetchTimeout
   });
@@ -215,6 +216,161 @@ var PiDishBrowser = (() => {
       async setEnabledModels(enabledIds) {
         const body = { enabledIds: enabledIds && [...enabledIds] };
         return decodeEnabledModelsResult(await sendJson(request, null, "/api/models/enabled", body, "PUT"));
+      }
+    };
+  }
+
+  // src/browser/model-selector.ts
+  function mountModelSelector(root, actions, formatTokens) {
+    const doc = root.ownerDocument;
+    let view = null;
+    let disposed = false;
+    function element(tag, className, text2) {
+      const node = doc.createElement(tag);
+      node.className = className;
+      if (text2 !== void 0) node.textContent = text2;
+      return node;
+    }
+    const search = element("input", "model-search");
+    search.type = "text";
+    search.placeholder = "Search models...";
+    const results = element("div", "model-results");
+    const footer = element("div", "model-dropdown-footer");
+    root.replaceChildren(search, results, footer);
+    function active(model, current) {
+      return model.id === current || `${model.provider}/${model.id}` === current;
+    }
+    function action(node, name, value = "") {
+      node.dataset.action = name;
+      node.dataset.value = value;
+      return node;
+    }
+    function button(text2, name, value = "", primary = false) {
+      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text2);
+      node.type = "button";
+      return action(node, name, value);
+    }
+    function update(next) {
+      if (disposed) return;
+      view = { ...next, models: next.models.map((model) => ({ ...model })) };
+      const { models, currentModel, query, editMode, harnessId } = view;
+      if (search.value !== query) search.value = query;
+      const q = query.toLowerCase();
+      const filtered = models.filter((model) => !q || [model.id, model.provider, model.name].some((value) => value.toLowerCase().includes(q)));
+      const visible = editMode ? filtered : filtered.filter((model) => model.enabled !== false || active(model, currentModel));
+      const hidden = filtered.length - visible.length;
+      const groups = /* @__PURE__ */ new Map();
+      for (const model of visible) {
+        const group = groups.get(model.provider) || [];
+        group.push(model);
+        groups.set(model.provider, group);
+      }
+      const fragment = doc.createDocumentFragment();
+      for (const provider of [...groups.keys()].sort()) {
+        const group = groups.get(provider);
+        const header = element("div", "model-group-header" + (editMode ? " model-group-toggle" : ""));
+        if (editMode) {
+          const on = group.filter((model) => model.enabled !== false).length;
+          action(header, "provider", provider);
+          header.title = `Toggle all ${provider} models`;
+          header.append(
+            element("span", "model-check", on === group.length ? "\u2713" : on ? "\u2013" : ""),
+            doc.createTextNode(provider),
+            element("span", "model-group-count", `${on}/${group.length}`)
+          );
+        } else header.textContent = provider;
+        fragment.append(header);
+        for (const model of group) {
+          const on = model.enabled !== false;
+          const fullId = `${model.provider}/${model.id}`;
+          const row = element("div", "model-option" + (active(model, currentModel) ? " active" : "") + (editMode && !on ? " disabled" : ""));
+          row.title = fullId;
+          action(row, editMode ? "toggle" : "select", fullId);
+          if (editMode) row.append(element("span", "model-check", on ? "\u2713" : ""));
+          const copy = element("span", "model-option-copy");
+          copy.append(
+            element("span", "model-option-name", model.id),
+            element("span", "model-option-context", model.contextWindow ? `${formatTokens(model.contextWindow)} context` : "context unknown")
+          );
+          row.append(copy);
+          if (model.free) row.append(element("span", "model-badge free", "free"));
+          if (model.reasoning) row.append(element("span", "model-badge reasoning", "\u{1F9E0}"));
+          fragment.append(row);
+        }
+      }
+      if (!visible.length) {
+        const empty = element("div", "model-option", "No models found");
+        empty.style.color = "var(--text-muted)";
+        empty.style.cursor = "default";
+        fragment.append(empty);
+      }
+      const scrollTop = results.scrollTop;
+      results.replaceChildren(fragment);
+      results.scrollTop = scrollTop;
+      footer.replaceChildren();
+      if (editMode) {
+        footer.append(
+          element("span", "model-footer-info", `${models.filter((model) => model.enabled !== false).length} of ${models.length} enabled`),
+          button("All", "all", "true"),
+          button("None", "all", "false"),
+          button("Done", "edit", "false", true)
+        );
+      } else {
+        if (hidden) footer.append(element("span", "model-footer-info", `${hidden} hidden`));
+        if (harnessId === "pi") {
+          const edit = button("\u2699 Edit models", "edit", "true");
+          edit.title = "Choose which models are enabled (pi scoped models)";
+          footer.append(edit);
+        }
+      }
+    }
+    function onInput(event) {
+      if (view && event.target === search) actions.queryChanged(view.owner, search.value);
+    }
+    function onKeydown(event) {
+      if (view && event.key === "Escape") actions.requestClose(view.owner);
+    }
+    function onClick(event) {
+      const target = event.target;
+      if (!view || !(target instanceof Element)) return;
+      const node = target.closest("[data-action]");
+      if (!node || !root.contains(node)) return;
+      const { owner } = view;
+      const value = node.dataset.value || "";
+      switch (node.dataset.action) {
+        case "select":
+          actions.selectModel(owner, value);
+          break;
+        case "toggle":
+          actions.toggleModel(owner, value);
+          break;
+        case "provider":
+          actions.toggleProvider(owner, value);
+          break;
+        case "all":
+          actions.setAllEnabled(owner, value === "true");
+          break;
+        case "edit":
+          actions.editModeChanged(owner, value === "true");
+          break;
+      }
+    }
+    root.addEventListener("input", onInput);
+    root.addEventListener("keydown", onKeydown);
+    root.addEventListener("click", onClick);
+    return {
+      update,
+      focusSearch() {
+        if (!disposed) search.focus();
+      },
+      dispose() {
+        if (disposed) return;
+        disposed = true;
+        view = null;
+        root.removeEventListener("input", onInput);
+        root.removeEventListener("keydown", onKeydown);
+        root.removeEventListener("click", onClick);
+        root.replaceChildren();
       }
     };
   }

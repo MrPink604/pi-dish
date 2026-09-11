@@ -113,11 +113,14 @@ Current capabilities are defined by the harness wrappers and the server's
 capability projection; README summarizes supported behavior. `TASKS/` records
 design history and may include work that has already shipped.
 
-## Framework evaluation preparation (in progress)
+## Framework evaluation preparation (completed 2026-09-10)
 
 1. Session/model API contracts: complete after Fable review and full checks;
    invalid history rows are isolated and optional capability flags stay optional.
 2. Typed browser request adapter and local browser build: complete after Fable
    review and full checks, including malformed/unauthorized peer responses.
-3. Extracted model-selector baseline with explicit actions and cleanup: pending.
-4. Readiness checkpoint with baseline evidence: pending; framework adoption stays separate.
+3. Extracted model-selector baseline with explicit actions and cleanup: complete
+   after Fable review and full checks.
+4. [Readiness checkpoint and baseline evidence](docs/model-selector-baseline.md):
+   complete; the contained framework experiment can start from this baseline.
+   No framework has been adopted.

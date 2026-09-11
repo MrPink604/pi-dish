@@ -18,3 +18,14 @@ api.models(null).then(models => {
   const other: string = models[0]!.custom;
   void [enabled, other];
 });
+
+import { mountModelSelector } from '../../src/browser/model-selector';
+import type { ModelSelectorView, ModelSelectorActions } from '../../src/browser/model-selector';
+declare const selectorView: ModelSelectorView;
+// @ts-expect-error The component cannot retarget its captured owner.
+selectorView.owner.host = 'other';
+// @ts-expect-error Catalog ownership stays outside the component.
+selectorView.models.push({});
+declare const selectorActions: ModelSelectorActions;
+// @ts-expect-error The first selection argument is its owner, not a bare selector string.
+mountModelSelector(document.createElement('div'), { ...selectorActions, selectModel: (selector: string) => {} }, String);

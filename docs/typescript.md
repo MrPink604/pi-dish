@@ -164,3 +164,7 @@ Model, thinking, rename and enabled-model sends use `sessionApi`; intercept
 `apiFetch` in integration tests for these operations, rather than `apiSend`.
 Browser runtime imports must remain under `src/`; legacy script contracts use
 type-only imports to avoid bundling a second copy of their runtime state.
+
+The model-selector DOM implementation is also strictly checked under
+`src/browser/`. Its view/actions interface and ordinary DOM baseline are
+[ready for a contained framework comparison](model-selector-baseline.md).
