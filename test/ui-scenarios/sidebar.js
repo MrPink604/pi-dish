@@ -100,12 +100,12 @@ module.exports = async function sidebar({ desktop, registryState, check, SKILL_S
   // with the parent wrapper rather than becoming an independently sorted row.
   await desktop.click(`.pinned-segment .session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
   await desktop.waitForSelector(`.pinned-segment .session-item[data-id="${SKILL_SESSION_ID}"]`);
-  const handleBox = await desktop.locator(`.pinned-segment .session-item[data-id="${BETA_ID}"] .session-drag-handle`).boundingBox();
-  const firstBox = await desktop.locator(`.pinned-segment .session-item[data-id="${registryState.sessionId}"]`).boundingBox();
-  await desktop.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
-  await desktop.mouse.down();
-  await desktop.mouse.move(firstBox.x + 20, firstBox.y + 2, { steps: 5 });
-  await desktop.mouse.up();
+  // Polls can replace rows between protocol calls. Locator actions re-resolve
+  // detached elements and wait for visibility before issuing pointer input.
+  await desktop.locator(`.pinned-segment .session-item[data-id="${BETA_ID}"] .session-drag-handle`)
+    .dragTo(desktop.locator(`.pinned-segment .session-item[data-id="${registryState.sessionId}"]`), {
+      targetPosition: { x: 20, y: 2 }, steps: 5, timeout: 5000,
+    });
   await desktop.waitForFunction((want) =>
     JSON.stringify([...document.querySelectorAll('.pinned-segment > .session-family-root')].map((el) => el.dataset.familyId)) === want,
     JSON.stringify([BETA_ID, registryState.sessionId]), { timeout: 2000 });

@@ -50,8 +50,8 @@ test.after(() => {
 });
 
 const get = async (p) => { const r = await fetch(base + p); return { status: r.status, body: await r.json() }; };
-const post = async (p, body) => {
-  const r = await fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+const post = async (p, body, signal) => {
+  const r = await fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}), signal });
   return { status: r.status, body: await r.json().catch(() => ({})) };
 };
 
@@ -434,24 +434,39 @@ test('slash commands map onto RPC protocol commands', async () => {
   assert.match(typo.body.error, /unknown or unsupported command/);
 });
 
-test('a /compact issued while one runs is refused, not forwarded to pi', async () => {
+test('a /compact issued while one runs is refused, not forwarded to pi', { timeout: 10000 }, async () => {
   const before = readLog().filter(c => c.type === 'compact').length;
-  // The fixture holds the compaction open ~150ms (compaction_start streamed,
-  // response deferred) — long enough to prove the second command is gated.
+  // Hold the real stdio response until all mid-compaction HTTP assertions
+  // finish. A fixed 150ms window races session listing on busy CI runners.
   const rpc = getRPCSession(sessionId);
-  const started = new Promise(resolve => {
-    const off = rpc.on('compaction_start', event => { off(); resolve(event); });
+  await rpc.send('fixture_hold_compaction');
+  let off;
+  let startTimer;
+  const started = new Promise((resolve, reject) => {
+    off = rpc.on('compaction_start', event => { off(); resolve(event); });
+    startTimer = setTimeout(() => reject(new Error('compaction_start was not received')), 5000);
   });
   const firstP = post(`/api/sessions/${sessionId}/command`, { message: '/compact' });
-  await started;
+  try {
+    await started;
+    // Deliberately exceed the old fixture window, reproducing the CI schedule.
+    await new Promise(resolve => setTimeout(resolve, 250));
 
-  // Mid-compaction the session list must say so (the client's sidebar dot
-  // and SSE init frame read this flag).
-  assert.equal((await findActive(sessionId)).compacting, true, 'list reflects compacting');
+    // Mid-compaction the session list must say so (the client's sidebar dot
+    // and SSE init frame read this flag).
+    assert.equal((await findActive(sessionId)).compacting, true, 'list reflects compacting');
 
-  const second = await post(`/api/sessions/${sessionId}/command`, { message: '/compact' });
-  assert.equal(second.status, 400);
-  assert.match(second.body.error, /already in progress/i);
+    // If a regression forwards this command, abort the wait so finally can
+    // release both held responses instead of waiting for the RPC timeout.
+    const second = await post(`/api/sessions/${sessionId}/command`, { message: '/compact' }, AbortSignal.timeout(5000));
+    assert.equal(second.status, 400);
+    assert.match(second.body.error, /already in progress/i);
+  } finally {
+    clearTimeout(startTimer);
+    off();
+    await rpc.send('fixture_release_compaction');
+    await firstP;
+  }
 
   const first = await firstP;
   assert.equal(first.status, 200, JSON.stringify(first.body));

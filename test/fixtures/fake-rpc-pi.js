@@ -16,6 +16,8 @@
  *  - `abort` mid-turn ends with agent_end and no paired turn_end (the
  *    aborted-turn shape both backends must treat as turn-terminating).
  *  - PI_FIXTURE_EXIT_ON_START=1 exits immediately (startup-failure path).
+ *  - `fixture_hold_compaction` / `fixture_release_compaction` let tests keep
+ *    a compaction pending across HTTP assertions without racing a timer.
  */
 const fs = require('fs');
 const path = require('path');
@@ -72,6 +74,8 @@ if (modelIdx >= 0 && args[modelIdx + 1]) {
 let sessionName = 'rpc fixture';
 let turnOpen = false;
 let abortTurn = null; // set while a turn is open
+let holdCompaction = false;
+const heldCompactions = [];
 
 const out = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');
 const respond = (id, data) => out({ type: 'response', id, success: true, data });
@@ -171,18 +175,29 @@ function handle(cmd) {
       return respond(id, { commands: [{ name: 'dish-ext', description: 'a fixture extension command' }] });
     case 'get_session_stats':
       return respond(id, { contextUsage: { tokens: 1234, contextWindow: 200000, percent: 1 } });
-    case 'compact':
+    case 'fixture_hold_compaction':
+      holdCompaction = true;
+      return respond(id, {});
+    case 'fixture_release_compaction': {
+      holdCompaction = false;
+      // Release every pending response even if a regression forwarded a
+      // duplicate: a failing assertion must not strand the first HTTP request.
+      for (const finish of heldCompactions.splice(0)) finish();
+      return respond(id, {});
+    }
+    case 'compact': {
       // Mirror real pi: RPC mode forwards the AgentSession's
-      // compaction_start/compaction_end events ahead of the response. The
-      // delay holds the compaction open long enough for tests to prove a
-      // concurrent /compact is refused instead of reaching pi.
+      // compaction_start/compaction_end events ahead of the response.
       out({ type: 'compaction_start', reason: 'manual' });
-      return (async () => {
-        await sleep(150);
+      const finish = () => {
         out({ type: 'compaction_end', reason: 'manual', aborted: false, willRetry: false,
               result: { tokensBefore: 1000, estimatedTokensAfter: 200 } });
         respond(id, { tokensBefore: 1000, estimatedTokensAfter: 200 });
-      })();
+      };
+      if (holdCompaction) heldCompactions.push(finish);
+      else setTimeout(finish, 150);
+      return;
+    }
     case 'export_html':
       return respond(id, { path: cmd.outputPath || '/tmp/fake-export.html' });
     case 'new_session':
