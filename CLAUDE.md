@@ -2061,3 +2061,10 @@ host/harness/draft/generation through controller accessors and use its lifecycle
 and selection writers; do not restore mutable globals in `app.js`. Workspace
 buttons, directory trees, pickers and debounced config/model refreshes follow the
 controller's captured host and view. Disposal retires their callbacks and inputs.
+
+Bulk Bounce UI is owned by `src/browser/bounce.ts`, with wire contracts in
+`bounce-data.ts`. Each selected snapshot freezes its host route/token and mode;
+view refresh/close retires row listeners and status timers. The operation read
+sequence prevents an older poll from erasing accepted mutations. Completed
+restart reconciliation keeps the bounce surface open and only reconnects the
+transcript when the originating host/session selection still owns the view.

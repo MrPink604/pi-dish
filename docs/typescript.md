@@ -348,3 +348,8 @@ view guards stop owning their form on disposal as well as close/replacement.
 contracts and explicit settings/report lifetimes. App callbacks supply capability
 checks, fleet readiness and cross-view navigation. Host route/token changes
 invalidate old requests and controls; submitted mutations retain their endpoints.
+
+`bounce.ts` owns bulk reload/restart previews, selected snapshots, cancellation,
+status polling and selected-session reconciliation. `bounce-data.ts` narrows wire
+rows into readonly contracts. The app supplies host/session accessors and reload
+callbacks; the controller retains endpoint/view ownership across asynchronous work.

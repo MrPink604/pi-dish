@@ -337,3 +337,26 @@ run superseded the spawn run before that run finished its browser job.
 
 Fable 5.1 cleared new-session form commit `9538411`, which is pushed. Shared-helper
 commit `861d799` passed all five CI jobs (run `34598941974`).
+
+## Checkpoint 15 — bounce operations (verified locally; review pending)
+
+- `bounce.ts` owns each host's mode/endpoint/target snapshot, selected rows,
+  queued/cancelled operations, polling and restart reconciliation. `bounce-data.ts`
+  narrows preview/operation/result payloads before state or rendering uses them.
+- Controls retain their rendered host/view and operation. Refresh/close retires
+  listeners and timers. Status reads cannot overwrite a newer accepted operation;
+  endpoint changes invalidate old controls. Accepted mutations retain their host
+  and do not retry when response/acceptance is uncertain.
+- Host-qualified restart tracking and selected-transcript reconciliation preserve
+  the bounce status surface. Disposal prevents late status results from restarting
+  polling, writing the view or repopulating pending restart tracking.
+- Four browser regressions cover stale previews, retained controls, submitted
+  snapshots, old status reads and disposal. Decoder units and strict contracts
+  check malformed rows, mode values and readonly host/operation inputs.
+- Strict checks, 902 backend tests, 117 browser regressions, independent UI
+  scenarios and full desktop/mobile smoke passed. The integrated runtime, config
+  and test files match that verified draft byte for byte; strict checks passed
+  again after integration. Fable review is required before push.
+- Next: session navigation/search, then remaining browser feature controllers.
+
+Fable 5.1 cleared recovery commit `b8faac4`, which is pushed.

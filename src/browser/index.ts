@@ -30,3 +30,6 @@ export { createSessionSpawns, decodeSpawnId, decodeSpawnStatus, sessionSpawnKey 
 export { createNewSession, NEW_SESSION_HARNESS_KEY } from './new-session';
 
 export { createRecovery, decodeRecoveryMode, decodeRecoveryReport } from './recovery';
+
+export { createBounce } from './bounce';
+export { decodeBouncePreview, decodeBounceOperation, decodeBounceOperations } from './bounce-data';
