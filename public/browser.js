@@ -64,6 +64,7 @@ var PiDishBrowser = (() => {
     createSpawnTargets: () => createSpawnTargets,
     createTerminalController: () => createTerminalController,
     createThemes: () => createThemes,
+    createTranscriptTree: () => createTranscriptTree,
     createUsageView: () => createUsageView,
     decodeBounceOperation: () => decodeBounceOperation,
     decodeBounceOperations: () => decodeBounceOperations,
@@ -95,6 +96,7 @@ var PiDishBrowser = (() => {
     decodeTerminalOutput: () => decodeTerminalOutput,
     decodeThemeTokens: () => decodeThemeTokens,
     decodeThemes: () => decodeThemes,
+    decodeTranscriptTree: () => decodeTranscriptTree,
     decodeUsageLimits: () => decodeUsageLimits,
     decodeUsageSummary: () => decodeUsageSummary,
     hostConnReduce: () => hostConnReduce,
@@ -319,10 +321,10 @@ var PiDishBrowser = (() => {
     const doc = root.ownerDocument;
     let view = null;
     let disposed = false;
-    function element(tag, className, text12) {
+    function element(tag, className, text13) {
       const node = doc.createElement(tag);
       node.className = className;
-      if (text12 !== void 0) node.textContent = text12;
+      if (text13 !== void 0) node.textContent = text13;
       return node;
     }
     const search = element("input", "model-search");
@@ -339,8 +341,8 @@ var PiDishBrowser = (() => {
       node.dataset.value = value;
       return node;
     }
-    function button(text12, name, value = "", primary = false) {
-      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text12);
+    function button(text13, name, value = "", primary = false) {
+      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text13);
       node.type = "button";
       return action(node, name, value);
     }
@@ -575,8 +577,8 @@ var PiDishBrowser = (() => {
     const state = prev && typeof prev === "object" ? prev : null;
     const errText = (value) => {
       if (value == null) return null;
-      const text12 = String(typeof value === "object" && "message" in value && value.message || value);
-      return text12 || null;
+      const text13 = String(typeof value === "object" && "message" in value && value.message || value);
+      return text13 || null;
     };
     const eventError = event && typeof event === "object" && "error" in event ? errText(event.error) : null;
     if (kind === "blocked") {
@@ -2770,9 +2772,9 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/helper-format.ts
-  function escapeHtml(text12) {
-    if (text12 == null || text12 === "") return "";
-    return String(text12).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  function escapeHtml(text13) {
+    if (text13 == null || text13 === "") return "";
+    return String(text13).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
   function formatTokens(tokens2) {
     if (!tokens2 || tokens2 === 0) return "0";
@@ -2846,9 +2848,9 @@ var PiDishBrowser = (() => {
     if (!cwd) return "";
     return cwd.replace(/^\/home\/[^/]+\//, "~/").replace(/^\/home\/[^/]+$/, "~");
   }
-  function truncate(text12, maxLen, suffix = " \u2026 (truncated)") {
-    if (!text12 || text12.length <= maxLen) return text12;
-    return text12.slice(0, maxLen) + suffix;
+  function truncate(text13, maxLen, suffix = " \u2026 (truncated)") {
+    if (!text13 || text13.length <= maxLen) return text13;
+    return text13.slice(0, maxLen) + suffix;
   }
   function tmuxPrefixSeq(prefix) {
     if (typeof prefix !== "string") return null;
@@ -3002,12 +3004,12 @@ var PiDishBrowser = (() => {
     }
     return true;
   }
-  function countOccurrences(text12, token) {
-    if (!text12 || !token) return 0;
-    let n = 0, i = text12.indexOf(token);
+  function countOccurrences(text13, token) {
+    if (!text13 || !token) return 0;
+    let n = 0, i = text13.indexOf(token);
     while (i !== -1) {
       n++;
-      i = text12.indexOf(token, i + token.length);
+      i = text13.indexOf(token, i + token.length);
     }
     return n;
   }
@@ -3067,8 +3069,8 @@ var PiDishBrowser = (() => {
     result += escapeHtml(str.slice(last));
     return result;
   }
-  function highlightTokens(text12, tokens2) {
-    const str = String(text12);
+  function highlightTokens(text13, tokens2) {
+    const str = String(text13);
     const lower = str.toLowerCase();
     const ranges = [];
     for (const t of tokens2) {
@@ -3979,11 +3981,11 @@ var PiDishBrowser = (() => {
     }
     function updateBounceSelection() {
       if (disposed) return;
-      const count = bounceHosts.reduce((sum, state) => sum + (bounceHostElement(state) ? state.selected.size : 0), 0);
+      const count2 = bounceHosts.reduce((sum, state) => sum + (bounceHostElement(state) ? state.selected.size : 0), 0);
       const mode = element("bounceMode").value === "restart" ? "Restart" : "Reload";
       const submit = element("bounceSubmit");
-      submit.disabled = !count || bounceSubmitting;
-      submit.textContent = bounceSubmitting ? "Queueing\u2026" : `Queue ${mode} (${count})`;
+      submit.disabled = !count2 || bounceSubmitting;
+      submit.textContent = bounceSubmitting ? "Queueing\u2026" : `Queue ${mode} (${count2})`;
       for (const id of ["bounceMode", "bounceRefresh", "bounceSelectEligible", "bounceClearSelection"]) {
         element(id).disabled = bounceSubmitting;
       }
@@ -4248,13 +4250,13 @@ var PiDishBrowser = (() => {
       more.type = "button";
       more.className = "session-relation-chip session-relation-more";
       more.title = `Show ${hiddenCount} hidden related session${hiddenCount === 1 ? "" : "s"}`;
-      const count = document2.createElement("span");
-      count.className = "session-relation-kind";
-      count.textContent = `+${hiddenCount}`;
+      const count2 = document2.createElement("span");
+      count2.className = "session-relation-kind";
+      count2.textContent = `+${hiddenCount}`;
       const label2 = document2.createElement("span");
       label2.className = "session-relation-name";
       label2.textContent = "more";
-      more.append(count, label2);
+      more.append(count2, label2);
       const owner = renderOwner, endpoint = renderEndpoint;
       more.addEventListener("click", () => {
         if (owns(owner, endpoint)) openRelationsModal();
@@ -4272,15 +4274,15 @@ var PiDishBrowser = (() => {
       const prefixWidths = [0];
       for (const width of widths) prefixWidths.push(prefixWidths[prefixWidths.length - 1] + width);
       let chosen = 0;
-      for (let count = chips.length; count >= 0; count -= 1) {
-        const hiddenCount = totalCount - count;
-        let needed = prefixWidths[count] + Math.max(0, count - 1) * gap;
+      for (let count2 = chips.length; count2 >= 0; count2 -= 1) {
+        const hiddenCount = totalCount - count2;
+        let needed = prefixWidths[count2] + Math.max(0, count2 - 1) * gap;
         if (hiddenCount > 0) {
           moreProbe.querySelector(".session-relation-kind").textContent = `+${hiddenCount}`;
-          needed += (count ? gap : 0) + moreProbe.offsetWidth;
+          needed += (count2 ? gap : 0) + moreProbe.offsetWidth;
         }
         if (needed <= available) {
-          chosen = count;
+          chosen = count2;
           break;
         }
       }
@@ -4611,8 +4613,8 @@ var PiDishBrowser = (() => {
     const textNodes = [];
     while (walker.nextNode()) textNodes.push(walker.currentNode);
     for (const node of textNodes) {
-      const text12 = node.textContent || "";
-      const lower = text12.toLowerCase();
+      const text13 = node.textContent || "";
+      const lower = text13.toLowerCase();
       const ranges = [];
       for (const token of tokens2) {
         let from = 0, at;
@@ -4627,14 +4629,14 @@ var PiDishBrowser = (() => {
       let cursor = 0;
       for (const [start, end] of ranges) {
         if (start < cursor) continue;
-        frag.appendChild(document2.createTextNode(text12.slice(cursor, start)));
+        frag.appendChild(document2.createTextNode(text13.slice(cursor, start)));
         const mark = document2.createElement("mark");
         mark.className = "search-mark";
-        mark.textContent = text12.slice(start, end);
+        mark.textContent = text13.slice(start, end);
         frag.appendChild(mark);
         cursor = end;
       }
-      frag.appendChild(document2.createTextNode(text12.slice(cursor)));
+      frag.appendChild(document2.createTextNode(text13.slice(cursor)));
       node.replaceWith(frag);
     }
   }
@@ -5413,12 +5415,12 @@ var PiDishBrowser = (() => {
         let dot = "";
         if (s.turnInProgress || s.compacting) dot = '<span class="session-item-status working"></span>';
         else if (s.isActive) dot = '<span class="live-dot"></span>';
-        const count = s.matchCount ? `<span class="search-result-count">${s.matchCount} ${s.matchCount === 1 ? "match" : "matches"}</span>` : "";
+        const count2 = s.matchCount ? `<span class="search-result-count">${s.matchCount} ${s.matchCount === 1 ? "match" : "matches"}</span>` : "";
         const snippets = (s.snippets || []).map((sn) => `<div class="search-result-snippet">${highlightTokens(sn, tokens2)}</div>`).join("");
         return `<div class="search-result" data-id="${escapeHtml(s.id)}"${s.host ? ` data-host="${escapeHtml(s.host)}"` : ""} data-content-matches="${s.matchCount > 0 ? "1" : "0"}">
         <div class="search-result-header">
           ${dot}<span class="search-result-name">${highlightTokens(s.name || "Unnamed", tokens2)}</span>
-          ${count}<span class="search-result-time">${formatRelativeTime(s.lastActivity)}</span>
+          ${count2}<span class="search-result-time">${formatRelativeTime(s.lastActivity)}</span>
         </div>
         <div class="search-result-meta">${hostChipHtml(s.host)}${escapeHtml(shortCwd(s.cwd || "~"))} \xB7 ${escapeHtml(s.model)}</div>
         ${snippets}
@@ -6998,10 +7000,10 @@ var PiDishBrowser = (() => {
       })();
       return assets;
     }
-    function status(text12 = "", cls = "") {
+    function status(text13 = "", cls = "") {
       const value = document2.getElementById("terminalStatus");
       if (!value) return;
-      value.textContent = text12;
+      value.textContent = text13;
       value.className = "terminal-status" + (cls ? " " + cls : "");
     }
     function setCtrl(on) {
@@ -7613,7 +7615,7 @@ var PiDishBrowser = (() => {
         const last = r.stats?.lastInvocation || null;
         const dot = `<span class="rt-dot ${last ? routineStatusClass(last.status) : "none"}" title="${escapeHtml(last ? last.status : "never run")}"></span>`;
         const lastLine = last ? `${dot}${escapeHtml(last.status)} \xB7 ${escapeHtml(formatRelativeTime(last.startedAt))}` : `${dot}never run`;
-        const count = r.stats?.invocations || 0;
+        const count2 = r.stats?.invocations || 0;
         return `<div class="rt-row${routineSelKey === key ? " selected" : ""}" data-routine="${escapeHtml(r.id)}" data-host="${escapeHtml(r.host || "")}">
         <div class="rt-row-top">
           <span class="rt-name">${escapeHtml(r.name || r.id)}</span>
@@ -7621,7 +7623,7 @@ var PiDishBrowser = (() => {
         </div>
         <div class="rt-row-sched">${routineScheduleLine(r)}</div>
         <div class="rt-row-meta">${escapeHtml(r.mode === "continue" ? "continue" : "one-shot")} \xB7 on busy ${escapeHtml(r.onBusy || "skip")}</div>
-        <div class="rt-row-last">${lastLine}<span class="rt-count">${count} run${count === 1 ? "" : "s"}</span></div>
+        <div class="rt-row-last">${lastLine}<span class="rt-count">${count2} run${count2 === 1 ? "" : "s"}</span></div>
       </div>`;
       }).join("");
       el.innerHTML = `
@@ -9005,10 +9007,10 @@ var PiDishBrowser = (() => {
       }
       body.innerHTML = html;
       body.querySelectorAll(".artifact-copy").forEach((button) => {
-        const text12 = button.dataset.copy || "";
+        const text13 = button.dataset.copy || "";
         button.addEventListener("click", () => {
           if (!current()) return;
-          void copyTextToClipboard(text12).then(() => {
+          void copyTextToClipboard(text13).then(() => {
             if (current()) setStatus("Link copied");
           }, () => {
             if (current()) setStatus("Copy failed (clipboard blocked)", "error");
@@ -9061,6 +9063,289 @@ var PiDishBrowser = (() => {
         clearTimers(messageTimers);
         messageCopies = /* @__PURE__ */ new WeakMap();
         artifactsSeq++;
+        disposed = true;
+      }
+    };
+  }
+
+  // src/browser/transcript-tree-data.ts
+  var text12 = (value) => typeof value === "string" ? value : "";
+  var count = (value) => finite2(value) ? Math.max(0, Math.floor(value)) : 0;
+  function decodeTranscriptTree(value) {
+    if (!record8(value) || !Array.isArray(value.nodes)) throw new Error("Invalid session tree");
+    const maxDepth = value.nodes.length;
+    return {
+      leafId: typeof value.leafId === "string" ? value.leafId : null,
+      activePathIds: Array.isArray(value.activePathIds) ? value.activePathIds.filter((id) => typeof id === "string") : [],
+      nodes: value.nodes.flatMap((node) => {
+        if (!record8(node) || typeof node.id !== "string" || !node.id) return [];
+        return [{
+          id: node.id,
+          parentId: typeof node.parentId === "string" ? node.parentId : null,
+          type: text12(node.type),
+          role: text12(node.role),
+          depth: Math.min(count(node.depth), maxDepth),
+          childCount: count(node.childCount),
+          isLeaf: node.isLeaf === true,
+          text: text12(node.text),
+          label: text12(node.label),
+          toolName: text12(node.toolName),
+          toolCallId: text12(node.toolCallId),
+          modelId: text12(node.modelId),
+          summary: text12(node.summary),
+          stopReason: text12(node.stopReason),
+          errorMessage: text12(node.errorMessage),
+          isError: node.isError === true,
+          tokensBefore: count(node.tokensBefore),
+          toolCalls: Array.isArray(node.toolCalls) ? node.toolCalls.flatMap((tool) => record8(tool) && typeof tool.id === "string" ? [{ id: tool.id, name: text12(tool.name), args: text12(tool.args) }] : []) : []
+        }];
+      })
+    };
+  }
+
+  // src/browser/transcript-tree.ts
+  function createTranscriptTree(options) {
+    const { document: document2, sessionState, storage, status: setStatus } = options;
+    const element = (id) => {
+      const value = document2.getElementById(id);
+      if (!value) throw new Error("Missing tree element: " + id);
+      return value;
+    };
+    const errorMessage = (error) => error instanceof Error ? error.message : String(error);
+    let disposed = false, treeViewGeneration = 0, branchGeneration = 0, operationGeneration = 0;
+    let treeData = null, treeOwner = null, treeEndpoint = null;
+    let pendingBranchId = null;
+    const treeToolCallMap = /* @__PURE__ */ new Map();
+    let viewEvents = new AbortController(), rowEvents = new AbortController(), branchEvents = new AbortController();
+    function ownsSelection(owner, host) {
+      if (disposed || !owner || !host || !sessionState.ownsSelection(owner)) return false;
+      const current = options.host(owner.host);
+      return !!current && current.base === host.base && (current.token || "") === (host.token || "");
+    }
+    function ownsView(owner, host, generation) {
+      return generation === treeViewGeneration && owner === treeOwner && ownsSelection(owner, host);
+    }
+    function retireBranch() {
+      branchGeneration++;
+      pendingBranchId = null;
+      branchEvents.abort();
+      branchEvents = new AbortController();
+    }
+    function closeTreeModal() {
+      treeViewGeneration++;
+      treeOwner = null;
+      treeEndpoint = null;
+      treeData = null;
+      treeToolCallMap.clear();
+      viewEvents.abort();
+      rowEvents.abort();
+      retireBranch();
+      element("treeModal").style.display = "none";
+    }
+    async function openTreeModal() {
+      if (disposed || !sessionState.currentSession) return;
+      closeTreeModal();
+      operationGeneration++;
+      const owner = sessionState.captureSelection();
+      if (!owner) return;
+      const endpoint = options.host(owner.host);
+      if (!endpoint) return;
+      const host = Object.freeze({ ...endpoint }), generation = ++treeViewGeneration;
+      treeOwner = owner;
+      treeEndpoint = host;
+      setStatus("Loading tree...", "working");
+      try {
+        const response = await options.request(host, "/api/sessions/" + encodeURIComponent(owner.id) + "/tree");
+        if (!response.ok) throw new Error(await response.text());
+        const data = decodeTranscriptTree(await response.json());
+        if (!ownsView(owner, host, generation)) return;
+        treeData = data;
+        for (const node of data.nodes) if (node.role === "assistant") for (const tool of node.toolCalls) treeToolCallMap.set(tool.id, tool);
+        const search = element("treeSearch"), filter = element("treeFilter");
+        search.value = "";
+        filter.value = "default";
+        viewEvents = new AbortController();
+        const update = () => {
+          if (ownsView(owner, host, generation)) filterTree(search.value);
+        };
+        search.addEventListener("input", update, { signal: viewEvents.signal });
+        filter.addEventListener("change", update, { signal: viewEvents.signal });
+        filterTree("");
+        element("treeModal").style.display = "flex";
+        search.focus();
+        setStatus("");
+      } catch (error) {
+        if (ownsView(owner, host, generation)) setStatus("Failed to load tree: " + errorMessage(error), "error");
+      }
+    }
+    function filterTree(query) {
+      if (!treeData || !ownsView(treeOwner, treeEndpoint, treeViewGeneration)) return;
+      var filterMode = element("treeFilter").value;
+      var tokens2 = query.toLowerCase().split(/\s+/).filter(Boolean);
+      var filtered = treeData.nodes.filter(function(node) {
+        if (filterMode === "user-only" && !(node.type === "message" && node.role === "user")) return false;
+        if (filterMode === "no-tools" && node.type === "message" && (node.role === "toolResult" || node.role === "assistant" && !node.text && !node.isLeaf)) return false;
+        if (filterMode === "default") {
+          if (["model_change", "thinking_level_change", "label", "custom"].includes(node.type)) return false;
+          if (node.type === "message" && node.role === "assistant" && !node.text && !node.isLeaf) return false;
+        }
+        if (tokens2.length > 0) {
+          var text13 = getNodeSearchText(node).toLowerCase();
+          return tokens2.every((t) => text13.includes(t));
+        }
+        return true;
+      });
+      renderTree(filtered);
+    }
+    function getNodeSearchText(node) {
+      return [node.text, node.role, node.label, node.toolName, node.modelId, node.summary].filter(Boolean).join(" ");
+    }
+    function renderTree(nodes) {
+      var body = element("treeBody");
+      if (!treeData || !ownsView(treeOwner, treeEndpoint, treeViewGeneration)) return;
+      var activeSet = new Set(treeData.activePathIds);
+      const childrenOf = /* @__PURE__ */ new Map();
+      for (var n of nodes) {
+        var pid = n.parentId || "__root__";
+        const siblings2 = childrenOf.get(pid) || [];
+        siblings2.push(n);
+        childrenOf.set(pid, siblings2);
+      }
+      var html = "";
+      for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i];
+        var isActive = activeSet.has(node.id);
+        var indent = "  ".repeat(Math.min(node.depth, treeData.nodes.length));
+        var siblings = childrenOf.get(node.parentId || "__root__") || [];
+        var isLast = siblings.indexOf(node) === siblings.length - 1;
+        var connector = node.depth > 0 && siblings.length > 1 ? isLast ? "\u2514 " : "\u251C " : "";
+        var marker = isActive ? "\u2022" : " ";
+        var classes = "tree-node" + (isActive ? " active" : "") + (node.isLeaf ? " is-leaf" : "");
+        var badge = node.childCount > 1 ? '<span class="tree-branch-badge">' + node.childCount + "</span>" : "";
+        html += '<div class="' + classes + '" data-id="' + escapeHtml(node.id) + '" style="--tree-depth:' + node.depth + '">';
+        html += '<span class="tree-prefix">' + indent + connector + "</span>";
+        html += '<span class="tree-marker ' + (isActive ? "active-marker" : "inactive-marker") + '">' + marker + " </span>";
+        html += renderTreeNodeContent(node) + badge + "</div>";
+      }
+      retireBranch();
+      rowEvents.abort();
+      rowEvents = new AbortController();
+      const owner = treeOwner, host = treeEndpoint, generation = treeViewGeneration;
+      body.innerHTML = html;
+      body.querySelectorAll(".tree-node").forEach((row) => {
+        const id = row.dataset.id;
+        row.addEventListener("click", () => {
+          if (id && ownsView(owner, host, generation)) selectTreeNode(id);
+        }, { signal: rowEvents.signal });
+      });
+      element("treeStatus").textContent = nodes.length + " entries";
+      var leaf = body.querySelector(".is-leaf");
+      if (leaf) leaf.scrollIntoView({ block: "center", behavior: "instant" });
+    }
+    function renderTreeNodeContent(node) {
+      if (node.type === "message") {
+        if (node.role === "user") return '<span class="tree-role user">user:</span><span class="tree-text">' + escapeHtml(node.text || "(empty)") + "</span>";
+        if (node.role === "assistant") {
+          var text13 = node.text || "";
+          if (!text13 && node.stopReason === "aborted") text13 = "(aborted)";
+          if (!text13 && node.errorMessage) return '<span class="tree-role assistant">assistant:</span><span class="tree-text error-text">' + escapeHtml(node.errorMessage.substring(0, 80)) + "</span>";
+          if (!text13 && node.toolCalls && node.toolCalls.length) {
+            var calls = node.toolCalls.map(function(tc2) {
+              return tc2.args ? tc2.name + ": " + tc2.args : tc2.name;
+            }).join(" \xB7 ");
+            return '<span class="tree-role assistant">assistant:</span><span class="tree-text muted">' + escapeHtml(calls) + "</span>";
+          }
+          if (!text13) text13 = "(empty)";
+          return '<span class="tree-role assistant">assistant:</span><span class="tree-text">' + escapeHtml(text13) + "</span>";
+        }
+        if (node.role === "toolResult") {
+          var tc = node.toolCallId ? treeToolCallMap.get(node.toolCallId) : null;
+          var disp = tc ? "[" + tc.name + ": " + tc.args + "]" : "[" + (node.toolName || "tool") + "]";
+          return '<span class="tree-role tool">' + escapeHtml(disp) + "</span>" + (node.isError ? '<span class="tree-text error-text"> error</span>' : "");
+        }
+        return '<span class="tree-text muted">[' + escapeHtml(node.role || "message") + "]</span>";
+      }
+      if (node.type === "compaction") return '<span class="tree-role system">[compaction: ' + Math.round((node.tokensBefore || 0) / 1e3) + "k tokens]</span>";
+      if (node.type === "model_change") return '<span class="tree-text muted">[model: ' + escapeHtml(node.modelId || "") + "]</span>";
+      if (node.type === "branch_summary") return '<span class="tree-role system">[branch summary]</span> <span class="tree-text muted">' + escapeHtml(node.summary || "") + "</span>";
+      if (node.type === "session_info") return '<span class="tree-text muted">[session info]</span>';
+      return '<span class="tree-text muted">[' + escapeHtml(node.type) + "]</span>";
+    }
+    function selectTreeNode(entryId) {
+      const owner = treeOwner, host = treeEndpoint, generation = treeViewGeneration;
+      if (!treeData || !ownsView(owner, host, generation) || !treeData.nodes.some((node) => node.id === entryId)) return;
+      if (entryId === treeData.leafId) {
+        closeTreeModal();
+        return;
+      }
+      retireBranch();
+      pendingBranchId = entryId;
+      const branch = branchGeneration;
+      const current = () => branch === branchGeneration && pendingBranchId === entryId && ownsView(owner, host, generation);
+      element("treeBody").querySelectorAll(".tree-node").forEach((row) => row.classList.toggle("selected", row.dataset.id === entryId));
+      const summarize = storage.getItem("pi-dish-branch-summarize") === "1";
+      const allowInstructions = sessionState.currentSession?.harnessId !== "omp";
+      element("treeStatus").innerHTML = '<div class="branch-confirm"><label class="branch-summarize-label"><input type="checkbox" id="branchSummarize"' + (summarize ? " checked" : "") + "> Summarize abandoned branch</label>" + (allowInstructions ? '<input type="text" id="branchInstructions" class="branch-instructions" placeholder="Summary instructions (optional)"' + (summarize ? "" : ' style="display:none"') + ">" : "") + '<span class="branch-confirm-btns"><button class="btn-sm btn-branch" id="branchGoBtn">Branch from here</button><button class="btn-sm" id="branchCancelBtn">Cancel</button></span></div>';
+      element("branchSummarize").addEventListener("change", () => {
+        if (current()) toggleBranchInstructions();
+      }, { signal: branchEvents.signal });
+      element("branchGoBtn").addEventListener("click", () => {
+        if (current()) void confirmBranch();
+      }, { signal: branchEvents.signal });
+      element("branchCancelBtn").addEventListener("click", () => {
+        if (current()) cancelBranch();
+      }, { signal: branchEvents.signal });
+    }
+    function toggleBranchInstructions() {
+      const input = document2.getElementById("branchInstructions");
+      if (input) input.style.display = element("branchSummarize").checked ? "" : "none";
+    }
+    function cancelBranch() {
+      retireBranch();
+      element("treeBody").querySelectorAll(".selected").forEach((row) => row.classList.remove("selected"));
+      element("treeStatus").textContent = element("treeBody").querySelectorAll(".tree-node").length + " entries";
+    }
+    async function confirmBranch() {
+      const owner = treeOwner, host = treeEndpoint, generation = treeViewGeneration;
+      if (!treeData || !pendingBranchId || !host || !ownsView(owner, host, generation)) return;
+      const button = element("branchGoBtn");
+      if (button.disabled) return;
+      const entryId = pendingBranchId, branch = branchGeneration, operation = ++operationGeneration;
+      const summarize = element("branchSummarize").checked;
+      const customInstructions = document2.getElementById("branchInstructions")?.value.trim() || void 0;
+      storage.setItem("pi-dish-branch-summarize", summarize ? "1" : "0");
+      button.disabled = true;
+      button.textContent = summarize ? "Summarizing\u2026" : "Branching\u2026";
+      setStatus(summarize ? "Summarizing abandoned branch\u2026" : "Branching...", "working");
+      try {
+        const data = await sendJson(options.request, host, "/api/sessions/" + encodeURIComponent(owner.id) + "/branch", { entryId, summarize, customInstructions });
+        if (!disposed && record8(data) && typeof data.editorText === "string" && data.editorText) options.saveEditorDraft(owner, data.editorText);
+        if (operation !== operationGeneration || !ownsSelection(owner, host)) return;
+        closeTreeModal();
+        setStatus("Branched \u2014 reloading");
+        await options.selectSession(owner.id, { host: owner.host, forceTranscriptReload: true });
+      } catch (error) {
+        if (operation !== operationGeneration || !ownsSelection(owner, host)) return;
+        setStatus("Branch failed: " + errorMessage(error), "error");
+        if (branch === branchGeneration && ownsView(owner, host, generation)) {
+          button.disabled = false;
+          button.textContent = "Branch from here";
+        }
+      }
+    }
+    return {
+      open: openTreeModal,
+      close: closeTreeModal,
+      filter: filterTree,
+      select: selectTreeNode,
+      confirm: confirmBranch,
+      cancel: cancelBranch,
+      get data() {
+        return treeData;
+      },
+      dispose() {
+        closeTreeModal();
+        operationGeneration++;
         disposed = true;
       }
     };

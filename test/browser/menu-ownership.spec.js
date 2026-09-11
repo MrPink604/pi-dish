@@ -13,7 +13,7 @@ test('a delayed tree cannot open after changing to the same id on another host',
   await route.fulfill({ json: tree });
   await page.evaluate(() => window.pendingTree);
   await expect(page.locator('#treeModal')).toBeHidden();
-  expect(await page.evaluate(() => treeData)).toBeNull();
+  expect(await page.evaluate(() => transcriptTree.data)).toBeNull();
 });
 
 test('a delayed branch preserves the originating draft without reselecting another host', async ({ page, fleet }) => {

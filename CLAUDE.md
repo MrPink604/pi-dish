@@ -1314,7 +1314,8 @@ away, and delayed diff hydration cannot reopen an old comment editor.
 Tree loads and branch completions retain their selection owner and modal
 generation. A completed branch saves returned editor text to its originating
 host-qualified draft; only the originating selection can reselect and reload,
-even if its tree was dismissed while the request was pending. Selection
+even if its tree was dismissed while the request was pending. Reopening the
+tree retires older branch completion effects so they cannot close the new view. Selection
 changes dismiss tree/artifact overlays and model/thinking menus, and delayed
 model catalog loads cannot reopen menus for the old selection.
 
@@ -2121,3 +2122,10 @@ close/restart, share links, published pages and artifact badges/modals. Read
 have separate generations under the modal owner; artifact discovery has its own
 sequence. Message link copies guard the originating selection before clipboard
 writes, including existing shares. Close/disposal retires listeners and timers.
+
+Transcript tree rendering and branch controls live in `src/browser/transcript-tree.ts`,
+with narrowed nodes/tool summaries in `transcript-tree-data.ts`. Filters, rows and
+branch confirmation controls have independent listener lifetimes. Branch requests
+retain their selection and endpoint; originating draft writes survive navigation,
+while reopened views retire old completion effects. Generated rows use listeners,
+escape ids/roles and bound depth before indentation.

@@ -7799,54 +7799,17 @@ function copyTextToClipboard(text) {
 // =========================================================================
 // Tree Modal
 // =========================================================================
-var treeData = null;
-var treeOwner = null;
-var treeViewGeneration = 0;
-
-function ownsTree(owner, generation) {
-  return owner === treeOwner && generation === treeViewGeneration && sessionState.ownsSelection(owner);
-}
-var treeToolCallMap = new Map();
-
-async function openTreeModal() {
-  if (!sessionState.currentSession) return;
-  closeTreeModal();
-  const owner = sessionState.captureSelection();
-  const generation = ++treeViewGeneration;
-  treeOwner = owner;
-  treeData = null;
-  pendingBranchId = null;
-  setStatus('Loading tree...', 'working');
-  try {
-    const res = await apiFetch(owner.host, '/api/sessions/' + encodeURIComponent(owner.id) + '/tree');
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-    if (!ownsTree(owner, generation)) return;
-    treeData = data;
-    treeToolCallMap.clear();
-    for (var node of treeData.nodes) {
-      if (node.role === 'assistant' && node.toolCalls) {
-        for (var tc of node.toolCalls) treeToolCallMap.set(tc.id, { name: tc.name, args: tc.args });
-      }
-    }
-    document.getElementById('treeSearch').value = '';
-    document.getElementById('treeFilter').value = 'default';
-    filterTree('');
-    document.getElementById('treeModal').style.display = 'flex';
-    document.getElementById('treeSearch').focus();
-    setStatus('');
-  } catch (e) {
-    if (ownsTree(owner, generation)) setStatus('Failed to load tree: ' + e.message, 'error');
-  }
-}
-
-function closeTreeModal() {
-  treeViewGeneration += 1;
-  treeOwner = null;
-  pendingBranchId = null;
-  document.getElementById('treeModal').style.display = 'none';
-  treeData = null;
-}
+const transcriptTree = PiDishBrowser.createTranscriptTree({
+  document, storage: localStorage, sessionState, request: (host, path, options) => apiFetch(host, path, options), host: hostEntryFor,
+  status: (message, type) => setStatus(message, type), selectSession: (id, options) => selectSession(id, options),
+  saveEditorDraft: (owner, text) => {
+    try { const key = draftKey(sessionRefKey(owner)); if (!(localStorage.getItem(key) || '').trim()) localStorage.setItem(key, text); } catch {}
+  },
+});
+function openTreeModal() { return transcriptTree.open(); }
+function closeTreeModal() { transcriptTree.close(); }
+function selectTreeNode(id) { transcriptTree.select(id); }
+function confirmBranch() { return transcriptTree.confirm(); }
 
 document.addEventListener('keydown', function(e) {
   if (e.key !== 'Escape') return;
@@ -7897,179 +7860,6 @@ document.addEventListener('keydown', function(e) {
     e.preventDefault(); closeDiffView();
   }
 });
-
-function filterTree(query) {
-  if (!treeData) return;
-  var filterMode = document.getElementById('treeFilter').value;
-  var tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
-  
-  var filtered = treeData.nodes.filter(function(node) {
-    if (filterMode === 'user-only' && !(node.type === 'message' && node.role === 'user')) return false;
-    // No Tools hides the whole tool layer: results AND the text-less
-    // assistant messages that only carry tool calls (keep the leaf — it's
-    // the branch point the modal exists to show).
-    if (filterMode === 'no-tools' && node.type === 'message' &&
-        (node.role === 'toolResult' ||
-         (node.role === 'assistant' && !node.text && !node.isLeaf))) return false;
-    if (filterMode === 'default') {
-      if (['model_change','thinking_level_change','label','custom'].includes(node.type)) return false;
-      if (node.type === 'message' && node.role === 'assistant' && !node.text && !node.isLeaf) return false;
-    }
-    if (tokens.length > 0) {
-      var text = getNodeSearchText(node).toLowerCase();
-      return tokens.every(t => text.includes(t));
-    }
-    return true;
-  });
-  renderTree(filtered);
-}
-
-function getNodeSearchText(node) {
-  return [node.text, node.role, node.label, node.toolName, node.modelId, node.summary].filter(Boolean).join(' ');
-}
-
-function renderTree(nodes) {
-  var body = document.getElementById('treeBody');
-  if (!treeData) return;
-  var activeSet = new Set(treeData.activePathIds);
-  var childrenOf = {};
-  for (var n of nodes) {
-    var pid = n.parentId || '__root__';
-    if (!childrenOf[pid]) childrenOf[pid] = [];
-    childrenOf[pid].push(n);
-  }
-  
-  var html = '';
-  for (var i = 0; i < nodes.length; i++) {
-    var node = nodes[i];
-    var isActive = activeSet.has(node.id);
-    var indent = '  '.repeat(node.depth);
-    var siblings = childrenOf[node.parentId || '__root__'] || [];
-    var isLast = siblings.indexOf(node) === siblings.length - 1;
-    var connector = (node.depth > 0 && siblings.length > 1) ? (isLast ? '└ ' : '├ ') : '';
-    var marker = isActive ? '•' : ' ';
-    var classes = 'tree-node' + (isActive ? ' active' : '') + (node.isLeaf ? ' is-leaf' : '');
-    var badge = node.childCount > 1 ? '<span class="tree-branch-badge">' + node.childCount + '</span>' : '';
-    
-    html += '<div class="' + classes + '" data-id="' + node.id + '" style="--tree-depth:' + node.depth + '" onclick="selectTreeNode(\'' + node.id + '\')">';
-    html += '<span class="tree-prefix">' + indent + connector + '</span>';
-    html += '<span class="tree-marker ' + (isActive ? 'active-marker' : 'inactive-marker') + '">' + marker + ' </span>';
-    html += renderTreeNodeContent(node) + badge + '</div>';
-  }
-  
-  body.innerHTML = html;
-  document.getElementById('treeStatus').textContent = nodes.length + ' entries';
-  var leaf = body.querySelector('.is-leaf');
-  if (leaf) leaf.scrollIntoView({ block: 'center', behavior: 'instant' });
-}
-
-function renderTreeNodeContent(node) {
-  if (node.type === 'message') {
-    if (node.role === 'user') return '<span class="tree-role user">user:</span><span class="tree-text">' + escapeHtml(node.text || '(empty)') + '</span>';
-    if (node.role === 'assistant') {
-      var text = node.text || '';
-      if (!text && node.stopReason === 'aborted') text = '(aborted)';
-      if (!text && node.errorMessage) return '<span class="tree-role assistant">assistant:</span><span class="tree-text error-text">' + escapeHtml(node.errorMessage.substring(0, 80)) + '</span>';
-      // Tool-only message: name the calls (server sends getToolSummary
-      // strings) instead of an anonymous "(tool use)".
-      if (!text && node.toolCalls && node.toolCalls.length) {
-        var calls = node.toolCalls.map(function(tc) { return tc.args ? tc.name + ': ' + tc.args : tc.name; }).join(' · ');
-        return '<span class="tree-role assistant">assistant:</span><span class="tree-text muted">' + escapeHtml(calls) + '</span>';
-      }
-      if (!text) text = '(empty)';
-      return '<span class="tree-role assistant">assistant:</span><span class="tree-text">' + escapeHtml(text) + '</span>';
-    }
-    if (node.role === 'toolResult') {
-      var tc = node.toolCallId ? treeToolCallMap.get(node.toolCallId) : null;
-      var disp = tc ? '[' + tc.name + ': ' + tc.args + ']' : '[' + (node.toolName || 'tool') + ']';
-      return '<span class="tree-role tool">' + escapeHtml(disp) + '</span>' + (node.isError ? '<span class="tree-text error-text"> error</span>' : '');
-    }
-    return '<span class="tree-text muted">[' + (node.role || 'message') + ']</span>';
-  }
-  if (node.type === 'compaction') return '<span class="tree-role system">[compaction: ' + Math.round((node.tokensBefore || 0) / 1000) + 'k tokens]</span>';
-  if (node.type === 'model_change') return '<span class="tree-text muted">[model: ' + escapeHtml(node.modelId || '') + ']</span>';
-  if (node.type === 'branch_summary') return '<span class="tree-role system">[branch summary]</span> <span class="tree-text muted">' + escapeHtml(node.summary || '') + '</span>';
-  if (node.type === 'session_info') return '<span class="tree-text muted">[session info]</span>';
-  return '<span class="tree-text muted">[' + escapeHtml(node.type) + ']</span>';
-}
-
-var pendingBranchId = null;
-
-function selectTreeNode(entryId) {
-  if (!treeData || !ownsTree(treeOwner, treeViewGeneration)) return;
-  if (entryId === treeData.leafId) { closeTreeModal(); return; }
-  document.querySelectorAll('.tree-node.selected').forEach(el => el.classList.remove('selected'));
-  var el = document.querySelector('.tree-node[data-id="' + entryId + '"]');
-  if (el) el.classList.add('selected');
-  pendingBranchId = entryId;
-  // Summarize default persists across uses — retrying a prompt wants it off,
-  // the explore-then-return workflow wants it on every time.
-  var summarize = localStorage.getItem('pi-dish-branch-summarize') === '1';
-  // OMP's public navigateTree API accepts { summarize } but has no custom
-  // instructions field. Keep the supported summary toggle and avoid showing
-  // an input the host would have to ignore.
-  var allowSummaryInstructions = sessionState.currentSession.harnessId !== 'omp';
-  document.getElementById('treeStatus').innerHTML =
-    '<div class="branch-confirm">' +
-      '<label class="branch-summarize-label"><input type="checkbox" id="branchSummarize"' + (summarize ? ' checked' : '') +
-        ' onchange="toggleBranchInstructions()"> Summarize abandoned branch</label>' +
-      (allowSummaryInstructions
-        ? '<input type="text" id="branchInstructions" class="branch-instructions" placeholder="Summary instructions (optional)"' +
-          (summarize ? '' : ' style="display:none"') + '>'
-        : '') +
-      '<span class="branch-confirm-btns">' +
-        '<button class="btn-sm btn-branch" id="branchGoBtn" onclick="confirmBranch()">Branch from here</button>' +
-        '<button class="btn-sm" onclick="cancelBranch()">Cancel</button>' +
-      '</span>' +
-    '</div>';
-}
-
-function toggleBranchInstructions() {
-  var on = document.getElementById('branchSummarize')?.checked;
-  var input = document.getElementById('branchInstructions');
-  if (input) input.style.display = on ? '' : 'none';
-}
-
-function cancelBranch() {
-  pendingBranchId = null;
-  document.querySelectorAll('.tree-node.selected').forEach(el => el.classList.remove('selected'));
-  document.getElementById('treeStatus').textContent = document.querySelectorAll('.tree-node').length + ' entries';
-}
-
-async function confirmBranch() {
-  const owner = treeOwner;
-  const generation = treeViewGeneration;
-  if (!treeData || !pendingBranchId || !ownsTree(owner, generation)) return;
-  var entryId = pendingBranchId;
-  var summarize = !!document.getElementById('branchSummarize')?.checked;
-  var customInstructions = document.getElementById('branchInstructions')?.value.trim() || undefined;
-  localStorage.setItem('pi-dish-branch-summarize', summarize ? '1' : '0');
-  var btn = document.getElementById('branchGoBtn');
-  if (btn) { btn.disabled = true; btn.textContent = summarize ? 'Summarizing…' : 'Branching…'; }
-  setStatus(summarize ? 'Summarizing abandoned branch…' : 'Branching...', 'working');
-  try {
-    var data = await apiSend(owner.host, '/api/sessions/' + encodeURIComponent(owner.id) + '/branch',
-      { entryId, summarize, customInstructions });
-    // A user-message target means "re-edit this prompt" (leaf moves to its
-    // parent) — mirror the TUI and prefill the composer, but never clobber
-    // a draft already in progress. Written to the draft store because the
-    // reload below runs restorePromptState, which overwrites the input.
-    if (data.editorText) {
-      try {
-        var key = draftKey(sessionRefKey(owner));
-        if (!(localStorage.getItem(key) || '').trim()) localStorage.setItem(key, data.editorText);
-      } catch {}
-    }
-    if (!sessionState.ownsSelection(owner)) return;
-    closeTreeModal();
-    setStatus('Branched — reloading');
-    selectSession(owner.id, { host: owner.host, forceTranscriptReload: true });
-  } catch (e) {
-    if (!sessionState.ownsSelection(owner)) return;
-    setStatus('Branch failed: ' + e.message, 'error');
-    if (ownsTree(owner, generation) && btn) { btn.disabled = false; btn.textContent = 'Branch from here'; }
-  }
-}
 
 // =========================================================================
 // Terminal (feature-flagged: /api/config .terminal → PI_DISH_TERMINAL=1).

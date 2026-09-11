@@ -395,3 +395,7 @@ Session statistics, process actions, sharing and published artifacts live in
 `session-info.ts`, with wire narrowing in `session-info-data.ts`. Each modal
 render and request retains its host/selection and independent section generation.
 Message-share copies capture their owner before lookup and clipboard effects.
+
+Transcript tree data and view/branch lifetimes live in `transcript-tree-data.ts`
+and `transcript-tree.ts`. Closing a tree retires controls; reopening additionally
+retires older branch completion effects. Returned editor text retains its origin.

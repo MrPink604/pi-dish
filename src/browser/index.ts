@@ -57,3 +57,6 @@ export { decodeRoutine, decodeRoutineList, decodeRoutineInvocations } from './ro
 
 export { createSessionInfo } from './session-info';
 export { decodeSessionStats, decodeSessionShare, decodePublishedPages } from './session-info-data';
+
+export { createTranscriptTree } from './transcript-tree';
+export { decodeTranscriptTree } from './transcript-tree-data';

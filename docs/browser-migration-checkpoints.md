@@ -561,3 +561,24 @@ passed again after the fix. AGENTS.md now includes the pre-paint output.
 - Fable 5.1 cleared the routines host-rotation fix in `61c5691` before push.
   Terminal checkpoint `0e5aef8` has a successful CI workflow in run `34607561015`.
 - Next: transcript tree navigation, rich text rendering and remaining shell.
+
+## Checkpoint 24 — transcript tree and branch navigation
+
+- `transcript-tree.ts` owns tree loads, filters, node rendering, branch controls,
+  request generations and view disposal. `transcript-tree-data.ts` narrows tree
+  nodes, active paths and tool summaries, bounding indentation for malformed data.
+- Filter and row/branch controls use owned listeners. Retained rows and branch
+  buttons cannot act on a newly rendered tree. Node ids and unknown roles render
+  as escaped text instead of inline handlers or raw markup.
+- Branch replies save editor text only to the originating host-qualified empty
+  draft. A branch may still reload or report an error after simple dismissal on
+  that same selection, preserving existing behavior. Reopening the tree retires
+  older completion effects so they cannot close the new tree or enable controls.
+- Five new browser regressions cover filter/retained-control ownership, late
+  success/failure after reopen, unusual ids/roles and disposal. Eight existing
+  menu ownership cases also pass, including both dismissed-branch completions.
+- Strict checks, 919 backend tests, 162 browser regressions, independent UI
+  scenarios and full desktop/mobile smoke passed. Integrated runtime/config/test
+  files match the verified draft byte for byte; strict checks passed again.
+- Fable 5.1 cleared session information commit `6ddf1ab` before push.
+- Next: rich text/diagram rendering, extension UI and remaining shell.
