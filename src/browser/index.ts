@@ -60,3 +60,8 @@ export { decodeSessionStats, decodeSessionShare, decodePublishedPages } from './
 
 export { createTranscriptTree } from './transcript-tree';
 export { decodeTranscriptTree } from './transcript-tree-data';
+
+export { createBrowserAssets } from './browser-assets';
+export { createRichText } from './rich-text';
+export { createDiagrams } from './diagrams';
+export { copyTextToClipboard } from './clipboard';

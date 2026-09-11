@@ -2129,3 +2129,11 @@ branch confirmation controls have independent listener lifetimes. Branch request
 retain their selection and endpoint; originating draft writes survive navigation,
 while reopened views retire old completion effects. Generated rows use listeners,
 escape ids/roles and bound depth before indentation.
+
+Markdown/final highlighting/file-path linking and fenced-copy controls now live
+in `src/browser/rich-text.ts`. `browser-assets.ts` owns lazy local resources and
+`rich-text-vendors.ts` their explicit API contracts. `diagrams.ts` owns deferred
+render tokens by source and theme generation, including detached retained roots.
+A render checks both its owner and current feed containment before effects; bottom
+pinning is measured before SVG insertion, not after its own height change.
+Lightboxes, copy feedback and deferred tasks retire on controller disposal.

@@ -27,7 +27,8 @@ Checkpoint 20 migrates display preferences, themes/pre-paint and panel resizing.
 Checkpoint 21 migrates terminal opens, sockets, reconnects and mobile key input.
 Checkpoint 22 migrates routine forms, catalogs, mutations and invocation history.
 Checkpoint 23 migrates session statistics, sharing and artifact controls.
-Checkpoint 24 migrates transcript tree rendering and branch navigation. See
+Checkpoint 24 migrates transcript tree rendering and branch navigation.
+Checkpoint 25 migrates rich text, lazy assets, diagrams and clipboard delivery. See
 [the checkpoint log](docs/browser-migration-checkpoints.md) for implementation
 verification and the complete browser entrypoint inventory. The last confirmed
 CI checkpoint is recorded below; final CI must pass before the goal is complete.
@@ -38,7 +39,7 @@ CI checkpoint is recorded below; final CI must pass before the goal is complete.
 | --- | --- | --- |
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
-| Browser migration | In progress — current stage | Fifty-six implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
+| Browser migration | In progress — current stage | Sixty implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
 | Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -56,11 +57,12 @@ in `lib/`. Its full module inventory is in [the migration guide](docs/typescript
 Most JavaScript callers of these modules are not yet type checked; `lib/cron.js`
 is an explicitly checked exception.
 
-These fifty-six browser implementation modules compile strictly into local
+These sixty browser implementation modules compile strictly into local
 `public/browser.js`, `public/helpers.js`, `public/artifact-comments.js` and
 `public/theme-prepaint.js` scripts.
-The entries are `index.ts`, `shared-helpers.ts` and `artifact-comments.ts`;
-`shared-helper-types.ts` supplies their pure-helper contracts:
+The entries are `index.ts`, `shared-helpers.ts`, `artifact-comments.ts` and
+`theme-prepaint.ts`; `shared-helper-types.ts` and `rich-text-vendors.ts` supply
+pure-helper and vendored runtime contracts:
 
 | Completed browser module | Responsibility now owned by TypeScript |
 | --- | --- |
@@ -93,6 +95,10 @@ The entries are `index.ts`, `shared-helpers.ts` and `artifact-comments.ts`;
 | `bounce.ts` | Host snapshots, selected bounce targets, operation polling and restart reconciliation |
 | `session-relations.ts` | Related-session wire rows, header/modal controls, indexing refresh and navigation |
 | `session-search.ts` | Query/match state, request sequencing, marks and serialized paging jumps |
+| `browser-assets.ts` | Local vendor load deduplication, retries and disposal |
+| `rich-text.ts` | Markdown configuration, final highlighting, file links and copy controls |
+| `diagrams.ts` | Diagram rendering/theme generations and lightbox controls |
+| `clipboard.ts` | Native clipboard and insecure-context textarea fallback |
 | `transcript-tree-data.ts` | Transcript tree nodes, tool calls and active paths |
 | `transcript-tree.ts` | Tree loading/filtering/rendering and branch request ownership |
 | `session-info-data.ts` | Session statistics, share and published page payloads |

@@ -399,3 +399,8 @@ Message-share copies capture their owner before lookup and clipboard effects.
 Transcript tree data and view/branch lifetimes live in `transcript-tree-data.ts`
 and `transcript-tree.ts`. Closing a tree retires controls; reopening additionally
 retires older branch completion effects. Returned editor text retains its origin.
+
+Rich text is split across `rich-text.ts` (Markdown/final passes/copy controls),
+`diagrams.ts` (source/theme render owners and lightboxes), `browser-assets.ts`
+(local resource loading) and `clipboard.ts`. Vendored APIs have explicit contracts
+in `rich-text-vendors.ts`; the app retains its existing local vendor paths.

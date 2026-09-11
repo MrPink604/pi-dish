@@ -31,8 +31,11 @@ var PiDishBrowser = (() => {
     assignHostColor: () => assignHostColor,
     clampSidebarWidth: () => clampSidebarWidth,
     clampTerminalHeight: () => clampTerminalHeight,
+    copyTextToClipboard: () => copyTextToClipboard,
     createBounce: () => createBounce,
+    createBrowserAssets: () => createBrowserAssets,
     createCwdAutocomplete: () => createCwdAutocomplete,
+    createDiagrams: () => createDiagrams,
     createDirectoryCatalog: () => createDirectoryCatalog,
     createDirectoryTree: () => createDirectoryTree,
     createDisplayPreferences: () => createDisplayPreferences,
@@ -51,6 +54,7 @@ var PiDishBrowser = (() => {
     createNewSessionPreferences: () => createNewSessionPreferences,
     createPanelResize: () => createPanelResize,
     createRecovery: () => createRecovery,
+    createRichText: () => createRichText,
     createRoutinesView: () => createRoutinesView,
     createSearchView: () => createSearchView,
     createSessionApi: () => createSessionApi,
@@ -7363,7 +7367,7 @@ var PiDishBrowser = (() => {
       return options.request(host, path, init);
     };
     const isMultiHost = options.multiHost, hostChipHtml = options.hostChip;
-    const copyTextToClipboard = options.copy, setStatus = options.status, confirm = options.confirm;
+    const copyTextToClipboard2 = options.copy, setStatus = options.status, confirm = options.confirm;
     const createCwdAutocomplete2 = options.autocomplete;
     const modelSelectOptionsHtml2 = (models) => modelSelectOptionsHtml(models, escapeHtml);
     const field = (id) => document2.getElementById(id);
@@ -8109,7 +8113,7 @@ var PiDishBrowser = (() => {
     }
     function copyRoutineCurl() {
       if (!isRoutinesViewOpen() || !routineSelected) return;
-      copyTextToClipboard(routineInvokeCurl(routineSelected));
+      copyTextToClipboard2(routineInvokeCurl(routineSelected));
       setStatus("Invoke command copied");
     }
     function renderRoutineVersions() {
@@ -8566,7 +8570,7 @@ var PiDishBrowser = (() => {
   // src/browser/session-info.ts
   function createSessionInfo(options) {
     const { document: document2, sessionState } = options, location = document2.defaultView.location;
-    const copyTextToClipboard = options.copy, setStatus = options.status, confirm = options.confirm, sessionRefFor = options.reference;
+    const copyTextToClipboard2 = options.copy, setStatus = options.status, confirm = options.confirm, sessionRefFor = options.reference;
     const apiFetch = options.request, refreshSessions = options.refreshSessions, selectSession = options.selectSession;
     const errorMessage = (error) => error instanceof Error ? error.message : String(error);
     const element = (id) => {
@@ -8650,7 +8654,7 @@ var PiDishBrowser = (() => {
         if (!(event.target instanceof Element) || !ownsStatsModal(owner, generation)) return;
         const button = event.target.closest(".stats-copy");
         if (!button || !body.contains(button)) return;
-        void copyTextToClipboard(button.dataset.copy || "").then(() => {
+        void copyTextToClipboard2(button.dataset.copy || "").then(() => {
           if (!ownsStatsModal(owner, generation) || !button.isConnected) return;
           const original = button.textContent;
           button.classList.add("copied");
@@ -8774,7 +8778,7 @@ var PiDishBrowser = (() => {
         }
         if (!current()) return;
         const base = share.url || location.origin + share.path;
-        await copyTextToClipboard(`${base}?targetId=${encodeURIComponent(id)}`);
+        await copyTextToClipboard2(`${base}?targetId=${encodeURIComponent(id)}`);
         if (!current()) return;
         button.classList.add("copied");
         later(messageTimers, () => {
@@ -9010,7 +9014,7 @@ var PiDishBrowser = (() => {
         const text13 = button.dataset.copy || "";
         button.addEventListener("click", () => {
           if (!current()) return;
-          void copyTextToClipboard(text13).then(() => {
+          void copyTextToClipboard2(text13).then(() => {
             if (current()) setStatus("Link copied");
           }, () => {
             if (current()) setStatus("Copy failed (clipboard blocked)", "error");
@@ -9349,6 +9353,716 @@ var PiDishBrowser = (() => {
         disposed = true;
       }
     };
+  }
+
+  // src/browser/browser-assets.ts
+  function createBrowserAssets(document2) {
+    let disposed = false;
+    const loaded = /* @__PURE__ */ new Map();
+    const pending = /* @__PURE__ */ new Set();
+    function load(tag, attributes) {
+      if (disposed) return Promise.reject(new Error("Browser assets disposed"));
+      const url = "src" in attributes ? attributes.src : attributes.href;
+      const key = tag + ":" + url;
+      const existing = loaded.get(key);
+      if (existing) return existing;
+      const promise = new Promise((resolve, reject) => {
+        const element = document2.createElement(tag);
+        Object.assign(element, attributes);
+        const cleanup = () => {
+          pending.delete(cancel);
+          element.onload = null;
+          element.onerror = null;
+        };
+        const cancel = () => {
+          cleanup();
+          element.remove();
+          reject(new Error("Browser assets disposed"));
+        };
+        pending.add(cancel);
+        element.onload = () => {
+          cleanup();
+          resolve();
+        };
+        element.onerror = () => {
+          cleanup();
+          element.remove();
+          reject(new Error("Failed to load " + url));
+        };
+        document2.head.append(element);
+      }).catch((error) => {
+        loaded.delete(key);
+        throw error;
+      });
+      loaded.set(key, promise);
+      return promise;
+    }
+    return { load, dispose() {
+      disposed = true;
+      for (const cancel of [...pending]) cancel();
+      loaded.clear();
+    } };
+  }
+
+  // src/browser/helper-markdown.ts
+  function sanitizeMarkdownUrl(url) {
+    const raw = String(url == null ? "" : url).trim();
+    const scheme = raw.replace(/[\u0000-\u0020]+/g, "").toLowerCase();
+    if (/^(javascript|vbscript|data):/.test(scheme)) return "#";
+    return raw;
+  }
+  var MERMAID_FENCE_LANGS = /* @__PURE__ */ new Set(["mermaid", "mmd"]);
+  var DIAGRAM_SNIFF_LANGS = /* @__PURE__ */ new Set(["", "text", "txt", "plain", "plaintext", "diagram", "uml"]);
+  var MERMAID_DECLARATIONS = [
+    /^(?:graph|flowchart(?:-elk)?)\s+(?:TB|TD|BT|RL|LR)\b/,
+    /^(?:sequenceDiagram|classDiagram(?:-v2)?|stateDiagram(?:-v2)?|erDiagram|journey|gantt|mindmap|timeline|kanban|zenuml|quadrantChart|requirementDiagram|gitGraph|architecture-beta|block-beta|packet(?:-beta)?|radar-beta|sankey-beta|treemap(?:-beta)?|xychart-beta|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment)\b/,
+    /^pie(?:\s+(?:title|showData)\b|\s*$)/
+  ];
+  function mermaidDeclarationLine(text13) {
+    const lines = String(text13 == null ? "" : text13).split("\n");
+    let i = 0;
+    if (lines[0] !== void 0 && lines[0].trim() === "---") {
+      const end = lines.findIndex((l, idx) => idx > 0 && l.trim() === "---");
+      if (end > 0) i = end + 1;
+    }
+    for (; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line || line.startsWith("%%")) continue;
+      return line;
+    }
+    return "";
+  }
+  function looksLikeMermaid(text13) {
+    const decl = mermaidDeclarationLine(text13);
+    return !!decl && MERMAID_DECLARATIONS.some((re) => re.test(decl));
+  }
+  function diagramKindForFence(lang, source) {
+    const tag = String(lang == null ? "" : lang).trim().toLowerCase().split(/[\s,:;]/)[0];
+    if (MERMAID_FENCE_LANGS.has(tag)) return "mermaid";
+    if (!DIAGRAM_SNIFF_LANGS.has(tag)) return null;
+    return looksLikeMermaid(source) ? "mermaid" : null;
+  }
+  function isDarkColorHex(hex) {
+    const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex == null ? "" : hex).trim());
+    if (!m) return true;
+    const h = m[1].length === 3 ? m[1].replace(/./g, (c) => c + c) : m[1];
+    const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+    const lin = (c) => c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b) < 0.5;
+  }
+  function createMathExtensions(katexLib) {
+    const getKatex = () => katexLib || (typeof katex !== "undefined" ? katex : null);
+    const blockMath = {
+      name: "blockMath",
+      level: "block",
+      start(src) {
+        const match = src.match(/\$\$|\\\[/);
+        return match ? match.index : -1;
+      },
+      tokenizer(src) {
+        const match = /^(?:\$\$([\s\S]*?)\$\$|\\\[([\s\S]*?)\\\])/.exec(src);
+        if (match) {
+          const text13 = match[1] !== void 0 ? match[1] : match[2];
+          return {
+            type: "blockMath",
+            raw: match[0],
+            text: text13.trim()
+          };
+        }
+      },
+      renderer(token) {
+        const k = getKatex();
+        if (!k) return `<pre class="math-block"><code>${escapeHtml(token.raw)}</code></pre>
+`;
+        try {
+          return `<div class="math-block">${k.renderToString(token.text, { displayMode: true, throwOnError: false })}</div>
+`;
+        } catch (e) {
+          return `<pre class="math-error"><code>${escapeHtml(token.raw)}</code></pre>
+`;
+        }
+      }
+    };
+    const inlineMath = {
+      name: "inlineMath",
+      level: "inline",
+      start(src) {
+        const match = src.match(/\$|\\\(|\\\[/);
+        return match ? match.index : -1;
+      },
+      tokenizer(src) {
+        const bracketMatch = /^\\\[([\s\S]*?)\\\]/.exec(src);
+        if (bracketMatch) {
+          return {
+            type: "inlineMath",
+            raw: bracketMatch[0],
+            text: bracketMatch[1].trim(),
+            display: true
+          };
+        }
+        const parenMatch = /^\\\(([\s\S]*?)\\\)/.exec(src);
+        if (parenMatch) {
+          return {
+            type: "inlineMath",
+            raw: parenMatch[0],
+            text: parenMatch[1].trim(),
+            display: false
+          };
+        }
+        const doubleDollarMatch = /^\$\$([\s\S]*?)\$\$/.exec(src);
+        if (doubleDollarMatch) {
+          return {
+            type: "inlineMath",
+            raw: doubleDollarMatch[0],
+            text: doubleDollarMatch[1].trim(),
+            display: true
+          };
+        }
+        const dollarMatch = /^\$((?:\\\$|[^\$\s\n])(?:(?:\\\$|[^\$\n])*?(?:\\\$|[^\$\s\n]))?)\$/.exec(src);
+        if (dollarMatch) {
+          return {
+            type: "inlineMath",
+            raw: dollarMatch[0],
+            text: dollarMatch[1],
+            display: false
+          };
+        }
+      },
+      renderer(token) {
+        const k = getKatex();
+        if (!k) return escapeHtml(token.raw);
+        try {
+          return k.renderToString(token.text, { displayMode: Boolean(token.display), throwOnError: false });
+        } catch (e) {
+          return escapeHtml(token.raw);
+        }
+      }
+    };
+    return [blockMath, inlineMath];
+  }
+  var FILE_MENTION_RE = /^(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?$/;
+  var FILE_EXT_RE = /\.[A-Za-z][A-Za-z0-9]{0,7}$/;
+  function looksLikeFilePath(text13) {
+    const s = String(text13 == null ? "" : text13).trim();
+    if (!s || s.length > 260) return false;
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return false;
+    if (!FILE_MENTION_RE.test(s)) return false;
+    const stripped = s.replace(/:\d+(?::\d+)?$/, "");
+    return stripped.includes("/") || FILE_EXT_RE.test(stripped);
+  }
+  var PATH_TOKEN_RE = /(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?/g;
+  var BARE_EXT_STOPLIST = /* @__PURE__ */ new Set(["com", "org", "net", "io", "ai", "dev", "co", "app"]);
+  function findPathTokens(text13) {
+    const s = String(text13 == null ? "" : text13);
+    const out = [];
+    PATH_TOKEN_RE.lastIndex = 0;
+    let m;
+    while (m = PATH_TOKEN_RE.exec(s)) {
+      const token = m[0].replace(/[.,;:!?]+$/, "");
+      if (!token) continue;
+      const prev = s[m.index - 1];
+      if (prev && /[\w.@:/+-]/.test(prev)) continue;
+      if (!looksLikeFilePath(token)) continue;
+      const stripped = token.replace(/:\d+(?::\d+)?$/, "");
+      const rooted = /^(?:~\/|\.{1,2}\/|\/)/.test(stripped);
+      const ext = (stripped.match(FILE_EXT_RE) || [""])[0].slice(1);
+      if (!rooted && !ext) continue;
+      if (!rooted && !stripped.includes("/") && BARE_EXT_STOPLIST.has(ext.toLowerCase())) continue;
+      out.push({ start: m.index, end: m.index + token.length, token });
+    }
+    return out;
+  }
+
+  // src/browser/rich-text.ts
+  function createRichText(options) {
+    const { document: document2, sessionState } = options;
+    const events = new AbortController(), copyTimers = /* @__PURE__ */ new Set();
+    let copies = /* @__PURE__ */ new WeakMap();
+    document2.addEventListener("click", (event) => {
+      if (disposed || !(event.target instanceof Element)) return;
+      const copy = event.target.closest(".code-copy-btn");
+      if (copy) {
+        const owner = sessionState.captureSelection(), token = /* @__PURE__ */ Symbol();
+        copies.set(copy, token);
+        const current = () => !disposed && copy.isConnected && copies.get(copy) === token && (owner ? sessionState.ownsSelection(owner) : !sessionState.currentSession);
+        const source = copy.closest(".code-block")?.querySelector("pre code")?.textContent || "";
+        void options.copy(source).then(() => {
+          if (!current()) return;
+          copy.textContent = "\u2713";
+          const timer = setTimeout(() => {
+            copyTimers.delete(timer);
+            if (current()) copy.textContent = "\u29C9";
+          }, 1200);
+          copyTimers.add(timer);
+        }, () => {
+          if (current()) options.status("Copy failed (clipboard blocked)", "error");
+        });
+        return;
+      }
+      const block = event.target.closest(".diagram-block");
+      if (!block) return;
+      if (event.target.closest(".diagram-source-btn")) options.diagrams.toggleSource(block);
+      else if (event.target.closest(".diagram-zoom-btn")) options.diagrams.openLightbox(block);
+    }, { signal: events.signal });
+    let disposed = false, mathAssetsPromise = null, highlightAssetsPromise = null;
+    options.marked?.use({
+      breaks: true,
+      gfm: true,
+      // Marked's GFM tokenizer accepts both ~text~ and ~~text~~ as deletion.
+      // Models commonly use a single tilde literally (paths, approximation,
+      // shell syntax), so require the explicit double-tilde form instead.
+      tokenizer: {
+        del(src) {
+          const cap = /^(~~)(?=[^\s~])([\s\S]*?[^\s~])\1(?=[^~]|$)/.exec(src);
+          if (!cap) return;
+          return {
+            type: "del",
+            raw: cap[0],
+            text: cap[2],
+            tokens: this.lexer.inlineTokens(cap[2])
+          };
+        }
+      },
+      renderer: {
+        html(html) {
+          return escapeHtml(typeof html === "string" ? html : record8(html) && typeof html.text === "string" ? html.text : "");
+        }
+      },
+      walkTokens(token) {
+        if (token.type === "link" || token.type === "image") token.href = sanitizeMarkdownUrl(token.href);
+      },
+      extensions: createMathExtensions()
+    });
+    function formatMarkdown(text13) {
+      if (!text13) return "";
+      if (options.marked) {
+        try {
+          return options.marked.parse(text13);
+        } catch (e) {
+        }
+      }
+      let html = escapeHtml(text13);
+      html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => `<pre><code class="language-${lang}">${code.trim()}</code></pre>`);
+      html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+      html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      html = html.replace(/\n/g, "<br>");
+      return html;
+    }
+    function applyHighlight(el) {
+      const root = el || document2.getElementById("messages");
+      if (disposed || !root) return;
+      const pendingHighlight = [];
+      root.querySelectorAll(".markdown-body pre code").forEach((code) => {
+        const pre = code.closest("pre");
+        if (pre && !pre.parentElement?.classList.contains("code-block")) {
+          const wrap = document2.createElement("div");
+          wrap.className = "code-block";
+          const btn = document2.createElement("button");
+          btn.className = "code-copy-btn";
+          btn.title = "Copy code";
+          btn.textContent = "\u29C9";
+          pre.replaceWith(wrap);
+          wrap.append(btn, pre);
+        }
+        const kind = diagramKindForFence(fenceLanguage(code), code.textContent);
+        if (kind) {
+          options.diagrams.prepare(pre?.parentElement || null, kind);
+          code.dataset.highlighted = "diagram";
+        }
+        if (code.dataset.highlighted) return;
+        const hljs = options.highlight();
+        if (!hljs) {
+          pendingHighlight.push({ code, source: code.textContent || "" });
+          return;
+        }
+        try {
+          hljs.highlightElement(code);
+        } catch (e) {
+        }
+      });
+      if (pendingHighlight.length) {
+        loadHighlightAssets().then((hljs) => {
+          if (disposed) return;
+          for (const { code, source } of pendingHighlight) {
+            if (code.dataset.highlighted || code.textContent !== source) continue;
+            try {
+              hljs.highlightElement(code);
+            } catch (e) {
+            }
+          }
+        }).catch(() => {
+        });
+      }
+      options.diagrams.render(root);
+      linkifyFilePaths(root);
+    }
+    function fenceLanguage(code) {
+      const cls = [...code.classList].find((c) => c.startsWith("language-"));
+      return cls ? cls.slice("language-".length) : "";
+    }
+    function linkifyFilePaths(root) {
+      root.querySelectorAll(".markdown-body code, .tool-call-summary, .live-tool-summary").forEach((el) => {
+        if (el.closest("pre") || el.classList.contains("file-link") || el.children.length) return;
+        if (looksLikeFilePath((el.textContent || "").trim())) {
+          el.classList.add("file-link");
+          el.title = "Open file";
+        }
+      });
+      root.querySelectorAll(".markdown-body:not([data-linkified])").forEach((body) => {
+        body.dataset.linkified = "1";
+        const walker = document2.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
+          acceptNode(n) {
+            return n.parentElement && !n.parentElement.closest("code, a, pre, .file-link, .katex, .math-block, .diagram-render") ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+          }
+        });
+        const nodes = [];
+        while (walker.nextNode()) nodes.push(walker.currentNode);
+        for (const node of nodes) {
+          const tokens2 = findPathTokens(node.data);
+          if (!tokens2.length) continue;
+          const frag = document2.createDocumentFragment();
+          let pos = 0;
+          for (const t of tokens2) {
+            frag.append(node.data.slice(pos, t.start));
+            const span = document2.createElement("span");
+            span.className = "file-link";
+            span.title = "Open file";
+            span.textContent = t.token;
+            frag.append(span);
+            pos = t.end;
+          }
+          frag.append(node.data.slice(pos));
+          node.replaceWith(frag);
+        }
+      });
+    }
+    function loadMathAssets() {
+      if (disposed) return Promise.reject(new Error("Rich text disposed"));
+      return mathAssetsPromise ||= Promise.all([
+        options.assets.load("link", { rel: "stylesheet", href: "vendor/katex.min.css" }),
+        options.assets.load("script", { src: "vendor/katex.min.js" })
+      ]).catch((error) => {
+        mathAssetsPromise = null;
+        throw error;
+      });
+    }
+    function loadHighlightAssets() {
+      if (disposed) return Promise.reject(new Error("Rich text disposed"));
+      return highlightAssetsPromise ||= Promise.all([
+        options.assets.load("link", { rel: "stylesheet", href: "vendor/hljs-theme.min.css" }),
+        options.assets.load("script", { src: "vendor/highlight.js" })
+      ]).then(() => {
+        const runtime = options.highlight();
+        if (!runtime) throw new Error("Syntax highlighter did not load");
+        return runtime;
+      }).catch((error) => {
+        highlightAssetsPromise = null;
+        throw error;
+      });
+    }
+    return { format: formatMarkdown, highlight: applyHighlight, loadMath: loadMathAssets, dispose() {
+      disposed = true;
+      events.abort();
+      copies = /* @__PURE__ */ new WeakMap();
+      for (const timer of copyTimers) clearTimeout(timer);
+      copyTimers.clear();
+    } };
+  }
+
+  // src/browser/diagrams.ts
+  function createDiagrams(options) {
+    const { document: document2 } = options, window = document2.defaultView;
+    let disposed = false, themeGeneration = 0;
+    let renders = /* @__PURE__ */ new WeakMap();
+    const tasks = /* @__PURE__ */ new Set();
+    let lightbox = null;
+    function closeLightbox() {
+      lightbox?.events.abort();
+      lightbox?.element.remove();
+      lightbox = null;
+    }
+    function owns(block, owner) {
+      return !disposed && owner.generation === themeGeneration && renders.get(block) === owner && block.querySelector("pre code")?.textContent === owner.source;
+    }
+    let mermaidPromise = null;
+    let diagramSeq = 0;
+    function loadMermaid() {
+      if (disposed) return Promise.reject(new Error("Diagrams disposed"));
+      if (mermaidPromise) return mermaidPromise;
+      mermaidPromise = options.assets.load("script", { src: "vendor/mermaid.min.js" }).then(() => {
+        const mermaid = options.runtime();
+        if (!mermaid) throw new Error("mermaid did not load");
+        if (disposed) throw new Error("Diagrams disposed");
+        mermaid.initialize(mermaidConfig());
+        return mermaid;
+      }).catch((err) => {
+        mermaidPromise = null;
+        throw err;
+      });
+      return mermaidPromise;
+    }
+    function mermaidConfig() {
+      const css = window.getComputedStyle(document2.documentElement);
+      const hex = (name, fallback2) => resolveColorToHex(css.getPropertyValue(name).trim(), document2) || fallback2;
+      const bg = hex("--bg-darker", "#00212b");
+      const card = hex("--bg-card", "#073642");
+      const hover = hex("--bg-hover", "#0b4354");
+      const text13 = hex("--text-bright", "#dbe5e6");
+      const muted = hex("--text-muted", "#6f8b93");
+      const border = hex("--accent-dim", "#1c6ba3");
+      const line = hex("--border", "#11475a");
+      return {
+        startOnLoad: false,
+        // The SVG is written into transcript DOM, so mermaid's own sanitizer is
+        // what keeps diagram-authored HTML labels (<br>, <b>) inert.
+        securityLevel: "strict",
+        // A failed render must leave the code block standing, not mermaid's own
+        // error graphic.
+        suppressErrorRendering: true,
+        theme: "base",
+        fontFamily: window.getComputedStyle(document2.body).fontFamily,
+        flowchart: { htmlLabels: true, useMaxWidth: true },
+        themeVariables: {
+          darkMode: isDarkColorHex(bg),
+          background: bg,
+          primaryColor: card,
+          primaryTextColor: text13,
+          primaryBorderColor: border,
+          secondaryColor: hover,
+          secondaryTextColor: text13,
+          tertiaryColor: bg,
+          tertiaryTextColor: text13,
+          lineColor: muted,
+          textColor: text13,
+          mainBkg: card,
+          nodeBorder: border,
+          clusterBkg: bg,
+          clusterBorder: line,
+          titleColor: text13,
+          edgeLabelBackground: bg,
+          labelBoxBkgColor: card,
+          labelBoxBorderColor: border,
+          actorBkg: card,
+          actorBorder: border,
+          actorTextColor: text13,
+          signalColor: muted,
+          signalTextColor: text13,
+          noteBkgColor: hover,
+          noteBorderColor: border,
+          noteTextColor: text13,
+          fontSize: "14px"
+        }
+      };
+    }
+    function prepareDiagramBlock(block, kind) {
+      if (disposed || !block || block.dataset.diagram) return;
+      block.dataset.diagram = kind;
+      block.classList.add("diagram-block");
+      const actions = document2.createElement("div");
+      actions.className = "diagram-actions";
+      const source = document2.createElement("button");
+      source.className = "diagram-btn diagram-source-btn";
+      source.title = "Show diagram source";
+      source.textContent = "</>";
+      const zoom = document2.createElement("button");
+      zoom.className = "diagram-btn diagram-zoom-btn";
+      zoom.title = "Zoom diagram";
+      zoom.textContent = "\u2922";
+      actions.append(source, zoom);
+      const copy = block.querySelector(".code-copy-btn");
+      if (copy) actions.append(copy);
+      block.prepend(actions);
+    }
+    function renderDiagrams(root) {
+      const blocks = [...root.querySelectorAll(".diagram-block:not([data-diagram-state])")];
+      if (disposed || !blocks.length) return;
+      const pending = blocks.map((block) => {
+        const owner = { generation: themeGeneration, source: block.querySelector("pre code")?.textContent || "" };
+        renders.set(block, owner);
+        block.dataset.diagramState = "loading";
+        return { block, owner };
+      });
+      const timer = setTimeout(() => {
+        tasks.delete(timer);
+        if (disposed) return;
+        loadMermaid().then(
+          (m) => {
+            for (const { block, owner } of pending) if (owns(block, owner)) void renderDiagramBlock(m, block, owner);
+          },
+          () => {
+            for (const { block, owner } of pending) if (owns(block, owner)) setDiagramError(block, "diagram renderer unavailable");
+          }
+        );
+      }, 0);
+      tasks.add(timer);
+    }
+    async function renderDiagramBlock(m, block, owner) {
+      const code = block.querySelector("pre code");
+      if (!code) {
+        block.dataset.diagramState = "error";
+        return;
+      }
+      const feed = document2.getElementById("messages");
+      const pinned = feed && feed.contains(block) && options.isPinned(feed);
+      try {
+        const { svg } = await m.render(`pi-dish-diagram-${++diagramSeq}`, owner.source);
+        if (!owns(block, owner)) return;
+        const stillPinned = pinned && feed.contains(block) && options.isPinned(feed);
+        let figure = block.querySelector(".diagram-render");
+        if (!figure) {
+          figure = document2.createElement("div");
+          figure.className = "diagram-render";
+          block.insertBefore(figure, block.querySelector("pre"));
+        }
+        figure.innerHTML = svg;
+        block.querySelector(".diagram-error")?.remove();
+        block.classList.remove("diagram-failed");
+        block.dataset.diagramState = "rendered";
+        if (stillPinned) options.scrollBottom(feed);
+      } catch (err) {
+        if (!owns(block, owner)) return;
+        setDiagramError(block, String(err instanceof Error ? err.message : err).split("\n")[0].replace(/:\s*$/, ""));
+      }
+    }
+    function setDiagramError(block, message3) {
+      block.dataset.diagramState = "error";
+      block.classList.add("diagram-failed");
+      let note = block.querySelector(".diagram-error");
+      if (!note) {
+        note = document2.createElement("div");
+        note.className = "diagram-error";
+        block.insertBefore(note, block.querySelector("pre"));
+      }
+      note.textContent = `\u26A0 ${message3}`;
+    }
+    function toggleDiagramSource(block) {
+      if (disposed) return;
+      const showing = block.classList.toggle("diagram-source");
+      const btn = block.querySelector(".diagram-source-btn");
+      if (btn) {
+        btn.textContent = showing ? "\u25A6" : "</>";
+        btn.title = showing ? "Show diagram" : "Show diagram source";
+      }
+    }
+    function openDiagramLightbox(block) {
+      const svg = block.querySelector(".diagram-render svg");
+      if (disposed || !svg) return;
+      closeLightbox();
+      const box = svg.viewBox && svg.viewBox.baseVal;
+      const rect = svg.getBoundingClientRect();
+      const baseW = box && box.width || rect.width || 800;
+      const baseH = box && box.height || rect.height || 600;
+      const overlay = document2.createElement("div");
+      overlay.className = "lightbox-overlay diagram-lightbox";
+      const events = new AbortController();
+      lightbox = { element: overlay, events };
+      const current = () => !disposed && lightbox?.element === overlay && overlay.isConnected;
+      const bar = document2.createElement("div");
+      bar.className = "diagram-zoom-bar";
+      const stage = document2.createElement("div");
+      stage.className = "diagram-stage";
+      const clone = svg.cloneNode(true);
+      clone.removeAttribute("style");
+      clone.removeAttribute("width");
+      clone.removeAttribute("height");
+      stage.appendChild(clone);
+      overlay.append(bar, stage);
+      document2.body.appendChild(overlay);
+      const fitScale = () => Math.max(0.1, Math.min(1, (stage.clientWidth - 24) / baseW, (stage.clientHeight - 24) / baseH));
+      let scale = fitScale();
+      const label = document2.createElement("span");
+      label.className = "diagram-zoom-label";
+      const apply = () => {
+        clone.style.width = `${Math.round(baseW * scale)}px`;
+        clone.style.height = `${Math.round(baseH * scale)}px`;
+        label.textContent = `${Math.round(scale * 100)}%`;
+      };
+      const step = (factor) => {
+        scale = Math.min(8, Math.max(0.1, scale * factor));
+        apply();
+      };
+      const button = (text13, title, onClick) => {
+        const b = document2.createElement("button");
+        b.className = "diagram-btn";
+        b.textContent = text13;
+        b.title = title;
+        b.addEventListener("click", () => {
+          if (current()) onClick();
+        }, { signal: events.signal });
+        return b;
+      };
+      bar.append(
+        button("\u2212", "Zoom out", () => step(1 / 1.25)),
+        label,
+        button("+", "Zoom in", () => step(1.25)),
+        button("\u293E", "Fit to screen", () => {
+          scale = fitScale();
+          apply();
+        }),
+        button("\u2715", "Close", closeLightbox)
+      );
+      apply();
+      overlay.addEventListener("click", (e) => {
+        if (current() && (e.target === overlay || e.target === stage)) closeLightbox();
+      }, { signal: events.signal });
+    }
+    function refreshDiagramTheme() {
+      if (disposed || !mermaidPromise) return;
+      const generation = ++themeGeneration;
+      mermaidPromise.then((m) => {
+        if (disposed || generation !== themeGeneration) return;
+        m.initialize(mermaidConfig());
+        const roots = [document2, ...options.retainedRoots()];
+        for (const root of roots) {
+          root.querySelectorAll(".diagram-block[data-diagram-state]").forEach((block) => {
+            block.querySelector(".diagram-render")?.remove();
+            delete block.dataset.diagramState;
+          });
+          renderDiagrams(root);
+        }
+      }).catch(() => {
+      });
+    }
+    return {
+      prepare: prepareDiagramBlock,
+      render: renderDiagrams,
+      toggleSource: toggleDiagramSource,
+      openLightbox: openDiagramLightbox,
+      refreshTheme: refreshDiagramTheme,
+      dispose() {
+        disposed = true;
+        themeGeneration++;
+        renders = /* @__PURE__ */ new WeakMap();
+        for (const timer of tasks) clearTimeout(timer);
+        tasks.clear();
+        closeLightbox();
+      }
+    };
+  }
+
+  // src/browser/clipboard.ts
+  function copyTextToClipboard(text13, document2 = globalThis.document, navigator = globalThis.navigator) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text13);
+    }
+    return new Promise((resolve, reject) => {
+      const ta = document2.createElement("textarea");
+      ta.value = text13;
+      ta.setAttribute("readonly", "");
+      ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
+      document2.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      ta.setSelectionRange(0, ta.value.length);
+      let ok = false;
+      try {
+        ok = document2.execCommand("copy");
+      } catch (e) {
+      }
+      ta.remove();
+      if (ok) resolve();
+      else reject(new Error("execCommand copy rejected"));
+    });
   }
   return __toCommonJS(index_exports);
 })();

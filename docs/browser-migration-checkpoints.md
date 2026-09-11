@@ -582,3 +582,29 @@ passed again after the fix. AGENTS.md now includes the pre-paint output.
   files match the verified draft byte for byte; strict checks passed again.
 - Fable 5.1 cleared session information commit `6ddf1ab` before push.
 - Next: rich text/diagram rendering, extension UI and remaining shell.
+
+## Checkpoint 25 — Markdown, diagrams and local assets
+
+- `rich-text.ts` owns Markdown setup, safe HTML/link handling, literal tilde
+  semantics, math extensions, final highlighting, file-path links and code-copy
+  controls. `rich-text-vendors.ts` declares the supported vendored runtime surface.
+- `browser-assets.ts` deduplicates local script/stylesheet loads, removes failed
+  elements for retry and rejects pending loads on disposal. `clipboard.ts`
+  preserves native clipboard delivery and the insecure-context textarea fallback.
+- `diagrams.ts` owns deferred renders, per-block source/theme generations and
+  zoom overlays. Late renders cannot overwrite a newer theme; retained detached
+  transcripts still render without scrolling the currently selected feed.
+- A still-pinned feed is measured before inserting a taller SVG, then carried
+  down after insertion. An initial post-insertion check incorrectly treated the
+  diagram's growth as user scrolling, leaving the jump button over a mobile
+  terminal key. The corrected ordering and a focused regression both pass.
+- Disposal cancels deferred diagram tasks, copy feedback timers and owned
+  listeners. Replaced lightbox controls cannot act on the current overlay.
+- Seven browser regressions cover escaping, load deduplication/retry/disposal,
+  theme races, detached rendering, lightbox and copy lifetimes, and pinned growth.
+- Final strict checks, 919 backend tests, 169 browser regressions, every independent
+  UI scenario and full desktop/mobile smoke passed after the scroll correction.
+  Integrated runtime/config/test files match the verified draft byte for byte;
+  strict checks passed again before commit.
+- Fable 5.1 cleared tree commit `54264af` before push.
+- Next: extension widgets/status/dialogs, file/comment surfaces and remaining shell.
