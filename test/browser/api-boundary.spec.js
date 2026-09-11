@@ -19,7 +19,7 @@ test('malformed model catalogs cannot populate the selector', async ({ page, fle
   });
   await expect(page.locator('#modelDropdown')).toBeVisible();
   await expect(page.locator('#modelDropdown')).toContainText('No models found');
-  expect(await page.evaluate(() => knownModels.length)).toBe(0);
+  expect(await page.evaluate(() => modelCatalog.rows().length)).toBe(0);
 });
 
 test('an unauthorized peer becomes blocked while retaining its cached rows', async ({ page, fleet }) => {

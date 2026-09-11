@@ -12,8 +12,10 @@ export { createHostDirectory } from './host-directory';
 export { createHostSettings, hostSettingsHtml } from './host-settings';
 export { createHostPresentation, resolveColorToHex } from './host-presentation';
 export { HOST_COLOR_SLOTS, sanitizeHostColors, sanitizeHostColorOrder, assignHostColor, rgbStringToHex } from '../core/host-colors';
-export { createDirectoryCatalog, decodeKnownDirectories, decodeDirectoryChildren } from './directory-catalog';
+export { sameDirectoryHost, createDirectoryCatalog, decodeKnownDirectories, decodeDirectoryChildren } from './directory-catalog';
 export { createCwdAutocomplete } from './cwd-autocomplete';
 export { createDirectoryTree } from './directory-tree';
 
 export { createSpawnTargets, createSpawnTargetPicker, decodeSpawnChoices, spawnTargetKey } from './spawn-targets';
+
+export { createModelCatalog, modelsCacheKey, modelSelectOptionsHtml, modelHiddenNote } from './model-catalog';

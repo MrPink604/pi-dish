@@ -10,8 +10,9 @@ const target = controller.selected('new-name');
 if (target && 'tmuxSession' in target) target.tmuxSession.toLowerCase();
 // @ts-expect-error callers cannot inject unowned target choices
 controller.choices().push({ label: 'injected', target: null });
+const currentTarget = controller.current().target;
 // @ts-expect-error target descriptors are readonly views
-if (controller.current().target) controller.current().target.socket = '/retarget';
+if (currentTarget) currentTarget.socket = '/retarget';
 // @ts-expect-error resume requires the host route, not an ambiguous id
 controller.resume('host-a');
 createSpawnTargetPicker({ input, nameInput: input, wrap: container, dropdown: container, targets: controller,

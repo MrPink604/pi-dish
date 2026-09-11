@@ -1608,7 +1608,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       null, { timeout: 5000 });
     await desktop.locator('.ns-tree-row').filter({ hasText: 'proj-alpha' }).first().click();
     check(await desktop.inputValue('#newSessionCwd') === CWD, 'selecting a tree dir sets the cwd input');
-    await desktop.waitForFunction((cwd) => knownModelsCwd === cwd, CWD, { timeout: 5000 });
+    await desktop.waitForFunction((cwd) => modelCatalog.scope?.cwd === cwd, CWD, { timeout: 5000 });
 
     // Spawn: routed async round-trip (deterministic — no real pi child).
     // The POST opts into asynchronous spawning; the takeover closes
@@ -1634,7 +1634,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // A cached catalog is enough to submit immediately. The server still
     // validates explicit model/thinking values, while its in-flight catalog
     // request also serves that validation.
-    await desktop.evaluate(() => { knownModelsCwd = null; });
+    await desktop.evaluate(() => { modelCatalog.seed({ host: nsHost(), harnessId: selectedHarnessId() }, modelCatalog.rows(), () => true); });
     await desktop.click('#nsSpawnBtn');
     await desktop.waitForSelector('.session-item.starting');
     check(asyncSpawnBody?.async === true, 'takeover spawn opts into asynchronous spawning');
@@ -1686,7 +1686,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       () => document.querySelector('.main').classList.contains('new-session-open'),
       null, { timeout: 5000 });
     await desktop.fill('#newSessionCwd', CWD);
-    await desktop.waitForFunction((cwd) => knownModelsCwd === cwd, CWD, { timeout: 5000 });
+    await desktop.waitForFunction((cwd) => modelCatalog.scope?.cwd === cwd, CWD, { timeout: 5000 });
     await desktop.click('#nsSpawnBtn');
     await desktop.waitForSelector('.session-item.starting');
     const failedDraft = 'keep this after a startup failure';
@@ -2659,12 +2659,12 @@ let remoteHost = null; // second pi-dish (multi-host section)
         if (url === '/api/models/enabled') { window.__auditEnabledBody = JSON.parse(options.body); return new Response(JSON.stringify({ success: true, enabledModels: window.__auditEnabledBody.enabledIds })); }
         return realApiFetch(host, url, options);
       };
-      knownModels = [
+      modelCatalog.seed({ host: selfHostEntry(), harnessId: 'pi' }, [
         { provider: 'audit', id: 'kept', enabled: true },
         { provider: 'audit', id: 'removed', enabled: false },
-      ];
+      ], () => true);
       saveEnabledModels();
-      knownModels = [{ provider: 'other-session', id: 'replacement', enabled: true }];
+      modelCatalog.seed({ host: selfHostEntry(), harnessId: 'pi' }, [{ provider: 'other-session', id: 'replacement', enabled: true }], () => true);
       await new Promise((resolve) => setTimeout(resolve, 500));
       apiFetch = window.__auditRealApiFetch;
     });

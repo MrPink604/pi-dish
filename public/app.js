@@ -1137,7 +1137,7 @@ function setSearchBusy(busy) {
 // session-tree scan) and keep the previously fetched `previous` list.
 // `withPrevious: true` forces a full fetch regardless of tab (initial load,
 // which may need to restore a historical session).
-let loadSessionsSeq = 0; // drops out-of-order responses (cf. modelsSeq)
+let loadSessionsSeq = 0; // drops out-of-order responses (and the model catalog)
 let sessionIndexing = false; // server is still backfilling its session index
 let indexingRefreshTimer = null;
 // The query the current `sessions` lists were server-filtered by ('' when
@@ -2054,7 +2054,7 @@ function showPendingSessionView(spawnId) {
   clearSessionRelations();
   closeControlPanel();
   hideAutocomplete();
-  modelsSeq += 1;
+  modelCatalog.retire();
   commandsSeq += 1;
 
   document.getElementById('emptyState').style.display = 'none';
@@ -2327,58 +2327,32 @@ async function resumeSession() {
 // Models
 // =========================================================================
 
-let knownModels = [];
-let knownModelsHarnessId = null;
-let knownModelsCwd = null;
-let modelsSeq = 0; // drops out-of-order responses on fast session switches
-
+const modelCatalog = PiDishBrowser.createModelCatalog({
+  read: scope => sessionApi.models(scope.host, scope),
+  persist: (scope, models) => localStorage.setItem(modelsCacheKey(scope.harnessId, scope.host.hostId), JSON.stringify(models)),
+  changed: refreshResponsePricingState,
+  failed: error => console.error('Failed to load models:', error),
+});
 function modelCatalogUrl(harnessId, cwd) { return PiDishBrowser.modelCatalogUrl(harnessId, cwd); }
-
-/**
- * localStorage key for a harness's model catalog snapshot. Catalogs are
- * per host (a peer may have entirely different providers configured), so a
- * remote host's cache is suffixed with its id; the self host keeps the
- * historical bare keys.
- */
 function modelsCacheKey(harnessId, hostId) {
-  const base = harnessId === 'pi' ? 'pi-dish-models-cache' : `pi-dish-models-cache:${harnessId}`;
-  return hostId && hostId !== hostDirectory.self.hostId ? `${base}@${hostId}` : base;
+  return PiDishBrowser.modelsCacheKey(harnessId, hostId, hostDirectory.self.hostId);
 }
-
-async function loadModels(sessionId, harnessId, cwd, host) {
+function loadModels(sessionId, harnessId, cwd, host) {
+  const owner = sessionId ? sessionState.captureSelection() : null;
   const requestedHarnessId = harnessId || (sessionId ? sessionState.findSession(sessionId)?.harnessId : null) || 'pi';
   const requestedHost = sessionId ? sessionState.sessionHostId(sessionId) : (host === undefined ? null : host);
-  const seq = ++modelsSeq;
-  try {
-    const data = await sessionApi.models(requestedHost, { sessionId, harnessId: requestedHarnessId, cwd });
-    if (seq !== modelsSeq) return; // superseded by a newer session's fetch
-    knownModels = data;
-    knownModelsHarnessId = requestedHarnessId;
-    knownModelsCwd = sessionId ? null : (cwd || '');
-    // Cache the last good catalog so the new-session takeover renders its
-    // model select instantly before the background refresh lands.
-    if (knownModels.length) {
-      try {
-        localStorage.setItem(modelsCacheKey(requestedHarnessId, requestedHost), JSON.stringify(knownModels));
-      } catch {}
-    }
-    refreshResponsePricingState();
-  } catch (e) {
-    console.error('Failed to load models:', e);
-    if (seq === modelsSeq) {
-      knownModels = [];
-      knownModelsCwd = null;
-    }
-  }
+  const endpoint = hostEntryFor(requestedHost);
+  if (!endpoint) { modelCatalog.clear(); return Promise.resolve(); }
+  const captured = Object.freeze({ ...endpoint });
+  const generation = newSessionViewGeneration;
+  const ownsRows = () => PiDishBrowser.sameDirectoryHost(captured, hostEntryFor(requestedHost))
+    && (sessionId ? owner && owner.id === sessionId && sessionState.ownsSelection(owner)
+      : generation === newSessionViewGeneration && isNewSessionViewOpen()
+        && nsHostId() === captured.hostId && selectedHarnessId() === requestedHarnessId);
+  const ownsRequest = () => ownsRows() && (!!sessionId || nsCwdValue() === (cwd || ''));
+  return modelCatalog.load({ host: captured, sessionId, harnessId: requestedHarnessId, cwd }, ownsRequest, ownsRows);
 }
-
-function filterModels(query) {
-  if (!Array.isArray(knownModels)) return [];
-  if (!query) return knownModels;
-  const q = query.toLowerCase();
-  return knownModels.filter(m => m &&
-    [m.id, m.provider, m.name].some(f => typeof f === 'string' && f.toLowerCase().includes(q)));
-}
+function filterModels(query) { return modelCatalog.filter(query); }
 
 // =========================================================================
 // Session Header
@@ -2734,7 +2708,7 @@ async function toggleThinkingDropdown() {
   if (!thinkingDropdownOpen) { closeThinkingDropdown(); return; }
 
   const ref = sessionState.currentSession.model || '';
-  const model = knownModels.find(m => m &&
+  const model = modelCatalog.rows().find(m => m &&
     (m.selector === ref || m.id === ref || `${m.provider}/${m.id}` === ref));
   if (!thinkingSelector) {
     // Unowned actions must not dismiss or mutate a newer selection. Normal
@@ -6265,7 +6239,7 @@ function renderModelDropdown(query) {
       setAllEnabled: owned(setAllModelsEnabled),
     }, formatTokens);
   }
-  modelSelector.update({ owner, models: knownModels, currentModel: sessionState.currentSession.model || null,
+  modelSelector.update({ owner, models: modelCatalog.rows(), currentModel: sessionState.currentSession.model || null,
     harnessId: sessionState.currentSession.harnessId || null, query, editMode: modelEditMode });
 }
 
@@ -6283,39 +6257,25 @@ function exitModelEditMode() {
 function currentModelQuery() { return modelQuery; }
 
 function toggleModelEnabled(fullId) {
-  var model = knownModels.find(m => m && (m.provider + '/' + m.id) === fullId);
-  if (!model) return;
-  model.enabled = model.enabled === false;
+  modelCatalog.toggle(fullId);
   renderModelDropdown(currentModelQuery());
   saveEnabledModels();
 }
-
 function setAllModelsEnabled(enabled) {
-  knownModels.forEach(m => { if (m) m.enabled = enabled; });
+  modelCatalog.setAll(enabled);
   renderModelDropdown(currentModelQuery());
   saveEnabledModels();
 }
-
-// Flip a whole provider section. Operates on the models the header is
-// currently listing (i.e. respects the search filter): all on → all off,
-// anything less → all on.
 function toggleProviderEnabled(provider) {
-  var listed = filterModels(currentModelQuery()).filter(m => m && m.provider === provider);
-  if (!listed.length) return;
-  var allOn = listed.every(m => m.enabled !== false);
-  listed.forEach(m => { m.enabled = !allOn; });
+  modelCatalog.toggleProvider(provider, currentModelQuery());
   renderModelDropdown(currentModelQuery());
   saveEnabledModels();
 }
 
 let saveEnabledTimer = null;
 function saveEnabledModels() {
-  const enabled = knownModels.filter(m => m && m.enabled !== false);
-  // Snapshot at edit time. A session switch can replace knownModels before
-  // the debounce fires, but it must not rewrite or discard the user's edit.
-  const enabledIds = enabled.length === knownModels.length
-    ? null
-    : enabled.map(m => m.provider + '/' + m.id);
+  // Snapshot the owner's edit before the debounce can observe another catalog.
+  const enabledIds = modelCatalog.enabledIds();
   clearTimeout(saveEnabledTimer);
   saveEnabledTimer = setTimeout(async () => {
     try {
@@ -8812,9 +8772,7 @@ function onNsHostChange(value) {
   else localStorage.removeItem(NS_HOST_KEY);
   // Everything under the picker is host-scoped: catalogs, directories, tmux
   // targets and the harness list all belong to the machine being spawned on.
-  knownModels = [];
-  knownModelsCwd = null;
-  knownModelsHarnessId = null;
+  modelCatalog.clear();
   loadKnownCwds();
   loadSpawnTargets();
   loadHarnesses();
@@ -8892,9 +8850,7 @@ function onNsHarnessChange(value) {
     || (newSessionHarness === 'pi' ? localStorage.getItem('pi-dish-new-model') : '') || '';
   newSessionThinking = localStorage.getItem(`pi-dish-new-thinking:${newSessionHarness}`)
     || (newSessionHarness === 'pi' ? localStorage.getItem('pi-dish-new-thinking') : '') || '';
-  knownModels = [];
-  knownModelsHarnessId = null;
-  knownModelsCwd = null;
+  modelCatalog.clear();
   renderNsModel();
   refreshNsPilotOptions();
 }
@@ -9035,7 +8991,7 @@ async function openHarnessSettings(opts = {}) {
   if (seq !== harnessSettingsSeq || !isHarnessSettingsOpen()) return;
   harnessSettings.config = config.value || null;
   harnessSettings.models = Array.isArray(models.value) ? models.value
-    : (knownModelsHarnessId === harnessId && Array.isArray(knownModels) ? knownModels : []);
+    : (modelCatalog.scope?.harnessId === harnessId && Array.isArray(modelCatalog.rows()) ? modelCatalog.rows() : []);
   if (agents.value) {
     harnessSettings.agents = Array.isArray(agents.value.agents) ? agents.value.agents : [];
     harnessSettings.settings = agents.value.settings || null;
@@ -9297,7 +9253,7 @@ function refreshNsPilotOptions() {
   if (!isNewSessionViewOpen()) return;
   const harnessId = selectedHarnessId();
   const cwd = nsCwdValue();
-  knownModelsCwd = null;
+  modelCatalog.retire();
   renderNsModel();
   loadModels(undefined, harnessId, cwd, nsHostId()).then(() => {
     if (isNewSessionViewOpen() && selectedHarnessId() === harnessId) renderNsModel();
@@ -9306,6 +9262,7 @@ function refreshNsPilotOptions() {
 }
 
 function scheduleNsPilotRefresh() {
+  modelCatalog.retire();
   clearTimeout(nsPilotRefreshTimer);
   nsPilotRefreshTimer = setTimeout(refreshNsPilotOptions, 300);
 }
@@ -9314,8 +9271,10 @@ function scheduleNsPilotRefresh() {
 // default); opts.draft stashes an evidence-bundle prompt (the Skills refine
 // launcher) that lands in the composer once the session spawns.
 let nsPendingDraft = null;
+let newSessionViewGeneration = 0;
 
 function openNewSessionView(opts = {}) {
+  newSessionViewGeneration++;
   closeSidebar(); // on mobile the footer button lives in the drawer
   closeUsageView(); // takeovers are mutually exclusive
   closeSearchView();
@@ -9351,17 +9310,17 @@ function openNewSessionView(opts = {}) {
     || (newSessionHarness === 'pi' ? localStorage.getItem('pi-dish-new-model') : '') || '';
   newSessionThinking = localStorage.getItem(`pi-dish-new-thinking:${newSessionHarness}`)
     || (newSessionHarness === 'pi' ? localStorage.getItem('pi-dish-new-thinking') : '') || '';
-  if (knownModelsHarnessId !== newSessionHarness) {
-    knownModels = [];
-    knownModelsCwd = null;
+  if (modelCatalog.scope?.harnessId !== newSessionHarness
+      || !PiDishBrowser.sameDirectoryHost(modelCatalog.scope?.host || null, nsHost())) {
+    modelCatalog.clear();
     try {
-      const cacheKey = `pi-dish-models-cache:${newSessionHarness}`;
-      const cached = JSON.parse(localStorage.getItem(cacheKey)
-        || (newSessionHarness === 'pi' ? localStorage.getItem('pi-dish-models-cache') : '') || 'null');
-      if (Array.isArray(cached)) {
-        knownModels = PiDishBrowser.decodeModelCatalog(cached);
-        knownModelsHarnessId = newSessionHarness;
-      }
+      const endpoint = Object.freeze({ ...nsHost() });
+      const harnessId = newSessionHarness;
+      const generation = newSessionViewGeneration;
+      const cached = JSON.parse(localStorage.getItem(modelsCacheKey(harnessId, endpoint.hostId)) || 'null');
+      if (Array.isArray(cached)) modelCatalog.seed({ host: endpoint, harnessId }, cached,
+        () => generation === newSessionViewGeneration && isNewSessionViewOpen()
+          && PiDishBrowser.sameDirectoryHost(endpoint, nsHost()) && selectedHarnessId() === harnessId);
     } catch {}
   }
   renderNsModel();
@@ -9371,6 +9330,7 @@ function openNewSessionView(opts = {}) {
 }
 
 function closeNewSessionView() {
+  if (isNewSessionViewOpen()) { newSessionViewGeneration++; modelCatalog.retire(); }
   spawnTargetsController.retire();
   spawnTargetPicker.hide();
   directoryCatalog.retire();
@@ -9444,7 +9404,7 @@ function syncNsThinking() {
   if (!sel) return;
   const harnessId = selectedHarnessId();
   const selectedRef = document.getElementById('nsModelSelect')?.value || '';
-  const selectedModel = knownModels.find(m => m && (m.selector || `${m.provider}/${m.id}`) === selectedRef);
+  const selectedModel = modelCatalog.rows().find(m => m && (m.selector || `${m.provider}/${m.id}`) === selectedRef);
   const note = document.getElementById('nsThinkingNote');
   let levels = Object.keys(NS_THINKING_LABELS);
   let disabled = selectedModel?.reasoning === false;
@@ -9479,35 +9439,19 @@ function syncNsThinking() {
  * sets `selected` here; callers assign `.value` after inserting the HTML.
  */
 function modelSelectOptionsHtml(models) {
-  const list = Array.isArray(models) ? models : [];
-  const enabled = list.filter(m => m && m.enabled !== false);
-  const byProvider = {};
-  enabled.forEach(m => { (byProvider[m.provider] = byProvider[m.provider] || []).push(m); });
-  let html = '<option value="">(default)</option>';
-  Object.keys(byProvider).sort().forEach(p => {
-    html += `<optgroup label="${escapeHtml(p)}">`;
-    byProvider[p].forEach(m => {
-      const selector = m.selector || `${m.provider}/${m.id}`;
-      html += `<option value="${escapeHtml(selector)}">${escapeHtml(m.name || m.id)}</option>`;
-    });
-    html += '</optgroup>';
-  });
-  return { html, enabled, hidden: list.length - enabled.length };
+  return PiDishBrowser.modelSelectOptionsHtml(models, escapeHtml);
 }
-
-function modelHiddenNote(hidden) {
-  return hidden > 0 ? `${hidden} model${hidden === 1 ? '' : 's'} hidden (not enabled)` : '';
-}
+function modelHiddenNote(hidden) { return PiDishBrowser.modelHiddenNote(hidden); }
 
 function renderNsModel() {
   const sel = document.getElementById('nsModelSelect');
   if (!sel) return;
-  const { html, enabled, hidden } = modelSelectOptionsHtml(knownModels);
+  const { html, enabled, hidden } = modelSelectOptionsHtml(modelCatalog.rows());
   sel.innerHTML = html;
 
   // Show the saved selection when the rendered list has it; else display
   // "(default)" but keep newSessionModel — the first render may be an interim
-  // list (session-scoped knownModels, or empty pre-cache), and clearing here
+  // list (session-scoped modelCatalog.rows(), or empty pre-cache), and clearing here
   // would lose the selection before the full-catalog refresh re-renders.
   // Spawning reads the select itself, so a never-restored model can't be sent.
   sel.value = (newSessionModel && enabled.some(m =>
@@ -11996,7 +11940,7 @@ let routineVersionFilter = null;  // clicking a version row filters the table
 let routineVersionShown = null;   // which version's prompt is expanded inline
 let routineNotice = '';           // transient success line under the actions
 // Per (host|harness|cwd) model catalogs. Deliberately *not* the global
-// knownModels: that one belongs to the session header and the new-session
+// modelCatalog.rows(): that one belongs to the session header and the new-session
 // takeover, and a routine's catalog is a different harness/cwd/host triple.
 const routineModelCatalogs = new Map();
 const routineHarnessCatalogs = new Map();

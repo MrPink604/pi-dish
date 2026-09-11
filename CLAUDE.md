@@ -736,6 +736,13 @@ checks its originating tree and host before rendering or selecting a cwd.
 Host catalog/token edits and late identity discovery renew an open directory tree
 and known-cwd catalog when their captured endpoint changes.
 
+The shared model catalog lives in `src/browser/model-catalog.ts`; its readonly
+rows/scope replace the old global model arrays. Loads receive captured request
+and visible-row ownership callbacks. New-session request ownership includes cwd
+and view generation, while cached visible rows require the same host/harness/view.
+The app retires requests at cwd edit/close and captures enabled-model snapshots
+before debounce. Use the catalog writers for edits and host-scoped cache keys.
+
 Tmux target catalog and run-in picker ownership live in
 `src/browser/spawn-targets.ts`. Refresh resets to headless before awaiting and
 captures host id/route/token plus a sequence; failure cannot leave an old host's

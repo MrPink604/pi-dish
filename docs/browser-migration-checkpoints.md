@@ -146,3 +146,24 @@ are not completion percentages.
   regressions, all independent UI scenarios and desktop/mobile smoke passed.
   Fable review of the local commit is required before push.
 - Next: shared model catalog and new-session model/config/spawn controllers.
+
+- Fable 5.1 cleared tmux commit `0428252` with no blocking findings before
+  push. Its suggested improvement to the readonly compile assertion is included
+  in checkpoint 7. All five CI jobs passed on directory follow-up `f3f9399`.
+
+## Checkpoint 7 — shared model catalog
+
+- Boundary: model rows, cache scope, filter/enabled-model writers and shared
+  select-option markup. Rows and captured scope are readonly; edits replace rows
+  so saved snapshots remain stable. Prototype-like provider names group safely.
+- Request ownership includes host endpoint, harness/session and request sequence.
+  New-session loads also capture takeover generation and cwd, retiring on edit
+  before debounce or close. Cached rows have separate host/harness/view ownership
+  so valid interim choices remain visible until the refreshed cwd catalog arrives.
+- Six unit tests, four browser regressions and compile contracts cover delayed
+  bodies, view closure, host-specific cache keys and stable edit snapshots.
+- Verification: strict build/lint/type checks, all 885 backend tests, 87 browser
+  regressions, all independent UI scenarios and desktop/mobile smoke passed.
+  Fable review of the local commit is required before push.
+- Next: published-page comment entrypoint, new-session preferences/config/spawn
+  controllers and the remaining application rendering/features.

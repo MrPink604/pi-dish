@@ -37,6 +37,7 @@ var PiDishBrowser = (() => {
     createHostSessionLoader: () => createHostSessionLoader,
     createHostSettings: () => createHostSettings,
     createHostTransport: () => createHostTransport,
+    createModelCatalog: () => createModelCatalog,
     createSessionApi: () => createSessionApi,
     createSessionState: () => createSessionState,
     createSpawnTargetPicker: () => createSpawnTargetPicker,
@@ -51,12 +52,16 @@ var PiDishBrowser = (() => {
     hostSettingsHtml: () => hostSettingsHtml,
     mergeHostEntries: () => mergeHostEntries,
     modelCatalogUrl: () => modelCatalogUrl,
+    modelHiddenNote: () => modelHiddenNote,
+    modelSelectOptionsHtml: () => modelSelectOptionsHtml,
+    modelsCacheKey: () => modelsCacheKey,
     mountModelSelector: () => mountModelSelector,
     mountThinkingSelector: () => mountThinkingSelector,
     normalizeHostBase: () => normalizeHostBase,
     reconcileHostCatalog: () => reconcileHostCatalog,
     resolveColorToHex: () => resolveColorToHex,
     rgbStringToHex: () => rgbStringToHex,
+    sameDirectoryHost: () => sameDirectoryHost,
     sanitizeHostCatalog: () => sanitizeHostCatalog,
     sanitizeHostColorOrder: () => sanitizeHostColorOrder,
     sanitizeHostColors: () => sanitizeHostColors,
@@ -1960,6 +1965,114 @@ var PiDishBrowser = (() => {
       hide();
       listeners.abort();
     } };
+  }
+
+  // src/browser/model-catalog.ts
+  function modelsCacheKey(harnessId, hostId, selfId) {
+    const base = harnessId === "pi" ? "pi-dish-models-cache" : `pi-dish-models-cache:${harnessId}`;
+    return hostId && hostId !== selfId ? `${base}@${hostId}` : base;
+  }
+  function createModelCatalog(options) {
+    let sequence = 0;
+    let models = [];
+    let scope = null;
+    let currentOwner = null;
+    const current = () => !currentOwner || currentOwner();
+    function rows() {
+      return current() ? models : [];
+    }
+    function retire() {
+      sequence++;
+    }
+    function clear() {
+      retire();
+      models = [];
+      scope = null;
+      currentOwner = null;
+    }
+    function snapshot(target) {
+      return Object.freeze({ ...target, host: Object.freeze({ ...target.host }) });
+    }
+    function seed(target, data, owns) {
+      clear();
+      if (!owns()) return;
+      scope = snapshot(target);
+      models = decodeModelCatalog(data);
+      currentOwner = owns;
+    }
+    async function load(target, ownsRequest, ownsRows = ownsRequest) {
+      const requestSequence = ++sequence;
+      const owner = snapshot(target);
+      const valid = () => requestSequence === sequence && ownsRequest();
+      try {
+        const data = await options.read(owner);
+        if (!valid()) return;
+        models = decodeModelCatalog(data);
+        scope = owner;
+        currentOwner = ownsRows;
+        if (models.length) {
+          try {
+            options.persist(owner, models);
+          } catch {
+          }
+        }
+        options.changed();
+      } catch (error) {
+        if (!valid()) return;
+        models = [];
+        scope = null;
+        currentOwner = null;
+        options.failed(error);
+      }
+    }
+    function filter(query) {
+      const q = query.toLowerCase();
+      return rows().filter((model) => !q || [model.id, model.provider, model.name].some((value) => value.toLowerCase().includes(q)));
+    }
+    function replaceEnabled(matches, enabled) {
+      if (!current()) return;
+      models = models.map((model) => matches(model) ? { ...model, enabled: enabled(model) } : model);
+    }
+    function toggle(selector) {
+      replaceEnabled((model) => `${model.provider}/${model.id}` === selector, (model) => model.enabled === false);
+    }
+    function setAll(enabled) {
+      replaceEnabled(() => true, () => enabled);
+    }
+    function toggleProvider(provider, query) {
+      const listed = new Set(filter(query).filter((model) => model.provider === provider));
+      if (!listed.size) return;
+      const enabled = ![...listed].every((model) => model.enabled !== false);
+      replaceEnabled((model) => listed.has(model), () => enabled);
+    }
+    function enabledIds() {
+      const list = rows(), enabled = list.filter((model) => model.enabled !== false);
+      return enabled.length === list.length ? null : enabled.map((model) => `${model.provider}/${model.id}`);
+    }
+    return { rows, get scope() {
+      return current() ? scope : null;
+    }, load, seed, retire, clear, filter, toggle, setAll, toggleProvider, enabledIds };
+  }
+  function modelSelectOptionsHtml(models, escapeHtml) {
+    const enabled = models.filter((model) => model.enabled !== false);
+    const byProvider = /* @__PURE__ */ new Map();
+    for (const model of enabled) {
+      const group = byProvider.get(model.provider) || [];
+      group.push(model);
+      byProvider.set(model.provider, group);
+    }
+    let html = '<option value="">(default)</option>';
+    for (const provider of [...byProvider.keys()].sort()) {
+      html += `<optgroup label="${escapeHtml(provider)}">`;
+      for (const model of byProvider.get(provider) || []) {
+        html += `<option value="${escapeHtml(model.selector || `${model.provider}/${model.id}`)}">${escapeHtml(model.name || model.id)}</option>`;
+      }
+      html += "</optgroup>";
+    }
+    return { html, enabled, hidden: models.length - enabled.length };
+  }
+  function modelHiddenNote(hidden) {
+    return hidden > 0 ? `${hidden} model${hidden === 1 ? "" : "s"} hidden (not enabled)` : "";
   }
   return __toCommonJS(index_exports);
 })();
