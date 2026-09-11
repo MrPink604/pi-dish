@@ -8216,7 +8216,9 @@ function updateMicButton() {
   else btn.removeAttribute('aria-disabled');
   btn.classList.toggle('recording', isRecording());
   btn.classList.toggle('busy', micBusy);
-  btn.textContent = isRecording() ? '⏺' : micBusy ? '…' : '🎙';
+  // The glyph is the inline SVG: recording adds its slash (see the
+  // .mic-slash rules), busy dims. Writing textContent here used to replace
+  // the SVG with the 🎙 emoji — the one icon that didn't match the set.
   btn.title = reason ? reason.message
     : isRecording() ? 'Stop recording'
     : micBusy ? 'Transcribing…'
