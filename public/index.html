@@ -110,16 +110,16 @@
             </svg>
           </button>
           <div class="session-info">
-            <h2 id="sessionName" class="editable-name" onclick="startRename()" title="Click to rename">Session Name</h2>
+            <h2 id="sessionName" class="editable-name" title="Click to rename">Session Name</h2>
             <input type="text" id="sessionNameInput" class="name-input" style="display:none"
-              onblur="commitRename()" onkeydown="handleRenameKey(event)">
+              >
             <div class="session-meta session-meta-desktop">
               <span class="badge host-badge" id="sessionHost" style="display:none"></span>
               <span class="badge harness-badge" id="sessionHarness" style="display:none" onclick="openSessionHarnessSettings()"></span>
               <div class="model-selector" id="modelSelector">
-                <button class="badge badge-model" id="sessionModel" onclick="toggleModelDropdown()" title="Change model">model ▾</button>
+                <button class="badge badge-model" id="sessionModel" title="Change model">model ▾</button>
               </div>
-              <button class="badge badge-thinking" id="sessionThinking" onclick="toggleThinkingDropdown()" title="Thinking level" style="display:none">▾</button>
+              <button class="badge badge-thinking" id="sessionThinking" title="Thinking level" style="display:none">▾</button>
               <span class="badge badge-working" id="sessionWorking"><span class="spinner-dot"></span><span class="spinner-text">Working</span></span>
             </div>
             <!-- Third header row on a phone: run state first (so the eye always

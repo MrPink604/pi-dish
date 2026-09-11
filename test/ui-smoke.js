@@ -3776,7 +3776,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       const before = await multi.evaluate(({ id, host, field }) => sessionState.findSession(id, host)[field],
         { id: collisionId, host: selfId, field });
       await multi.evaluate(({ action, value }) => {
-        if (action === 'rename') document.getElementById('sessionNameInput').value = value;
+        if (action === 'rename') { startRename(); document.getElementById('sessionNameInput').value = value; }
         window.__collisionMutation = action === 'model' ? selectModel(value)
           : action === 'thinking' ? selectThinkingLevel(value) : commitRename();
       }, { action, value });

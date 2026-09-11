@@ -2159,3 +2159,11 @@ nodes in `comment-anchors.ts`. Capture the owning file/diff generation and endpo
 before selection, list navigation or requests. Index/body refreshes share a
 sequence; save/delete share the current editor's busy state. Retire list listeners,
 queued selections, confirmation/reposition timers and observation on close/disposal.
+
+Session header menus, rename, model/thinking mutations and export live in
+`src/browser/session-controls.ts`. Do not restore click-property assignments on
+sessionName/sessionModel: the controller owns their listeners. Rename captures its
+selection at open; pending menu loads and per-field mutations have independent
+owners. Enabled-model persistence belongs to the serving Pi instance regardless
+of selection. Export byte delivery retains the requested session, while feedback
+is selection-owned and object URLs retire after delayed download or disposal.

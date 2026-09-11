@@ -35,7 +35,7 @@ for (const [action, field, value] of [
     const before = await page.evaluate(({ id, host, field }) => sessionState.findSession(id, host)[field],
       { id: ROOT, host: self.hostId, field });
     await page.evaluate(({ action, value }) => {
-      if (action === 'rename') document.getElementById('sessionNameInput').value = value;
+      if (action === 'rename') { startRename(); document.getElementById('sessionNameInput').value = value; }
       window.pendingMutation = action === 'model' ? selectModel(value)
         : action === 'thinking' ? selectThinkingLevel(value) : commitRename();
     }, { action, value });

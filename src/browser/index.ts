@@ -76,3 +76,5 @@ export { renderDiffViewHtml } from './file-view-render';
 export { createAnchoredComments } from './anchored-comments';
 export { decodeAnchoredComments, decodeCommentTarget, decodeCommentIndex } from './anchored-comment-data';
 export { selectionTextAnchor, findQuoteOffset, markCommentQuote } from './comment-anchors';
+
+export { createSessionControls } from './session-controls';

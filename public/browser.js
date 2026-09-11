@@ -61,6 +61,7 @@ var PiDishBrowser = (() => {
     createRoutinesView: () => createRoutinesView,
     createSearchView: () => createSearchView,
     createSessionApi: () => createSessionApi,
+    createSessionControls: () => createSessionControls,
     createSessionInfo: () => createSessionInfo,
     createSessionRelations: () => createSessionRelations,
     createSessionSearch: () => createSessionSearch,
@@ -2887,6 +2888,36 @@ var PiDishBrowser = (() => {
     if (m) return "\x1B" + m[1];
     return null;
   }
+  function filenameFromContentDisposition(header, fallback2) {
+    const clean = (raw) => {
+      if (typeof raw !== "string") return "";
+      const base = (raw.replace(/\\/g, "/").split("/").pop() || "").replace(/[\u0000-\u001f\u007f]/g, "").trim();
+      return base === "." || base === ".." ? "" : base;
+    };
+    const value = typeof header === "string" ? header : "";
+    const extended = value.match(/;\s*filename\*\s*=\s*([^;]+)/i);
+    if (extended) {
+      const parts = extended[1].trim().match(/^[^']*'[^']*'(.*)$/);
+      if (parts) {
+        try {
+          const decoded = clean(decodeURIComponent(parts[1]));
+          if (decoded) return decoded;
+        } catch {
+        }
+      }
+    }
+    const quoted = value.match(/;\s*filename\s*=\s*"((?:[^"\\]|\\.)*)"/i);
+    if (quoted) {
+      const decoded = clean(quoted[1].replace(/\\(.)/g, "$1"));
+      if (decoded) return decoded;
+    }
+    const bare = value.match(/;\s*filename\s*=\s*([^;"][^;]*)/i);
+    if (bare) {
+      const decoded = clean(bare[1]);
+      if (decoded) return decoded;
+    }
+    return fallback2;
+  }
 
   // src/browser/helper-identity.ts
   function sessionKey(hostId, sessionId) {
@@ -2914,6 +2945,13 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/helper-models.ts
+  var THINKING_LEVEL_NAMES = ["off", "minimal", "low", "medium", "high", "xhigh"];
+  var OMP_THINKING_LEVEL_NAMES = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"];
+  function thinkingLevelsFor(harnessId, model) {
+    if (harnessId !== "omp") return THINKING_LEVEL_NAMES;
+    const supported = Array.isArray(model?.thinking) && model.thinking.length ? model.thinking : OMP_THINKING_LEVEL_NAMES.slice(0, -1);
+    return [.../* @__PURE__ */ new Set(["off", ...supported, "auto"])];
+  }
   var OMP_MODEL_ROLES = [
     { key: "default", name: "Default", description: "Main agent model" },
     { key: "smol", name: "Fast", description: "Fast/cheap model for lightweight tasks, summaries, and fallbacks" },
@@ -11815,6 +11853,414 @@ var PiDishBrowser = (() => {
         lifetime.abort();
         observer?.disconnect();
         disposed = true;
+      }
+    };
+  }
+
+  // src/browser/session-controls.ts
+  function createSessionControls(options2) {
+    const { document: document2, sessionState, catalog } = options2, window = document2.defaultView;
+    const element = (id) => {
+      const value = document2.getElementById(id);
+      if (!value) throw new Error("Missing session control: " + id);
+      return value;
+    };
+    const errorText = (error) => error instanceof Error ? error.message : String(error);
+    function header() {
+      const row = sessionState.currentSession;
+      if (!row) return null;
+      return {
+        id: row.id,
+        isActive: row.isActive === true,
+        name: typeof row.name === "string" ? row.name : "",
+        model: typeof row.model === "string" ? row.model : "",
+        harnessId: typeof row.harnessId === "string" ? row.harnessId : void 0,
+        thinkingLevel: typeof row.thinkingLevel === "string" ? row.thinkingLevel : "",
+        capabilities: record8(row.capabilities) ? row.capabilities : {}
+      };
+    }
+    function sessionSupports(row, capability) {
+      return row.capabilities[capability] !== false;
+    }
+    let disposed = false, modelOwner = null, thinkingOwner = null, renameOwner = null;
+    let modelOpen = false, thinkingOpen = false, editMode = false, query = "";
+    let modelSelector = null, thinkingSelector = null;
+    let modelEvents = new AbortController(), thinkingEvents = new AbortController(), renameEvents = new AbortController();
+    const lifetime = new AbortController(), mutations = /* @__PURE__ */ new Map(), timers = /* @__PURE__ */ new Set(), urls = /* @__PURE__ */ new Map();
+    let enabledTimer = null, enabledSequence = 0, exportSequence = 0;
+    function later(callback, ms = 0) {
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        if (!disposed) callback();
+      }, ms);
+      timers.add(timer);
+      return timer;
+    }
+    function capture() {
+      const selection = sessionState.captureSelection();
+      if (disposed || !selection) return null;
+      const endpoint = options2.host(selection.host);
+      return endpoint ? { selection, endpoint: Object.freeze({ ...endpoint }) } : null;
+    }
+    function endpointCurrent(owner) {
+      const endpoint = options2.host(owner.selection.host);
+      return !disposed && endpoint && endpoint.base === owner.endpoint.base ? { ...owner.endpoint, token: endpoint.token } : null;
+    }
+    function owns(owner) {
+      return !!owner && !!endpointCurrent(owner) && sessionState.ownsSelection(owner.selection);
+    }
+    function api(owner) {
+      const endpoint = endpointCurrent(owner);
+      if (!endpoint) throw new Error("Host connection changed");
+      return createSessionApi((_host, path, init) => options2.request(endpoint, path, init));
+    }
+    function mutation(owner, kind) {
+      const key = sessionKey(owner.selection.host, owner.selection.id) + ":" + kind, token = Symbol(kind);
+      mutations.set(key, token);
+      return () => endpointCurrent(owner) && mutations.get(key) === token;
+    }
+    function place(dropdown, trigger) {
+      dropdown.style.top = "";
+      dropdown.style.left = "";
+      dropdown.style.bottom = "";
+      dropdown.style.right = "";
+      if (window.innerWidth > 768) {
+        const rect = trigger.getBoundingClientRect();
+        dropdown.style.left = rect.left + "px";
+        dropdown.style.top = rect.bottom + 4 + "px";
+      }
+    }
+    function outside(ids, events, current, close) {
+      later(() => {
+        if (events.signal.aborted || !current()) return;
+        document2.addEventListener("click", (event) => {
+          if (!current() || !(event.target instanceof Node)) return;
+          if (!document2.body.contains(event.target) || ids.some((id) => element(id).contains(event.target))) return;
+          close();
+        }, { signal: events.signal });
+      });
+    }
+    function closeModels() {
+      modelOwner = null;
+      modelOpen = false;
+      modelEvents.abort();
+      modelSelector?.dispose();
+      modelSelector = null;
+      element("modelDropdown").style.display = "none";
+    }
+    function closeThinking() {
+      thinkingOwner = null;
+      thinkingOpen = false;
+      thinkingEvents.abort();
+      thinkingSelector?.dispose();
+      thinkingSelector = null;
+      element("thinkingDropdown").style.display = "none";
+    }
+    const ownsModels = (owner = modelOwner) => !!owner && owner === modelOwner && owns(owner) && modelOpen;
+    const ownsThinking = (owner = thinkingOwner) => !!owner && owner === thinkingOwner && owns(owner) && thinkingOpen;
+    async function toggleModels() {
+      if (modelOwner) {
+        closeModels();
+        return;
+      }
+      const session = header(), owner = capture();
+      if (!owner || !session?.isActive || !sessionSupports(session, "setModel")) return;
+      modelOwner = owner;
+      try {
+        await options2.loadModels(owner.selection.id, session.harnessId);
+      } catch {
+        if (modelOwner === owner) closeModels();
+        return;
+      }
+      if (!owns(owner) || modelOwner !== owner) return;
+      modelOpen = true;
+      editMode = false;
+      query = "";
+      modelEvents = new AbortController();
+      const dropdown = element("modelDropdown");
+      place(dropdown, element("sessionModel"));
+      renderModels("");
+      dropdown.style.display = "flex";
+      modelSelector?.focusSearch();
+      outside(["modelSelector", "modelDropdown"], modelEvents, () => ownsModels(owner), closeModels);
+    }
+    function renderModels(nextQuery) {
+      const owner = modelOwner, session = header();
+      if (!ownsModels(owner) || !session) return;
+      query = nextQuery;
+      const owned = (target) => ownsModels(owner) && owner.selection === target;
+      if (!modelSelector) modelSelector = mountModelSelector(element("modelDropdown"), {
+        requestClose: (target) => {
+          if (owned(target)) closeModels();
+        },
+        queryChanged: (target, value) => {
+          if (owned(target)) renderModels(value);
+        },
+        editModeChanged: (target, value) => {
+          if (owned(target)) setEditMode(value);
+        },
+        selectModel: (target, value) => {
+          if (owned(target)) void selectModel(value);
+        },
+        toggleModel: (target, value) => {
+          if (owned(target)) toggleModel(value);
+        },
+        toggleProvider: (target, value) => {
+          if (owned(target)) toggleProvider(value);
+        },
+        setAllEnabled: (target, value) => {
+          if (owned(target)) setAll(value);
+        }
+      }, formatTokens);
+      modelSelector.update({ owner: owner.selection, models: catalog.rows(), currentModel: session.model || null, harnessId: session.harnessId || null, query, editMode });
+    }
+    function setEditMode(value) {
+      if (!ownsModels() || value && header()?.harnessId !== "pi") return;
+      editMode = value;
+      renderModels(query);
+    }
+    function toggleModel(selector) {
+      if (!ownsModels() || !editMode) return;
+      catalog.toggle(selector);
+      renderModels(query);
+      saveEnabled();
+    }
+    function toggleProvider(provider) {
+      if (!ownsModels() || !editMode) return;
+      catalog.toggleProvider(provider, query);
+      renderModels(query);
+      saveEnabled();
+    }
+    function setAll(enabled) {
+      if (!ownsModels() || !editMode) return;
+      catalog.setAll(enabled);
+      renderModels(query);
+      saveEnabled();
+    }
+    function saveEnabled() {
+      const enabled = catalog.enabledIds(), self = options2.host(null);
+      if (disposed || enabled === void 0 || !self) return;
+      const endpoint = Object.freeze({ ...self }), ids = enabled && [...enabled], sequence = ++enabledSequence;
+      if (enabledTimer !== null) {
+        clearTimeout(enabledTimer);
+        timers.delete(enabledTimer);
+      }
+      enabledTimer = later(() => {
+        enabledTimer = null;
+        const current = options2.host(null);
+        if (!current || current.base !== endpoint.base) return;
+        void sendJson(options2.request, { ...endpoint, token: current.token }, "/api/models/enabled", { enabledIds: ids }, "PUT").catch((error) => {
+          if (!disposed && sequence === enabledSequence && options2.host(null)?.base === endpoint.base) options2.status("Failed to save model list: " + errorText(error), "error");
+        });
+      }, 400);
+    }
+    async function selectModel(selector) {
+      const session = header(), owner = capture();
+      closeModels();
+      if (!owner || !session || !sessionSupports(session, "setModel") || selector === session.model) return;
+      const current = mutation(owner, "model");
+      options2.status("Switching model...", "working");
+      try {
+        await api(owner).setModel(owner.selection, selector);
+        if (!current()) return;
+        sessionState.patchSession(owner.selection.id, { model: selector }, owner.selection.host);
+        if (owns(owner)) options2.status("Model switched to " + selector);
+      } catch (error) {
+        if (current() && owns(owner)) options2.status("Model switch failed: " + errorText(error), "error");
+      }
+    }
+    function updateThinking() {
+      const session = header(), badge = element("sessionThinking");
+      badge.style.display = session?.isActive && sessionSupports(session, "setThinking") ? "" : "none";
+      badge.textContent = (session?.thinkingLevel || "?") + " \u25BE";
+    }
+    async function toggleThinking() {
+      if (thinkingOwner) {
+        closeThinking();
+        return;
+      }
+      const session = header(), owner = capture();
+      if (!owner || !session?.isActive || !sessionSupports(session, "setThinking")) return;
+      thinkingOwner = owner;
+      try {
+        await options2.loadModels(owner.selection.id, session.harnessId);
+      } catch {
+        if (thinkingOwner === owner) closeThinking();
+        return;
+      }
+      if (!owns(owner) || thinkingOwner !== owner) return;
+      thinkingOpen = true;
+      thinkingEvents = new AbortController();
+      const dropdown = element("thinkingDropdown");
+      const current = header(), ref = current.model || "";
+      const model = catalog.rows().find((row) => row.selector === ref || row.id === ref || `${row.provider}/${row.id}` === ref);
+      thinkingSelector = mountThinkingSelector(dropdown, {
+        selectLevel: (target, value) => {
+          if (ownsThinking(owner) && target === owner.selection) void selectThinking(value);
+        },
+        requestClose: (target) => {
+          if (ownsThinking(owner) && target === owner.selection) closeThinking();
+        }
+      });
+      thinkingSelector.update({ owner: owner.selection, levels: thinkingLevelsFor(current.harnessId, model), currentLevel: current.thinkingLevel || null });
+      place(dropdown, element("sessionThinking"));
+      dropdown.style.display = "block";
+      outside(["sessionThinking", "thinkingDropdown"], thinkingEvents, () => ownsThinking(owner), closeThinking);
+    }
+    async function selectThinking(level) {
+      const session = header(), owner = capture();
+      closeThinking();
+      if (!owner || !session || !sessionSupports(session, "setThinking")) return;
+      const current = mutation(owner, "thinking");
+      try {
+        const result = await api(owner).setThinking(owner.selection, level);
+        if (!current()) return;
+        const reported = result.level || level;
+        sessionState.patchSession(owner.selection.id, { thinkingLevel: reported }, owner.selection.host);
+        if (owns(owner)) options2.status(reported !== level ? `Thinking level: ${reported} (model doesn't support ${level})` : `Thinking level: ${reported}`);
+      } catch (error) {
+        if (current() && owns(owner)) options2.status("Thinking level failed: " + errorText(error), "error");
+      }
+    }
+    function cancelRename() {
+      renameOwner = null;
+      renameEvents.abort();
+      element("sessionNameInput").style.display = "none";
+      element("sessionName").style.display = "";
+    }
+    function startRename() {
+      const session = header(), owner = capture();
+      if (!owner || !session?.isActive || !sessionSupports(session, "rename")) return;
+      cancelRename();
+      renameOwner = owner;
+      renameEvents = new AbortController();
+      const input = element("sessionNameInput");
+      element("sessionName").style.display = "none";
+      input.style.display = "";
+      input.value = session.name || "";
+      input.focus();
+      input.select();
+      const signal = renameEvents.signal;
+      input.addEventListener("blur", () => {
+        if (renameOwner === owner) void commitRename();
+      }, { signal });
+      input.addEventListener("keydown", (event) => {
+        if (renameOwner === owner) renameKey(event);
+      }, { signal });
+    }
+    function renameKey(event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void commitRename();
+      } else if (event.key === "Escape") cancelRename();
+    }
+    async function commitRename() {
+      const owner = renameOwner, value = element("sessionNameInput").value.trim();
+      cancelRename();
+      const session = header();
+      if (!owns(owner) || !session?.isActive || !sessionSupports(session, "rename") || !value || value === session.name) return;
+      const current = mutation(owner, "rename");
+      try {
+        await api(owner).rename(owner.selection, value);
+        if (current()) sessionState.patchSession(owner.selection.id, { name: value }, owner.selection.host);
+      } catch (error) {
+        if (current() && owns(owner)) options2.status("Rename failed: " + errorText(error), "error");
+      }
+    }
+    function download(blob, name) {
+      if (disposed) return;
+      const url = URL.createObjectURL(blob), link = document2.createElement("a");
+      link.href = url;
+      link.download = name;
+      link.rel = "noopener";
+      document2.body.appendChild(link);
+      link.click();
+      link.remove();
+      const timer = later(() => {
+        URL.revokeObjectURL(url);
+        urls.delete(url);
+      }, 6e4);
+      urls.set(url, timer);
+    }
+    async function exportSession() {
+      const session = header(), owner = capture();
+      if (!owner || !session) return;
+      const endpoint = endpointCurrent(owner);
+      if (!endpoint) return;
+      const path = `/api/sessions/${encodeURIComponent(owner.selection.id)}/export`, sequence = ++exportSequence;
+      if (!endpoint.token) {
+        window.open(endpoint.base + path, "_blank");
+        return;
+      }
+      options2.status("Exporting session\u2026", "working");
+      try {
+        const response = await options2.request(endpoint, path);
+        if (!response.ok) {
+          const data = await response.json().catch(() => null);
+          throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
+        }
+        const blob = await response.blob();
+        if (!endpointCurrent(owner)) return;
+        const fallback2 = `${(session.name || session.id).replace(/[^\w.-]+/g, "-")}.html`;
+        download(blob, filenameFromContentDisposition(response.headers.get("Content-Disposition"), fallback2));
+        if (sequence === exportSequence && owns(owner)) options2.status("Session exported");
+      } catch (error) {
+        if (sequence === exportSequence && owns(owner)) options2.status("Export failed: " + errorText(error), "error");
+      }
+    }
+    element("sessionName").addEventListener("click", startRename, { signal: lifetime.signal });
+    element("sessionModel").addEventListener("click", () => {
+      void toggleModels();
+    }, { signal: lifetime.signal });
+    element("sessionThinking").addEventListener("click", () => {
+      void toggleThinking();
+    }, { signal: lifetime.signal });
+    return {
+      toggleModels,
+      closeModels,
+      renderModels,
+      setEditMode,
+      toggleModel,
+      toggleProvider,
+      setAll,
+      saveEnabled,
+      selectModel,
+      toggleThinking,
+      closeThinking,
+      selectThinking,
+      updateThinking,
+      startRename,
+      cancelRename,
+      commitRename,
+      renameKey,
+      export: exportSession,
+      download,
+      get modelOpen() {
+        return modelOpen;
+      },
+      get thinkingOpen() {
+        return thinkingOpen;
+      },
+      get query() {
+        return query;
+      },
+      get modelSelector() {
+        return modelSelector;
+      },
+      get thinkingSelector() {
+        return thinkingSelector;
+      },
+      dispose() {
+        closeModels();
+        closeThinking();
+        cancelRename();
+        disposed = true;
+        lifetime.abort();
+        mutations.clear();
+        for (const timer of timers) clearTimeout(timer);
+        timers.clear();
+        for (const url of urls.keys()) URL.revokeObjectURL(url);
+        urls.clear();
       }
     };
   }

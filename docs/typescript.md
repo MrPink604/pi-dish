@@ -419,3 +419,9 @@ Anchored comment selection, edits and marks live in `anchored-comments.ts` with
 explicit file/diff targets in `anchored-comment-data.ts` and durable quote matching
 in `comment-anchors.ts`. Editors and comment lists retain view owners; overlapping
 refreshes, delayed selections and mutation completion effects have separate guards.
+
+Session header orchestration lives in `session-controls.ts`: pending model/thinking
+menus, rename editors, field-specific mutation ordering, serving-host preference
+saves and export resource lifetimes. Existing typed selector components retain DOM
+ownership. Tokenless exports navigate; authenticated exports retain captured bytes
+and filenames while status feedback follows the originating selection.

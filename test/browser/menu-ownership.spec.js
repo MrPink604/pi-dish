@@ -64,9 +64,10 @@ for (const menu of ['Model', 'Thinking']) {
 
 test('changing sessions dismisses already open session menus and overlays', async ({ page, fleet }) => {
   await fleet.select(fleet.peer);
-  await page.evaluate(() => {
-    modelDropdownOpen = true;
-    thinkingDropdownOpen = true;
+  await page.evaluate(async () => {
+    const owner = sessionState.captureSelection();
+    sessionState.mergeCurrentSession(owner, { isActive: true, capabilities: { ...sessionState.currentSession.capabilities, setModel: true, setThinking: true } });
+    await toggleModelDropdown(); await toggleThinkingDropdown();
     for (const id of ['modelDropdown', 'thinkingDropdown', 'treeModal', 'artifactsModal']) {
       document.getElementById(id).style.display = 'flex';
     }
@@ -75,7 +76,7 @@ test('changing sessions dismisses already open session menus and overlays', asyn
   for (const id of ['modelDropdown', 'thinkingDropdown', 'treeModal', 'artifactsModal']) {
     await expect(page.locator(`#${id}`)).toBeHidden();
   }
-  expect(await page.evaluate(() => modelDropdownOpen || thinkingDropdownOpen)).toBe(false);
+  expect(await page.evaluate(() => sessionControls.modelOpen || sessionControls.thinkingOpen)).toBe(false);
 });
 
 test.describe('live branch completion', () => {

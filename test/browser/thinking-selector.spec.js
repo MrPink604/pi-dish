@@ -95,7 +95,7 @@ test.describe('live thinking selector', () => {
     await expect.poll(() => requests.length).toBe(1);
     expect(requests).toEqual([{ level: unusual }]);
     await expect(root).toBeHidden();
-    expect(await page.evaluate(() => thinkingSelector)).toBeNull();
+    expect(await page.evaluate(() => sessionControls.thinkingSelector)).toBeNull();
     expect(await page.evaluate(() => [...THINKING_LEVEL_NAMES])).not.toContain(unusual);
 
     await fleet.select(fleet.peer);

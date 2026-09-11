@@ -31,7 +31,8 @@ Checkpoint 24 migrates transcript tree rendering and branch navigation.
 Checkpoint 25 migrates rich text, lazy assets, diagrams and clipboard delivery.
 Checkpoint 26 migrates extension widgets, status entries and interactive dialogs.
 Checkpoint 27 migrates file previews, publication controls and lazy diff views.
-Checkpoint 28 migrates anchored comment selection, editors and rendered marks. See
+Checkpoint 28 migrates anchored comment selection, editors and rendered marks.
+Checkpoint 29 migrates session header menus, rename, model/thinking actions and export. See
 [the checkpoint log](docs/browser-migration-checkpoints.md) for implementation
 verification and the complete browser entrypoint inventory. The last confirmed
 CI checkpoint is recorded below; final CI must pass before the goal is complete.
@@ -42,7 +43,7 @@ CI checkpoint is recorded below; final CI must pass before the goal is complete.
 | --- | --- | --- |
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
-| Browser migration | In progress — current stage | Seventy implementation modules are typed. Transcript/composer orchestration, header controls and shell wiring remain in `public/app.js`. |
+| Browser migration | In progress — current stage | Seventy-one implementation modules are typed. Transcript/composer orchestration and shell wiring remain in `public/app.js`. |
 | Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -102,6 +103,7 @@ pure-helper and vendored runtime contracts:
 | `extension-ui.ts`, `extension-ui-data.ts`, `extension-display.ts`, `extension-dialogs.ts` | Typed extension requests, widgets/status, dialog cards and response ownership |
 | `file-views.ts`, `file-view-data.ts`, `file-view-render.ts` | File/diff ownership, publication controls, narrowed wire data and diff rendering |
 | `anchored-comments.ts`, `anchored-comment-data.ts`, `comment-anchors.ts` | Comment selection/editing, refresh ownership and durable quote/line marks |
+| `session-controls.ts` | Header menu lifetimes, owned rename/model/thinking mutations and export resources |
 | `rich-text.ts` | Markdown configuration, final highlighting, file links and copy controls |
 | `diagrams.ts` | Diagram rendering/theme generations and lightbox controls |
 | `clipboard.ts` | Native clipboard and insecure-context textarea fallback |
@@ -135,8 +137,7 @@ pure-helper and vendored runtime contracts:
 The checkpoint log distinguishes local implementation from completed review and push.
 A completed module means that boundary has moved, been reviewed and verified.
 It does **not** mean its entire feature is migrated: for example, model-selector
-DOM, catalog and new-session preferences are typed; session menu orchestration
-still has JavaScript in the app. Selection ownership guards are already used throughout the browser,
+DOM, catalog and new-session preferences are typed; transcript and composer orchestration still have JavaScript in the app. Selection ownership guards are already used throughout the browser,
 but many guarded feature implementations themselves remain JavaScript.
 
 ## Next implementation steps
@@ -175,12 +176,12 @@ checks. Documentation-only changes need content and link checks. After a chunk
 ships, update this page's checkpoint, completed inventory and next step so the
 status stays current.
 
-Last confirmed CI checkpoint, `07e4505` (newer work is in the checkpoint log):
+Last confirmed CI checkpoint, `b15c5a5` (newer work is in the checkpoint log):
 
-- Fable 5.1 cleared the usage dashboard before push.
-- Strict checks, 911 backend tests, 133 browser regressions, independent UI
+- Fable 5.1 cleared rich text/diagram rendering before push.
+- Strict checks, 919 backend tests, 169 browser regressions, independent UI
   scenarios and full desktop/mobile smoke passed on that checkpoint.
-- [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34604387530):
+- [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34612052395):
   backend on Node 22.19.0, 22.x, 24.x and 26.x, plus the Node 24 browser job.
 - This verifies that checkpoint; final CI must pass on the completed browser
   migration before the goal is marked done.

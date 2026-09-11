@@ -89,7 +89,7 @@ test.describe('live selector', () => {
     await expect(page.locator('#modelDropdown .model-option')).toHaveCount(2);
     await search.press('Escape');
     await expect(page.locator('#modelDropdown')).toBeHidden();
-    expect(await page.evaluate(() => modelSelector)).toBeNull();
+    expect(await page.evaluate(() => sessionControls.modelSelector)).toBeNull();
   });
 
   test('model selector baseline measurements', async ({ page, fleet, browser }) => {
@@ -104,7 +104,7 @@ test.describe('live selector', () => {
         await toggleModelDropdown();
         open.push(performance.now() - start);
         const dropdown = document.getElementById('modelDropdown');
-        if (!modelDropdownOpen || dropdown.style.display !== 'flex'
+        if (!sessionControls.modelOpen || dropdown.style.display !== 'flex'
             || dropdown.querySelectorAll('.model-option[data-action="select"]').length !== 187) {
           throw new Error('Baseline must measure an open selector with the fixed visible catalog');
         }

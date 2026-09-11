@@ -677,3 +677,33 @@ passed again after the fix. AGENTS.md now includes the pre-paint output.
   files match the verified draft byte for byte; strict checks passed again.
 - Fable 5.1 cleared file/diff commit `63f9893` before push.
 - Next: session header controls, transcript/composer orchestration and shell wiring.
+
+## Checkpoint 29 — Session header controls and export
+
+- `session-controls.ts` owns model/thinking menu attempts, outside listeners,
+  selector instances, inline rename ownership, preference debounce and exports.
+  Closing a pending menu retires its catalog completion on the same selection.
+- Rename captures its owner on editor open. Mutations retain their endpoint and
+  update their originating host after navigation; per-session/field generations
+  keep an older response from overwriting a newer requested value.
+- Enabled-model edits snapshot the serving Pi instance's preference before the
+  debounce, preserving that scope when the menu closes or selection changes.
+- Exports preserve tokenless navigation and authenticated blob delivery without
+  a deadline. Captured bytes/names can finish after navigation, status remains
+  selection-owned, and download URLs/timers retire on disposal.
+- The initial selector test caught legacy click-property assignments duplicating
+  newly owned listeners. Those assignments are removed; all 19 existing header
+  ownership/selector regressions and baseline measurements pass.
+- Eight new browser cases cover pending close, rename retargeting, mutation order,
+  preference debounce, export origin/cleanup and disposal. The export fixture
+  confirms the originating-name fallback when CORS hides Content-Disposition.
+- Strict checks, 925 backend tests, 197 browser regressions, every independent UI
+  scenario and full desktop/mobile smoke passed. Integrated runtime/config/test
+  files match the verified draft byte for byte; strict checks passed again.
+- Fable 5.1 cleared anchored comments commit `ab4559b` before push. All five CI
+  jobs passed for renderer checkpoint `b15c5a5` (run `34612052395`).
+- Fable found that one global export sequence suppressed an earlier requested
+  download after another export. Downloads now each deliver captured bytes;
+  only feedback uses that sequence. An overlapping-export regression and the
+  repeated full checks pass. Tokenless navigation retains the original arguments.
+- Next: dictation/media, composer and transcript orchestration, and shell wiring.

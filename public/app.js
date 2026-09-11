@@ -2015,10 +2015,8 @@ function showPendingSessionView(spawnId) {
   nameEl.textContent = 'Starting session…';
   nameEl.classList.remove('editable-name');
   nameEl.title = '';
-  nameEl.onclick = null;
   const modelBtn = document.getElementById('sessionModel');
   modelBtn.textContent = `${harnessLabel} starting`;
-  modelBtn.onclick = null;
   modelBtn.style.cursor = 'default';
   const ctxReset = document.getElementById('sessionContext');
   ctxReset.textContent = '0%';
@@ -2374,12 +2372,10 @@ function updateSessionHeader() {
   const canRename = sessionState.currentSession.isActive && sessionSupports(sessionState.currentSession, 'rename');
   nameEl.classList.toggle('editable-name', canRename);
   nameEl.title = canRename ? 'Click to rename' : '';
-  nameEl.onclick = canRename ? startRename : null;
 
   const modelBtn = document.getElementById('sessionModel');
   const canSetModel = sessionState.currentSession.isActive && sessionSupports(sessionState.currentSession, 'setModel');
   setModelChipLabel(modelBtn, sessionState.currentSession.model, canSetModel ? ' ▾' : '');
-  modelBtn.onclick = canSetModel ? toggleModelDropdown : null;
   modelBtn.style.cursor = canSetModel ? 'pointer' : 'default';
 
   // One readout, in the composer field: percent only (its slot is fixed
@@ -2407,92 +2403,15 @@ function updateSessionHeader() {
   }
 }
 
-// --- Thinking level selector (levels from helpers.thinkingLevelsFor: pi's
-//     fixed vocabulary, OMP's model-supported subset + off/auto) ---
-let thinkingDropdownOpen = false;
-let thinkingSelector = null;
-
-function updateThinkingBadges() {
-  const level = sessionState.currentSession?.thinkingLevel;
-  const show = !!(sessionState.currentSession && sessionState.currentSession.isActive && sessionSupports(sessionState.currentSession, 'setThinking'));
-  const label = (level || '?') + ' ▾';
-  const badge = document.getElementById('sessionThinking');
-  if (badge) {
-    badge.style.display = show ? '' : 'none';
-    badge.textContent = label;
-  }
-}
-
-async function toggleThinkingDropdown() {
-  if (!sessionState.currentSession || !sessionState.currentSession.isActive || !sessionSupports(sessionState.currentSession, 'setThinking')) return;
-  // Load the model list so OMP can trim the dropdown to what the session's
-  // model supports (cached after the first fetch).
-  const owner = sessionState.captureSelection();
-  await loadModels(owner.id, sessionState.currentSession.harnessId);
-  if (!sessionState.ownsSelection(owner)) return;
-  const dropdown = document.getElementById('thinkingDropdown');
-  thinkingDropdownOpen = !thinkingDropdownOpen;
-  if (!thinkingDropdownOpen) { closeThinkingDropdown(); return; }
-
-  const ref = sessionState.currentSession.model || '';
-  const model = modelCatalog.rows().find(m => m &&
-    (m.selector === ref || m.id === ref || `${m.provider}/${m.id}` === ref));
-  if (!thinkingSelector) {
-    // Unowned actions must not dismiss or mutate a newer selection. Normal
-    // selection changes already dispose this instance before the view reset.
-    thinkingSelector = PiDishBrowser.mountThinkingSelector(dropdown, {
-      selectLevel: (target, level) => {
-        if (sessionState.ownsSelection(target)) selectThinkingLevel(level);
-      },
-      requestClose: target => {
-        if (sessionState.ownsSelection(target)) closeThinkingDropdown();
-      },
-    });
-  }
-  thinkingSelector.update({ owner, levels: thinkingLevelsFor(sessionState.currentSession.harnessId, model),
-    currentLevel: sessionState.currentSession.thinkingLevel || null });
-
-  // Desktop: anchored under the header button. Mobile: the stylesheet
-  // positions it (full-width sheet, same as the model dropdown). The button
-  // is looked up by id, never taken off the click event: the await above
-  // outlives the event dispatch, so `event.currentTarget` is null by here.
-  if (window.innerWidth > 768) {
-    anchorDropdown(dropdown, document.getElementById('sessionThinking').getBoundingClientRect());
-  } else {
-    clearDropdownPos(dropdown);
-  }
-  dropdown.style.display = 'block';
-  // The badge counts as inside, or clicking it while open would close the
-  // dropdown here and let this handler's own toggle reopen it.
-  armOutsideClickClose(['sessionThinking', 'thinkingDropdown'], closeThinkingDropdown, () => thinkingDropdownOpen);
-}
-
-function closeThinkingDropdown() {
-  thinkingDropdownOpen = false;
-  thinkingSelector?.dispose();
-  thinkingSelector = null;
-  document.getElementById('thinkingDropdown').style.display = 'none';
-}
-
-async function selectThinkingLevel(level) {
-  closeThinkingDropdown();
-  if (!sessionState.currentSession || !sessionSupports(sessionState.currentSession, 'setThinking')) return;
-  const owner = sessionState.captureSelection();
-  const { id, host } = owner;
-  try {
-    const data = await sessionApi.setThinking(owner, level);
-    // The harness clamps to what the model supports; trust the reported
-    // level, and say so when it differs from what was asked for.
-    const reported = data.level || level;
-    sessionState.patchSession(id, { thinkingLevel: reported }, host);
-    if (!sessionState.ownsSelection(owner)) return;
-    setStatus(reported !== level
-      ? `Thinking level: ${reported} (model doesn't support ${level})`
-      : `Thinking level: ${reported}`);
-  } catch (e) {
-    if (sessionState.ownsSelection(owner)) setStatus('Thinking level failed: ' + e.message, 'error');
-  }
-}
+// Header actions capture their selection before opening editors or dispatching.
+const sessionControls = PiDishBrowser.createSessionControls({
+  document, sessionState, catalog: modelCatalog, request: (host, path, options) => apiFetch(host, path, options), host: hostEntryFor,
+  loadModels: (id, harness) => loadModels(id, harness), status: (message, type) => setStatus(message, type),
+});
+function updateThinkingBadges() { sessionControls.updateThinking(); }
+function toggleThinkingDropdown() { return sessionControls.toggleThinking(); }
+function closeThinkingDropdown() { sessionControls.closeThinking(); }
+function selectThinkingLevel(level) { return sessionControls.selectThinking(level); }
 
 // --- Focus mode: hide tool calls/results so only user/assistant text shows ---
 let focusMode = false;
@@ -2740,223 +2659,23 @@ function openCommentEditor(comment, anchor) { anchoredCommentController.openEdit
 function disarmCommentDelete() { anchoredCommentController.disarmDelete(); }
 function handleCommentDelete() { return anchoredCommentController.remove(); }
 
-// --- Export ---
-//
-// The export is a Content-Disposition attachment, and the session may live on
-// any host in the fleet — so this cannot be a window.open() of a *bare* path.
-// A bare path resolves against location.origin, i.e. the hub, where a peer's
-// session id does not exist.
-//
-// It stays a navigation whenever the owning host needs no bearer, which keeps
-// the single-host behaviour byte for byte (the attachment streams straight to
-// disk instead of through a blob in memory — a long transcript exports to tens
-// of MB) and works for a peer too, since the /hosts/<name> proxy relays
-// Content-Disposition untouched. A navigation cannot carry an Authorization
-// header, so a token host — and only a token host — goes through apiFetch and
-// saves the bytes by hand. That split is also what CORS wants: a cross-origin
-// peer only emits CORS headers when it has a token configured, so the
-// tokenless case *must* be the navigation.
-//
-// Neither path takes a deadline: the exporter runs over the whole session
-// before the first byte.
-async function exportSession() {
-  if (!sessionState.currentSession) return;
-  const session = sessionState.currentSession;
-  const host = resolveHost(session.host);
-  const path = `/api/sessions/${encodeURIComponent(session.id)}/export`;
-  if (!host.token) { window.open(host.base + path, '_blank'); return; }
-
-  setStatus('Exporting session…', 'working');
-  try {
-    const res = await apiFetch(host, path);
-    if (!res.ok) {
-      let message = `HTTP ${res.status}`;
-      try { message = (await res.json()).error || message; } catch { /* not JSON */ }
-      throw new Error(message);
-    }
-    const fallback = `${(session.name || session.id).replace(/[^\w.-]+/g, '-')}.html`;
-    downloadBlob(await res.blob(),
-      filenameFromContentDisposition(res.headers.get('Content-Disposition'), fallback));
-    setStatus('Session exported');
-  } catch (e) {
-    setStatus('Export failed: ' + e.message, 'error');
-  }
-}
-
-/** Save already-fetched bytes to disk under `name`. */
-function downloadBlob(blob, name) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  a.rel = 'noopener';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // Revoked late on purpose: revoking in the same tick cancels the save in
-  // some browsers, which read the blob only after the click is handled.
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
-}
-
-// --- Inline rename ---
-function startRename() {
-  if (!sessionState.currentSession || !sessionState.currentSession.isActive || !sessionSupports(sessionState.currentSession, 'rename')) return;
-  const nameEl = document.getElementById('sessionName');
-  const inputEl = document.getElementById('sessionNameInput');
-  nameEl.style.display = 'none';
-  inputEl.style.display = '';
-  inputEl.value = sessionState.currentSession.name || '';
-  inputEl.focus();
-  inputEl.select();
-}
-
-function handleRenameKey(e) {
-  if (e.key === 'Enter') { e.preventDefault(); commitRename(); }
-  else if (e.key === 'Escape') cancelRename();
-}
-
-async function commitRename() {
-  const inputEl = document.getElementById('sessionNameInput');
-  const nameEl = document.getElementById('sessionName');
-  const newName = inputEl.value.trim();
-  inputEl.style.display = 'none';
-  nameEl.style.display = '';
-  if (!sessionState.currentSession || !newName || newName === sessionState.currentSession.name || !sessionState.currentSession.isActive) return;
-  const owner = sessionState.captureSelection();
-  const { id, host } = owner;
-  try {
-    await sessionApi.rename(owner, newName);
-    sessionState.patchSession(id, { name: newName }, host);
-  } catch (e) {
-    if (sessionState.ownsSelection(owner)) setStatus('Rename failed: ' + e.message, 'error');
-  }
-}
-
-function cancelRename() {
-  document.getElementById('sessionNameInput').style.display = 'none';
-  document.getElementById('sessionName').style.display = '';
-}
-
-// --- Model dropdown ---
-let modelDropdownOpen = false;
-let modelEditMode = false; // scoped-models switcher: toggle which models are enabled
-let modelQuery = '';
-let modelSelector = null;
-
-async function toggleModelDropdown() {
-  if (!sessionState.currentSession || !sessionState.currentSession.isActive || !sessionSupports(sessionState.currentSession, 'setModel')) return;
-  const owner = sessionState.captureSelection();
-  await loadModels(owner.id, sessionState.currentSession.harnessId);
-  if (!sessionState.ownsSelection(owner)) return;
-  modelDropdownOpen = !modelDropdownOpen;
-  modelEditMode = false;
-  const dropdown = document.getElementById('modelDropdown');
-  if (!modelDropdownOpen) { closeModelDropdown(); return; }
-  // Desktop: anchored under the header button. Mobile: the stylesheet
-  // positions it (full-width sheet), so just clear any desktop inline pos.
-  if (window.innerWidth > 768) {
-    anchorDropdown(dropdown, document.getElementById('sessionModel').getBoundingClientRect());
-  } else {
-    clearDropdownPos(dropdown);
-  }
-  renderModelDropdown('');
-  dropdown.style.display = 'flex';
-  modelSelector.focusSearch();
-  armOutsideClickClose(['modelSelector', 'modelDropdown'], closeModelDropdown, () => modelDropdownOpen);
-}
-
-function renderModelDropdown(query) {
-  const owner = sessionState.captureSelection();
-  if (!owner) return;
-  modelQuery = query;
-  if (!modelSelector) {
-    // Every action is bound to the view that emitted it, before invoking the
-    // existing request/catalog writers. The component never reads global state.
-    const owned = action => (target, ...args) => {
-      if (sessionState.ownsSelection(target)) action(...args);
-    };
-    modelSelector = PiDishBrowser.mountModelSelector(document.getElementById('modelDropdown'), {
-      requestClose: owned(closeModelDropdown),
-      queryChanged: owned(renderModelDropdown),
-      editModeChanged: owned(editing => editing ? enterModelEditMode() : exitModelEditMode()),
-      selectModel: owned(selectModel),
-      toggleModel: owned(toggleModelEnabled),
-      toggleProvider: owned(toggleProviderEnabled),
-      setAllEnabled: owned(setAllModelsEnabled),
-    }, formatTokens);
-  }
-  modelSelector.update({ owner, models: modelCatalog.rows(), currentModel: sessionState.currentSession.model || null,
-    harnessId: sessionState.currentSession.harnessId || null, query, editMode: modelEditMode });
-}
-
-function enterModelEditMode() {
-  if (sessionState.currentSession?.harnessId !== 'pi') return;
-  modelEditMode = true;
-  renderModelDropdown(currentModelQuery());
-}
-
-function exitModelEditMode() {
-  modelEditMode = false;
-  renderModelDropdown(currentModelQuery());
-}
-
-function currentModelQuery() { return modelQuery; }
-
-function toggleModelEnabled(fullId) {
-  modelCatalog.toggle(fullId);
-  renderModelDropdown(currentModelQuery());
-  saveEnabledModels();
-}
-function setAllModelsEnabled(enabled) {
-  modelCatalog.setAll(enabled);
-  renderModelDropdown(currentModelQuery());
-  saveEnabledModels();
-}
-function toggleProviderEnabled(provider) {
-  modelCatalog.toggleProvider(provider, currentModelQuery());
-  renderModelDropdown(currentModelQuery());
-  saveEnabledModels();
-}
-
-let saveEnabledTimer = null;
-function saveEnabledModels() {
-  // Snapshot the owner's edit before the debounce can observe another catalog.
-  const enabledIds = modelCatalog.enabledIds();
-  if (enabledIds === undefined) return; // Retired rows cannot clear the server-local preference.
-  clearTimeout(saveEnabledTimer);
-  saveEnabledTimer = setTimeout(async () => {
-    try {
-      await sessionApi.setEnabledModels(enabledIds);
-    } catch (e) { setStatus('Failed to save model list: ' + e.message, 'error'); }
-  }, 400);
-}
-
-function closeModelDropdown() {
-  modelDropdownOpen = false;
-  modelSelector?.dispose();
-  modelSelector = null;
-  document.getElementById('modelDropdown').style.display = 'none';
-}
-
-async function selectModel(fullModelId) {
-  closeModelDropdown();
-  // Only skip on an exact provider/id match. currentSession.model is often a
-  // bare id, and the same id can exist under two providers (anthropic vs a
-  // Bedrock mirror) — a bare-id comparison silently swallowed those switches.
-  // A redundant set_model for the truly-same model is harmless.
-  var isSame = fullModelId === sessionState.currentSession?.model;
-  if (!sessionState.currentSession || !sessionSupports(sessionState.currentSession, 'setModel') || isSame) return;
-  const owner = sessionState.captureSelection();
-  const { id, host } = owner;
-  setStatus('Switching model...', 'working');
-  try {
-    await sessionApi.setModel(owner, fullModelId);
-    sessionState.patchSession(id, { model: fullModelId }, host);
-    if (sessionState.ownsSelection(owner)) setStatus('Model switched to ' + fullModelId);
-  } catch (e) {
-    if (sessionState.ownsSelection(owner)) setStatus('Model switch failed: ' + e.message, 'error');
-  }
-}
+function exportSession() { return sessionControls.export(); }
+function downloadBlob(blob, name) { sessionControls.download(blob, name); }
+function startRename() { sessionControls.startRename(); }
+function handleRenameKey(event) { sessionControls.renameKey(event); }
+function commitRename() { return sessionControls.commitRename(); }
+function cancelRename() { sessionControls.cancelRename(); }
+function toggleModelDropdown() { return sessionControls.toggleModels(); }
+function renderModelDropdown(query) { sessionControls.renderModels(query); }
+function enterModelEditMode() { sessionControls.setEditMode(true); }
+function exitModelEditMode() { sessionControls.setEditMode(false); }
+function currentModelQuery() { return sessionControls.query; }
+function toggleModelEnabled(selector) { sessionControls.toggleModel(selector); }
+function setAllModelsEnabled(enabled) { sessionControls.setAll(enabled); }
+function toggleProviderEnabled(provider) { sessionControls.toggleProvider(provider); }
+function saveEnabledModels() { sessionControls.saveEnabled(); }
+function closeModelDropdown() { sessionControls.closeModels(); }
+function selectModel(selector) { return sessionControls.selectModel(selector); }
 
 // =========================================================================
 // Messages
@@ -5426,23 +5145,6 @@ function moveActiveItem(items, currentIdx, delta, { wrap = false } = {}) {
   items.forEach((el, i) => el.classList.toggle('active', i === idx));
   items[idx].scrollIntoView({ block: 'nearest' });
   return idx;
-}
-
-/** Reset a fixed dropdown's inline position so the stylesheet takes over. */
-function clearDropdownPos(el) {
-  el.style.top = ''; el.style.left = ''; el.style.bottom = ''; el.style.right = '';
-}
-
-/**
- * Anchor a position:fixed dropdown to its trigger's rect — below it, or
- * above it (`above`) when the bottom of the screen belongs to the mobile
- * keyboard/composer.
- */
-function anchorDropdown(el, rect, { above = false } = {}) {
-  clearDropdownPos(el);
-  el.style.left = rect.left + 'px';
-  if (above) el.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
-  else el.style.top = (rect.bottom + 4) + 'px';
 }
 
 /** localStorage JSON read that can't throw on a corrupt/missing value. */
