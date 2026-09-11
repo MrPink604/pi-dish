@@ -169,3 +169,5 @@ complete application coverage.
 `message-render.spec.js` covers message projection, retained telemetry identity, grouping and disposal.
 
 `live-transcript.spec.js` covers coalesced frame ownership, cumulative tools, retained panels and disposal.
+
+`transcript.spec.js` covers tail/older/catch-up races, retained cache bounds, endpoint identity and disposal.

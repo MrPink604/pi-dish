@@ -2204,3 +2204,6 @@ Keep retained transcript anchors and custom-message upsert identity intact.
 
 Live browser frames and tool panels are typed controllers; retire coalescing timers
 and preserve retained panel identity when resetting selection.
+
+The typed transcript controller owns pagination cursors and retained DOM; retire
+requests before stashing, and preserve the later group anchor during prepend.

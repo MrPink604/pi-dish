@@ -653,8 +653,7 @@ function showPendingSessionView(spawnId) {
   const harnessLabel = spawn.harnessLabel || 'Pi';
   sessionState.advanceSelection();
   sessionSearch.reset();
-  loadingOlder = false;
-  loadingOlderGeneration += 1;
+  transcriptController.retire();
   stashPromptState();
   cancelStreamingRender();
   closeSearch();
@@ -715,10 +714,7 @@ function showPendingSessionView(spawnId) {
   updateTerminalButtons();
   updateMicButton();
 
-  oldestLoadedIndex = null;
-  lastLoadedIndex = null;
-  hasMoreOlder = false;
-  totalMessages = 0;
+  transcriptController.reset();
   setMoodIndicator('', '');
   const targetLabel = spawn.target ? 'tmux' : 'the headless session';
   document.getElementById('messages').innerHTML = `<div class="empty-state pending-session-state" style="padding: 48px;">
@@ -755,8 +751,7 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   if (!sessionState.findSession(id, host)) return;
   sessionState.advanceSelection();
   sessionSearch.reset();
-  loadingOlder = false;
-  loadingOlderGeneration += 1;
+  transcriptController.retire();
   stashPromptState();
   currentSessionSpawnId = null;
   setComposerWaiting(false);
@@ -789,7 +784,7 @@ async function selectSession(id, { forceTranscriptReload = false, host = null, k
   stashCurrentTranscript();
   if (!sessionState.setCurrentSession(id, host)) return;
   const owner = sessionState.captureSelection();
-  if (forceTranscriptReload) transcriptCache.delete(sessionRefKey(sessionState.currentSession));
+  if (forceTranscriptReload) transcriptController.deleteCached(sessionRefKey(sessionState.currentSession));
   // Math rendering is transcript-only. Start its one-shot load while the
   // synchronous session chrome is updated, then gate markdown hydration on it.
   const mathAssetsReady = loadMathAssets().catch(() => {});
@@ -1122,7 +1117,7 @@ function setFocusMode(on) {
 // Whole-transcript search owns query requests, marks and serialized paging jumps.
 const sessionSearch = PiDishBrowser.createSessionSearch({
   document, sessionState, request: (host, path, init) => apiFetch(host, path, init), endpoint: hostEntryFor,
-  focusMode: () => focusMode, oldestIndex: () => oldestLoadedIndex, hasOlder: () => hasMoreOlder,
+  focusMode: () => focusMode, oldestIndex: () => transcriptController.oldestIndex, hasOlder: () => transcriptController.hasOlder,
   loadOlder: () => loadOlderMessages(), stopFollowing: () => { followStream = false; }, updateJumpButton,
 });
 const search = sessionSearch.state;
@@ -1371,298 +1366,23 @@ function selectModel(selector) { return sessionControls.selectModel(selector); }
 // Messages
 // =========================================================================
 
-const MESSAGE_PAGE_SIZE = 50;
-const TRANSCRIPT_CACHE_TTL_MS = 15 * 60 * 1000;
-const TRANSCRIPT_CACHE_MAX_SESSIONS = 5;
-// The session-count bound alone puts no ceiling on retained DOM — one
-// deep-scrolled transcript can hold thousands of highlighted messages. Cap
-// each stash at its newest messages; trimmed history re-pages in on demand.
-const TRANSCRIPT_CACHE_MAX_MESSAGES = 300;
-const LOAD_OLDER_SCROLL_THRESHOLD = 200;
-
-// Pagination cursors for the currently loaded session.
-let oldestLoadedIndex = null;
-let lastLoadedIndex = null;
-let hasMoreOlder = false;
-let totalMessages = 0;
-let loadingOlder = false;
-let loadingOlderGeneration = 0;
-
-// Recently viewed transcript DOM, keyed by host+session, including every page the reader explicitly
-// loaded. Moving nodes into a DocumentFragment preserves expensive markdown,
-// highlighting, open tool groups, and image elements without serializing or
-// re-downloading them. The bounded TTL/LRU policy keeps that convenience from
-// turning a tour through many large sessions into unbounded memory growth.
-const transcriptCache = new Map();
-
-function pruneTranscriptCache(skipId) {
-  const now = Date.now();
-  for (const [id, entry] of transcriptCache) {
-    if (id !== skipId && now - entry.lastUsed > TRANSCRIPT_CACHE_TTL_MS) transcriptCache.delete(id);
-  }
-  while (transcriptCache.size > TRANSCRIPT_CACHE_MAX_SESSIONS) {
-    const oldest = [...transcriptCache.entries()]
-      .filter(([id]) => id !== skipId)
-      .sort((a, b) => a[1].lastUsed - b[1].lastUsed)[0];
-    if (!oldest) break;
-    transcriptCache.delete(oldest[0]);
-  }
-}
-
-function stashCurrentTranscript() {
-  const id = sessionState.currentSession && sessionRefKey(sessionState.currentSession);
-  const container = document.getElementById('messages');
-  if (!id || !container || lastLoadedIndex == null || container.querySelector('.loading, .error')) return;
-  const scrollTop = container.scrollTop;
-  const mood = document.getElementById('moodIndicator');
-  const fragment = transcriptCache.get(id)?.fragment || document.createDocumentFragment();
-  fragment.replaceChildren();
-  while (container.firstChild) fragment.appendChild(container.firstChild);
-  const entry = {
-    fragment,
-    oldestLoadedIndex,
-    lastLoadedIndex,
-    hasMoreOlder,
-    totalMessages,
-    scrollTop,
-    moodDescription: mood?.dataset.moodDescription || '',
-    moodFace: mood?.dataset.moodFace || '',
-    lastUsed: Date.now(),
-  };
-  trimStashedTranscript(entry);
-  transcriptCache.set(id, entry);
-  pruneTranscriptCache(id);
-}
-
-// Drop a stash's oldest messages past the cap and re-point its older-page
-// cursor at the oldest survivor, so a restore pages the trimmed history back
-// in through the normal top-of-feed path (the load-older bar goes with the
-// trimmed nodes; the first implicit page-in re-renders it with a fresh count).
-function trimStashedTranscript(entry) {
-  const { fragment } = entry;
-  const indexed = fragment.querySelectorAll('[data-msg-index]');
-  if (indexed.length <= TRANSCRIPT_CACHE_MAX_MESSAGES) return;
-  // Cut at the top-level ancestor of the oldest kept message — messages
-  // folded into a tool-group must move (or stay) with their group.
-  let keep = indexed[indexed.length - TRANSCRIPT_CACHE_MAX_MESSAGES];
-  while (keep.parentNode && keep.parentNode !== fragment) keep = keep.parentNode;
-  while (fragment.firstChild && fragment.firstChild !== keep) fragment.firstChild.remove();
-  const first = fragment.querySelector('[data-msg-index]');
-  const firstIndex = first ? parseInt(first.dataset.msgIndex, 10) : NaN;
-  if (Number.isNaN(firstIndex)) return;
-  entry.oldestLoadedIndex = firstIndex;
-  entry.hasMoreOlder = firstIndex > 0;
-}
-
-function restoreCachedTranscript(id) {
-  id = sessionKey(sessionState.sessionHostId(id), id);
-  const cached = transcriptCache.get(id);
-  if (!cached) return false;
-  if (Date.now() - cached.lastUsed > TRANSCRIPT_CACHE_TTL_MS) {
-    transcriptCache.delete(id);
-    return false;
-  }
-  const container = document.getElementById('messages');
-  if (!container || !cached.fragment.childNodes.length) return false;
-  container.replaceChildren(cached.fragment);
-  oldestLoadedIndex = cached.oldestLoadedIndex;
-  lastLoadedIndex = cached.lastLoadedIndex;
-  hasMoreOlder = cached.hasMoreOlder;
-  totalMessages = cached.totalMessages;
-  cached.lastUsed = Date.now();
-  setMoodIndicator(cached.moodDescription, cached.moodFace);
-  container.scrollTop = cached.scrollTop;
-  updateJumpButton(container);
-  pruneTranscriptCache(id);
-  return true;
-}
-
-function maybeLoadOlderMessages(container) {
-  if (container?.scrollTop <= LOAD_OLDER_SCROLL_THRESHOLD) loadOlderMessages();
-}
-
+const transcriptController = PiDishBrowser.createTranscript({
+  document, sessionState, request: (host, path, options) => apiFetch(host, path, options), host: hostEntryFor,
+  renderMessage: message => renderMessageHtml(message), finalize: (root, options) => finalizeRender(root, options),
+  closeSearch: () => closeSearch(), cancelStreaming: () => cancelStreamingRender(), mood: (description, face) => setMoodIndicator(description, face),
+  updateMood: messages => updateMoodFromMessages(messages), pinned: isPinnedToBottom, scroll: scrollToBottom, jump: updateJumpButton,
+  consumeEcho: (id, content) => consumePendingSelfEcho(id, content),
+});
+function stashCurrentTranscript() { transcriptController.stash(); }
+function restoreCachedTranscript(id) { return transcriptController.restore(id); }
+function pruneTranscriptCache(id) { transcriptController.pruneCache(id); }
+function maybeLoadOlderMessages(container) { transcriptController.maybeOlder(container); }
 function renderMessageHtml(message) { return messageRenderer.message(message); }
-
-async function loadMessages(owner = sessionState.captureSelection()) {
-  if (!sessionState.ownsSelection(owner)) return;
-  const { id, host } = owner;
-  cancelStreamingRender();
-  closeSearch();
-  const container = document.getElementById('messages');
-  if (restoreCachedTranscript(id)) {
-    // Keep the warm pages visible while checking for anything appended since
-    // this session was last viewed. Inactive sessions have no SSE init to do
-    // this catch-up for them.
-    await fetchNewMessagesSince(owner);
-    return;
-  }
-  container.innerHTML = '<div class="loading">Loading...</div>';
-  oldestLoadedIndex = null;
-  lastLoadedIndex = null;
-  hasMoreOlder = false;
-  totalMessages = 0;
-  // Mood is per-session; clear here (not in renderMessages) so a tail page
-  // without a set_mood call doesn't wipe a mood set earlier in the session.
-  setMoodIndicator('', '');
-  try {
-    const res = await apiFetch(host, `/api/sessions/${encodeURIComponent(id)}/messages?limit=${MESSAGE_PAGE_SIZE}`);
-    const data = await res.json();
-    // A newer selection may have superseded us while the fetch was in flight —
-    // don't clobber its transcript/cursors with this stale response.
-    if (!sessionState.ownsSelection(owner)) return;
-    const { messages, session, firstIndex, lastIndex, hasMore, totalMessages: total } = data;
-    sessionState.mergeCurrentSession(owner, session);
-    oldestLoadedIndex = firstIndex;
-    lastLoadedIndex = lastIndex;
-    hasMoreOlder = !!hasMore;
-    totalMessages = total || 0;
-    renderMessages(messages);
-  } catch (e) {
-    if (!sessionState.ownsSelection(owner)) return;
-    container.innerHTML = `<div class="error">Failed to load messages: ${e.message}</div>`;
-  }
-}
-
-function renderLoadOlderBar() {
-  if (!hasMoreOlder) return '';
-  const remaining = oldestLoadedIndex != null ? oldestLoadedIndex : 0;
-  return `<div class="load-older-bar" id="loadOlderBar">
-    <button class="load-older-btn" onclick="loadOlderMessages()">Load older messages (${remaining} earlier)</button>
-  </div>`;
-}
-
-function renderMessages(messages) {
-  const container = document.getElementById('messages');
-  updateMoodFromMessages(messages);
-  if (messages.length === 0) {
-    container.innerHTML = '<div class="empty-state" style="padding: 48px;"><p style="color: var(--text-muted);">No messages yet</p></div>';
-    return;
-  }
-  container.innerHTML = renderLoadOlderBar() + messages.map(renderMessageHtml).join('');
-  finalizeRender(container);
-  scrollToBottom(container); // fresh session load: start at the latest message
-}
-
-async function loadOlderMessages() {
-  if (loadingOlder || !hasMoreOlder || !sessionState.currentSession || oldestLoadedIndex == null) return;
-  loadingOlder = true;
-  const owner = sessionState.captureSelection();
-  const { id: sessionId, host } = owner;
-  const requestGeneration = ++loadingOlderGeneration;
-  const beforeIndex = oldestLoadedIndex;
-  const container = document.getElementById('messages');
-  const bar = document.getElementById('loadOlderBar');
-  if (bar) bar.querySelector('.load-older-btn').textContent = 'Loading...';
-
-  // Anchor scroll to the first existing message so the viewport doesn't jump
-  // when we prepend older content.
-  // Top-level children only: a message folded into a closed tool-group has
-  // no box, so its rect can't anchor the scroll restore.
-  const anchor = container.querySelector(':scope > .message, :scope > details.tool-group');
-  const anchorOffset = anchor ? anchor.getBoundingClientRect().top : 0;
-
-  try {
-    const res = await apiFetch(host, `/api/sessions/${encodeURIComponent(sessionId)}/messages?limit=${MESSAGE_PAGE_SIZE}&before=${beforeIndex}`);
-    const data = await res.json();
-    // The request belongs to the transcript that initiated it. A quick
-    // session switch or same-session forced reload must not prepend those
-    // messages into the replacement transcript.
-    if (!sessionState.ownsSelection(owner) || requestGeneration !== loadingOlderGeneration) return;
-    const { messages, firstIndex, hasMore } = data;
-    if (messages && messages.length) {
-      const html = messages.map(renderMessageHtml).join('');
-      // Replace the existing bar (if any) with the new bar + prepended messages.
-      const existingBar = container.querySelector('#loadOlderBar');
-      if (existingBar) existingBar.remove();
-      oldestLoadedIndex = firstIndex != null ? firstIndex : oldestLoadedIndex;
-      hasMoreOlder = !!hasMore;
-      container.insertAdjacentHTML('afterbegin', renderLoadOlderBar() + html);
-      finalizeRender(container, { stripLive: false });
-      // Paging back can reveal the session's most recent set_mood when the
-      // tail page had none — backfill only, never override a shown mood
-      // (anything in this page is older than what's already displayed).
-      if (!document.getElementById('moodIndicator')) updateMoodFromMessages(messages);
-
-      // Restore scroll so the anchor stays in the same viewport position.
-      if (anchor) {
-        const newOffset = anchor.getBoundingClientRect().top;
-        container.scrollTop += (newOffset - anchorOffset);
-      }
-    } else {
-      hasMoreOlder = false;
-      const existingBar = container.querySelector('#loadOlderBar');
-      if (existingBar) existingBar.remove();
-    }
-  } catch (e) {
-    if (!sessionState.ownsSelection(owner) || requestGeneration !== loadingOlderGeneration) return;
-    if (bar) bar.querySelector('.load-older-btn').textContent = `Failed: ${e.message} — retry`;
-  } finally {
-    if (requestGeneration === loadingOlderGeneration) loadingOlder = false;
-  }
-}
-
-async function fetchNewMessagesSince(owner = sessionState.captureSelection()) {
-  if (!sessionState.ownsSelection(owner)) return;
-  const { id: sessionId, host } = owner;
-  // Incremental catch-up after turn_end / init. Avoids the full reload that
-  // stalls long sessions.
-  if (lastLoadedIndex == null) {
-    // No baseline yet — fall back to a full tail load.
-    return loadMessages(owner);
-  }
-  try {
-    const res = await apiFetch(host, `/api/sessions/${encodeURIComponent(sessionId)}/messages?after=${lastLoadedIndex}`);
-    const data = await res.json();
-    // Bail if the user switched sessions or force-reloaded this same session
-    // while the catch-up was in flight.
-    if (!sessionState.ownsSelection(owner)) return;
-    const { messages, lastIndex, totalMessages: total, session } = data;
-    sessionState.mergeCurrentSession(owner, session);
-    if (typeof total === 'number') totalMessages = total;
-    if (!messages || messages.length === 0) return;
-
-    const container = document.getElementById('messages');
-    if (!container) return;
-
-    // Skip indices we already rendered (defensive — server uses strict >).
-    const existing = new Set();
-    container.querySelectorAll('[data-msg-index]').forEach(el => existing.add(parseInt(el.dataset.msgIndex, 10)));
-    const fresh = messages.filter(m => !existing.has(m.index));
-    // If this browser was away when pi emitted the user echo, the stream could
-    // not consume its optimistic association. The authoritative indexed user
-    // message is now present, so that association no longer has work to do.
-    fresh.filter(m => m.role === 'user').forEach(m => {
-      consumePendingSelfEcho(sessionId, m.content);
-    });
-    updateMoodFromMessages(fresh);
-    if (fresh.length === 0) {
-      if (lastIndex != null) lastLoadedIndex = lastIndex;
-      return;
-    }
-
-    // Now that we have authoritative JSONL versions, strip optimistic
-    // (non-indexed) message DOM. Streaming placeholders + the optimistic
-    // user echo get replaced by their indexed counterparts. Exception: keep
-    // the finalized assistant render until a batch actually carries an
-    // assistant message — a batch of tool messages only (JSONL flush lagging
-    // turn_end) must not blank the answer, the vanishing-text mode the
-    // streaming pipeline is designed to avoid.
-    const wasPinned = isPinnedToBottom(container);
-    const freshHasAssistant = fresh.some(m => m.role === 'assistant');
-    container.querySelectorAll('.message:not([data-msg-index])').forEach(el => {
-      if (el.classList.contains('assistant') && !freshHasAssistant) return;
-      el.remove();
-    });
-
-    container.insertAdjacentHTML('beforeend', fresh.map(renderMessageHtml).join(''));
-    if (lastIndex != null) lastLoadedIndex = lastIndex;
-    finalizeRender(container);
-    if (wasPinned) scrollToBottom(container); else updateJumpButton(container);
-  } catch (e) {
-    if (!sessionState.ownsSelection(owner)) return;
-    console.error('fetchNewMessagesSince failed:', e);
-  }
-}
+function loadMessages(owner) { return transcriptController.load(owner); }
+function renderLoadOlderBar() { return transcriptController.barHtml(); }
+function renderMessages(messages) { transcriptController.render(messages); }
+function loadOlderMessages() { return transcriptController.loadOlder(); }
+function fetchNewMessagesSince(owner) { return transcriptController.catchup(owner); }
 
 // Typed message projection and telemetry retain only their own render data.
 const messageRenderer = PiDishBrowser.createMessageRenderer({
@@ -1990,7 +1710,7 @@ function openMessageStream(url, owner) {
       // The route identifies a different transcript even though the pane and
       // bridge socket stayed put. Never restore a prior DOM stash for that id:
       // the session may have changed since it was last viewed.
-      transcriptCache.delete(sessionKey(hostId, nextId));
+      transcriptController.deleteCached(sessionKey(hostId, nextId));
       void loadSessions(undefined, { withPrevious: true }).then(() => {
         if (!sessionState.ownsSelection(owner) || !sessionState.findSession(nextId, hostId)) return;
         selectSession(nextId, { forceTranscriptReload: true, host: hostId });
@@ -2856,7 +2576,7 @@ function handleExtensionUI(request, id, host = sessionState.sessionHostId(id)) {
 const browserAssets = PiDishBrowser.createBrowserAssets(document);
 const diagramRenderer = PiDishBrowser.createDiagrams({
   document, assets: browserAssets, runtime: () => typeof mermaid === 'undefined' ? null : mermaid,
-  retainedRoots: () => [...transcriptCache.values()].map(entry => entry.fragment), isPinned: feed => isPinnedToBottom(feed), scrollBottom: feed => scrollToBottom(feed),
+  retainedRoots: () => transcriptController.retainedRoots(), isPinned: feed => isPinnedToBottom(feed), scrollBottom: feed => scrollToBottom(feed),
 });
 const richText = PiDishBrowser.createRichText({
   document, marked: typeof marked === 'undefined' ? null : marked, highlight: () => typeof hljs === 'undefined' ? null : hljs,

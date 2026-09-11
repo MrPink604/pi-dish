@@ -73,39 +73,23 @@ test('a delayed search cannot replace the query on a same-id peer', async ({ pag
 test('closing and reopening search preserves its single paging jump within a selection', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
   const result = await page.evaluate(async () => {
-    const load = loadOlderMessages;
-    const fetch = apiFetch;
-    let started;
+    const fetch = apiFetch; let started, release, calls = 0;
     const loading = new Promise(resolve => { started = resolve; });
-    apiFetch = (host, path, init) => path.includes('/search?')
-      ? Promise.resolve(new Response(JSON.stringify({ matches: [{ index: 0, role: 'user' }] }))) : fetch(host, path, init);
-    const oldIndex = oldestLoadedIndex;
-    const oldMore = hasMoreOlder;
-    let release;
-    let calls = 0;
-    const pending = new Promise(resolve => { release = resolve; });
-    loadOlderMessages = () => { calls += 1; started(); return pending.then(() => { hasMoreOlder = false; }); };
+    apiFetch = (host, path, init) => {
+      if (path.includes('/search?')) return Promise.resolve(new Response(JSON.stringify({ matches: [{ index: 0, role: 'user' }] })));
+      if (path.includes('/messages?limit=50&before=')) {
+        calls++; started(); return new Promise(resolve => { release = () => resolve(new Response(JSON.stringify({ messages: [], hasMore: false }))); });
+      }
+      if (path.includes('/messages?limit=50')) return Promise.resolve(new Response(JSON.stringify({ messages: [{ role: 'user', index: 10, content: 'baseline' }], firstIndex: 10, lastIndex: 10, hasMore: true, totalMessages: 11 })));
+      return fetch(host, path, init);
+    };
     try {
-      oldestLoadedIndex = 10;
-      hasMoreOlder = true;
-      openSearch();
-      const first = runSessionSearch('first');
-      await loading;
-      closeSearch();
-      openSearch();
-      const second = runSessionSearch('second');
-      await new Promise(resolve => setTimeout(resolve, 0));
-      const beforeRelease = { calls, navigating: search.navigating };
-      release();
-      await Promise.all([first, second]);
+      transcriptController.deleteCached(keyForSessionId(sessionState.currentSession.id)); await loadMessages();
+      openSearch(); const first = runSessionSearch('first'); await loading;
+      closeSearch(); openSearch(); const second = runSessionSearch('second'); await new Promise(resolve => setTimeout(resolve, 0));
+      const beforeRelease = { calls, navigating: search.navigating }; release(); await Promise.all([first, second]);
       return { ...beforeRelease, settled: !search.navigating };
-    } finally {
-      loadOlderMessages = load;
-      apiFetch = fetch;
-      oldestLoadedIndex = oldIndex;
-      hasMoreOlder = oldMore;
-      closeSearch();
-    }
+    } finally { apiFetch = fetch; closeSearch(); }
   });
   expect(result).toEqual({ calls: 1, navigating: true, settled: true });
 });

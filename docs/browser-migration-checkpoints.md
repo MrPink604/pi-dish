@@ -849,3 +849,22 @@ UI scenarios and full desktop/mobile smoke passed. Seven focused browser cases
 and strict contracts cover frame replacement, host ownership, cumulative panels,
 renamed tools, mood text and disposal. Later combined pagination and activity drafts
 passed 252/257 browser cases plus all UI checks. Fable reviews before push.
+
+## Checkpoint 38 — transcript loading, pagination and retained DOM
+
+Moved page decoding, tail loads, older pages, incremental catch-up and retained
+transcript caching into three strict modules. Requests capture selection, endpoint
+and view generations; pagination uses a distinct lock so old finalizers cannot
+unlock a newer page. Catch-up is latest-wins and cursors never regress. Tool-only
+JSONL batches preserve the unindexed final assistant until its indexed copy lands.
+Cache identity includes endpoint and host/session, with five-entry/15-minute bounds
+and a newest-300-message limit preserving group ancestry and DOM state.
+
+Updated two older test fixtures: search paging now establishes real cursor state
+through a tail response; held fetches deliberately deliver late bodies despite
+cancellation so they still exercise ownership rather than hang on a rejected fetch.
+
+Verification: strict checks, 936 backend tests, 252 browser tests, all independent
+UI scenarios and full desktop/mobile smoke passed. Two pure tests, seven browser
+cases and strict contracts cover cursors, cache bounds, endpoint identity, paging
+locks, detached controls, literal errors and disposal. Fable reviews before push.

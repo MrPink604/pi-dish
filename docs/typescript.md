@@ -462,3 +462,8 @@ usable when their host-qualified transcript is restored.
 Live tool panels and coalesced assistant frames live in `live-tools.ts` and
 `streaming-render.ts`. Both capture selected-session ownership; retained details
 preserve user expansion. `mood.ts` owns the composer mood projection.
+
+Transcript loading lives in `transcript.ts`, with `transcript-data.ts` narrowing
+page payloads and `transcript-cache.ts` retaining bounded host/endpoint-owned DOM.
+Selection retirement cancels requests before stashing without prematurely clearing
+the outgoing transcript’s cursors. Replaced paging controls remain inert.

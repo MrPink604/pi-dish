@@ -2349,13 +2349,14 @@ let remoteHost = null; // second pi-dish (multi-host section)
         const url = String(input);
         if (!held && url.includes(`/api/sessions/${a}/messages?limit=`)) {
           held = true;
-          return new Promise((resolve) => {
-            window.__releaseAuditSelection = () => realFetch(input, init).then(resolve);
+          return new Promise((resolve, reject) => {
+            // Deliver the late body even if the controller retired its original request.
+            window.__releaseAuditSelection = () => realFetch(input, { ...init, signal: undefined }).then(resolve, reject);
           });
         }
         return realFetch(input, init);
       };
-      transcriptCache.delete(a);
+      transcriptController.deleteCached(keyForSessionId(a));
       window.__auditSelectionA = selectSession(a, { forceTranscriptReload: true });
     }, { a: SESSION_ID });
     await desktop.waitForFunction(() => typeof window.__releaseAuditSelection === 'function');

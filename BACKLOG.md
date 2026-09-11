@@ -40,7 +40,8 @@ Checkpoint 33 migrates the sidebar metadata/family/workspace projection.
 Checkpoint 34 migrates sidebar pins, menus, close confirmations and drag ownership.
 Checkpoint 35 migrates sidebar query/scopes, list polling and seen activity.
 Checkpoint 36 migrates message projection, response details and tool grouping.
-Checkpoint 37 migrates streaming frames, live tool panels and mood state. See
+Checkpoint 37 migrates streaming frames, live tool panels and mood state.
+Checkpoint 38 migrates transcript loading, pagination and retained DOM caches. See
 [the checkpoint log](docs/browser-migration-checkpoints.md) for implementation
 verification and the complete browser entrypoint inventory. The last confirmed
 CI checkpoint is recorded below; final CI must pass before the goal is complete.
@@ -51,7 +52,7 @@ CI checkpoint is recorded below; final CI must pass before the goal is complete.
 | --- | --- | --- |
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
-| Browser migration | In progress — current stage | Ninety implementation modules are typed. Transcript/composer orchestration and shell wiring remain in `public/app.js`. |
+| Browser migration | In progress — current stage | Ninety-three implementation modules are typed. Transcript/composer orchestration and shell wiring remain in `public/app.js`. |
 | Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -69,7 +70,7 @@ in `lib/`. Its full module inventory is in [the migration guide](docs/typescript
 Most JavaScript callers of these modules are not yet type checked; `lib/cron.js`
 is an explicitly checked exception.
 
-These ninety browser implementation modules compile strictly into local
+These ninety-three browser implementation modules compile strictly into local
 `public/browser.js`, `public/helpers.js`, `public/artifact-comments.js` and
 `public/theme-prepaint.js` scripts.
 The entries are `index.ts`, `shared-helpers.ts`, `artifact-comments.ts` and
@@ -120,6 +121,7 @@ pure-helper and vendored runtime contracts:
 | `sidebar-query.ts`, `sidebar-lists.ts`, `sidebar-activity.ts` | Query/scopes, list fan-out/indexing/polls and host-qualified seen tracking |
 | `message-data.ts`, `message-render.ts`, `response-details.ts`, `message-groups.ts` | Narrowed message projection, retained response telemetry and deterministic tool groups |
 | `live-tools.ts`, `streaming-render.ts`, `mood.ts` | Live tool lifecycle, coalesced owned frames and mood projection |
+| `transcript.ts`, `transcript-data.ts`, `transcript-cache.ts` | Tail/older/catch-up request ownership, pagination cursors and retained DOM |
 | `rich-text.ts` | Markdown configuration, final highlighting, file links and copy controls |
 | `diagrams.ts` | Diagram rendering/theme generations and lightbox controls |
 | `clipboard.ts` | Native clipboard and insecure-context textarea fallback |

@@ -105,3 +105,7 @@ export { groupToolActivity, updateToolGroupSummary } from './message-groups';
 export { createLiveTools } from './live-tools';
 export { createStreamingRenderer } from './streaming-render';
 export { createMood } from './mood';
+
+export { createTranscript } from './transcript';
+export { createTranscriptCache } from './transcript-cache';
+export { decodeTranscriptPage } from './transcript-data';

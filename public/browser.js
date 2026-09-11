@@ -87,6 +87,8 @@ var PiDishBrowser = (() => {
     createStreamingRenderer: () => createStreamingRenderer,
     createTerminalController: () => createTerminalController,
     createThemes: () => createThemes,
+    createTranscript: () => createTranscript,
+    createTranscriptCache: () => createTranscriptCache,
     createTranscriptTree: () => createTranscriptTree,
     createUsageView: () => createUsageView,
     decodeAnchoredComments: () => decodeAnchoredComments,
@@ -132,6 +134,7 @@ var PiDishBrowser = (() => {
     decodeTerminalOutput: () => decodeTerminalOutput,
     decodeThemeTokens: () => decodeThemeTokens,
     decodeThemes: () => decodeThemes,
+    decodeTranscriptPage: () => decodeTranscriptPage,
     decodeTranscriptTree: () => decodeTranscriptTree,
     decodeUsageLimits: () => decodeUsageLimits,
     decodeUsageSummary: () => decodeUsageSummary,
@@ -4460,17 +4463,17 @@ var PiDishBrowser = (() => {
     for (const node of nodes.values()) {
       const parent = nodes.get(sessionKey(node.session.host, sessionFamilyParentId(node.session)));
       if (!parent || parent === node || (parent.session.cwd || "~") !== (node.session.cwd || "~")) continue;
-      let cursor = parent;
+      let cursor2 = parent;
       const seen = /* @__PURE__ */ new Set();
       let cyclic = false;
-      while (cursor && !seen.has(cursor)) {
-        if (cursor === node) {
+      while (cursor2 && !seen.has(cursor2)) {
+        if (cursor2 === node) {
           cyclic = true;
           break;
         }
-        seen.add(cursor);
-        const next = nodes.get(sessionKey(cursor.session.host, sessionFamilyParentId(cursor.session)));
-        cursor = next && (next.session.cwd || "~") === (cursor.session.cwd || "~") ? next : null;
+        seen.add(cursor2);
+        const next = nodes.get(sessionKey(cursor2.session.host, sessionFamilyParentId(cursor2.session)));
+        cursor2 = next && (next.session.cwd || "~") === (cursor2.session.cwd || "~") ? next : null;
       }
       if (cyclic) continue;
       parent.children.push(node);
@@ -5030,17 +5033,17 @@ var PiDishBrowser = (() => {
       if (!ranges.length) continue;
       ranges.sort((a, b) => a[0] - b[0]);
       const frag = document2.createDocumentFragment();
-      let cursor = 0;
+      let cursor2 = 0;
       for (const [start, end] of ranges) {
-        if (start < cursor) continue;
-        frag.appendChild(document2.createTextNode(text17.slice(cursor, start)));
+        if (start < cursor2) continue;
+        frag.appendChild(document2.createTextNode(text17.slice(cursor2, start)));
         const mark = document2.createElement("mark");
         mark.className = "search-mark";
         mark.textContent = text17.slice(start, end);
         frag.appendChild(mark);
-        cursor = end;
+        cursor2 = end;
       }
-      frag.appendChild(document2.createTextNode(text17.slice(cursor)));
+      frag.appendChild(document2.createTextNode(text17.slice(cursor2)));
       node.replaceWith(frag);
     }
   }
@@ -6737,20 +6740,20 @@ var PiDishBrowser = (() => {
         const x = margin.left + band * i + (band - barW) / 2;
         const label = ((b.days || 1) > 1 ? `Week of ${formatUsageDay(b.day)}` : formatUsageDay(b.day, "long")) + ": " + (metric === "cost" ? formatUsageCost(b.costs?.total, b.costUnavailable?.total) : metric === "tokens" ? `${formatTokens(usageTokensTotal(b.tokens))} tokens` : `${b.calls} calls`);
         const seg = [];
-        let cursor = yFor(0);
+        let cursor2 = yFor(0);
         for (let sI = 0; sI < segs.length; sI++) {
           const hPx = top > 0 ? segs[sI].v / top * plotH : 0;
           if (hPx <= 0) continue;
           const isTop = sI === segs.length - 1;
           const drawH = Math.max(0.75, hPx - (isTop ? 0 : 2));
-          const yTop = cursor - hPx;
+          const yTop = cursor2 - hPx;
           if (isTop) {
             const r = Math.min(3, barW / 2, drawH);
             seg.push(`<path class="seg ${segs[sI].cls}" d="M${x},${(yTop + drawH).toFixed(1)} V${(yTop + r).toFixed(1)} Q${x},${yTop.toFixed(1)} ${x + r},${yTop.toFixed(1)} H${(x + barW - r).toFixed(1)} Q${x + barW},${yTop.toFixed(1)} ${x + barW},${(yTop + r).toFixed(1)} V${(yTop + drawH).toFixed(1)} Z"/>`);
           } else {
             seg.push(`<rect class="seg ${segs[sI].cls}" x="${x}" y="${yTop.toFixed(1)}" width="${barW.toFixed(1)}" height="${drawH.toFixed(1)}"/>`);
           }
-          cursor = yTop;
+          cursor2 = yTop;
         }
         parts.push(`<g class="usage-col${b.day === usageSelectedDay ? " selected" : ""}" data-i="${i}" tabindex="0" role="button" aria-label="${escapeHtml(label)}"><rect class="hit" x="${margin.left + band * i}" y="${margin.top}" width="${band.toFixed(2)}" height="${plotH}"/>${seg.join("")}</g>`);
       }
@@ -14233,14 +14236,14 @@ ${restored}`;
       for (const root of roots) visit(root, sessionRefKey(root.session));
       const byKey = new Map(rows.map((row) => [sessionRefKey(row), row]));
       for (const [member, visibleRoot] of map) {
-        let canonical = visibleRoot, cursor = byKey.get(visibleRoot);
+        let canonical = visibleRoot, cursor2 = byKey.get(visibleRoot);
         const seen = /* @__PURE__ */ new Set([canonical]);
-        while (cursor?.familyParentId) {
-          const parent = sessionKey(cursor.host, cursor.familyParentId);
+        while (cursor2?.familyParentId) {
+          const parent = sessionKey(cursor2.host, cursor2.familyParentId);
           if (seen.has(parent)) break;
           canonical = parent;
           seen.add(canonical);
-          cursor = byKey.get(canonical);
+          cursor2 = byKey.get(canonical);
         }
         map.set(member, canonical);
       }
@@ -15815,6 +15818,281 @@ ${restored}`;
       }
     }
     return { set: setMoodIndicator, fromTool: applyMoodFromTool, fromMessages: updateMoodFromMessages };
+  }
+
+  // src/browser/transcript-cache.ts
+  function createTranscriptCache(document2) {
+    const entries = /* @__PURE__ */ new Map();
+    function prune(skip) {
+      const now = Date.now();
+      for (const [key, entry] of entries) if (key !== skip && now - entry.lastUsed > 15 * 60 * 1e3) entries.delete(key);
+      while (entries.size > 5) {
+        const oldest = [...entries].filter(([key]) => key !== skip).sort((a, b) => a[1].lastUsed - b[1].lastUsed)[0];
+        if (!oldest) break;
+        entries.delete(oldest[0]);
+      }
+    }
+    function stash(key, base, cursors, container) {
+      if (cursors.lastIndex == null || container.querySelector(".loading, .error")) return;
+      const scrollTop = container.scrollTop, mood = document2.getElementById("moodIndicator"), fragment = entries.get(key)?.fragment || document2.createDocumentFragment();
+      fragment.replaceChildren();
+      while (container.firstChild) fragment.appendChild(container.firstChild);
+      const entry = { ...cursors, fragment, base, scrollTop, moodDescription: mood?.dataset.moodDescription || "", moodFace: mood?.dataset.moodFace || "", lastUsed: Date.now() };
+      const indexed = fragment.querySelectorAll("[data-msg-index]");
+      if (indexed.length > 300) {
+        let keep = indexed[indexed.length - 300];
+        while (keep.parentNode && keep.parentNode !== fragment) keep = keep.parentNode;
+        while (fragment.firstChild && fragment.firstChild !== keep) fragment.firstChild.remove();
+        const first = fragment.querySelector("[data-msg-index]"), index = Number.parseInt(first?.dataset.msgIndex || "", 10);
+        if (Number.isFinite(index)) {
+          entry.oldestIndex = index;
+          entry.hasOlder = index > 0;
+        }
+      }
+      entries.set(key, entry);
+      prune(key);
+    }
+    function restore(key, base, container) {
+      const entry = entries.get(key);
+      if (!entry) return null;
+      if (entry.base !== base || Date.now() - entry.lastUsed > 15 * 60 * 1e3) {
+        entries.delete(key);
+        return null;
+      }
+      if (!entry.fragment.childNodes.length) return null;
+      container.replaceChildren(entry.fragment);
+      container.scrollTop = entry.scrollTop;
+      entry.lastUsed = Date.now();
+      prune(key);
+      return entry;
+    }
+    return { stash, restore, prune, delete: (key) => entries.delete(key), roots: () => [...entries.values()].map((entry) => entry.fragment), clear: () => entries.clear(), get size() {
+      return entries.size;
+    } };
+  }
+
+  // src/browser/transcript-data.ts
+  var cursor = (value) => finite2(value) && Number.isInteger(value) && value >= 0 ? value : null;
+  function decodeTranscriptPage(value) {
+    if (!record8(value) || !Array.isArray(value.messages)) throw new Error("Invalid transcript page");
+    const session = record8(value.session) ? { ...value.session } : {};
+    delete session.id;
+    delete session.host;
+    return { messages: value.messages.map(decodeRenderMessage), session, firstIndex: cursor(value.firstIndex), lastIndex: cursor(value.lastIndex), hasMore: value.hasMore === true, totalMessages: cursor(value.totalMessages) };
+  }
+
+  // src/browser/transcript.ts
+  function createTranscript(options2) {
+    const { document: document2, sessionState } = options2, container = document2.getElementById("messages");
+    const cache = createTranscriptCache(document2), requests = /* @__PURE__ */ new Set();
+    let disposed = false, generation = 0, catchupSequence = 0, older = null, barEvents = new AbortController();
+    let cursors = { oldestIndex: null, lastIndex: null, hasOlder: false, total: 0 };
+    let loaded = null;
+    function capture(selection = sessionState.captureSelection()) {
+      if (disposed || !selection || !sessionState.ownsSelection(selection)) return null;
+      const endpoint = options2.host(selection.host);
+      return endpoint ? { selection, endpoint: Object.freeze({ ...endpoint }), generation } : null;
+    }
+    const owns = (owner) => !disposed && owner.generation === generation && sessionState.ownsSelection(owner.selection) && options2.host(owner.selection.host)?.base === owner.endpoint.base;
+    function retire() {
+      generation++;
+      catchupSequence++;
+      older = null;
+      barEvents.abort();
+      for (const request of requests) request.abort();
+      requests.clear();
+    }
+    function reset() {
+      retire();
+      loaded = null;
+      cursors = { oldestIndex: null, lastIndex: null, hasOlder: false, total: 0 };
+    }
+    async function page(owner, suffix) {
+      const endpoint = options2.host(owner.selection.host);
+      if (!owns(owner) || !endpoint) throw new Error("Transcript ownership changed");
+      const controller = new AbortController();
+      requests.add(controller);
+      try {
+        const response = await options2.request({ ...owner.endpoint, token: endpoint.token }, `/api/sessions/${encodeURIComponent(owner.selection.id)}/messages?${suffix}`, { signal: controller.signal });
+        const value = await response.json();
+        if (!response.ok) throw new Error(record8(value) && typeof value.error === "string" ? value.error : `Transcript request failed (${response.status})`);
+        return decodeTranscriptPage(value);
+      } finally {
+        requests.delete(controller);
+      }
+    }
+    function barHtml() {
+      return cursors.hasOlder ? `<div class="load-older-bar" id="loadOlderBar"><button class="load-older-btn">Load older messages (${cursors.oldestIndex ?? 0} earlier)</button></div>` : "";
+    }
+    function bindBar() {
+      barEvents.abort();
+      barEvents = new AbortController();
+      const owner = capture(), button = container.querySelector(".load-older-btn");
+      if (owner && button) button.addEventListener("click", () => {
+        if (owns(owner) && button.isConnected && container.contains(button)) void loadOlder();
+      }, { signal: barEvents.signal });
+    }
+    function stash() {
+      const selected = sessionState.currentSession;
+      if (disposed || !selected || !loaded || loaded.key !== sessionRefKey(selected)) return;
+      cache.stash(loaded.key, loaded.base, cursors, container);
+    }
+    function restore(id) {
+      const owner = capture();
+      if (!owner || owner.selection.id !== id) return false;
+      const key = sessionRefKey(owner.selection), entry = cache.restore(key, owner.endpoint.base, container);
+      if (!entry) return false;
+      cursors = { oldestIndex: entry.oldestIndex, lastIndex: entry.lastIndex, hasOlder: entry.hasOlder, total: entry.total };
+      loaded = { key, base: owner.endpoint.base };
+      options2.mood(entry.moodDescription, entry.moodFace);
+      options2.jump(container);
+      bindBar();
+      return true;
+    }
+    function render(messages) {
+      if (disposed) return;
+      options2.updateMood(messages);
+      if (!messages.length) {
+        container.innerHTML = '<div class="empty-state" style="padding: 48px;"><p style="color: var(--text-muted);">No messages yet</p></div>';
+        barEvents.abort();
+        return;
+      }
+      container.innerHTML = barHtml() + messages.map(options2.renderMessage).join("");
+      bindBar();
+      options2.finalize(container);
+      options2.scroll(container);
+    }
+    async function load(selection = sessionState.captureSelection()) {
+      if (!capture(selection)) return;
+      retire();
+      const owner = capture(selection);
+      if (!owner) return;
+      options2.cancelStreaming();
+      options2.closeSearch();
+      if (restore(owner.selection.id)) {
+        await catchup(selection);
+        return;
+      }
+      loaded = null;
+      container.innerHTML = '<div class="loading">Loading...</div>';
+      cursors = { oldestIndex: null, lastIndex: null, hasOlder: false, total: 0 };
+      options2.mood("", "");
+      try {
+        const data = await page(owner, "limit=50");
+        if (!owns(owner)) return;
+        sessionState.mergeCurrentSession(owner.selection, data.session);
+        loaded = { key: sessionRefKey(owner.selection), base: owner.endpoint.base };
+        cursors = { oldestIndex: data.firstIndex, lastIndex: data.lastIndex, hasOlder: data.hasMore, total: data.totalMessages || 0 };
+        render(data.messages);
+      } catch (error) {
+        if (owns(owner)) container.innerHTML = `<div class="error">Failed to load messages: ${escapeHtml(error instanceof Error ? error.message : String(error))}</div>`;
+      }
+    }
+    async function loadOlder() {
+      if (older || !cursors.hasOlder || cursors.oldestIndex == null) return;
+      const owner = capture();
+      if (!owner) return;
+      const operation = /* @__PURE__ */ Symbol("older"), before = cursors.oldestIndex;
+      older = operation;
+      const bar = container.querySelector("#loadOlderBar"), button = bar?.querySelector(".load-older-btn");
+      if (button) button.textContent = "Loading...";
+      const anchor = container.querySelector(":scope > .message, :scope > details.tool-group"), offset = anchor?.getBoundingClientRect().top || 0;
+      try {
+        const data = await page(owner, "limit=50&before=" + before);
+        if (!owns(owner) || older !== operation) return;
+        if (data.messages.length) {
+          const html = data.messages.map(options2.renderMessage).join("");
+          container.querySelector("#loadOlderBar")?.remove();
+          cursors.oldestIndex = data.firstIndex ?? cursors.oldestIndex;
+          cursors.hasOlder = data.hasMore;
+          container.insertAdjacentHTML("afterbegin", barHtml() + html);
+          bindBar();
+          options2.finalize(container, { stripLive: false });
+          if (!document2.getElementById("moodIndicator")) options2.updateMood(data.messages);
+          if (anchor?.isConnected && container.contains(anchor)) container.scrollTop += anchor.getBoundingClientRect().top - offset;
+        } else {
+          cursors.hasOlder = false;
+          container.querySelector("#loadOlderBar")?.remove();
+          barEvents.abort();
+        }
+      } catch (error) {
+        if (owns(owner) && older === operation && button?.isConnected) button.textContent = `Failed: ${error instanceof Error ? error.message : String(error)} \u2014 retry`;
+      } finally {
+        if (older === operation) older = null;
+      }
+    }
+    async function catchup(selection = sessionState.captureSelection()) {
+      const owner = capture(selection);
+      if (!owner) return;
+      if (cursors.lastIndex == null) return load(selection);
+      const sequence = ++catchupSequence, after = cursors.lastIndex;
+      try {
+        const data = await page(owner, "after=" + after);
+        if (!owns(owner) || sequence !== catchupSequence) return;
+        sessionState.mergeCurrentSession(owner.selection, data.session);
+        if (data.totalMessages != null) cursors.total = data.totalMessages;
+        if (!data.messages.length) return;
+        const existing = new Set(Array.from(container.querySelectorAll("[data-msg-index]")).map((el) => Number.parseInt(el.dataset.msgIndex || "", 10)));
+        const fresh = data.messages.filter((message3) => message3.index == null || !existing.has(message3.index));
+        for (const message3 of fresh) if (message3.role === "user") options2.consumeEcho(owner.selection.id, message3.content);
+        options2.updateMood(fresh);
+        if (!fresh.length) {
+          if (data.lastIndex != null) cursors.lastIndex = Math.max(cursors.lastIndex ?? 0, data.lastIndex);
+          return;
+        }
+        const pinned = options2.pinned(container), assistant = fresh.some((message3) => message3.role === "assistant");
+        container.querySelectorAll(".message:not([data-msg-index])").forEach((el) => {
+          if (el.classList.contains("assistant") && !assistant) return;
+          el.remove();
+        });
+        container.insertAdjacentHTML("beforeend", fresh.map(options2.renderMessage).join(""));
+        if (data.lastIndex != null) cursors.lastIndex = Math.max(cursors.lastIndex ?? 0, data.lastIndex);
+        options2.finalize(container);
+        if (pinned) options2.scroll(container);
+        else options2.jump(container);
+      } catch (error) {
+        if (owns(owner) && sequence === catchupSequence) console.error("fetchNewMessagesSince failed:", error);
+      }
+    }
+    return {
+      load,
+      loadOlder,
+      catchup,
+      render,
+      stash,
+      restore,
+      reset,
+      retire,
+      barHtml,
+      maybeOlder(root) {
+        if (root && root.scrollTop <= 200) void loadOlder();
+      },
+      deleteCached: (key) => cache.delete(key),
+      retainedRoots: cache.roots,
+      pruneCache: cache.prune,
+      get oldestIndex() {
+        return cursors.oldestIndex;
+      },
+      get lastIndex() {
+        return cursors.lastIndex;
+      },
+      get hasOlder() {
+        return cursors.hasOlder;
+      },
+      get total() {
+        return cursors.total;
+      },
+      get loadingOlder() {
+        return !!older;
+      },
+      dispose() {
+        if (disposed) return;
+        retire();
+        disposed = true;
+        cache.clear();
+        loaded = null;
+      }
+    };
   }
   return __toCommonJS(index_exports);
 })();
