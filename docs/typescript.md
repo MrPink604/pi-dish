@@ -443,3 +443,8 @@ endpoint before debounce; completion acceptance emits input for draft persistenc
 Sidebar HTML projection lives in `sidebar-render.ts`. One render receives narrowed
 row metadata, host state and read-only preference snapshots; family grouping,
 server-search authority, automation notes and host-qualified collapse stay intact.
+
+Sidebar row interactions live in `sidebar-controls.ts`: preferences, host-qualified
+family pins, close confirmation and request state, clipboard menus and pointer
+listeners. The session state exposes a read-only selection generation for actions
+started with no selected session. Replaced menus and disposed controls stay inert.

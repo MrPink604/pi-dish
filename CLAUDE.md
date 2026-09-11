@@ -2188,3 +2188,7 @@ existing exact host-id grammar and owning-host prefix disambiguation.
 `src/browser/sidebar-render.ts` renders the sidebar from a single typed metadata
 projection. It owns no requests, persistent preferences or DOM listeners. Keep
 server-filtered content matches authoritative and collapse keys host-qualified.
+
+Sidebar row preferences and actions live in `src/browser/sidebar-controls.ts`.
+Use its preference writers and migration method. Close confirmation captures an
+endpoint; clipboard feedback and drag listeners retire with their owning control.

@@ -774,3 +774,23 @@ independent host collapse/families and server-search/scoping authority. The late
 sidebar-control draft also passed 225 browser tests on the corrected autocomplete
 baseline. Actual runtime and test files match the verified projection draft.
 Latest confirmed CI: `fc174c6`, all four Node jobs and the browser job passed.
+
+## Checkpoint 34 — sidebar controls
+
+Moved family pin/expansion and collapse preferences, host-key migration, row close
+confirmation, context menus, delegated row actions and pointer reordering into a
+strict controller. Close confirmation retains the target endpoint; changed bases
+require a fresh confirmation and same-base dispatch refreshes credentials.
+Clipboard completion cannot relabel or close a replacement menu. Only the owning
+pointer completes a drag; disposal retires timers/listeners and pending effects.
+
+A read-only selection generation covers actions begun with no selected session.
+Such a close still refreshes lists after later navigation without stale feedback.
+The previous projection’s unused canonical-family wrapper is removed, and its
+CI checkpoint description/count is corrected to the verified draft/image result.
+
+Verification: strict checks, 932 backend tests, 225 browser tests, all independent
+UI scenarios and full desktop/mobile smoke passed. Seven new ownership cases and
+strict contracts cover menus, endpoint changes, empty/peer selection, family
+preferences, pointer identity and disposal. Actual runtime/tests match the verified
+draft byte for byte. Fable review remains required before push.

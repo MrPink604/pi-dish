@@ -125,6 +125,7 @@ export function createSessionState(options: SessionStateOptions) {
   return {
     get sessions() { return sessions; },
     get currentSession() { return currentSession; },
+    get selectionGeneration() { return generation; },
     findSession, sessionHostId, setSessionLists, setCurrentSession,
     patchSession, mergeCurrentSession, advanceSelection,
     captureSelection, ownsSelection,

@@ -123,12 +123,7 @@ function migrateClientKeys() {
     }
     seenActivity = seenNext;
     localStorage.setItem('pi-dish-seen', JSON.stringify(seenActivity));
-    pinnedSessions = pinnedSessions.map(pin => (isBare(pin) ? compose(pin) : pin));
-    savePinnedSessions();
-    const families = [...expandedSessionFamilies].map(id => (isBare(id) ? compose(id) : id));
-    expandedSessionFamilies.clear();
-    for (const id of families) expandedSessionFamilies.add(id);
-    localStorage.setItem('pi-dish-expanded-session-families', JSON.stringify(families));
+    sidebarControls.migrate(hostDirectory.self.hostId);
     const selected = localStorage.getItem('pi-dish-session');
     if (selected && isBare(selected)) localStorage.setItem('pi-dish-session', compose(selected));
     localStorage.setItem(KEYS_MIGRATED_KEY, hostDirectory.self.hostId);
@@ -488,65 +483,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // resets to unfiltered mid-search.
   setInterval(refreshSessions, 10000);
 
-  // Session items render without inline handlers; one delegated listener
-  // selects and (on mobile) closes the drawer.
-  document.getElementById('sessionList').addEventListener('click', (e) => {
-    const familyToggle = e.target.closest('.session-family-toggle');
-    if (familyToggle) {
-      const item = familyToggle.closest('.session-item');
-      toggleSessionFamilyExpanded(familyToggle.dataset.familyId, item.dataset.host || null);
-      return;
-    }
-    const pinBtn = e.target.closest('.session-pin-btn');
-    if (pinBtn) {
-      const item = pinBtn.closest('.session-item');
-      const family = item.closest('.session-family-root');
-      const memberIds = family
-        ? [...family.querySelectorAll('.session-item[data-id]')].map(row => row.dataset.id)
-        : [item.dataset.id];
-      toggleSessionPinned(item.dataset.id, family?.dataset.familyId || item.dataset.id, memberIds, item.dataset.host || null);
-      return;
-    }
-    // Row-level close: two-tap confirm — never a row select.
-    const closeBtn = e.target.closest('.session-close-btn');
-    if (closeBtn) {
-      e.stopPropagation();
-      const item = closeBtn.closest('.session-item');
-      handleRowCloseClick(item.dataset.id, item.dataset.host || null);
-      return;
-    }
-    // A finished drag still emits a click on the handle — never treat it as a select.
-    if (e.target.closest('.session-drag-handle')) return;
-    // The header's + spawns a session at the node's path — not a collapse toggle.
-    const newBtn = e.target.closest('.workspace-new-btn');
-    // The workspace's own host spawns it — never the picker's current choice.
-    if (newBtn) { createSession(newBtn.dataset.path, newBtn.dataset.host || null); return; }
-    // Host sections share the collapse store (keys namespaced `host:` the way
-    // Recent buckets are `date:`), just not the workspace header's chrome.
-    const hostHeader = e.target.closest('.host-section-header');
-    if (hostHeader) { toggleGroupCollapsed(hostHeader.dataset.hostSection); return; }
-    const header = e.target.closest('.workspace-group-header');
-    if (header) { if (header.dataset.cwd) toggleGroupCollapsed(header.dataset.cwd); return; }
-    const item = e.target.closest('.session-item');
-    if (!item) return;
-    if (item.classList.contains('starting')) showPendingSessionView(item.dataset.spawnId);
-    else selectSession(item.dataset.id, { host: item.dataset.host || null });
-    if (window.innerWidth <= 768) closeSidebar();
-  });
-
-  // Right-click (and Android's long-press, which dispatches the same event)
-  // on a row opens the copy-a-ref menu. Provisional spawn rows have no
-  // session behind them yet, so they keep the browser's own menu.
-  document.getElementById('sessionList').addEventListener('contextmenu', (e) => {
-    const item = e.target.closest('.session-item[data-id]');
-    if (!item) return;
-    const session = sessionState.findSession(item.dataset.id, item.dataset.host || null);
-    if (!session) return;
-    e.preventDefault();
-    openSessionMenu(session, e.clientX, e.clientY);
-  });
-
-  initPinnedDrag();
+  sidebarControls.mount();
 
   document.getElementById('scopeChips').addEventListener('click', (e) => {
     if (e.target.closest('.scope-add')) { saveCurrentFilterAsScope(); return; }
@@ -917,330 +854,40 @@ function refreshSessions() {
   return loadSessions(filterQuery || undefined);
 }
 
-// Row-level close (live rows): a quiet ✕ with a two-tap inline confirm —
-// first tap arms a danger-styled "close?" state that auto-reverts after ~3s,
-// second tap fires POST /close. State lives in module vars (not the DOM) so
-// the 10s poll's re-render restores an armed confirm instead of clearing it.
-let sessionCloseConfirmId = null; // host+session key awaiting its second confirm tap
-let sessionCloseConfirmTimer = null;
-let sessionCloseBusyId = null;    // host+session key whose close POST is in flight
-
-function handleRowCloseClick(id, host = sessionState.sessionHostId(id)) {
-  const key = sessionKey(host, id);
-  if (sessionCloseBusyId) return; // one close at a time
-  if (sessionCloseConfirmId === key) { performRowClose(id, host); return; }
-  clearTimeout(sessionCloseConfirmTimer);
-  sessionCloseConfirmId = key;
-  sessionCloseConfirmTimer = setTimeout(() => {
-    sessionCloseConfirmId = null;
-    renderSessions();
-  }, 3000);
-  renderSessions();
-}
-
-async function performRowClose(id, host = sessionState.sessionHostId(id)) {
-  const owner = sessionState.captureSelection();
-  clearTimeout(sessionCloseConfirmTimer);
-  sessionCloseConfirmId = null;
-  sessionCloseBusyId = sessionKey(host, id);
-  renderSessions();
-  try {
-    await apiSend(host, `/api/sessions/${encodeURIComponent(id)}/close`);
-    sessionCloseBusyId = null;
-    await finishSessionClose(id, host, owner);
-  } catch (e) {
-    sessionCloseBusyId = null;
-    setStatus('Close failed: ' + e.message, 'error');
-    renderSessions();
-  }
-}
-
+// Sidebar row controls own preferences, family pins, confirmation, drag and menus.
+const sidebarControls = PiDishBrowser.createSidebarControls({
+  document, storage: localStorage, sessionState, request: (host, path, options) => apiFetch(host, path, options),
+  host: hostEntryFor, render: () => renderSessions(), closeSidebar: () => closeSidebar(),
+  select: (id, host) => selectSession(id, { host }), pending: id => showPendingSessionView(id), create: (cwd, host) => createSession(cwd, host),
+  finishClose: (id, host, owner) => finishSessionClose(id, host, owner), refresh: () => loadSessions(undefined, { withPrevious: true }),
+  ref: session => sessionRefFor(session), copy: text => copyTextToClipboard(text), status: (message, type) => setStatus(message, type),
+});
 function harnessBadgeInnerHtml(info) { return PiDishBrowser.harnessBadgeInnerHtml(info); }
-function renderHarnessBadge(harnessId, harnessLabel) { return PiDishBrowser.renderHarnessBadge(harnessId, harnessLabel); }
-
-// Collapsed workspace groups (by cwd) — collapsed groups hide their sessions
-// and sink to the bottom of the list. Persisted across reloads.
-const collapsedGroups = new Set(readJSONPref('pi-dish-collapsed-groups', []));
-
-function toggleGroupCollapsed(cwd) {
-  if (collapsedGroups.has(cwd)) collapsedGroups.delete(cwd);
-  else collapsedGroups.add(cwd);
-  localStorage.setItem('pi-dish-collapsed-groups', JSON.stringify([...collapsedGroups]));
-  renderSessions();
-}
-
-/**
- * Composite client key for a host-local wire id. Unknown ids resolve to
- * this host, which
- * is what a not-yet-listed or just-spawned session is.
- */
-function keyForSessionId(id) {
-  return sessionKey(sessionState.sessionHostId(id), id);
-}
-
-/**
- * Fold a session key onto its family root's key. Pins are stored per family
- * root. Both sides of the render-time map include the owning host.
- */
-function canonicalFamilyKey(key) {
-  return sidebarFamilyRootMap.get(key) || key;
-}
-
-// Session families default collapsed to keep subagents quiet. Store only the
-// explicit expansions so newly discovered families also start collapsed.
-const expandedSessionFamilies = new Set(readJSONPref('pi-dish-expanded-session-families', []));
-
-function toggleSessionFamilyExpanded(id, host = sessionState.sessionHostId(id)) {
-  const key = sessionKey(host, id);
-  if (expandedSessionFamilies.has(key)) expandedSessionFamilies.delete(key);
-  else expandedSessionFamilies.add(key);
-  localStorage.setItem('pi-dish-expanded-session-families', JSON.stringify([...expandedSessionFamilies]));
-  renderSessions();
-}
-
-function currentFamilyRootMap() {
-  const list = [...sessionState.sessions.active, ...sessionState.sessions.previous];
-  const roots = buildSessionFamilies(list);
-  const map = new Map();
-  const visit = (node, rootKey) => {
-    map.set(sessionRefKey(node.session), rootKey);
-    for (const child of node.children) visit(child, rootKey);
-  };
-  for (const root of roots) visit(root, sessionRefKey(root.session));
-
-  // Filtered/Active views can omit an ancestor. Follow the server-confirmed
-  // same-cwd family hint beyond the visible fragment so pins retain one stable
-  // family identity and collect every visible sibling fragment.
-  const byKey = new Map(list.map(session => [sessionRefKey(session), session]));
-  for (const [memberKey, visibleRootKey] of map) {
-    let canonical = visibleRootKey;
-    let cursor = byKey.get(visibleRootKey);
-    const seen = new Set([canonical]);
-    while (cursor?.familyParentId) {
-      const parentKey = sessionKey(cursor.host, cursor.familyParentId);
-      if (seen.has(parentKey)) break;
-      canonical = parentKey;
-      seen.add(canonical);
-      cursor = byKey.get(canonical);
-    }
-    map.set(memberKey, canonical);
-  }
-  return map;
-}
-
-function revealSessionInFamily(id, host = sessionState.sessionHostId(id)) {
-  const key = sessionKey(host, id);
-  const roots = buildSessionFamilies([...sessionState.sessions.active, ...sessionState.sessions.previous]);
-  let ancestors = null;
-  const find = (node, path) => {
-    if (sessionRefKey(node.session) === key) { ancestors = path; return true; }
-    return node.children.some(child => find(child, [...path, node]));
-  };
-  roots.some(root => find(root, []));
-  let changed = false;
-  for (const ancestor of ancestors || []) {
-    if (!expandedSessionFamilies.has(sessionRefKey(ancestor.session))) {
-      expandedSessionFamilies.add(sessionRefKey(ancestor.session));
-      changed = true;
-    }
-  }
-  if (changed) {
-    localStorage.setItem('pi-dish-expanded-session-families', JSON.stringify([...expandedSessionFamilies]));
-  }
-}
-
-// Pinned sessions live in a section at the top of the sidebar; one stored root
-// id represents the whole same-workspace family, which drags as a block.
-let pinnedSessions = readJSONPref('pi-dish-pinned-sessions', []);
-let sidebarFamilyRootMap = new Map(); // refreshed once per sidebar render
-// Set while a pinned row is being dragged — renderSessions must not rebuild
-// the list out from under the drag (the 10s poll would otherwise do so).
-let pinnedDragActive = false;
-
-function savePinnedSessions() {
-  localStorage.setItem('pi-dish-pinned-sessions', JSON.stringify(pinnedSessions));
-}
-
-function toggleSessionPinned(id, displayedRootId = id, renderedMemberIds = [id], host = sessionState.sessionHostId(id)) {
-  const roots = currentFamilyRootMap();
-  const key = sessionKey(host, id);
-  const canonicalRoot = roots.get(key) || key;
-  const aliases = new Set(renderedMemberIds.map(memberId => sessionKey(host, memberId)));
-  aliases.add(sessionKey(host, displayedRootId));
-  // Include collapsed descendants and legacy child pins from the complete
-  // lists, but keep other hosts and cross-cwd relationships independent.
-  for (const [memberKey, rootKey] of roots) {
-    if (rootKey === canonicalRoot) aliases.add(memberKey);
-  }
-  // If Active/search omits the parent, an existing parent pin should still
-  // toggle off from its visible child fragment.
-  const visibleKeys = new Set([...document.querySelectorAll('#sessionList .session-item[data-id]')]
-    .map(row => sessionKey(row.dataset.host, row.dataset.id)));
-  for (const memberKey of aliases) {
-    const { hostId, sessionId } = parseSessionKey(memberKey);
-    const parentId = sessionState.findSession(sessionId, hostId)?.familyParentId;
-    const parentKey = sessionKey(hostId, parentId);
-    if (parentId && !visibleKeys.has(parentKey)) aliases.add(parentKey);
-  }
-  const wasPinned = pinnedSessions.some(pin => aliases.has(pin));
-  pinnedSessions = pinnedSessions.filter(pin => !aliases.has(pin));
-  if (!wasPinned) pinnedSessions.push(canonicalRoot);
-  savePinnedSessions();
-  renderSessions();
-}
-
-/**
- * Drag-to-reorder for the pinned section. Pointer events (not HTML5 DnD) so
- * it works on touch too; the handle has touch-action:none, so grabbing it
- * doesn't fight the list's scroll. The dragged row is moved live in the DOM;
- * the drop reads the resulting order back into pinnedSessions.
- */
-function initPinnedDrag() {
-  document.getElementById('sessionList').addEventListener('pointerdown', (e) => {
-    const handle = e.target.closest('.session-drag-handle');
-    if (!handle) return;
-    const family = handle.closest('.session-family-root');
-    const segment = family?.parentElement;
-    if (!family || !segment?.classList.contains('pinned-segment')) return;
-    e.preventDefault();
-    pinnedDragActive = true;
-    family.classList.add('dragging');
-
-    // Listeners go on document, not the handle: reordering detaches and
-    // reinserts the row, which silently releases pointer capture on it.
-    const onMove = (ev) => {
-      const siblings = [...segment.children].filter(el =>
-        el.classList.contains('session-family-root') && !el.classList.contains('dragging'));
-      const next = siblings.find(sib => {
-        const r = sib.getBoundingClientRect();
-        return ev.clientY < r.top + r.height / 2;
-      });
-      if (next) segment.insertBefore(family, next);
-      else segment.appendChild(family);
-    };
-    const onUp = () => {
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-      document.removeEventListener('pointercancel', onUp);
-      family.classList.remove('dragging');
-      pinnedDragActive = false;
-      pinnedSessions = [...segment.children]
-        .filter(el => el.classList.contains('session-family-root'))
-        .map(el => el.dataset.familyKey);
-      savePinnedSessions();
-      renderSessions();
-    };
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-    document.addEventListener('pointercancel', onUp);
-  });
-}
-
-// =========================================================================
-// Session row context menu — the copy-a-ref affordance.
-//
-// A ref is the short handle a session is pasted into another agent's prompt
-// as (helpers.js `sessionRef`). Right-click is the whole gesture: Android
-// long-press dispatches `contextmenu` too, so phones get this for free and
-// there is deliberately no separate long-press machinery to keep in sync.
-//
-// One element, created on first use and reused. It is torn down by anything
-// that could move the row out from under it — outside click, Escape, a scroll
-// in any container, a resize, and a session-list re-render.
-// =========================================================================
-let sessionMenuEl = null;
-let sessionMenuTimer = null;
-
-/** The ref for a session, resolved against the host that actually owns it and
- *  widened past every same-host sibling that shares its prefix — a copied ref
- *  that names three sessions is one the owning server refuses. */
-function sessionRefFor(session) {
-  if (!session || !session.id) return '';
-  return sessionRef(session, hostEntryFor(session.host || null), refPrefixFor(session));
-}
-
-function isSessionMenuOpen() {
-  return !!sessionMenuEl && sessionMenuEl.style.display !== 'none';
-}
-
-function closeSessionMenu() {
-  clearTimeout(sessionMenuTimer);
-  if (sessionMenuEl) sessionMenuEl.style.display = 'none';
-}
-
-function ensureSessionMenu() {
-  if (sessionMenuEl) return sessionMenuEl;
-  const el = document.createElement('div');
-  el.id = 'sessionMenu';
-  el.className = 'context-menu';
-  el.style.display = 'none';
-  document.body.appendChild(el);
-  el.addEventListener('click', (e) => {
-    const item = e.target.closest('.context-menu-item');
-    if (item) copyFromSessionMenu(item);
-  });
-  // Scroll doesn't bubble, so the capture phase is the only way to hear a
-  // scroll in whichever container the row happens to live in.
-  document.addEventListener('scroll', () => { if (isSessionMenuOpen()) closeSessionMenu(); }, true);
-  window.addEventListener('resize', () => { if (isSessionMenuOpen()) closeSessionMenu(); });
-  sessionMenuEl = el;
-  return el;
-}
-
-function openSessionMenu(session, x, y) {
-  const el = ensureSessionMenu();
-  const ref = sessionRefFor(session);
-  // The ref is short enough to read, so it doubles as the row's own preview;
-  // the full id is not, and stays behind its label.
-  el.innerHTML = [
-    ['Copy session ref', ref, ref],
-    ['Copy session id', session.id, ''],
-  ].map(([label, value, preview]) => `
-    <button type="button" class="context-menu-item" data-copy="${escapeHtml(value)}">
-      <span class="context-menu-label">${escapeHtml(label)}</span>
-      ${preview ? `<span class="context-menu-value">${escapeHtml(preview)}</span>` : ''}
-    </button>`).join('');
-  el.style.display = 'block';
-  // Measure at the origin, then clamp — a menu opened near the right or
-  // bottom edge must stay whole rather than extend the page.
-  el.style.left = '0px';
-  el.style.top = '0px';
-  const { offsetWidth: w, offsetHeight: h } = el;
-  el.style.left = `${Math.max(8, Math.min(x, window.innerWidth - w - 8))}px`;
-  el.style.top = `${Math.max(8, Math.min(y, window.innerHeight - h - 8))}px`;
-  // The detached-target rule matters here too: copying re-renders the menu's
-  // innards, and the click that did it must not read as "outside".
-  armOutsideClickClose(['sessionMenu'], closeSessionMenu, isSessionMenuOpen);
-}
-
-/** Copy an item's value, confirm quietly in place, then dismiss. */
-function copyFromSessionMenu(item) {
-  const label = item.querySelector('.context-menu-label');
-  copyTextToClipboard(item.dataset.copy || '').then(
-    () => {
-      if (label) label.textContent = 'Copied';
-      item.classList.add('copied');
-      clearTimeout(sessionMenuTimer);
-      sessionMenuTimer = setTimeout(closeSessionMenu, 700);
-    },
-    () => {
-      closeSessionMenu();
-      setStatus('Copy failed (clipboard blocked)', 'error');
-    },
-  );
-}
+function renderHarnessBadge(id, label) { return PiDishBrowser.renderHarnessBadge(id, label); }
+function keyForSessionId(id) { return sessionKey(sessionState.sessionHostId(id), id); }
+function toggleGroupCollapsed(key) { sidebarControls.toggleGroup(key); }
+function toggleSessionFamilyExpanded(id, host) { sidebarControls.toggleFamily(id, host); }
+function currentFamilyRootMap() { return sidebarControls.familyRoots(); }
+function revealSessionInFamily(id, host) { sidebarControls.reveal(id, host); }
+function toggleSessionPinned(id, root, members, host) { sidebarControls.togglePin(id, root, members, host); }
+function handleRowCloseClick(id, host) { sidebarControls.closeClick(id, host); }
+function performRowClose(id, host) { return sidebarControls.performClose(id, host); }
+function sessionRefFor(session) { return session?.id ? sessionRef(session, hostEntryFor(session.host || null), refPrefixFor(session)) : ''; }
+function isSessionMenuOpen() { return sidebarControls.menuOpen; }
+function closeSessionMenu() { sidebarControls.closeMenu(); }
+function openSessionMenu(session, x, y) { sidebarControls.openMenu(session, x, y); }
 
 // Render one metadata snapshot through the typed sidebar projection.
 let lastSessionListHtml = '';
 function renderSessions() {
-  if (pinnedDragActive) return;
-  sidebarFamilyRootMap = currentFamilyRootMap();
+  if (sidebarControls.dragging) return;
+  const sidebarFamilyRootMap = currentFamilyRootMap();
   const { html, count } = PiDishBrowser.renderSidebar({
     ...sessionState.sessions, selected: sessionState.currentSession,
     tab: sidebarTab, view: sidebarView, query: filterQuery, queriedFor: listsQueriedFor, scope: scopeQuery(), indexing: sessionIndexing,
     contextMetric: displayPreferences.contextMetric, pending: [...pendingSessionSpawns.entries()], selectedSpawn: currentSessionSpawnId,
-    expanded: expandedSessionFamilies, collapsed: collapsedGroups, pinned: pinnedSessions, roots: sidebarFamilyRootMap,
-    closeConfirm: sessionCloseConfirmId, closeBusy: sessionCloseBusyId, multiHost: isMultiHost(),
+    expanded: sidebarControls.expanded, collapsed: sidebarControls.collapsed, pinned: sidebarControls.pinned, roots: sidebarFamilyRootMap,
+    closeConfirm: sidebarControls.closeConfirm, closeBusy: sidebarControls.closeBusy, multiHost: isMultiHost(),
     unread: isUnread, hostChip: hostChipHtml,
     hosts: effectiveHosts().map(host => {
       const cache = hostSessionLoader.getCache(host);

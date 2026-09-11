@@ -3382,9 +3382,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       localStorage.setItem('pi-dish-session', id);
       localStorage.removeItem('pi-dish-keys-migrated');
       seenActivity = readJSONPref('pi-dish-seen', {});
-      pinnedSessions = readJSONPref('pi-dish-pinned-sessions', []);
-      expandedSessionFamilies.clear();
-      expandedSessionFamilies.add(id);
+      sidebarControls.reloadPreferences();
       migrateClientKeys();
       const key = sessionKey(hostId, id);
       const bareLeft = Object.keys(localStorage).filter((k) =>
@@ -3816,7 +3814,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(closeResponse.request().method() === 'POST' &&
       await multi.evaluate(host => sessionState.currentSession.host === host, selfId),
       'closing the remote row sends to the peer and preserves the self-host selection');
-    await multi.waitForFunction(() => sessionCloseBusyId === null);
+    await multi.waitForFunction(() => sidebarControls.closeBusy === null);
     await multi.unroute(closeEndpoint);
     await multi.evaluate(({ id, host }) => selectSession(id, { host }), { id: REMOTE_SESSION_ID, host: remoteId });
     for (const file of collisionFiles) fs.unlinkSync(file);
