@@ -13,7 +13,8 @@ controllers/rendering, the server application and feature stores remain JavaScri
 Browser session state lives in `src/browser/session-state.ts`; use its writers
 and selection guards from `app.js` via `PiDishBrowser.createSessionState`. Continue
 with vanilla TypeScript modules in `src/browser/`; regenerate and commit
-`public/browser.js`, `public/helpers.js` and `public/artifact-comments.js` with
+`public/browser.js`, `public/helpers.js`, `public/artifact-comments.js` and
+`public/theme-prepaint.js` with
 `npm run build:browser`. Shared helper source lives in `src/browser/helper-*.ts`;
 keep the generated helper CommonJS/browser exports stable. Its drift/type checks are included in `npm run check`.
 

@@ -8507,23 +8507,6 @@ async function confirmBranch() {
 // =========================================================================
 
 let appConfig = { terminal: false };
-let terminalAssetsPromise = null;
-
-// The vendor asset loader lives with the diagrams (see loadVendorAsset).
-
-function loadTerminalAssets() {
-  if (terminalAssetsPromise) return terminalAssetsPromise;
-  terminalAssetsPromise = (async () => {
-    const css = loadVendorAsset('link', { rel: 'stylesheet', href: 'vendor/xterm.css' });
-    await Promise.all([
-      css,
-      loadVendorAsset('script', { src: 'vendor/xterm.js' }),
-    ]);
-    await loadVendorAsset('script', { src: 'vendor/xterm-addon-fit.js' });
-  })();
-  return terminalAssetsPromise;
-}
-
 async function loadConfig() {
   try {
     const res = await apiFetch(null, '/api/config');
@@ -8533,10 +8516,6 @@ async function loadConfig() {
   updateRoutinesButton();
   updateMicButton();
 }
-
-// { term, fitAddon, ws, sessionId, reconnectTimer, attempts, closedByUser, exited }
-let termState = null;
-let termCtrlLatch = false;
 
 /**
  * The terminal is a *per-host* feature: a session on a peer with
@@ -8554,287 +8533,40 @@ function sessionHostSupportsTmux(session) {
   return hostSupportsCapability(hostEntryFor(session?.host), 'tmux', appConfig);
 }
 
-function updateTerminalButtons() {
-  const supported = sessionHostSupportsTerminal(sessionState.currentSession);
-  const show = supported && sessionState.currentSession?.isActive;
-  const btn = document.getElementById('btnTerminal');
-  if (btn) btn.style.display = show ? '' : 'none';
-  const row = document.getElementById('cpTerminalRow');
-  if (row) row.style.display = show ? '' : 'none';
-}
+function updateTerminalButtons() { terminalController.updateButtons(); }
 
 // =========================================================================
 // Theme payloads and pre-paint cache restoration share typed token decoding.
 const themesController = PiDishBrowser.createThemes({ document, storage: localStorage, request: (host, url, options) => apiFetch(host, url, options), host: () => hostEntryFor(null),
-  changed: () => { if (termState?.term) termState.term.options.theme = terminalTheme(); refreshDiagramTheme(); },
+  changed: () => { terminalController.refreshTheme(); refreshDiagramTheme(); },
 });
 function loadThemes() { return themesController.load(); }
 function renderThemeSelect(select) { themesController.render(select); }
 function applyTheme(id) { themesController.apply(id); }
 function terminalTheme() { return PiDishBrowser.terminalTheme(document); }
 
-// Per-session, host-namespaced; the panel size next to it is device-global.
-function terminalModeKey(sessionId) {
-  return 'pi-dish-terminal-mode-' + keyForSessionId(sessionId);
-}
-
-function toggleTerminal() {
-  if (termState) closeTerminal();
-  else openTerminal();
-}
-
-async function openTerminal(mode) {
-  if (!sessionState.currentSession || termState || !sessionHostSupportsTerminal(sessionState.currentSession)) return;
-  const session = sessionState.currentSession;
-  const owner = sessionState.captureSelection();
-  const sessionId = owner.id;
-  // Assets may still be in flight (or never requested, on a load whose first
-  // terminal-capable session is a remote one) — the promise is one-shot.
-  try { await loadTerminalAssets(); } catch { return; }
-  if (typeof Terminal === 'undefined') return;
-  if (termState || !sessionState.ownsSelection(owner)) return;
-  // 'shell' (default) or 'tmux' (a grouped tmux client viewing the pane the
-  // session's pi runs in). The last choice sticks per session.
-  if (!mode) mode = localStorage.getItem(terminalModeKey(sessionId)) === 'tmux' ? 'tmux' : 'shell';
-
-  // Have the Nerd Font symbols ready before xterm first paints — otherwise
-  // prompt icons flash as tofu until the lazy font load lands. Never block
-  // the terminal on it (offline cache miss etc. just falls back to squares).
-  try {
-    await Promise.race([
-      document.fonts.load('12px "Symbols Nerd Font Mono"'),
-      new Promise(r => setTimeout(r, 2000)),
-    ]);
-  } catch {}
-  if (termState || !sessionState.ownsSelection(owner)) return;
-
-  const panel = document.getElementById('terminalPanel');
-  const container = document.getElementById('terminalContainer');
-  applySavedTerminalSize(panel);
-  panel.style.display = '';
-  document.getElementById('terminalCwd').textContent = shortCwd(session.cwd || '~');
-
-  const css = getComputedStyle(document.documentElement);
-  const term = new Terminal({
-    fontFamily: css.getPropertyValue('--font-mono').trim() + ", 'Symbols Nerd Font Mono'",
-    fontSize: window.innerWidth <= 768 ? 12 : 13,
-    theme: terminalTheme(),
-    scrollback: 5000,
-    cursorBlink: true,
-  });
-  const FitCtor = window.FitAddon && (window.FitAddon.FitAddon || window.FitAddon);
-  const fitAddon = FitCtor ? new FitCtor() : null;
-  if (fitAddon) term.loadAddon(fitAddon);
-
-  termState = {
-    term, fitAddon, ws: null, sessionId, owner, mode,
-    tmuxPrefix: null, reconnectTimer: null, attempts: 0, closedByUser: false, exited: false,
-  };
-  updateTerminalModeUI();
-
-  term.open(container);
-  fitTerminal();
-  term.onData((data) => {
-    // Ctrl latch (mobile key bar): the next printable key is sent as its
-    // control character.
-    if (termCtrlLatch && data.length === 1) {
-      const code = data.toUpperCase().charCodeAt(0);
-      if (code >= 64 && code <= 95) data = String.fromCharCode(code & 31);
-      setTermCtrlLatch(false);
-    }
-    termSend({ type: 'input', data });
-  });
-  term.onResize(({ cols, rows }) => termSend({ type: 'resize', cols, rows }));
-
-  window.addEventListener('resize', fitTerminal);
-  window.visualViewport?.addEventListener('resize', fitTerminal);
-
-  connectTerminalWS();
-  term.focus();
-}
-
-function fitTerminal() {
-  if (!termState?.fitAddon) return;
-  try { termState.fitAddon.fit(); } catch {}
-}
-
-function termSend(msg) {
-  const ws = termState?.ws;
-  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
-}
-
-function setTerminalStatus(text, cls) {
-  const el = document.getElementById('terminalStatus');
-  if (!el) return;
-  el.textContent = text || '';
-  el.className = 'terminal-status' + (cls ? ' ' + cls : '');
-}
-
-function connectTerminalWS() {
-  if (!termState) return;
-  const state = termState;
-  if (!sessionState.ownsSelection(state.owner)) return;
-  const host = resolveHost(state.owner.host);
-  const modeQ = state.mode === 'tmux' ? '?mode=tmux' : '';
-  const url = hostWsUrl(host, `/api/sessions/${encodeURIComponent(state.sessionId)}/terminal${modeQ}`);
-  if (!host.token) { openTerminalWS(state, url); return; }
-  // Same ticket rule as the SSE stream: minted per connect, never reused.
-  setTerminalStatus(state.attempts ? 'reconnecting…' : 'connecting…', 'reconnecting');
-  mintHostTicket(host, 'terminal').then((ticket) => {
-    if (termState !== state || state.closedByUser || !sessionState.ownsSelection(state.owner)) return;
-    openTerminalWS(state, `${url}${modeQ ? '&' : '?'}ticket=${encodeURIComponent(ticket)}`);
-  }).catch(() => {
-    if (termState === state && sessionState.ownsSelection(state.owner)) setTerminalStatus('connect failed', 'error');
-  });
-}
-
-function openTerminalWS(state, url) {
-  if (state !== termState || state.closedByUser || !sessionState.ownsSelection(state.owner)) return;
-  const ws = new WebSocket(url);
-  const previous = state.ws;
-  state.ws = ws;
-  // Publish the replacement first, so even an immediate old close callback
-  // cannot schedule another reconnect. Retired sockets must also detach.
-  try { previous?.close(); } catch {}
-  setTerminalStatus(state.attempts ? 'reconnecting…' : 'connecting…', 'reconnecting');
-
-  ws.onmessage = (ev) => {
-    if (state !== termState || state.ws !== ws || state.closedByUser || !sessionState.ownsSelection(state.owner)) return;
-    let msg;
-    try { msg = JSON.parse(ev.data); } catch { return; }
-    if (msg.type === 'attach') {
-      state.attempts = 0;
-      setTerminalStatus('');
-      state.tmuxPrefix = msg.tmuxPrefix || null;
-      updateTerminalModeUI();
-      // Reattach: the replay buffer contains everything we may have already
-      // rendered — reset and replay rather than double-print.
-      state.term.reset();
-      if (msg.replay) state.term.write(msg.replay);
-      if (msg.cwd) document.getElementById('terminalCwd').textContent = shortCwd(msg.cwd);
-      fitTerminal();
-      termSend({ type: 'resize', cols: state.term.cols, rows: state.term.rows });
-    } else if (msg.type === 'output') {
-      state.term.write(msg.data);
-    } else if (msg.type === 'exit') {
-      state.exited = true;
-      setTerminalStatus(`shell exited (${msg.code})`);
-    } else if (msg.type === 'error') {
-      state.exited = true;
-      setTerminalStatus(msg.error, 'error');
-    }
-  };
-
-  ws.onclose = () => {
-    if (state !== termState || state.ws !== ws || state.closedByUser || state.exited || !sessionState.ownsSelection(state.owner)) return;
-    // Auto-reconnect with backoff while the panel is open — phones drop the
-    // socket on every screen lock; the server-side PTY is still there.
-    const delay = Math.min(8000, 1000 * 2 ** state.attempts);
-    state.attempts++;
-    setTerminalStatus('disconnected — reconnecting…', 'reconnecting');
-    state.reconnectTimer = setTimeout(connectTerminalWS, delay);
-  };
-}
-
-function closeTerminal() {
-  if (!termState) return;
-  const state = termState;
-  termState = null;
-  state.closedByUser = true;
-  clearTimeout(state.reconnectTimer);
-  try { state.ws?.close(); } catch {}
-  state.term.dispose();
-  window.removeEventListener('resize', fitTerminal);
-  window.visualViewport?.removeEventListener('resize', fitTerminal);
-  setTermCtrlLatch(false);
-  setTerminalStatus('');
-  document.getElementById('terminalPanel').style.display = 'none';
-}
-
-// The mode button shows the *target* mode; the keybar prefix key appears
-// only on a tmux attach that reported its prefix. Both are re-derived on
-// open, attach, and mode switch.
-function updateTerminalModeUI() {
-  const btn = document.getElementById('termModeBtn');
-  if (btn) {
-    const showBtn = !!(termState && sessionHostSupportsTmux(sessionState.currentSession) && sessionState.currentSession?.isActive);
-    btn.style.display = showBtn ? '' : 'none';
-    if (termState?.mode === 'tmux') {
-      btn.textContent = '⇆ shell';
-      btn.title = 'Switch to a plain shell at the session cwd';
-    } else {
-      btn.textContent = '⇆ pi tmux';
-      btn.title = "Attach to the tmux pane the session's pi runs in";
-    }
-  }
-  const prefixBtn = document.getElementById('termKeyPrefix');
-  if (prefixBtn) {
-    const seq = termState?.mode === 'tmux' ? tmuxPrefixSeq(termState.tmuxPrefix) : null;
-    prefixBtn.style.display = seq ? '' : 'none';
-    if (seq) prefixBtn.textContent = termState.tmuxPrefix;
-  }
-}
-
-function switchTerminalMode() {
-  if (!termState || !sessionState.currentSession) return;
-  const next = termState.mode === 'tmux' ? 'shell' : 'tmux';
-  const id = termState.sessionId;
-  if (next === 'tmux') localStorage.setItem(terminalModeKey(id), 'tmux');
-  else localStorage.removeItem(terminalModeKey(id));
-  closeTerminal();
-  openTerminal(next);
-}
-
-function restartTerminalShell() {
-  if (!termState) return;
-  const q = termState.mode === 'tmux'
-    ? 'Reattach the tmux client? (The tmux session and everything in it keeps running.)'
-    : 'Restart shell? Anything running in it will be killed.';
-  if (!confirm(q)) return;
-  termState.exited = false; // a fresh shell supersedes an exited one
-  if (termState.ws?.readyState === WebSocket.OPEN) {
-    termSend({ type: 'restart' });
-  } else {
-    // Shell exited → the server closed the socket; reconnecting spawns a
-    // fresh PTY (the exited one is already out of the pool).
-    clearTimeout(termState.reconnectTimer);
-    termState.attempts = 0;
-    connectTerminalWS();
-  }
-  termState.term.focus();
-}
-
-function setTermCtrlLatch(on) {
-  termCtrlLatch = on;
-  document.getElementById('termKeyCtrl')?.classList.toggle('latched', on);
-}
-
-const TERM_KEY_SEQUENCES = {
-  esc: '\x1b',
-  tab: '\t',
-  'ctrl-c': '\x03',
-};
-
-function termKeybarPress(key) {
-  if (!termState) return;
-  if (key === 'ctrl') { setTermCtrlLatch(!termCtrlLatch); return; }
-  if (key === 'tmux-prefix') {
-    const seq = tmuxPrefixSeq(termState.tmuxPrefix);
-    if (seq) termSend({ type: 'input', data: seq });
-    termState.term.focus();
-    return;
-  }
-  let seq = TERM_KEY_SEQUENCES[key];
-  if (!seq) {
-    // Arrows honor DECCKM (application cursor keys) so vim/less/etc work.
-    const app = termState.term.modes?.applicationCursorKeysMode;
-    const dir = { up: 'A', down: 'B', right: 'C', left: 'D' }[key];
-    if (!dir) return;
-    seq = (app ? '\x1bO' : '\x1b[') + dir;
-  }
-  termSend({ type: 'input', data: seq });
-  termState.term.focus();
-}
+// Terminal lifecycle owns pending opens, host endpoints, sockets and reconnects.
+const terminalController = PiDishBrowser.createTerminalController({
+  document, storage: localStorage, sessionState, host: host => hostEntryFor(host),
+  supportsTerminal: session => sessionHostSupportsTerminal(session), supportsTmux: session => sessionHostSupportsTmux(session),
+  asset: (tag, attributes) => loadVendorAsset(tag, attributes),
+  createTerminal: options => typeof Terminal === 'undefined' ? null : new Terminal(options),
+  createFitAddon: () => { const Ctor = window.FitAddon && (window.FitAddon.FitAddon || window.FitAddon); return Ctor ? new Ctor() : null; },
+  socket: url => new WebSocket(url), socketUrl: (host, path) => hostWsUrl(host, path), ticket: (host, purpose) => mintHostTicket(host, purpose),
+  theme: () => terminalTheme(), applySize: panel => applySavedTerminalSize(panel), confirm: message => confirm(message),
+});
+function terminalModeKey(id) { return terminalController.modeKey(id); }
+function loadTerminalAssets() { return terminalController.loadAssets(); }
+function toggleTerminal() { terminalController.toggle(); }
+function openTerminal(mode) { return terminalController.open(mode); }
+function closeTerminal() { terminalController.close(); }
+function fitTerminal() { terminalController.fit(); }
+function termSend(message) { terminalController.send(message); }
+function connectTerminalWS() { terminalController.connect(); }
+function updateTerminalModeUI() { terminalController.updateMode(); }
+function switchTerminalMode() { terminalController.switchMode(); }
+function restartTerminalShell() { terminalController.restart(); }
+function termKeybarPress(key) { terminalController.key(key); }
 
 // Resize controllers own each pointer capture and release listeners on disposal.
 const panelResize = PiDishBrowser.createPanelResize({ document, storage: localStorage, fitTerminal: () => fitTerminal() });
@@ -8845,18 +8577,7 @@ function initTerminalResize() { panelResize.terminal(); }
 function clampTerminalHeight(px, parentHeight) { return PiDishBrowser.clampTerminalHeight(px, parentHeight); }
 function applySavedTerminalSize(panel) { panelResize.terminalSize(panel); }
 
-function initTerminalKeybar() {
-  const bar = document.getElementById('terminalKeybar');
-  if (!bar) return;
-  // pointerdown is prevented so key taps never blur the terminal's hidden
-  // textarea — a blur closes the phone keyboard mid-typing.
-  bar.addEventListener('pointerdown', (e) => {
-    const btn = e.target.closest('button[data-termkey]');
-    if (!btn) return;
-    e.preventDefault();
-    termKeybarPress(btn.dataset.termkey);
-  });
-}
+function initTerminalKeybar() { terminalController.mountKeybar(); }
 
 // =========================================================================
 // Routines takeover (main-pane, usage-view pattern)

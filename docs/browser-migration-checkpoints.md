@@ -469,3 +469,33 @@ Fable 5.1 cleared session-navigation commit `fa5316a`, which is pushed.
   Fable review is required before push.
 - Fable 5.1 cleared usage commit `07e4505`, which is pushed.
 - Next: terminal lifecycle, then remaining features/rendering and shell.
+
+## Checkpoint 21 — terminal lifecycle
+
+- `terminal.ts` owns terminal instances, pending opens, captured session/endpoint
+  identity, ticket requests, socket replacement, reconnect timers and key input.
+  Xterm and the fit addon use their vendor TypeScript contracts without adding
+  a runtime dependency to the local browser bundle.
+- Close cancels opens waiting for assets/fonts, even before a terminal exists.
+  Font deadlines are cleared when readiness or cancellation wins. Overlapping
+  ticket requests admit only the latest connection; retired socket and terminal
+  input callbacks cannot act on a replacement or different selected host.
+- Keybar and viewport listeners follow controller/terminal lifetimes. Disposal
+  clears reconnects, instances and pending opens. Socket payloads are narrowed
+  before output/attach/error handling; per-host mode storage remains qualified.
+- Five focused browser scenarios replace the old mutable-global probe and cover
+  reconnect/host switches, asset/font cancellation, ticket races, reconnect
+  disposal and mobile input callbacks. Unit/strict tests cover wire contracts.
+- Strict checks, 914 backend tests, 141 browser regressions, independent UI
+  scenarios and full desktop/mobile smoke passed. Integrated runtime/config/test
+  files match the verified draft byte for byte; strict checks passed again.
+  Fable review is required before push.
+- Fable 5.1 cleared display commit `dbdb6fe`, which is pushed. The generated-file
+  guidance in AGENTS.md now names all four browser outputs.
+- Next: routine form/invocation ownership, then remaining features and shell.
+
+Fable's terminal review identified a removed-host lookup returning null. The
+terminal host contract is now nullable; open and all ownership checks retire
+safely when that host disappears. A fifth browser regression covers removed-host
+socket messages, close/resize/key callbacks and reopening. Full local checks
+passed again after the fix. AGENTS.md now includes the pre-paint output.

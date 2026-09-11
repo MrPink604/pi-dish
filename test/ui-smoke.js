@@ -2071,7 +2071,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(await desktop.evaluate(() => document.fonts.check('12px "Symbols Nerd Font Mono"')),
       'Nerd Font symbols fallback loaded (p10k prompt glyphs)');
     const termText = () => desktop.evaluate(() => {
-      const b = termState.term.buffer.active;
+      const b = terminalController.state.term.buffer.active;
       let out = '';
       for (let i = 0; i < b.length; i++) out += b.getLine(i)?.translateToString(true) + '\n';
       return out;
@@ -2700,7 +2700,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       window.__auditTerminalA = openTerminal();
     });
     await desktop.waitForTimeout(50);
-    check(await desktop.evaluate(() => !termState && window.__auditTerminalUrls.length === 0 &&
+    check(await desktop.evaluate(() => !terminalController.state && window.__auditTerminalUrls.length === 0 &&
       document.getElementById('terminalPanel').style.display === 'none'),
       'terminal does not open or connect while A font readiness is held');
     await desktop.evaluate((b) => selectSession(b, { forceTranscriptReload: true }), SESSION2_ID);
@@ -2712,7 +2712,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.waitForFunction(() => document.getElementById('terminalStatus').textContent === '',
       { timeout: 5000 });
     const terminalOwnership = await desktop.evaluate(({ a, b }) => ({
-      owner: termState?.sessionId,
+      owner: terminalController.state?.sessionId,
       urls: window.__auditTerminalUrls.slice(),
       currentId: sessionState.currentSession?.id,
       hasAUrl: window.__auditTerminalUrls.some((url) => url.includes(encodeURIComponent(a))),

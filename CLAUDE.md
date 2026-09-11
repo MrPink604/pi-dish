@@ -2101,3 +2101,9 @@ Display preference modal state/requests/listeners are owned by
 saves and retires device/filter controls. `themes.ts` owns catalog refreshes and
 switching; `theme-prepaint.ts` restores cached tokens synchronously before CSS.
 `panel-resize.ts` owns pointer captures, size preferences and listener disposal.
+
+Terminal instance state and socket/input lifecycle live in `src/browser/terminal.ts`.
+Open captures the selected owner and endpoint before loading assets or fonts.
+Close also cancels pending opens; connection generations guard ticket races and
+socket callbacks. Retired onData/onResize callbacks cannot target a replacement
+terminal. Keybar/viewport listeners and reconnect timers retire with their owner.

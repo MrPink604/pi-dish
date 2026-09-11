@@ -60,6 +60,7 @@ var PiDishBrowser = (() => {
     createSkills: () => createSkills,
     createSpawnTargetPicker: () => createSpawnTargetPicker,
     createSpawnTargets: () => createSpawnTargets,
+    createTerminalController: () => createTerminalController,
     createThemes: () => createThemes,
     createUsageView: () => createUsageView,
     decodeBounceOperation: () => decodeBounceOperation,
@@ -83,6 +84,7 @@ var PiDishBrowser = (() => {
     decodeSpawnChoices: () => decodeSpawnChoices,
     decodeSpawnId: () => decodeSpawnId,
     decodeSpawnStatus: () => decodeSpawnStatus,
+    decodeTerminalOutput: () => decodeTerminalOutput,
     decodeThemeTokens: () => decodeThemeTokens,
     decodeThemes: () => decodeThemes,
     decodeUsageLimits: () => decodeUsageLimits,
@@ -2804,6 +2806,19 @@ var PiDishBrowser = (() => {
   function shortCwd(cwd) {
     if (!cwd) return "";
     return cwd.replace(/^\/home\/[^/]+\//, "~/").replace(/^\/home\/[^/]+$/, "~");
+  }
+  function tmuxPrefixSeq(prefix) {
+    if (typeof prefix !== "string") return null;
+    if (/^C-Space$/i.test(prefix)) return "\0";
+    let m = /^C-([a-zA-Z@[\\\]^_?])$/.exec(prefix);
+    if (m) {
+      if (m[1] === "?") return "\x7F";
+      const code = m[1].toUpperCase().charCodeAt(0);
+      return String.fromCharCode(code & 31);
+    }
+    m = /^M-(.)$/.exec(prefix);
+    if (m) return "\x1B" + m[1];
+    return null;
   }
 
   // src/browser/helper-identity.ts
@@ -6887,6 +6902,338 @@ var PiDishBrowser = (() => {
   }
   function message2(error) {
     return error instanceof Error ? error.message : String(error);
+  }
+
+  // src/browser/terminal.ts
+  function decodeTerminalOutput(value) {
+    if (!record8(value)) return null;
+    switch (value.type) {
+      case "attach":
+        return { type: "attach", replay: typeof value.replay === "string" ? value.replay : "", cwd: typeof value.cwd === "string" ? value.cwd : "", tmuxPrefix: typeof value.tmuxPrefix === "string" ? value.tmuxPrefix : null };
+      case "output":
+        return typeof value.data === "string" ? { type: "output", data: value.data } : null;
+      case "exit":
+        return { type: "exit", code: finite2(value.code) ? value.code : null };
+      case "error":
+        return typeof value.error === "string" ? { type: "error", error: value.error } : null;
+      default:
+        return null;
+    }
+  }
+  function createTerminalController(options) {
+    const { document: document2, storage, sessionState } = options, window = document2.defaultView;
+    const element = (id) => {
+      const value = document2.getElementById(id);
+      if (!value) throw new Error("Missing terminal element: " + id);
+      return value;
+    };
+    let state = null, disposed = false, generation = 0, ctrlLatch = false;
+    let assets = null, cancelOpen = null;
+    const events = new AbortController();
+    let keybarMounted = false;
+    function sameHost(owner, endpoint) {
+      const host = options.host(owner.host);
+      return !!host && host.base === endpoint.base && (host.token || "") === (endpoint.token || "");
+    }
+    function owns(value) {
+      return !disposed && value === state && sessionState.ownsSelection(value.owner) && sameHost(value.owner, value.endpoint);
+    }
+    function modeKey(id, host = sessionState.sessionHostId(id)) {
+      return "pi-dish-terminal-mode-" + sessionKey(host, id);
+    }
+    function loadAssets() {
+      if (disposed) return Promise.resolve();
+      if (!assets) assets = (async () => {
+        await Promise.all([options.asset("link", { rel: "stylesheet", href: "vendor/xterm.css" }), options.asset("script", { src: "vendor/xterm.js" })]);
+        await options.asset("script", { src: "vendor/xterm-addon-fit.js" });
+      })();
+      return assets;
+    }
+    function status(text10 = "", cls = "") {
+      const value = document2.getElementById("terminalStatus");
+      if (!value) return;
+      value.textContent = text10;
+      value.className = "terminal-status" + (cls ? " " + cls : "");
+    }
+    function setCtrl(on) {
+      ctrlLatch = on;
+      document2.getElementById("termKeyCtrl")?.classList.toggle("latched", on);
+    }
+    function updateButtons() {
+      if (disposed) return;
+      const show = options.supportsTerminal(sessionState.currentSession) && sessionState.currentSession?.isActive === true;
+      for (const id of ["btnTerminal", "cpTerminalRow"]) {
+        const value = document2.getElementById(id);
+        if (value) value.style.display = show ? "" : "none";
+      }
+    }
+    function updateMode() {
+      if (disposed) return;
+      const button = document2.getElementById("termModeBtn");
+      if (button) {
+        button.style.display = state && options.supportsTmux(sessionState.currentSession) && sessionState.currentSession?.isActive === true ? "" : "none";
+        button.textContent = state?.mode === "tmux" ? "\u21C6 shell" : "\u21C6 pi tmux";
+        button.title = state?.mode === "tmux" ? "Switch to a plain shell at the session cwd" : "Attach to the tmux pane the session's pi runs in";
+      }
+      const prefix = document2.getElementById("termKeyPrefix");
+      if (prefix) {
+        const sequence = state?.mode === "tmux" ? tmuxPrefixSeq(state.tmuxPrefix) : null;
+        prefix.style.display = sequence ? "" : "none";
+        if (sequence) prefix.textContent = state?.tmuxPrefix || "";
+      }
+    }
+    function fit() {
+      if (state && owns(state)) try {
+        state.fitAddon?.fit();
+      } catch {
+      }
+    }
+    function send(message3, owner = state) {
+      if (!owner || !owns(owner)) return;
+      const socket = owner.ws;
+      if (socket && socket.readyState === 1) socket.send(JSON.stringify(message3));
+    }
+    async function open(mode) {
+      if (disposed || state || !sessionState.currentSession || !options.supportsTerminal(sessionState.currentSession)) return;
+      cancelOpen?.();
+      const own = ++generation;
+      const session = sessionState.currentSession, owner = sessionState.captureSelection();
+      if (!owner) return;
+      const resolved = options.host(owner.host);
+      if (!resolved) return;
+      const endpoint = Object.freeze({ ...resolved });
+      let cancel;
+      const cancelled = new Promise((resolve) => {
+        cancel = resolve;
+      });
+      cancelOpen = cancel;
+      const current = () => !disposed && own === generation && !state && sessionState.ownsSelection(owner) && sameHost(owner, endpoint);
+      let fontTimer;
+      try {
+        try {
+          await Promise.race([loadAssets(), cancelled]);
+        } catch {
+          return;
+        }
+        if (!current()) return;
+        mode ||= storage.getItem(modeKey(owner.id, owner.host)) === "tmux" ? "tmux" : "shell";
+        try {
+          await Promise.race([document2.fonts.load('12px "Symbols Nerd Font Mono"'), cancelled, new Promise((resolve) => {
+            fontTimer = setTimeout(resolve, 2e3);
+          })]);
+        } catch {
+        } finally {
+          clearTimeout(fontTimer);
+        }
+        if (!current()) return;
+        const css = window.getComputedStyle(document2.documentElement);
+        const term = options.createTerminal({ fontFamily: css.getPropertyValue("--font-mono").trim() + ", 'Symbols Nerd Font Mono'", fontSize: window.innerWidth <= 768 ? 12 : 13, theme: options.theme(), scrollback: 5e3, cursorBlink: true });
+        if (!term) return;
+        const fitAddon = options.createFitAddon();
+        if (fitAddon) term.loadAddon(fitAddon);
+        const next = { term, fitAddon, sessionId: owner.id, owner, endpoint, mode, events: new AbortController(), ws: null, tmuxPrefix: null, reconnectTimer: void 0, attempts: 0, exited: false, connection: 0 };
+        state = next;
+        const panel = element("terminalPanel");
+        options.applySize(panel);
+        panel.style.display = "";
+        element("terminalCwd").textContent = shortCwd(typeof session.cwd === "string" ? session.cwd : "~");
+        updateMode();
+        term.open(element("terminalContainer"));
+        fit();
+        term.onData((data) => {
+          if (!owns(next)) return;
+          if (ctrlLatch && data.length === 1) {
+            const code = data.toUpperCase().charCodeAt(0);
+            if (code >= 64 && code <= 95) data = String.fromCharCode(code & 31);
+            setCtrl(false);
+          }
+          send({ type: "input", data }, next);
+        });
+        term.onResize(({ cols, rows }) => send({ type: "resize", cols, rows }, next));
+        window.addEventListener("resize", fit, { signal: next.events.signal });
+        window.visualViewport?.addEventListener("resize", fit, { signal: next.events.signal });
+        connect();
+        term.focus();
+      } finally {
+        clearTimeout(fontTimer);
+        if (cancelOpen === cancel) cancelOpen = null;
+      }
+    }
+    function connect() {
+      const current = state;
+      if (!current || !owns(current)) return;
+      clearTimeout(current.reconnectTimer);
+      const sequence = ++current.connection;
+      const query = current.mode === "tmux" ? "?mode=tmux" : "";
+      const url = options.socketUrl(current.endpoint, `/api/sessions/${encodeURIComponent(current.sessionId)}/terminal${query}`);
+      const ready = () => owns(current) && sequence === current.connection;
+      if (!current.endpoint.token) {
+        openSocket(current, url, sequence);
+        return;
+      }
+      status(current.attempts ? "reconnecting\u2026" : "connecting\u2026", "reconnecting");
+      void options.ticket(current.endpoint, "terminal").then((ticket) => {
+        if (ready()) openSocket(current, `${url}${query ? "&" : "?"}ticket=${encodeURIComponent(ticket)}`, sequence);
+      }).catch(() => {
+        if (ready()) status("connect failed", "error");
+      });
+    }
+    function openSocket(current, url, sequence) {
+      if (!owns(current) || sequence !== current.connection) return;
+      const socket = options.socket(url), previous = current.ws;
+      current.ws = socket;
+      try {
+        previous?.close();
+      } catch {
+      }
+      const active = () => owns(current) && current.ws === socket && current.connection === sequence;
+      status(current.attempts ? "reconnecting\u2026" : "connecting\u2026", "reconnecting");
+      socket.onmessage = (event) => {
+        if (!active() || typeof event.data !== "string") return;
+        let message3;
+        try {
+          const value = JSON.parse(event.data);
+          message3 = decodeTerminalOutput(value);
+        } catch {
+          return;
+        }
+        if (!message3) return;
+        if (message3.type === "attach") {
+          current.attempts = 0;
+          status();
+          current.tmuxPrefix = message3.tmuxPrefix;
+          updateMode();
+          current.term.reset();
+          if (message3.replay) current.term.write(message3.replay);
+          if (message3.cwd) element("terminalCwd").textContent = shortCwd(message3.cwd);
+          fit();
+          send({ type: "resize", cols: current.term.cols, rows: current.term.rows }, current);
+        } else if (message3.type === "output") current.term.write(message3.data);
+        else if (message3.type === "exit") {
+          current.exited = true;
+          status(`shell exited (${message3.code})`);
+        } else {
+          current.exited = true;
+          status(message3.error, "error");
+        }
+      };
+      socket.onclose = () => {
+        if (!active() || current.exited) return;
+        const delay = Math.min(8e3, 1e3 * 2 ** current.attempts++);
+        status("disconnected \u2014 reconnecting\u2026", "reconnecting");
+        clearTimeout(current.reconnectTimer);
+        current.reconnectTimer = setTimeout(() => {
+          if (active()) connect();
+        }, delay);
+      };
+    }
+    function close() {
+      if (disposed) return;
+      generation++;
+      cancelOpen?.();
+      cancelOpen = null;
+      const current = state;
+      state = null;
+      if (current) {
+        clearTimeout(current.reconnectTimer);
+        current.events.abort();
+        try {
+          current.ws?.close();
+        } catch {
+        }
+        current.term.dispose();
+      }
+      setCtrl(false);
+      status();
+      element("terminalPanel").style.display = "none";
+    }
+    function switchMode() {
+      const current = state;
+      if (!current || !owns(current)) return;
+      const mode = current.mode === "tmux" ? "shell" : "tmux";
+      if (mode === "tmux" && !options.supportsTmux(sessionState.currentSession)) return;
+      if (mode === "tmux") storage.setItem(modeKey(current.sessionId, current.owner.host), mode);
+      else storage.removeItem(modeKey(current.sessionId, current.owner.host));
+      close();
+      void open(mode);
+    }
+    function restart() {
+      const current = state;
+      if (!current || !owns(current)) return;
+      if (!options.confirm(current.mode === "tmux" ? "Reattach the tmux client? (The tmux session and everything in it keeps running.)" : "Restart shell? Anything running in it will be killed.") || !owns(current)) return;
+      current.exited = false;
+      if (current.ws?.readyState === 1) send({ type: "restart" }, current);
+      else {
+        clearTimeout(current.reconnectTimer);
+        current.attempts = 0;
+        connect();
+      }
+      current.term.focus();
+    }
+    function key(key2) {
+      const current = state;
+      if (!current || !owns(current)) return;
+      if (key2 === "ctrl") {
+        setCtrl(!ctrlLatch);
+        return;
+      }
+      let sequence;
+      if (key2 === "tmux-prefix") sequence = tmuxPrefixSeq(current.tmuxPrefix);
+      else {
+        const sequences = { esc: "\x1B", tab: "	", "ctrl-c": "" };
+        sequence = sequences[key2];
+        if (!sequence) {
+          const direction = { up: "A", down: "B", right: "C", left: "D" };
+          if (!direction[key2]) return;
+          sequence = (current.term.modes.applicationCursorKeysMode ? "\x1BO" : "\x1B[") + direction[key2];
+        }
+      }
+      if (sequence) send({ type: "input", data: sequence }, current);
+      current.term.focus();
+    }
+    function mountKeybar() {
+      if (disposed || keybarMounted) return;
+      const bar = document2.getElementById("terminalKeybar");
+      if (!bar) return;
+      keybarMounted = true;
+      bar.addEventListener("pointerdown", (event) => {
+        if (!(event.target instanceof Element)) return;
+        const button = event.target.closest("button[data-termkey]");
+        if (!button) return;
+        event.preventDefault();
+        key(button.dataset.termkey || "");
+      }, { signal: events.signal });
+    }
+    return {
+      open,
+      close,
+      loadAssets,
+      fit,
+      send,
+      connect,
+      switchMode,
+      restart,
+      key,
+      mountKeybar,
+      modeKey,
+      updateButtons,
+      updateMode,
+      toggle() {
+        if (state || cancelOpen) close();
+        else void open();
+      },
+      refreshTheme() {
+        if (state && owns(state)) state.term.options.theme = options.theme();
+      },
+      get state() {
+        return state;
+      },
+      dispose() {
+        close();
+        events.abort();
+        disposed = true;
+      }
+    };
   }
   return __toCommonJS(index_exports);
 })();

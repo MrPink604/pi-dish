@@ -380,3 +380,8 @@ Display preferences, themes and pointer resizing are owned by
 `theme-prepaint.ts` entrypoint generates `public/theme-prepaint.js`; it runs
 synchronously before CSS and shares the typed token decoder with theme switching.
 The browser build validates all four outputs before writing any of them.
+
+`terminal.ts` owns terminal instances and all open/connection/input lifetimes.
+Pending opens are cancellable before an instance exists; font deadlines and
+reconnect timers are cleared on retirement. Xterm/FitAddon imports are type-only,
+and runtime assets remain the existing local vendor files.
