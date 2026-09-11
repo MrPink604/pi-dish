@@ -390,3 +390,8 @@ Routine list/form/catalog/mutation/ledger lifetimes live in `routines-view.ts`,
 with explicit definitions, versions and invocation decoding in `routines-data.ts`.
 Form owners include host endpoints; changing views or form targets retires earlier
 results. Closing preserves draft values while retiring listeners and timers.
+
+Session statistics, process actions, sharing and published artifacts live in
+`session-info.ts`, with wire narrowing in `session-info-data.ts`. Each modal
+render and request retains its host/selection and independent section generation.
+Message-share copies capture their owner before lookup and clipboard effects.

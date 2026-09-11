@@ -534,3 +534,30 @@ passed again after the fix. AGENTS.md now includes the pre-paint output.
   back control and same-row reload; reopening shows a disabled state and a
   recovery message while preserving the draft. Two new regressions cover both.
   All required checks passed again after the fix; follow-up review precedes push.
+
+## Checkpoint 23 — session statistics, sharing and artifacts
+
+- `session-info.ts` owns the stats overlay, process actions, share/page controls,
+  artifact discovery and message share copies. `session-info-data.ts` narrows
+  statistics, costs (including unavailable prices), runtime, share and page data.
+- Stats renders and share/page/process sections retain separate request and
+  listener generations, selection owners and answering endpoints. Retained
+  controls cannot act on a newly opened modal or a same-id peer session.
+- Artifact discovery and revoke actions retain their answering host. Message
+  link copies guard both the share lookup and the clipboard effect, including
+  existing-share responses that settle after navigation. Close/disposal retires
+  controls and feedback timers.
+- Failed share/page mutations report server errors and restore usable controls
+  without claiming success. Process actions preserve capability gates and close
+  selection behavior; duplicate close/restart actions stay disabled in flight.
+- Five browser regressions cover retained controls, delayed share copies,
+  mutation errors, same-token artifacts and disposal. Decoder/strict contracts
+  cover unavailable costs and readonly artifact identities.
+- Strict checks, 918 backend tests and 157 browser regressions passed, as did
+  independent UI scenarios and full desktop/mobile smoke. The skills scenario's
+  assertions passed on its first run, but temporary-directory cleanup raced;
+  its targeted rerun passed. Integrated runtime/config/test files match the
+  verified draft byte for byte; strict checks passed again before commit.
+- Fable 5.1 cleared the routines host-rotation fix in `61c5691` before push.
+  Terminal checkpoint `0e5aef8` has a successful CI workflow in run `34607561015`.
+- Next: transcript tree navigation, rich text rendering and remaining shell.

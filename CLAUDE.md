@@ -2114,3 +2114,10 @@ answering endpoint. List/form/catalog/mutation and ledger generations are separa
 old same-id host responses cannot replace a new form. Draft values and baselines
 survive close/reopen, including edits during saves. Render listeners, autocomplete,
 ledger polling, delete arming and fan-out coalescers retire on close/disposal.
+
+Session information controls live in `src/browser/session-info.ts`: statistics,
+close/restart, share links, published pages and artifact badges/modals. Read
+`session-info-data.ts` for narrowed payloads. Stats section requests and listeners
+have separate generations under the modal owner; artifact discovery has its own
+sequence. Message link copies guard the originating selection before clipboard
+writes, including existing shares. Close/disposal retires listeners and timers.

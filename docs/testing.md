@@ -89,6 +89,7 @@ After editing `src/browser/`, run `npm run build:browser` before `npm test`;
 | Wire envelope validation, malformed responses, unknown events and transport survival | `test/transport-frames.test.js` plus existing bridge/RPC protocol suites |
 | Typed RPC startup validation, failed-child cleanup, delta snapshots and recovery ownership | `test/rpc-session.test.js`, `test/transport-frames.test.js`, `test/session-recovery.test.js` |
 | Typed bridge registry validation, pre-hello claim protection and session-switch replay ordering | `test/bridge-session.test.js` |
+| Session stats/share/process/artifact ownership and mutation errors | `test/browser-session-info.test.js`, `test/browser/session-info.spec.js`, `test/types/browser-session-info.ts` |
 | Routine form/catalog/mutation/ledger ownership and draft retention | `test/browser-routines.test.js`, `test/browser/routines.spec.js`, `test/types/browser-routines.ts`, `test/ui-scenarios/routines.js` |
 | Terminal wire contracts, pending opens, sockets/tickets and input disposal | `test/browser-terminal.test.js`, `test/browser/terminal-ownership.spec.js`, `test/types/browser-terminal.ts`, `test/ui-scenarios/mobile.js`, `test/ui-smoke.js` |
 | Display settings races, theme startup and pointer disposal | `test/browser-display.test.js`, `test/browser/display.spec.js`, `test/types/browser-display.ts`, `test/browser-build.test.js`, `test/ui-smoke.js` |

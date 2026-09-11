@@ -54,3 +54,6 @@ export { createTerminalController, decodeTerminalOutput } from './terminal';
 
 export { createRoutinesView } from './routines-view';
 export { decodeRoutine, decodeRoutineList, decodeRoutineInvocations } from './routines-data';
+
+export { createSessionInfo } from './session-info';
+export { decodeSessionStats, decodeSessionShare, decodePublishedPages } from './session-info-data';
