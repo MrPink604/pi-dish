@@ -88,3 +88,30 @@ test('new-session cached catalogs use the selected peer key', async ({ page, fle
   await expect(page.locator('#nsModelSelect')).not.toContainText('self-cache');
   for (const route of held) await route.fulfill({ json: [{ id: 'pi', available: true }] });
 });
+
+test('a catalog retired by host renewal cannot clear the server-local enabled-model scope', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  await page.route(`${fleet.self.base}/api/models?sessionId=${ROOT}`, route => route.fulfill({ json: [
+    { id: 'enabled', provider: 'fixture', enabled: true }, { id: 'hidden', provider: 'fixture', enabled: false },
+  ] }));
+  await page.evaluate(async () => { await loadModels(sessionState.currentSession.id, 'pi'); });
+  const payloads = [];
+  await page.route('**/api/models/enabled', route => {
+    payloads.push(route.request().postDataJSON());
+    return route.fulfill({ json: { success: true, enabledModels: null } });
+  });
+  const timersScheduled = await page.evaluate(() => {
+    const original = window.setTimeout;
+    let saves = 0;
+    window.setTimeout = (callback, delay, ...args) => { if (delay === 400) saves++; return original(callback, delay, ...args); };
+    try {
+      const resolve = hostEntryFor;
+      hostEntryFor = host => { const entry = resolve(host); return entry ? { ...entry, token: 'renewed-fixture' } : entry; };
+      setAllModelsEnabled(true);
+      return saves;
+    } finally { window.setTimeout = original; }
+  });
+  expect(timersScheduled).toBe(0);
+  expect(payloads).toEqual([]);
+  expect(await page.evaluate(() => modelCatalog.enabledIds())).toBeUndefined();
+});

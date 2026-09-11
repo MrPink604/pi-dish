@@ -740,8 +740,9 @@ The shared model catalog lives in `src/browser/model-catalog.ts`; its readonly
 rows/scope replace the old global model arrays. Loads receive captured request
 and visible-row ownership callbacks. New-session request ownership includes cwd
 and view generation, while cached visible rows require the same host/harness/view.
-The app retires requests at cwd edit/close and captures enabled-model snapshots
-before debounce. Use the catalog writers for edits and host-scoped cache keys.
+The app retires requests on cwd pick/blur or takeover close and captures enabled-model snapshots
+before debounce. Request cwd equality guards also reject replies while the user
+is typing, before blur triggers a refresh. Use the catalog writers for edits and host-scoped cache keys.
 
 Tmux target catalog and run-in picker ownership live in
 `src/browser/spawn-targets.ts`. Refresh resets to headless before awaiting and

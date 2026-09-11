@@ -157,8 +157,9 @@ are not completion percentages.
   select-option markup. Rows and captured scope are readonly; edits replace rows
   so saved snapshots remain stable. Prototype-like provider names group safely.
 - Request ownership includes host endpoint, harness/session and request sequence.
-  New-session loads also capture takeover generation and cwd, retiring on edit
-  before debounce or close. Cached rows have separate host/harness/view ownership
+  New-session loads also capture takeover generation and cwd, retiring on pick/blur
+  before refresh debounce or on close. Cwd equality guards reject replies while
+  typing. Cached rows have separate host/harness/view ownership
   so valid interim choices remain visible until the refreshed cwd catalog arrives.
 - Six unit tests, four browser regressions and compile contracts cover delayed
   bodies, view closure, host-specific cache keys and stable edit snapshots.
@@ -167,3 +168,11 @@ are not completion percentages.
   Fable review of the local commit is required before push.
 - Next: published-page comment entrypoint, new-session preferences/config/spawn
   controllers and the remaining application rendering/features.
+
+- Fable reviewed `5b8b45f` and identified a retired-catalog save edge case. The
+  follow-up returns no edit snapshot for retired rows and skips that save, so a
+  host renewal cannot clear server-local model scoping. Malformed cache decoding
+  leaves no partial scope, and docs now distinguish cwd equality guards from
+  pick/blur refresh scheduling. Added unit/browser regressions pass along with
+  strict checks, all 886 backend tests, 88 browser regressions, independent UI
+  scenarios and full desktop/mobile smoke. Follow-up Fable review precedes push.

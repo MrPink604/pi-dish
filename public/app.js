@@ -2352,7 +2352,6 @@ function loadModels(sessionId, harnessId, cwd, host) {
   const ownsRequest = () => ownsRows() && (!!sessionId || nsCwdValue() === (cwd || ''));
   return modelCatalog.load({ host: captured, sessionId, harnessId: requestedHarnessId, cwd }, ownsRequest, ownsRows);
 }
-function filterModels(query) { return modelCatalog.filter(query); }
 
 // =========================================================================
 // Session Header
@@ -6276,6 +6275,7 @@ let saveEnabledTimer = null;
 function saveEnabledModels() {
   // Snapshot the owner's edit before the debounce can observe another catalog.
   const enabledIds = modelCatalog.enabledIds();
+  if (enabledIds === undefined) return; // Retired rows cannot clear the server-local preference.
   clearTimeout(saveEnabledTimer);
   saveEnabledTimer = setTimeout(async () => {
     try {

@@ -61,6 +61,7 @@ test('cached models remain visible during a cwd refresh while the stale request 
   hostOwned = false;
   assert.equal(f.catalog.rows().length, 0);
   assert.equal(f.catalog.scope, null);
+  assert.equal(f.catalog.enabledIds(), undefined);
 });
 
 test('model edit writers preserve persisted snapshots and provider filtering', async () => {
@@ -85,4 +86,11 @@ test('model option grouping supports literal prototype names and escapes labels'
   assert.match(result.html, /value="constructor\/one"/);
   assert.match(result.html, /value="__proto__\/two"/);
   assert.equal(result.html.includes('<hidden>'), false);
+});
+
+test('malformed cached rows leave no catalog scope or owner', () => {
+  const f = fixture();
+  assert.throws(() => f.catalog.seed(scope('a'), [null], () => true), /model catalog/);
+  assert.equal(f.catalog.scope, null);
+  assert.equal(f.catalog.rows().length, 0);
 });

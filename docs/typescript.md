@@ -297,7 +297,8 @@ remain explicit callbacks supplied by the app.
 `src/browser/model-catalog.ts` owns model rows, catalog scope, enabled-model
 writes and shared select markup. Request owners include the host endpoint and
 request sequence; app callbacks also validate selection or takeover generation,
-harness and cwd. Pending reads retire on cwd edits before the debounce fires.
+harness and cwd. Pending reads retire on cwd pick/blur before the refresh debounce fires; cwd
+equality guards reject stale replies while typing.
 Row ownership is separate so interim cached rows remain usable for the same
 host/harness/view. Peer cache reads use their own host suffix. Readonly rows and
 replacement writers preserve captured persistence snapshots across later edits.

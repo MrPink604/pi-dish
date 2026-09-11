@@ -1996,8 +1996,9 @@ var PiDishBrowser = (() => {
     function seed(target, data, owns) {
       clear();
       if (!owns()) return;
+      const decoded = decodeModelCatalog(data);
       scope = snapshot(target);
-      models = decodeModelCatalog(data);
+      models = decoded;
       currentOwner = owns;
     }
     async function load(target, ownsRequest, ownsRows = ownsRequest) {
@@ -2046,6 +2047,7 @@ var PiDishBrowser = (() => {
       replaceEnabled((model) => listed.has(model), () => enabled);
     }
     function enabledIds() {
+      if (!current()) return void 0;
       const list = rows(), enabled = list.filter((model) => model.enabled !== false);
       return enabled.length === list.length ? null : enabled.map((model) => `${model.provider}/${model.id}`);
     }

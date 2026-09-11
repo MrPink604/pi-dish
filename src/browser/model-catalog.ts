@@ -34,8 +34,9 @@ export function createModelCatalog(options: {
   function seed(target: ModelCatalogScope, data: unknown, owns: () => boolean): void {
     clear();
     if (!owns()) return;
+    const decoded = decodeModelCatalog(data);
     scope = snapshot(target);
-    models = decodeModelCatalog(data);
+    models = decoded;
     currentOwner = owns;
   }
   async function load(target: ModelCatalogScope, ownsRequest: () => boolean, ownsRows = ownsRequest): Promise<void> {
@@ -77,7 +78,8 @@ export function createModelCatalog(options: {
     const enabled = ![...listed].every(model => model.enabled !== false);
     replaceEnabled(model => listed.has(model), () => enabled);
   }
-  function enabledIds(): string[] | null {
+  function enabledIds(): string[] | null | undefined {
+    if (!current()) return undefined;
     const list = rows(), enabled = list.filter(model => model.enabled !== false);
     return enabled.length === list.length ? null : enabled.map(model => `${model.provider}/${model.id}`);
   }
