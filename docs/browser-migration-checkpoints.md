@@ -75,7 +75,7 @@ are not completion percentages.
   on that commit.
 - Next: host settings DOM and add-host request/view ownership.
 
-## Checkpoint 3 — host settings (local verification complete)
+## Checkpoint 3 — host settings
 
 - Boundary: settings markup, row/form listeners, catalog UI actions and add-host
   validation with captured endpoint/view/attempt ownership.
@@ -85,5 +85,19 @@ are not completion percentages.
   Color state and shared formatting still enter through explicit typed callbacks.
 - Verification: strict build/lint/type checks, 862 backend tests, 71 browser
   regressions, all independent UI scenarios and desktop/mobile smoke passed.
-- Fable commit review is required before pushing this checkpoint.
+- Commit `b1cc60d` passed Fable 5.1 review with no blocking findings before push.
+  [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34587819581)
+  on that commit.
 - Next: host color state, then remaining new-session request controllers.
+
+## Checkpoint 4 — host colors and presentation (local verification complete)
+
+- Boundary: device color state, first-seen palette order, chip/dot markup and
+  native color resolution. Shared pure color helpers retain their CommonJS API.
+- Readonly persistence contracts and focused tests cover runtime updates after
+  storage failure, self identity fallback and own override keys. Prototype names
+  such as `constructor` can no longer resolve to inherited functions as colors.
+- Verification: strict build/lint/type checks, 867 backend tests, 71 browser
+  regressions, all independent UI scenarios and desktop/mobile smoke passed.
+- Fable commit review is required before pushing this checkpoint.
+- Next: remaining new-session directory, target, model/config and spawn controllers.

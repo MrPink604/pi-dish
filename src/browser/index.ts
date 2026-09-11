@@ -10,3 +10,5 @@ export { createHarnessDiscovery } from './harness-discovery';
 export { createHostDiscovery, decodeHostDescriptor } from './host-discovery';
 export { createHostDirectory } from './host-directory';
 export { createHostSettings, hostSettingsHtml } from './host-settings';
+export { createHostPresentation, resolveColorToHex } from './host-presentation';
+export { HOST_COLOR_SLOTS, sanitizeHostColors, sanitizeHostColorOrder, assignHostColor, rgbStringToHex } from '../core/host-colors';

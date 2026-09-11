@@ -6,7 +6,8 @@ code still lives in JavaScript.**
 
 The browser-completion goal is active. Host identity and fleet discovery is
 checkpoint 1; host catalog state/editing is checkpoint 2. Both are pushed after
-Fable review. Checkpoint 3 moves the host settings UI and add-host request owners. See
+Fable review. Host settings UI and add-host request owners are checkpoint 3,
+also pushed after review. Checkpoint 4 completes host color state/presentation. See
 [the checkpoint log](docs/browser-migration-checkpoints.md) for implementation
 verification and the complete browser entrypoint inventory. The last confirmed
 CI checkpoint is recorded below; final CI must pass before the goal is complete.
@@ -17,7 +18,7 @@ CI checkpoint is recorded below; final CI must pass before the goal is complete.
 | --- | --- | --- |
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
-| Browser migration | In progress — current stage | Eleven implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
+| Browser migration | In progress — current stage | Twelve implementation modules are typed. Most controllers and rendering remain in `public/app.js`. |
 | Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -35,7 +36,7 @@ in `lib/`. Its full module inventory is in [the migration guide](docs/typescript
 Most JavaScript callers of these modules are not yet type checked; `lib/cron.js`
 is an explicitly checked exception.
 
-These eleven browser implementation modules compile strictly into the local
+These twelve browser implementation modules compile strictly into the local
 `public/browser.js` bundle (`src/browser/index.ts` is the bundle entrypoint):
 
 | Completed browser module | Responsibility now owned by TypeScript |
@@ -51,6 +52,7 @@ These eleven browser implementation modules compile strictly into the local
 | `host-discovery.ts` | Self/fleet request sequences, descriptor ownership and refresh timing |
 | `host-directory.ts` | Catalog/fleet/self state, effective lookups and owned source writers |
 | `host-settings.ts` | Host settings DOM, catalog actions and add-host request/view ownership |
+| `host-presentation.ts` | Device color state, palette order, host chips/dots and native color resolution |
 
 A completed module means that boundary has moved, been reviewed and verified.
 It does **not** mean its entire feature is migrated: for example, model-selector
@@ -66,7 +68,7 @@ commits; it is not a promise that one row equals one change.
 | Order | Work | Completion criterion |
 | --- | --- | --- |
 | 1 — implemented | Host identity and fleet discovery: `loadHostIdentity`, `loadHostFleet`, `identifyHosts` and their request state | Typed controller owns descriptor requests and their captured host/source identities; catalog persistence and UI callbacks remain explicit. Old-server fallback, refresh timing and stale-response behavior are verified. |
-| 2 — in progress | Host catalog editing and settings UI: persistence, add/remove/token actions and host-section rendering | Storage and network boundaries are typed; each action retains its intended host, and view listeners have explicit cleanup. |
+| 2 — implemented | Host catalog editing and settings UI: persistence, add/remove/token actions and host-section rendering | Storage and network boundaries are typed; each action retains its intended host, and view listeners have explicit cleanup. |
 | 3 | Remaining new-session request controllers: workspace/directory lookup, spawn targets, model/config discovery and spawn coordination | Requests retain host, harness, cwd and operation ownership; delayed results cannot change a newer configuration or retarget a spawn. |
 | 4 | Remaining browser features, extracted one feature at a time | Composer/queue, dialogs, search/usage, shares/pages/comments, tree and other feature state, requests and UI move behind typed contracts. Each feature gets its own scope before implementation. |
 | 5 | Transcript/streaming, file/diff and terminal surfaces, then the remaining app shell | Rendering and transport ownership move without losing streaming coalescing, retained transcript DOM, pagination, scroll state or terminal cleanup. |
@@ -94,14 +96,14 @@ checks. Documentation-only changes need content and link checks. After a chunk
 ships, update this page's checkpoint, completed inventory and next step so the
 status stays current.
 
-Last confirmed CI checkpoint, `69cccb7` (newer local work is in the checkpoint log):
+Last confirmed CI checkpoint, `b1cc60d` (newer local work is in the checkpoint log):
 
-- Fable 5.1 reviewed the host-directory commit before push with no blocking
-  findings. Its predecessor discovery commits were also reviewed before push.
-- 862 backend tests and 66 browser regressions passed, along with independent UI
+- Fable 5.1 reviewed the host-settings commit before push with no blocking
+  findings. Earlier host-directory/discovery checkpoints were also reviewed before push.
+- 862 backend tests and 71 browser regressions passed, along with independent UI
   scenarios and desktop/mobile smoke. OMP/Prime fake-provider canaries last passed
   at `53b5ae0`; they will run again for the final browser audit.
-- [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34586840814):
+- [All five CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/34587819581):
   backend Node 22.19.0/22.x/24.x/26.x and browser/UI on Node 24.
 
 These results establish a verified checkpoint, not exhaustive application coverage

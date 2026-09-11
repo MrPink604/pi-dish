@@ -24,10 +24,13 @@ var PiDishBrowser = (() => {
     ApiHttpError: () => ApiHttpError,
     HOST_BACKOFF_LADDER: () => HOST_BACKOFF_LADDER,
     HOST_BACKOFF_RESET_MS: () => HOST_BACKOFF_RESET_MS,
+    HOST_COLOR_SLOTS: () => HOST_COLOR_SLOTS,
+    assignHostColor: () => assignHostColor,
     createHarnessDiscovery: () => createHarnessDiscovery,
     createHostConnections: () => createHostConnections,
     createHostDirectory: () => createHostDirectory,
     createHostDiscovery: () => createHostDiscovery,
+    createHostPresentation: () => createHostPresentation,
     createHostSessionLoader: () => createHostSessionLoader,
     createHostSettings: () => createHostSettings,
     createHostTransport: () => createHostTransport,
@@ -44,7 +47,11 @@ var PiDishBrowser = (() => {
     mountThinkingSelector: () => mountThinkingSelector,
     normalizeHostBase: () => normalizeHostBase,
     reconcileHostCatalog: () => reconcileHostCatalog,
+    resolveColorToHex: () => resolveColorToHex,
+    rgbStringToHex: () => rgbStringToHex,
     sanitizeHostCatalog: () => sanitizeHostCatalog,
+    sanitizeHostColorOrder: () => sanitizeHostColorOrder,
+    sanitizeHostColors: () => sanitizeHostColors,
     sendJson: () => sendJson,
     withFetchTimeout: () => withFetchTimeout
   });
@@ -1373,6 +1380,105 @@ var PiDishBrowser = (() => {
       }
     }
     return { mount, unmount, render, save, addFromForm };
+  }
+
+  // src/core/host-colors.ts
+  var HOST_COLOR_SLOTS = 5;
+  function sanitizeHostColors(raw) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    const entries = [];
+    for (const [key, value] of Object.entries(raw)) {
+      if (key && typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value)) entries.push([key, value.toLowerCase()]);
+    }
+    return Object.fromEntries(entries);
+  }
+  function sanitizeHostColorOrder(raw) {
+    if (!Array.isArray(raw)) return [];
+    const rows = raw;
+    return [...new Set(rows.filter((item) => typeof item === "string" && !!item))];
+  }
+  function assignHostColor(order, key, overrides) {
+    const list = sanitizeHostColorOrder(order);
+    const map = sanitizeHostColors(overrides);
+    let index = list.indexOf(key);
+    const appended = !!key && index < 0;
+    if (appended) {
+      list.push(key);
+      index = list.length - 1;
+    }
+    const auto = index < 0 ? "var(--text-muted)" : `var(--chart-${index % HOST_COLOR_SLOTS + 1})`;
+    const custom = Object.prototype.hasOwnProperty.call(map, key);
+    return { color: custom ? map[key] : auto, order: list, index, appended, custom };
+  }
+  function rgbStringToHex(value) {
+    if (typeof value !== "string") return null;
+    if (/^#[0-9a-fA-F]{6}$/.test(value)) return value.toLowerCase();
+    const match = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/.exec(value.trim());
+    if (!match) return null;
+    const part = (input) => Math.max(0, Math.min(255, Math.round(Number(input)))).toString(16).padStart(2, "0");
+    return "#" + part(match[1]) + part(match[2]) + part(match[3]);
+  }
+
+  // src/browser/host-presentation.ts
+  function createHostPresentation(options) {
+    let overrides = sanitizeHostColors(options.initialColors);
+    let order = sanitizeHostColorOrder(options.initialOrder);
+    function keyFor(hostId) {
+      if (hostId) return hostId;
+      const entry = options.directory.entryFor(null);
+      return entry && (entry.hostId || entry.key) || "self";
+    }
+    function colorFor(hostId) {
+      const assigned = assignHostColor(order, keyFor(hostId), overrides);
+      if (assigned.appended) {
+        order = assigned.order;
+        try {
+          options.persistOrder(order);
+        } catch {
+        }
+      }
+      return assigned.color;
+    }
+    function isCustom(hostId) {
+      return Object.prototype.hasOwnProperty.call(overrides, keyFor(hostId));
+    }
+    function setColor(hostId, hex, { rows = true } = {}) {
+      const key = keyFor(hostId);
+      if (hex) overrides = { ...overrides, [key]: hex };
+      else delete overrides[key];
+      overrides = sanitizeHostColors(overrides);
+      try {
+        options.persistColors(overrides);
+      } catch {
+      }
+      options.onColorChanged(rows);
+    }
+    function dotHtml(hostId, className = "host-chip-dot") {
+      return `<span class="${className}" style="--host-color:${options.escapeHtml(colorFor(hostId))}"></span>`;
+    }
+    function chipHtml(hostId, { note = false } = {}) {
+      if (options.directory.effectiveHosts().length <= 1) return "";
+      const entry = options.directory.entryFor(hostId);
+      if (!entry) return "";
+      const down = options.isDown(entry);
+      const label = options.displayLabel(entry);
+      const title = label + (down ? " \u2014 unreachable, showing last known sessions" : "");
+      return `<span class="host-chip${down ? " offline" : ""}" style="--host-color:${options.escapeHtml(colorFor(hostId))}" title="${options.escapeHtml(title)}"><span class="host-chip-dot"></span>${options.escapeHtml(label)}${down && note ? " \xB7 unreachable" : ""}</span>`;
+    }
+    return { colorFor, isCustom, setColor, dotHtml, chipHtml };
+  }
+  function resolveColorToHex(color, doc = document) {
+    const direct = rgbStringToHex(color);
+    if (direct) return direct;
+    const probe = doc.createElement("span");
+    probe.style.cssText = "position:absolute;visibility:hidden;pointer-events:none";
+    probe.style.color = color;
+    doc.body.appendChild(probe);
+    try {
+      return rgbStringToHex(doc.defaultView?.getComputedStyle(probe).color);
+    } finally {
+      probe.remove();
+    }
   }
   return __toCommonJS(index_exports);
 })();

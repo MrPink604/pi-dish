@@ -249,82 +249,24 @@ function pruneHostCaches() {
 // a status light: the tint is faint, and liveness stays the dots' job.
 const HOST_COLORS_KEY = 'pi-dish-host-colors';
 const HOST_COLOR_ORDER_KEY = 'pi-dish-host-color-order';
-let hostColorOverrides = sanitizeHostColors(readJSONPref(HOST_COLORS_KEY, {}));
-let hostColorOrder = sanitizeHostColorOrder(readJSONPref(HOST_COLOR_ORDER_KEY, []));
-
-/** Stable per-host key for colors: the host id, falling back to its list key. */
-function hostColorKey(hostId) {
-  if (hostId) return hostId;
-  const entry = hostEntryFor(null);
-  return (entry && (entry.hostId || entry.key)) || 'self';
-}
-
-/** A CSS color for one host — `var(--chart-N)` unless overridden with a hex. */
-function hostColorFor(hostId) {
-  const key = hostColorKey(hostId);
-  const { color, order, appended } = assignHostColor(hostColorOrder, key, hostColorOverrides);
-  if (appended) {
-    hostColorOrder = order;
-    try { localStorage.setItem(HOST_COLOR_ORDER_KEY, JSON.stringify(order)); } catch {}
-  }
-  return color;
-}
-
-/** True when this host's color came from the user, not the palette rotation. */
-function hostColorIsCustom(hostId) {
-  return Object.prototype.hasOwnProperty.call(hostColorOverrides, hostColorKey(hostId));
-}
-
-function setHostColorOverride(hostId, hex, { rows = true } = {}) {
-  const key = hostColorKey(hostId);
-  if (hex) hostColorOverrides[key] = hex;
-  else delete hostColorOverrides[key];
-  hostColorOverrides = sanitizeHostColors(hostColorOverrides);
-  try { localStorage.setItem(HOST_COLORS_KEY, JSON.stringify(hostColorOverrides)); } catch {}
-  if (rows) renderHostsSection();
-  renderSessions();
-}
-
-/**
- * A CSS color string → `#rrggbb`, via a throwaway probe element: an auto host
- * color is `var(--chart-N)`, and `<input type="color">` can only hold a
- * concrete hex. Falls back to null when the browser won't resolve it.
- */
-function resolveColorToHex(color) {
-  const direct = rgbStringToHex(color);
-  if (direct) return direct;
-  const probe = document.createElement('span');
-  probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none';
-  probe.style.color = color;
-  document.body.appendChild(probe);
-  const computed = getComputedStyle(probe).color;
-  probe.remove();
-  return rgbStringToHex(computed);
-}
-
-/** The color dot a host wears in chips and section headings. */
-function hostDotHtml(hostId, className = 'host-chip-dot') {
-  return `<span class="${className}" style="--host-color:${escapeHtml(hostColorFor(hostId))}"></span>`;
-}
-
-/**
- * The host chip: a color dot, the label, and a faint tint of the host's color
- * on the hairline. Color-coded on purpose — across a fleet the color is what
- * the eye sorts by — but kept calm: this is context, not a status light, and
- * liveness stays the row dots' job. The unreachable form is the only
- * variation, and it is a word plus dimming, never an alarm color. Renders
- * nothing at all on a single host.
- */
-function hostChipHtml(hostId, { note = false } = {}) {
-  if (!isMultiHost()) return '';
-  const entry = hostEntryFor(hostId);
-  if (!entry) return '';
-  const down = hostIsDown(entry);
-  const label = hostDisplayLabel(entry);
-  const title = label + (down ? ' — unreachable, showing last known sessions' : '');
-  return `<span class="host-chip${down ? ' offline' : ''}" style="--host-color:${escapeHtml(hostColorFor(hostId))}" title="${escapeHtml(title)}">` +
-    `<span class="host-chip-dot"></span>${escapeHtml(label)}${down && note ? ' · unreachable' : ''}</span>`;
-}
+const hostPresentation = PiDishBrowser.createHostPresentation({
+  directory: hostDirectory,
+  initialColors: readJSONPref(HOST_COLORS_KEY, {}),
+  initialOrder: readJSONPref(HOST_COLOR_ORDER_KEY, []),
+  persistColors: colors => localStorage.setItem(HOST_COLORS_KEY, JSON.stringify(colors)),
+  persistOrder: order => localStorage.setItem(HOST_COLOR_ORDER_KEY, JSON.stringify(order)),
+  onColorChanged: rows => {
+    if (rows) renderHostsSection();
+    renderSessions();
+  },
+  escapeHtml, displayLabel: hostDisplayLabel, isDown: hostIsDown,
+});
+function hostColorFor(hostId) { return hostPresentation.colorFor(hostId); }
+function hostColorIsCustom(hostId) { return hostPresentation.isCustom(hostId); }
+function setHostColorOverride(hostId, hex, options) { hostPresentation.setColor(hostId, hex, options); }
+function resolveColorToHex(color) { return PiDishBrowser.resolveColorToHex(color); }
+function hostDotHtml(hostId, className) { return hostPresentation.dotHtml(hostId, className); }
+function hostChipHtml(hostId, options) { return hostPresentation.chipHtml(hostId, options); }
 
 // All session list/selection writes and their rendering hooks share one store.
 // Read its snapshots freely; mutate them only through its four state writers.

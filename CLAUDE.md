@@ -1608,11 +1608,12 @@ pinned, flat-search and spawn rows, and the Recent view stays interleaved
 (13.5px/700, `--text`, hairline above) > workspace group header (11px mono,
 muted) > session row.
 
+Host color state and chip/dot rendering live in `src/browser/host-presentation.ts`.
 Each host wears one color: `hostColorFor` resolves a `pi-dish-host-colors`
 `{hostId:'#rrggbb'}` override first, else a `var(--chart-N)` slot from
 first-seen order persisted in `pi-dish-host-color-order` (append-only, so
 colors never shuffle; tokens, so auto colors follow the theme —
-`assignHostColor` in helpers.js). It rides as an inline `--host-color` on
+`assignHostColor` in `src/core/host-colors.ts`; CommonJS helper exports remain compatible). It rides as an inline `--host-color` on
 chips and section headings, tinting a dot plus a `color-mix()` hairline; the
 tint stays faint because liveness is still the status dots' job. The settings
 Hosts rows carry the override editor: an `<input type="color">` seeded with

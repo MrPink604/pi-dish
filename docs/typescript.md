@@ -21,6 +21,7 @@ vanilla TypeScript and ordinary DOM rendering.
 | `rpc-session.ts` | RPC child lifecycle, request methods, stream reconstruction and native-id pool |
 | `bridge-session.ts` | Registry discovery/claims, socket handshake and pool, request methods and reconnect snapshots |
 | `host-identity.ts` | Stable host id and host label |
+| `host-colors.ts` | Shared pure color sanitization, palette assignment and RGB conversion |
 | `dish-store.ts` | HOME-scoped reads and atomic writes for small JSON stores |
 | `process-identity.ts` | Linux birth identity, liveness and bounded ancestry proofs |
 | `pending-requests.ts` | Correlation, timeout and disconnect cleanup for socket/stdio requests |
@@ -259,5 +260,13 @@ mounted view/attempt; edits, resubmission, unmount and remount retire old replie
 before descriptor or catalog publication. Ownership is checked after both the
 response and its body. Form and row listeners are disposed on replacement/close.
 Color input preserves its row while updating the sidebar, and change refreshes
-the controls. Color state and shared formatting remain explicit typed callbacks
-until their own migration.
+the controls. Color state is supplied by the typed host presentation controller; shared
+label/HTML formatting remains an explicit callback.
+
+`src/browser/host-presentation.ts` owns device-local color overrides, first-seen
+palette order, chip/dot rendering and native color resolution. Preference writers
+receive readonly values; failed storage writes preserve runtime color changes.
+The shared pure color functions live in `src/core/host-colors.ts`, compiled into
+both the browser bundle and `lib/host-colors.js`. `public/helpers.js` re-exports
+those functions for its existing Node consumers. Color lookup accepts only own
+validated overrides, including host keys that match Object prototype names.
