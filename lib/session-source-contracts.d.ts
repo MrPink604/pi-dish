@@ -22,11 +22,14 @@ export interface DiscoveryResult {
     readonly skipped: number;
 }
 export interface DiscoveryOptions {
-    readonly descriptor: HarnessDescriptor;
+    readonly descriptor?: HarnessDescriptor;
+    readonly harnessId?: HarnessId;
+    readonly profileId?: string;
+    readonly profileVersion?: number;
     readonly maxDepth?: number;
     readonly maxFiles?: number;
     readonly maxEntries?: number;
-    readonly excludeIds?: ReadonlySet<NativeSessionId>;
+    readonly excludeIds?: ReadonlySet<NativeSessionId> | readonly NativeSessionId[];
 }
 export interface LiveSourceObservation {
     readonly kind: 'registered' | 'rpc';

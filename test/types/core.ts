@@ -160,12 +160,14 @@ if (apiSession.capabilities) {
 import type { SessionFields, SessionRow, SessionMutationPatch, SessionActivityPatch, SessionTranscriptPatch } from '../../lib/session-api';
 import type { SessionSource, SessionSourceResolver } from '../../lib/session-source-contracts';
 import type { SessionMetadataIndex } from '../../lib/session-index-contracts';
-import type { CatalogSession } from '../../lib/session-catalog-contracts';
+import type { CatalogSession, CatalogLiveObservation } from '../../lib/session-catalog-contracts';
 import { sessionForClient } from '../../lib/session-api';
 declare const serverCatalogRow: CatalogSession;
 const serverTimestamp: Date | string | number | null | undefined = sessionForClient(serverCatalogRow).lastActivity;
 // @ts-expect-error A pre-JSON server projection is not a wire-only timestamp.
 const prematureWireTimestamp: string | number | null | undefined = sessionForClient(serverCatalogRow).lastActivity;
+declare const liveObservation: CatalogLiveObservation;
+const pendingHistory: CatalogLiveObservation = { ...liveObservation, source: null, claimedFile: '/tmp/not-created-yet.jsonl' };
 const closedFields: SessionFields = { name: null, contextTokens: 0, compacting: false, familyParentId: null };
 const closedRow: SessionRow = { id: 'peer', fields: closedFields, extras: { extension: { native: true } } };
 const omittedPatch: SessionMutationPatch = {};
@@ -197,4 +199,4 @@ metadataIndex.getSessionInfo('/tmp/session.jsonl');
 metadataIndex.scanSessions([source]).infos.get(source.file)!.name = 'mutated';
 // @ts-expect-error Authoritative metadata has no open extension index signature.
 closedRow.fields.extension = true;
-void [serverTimestamp, prematureWireTimestamp, omittedPatch, nullablePatch, badMetadata, typoPatch, identityPatch, livePatch, controlPatch, datePatch, wrongSource, wrongRoute];
+void [pendingHistory, serverTimestamp, prematureWireTimestamp, omittedPatch, nullablePatch, badMetadata, typoPatch, identityPatch, livePatch, controlPatch, datePatch, wrongSource, wrongRoute];

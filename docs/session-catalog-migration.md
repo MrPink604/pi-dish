@@ -436,8 +436,11 @@ Source callers supply file, harness, parser profile/version, native id, encoded
 session key, canonical route id and nullable structural parent path. Native and
 route roles reuse existing brands; Pi's route id remains raw while its
 `sessionKey` is encoded. Discovery adds workspace directory, depth and identity
-origin. Live observations may lack a file; only the resolver produces a usable
-source. The registry adapter supplies the currently selected unambiguous claim,
+origin. Discovery options retain default Pi/optional descriptor or harness-id
+selection, set/array exclusions and optional parser profile/version overrides;
+they do not establish identity or relax header validation. Live
+observations may lack a file; only the resolver produces a usable source.
+The registry adapter supplies the currently selected unambiguous claim,
 then the Pi RPC fallback. Conflicted observations remain visible to catalog
 composition with precomputed control flags disabled.
 
@@ -460,16 +463,23 @@ implementation-owned contracts; this catalog port does not falsely type them.
 Task 3 must validate their consumed fields without adding a second JSON pass.
 
 `SessionCatalogInput` receives captured live/history observations, launch-parent
-and routine maps, canonical path observations, directory existence results, and
-the indexing/truncation flags. History observations retain discovery directory
+and routine maps, and the indexing/truncation flags. History observations retain discovery directory
 metadata for Pi's cwd fallback. Task 5 owns naming, context overlays, native vs
 launch ancestry and routine projection; Task 7 gathers filesystem/store inputs
 and computes `CatalogAdvice` through existing policy. The live observation's
 explicit harness/native identity remains available even without a source file.
+Its separate `claimedFile` preserves the registry/RPC path even before the file
+exists: live `sessionFile` comes from this claim, while structural parent fallback
+still requires a resolved source. A missing source must not erase the claimed path.
 Live metadata and indexed info are separate inputs so their precedence belongs
-to the catalog, not an adapter. Options supply descriptor labels/layout and the
-existing read-time model-window lookup policy; its results never enter persistence.
+to the catalog, not an adapter. Options supply descriptor labels/layout, read-only
+canonical-path/directory-existence probes, and the existing read-time model-window
+lookup policy; its results never enter persistence. Probes keep path derivation
+inside composition rather than duplicating it in a preparatory server adapter.
 Catalog maps/arrays are readonly; their data is not lifecycle authority.
+The related route's off-catalog lookup uses local copies/overlays of `byId` and
+`byPath`; it must not mutate the catalog snapshot. `list` supplies the ref resolver's
+flattened active-first view (then previous and any active-only children, once each).
 
 ### Producer → writer → consumer inventory
 
@@ -534,7 +544,7 @@ Identity/private fields are intentionally outside `SessionFields`:
 | `host`, `hostLabel` | Answering endpoint and local host directory, not a peer row. Closed ingress discards forged values; Task 4 stamps them in state. |
 | `sessionKey`, `nativeSessionId` | Explicit source identity/brands in server catalog. Default API exposes them; client projection omits them. |
 | `profileId`, `profileVersion` | Harness descriptor/source; string/number; historical rows include them, active rows may omit. Client projection omits both. |
-| `sessionFile` | Resolved file or null, never identity or ownership by itself. Default API includes, client projection omits. |
+| `sessionFile` | Live registry/RPC-claimed path, even before the file exists; discovered file for history; otherwise null. Never identity or ownership by itself. Default API includes, client projection omits. |
 | `parentSession`, `parentSessionSource` | Accumulator's native header lineage then structural OMP fallback; string/null. Client projection omits. Catalog annotations derive public parent hints. |
 | `pid` | Live registry/process observation; number/null, absent in history. Client projection omits; process control still requires independent birth/token proofs. |
 | `sessionId` inside file metadata | Nonempty native **header hint**, string/null; never a route id or overwrite of selected identity. The index's legacy generic-path conversion is removed only with explicit-source caller cutover. |
@@ -657,6 +667,12 @@ experiment and the remaining general transcript read distinct.
   pass. Full `npm test`: **942 passed, zero skipped**. Focused browser API suite:
   **3 passed**. All 22 local links across the three migration documents resolve;
   `git diff --check` passes. The baseline was rerun after cleanup improvements.
+- Fable 5.1 reviewed `74237c2` and found one missing handoff input: a live row's
+  claimed file path when history has not been created. The correction adds
+  `claimedFile` separately from resolved source and a compile-only pending-history
+  case. Review also clarified filesystem probes, readonly related-route overlays,
+  flattened ref-list output and discovery profile overrides. Correction re-review
+  is pending.
 - This checkpoint does not change UI/state behavior. Independent UI scenarios,
   full desktop/mobile smoke and opt-in OMP/Prime lifecycle canaries were not run;
   they remain gates for the actual cutover. External review/push/CI results will

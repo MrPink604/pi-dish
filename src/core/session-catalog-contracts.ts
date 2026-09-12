@@ -12,6 +12,8 @@ export interface CatalogAdvice {
 }
 export interface CatalogLiveObservation extends Readonly<SessionIdentity> {
   readonly kind: 'registered' | 'rpc';
+  /** Reported even before the JSONL exists. This is not a resolved read source. */
+  readonly claimedFile: string | null;
   readonly source: SessionSource | null;
   readonly id: SessionId;
   readonly fields: Readonly<Pick<SessionFields<Date | string | number>,
@@ -38,9 +40,6 @@ export interface SessionCatalogInput {
   readonly history: readonly CatalogHistoryObservation[];
   readonly launchParents: ReadonlyMap<SessionId, SessionId>;
   readonly routines: ReadonlyMap<SessionId, CatalogRoutineAnnotation>;
-  /** Existing realpath/existence observations; filesystem I/O remains at ingress. */
-  readonly canonicalPaths: ReadonlyMap<string, string>;
-  readonly existingDirectories: ReadonlySet<string>;
   readonly indexing: boolean;
   readonly discoveryTruncated: boolean;
   readonly discoverySkipped: number;
@@ -51,6 +50,9 @@ export interface SessionCatalogOptions {
     Readonly<Pick<HarnessDescriptor, 'id' | 'label' | 'layout'>>>;
   /** Existing model-window lookup policy, invoked at composition time, never persisted. */
   readonly contextWindowForModel: (model: string | null | undefined) => number;
+  /** Read-only probes keep path derivation in the catalog, without duplicating it in adapters. */
+  readonly canonicalPath: (file: string | null) => string | null;
+  readonly directoryExists: (directory: string) => boolean;
 }
 /** Before JSON serialization; default API fields omitted by view=client remain explicit. */
 export interface CatalogSession extends SessionFields<Date | string | number> {
@@ -66,6 +68,8 @@ export interface CatalogSession extends SessionFields<Date | string | number> {
   readonly pid?: number | null;
 }
 export interface SessionCatalog {
+  /** Active first, then previous and any active-only children, each route appearing once. */
+  readonly list: readonly CatalogSession[];
   readonly active: readonly CatalogSession[];
   readonly previous: readonly CatalogSession[];
   readonly children: readonly CatalogSession[];
