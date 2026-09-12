@@ -29,7 +29,7 @@ export function createSessionInfo(options: {
     if (disposed || !owner || !host || !sessionState.ownsSelection(owner)) return false;
     const current = options.host(owner.host); return !!current && current.base === host.base && (current.token || '') === (host.token || '');
   }
-  function sessionSupports(session: SessionEntry | undefined, capability: string) { const capabilities = session?.capabilities; return !record(capabilities) || capabilities[capability] !== false; }
+  function sessionSupports(session: SessionEntry | undefined, capability: string) { return session?.capabilities?.[capability] !== false; }
   async function json(host: HostEndpoint, path: string, init?: RequestOptions): Promise<unknown> {
     const response = await apiFetch(host, path, init); const data: unknown = await response.json().catch(() => null);
     if (!response.ok) throw new Error(record(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`);
@@ -229,7 +229,7 @@ export function createSessionInfo(options: {
     const host = owner.host;
     const detach = session.closeMode === 'client-only'; // Older fleet hosts still only detach Prime clients.
     const ownedAgent = session.closeMode === 'owned-agent';
-    const restartable = record(session.capabilities) && session.capabilities.restart === true;
+    const restartable = session.capabilities?.restart === true;
     el.innerHTML = '<div class="stats-share-title">Session process</div>' +
       '<div class="stats-share-body">' +
       (restartable ? '<button type="button" class="btn-small" id="sessionRestartBtn">Restart agent</button>' : '') +

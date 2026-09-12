@@ -10,12 +10,11 @@ That milestone established checked modules and explicit request/view ownership;
 it did not eliminate the browser's classic-script forwarding layer or make the
 session metadata pipeline strongly typed end to end.
 
-**Next: session catalog and metadata**, connecting discovery/index data, server
-catalog construction and browser state through explicit checked contracts.
-The [implementation plan](docs/session-catalog-migration.md) defines the higher-level
-tasks, acceptance criteria and parallel workstreams. Task 1 contracts and baseline
-are implemented; source/index/catalog and browser cutover remain planned, not
-implemented. Vanilla DOM rendering, local assets and existing server/Electron
+**Session catalog and metadata are implemented**, connecting discovery, explicit
+source resolution, indexed metadata, catalog composition and browser state through
+checked contracts. The [implementation record](docs/session-catalog-migration.md)
+tracks final verification and review. Browser composition cleanup is the next
+separate stage. Vanilla DOM rendering, local assets and existing server/Electron
 delivery remain supported.
 
 Browser work was divided into 43 checkpoints. See
@@ -61,12 +60,12 @@ inventory, not evidence of reduced complexity. A source increase can still be
 worthwhile when it removes a competing owner or an invalid state; a source
 decrease is not a win when complexity moves into adapters or tests.
 
-The immediate evidence is session metadata: `SessionEntry` currently combines
-identity with `Record<string, unknown>`, and its patch writer accepts both a
-numeric `model` and a misspelled `modle`. Sidebar/header consumers separately
-narrow overlapping fields. The browser also retains a classic-script global
-facade for composition and test instrumentation. These are explicit remaining
-debts, not reasons to discard the useful ownership and validation work.
+The session metadata stage closes `SessionEntry` and its mutation, activity and
+transcript writers. Numeric models, misspelled fields and identity writes now
+fail compilation. The source resolver replaces the server's path side map and
+route cache; catalog composition replaces independent row builders and annotations.
+Sidebar/header consumers retain display fallbacks without re-decoding established
+fields. The browser's classic-script forwarding facade remains a separate debt.
 
 ## Status at a glance
 
@@ -75,14 +74,14 @@ debts, not reasons to discard the useful ownership and validation work.
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
 | Browser migration | Source implementation complete and reviewed | All first-party application logic and bindings are typed. Local strict, backend, browser and UI checks pass; each push must also pass the CI matrix. |
-| Session catalog and metadata | Task 1 contracts/baseline implemented and reviewed | Source/index/catalog and browser cutover remain Tasks 2–7; require removal of redundant normalization and adapters. |
+| Session catalog and metadata | Tasks 1–7 implemented; final review in progress | Checked discovery/source/index/catalog and closed browser state replace competing adapters and render-time normalization. See the stage record for verification. |
 | Remaining server application and feature modules | Later — outside the next bounded stage | Lifecycle redesign, general routes, recovery and feature stores still need separate stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
 
 The completed browser source migration does not imply a whole-application
-conversion or complete domain contracts. Session catalog/metadata is the next
-bounded stage. Browser composition cleanup follows as a separate simplification
+conversion or complete domain contracts. Session catalog/metadata now establishes
+its bounded read path. Browser composition cleanup follows as a separate simplification
 candidate; lifecycle, other stores, extension checking and Electron shell scope
 remain to be assessed independently.
 
@@ -202,19 +201,12 @@ names instead of executable event handlers.
 
 ## Ordered next work
 
-1. **Session catalog and metadata.** Follow the
-   [higher-level task plan](docs/session-catalog-migration.md). Task 1 now defines
-   concrete field/source/index/catalog contracts and a reproducible isolated
-   baseline; strict checks, 942 backend tests, focused browser API tests and Fable
-   review passed. Tasks 2/3/4 follow that
-   foundation, then catalog composition and browser consumer cleanup. One integration
-   owner handles shared server wiring, exports, generated assets and final checks.
-2. **Browser composition cleanup.** Replace the broad classic-script forwarding
+1. **Browser composition cleanup.** Replace the broad classic-script forwarding
    facade with ordinary bundled dependencies and explicit composition. Migrate
    test instrumentation without losing ownership-race coverage; do not recreate
    the facade as an equally broad permanent debug object. This is a separate
    stage, not bundled into the metadata cutover.
-3. **Remaining backend boundaries.** Evaluate lifecycle orchestration next on
+2. **Remaining backend boundaries.** Evaluate lifecycle orchestration next on
    safety and simplification grounds; migrate feature stores when their consumer
    contracts justify it, not simply because they are easy JavaScript files.
    Audit extension checking and Electron before claiming whole-application coverage.

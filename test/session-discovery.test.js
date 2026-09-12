@@ -8,6 +8,7 @@ const {
   discoverSessionCandidates, discoverSubsessionCandidates, findSessionCandidate, readSessionHeader,
 } = require('../lib/session-discovery');
 const { registry } = require('../lib/harnesses');
+const { encodeSessionKey } = require('../lib/session-key');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-discovery-'));
 test.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -28,10 +29,12 @@ test('discovers traditional and nested generic Pi sessions with compatible ident
   write(path.join(workspace, 'scope', 'events.jsonl'), { type: 'session', id: 'not-a-session-artifact' });
 
   const result = discoverSessionCandidates(sessions);
-  assert.deepEqual(result.candidates.map(c => c.id), ['2026-01-01_parent', 'core-child']);
+  assert.deepEqual(result.candidates.map(c => c.nativeSessionId), ['2026-01-01_parent', 'core-child']);
   assert.equal(result.truncated, false);
-  const child = result.candidates.find(c => c.id === 'core-child');
+  const child = result.candidates.find(c => c.nativeSessionId === 'core-child');
   assert.equal(child.depth, 3);
+  assert.equal(child.routeId, 'core-child');
+  assert.equal(child.sessionKey, encodeSessionKey('pi', 'core-child'));
   assert.equal(readSessionHeader(child.file).parentSession, path.join(workspace, '2026-01-01_parent.jsonl'));
   assert.equal(findSessionCandidate(sessions, 'core-child', { allowPartial: false }).candidate.file, child.file);
 });
@@ -50,15 +53,15 @@ test('discovers OMP sibling-directory subsessions without loosening Pi discovery
   });
 
   const omp = discoverSessionCandidates(sessions, { descriptor: registry.omp });
-  assert.deepEqual(omp.candidates.map(candidate => candidate.id), [
+  assert.deepEqual(omp.candidates.map(candidate => candidate.nativeSessionId), [
     'root-session', 'omp-child-id', 'omp-grandchild-id',
   ]);
-  assert.equal(omp.candidates.find(candidate => candidate.id === 'omp-child-id').parentSession, parent);
-  assert.equal(omp.candidates.find(candidate => candidate.id === 'omp-grandchild-id').parentSession, child);
-  assert.equal(omp.candidates.some(candidate => candidate.id === 'not-under-a-session'), false);
+  assert.equal(omp.candidates.find(candidate => candidate.nativeSessionId === 'omp-child-id').parentSession, parent);
+  assert.equal(omp.candidates.find(candidate => candidate.nativeSessionId === 'omp-grandchild-id').parentSession, child);
+  assert.equal(omp.candidates.some(candidate => candidate.nativeSessionId === 'not-under-a-session'), false);
 
   const pi = discoverSessionCandidates(sessions, { descriptor: registry.pi });
-  assert.deepEqual(pi.candidates.map(candidate => candidate.id), ['root-session'],
+  assert.deepEqual(pi.candidates.map(candidate => candidate.nativeSessionId), ['root-session'],
     'arbitrarily named nested JSONLs remain excluded from Pi');
 });
 
@@ -73,13 +76,13 @@ test('bounded discovery skips over-depth directories, symlinks, and reports caps
   try { fs.symlinkSync(outside, path.join(workspace, 'linked'), 'dir'); } catch {}
 
   const shallow = discoverSessionCandidates(sessions, { maxDepth: 1 });
-  assert.deepEqual(shallow.candidates.map(c => c.id), ['one']);
+  assert.deepEqual(shallow.candidates.map(c => c.nativeSessionId), ['one']);
   const capped = discoverSessionCandidates(sessions, { maxFiles: 1 });
   assert.equal(capped.candidates.length, 1);
   assert.equal(capped.truncated, true);
   const entryCapped = discoverSessionCandidates(sessions, { maxEntries: 1 });
   assert.equal(entryCapped.truncated, true);
-  assert.equal(capped.candidates.some(c => c.id === 'linked'), false);
+  assert.equal(capped.candidates.some(c => c.nativeSessionId === 'linked'), false);
 });
 
 test('generic header cache reuses positive and negative results', () => {
@@ -124,7 +127,7 @@ test('invalid basename identities are skipped and warned once without aborting d
   console.warn = message => warnings.push(message);
   try {
     const first = discoverSessionCandidates(sessions);
-    assert.deepEqual(first.candidates.map(c => c.id), ['valid-session']);
+    assert.deepEqual(first.candidates.map(c => c.nativeSessionId), ['valid-session']);
     assert.equal(first.skipped, 1);
     assert.equal(first.truncated, false);
     assert.equal(discoverSessionCandidates(sessions).skipped, 1, 'each scan reports its skipped count');
@@ -149,17 +152,18 @@ test('subsession discovery mirrors the corpus walk within one session subtree', 
   write(path.join(workspace, 'other-session.jsonl'), { type: 'session', id: 'other-session', cwd: '/workspace' });
 
   const found = discoverSubsessionCandidates(parent, { descriptor: registry.omp });
-  assert.deepEqual(found.map(candidate => candidate.id).sort(), ['sub-explore', 'sub-helper'],
+  assert.deepEqual(found.map(candidate => candidate.nativeSessionId).sort(), ['sub-explore', 'sub-helper'],
     'only the parent’s own subtree, and only real session headers');
-  assert.equal(found.every(candidate => candidate.harnessId === 'omp' && candidate.nativeSessionId === candidate.id), true);
-  assert.equal(found.find(candidate => candidate.id === 'sub-explore').parentSession, parent);
+  assert.equal(found.every(candidate => candidate.harnessId === 'omp'
+    && candidate.routeId === encodeSessionKey('omp', candidate.nativeSessionId)), true);
+  assert.equal(found.find(candidate => candidate.nativeSessionId === 'sub-explore').parentSession, parent);
 
   assert.deepEqual(discoverSubsessionCandidates(parent, { descriptor: registry.pi }), [],
     'a harness without nested subsessions has none');
 
   // A copied/restored tree: two files claim one header id, so neither routes.
   write(path.join(workspace, 'root-session', 'Copy.jsonl'), { type: 'session', id: 'sub-explore', cwd: '/workspace' });
-  assert.deepEqual(discoverSubsessionCandidates(parent, { descriptor: registry.omp }).map(c => c.id), ['sub-helper'],
+  assert.deepEqual(discoverSubsessionCandidates(parent, { descriptor: registry.omp }).map(c => c.nativeSessionId), ['sub-helper'],
     'ambiguous header ids are omitted rather than routed arbitrarily');
   fs.rmSync(path.join(workspace, 'root-session', 'Copy.jsonl'));
 
@@ -169,11 +173,34 @@ test('subsession discovery mirrors the corpus walk within one session subtree', 
   write(path.join(workspace, 'root-session', 'Linked.jsonl'), { type: 'session', id: 'sub-linked', cwd: '/workspace' });
   let linked = false;
   try { fs.symlinkSync(outside, path.join(workspace, 'root-session', 'Linked'), 'dir'); linked = true; } catch {}
-  const afterLink = discoverSubsessionCandidates(parent, { descriptor: registry.omp }).map(c => c.id);
+  const afterLink = discoverSubsessionCandidates(parent, { descriptor: registry.omp }).map(c => c.nativeSessionId);
   assert.equal(afterLink.includes('sub-linked'), true, 'the file itself is still a session');
   if (linked) assert.equal(afterLink.includes('sub-outside'), false, 'symlinked agent directories are not followed');
 
   assert.equal(discoverSubsessionCandidates(parent, { descriptor: registry.omp, maxFiles: 1 }).length, 1);
-  assert.deepEqual(discoverSubsessionCandidates(parent, { descriptor: registry.omp, maxDepth: 1 }).map(c => c.id).sort(),
+  assert.deepEqual(discoverSubsessionCandidates(parent, { descriptor: registry.omp, maxDepth: 1 }).map(c => c.nativeSessionId).sort(),
     ['sub-explore', 'sub-linked'], 'depth bounds the subtree walk');
+});
+
+test('profile overrides and native-id exclusions retain descriptor-owned identity validation', () => {
+  const sessions = path.join(root, 'sessions-profile-options');
+  const file = path.join(sessions, 'workspace', 'run', 'session.jsonl');
+  write(file, { type: 'session', id: 'native' });
+  const options = { descriptor: registry.omp, profileId: 'custom-profile', profileVersion: 0 };
+  const [candidate] = discoverSessionCandidates(sessions, options).candidates;
+  assert.equal(candidate.nativeSessionId, 'native');
+  assert.equal(candidate.profileId, 'custom-profile');
+  assert.equal(candidate.profileVersion, 0);
+  assert.equal(candidate.routeId, encodeSessionKey('omp', 'native'));
+  for (const excludeIds of [['native'], new Set(['native'])]) {
+    assert.deepEqual(discoverSessionCandidates(sessions, { ...options, excludeIds }).candidates, []);
+  }
+  fs.writeFileSync(file, [
+    { type: 'title', title: 'OMP-only header framing' },
+    { type: 'session', id: 'later-native' },
+  ].map(JSON.stringify).join('\n') + '\n');
+  assert.equal(discoverSessionCandidates(sessions, options).candidates[0].nativeSessionId, 'later-native');
+  assert.deepEqual(discoverSessionCandidates(sessions, {
+    descriptor: registry.pi, profileId: 'omp-v1',
+  }).candidates, [], 'a parser output profile override cannot loosen the descriptor header identity policy');
 });

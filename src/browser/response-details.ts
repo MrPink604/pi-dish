@@ -10,7 +10,7 @@ export function createResponseDetails(options: { document: Document; sessionStat
   const responseDetails = new Map<string, Detail>(); let responseDetailSeq = 0, disposed = false;
   const lifetime = new AbortController();
   const key = () => sessionState.currentSession ? sessionRefKey(sessionState.currentSession) : null;
-  const model = () => typeof sessionState.currentSession?.model === 'string' ? sessionState.currentSession.model : '';
+  const model = () => sessionState.currentSession?.model ?? '';
   const current = (detail: Detail) => !disposed && detail.key === key();
   function button(value: unknown) {
     if (disposed) return ''; const message = decodeRenderMessage(value), detail = responseDetailProjection(message), id = `response-${++responseDetailSeq}`;

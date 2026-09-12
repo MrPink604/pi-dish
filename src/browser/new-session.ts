@@ -194,7 +194,7 @@ export function createNewSession(options: {
     const seen = new Set<string>(), values: string[] = [];
     for (const session of [...options.sessionState.sessions.active, ...options.sessionState.sessions.previous]) {
       if (options.multiHost() && (session.host || null) !== endpoint.hostId) continue;
-      if (typeof session.cwd === 'string' && session.cwd && !seen.has(session.cwd)) { seen.add(session.cwd); values.push(session.cwd); }
+      if (session.cwd && !seen.has(session.cwd)) { seen.add(session.cwd); values.push(session.cwd); }
     }
     if (!values.length) { workspaceRoot.innerHTML = ''; return; }
     workspaceRoot.innerHTML = '<span class="ns-workspaces-label">Workspaces</span>' + values.slice(0, 12).map(value =>

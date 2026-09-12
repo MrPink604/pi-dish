@@ -21,15 +21,15 @@ export function createSessionResume(options: {
     const owns = () => !disposed && generation === sequence && sessionState.ownsSelection(owner) && options.endpoint(owner.host).base === endpoint.base;
     wrap.style.display = 'flex'; select.title = 'Loading Oh My Pi models…';
     try {
-      const models = await api.models(endpoint, { harnessId: 'omp', cwd: typeof session.cwd === 'string' ? session.cwd : undefined }); if (!owns()) return;
-      const current = typeof session.model === 'string' && session.model !== 'unknown' && session.model ? ` (${session.model})` : '';
+      const models = await api.models(endpoint, { harnessId: 'omp', cwd: session.cwd }); if (!owns()) return;
+      const current = session.model && session.model !== 'unknown' ? ` (${session.model})` : '';
       select.innerHTML = `<option value="">Session model${escapeHtml(current)}</option>` + models.map(model => { const name = model.selector || `${model.provider}/${model.id}`; return `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`; }).join('');
       select.disabled = false; select.title = 'Optionally override the model while resuming this OMP session';
     } catch (error) { if (owns()) { select.disabled = true; select.title = `Could not load Oh My Pi models: ${error instanceof Error ? error.message : String(error)}`; } }
   }
   async function resume() {
     const owner = sessionState.captureSelection(); if (disposed || !owner) return;
-    const caps = sessionState.currentSession?.capabilities; if (record(caps) && caps.resume === false) return;
+    if (sessionState.currentSession?.capabilities?.resume === false) return;
     const key = sessionRefKey(owner); if (pending.has(key)) return;
     const token = Symbol(), endpoint = Object.freeze({ ...options.endpoint(owner.host) }), target = options.target(owner.host);
     const model = sessionState.currentSession?.harnessId === 'omp' ? select?.value || undefined : undefined;

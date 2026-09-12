@@ -3437,6 +3437,18 @@ let remoteHost = null; // second pi-dish (multi-host section)
     const multi = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     watch(multi, 'multi-host');
     await multi.addInitScript((entry) => {
+      // List facts belong to full snapshot setup, not restricted mutation patches.
+      window.fixtureSessionListPatch = (id, fields, host) => {
+        const parts = new Map();
+        for (const kind of ['active', 'previous']) {
+          for (const row of sessionState.sessions[kind]) {
+            const key = row.host || null;
+            if (!parts.has(key)) parts.set(key, { hostId: key, active: [], previous: [] });
+            parts.get(key)[kind].push(row.id === id && key === (host || null) ? { ...row, ...fields } : row);
+          }
+        }
+        sessionState.setSessionLists([...parts.values()]);
+      };
       localStorage.setItem('pi-dish-hosts', JSON.stringify([entry]));
     }, { base: remoteHost.base, hostId: remoteDescriptor.hostId, label: 'tycho', token: REMOTE_TOKEN });
     const remoteBase = remoteHost.base;
@@ -3764,7 +3776,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       ['rename', 'name', 'renamed remote collision'],
     ]) {
       await multi.evaluate(({ id, host }) => selectSession(id, { host }), { id: collisionId, host: remoteId });
-      await multi.evaluate(({ id, host }) => sessionState.patchSession(id, {
+      await multi.evaluate(({ id, host }) => window.fixtureSessionListPatch(id, {
         isActive: true, capabilities: { setModel: true, setThinking: true, rename: true },
       }, host), { id: collisionId, host: remoteId });
       const endpoint = `${remoteHost.base}/api/sessions/${collisionId}/${action}`;
@@ -3791,13 +3803,13 @@ let remoteHost = null; // second pi-dish (multi-host section)
       check(outcome.selectedHost === selfId && outcome.selected === before && outcome.self === before && outcome.remote === value,
         `delayed ${action} completion updates only the originating host`);
       await multi.unroute(endpoint);
-      await multi.evaluate(({ id, host }) => sessionState.patchSession(id, { isActive: false }, host), { id: collisionId, host: remoteId });
+      await multi.evaluate(({ id, host }) => window.fixtureSessionListPatch(id, { isActive: false }, host), { id: collisionId, host: remoteId });
     }
 
     // A row close belongs to the clicked row, even while its same-id peer is
     // selected. Confirming one host must not arm a close on the other host.
     await multi.evaluate(({ id, hosts }) => {
-      for (const host of hosts) sessionState.patchSession(id, { isActive: true, capabilities: { close: true } }, host);
+      for (const host of hosts) window.fixtureSessionListPatch(id, { isActive: true, capabilities: { close: true } }, host);
     }, { id: collisionId, hosts: [selfId, remoteId] });
     const selfClose = multi.locator(`.session-item[data-id="${collisionId}"][data-host="${selfId}"] .session-close-btn`);
     const remoteClose = multi.locator(`.session-item[data-id="${collisionId}"][data-host="${remoteId}"] .session-close-btn`);

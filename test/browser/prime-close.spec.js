@@ -4,7 +4,7 @@ const { test, expect, ROOT } = require('./fixtures');
 
 async function configureSession(page, fleet, mode, close = true, restart = false) {
   await fleet.select(fleet.peer);
-  await page.evaluate(({ id, host, mode, close, restart }) => sessionState.patchSession(id, {
+  await page.evaluate(({ id, host, mode, close, restart }) => window.fixtureSessionListPatch(id, {
     isActive: true,
     // The same harness has different close semantics on old and new hosts.
     harnessId: 'prime',

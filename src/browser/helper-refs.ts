@@ -364,12 +364,12 @@ export function searchSessionsForRef<T extends HelperSession>(list: readonly T[]
     let score = 0;
     let indices = null;
     if (q) {
-      const name = String(session.name || '');
+      const name = session.name || '';
       indices = fuzzyMatch(q, name);
       if (indices) {
         score = 1000 + fuzzyScore(indices, name);
       } else {
-        const cwd = String(session.cwd || '');
+        const cwd = session.cwd || '';
         const cwdIndices = fuzzyMatch(q, cwd);
         if (cwdIndices) score = 500 + fuzzyScore(cwdIndices, cwd);
         // Any identifier a ref may name, so typing a uuid tail finds the

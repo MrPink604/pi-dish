@@ -80,7 +80,7 @@ test.describe('live thinking selector', () => {
   test('an unusual current level is literal, uses the owning API and cannot leak into another session menu', async ({ page, fleet }) => {
     await fleet.select(fleet.self);
     const unusual = "future'<b>level</b>";
-    await page.evaluate(level => sessionState.mergeCurrentSession(sessionState.captureSelection(), { thinkingLevel: level }), unusual);
+    await page.evaluate(level => window.fixtureSessionListPatch(sessionState.currentSession.id, { thinkingLevel: level }), unusual);
     const requests = [];
     await page.route(`${fleet.self.base}/api/sessions/${ROOT}/thinking`, route => {
       const body = route.request().postDataJSON();

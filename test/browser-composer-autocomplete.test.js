@@ -14,7 +14,8 @@ test('autocomplete wire data narrows command and file fields without mutating in
 });
 test('session refs use target-host naming and keep exact host-id references unambiguous', () => {
   const state = createSessionState({ getSelfHostId: () => 'self', getHostLabel: id => id, onListsChanged() {}, onCurrentChanged() {} });
-  state.setSessionLists({ active: [{ id: 'same-id', host: 'self', name: 'Local' }, { id: 'same-id', host: 'peer', name: 'Remote' }, { id: 'other-id', host: 'peer' }] });
+  state.setSessionLists([{ hostId: 'self', active: [{ id: 'same-id', name: 'Local' }] },
+    { hostId: 'peer', active: [{ id: 'same-id', name: 'Remote' }, { id: 'other-id' }] }]);
   state.setCurrentSession('same-id', 'peer');
   const hosts = { self: { hostId: 'self', base: '', capabilities: {} }, peer: { hostId: 'peer', base: 'http://peer', name: 'named-peer', capabilities: {} } };
   const refs = createSessionReferences({ sessionState: state, selfId: () => 'self', host: id => hosts[id || 'self'], hostLabel: id => id, config: () => ({}) });

@@ -2,7 +2,7 @@ const { test, expect, ROOT } = require('./fixtures');
 test('late resume-model options cannot replace the picker for a newly selected host', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
   await page.evaluate(() => {
-    sessionState.patchSession(sessionState.currentSession.id, { harnessId: 'omp' });
+    window.fixtureSessionListPatch(sessionState.currentSession.id, { harnessId: 'omp' });
     const original = apiFetch; apiFetch = (host, path, init) => path.startsWith('/api/models') ? new Promise(resolve => { window.finishResumeModels = resolve; }) : original(host, path, init);
     window.oldResumeModels = loadResumeModelOptions(sessionState.currentSession);
   });
@@ -29,7 +29,7 @@ test('resume serializes a captured target and cannot navigate the replacement se
 test('resume disposal retires late response effects and changed endpoints retire picker data', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
   await page.evaluate(() => {
-    sessionState.patchSession(sessionState.currentSession.id, { harnessId: 'omp' });
+    window.fixtureSessionListPatch(sessionState.currentSession.id, { harnessId: 'omp' });
     window.resumeEndpoint = { base: 'http://original' }; window.resumeResponses = []; window.resumeEffects = [];
     window.ownedResume = PiDishBrowser.createSessionResume({ document, sessionState, endpoint: () => window.resumeEndpoint, target: () => null,
       request: (...args) => new Promise(resolve => window.resumeResponses.push({ args, resolve })), refresh: async () => window.resumeEffects.push('refresh'), select: () => window.resumeEffects.push('select'), status() {} });
@@ -40,9 +40,18 @@ test('resume disposal retires late response effects and changed endpoints retire
   await page.evaluate(id => { window.disposedResume = window.ownedResume.resume(); window.ownedResume.dispose(); window.resumeResponses[1].resolve(new Response(JSON.stringify({ id }))); return window.disposedResume; }, ROOT);
   expect(await page.evaluate(() => window.resumeEffects)).toEqual([]);
 });
-test('header projection narrows malformed metadata and cannot render wire HTML', async ({ page, fleet }) => {
+test('list ingress omits malformed presentation fields before header rendering and escapes names', async ({ page, fleet }) => {
+  await page.route(`${fleet.self.base}/api/sessions?**`, route => route.fulfill({ json: {
+    active: [], previous: [{ id: ROOT, name: '<img src=x>', model: null, cwd: {}, contextPercent: {}, contextTokens: 'not numeric', turnInProgress: 1 }],
+  } }));
+  await page.evaluate(() => loadSessions(undefined, { withPrevious: true }));
+  // Inspect the list before transcript metadata legitimately refreshes the header.
+  expect(await page.evaluate(({ id, host }) => {
+    const row = sessionState.findSession(id, host);
+    return { cwd: row.cwd, contextPercent: row.contextPercent, contextTokens: row.contextTokens, turnInProgress: row.turnInProgress };
+  }, { id: ROOT, host: fleet.self.hostId })).toEqual({ cwd: undefined, contextPercent: undefined, contextTokens: undefined, turnInProgress: undefined });
+  await page.route(`${fleet.self.base}/api/sessions/${ROOT}/messages?**`, route => route.fulfill({ json: { messages: [], session: {} } }));
   await fleet.select(fleet.self);
-  await page.evaluate(() => sessionState.patchSession(sessionState.currentSession.id, { name: '<img src=x>', cwd: {}, model: {}, contextPercent: {}, contextTokens: NaN }));
   await expect(page.locator('#sessionName')).toHaveText('<img src=x>');
   await expect(page.locator('#sessionName img')).toHaveCount(0);
   await expect(page.locator('#sessionContext')).toHaveText('0%');

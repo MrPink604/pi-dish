@@ -4,7 +4,7 @@ async function setup(page) {
     sidebarControls.dispose();
     window.controlsLog = { render: 0, copied: [], statuses: [], closes: [], refresh: 0, selected: [] };
     window.controlsState = PiDishBrowser.createSessionState({ getSelfHostId: () => 'self', getHostLabel: id => id, onListsChanged() {}, onCurrentChanged() {} });
-    window.controlsState.setSessionLists({ active: [{ id: 'same', host: 'self' }, { id: 'same', host: 'peer' }] });
+    window.controlsState.setSessionLists([{ hostId: 'self', active: [{ id: 'same' }] }, { hostId: 'peer', active: [{ id: 'same' }] }]);
     window.controlsState.setCurrentSession('same', 'self');
     window.controlHosts = { self: { base: 'http://self', token: 'first' }, peer: { base: 'http://peer' } };
     window.controlStorage = new Map();
@@ -69,7 +69,8 @@ test('closing from an empty selection cannot report after a later selection cycl
 test('family pin aliases and preference migration preserve host-qualified identities', async ({ page, fleet }) => {
   await setup(page, fleet);
   const result = await page.evaluate(() => {
-    window.controlsState.setSessionLists({ active: [{ id: 'child', host: 'peer', familyParentId: 'parent', cwd: '/repo' }, { id: 'parent', host: 'self', cwd: '/repo' }] });
+    window.controlsState.setSessionLists([{ hostId: 'peer', active: [{ id: 'child', familyParentId: 'parent', cwd: '/repo' }] },
+      { hostId: 'self', active: [{ id: 'parent', cwd: '/repo' }] }]);
     window.customSidebar.togglePin('child', 'child', ['child'], 'peer'); window.customSidebar.togglePin('parent', 'parent', ['parent'], 'self');
     const pins = [...window.customSidebar.pinned]; window.customSidebar.togglePin('child', 'child', ['child'], 'peer');
     window.controlStorage.set('pi-dish-expanded-session-families', JSON.stringify(['bare', 'peer child', 1]));

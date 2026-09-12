@@ -4,13 +4,12 @@ import type { RenderMessage, MessageBlock, AdvisorNote } from './message-data';
 import { decodeRenderMessage } from './message-data';
 import type { createResponseDetails } from './response-details';
 import { escapeHtml, formatTime, formatDuration, truncate } from './helper-format';
-import { record } from './helper-values';
 import { extractImageBlocks, extractTextContent, messageHasVisibleText, getToolSummary, parseIpythonResult } from './helper-content';
 import { splitSessionRefContext } from './helper-refs';
 export function createMessageRenderer(options: {
   document: Document; sessionState: SessionState; details: ReturnType<typeof createResponseDetails>;
   markdown: (text: string) => string; assetUrl: (host: string | null | undefined, path: string) => string;
-  matchRef: (ref: string) => { name?: string; isActive?: boolean } | null | undefined;
+  matchRef: (ref: string) => { name?: string | null; isActive?: boolean } | null | undefined;
   pinned: (container: HTMLElement) => boolean; follow: () => boolean; scroll: (container: HTMLElement) => void; jump: (container: HTMLElement) => void;
 }) {
   const { document } = options; let disposed = false;
@@ -51,7 +50,7 @@ function imageBlocksHtml(content: unknown, alt = 'image') {
 // message (pi's HTML export scrolls to ?targetId=<JSONL entry id>). Only
 // JSONL-backed messages have an entry id — streaming placeholders don't.
 function messageLinkBtnHtml(msg: RenderMessage) {
-  if (!msg.id || (record(options.sessionState.currentSession?.capabilities) && options.sessionState.currentSession.capabilities.export === false)) return '';
+  if (!msg.id || options.sessionState.currentSession?.capabilities?.export === false) return '';
   return `<button type="button" class="msg-link-btn" data-entry-id="${escapeHtml(msg.id)}" title="Copy share link to this message">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>

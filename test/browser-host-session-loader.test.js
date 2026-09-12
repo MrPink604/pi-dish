@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { stripQueryField } = require('../public/helpers');
+const { decodeSessionList } = require('../lib/session-api');
 const context = { URLSearchParams };
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
 const { createHostSessionLoader, ApiHttpError } = context.PiDishBrowser;
@@ -12,7 +13,7 @@ function fixture() {
   let sequence = 1;
   const calls = [], events = [];
   const loader = createHostSessionLoader({
-    requestList: (host, path, options) => new Promise((resolve, reject) => calls.push({ host, path, options, resolve, reject })),
+    requestList: (host, path, options) => new Promise((resolve, reject) => calls.push({ host, path, options, resolve: wire => resolve(decodeSessionList(wire)), reject })),
     currentSequence: () => sequence,
     stripHostQuery: query => stripQueryField(query, 'host'),
     onConnection: (host, event) => events.push({ type: 'connection', host, event }),
@@ -173,3 +174,24 @@ test('a changed host endpoint starts a new request and a retired 401 cannot bloc
   assert.equal(events.length, count);
   assert.equal(loader.getCache(mutable).active[0].name, 'replacement');
 });
+
+for (const hint of [undefined, null, '']) {
+  test(`active-only hints preserve prior parent and family for ${String(hint)} while full scans replace them`, async () => {
+    const { loader, calls } = fixture();
+    let pending = loader.load(host, undefined, true, 1);
+    calls[0].resolve({ active: [{ id: 'one', parentId: 'parent', parentSource: 'native', familyParentId: 'family' }], previous: [] });
+    await pending;
+    const incoming = { active: [{ id: 'one', parentId: hint, parentSource: null, familyParentId: hint }], previous: [] };
+    pending = loader.load(host, undefined, false, 1);
+    calls[1].resolve(incoming);
+    await pending;
+    assert.equal(loader.getCache(host).active[0].parentId, 'parent');
+    assert.equal(loader.getCache(host).active[0].parentSource, 'native');
+    assert.equal(loader.getCache(host).active[0].familyParentId, 'family');
+    pending = loader.load(host, undefined, true, 1);
+    calls[2].resolve(incoming);
+    await pending;
+    assert.equal(loader.getCache(host).active[0].parentId, hint);
+    assert.equal(loader.getCache(host).active[0].familyParentId, hint);
+  });
+}

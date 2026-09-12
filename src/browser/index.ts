@@ -89,7 +89,7 @@ export { createSessionReferences } from './session-references';
 export { createComposerAutocomplete } from './composer-autocomplete';
 export { decodeSlashCommands, decodeFileCompletions } from './composer-autocomplete-data';
 
-export { renderSidebar, sidebarSession, harnessBadgeInnerHtml, renderHarnessBadge } from './sidebar-render';
+export { renderSidebar, harnessBadgeInnerHtml, renderHarnessBadge } from './sidebar-render';
 
 export { createSidebarControls } from './sidebar-controls';
 

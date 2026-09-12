@@ -88,7 +88,7 @@ function setTurnInProgress(active: boolean) {
   // Reflect in the sidebar immediately — the working dot shouldn't wait for
   // the next 10s poll. (turn events only stream for the viewed session.)
   if (sessionState.currentSession && !!sessionState.currentSession.turnInProgress !== !!active) {
-    sessionState.patchSession(sessionState.currentSession.id, { turnInProgress: !!active });
+    sessionState.patchSessionActivity(sessionState.currentSession.id, { turnInProgress: !!active }, owner?.host);
   }
   var btnSteer = document.getElementById('btnSteer');
   var btnFollowUp = document.getElementById('btnFollowUp');
@@ -114,7 +114,7 @@ function setCompacting(active: boolean) {
   // Sidebar dot immediately, same as the turn dot (compaction events only
   // stream for the viewed session; other rows update via the poll).
   if (sessionState.currentSession && !!sessionState.currentSession.compacting !== on) {
-    sessionState.patchSession(sessionState.currentSession.id, { compacting: on });
+    sessionState.patchSessionActivity(sessionState.currentSession.id, { compacting: on }, owner?.host);
   }
 }
 

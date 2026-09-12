@@ -5,18 +5,23 @@ const path = require('node:path');
 const vm = require('node:vm');
 const context = {};
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-const { renderSidebar, sidebarSession } = context.PiDishBrowser;
+const { renderSidebar } = context.PiDishBrowser;
 function render(overrides = {}) {
   return renderSidebar({ active: [], previous: [], selected: null, tab: 'all', view: 'workspace', query: '', queriedFor: '', scope: '', indexing: false,
     contextMetric: 'percent', pending: [], selectedSpawn: null, expanded: new Set(), collapsed: new Set(), pinned: [], roots: new Map(),
     closeConfirm: null, closeBusy: null, multiHost: false, hosts: [], unread: () => false, hostChip: () => '', ...overrides });
 }
-test('sidebar projection narrows malformed metadata and retains explicit null family boundaries', () => {
-  const raw = { id: 'a', name: {}, contextPercent: Infinity, contextTokens: '10', searchScore: [], capabilities: { close: false, rename: 'yes' }, parentId: 'parent', familyParentId: null };
-  const row = sidebarSession(raw);
-  assert.equal(row.name, ''); assert.equal(row.contextPercent, 0); assert.equal(row.contextTokens, undefined);
-  assert.equal(row.capabilities.close, false); assert.equal(row.capabilities.rename, undefined); assert.equal(row.familyParentId, null);
-  assert.equal(raw.capabilities.rename, 'yes'); assert.equal(Object.hasOwn(sidebarSession({ id: 'b', parentId: 'parent' }), 'familyParentId'), false);
+test('sidebar presents decoded optional fields and retains explicit null family boundaries', () => {
+  const parent = { id: 'parent', name: '<parent>', cwd: '/repo' };
+  const implicitChild = { id: 'child', parentId: 'parent', cwd: '/repo', name: 'implicit child' };
+  const separated = { id: 'separate', parentId: 'parent', familyParentId: null, cwd: '/repo', name: 'separate child' };
+  const { html } = render({ previous: [parent, implicitChild, separated] });
+  assert.match(html, /&lt;parent&gt;/);
+  assert.match(html, /separate child/);
+  assert.doesNotMatch(html, /implicit child/);
+  assert.match(html, /0%/);
+  assert.equal(Object.hasOwn(implicitChild, 'familyParentId'), false);
+  assert.equal(separated.familyParentId, null);
 });
 test('host-qualified workspace collapse and family status stay independent for identical ids and paths', () => {
   const hosts = ['self', 'peer'].map(hostId => ({ hostId, label: hostId, state: 'reachable', key: hostId, color: '#abc', dot: '', hasCache: true }));

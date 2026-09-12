@@ -209,8 +209,8 @@ export function createSearchView(options: {
     const all = [...sessionState.sessions.active, ...sessionState.sessions.previous];
     const cwds = new Map<string, string>(), models = new Set<string>();
     for (const s of all) {
-      if (typeof s.cwd === 'string' && s.cwd) cwds.set(s.cwd, shortCwd(s.cwd));
-      if (typeof s.model === 'string' && s.model && s.model !== 'unknown') models.add(s.model);
+      if (s.cwd) cwds.set(s.cwd, shortCwd(s.cwd));
+      if (s.model && s.model !== 'unknown') models.add(s.model);
     }
     return {
       cwds: [...cwds.entries()].sort((a, b) => a[1].localeCompare(b[1])),

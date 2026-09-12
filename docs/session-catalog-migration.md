@@ -1,10 +1,9 @@
 # Session catalog and metadata migration
 
-Status: **Task 1 implemented and externally reviewed** (2026-09-11).
-The contracts, authority audit and isolated pre-migration baseline are recorded
-[below](#task-1-record). Tasks 2–7 remain unimplemented. This is the next stage
-of the [roadmap](../BACKLOG.md), not a claim that the current store or server
-already enforces the new contracts.
+Status: **Tasks 1–7 implemented; final verification and external review in progress**
+(2026-09-11). Task 1's reviewed contracts and baseline remain recorded
+[below](#task-1-record); the [cutover record](#tasks-2-7-cutover-record) describes
+implemented ownership changes and remaining unchecked boundaries.
 
 ## Mission and outcome
 
@@ -30,7 +29,10 @@ Success is measured across source, adapters, callers and tests together. Invento
 removed responsibilities and invalid writes prevented alongside source coverage
 and verification; do not equate fewer lines in `server.js` with less complexity.
 
-## Current seams and scope
+## Planning seams and scope
+
+This table records the pre-cutover owners that defined the work; the cutover
+record below identifies their implemented replacements.
 
 | Boundary | Current implementation | Work in this stage |
 | --- | --- | --- |
@@ -40,8 +42,8 @@ and verification; do not equate fewer lines in `server.js` with less complexity.
 | Browser ingress and state | `api-client.ts`, `host-session-loader.ts`, `sidebar-lists.ts`, `session-state.ts`, transcript/search decoding, activity and mutation writers | Decode incoming metadata, preserve the contract in state and restrict patches. |
 | Browser consumers | Sidebar/header/view, session helpers and other metadata readers | Remove repeated type narrowing; retain display derivation and ownership checks. |
 
-The current `SessionEntry` is identity plus `Record<string, unknown>`.
-`patchSession('session', { model: 123, modle: 'typo' }, 'host')` passes strict
+At planning time, `SessionEntry` was identity plus `Record<string, unknown>`.
+`patchSession('session', { model: 123, modle: 'typo' }, 'host')` passed strict
 checking. `SessionMetadata` names only a subset of fields, and transcript metadata
 is copied as a broad partial record. This is the concrete contract gap to close.
 
@@ -693,3 +695,94 @@ resolver, discovery, index, accumulator, catalog builders and browser store are
 **not migrated** by this checkpoint. The only runtime deduplication so far is
 shared capability-map validation; the large competing owners and renderer
 normalization remain explicit deletion work in Tasks 2–7.
+
+
+## Tasks 2–7 cutover record
+
+The first implementation wave ran discovery/source, metadata/index and browser
+state work in parallel. Catalog composition and browser consumer cleanup followed
+their dependencies; the integration owner changed server wiring, generated assets
+and shared contracts together.
+
+### Implemented owners and deleted responsibilities
+
+- `session-discovery.ts` contains the traversal/header/strict-exit implementation;
+  `session-source.ts` owns route aliases, header revalidation and invalidation.
+  The server's `sourceByFile`, `rememberSessionSource`, `sourceForRead`,
+  `sessionFileCache` and `refreshSessionFileCache` are removed. Discovery candidates
+  carry `nativeSessionId` and `routeId`, with no competing `id` alias.
+- `session-metadata.ts` contains the sole accumulator; `session-files.js` imports
+  it and no longer exports the obsolete entry-accumulator helpers. The checked
+  persistent index requires explicit sources, validates persisted data and the
+  JS projection fields it consumes, and keeps schemas 9/3/1 unchanged.
+- `session-catalog.ts` owns active/history/child rows, context derivation, deduping,
+  ordering and parent/routine hints. The server supplies observed registry/RPC data,
+  existing capability policy and bounded discovery/index results. Independent
+  active/history/subsession builders and annotation passes are removed. List,
+  search and reference consumers share composition; related-route fallback uses a
+  local map/list overlay. Lifecycle proofs stay with their existing owners.
+- `SessionEntry` retains closed `SessionFields` and separate opaque `extras`.
+  List ingress flattens validated fields once; host identity comes from the
+  answering endpoint. Mutation, activity and transcript writers accept only their
+  assigned fields. Sidebar/header consume established metadata directly; the
+  `sidebarSession` decoder and per-render normalization copies are removed.
+
+### Compatibility decisions during implementation
+
+Malformed historical names/models/cwd values are rejected by metadata accumulation
+before catalog construction. A malformed name therefore uses the normal history
+fallback in both default and client views, instead of forcing client projection to
+drop the whole row. The server regression records this deliberate improvement.
+Known valid omitted/null/empty/zero/false behavior, active-only family-hint retention,
+legacy partial Pi routes, encoded exact routes, registry/RPC precedence, pending
+claimed files, and live-child resume gates remain covered.
+
+General JSONL/tree/message parsing, usage projection, skill mining, feature stores,
+server routes/lifecycle orchestration and the browser's classic-script facade remain
+outside the migrated implementation. JS results enter the index as unknown and are
+validated for the fields it uses; this does not claim all usage buckets or harness
+events are checked. No store schema, protocol format or lifecycle policy was added.
+
+### Verification and review
+
+- `npm run check` passes, including strict compilation, generated-output drift
+  checks and negative type fixtures against the real implementations.
+- The complete backend suite passes: **971 tests**, no skips.
+- The complete browser run passed 279 of 280 scenarios; its sole failure was a
+  test setup relying on row-provided host identity. After converting that and
+  related direct list fixtures to endpoint-qualified snapshots, all **24 affected
+  scenarios passed**. Application code was unchanged by those fixture corrections.
+- All **eight independent UI scenarios** and the full desktop/mobile smoke pass,
+  including changed sidebar/header behavior, family pins, multi-host ownership,
+  capability controls, transcript refreshes and active-only child rows.
+- Optional real-harness lineage canaries were not run: harness launch/lifecycle
+  protocols were not changed; isolated discovery, strict-exit and lifecycle suites
+  cover the migrated readers.
+- Local Markdown link targets and `git diff --check` pass.
+
+The [post-migration artifact](session-catalog-after.json) uses the identical fixture
+corpus and instrumentation described above. Every directory/stat/full/range read,
+byte/parse count and returned result matches the pre-migration artifact. Warm
+active-only still reads one live subtree, no historical tree and zero JSONL bytes;
+warm full/route/persisted lists read zero JSONL bytes. An ordinary append performs
+one 130-byte range read and one 130-byte parse. Timings are observational, not gates:
+
+
+| Request | Before ms | After ms |
+| --- | ---: | ---: |
+| cold-route-and-transcript | 28.954 | 32.240 |
+| warm-route-and-transcript | 3.090 | 3.000 |
+| cold-active-only | 26.376 | 36.761 |
+| warm-active-only | 4.674 | 4.703 |
+| initial-bounded-list | 32.348 | 72.401 |
+| fully-indexed-warm-list | 9.088 | 11.024 |
+| persisted-index-list | 18.240 | 27.808 |
+| ordinary-append-index-read | 0.360 | 0.419 |
+
+Cold request timings varied across repeated captures: the bounded full-list
+sample above was 72.401 ms, and an immediate repeat was 46.839 ms with identical
+I/O counts (the first post-change capture was 46.115 ms). This is not a speedup
+claim or proof of equal CPU cost; source validation and snapshot projection add
+work while the required bounded scan/append behavior remains unchanged.
+
+External review and exact-commit CI remain pending.

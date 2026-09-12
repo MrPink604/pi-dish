@@ -1167,7 +1167,7 @@ function loadNsHarnessConfig(cwd = nsCwdValue()) { return newSessionConfigPrevie
 function harnessRow(...args: Parameters<typeof harnessDiscovery.row>) { return harnessDiscovery.row(...args); }
 function ensureHarnessRows(hostId: string | null) { void harnessDiscovery.ensure(hostId); }
 function harnessSupportsSettings(session: SessionEntry | null) {
-  return !!session && typeof session.harnessId === 'string' && !!session.harnessId && !!harnessRow(sessionHostIdOf(session), session.harnessId)?.pilotConfig;
+  return !!session?.harnessId && !!harnessRow(sessionHostIdOf(session), session.harnessId)?.pilotConfig;
 }
 function modelSelectOptionsHtml(models: Parameters<typeof PiDishBrowser.modelSelectOptionsHtml>[0]) { return PiDishBrowser.modelSelectOptionsHtml(models, escapeHtml); }
 function modelHiddenNote(...args: Parameters<typeof PiDishBrowser.modelHiddenNote>) { return PiDishBrowser.modelHiddenNote(...args); }
@@ -1196,8 +1196,8 @@ async function harnessSettingsFetch(hostId: HostTarget, url: string) {
 function openSessionHarnessSettings() {
   const session = sessionState.currentSession;
   if (!session || !harnessSupportsSettings(session)) return;
-  return openHarnessSettings({ harnessId: typeof session.harnessId === 'string' ? session.harnessId : 'pi', hostId: sessionHostIdOf(session), cwd: typeof session.cwd === 'string' ? session.cwd : '',
-    label: typeof session.harnessLabel === 'string' && session.harnessLabel || harnessBadgeInfo(typeof session.harnessId === 'string' ? session.harnessId : null).label });
+  return openHarnessSettings({ harnessId: session.harnessId || 'pi', hostId: sessionHostIdOf(session), cwd: session.cwd ?? '',
+    label: session.harnessLabel || harnessBadgeInfo(session.harnessId ?? null).label });
 }
 function openHarnessSettings(opts: Partial<Parameters<typeof harnessSettingsController.open>[0]> = {}) {
   const harnessId = opts.harnessId || 'omp';

@@ -44,7 +44,7 @@ export interface SourceLookup {
   readonly discover?: boolean;
   readonly live: readonly LiveSourceObservation[];
 }
-/** Future Task 2 implementation port, deliberately not a declaration of current JS. */
+/** Implemented by session-source.ts; read provenance never proves process ownership. */
 export interface SessionSourceResolver {
   resolve(input: SourceLookup): SessionSource | null;
   /** Replace discovered route entries, including on a truncated enumeration. */

@@ -36,16 +36,20 @@ const pages = require('./lib/pages');
 const comments = require('./lib/comments');
 const stt = require('./lib/stt');
 const {
-  readSessionMessages: readSessionMessagesRaw,
-  readSessionMessagesAtLeaf: readSessionMessagesAtLeafRaw,
-  readSessionMessageById: readSessionMessageByIdRaw,
-  getSessionStats: getSessionStatsRaw,
-  readSessionCwd: readSessionCwdRaw,
+  readSessionMessages,
+  readSessionMessagesAtLeaf,
+  readSessionMessageById,
+  getSessionStats,
+  readSessionCwd,
   readSessionTailEntry,
-  decodeDirToCwd,
 } = require('./lib/session-files');
-const { discoverSessionCandidates, discoverHarnessSessions, findSessionCandidate, discoverSubsessionCandidates, readSessionHeader, inspectSubsessionExits } = require('./lib/session-discovery');
+const { discoverHarnessSessions, findSessionCandidate, discoverSubsessionCandidates, readSessionHeader, inspectSubsessionExits } = require('./lib/session-discovery');
 const sessionIndex = require('./lib/session-index');
+const { getSessionInfo } = sessionIndex;
+const { createSessionSourceResolver, sourceForIdentity } = require('./lib/session-source');
+const { composeSessionCatalog, registeredSessionObservation, rpcSessionObservation,
+  decodeLaunchParents, decodeRoutineAnnotations, withSessionContext, subsessionLabel,
+  buildSourceSession } = require('./lib/session-catalog');
 const { encodeSessionKey, resolveSessionRoute, canonicalSessionId, VERSION: SESSION_KEY_VERSION } = require('./lib/session-key');
 const { getHarness, listHarnesses, resolveLaunchSpec } = require('./lib/harnesses');
 const { bridgeSupports, sessionCapabilities } = require('./lib/session-capabilities');
@@ -700,52 +704,22 @@ async function getBridgeSession(sessionId) {
   return getBridgeSessionForClaim(entry);
 }
 
-const sourceByFile = new Map();
-function rememberSessionSource(candidate) {
-  if (candidate?.file) sourceByFile.set(candidate.file, candidate);
-  return candidate;
-}
-function sourceForIdentity(harnessId, nativeSessionId, file) {
-  const descriptor = getHarness(harnessId);
-  const nestedParent = descriptor?.nestedSubsessions ? `${path.dirname(file)}.jsonl` : null;
-  return rememberSessionSource({
-    file,
-    id: nativeSessionId,
-    nativeSessionId,
-    sessionKey: encodeSessionKey(harnessId, nativeSessionId),
-    harnessId,
-    profileId: descriptor?.profileId || 'pi-v3',
-    profileVersion: descriptor?.profileVersion || 1,
-    parentSession: nestedParent && fs.existsSync(nestedParent) ? nestedParent : null,
-  });
-}
-function sourceForRead(input) {
-  if (typeof input !== 'string') return rememberSessionSource(input);
-  return sourceByFile.get(input) || input;
-}
+const sessionSources = createSessionSourceResolver();
 function apiIdForCandidate(candidate) {
-  return routeSessionId(candidate.harnessId || 'pi', candidate.nativeSessionId || candidate.id);
+  return candidate.routeId;
+}
+function liveSourceObservations(sessionId) {
+  const identity = routeIdentity(sessionId);
+  if (!identity) return [];
+  const registered = getRegisteredSession(sessionId);
+  const rpc = identity.harnessId === 'pi' ? getRPCSession(sessionId) : null;
+  return [
+    ...(registered ? [{ kind: 'registered', ...identity, file: registered.sessionFile || null }] : []),
+    ...(rpc ? [{ kind: 'rpc', ...identity, file: rpc.sessionFile || rpc.state?.sessionFile || null }] : []),
+  ];
 }
 function resolveSessionCandidate(sessionId, { discover = true } = {}) {
-  const identity = routeIdentity(sessionId);
-  if (!identity) return null;
-  const descriptor = getHarness(identity.harnessId);
-  if (!descriptor) return null;
-  const registered = getRegisteredSession(sessionId);
-  if (registered?.sessionFile && fs.existsSync(registered.sessionFile)) {
-    return sourceForIdentity(identity.harnessId, identity.nativeSessionId, registered.sessionFile);
-  }
-  if (identity.harnessId === 'pi') {
-    const rpc = getRPCSession(sessionId);
-    const file = rpc?.sessionFile || rpc?.state?.sessionFile;
-    if (file && fs.existsSync(file)) return sourceForIdentity('pi', identity.nativeSessionId, file);
-  }
-  if (!discover) return null;
-  const { candidate } = findSessionCandidate(descriptor.rootPath(), identity.nativeSessionId, {
-    descriptor,
-    allowPartial: false,
-  });
-  return candidate ? rememberSessionSource(candidate) : null;
+  return sessionSources.resolve({ route: sessionId, exact: true, discover, live: liveSourceObservations(sessionId) });
 }
 function liveSessionHistoryPending(sessionId) {
   const registered = getRegisteredSession(sessionId);
@@ -754,16 +728,6 @@ function liveSessionHistoryPending(sessionId) {
   const file = rpc?.sessionFile || rpc?.state?.sessionFile;
   return !!rpc?.alive && (!file || !fs.existsSync(file));
 }
-// Session metadata comes from the persistent index: for an actively
-// streaming session it extends in O(appended bytes) per poll instead of
-// re-parsing the whole multi-MB JSONL on every append.
-function getSessionInfo(input) { return sessionIndex.getSessionInfo(sourceForRead(input)); }
-function readSessionMessages(input) { return readSessionMessagesRaw(sourceForRead(input)); }
-function readSessionMessagesAtLeaf(input, leafId) { return readSessionMessagesAtLeafRaw(sourceForRead(input), leafId); }
-function readSessionMessageById(input, id) { return readSessionMessageByIdRaw(sourceForRead(input), id); }
-function getSessionStats(input) { return getSessionStatsRaw(sourceForRead(input)); }
-function readSessionCwd(input) { return readSessionCwdRaw(sourceForRead(input)); }
-
 function sessionIdentityFields(harnessId, nativeSessionId) {
   const descriptor = getHarness(harnessId);
   return {
@@ -1013,10 +977,7 @@ function adoptBridgeSessionSwitch(sess, data) {
   runtimeCache.delete(routed.sessionId);
   diffSnapshots.delete(routed.previousSessionId);
   diffSnapshots.delete(routed.sessionId);
-  for (const prefix of ['exact:', 'partial:']) {
-    sessionFileCache.delete(prefix + routed.previousSessionId);
-    sessionFileCache.delete(prefix + routed.sessionId);
-  }
+  sessionSources.clear();
 }
 
 /**
@@ -1182,15 +1143,11 @@ function getContextWindow(modelId) {
 // cache — the models cache warms up asynchronously and would otherwise be
 // baked stale into cached entries.
 function withContext(info) {
-  const contextWindow = getContextWindow(info.model);
-  const contextPercent = info.contextTokens > 0
-    ? Math.min(100, Math.floor(info.contextTokens / contextWindow * 100))
-    : 0;
-  return { ...info, contextWindow, contextPercent };
+  return withSessionContext(info, getContextWindow);
 }
 
-function parseSessionFile(filePath) {
-  return withContext(getSessionInfo(filePath));
+function parseSessionFile(source) {
+  return withContext(getSessionInfo(source));
 }
 
 // =========================================================================
@@ -1198,45 +1155,10 @@ function parseSessionFile(filePath) {
 // =========================================================================
 
 /**
- * The one session-summary shape both backends produce — a field added here
- * lands for bridge and RPC sessions alike (the two used to be separate
- * object literals that could silently drift apart).
- */
-function activeSessionEntry(v) {
-  return {
-    id: v.id,
-    sessionKey: v.sessionKey,
-    harnessId: v.harnessId || 'pi',
-    harnessLabel: v.harnessLabel || 'Pi',
-    nativeSessionId: v.nativeSessionId || v.id,
-    capabilities: v.capabilities || sessionCapabilities('pi', {}, { active: true }),
-    closeMode: v.closeMode || 'logical',
-    conflicted: !!v.conflicted,
-    liveInstanceCount: v.liveInstanceCount || 1,
-    name: v.name || 'New Session',
-    model: v.model || 'unknown',
-    contextPercent: roundPercent(v.percent) ?? 0,
-    contextTokens: v.tokens ?? 0,
-    contextWindow: v.contextWindow || 0,
-    thinkingLevel: v.thinkingLevel || null,
-    messageCount: v.messageCount || 0,
-    lastActivity: v.lastActivity,
-    isActive: true,
-    turnInProgress: !!v.turnInProgress,
-    compacting: !!v.compacting,
-    cwd: v.cwd || null,
-    sessionFile: v.sessionFile || null,
-    parentSession: v.parentSession || null,
-    parentSessionSource: v.parentSessionSource || null,
-    pid: v.pid || null,
-  };
-}
-
-/**
  * Active sessions = sessions registered by the pi-dish-bridge extension.
  * We enrich the registry entry with metadata from the on-disk JSONL.
  */
-function getActiveSessions(registered = listRegisteredSessions()) {
+function collectActiveObservations(registered = listRegisteredSessions()) {
   const active = [];
   const seen = new Set();
   const groups = new Map();
@@ -1254,49 +1176,27 @@ function getActiveSessions(registered = listRegisteredSessions()) {
     const conflicted = instances.length !== 1;
     const reg = instances.slice().sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))[0];
     const identity = registryIdentity(reg);
-    const identityFields = sessionIdentityFields(identity.harnessId, identity.nativeSessionId);
     const ownedSpawn = tmux.getSpawn(routeId);
     const closeMode = getHarness(identity.harnessId).closeMode;
     const restartAllowed = spawnAllowsRestart(ownedSpawn, reg, closeMode);
-    let info = {};
+    let info = null;
     let source = null;
     if (reg.sessionFile && fs.existsSync(reg.sessionFile)) {
       try {
         source = sourceForIdentity(identity.harnessId, identity.nativeSessionId, reg.sessionFile);
-        info = parseSessionFile(source);
+        info = getSessionInfo(source);
       } catch {}
     }
-    // The bridge reports the session's actual context usage (tokens, window,
-    // percent) straight from pi — always prefer it over JSONL guesswork.
-    const usage = reg.contextUsage || null;
-    active.push(activeSessionEntry({
-      ...identityFields,
-      capabilities: sessionCapabilities(identity.harnessId, reg.capabilities || {}, {
-        active: true,
-        conflicted,
-        closeAllowed: spawnAllowsManagedClose(ownedSpawn, reg, closeMode),
-        restartAllowed: !!getRPCSession(routeId)?.alive || restartAllowed,
-      }),
-      closeMode,
-      conflicted,
-      liveInstanceCount: instances.length,
-      name: reg.name || info.name,
-      model: reg.model || info.model,
-      percent: usage?.percent ?? info.contextPercent,
-      tokens: usage?.tokens ?? info.contextTokens,
-      contextWindow: usage?.contextWindow || getContextWindow(reg.model || info.model),
-      thinkingLevel: reg.thinkingLevel,
-      messageCount: info.messageCount,
-      // Stable fallbacks only — a fresh `new Date()` per poll would make
-      // isUnreadSession() flag the session unread forever and churn the sort.
-      lastActivity: info.lastActivity || reg.updatedAt || new Date(0),
-      turnInProgress: reg.turnInProgress,
-      compacting: reg.compacting,
-      cwd: reg.cwd || info.cwd,
-      sessionFile: reg.sessionFile,
-      parentSession: info.parentSession || source?.parentSession,
-      parentSessionSource: !info.parentSession && source?.parentSession ? 'omp-subsession-layout' : null,
-      pid: reg.pid,
+    active.push(registeredSessionObservation(reg, {
+      ...identity, source, info,
+      advice: {
+        capabilities: sessionCapabilities(identity.harnessId, reg.capabilities || {}, {
+          active: true, conflicted,
+          closeAllowed: spawnAllowsManagedClose(ownedSpawn, reg, closeMode),
+          restartAllowed: !!getRPCSession(routeId)?.alive || restartAllowed,
+        }),
+        closeMode, conflicted, liveInstanceCount: instances.length,
+      },
     }));
     seen.add(routeId);
   }
@@ -1307,105 +1207,54 @@ function getActiveSessions(registered = listRegisteredSessions()) {
   // model-switchable.
   for (const rpc of getAllRPCSessions()) {
     if (!rpc.alive || seen.has(rpc.id)) continue;
-    const state = rpc.state || {};
-    const usage = rpc.lastStats?.contextUsage || null;
-    let info = {};
-    const rpcFile = rpc.sessionFile || state.sessionFile;
+    let info = null;
+    let source = null;
+    const rpcFile = rpc.sessionFile || rpc.state?.sessionFile;
     if (rpcFile && fs.existsSync(rpcFile)) {
-      try { info = parseSessionFile(rpcFile); } catch {}
+      try {
+        source = sourceForIdentity('pi', rpc.id, rpcFile);
+        info = getSessionInfo(source);
+      } catch {}
     }
-    active.push(activeSessionEntry({
-      ...sessionIdentityFields('pi', rpc.id),
-      capabilities: sessionCapabilities('pi', {}, { active: true, restartAllowed: true }),
-      name: state.sessionName || state.name,
-      model: formatModelRef(state.model) || formatModelRef(rpc.model),
-      percent: usage?.percent,
-      tokens: usage?.tokens,
-      contextWindow: usage?.contextWindow || state.model?.contextWindow,
-      thinkingLevel: state.thinkingLevel,
-      messageCount: state.messageCount,
-      lastActivity: rpc.lastActivityAt,
-      turnInProgress: rpc.turnInProgress,
-      compacting: rpc.compacting,
-      cwd: rpc.cwd,
-      sessionFile: rpcFile,
-      parentSession: info.parentSession,
-      pid: rpc.proc?.pid,
+    active.push(rpcSessionObservation(rpc, {
+      nativeSessionId: rpc.id, source, info,
+      advice: {
+        capabilities: sessionCapabilities('pi', {}, { active: true, restartAllowed: true }),
+        closeMode: getHarness('pi').closeMode, conflicted: false, liveInstanceCount: 1,
+      },
     }));
     seen.add(rpc.id);
   }
 
-  active.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
   return active;
 }
 
-// Returns { previous, indexing } — with `indexing` true the session index is
-// still backfilling (first boot over a large corpus) and `previous` holds
-// only the sessions indexed so far; callers surface the flag so the client
-// can re-poll instead of mistaking the partial list for the whole one.
-function getPreviousSessions(registered = listRegisteredSessions()) {
-  const activeIds = new Set([
-    ...registered.map((r) => {
-      const identity = registryIdentity(r);
-      return identity ? routeSessionId(identity.harnessId, identity.nativeSessionId) : null;
-    }).filter(Boolean),
-    ...getAllRPCSessions().filter(s => s.alive).map(s => s.id),
-  ]);
-  const candidates = []; // { file, id, dirName }
-  const previous = [];
-  let indexing = false;
-  let discoveryTruncated = false;
-  let discoverySkipped = 0;
+const catalogOptions = {
+  harnesses: new Map(listHarnesses().map(descriptor => [descriptor.id, descriptor])),
+  contextWindowForModel: getContextWindow,
+  canonicalPath: canonicalSessionPath,
+  directoryExists: directory => fs.existsSync(directory),
+};
 
-  try {
-    const discovery = discoverHarnessSessions();
-    candidates.push(...discovery.candidates.filter(candidate =>
-      !activeIds.has(routeSessionId(candidate.harnessId, candidate.nativeSessionId))));
-    refreshSessionFileCache(discovery.candidates);
-    discoveryTruncated = discovery.truncated;
-    discoverySkipped = discovery.skipped;
+function historicalAdvice(source, liveChild = false) {
+  return {
+    capabilities: {
+      ...sessionCapabilities(source.harnessId, {}, { active: false }),
+      ...(liveChild ? { resume: false } : {}),
+    },
+    closeMode: getHarness(source.harnessId).closeMode,
+    conflicted: false, liveInstanceCount: 0,
+  };
+}
 
-    const scan = sessionIndex.scanSessions(candidates);
-    indexing = scan.indexing;
-    for (const candidate of candidates) {
-      const { file, id, dirName, harnessId, nativeSessionId } = candidate;
-      rememberSessionSource(candidate);
-      const raw = scan.infos.get(file);
-      if (!raw) continue; // unreadable, or still queued for background indexing
-      const info = withContext(raw);
-      // The dir-name decode is lossy (every '-' becomes '/'), so a
-      // hyphenated project dir decodes to a bogus path — only trust it
-      // when the decoded directory actually exists.
-      let cwd = info.cwd;
-      if (!cwd && harnessId === 'pi' && getHarness(harnessId)?.layout === 'nested') {
-        const decoded = decodeDirToCwd(dirName);
-        cwd = fs.existsSync(decoded) ? decoded : null;
-      }
-      previous.push({
-        ...sessionIdentityFields(harnessId, nativeSessionId),
-        capabilities: sessionCapabilities(harnessId, {}, { active: false }),
-        closeMode: getHarness(harnessId).closeMode,
-        profileId: candidate.profileId,
-        profileVersion: candidate.profileVersion,
-        name: subsessionLabel(candidate) || info.name || id.slice(0, 8),
-        model: info.model || 'unknown',
-        contextPercent: info.contextPercent || 0,
-        contextTokens: info.contextTokens || 0,
-        messageCount: info.messageCount || 0,
-        lastActivity: info.lastActivity,
-        isActive: false,
-        cwd,
-        sessionFile: file,
-        parentSession: info.parentSession || candidate.parentSession || null,
-        parentSessionSource: !info.parentSession && candidate.parentSession ? 'omp-subsession-layout' : null,
-      });
-    }
-  } catch (e) {
-    console.error('Error scanning sessions:', e);
-  }
-
-  previous.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
-  return { previous, indexing, discoveryTruncated, discoverySkipped };
+// Lifecycle and routine callers need only current observations: no historical
+// corpus or live-child traversal follows from this active projection.
+function getActiveSessions(registered = listRegisteredSessions()) {
+  return composeSessionCatalog({
+    active: collectActiveObservations(registered), history: [],
+    launchParents: new Map(), routines: new Map(), activeOnly: true,
+    indexing: false, discoveryTruncated: false, discoverySkipped: 0,
+  }, catalogOptions).active;
 }
 
 /**
@@ -1448,72 +1297,14 @@ function liveSubsessionCandidates(active) {
       try { tail = readSessionTailEntry(candidate); } catch { continue; }
       if (tail?.type === 'custom' && tail.customType === descriptor.sessionExitCustomType) continue;
       claimed.add(routeId);
-      out.push(rememberSessionSource(candidate));
+      out.push(candidate);
     }
   }
   return out;
 }
 
-/**
- * A nested subsession's file basename is its agent handle — OMP names the
- * file after the agent it ran (`RefsAndSearch.jsonl`, `__advisor.jsonl`),
- * while its title entry is empty and its first user message is the same wall
- * of delegation boilerplate for every sibling in a fan-out. The handle is the
- * only thing that tells one child row from another.
- *
- * `parentSession` on a candidate means exactly "found beside a parent JSONL",
- * which both candidate producers (discovery and sourceForIdentity) set the
- * same way. A generic `session.jsonl` is excluded: that basename is a
- * convention, not a name.
- */
-function subsessionLabel(candidate) {
-  if (!candidate?.parentSession || typeof candidate.file !== 'string') return null;
-  const handle = path.basename(candidate.file, '.jsonl');
-  return handle === 'session' ? null : handle;
-}
-
-// A real fan-out is dozens of agents (OMP's own concurrency cap is 32), so a
-// larger set means something pathological; the cap also bounds the one
-// genuinely expensive case — after a restart the index has never seen a
-// mid-flight subagent, and the first poll pays a full parse per child. Rows
-// past the cap arrive on the next poll, by which point the earlier ones are
-// (mtimeMs, size) cache hits.
+// Bound first-poll full reads of previously unseen live child histories.
 const SUBSESSION_ROW_CAP = 64;
-
-/** Live-subagent list rows, shaped exactly like historical rows. */
-function subsessionSessionRows(candidates) {
-  const rows = [];
-  for (const candidate of candidates) {
-    if (rows.length >= SUBSESSION_ROW_CAP) break;
-    let info;
-    // Same tolerance as getActiveSessions: a file that vanished since the
-    // walk must not take the whole list down with it.
-    try { info = parseSessionFile(candidate); } catch { continue; }
-    rows.push({
-      ...sessionIdentityFields(candidate.harnessId, candidate.nativeSessionId),
-      // Not controllable: pi-dish has no socket to a session its parent owns —
-      // and never resumable while it is loaded there, or a second process
-      // would append to the same JSONL behind the parent's back.
-      capabilities: { ...sessionCapabilities(candidate.harnessId, {}, { active: false }), resume: false },
-      closeMode: getHarness(candidate.harnessId).closeMode,
-      profileId: candidate.profileId,
-      profileVersion: candidate.profileVersion,
-      name: subsessionLabel(candidate) || info.name || candidate.id.slice(0, 8),
-      model: info.model || 'unknown',
-      contextPercent: info.contextPercent || 0,
-      contextTokens: info.contextTokens || 0,
-      messageCount: info.messageCount || 0,
-      lastActivity: info.lastActivity,
-      isActive: false,
-      subagentLive: true,
-      cwd: info.cwd,
-      sessionFile: candidate.file,
-      parentSession: info.parentSession || candidate.parentSession || null,
-      parentSessionSource: !info.parentSession && candidate.parentSession ? 'omp-subsession-layout' : null,
-    });
-  }
-  return rows;
-}
 
 function enumerateSessionCandidates(excludeIds = new Set()) {
   return discoverHarnessSessions().candidates.filter(candidate =>
@@ -1535,7 +1326,7 @@ function matchSessionQuery(session, parsed) {
   const contentTokens = positiveQueryTokens(parsed);
   if (contentTokens.length && session.sessionFile) {
     const historyText = sessionIndex.getSearchText(sourceForIdentity(
-      session.harnessId || 'pi', session.nativeSessionId || session.id, session.sessionFile));
+      session.harnessId, session.nativeSessionId, session.sessionFile));
     if (evaluateSessionQuery(parsed, session, historyText)) {
       return { snippet: buildSnippet(historyText, contentTokens), text: historyText };
     }
@@ -1560,7 +1351,7 @@ function filterSessionsByQuery(list, query) {
     if (!m) continue;
     if (!rank) { out.push(session); continue; }
     const text = m.text ?? (session.sessionFile ? sessionIndex.getSearchText(sourceForIdentity(
-      session.harnessId || 'pi', session.nativeSessionId || session.id, session.sessionFile)) : null);
+      session.harnessId, session.nativeSessionId, session.sessionFile)) : null);
     const entry = { ...session, searchScore: scoreSessionMatch(parsed, session, text) };
     if (m.snippet) entry.searchSnippet = m.snippet;
     out.push(entry);
@@ -1582,86 +1373,18 @@ function filterSessionsByQuery(list, query) {
 // inside those live sessions, which no registry can report (see
 // liveSubsessionCandidates). On a full list they are already in `previous`,
 // so they are stamped there instead of sent twice.
-// Relationship hints on list rows are presentation-only. They let the client
-// arrange same-workspace families without fetching /related for every row;
-// they never grant control authority. Native/structural lineage wins when
-// both it and pi-dish launch provenance exist.
-function annotateSessionParents(list) {
-  const launches = sessionProvenance.readLaunches();
-  const byCanonicalPath = new Map();
-  const byId = new Map(list.map(session => [session.id, session]));
-  for (const session of list) {
-    const canonical = canonicalSessionPath(session.sessionFile);
-    if (canonical) byCanonicalPath.set(canonical, session);
-  }
-  for (const session of list) {
-    let nativeParent = null;
-    if (session.parentSession && session.sessionFile) {
-      const parentFile = path.isAbsolute(session.parentSession)
-        ? session.parentSession : path.resolve(path.dirname(session.sessionFile), session.parentSession);
-      // A basename alone is not lineage: stale paths must not attach a child
-      // to an unrelated current session that happens to reuse the same id.
-      nativeParent = byCanonicalPath.get(canonicalSessionPath(parentFile))?.id || null;
-    }
-    const launchParent = launches[session.id]?.sourceSessionId || null;
-    const parentId = nativeParent || launchParent;
-    session.parentId = parentId && parentId !== session.id ? parentId : null;
-    session.parentSource = nativeParent
-      ? (session.parentSessionSource || 'pi-session-header') : launchParent ? 'pi-dish-launch' : null;
-    const parent = byId.get(session.parentId);
-    session.familyParentId = parent && (parent.cwd || '~') === (session.cwd || '~')
-      ? parent.id : null;
-  }
-}
-
-// Routine provenance on list rows, the same presentation-only contract as the
-// parent hints above: a session says which routine produced it so `routine:`
-// queries and the sidebar chip work, and nothing more follows from it.
-function annotateSessionRoutines(list) {
-  const bySession = routinesStore.invocationsBySessionId();
-  if (!bySession.size) return;
-  for (const session of list) {
-    const invocation = bySession.get(session.id);
-    if (!invocation) continue;
-    session.routine = invocation.routineName;
-    session.routineId = invocation.routineId;
-    session.routineInvocationId = invocation.id;
-  }
-}
-
 // The browser list uses public presentation/control fields only. Keep the
 // default response unchanged for API/CLI consumers that inspect provenance or
 // file-system metadata; `view=client` avoids transferring and retaining it on
 // every sidebar poll.
 function clientSessionRows(rows) {
-  return rows.flatMap(session => {
-    try { return [sessionForClient(session)]; } catch {
-      console.warn('Ignoring invalid browser session row:', session.id);
-      return [];
-    }
-  });
+  return rows.map(session => sessionForClient(session));
 }
 
 app.get('/api/sessions', (req, res) => {
   const query = (req.query.q || '').trim().toLowerCase();
-  const registered = listRegisteredSessions();
-  let active = getActiveSessions(registered);
-  let previous = [], indexing = false, discoveryTruncated = false, discoverySkipped = 0;
-  const liveSubsessions = liveSubsessionCandidates(active);
-  let children = [];
-  if (req.query.active === '1') {
-    children = subsessionSessionRows(liveSubsessions);
-  } else {
-    ({ previous, indexing, discoveryTruncated, discoverySkipped } = getPreviousSessions(registered));
-    const liveIds = new Set(liveSubsessions.map(apiIdForCandidate));
-    for (const session of previous) {
-      if (!liveIds.has(session.id)) continue;
-      session.subagentLive = true;
-      session.capabilities = { ...session.capabilities, resume: false };
-    }
-  }
-  annotateSessionParents([...active, ...previous, ...children]);
-  annotateSessionRoutines([...active, ...previous, ...children]);
+  let { active, previous, children, indexing, discoveryTruncated, discoverySkipped } =
+    buildSessionCatalog({ activeOnly: req.query.active === '1' });
 
   if (query) {
     active = filterSessionsByQuery(active, query);
@@ -1699,8 +1422,6 @@ app.get('/api/sessions/resolve', (req, res) => {
   if (ref.length < 4) return res.status(400).json({ error: 'id prefix must be at least 4 characters' });
 
   const catalog = buildSessionCatalog();
-  annotateSessionParents(catalog.list); // list rows carry lineage hints; keep the shape identical
-  annotateSessionRoutines(catalog.list);
   const { session, matches } = resolveRefInCatalog(catalog, ref);
   // `ref` is the handle a caller should keep and paste instead of a
   // 100-character encoded route id — shortened only where a *different*
@@ -1740,23 +1461,45 @@ function relationSessionSummary(session) {
   };
 }
 
-function buildSessionCatalog() {
+function buildSessionCatalog({ activeOnly = false } = {}) {
   const registered = listRegisteredSessions();
-  const active = getActiveSessions(registered);
-  const historical = getPreviousSessions(registered);
-  const list = [...active, ...historical.previous];
-  const byId = new Map(list.map(session => [session.id, session]));
-  const byPath = new Map();
-  for (const session of list) {
-    const canonical = canonicalSessionPath(session.sessionFile);
-    if (canonical) byPath.set(canonical, session);
+  const active = collectActiveObservations(registered);
+  const liveChildren = liveSubsessionCandidates(active.map(observation => ({
+    id: observation.id, harnessId: observation.harnessId, sessionFile: observation.claimedFile,
+  })));
+  const history = [];
+  let indexing = false, discoveryTruncated = false, discoverySkipped = 0;
+  if (activeOnly) {
+    for (const source of liveChildren) {
+      if (history.length >= SUBSESSION_ROW_CAP) break;
+      try {
+        history.push({ source, info: getSessionInfo(source), liveChild: true, advice: historicalAdvice(source, true) });
+      } catch {}
+    }
+  } else {
+    try {
+      const discovery = discoverHarnessSessions();
+      sessionSources.refresh(discovery);
+      discoveryTruncated = discovery.truncated;
+      discoverySkipped = discovery.skipped;
+      const activeIds = new Set(active.map(observation => observation.id));
+      const candidates = discovery.candidates.filter(source => !activeIds.has(source.routeId));
+      const liveIds = new Set(liveChildren.map(source => source.routeId));
+      const scan = sessionIndex.scanSessions(candidates);
+      indexing = scan.indexing;
+      for (const source of candidates) {
+        const info = scan.infos.get(source.file);
+        if (!info) continue;
+        const liveChild = liveIds.has(source.routeId);
+        history.push({ source, info, liveChild, advice: historicalAdvice(source, liveChild) });
+      }
+    } catch (error) { console.error('Error scanning sessions:', error); }
   }
-  return {
-    list, byId, byPath,
-    indexing: historical.indexing,
-    discoveryTruncated: historical.discoveryTruncated,
-    discoverySkipped: historical.discoverySkipped,
-  };
+  return composeSessionCatalog({
+    active, history, activeOnly, indexing, discoveryTruncated, discoverySkipped,
+    launchParents: decodeLaunchParents(sessionProvenance.readLaunches()),
+    routines: decodeRoutineAnnotations(routinesStore.invocationsBySessionId()),
+  }, catalogOptions);
 }
 
 // Advisory relationships only: native parentSession headers, OMP's nested
@@ -1764,26 +1507,13 @@ function buildSessionCatalog() {
 // ownership or control rights.
 app.get('/api/sessions/:id/related', (req, res) => {
   try {
-    const catalog = buildSessionCatalog();
+    const base = buildSessionCatalog();
+    const catalog = { ...base, list: [...base.list], byId: new Map(base.byId), byPath: new Map(base.byPath) };
     let current = catalog.byId.get(req.params.id);
     if (!current) {
       const candidate = resolveSessionCandidate(req.params.id);
       if (!candidate) return res.status(404).json({ error: 'Session not found' });
-      const info = parseSessionFile(candidate);
-      current = {
-        id: apiIdForCandidate(candidate),
-        sessionKey: candidate.sessionKey,
-        harnessId: candidate.harnessId,
-        nativeSessionId: candidate.nativeSessionId,
-        name: subsessionLabel(candidate) || info.name || candidate.nativeSessionId.slice(0, 8),
-        cwd: info.cwd,
-        model: info.model,
-        lastActivity: info.lastActivity,
-        isActive: false,
-        sessionFile: candidate.file,
-        parentSession: info.parentSession || candidate.parentSession,
-        parentSessionSource: !info.parentSession && candidate.parentSession ? 'omp-subsession-layout' : null,
-      };
+      current = buildSourceSession(candidate, getSessionInfo(candidate), historicalAdvice(candidate), catalogOptions);
       catalog.byId.set(current.id, current);
       catalog.byPath.set(canonicalSessionPath(candidate.file), current);
       catalog.list.push(current);
@@ -1846,13 +1576,7 @@ const SEARCH_RESULT_CAP = 100;
 app.get('/api/search', (req, res) => {
   const query = (req.query.q || '').trim().toLowerCase();
   const scopeQuery = String(req.query.scope || '').trim().toLowerCase();
-  const registered = listRegisteredSessions();
-  const active = getActiveSessions(registered);
-  const { previous, indexing, discoveryTruncated, discoverySkipped } = getPreviousSessions(registered);
-  // Advanced search builds its own list rather than reusing /api/sessions', so
-  // the routine stamp has to be applied here too or `routine:` would match in
-  // the sidebar and nowhere else.
-  annotateSessionRoutines([...active, ...previous]);
+  const { active, previous, indexing, discoveryTruncated, discoverySkipped } = buildSessionCatalog();
   const parsed = parseSessionQuery(query);
   const scopeParsed = parseSessionQuery(scopeQuery);
   const hasScope = scopeParsed.terms.length || scopeParsed.since !== null || scopeParsed.before !== null;
@@ -1879,7 +1603,7 @@ app.get('/api/search', (req, res) => {
     if (!evaluateSessionQuery(parsed, session)) {
       if (!contentTokens.length || !session.sessionFile) continue;
       text = sessionIndex.getSearchText(sourceForIdentity(
-        session.harnessId || 'pi', session.nativeSessionId || session.id, session.sessionFile));
+        session.harnessId, session.nativeSessionId, session.sessionFile));
       if (!evaluateSessionQuery(parsed, session, text)) continue;
     }
     if (hasScope && !evaluateSessionQuery(scopeParsed, session)) {
@@ -1889,7 +1613,7 @@ app.get('/api/search', (req, res) => {
     let snippets = [], matchCount = 0;
     if (contentTokens.length && session.sessionFile) {
       text ??= sessionIndex.getSearchText(sourceForIdentity(
-        session.harnessId || 'pi', session.nativeSessionId || session.id, session.sessionFile));
+        session.harnessId, session.nativeSessionId, session.sessionFile));
       ({ snippets, count: matchCount } = buildSnippets(text, contentTokens));
     }
     results.push({ ...session, snippets, matchCount, searchScore: scoreSessionMatch(parsed, session, text) });
@@ -2129,9 +1853,7 @@ const WEEK_MS = 7 * DAY_MS;
 function knownWorkspaceCwds() {
   const cwds = new Set();
   try {
-    const { previous } = getPreviousSessions();
-    for (const s of previous) if (s.cwd) cwds.add(s.cwd);
-    for (const s of getActiveSessions()) if (s.cwd) cwds.add(s.cwd);
+    for (const session of buildSessionCatalog().list) if (session.cwd) cwds.add(session.cwd);
   } catch {}
   return [...cwds];
 }
@@ -2372,8 +2094,8 @@ app.get('/api/skills/coverage', (req, res) => {
   let latest = roll.latest;
   if (latest && latest.sessionId) {
     try {
-      const file = findSessionFile(latest.sessionId);
-      if (file) latest = { ...latest, name: getSessionInfo(file).name || null };
+      const source = findSessionSource(latest.sessionId);
+      if (source) latest = { ...latest, name: getSessionInfo(source).name || null };
     } catch {}
   }
 
@@ -6357,7 +6079,7 @@ async function restartSessionById(requestedId, { beforeAction = null } = {}) {
   } catch {
     return closeResult(409, { error: 'The active agent has no resumable session file.' });
   }
-  let cwd = readSessionCwd({ ...(sessionSource || {}), file: sessionFile });
+  let cwd = readSessionCwd(sourceForIdentity(route.harnessId, route.nativeSessionId, sessionFile));
   if (!cwd || !fs.existsSync(cwd)) cwd = process.env.HOME;
 
   // Repeat the close path's claim and process proofs immediately before the
@@ -7056,59 +6778,8 @@ app.get('/api/sessions/:id/stream', async (req, res) => {
 // Helpers
 // =========================================================================
 
-// id → confirmed path. The full tree walk otherwise re-runs for every
-// pagination/search request against a historical session; the mapping is
-// stable, so a hit only needs an existsSync revalidation. Misses are never
-// cached (the file may appear later).
-const sessionFileCache = new Map();
-
-// A full historical discovery is authoritative for route identity too. Refresh
-// both full-id lookup modes together so a newly preferred/removed duplicate
-// cannot leave the list pointing at one file while routes use an older cache.
-function refreshSessionFileCache(candidates) {
-  sessionFileCache.clear();
-  for (const candidate of candidates || []) {
-    const routeId = apiIdForCandidate(candidate);
-    sessionFileCache.set(`exact:${routeId}`, candidate);
-    sessionFileCache.set(`partial:${routeId}`, candidate);
-  }
-}
-
 function findSessionSource(sessionId, { exact = false } = {}) {
-  const active = resolveSessionCandidate(sessionId, { discover: false });
-  if (active?.file && fs.existsSync(active.file)) return active;
-
-  const cacheKey = `${exact ? 'exact' : 'partial'}:${sessionId}`;
-  const cached = sessionFileCache.get(cacheKey);
-  if (cached?.file && fs.existsSync(cached.file)) {
-    if (path.basename(cached.file) !== 'session.jsonl') return cached;
-    // Generic identities can become ambiguous when an external launcher
-    // creates/copies another tree between sidebar scans. Revalidate them on
-    // route access so cached paths never bypass the no-ambiguous-routing rule.
-    const descriptor = getHarness(cached.harnessId);
-    const current = findSessionCandidate(descriptor.rootPath(), cached.nativeSessionId, {
-      descriptor,
-      allowPartial: false,
-    }).candidate;
-    if (!current) { sessionFileCache.delete(cacheKey); return null; }
-    sessionFileCache.set(cacheKey, current);
-    return current;
-  }
-
-  const identity = routeIdentity(sessionId);
-  if (!identity) return null;
-  const descriptor = getHarness(identity.harnessId);
-  if (!descriptor) return null;
-  // Encoded identities are canonical and must always route exactly. Preserve
-  // Pi's legacy substring lookup only for old raw route IDs.
-  const { candidate } = findSessionCandidate(descriptor.rootPath(), identity.nativeSessionId, {
-    descriptor,
-    allowPartial: !identity.encoded && !exact,
-  });
-  if (!candidate) return null;
-  if (sessionFileCache.size >= 500) sessionFileCache.clear();
-  sessionFileCache.set(cacheKey, candidate);
-  return candidate;
+  return sessionSources.resolve({ route: sessionId, exact, live: liveSourceObservations(sessionId) });
 }
 
 function findSessionFile(sessionId, options) {

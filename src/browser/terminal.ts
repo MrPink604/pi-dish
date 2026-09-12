@@ -102,7 +102,7 @@ export function createTerminalController(options: {
       const next: TerminalState = { term, fitAddon, sessionId: owner.id, owner, endpoint, mode, events: new AbortController(), ws: null, tmuxPrefix: null, reconnectTimer: undefined, attempts: 0, exited: false, connection: 0 };
       state = next;
       const panel = element('terminalPanel'); options.applySize(panel); panel.style.display = '';
-      element('terminalCwd').textContent = shortCwd(typeof session.cwd === 'string' ? session.cwd : '~');
+      element('terminalCwd').textContent = shortCwd(session.cwd ?? '~');
       updateMode(); term.open(element('terminalContainer')); fit();
       term.onData(data => {
         if (!owns(next)) return;

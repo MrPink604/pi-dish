@@ -183,7 +183,6 @@ var PiDishBrowser = (() => {
     selectionTextAnchor: () => selectionTextAnchor,
     sendJson: () => sendJson,
     sessionSpawnKey: () => sessionSpawnKey,
-    sidebarSession: () => sidebarSession,
     spawnTargetKey: () => spawnTargetKey,
     terminalTheme: () => terminalTheme,
     updateToolGroupSummary: () => updateToolGroupSummary,
@@ -203,6 +202,39 @@ var PiDishBrowser = (() => {
   function invalid(kind) {
     throw new Error(`Invalid ${kind} response`);
   }
+  var optionalString = (value) => typeof value === "string" ? value : void 0;
+  var nullableString = (value) => value === null ? null : optionalString(value);
+  var optionalNumber = (value) => finite(value) ? value : void 0;
+  var optionalBoolean = (value) => typeof value === "boolean" ? value : void 0;
+  var fieldDecoders = {
+    name: nullableString,
+    model: nullableString,
+    thinkingLevel: nullableString,
+    harnessId: optionalString,
+    harnessLabel: optionalString,
+    capabilities: decodeCapabilities,
+    isActive: optionalBoolean,
+    closeMode: optionalString,
+    conflicted: optionalBoolean,
+    liveInstanceCount: optionalNumber,
+    contextPercent: optionalNumber,
+    contextTokens: optionalNumber,
+    contextWindow: optionalNumber,
+    messageCount: optionalNumber,
+    lastActivity: (value) => value === null || typeof value === "string" || finite(value) ? value : void 0,
+    turnInProgress: optionalBoolean,
+    compacting: optionalBoolean,
+    cwd: nullableString,
+    subagentLive: optionalBoolean,
+    parentId: nullableString,
+    parentSource: nullableString,
+    familyParentId: nullableString,
+    routine: optionalString,
+    routineId: optionalString,
+    routineInvocationId: optionalString,
+    searchSnippet: optionalString,
+    searchScore: optionalNumber
+  };
   function decodeCapabilities(value) {
     if (value === void 0) return void 0;
     if (!record(value)) return invalid("session capabilities");
@@ -213,23 +245,63 @@ var PiDishBrowser = (() => {
     }
     return capabilities;
   }
-  function decodeSessionMetadata(value) {
+  function decodeFields(value) {
+    const fields = {};
+    for (const key of Object.keys(fieldDecoders)) {
+      if (!Object.hasOwn(value, key)) continue;
+      const decoded = fieldDecoders[key](value[key]);
+      if (decoded !== void 0) Object.defineProperty(fields, key, { value: decoded, enumerable: true, configurable: true, writable: true });
+    }
+    return fields;
+  }
+  function decodeSessionRow(value) {
+    if (!record(value) || !Object.hasOwn(value, "id")) return invalid("session");
+    validateSessionControls(value);
+    const wire = value;
+    const extras = {};
+    for (const [key, extra] of Object.entries(wire)) {
+      if (key === "id" || key === "host" || key === "hostLabel" || Object.hasOwn(fieldDecoders, key)) continue;
+      Object.defineProperty(extras, key, { value: extra, enumerable: true, configurable: true, writable: true });
+    }
+    return { id: wire.id, fields: decodeFields(wire), extras };
+  }
+  function decodePatch(value, keys) {
+    if (!record(value)) return invalid("session patch");
+    const patch = {};
+    for (const key of keys) {
+      if (!Object.hasOwn(value, key) || value[key] === void 0) continue;
+      const decoded = fieldDecoders[key](value[key]);
+      if (decoded === void 0) return invalid("session patch");
+      Object.defineProperty(patch, key, { value: decoded, enumerable: true, configurable: true, writable: true });
+    }
+    return patch;
+  }
+  function decodeSessionMutationPatch(value) {
+    return decodePatch(value, ["name", "model", "thinkingLevel"]);
+  }
+  function decodeSessionActivityPatch(value) {
+    return decodePatch(value, ["turnInProgress", "compacting"]);
+  }
+  function decodeSessionTranscriptPatch(value) {
+    return decodePatch(value, ["name", "model", "cwd", "messageCount", "contextTokens", "contextWindow", "contextPercent", "lastActivity", "isActive"]);
+  }
+  function validateSessionControls(value) {
     if (!record(value) || !text(value.id)) return invalid("session");
     for (const key of ["name", "model", "thinkingLevel"]) {
       if (value[key] !== void 0 && value[key] !== null && typeof value[key] !== "string") return invalid("session");
     }
     if (value.harnessId !== void 0 && !text(value.harnessId)) return invalid("session");
     if (value.isActive !== void 0 && typeof value.isActive !== "boolean") return invalid("session");
-    const capabilities = decodeCapabilities(value.capabilities);
-    return { ...value, ...capabilities ? { capabilities } : {} };
   }
   function decodeSessionList(value) {
     if (!record(value) || !Array.isArray(value.active) || !Array.isArray(value.previous) || value.children !== void 0 && !Array.isArray(value.children)) return invalid("session list");
     return {
-      ...value,
-      active: value.active.map(decodeSessionMetadata),
-      previous: value.previous.map(decodeSessionMetadata),
-      ...Array.isArray(value.children) ? { children: value.children.map(decodeSessionMetadata) } : {}
+      active: value.active.map(decodeSessionRow),
+      previous: value.previous.map(decodeSessionRow),
+      ...Array.isArray(value.children) ? { children: value.children.map(decodeSessionRow) } : {},
+      ...typeof value.indexing === "boolean" ? { indexing: value.indexing } : {},
+      ...typeof value.discoveryTruncated === "boolean" ? { discoveryTruncated: value.discoveryTruncated } : {},
+      ...finite(value.discoverySkipped) ? { discoverySkipped: value.discoverySkipped } : {}
     };
   }
   function pricing(value) {
@@ -537,6 +609,9 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/session-state.ts
+  function sessionEntryFromRow(row) {
+    return { ...row.fields, id: row.id, extras: row.extras };
+  }
   function createSessionState(options2) {
     let sessions = { active: [], previous: [] };
     let currentSession = null;
@@ -558,9 +633,10 @@ var PiDishBrowser = (() => {
       return findSession(id)?.host || options2.getSelfHostId();
     }
     function stampSessionHost(session, hostId = options2.getSelfHostId()) {
-      if (!session.host && hostId) session.host = hostId;
-      const label = options2.getHostLabel(session.host || hostId);
+      session.host = hostId || null;
+      const label = options2.getHostLabel(session.host);
       if (label) session.hostLabel = label;
+      else delete session.hostLabel;
       return session;
     }
     function setSessionLists(next, hostId = options2.getSelfHostId()) {
@@ -580,26 +656,29 @@ var PiDishBrowser = (() => {
     }
     function setCurrentSession(id, host) {
       const entry = findSession(id, host);
-      currentSession = entry ? stampSessionHost({ ...entry }) : null;
+      currentSession = entry ? stampSessionHost({ ...entry }, entry.host || options2.getSelfHostId()) : null;
       return currentSession;
     }
-    function patchSession(id, patch, host = sessionHostId(id)) {
+    function applyPatch(id, patch, host) {
       const matches = (session) => session !== null && session.id === id && (session.host || null) === (host || null);
       for (const list of [sessions.active, sessions.previous]) {
         const session = list.find(matches);
-        if (session) stampSessionHost(Object.assign(session, patch));
+        if (session) stampSessionHost(Object.assign(session, patch), session.host || options2.getSelfHostId());
       }
-      if (matches(currentSession) && currentSession) stampSessionHost(Object.assign(currentSession, patch));
+      if (matches(currentSession) && currentSession) stampSessionHost(Object.assign(currentSession, patch), currentSession.host || options2.getSelfHostId());
       options2.onListsChanged();
       if (matches(currentSession)) options2.onCurrentChanged();
     }
+    function patchSession(id, patch, host = sessionHostId(id)) {
+      applyPatch(id, decodeSessionMutationPatch(patch), host);
+    }
+    function patchSessionActivity(id, patch, host = sessionHostId(id)) {
+      applyPatch(id, decodeSessionActivityPatch(patch), host);
+    }
     function mergeCurrentSession(owner, fields) {
       if (!fields || !ownsSelection(owner) || !currentSession) return;
-      const { id, host } = currentSession;
-      Object.assign(currentSession, fields);
-      currentSession.id = id;
-      currentSession.host = host;
-      stampSessionHost(currentSession);
+      Object.assign(currentSession, decodeSessionTranscriptPatch(fields));
+      stampSessionHost(currentSession, currentSession.host || options2.getSelfHostId());
       options2.onCurrentChanged();
     }
     function advanceSelection() {
@@ -626,6 +705,7 @@ var PiDishBrowser = (() => {
       setSessionLists,
       setCurrentSession,
       patchSession,
+      patchSessionActivity,
       mergeCurrentSession,
       advanceSelection,
       captureSelection,
@@ -793,9 +873,10 @@ var PiDishBrowser = (() => {
           indexing.set(key, !!data.indexing);
           if (data.indexing) options2.onIndexing();
         }
+        const active = data.active.map(sessionEntryFromRow);
         const next = {
-          active: withPrevious ? data.active : mergeActiveHints(data.active, cached.active),
-          previous: withPrevious ? data.previous : mergeLiveSubagents(cached.previous, data.children)
+          active: withPrevious ? active : mergeActiveHints(active, cached.active),
+          previous: withPrevious ? data.previous.map(sessionEntryFromRow) : mergeLiveSubagents(cached.previous, data.children?.map(sessionEntryFromRow))
         };
         options2.beforePublish(host, next, wireQuery);
         caches.set(key, next);
@@ -3213,11 +3294,12 @@ var PiDishBrowser = (() => {
     for (const term of parsed.terms) {
       let hit;
       if (term.field === "host") {
-        hit = String(session.hostLabel || session.host || "").toLowerCase().includes(term.value);
+        hit = (session.hostLabel || session.host || "").toLowerCase().includes(term.value);
       } else if (term.field === "is") {
         hit = term.value === "active" && !!session.isActive || term.value === "automation" && isAutomationSession(session);
       } else {
-        const hay = term.field ? String(session[term.field] || "").toLowerCase() : meta;
+        const field = term.field;
+        const hay = field === null ? meta : field === "name" || field === "cwd" || field === "model" || field === "id" || field === "routine" ? (session[field] || "").toLowerCase() : "";
         hit = hay.includes(term.value);
         if (!hit && !term.neg && !term.field && contentText) hit = contentText.includes(term.value);
       }
@@ -3237,7 +3319,7 @@ var PiDishBrowser = (() => {
   function scoreSessionMatch(parsed, session, contentText) {
     const tokens2 = positiveQueryTokens(parsed);
     if (!tokens2.length) return 0;
-    const name = String(session.name || "").toLowerCase();
+    const name = (session.name || "").toLowerCase();
     const other = [session.cwd, session.model, session.id].join(" ").toLowerCase();
     let total = 0;
     for (const token of tokens2) {
@@ -3365,7 +3447,7 @@ var PiDishBrowser = (() => {
     const hostId = () => host().hostId || null;
     const cwd = () => cwdInput.value.trim();
     const selectedHarness = () => harnessSelect.value || harnessId || "pi";
-    const supports2 = (capability) => !host().capabilities || host().capabilities?.[capability] === true;
+    const supports = (capability) => !host().capabilities || host().capabilities?.[capability] === true;
     const hostOptions = () => options2.hosts().filter((row) => row.self || !options2.hostDown(row));
     const error = (value) => {
       if (!disposed) element("nsError").textContent = value;
@@ -3392,7 +3474,7 @@ var PiDishBrowser = (() => {
     const directories = createDirectoryCatalog({ host, request });
     const targets = createSpawnTargets({
       host,
-      supportsTmux: () => supports2("tmux"),
+      supportsTmux: () => supports("tmux"),
       request,
       readSaved: () => storage.getItem("pi-dish-spawn-target"),
       save: (key) => storage.setItem("pi-dish-spawn-target", key),
@@ -3544,7 +3626,7 @@ var PiDishBrowser = (() => {
       const seen = /* @__PURE__ */ new Set(), values = [];
       for (const session of [...options2.sessionState.sessions.active, ...options2.sessionState.sessions.previous]) {
         if (options2.multiHost() && (session.host || null) !== endpoint.hostId) continue;
-        if (typeof session.cwd === "string" && session.cwd && !seen.has(session.cwd)) {
+        if (session.cwd && !seen.has(session.cwd)) {
           seen.add(session.cwd);
           values.push(session.cwd);
         }
@@ -3701,7 +3783,7 @@ var PiDishBrowser = (() => {
       host,
       hostId,
       hostOptions,
-      supports: supports2,
+      supports,
       setHostId,
       changeHost,
       cwd,
@@ -5796,8 +5878,8 @@ var PiDishBrowser = (() => {
       const all = [...sessionState.sessions.active, ...sessionState.sessions.previous];
       const cwds = /* @__PURE__ */ new Map(), models = /* @__PURE__ */ new Set();
       for (const s of all) {
-        if (typeof s.cwd === "string" && s.cwd) cwds.set(s.cwd, shortCwd(s.cwd));
-        if (typeof s.model === "string" && s.model && s.model !== "unknown") models.add(s.model);
+        if (s.cwd) cwds.set(s.cwd, shortCwd(s.cwd));
+        if (s.model && s.model !== "unknown") models.add(s.model);
       }
       return {
         cwds: [...cwds.entries()].sort((a, b) => a[1].localeCompare(b[1])),
@@ -7515,7 +7597,7 @@ var PiDishBrowser = (() => {
         const panel = element("terminalPanel");
         options2.applySize(panel);
         panel.style.display = "";
-        element("terminalCwd").textContent = shortCwd(typeof session.cwd === "string" ? session.cwd : "~");
+        element("terminalCwd").textContent = shortCwd(session.cwd ?? "~");
         updateMode();
         term.open(element("terminalContainer"));
         fit();
@@ -8158,7 +8240,7 @@ var PiDishBrowser = (() => {
       const out = [];
       for (const s of [...sessionState.sessions.active, ...sessionState.sessions.previous]) {
         if (isMultiHost() && (s.host || null) !== hostId) continue;
-        if (typeof s.cwd !== "string" || !s.cwd || seen.has(s.cwd)) continue;
+        if (!s.cwd || seen.has(s.cwd)) continue;
         seen.add(s.cwd);
         out.push({ path: s.cwd, short: shortCwd(s.cwd) });
       }
@@ -8670,7 +8752,7 @@ var PiDishBrowser = (() => {
     }
     function routineSessionLabel(sessionId) {
       const known = sessionState.findSession(sessionId, routineSelected?.host || null);
-      if (known && known.name) return truncate(typeof known.name === "string" ? known.name : "", 28, "\u2026");
+      if (known && known.name) return truncate(known.name, 28, "\u2026");
       return /^\d{4}-\d\d-\d\d/.test(sessionId) ? sessionId.slice(-8) : sessionId.slice(0, 8);
     }
     function renderRoutineInvocations() {
@@ -9030,8 +9112,7 @@ var PiDishBrowser = (() => {
       return !!current && current.base === host.base && (current.token || "") === (host.token || "");
     }
     function sessionSupports2(session, capability) {
-      const capabilities = session?.capabilities;
-      return !record8(capabilities) || capabilities[capability] !== false;
+      return session?.capabilities?.[capability] !== false;
     }
     async function json(host, path, init) {
       const response = await apiFetch(host, path, init);
@@ -9241,7 +9322,7 @@ var PiDishBrowser = (() => {
       const host = owner.host;
       const detach = session.closeMode === "client-only";
       const ownedAgent = session.closeMode === "owned-agent";
-      const restartable = record8(session.capabilities) && session.capabilities.restart === true;
+      const restartable = session.capabilities?.restart === true;
       el.innerHTML = '<div class="stats-share-title">Session process</div><div class="stats-share-body">' + (restartable ? '<button type="button" class="btn-small" id="sessionRestartBtn">Restart agent</button>' : "") + `<button type="button" class="btn-small btn-danger" id="sessionCloseBtn">${detach ? "Detach client" : "Close session"}</button><div class="stats-share-hint">${detach ? "Disconnects this client. The logical agent continues independently." : ownedAgent ? restartable ? "Restart stops this agent and its children, then resumes the root in the same pane. Close also removes the client pane. The transcript is kept; other root agents keep running." : "Stops this agent and its children, then closes its pi-dish-owned client pane. The transcript stays resumable." : restartable ? "Restarts the agent in its current pi-dish-owned pane or RPC slot. The transcript is kept." : "Shuts down this agent process. The transcript is kept and can be resumed."}</div></div>`;
       const closeBtn = el.querySelector("#sessionCloseBtn");
       closeBtn.addEventListener("click", async () => {
@@ -12232,20 +12313,10 @@ var PiDishBrowser = (() => {
     };
     const errorText = (error) => error instanceof Error ? error.message : String(error);
     function header() {
-      const row = sessionState.currentSession;
-      if (!row) return null;
-      return {
-        id: row.id,
-        isActive: row.isActive === true,
-        name: typeof row.name === "string" ? row.name : "",
-        model: typeof row.model === "string" ? row.model : "",
-        harnessId: typeof row.harnessId === "string" ? row.harnessId : void 0,
-        thinkingLevel: typeof row.thinkingLevel === "string" ? row.thinkingLevel : "",
-        capabilities: record8(row.capabilities) ? row.capabilities : {}
-      };
+      return sessionState.currentSession;
     }
     function sessionSupports2(row, capability) {
-      return row.capabilities[capability] !== false;
+      return row.capabilities?.[capability] !== false;
     }
     let disposed = false, modelOwner = null, thinkingOwner = null, renameOwner = null;
     let modelOpen = false, thinkingOpen = false, editMode = false, query = "";
@@ -12557,6 +12628,7 @@ var PiDishBrowser = (() => {
         window.open(endpoint.base + path, "_blank");
         return;
       }
+      const fallback2 = `${(session.name || session.id).replace(/[^\w.-]+/g, "-")}.html`;
       options2.status("Exporting session\u2026", "working");
       try {
         const response = await options2.request(endpoint, path);
@@ -12566,7 +12638,6 @@ var PiDishBrowser = (() => {
         }
         const blob = await response.blob();
         if (!endpointCurrent(owner)) return;
-        const fallback2 = `${(session.name || session.id).replace(/[^\w.-]+/g, "-")}.html`;
         download(blob, filenameFromContentDisposition(response.headers.get("Content-Disposition"), fallback2));
         if (sequence === exportSequence && owns(owner)) options2.status("Session exported");
       } catch (error) {
@@ -13538,12 +13609,12 @@ ${restored}`;
       let score = 0;
       let indices = null;
       if (q) {
-        const name = String(session.name || "");
+        const name = session.name || "";
         indices = fuzzyMatch(q, name);
         if (indices) {
           score = 1e3 + fuzzyScore(indices, name);
         } else {
-          const cwd = String(session.cwd || "");
+          const cwd = session.cwd || "";
           const cwdIndices = fuzzyMatch(q, cwd);
           if (cwdIndices) score = 500 + fuzzyScore(cwdIndices, cwd);
           else if (sessionRefAliases(session.id).some((alias) => alias.toLowerCase().startsWith(lower))) score = 250;
@@ -13563,14 +13634,7 @@ ${restored}`;
       return session?.host || options2.selfId();
     }
     function all() {
-      return [...sessionState.sessions.active, ...sessionState.sessions.previous].map((row) => ({
-        id: row.id,
-        host: row.host || null,
-        name: typeof row.name === "string" ? row.name : "",
-        cwd: typeof row.cwd === "string" ? row.cwd : "",
-        isActive: row.isActive === true,
-        lastActivity: typeof row.lastActivity === "number" || typeof row.lastActivity === "string" ? row.lastActivity : 0
-      }));
+      return [...sessionState.sessions.active, ...sessionState.sessions.previous];
     }
     function candidates() {
       const current = sessionState.currentSession;
@@ -13612,7 +13676,7 @@ ${restored}`;
     function hints(message3) {
       return parseSessionRefTokens(message3).flatMap(({ ref: ref2 }) => {
         const session = match(ref2);
-        return session ? [{ ref: ref2, name: session.name, host: options2.hostLabel(session.host) || "", cwd: session.cwd, isActive: session.isActive }] : [];
+        return session ? [{ ref: ref2, name: session.name || "", host: options2.hostLabel(session.host || null) || "", cwd: session.cwd || "", isActive: !!session.isActive }] : [];
       });
     }
     return { all, hostId, candidates, sameHostIds, prefix, ref, match, hints, search: (token) => searchSessionsForRef(candidates(), token, 8) };
@@ -13719,7 +13783,7 @@ ${restored}`;
       }
       render(references.search(token).map(({ session, indices }) => {
         const ref = references.ref(session, current), name = session.name || session.id.slice(0, 8);
-        return { choice: { kind: "ref", ref }, icon: "\u25CF", nameHtml: indices ? highlightFuzzy(name, indices) : escapeHtml(name), description: [options2.multiHost() ? options2.hostLabel(session.host) : "", ref, shortCwd(session.cwd)].filter(Boolean).join(" \xB7 "), live: session.isActive };
+        return { choice: { kind: "ref", ref }, icon: "\u25CF", nameHtml: indices ? highlightFuzzy(name, indices) : escapeHtml(name), description: [options2.multiHost() ? options2.hostLabel(session.host || null) : "", ref, shortCwd(session.cwd)].filter(Boolean).join(" \xB7 "), live: session.isActive };
       }));
     }
     async function loadCommands(id) {
@@ -13870,40 +13934,6 @@ ${restored}`;
   }
 
   // src/browser/sidebar-render.ts
-  function sidebarSession(row) {
-    const string3 = (value) => typeof value === "string" ? value : "";
-    const capabilities = {};
-    if (record8(row.capabilities)) {
-      for (const [key, value] of Object.entries(row.capabilities)) if (typeof value === "boolean") capabilities[key] = value;
-    }
-    const parent = typeof row.familyParentId === "string" ? row.familyParentId : null;
-    return {
-      id: row.id,
-      host: row.host,
-      hostLabel: typeof row.hostLabel === "string" ? row.hostLabel : void 0,
-      name: string3(row.name),
-      cwd: string3(row.cwd),
-      model: string3(row.model),
-      lastActivity: typeof row.lastActivity === "string" || finite2(row.lastActivity) ? row.lastActivity : null,
-      isActive: row.isActive === true,
-      turnInProgress: row.turnInProgress === true,
-      subagentLive: row.subagentLive === true,
-      compacting: row.compacting === true,
-      parentId: string3(row.parentId),
-      ...Object.hasOwn(row, "familyParentId") ? { familyParentId: parent } : {},
-      routine: string3(row.routine),
-      routineId: string3(row.routineId),
-      capabilities,
-      contextPercent: finite2(row.contextPercent) ? row.contextPercent : 0,
-      contextTokens: finite2(row.contextTokens) ? row.contextTokens : void 0,
-      thinkingLevel: string3(row.thinkingLevel),
-      closeMode: string3(row.closeMode),
-      harnessId: string3(row.harnessId),
-      harnessLabel: string3(row.harnessLabel),
-      searchSnippet: string3(row.searchSnippet),
-      searchScore: finite2(row.searchScore) ? row.searchScore : void 0
-    };
-  }
   function harnessBadgeInnerHtml(info) {
     const icon = info.icon ? `<img class="harness-badge-icon" src="${escapeHtml(info.icon)}" alt="">` : '<span class="harness-badge-icon harness-badge-icon-fallback" aria-hidden="true">\u25C6</span>';
     return icon + `<span class="harness-badge-label">${escapeHtml(info.label)}</span>`;
@@ -13918,7 +13948,8 @@ ${restored}`;
     const canonical = (key) => options2.roots.get(key) || key;
     const hostIsDown = (host) => host.state === "blocked" || host.state === "backoff";
     function renderSessionItem(session, opts = {}) {
-      const ctxClass = contextClass(session.contextPercent);
+      const contextPercent = session.contextPercent ?? 0;
+      const ctxClass = contextClass(contextPercent);
       const activeClass = options2.selected && sessionRefKey(options2.selected) === sessionRefKey(session) ? "active" : "";
       const inactiveClass = session.isActive || session.subagentLive ? "" : "inactive";
       const familyNode = opts.familyNode || null;
@@ -13936,8 +13967,8 @@ ${restored}`;
         liveDot = '<span class="live-dot" title="Subagent still loaded in its parent session"></span>';
       }
       const displayName = session.name || "Unnamed";
-      const ctxText = options2.contextMetric === "tokens" && session.contextTokens ? `${formatTokens(session.contextTokens)} tok` : `${session.contextPercent}%`;
-      const ctxTitle = session.contextTokens ? `${session.contextPercent}% of context \xB7 ${formatTokens(session.contextTokens)} tokens` : `${session.contextPercent}% of context`;
+      const ctxText = options2.contextMetric === "tokens" && session.contextTokens ? `${formatTokens(session.contextTokens)} tok` : `${contextPercent}%`;
+      const ctxTitle = session.contextTokens ? `${contextPercent}% of context \xB7 ${formatTokens(session.contextTokens)} tokens` : `${contextPercent}% of context`;
       const timeAgo = formatRelativeTime(hasChildren ? familyNode.activity : session.lastActivity);
       const canonicalRootKey = canonical(opts.familyRootKey || sessionRefKey(session));
       const isPinned = opts.familyPinned ?? options2.pinned.some((pin) => canonical(pin) === canonicalRootKey);
@@ -14015,7 +14046,7 @@ ${restored}`;
     }
     function renderSessions() {
       hostSectionsShown = null;
-      const active = options2.active.map(sidebarSession), previous = options2.previous.map(sidebarSession);
+      const { active, previous } = options2;
       const showing = options2.tab === "active" ? [...active, ...previous.filter((session) => session.subagentLive)] : [...active, ...previous];
       const pending = options2.pending;
       const sq = options2.scope;
@@ -14247,7 +14278,7 @@ ${restored}`;
       saveExpanded();
       render();
     }
-    const sessions = () => [...sessionState.sessions.active, ...sessionState.sessions.previous].map(sidebarSession);
+    const sessions = () => [...sessionState.sessions.active, ...sessionState.sessions.previous];
     function familyRoots() {
       const rows = sessions(), roots = buildSessionFamilies(rows), map = /* @__PURE__ */ new Map();
       const visit = (node, root) => {
@@ -14599,12 +14630,12 @@ ${restored}`;
       }
     }
     function mark(session, at = session?.lastActivity) {
-      if (!session || !at || typeof at !== "string" && typeof at !== "number") return;
+      if (!session || !at) return;
       seen[sessionRefKey(session)] = at;
       save();
     }
     function unread(session) {
-      return isUnreadSession(sidebarSession(session), seen, sessionState.currentSession ? sessionRefKey(sessionState.currentSession) : null, !document2.hidden);
+      return isUnreadSession(session, seen, sessionState.currentSession ? sessionRefKey(sessionState.currentSession) : null, !document2.hidden);
     }
     function title() {
       const count2 = sessionState.sessions.active.filter(unread).length;
@@ -15096,7 +15127,7 @@ ${restored}`;
       return `<div class="msg-images">${imgs}</div>`;
     }
     function messageLinkBtnHtml(msg) {
-      if (!msg.id || record8(options2.sessionState.currentSession?.capabilities) && options2.sessionState.currentSession.capabilities.export === false) return "";
+      if (!msg.id || options2.sessionState.currentSession?.capabilities?.export === false) return "";
       return `<button type="button" class="msg-link-btn" data-entry-id="${escapeHtml(msg.id)}" title="Copy share link to this message">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
@@ -15391,7 +15422,7 @@ ${restored}`;
     let responseDetailSeq = 0, disposed = false;
     const lifetime = new AbortController();
     const key = () => sessionState.currentSession ? sessionRefKey(sessionState.currentSession) : null;
-    const model = () => typeof sessionState.currentSession?.model === "string" ? sessionState.currentSession.model : "";
+    const model = () => sessionState.currentSession?.model ?? "";
     const current = (detail) => !disposed && detail.key === key();
     function button(value) {
       if (disposed) return "";
@@ -15949,9 +15980,7 @@ ${restored}`;
   var cursor = (value) => finite2(value) && Number.isInteger(value) && value >= 0 ? value : null;
   function decodeTranscriptPage(value) {
     if (!record8(value) || !Array.isArray(value.messages)) throw new Error("Invalid transcript page");
-    const session = record8(value.session) ? { ...value.session } : {};
-    delete session.id;
-    delete session.host;
+    const session = record8(value.session) ? decodeSessionTranscriptPatch(value.session) : {};
     return { messages: value.messages.map(decodeRenderMessage), session, firstIndex: cursor(value.firstIndex), lastIndex: cursor(value.lastIndex), hasMore: value.hasMore === true, totalMessages: cursor(value.totalMessages) };
   }
 
@@ -16230,7 +16259,7 @@ ${restored}`;
       }
       syncActivityIndicator();
       if (sessionState.currentSession && !!sessionState.currentSession.turnInProgress !== !!active) {
-        sessionState.patchSession(sessionState.currentSession.id, { turnInProgress: !!active });
+        sessionState.patchSessionActivity(sessionState.currentSession.id, { turnInProgress: !!active }, owner?.host);
       }
       var btnSteer = document2.getElementById("btnSteer");
       var btnFollowUp = document2.getElementById("btnFollowUp");
@@ -16251,7 +16280,7 @@ ${restored}`;
       compactingStartedAt = on ? compactingStartedAt || Date.now() : null;
       syncActivityIndicator();
       if (sessionState.currentSession && !!sessionState.currentSession.compacting !== on) {
-        sessionState.patchSession(sessionState.currentSession.id, { compacting: on });
+        sessionState.patchSessionActivity(sessionState.currentSession.id, { compacting: on }, owner?.host);
       }
     }
     function toolStarted(id, name) {
@@ -17144,11 +17173,11 @@ ${restored}`;
       } else {
         options2.drafts.clear();
         if (inputArea) inputArea.style.display = "none";
-        const caps = current.capabilities, resumable = !record8(caps) || caps.resume !== false;
+        const resumable = current.capabilities?.resume !== false;
         if (resumeBar) {
           resumeBar.style.display = "";
           const cwdSpan = resumeBar.querySelector(".resume-cwd");
-          if (cwdSpan) cwdSpan.textContent = typeof current.cwd === "string" && current.cwd || "~";
+          if (cwdSpan) cwdSpan.textContent = current.cwd || "~";
           const label = resumeBar.querySelector(".resume-label");
           if (label) {
             label.textContent = resumable ? "Read-only \u2014 session is inactive" : "Read-only \u2014 a live session owns this transcript";
@@ -17170,7 +17199,7 @@ ${restored}`;
       options2.header();
       options2.relations(owner);
       if (current.isActive) {
-        options2.models(id, typeof current.harnessId === "string" ? current.harnessId : void 0);
+        options2.models(id, current.harnessId);
         options2.commands(id);
       }
       await mathAssetsReady;
@@ -17218,9 +17247,9 @@ ${restored}`;
       wrap.style.display = "flex";
       select.title = "Loading Oh My Pi models\u2026";
       try {
-        const models = await api.models(endpoint, { harnessId: "omp", cwd: typeof session.cwd === "string" ? session.cwd : void 0 });
+        const models = await api.models(endpoint, { harnessId: "omp", cwd: session.cwd });
         if (!owns()) return;
-        const current = typeof session.model === "string" && session.model !== "unknown" && session.model ? ` (${session.model})` : "";
+        const current = session.model && session.model !== "unknown" ? ` (${session.model})` : "";
         select.innerHTML = `<option value="">Session model${escapeHtml(current)}</option>` + models.map((model) => {
           const name = model.selector || `${model.provider}/${model.id}`;
           return `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`;
@@ -17237,8 +17266,7 @@ ${restored}`;
     async function resume() {
       const owner = sessionState.captureSelection();
       if (disposed || !owner) return;
-      const caps = sessionState.currentSession?.capabilities;
-      if (record8(caps) && caps.resume === false) return;
+      if (sessionState.currentSession?.capabilities?.resume === false) return;
       const key = sessionRefKey(owner);
       if (pending.has(key)) return;
       const token = /* @__PURE__ */ Symbol(), endpoint = Object.freeze({ ...options2.endpoint(owner.host) }), target = options2.target(owner.host);
@@ -17269,22 +17297,12 @@ ${restored}`;
   }
 
   // src/browser/session-header.ts
-  function string2(value) {
-    return typeof value === "string" ? value : "";
-  }
-  function number8(value) {
-    return typeof value === "number" && Number.isFinite(value) ? value : 0;
-  }
-  function supports(session, capability) {
-    const caps = session.capabilities;
-    return !record8(caps) || caps[capability] !== false;
-  }
   function createSessionHeader(options2) {
     const { document: document2, sessionState } = options2;
     let disposed = false;
     const element = (id) => document2.getElementById(id);
     function setModelChipLabel(btn, model, suffix) {
-      const full = String(model || "");
+      const full = model || "";
       btn.title = full ? `${full} \u2014 change model` : "Change model";
       btn.textContent = full + suffix;
       if (btn.clientWidth && btn.scrollWidth > btn.clientWidth) {
@@ -17294,17 +17312,7 @@ ${restored}`;
     }
     function updateSessionHeader() {
       if (disposed || !sessionState.currentSession) return;
-      const raw = sessionState.currentSession, current = {
-        ...raw,
-        name: string2(raw.name),
-        model: string2(raw.model),
-        cwd: string2(raw.cwd),
-        harnessId: string2(raw.harnessId),
-        harnessLabel: string2(raw.harnessLabel),
-        contextPercent: number8(raw.contextPercent),
-        contextTokens: number8(raw.contextTokens),
-        isActive: !!raw.isActive
-      };
+      const current = sessionState.currentSession;
       element("sessionName").textContent = current.name || "Unnamed";
       const hostEl = element("sessionHost");
       if (hostEl) {
@@ -17321,7 +17329,7 @@ ${restored}`;
         const info = harnessBadgeInfo(current.harnessId, current.harnessLabel);
         const title = current.harnessLabel || info.label;
         options2.ensureHarness(current.host || null);
-        const configurable = options2.settings(raw);
+        const configurable = options2.settings(current);
         harnessEl.className = `badge harness-badge harness-badge-${current.harnessId}` + (configurable ? " clickable" : "");
         harnessEl.title = configurable ? `${title} settings: agents and models` : `${title} harness`;
         harnessEl.setAttribute("aria-label", configurable ? `${title} settings` : `${title} harness`);
@@ -17332,21 +17340,22 @@ ${restored}`;
         harnessEl.textContent = "";
       }
       const cpTree = element("cpTreeRow");
-      if (cpTree) cpTree.style.display = supports(raw, "tree") ? "" : "none";
+      if (cpTree) cpTree.style.display = sessionSupports(current, "tree") ? "" : "none";
       const cpHarness = element("cpHarnessRow");
-      if (cpHarness) cpHarness.style.display = options2.settings(raw) ? "" : "none";
-      element("btnExport").style.display = supports(raw, "export") ? "" : "none";
+      if (cpHarness) cpHarness.style.display = options2.settings(current) ? "" : "none";
+      element("btnExport").style.display = sessionSupports(current, "export") ? "" : "none";
       const nameEl = element("sessionName");
-      const canRename = current.isActive && supports(raw, "rename");
+      const canRename = !!current.isActive && sessionSupports(current, "rename");
       nameEl.classList.toggle("editable-name", canRename);
       nameEl.title = canRename ? "Click to rename" : "";
       const modelBtn = element("sessionModel");
-      const canSetModel = current.isActive && supports(raw, "setModel");
+      const canSetModel = current.isActive && sessionSupports(current, "setModel");
       setModelChipLabel(modelBtn, current.model, canSetModel ? " \u25BE" : "");
       modelBtn.style.cursor = canSetModel ? "pointer" : "default";
-      const ctxClass = contextClass(current.contextPercent);
+      const contextPercent = current.contextPercent ?? 0;
+      const ctxClass = contextClass(contextPercent);
       const contextEl = element("sessionContext");
-      contextEl.textContent = `${current.contextPercent}%`;
+      contextEl.textContent = `${contextPercent}%`;
       contextEl.className = "tool-btn tool-ctx" + (ctxClass ? " " + ctxClass : "");
       contextEl.title = current.contextTokens ? `Session stats \u2014 ${formatTokens(current.contextTokens)} tokens of context` : "Session stats";
       options2.thinking();

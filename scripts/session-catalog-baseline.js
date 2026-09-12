@@ -171,8 +171,7 @@ async function main() {
   await measure('fully-indexed-warm-list', () => get('/api/sessions?view=client'));
   index.resetForTests();
   await measure('persisted-index-list', () => get('/api/sessions?view=client'));
-  const candidate = { file: large, harnessId: 'pi', nativeSessionId: 'streaming',
-    sessionKey: encodeSessionKey('pi', 'streaming'), profileId: 'pi-v3', profileVersion: 1 };
+  const candidate = require('../lib/session-source').sourceForIdentity('pi', 'streaming', large);
   index.getSessionInfo(candidate);
   const delta = JSON.stringify({ type: 'message', id: 'm6000', parentId: 'm5999', message: { role: 'user', content: [{ type: 'text', text: 'ordinary append' }] } }) + '\n';
   fs.appendFileSync(large, delta);

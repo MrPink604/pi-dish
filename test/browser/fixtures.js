@@ -75,6 +75,19 @@ const test = base.extend({
       const self = await startHost('self', logs, hosts, null, liveSessions);
       const peer = await startHost('peer', logs, hosts, self.base, liveSessions);
       await page.addInitScript(entry => {
+        // Tests that need registry/list facts replace the list snapshot through
+        // its actual writer; mutation/transcript patches deliberately cannot.
+        window.fixtureSessionListPatch = (id, fields, host = sessionState.sessionHostId(id)) => {
+          const parts = new Map();
+          for (const kind of ['active', 'previous']) {
+            for (const row of sessionState.sessions[kind]) {
+              const key = row.host || null;
+              if (!parts.has(key)) parts.set(key, { hostId: key, active: [], previous: [] });
+              parts.get(key)[kind].push(row.id === id && key === (host || null) ? { ...row, ...fields } : row);
+            }
+          }
+          sessionState.setSessionLists([...parts.values()]);
+        };
         localStorage.setItem('pi-dish-hosts', JSON.stringify([entry]));
       }, { base: peer.base, hostId: peer.hostId, label: peer.label, token: peer.token });
       await page.goto(self.base);

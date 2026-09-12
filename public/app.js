@@ -1924,7 +1924,7 @@ function ensureHarnessRows(hostId) {
   void harnessDiscovery.ensure(hostId);
 }
 function harnessSupportsSettings(session) {
-  return !!session && typeof session.harnessId === "string" && !!session.harnessId && !!harnessRow(sessionHostIdOf(session), session.harnessId)?.pilotConfig;
+  return !!session?.harnessId && !!harnessRow(sessionHostIdOf(session), session.harnessId)?.pilotConfig;
 }
 function modelSelectOptionsHtml(models) {
   return PiDishBrowser.modelSelectOptionsHtml(models, escapeHtml);
@@ -1969,10 +1969,10 @@ function openSessionHarnessSettings() {
   const session = sessionState.currentSession;
   if (!session || !harnessSupportsSettings(session)) return;
   return openHarnessSettings({
-    harnessId: typeof session.harnessId === "string" ? session.harnessId : "pi",
+    harnessId: session.harnessId || "pi",
     hostId: sessionHostIdOf(session),
-    cwd: typeof session.cwd === "string" ? session.cwd : "",
-    label: typeof session.harnessLabel === "string" && session.harnessLabel || harnessBadgeInfo(typeof session.harnessId === "string" ? session.harnessId : null).label
+    cwd: session.cwd ?? "",
+    label: session.harnessLabel || harnessBadgeInfo(session.harnessId ?? null).label
   });
 }
 function openHarnessSettings(opts = {}) {

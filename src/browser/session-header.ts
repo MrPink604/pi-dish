@@ -1,12 +1,8 @@
 import { shortModelName } from './helper-usage';
 import { harnessBadgeInnerHtml } from './sidebar-render';
 import { contextClass, formatTokens } from './helper-format';
-import { harnessBadgeInfo } from './helper-identity';
-import { record } from './helper-values';
+import { harnessBadgeInfo, sessionSupports } from './helper-identity';
 import type { SessionState, SessionEntry } from './session-state';
-function string(value: unknown) { return typeof value === 'string' ? value : ''; }
-function number(value: unknown) { return typeof value === 'number' && Number.isFinite(value) ? value : 0; }
-function supports(session: SessionEntry, capability: string) { const caps = session.capabilities; return !record(caps) || caps[capability] !== false; }
 export function createSessionHeader(options: {
   document: Document; sessionState: SessionState; multi: () => boolean; host: (id: string | null | undefined) => unknown;
   down: (id: string | null | undefined) => boolean; color: (id: string | null | undefined) => string; label: (id: string | null | undefined) => string;
@@ -14,8 +10,8 @@ export function createSessionHeader(options: {
 }) {
 const { document, sessionState } = options; let disposed = false;
 const element = (id: string) => document.getElementById(id)!;
-function setModelChipLabel(btn: HTMLElement, model: string, suffix: string) {
-  const full = String(model || '');
+function setModelChipLabel(btn: HTMLElement, model: string | null | undefined, suffix: string) {
+  const full = model || '';
   btn.title = full ? `${full} — change model` : 'Change model';
   btn.textContent = full + suffix;
   // scrollWidth is 0 while the header is hidden; then the full ref stands
@@ -28,8 +24,7 @@ function setModelChipLabel(btn: HTMLElement, model: string, suffix: string) {
 
 function updateSessionHeader() {
   if (disposed || !sessionState.currentSession) return;
-  const raw = sessionState.currentSession, current = { ...raw, name: string(raw.name), model: string(raw.model), cwd: string(raw.cwd), harnessId: string(raw.harnessId), harnessLabel: string(raw.harnessLabel),
-    contextPercent: number(raw.contextPercent), contextTokens: number(raw.contextTokens), isActive: !!raw.isActive };
+  const current = sessionState.currentSession;
 
   element('sessionName').textContent = current.name || 'Unnamed';
   const hostEl = element('sessionHost');
@@ -51,7 +46,7 @@ function updateSessionHeader() {
     options.ensureHarness(current.host || null);
     // Clickable only where the host reports a settings view for this harness
     // (OMP's /agents + /models hubs today).
-    const configurable = options.settings(raw);
+    const configurable = options.settings(current);
     harnessEl.className = `badge harness-badge harness-badge-${current.harnessId}`
       + (configurable ? ' clickable' : '');
     harnessEl.title = configurable ? `${title} settings: agents and models` : `${title} harness`;
@@ -67,27 +62,28 @@ function updateSessionHeader() {
   // The tree has no header button any more (type /tree in the composer); the
   // mobile control panel keeps its row, so it still follows harness support.
   const cpTree = element('cpTreeRow');
-  if (cpTree) cpTree.style.display = supports(raw, 'tree') ? '' : 'none';
+  if (cpTree) cpTree.style.display = sessionSupports(current, 'tree') ? '' : 'none';
   // Phone parity for the header badge: same modal from the control panel.
   const cpHarness = element('cpHarnessRow');
-  if (cpHarness) cpHarness.style.display = options.settings(raw) ? '' : 'none';
-  element('btnExport').style.display = supports(raw, 'export') ? '' : 'none';
+  if (cpHarness) cpHarness.style.display = options.settings(current) ? '' : 'none';
+  element('btnExport').style.display = sessionSupports(current, 'export') ? '' : 'none';
 
   const nameEl = element('sessionName');
-  const canRename = current.isActive && supports(raw, 'rename');
+  const canRename = !!current.isActive && sessionSupports(current, 'rename');
   nameEl.classList.toggle('editable-name', canRename);
   nameEl.title = canRename ? 'Click to rename' : '';
 
   const modelBtn = element('sessionModel');
-  const canSetModel = current.isActive && supports(raw, 'setModel');
+  const canSetModel = current.isActive && sessionSupports(current, 'setModel');
   setModelChipLabel(modelBtn, current.model, canSetModel ? ' ▾' : '');
   modelBtn.style.cursor = canSetModel ? 'pointer' : 'default';
 
   // One readout, in the composer field: percent only (its slot is fixed
   // width), with the token count in the tooltip.
-  const ctxClass = contextClass(current.contextPercent);
+  const contextPercent = current.contextPercent ?? 0;
+  const ctxClass = contextClass(contextPercent);
   const contextEl = element('sessionContext');
-  contextEl.textContent = `${current.contextPercent}%`;
+  contextEl.textContent = `${contextPercent}%`;
   contextEl.className = 'tool-btn tool-ctx' + (ctxClass ? ' ' + ctxClass : '');
   contextEl.title = current.contextTokens
     ? `Session stats — ${formatTokens(current.contextTokens)} tokens of context`

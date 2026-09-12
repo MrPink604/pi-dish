@@ -1,31 +1,11 @@
 import type { SessionEntry } from './session-state';
-import type { HelperSession, HelperHost, SessionFamily, WorkspaceNode } from './shared-helper-types';
+import type { HelperHost, SessionFamily, WorkspaceNode } from './shared-helper-types';
 import type { PendingSessionSpawn } from './session-spawns';
-import { record, finite } from './helper-values';
 import { escapeHtml, contextClass, formatTokens, formatRelativeTime, shortCwd } from './helper-format';
 import { shortModelName } from './helper-usage';
 import { sessionKey, sessionRefKey, sessionSupports, harnessBadgeInfo, hostDisplayLabel, sortHostSections, hostSectionKey } from './helper-identity';
 import { buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies, groupSessionsByDate, groupByWorkspace, buildWorkspaceTree, collectTreeSessions } from './helper-sessions';
 import { parseSessionQuery, positiveQueryTokens, highlightTokens, queryAsksForAutomation, isAutomationSession, applyHostTerms, applyLocalFilter, evaluateSessionQuery, scoreSessionMatch } from './helper-query';
-export interface SidebarSession extends HelperSession {
-  subagentLive: boolean; compacting: boolean; contextPercent: number; contextTokens?: number;
-  thinkingLevel: string; closeMode: string; harnessId: string; harnessLabel: string; searchSnippet: string; searchScore?: number;
-}
-/** Narrow list metadata once before grouping; the session store retains its original payloads. */
-export function sidebarSession(row: Pick<SessionEntry, 'id' | 'host'> & Record<string, unknown>): SidebarSession {
-  const string = (value: unknown) => typeof value === 'string' ? value : '';
-  const capabilities: Record<string, boolean> = {};
-  if (record(row.capabilities)) for (const [key, value] of Object.entries(row.capabilities)) if (typeof value === 'boolean') capabilities[key] = value;
-  const parent = typeof row.familyParentId === 'string' ? row.familyParentId : null;
-  return { id: row.id, host: row.host, hostLabel: typeof row.hostLabel === 'string' ? row.hostLabel : undefined, name: string(row.name), cwd: string(row.cwd), model: string(row.model),
-    lastActivity: typeof row.lastActivity === 'string' || finite(row.lastActivity) ? row.lastActivity : null,
-    isActive: row.isActive === true, turnInProgress: row.turnInProgress === true, subagentLive: row.subagentLive === true, compacting: row.compacting === true,
-    parentId: string(row.parentId), ...(Object.hasOwn(row, 'familyParentId') ? { familyParentId: parent } : {}),
-    routine: string(row.routine), routineId: string(row.routineId), capabilities,
-    contextPercent: finite(row.contextPercent) ? row.contextPercent : 0, contextTokens: finite(row.contextTokens) ? row.contextTokens : undefined,
-    thinkingLevel: string(row.thinkingLevel), closeMode: string(row.closeMode), harnessId: string(row.harnessId), harnessLabel: string(row.harnessLabel),
-    searchSnippet: string(row.searchSnippet), searchScore: finite(row.searchScore) ? row.searchScore : undefined };
-}
 export interface SidebarHost extends HelperHost { state: string; key: string; color: string; dot: string; hasCache: boolean }
 export interface SidebarRenderOptions {
   active: readonly SessionEntry[]; previous: readonly SessionEntry[]; selected: SessionEntry | null;
@@ -33,9 +13,9 @@ export interface SidebarRenderOptions {
   contextMetric: string; pending: readonly (readonly [string, PendingSessionSpawn])[]; selectedSpawn: string | null;
   expanded: ReadonlySet<string>; collapsed: ReadonlySet<string>; pinned: readonly string[]; roots: ReadonlyMap<string, string>;
   closeConfirm: string | null; closeBusy: string | null; multiHost: boolean; hosts: readonly SidebarHost[];
-  unread: (row: SidebarSession) => boolean; hostChip: (id?: string | null) => string;
+  unread: (row: SessionEntry) => boolean; hostChip: (id?: string | null) => string;
 }
-interface RowOptions { familyNode?: SessionFamily<SidebarSession>; familyRootKey?: string; familyDepth?: number; familyPinned?: boolean; pinnedRow?: boolean; showCwd?: boolean }
+interface RowOptions { familyNode?: SessionFamily<SessionEntry>; familyRootKey?: string; familyDepth?: number; familyPinned?: boolean; pinnedRow?: boolean; showCwd?: boolean }
 interface FamilyOptions { pinnedFamily?: boolean; showCwd?: boolean }
 export function harnessBadgeInnerHtml(info: ReturnType<typeof harnessBadgeInfo>) {
   const icon = info.icon
@@ -51,12 +31,13 @@ export function renderHarnessBadge(harnessId?: string | null, harnessLabel?: str
   return `<span class="harness-badge harness-badge-${escapeHtml(id)}" title="${escapeHtml(title)} harness" aria-label="${escapeHtml(title)} harness">${harnessBadgeInnerHtml(info)}</span>`;
 }
 
-/** One render uses a single projection; no DOM, requests, timers or retained row closures. */
+/** Render established metadata; no DOM, requests, timers or retained row closures. */
 export function renderSidebar(options: SidebarRenderOptions) {
   const canonical = (key: string) => options.roots.get(key) || key;
   const hostIsDown = (host: SidebarHost) => host.state === 'blocked' || host.state === 'backoff';
-function renderSessionItem(session: SidebarSession, opts: RowOptions = {}) {
-  const ctxClass = contextClass(session.contextPercent);
+function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
+  const contextPercent = session.contextPercent ?? 0;
+  const ctxClass = contextClass(contextPercent);
   const activeClass = options.selected && sessionRefKey(options.selected) === sessionRefKey(session) ? 'active' : '';
   // A live subagent has no bridge of its own (its parent's process owns it),
   // so `isActive` is false — but it is a running session, not history, and
@@ -89,10 +70,10 @@ function renderSessionItem(session: SidebarSession, opts: RowOptions = {}) {
   // count). The colour still comes from the percent — that's the warning.
   const ctxText = options.contextMetric === 'tokens' && session.contextTokens
     ? `${formatTokens(session.contextTokens)} tok`
-    : `${session.contextPercent}%`;
+    : `${contextPercent}%`;
   const ctxTitle = session.contextTokens
-    ? `${session.contextPercent}% of context · ${formatTokens(session.contextTokens)} tokens`
-    : `${session.contextPercent}% of context`;
+    ? `${contextPercent}% of context · ${formatTokens(session.contextTokens)} tokens`
+    : `${contextPercent}% of context`;
   const timeAgo = formatRelativeTime(hasChildren ? familyNode!.activity : session.lastActivity);
   const canonicalRootKey = canonical(opts.familyRootKey || sessionRefKey(session));
   const isPinned = opts.familyPinned ?? options.pinned.some(pin =>
@@ -162,7 +143,7 @@ function renderSessionItem(session: SidebarSession, opts: RowOptions = {}) {
   `;
 }
 
-function renderSessionFamily(node: SessionFamily<SidebarSession>, opts: FamilyOptions = {}, depth = 0, rootId = node.session.id,
+function renderSessionFamily(node: SessionFamily<SessionEntry>, opts: FamilyOptions = {}, depth = 0, rootId = node.session.id,
   rootKey = sessionRefKey(node.session)): string {
   const expanded = node.children.length > 0 && options.expanded.has(sessionRefKey(node.session));
   const row = renderSessionItem(node.session, {
@@ -205,7 +186,7 @@ function renderPendingSessionItem(spawnId: string, spawn: PendingSessionSpawn) {
 
 function renderSessions() {
   hostSectionsShown = null; // only the workspace view builds host sections
-  const active = options.active.map(sidebarSession), previous = options.previous.map(sidebarSession);
+  const { active, previous } = options;
   // A live subagent runs inside a live session's process, so it belongs on
   // the Active tab even though it is a historical row everywhere else (its
   // parent owns it; pi-dish has no socket to it). The count badge stays a
@@ -344,7 +325,7 @@ let hostSectionsShown: Set<string> | null = null;
  * Order is self first then by label — stable, deliberately not recency, so
  * the headings don't shuffle under the cursor.
  */
-function renderWorkspaceTrees(list: readonly SidebarSession[]) {
+function renderWorkspaceTrees(list: readonly SessionEntry[]) {
   if (!options.multiHost) {
     const tree = buildWorkspaceTree(groupByWorkspace(list, options.collapsed), options.collapsed);
     return tree.map(node => renderWorkspaceNode(node)).join('');
@@ -422,7 +403,7 @@ function hostOfflineNotesHtml() {
  * trees sit inside a .host-section whose heading names the machine, so no
  * node header carries a host chip.
  */
-function renderWorkspaceNode(node: WorkspaceNode<SidebarSession>, opts: { hostId?: string | null } = {}): string {
+function renderWorkspaceNode(node: WorkspaceNode<SessionEntry>, opts: { hostId?: string | null } = {}): string {
   const hostId = opts.hostId || null;
   const groupKey = workspaceGroupKey(hostId, node.path);
   const isCollapsed = options.collapsed.has(groupKey);
@@ -458,7 +439,7 @@ function renderWorkspaceNode(node: WorkspaceNode<SidebarSession>, opts: { hostId
  * "May" would break the timeline. Rows carry the cwd hint: the workspace
  * label isn't above them in this view.
  */
-function renderDateBucket(bucket: { key: string; label: string; sessions: readonly SessionFamily<SidebarSession>[] }) {
+function renderDateBucket(bucket: { key: string; label: string; sessions: readonly SessionFamily<SessionEntry>[] }) {
   const key = 'date:' + bucket.key;
   const isCollapsed = options.collapsed.has(key);
   const bucketMembers = flattenSessionFamilies(bucket.sessions);

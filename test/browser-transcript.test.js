@@ -16,3 +16,14 @@ test('transcript decoding preserves authoritative indexed empty assistant entrie
   const data = decodeTranscriptPage({ messages: [{ role: 'assistant', index: 3, content: [] }], firstIndex: 3, lastIndex: 3, totalMessages: 4 });
   assert.equal(data.messages.length, 1); assert.equal(data.messages[0].index, 3); assert.equal(data.messages[0].content.length, 0);
 });
+
+test('transcript patches preserve present display values and exclude list authority and extras', () => {
+  const data = decodeTranscriptPage({ messages: [], session: {
+    name: null, model: '', cwd: null, contextPercent: 0, contextTokens: 0, lastActivity: 0, isActive: false,
+    harnessId: 'peer', capabilities: { resume: true }, parentId: 'forged', routine: 'forged',
+    thinkingLevel: 'high', turnInProgress: true, extra: { name: 'forged' },
+  } });
+  assert.deepEqual({ ...data.session }, { name: null, model: '', cwd: null, contextTokens: 0, contextPercent: 0, lastActivity: 0, isActive: false });
+  assert.equal(Object.hasOwn(data.session, 'messageCount'), false);
+  assert.throws(() => decodeTranscriptPage({ messages: [], session: { contextTokens: '0' } }), /Invalid session patch/);
+});

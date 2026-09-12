@@ -215,16 +215,17 @@ averages aren't diluted). These in-memory LRUs are sized for the *viewed*
 sessions only — anything that iterates the whole corpus (the sidebar scan,
 list search) must go through `lib/session-index.js` instead, or thousands of
 sessions turn a capped LRU into a 0%-hit-rate full re-parse per request. The
-content-based cores (`parseSessionContent`, `buildSearchTextFromContent`,
-`buildIndexedUsageFromContent`) are exported so the index derives metadata,
-search text, and compact daily/model usage summaries from one read.
+entry parser and search/usage projections are exported so the index derives
+metadata, search text and compact usage summaries from one read. The sole metadata
+accumulator is authored in `src/core/session-metadata.ts`; `session-files.js` imports
+it for standalone reads. Index callers pass explicit `SessionSource` descriptors.
 `getSessionInfo` returns a
 copy (callers overlay live usage onto it); the other readers return the
 cached value itself — never mutate it. The parser also retains Pi's optional
 core `SessionHeader.id`/`parentSession` provenance. This is display metadata,
 not control authority, and pi-dish never appends custom relationship entries
 to Pi JSONL. Context window/percent are derived in
-server.js (`withContext`) at read time, not inside the cache — the models
+`src/core/session-catalog.ts` (`withSessionContext`) at read time, not inside the cache — the models
 cache warms asynchronously and would bake in stale windows.
 
 `GET /api/sessions/:id/messages` projects historical `{type:'image', data}`
@@ -240,14 +241,24 @@ unaffected because OMP's session loader restores inline base64 in memory.
 
 ## Nested session discovery + related sessions
 
-Historical discovery is bounded-recursive (`lib/session-discovery.js`) so
+Historical discovery is authored in `src/core/session-discovery.ts` and generated
+to `lib/session-discovery.js`. Its bounded traversal keeps
 alternative launchers' nested `.../run-N/session.jsonl` files remain visible
 after their bridge exits. Traditional files retain their basename identity;
 only generic `session.jsonl` uses the validated core header id, matching the
 bridge's live identity rule. Conflicting generic files claiming the same header
 id are omitted as ambiguous rather than routed arbitrarily. Traversal never follows symlink directories and
 is depth/file/entry capped; `/api/sessions` exposes `discoveryTruncated` when the cap
-is reached. All historical route lookup goes through the same discovery path.
+is reached. All historical route lookup goes through `src/core/session-source.ts`, which owns
+route aliases and header-cache invalidation. Registered/RPC claims enter explicitly;
+no path-to-source side map establishes identity. Cached header-derived identities,
+including OMP named children, are revalidated against ambiguity on route access.
+
+`src/core/session-catalog.ts` composes active, historical and live-child rows and
+their relationship/routine hints from captured observations. The server retains
+registry grouping, live-child exit checks and existing process/tmux capability
+proofs. List, search and reference routes consume the same composition; direct
+transcript/stat reads use the source and index without a full catalog scan.
 
 A subagent OMP runs is a full session of its own inside the parent's process
 (`<parent>/<agent>.jsonl`), and only one bridge registers per process — so a
@@ -1285,11 +1296,12 @@ browser assertions.
 with host lookup and rendering hooks. `SelectionOwner` is exported by this typed
 module and shared by the API adapter and model selector.
 Its `sessions` (sidebar lists) and `currentSession` (a **detached copy** of the
-selected entry) are written only by four store methods:
-`setSessionLists` (poll/search results; folds the fresh
+selected entry) are written only by the store methods:
+`setSessionLists` (validated list observations; folds the fresh
 entry into `currentSession`), `setCurrentSession` (selection),
-`patchSession` (local mutations — rename, model switch, thinking level), and
-`mergeCurrentSession` (a current ownership token plus the `session` payload on /messages responses —
+`patchSession` (rename, model switch and thinking level), `patchSessionActivity`
+(turn/compaction activity), and `mergeCurrentSession` (a current ownership token
+plus the decoded transcript patch from /messages responses —
 current-session/header only, never the lists, whose name/model come from the
 registry-aware poll). Each write re-renders the views it affects, so a
 mutation can't leave sidebar and header disagreeing (the old "rename needs
@@ -1781,9 +1793,11 @@ search so the reader lands on the match.
 
 ## Session/model API contracts
 
-`src/core/session-api.ts` owns the client session projection and harness model
-normalization consumed by `server.js`. Named session control fields and model
-identities are validated; unknown feature metadata stays opaque. The module
+`src/core/session-api.ts` owns closed first-party session fields, restricted
+mutation/activity/transcript patches, client projection and harness model
+normalization. Browser ingress validates named fields and separates opaque extras;
+`SessionEntry` retains the field contract through state and rendering. Client
+projection preserves server Dates and omits private routing metadata. The module
 also defines catalog and mutation response decoders consumed by
 `src/browser/api-client.ts`. The checked-in `public/browser.js` bundle loads
 before the ordinary app script and exposes `PiDishBrowser`; regenerate it with
@@ -2198,8 +2212,8 @@ command catalog refresh, menu rows and blur timers. Every accepted choice emits
 input so plain file mentions persist in drafts. Session references retain the
 existing exact host-id grammar and owning-host prefix disambiguation.
 
-`src/browser/sidebar-render.ts` renders the sidebar from a single typed metadata
-projection. It owns no requests, persistent preferences or DOM listeners. Keep
+`src/browser/sidebar-render.ts` renders established `SessionEntry` fields directly
+and derives only display fallbacks, grouping and labels. It owns no requests, persistent preferences or DOM listeners. Keep
 server-filtered content matches authoritative and collapse keys host-qualified.
 
 Sidebar row preferences and actions live in `src/browser/sidebar-controls.ts`.

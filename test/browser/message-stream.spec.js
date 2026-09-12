@@ -59,7 +59,10 @@ test('the newest session-switch event owns delayed list navigation', async ({ pa
   await setup(page, fleet);
   await page.evaluate(child => {
     const host = sessionState.currentSession.host;
-    sessionState.setSessionLists({ previous: [...sessionState.sessions.previous, { id: 'newer-transcript', host }] });
+    const previous = [...sessionState.sessions.previous, { id: 'newer-transcript', host }];
+    sessionState.setSessionLists([...new Set(previous.map(row => row.host))].map(hostId => ({
+      hostId, previous: previous.filter(row => row.host === hostId),
+    })));
     window.streamEndpoint.token = null; window.ownedStream.start();
     window.emitOwnedStream(0, 'session_switch', { sessionId: child }); window.emitOwnedStream(0, 'session_switch', { sessionId: 'newer-transcript' });
     window.streamLoads[1]();

@@ -443,7 +443,7 @@ export function createRoutinesView(options: {
     const out = [];
     for (const s of [...sessionState.sessions.active, ...sessionState.sessions.previous]) {
       if (isMultiHost() && (s.host || null) !== hostId) continue;
-      if (typeof s.cwd !== 'string' || !s.cwd || seen.has(s.cwd)) continue;
+      if (!s.cwd || seen.has(s.cwd)) continue;
       seen.add(s.cwd);
       out.push({ path: s.cwd, short: shortCwd(s.cwd) });
     }
@@ -971,7 +971,7 @@ export function createRoutinesView(options: {
    */
   function routineSessionLabel(sessionId: string) {
     const known = sessionState.findSession(sessionId, routineSelected?.host || null);
-    if (known && known.name) return truncate(typeof known.name === 'string' ? known.name : '', 28, '…');
+    if (known && known.name) return truncate(known.name, 28, '…');
     // Pi's ids lead with a timestamp, so the app's usual first-8 ref would read
     // "2026-09-" on every row; the distinguishing part is the tail. Uuid-shaped
     // ids (OMP) keep the familiar leading form.

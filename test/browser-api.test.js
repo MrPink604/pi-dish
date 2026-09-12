@@ -60,3 +60,30 @@ test('typed reads reject malformed successes and retain HTTP error status', asyn
   const generic = await sendJson(async () => new Response('', { status: 200 }), null, '/api/legacy', null);
   assert.equal(Object.keys(generic).length, 0);
 });
+
+test('session list ingress separates opaque extras and omits malformed presentation values', async () => {
+  const api = createSessionApi(async () => new Response(JSON.stringify({
+    active: [{ id: 'one', host: 'forged', hostLabel: 'forged label', name: null, model: '',
+      lastActivity: 0, contextTokens: 0, contextPercent: '45', turnInProgress: 1, compacting: false,
+      parentId: null, familyParentId: '', capabilities: { resume: false, future: true },
+      custom: { model: 42 }, fields: { model: 'forged' }, extras: { isActive: true } }], previous: [],
+  })));
+  const list = await api.list('peer', '/api/sessions');
+  const row = list.active[0];
+  assert.equal(row.id, 'one');
+  assert.equal(row.fields.name, null);
+  assert.equal(row.fields.model, '');
+  assert.equal(row.fields.lastActivity, 0);
+  assert.equal(row.fields.contextTokens, 0);
+  assert.equal(row.fields.contextPercent, undefined);
+  assert.equal(row.fields.turnInProgress, undefined);
+  assert.equal(row.fields.compacting, false);
+  assert.equal(row.fields.parentId, null);
+  assert.equal(row.fields.familyParentId, '');
+  assert.equal(row.fields.capabilities.future, true);
+  assert.equal(row.extras.custom.model, 42);
+  assert.equal(row.extras.fields.model, 'forged');
+  assert.equal(row.extras.host, undefined);
+  assert.equal(row.extras.hostLabel, undefined);
+  assert.equal(row.extras.contextPercent, undefined);
+});

@@ -7,7 +7,7 @@ import { escapeHtml } from './helper-format';
 // client is the aggregator), so a server's own sessions carry neither
 // hostLabel nor host. Clients strip host terms with stripQueryField() before
 // querying any server and re-apply them locally.
-// `routine` rides the generic session[field] substring path: a session stamped
+// `routine` uses the same named-field substring matching: a session stamped
 // with routine provenance answers `routine:nightly` and `-routine:nightly`
 // everywhere the grammar is spoken. Deliberately absent from sessionMetaText —
 // a plain term must not match a routine name.
@@ -134,7 +134,7 @@ export function evaluateSessionQuery(parsed: SessionQuery, session: HelperSessio
       // Client-only: the host's display label, falling back to its id. A
       // server's sessions carry neither, so a positive host: term matches
       // nothing there — which is exactly why clients strip these first.
-      hit = String(session.hostLabel || session.host || '').toLowerCase().includes(term.value);
+      hit = (session.hostLabel || session.host || '').toLowerCase().includes(term.value);
     } else if (term.field === 'is') {
       // Not a substring field: is:active tests liveness, is:automation
       // routine provenance (anything else simply never matches, so a typo
@@ -142,7 +142,10 @@ export function evaluateSessionQuery(parsed: SessionQuery, session: HelperSessio
       hit = (term.value === 'active' && !!session.isActive)
         || (term.value === 'automation' && isAutomationSession(session));
     } else {
-      const hay = term.field ? String(session[term.field] || '').toLowerCase() : meta;
+      const field = term.field;
+      const hay = field === null ? meta
+        : field === 'name' || field === 'cwd' || field === 'model' || field === 'id' || field === 'routine'
+          ? (session[field] || '').toLowerCase() : '';
       hit = hay.includes(term.value);
       if (!hit && !term.neg && !term.field && contentText) hit = contentText.includes(term.value);
     }
@@ -179,7 +182,7 @@ export function countOccurrences(text: string | undefined, token: string) {
 export function scoreSessionMatch(parsed: SessionQuery, session: HelperSession, contentText?: string) {
   const tokens = positiveQueryTokens(parsed);
   if (!tokens.length) return 0;
-  const name = String(session.name || '').toLowerCase();
+  const name = (session.name || '').toLowerCase();
   const other = [session.cwd, session.model, session.id].join(' ').toLowerCase();
   let total = 0;
   for (const token of tokens) {

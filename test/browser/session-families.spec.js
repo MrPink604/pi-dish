@@ -44,7 +44,7 @@ test('a peer-only parent hint cannot change another host child pin', async ({ pa
   await select(self, CHILD);
   // Simulate an API refresh where the peer's ancestor is outside the loaded
   // history page. The self-host child still belongs to its visible root.
-  await page.evaluate(({ id, host }) => sessionState.patchSession(id, { familyParentId: 'peer-only-parent' }, host),
+  await page.evaluate(({ id, host }) => window.fixtureSessionListPatch(id, { familyParentId: 'peer-only-parent' }, host),
     { id: CHILD, host: peer.hostId });
   await row(self, CHILD).locator('.session-pin-btn').click();
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('pi-dish-pinned-sessions'))))

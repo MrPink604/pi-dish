@@ -10,7 +10,7 @@ test('startup restoration cannot replace a selection made while initial lists ar
   const route = await received;
   await page.evaluate(async ({ root, child, host }) => {
     const mount = sidebarLists.mount; sidebarLists.mount = () => { window.startupMounted = true; mount(); };
-    sessionState.setSessionLists({ previous: [{ id: root, host, name: 'saved' }, { id: child, host, name: 'selected' }] });
+    sessionState.setSessionLists({ previous: [{ id: root, name: 'saved' }, { id: child, name: 'selected' }] }, host);
     await selectSession(child, { host });
   }, { root: ROOT, child: CHILD, host: fleet.self.hostId });
   await route.fulfill({ json: { active: [], previous: [{ id: ROOT, name: 'saved' }, { id: CHILD, name: 'selected' }] } });

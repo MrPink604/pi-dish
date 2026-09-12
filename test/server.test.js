@@ -296,7 +296,7 @@ test('GET /api/sessions client view omits server-only routing metadata', async (
   assert.equal(nested.familyParentId, SESSION_ID);
 });
 
-test('a malformed history row cannot break the client session list', async () => {
+test('malformed historical metadata falls back before client projection', async () => {
   const badId = 'malformed-browser-row';
   const file = path.join(sessionDir, badId + '.jsonl');
   fs.writeFileSync(file, [
@@ -310,7 +310,7 @@ test('a malformed history row cannot break the client session list', async () =>
     const client = await get('/api/sessions?view=client');
     assert.equal(client.status, 200);
     assert.ok(client.body.previous.some(row => row.id === SESSION_ID));
-    assert.ok(!client.body.previous.some(row => row.id === badId));
+    assert.equal(client.body.previous.find(row => row.id === badId)?.name, badId.slice(0, 8));
   } finally { fs.rmSync(file, { force: true }); }
 });
 

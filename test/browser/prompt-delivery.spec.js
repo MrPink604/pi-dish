@@ -1,7 +1,7 @@
 const { test, expect } = require('./fixtures');
 test('queue decoder ignores malformed rows and displays valid text literally', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
-  await page.evaluate(() => sessionState.patchSession(sessionState.currentSession.id, { capabilities: { queueCancel: true } }));
+  await page.evaluate(() => window.fixtureSessionListPatch(sessionState.currentSession.id, { capabilities: { queueCancel: true } }));
   await page.evaluate(() => renderQueueStatus({ steering: [null, {}, '<img src=x onerror=alert(1)>'], followUp: 'bad' }));
   await expect(page.locator('.queue-item')).toHaveCount(1);
   await expect(page.locator('.queue-item-text')).toHaveText('<img src=x onerror=alert(1)>');
@@ -9,7 +9,7 @@ test('queue decoder ignores malformed rows and displays valid text literally', a
 });
 test('replaced queue controls are inert and a double click sends one cancellation', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
-  await page.evaluate(() => sessionState.patchSession(sessionState.currentSession.id, { capabilities: { queueCancel: true } }));
+  await page.evaluate(() => window.fixtureSessionListPatch(sessionState.currentSession.id, { capabilities: { queueCancel: true } }));
   await page.evaluate(() => {
     window.queueCancels = [];
     apiFetch = (...args) => new Promise(resolve => window.queueCancels.push({ args, resolve }));
@@ -25,7 +25,7 @@ test('replaced queue controls are inert and a double click sends one cancellatio
 });
 test('queue rows retain endpoint ownership and disposal retires response effects', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
-  await page.evaluate(() => sessionState.patchSession(sessionState.currentSession.id, { capabilities: { queueCancel: true } }));
+  await page.evaluate(() => window.fixtureSessionListPatch(sessionState.currentSession.id, { capabilities: { queueCancel: true } }));
   await page.evaluate(() => {
     promptDelivery.dispose(); window.deliveryEndpoint = { base: 'http://original' }; window.deliveryCalls = []; window.deliveryRestores = [];
     window.ownedDelivery = PiDishBrowser.createPromptDelivery({ document, sessionState, endpoint: () => window.deliveryEndpoint,
@@ -39,7 +39,7 @@ test('queue rows retain endpoint ownership and disposal retires response effects
 });
 test('late side-command success cannot replace a newer answer or status', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
-  await page.evaluate(() => sessionState.patchSession(sessionState.currentSession.id, { capabilities: { queueCancel: true } }));
+  await page.evaluate(() => window.fixtureSessionListPatch(sessionState.currentSession.id, { capabilities: { queueCancel: true } }));
   await page.evaluate(() => {
     window.commandReplies = []; apiFetch = (...args) => new Promise(resolve => window.commandReplies.push({ args, resolve }));
     document.getElementById('promptInput').value = '/btw first'; window.firstCommand = sendPrompt();
@@ -53,7 +53,7 @@ test('late side-command success cannot replace a newer answer or status', async 
 });
 test('disposing submit retires late command effects while preserving the next composer', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
-  await page.evaluate(() => sessionState.patchSession(sessionState.currentSession.id, { capabilities: { queueCancel: true } }));
+  await page.evaluate(() => window.fixtureSessionListPatch(sessionState.currentSession.id, { capabilities: { queueCancel: true } }));
   await page.evaluate(() => {
     apiFetch = () => new Promise(resolve => { window.finishDisposedCommand = resolve; });
     document.getElementById('promptInput').value = '/btw question'; window.disposedCommand = sendPrompt();

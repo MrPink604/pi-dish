@@ -25,7 +25,7 @@ for (const [action, field, value] of [
   test(`delayed ${action} response updates its host after selection changes`, async ({ page, fleet }) => {
     const { self, peer, select } = fleet;
     await select(peer);
-    await page.evaluate(({ id, host }) => sessionState.patchSession(id, {
+    await page.evaluate(({ id, host }) => window.fixtureSessionListPatch(id, {
       isActive: true, capabilities: { setModel: true, setThinking: true, rename: true },
     }, host), { id: ROOT, host: peer.hostId });
     const endpoint = `${peer.base}/api/sessions/${ROOT}/${action}`;

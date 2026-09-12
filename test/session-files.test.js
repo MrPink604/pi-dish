@@ -582,3 +582,24 @@ test('decodeDirToCwd reverses pi session-dir naming', () => {
   assert.equal(SF.decodeDirToCwd('--home-user-proj--'), '/home/user/proj');
   assert.equal(SF.decodeDirToCwd('--home-user--'), '/home/user');
 });
+
+test('typed metadata accumulation narrows malformed known fields without promoting later headers', () => {
+  const { sessionInfoFromEntries, extendSessionInfoFromEntries } = require('../lib/session-metadata.js');
+  const entries = SF.parseSessionEntries([
+    { type: 'session', id: 'first', cwd: '/valid', parentSession: '/parent' },
+    { type: 'model_change', modelId: 'valid-model' },
+    { type: 'session_info', name: 'valid-name' },
+    { type: 'session', id: 'later', cwd: { bad: true }, parentSession: '/wrong' },
+    { type: 'model_change', modelId: 42 },
+    { type: 'session_info', name: ['bad'], sessionName: { bad: true } },
+    { type: 'message', message: { role: 'assistant', usage: { totalTokens: '123' } } },
+  ].map(JSON.stringify).join('\n'));
+  const info = sessionInfoFromEntries(entries, new Date(0));
+  assert.deepEqual(info, { model: 'valid-model', name: 'valid-name', messageCount: 0,
+    contextTokens: 0, lastActivity: new Date(0), cwd: '/valid', sessionId: 'first', parentSession: '/parent' });
+  const delta = SF.parseSessionEntries(JSON.stringify({ type: 'session', id: 'delta-header', parentSession: '/delta' }));
+  assert.strictEqual(extendSessionInfoFromEntries(info, delta, new Date(1000)), info);
+  assert.equal(info.sessionId, 'first');
+  assert.equal(info.parentSession, '/parent');
+  assert.equal(info.lastActivity.getTime(), 1000);
+});

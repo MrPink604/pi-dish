@@ -1,6 +1,5 @@
 import { escapeHtml } from './helper-format';
 import { sessionRefKey } from './helper-identity';
-import { record } from './helper-values';
 import type { SessionState, SessionEntry, SelectionOwner } from './session-state';
 import type { HostEndpoint } from './api-client';
 import type { PendingSessionSpawn } from './session-spawns';
@@ -179,11 +178,11 @@ async function selectSession(id: string, { forceTranscriptReload = false, host =
     // resuming would put a second harness process on a file that process
     // keeps appending to. The bar keeps the read-only label and Stats; only
     // the Resume affordance goes.
-    const caps = current.capabilities, resumable = !record(caps) || caps.resume !== false;
+    const resumable = current.capabilities?.resume !== false;
     if (resumeBar) {
       resumeBar.style.display = '';
       const cwdSpan = resumeBar.querySelector('.resume-cwd');
-      if (cwdSpan) cwdSpan.textContent = typeof current.cwd === 'string' && current.cwd || '~';
+      if (cwdSpan) cwdSpan.textContent = current.cwd || '~';
       const label = resumeBar.querySelector('.resume-label');
       if (label) {
         label.textContent = resumable
@@ -216,7 +215,7 @@ async function selectSession(id: string, { forceTranscriptReload = false, host =
   if (current.isActive) {
     // Fire-and-forget: nothing below needs the results, and both can ask the
     // live session over its socket — don't stall the transcript on them.
-    options.models(id, typeof current.harnessId === 'string' ? current.harnessId : undefined);
+    options.models(id, current.harnessId);
     options.commands(id); // refresh autocomplete with this session's commands
   }
   await mathAssetsReady;

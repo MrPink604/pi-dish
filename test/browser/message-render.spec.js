@@ -47,7 +47,7 @@ test('transcript image resources and share controls use the selected owning host
   await fleet.select(fleet.peer);
   const html = await page.evaluate(() => messageRenderer.message({ role: 'user', id: 'entry', content: [{ type: 'image', url: '/api/image', mimeType: 'image/png' }] }));
   expect(html).toContain(fleet.peer.base + '/api/image'); expect(html).toContain('loading="lazy"'); expect(html).toContain('data-entry-id="entry"');
-  const noExport = await page.evaluate(() => { sessionState.patchSession(sessionState.currentSession.id, { capabilities: { export: false } }, sessionState.currentSession.host); return messageRenderer.message({ role: 'user', id: 'entry', content: 'hello' }); });
+  const noExport = await page.evaluate(() => { window.fixtureSessionListPatch(sessionState.currentSession.id, { capabilities: { export: false } }, sessionState.currentSession.host); return messageRenderer.message({ role: 'user', id: 'entry', content: 'hello' }); });
   expect(noExport).not.toContain('msg-link-btn');
 });
 test('retained telemetry keeps its original host and remains usable after restoring that transcript', async ({ page, fleet }) => {

@@ -1,5 +1,4 @@
 // Generated from src/core/session-api.ts; edit that source and run npm run build:core.
-import type { CatalogSession } from './session-catalog-contracts';
 /** Closed first-party metadata. Identity and opaque extras are separate owners. */
 export interface SessionFields<Timestamp = string | number> {
     name?: string | null;
@@ -30,7 +29,7 @@ export interface SessionFields<Timestamp = string | number> {
     searchSnippet?: string;
     searchScore?: number;
 }
-/** Existing wire compatibility boundary, until Tasks 4/6 cut over all readers. */
+/** Legacy wire helper compatibility; authoritative browser state uses SessionRow. */
 export interface SessionMetadata extends Record<string, unknown>, Pick<SessionFields, 'name' | 'model' | 'harnessId' | 'thinkingLevel' | 'isActive' | 'capabilities'> {
     id: string;
 }
@@ -43,10 +42,13 @@ export interface SessionRow {
 export type SessionMutationPatch = Pick<SessionFields, 'name' | 'model' | 'thinkingLevel'>;
 export type SessionActivityPatch = Pick<SessionFields, 'turnInProgress' | 'compacting'>;
 export type SessionTranscriptPatch = Pick<SessionFields, 'name' | 'model' | 'cwd' | 'messageCount' | 'contextTokens' | 'contextWindow' | 'contextPercent' | 'lastActivity' | 'isActive'>;
-export interface SessionList extends Record<string, unknown> {
-    active: SessionMetadata[];
-    previous: SessionMetadata[];
-    children?: SessionMetadata[];
+export interface SessionList {
+    active: SessionRow[];
+    previous: SessionRow[];
+    children?: SessionRow[];
+    indexing?: boolean;
+    discoveryTruncated?: boolean;
+    discoverySkipped?: number;
 }
 export interface ModelPricing {
     input: number;
@@ -85,7 +87,7 @@ export interface EnabledModelsResult extends MutationResult {
     enabledModels: string[] | null;
 }
 /**
- * Future browser ingress. Keep the established fatal control checks; malformed
+ * Browser ingress. Keep the established fatal control checks; malformed
  * newly named presentation fields are omitted, never smuggled into extras.
  * This accepts serialized wire timestamps. Server Date projection stays separate.
  */
@@ -97,8 +99,9 @@ export declare function decodeSessionMetadata(value: unknown): SessionMetadata;
 export declare function decodeSessionList(value: unknown): SessionList;
 /** Preserve the existing client projection; full API rows retain provenance. */
 type ClientPrivateField = 'sessionKey' | 'nativeSessionId' | 'profileId' | 'profileVersion' | 'sessionFile' | 'parentSession' | 'parentSessionSource' | 'pid';
-export declare function sessionForClient(session: CatalogSession): Omit<CatalogSession, ClientPrivateField>;
-export declare function sessionForClient(session: Record<string, unknown>): SessionMetadata;
+export declare function sessionForClient<T extends SessionFields<Date | string | number> & {
+    id: string;
+}>(session: T): Omit<T, ClientPrivateField>;
 /** Harness model discovery accepts native refs/records, then projects API rows. */
 export declare function normalizeModels(value: unknown): CatalogModel[];
 /** Decode API/catalog-cache rows, preserving extra metadata and optional legacy fields. */

@@ -792,11 +792,12 @@ var PiDishHelpers = (() => {
     for (const term of parsed.terms) {
       let hit;
       if (term.field === "host") {
-        hit = String(session.hostLabel || session.host || "").toLowerCase().includes(term.value);
+        hit = (session.hostLabel || session.host || "").toLowerCase().includes(term.value);
       } else if (term.field === "is") {
         hit = term.value === "active" && !!session.isActive || term.value === "automation" && isAutomationSession(session);
       } else {
-        const hay = term.field ? String(session[term.field] || "").toLowerCase() : meta;
+        const field = term.field;
+        const hay = field === null ? meta : field === "name" || field === "cwd" || field === "model" || field === "id" || field === "routine" ? (session[field] || "").toLowerCase() : "";
         hit = hay.includes(term.value);
         if (!hit && !term.neg && !term.field && contentText) hit = contentText.includes(term.value);
       }
@@ -816,7 +817,7 @@ var PiDishHelpers = (() => {
   function scoreSessionMatch(parsed, session, contentText) {
     const tokens = positiveQueryTokens(parsed);
     if (!tokens.length) return 0;
-    const name = String(session.name || "").toLowerCase();
+    const name = (session.name || "").toLowerCase();
     const other = [session.cwd, session.model, session.id].join(" ").toLowerCase();
     let total = 0;
     for (const token of tokens) {
@@ -1148,12 +1149,12 @@ ${block}` : block;
       let score = 0;
       let indices = null;
       if (q) {
-        const name = String(session.name || "");
+        const name = session.name || "";
         indices = fuzzyMatch(q, name);
         if (indices) {
           score = 1e3 + fuzzyScore(indices, name);
         } else {
-          const cwd = String(session.cwd || "");
+          const cwd = session.cwd || "";
           const cwdIndices = fuzzyMatch(q, cwd);
           if (cwdIndices) score = 500 + fuzzyScore(cwdIndices, cwd);
           else if (sessionRefAliases(session.id).some((alias) => alias.toLowerCase().startsWith(lower))) score = 250;

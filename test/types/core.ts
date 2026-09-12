@@ -156,13 +156,25 @@ if (apiSession.capabilities) {
   void absentCapability;
 }
 
-// Task 1's future cutover contracts are checked through generated declarations.
+// The implemented source/index/catalog contracts are checked through generated declarations.
 import type { SessionFields, SessionRow, SessionMutationPatch, SessionActivityPatch, SessionTranscriptPatch } from '../../lib/session-api';
 import type { SessionSource, SessionSourceResolver } from '../../lib/session-source-contracts';
 import type { SessionMetadataIndex } from '../../lib/session-index-contracts';
+import * as implementedIndex from '../../lib/session-index';
+import { createSessionSourceResolver } from '../../lib/session-source';
+import { composeSessionCatalog } from '../../lib/session-catalog';
+import type { SessionCatalogInput, SessionCatalogOptions, SessionCatalog } from '../../lib/session-catalog-contracts';
+const checkedIndex: SessionMetadataIndex = implementedIndex;
+const checkedResolver: SessionSourceResolver = createSessionSourceResolver();
+declare const catalogInput: SessionCatalogInput;
+declare const catalogOptions: SessionCatalogOptions;
+const checkedCatalog: SessionCatalog = composeSessionCatalog(catalogInput, catalogOptions);
+void [checkedIndex, checkedResolver, checkedCatalog];
 import type { CatalogSession, CatalogLiveObservation } from '../../lib/session-catalog-contracts';
 import { sessionForClient } from '../../lib/session-api';
 declare const serverCatalogRow: CatalogSession;
+// @ts-expect-error Server projection cannot accept malformed first-party metadata.
+sessionForClient({ ...serverCatalogRow, model: 123 });
 const serverTimestamp: Date | string | number | null | undefined = sessionForClient(serverCatalogRow).lastActivity;
 // @ts-expect-error A pre-JSON server projection is not a wire-only timestamp.
 const prematureWireTimestamp: string | number | null | undefined = sessionForClient(serverCatalogRow).lastActivity;

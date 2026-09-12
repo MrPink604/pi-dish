@@ -102,7 +102,7 @@ test('browser state keeps selected metadata when filtered lists omit it and clea
   assert.deepEqual(renders, [], 'the selection caller owns its broader rendering/reset');
 });
 
-test('browser state stamps legacy entries once host identity becomes known and preserves qualified hosts', () => {
+test('browser state stamps discovered host identity and rejects peer-provided host claims', () => {
   const { state, identifySelf } = fixture();
   identifySelf(null);
   state.setSessionLists({ active: [{ id: 'one' }] });
@@ -112,7 +112,9 @@ test('browser state stamps legacy entries once host identity becomes known and p
   state.mergeCurrentSession(state.captureSelection(), { name: 'updated' });
   assert.equal(state.currentSession.host, 'self');
   state.setSessionLists({ active: [{ id: 'two', host: 'peer' }] });
-  assert.equal(state.findSession('two').host, 'peer');
+  assert.equal(state.findSession('two').host, 'self');
+  state.setSessionLists([{ hostId: 'peer', active: [{ id: 'two', host: 'self', hostLabel: 'forged' }] }]);
+  assert.equal(state.findSession('two', 'peer').hostLabel, 'Other host');
 });
 
 test('browser selection generations reject stale work across same-id hosts, reloads and provisional views', () => {
@@ -179,4 +181,54 @@ test('transcript merges reject stale ownership after host switches and same-sess
   state.mergeCurrentSession(state.captureSelection(), { name: 'current remote' });
   assert.equal(state.currentSession.name, 'current remote');
   assert.deepEqual(renders, ['header']);
+});
+
+test('state writers filter identity, capability, family and extras independently of permitted metadata', () => {
+  const { state } = fixture();
+  const extras = { custom: { name: 'extension name' } };
+  state.setSessionLists([{ hostId: 'peer', active: [{ id: 'one', name: 'live', model: 'p/m', isActive: true, capabilities: { resume: false }, parentId: 'parent', extras }] }]);
+  state.setCurrentSession('one', 'peer');
+  state.patchSession('one', { name: '', id: 'other', host: 'self', extras: { replaced: true }, capabilities: { resume: true }, parentId: null, isActive: false, turnInProgress: true }, 'peer');
+  assert.equal(state.currentSession.name, '');
+  assert.equal(state.currentSession.id, 'one');
+  assert.equal(state.currentSession.host, 'peer');
+  assert.equal(state.currentSession.extras, extras);
+  assert.equal(state.currentSession.capabilities.resume, false);
+  assert.equal(state.currentSession.parentId, 'parent');
+  assert.equal(state.currentSession.isActive, true);
+  assert.equal(state.currentSession.turnInProgress, undefined);
+  state.patchSessionActivity('one', { turnInProgress: false, compacting: true, name: 'not activity', isActive: false }, 'peer');
+  assert.equal(state.currentSession.name, '');
+  assert.equal(state.currentSession.turnInProgress, false);
+  assert.equal(state.currentSession.compacting, true);
+  assert.equal(state.currentSession.isActive, true);
+  state.mergeCurrentSession(state.captureSelection(), { name: null, model: null, lastActivity: 0, contextTokens: 0, isActive: false, thinkingLevel: 'high', compacting: false, harnessId: 'forged', parentId: null, capabilities: { resume: true }, extras: {} });
+  assert.equal(state.currentSession.name, null);
+  assert.equal(state.currentSession.model, null);
+  assert.equal(state.currentSession.lastActivity, 0);
+  assert.equal(state.currentSession.contextTokens, 0);
+  assert.equal(state.currentSession.isActive, false);
+  assert.equal(state.currentSession.thinkingLevel, undefined);
+  assert.equal(state.currentSession.compacting, true);
+  assert.equal(state.currentSession.harnessId, undefined);
+  assert.equal(state.currentSession.parentId, 'parent');
+  assert.equal(state.currentSession.capabilities.resume, false);
+  assert.equal(state.currentSession.extras, extras);
+  assert.equal(state.findSession('one', 'peer').isActive, true);
+  assert.equal(state.findSession('one', 'peer').model, 'p/m');
+  assert.throws(() => state.patchSession('one', { model: 123 }, 'peer'), /Invalid session patch/);
+  assert.throws(() => state.patchSessionActivity('one', { compacting: 'yes' }, 'peer'), /Invalid session patch/);
+});
+
+test('list replacement and detached selection preserve omission without swallowing explicit null or false', () => {
+  const { state } = fixture();
+  state.setSessionLists({ active: [{ id: 'one', name: 'original', model: 'p/m', cwd: '/work', turnInProgress: true }] });
+  state.setCurrentSession('one');
+  state.setSessionLists({ active: [{ id: 'one', name: null, cwd: '', turnInProgress: false, contextPercent: 0 }] });
+  assert.equal(state.findSession('one').model, undefined);
+  assert.equal(state.currentSession.model, 'p/m');
+  assert.equal(state.currentSession.name, null);
+  assert.equal(state.currentSession.cwd, '');
+  assert.equal(state.currentSession.turnInProgress, false);
+  assert.equal(state.currentSession.contextPercent, 0);
 });

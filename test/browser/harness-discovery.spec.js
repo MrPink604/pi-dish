@@ -65,7 +65,7 @@ test('a picker catalog refreshes the settings badge while an older background re
   await page.route(`${fleet.peer.base}/api/harnesses`, route => routes.push(route));
   await fleet.select(fleet.peer);
   await page.evaluate(host => {
-    sessionState.mergeCurrentSession(sessionState.captureSelection(), { harnessId: 'omp' });
+    window.fixtureSessionListPatch(sessionState.currentSession.id, { harnessId: 'omp' });
     updateSessionHeader();
     window.backgroundDiscovery = harnessDiscovery.ensure(host);
     newSessionController.setHostId(host);

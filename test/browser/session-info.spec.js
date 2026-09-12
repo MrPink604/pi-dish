@@ -10,7 +10,7 @@ async function setup(page, fleet) {
 
 test('stats controls from an earlier opening cannot copy publish revoke or close', async ({ page, fleet }) => {
   await setup(page, fleet); await fleet.select(fleet.self);
-  await page.evaluate(() => sessionState.patchSession(sessionState.currentSession.id, { isActive: true, capabilities: { close: true, export: true } }, sessionState.currentSession.host));
+  await page.evaluate(() => window.fixtureSessionListPatch(sessionState.currentSession.id, { isActive: true, capabilities: { close: true, export: true } }, sessionState.currentSession.host));
   let writes = 0, dialogs = 0;
   page.on('dialog', async dialog => { dialogs++; await dialog.accept(); });
   await page.route('**/api/**', route => { if (route.request().method() !== 'GET') writes++; return route.fallback(); });

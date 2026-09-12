@@ -56,7 +56,7 @@ test('metadata patches preserve presence and permit only their assigned writers'
   assert.throws(() => decodeSessionTranscriptPatch({ contextPercent: NaN }), /Invalid session patch/);
 });
 
-test('client session projection preserves feature hints and validates control fields', () => {
+test('client projection preserves feature hints and wire ingress validates control fields', () => {
   const row = { id: 'omp:session', name: null, model: 'provider/model', isActive: true,
     capabilities: { prompt: true, btw: true, futureCapability: false },
     parentId: 'parent', routine: 'routine', sessionFile: '/private', pid: 42, nativeSessionId: 'native' };
@@ -71,7 +71,8 @@ test('client session projection preserves feature hints and validates control fi
   }
   assert.deepEqual(decodeSessionMetadata({ id: 'legacy' }), { id: 'legacy' });
   assert.throws(() => decodeSessionList({ active: [{ id: 'a' }], previous: [null] }), /Invalid session/);
-  assert.deepEqual(decodeSessionList({ active: [], previous: [], children: [{ id: 'child' }], indexing: true }).children, [{ id: 'child' }]);
+  assert.deepEqual(decodeSessionList({ active: [], previous: [], children: [{ id: 'child' }], indexing: true }).children,
+    [{ id: 'child', fields: {}, extras: {} }]);
 });
 
 test('harness models normalize native refs, thinking subsets and finite pricing', () => {

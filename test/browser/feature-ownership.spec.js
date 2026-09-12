@@ -99,7 +99,12 @@ test('a search-result list reload cannot hijack a newer selection', async ({ pag
   await page.evaluate(({ id, host }) => {
     openSearchView('');
     const keep = row => row.id !== id || row.host !== host;
-    sessionState.setSessionLists({ active: sessionState.sessions.active.filter(keep), previous: sessionState.sessions.previous.filter(keep) });
+    const { active, previous } = sessionState.sessions;
+    const hosts = [...new Set([...active, ...previous].map(row => row.host))];
+    sessionState.setSessionLists(hosts.map(hostId => ({ hostId,
+      active: active.filter(row => row.host === hostId && keep(row)),
+      previous: previous.filter(row => row.host === hostId && keep(row)),
+    })));
     const load = loadSessions;
     loadSessions = (...args) => {
       loadSessions = load;

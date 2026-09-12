@@ -4,9 +4,7 @@ import { sendJson } from './api-client';
 import { sessionKey, sessionRefKey, parseSessionKey } from './helper-identity';
 import { buildSessionFamilies } from './helper-sessions';
 import { escapeHtml } from './helper-format';
-import { sidebarSession } from './sidebar-render';
 import type { SessionFamily } from './shared-helper-types';
-import type { SidebarSession } from './sidebar-render';
 
 /** Sidebar preferences and row actions own their DOM, timers and captured host endpoints. */
 export function createSidebarControls(options: {
@@ -42,10 +40,10 @@ export function createSidebarControls(options: {
   function toggleFamily(id: string, host = sessionState.sessionHostId(id)) {
     if (disposed) return; const key = sessionKey(host, id); if (expanded.has(key)) expanded.delete(key); else expanded.add(key); saveExpanded(); render();
   }
-  const sessions = () => [...sessionState.sessions.active, ...sessionState.sessions.previous].map(sidebarSession);
+  const sessions = () => [...sessionState.sessions.active, ...sessionState.sessions.previous];
   function familyRoots() {
     const rows = sessions(), roots = buildSessionFamilies(rows), map = new Map<string, string>();
-    const visit = (node: SessionFamily<SidebarSession>, root: string) => { map.set(sessionRefKey(node.session), root); for (const child of node.children) visit(child, root); };
+    const visit = (node: SessionFamily<SessionEntry>, root: string) => { map.set(sessionRefKey(node.session), root); for (const child of node.children) visit(child, root); };
     for (const root of roots) visit(root, sessionRefKey(root.session));
     const byKey = new Map(rows.map(row => [sessionRefKey(row), row]));
     for (const [member, visibleRoot] of map) {
@@ -60,7 +58,7 @@ export function createSidebarControls(options: {
   }
   function reveal(id: string, host = sessionState.sessionHostId(id)) {
     if (disposed) return; const key = sessionKey(host, id), roots = buildSessionFamilies(sessions());
-    function find(node: SessionFamily<SidebarSession>, ancestors: string[]): string[] | null {
+    function find(node: SessionFamily<SessionEntry>, ancestors: string[]): string[] | null {
       if (sessionRefKey(node.session) === key) return ancestors;
       for (const child of node.children) { const found = find(child, [...ancestors, sessionRefKey(node.session)]); if (found) return found; }
       return null;

@@ -4,6 +4,7 @@ import type { SessionList } from '../core/session-api';
 import { hostKeyOf } from './host-connections';
 import type { ConnectionHost, HostConnectionEvent } from './host-connections';
 import type { SessionEntry, SessionLists } from './session-state';
+import { sessionEntryFromRow } from './session-state';
 
 export type SessionHost = Readonly<HostEndpoint & Pick<ConnectionHost, 'key' | 'hostId' | 'self'>>;
 export interface HostSessionLoaderOptions {
@@ -105,9 +106,11 @@ export function createHostSessionLoader(options: HostSessionLoaderOptions) {
         indexing.set(key, !!data.indexing);
         if (data.indexing) options.onIndexing();
       }
+      const active = data.active.map(sessionEntryFromRow);
       const next: SessionLists = {
-        active: withPrevious ? data.active : mergeActiveHints(data.active, cached.active),
-        previous: withPrevious ? data.previous : mergeLiveSubagents(cached.previous, data.children),
+        active: withPrevious ? active : mergeActiveHints(active, cached.active),
+        previous: withPrevious ? data.previous.map(sessionEntryFromRow)
+          : mergeLiveSubagents(cached.previous, data.children?.map(sessionEntryFromRow)),
       };
       // Unread bookkeeping must finish before the state writer renders rows.
       options.beforePublish(host, next, wireQuery);

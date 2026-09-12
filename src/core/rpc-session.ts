@@ -19,10 +19,10 @@ import { createLineSplitter } from './line-splitter';
 import { PendingRequests } from './pending-requests';
 import { decodeRPCFrame, isRecord, type ProtocolRecord } from './wire-protocol';
 import { trackRunningToolCalls } from './running-tool-calls';
-// Explicit ports into the remaining JavaScript modules; their implementations
-// retain their existing tests and are not claimed to be type checked here.
-const { safeHeaderSessionId }: { safeHeaderSessionId(value: unknown): string | null } = require('./session-discovery');
+import { safeHeaderSessionId } from './session-discovery';
 import { processIdentity, processIdentityAlive } from './process-identity';
+// Explicit port into the remaining JavaScript observer; its implementation
+// retains its existing tests and is not claimed to be type checked here.
 const { createSessionObserver }: { createSessionObserver(options: {
   waitsForSettled: boolean; canWrite: () => boolean; snapshot: () => ProtocolRecord | null;
 }): RecoveryObserver } = require('./session-recovery');

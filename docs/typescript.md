@@ -4,9 +4,10 @@ For current completion status, the renewed simplification mission and the ordere
 work queue, start with [the roadmap](../BACKLOG.md). This document describes
 implemented typed boundaries and their limitations, plus the design rules for
 the [session catalog/metadata stage](session-catalog-migration.md).
-Task 1 implements closed metadata/patch decoders and future source/index/catalog
-ports, with the authority matrix and performance baseline in that plan. The
-existing server and browser store have not yet cut over to those contracts.
+The stage now implements discovery, source/cache ownership, metadata accumulation,
+the persistent index and catalog composition in `src/core/`. Closed session fields
+and writer-specific patches continue through browser ingress, state and consumers.
+The stage record separates implementation, verification and external review.
 
 The shared foundation is complete within its defined scope. Browser application
 source migration is complete; scope, review and CI requirements are tracked in
@@ -23,27 +24,19 @@ classic-script composition. The next objective is to use those boundaries to
 remove repeated normalization, competing owners and obsolete adapters, rather
 than continue transposing code without simplifying the whole path.
 
-In particular, the current `SessionEntry` is identity plus an open
-`Record<string, unknown>`. `SessionMetadata` validates only a small named subset;
-the store does not retain even that entire typed subset. A `patchSession` call
-with `{ model: 123, modle: 'typo' }` currently passes strict checking. This is a
-contract limitation, not evidence that runtime ownership guards are unnecessary.
-Sidebar and header code separately narrow overlapping metadata. Protocol
-envelopes are also typed without promising schemas for every event payload.
+`SessionEntry` extends closed `SessionFields`; opaque external fields live in a
+separate `extras` object. Mutation, activity and transcript patches have different
+named fields, and compile-time fixtures reject wrong types, misspellings and
+identity/control writes. Runtime writer filtering protects the remaining classic
+script boundary. Host stamping and selection generations still decide which
+session an observation may update.
 
-For the next stage, define first-party metadata and permitted patches explicitly,
-retain that knowledge through state, and narrow only at actual external ingress.
-Separate opaque extras from authoritative named fields in the internal model;
-preserve current external wire shapes. Do not blanket-cast parsed JSON or use an
-open index signature on a mutation contract to make the conversion compile.
-Read-time display projections may still derive labels, defaults and grouping:
-remove redundant validation, not meaningful presentation policy.
-
-Source resolution and catalog construction need actual checked implementations,
-not declarations that merely assert the shape of unchanged JavaScript. Remaining
-JavaScript dependencies must be identified as unchecked boundaries with validated
-inputs/outputs where needed. Keep one owner for source/cache consistency without
-collapsing distinct caches that serve different performance requirements.
+Discovery, source resolution, metadata accumulation, indexing and catalog
+composition have checked implementations. `server.js` supplies captured registry
+and RPC observations plus existing lifecycle advice; consumed external fields are
+validated before composition. General JSONL/tree/message parsing, usage projections,
+skill mining and feature stores remain JavaScript. The index validates the values
+it consumes from those projections without claiming their algorithms are migrated.
 
 See the [stage plan](session-catalog-migration.md) for scope, field authority,
 dependencies, deletion criteria and verification. Lifecycle authority, host and
@@ -58,7 +51,11 @@ invariants; they are not simplification targets.
 | `session-key.ts` | Strict route decoding, harness/native encoding and legacy Pi canonicalization |
 | `harnesses.ts` | Existing harness registry and launch argv/environment construction |
 | `session-capabilities.ts` | Bridge capability defaults and API projection; lifecycle authority stays with callers |
-| `session-api.ts` | Browser session/model DTOs, runtime decoders and client projection; feature extras stay unknown |
+| `session-api.ts` | Closed session fields and patches, wire ingress decoders, model DTOs and client projection |
+| `session-discovery.ts`, `session-source.ts` | Bounded discovery and header identity; explicit source descriptors and route/cache consistency |
+| `session-metadata.ts` | One metadata accumulator for full and appended entries; persisted metadata validation |
+| `session-index.ts`, `session-index-data.ts` | Persistent metadata/text/skills index, bounded backfill and validated JS projection boundaries |
+| `session-catalog.ts` | Captured observation ingress, active/history/child projection, context and relationship/routine annotations |
 | `wire-protocol.ts` | RPC/bridge envelope validation and response/event distinctions; feature payloads remain unknown |
 | `rpc-session.ts` | RPC child lifecycle, request methods, stream reconstruction and native-id pool |
 | `bridge-session.ts` | Registry discovery/claims, socket handshake and pool, request methods and reconnect snapshots |
@@ -70,19 +67,20 @@ invariants; they are not simplification targets.
 | `line-splitter.ts` | Incremental UTF-8 LF framing |
 | `running-tool-calls.ts` | Shared bridge/RPC reconnect snapshots |
 
-The new `session-*-contracts.ts` files describe future source, metadata, index and
-catalog implementation ports. They do not replace or validate the existing JS
-implementations. `SessionFields` and the restricted patch types in `session-api.ts`
-are closed; `decodeSessionRow` separates named fields from opaque extras. Current
-callers still use the original `SessionMetadata` compatibility decoder until the
-coordinated Tasks 4/6 browser cutover. The server client projection preserves
-`Date` timestamps before serialization; wire decoding is a separate boundary.
+The `session-*-contracts.ts` files describe the implemented source, metadata,
+index and catalog boundaries. Compile-time fixtures assign the real index/resolver
+implementations to those ports. `decodeSessionRow` separates named fields from
+opaque extras; `host-session-loader.ts` flattens validated fields once, before
+endpoint-owned host stamping. The legacy `decodeSessionMetadata` wire helper
+remains compatible for external callers and is not the browser state contract.
+Client projection only omits private fields and preserves server `Date` values
+until serialization; wire decoding is a separate boundary.
 
 `src/browser/session-state.ts` owns browser list/selection state and the existing
 generation guards. It compiles strictly into the local `public/browser.js` bundle;
 `src/browser/app.ts` creates the store through `PiDishBrowser.createSessionState`.
-Its metadata fields stay unknown, and `test/types/browser-state.ts` checks its
-public interface. Browser route/host ids are strings here, without claiming the
+Its metadata and restricted writer interfaces are checked by
+`test/types/browser-state.ts`. Browser route/host ids are strings here, without claiming the
 server's branded validation. `captureSelection()` returns a frozen host/id/
 generation token; `ownsSelection()` checks all three. Transcript loads, stream
 connections/retries, relations and metadata mutations now carry these tokens.
@@ -496,8 +494,8 @@ in `composer-autocomplete-data.ts` and host-qualified session references in
 `session-references.ts`. Query tokens capture selection, composer, text/caret and
 endpoint before debounce; completion acceptance emits input for draft persistence.
 
-Sidebar HTML projection lives in `sidebar-render.ts`. One render receives narrowed
-row metadata, host state and read-only preference snapshots; family grouping,
+Sidebar HTML projection lives in `sidebar-render.ts`. One render receives established
+`SessionEntry` fields, host state and read-only preference snapshots; family grouping,
 server-search authority, automation notes and host-qualified collapse stay intact.
 
 Sidebar row interactions live in `sidebar-controls.ts`: preferences, host-qualified

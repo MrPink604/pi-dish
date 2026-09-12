@@ -1,5 +1,17 @@
+import type { SessionFields, SessionRow, SessionMutationPatch, SessionActivityPatch, SessionTranscriptPatch } from '../core/session-api';
+import { decodeSessionMutationPatch, decodeSessionActivityPatch, decodeSessionTranscriptPatch } from '../core/session-api';
+
 /** Browser list/selection identity and writes. No DOM or transport. */
-export type SessionEntry = { id: string; host?: string | null; hostLabel?: string } & Record<string, unknown>;
+export interface SessionEntry extends SessionFields {
+  readonly id: string;
+  host?: string | null;
+  hostLabel?: string;
+  readonly extras?: Readonly<Record<string, unknown>>;
+}
+/** Flatten validated fields once; opaque metadata never participates in writes. */
+export function sessionEntryFromRow(row: SessionRow): SessionEntry {
+  return { ...row.fields, id: row.id, extras: row.extras };
+}
 export interface SessionLists { active: SessionEntry[]; previous: SessionEntry[] }
 export interface HostSessionLists { hostId?: string | null; active?: SessionEntry[]; previous?: SessionEntry[] }
 export type SelectionOwner = Readonly<{ id: string; host: string | null; generation: number }>;
@@ -39,13 +51,14 @@ export function createSessionState(options: SessionStateOptions) {
   }
 
   /**
-   * Stamping happens only in the four writers. Labels refresh on each write
+   * Stamping happens only in the state writers. Labels refresh on each write
    * because the host can be relabelled while its sessions remain in state.
    */
   function stampSessionHost(session: SessionEntry, hostId = options.getSelfHostId()) {
-    if (!session.host && hostId) session.host = hostId;
-    const label = options.getHostLabel(session.host || hostId);
+    session.host = hostId || null;
+    const label = options.getHostLabel(session.host);
     if (label) session.hostLabel = label;
+    else delete session.hostLabel;
     return session;
   }
 
@@ -74,35 +87,40 @@ export function createSessionState(options: SessionStateOptions) {
    */
   function setCurrentSession(id: string | null, host?: string | null) {
     const entry = findSession(id, host);
-    currentSession = entry ? stampSessionHost({ ...entry }) : null;
+    currentSession = entry ? stampSessionHost({ ...entry }, entry.host || options.getSelfHostId()) : null;
     return currentSession;
   }
 
   /**
    * Local mutations patch both lists and the selected copy for one host.
    */
-  function patchSession(id: string, patch: Partial<SessionEntry>, host = sessionHostId(id)) {
+  function applyPatch(id: string, patch: SessionMutationPatch | SessionActivityPatch, host: string | null) {
     const matches = (session: SessionEntry | null) => session !== null && session.id === id && (session.host || null) === (host || null);
     for (const list of [sessions.active, sessions.previous]) {
       const session = list.find(matches);
-      if (session) stampSessionHost(Object.assign(session, patch));
+      if (session) stampSessionHost(Object.assign(session, patch), session.host || options.getSelfHostId());
     }
-    if (matches(currentSession) && currentSession) stampSessionHost(Object.assign(currentSession, patch));
+    if (matches(currentSession) && currentSession) stampSessionHost(Object.assign(currentSession, patch), currentSession.host || options.getSelfHostId());
     options.onListsChanged();
     if (matches(currentSession)) options.onCurrentChanged();
+  }
+
+  function patchSession(id: string, patch: SessionMutationPatch, host = sessionHostId(id)) {
+    applyPatch(id, decodeSessionMutationPatch(patch), host);
+  }
+
+  function patchSessionActivity(id: string, patch: SessionActivityPatch, host = sessionHostId(id)) {
+    applyPatch(id, decodeSessionActivityPatch(patch), host);
   }
 
   /**
    * Transcript metadata refreshes the header only. Registry-aware list fields
    * retain their own source of truth, and wire fields cannot change identity.
    */
-  function mergeCurrentSession(owner: SelectionOwner | null | undefined, fields: Partial<SessionEntry> | null | undefined) {
+  function mergeCurrentSession(owner: SelectionOwner | null | undefined, fields: SessionTranscriptPatch | null | undefined) {
     if (!fields || !ownsSelection(owner) || !currentSession) return;
-    const { id, host } = currentSession;
-    Object.assign(currentSession, fields);
-    currentSession.id = id;
-    currentSession.host = host;
-    stampSessionHost(currentSession);
+    Object.assign(currentSession, decodeSessionTranscriptPatch(fields));
+    stampSessionHost(currentSession, currentSession.host || options.getSelfHostId());
     options.onCurrentChanged();
   }
 
@@ -127,7 +145,7 @@ export function createSessionState(options: SessionStateOptions) {
     get currentSession() { return currentSession; },
     get selectionGeneration() { return generation; },
     findSession, sessionHostId, setSessionLists, setCurrentSession,
-    patchSession, mergeCurrentSession, advanceSelection,
+    patchSession, patchSessionActivity, mergeCurrentSession, advanceSelection,
     captureSelection, ownsSelection,
   };
 }

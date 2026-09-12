@@ -16,13 +16,8 @@ export function createSessionControls(options: {
   const { document, sessionState, catalog } = options, window = document.defaultView!;
   const element = <T extends HTMLElement = HTMLElement>(id: string) => { const value = document.getElementById(id); if (!value) throw new Error('Missing session control: ' + id); return value as T; };
   const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
-  function header() {
-    const row = sessionState.currentSession; if (!row) return null;
-    return { id: row.id, isActive: row.isActive === true, name: typeof row.name === 'string' ? row.name : '', model: typeof row.model === 'string' ? row.model : '',
-      harnessId: typeof row.harnessId === 'string' ? row.harnessId : undefined, thinkingLevel: typeof row.thinkingLevel === 'string' ? row.thinkingLevel : '',
-      capabilities: record(row.capabilities) ? row.capabilities : {} };
-  }
-  function sessionSupports(row: NonNullable<ReturnType<typeof header>>, capability: string) { return row.capabilities[capability] !== false; }
+  function header() { return sessionState.currentSession; }
+  function sessionSupports(row: NonNullable<ReturnType<typeof header>>, capability: string) { return row.capabilities?.[capability] !== false; }
   interface Owner { selection: SelectionOwner; endpoint: Readonly<HostEndpoint> }
   let disposed = false, modelOwner: Owner | null = null, thinkingOwner: Owner | null = null, renameOwner: Owner | null = null;
   let modelOpen = false, thinkingOpen = false, editMode = false, query = '';
@@ -161,12 +156,12 @@ export function createSessionControls(options: {
     const endpoint = endpointCurrent(owner); if (!endpoint) return;
     const path = `/api/sessions/${encodeURIComponent(owner.selection.id)}/export`, sequence = ++exportSequence;
     if (!endpoint.token) { window.open(endpoint.base + path, '_blank'); return; }
+    const fallback = `${(session.name || session.id).replace(/[^\w.-]+/g, '-')}.html`;
     options.status('Exporting session…', 'working');
     try {
       const response = await options.request(endpoint, path);
       if (!response.ok) { const data: unknown = await response.json().catch(() => null); throw new Error(record(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`); }
       const blob = await response.blob(); if (!endpointCurrent(owner)) return;
-      const fallback = `${(session.name || session.id).replace(/[^\w.-]+/g, '-')}.html`;
       download(blob, filenameFromContentDisposition(response.headers.get('Content-Disposition'), fallback));
       if (sequence === exportSequence && owns(owner)) options.status('Session exported');
     } catch (error) { if (sequence === exportSequence && owns(owner)) options.status('Export failed: ' + errorText(error), 'error'); }

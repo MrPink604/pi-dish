@@ -51,7 +51,7 @@ export function createComposerAutocomplete(options: {
     const current = sessionState.currentSession; if (!current) { hide(); return; }
     render(references.search(token).map(({ session, indices }) => {
       const ref = references.ref(session, current), name = session.name || session.id.slice(0, 8);
-      return { choice: { kind: 'ref', ref }, icon: '●', nameHtml: indices ? highlightFuzzy(name, indices) : escapeHtml(name), description: [options.multiHost() ? options.hostLabel(session.host) : '', ref, shortCwd(session.cwd)].filter(Boolean).join(' · '), live: session.isActive };
+      return { choice: { kind: 'ref', ref }, icon: '●', nameHtml: indices ? highlightFuzzy(name, indices) : escapeHtml(name), description: [options.multiHost() ? options.hostLabel(session.host || null) : '', ref, shortCwd(session.cwd)].filter(Boolean).join(' · '), live: session.isActive };
     }));
   }
   async function loadCommands(id?: string) {

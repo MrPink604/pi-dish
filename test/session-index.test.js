@@ -20,7 +20,12 @@ process.env.HOME = tmpHome;
 
 const index = require('../lib/session-index.js');
 const sessionFiles = require('../lib/session-files.js');
-const { encodeSessionKey } = require('../lib/session-key.js');
+const { sourceForIdentity } = require('../lib/session-source.js');
+
+function sourceForFile(file) {
+  return typeof file === 'string'
+    ? sourceForIdentity('pi', path.basename(file, '.jsonl'), file) : file;
+}
 
 const sessionsDir = path.join(tmpHome, '.pi', 'agent', 'sessions', '--proj--');
 fs.mkdirSync(sessionsDir, { recursive: true });
@@ -56,13 +61,13 @@ async function waitFor(cond, what, ms = 2000) {
 
 test('scanSessions indexes files and revalidates on append', () => {
   const file = writeSession([userMsg('first question')]);
-  let { infos, indexing } = index.scanSessions([file]);
+  let { infos, indexing } = index.scanSessions([sourceForFile(file)]);
   assert.equal(indexing, false);
   assert.equal(infos.get(file).messageCount, 1);
   assert.equal(infos.get(file).name, 'first question');
 
   fs.appendFileSync(file, JSON.stringify(userMsg('second question')) + '\n');
-  ({ infos } = index.scanSessions([file]));
+  ({ infos } = index.scanSessions([sourceForFile(file)]));
   assert.equal(infos.get(file).messageCount, 2, 'appended file re-indexed');
 });
 
@@ -75,14 +80,7 @@ test('OMP candidates retain their combined model in indexed usage', () => {
       role: 'assistant', content: [], usage: { input: 5, output: 2 },
     } },
   ]);
-  const candidate = {
-    file,
-    harnessId: 'omp',
-    nativeSessionId: 'omp-usage',
-    sessionKey: encodeSessionKey('omp', 'omp-usage'),
-    profileId: 'omp-v1',
-    profileVersion: 1,
-  };
+  const candidate = sourceForIdentity('omp', 'omp-usage', file);
 
   const { infos, indexing } = index.scanSessions([candidate]);
   assert.equal(indexing, false);
@@ -96,19 +94,19 @@ test('index persists: a zero-budget scan after state reset still serves entries'
     { type: 'session', id: 'persisted-core-id', cwd: '/proj', parentSession: '/sessions/native-parent.jsonl' },
     userMsg('persisted needle'),
   ]);
-  index.scanSessions([file]);
+  index.scanSessions([sourceForFile(file)]);
   index.resetForTests(); // flushes logs, drops all in-memory state
 
   assert.ok(fs.existsSync(path.join(indexDir, 'meta.ndjson')), 'meta log written');
   assert.ok(fs.existsSync(path.join(indexDir, 'text.ndjson')), 'text log written');
 
-  const { infos, indexing } = withBudget(0, () => index.scanSessions([file]));
+  const { infos, indexing } = withBudget(0, () => index.scanSessions([sourceForFile(file)]));
   assert.equal(indexing, false, 'nothing left to index after reload');
   assert.equal(infos.get(file).messageCount, 1, 'served from disk, not re-parsed');
   assert.equal(infos.get(file).sessionId, 'persisted-core-id', 'core header id persisted');
   assert.equal(infos.get(file).parentSession, '/sessions/native-parent.jsonl', 'native lineage persisted');
   assert.ok(infos.get(file).lastActivity instanceof Date, 'lastActivity revived as Date');
-  assert.ok(index.getSearchText(file).includes('persisted needle'), 'search text survived too');
+  assert.ok(index.getSearchText(sourceForFile(file)).includes('persisted needle'), 'search text survived too');
 });
 
 test('versionless metadata is queued for reindex instead of being served stale', async () => {
@@ -126,12 +124,12 @@ test('versionless metadata is queued for reindex instead of being served stale',
     v: { name: 'stale metadata', messageCount: 999, lastActivity: '2020-01-01T00:00:00.000Z' },
   }) + '\n');
 
-  const first = withBudget(0, () => index.scanSessions([file]));
+  const first = withBudget(0, () => index.scanSessions([sourceForFile(file)]));
   assert.equal(first.infos.has(file), false, 'old schema is not served as current telemetry');
   assert.equal(first.indexing, true);
-  await waitFor(() => withBudget(0, () => index.scanSessions([file])).indexing === false,
+  await waitFor(() => withBudget(0, () => index.scanSessions([sourceForFile(file)])).indexing === false,
     'schema migration reindex');
-  const fresh = withBudget(0, () => index.scanSessions([file])).infos.get(file);
+  const fresh = withBudget(0, () => index.scanSessions([sourceForFile(file)])).infos.get(file);
   assert.equal(fresh.name, 'fresh metadata');
   assert.equal(fresh.messageCount, 1);
   assert.equal(fresh.usage.total.costs.total, 0.01);
@@ -159,19 +157,19 @@ test('schema-3 zero-filled usage migrates through the bounded reindex backlog', 
     f: file, m: stats.mtimeMs, s: stats.size, ver: 1, nl: 1, t: 'cost availability source',
   }) + '\n');
 
-  const first = withBudget(0, () => index.scanSessions([file]));
+  const first = withBudget(0, () => index.scanSessions([sourceForFile(file)]));
   assert.equal(first.infos.has(file), false, 'schema-3 metadata is never served with false zeros');
   assert.equal(first.indexing, true, 'migration honors the synchronous reindex budget');
-  await waitFor(() => withBudget(0, () => index.scanSessions([file])).indexing === false,
+  await waitFor(() => withBudget(0, () => index.scanSessions([sourceForFile(file)])).indexing === false,
     'cost availability schema migration');
-  const fresh = withBudget(0, () => index.scanSessions([file])).infos.get(file);
+  const fresh = withBudget(0, () => index.scanSessions([sourceForFile(file)])).infos.get(file);
   assert.deepEqual(fresh.usage.total.costs,
     { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.25 });
   assert.deepEqual(fresh.usage.total.costUnavailable,
     { input: 1, output: 1, cacheRead: 1, cacheWrite: 1, total: 0 });
 
   index.resetForTests();
-  const persisted = withBudget(0, () => index.scanSessions([file]));
+  const persisted = withBudget(0, () => index.scanSessions([sourceForFile(file)]));
   assert.equal(persisted.indexing, false, 'rebuilt current-schema metadata persists');
   assert.equal(persisted.infos.get(file).usage.total.costs.input, 0);
 });
@@ -199,12 +197,12 @@ test('schema-5 ZAI plan usage is reindexed instead of remaining falsely free', a
     f: file, m: stats.mtimeMs, s: stats.size, ver: 1, nl: 1, t: 'zai cost source',
   }) + '\n');
 
-  const first = withBudget(0, () => index.scanSessions([file]));
+  const first = withBudget(0, () => index.scanSessions([sourceForFile(file)]));
   assert.equal(first.infos.has(file), false, 'schema-5 false-zero telemetry is not served');
   assert.equal(first.indexing, true);
-  await waitFor(() => withBudget(0, () => index.scanSessions([file])).indexing === false,
+  await waitFor(() => withBudget(0, () => index.scanSessions([sourceForFile(file)])).indexing === false,
     'ZAI pricing schema migration');
-  const fresh = withBudget(0, () => index.scanSessions([file])).infos.get(file);
+  const fresh = withBudget(0, () => index.scanSessions([sourceForFile(file)])).infos.get(file);
   assert.equal(fresh.usage.total.costs.total, 0);
   assert.equal(fresh.usage.total.costUnavailable.total, 1);
 });
@@ -222,54 +220,54 @@ test('versionless search text migrates through the bounded indexing backlog', as
     f: file, m: stats.mtimeMs, s: stats.size, nl: 1, t: 'stale schema text',
   }) + '\n');
 
-  const first = withBudget(0, () => index.scanSessions([file]));
+  const first = withBudget(0, () => index.scanSessions([sourceForFile(file)]));
   assert.equal(first.infos.has(file), false, 'old text schema is not paired with current metadata');
   assert.equal(first.indexing, true, 'migration honors the zero synchronous budget');
-  await waitFor(() => withBudget(0, () => index.scanSessions([file])).indexing === false,
+  await waitFor(() => withBudget(0, () => index.scanSessions([sourceForFile(file)])).indexing === false,
     'search schema migration reindex');
-  const text = index.getSearchText(file);
+  const text = index.getSearchText(sourceForFile(file));
   assert.ok(text.includes('fresh searchable text'));
   assert.ok(!text.includes('stale schema text'));
 });
 
 test('zero sync budget queues a backlog that the background build drains', async () => {
   const files = [writeSession([userMsg('aaa')]), writeSession([userMsg('bbb')])];
-  const first = withBudget(0, () => index.scanSessions(files));
+  const first = withBudget(0, () => index.scanSessions(files.map(sourceForFile)));
   assert.equal(first.infos.size, 0, 'nothing indexed synchronously');
   assert.equal(first.indexing, true);
 
-  await waitFor(() => withBudget(0, () => index.scanSessions(files)).indexing === false,
+  await waitFor(() => withBudget(0, () => index.scanSessions(files.map(sourceForFile))).indexing === false,
     'background build to drain');
-  const { infos } = withBudget(0, () => index.scanSessions(files));
+  const { infos } = withBudget(0, () => index.scanSessions(files.map(sourceForFile)));
   assert.equal(infos.size, 2, 'background build indexed the backlog');
 });
 
 test('sync budget bounds per-scan parsing; the rest lands via the builder', async () => {
   const files = Array.from({ length: 5 }, (_, i) => writeSession([userMsg(`msg ${i}`)]));
-  const first = withBudget(2, () => index.scanSessions(files));
+  const first = withBudget(2, () => index.scanSessions(files.map(sourceForFile)));
   assert.equal(first.infos.size, 2, 'exactly budget files parsed in-line');
   assert.equal(first.indexing, true);
-  await waitFor(() => withBudget(0, () => index.scanSessions(files)).indexing === false,
+  await waitFor(() => withBudget(0, () => index.scanSessions(files.map(sourceForFile))).indexing === false,
     'builder to finish the remaining files');
-  assert.equal(withBudget(0, () => index.scanSessions(files)).infos.size, 5);
+  assert.equal(withBudget(0, () => index.scanSessions(files.map(sourceForFile))).infos.size, 5);
 });
 
 test('getSearchText extends from the appended byte range', () => {
   const file = writeSession([userMsg('alpha bravo')]);
-  assert.ok(index.getSearchText(file).includes('alpha bravo'));
+  assert.ok(index.getSearchText(sourceForFile(file)).includes('alpha bravo'));
 
   fs.appendFileSync(file, JSON.stringify(userMsg('charlie delta')) + '\n');
-  const text = index.getSearchText(file);
+  const text = index.getSearchText(sourceForFile(file));
   assert.ok(text.includes('alpha bravo'), 'old text kept');
   assert.ok(text.includes('charlie delta'), 'appended text searchable immediately');
 
   // A rewritten (shrunk) file falls back to a full re-index.
   fs.writeFileSync(file, JSON.stringify(userMsg('echo only')) + '\n');
-  const rewritten = index.getSearchText(file);
+  const rewritten = index.getSearchText(sourceForFile(file));
   assert.ok(rewritten.includes('echo only'));
   assert.ok(!rewritten.includes('charlie'), 'stale text dropped on rewrite');
 
-  assert.equal(index.getSearchText(path.join(sessionsDir, 'missing.jsonl')), '',
+  assert.equal(index.getSearchText(sourceForFile(path.join(sessionsDir, 'missing.jsonl'))), '',
     'missing file degrades to empty');
 });
 
@@ -278,12 +276,12 @@ test('the byte-range extension honors the session text cap, keeping the newest',
   const entries = [];
   for (let i = 0; i < 45; i++) entries.push(userMsg(`cap${i} ${big}`));
   const file = writeSession(entries);
-  const built = index.getSearchText(file);
+  const built = index.getSearchText(sourceForFile(file));
   assert.ok(built.length <= sessionFiles.SEARCH_TEXT_SESSION_CAP);
   assert.ok(!built.includes('cap0 '), 'the oldest text was evicted at build time');
 
   fs.appendFileSync(file, JSON.stringify(userMsg('overflow_marker_zulu')) + '\n');
-  const extended = index.getSearchText(file);
+  const extended = index.getSearchText(sourceForFile(file));
   assert.ok(extended.length <= sessionFiles.SEARCH_TEXT_SESSION_CAP,
     'a streaming append cannot grow the text past the cap one delta at a time');
   assert.ok(extended.includes('overflow_marker_zulu'),
@@ -303,7 +301,7 @@ test('a pre-v2 text entry is re-indexed to pick up tool-call args', () => {
         arguments: { command: 'grep migration_needle lib/x.js' } },
     ] } },
   ]);
-  assert.ok(index.getSearchText(file).includes('migration_needle'));
+  assert.ok(index.getSearchText(sourceForFile(file)).includes('migration_needle'));
   index.resetForTests(); // flush the logs so the downgrade below edits real state
 
   // Rewrite this file's persisted text entry as a v1 line: no tool-call text,
@@ -318,8 +316,8 @@ test('a pre-v2 text entry is re-indexed to pick up tool-call args', () => {
   }).join('\n'));
 
   index.resetForTests();
-  withBudget(1, () => index.scanSessions([file]));
-  assert.ok(index.getSearchText(file).includes('migration_needle'),
+  withBudget(1, () => index.scanSessions([sourceForFile(file)]));
+  assert.ok(index.getSearchText(sourceForFile(file)).includes('migration_needle'),
     'the stale-version entry was rebuilt with the v2 extraction');
 });
 
@@ -336,14 +334,14 @@ test('getSearchText rebuilds when an append changes the active tree branch', () 
     treeMsg('e4', 'e3', 'assistant', 'SECRET_ABANDONED answer'),
   ]);
 
-  assert.ok(index.getSearchText(file).includes('secret_abandoned'),
+  assert.ok(index.getSearchText(sourceForFile(file)).includes('secret_abandoned'),
     'the original leaf is searchable before navigation');
   fs.appendFileSync(file, [
     { type: 'branch_summary', id: 'bs1', parentId: 'e2', fromId: 'e2', summary: 'tried another route' },
     treeMsg('e5', 'bs1', 'user', 'authoritative retry'),
   ].map(entry => JSON.stringify(entry)).join('\n') + '\n');
 
-  const text = index.getSearchText(file);
+  const text = index.getSearchText(sourceForFile(file));
   const transcript = sessionFiles.readSessionMessages(file)
     .map(message => message.content[0].text.toLowerCase());
   assert.ok(!text.includes('secret_abandoned'), 'abandoned branch text is discarded');
@@ -351,21 +349,21 @@ test('getSearchText rebuilds when an append changes the active tree branch', () 
     `indexed text agrees with the active transcript: ${transcript.join(', ')}`);
 
   index.resetForTests();
-  const persisted = withBudget(0, () => index.scanSessions([file]));
+  const persisted = withBudget(0, () => index.scanSessions([sourceForFile(file)]));
   assert.equal(persisted.indexing, false, 'rebuilt branch-aware text was persisted');
-  assert.ok(!index.getSearchText(file).includes('secret_abandoned'));
+  assert.ok(!index.getSearchText(sourceForFile(file)).includes('secret_abandoned'));
 });
 
 test('deleted session files are dropped from the index', () => {
   const file = writeSession([userMsg('doomed')]);
-  index.scanSessions([file]);
+  index.scanSessions([sourceForFile(file)]);
   fs.rmSync(file);
   const { infos } = index.scanSessions([]);
   assert.ok(!infos.has(file));
   index.resetForTests();
   const after = withBudget(0, () => index.scanSessions([]));
   assert.equal(after.infos.size, 0);
-  assert.equal(index.getSearchText(file), '', 'tombstone survived the reload');
+  assert.equal(index.getSearchText(sourceForFile(file)), '', 'tombstone survived the reload');
 });
 
 test('log compaction keeps the text log near its live size', () => {
@@ -373,17 +371,17 @@ test('log compaction keeps the text log near its live size', () => {
   // lines cross the compaction threshold (dead > 1MB and dead > live).
   const big = Array.from({ length: 100 }, (_, i) => userMsg(`filler ${i} ` + 'y'.repeat(480)));
   const file = writeSession(big);
-  index.scanSessions([file]);
+  index.scanSessions([sourceForFile(file)]);
   for (let i = 0; i < 45; i++) {
     fs.appendFileSync(file, JSON.stringify(userMsg(`update ${i}`)) + '\n');
-    index.scanSessions([file]);
+    index.scanSessions([sourceForFile(file)]);
   }
   index.resetForTests(); // flush pending appends
   const logSize = fs.statSync(path.join(indexDir, 'text.ndjson')).size;
   assert.ok(logSize < 500_000,
     `text log should be compacted near one live entry (~50KB), got ${logSize}`);
   // And the compacted log still round-trips.
-  const { infos } = withBudget(0, () => index.scanSessions([file]));
+  const { infos } = withBudget(0, () => index.scanSessions([sourceForFile(file)]));
   assert.equal(infos.get(file).messageCount, 145);
 });
 
@@ -397,13 +395,13 @@ test('skills.ndjson persists: a zero-budget scan serves mined activations from d
       { type: 'toolCall', id: 'tc1', name: 'read', arguments: { path: SKILL, offset: 1, limit: 30 } },
     ] } },
   ]);
-  index.scanSessions([file]);
+  index.scanSessions([sourceForFile(file)]);
   index.resetForTests(); // flush + drop in-memory state
 
   assert.ok(fs.existsSync(path.join(indexDir, 'skills.ndjson')), 'skills log written');
 
   // Zero-budget scan can't parse JSONL — records must come from disk.
-  const { indexing } = withBudget(0, () => index.scanSessions([file]));
+  const { indexing } = withBudget(0, () => index.scanSessions([sourceForFile(file)]));
   assert.equal(indexing, false, 'nothing left to index after reload');
   const recs = index.getSkillActivations({ skill: SKILL });
   assert.equal(recs.length, 1, 'activation served from persisted skills.ndjson');
@@ -447,22 +445,22 @@ test('append extension matches a full re-index (meta, usage, text, skills)', () 
   ];
 
   const fileA = writeSession(base);
-  index.scanSessions([fileA]);
+  index.scanSessions([sourceForFile(fileA)]);
   fs.appendFileSync(fileA, delta.map(e => JSON.stringify(e)).join('\n') + '\n');
   // Structural proof this went through the extension: a zero-budget scan is
   // forbidden from re-parsing the file synchronously.
-  const extended = withBudget(0, () => index.scanSessions([fileA]));
+  const extended = withBudget(0, () => index.scanSessions([sourceForFile(fileA)]));
   assert.equal(extended.indexing, false, 'appended file served without sync budget');
   const extInfo = extended.infos.get(fileA);
 
   const fileB = writeSession(base.concat(delta));
-  const fullInfo = index.scanSessions([fileB]).infos.get(fileB);
+  const fullInfo = index.scanSessions([sourceForFile(fileB)]).infos.get(fileB);
 
   for (const key of ['model', 'name', 'messageCount', 'contextTokens', 'cwd', 'sessionId', 'parentSession']) {
     assert.deepEqual(extInfo[key], fullInfo[key], `info.${key} matches full re-index`);
   }
   assert.deepEqual(extInfo.usage, fullInfo.usage, 'usage (totals, days, models, continuity state) matches');
-  assert.equal(index.getSearchText(fileA), index.getSearchText(fileB), 'search text matches');
+  assert.equal(index.getSearchText(sourceForFile(fileA)), index.getSearchText(sourceForFile(fileB)), 'search text matches');
 
   const stripSession = (r) => { const { sessionId, ...rest } = r; return rest; };
   const recsA = index.getSkillActivations({ skill: SKILL }).filter(r => r.sessionId === path.basename(fileA, '.jsonl'));
@@ -477,11 +475,11 @@ test('getSessionInfo serves the session-files shape and extends on append', () =
     { type: 'model_change', provider: 'anthropic', modelId: 'claude-a' },
     userMsg('first'),
   ]);
-  const before = index.getSessionInfo(file);
+  const before = index.getSessionInfo(sourceForFile(file));
   assert.deepEqual(before, sessionFiles.getSessionInfo(file), 'matches session-files on first index');
 
   fs.appendFileSync(file, JSON.stringify(userMsg('second')) + '\n');
-  const after = index.getSessionInfo(file);
+  const after = index.getSessionInfo(sourceForFile(file));
   assert.deepEqual(after, sessionFiles.getSessionInfo(file), 'matches session-files after append');
   assert.equal(after.messageCount, before.messageCount + 1);
   // Index-internal fields must not leak into API responses that spread info.
@@ -489,7 +487,7 @@ test('getSessionInfo serves the session-files shape and extends on append', () =
     assert.ok(!(internal in after), `${internal} stripped from public info`);
   }
 
-  assert.throws(() => index.getSessionInfo(path.join(sessionsDir, 'missing.jsonl')),
+  assert.throws(() => index.getSessionInfo(sourceForFile(path.join(sessionsDir, 'missing.jsonl'))),
     'unreadable file throws like session-files.getSessionInfo');
 });
 
@@ -504,7 +502,7 @@ test('an index populated before skills mining re-mines its files (upgrade path)'
       { type: 'toolCall', id: 'tc1', name: 'read', arguments: { path: SKILL, offset: 5, limit: 10 } },
     ] } },
   ]);
-  index.scanSessions([file]);
+  index.scanSessions([sourceForFile(file)]);
   index.resetForTests(); // flush everything to disk
 
   // Simulate the pre-skills index: meta/text logs exist, skills log doesn't.
@@ -512,9 +510,79 @@ test('an index populated before skills mining re-mines its files (upgrade path)'
 
   // Budgeted scan: meta/text are current, but the missing skills entry makes
   // the file stale, so it re-parses and re-mines.
-  const { indexing } = index.scanSessions([file]);
+  const { indexing } = index.scanSessions([sourceForFile(file)]);
   assert.equal(indexing, false);
   const recs = index.getSkillActivations({ skill: SKILL });
   assert.equal(recs.length, 1, 'historical file was re-mined despite current meta/text');
   assert.deepEqual(recs[0].ranges, [[5, 14]]);
+});
+
+test('index APIs require explicit sources and never infer generic-file identity', () => {
+  const file = writeSession([{ type: 'session', id: 'header-id' }, userMsg('source owned')]);
+  assert.throws(() => index.scanSessions([file]), /SessionSource/);
+  assert.throws(() => index.getSessionInfo(file), /SessionSource/);
+  assert.throws(() => index.getSearchText(file), /SessionSource/);
+  const source = sourceForIdentity('pi', 'resolved-identity', file);
+  const info = index.scanSessions([source]).infos.get(file);
+  assert.equal(info.nativeSessionId, 'resolved-identity');
+  assert.equal(info.sessionId, 'header-id', 'header provenance never replaces resolved identity');
+});
+
+test('invalid current-schema metadata is stale and rebuilt through the bounded backlog', async () => {
+  const file = writeSession([userMsg('validated rebuild')]);
+  const source = sourceForFile(file);
+  index.scanSessions([source]);
+  index.resetForTests();
+  const log = path.join(indexDir, 'meta.ndjson');
+  const records = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+  const valid = records.findLast(record => record.f === file && !record.del);
+  fs.appendFileSync(log, JSON.stringify({ ...valid, v: { ...valid.v, name: { malformed: true } } }) + '\n');
+  const stale = withBudget(0, () => index.scanSessions([source]));
+  assert.equal(stale.infos.has(file), false);
+  assert.equal(stale.indexing, true);
+  await waitFor(() => !withBudget(0, () => index.scanSessions([source])).indexing, 'metadata validation rebuild');
+  assert.equal(index.getSessionInfo(source).name, 'validated rebuild');
+});
+
+test('persisted numeric activity and missing legacy continuity preserve warm reads', () => {
+  const file = writeSession([userMsg('legacy values')]);
+  const source = sourceForFile(file);
+  const initial = index.scanSessions([source]).infos.get(file);
+  index.resetForTests();
+  const log = path.join(indexDir, 'meta.ndjson');
+  const records = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+  const valid = records.findLast(record => record.f === file && !record.del);
+  const legacyUsage = { ...valid.v.usage };
+  delete legacyUsage.state;
+  fs.appendFileSync(log, JSON.stringify({ ...valid, v: {
+    ...valid.v, name: '', contextTokens: 0, lastActivity: 0, usage: legacyUsage,
+  } }) + '\n');
+  const warm = withBudget(0, () => index.scanSessions([source]));
+  assert.equal(warm.indexing, false);
+  const info = warm.infos.get(file);
+  assert.equal(info.name, '');
+  assert.equal(info.lastActivity.getTime(), 0);
+  assert.equal(info.contextTokens, 0);
+  assert.deepEqual(info.usage.total, initial.usage.total, 'cost availability and usage preserved');
+  const copy = index.getSessionInfo(source);
+  copy.name = 'local overlay';
+  assert.equal(index.getSessionInfo(source).name, '', 'single-file reads remain shallow copies');
+  assert.strictEqual(index.scanSessions([source]).infos.get(file), info, 'scan metadata remains borrowed');
+});
+
+test('persisted invalid search/skills continuity is stale without a schema bump', async () => {
+  const file = writeSession([userMsg('continuity rebuild')]);
+  const source = sourceForFile(file);
+  index.scanSessions([source]);
+  index.resetForTests();
+  const log = path.join(indexDir, 'skills.ndjson');
+  const records = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+  const valid = records.findLast(record => record.f === file && !record.del);
+  assert.equal(valid.ver, 1);
+  fs.appendFileSync(log, JSON.stringify({ ...valid, st: { cwd: null, provider: null, model: 12 } }) + '\n');
+  const stale = withBudget(0, () => index.scanSessions([source]));
+  assert.equal(stale.infos.has(file), false);
+  assert.equal(stale.indexing, true);
+  await waitFor(() => !withBudget(0, () => index.scanSessions([source])).indexing, 'continuity rebuild');
+  assert.equal(index.getSessionInfo(source).name, 'continuity rebuild');
 });

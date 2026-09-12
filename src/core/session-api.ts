@@ -1,5 +1,3 @@
-import type { CatalogSession } from './session-catalog-contracts';
-
 /** Closed first-party metadata. Identity and opaque extras are separate owners. */
 export interface SessionFields<Timestamp = string | number> {
   name?: string | null;
@@ -30,7 +28,7 @@ export interface SessionFields<Timestamp = string | number> {
   searchSnippet?: string;
   searchScore?: number;
 }
-/** Existing wire compatibility boundary, until Tasks 4/6 cut over all readers. */
+/** Legacy wire helper compatibility; authoritative browser state uses SessionRow. */
 export interface SessionMetadata extends Record<string, unknown>,
   Pick<SessionFields, 'name' | 'model' | 'harnessId' | 'thinkingLevel' | 'isActive' | 'capabilities'> {
   id: string;
@@ -45,10 +43,13 @@ export type SessionMutationPatch = Pick<SessionFields, 'name' | 'model' | 'think
 export type SessionActivityPatch = Pick<SessionFields, 'turnInProgress' | 'compacting'>;
 export type SessionTranscriptPatch = Pick<SessionFields,
   'name' | 'model' | 'cwd' | 'messageCount' | 'contextTokens' | 'contextWindow' | 'contextPercent' | 'lastActivity' | 'isActive'>;
-export interface SessionList extends Record<string, unknown> {
-  active: SessionMetadata[];
-  previous: SessionMetadata[];
-  children?: SessionMetadata[];
+export interface SessionList {
+  active: SessionRow[];
+  previous: SessionRow[];
+  children?: SessionRow[];
+  indexing?: boolean;
+  discoveryTruncated?: boolean;
+  discoverySkipped?: number;
 }
 export interface ModelPricing {
   input: number;
@@ -119,13 +120,14 @@ function decodeFields(value: Record<string, unknown>): SessionFields {
   return fields;
 }
 /**
- * Future browser ingress. Keep the established fatal control checks; malformed
+ * Browser ingress. Keep the established fatal control checks; malformed
  * newly named presentation fields are omitted, never smuggled into extras.
  * This accepts serialized wire timestamps. Server Date projection stays separate.
  */
 export function decodeSessionRow(value: unknown): SessionRow {
   if (!record(value) || !Object.hasOwn(value, 'id')) return invalid('session');
-  const wire = decodeSessionMetadata(value);
+  validateSessionControls(value);
+  const wire = value;
   const extras: Record<string, unknown> = {};
   for (const [key, extra] of Object.entries(wire)) {
     if (key === 'id' || key === 'host' || key === 'hostLabel' || Object.hasOwn(fieldDecoders, key)) continue;
@@ -155,13 +157,17 @@ export function decodeSessionTranscriptPatch(value: unknown): SessionTranscriptP
   return decodePatch(value, ['name', 'model', 'cwd', 'messageCount', 'contextTokens', 'contextWindow', 'contextPercent', 'lastActivity', 'isActive']);
 }
 
-export function decodeSessionMetadata(value: unknown): SessionMetadata {
+function validateSessionControls(value: unknown): asserts value is Record<string, unknown> & { id: string } {
   if (!record(value) || !text(value.id)) return invalid('session');
   for (const key of ['name', 'model', 'thinkingLevel']) {
     if (value[key] !== undefined && value[key] !== null && typeof value[key] !== 'string') return invalid('session');
   }
   if (value.harnessId !== undefined && !text(value.harnessId)) return invalid('session');
   if (value.isActive !== undefined && typeof value.isActive !== 'boolean') return invalid('session');
+}
+
+export function decodeSessionMetadata(value: unknown): SessionMetadata {
+  validateSessionControls(value);
   const capabilities = decodeCapabilities(value.capabilities);
   // The checks establish every named property; extras are deliberately unknown.
   return { ...value, ...(capabilities ? { capabilities } : {}) } as SessionMetadata;
@@ -170,20 +176,22 @@ export function decodeSessionMetadata(value: unknown): SessionMetadata {
 export function decodeSessionList(value: unknown): SessionList {
   if (!record(value) || !Array.isArray(value.active) || !Array.isArray(value.previous)
       || (value.children !== undefined && !Array.isArray(value.children))) return invalid('session list');
-  return { ...value, active: value.active.map(decodeSessionMetadata), previous: value.previous.map(decodeSessionMetadata),
-    ...(Array.isArray(value.children) ? { children: value.children.map(decodeSessionMetadata) } : {}) };
+  return { active: value.active.map(decodeSessionRow), previous: value.previous.map(decodeSessionRow),
+    ...(Array.isArray(value.children) ? { children: value.children.map(decodeSessionRow) } : {}),
+    ...(typeof value.indexing === 'boolean' ? { indexing: value.indexing } : {}),
+    ...(typeof value.discoveryTruncated === 'boolean' ? { discoveryTruncated: value.discoveryTruncated } : {}),
+    ...(finite(value.discoverySkipped) ? { discoverySkipped: value.discoverySkipped } : {}) };
 }
 
 /** Preserve the existing client projection; full API rows retain provenance. */
 type ClientPrivateField = 'sessionKey' | 'nativeSessionId' | 'profileId' | 'profileVersion'
   | 'sessionFile' | 'parentSession' | 'parentSessionSource' | 'pid';
-export function sessionForClient(session: CatalogSession): Omit<CatalogSession, ClientPrivateField>;
-export function sessionForClient(session: Record<string, unknown>): SessionMetadata;
-export function sessionForClient(session: object): SessionMetadata {
-  if (!record(session)) return invalid('session');
+export function sessionForClient<T extends SessionFields<Date | string | number> & { id: string }>(session: T): Omit<T, ClientPrivateField> {
+  // Catalog rows have already established named metadata. This is only a wire
+  // projection: preserve Date values until JSON serialization and opaque extras.
   const { sessionKey, nativeSessionId, profileId, profileVersion, sessionFile,
-    parentSession, parentSessionSource, pid, ...client } = session;
-  return decodeSessionMetadata(client);
+    parentSession, parentSessionSource, pid, ...client } = session as T & Partial<Record<ClientPrivateField, unknown>>;
+  return client;
 }
 
 function pricing(value: unknown): ModelPricing | null {

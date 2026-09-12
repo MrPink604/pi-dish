@@ -9,10 +9,7 @@ export function createSessionReferences(options: {
   const { sessionState } = options;
   type SessionIdentity = Pick<SessionEntry, 'id' | 'host'>;
   function hostId(session: Pick<SessionEntry, 'host'> | null | undefined) { return session?.host || options.selfId(); }
-  function all() { return [...sessionState.sessions.active, ...sessionState.sessions.previous].map(row => ({
-    id: row.id, host: row.host || null, name: typeof row.name === 'string' ? row.name : '', cwd: typeof row.cwd === 'string' ? row.cwd : '', isActive: row.isActive === true,
-    lastActivity: typeof row.lastActivity === 'number' || typeof row.lastActivity === 'string' ? row.lastActivity : 0,
-  })); }
+  function all() { return [...sessionState.sessions.active, ...sessionState.sessions.previous]; }
   function candidates() { const current = sessionState.currentSession; return all().filter(row => !current || row.id !== current.id || hostId(row) !== hostId(current)); }
   function sameHostIds(session: SessionIdentity) { return all().filter(row => hostId(row) === hostId(session)).map(row => row.id); }
   function prefix(session: SessionIdentity) {
@@ -38,7 +35,7 @@ export function createSessionReferences(options: {
     const matches = onHost.filter(row => row.id.startsWith(parts.id)); return matches.length === 1 ? matches[0]! : null;
   }
   function hints(message: string) {
-    return parseSessionRefTokens(message).flatMap(({ ref }) => { const session = match(ref); return session ? [{ ref, name: session.name, host: options.hostLabel(session.host) || '', cwd: session.cwd, isActive: session.isActive }] : []; });
+    return parseSessionRefTokens(message).flatMap(({ ref }) => { const session = match(ref); return session ? [{ ref, name: session.name || '', host: options.hostLabel(session.host || null) || '', cwd: session.cwd || '', isActive: !!session.isActive }] : []; });
   }
   return { all, hostId, candidates, sameHostIds, prefix, ref, match, hints, search: (token: string) => searchSessionsForRef(candidates(), token, 8) };
 }

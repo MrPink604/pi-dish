@@ -46,7 +46,7 @@ for (const menu of ['Model', 'Thinking']) {
     await fleet.select(fleet.peer);
     await page.evaluate(menu => {
       const owner = sessionState.captureSelection();
-      sessionState.mergeCurrentSession(owner, { isActive: true,
+      window.fixtureSessionListPatch(owner.id, { isActive: true,
         capabilities: { ...sessionState.currentSession.capabilities, ['set' + menu]: true } });
       const load = loadModels;
       loadModels = () => {
@@ -66,7 +66,7 @@ test('changing sessions dismisses already open session menus and overlays', asyn
   await fleet.select(fleet.peer);
   await page.evaluate(async () => {
     const owner = sessionState.captureSelection();
-    sessionState.mergeCurrentSession(owner, { isActive: true, capabilities: { ...sessionState.currentSession.capabilities, setModel: true, setThinking: true } });
+    window.fixtureSessionListPatch(owner.id, { isActive: true, capabilities: { ...sessionState.currentSession.capabilities, setModel: true, setThinking: true } });
     await toggleModelDropdown(); await toggleThinkingDropdown();
     for (const id of ['modelDropdown', 'thinkingDropdown', 'treeModal', 'artifactsModal']) {
       document.getElementById(id).style.display = 'flex';
