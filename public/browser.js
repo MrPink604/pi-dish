@@ -203,6 +203,16 @@ var PiDishBrowser = (() => {
   function invalid(kind) {
     throw new Error(`Invalid ${kind} response`);
   }
+  function decodeCapabilities(value) {
+    if (value === void 0) return void 0;
+    if (!record(value)) return invalid("session capabilities");
+    const capabilities = {};
+    for (const [key, enabled] of Object.entries(value)) {
+      if (typeof enabled !== "boolean") return invalid("session capabilities");
+      Object.defineProperty(capabilities, key, { value: enabled, enumerable: true, configurable: true, writable: true });
+    }
+    return capabilities;
+  }
   function decodeSessionMetadata(value) {
     if (!record(value) || !text(value.id)) return invalid("session");
     for (const key of ["name", "model", "thinkingLevel"]) {
@@ -210,15 +220,7 @@ var PiDishBrowser = (() => {
     }
     if (value.harnessId !== void 0 && !text(value.harnessId)) return invalid("session");
     if (value.isActive !== void 0 && typeof value.isActive !== "boolean") return invalid("session");
-    let capabilities;
-    if (value.capabilities !== void 0) {
-      if (!record(value.capabilities)) return invalid("session capabilities");
-      capabilities = {};
-      for (const [key, enabled] of Object.entries(value.capabilities)) {
-        if (typeof enabled !== "boolean") return invalid("session capabilities");
-        Object.defineProperty(capabilities, key, { value: enabled, enumerable: true, configurable: true, writable: true });
-      }
-    }
+    const capabilities = decodeCapabilities(value.capabilities);
     return { ...value, ...capabilities ? { capabilities } : {} };
   }
   function decodeSessionList(value) {

@@ -1,7 +1,60 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { normalizeModels, sessionForClient, decodeSessionMetadata, decodeSessionList,
-  thinkingResult, decodeModelCatalog, decodeMutationResult, decodeThinkingResult, decodeEnabledModelsResult } = require('../lib/session-api');
+  thinkingResult, decodeModelCatalog, decodeMutationResult, decodeThinkingResult, decodeEnabledModelsResult,
+  decodeSessionRow, decodeSessionMutationPatch, decodeSessionActivityPatch, decodeSessionTranscriptPatch } = require('../lib/session-api');
+
+test('closed session ingress separates authority, endpoint identity and opaque peer extras', () => {
+  const wire = JSON.parse('{"id":"peer","host":"forged","hostLabel":"forged","name":"","model":null,"contextTokens":0,"compacting":false,"familyParentId":null,"capabilities":{"close":false,"future":true,"__proto__":false},"extra":{"model":99},"__proto__":{"model":99}}');
+  const row = decodeSessionRow(wire);
+  assert.equal(row.id, 'peer');
+  assert.equal(row.fields.name, '');
+  assert.equal(row.fields.model, null);
+  assert.equal(row.fields.contextTokens, 0);
+  assert.equal(row.fields.compacting, false);
+  assert.equal(row.fields.familyParentId, null);
+  assert.equal(row.fields.capabilities.resume, undefined, 'partial capabilities retain legacy fallback');
+  assert.equal(row.fields.capabilities.close, false);
+  assert.equal(row.fields.capabilities.__proto__, false);
+  assert.ok(!Object.hasOwn(row.fields, 'host') && !Object.hasOwn(row.extras, 'host'));
+  assert.ok(!Object.hasOwn(row.extras, 'hostLabel') && !Object.hasOwn(row.extras, 'model'));
+  assert.deepEqual(row.extras.extra, { model: 99 });
+  assert.deepEqual(row.extras.__proto__, { model: 99 });
+  assert.equal(Object.getPrototypeOf(row.extras), Object.prototype);
+  assert.equal(wire.host, 'forged', 'decoding does not mutate the caller');
+  assert.deepEqual(decodeSessionRow({ id: 'legacy' }).fields, {});
+  const malformed = decodeSessionRow({ id: 'legacy', contextTokens: '123', searchScore: Infinity, parentId: {}, lastActivity: new Date(0) });
+  assert.deepEqual(malformed.fields, {});
+  assert.deepEqual(malformed.extras, {}, 'invalid known fields do not re-enter through extras');
+  assert.throws(() => decodeSessionRow({ id: 'bad', model: 42 }), /Invalid session/);
+  assert.throws(() => decodeSessionRow(Object.create({ id: 'inherited' })), /Invalid session/);
+});
+
+test('wire and server timestamp boundaries preserve existing Date projection', () => {
+  const date = new Date('2026-09-12T00:00:00Z');
+  const projected = sessionForClient({ id: 'a', lastActivity: date, sessionFile: '/private' });
+  assert.equal(projected.lastActivity, date, 'server projection runs before JSON serialization');
+  assert.equal(decodeSessionRow(JSON.parse(JSON.stringify(projected))).fields.lastActivity, date.toISOString());
+  for (const value of [0, '', null, date.toISOString()]) {
+    assert.equal(decodeSessionRow({ id: 'a', lastActivity: value }).fields.lastActivity, value);
+  }
+});
+
+test('metadata patches preserve presence and permit only their assigned writers', () => {
+  assert.deepEqual(decodeSessionMutationPatch({ id: 'new', host: 'new', name: '', model: null, thinkingLevel: undefined,
+    capabilities: { close: true }, extras: { model: 99 }, modle: 'typo' }), { name: '', model: null });
+  assert.deepEqual(decodeSessionActivityPatch({ turnInProgress: false, compacting: true, isActive: false }), { turnInProgress: false, compacting: true });
+  assert.deepEqual(decodeSessionTranscriptPatch({ id: 'new', harnessId: 'other', name: null, cwd: null,
+    contextTokens: 0, lastActivity: 0, isActive: false, parentId: 'new', routine: 'new', capabilities: { close: true } }),
+  { name: null, cwd: null, contextTokens: 0, lastActivity: 0, isActive: false });
+  for (const decoder of [decodeSessionMutationPatch, decodeSessionActivityPatch, decodeSessionTranscriptPatch]) {
+    assert.deepEqual(decoder({}), {});
+    assert.throws(() => decoder(null), /Invalid session patch/);
+  }
+  assert.throws(() => decodeSessionMutationPatch({ model: 42 }), /Invalid session patch/);
+  assert.throws(() => decodeSessionActivityPatch({ compacting: null }), /Invalid session patch/);
+  assert.throws(() => decodeSessionTranscriptPatch({ contextPercent: NaN }), /Invalid session patch/);
+});
 
 test('client session projection preserves feature hints and validates control fields', () => {
   const row = { id: 'omp:session', name: null, model: 'provider/model', isActive: true,

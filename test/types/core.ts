@@ -155,3 +155,46 @@ if (apiSession.capabilities) {
   const absentCapability: boolean = apiSession.capabilities.future;
   void absentCapability;
 }
+
+// Task 1's future cutover contracts are checked through generated declarations.
+import type { SessionFields, SessionRow, SessionMutationPatch, SessionActivityPatch, SessionTranscriptPatch } from '../../lib/session-api';
+import type { SessionSource, SessionSourceResolver } from '../../lib/session-source-contracts';
+import type { SessionMetadataIndex } from '../../lib/session-index-contracts';
+import type { CatalogSession } from '../../lib/session-catalog-contracts';
+import { sessionForClient } from '../../lib/session-api';
+declare const serverCatalogRow: CatalogSession;
+const serverTimestamp: Date | string | number | null | undefined = sessionForClient(serverCatalogRow).lastActivity;
+// @ts-expect-error A pre-JSON server projection is not a wire-only timestamp.
+const prematureWireTimestamp: string | number | null | undefined = sessionForClient(serverCatalogRow).lastActivity;
+const closedFields: SessionFields = { name: null, contextTokens: 0, compacting: false, familyParentId: null };
+const closedRow: SessionRow = { id: 'peer', fields: closedFields, extras: { extension: { native: true } } };
+const omittedPatch: SessionMutationPatch = {};
+const nullablePatch: SessionTranscriptPatch = { name: null, cwd: null, lastActivity: 0 };
+// @ts-expect-error Known model values are text or null.
+const badMetadata: SessionFields = { model: 42 };
+// @ts-expect-error Misspelled first-party patches are not extension data.
+const typoPatch: SessionMutationPatch = { modle: 'typo' };
+// @ts-expect-error Metadata patches cannot change route identity.
+const identityPatch: SessionMutationPatch = { id: 'other' };
+// @ts-expect-error Activity does not own registry liveness.
+const livePatch: SessionActivityPatch = { isActive: true };
+// @ts-expect-error Transcripts cannot overwrite capability policy.
+const controlPatch: SessionTranscriptPatch = { capabilities: { close: true } };
+// @ts-expect-error Browser timestamps have already crossed JSON serialization.
+const datePatch: SessionTranscriptPatch = { lastActivity: new Date() };
+declare const source: SessionSource;
+declare const sourceResolver: SessionSourceResolver;
+declare const metadataIndex: SessionMetadataIndex;
+metadataIndex.scanSessions([source]);
+sourceResolver.resolve({ route: sessionId, live: [] });
+// @ts-expect-error Native ids and route ids are not interchangeable.
+const wrongSource: SessionSource = { ...source, nativeSessionId: sessionId };
+// @ts-expect-error Route ids cannot be built from native ids without canonicalization.
+const wrongRoute: SessionSource = { ...source, routeId: nativeId };
+// @ts-expect-error A bare path does not identify a parser profile or harness.
+metadataIndex.getSessionInfo('/tmp/session.jsonl');
+// @ts-expect-error Borrowed cache observations are not mutable catalog snapshots.
+metadataIndex.scanSessions([source]).infos.get(source.file)!.name = 'mutated';
+// @ts-expect-error Authoritative metadata has no open extension index signature.
+closedRow.fields.extension = true;
+void [serverTimestamp, prematureWireTimestamp, omittedPatch, nullablePatch, badMetadata, typoPatch, identityPatch, livePatch, controlPatch, datePatch, wrongSource, wrongRoute];

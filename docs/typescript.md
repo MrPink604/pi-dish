@@ -3,8 +3,10 @@
 For current completion status, the renewed simplification mission and the ordered
 work queue, start with [the roadmap](../BACKLOG.md). This document describes
 implemented typed boundaries and their limitations, plus the design rules for
-the [planned session catalog/metadata stage](session-catalog-migration.md).
-Planned contracts below are not claims about guarantees the current code provides.
+the [session catalog/metadata stage](session-catalog-migration.md).
+Task 1 implements closed metadata/patch decoders and future source/index/catalog
+ports, with the authority matrix and performance baseline in that plan. The
+existing server and browser store have not yet cut over to those contracts.
 
 The shared foundation is complete within its defined scope. Browser application
 source migration is complete; scope, review and CI requirements are tracked in
@@ -67,6 +69,14 @@ invariants; they are not simplification targets.
 | `pending-requests.ts` | Correlation, timeout and disconnect cleanup for socket/stdio requests |
 | `line-splitter.ts` | Incremental UTF-8 LF framing |
 | `running-tool-calls.ts` | Shared bridge/RPC reconnect snapshots |
+
+The new `session-*-contracts.ts` files describe future source, metadata, index and
+catalog implementation ports. They do not replace or validate the existing JS
+implementations. `SessionFields` and the restricted patch types in `session-api.ts`
+are closed; `decodeSessionRow` separates named fields from opaque extras. Current
+callers still use the original `SessionMetadata` compatibility decoder until the
+coordinated Tasks 4/6 browser cutover. The server client projection preserves
+`Date` timestamps before serialization; wire decoding is a separate boundary.
 
 `src/browser/session-state.ts` owns browser list/selection state and the existing
 generation guards. It compiles strictly into the local `public/browser.js` bundle;
