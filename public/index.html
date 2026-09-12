@@ -343,44 +343,45 @@
                error). Filled with textContent only. -->
           <div class="composer-note" id="composerNote" style="display:none"></div>
           <div class="attachment-strip" id="attachmentStrip" style="display:none"></div>
-          <!-- Composer box: the field owns every control. Left of the in-field
-               rail are the tools that act on the prompt's *content* (attach,
-               dictate); right of it the context readout, stop, and the turn
-               column — Send when idle, steer over follow-up mid-turn. The
-               separate button row this replaced overflowed on a phone, and any
-               new control would have pushed Follow-up off screen again. The
-               field reserves the rail's height with padding-bottom, so a long
-               draft scrolls above the glyphs instead of under them. -->
+          <!-- Composer box: the field owns every control. `.composer-main`
+               stacks the textarea above the content-tool rail (attach,
+               dictate, context readout, stop). `.composer-act` is a sibling
+               column on the rail baseline — Send when idle, steer over
+               follow-up mid-turn — so the extra glyph grows up beside the
+               textarea instead of resizing the box. The separate button row
+               this replaced overflowed on a phone. -->
           <div class="composer-box">
-            <textarea id="promptInput" placeholder="Send a message..." rows="2"></textarea>
-            <input type="file" id="imageFileInput" accept="image/*" multiple style="display:none">
-            <div class="composer-tools">
-              <button class="tool-btn" id="btnAttach" data-app-click="attachImage" title="Attach images" aria-label="Attach images">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.2-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
-              </button>
-              <!-- Dictation. No inline onclick: desktop toggles on click while
-                   touch is hold-to-talk, so app.js binds the pointer handlers. -->
-              <button class="tool-btn" id="btnMic" style="display:none" title="Dictate (speech to text)" aria-label="Dictate">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21"/><path class="mic-slash" d="M4 4l16 16"/></svg>
-              </button>
-              <span class="composer-gap"></span>
-              <button class="tool-btn tool-ctx" id="sessionContext" data-app-click="openStatsModal" title="Session stats">0%</button>
-              <!-- Keeps its slot when idle (visibility, not display): the
-                   context readout must not shift when a turn starts. -->
-              <button class="tool-btn tool-stop" id="btnStop" data-app-click="abortTurn" title="Stop (Esc)" aria-label="Stop">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>
-              </button>
-              <div class="composer-act">
-                <button class="tool-btn" id="btnSteer" data-app-click="sendSteer" style="display:none" title="Steer (Ctrl+Enter)" aria-label="Steer">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8.6"/><circle cx="12" cy="12" r="2.4"/><path d="M3.4 12h6.2M14.4 12h6.2M12 14.4V20.6" stroke-linecap="round"/></svg>
+            <div class="composer-main">
+              <textarea id="promptInput" placeholder="Send a message..." rows="2"></textarea>
+              <input type="file" id="imageFileInput" accept="image/*" multiple style="display:none">
+              <div class="composer-tools">
+                <button class="tool-btn" id="btnAttach" data-app-click="attachImage" title="Attach images" aria-label="Attach images">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.2-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
                 </button>
-                <button class="tool-btn" id="btnFollowUp" data-app-click="sendFollowUp" style="display:none" title="Queue after agent finishes" aria-label="Follow-up">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 5v6a4 4 0 01-4 4H5"/><path d="M9 11l-4 4 4 4"/></svg>
+                <!-- Dictation. No inline onclick: desktop toggles on click while
+                     touch is hold-to-talk, so app.js binds the pointer handlers. -->
+                <button class="tool-btn" id="btnMic" style="display:none" title="Dictate (speech to text)" aria-label="Dictate">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21"/><path class="mic-slash" d="M4 4l16 16"/></svg>
                 </button>
-                <button class="composer-send" id="btnSend" data-app-click="sendPrompt" title="Send" aria-label="Send">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+                <span class="composer-gap"></span>
+                <button class="tool-btn tool-ctx" id="sessionContext" data-app-click="openStatsModal" title="Session stats">0%</button>
+                <!-- Keeps its slot when idle (visibility, not display): the
+                     context readout must not shift when a turn starts. -->
+                <button class="tool-btn tool-stop" id="btnStop" data-app-click="abortTurn" title="Stop (Esc)" aria-label="Stop">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>
                 </button>
               </div>
+            </div>
+            <div class="composer-act">
+              <button class="tool-btn" id="btnSteer" data-app-click="sendSteer" style="display:none" title="Steer (Ctrl+Enter)" aria-label="Steer">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8.6"/><circle cx="12" cy="12" r="2.4"/><path d="M3.4 12h6.2M14.4 12h6.2M12 14.4V20.6" stroke-linecap="round"/></svg>
+              </button>
+              <button class="tool-btn" id="btnFollowUp" data-app-click="sendFollowUp" style="display:none" title="Queue after agent finishes" aria-label="Follow-up">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 5v6a4 4 0 01-4 4H5"/><path d="M9 11l-4 4 4 4"/></svg>
+              </button>
+              <button class="composer-send" id="btnSend" data-app-click="sendPrompt" title="Send" aria-label="Send">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+              </button>
             </div>
           </div>
         </div>

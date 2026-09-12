@@ -2372,17 +2372,30 @@ body.sidebar-open {
   position: relative; /* anchor for autocomplete + control panel */
 }
 
-/* The bordered box is the field: it holds the (transparent, borderless)
-   textarea above its own control row. The rail used to be absolutely
-   positioned over the textarea's reserved bottom padding, but padding
-   scrolls with the text — any intermediate scroll position ran lines
-   straight under the glyphs. A real row cannot be scrolled into. */
+/* The bordered box is the field: `.composer-main` holds the (transparent,
+   borderless) textarea above its own control row; `.composer-act` is a
+   sibling column on the rail baseline. Mid-turn steer/follow-up stack up
+   beside the textarea so the box height does not change. The rail used
+   to be absolutely positioned over the textarea's reserved bottom
+   padding, but padding scrolls with the text — any intermediate scroll
+   position ran lines straight under the glyphs. A real row cannot be
+   scrolled into. */
 .composer-box {
   position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 2px 6px 4px;
+}
+
+.composer-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .composer-box:focus-within {
@@ -2408,7 +2421,7 @@ body.sidebar-open {
   outline: none;
 }
 
-/* Content tools left, readout/stop/turn column right. */
+/* Content tools left, readout/stop right. The turn column is a sibling. */
 .composer-tools {
   display: flex;
   align-items: center;
@@ -2420,10 +2433,10 @@ body.sidebar-open {
   flex: 1 1 auto;
 }
 
-/* Rail buttons. No border or background of their own until hovered — the
-   field is the container, the glyph is the affordance. Touch-sized by
-   default; tightened on desktop below. */
-.composer-tools .tool-btn {
+/* Rail and turn-column buttons. No border or background of their own
+   until hovered — the field is the container, the glyph is the
+   affordance. Touch-sized by default; tightened on desktop below. */
+.composer-box .tool-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2440,12 +2453,12 @@ body.sidebar-open {
   font-size: 12px;
 }
 
-.composer-tools .tool-btn svg {
+.composer-box .tool-btn svg {
   width: 18px;
   height: 18px;
 }
 
-.composer-tools .tool-btn:hover {
+.composer-box .tool-btn:hover {
   background: var(--bg-hover);
   border-color: var(--border);
   color: var(--text);
@@ -2472,13 +2485,15 @@ body.sidebar-open {
 }
 
 /* Turn column: Send when idle, steer over follow-up during a turn. Fixed
-   width so both states occupy the same column. */
+   width so both states occupy the same column; flex-end keeps follow-up
+   on the rail and lets steer grow up into the textarea's column. */
 .composer-act {
   flex: none;
   width: 30px;
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: flex-end;
   gap: 2px;
 }
 
@@ -4281,12 +4296,12 @@ button.badge-context {
 
 /* Desktop trims the rail a little further; the base sizes are touch-sized. */
 @media (min-width: 769px) {
-  .composer-tools .tool-btn {
+  .composer-box .tool-btn {
     min-width: 28px;
     min-height: 28px;
   }
 
-  .composer-tools .tool-btn svg {
+  .composer-box .tool-btn svg {
     width: 17px;
     height: 17px;
   }

@@ -1830,21 +1830,22 @@ and outside-click policy remain with the shell.
 ## Prompt composer (public/app.js)
 
 - **Layout**: every control lives in the field, and the *box* is the field:
-  `.composer-box` carries the border, background and focus ring, wrapping a
-  transparent borderless textarea above `.composer-tools` — attach and dictate
-  on the left, then the context readout (`#sessionContext`, tap = stats), Stop,
-  and `.composer-act`, a fixed-width column holding Send when idle and Steer
-  over Follow-up during a turn. There is no button row under the field; a phone
-  had no width left for one. The rail is a real row, not an overlay: it was
-  once absolutely positioned over reserved `padding-bottom`, but a textarea's
-  padding scrolls with its text, so any mid-scroll position ran lines under the
-  glyphs. Two invariants hold the readout still: Stop keeps its slot when idle
-  (`visibility`, not `display`) and `.composer-act` is a fixed width in both
-  states. `resize: none` — the native grip drew a light square inside the box,
-  and `autosizePromptInput` (160px cap, text only) tracks the content. Glyphs
-  are stroke SVG, muted until hover; Stop is the only coloured one, Send the
-  only filled one, and the readout stays muted until its tier colours it.
-  `test/ui-scenarios/mobile.js` asserts the geometry.
+  `.composer-box` carries the border, background and focus ring. `.composer-main`
+  wraps a transparent borderless textarea above `.composer-tools` — attach and
+  dictate on the left, then the context readout (`#sessionContext`, tap = stats)
+  and Stop. `.composer-act` is a sibling column, not a child of the rail: Send
+  when idle, Steer over Follow-up during a turn, aligned to the rail so the extra
+  glyph grows up beside the textarea instead of resizing the box. There is no
+  button row under the field; a phone had no width left for one. The rail is a
+  real row, not an overlay: it was once absolutely positioned over reserved
+  `padding-bottom`, but a textarea's padding scrolls with its text, so any
+  mid-scroll position ran lines under the glyphs. Two invariants hold the
+  readout still: Stop keeps its slot when idle (`visibility`, not `display`) and
+  `.composer-act` is a fixed width in both states. `resize: none` — the native
+  grip drew a light square inside the box, and `autosizePromptInput` (160px cap,
+  text only) tracks the content. Glyphs are stroke SVG, muted until hover; Stop
+  is the only coloured one, Send the only filled one, and the readout stays muted
+  until its tier colours it. `test/ui-scenarios/mobile.js` asserts the geometry.
 - **Image attachments**: paste or 📎-pick images; `prepareImageAttachment()`
   downscales to a 1568px long edge / JPEG re-encode before base64ing (phone
   photos are huge). Images ride the `images` field on `/prompt` and `/steer`

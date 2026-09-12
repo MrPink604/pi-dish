@@ -21,7 +21,9 @@ Deviations from the spec below, as built:
   textarea above it), not an overlay on reserved `padding-bottom`: padding
   scrolls with a textarea's text, so a mid-scroll draft ran under the glyphs.
   `resize: none` follows from that — the native grip drew a light square
-  inside the box.
+  inside the box. `.composer-act` is a sibling of `.composer-main` (the
+  mock's `.field-main` + `.act`), aligned to the rail, so mid-turn
+  steer/follow-up do not grow the field.
 - The 0–33 tier is `--text-muted`, not `--text-bright`: white at the default
   tier read as an alert next to muted glyphs.
 
@@ -81,9 +83,11 @@ Desktop header is unchanged (single row).
 
 - Left: attach, dictate.
 - Right of the tool row: the context readout (tap = stats modal), then stop.
-- Far right column (`.act`, **fixed 40px wide in both states**): the round
+- Far right column (`.composer-act`, **fixed width in both states**): the round
   filled Send button when idle; mid-turn it becomes steer (steering wheel) over
-  follow-up (↵), stacked vertically **inside** the field.
+  follow-up (↵), stacked vertically **inside** the field. The column is a sibling
+  of the textarea/rail stack, aligned to the rail, so steer grows up beside the
+  textarea and the box height does not change.
 - The stop button occupies its slot in both states (`visibility: hidden` when
   idle). Together with the fixed `.act` width this pins the context readout to
   one x-position — it must not shift when a turn starts or ends.
@@ -94,9 +98,6 @@ Desktop header is unchanged (single row).
   (desktop hover) and `aria-label`.
 - The attachment strip, queue strip and composer note still stack above the
   field, unchanged.
-
-Mid-turn the field is ~30px taller than idle (two stacked glyphs vs one Send).
-Accepted: shrinking the glyphs to fit 38px total makes them thumb-hostile.
 
 ## Removals
 
@@ -178,7 +179,8 @@ The mock's `D · Glyphs` panel holds the exact paths.
   (`scrollWidth > clientWidth`) and its first cell is the run state, (c) the
   context readout's `getBoundingClientRect().right` is identical idle and
   mid-turn, (d) steer and follow-up are inside the field's bounds and are
-  reachable (`overflowing.length === 0`).
+  reachable (`overflowing.length === 0`), and the field height is identical
+  idle and mid-turn.
 - `test/ui-smoke.js`: `#btnSend`/`#btnSteer`/`#btnStop` selectors survive (keep
   the ids on the new glyph buttons); `#sessionContext` stats-modal opens
   retarget to the in-field readout; drop the spend-preference coverage.

@@ -95,24 +95,35 @@ module.exports = async function mobile({ browser, watch, base, check, emit, SESS
     `the run chip carries turn state alone; only errors add prose (got ${JSON.stringify(statusVisibility)})`);
 
   // Composer contract on a phone: every control lives inside the field's
-  // box, in a strip below the text (an overlaid rail let scrolled lines run
-  // under the glyphs), and the context readout holds one position across the
-  // idle/running switch — a turn starting used to reflow the whole row and
-  // push Follow-up off screen.
+  // box, the content-tool rail sits below the text (an overlaid rail let
+  // scrolled lines run under the glyphs), and the context readout holds
+  // one position across the idle/running switch — a turn starting used
+  // to reflow the whole row and push Follow-up off screen. Steer stacks
+  // above follow-up on the rail baseline so the box does not grow.
   const ctxRight = () => mobile.evaluate(() =>
     Math.round(document.getElementById('sessionContext').getBoundingClientRect().right));
+  const boxHeight = () => mobile.evaluate(() =>
+    Math.round(document.querySelector('.composer-box').getBoundingClientRect().height));
   const ctxIdle = await ctxRight();
+  const heightIdle = await boxHeight();
   await mobile.evaluate(() => setTurnInProgress(true));
   const composer = await mobile.evaluate(() => {
     const box = document.querySelector('.composer-box').getBoundingClientRect();
     const text = document.getElementById('promptInput').getBoundingClientRect();
+    const tools = document.querySelector('.composer-tools').getBoundingClientRect();
+    const steer = document.getElementById('btnSteer').getBoundingClientRect();
+    const follow = document.getElementById('btnFollowUp').getBoundingClientRect();
     const inBox = (r) => r.left >= box.left && r.right <= box.right &&
       r.top >= box.top && r.bottom <= box.bottom;
-    const visible = [...document.querySelectorAll('.composer-tools button')]
+    const visible = [...document.querySelectorAll('.composer-box button')]
       .filter(el => el.offsetParent !== null);
     return {
       textBottom: Math.round(text.bottom),
-      railTop: Math.round(document.querySelector('.composer-tools').getBoundingClientRect().top),
+      railTop: Math.round(tools.top),
+      followBottom: Math.round(follow.bottom),
+      toolsBottom: Math.round(tools.bottom),
+      steerBottom: Math.round(steer.bottom),
+      followTop: Math.round(follow.top),
       ids: visible.map(el => el.id),
       outside: visible.filter(el => !inBox(el.getBoundingClientRect())).map(el => el.id),
       overflowing: visible.filter(el => {
@@ -126,6 +137,11 @@ module.exports = async function mobile({ browser, watch, base, check, emit, SESS
   check(composer.ids.includes('btnFollowUp') && composer.ids.includes('btnSteer') &&
     composer.overflowing.length === 0,
     `steer and follow-up stay reachable mid-turn (got ${JSON.stringify(composer)})`);
+  check(composer.steerBottom <= composer.followTop &&
+    Math.abs(composer.followBottom - composer.toolsBottom) <= 2,
+    `in-turn actions stack up from the tools baseline (got ${JSON.stringify(composer)})`);
+  check(await boxHeight() === heightIdle,
+    `the field keeps its idle height when a turn starts (idle ${heightIdle})`);
   check(await ctxRight() === ctxIdle,
     `the context readout keeps its slot when a turn starts (idle ${ctxIdle})`);
   await mobile.evaluate(() => setTurnInProgress(false));
