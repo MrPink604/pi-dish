@@ -1,8 +1,10 @@
 # TypeScript migration guide
 
-For current completion status and the ordered work queue, start with
-[the roadmap](../BACKLOG.md). This document describes the typed boundaries,
-build conventions and compatibility rules already implemented.
+For current completion status, the renewed simplification mission and the ordered
+work queue, start with [the roadmap](../BACKLOG.md). This document describes
+implemented typed boundaries and their limitations, plus the design rules for
+the [planned session catalog/metadata stage](session-catalog-migration.md).
+Planned contracts below are not claims about guarantees the current code provides.
 
 The shared foundation is complete within its defined scope. Browser application
 source migration is complete; scope, review and CI requirements are tracked in
@@ -10,6 +12,43 @@ the roadmap. The server application and feature stores remain largely JavaScript
 The original foundation introduced no UI framework, ESM runtime
 migration or wire/store format change. Subsequent browser extractions use
 vanilla TypeScript and ordinary DOM rendering.
+
+## Source completion is not contract completion
+
+The browser migration made controller inputs, request/view ownership and delivery
+strictly checked. It intentionally preserved much of the old data flow and
+classic-script composition. The next objective is to use those boundaries to
+remove repeated normalization, competing owners and obsolete adapters, rather
+than continue transposing code without simplifying the whole path.
+
+In particular, the current `SessionEntry` is identity plus an open
+`Record<string, unknown>`. `SessionMetadata` validates only a small named subset;
+the store does not retain even that entire typed subset. A `patchSession` call
+with `{ model: 123, modle: 'typo' }` currently passes strict checking. This is a
+contract limitation, not evidence that runtime ownership guards are unnecessary.
+Sidebar and header code separately narrow overlapping metadata. Protocol
+envelopes are also typed without promising schemas for every event payload.
+
+For the next stage, define first-party metadata and permitted patches explicitly,
+retain that knowledge through state, and narrow only at actual external ingress.
+Separate opaque extras from authoritative named fields in the internal model;
+preserve current external wire shapes. Do not blanket-cast parsed JSON or use an
+open index signature on a mutation contract to make the conversion compile.
+Read-time display projections may still derive labels, defaults and grouping:
+remove redundant validation, not meaningful presentation policy.
+
+Source resolution and catalog construction need actual checked implementations,
+not declarations that merely assert the shape of unchanged JavaScript. Remaining
+JavaScript dependencies must be identified as unchecked boundaries with validated
+inputs/outputs where needed. Keep one owner for source/cache consistency without
+collapsing distinct caches that serve different performance requirements.
+
+See the [stage plan](session-catalog-migration.md) for scope, field authority,
+dependencies, deletion criteria and verification. Lifecycle authority, host and
+selection ownership, local assets and checked-in runtime delivery remain
+invariants; they are not simplification targets.
+
+## Implemented foundation inventory
 
 | TypeScript source in `src/core/` | Responsibility |
 | --- | --- |

@@ -6,10 +6,13 @@ now implements the preparation boundary and records repeatable measurements.
 
 ## Decision
 
-Continue with vanilla TypeScript as the implementation base and migrate the
-remaining browser modules into `src/browser/`. Keep ordinary DOM rendering and
-explicit ownership boundaries. No framework has demonstrated a maintenance or
-runtime benefit in this repository, and a framework pilot is not the next stage.
+Continue with vanilla TypeScript and ordinary DOM rendering. Browser source
+migration is now complete; the next stage is
+[session catalog and metadata simplification](session-catalog-migration.md),
+not framework adoption. No framework has demonstrated a maintenance or runtime
+benefit in this repository. Source conversion alone does not establish that
+the original complexity has been removed; the [roadmap](../BACKLOG.md) now
+requires explicit contract improvements and deletion criteria.
 
 Preact remains a possible later experiment for leaf UI if extraction exposes a
 specific maintenance problem. Svelte is not an intended destination either.
@@ -22,7 +25,11 @@ callbacks carrying the wrong host/session or applying after navigation.
 Framework lifecycle hooks would still need the same captured owners. Production
 adoption should depend on simpler feature code and acceptable runtime costs.
 
-## What the code now supports
+## Baseline at the original assessment
+
+These observations describe the pre-completion browser baseline on 2026-09-10,
+not the current distribution of controller code. Use the roadmap and
+[migration guide](typescript.md) for implemented boundaries and remaining debt.
 
 - `src/browser/session-state.ts` owns lists, detached selection, the four writers,
   and immutable `SelectionOwner` tokens. Its strict TypeScript interface and unit/type

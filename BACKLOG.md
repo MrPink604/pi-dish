@@ -1,20 +1,70 @@
 # pi-dish roadmap and migration status
 
 Updated 2026-09-11. **Browser application source migration is complete and
-independently reviewed.**
+independently reviewed. Architectural simplification is not complete.**
 
 All first-party browser application logic is authored in `src/browser/`, including
 the application entrypoint and static control bindings. The five scripts shipped
 under `public/` are generated and checked against strict TypeScript source.
-Vanilla DOM rendering, local assets and the existing server/Electron delivery
-paths remain supported. The backend application and feature stores are a separate
-migration stage.
+That milestone established checked modules and explicit request/view ownership;
+it did not eliminate the browser's classic-script forwarding layer or make the
+session metadata pipeline strongly typed end to end.
+
+**Next: session catalog and metadata**, connecting discovery/index data, server
+catalog construction and browser state through explicit checked contracts.
+The [implementation plan](docs/session-catalog-migration.md) defines the higher-level
+tasks, acceptance criteria and parallel workstreams. This stage is planned, not
+implemented. Vanilla DOM rendering, local assets and existing server/Electron
+delivery remain supported.
 
 Work was divided into 43 checkpoints. See
 [the checkpoint log](docs/browser-migration-checkpoints.md) for scope, verification
 and review status. Fable 5.1 reviewed checkpoints through 38; the authorized
 substitute, Kimi K3 through OMP, cleared checkpoints 39–43 without blocking
 findings. CI requirements and the earlier passing baseline are recorded below.
+
+## Renewed mission: simplify through checked boundaries
+
+The migration exists to reduce the amount of application context needed to make
+a correct change, not to maximize TypeScript line count. The original maintenance
+discussion asked whether modules, types or a framework would reduce spaghetti.
+The browser stage deliberately narrowed that question to source conversion with
+behavior preservation. Its completion is real, but it is not proof that the
+original simplification goal has been met.
+
+The next stages must use types to replace repeated responsibility: establish who
+owns an identity, a field, a state transition and a cache; validate external input
+at that boundary; then carry the established contract to its consumers.
+Moving defensive code into more files, adding declarations over unchecked
+implementations, or retaining the old architecture behind typed forwarding
+wrappers is not sufficient.
+
+Each stage must identify:
+
+- **The contract strengthened:** invalid combinations, misspelled fields or
+  unsafe writes the compiler will reject, and external data still requiring
+  runtime validation.
+- **The complexity removed:** duplicate normalization, competing state/cache
+  owners, obsolete adapters or compatibility layers deleted across the whole
+  producer/consumer path, not merely a shorter entrypoint.
+- **The behavior preserved:** authority, missing/null/fallback semantics,
+  identity, request retirement and the performance properties exercised by
+  relevant regression and smoke checks.
+- **The remaining boundary:** unchecked implementations and deliberately opaque
+  extension data, stated honestly rather than counted as migrated.
+
+Keep source coverage, architectural simplification and verified delivery as
+separate status measures. File counts, checkpoint counts and test totals are
+inventory, not evidence of reduced complexity. A source increase can still be
+worthwhile when it removes a competing owner or an invalid state; a source
+decrease is not a win when complexity moves into adapters or tests.
+
+The immediate evidence is session metadata: `SessionEntry` currently combines
+identity with `Record<string, unknown>`, and its patch writer accepts both a
+numeric `model` and a misspelled `modle`. Sidebar/header consumers separately
+narrow overlapping fields. The browser also retains a classic-script global
+facade for composition and test instrumentation. These are explicit remaining
+debts, not reasons to discard the useful ownership and validation work.
 
 ## Status at a glance
 
@@ -23,13 +73,16 @@ findings. CI requirements and the earlier passing baseline are recorded below.
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
 | Browser migration | Source implementation complete and reviewed | All first-party application logic and bindings are typed. Local strict, backend, browser and UI checks pass; each push must also pass the CI matrix. |
-| Remaining server application and feature modules | Later — not yet migrated | Express routes, application/lifecycle orchestration and feature stores still need separate bounded stages. |
+| Session catalog and metadata | Next — planned, not implemented | Type and consolidate source resolution, catalog composition and first-party metadata through browser state; require removal of redundant normalization and adapters. |
+| Remaining server application and feature modules | Later — outside the next bounded stage | Lifecycle redesign, general routes, recovery and feature stores still need separate stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
 
 The completed browser source migration does not imply a whole-application
-conversion. `server.js`, feature stores, extension checking and Electron shell
-scope still need their own audit and bounded implementation stages.
+conversion or complete domain contracts. Session catalog/metadata is the next
+bounded stage. Browser composition cleanup follows as a separate simplification
+candidate; lifecycle, other stores, extension checking and Electron shell scope
+remain to be assessed independently.
 
 ## What is already in TypeScript
 
@@ -142,12 +195,27 @@ in TypeScript with explicit state, request and view owners. `public/app.js` is
 generated; edit `src/browser/app.ts` and rebuild. Static HTML contains action
 names instead of executable event handlers.
 
-**After the browser stage:** plan the remaining server application/lifecycle and
-feature-store migrations separately. Existing typed RPC/bridge internals do not
-make the Express server, session index/recovery, routines, shares or other stores
-fully typed. Audit extensions and the Electron shell before declaring a whole-
-application migration complete. These later areas are not yet a commit-by-commit
-plan.
+## Ordered next work
+
+1. **Session catalog and metadata.** Follow the
+   [higher-level task plan](docs/session-catalog-migration.md). Begin with field
+   authority and shared contracts, then parallelize independent source/catalog
+   and browser-metadata work only after those contracts are agreed. One integration
+   owner handles shared server wiring, exports, generated assets and final checks.
+2. **Browser composition cleanup.** Replace the broad classic-script forwarding
+   facade with ordinary bundled dependencies and explicit composition. Migrate
+   test instrumentation without losing ownership-race coverage; do not recreate
+   the facade as an equally broad permanent debug object. This is a separate
+   stage, not bundled into the metadata cutover.
+3. **Remaining backend boundaries.** Evaluate lifecycle orchestration next on
+   safety and simplification grounds; migrate feature stores when their consumer
+   contracts justify it, not simply because they are easy JavaScript files.
+   Audit extension checking and Electron before claiming whole-application coverage.
+
+There is no scheduled framework adoption or blanket `server.ts` conversion.
+Reconsider a leaf renderer only against a concrete maintenance problem and the
+existing framework-assessment criteria. Source migration alone does not justify
+a new framework or a rewrite of persistence and deployment.
 
 ## Review and verification
 
