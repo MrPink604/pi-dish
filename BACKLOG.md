@@ -17,11 +17,12 @@ tasks, acceptance criteria and parallel workstreams. This stage is planned, not
 implemented. Vanilla DOM rendering, local assets and existing server/Electron
 delivery remain supported.
 
-Work was divided into 43 checkpoints. See
-[the checkpoint log](docs/browser-migration-checkpoints.md) for scope, verification
-and review status. Fable 5.1 reviewed checkpoints through 38; the authorized
-substitute, Kimi K3 through OMP, cleared checkpoints 39–43 without blocking
-findings. CI requirements and the earlier passing baseline are recorded below.
+Browser work was divided into 43 checkpoints. See
+[the checkpoint log](docs/browser-migration-checkpoints.md) for contemporaneous
+scope, verification and review notes; some historical entries retain pending
+labels and are not a complete clearance ledger. Kimi K3 through OMP cleared the
+final implementation range recorded below. Final delivery evidence is separate
+from individual review notes and from the next stage's planned work.
 
 ## Renewed mission: simplify through checked boundaries
 
@@ -186,9 +187,12 @@ regressions, all independent UI scenarios and full desktop/mobile smoke. Kimi K3
 through OMP (`kimi-code/k3`) cleared the five-commit implementation range
 `fab8947..28627d1` without blocking findings.
 
-The [main-branch CI runs](https://github.com/MrPink604/pi-dish/actions/workflows/tests.yml?query=branch%3Amain)
-provide delivery evidence. The browser completion goal requires all five jobs to
-pass on the exact final pushed commit; a passing earlier checkpoint is insufficient.
+The browser stage was delivered at `8ac580d617b5d3461ca4601a690b08ac839c23d1`.
+[All five CI jobs passed on that exact commit](https://github.com/MrPink604/pi-dish/actions/runs/34633082275):
+backend on Node 22.19.0, 22.x, 24.x and 26.x, plus the Node 24 browser job,
+including regressions, independent UI scenarios and desktop/mobile smoke.
+This records the completed browser milestone, not verification of future
+catalog/metadata implementation. Later changes require their own checks.
 
 The source finish line is met: first-party browser application logic is authored
 in TypeScript with explicit state, request and view owners. `public/app.js` is

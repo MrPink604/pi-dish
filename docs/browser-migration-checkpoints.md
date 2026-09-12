@@ -8,6 +8,26 @@ The operator authorized `kimi-coding/kimi-k3` through OMP as a substitute for
 Fable 5.1 for the final pending checkpoints. The review-before-push requirement
 and final CI requirement remain in force.
 
+## Delivered browser milestone
+
+Final delivery: `8ac580d617b5d3461ca4601a690b08ac839c23d1`.
+[CI run 34633082275](https://github.com/MrPink604/pi-dish/actions/runs/34633082275)
+passed all five jobs: four backend Node versions and the Node 24 browser job,
+including browser regressions, independent UI scenarios and desktop/mobile smoke.
+The roadmap records Kimi's clearance of the final implementation range
+`fab8947..28627d1`.
+
+The entries below preserve contemporaneous checkpoint notes, including pending
+review labels and incomplete per-checkpoint clearance records. They are not the
+current work queue, and passing final CI does not retrospectively prove missing
+review records. Use recorded reviews and their original transcripts rather than
+infer individual clearance from the aggregate delivery result.
+
+Browser source completion does not mean architectural simplification is complete.
+The [renewed roadmap](../BACKLOG.md) and
+[session catalog/metadata plan](session-catalog-migration.md) define the next
+mission and its measurable contract/deletion criteria.
+
 ## Completion criteria
 
 - First-party browser application logic has TypeScript sources under strict

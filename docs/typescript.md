@@ -425,7 +425,7 @@ Display preferences, themes and pointer resizing are owned by
 `display-preferences.ts`, `themes.ts` and `panel-resize.ts`. The separate
 `theme-prepaint.ts` entrypoint generates `public/theme-prepaint.js`; it runs
 synchronously before CSS and shares the typed token decoder with theme switching.
-The browser build validates all four outputs before writing any of them.
+The browser build validates all five outputs before writing any of them.
 
 `terminal.ts` owns terminal instances and all open/connection/input lifetimes.
 Pending opens are cancellable before an instance exists; font deadlines and

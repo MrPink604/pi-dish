@@ -87,6 +87,12 @@ boundaries; reuse existing symbols where possible rather than introduce aliases.
   refusal and revalidation of generic `session.jsonl` identities.
 - File/profile and route lookup indexes may remain separate. One component owns
   their consistency and invalidation; the objective is not one universal cache.
+- The migrated index accepts explicit source descriptors, not bare file strings
+  that silently default to Pi. Task 3 removes that legacy index input; Task 7
+  converts every caller, including RPC fallback and search hits. Standalone
+  low-level JS file readers may retain their existing path input, but catalog
+  callers pass the resolved descriptor and never recover identity from that path
+  or the removed side map.
 - Keep the browser's host-qualified identity and `SelectionOwner` generation.
   Server brands do not magically validate strings received from remote peers.
 
@@ -138,6 +144,13 @@ catalog projection before parallel work starts. Document which snapshot fields
 are validated and which lifecycle decisions are supplied by existing policy.
 Inventory references with language-server support before modifying exports.
 
+The integration lead captures the isolated representative-corpus performance
+baseline in this task, before wave 2 changes implementations. Record fixture
+construction, cold/warm list and route timings, active-only scan behavior and
+ordinary append read/parse work so Task 7 can repeat the same measurements.
+The field matrix must explicitly cover `lastActivity`: server Date values,
+serialized wire strings and the existing browser numeric-timestamp tolerance.
+
 **Acceptance:** contracts are reviewable, compile-time negative cases cover wrong
 known types, misspelled patch fields and identity writes, and runtime compatibility
 cases distinguish omitted/null/false/zero. Shared definitions have one owner.
@@ -154,6 +167,10 @@ source reconstruction and historical route lookup into it, receiving current
 registered/RPC observations through explicit inputs. Preserve bounded traversal,
 header provenance, duplicate preference/ambiguity, nested discovery and strict
 subsession-exit inspection used by lifecycle callers.
+
+This worker also replaces the handwritten discovery `require` signature in
+`src/core/rpc-session.ts` with a checked import from the migrated module. Task 7
+regenerates `lib/rpc-session.js` and declarations along with the other outputs.
 
 **Acceptance:** source callers no longer recover profile/identity via a hidden
 path side map. Route/list refresh and generic-file revalidation share one owner;
@@ -185,6 +202,11 @@ formats, schema/pricing freshness, append batching, truncation/rotation detectio
 background budgets and the O(appended-bytes) update path unchanged. Preserve
 copy-versus-borrowed cache semantics; context-window/percent derivation remains
 read-time because the model catalog can warm after indexing.
+Remove bare-string inputs from the migrated index; callers supply the agreed
+source descriptor rather than receive an implicit Pi profile. Invalid persisted
+metadata is stale and rebuilt through the existing bounded backlog. Do not bump
+metadata/text/skills schema versions for a type-only migration or reject valid
+legacy values merely because their internal representation differs.
 
 **Acceptance:** catalog metadata comes from checked accumulation/index code;
 remaining JS projections are explicitly unchecked boundaries. There is one
@@ -242,6 +264,9 @@ from existing lifecycle code. Leave process/tmux proofs there. Keep conflicting
 bridge visibility versus controllability, RPC fallback, stable activity ordering,
 active-only scan avoidance, historical indexing flags and live-child resume gates.
 Preserve query-specific enrichment and default API versus client projection.
+The existing `getActiveSessions` computes some advice inline. Task 7 separates
+those existing policy calls from row construction and supplies their results;
+the catalog worker must not move the process/tmux proofs into the read model.
 
 **Acceptance:** source and metadata assembly have one checked owner; server route
 handlers no longer independently construct divergent first-party session shapes.
@@ -283,6 +308,9 @@ cache coordination with the new owners; migrate read consumers including
 messages/stats/export/search/usage/skills and lifecycle source lookups. A lifecycle
 caller may use the new read source but must still independently prove ownership.
 Do not turn every read into catalog construction or change its tree-leaf behavior.
+Convert every bare-path index call, including active RPC fallback and search-hit
+reads, to the agreed source descriptor. Adapt remaining JS reader calls without
+changing their standalone path API or recreating a hidden source lookup.
 
 Own shared exports/build inputs, generated `lib/*.js`/`.d.ts` and `public/` assets,
 and any unavoidable `app.ts` wiring. Update all in-repo callers of removed exports;
