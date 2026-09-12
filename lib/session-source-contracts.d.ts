@@ -51,5 +51,7 @@ export interface SessionSourceResolver {
     refresh(discovery: DiscoveryResult): void;
     /** Retire every route/profile alias for a vanished or replaced file. */
     invalidate(file: string): void;
+    /** Retire lookup aliases for one canonical session without discarding file/header observations. */
+    invalidateRoute(route: string): void;
     clear(): void;
 }

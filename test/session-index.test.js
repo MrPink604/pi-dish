@@ -586,3 +586,52 @@ test('persisted invalid search/skills continuity is stale without a schema bump'
   await waitFor(() => !withBudget(0, () => index.scanSessions([source])).indexing, 'continuity rebuild');
   assert.equal(index.getSessionInfo(source).name, 'continuity rebuild');
 });
+
+for (const harnessId of ['pi', 'omp']) {
+  test(`${harnessId} malformed metadata preserves indexed usage and skill continuity on full reads and append`, () => {
+    const cwd = path.join(tmpHome, 'malformed-continuity', harnessId);
+    const skill = path.join(cwd, 'demo', 'SKILL.md');
+    const valid = [
+      { type: 'session', id: 'header-continuity', cwd },
+      { type: 'model_change', provider: 'openai', modelId: 'gpt-known', model: 'openai/gpt-known' },
+      userMsg('keep the readable session'),
+      { type: 'message', message: { role: 'assistant', provider: 'openai', model: 'gpt-known',
+        content: [], usage: { input: 2, output: 1 } } },
+    ];
+    const malformed = [
+      { type: 'session', cwd: 123 },
+      { type: 'model_change', provider: 456, modelId: 789, model: 789 },
+      { type: 'message', id: 123, message: { role: 'assistant', provider: 456, model: 789, responseModel: [],
+        content: [{ type: 'toolCall', name: 'read', arguments: { path: 'demo/SKILL.md' } }],
+        usage: { input: 3, output: 2 } } },
+    ];
+    const file = writeSession(valid.concat(malformed));
+    const source = sourceForIdentity(harnessId, path.basename(file, '.jsonl'), file);
+    const first = index.scanSessions([source]);
+    assert.equal(first.indexing, false);
+    const info = first.infos.get(file);
+    assert.ok(info, 'malformed presentation values do not drop an otherwise readable session');
+    assert.equal(info.cwd, cwd);
+    assert.equal(info.model, harnessId === 'omp' ? 'openai/gpt-known' : 'gpt-known');
+    assert.equal(info.usage.cwd, cwd);
+    assert.deepEqual(info.usage.state, { provider: 'openai', model: 'gpt-known' });
+    assert.deepEqual(Object.keys(info.usage.models), ['openai/gpt-known']);
+    assert.equal(info.usage.total.calls, 2, 'valid usage still contributes');
+    const identity = harnessId === 'pi' ? source.nativeSessionId : source.sessionKey;
+    const activations = () => index.getSkillActivations({ skill }).filter(record => record.sessionId === identity);
+    assert.equal(activations().length, 1, 'relative skill read keeps its valid cwd');
+    assert.equal(activations()[0].model, 'openai/gpt-known');
+    assert.equal(activations()[0].entryId, null, 'malformed entry provenance does not drop a valid skill read');
+
+    fs.appendFileSync(file, malformed.map(entry => JSON.stringify(entry)).join('\n') + '\n');
+    const extended = withBudget(0, () => index.scanSessions([source]));
+    assert.equal(extended.indexing, false, 'malformed metadata does not force a full-file rebuild on append');
+    const next = extended.infos.get(file);
+    assert.equal(next.cwd, cwd);
+    assert.equal(next.usage.cwd, cwd);
+    assert.deepEqual(next.usage.state, { provider: 'openai', model: 'gpt-known' });
+    assert.equal(next.usage.total.calls, 3);
+    assert.equal(activations().length, 2);
+    assert.ok(activations().every(record => record.cwd === cwd && record.model === 'openai/gpt-known'));
+  });
+}

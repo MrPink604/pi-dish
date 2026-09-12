@@ -300,8 +300,9 @@ test('malformed historical metadata falls back before client projection', async 
   const badId = 'malformed-browser-row';
   const file = path.join(sessionDir, badId + '.jsonl');
   fs.writeFileSync(file, [
-    { type: 'session', version: 3, id: badId, cwd: '/fixture/bad', timestamp: new Date().toISOString() },
+    { type: 'session', version: 3, id: badId, cwd: 123, timestamp: new Date().toISOString() },
     { type: 'session_info', name: { malformed: true } },
+    { type: 'model_change', provider: { malformed: true }, modelId: 456 },
   ].map(row => JSON.stringify(row)).join('\n') + '\n');
   try {
     const full = await get('/api/sessions');
@@ -311,6 +312,7 @@ test('malformed historical metadata falls back before client projection', async 
     assert.equal(client.status, 200);
     assert.ok(client.body.previous.some(row => row.id === SESSION_ID));
     assert.equal(client.body.previous.find(row => row.id === badId)?.name, badId.slice(0, 8));
+    assert.equal(client.body.previous.find(row => row.id === badId)?.model, 'unknown');
   } finally { fs.rmSync(file, { force: true }); }
 });
 

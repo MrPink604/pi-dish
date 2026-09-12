@@ -747,7 +747,7 @@ events are checked. No store schema, protocol format or lifecycle policy was add
 
 - `npm run check` passes, including strict compilation, generated-output drift
   checks and negative type fixtures against the real implementations.
-- The complete backend suite passes: **971 tests**, no skips.
+- The complete backend suite passes: **974 tests**, no skips (including review follow-ups).
 - The complete browser run passed 279 of 280 scenarios; its sole failure was a
   test setup relying on row-provided host identity. After converting that and
   related direct list fixtures to endpoint-qualified snapshots, all **24 affected
@@ -785,4 +785,22 @@ I/O counts (the first post-change capture was 46.115 ms). This is not a speedup
 claim or proof of equal CPU cost; source validation and snapshot projection add
 work while the required bounded scan/append behavior remains unchanged.
 
-External review and exact-commit CI remain pending.
+Fable 5.1 independently reviewed implementation commit `73e365e` and returned
+**clear, no blockers**. Its optional findings led to focused follow-ups for
+malformed continuity values in the remaining JS projections and session-switch
+route invalidation without flushing unrelated header observations. The malformed-field regression covers Pi and OMP full reads and zero-budget
+append extension, usage totals and relative skill attribution. The route regression
+checks canonical/encoded/partial alias removal while unrelated routes and headers
+stay warm. Persisted validators remain strict: schema 9's introducing commit
+`1a4ffbb` already initialized `sessionId` and `parentSession` to null, so the proposed
+legacy-key relaxation has no known valid producer to preserve. The follow-up full backend suite passes all 974 tests and `npm run check` passes.
+A focused Fable re-review is pending before push.
+
+The shared catalog also makes presentation fields consistent across consumers:
+search and active summaries now include applicable parent/family hints, and the
+related-route fallback uses the same capability/profile projection as history.
+These are additive output fields; they confer no control authority. Exact
+`resolveSessionCandidate` reads now reuse the source resolver's validated cache
+instead of independently repeating historical discovery.
+
+Exact-commit CI remains pending.

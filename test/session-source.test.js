@@ -147,3 +147,43 @@ test('invalidation retires all route and profile observations of a replaced file
   assert.equal(readSessionHeader(file, 'omp-v1').id, 'other');
   assert.equal(resolve('other').file, file);
 });
+
+test('route invalidation retires canonical and partial aliases while retaining unrelated routes and headers', t => {
+  const { roots, write, resolve, resolver } = fixture(t);
+  const old = write(path.join(roots.pi, 'z-workspace', 'native.jsonl'), 'native');
+  const unrelated = write(path.join(roots.prime, 'native.jsonl'), 'native');
+  const header = write(path.join(roots.pi, 'ws', 'run', 'session.jsonl'), 'cached-header');
+  const piRoute = encodeSessionKey('pi', 'native');
+  const primeRoute = encodeSessionKey('prime', 'native');
+  assert.equal(resolve('native').file, old);
+  assert.equal(resolve('native', { exact: true }).file, old);
+  assert.equal(resolve(piRoute).file, old);
+  assert.equal(resolve('ativ').file, old);
+  assert.equal(resolve(primeRoute).file, unrelated);
+  assert.equal(readSessionHeader(header).id, 'cached-header');
+  assert.equal(readSessionHeader(header, 'omp-v1').id, 'cached-header');
+
+  const preferred = write(path.join(roots.pi, 'a-workspace', 'native.jsonl'), 'native');
+  const originalOpen = fs.openSync;
+  const originalOpenDir = fs.opendirSync;
+  let fileOpens = 0, directoryOpens = 0;
+  fs.openSync = (...args) => { fileOpens += 1; return originalOpen(...args); };
+  fs.opendirSync = (...args) => { directoryOpens += 1; return originalOpenDir(...args); };
+  try {
+    resolver.invalidateRoute(piRoute);
+    assert.equal(resolve(primeRoute).file, unrelated, 'same-native sessions on another harness stay cached');
+    assert.equal(readSessionHeader(header).id, 'cached-header');
+    assert.equal(readSessionHeader(header, 'omp-v1').id, 'cached-header');
+    assert.equal(fileOpens, 0, 'route changes retain stat-validated headers across profiles');
+    assert.equal(directoryOpens, 0, 'invalidation and unrelated cached routes require no discovery');
+
+    assert.equal(resolve('native').file, preferred);
+    assert.equal(resolve('native', { exact: true }).file, preferred);
+    assert.equal(resolve(piRoute).file, preferred);
+    assert.equal(resolve('ativ').file, preferred, 'substring aliases are retired by their resolved canonical identity');
+    assert.equal(fileOpens, 0, 'rediscovery also reuses the unrelated cached header');
+  } finally {
+    fs.openSync = originalOpen;
+    fs.opendirSync = originalOpenDir;
+  }
+});

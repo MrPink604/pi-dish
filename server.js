@@ -977,7 +977,8 @@ function adoptBridgeSessionSwitch(sess, data) {
   runtimeCache.delete(routed.sessionId);
   diffSnapshots.delete(routed.previousSessionId);
   diffSnapshots.delete(routed.sessionId);
-  sessionSources.clear();
+  sessionSources.invalidateRoute(routed.previousSessionId);
+  sessionSources.invalidateRoute(routed.sessionId);
 }
 
 /**

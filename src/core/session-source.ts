@@ -101,6 +101,14 @@ function createSessionSourceResolver(options: ResolverOptions = {}): SessionSour
       }
     },
     invalidate,
+    invalidateRoute(route) {
+      let canonical;
+      try { canonical = canonicalSessionId(route); } catch { return; }
+      // A bridge identity switch changes route observations, not file contents.
+      // Remove substring and encoded aliases by their resolved identity while
+      // leaving unrelated routes and stat-validated header observations warm.
+      for (const [key, candidate] of routes) if (candidate.routeId === canonical) routes.delete(key);
+    },
     clear() { routes.clear(); clearSessionHeaders(); },
   };
 }
