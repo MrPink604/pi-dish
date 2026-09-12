@@ -1,6 +1,6 @@
 # Session catalog and metadata migration
 
-Status: **Task 1 implemented; verification and delivery in progress** (2026-09-11).
+Status: **Task 1 implemented and externally reviewed** (2026-09-11).
 The contracts, authority audit and isolated pre-migration baseline are recorded
 [below](#task-1-record). Tasks 2–7 remain unimplemented. This is the next stage
 of the [roadmap](../BACKLOG.md), not a claim that the current store or server
@@ -471,6 +471,9 @@ explicit harness/native identity remains available even without a source file.
 Its separate `claimedFile` preserves the registry/RPC path even before the file
 exists: live `sessionFile` comes from this claim, while structural parent fallback
 still requires a resolved source. A missing source must not erase the claimed path.
+When both are present, the claim remains authoritative for the output file field;
+Task 7 must supply source/claim from the same captured observation and reject a
+mismatching source file. A null claim remains null, not a license to borrow history.
 Live metadata and indexed info are separate inputs so their precedence belongs
 to the catalog, not an adapter. Options supply descriptor labels/layout, read-only
 canonical-path/directory-existence probes, and the existing read-time model-window
@@ -480,6 +483,8 @@ Catalog maps/arrays are readonly; their data is not lifecycle authority.
 The related route's off-catalog lookup uses local copies/overlays of `byId` and
 `byPath`; it must not mutate the catalog snapshot. `list` supplies the ref resolver's
 flattened active-first view (then previous and any active-only children, once each).
+Task 7 confirms that precedence with the existing ref/list behavioral tests;
+the performance baseline's row counts do not prove list ordering.
 
 ### Producer → writer → consumer inventory
 
@@ -671,15 +676,17 @@ experiment and the remaining general transcript read distinct.
   claimed file path when history has not been created. The correction adds
   `claimedFile` separately from resolved source and a compile-only pending-history
   case. Review also clarified filesystem probes, readonly related-route overlays,
-  flattened ref-list output and discovery profile overrides. Correction re-review
-  is pending.
+  flattened ref-list output and discovery profile overrides. Fable re-reviewed
+  correction commit `d187801` and explicitly **cleared it for push**, with no
+  remaining blockers. Source/index/catalog runtime implementations remain untouched.
 - This checkpoint does not change UI/state behavior. Independent UI scenarios,
   full desktop/mobile smoke and opt-in OMP/Prime lifecycle canaries were not run;
-  they remain gates for the actual cutover. External review/push/CI results will
-  be recorded here after completion.
+  they remain gates for the actual cutover. Every push must pass all five jobs
+  on its exact SHA in the [main-branch CI workflow](https://github.com/MrPink604/pi-dish/actions/workflows/tests.yml?query=branch%3Amain);
+  use that run's commit identity rather than an earlier green checkpoint.
 
-Tasks 2/3/4 now have concrete shared inputs; they may proceed independently after
-this checkpoint clears delivery review. Task 5 consumes Tasks 2/3; Task 6 follows
+Tasks 2/3/4 now have concrete shared inputs and this checkpoint has cleared
+external review. Task 5 consumes Tasks 2/3; Task 6 follows
 the implemented Task 4 writer contract. One integration owner still owns shared
 server wiring, generated assets and the coherent browser cutover. The source
 resolver, discovery, index, accumulator, catalog builders and browser store are

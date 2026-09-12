@@ -75,7 +75,7 @@ debts, not reasons to discard the useful ownership and validation work.
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
 | Browser migration | Source implementation complete and reviewed | All first-party application logic and bindings are typed. Local strict, backend, browser and UI checks pass; each push must also pass the CI matrix. |
-| Session catalog and metadata | Task 1 contracts/baseline implemented; delivery checks in progress | Source/index/catalog and browser cutover remain Tasks 2–7; require removal of redundant normalization and adapters. |
+| Session catalog and metadata | Task 1 contracts/baseline implemented and reviewed | Source/index/catalog and browser cutover remain Tasks 2–7; require removal of redundant normalization and adapters. |
 | Remaining server application and feature modules | Later — outside the next bounded stage | Lifecycle redesign, general routes, recovery and feature stores still need separate stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -205,7 +205,8 @@ names instead of executable event handlers.
 1. **Session catalog and metadata.** Follow the
    [higher-level task plan](docs/session-catalog-migration.md). Task 1 now defines
    concrete field/source/index/catalog contracts and a reproducible isolated
-   baseline; delivery verification is in progress. Tasks 2/3/4 follow that
+   baseline; strict checks, 942 backend tests, focused browser API tests and Fable
+   review passed. Tasks 2/3/4 follow that
    foundation, then catalog composition and browser consumer cleanup. One integration
    owner handles shared server wiring, exports, generated assets and final checks.
 2. **Browser composition cleanup.** Replace the broad classic-script forwarding
