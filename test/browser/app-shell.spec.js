@@ -9,17 +9,17 @@ test('startup restoration cannot replace a selection made while initial lists ar
   await page.goto(fleet.self.base, { waitUntil: 'domcontentloaded' });
   const route = await received;
   await page.evaluate(async ({ root, child, host }) => {
-    const mount = sidebarLists.mount; sidebarLists.mount = () => { window.startupMounted = true; mount(); };
-    sessionState.setSessionLists({ previous: [{ id: root, name: 'saved' }, { id: child, name: 'selected' }] }, host);
-    await selectSession(child, { host });
+    const mount = fixtureApp.features.sidebarLists.mount; fixtureApp.features.sidebarLists.mount = () => { window.startupMounted = true; mount(); };
+    fixtureApp.features.sessionState.setSessionLists({ previous: [{ id: root, name: 'saved' }, { id: child, name: 'selected' }] }, host);
+    await fixtureApp.features.sessionView.select(child, { host });
   }, { root: ROOT, child: CHILD, host: fleet.self.hostId });
   await route.fulfill({ json: { active: [], previous: [{ id: ROOT, name: 'saved' }, { id: CHILD, name: 'selected' }] } });
   await page.waitForFunction(() => window.startupMounted);
-  expect(await page.evaluate(() => sessionState.currentSession.id)).toBe(CHILD);
+  expect(await page.evaluate(() => fixtureApp.features.sessionState.currentSession.id)).toBe(CHILD);
 });
 test('old mobile-panel outside-click handlers cannot close a reopened panel', async ({ page, fleet }) => {
   await page.evaluate(() => {
-    appChrome.dispose(); window.chromeClicks = [];
+    fixtureApp.features.appChrome.dispose(); window.chromeClicks = [];
     const add = document.addEventListener.bind(document);
     document.addEventListener = (type, callback, options) => { if (type === 'click') window.chromeClicks.push(callback); return add(type, callback, options); };
     window.ownedChrome = PiDishBrowser.createAppChrome({ document, storage: localStorage, older() {} }); window.ownedChrome.openPanel();
@@ -34,7 +34,7 @@ test('old mobile-panel outside-click handlers cannot close a reopened panel', as
 });
 test('chrome mounts once and disposal retires gesture and focus controls', async ({ page, fleet }) => {
   await page.evaluate(() => {
-    appChrome.dispose(); window.chromeOlder = 0; window.ownedChrome = PiDishBrowser.createAppChrome({ document, storage: localStorage, older: () => window.chromeOlder++ });
+    fixtureApp.features.appChrome.dispose(); window.chromeOlder = 0; window.ownedChrome = PiDishBrowser.createAppChrome({ document, storage: localStorage, older: () => window.chromeOlder++ });
     window.ownedChrome.mount(); window.ownedChrome.mount(); window.ownedChrome.follow();
     document.getElementById('messages').dispatchEvent(new WheelEvent('wheel', { deltaY: -1 }));
   });
@@ -46,7 +46,7 @@ test('chrome mounts once and disposal retires gesture and focus controls', async
 
 test('static bindings retire detached controls and disposal removes listeners', async ({ page, fleet }) => {
   await page.evaluate(() => {
-    appBindings.dispose(); window.appActionCalls = [];
+    fixtureApp.features.appBindings.dispose(); window.appActionCalls = [];
     const actions = Object.fromEntries(PiDishBrowser.APP_ACTION_NAMES.map(name => [name, () => window.appActionCalls.push(name)]));
     window.ownedBindings = PiDishBrowser.createAppBindings({ document, actions });
     const button = document.querySelector('[data-app-click="openUsageView"]'); button.remove(); button.click();

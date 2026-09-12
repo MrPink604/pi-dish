@@ -570,7 +570,8 @@ let remoteHost = null; // second pi-dish (multi-host section)
     args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
   });
   const errors = [];
-  const watch = (page, tag) => {
+  const watch = async (page, tag) => {
+    await require('./fixtures/browser-app').installFixtureApp(page);
     page.on('pageerror', (e) => errors.push(`${tag} pageerror: ${e.message}`));
     page.on('console', (m) => {
       // Resource-load noise (e.g. a flaky favicon 404) isn't a JS failure.
@@ -589,12 +590,12 @@ let remoteHost = null; // second pi-dish (multi-host section)
       // native clipboard path — not the execCommand fallback — is exercised)
       permissions: ['clipboard-read', 'clipboard-write'],
     });
-    watch(desktop, 'desktop');
+    await watch(desktop, 'desktop');
     const scenarioContext = () => ({ path, tmpHome, desktop, check, fs, registryState, SKILL_SESSION_ID, CWD, BETA_ID, SESSION_ID, base, browser, watch, emit });
     if (selectedScenario) {
       await desktop.goto(base, { waitUntil: 'networkidle' });
       await desktop.click('#tabAll');
-      await desktop.evaluate(id => selectSession(id), SESSION_ID);
+      await desktop.evaluate(id => fixtureApp.features.sessionView.select(id), SESSION_ID);
       // The usage catalog is an explicit prerequisite, not a timing side effect
       // of running minutes of unrelated scenarios before opening the view.
       if (selectedScenario === 'usage') await fetch(base + '/api/usage-summary?days=30');
@@ -672,7 +673,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       cwd: CWD,
       reason: 'new',
     });
-    await desktop.waitForFunction((id) => sessionState.currentSession?.id === id, SWITCH_ID, { timeout: 5000 });
+    await desktop.waitForFunction((id) => fixtureApp.features.sessionState.currentSession?.id === id, SWITCH_ID, { timeout: 5000 });
     await desktop.waitForFunction(() => document.getElementById('messages')?.textContent.includes('switched transcript answer'),
       { timeout: 5000 });
     check(!(await desktop.locator('#messages').textContent()).includes('existing answer'),
@@ -693,7 +694,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       cwd: CWD,
       reason: 'resume',
     });
-    await desktop.waitForFunction((id) => sessionState.currentSession?.id === id, SESSION_ID, { timeout: 5000 });
+    await desktop.waitForFunction((id) => fixtureApp.features.sessionState.currentSession?.id === id, SESSION_ID, { timeout: 5000 });
     await desktop.waitForFunction(() => document.getElementById('messages')?.textContent.includes('existing answer'),
       { timeout: 5000 });
     check(true, 'client follows a resume switch back to the original route');
@@ -870,7 +871,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       'completion-only end creates a finished panel');
     check(await desktop.locator('[data-tool-call-id="completion-only"]').count() === 1,
       'repeated tool completion stays a single panel');
-    await desktop.evaluate(() => removeDuplicatedLiveContent(document.getElementById('messages')));
+    await desktop.evaluate(() => fixtureApp.features.liveToolsController.clear(document.getElementById('messages')));
     emit('tool_execution_update', { toolCallId: 'completion-only', toolName: 'Bash',
       args: { command: 'echo complete' }, partialResult: { content: [{ type: 'text', text: 'late background update' }] } });
     await desktop.waitForSelector('details.live-tool-panel.running[data-tool-call-id="completion-only"]', { timeout: 3000 });
@@ -886,7 +887,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.waitForSelector('[data-tool-call-id="dedupe-start"]', { timeout: 3000 });
     check(await desktop.locator('[data-tool-call-id="dedupe-start"]').count() === 1,
       'repeated start for a known toolCallId stays deduped');
-    await desktop.evaluate(() => removeDuplicatedLiveContent(document.getElementById('messages')));
+    await desktop.evaluate(() => fixtureApp.features.liveToolsController.clear(document.getElementById('messages')));
 
     console.log('live async-result upsert:');
     const liveAsync = { role: 'custom', customType: 'async-result', content: 'background result', display: true,
@@ -1076,7 +1077,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       const selection = window.getSelection();
       selection.removeAllRanges();
       selection.addRange(range);
-      captureFileCommentSelection();
+      fixtureApp.features.anchoredCommentController.captureFile();
     });
     await desktop.waitForSelector('#commentBubble', { state: 'visible', timeout: 2000 });
     check(true, 'file text selection opens the anchored comment bubble');
@@ -1120,14 +1121,14 @@ let remoteHost = null; // second pi-dish (multi-host section)
       const range = document.createRange();
       range.setStart(root.firstChild, 6);
       range.setEnd(root.firstChild, 18);
-      const anchor = selectionTextAnchor(root, range);
+      const anchor = PiDishBrowser.selectionTextAnchor(root, range);
       const exact = anchor.prefix + anchor.quote + anchor.suffix === root.textContent
         && anchor.quote === '  selected  ';
       root.remove();
       return exact;
     }), 'text anchors preserve selected boundary whitespace exactly');
     await desktop.fill('#commentBody', 'Make this finding more specific.');
-    await desktop.evaluate(() => captureFileCommentSelection());
+    await desktop.evaluate(() => fixtureApp.features.anchoredCommentController.captureFile());
     check(await desktop.locator('#commentBody').inputValue() === 'Make this finding more specific.',
       'another capture attempt does not discard an open comment draft');
     await desktop.click('#commentSendBtn');
@@ -1260,7 +1261,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       const selection = window.getSelection();
       selection.removeAllRanges();
       selection.addRange(range);
-      captureDiffCommentSelection();
+      fixtureApp.features.anchoredCommentController.captureDiff();
     });
     await desktop.waitForSelector('#commentBubble', { state: 'visible', timeout: 2000 });
     check(true, 'diff line selection opens the anchored comment bubble');
@@ -1309,7 +1310,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       const selection = window.getSelection();
       selection.removeAllRanges();
       selection.addRange(range);
-      captureDiffCommentSelection();
+      fixtureApp.features.anchoredCommentController.captureDiff();
     });
     await desktop.waitForSelector('#commentBubble', { state: 'visible', timeout: 2000 });
     check(true, 'lazy patch line selection opens the comment bubble');
@@ -1323,7 +1324,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // Wide desktop: the message feed centers a reading column instead of
     // hugging the left edge.
     const wide = await browser.newPage({ viewport: { width: 1920, height: 900 } });
-    watch(wide, 'wide');
+    await watch(wide, 'wide');
     await wide.goto(base, { waitUntil: 'networkidle' });
     await wide.click('.session-item');
     await wide.waitForSelector('.message.assistant');
@@ -1485,7 +1486,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     });
     await desktop.evaluate(() => {
       localStorage.setItem('pi-dish-new-harness', 'omp');
-      return loadHarnesses();
+      return fixtureApp.features.newSessionController.harnesses.load();
     });
     await desktop.waitForFunction(() => document.querySelector('#nsHarnessSelect option[value="omp"]'));
     check(await desktop.locator('#nsHarnessSelect option[value="prime"]').count() === 0,
@@ -1608,7 +1609,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       null, { timeout: 5000 });
     await desktop.locator('.ns-tree-row').filter({ hasText: 'proj-alpha' }).first().click();
     check(await desktop.inputValue('#newSessionCwd') === CWD, 'selecting a tree dir sets the cwd input');
-    await desktop.waitForFunction((cwd) => modelCatalog.scope?.cwd === cwd, CWD, { timeout: 5000 });
+    await desktop.waitForFunction((cwd) => fixtureApp.features.modelCatalog.scope?.cwd === cwd, CWD, { timeout: 5000 });
 
     // Spawn: routed async round-trip (deterministic — no real pi child).
     // The POST opts into asynchronous spawning; the takeover closes
@@ -1634,7 +1635,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // A cached catalog is enough to submit immediately. The server still
     // validates explicit model/thinking values, while its in-flight catalog
     // request also serves that validation.
-    await desktop.evaluate(() => { modelCatalog.seed({ host: nsHost(), harnessId: selectedHarnessId() }, modelCatalog.rows(), () => true); });
+    await desktop.evaluate(() => { fixtureApp.features.modelCatalog.seed({ host: fixtureApp.features.newSessionController.host(), harnessId: fixtureApp.features.newSessionController.selectedHarness() }, fixtureApp.features.modelCatalog.rows(), () => true); });
     await desktop.click('#nsSpawnBtn');
     await desktop.waitForSelector('.session-item.starting');
     check(asyncSpawnBody?.async === true, 'takeover spawn opts into asynchronous spawning');
@@ -1661,18 +1662,18 @@ let remoteHost = null; // second pi-dish (multi-host section)
       (await desktop.locator('#status').textContent()).includes('still starting'),
       'typing and Enter preserve the prompt while Pi starts');
     await desktop.waitForTimeout(400); // debounced provisional draft save
-    const provisionalKey = await desktop.evaluate(() => pendingComposerKey(sessionView.spawnId));
-    check(await desktop.evaluate(key => localStorage.getItem(draftKey(key)), provisionalKey) === startupDraft,
+    const provisionalKey = await desktop.evaluate(() => (id => 'spawn:' + id)(fixtureApp.features.sessionView.spawnId));
+    check(await desktop.evaluate(key => localStorage.getItem(fixtureApp.features.composerDrafts.draftKey(key)), provisionalKey) === startupDraft,
       'provisional composer owns its draft before registration');
     spawnResult = 'ready';
     await desktop.waitForFunction(() => !document.querySelector('.session-item.starting'), null, { timeout: 3000 });
     check(readySpawnPolled, 'ready spawn reconciles the provisional row to the registered session');
-    await desktop.waitForFunction(({ id, draft }) => sessionState.currentSession?.id === id &&
+    await desktop.waitForFunction(({ id, draft }) => fixtureApp.features.sessionState.currentSession?.id === id &&
       document.getElementById('promptInput').value === draft,
     { id: SESSION_ID, draft: startupDraft }, { timeout: 3000 });
     const migratedDraft = await desktop.evaluate(({ spawnId, sessionId }) => ({
-      provisional: localStorage.getItem(draftKey(spawnId)),
-      session: localStorage.getItem(draftKey(sessionId)),
+      provisional: localStorage.getItem(fixtureApp.features.composerDrafts.draftKey(spawnId)),
+      session: localStorage.getItem(fixtureApp.features.composerDrafts.draftKey(sessionId)),
     }), { spawnId: provisionalKey, sessionId: SESSION_ID });
     check(migratedDraft.provisional === null && migratedDraft.session === startupDraft &&
       !(await desktop.locator('#btnSend').isDisabled()),
@@ -1687,7 +1688,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       () => document.querySelector('.main').classList.contains('new-session-open'),
       null, { timeout: 5000 });
     await desktop.fill('#newSessionCwd', CWD);
-    await desktop.waitForFunction((cwd) => modelCatalog.scope?.cwd === cwd, CWD, { timeout: 5000 });
+    await desktop.waitForFunction((cwd) => fixtureApp.features.modelCatalog.scope?.cwd === cwd, CWD, { timeout: 5000 });
     await desktop.click('#nsSpawnBtn');
     await desktop.waitForSelector('.session-item.starting');
     const failedDraft = 'keep this after a startup failure';
@@ -1699,9 +1700,9 @@ let remoteHost = null; // second pi-dish (multi-host section)
       await desktop.locator('#btnSend').isDisabled(),
       'failed spawn keeps its provisional draft accessible');
     await desktop.evaluate(async (id) => {
-      const owner = pendingComposerKey(sessionView.spawnId);
-      await selectSession(id);
-      localStorage.removeItem(draftKey(owner));
+      const owner = (id => 'spawn:' + id)(fixtureApp.features.sessionView.spawnId);
+      await fixtureApp.features.sessionView.select(id);
+      localStorage.removeItem(fixtureApp.features.composerDrafts.draftKey(owner));
     }, SESSION_ID);
     await desktop.unroute('**/api/sessions/new');
     await desktop.unroute('**/api/session-spawns/ui-spawn-1');
@@ -1735,7 +1736,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
     await desktop.evaluate(async (b64) => {
       const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-      await addImageFiles([new File([bytes], 'shot.png', { type: 'image/png' })]);
+      await fixtureApp.features.composerDrafts.images.add([new File([bytes], 'shot.png', { type: 'image/png' })]);
     }, PNG_B64);
     await desktop.waitForSelector('.attachment-thumb', { timeout: 5000 });
     check(true, 'attachment thumbnail appears in the strip');
@@ -1783,7 +1784,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       viewport: { width: 1280, height: 800 },
       permissions: ['microphone'],
     });
-    watch(dictation, 'dictation');
+    await watch(dictation, 'dictation');
     await dictation.goto(base, { waitUntil: 'networkidle' });
     await dictation.waitForSelector('.session-item');
     await dictation.click('.session-item');
@@ -1893,7 +1894,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.waitForFunction(() => document.getElementById('status')?.textContent === 'Stopping...',
       { timeout: 3000 });
     await desktop.waitForTimeout(100); // HTTP acknowledgement has landed
-    check(await desktop.evaluate(() => sessionActivity.turn),
+    check(await desktop.evaluate(() => fixtureApp.features.sessionActivity.turn),
       'abort HTTP acknowledgement does not clear turn state');
     await desktop.fill('#promptInput', 'must wait for abort boundary');
     await desktop.press('#promptInput', 'Enter');
@@ -1907,7 +1908,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.waitForFunction(() =>
       [...document.querySelectorAll('.message.user[data-msg-index]')]
         .some((el) => el.textContent.includes('abort catch-up marker')), { timeout: 5000 });
-    check(!(await desktop.evaluate(() => sessionActivity.turn)), 'agent_end clears the aborted turn');
+    check(!(await desktop.evaluate(() => fixtureApp.features.sessionActivity.turn)), 'agent_end clears the aborted turn');
     check(await desktop.locator('details.live-tool-panel').count() === 0,
       'agent_end catch-up removes the aborted turn live tool panel');
     await desktop.fill('#promptInput', '');
@@ -1955,8 +1956,8 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.waitForSelector('#btnStop', { state: 'visible', timeout: 3000 });
     await desktop.click('#btnStop');
     emit('compaction_end', { reason: 'manual', errorMessage: 'lost abort race' });
-    await desktop.waitForFunction(() => !sessionActivity.compacting, { timeout: 3000 });
-    check(!(await desktop.evaluate((id) => sessionActivity.isAborting(keyForSessionId(id)), SESSION_ID)),
+    await desktop.waitForFunction(() => !fixtureApp.features.sessionActivity.compacting, { timeout: 3000 });
+    check(!(await desktop.evaluate((id) => fixtureApp.features.sessionActivity.isAborting(fixtureApp.ports.composerDrafts.keyForSession(id)), SESSION_ID)),
       'compaction_end clears a compaction-only abort gate even on failure');
 
     // 8c-2. Compaction gates sends: while compacting there's no turn, but a
@@ -2071,7 +2072,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(await desktop.evaluate(() => document.fonts.check('12px "Symbols Nerd Font Mono"')),
       'Nerd Font symbols fallback loaded (p10k prompt glyphs)');
     const termText = () => desktop.evaluate(() => {
-      const b = terminalController.state.term.buffer.active;
+      const b = fixtureApp.features.terminalController.state.term.buffer.active;
       let out = '';
       for (let i = 0; i < b.length; i++) out += b.getLine(i)?.translateToString(true) + '\n';
       return out;
@@ -2127,7 +2128,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // Mode switch: tmux is available on this machine but the fixture session
     // has no pane, so the tmux view must fail with the clear no-pane error —
     // and switching back must land in a working shell again.
-    if (await desktop.evaluate(() => appConfig.tmux)) {
+    if (await desktop.evaluate(() => fixtureApp.ports.routinesController.config().tmux)) {
       check((await desktop.locator('#termModeBtn').textContent()).includes('pi tmux'),
         'mode button offers the tmux pane view');
       await desktop.click('#termModeBtn');
@@ -2254,7 +2255,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // session 2 and file it under "previous", so it never shows on the Active
     // tab. Let the cache lapse before forcing the fetch.
     await desktop.waitForTimeout(600);
-    await desktop.evaluate(() => loadSessions());
+    await desktop.evaluate(() => fixtureApp.features.sidebarLists.load());
     await desktop.waitForSelector(`.session-item[data-id="${SESSION2_ID}"]`, { timeout: 5000 });
     await desktop.click(`.session-item[data-id="${SESSION2_ID}"]`);
     // Session 2's bridge replays its own widget when the server connects;
@@ -2356,12 +2357,12 @@ let remoteHost = null; // second pi-dish (multi-host section)
         }
         return realFetch(input, init);
       };
-      transcriptController.deleteCached(keyForSessionId(a));
-      window.__auditSelectionA = selectSession(a, { forceTranscriptReload: true });
+      fixtureApp.features.transcriptController.deleteCached(fixtureApp.ports.composerDrafts.keyForSession(a));
+      window.__auditSelectionA = fixtureApp.features.sessionView.select(a, { forceTranscriptReload: true });
     }, { a: SESSION_ID });
     await desktop.waitForFunction(() => typeof window.__releaseAuditSelection === 'function');
-    await desktop.evaluate((b) => selectSession(b, { forceTranscriptReload: true }), SESSION2_ID);
-    await desktop.waitForFunction((b) => sessionState.currentSession?.id === b &&
+    await desktop.evaluate((b) => fixtureApp.features.sessionView.select(b, { forceTranscriptReload: true }), SESSION2_ID);
+    await desktop.waitForFunction((b) => fixtureApp.features.sessionState.currentSession?.id === b &&
       [...document.querySelectorAll('#messages .message')].some((el) => el.textContent.includes('second session')),
       SESSION2_ID, { timeout: 5000 });
     await desktop.evaluate(async () => {
@@ -2369,10 +2370,10 @@ let remoteHost = null; // second pi-dish (multi-host section)
       await window.__auditSelectionA;
     });
     const rapidSelection = await desktop.evaluate((b) => ({
-      currentId: sessionState.currentSession?.id,
-      streamUrl: messageStreamController.source?.url || '',
+      currentId: fixtureApp.features.sessionState.currentSession?.id,
+      streamUrl: fixtureApp.features.messageStreamController.source?.url || '',
       text: document.getElementById('messages').textContent,
-      generation: sessionState.captureSelection()?.generation,
+      generation: fixtureApp.features.sessionState.captureSelection()?.generation,
       expected: b,
     }), SESSION2_ID);
     check(rapidSelection.currentId === SESSION2_ID && rapidSelection.streamUrl.includes(`/${SESSION2_ID}/stream`) &&
@@ -2382,7 +2383,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
 
     // A same-session force reload gets a new generation too. An older catch-up
     // response carrying a unique marker must be ignored after the reload.
-    await desktop.evaluate((a) => selectSession(a, { forceTranscriptReload: true }), SESSION_ID);
+    await desktop.evaluate((a) => fixtureApp.features.sessionView.select(a, { forceTranscriptReload: true }), SESSION_ID);
     await desktop.waitForSelector('#messages .message.assistant', { timeout: 5000 });
     await desktop.evaluate((a) => {
       const realFetch = window.fetch.bind(window);
@@ -2401,10 +2402,10 @@ let remoteHost = null; // second pi-dish (multi-host section)
         }
         return realFetch(input, init);
       };
-      window.__auditOldCatchup = fetchNewMessagesSince(sessionState.captureSelection());
+      window.__auditOldCatchup = fixtureApp.features.transcriptController.catchup(fixtureApp.features.sessionState.captureSelection());
     }, SESSION_ID);
     await desktop.waitForFunction(() => typeof window.__releaseAuditCatchup === 'function');
-    await desktop.evaluate((a) => selectSession(a, { forceTranscriptReload: true }), SESSION_ID);
+    await desktop.evaluate((a) => fixtureApp.features.sessionView.select(a, { forceTranscriptReload: true }), SESSION_ID);
     await desktop.evaluate(async () => {
       window.__releaseAuditCatchup();
       await window.__auditOldCatchup;
@@ -2431,23 +2432,23 @@ let remoteHost = null; // second pi-dish (multi-host section)
         }
         return realFetch(input, init);
       };
-      openStatsModal();
+      fixtureApp.features.sessionInfo.openStats();
     }, { a: SESSION_ID });
     await desktop.waitForFunction(() => typeof window.__releaseAuditStats === 'function');
-    await desktop.evaluate((b) => selectSession(b, { forceTranscriptReload: true }), SESSION2_ID);
-    await desktop.evaluate(() => openStatsModal());
+    await desktop.evaluate((b) => fixtureApp.features.sessionView.select(b, { forceTranscriptReload: true }), SESSION2_ID);
+    await desktop.evaluate(() => fixtureApp.features.sessionInfo.openStats());
     await desktop.waitForSelector('#statsBody .stats-table', { timeout: 5000 });
     await desktop.evaluate(() => window.__releaseAuditStats());
     await desktop.waitForTimeout(50);
     const statsOwner = await desktop.evaluate(() => ({
-      sessionId: sessionInfo.statsOwner?.id,
+      sessionId: fixtureApp.features.sessionInfo.statsOwner?.id,
       text: document.getElementById('statsBody').textContent,
       visible: document.getElementById('statsModal').style.display !== 'none',
     }));
     check(statsOwner.visible && statsOwner.sessionId === SESSION2_ID && !statsOwner.text.includes('STALE-A-STATS'),
       'stale stats response cannot combine session A data with session B actions');
-    await desktop.evaluate(() => { closeStatsModal(); window.fetch = window.__auditRealFetch; });
-    await desktop.evaluate((a) => selectSession(a, { forceTranscriptReload: true }), SESSION_ID);
+    await desktop.evaluate(() => { fixtureApp.features.sessionInfo.closeStats(); window.fetch = window.__auditRealFetch; });
+    await desktop.evaluate((a) => fixtureApp.features.sessionView.select(a, { forceTranscriptReload: true }), SESSION_ID);
 
     // Latest request owns the file and diff takeover panes. Resolve an older
     // request only after a newer one has painted and verify it cannot overwrite.
@@ -2465,16 +2466,16 @@ let remoteHost = null; // second pi-dish (multi-host section)
         }
         return realFetch(input, init);
       };
-      window.__auditOldFile = openFileViewer('stale-audit.md');
+      window.__auditOldFile = fixtureApp.features.fileViews.openFile('stale-audit.md');
     });
     await desktop.waitForFunction(() => typeof window.__releaseAuditFile === 'function');
-    await desktop.evaluate(() => openFileViewer('findings.md'));
+    await desktop.evaluate(() => fixtureApp.features.fileViews.openFile('findings.md'));
     await desktop.waitForSelector('#fileView .markdown-body h1', { timeout: 5000 });
     await desktop.evaluate(async () => { window.__releaseAuditFile(); await window.__auditOldFile; });
     check(await desktop.locator('#fileViewTitle').textContent() === 'findings.md' &&
       !(await desktop.locator('#fileViewBody').textContent()).includes('STALE FILE'),
       'stale file response cannot overwrite the latest open file');
-    await desktop.evaluate(() => { closeFileView(); window.fetch = window.__auditRealFetch; });
+    await desktop.evaluate(() => { fixtureApp.features.fileViews.closeFile(); window.fetch = window.__auditRealFetch; });
 
     await desktop.evaluate(({ a }) => {
       const realFetch = window.fetch.bind(window);
@@ -2492,20 +2493,20 @@ let remoteHost = null; // second pi-dish (multi-host section)
         }
         return realFetch(input, init);
       };
-      window.__auditOldDiff = openDiffView();
+      window.__auditOldDiff = fixtureApp.features.fileViews.openDiff();
     }, { a: SESSION_ID });
     await desktop.waitForFunction(() => typeof window.__releaseAuditDiff === 'function');
-    await desktop.evaluate(() => loadDiffView());
+    await desktop.evaluate(() => fixtureApp.features.fileViews.loadDiff());
     await desktop.waitForSelector('.diff-repo', { timeout: 5000 });
     await desktop.evaluate(async () => { window.__releaseAuditDiff(); await window.__auditOldDiff; });
     check(!(await desktop.locator('#diffViewRoot').textContent()).includes('STALE-DIFF-ROOT') &&
       await desktop.locator('.diff-repo').count() > 0,
       'stale diff response cannot overwrite the latest diff view');
-    await desktop.evaluate(() => { closeDiffView(); window.fetch = window.__auditRealFetch; });
+    await desktop.evaluate(() => { fixtureApp.features.fileViews.closeDiff(); window.fetch = window.__auditRealFetch; });
 
     // Deferred patches carry the same view generation. Let an old patch land
     // after closing/reopening the diff and loading the replacement patch.
-    await desktop.evaluate(() => openDiffView());
+    await desktop.evaluate(() => fixtureApp.features.fileViews.openDiff());
     await desktop.waitForFunction(() => document.querySelectorAll('.diff-file').length === 7,
       { timeout: 5000 });
     await desktop.evaluate(() => {
@@ -2527,7 +2528,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     });
     await desktop.locator('.diff-file').filter({ hasText: 'lazy-4.txt' }).locator('summary').click();
     await desktop.waitForFunction(() => typeof window.__releaseAuditPatch === 'function');
-    await desktop.evaluate(() => { closeDiffView(); openDiffView(); });
+    await desktop.evaluate(() => { fixtureApp.features.fileViews.closeDiff(); fixtureApp.features.fileViews.openDiff(); });
     await desktop.waitForFunction(() => document.querySelectorAll('.diff-file').length === 7,
       { timeout: 5000 });
     await desktop.locator('.diff-file').filter({ hasText: 'lazy-4.txt' }).locator('summary').click();
@@ -2538,18 +2539,18 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.waitForTimeout(50);
     check(!(await desktop.locator('#diffViewBody').textContent()).includes('STALE PATCH'),
       'stale deferred patch cannot mutate a reopened diff view');
-    await desktop.evaluate(() => { closeDiffView(); window.fetch = window.__auditRealFetch; });
+    await desktop.evaluate(() => { fixtureApp.features.fileViews.closeDiff(); window.fetch = window.__auditRealFetch; });
 
     // Failed sends restore the payload to A even when B owns the composer by
     // the time the request fails, and remove the exact optimistic bubble.
     console.log('send/queue async ownership:');
     await desktop.fill('#promptInput', 'failed prompt from A');
     await desktop.evaluate(({ a, image }) => {
-      composerDrafts.images.replace(composerDrafts.key, [{ data: image, mimeType: 'image/png' }]);
-      renderAttachmentStrip();
-      const realApiFetch = apiFetch;
+      fixtureApp.features.composerDrafts.images.replace(fixtureApp.features.composerDrafts.key, [{ data: image, mimeType: 'image/png' }]);
+      fixtureApp.features.composerDrafts.images.render();
+      const realApiFetch = fixtureApp.features.apiTransport.request;
       window.__auditRealApiFetch = realApiFetch;
-      apiFetch = (host, url, ...args) => {
+      fixtureApp.features.apiTransport.request = (host, url, ...args) => {
         if (url === `/api/sessions/${a}/prompt`) {
           return new Promise((resolve, reject) => {
             window.__rejectAuditPrompt = () => reject(new Error('audit send failure'));
@@ -2557,37 +2558,37 @@ let remoteHost = null; // second pi-dish (multi-host section)
         }
         return realApiFetch(host, url, ...args);
       };
-      window.__auditFailedPrompt = sendPrompt();
+      window.__auditFailedPrompt = fixtureApp.features.composerSubmit.sendPrompt();
       window.__auditFailedPromptId = document.querySelector('#messages [data-client-prompt-id]:last-child')?.dataset.clientPromptId;
     }, { a: SESSION_ID, image: TINY_PNG });
     await desktop.waitForFunction(() => typeof window.__rejectAuditPrompt === 'function' &&
       document.querySelector('[data-client-prompt-id]'));
-    await desktop.evaluate((b) => selectSession(b, { forceTranscriptReload: true }), SESSION2_ID);
+    await desktop.evaluate((b) => fixtureApp.features.sessionView.select(b, { forceTranscriptReload: true }), SESSION2_ID);
     await desktop.evaluate(async () => {
       window.__rejectAuditPrompt();
       await window.__auditFailedPrompt;
-      apiFetch = window.__auditRealApiFetch;
+      fixtureApp.features.apiTransport.request = window.__auditRealApiFetch;
     });
     const failedOwnership = await desktop.evaluate((a) => ({
       currentText: document.getElementById('promptInput').value,
-      originDraft: localStorage.getItem(draftKey(a)),
-      originImages: composerDrafts.images.stored(keyForSessionId(a)).length || 0,
-      pendingMatch: promptDelivery.has(window.__auditFailedPromptId),
+      originDraft: localStorage.getItem(fixtureApp.features.composerDrafts.draftKey(a)),
+      originImages: fixtureApp.features.composerDrafts.images.stored(fixtureApp.ports.composerDrafts.keyForSession(a)).length || 0,
+      pendingMatch: fixtureApp.features.promptDelivery.has(window.__auditFailedPromptId),
     }), SESSION_ID);
     check(!failedOwnership.currentText.includes('failed prompt from A') &&
       failedOwnership.originDraft === 'failed prompt from A' && failedOwnership.originImages === 1 &&
       !failedOwnership.pendingMatch,
       'failed prompt restores text/images only to A and removes its optimistic association');
-    await desktop.evaluate((a) => selectSession(a, { forceTranscriptReload: true }), SESSION_ID);
+    await desktop.evaluate((a) => fixtureApp.features.sessionView.select(a, { forceTranscriptReload: true }), SESSION_ID);
     check(await desktop.inputValue('#promptInput') === 'failed prompt from A' &&
       await desktop.locator('#attachmentStrip .attachment-thumb').count() === 1,
       'originating session restores the failed payload when revisited');
     await desktop.evaluate((a) => {
       document.getElementById('promptInput').value = '';
-      composerDrafts.images.take();
-      composerDrafts.images.discard(keyForSessionId(a));
-      clearDraft(a);
-      renderAttachmentStrip();
+      fixtureApp.features.composerDrafts.images.take();
+      fixtureApp.features.composerDrafts.images.discard(fixtureApp.ports.composerDrafts.keyForSession(a));
+      fixtureApp.features.composerDrafts.clearDraft(a);
+      fixtureApp.features.composerDrafts.images.render();
     }, SESSION_ID);
 
     // A compaction-buffered optimistic prompt is associated to its queue row
@@ -2601,16 +2602,16 @@ let remoteHost = null; // second pi-dish (multi-host section)
         el.dataset.clientPromptId = id;
         el.textContent = 'duplicate buffered prompt';
         container.appendChild(el);
-        promptDelivery.add(keyForSessionId(a), 'duplicate buffered prompt', el, id);
-        promptDelivery.acknowledge(id, true);
+        fixtureApp.features.promptDelivery.add(fixtureApp.ports.composerDrafts.keyForSession(a), 'duplicate buffered prompt', el, id);
+        fixtureApp.features.promptDelivery.acknowledge(id, true);
         return el;
       };
       window.__auditQueuedFirst = makePending('audit-buffered-first');
       window.__auditQueuedSecond = makePending('audit-buffered-second');
-      renderQueueStatus({ followUp: ['duplicate buffered prompt'] });
-      const realApiFetch = apiFetch;
+      fixtureApp.features.promptDelivery.render({ followUp: ['duplicate buffered prompt'] });
+      const realApiFetch = fixtureApp.features.apiTransport.request;
       window.__auditRealApiFetch = realApiFetch;
-      apiFetch = (host, url, ...args) => {
+      fixtureApp.features.apiTransport.request = (host, url, ...args) => {
         if (url.endsWith('/queue/cancel')) {
           return new Promise((resolve) => { window.__resolveAuditQueueEdit = () => resolve(new Response(JSON.stringify({ success: true }))); });
         }
@@ -2618,27 +2619,27 @@ let remoteHost = null; // second pi-dish (multi-host section)
       };
       const row = document.querySelector('.queue-item');
       window.__auditQueueAssociation = row.dataset.clientPromptId;
-      window.__auditQueueEdit = editQueuedMessage(row.querySelector('.queue-item-edit'));
+      window.__auditQueueEdit = fixtureApp.features.promptDelivery.edit(row.querySelector('.queue-item-edit'));
       // Real bridge queue_update may beat the HTTP response. The remaining
       // duplicate must associate to the second prompt, not reuse the one being edited.
-      renderQueueStatus({ followUp: ['duplicate buffered prompt'] });
+      fixtureApp.features.promptDelivery.render({ followUp: ['duplicate buffered prompt'] });
       window.__auditRemainingQueueAssociation = document.querySelector('.queue-item')?.dataset.clientPromptId;
     }, SESSION_ID);
     check(await desktop.evaluate(() => window.__auditQueueAssociation) === 'audit-buffered-first',
       'buffered queue row carries its stable optimistic prompt id');
     check(await desktop.evaluate(() => window.__auditRemainingQueueAssociation) === 'audit-buffered-second',
       'queue update before cancel acknowledgement preserves duplicate prompt association');
-    await desktop.evaluate((b) => selectSession(b, { forceTranscriptReload: true }), SESSION2_ID);
+    await desktop.evaluate((b) => fixtureApp.features.sessionView.select(b, { forceTranscriptReload: true }), SESSION2_ID);
     await desktop.evaluate(async () => {
       window.__resolveAuditQueueEdit();
       await window.__auditQueueEdit;
-      apiFetch = window.__auditRealApiFetch;
+      fixtureApp.features.apiTransport.request = window.__auditRealApiFetch;
     });
     const queueOwnership = await desktop.evaluate((a) => ({
       currentText: document.getElementById('promptInput').value,
-      originDraft: localStorage.getItem(draftKey(a)),
-      firstPending: promptDelivery.has('audit-buffered-first'),
-      secondPending: promptDelivery.has('audit-buffered-second'),
+      originDraft: localStorage.getItem(fixtureApp.features.composerDrafts.draftKey(a)),
+      firstPending: fixtureApp.features.promptDelivery.has('audit-buffered-first'),
+      secondPending: fixtureApp.features.promptDelivery.has('audit-buffered-second'),
       firstRemoved: window.__auditQueuedFirst.parentNode === null,
       secondRetained: window.__auditQueuedSecond.parentNode !== null,
     }), SESSION_ID);
@@ -2649,32 +2650,32 @@ let remoteHost = null; // second pi-dish (multi-host section)
       queueOwnership.firstRemoved && queueOwnership.secondRetained,
       'queue edit removes only the associated bubble and echo suppression');
     await desktop.evaluate((a) => {
-      discardOptimisticPrompt('audit-buffered-second');
-      localStorage.removeItem(draftKey(a));
+      fixtureApp.features.promptDelivery.discard('audit-buffered-second');
+      localStorage.removeItem(fixtureApp.features.composerDrafts.draftKey(a));
     }, SESSION_ID);
 
     // Enabled-model persistence uses the IDs at edit time, not whichever
     // model list a session switch/reload installs before the debounce fires.
     await desktop.evaluate(async () => {
-      const realApiFetch = apiFetch;
+      const realApiFetch = fixtureApp.features.apiTransport.request;
       window.__auditRealApiFetch = realApiFetch;
-      apiFetch = async (host, url, options) => {
+      fixtureApp.features.apiTransport.request = async (host, url, options) => {
         if (url === '/api/models/enabled') { window.__auditEnabledBody = JSON.parse(options.body); return new Response(JSON.stringify({ success: true, enabledModels: window.__auditEnabledBody.enabledIds })); }
         return realApiFetch(host, url, options);
       };
-      modelCatalog.seed({ host: selfHostEntry(), harnessId: 'pi' }, [
+      fixtureApp.features.modelCatalog.seed({ host: fixtureApp.ports.newSessionController.self(), harnessId: 'pi' }, [
         { provider: 'audit', id: 'kept', enabled: true },
         { provider: 'audit', id: 'removed', enabled: false },
       ], () => true);
-      saveEnabledModels();
-      modelCatalog.seed({ host: selfHostEntry(), harnessId: 'pi' }, [{ provider: 'other-session', id: 'replacement', enabled: true }], () => true);
+      fixtureApp.features.sessionControls.saveEnabled();
+      fixtureApp.features.modelCatalog.seed({ host: fixtureApp.ports.newSessionController.self(), harnessId: 'pi' }, [{ provider: 'other-session', id: 'replacement', enabled: true }], () => true);
       await new Promise((resolve) => setTimeout(resolve, 500));
-      apiFetch = window.__auditRealApiFetch;
+      fixtureApp.features.apiTransport.request = window.__auditRealApiFetch;
     });
     check(JSON.stringify(await desktop.evaluate(() => window.__auditEnabledBody?.enabledIds)) ===
       JSON.stringify(['audit/kept']),
       'enabled-model debounce persists the edit-time ID snapshot');
-    await desktop.evaluate((a) => { loadModels(a); return selectSession(a, { forceTranscriptReload: true }); }, SESSION_ID);
+    await desktop.evaluate((a) => { fixtureApp.features.appModels.load(a); return fixtureApp.features.sessionView.select(a, { forceTranscriptReload: true }); }, SESSION_ID);
 
     // Terminal startup waits for fonts before constructing xterm or its
     // WebSocket. Hold that wait for A, select B, and start B's open before
@@ -2698,24 +2699,24 @@ let remoteHost = null; // second pi-dish (multi-host section)
         },
       });
       window.__releaseAuditFonts = releaseFonts;
-      window.__auditTerminalA = openTerminal();
+      window.__auditTerminalA = fixtureApp.features.terminalController.open();
     });
     await desktop.waitForTimeout(50);
-    check(await desktop.evaluate(() => !terminalController.state && window.__auditTerminalUrls.length === 0 &&
+    check(await desktop.evaluate(() => !fixtureApp.features.terminalController.state && window.__auditTerminalUrls.length === 0 &&
       document.getElementById('terminalPanel').style.display === 'none'),
       'terminal does not open or connect while A font readiness is held');
-    await desktop.evaluate((b) => selectSession(b, { forceTranscriptReload: true }), SESSION2_ID);
+    await desktop.evaluate((b) => fixtureApp.features.sessionView.select(b, { forceTranscriptReload: true }), SESSION2_ID);
     await desktop.evaluate(() => {
-      window.__auditTerminalB = openTerminal();
+      window.__auditTerminalB = fixtureApp.features.terminalController.open();
       window.__releaseAuditFonts();
     });
     await desktop.evaluate(() => Promise.all([window.__auditTerminalA, window.__auditTerminalB]));
     await desktop.waitForFunction(() => document.getElementById('terminalStatus').textContent === '',
       { timeout: 5000 });
     const terminalOwnership = await desktop.evaluate(({ a, b }) => ({
-      owner: terminalController.state?.sessionId,
+      owner: fixtureApp.features.terminalController.state?.sessionId,
       urls: window.__auditTerminalUrls.slice(),
-      currentId: sessionState.currentSession?.id,
+      currentId: fixtureApp.features.sessionState.currentSession?.id,
       hasAUrl: window.__auditTerminalUrls.some((url) => url.includes(encodeURIComponent(a))),
       hasBUrl: window.__auditTerminalUrls.some((url) => url.includes(encodeURIComponent(b))),
     }), { a: SESSION_ID, b: SESSION2_ID });
@@ -2723,7 +2724,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       terminalOwnership.urls.length === 1 && !terminalOwnership.hasAUrl && terminalOwnership.hasBUrl,
       `stale A terminal open cannot connect for or interfere with B (got ${JSON.stringify(terminalOwnership)})`);
     await desktop.evaluate(() => {
-      closeTerminal();
+      fixtureApp.features.terminalController.close();
       window.WebSocket = window.__auditNativeWebSocket;
       if (window.__auditFontLoadDescriptor) {
         Object.defineProperty(document.fonts, 'load', window.__auditFontLoadDescriptor);
@@ -2731,7 +2732,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
         delete document.fonts.load;
       }
     });
-    await desktop.evaluate((a) => selectSession(a, { forceTranscriptReload: true }), SESSION_ID);
+    await desktop.evaluate((a) => fixtureApp.features.sessionView.select(a, { forceTranscriptReload: true }), SESSION_ID);
 
     // Clean up: clear the extension UI and deregister session 2 so the
     // mobile section still sees a single Active session.
@@ -2770,18 +2771,18 @@ let remoteHost = null; // second pi-dish (multi-host section)
       const pct = await desktop.locator(`${rowSel} .session-item-context`).textContent();
       check(/%$/.test(pct), `row 2 defaults to percent of context (got ${pct})`);
       await desktop.evaluate(() => {
-        openSettingsModal();
+        fixtureApp.features.displayPreferences.open();
         const select = document.getElementById('sidebarContextMetric');
         select.value = 'tokens'; select.dispatchEvent(new Event('change'));
-        closeSettingsModal();
+        fixtureApp.ports.appBindings.actions.closeSettingsModal();
       });
       const tok = await desktop.locator(`${rowSel} .session-item-context`).textContent();
       check(/tok$/.test(tok), `the token metric replaces the percent (got ${tok})`);
       await desktop.evaluate(() => {
-        openSettingsModal();
+        fixtureApp.features.displayPreferences.open();
         const select = document.getElementById('sidebarContextMetric');
         select.value = 'percent'; select.dispatchEvent(new Event('change'));
-        closeSettingsModal();
+        fixtureApp.ports.appBindings.actions.closeSettingsModal();
       });
     }
     // The header icon row lost the theme picker and the all-sessions search;
@@ -2891,7 +2892,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // The absorbed query must not leave a debounced search pending: firing
     // after the clear, it would narrow the lists to an untyped query and only
     // the next 10s poll would undo it.
-    await desktop.waitForFunction(() => sidebarLists.queriedFor === '', null, { timeout: 5000 });
+    await desktop.waitForFunction(() => fixtureApp.features.sidebarLists.queriedFor === '', null, { timeout: 5000 });
     check(true, 'the absorbed query leaves no server-filtered lists behind');
     // Both proj-beta sessions (the beta transcript and the ranking fixture
     // sharing its cwd) are hidden by the scope, and the note says so.
@@ -2931,11 +2932,11 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.click('.workspace-group-header[data-cwd="date:today"]');
     await desktop.waitForFunction(() => !document.querySelector('.session-segment.collapsed'), null, { timeout: 2000 });
     // Delete the scope from the settings modal; chips row empties.
-    await desktop.evaluate(() => openSettingsModal());
+    await desktop.evaluate(() => fixtureApp.features.displayPreferences.open());
     await desktop.waitForSelector('.saved-filter-del', { timeout: 5000 });
     await desktop.click('.saved-filter-del');
     await desktop.waitForSelector('.saved-filters-empty', { timeout: 5000 });
-    await desktop.evaluate(() => closeSettingsModal());
+    await desktop.evaluate(() => fixtureApp.ports.appBindings.actions.closeSettingsModal());
     await desktop.waitForFunction(() => !document.querySelector('.scope-chip'), null, { timeout: 5000 });
     check(true, 'deleting the saved filter in settings clears the chips');
     // Back to the workspace view for the sections below.
@@ -2981,31 +2982,31 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.waitForSelector('#messages .message.assistant');
 
     console.log('related-session navigation:');
-    await desktop.evaluate((id) => selectSession(id), BETA_ID);
+    await desktop.evaluate((id) => fixtureApp.features.sessionView.select(id), BETA_ID);
     await desktop.waitForSelector('#sessionRelations .session-relation-chip', { timeout: 5000 });
     check((await desktop.locator('#sessionRelations').textContent()).includes('Parent'),
       'native Pi parentSession renders a neutral relation chip');
     await desktop.click('#sessionRelations .session-relation-chip');
-    await desktop.waitForFunction((id) => sessionState.currentSession?.id === id, registryState.sessionId, { timeout: 5000 });
+    await desktop.waitForFunction((id) => fixtureApp.features.sessionState.currentSession?.id === id, registryState.sessionId, { timeout: 5000 });
     check(true, 'related-session chip navigates to the available peer session');
     const relationRaceOwner = await desktop.evaluate(async (nextId) => {
-      const originalLoad = loadSessions;
+      const originalLoad = fixtureApp.features.sidebarLists.load;
       let release;
-      loadSessions = () => new Promise(resolve => { release = resolve; });
+      fixtureApp.features.sidebarLists.load = () => new Promise(resolve => { release = resolve; });
       try {
-        const owner = sessionState.captureSelection();
-        const pending = openRelatedSession('not-yet-loaded-peer', owner);
-        await selectSession(nextId);
+        const owner = fixtureApp.features.sessionState.captureSelection();
+        const pending = fixtureApp.features.sessionRelationsController.openRelated('not-yet-loaded-peer', owner);
+        await fixtureApp.features.sessionView.select(nextId);
         release();
         await pending;
-        return sessionState.currentSession.id;
+        return fixtureApp.features.sessionState.currentSession.id;
       } finally {
-        loadSessions = originalLoad;
+        fixtureApp.features.sidebarLists.load = originalLoad;
       }
     }, BETA_ID);
     check(relationRaceOwner === BETA_ID, 'stale related-session reload cannot hijack a newer selection');
-    await desktop.evaluate((id) => selectSession(id), registryState.sessionId);
-    await desktop.waitForFunction((id) => sessionState.currentSession?.id === id, registryState.sessionId);
+    await desktop.evaluate((id) => fixtureApp.features.sessionView.select(id), registryState.sessionId);
+    await desktop.waitForFunction((id) => fixtureApp.features.sessionState.currentSession?.id === id, registryState.sessionId);
 
     // Relation chip overflow: only live child fan-outs appear in the header.
     // Closed children and live children beyond one physical row go behind
@@ -3039,7 +3040,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       }
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ relations }) });
     });
-    await desktop.evaluate((id) => selectSession(id), BETA_ID);
+    await desktop.evaluate((id) => fixtureApp.features.sessionView.select(id), BETA_ID);
     await desktop.waitForSelector('.session-relation-more', { timeout: 5000 });
     const closedHeader = await desktop.locator('#sessionRelations').textContent();
     const closedOverflowCount = Number((await desktop.locator('.session-relation-more').textContent()).match(/\+(\d+)/)?.[1] || 0);
@@ -3066,7 +3067,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(true, 'Escape closes the relations modal');
 
     relationFixtureMode = 'active';
-    await desktop.evaluate((id) => selectSession(id), BETA_ID);
+    await desktop.evaluate((id) => fixtureApp.features.sessionView.select(id), BETA_ID);
     await desktop.waitForSelector('.session-relation-more', { timeout: 5000 });
     const activeHeader = await desktop.locator('#sessionRelations').textContent();
     const visibleActiveChildren = await desktop.locator('#sessionRelations .session-relation-chip:not(.session-relation-more)').evaluateAll(
@@ -3080,18 +3081,18 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.keyboard.press('Escape');
 
     relationFixtureMode = 'closed';
-    await desktop.evaluate((id) => selectSession(id), BETA_ID);
+    await desktop.evaluate((id) => fixtureApp.features.sessionView.select(id), BETA_ID);
     await desktop.waitForSelector('.session-relation-more', { timeout: 5000 });
     await desktop.click('.session-relation-more');
     await desktop.waitForSelector('#relationsModal .relation-row', { timeout: 5000 });
     await desktop.locator('#relationsModal .relation-row').first().click();
-    await desktop.waitForFunction((id) => sessionState.currentSession?.id === id, registryState.sessionId, { timeout: 5000 });
+    await desktop.waitForFunction((id) => fixtureApp.features.sessionState.currentSession?.id === id, registryState.sessionId, { timeout: 5000 });
     check(true, 'overflow modal row navigates to the relation');
     check(await desktop.locator('#relationsModal').evaluate((el) => el.style.display === 'none'),
       'navigation closes the relations modal');
     await desktop.unroute('**/api/sessions/*/related');
-    await desktop.evaluate((id) => selectSession(id), registryState.sessionId);
-    await desktop.waitForFunction((id) => sessionState.currentSession?.id === id &&
+    await desktop.evaluate((id) => fixtureApp.features.sessionView.select(id), registryState.sessionId);
+    await desktop.waitForFunction((id) => fixtureApp.features.sessionState.currentSession?.id === id &&
       !document.getElementById('sessionRelations').textContent.includes('overflow-'),
       registryState.sessionId, { timeout: 5000 });
 
@@ -3131,19 +3132,19 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.click('.scope-chip[data-name="Beta only"]');
     await desktop.waitForFunction(() =>
       !document.querySelector('.scope-chip[data-name="Beta only"]').classList.contains('active'));
-    await desktop.evaluate(() => openSearchView('boundary-contract'));
+    await desktop.evaluate(() => fixtureApp.features.searchViewController.open('boundary-contract'));
     await desktop.waitForFunction((id) =>
       document.querySelectorAll('.search-result').length === 100 &&
       !document.querySelector(`.search-result[data-id="${id}"]`) &&
       document.querySelector('.search-count-line')?.textContent.includes('showing the 100 best matches'),
       BETA_ID, { timeout: 10000 });
     check(true, 'unscoped rank-101 session is omitted with truthful cap messaging');
-    await desktop.evaluate(() => closeSearchView());
+    await desktop.evaluate(() => fixtureApp.features.searchViewController.close());
     await desktop.click('.scope-chip[data-name="Beta only"]');
     await desktop.waitForSelector('.scope-chip[data-name="Beta only"].active', { timeout: 5000 });
     check(await desktop.evaluate(() => localStorage.getItem('pi-dish-active-scopes')) === JSON.stringify(['Beta only']),
       'advanced-search active scope state remains device-local');
-    await desktop.evaluate(() => openSearchView('boundary-contract'));
+    await desktop.evaluate(() => fixtureApp.features.searchViewController.open('boundary-contract'));
     // Scope the note lookup to the takeover: the sidebar behind it renders
     // its own `.scope-hidden-note` for the same active scope.
     await desktop.waitForFunction((id) =>
@@ -3154,7 +3155,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(!await desktop.evaluate(() =>
       document.querySelector('.search-count-line').textContent.includes('showing the 100 best matches')),
       'scoped total and cap messaging describe the post-scope result set');
-    await desktop.evaluate(() => closeSearchView());
+    await desktop.evaluate(() => fixtureApp.features.searchViewController.close());
 
     await desktop.fill('#filterInput', 'beta');
     await desktop.waitForSelector('.search-open-chip', { timeout: 2000 });
@@ -3203,7 +3204,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(await desktop.evaluate(() => document.getElementById('sessionName').textContent) === 'beta question',
       'click-through opened the matched session');
     // Escape closes the takeover.
-    await desktop.evaluate(() => { closeSearch(); openSearchView('alpha'); });
+    await desktop.evaluate(() => { fixtureApp.features.sessionSearch.close(); fixtureApp.features.searchViewController.open('alpha'); });
     await desktop.waitForFunction(() =>
       document.querySelector('.main').classList.contains('search-open'), null, { timeout: 5000 });
     await desktop.keyboard.press('Escape');
@@ -3253,7 +3254,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(await desktop.evaluate(() => document.querySelector('.session-item.active')?.dataset.id || null) === selectedBefore,
       'confirm tap does not select the row');
     // A poll re-render must restore (not clear) the armed state.
-    await desktop.evaluate(() => renderSessions());
+    await desktop.evaluate(() => fixtureApp.ports.sessionState.onListsChanged());
     check(await desktop.locator(`${closeRowSel} .session-close-btn.confirm`).count() === 1,
       'list re-render preserves the armed confirm');
     // The armed state auto-reverts after ~3s.
@@ -3313,12 +3314,12 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // RPC sessions are pi-dish-owned. Restart must replace the managed child
     // directly, retain the session id, and never divert into tmux.
     const rpcRestartId = await desktop.evaluate(async (id) => {
-      await apiSend(hostDirectory.self.hostId, `/api/sessions/${encodeURIComponent(id)}/resume`);
-      await loadSessions(undefined, { withPrevious: true });
-      await selectSession(id, { host: hostDirectory.self.hostId });
+      await ((...args) => PiDishBrowser.sendJson(fixtureApp.features.apiTransport.request, ...args))(fixtureApp.features.hostDirectory.self.hostId, `/api/sessions/${encodeURIComponent(id)}/resume`);
+      await fixtureApp.features.sidebarLists.load(undefined, { withPrevious: true });
+      await fixtureApp.features.sessionView.select(id, { host: fixtureApp.features.hostDirectory.self.hostId });
       return id;
     }, BETA_ID);
-    await desktop.waitForFunction((id) => sessionState.currentSession?.id === id && sessionState.currentSession.isActive,
+    await desktop.waitForFunction((id) => fixtureApp.features.sessionState.currentSession?.id === id && fixtureApp.features.sessionState.currentSession.isActive,
       rpcRestartId, { timeout: 10000 });
     await desktop.click('#sessionContext');
     await desktop.waitForSelector('#sessionRestartBtn', { timeout: 5000 });
@@ -3335,7 +3336,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     desktop.once('dialog', (d) => d.accept());
     await desktop.click('#sessionRestartBtn');
     await desktop.waitForFunction((id) =>
-      sessionState.currentSession?.id === id && sessionState.currentSession.isActive &&
+      fixtureApp.features.sessionState.currentSession?.id === id && fixtureApp.features.sessionState.currentSession.isActive &&
       document.getElementById('statsModal').style.display === 'none',
       rpcRestartId, { timeout: 15000 });
     check(true, 'restart kept the same RPC transcript selected');
@@ -3371,8 +3372,8 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // helpers agree with what it wrote.
     console.log('host-aware client keys:');
     const keys = await desktop.evaluate((id) => {
-      const hostId = hostDirectory.self.hostId || 'ui-host';
-      if (!hostDirectory.self.hostId) hostDirectory.setSelf({ hostId, label: null, version: null, capabilities: null });
+      const hostId = fixtureApp.features.hostDirectory.self.hostId || 'ui-host';
+      if (!fixtureApp.features.hostDirectory.self.hostId) fixtureApp.features.hostDirectory.setSelf({ hostId, label: null, version: null, capabilities: null });
       localStorage.setItem('pi-dish-draft-' + id, 'bare draft');
       localStorage.setItem('pi-dish-history-' + id, JSON.stringify(['bare prompt']));
       localStorage.setItem('pi-dish-terminal-mode-' + id, 'tmux');
@@ -3382,14 +3383,14 @@ let remoteHost = null; // second pi-dish (multi-host section)
       localStorage.setItem('pi-dish-expanded-session-families', JSON.stringify([id]));
       localStorage.setItem('pi-dish-session', id);
       localStorage.removeItem('pi-dish-keys-migrated');
-      sidebarActivity.reload();
-      sidebarControls.reloadPreferences();
-      migrateClientKeys();
+      fixtureApp.features.sidebarActivity.reload();
+      fixtureApp.features.sidebarControls.reloadPreferences();
+      (() => fixtureApp.ports.hostDiscovery.onSelf(fixtureApp.features.hostDirectory.self))();
       const key = sessionKey(hostId, id);
       const bareLeft = Object.keys(localStorage).filter((k) =>
         /^pi-dish-(draft|history|terminal-mode)-/.test(k) && !k.includes(' ') && !k.includes('spawn:'));
       const freshState = PiDishBrowser.createSessionState({
-        getSelfHostId: () => hostDirectory.self.hostId, getHostLabel: hostLabelFor,
+        getSelfHostId: () => fixtureApp.features.hostDirectory.self.hostId, getHostLabel: fixtureApp.ports.sessionState.getHostLabel,
         onListsChanged() {}, onCurrentChanged() {},
       });
       freshState.setSessionLists({ active: [{ id: 'fresh' }] });
@@ -3405,8 +3406,8 @@ let remoteHost = null; // second pi-dish (multi-host section)
         expanded: localStorage.getItem('pi-dish-expanded-session-families'),
         selected: localStorage.getItem('pi-dish-session'),
         bareLeft,
-        derivedDraftKey: draftKey(id),
-        derivedTerminalKey: terminalModeKey(id),
+        derivedDraftKey: fixtureApp.features.composerDrafts.draftKey(id),
+        derivedTerminalKey: fixtureApp.features.terminalController.modeKey(id),
         stampedHost: freshState.sessions.active[0].host,
         migratedFlag: localStorage.getItem('pi-dish-keys-migrated'),
       };
@@ -3435,19 +3436,19 @@ let remoteHost = null; // second pi-dish (multi-host section)
     remoteHost = await startRemoteHost();
     const remoteDescriptor = await fetch(remoteHost.base + '/api/host').then(r => r.json());
     const multi = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-    watch(multi, 'multi-host');
+    await watch(multi, 'multi-host');
     await multi.addInitScript((entry) => {
       // List facts belong to full snapshot setup, not restricted mutation patches.
       window.fixtureSessionListPatch = (id, fields, host) => {
         const parts = new Map();
         for (const kind of ['active', 'previous']) {
-          for (const row of sessionState.sessions[kind]) {
+          for (const row of fixtureApp.features.sessionState.sessions[kind]) {
             const key = row.host || null;
             if (!parts.has(key)) parts.set(key, { hostId: key, active: [], previous: [] });
             parts.get(key)[kind].push(row.id === id && key === (host || null) ? { ...row, ...fields } : row);
           }
         }
-        sessionState.setSessionLists([...parts.values()]);
+        fixtureApp.features.sessionState.setSessionLists([...parts.values()]);
       };
       localStorage.setItem('pi-dish-hosts', JSON.stringify([entry]));
     }, { base: remoteHost.base, hostId: remoteDescriptor.hostId, label: 'tycho', token: REMOTE_TOKEN });
@@ -3457,7 +3458,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await multi.goto(base, { waitUntil: 'networkidle' });
     // A normal reload retains the host id, not its capabilities. Recovery
     // must still be configurable on the peer, never accidentally on self.
-    await multi.evaluate(() => openSettingsModal());
+    await multi.evaluate(() => fixtureApp.features.displayPreferences.open());
     await multi.waitForSelector(`#recoverySettingsHost option[value="${remoteDescriptor.hostId}"]`, { state: 'attached' });
     await multi.selectOption('#recoverySettingsHost', remoteDescriptor.hostId);
     await multi.waitForFunction(() => !document.getElementById('saveRecoveryMode').disabled);
@@ -3485,15 +3486,15 @@ let remoteHost = null; // second pi-dish (multi-host section)
       json: { ...remoteDescriptor, capabilities: { ...remoteDescriptor.capabilities, recovery: advertisesRecovery } },
     });
     await multi.route(remoteHost.base + '/api/host', descriptorRoute);
-    await multi.evaluate(() => loadHostFleet());
-    await multi.evaluate(() => openSettingsModal());
+    await multi.evaluate(() => fixtureApp.features.hostDiscovery.loadFleet());
+    await multi.evaluate(() => fixtureApp.features.displayPreferences.open());
     await multi.waitForFunction(() => !document.getElementById('saveRecoveryMode').disabled);
     await multi.selectOption('#recoveryMode', 'continue');
     check(await multi.locator(`#recoverySettingsHost option[value="${remoteDescriptor.hostId}"]`).count() === 0 &&
       (await multi.textContent('#recoveryUnavailableHosts')).includes('tycho'),
       'an older peer is named with upgrade guidance instead of silently omitted');
     advertisesRecovery = true;
-    await multi.evaluate(() => loadHostFleet());
+    await multi.evaluate(() => fixtureApp.features.hostDiscovery.loadFleet());
     check(await multi.locator(`#recoverySettingsHost option[value="${remoteDescriptor.hostId}"]`).count() === 1 &&
       await multi.inputValue('#recoveryMode') === 'continue',
       'a capability refresh adds a remote recovery host without discarding an unsaved selection');
@@ -3505,7 +3506,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       ...beforeFleetSettings,
       remotes: [{ name: 'tycho', url: remoteHost.base, token: REMOTE_TOKEN }],
     }));
-    await multi.evaluate(() => loadHostFleet());
+    await multi.evaluate(() => fixtureApp.features.hostDiscovery.loadFleet());
     await multi.selectOption('#recoverySettingsHost', remoteDescriptor.hostId);
     await multi.waitForFunction(() => !document.getElementById('saveRecoveryMode').disabled);
     await multi.selectOption('#recoveryMode', 'off');
@@ -3520,12 +3521,12 @@ let remoteHost = null; // second pi-dish (multi-host section)
       await multi.locator(`#recoverySettingsHost option[value="${remoteDescriptor.hostId}"]`).count() === 1,
       'a fleet peer is configured through the main entrypoint proxy and appears only once');
     fs.writeFileSync(dishSettingsFile, JSON.stringify(beforeFleetSettings));
-    await multi.evaluate(() => loadHostFleet());
+    await multi.evaluate(() => fixtureApp.features.hostDiscovery.loadFleet());
     await multi.keyboard.press('Escape');
     await multi.click('#tabAll');
     // Event-driven: drive the poll from the test rather than waiting out the
     // 10s interval (and never widen a wait to catch a transient element).
-    await multi.evaluate(() => loadSessions(undefined, { withPrevious: true }));
+    await multi.evaluate(() => fixtureApp.features.sidebarLists.load(undefined, { withPrevious: true }));
     await multi.waitForSelector(`.session-item[data-id="${REMOTE_SESSION_ID}"]`, { timeout: 15000 });
     check(await multi.locator(`.session-item[data-id="${SESSION_ID}"]`).count() === 1,
       'both hosts\' sessions are in one merged list');
@@ -3547,7 +3548,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
         dot: getComputedStyle(section.querySelector('.host-section-dot')).backgroundColor,
         count: section.querySelector('.host-section-count')?.textContent || null,
       })));
-    const selfLabel = await multi.evaluate(() => hostDisplayLabel(effectiveHosts()[0]));
+    const selfLabel = await multi.evaluate(() => hostDisplayLabel(fixtureApp.ports.hostDiscovery.hosts()[0]));
     check(sections.length === 2 && sections[0].name === selfLabel && sections[1].name === 'tycho',
       `the workspace view is sectioned by host, self first (got ${JSON.stringify(sections.map((s) => s.name))})`);
     check(sections.every((s) => /^var\(--chart-\d\)$/.test(s.color)) &&
@@ -3580,7 +3581,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
 
     // Recent view is a timeline, so it stays interleaved — the host is the
     // row's colored chip there.
-    await multi.evaluate(() => toggleSidebarView());
+    await multi.evaluate(() => fixtureApp.features.sidebarQuery.toggleView());
     const recentChips = await multi.evaluate(() => [...document.querySelectorAll('.session-item .host-chip')]
       .map((chip) => ({
         text: chip.textContent.trim(),
@@ -3592,11 +3593,11 @@ let remoteHost = null; // second pi-dish (multi-host section)
       `Recent rows carry a color-dotted host chip per host (got ${JSON.stringify(chipColors)})`);
     check(await multi.evaluate(() => document.querySelectorAll('.host-section').length) === 0,
       'the Recent view stays interleaved — no host sections');
-    await multi.evaluate(() => toggleSidebarView());
+    await multi.evaluate(() => fixtureApp.features.sidebarQuery.toggleView());
 
     // The color picker in the settings Hosts section overrides the automatic
     // color and repaints the sidebar without a reload.
-    await multi.evaluate(() => openSettingsModal());
+    await multi.evaluate(() => fixtureApp.features.displayPreferences.open());
     await multi.waitForSelector('#hostsList .host-color-input', { timeout: 5000 });
     const picked = await multi.evaluate(() => {
       const inputs = [...document.querySelectorAll('#hostsList .host-color-input')];
@@ -3638,15 +3639,15 @@ let remoteHost = null; // second pi-dish (multi-host section)
       'the session header names the host');
 
     const remoteRefResolution = await multi.evaluate((remoteId) => {
-      const bare = sessionMatchingRef(remoteId.slice(0, 12));
+      const bare = fixtureApp.features.sessionReferences.match(remoteId.slice(0, 12));
       // A same-id session on another host is still a valid picker candidate;
       // only the current host+id pair is excluded.
-      const shadow = { ...sessionState.currentSession, host: hostDirectory.self.hostId };
-      sessionState.sessions.previous.push(shadow);
-      const candidates = sessionRefCandidates().filter((s) => s.id === remoteId)
-        .map((s) => sessionHostIdOf(s));
-      sessionState.sessions.previous.pop();
-      return { bareHost: bare?.host || null, currentHost: sessionState.currentSession.host, candidates };
+      const shadow = { ...fixtureApp.features.sessionState.currentSession, host: fixtureApp.features.hostDirectory.self.hostId };
+      fixtureApp.features.sessionState.sessions.previous.push(shadow);
+      const candidates = fixtureApp.features.sessionReferences.candidates().filter((s) => s.id === remoteId)
+        .map((s) => fixtureApp.features.sessionReferences.hostId(s));
+      fixtureApp.features.sessionState.sessions.previous.pop();
+      return { bareHost: bare?.host || null, currentHost: fixtureApp.features.sessionState.currentSession.host, candidates };
     }, REMOTE_SESSION_ID);
     check(remoteRefResolution.bareHost === remoteRefResolution.currentHost,
       `a bare transcript #ref resolves on its owning remote host (got ${JSON.stringify(remoteRefResolution)})`);
@@ -3658,10 +3659,10 @@ let remoteHost = null; // second pi-dish (multi-host section)
     // PI_DISH_TERMINAL=1 and the peer with it off, so the capabilities the
     // peer advertises — not ours — decide whether the button can exist.
     const termGating = await multi.evaluate(() => {
-      const [self, remote] = [effectiveHosts()[0], effectiveHosts().find((h) => !h.self)];
+      const [self, remote] = [fixtureApp.ports.hostDiscovery.hosts()[0], fixtureApp.ports.hostDiscovery.hosts().find((h) => !h.self)];
       return {
-        self: hostSupportsTerminal(self, appConfig),
-        remote: hostSupportsTerminal(remote, appConfig),
+        self: hostSupportsTerminal(self, fixtureApp.ports.routinesController.config()),
+        remote: hostSupportsTerminal(remote, fixtureApp.ports.routinesController.config()),
         remoteCaps: !!(remote && remote.capabilities),
         button: document.getElementById('btnTerminal').style.display,
       };
@@ -3679,12 +3680,12 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await multi.evaluate(() => {
       const input = document.getElementById('filterInput');
       input.value = 'host:tycho';
-      onFilterInput();
+      fixtureApp.features.sidebarQuery.onInput();
     });
     await multi.waitForSelector(`.session-item[data-id="${SESSION_ID}"]`, { state: 'detached', timeout: 10000 });
     check(await multi.locator(`.session-item[data-id="${REMOTE_SESSION_ID}"]`).count() === 1,
       'host: keeps the named host\'s rows and drops the others');
-    await multi.waitForFunction(() => sidebarLists.queriedFor === 'host:tycho', { timeout: 10000 });
+    await multi.waitForFunction(() => fixtureApp.features.sidebarLists.queriedFor === 'host:tycho', { timeout: 10000 });
     multi.off('request', noteList);
     check(listReqs.length > 0 && listReqs.every((u) => u.startsWith(remoteBase)),
       `host: prunes the fan-out to the named host (got ${JSON.stringify(listReqs)})`);
@@ -3692,13 +3693,13 @@ let remoteHost = null; // second pi-dish (multi-host section)
       `the host: term is stripped before the wire (got ${JSON.stringify(listReqs)})`);
     await multi.evaluate(() => {
       document.getElementById('filterInput').value = '';
-      onFilterInput();
+      fixtureApp.features.sidebarQuery.onInput();
     });
     await multi.waitForSelector(`.session-item[data-id="${SESSION_ID}"]`, { timeout: 10000 });
 
     // The advanced-search host facet is pure UI over the same grammar: it
     // writes the term into the visible query, which stays authoritative.
-    await multi.evaluate(() => openSearchView(''));
+    await multi.evaluate(() => fixtureApp.features.searchViewController.open(''));
     await multi.waitForSelector('#searchFacetHost', { timeout: 10000 });
     const facetHosts = await multi.locator('#searchFacetHost option').allTextContents();
     check(facetHosts.length === 3 && facetHosts.includes('tycho'),
@@ -3714,15 +3715,15 @@ let remoteHost = null; // second pi-dish (multi-host section)
 
     // Unread bookkeeping is keyed host + session, so viewing a remote session
     // marks *that* host's entry and can never mask a local id that matches.
-    await multi.evaluate(() => loadSessions(undefined, { withPrevious: true }));
+    await multi.evaluate(() => fixtureApp.features.sidebarLists.load(undefined, { withPrevious: true }));
     const seenKeys = await multi.evaluate((id) => {
-      const host = effectiveHosts().find((h) => !h.self);
+      const host = fixtureApp.ports.hostDiscovery.hosts().find((h) => !h.self);
       return { keys: Object.keys(JSON.parse(localStorage.getItem('pi-dish-seen') || '{}')), want: host.hostId + ' ' + id };
     }, REMOTE_SESSION_ID);
     check(seenKeys.keys.includes(seenKeys.want),
       `the seen map records the remote session under its own host (got ${JSON.stringify(seenKeys.keys)})`);
 
-    await multi.evaluate(() => openNewSessionView());
+    await multi.evaluate(() => fixtureApp.features.newSessionController.open());
     await multi.waitForSelector('#nsHostRow', { state: 'visible', timeout: 5000 });
     const hostOptions = await multi.locator('#nsHostSelect option').allTextContents();
     check(hostOptions.length === 2 && hostOptions.includes('tycho'),
@@ -3744,26 +3745,26 @@ let remoteHost = null; // second pi-dish (multi-host section)
         { type: 'message', message: { role: 'user', content: `COLLISION ${index ? 'REMOTE' : 'SELF'} TRANSCRIPT` } },
       ].map(entry => JSON.stringify(entry)).join('\n') + '\n');
     }
-    const selfId = await multi.evaluate(() => hostDirectory.self.hostId);
+    const selfId = await multi.evaluate(() => fixtureApp.features.hostDirectory.self.hostId);
     const remoteId = remoteDescriptor.hostId;
-    await multi.evaluate(() => loadSessions(undefined, { withPrevious: true }));
-    await multi.evaluate(({ id, host }) => selectSession(id, { host }), { id: collisionId, host: selfId });
+    await multi.evaluate(() => fixtureApp.features.sidebarLists.load(undefined, { withPrevious: true }));
+    await multi.evaluate(({ id, host }) => fixtureApp.features.sessionView.select(id, { host }), { id: collisionId, host: selfId });
     check((await multi.locator('#messages').textContent()).includes('COLLISION SELF TRANSCRIPT'),
       'the self-host collision renders its own transcript');
-    await multi.evaluate(({ id, host }) => selectSession(id, { host }), { id: collisionId, host: remoteId });
+    await multi.evaluate(({ id, host }) => fixtureApp.features.sessionView.select(id, { host }), { id: collisionId, host: remoteId });
     check((await multi.locator('#messages').textContent()).includes('COLLISION REMOTE TRANSCRIPT') &&
       !(await multi.locator('#messages').textContent()).includes('COLLISION SELF TRANSCRIPT'),
       'selecting the peer with the same id cannot restore the self-host transcript');
-    await multi.evaluate(() => loadSessions(undefined, { withPrevious: true }));
-    check(await multi.evaluate(host => sessionState.currentSession.host === host, remoteId),
+    await multi.evaluate(() => fixtureApp.features.sidebarLists.load(undefined, { withPrevious: true }));
+    check(await multi.evaluate(host => fixtureApp.features.sessionState.currentSession.host === host, remoteId),
       'polling preserves the selected host when ids collide');
     const selectedCollision = multi.locator(`.session-item.active[data-id="${collisionId}"]`);
     check(await selectedCollision.count() === 1 && await selectedCollision.getAttribute('data-host') === remoteId,
       'only the selected host row is highlighted');
-    await multi.evaluate(id => selectSession(id, { host: 'missing-host' }), collisionId);
-    check(await multi.evaluate(({ id, host }) => !sessionState.findSession(id, 'missing-host') && sessionState.currentSession.host === host,
+    await multi.evaluate(id => fixtureApp.features.sessionView.select(id, { host: 'missing-host' }), collisionId);
+    check(await multi.evaluate(({ id, host }) => !fixtureApp.features.sessionState.findSession(id, 'missing-host') && fixtureApp.features.sessionState.currentSession.host === host,
       { id: collisionId, host: remoteId }), 'a missing host-qualified session never falls back to another host');
-    await multi.evaluate(({ id, host }) => selectSession(id, { host }), { id: collisionId, host: selfId });
+    await multi.evaluate(({ id, host }) => fixtureApp.features.sessionView.select(id, { host }), { id: collisionId, host: selfId });
     check((await multi.locator('#messages').textContent()).includes('COLLISION SELF TRANSCRIPT') &&
       !(await multi.locator('#messages').textContent()).includes('COLLISION REMOTE TRANSCRIPT'),
       'switching back restores only the owning host\'s cached transcript');
@@ -3775,7 +3776,7 @@ let remoteHost = null; // second pi-dish (multi-host section)
       ['thinking', 'thinkingLevel', 'high'],
       ['rename', 'name', 'renamed remote collision'],
     ]) {
-      await multi.evaluate(({ id, host }) => selectSession(id, { host }), { id: collisionId, host: remoteId });
+      await multi.evaluate(({ id, host }) => fixtureApp.features.sessionView.select(id, { host }), { id: collisionId, host: remoteId });
       await multi.evaluate(({ id, host }) => window.fixtureSessionListPatch(id, {
         isActive: true, capabilities: { setModel: true, setThinking: true, rename: true },
       }, host), { id: collisionId, host: remoteId });
@@ -3784,21 +3785,21 @@ let remoteHost = null; // second pi-dish (multi-host section)
       const received = new Promise(resolve => { receiveRequest = resolve; });
       await multi.route(endpoint, route => { receiveRequest(route); });
       const sent = multi.waitForRequest(endpoint, { timeout: 10000 });
-      const before = await multi.evaluate(({ id, host, field }) => sessionState.findSession(id, host)[field],
+      const before = await multi.evaluate(({ id, host, field }) => fixtureApp.features.sessionState.findSession(id, host)[field],
         { id: collisionId, host: selfId, field });
       await multi.evaluate(({ action, value }) => {
-        if (action === 'rename') { startRename(); document.getElementById('sessionNameInput').value = value; }
-        window.__collisionMutation = action === 'model' ? selectModel(value)
-          : action === 'thinking' ? selectThinkingLevel(value) : commitRename();
+        if (action === 'rename') { fixtureApp.features.sessionControls.startRename(); document.getElementById('sessionNameInput').value = value; }
+        window.__collisionMutation = action === 'model' ? fixtureApp.features.sessionControls.selectModel(value)
+          : action === 'thinking' ? fixtureApp.features.sessionControls.selectThinking(value) : fixtureApp.features.sessionControls.commitRename();
       }, { action, value });
       await sent;
       const route = await received;
-      await multi.evaluate(({ id, host }) => selectSession(id, { host }), { id: collisionId, host: selfId });
+      await multi.evaluate(({ id, host }) => fixtureApp.features.sessionView.select(id, { host }), { id: collisionId, host: selfId });
       await route.fulfill({ json: { success: true, level: value } });
       await multi.evaluate(() => window.__collisionMutation);
       const outcome = await multi.evaluate(({ id, self, remote, field }) => ({
-        selectedHost: sessionState.currentSession.host, selected: sessionState.currentSession[field],
-        self: sessionState.findSession(id, self)[field], remote: sessionState.findSession(id, remote)[field],
+        selectedHost: fixtureApp.features.sessionState.currentSession.host, selected: fixtureApp.features.sessionState.currentSession[field],
+        self: fixtureApp.features.sessionState.findSession(id, self)[field], remote: fixtureApp.features.sessionState.findSession(id, remote)[field],
       }), { id: collisionId, self: selfId, remote: remoteId, field });
       check(outcome.selectedHost === selfId && outcome.selected === before && outcome.self === before && outcome.remote === value,
         `delayed ${action} completion updates only the originating host`);
@@ -3825,13 +3826,13 @@ let remoteHost = null; // second pi-dish (multi-host section)
       multi.waitForResponse(closeEndpoint), remoteClose.click(),
     ]);
     check(closeResponse.request().method() === 'POST' &&
-      await multi.evaluate(host => sessionState.currentSession.host === host, selfId),
+      await multi.evaluate(host => fixtureApp.features.sessionState.currentSession.host === host, selfId),
       'closing the remote row sends to the peer and preserves the self-host selection');
-    await multi.waitForFunction(() => sidebarControls.closeBusy === null);
+    await multi.waitForFunction(() => fixtureApp.features.sidebarControls.closeBusy === null);
     await multi.unroute(closeEndpoint);
-    await multi.evaluate(({ id, host }) => selectSession(id, { host }), { id: REMOTE_SESSION_ID, host: remoteId });
+    await multi.evaluate(({ id, host }) => fixtureApp.features.sessionView.select(id, { host }), { id: REMOTE_SESSION_ID, host: remoteId });
     for (const file of collisionFiles) fs.unlinkSync(file);
-    await multi.evaluate(() => loadSessions(undefined, { withPrevious: true }));
+    await multi.evaluate(() => fixtureApp.features.sidebarLists.load(undefined, { withPrevious: true }));
 
     // A host that stops answering keeps its last-known rows, dimmed — and
     // degrades nothing else.
@@ -3839,18 +3840,18 @@ let remoteHost = null; // second pi-dish (multi-host section)
     remoteHost.child.kill('SIGKILL');
     await remoteGone;
     remoteHost = null;
-    await multi.evaluate(() => loadSessions(undefined, { withPrevious: true }));
+    await multi.evaluate(() => fixtureApp.features.sidebarLists.load(undefined, { withPrevious: true }));
     await multi.waitForSelector(`.session-item[data-id="${REMOTE_SESSION_ID}"].stale-host`, { timeout: 15000 });
     check(await multi.locator(`.session-item[data-id="${SESSION_ID}"]`).count() === 1 &&
       await multi.locator(`.session-item[data-id="${SESSION_ID}"].stale-host`).count() === 0,
       'the reachable host\'s rows are untouched by the dead one');
     const offlineSection = await multi.evaluate(() => {
-      const host = effectiveHosts().find((h) => !h.self);
+      const host = fixtureApp.ports.hostDiscovery.hosts().find((h) => !h.self);
       const header = [...document.querySelectorAll('.host-section-header')]
         .find((h) => h.dataset.hostSection === 'host:' + host.hostId);
       const section = header?.closest('.host-section');
       return {
-        state: hostState(host),
+        state: fixtureApp.features.hostConnections.stateOf(host),
         note: header?.querySelector('.host-section-state')?.textContent || null,
         offline: !!section?.classList.contains('offline'),
         rows: section ? section.querySelectorAll('.session-item.stale-host').length : 0,

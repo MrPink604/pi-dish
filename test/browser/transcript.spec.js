@@ -3,10 +3,10 @@ async function setup(page, fleet) {
   await fleet.select(fleet.self);
   await page.evaluate(({ self, peer }) => {
     window.transcriptReplies = []; window.transcriptHosts = { [self.hostId]: { base: self.base }, [peer.hostId]: { base: peer.base } };
-    window.ownedTranscript = PiDishBrowser.createTranscript({ document, sessionState,
+    window.ownedTranscript = PiDishBrowser.createTranscript({ document, sessionState: fixtureApp.features.sessionState,
       request: (host, path, init) => new Promise(resolve => window.transcriptReplies.push({ host, path, init, resolve })), host: id => window.transcriptHosts[id],
-      renderMessage: value => messageRenderer.message(value), finalize: (root, options) => finalizeRender(root, options), closeSearch() {}, cancelStreaming() {},
-      mood: (description, face) => setMoodIndicator(description, face), updateMood: messages => updateMoodFromMessages(messages), pinned: () => false, scroll() {}, jump() {}, consumeEcho() {},
+      renderMessage: value => fixtureApp.features.messageRenderer.message(value), finalize: (root, options) => fixtureApp.ports.transcriptController.finalize(root, options), closeSearch() {}, cancelStreaming() {},
+      mood: (description, face) => fixtureApp.features.moodController.set(description, face), updateMood: messages => fixtureApp.features.moodController.fromMessages(messages), pinned: () => false, scroll() {}, jump() {}, consumeEcho() {},
     });
   }, { self: { hostId: fleet.self.hostId, base: fleet.self.base }, peer: { hostId: fleet.peer.hostId, base: fleet.peer.base } });
 }
@@ -32,7 +32,7 @@ test('an old older-page finalizer cannot release the replacement transcript pagi
 });
 test('out-of-order catchup cannot regress the cursor or blank the retained final answer', async ({ page, fleet }) => {
   await setup(page, fleet); await initial(page);
-  await page.evaluate(() => { document.getElementById('messages').insertAdjacentHTML('beforeend', renderAssistantMessage({ role: 'assistant', content: 'retained answer' }, '')); window.oldCatchup = window.ownedTranscript.catchup(); window.newCatchup = window.ownedTranscript.catchup(); });
+  await page.evaluate(() => { document.getElementById('messages').insertAdjacentHTML('beforeend', fixtureApp.features.messageRenderer.assistant({ role: 'assistant', content: 'retained answer' }, '')); window.oldCatchup = window.ownedTranscript.catchup(); window.newCatchup = window.ownedTranscript.catchup(); });
   await reply(page, 2, { messages: [{ role: 'toolResult', index: 11, content: 'tool done' }], lastIndex: 11, totalMessages: 12 }); await page.evaluate(() => window.newCatchup);
   await reply(page, 1, { messages: [{ role: 'assistant', index: 9, content: 'old answer' }], lastIndex: 9, totalMessages: 10 }); await page.evaluate(() => window.oldCatchup);
   expect(await page.evaluate(() => window.ownedTranscript.lastIndex)).toBe(11); await expect(page.locator('#messages')).toContainText('retained answer'); await expect(page.locator('#messages')).not.toContainText('old answer');
@@ -44,8 +44,8 @@ test('cached DOM keeps host identity, node state and endpoint ownership', async 
   await setup(page, fleet); await initial(page);
   const result = await page.evaluate(({ id, self, peer }) => {
     const root = document.getElementById('messages'), node = root.querySelector('[data-msg-index]'); node.dataset.retained = 'yes'; window.ownedTranscript.stash();
-    sessionState.advanceSelection(); sessionState.setCurrentSession(id, peer); const wrongHost = window.ownedTranscript.restore(id);
-    sessionState.advanceSelection(); sessionState.setCurrentSession(id, self); const restored = window.ownedTranscript.restore(id), same = root.querySelector('[data-msg-index]') === node;
+    fixtureApp.features.sessionState.advanceSelection(); fixtureApp.features.sessionState.setCurrentSession(id, peer); const wrongHost = window.ownedTranscript.restore(id);
+    fixtureApp.features.sessionState.advanceSelection(); fixtureApp.features.sessionState.setCurrentSession(id, self); const restored = window.ownedTranscript.restore(id), same = root.querySelector('[data-msg-index]') === node;
     window.ownedTranscript.stash(); window.transcriptHosts[self].base += '/changed'; const wrongEndpoint = window.ownedTranscript.restore(id);
     return { wrongHost, restored, same, wrongEndpoint };
   }, { id: ROOT, self: fleet.self.hostId, peer: fleet.peer.hostId });

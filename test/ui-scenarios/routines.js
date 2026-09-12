@@ -72,16 +72,16 @@ module.exports = async function routines({ desktop, check, CWD }) {
   check(true, 'clearing the version filter restores every run');
 
   // Provenance: the session the routine produced wears its chip.
-  const routineSessionId = await desktop.evaluate(() => routinesController.invocations[0]?.sessionId || null);
+  const routineSessionId = await desktop.evaluate(() => fixtureApp.features.routinesController.invocations[0]?.sessionId || null);
   check(!!routineSessionId, 'the invocation records the session it ran in');
-  await desktop.evaluate(() => { switchTab('all'); });
-  await desktop.evaluate(() => { loadSessions(undefined, { withPrevious: true }); });
+  await desktop.evaluate(() => { fixtureApp.features.sidebarQuery.switchTab('all'); });
+  await desktop.evaluate(() => { fixtureApp.features.sidebarLists.load(undefined, { withPrevious: true }); });
   // Inactive automation runs stay off the All tab unless the query asks
   // (the oneShot run's session is closed after its close grace), so ask
   // for the routine by name before asserting its chip.
   await desktop.evaluate(() => {
     document.getElementById('filterInput').value = 'routine:smoke-routine';
-    onFilterInput();
+    fixtureApp.features.sidebarQuery.onInput();
   });
   await desktop.waitForSelector('.routine-chip', { timeout: 10000 });
   check((await desktop.locator('.routine-chip').first().textContent()).includes('smoke-routine'),
@@ -93,7 +93,7 @@ module.exports = async function routines({ desktop, check, CWD }) {
   // The `routine:` grammar field is metadata-only and shared everywhere.
   await desktop.evaluate(() => {
     document.getElementById('filterInput').value = 'routine:smoke-routine';
-    onFilterInput();
+    fixtureApp.features.sidebarQuery.onInput();
   });
   await desktop.waitForFunction((id) => {
     const rows = [...document.querySelectorAll('.session-item')];
@@ -102,19 +102,19 @@ module.exports = async function routines({ desktop, check, CWD }) {
   check(true, 'routine:<name> narrows the sidebar to that routine\'s sessions');
   await desktop.evaluate(() => {
     document.getElementById('filterInput').value = '';
-    onFilterInput();
+    fixtureApp.features.sidebarQuery.onInput();
   });
-  await desktop.evaluate(() => switchTab('active'));
+  await desktop.evaluate(() => fixtureApp.features.sidebarQuery.switchTab('active'));
 
   // Takeovers are mutually exclusive, and Escape closes this one.
-  await desktop.evaluate(() => openRoutinesView());
+  await desktop.evaluate(() => fixtureApp.features.routinesController.open());
   await desktop.waitForSelector('.main.routines-open', { timeout: 5000 });
   await desktop.click('[title="Usage and spend"]');
   await desktop.waitForFunction(() => document.querySelector('.main').classList.contains('usage-open') &&
     !document.querySelector('.main').classList.contains('routines-open'), null, { timeout: 5000 });
   check(true, 'opening the usage view closes the routines takeover');
   await desktop.keyboard.press('Escape');
-  await desktop.evaluate(() => openRoutinesView());
+  await desktop.evaluate(() => fixtureApp.features.routinesController.open());
   await desktop.waitForSelector('.main.routines-open', { timeout: 5000 });
   await desktop.keyboard.press('Escape');
   await desktop.waitForFunction(() => !document.querySelector('.main').classList.contains('routines-open'),

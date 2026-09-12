@@ -3,7 +3,7 @@ test.use({ liveSessions: true });
 
 async function select(fleet, page, host) {
   await fleet.select(host);
-  await page.waitForFunction(() => messageStreamController.source?.readyState === 1);
+  await page.waitForFunction(() => fixtureApp.features.messageStreamController.source?.readyState === 1);
 }
 
 test('same-id dialog replay preserves separate inputs and routes answers to their hosts', async ({ page, fleet }) => {

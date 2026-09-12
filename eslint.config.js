@@ -2,8 +2,8 @@ const fs = require('node:fs');
 const espree = require('espree');
 const globals = require('globals');
 
-// index.html loads helpers before app.js as ordinary scripts. Declare that
-// actual shared surface instead of disabling undefined-name checks in app.js.
+// Isolated tests load the independent helper and factory entrypoints. The
+// production application bundles its dependencies and shares no app bindings.
 function scriptGlobals(file) {
   const helperAst = espree.parse(fs.readFileSync(file, 'utf8'), { ecmaVersion: 'latest', sourceType: 'script' });
   const helperGlobals = {};
@@ -19,7 +19,6 @@ const helperGlobals = { ...scriptGlobals('public/helpers.js'),
   ...Object.fromEntries(Object.keys(require('./public/helpers')).map(name => [name, 'readonly'])),
 };
 const browserGlobals = scriptGlobals('public/browser.js');
-const appGlobals = scriptGlobals('public/app.js');
 module.exports = [
   { linterOptions: { reportUnusedDisableDirectives: 'off' } },
   { ignores: ['.claude/**', '.agents/**', '.codex/**', 'node_modules/**', 'public/vendor/**', 'dist/**', 'test-results/**', 'playwright-report/**', 'docs/**', 'pd-scratch/**'] },
@@ -34,7 +33,6 @@ module.exports = [
   },
   { files: ['**/*.mjs'], languageOptions: { sourceType: 'module' } },
   { files: ['public/**/*.js'], languageOptions: { sourceType: 'script', globals: { ...globals.browser, ...helperGlobals, ...browserGlobals, marked: 'readonly', hljs: 'readonly', katex: 'readonly', mermaid: 'readonly', Terminal: 'readonly', FitAddon: 'readonly' } } },
-  // Test evaluations share the actual browser script surface. Deriving these
-  // names makes renamed/removed app functions fail lint in their callers too.
-  { files: ['test/ui-smoke.js', 'test/ui-scenarios/*.js', 'test/browser/*.js', 'scripts/readme-shots.js'], languageOptions: { globals: { ...globals.browser, ...helperGlobals, ...browserGlobals, ...appGlobals } } },
+  // Feature observations exist only in the intercepted test fixture bundle.
+  { files: ['test/ui-smoke.js', 'test/ui-scenarios/*.js', 'test/browser/*.js', 'scripts/readme-shots.js'], languageOptions: { globals: { ...globals.browser, ...helperGlobals, ...browserGlobals, fixtureApp: 'readonly' } } },
 ];

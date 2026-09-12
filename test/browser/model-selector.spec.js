@@ -6,7 +6,7 @@ test('selector owns its DOM, passes captured actions and ignores events after di
     const root = document.createElement('div');
     document.body.append(root);
     const calls = [];
-    const owner = sessionState.captureSelection();
+    const owner = fixtureApp.features.sessionState.captureSelection();
     const actions = {
       requestClose: target => calls.push(['close', target.host]),
       queryChanged: (target, query) => calls.push(['query', query]),
@@ -89,7 +89,7 @@ test.describe('live selector', () => {
     await expect(page.locator('#modelDropdown .model-option')).toHaveCount(2);
     await search.press('Escape');
     await expect(page.locator('#modelDropdown')).toBeHidden();
-    expect(await page.evaluate(() => sessionControls.modelSelector)).toBeNull();
+    expect(await page.evaluate(() => fixtureApp.features.sessionControls.modelSelector)).toBeNull();
   });
 
   test('model selector baseline measurements', async ({ page, fleet, browser }) => {
@@ -101,17 +101,17 @@ test.describe('live selector', () => {
       const open = [], filter = [];
       for (let i = 0; i < 21; i++) {
         let start = performance.now();
-        await toggleModelDropdown();
+        await fixtureApp.features.sessionControls.toggleModels();
         open.push(performance.now() - start);
         const dropdown = document.getElementById('modelDropdown');
-        if (!sessionControls.modelOpen || dropdown.style.display !== 'flex'
+        if (!fixtureApp.features.sessionControls.modelOpen || dropdown.style.display !== 'flex'
             || dropdown.querySelectorAll('.model-option[data-action="select"]').length !== 187) {
           throw new Error('Baseline must measure an open selector with the fixed visible catalog');
         }
         start = performance.now();
-        renderModelDropdown('model-1');
+        fixtureApp.features.sessionControls.renderModels('model-1');
         filter.push(performance.now() - start);
-        closeModelDropdown();
+        fixtureApp.features.sessionControls.closeModels();
         if (dropdown.childElementCount !== 0) throw new Error('Selector must empty its root after every close');
       }
       const summarize = samples => {

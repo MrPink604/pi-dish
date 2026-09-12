@@ -9,13 +9,13 @@ async function setup(page, fleet) {
   await page.route('**/api/harnesses', route => route.fulfill({ json: { harnesses: [{ id: 'pi', label: 'Pi', available: true }] } }));
   page.on('dialog', dialog => dialog.accept());
   await page.evaluate(() => {
-    const hosts = effectiveHosts().map(host => Object.freeze({ ...host, capabilities: { ...host.capabilities, routines: true } }));
+    const hosts = fixtureApp.ports.hostDiscovery.hosts().map(host => Object.freeze({ ...host, capabilities: { ...host.capabilities, routines: true } }));
     window.routineHosts = hosts;
-    routinesController.dispose();
-    window.rt = PiDishBrowser.createRoutinesView({ root: document.querySelector('.main'), request: (host, path, options) => apiFetch(host, path, options), storage: localStorage, sessionState,
+    fixtureApp.features.routinesController.dispose();
+    window.rt = PiDishBrowser.createRoutinesView({ root: document.querySelector('.main'), request: (host, path, options) => fixtureApp.features.apiTransport.request(host, path, options), storage: localStorage, sessionState: fixtureApp.features.sessionState,
       hosts: () => hosts, effectiveHosts: () => hosts, host: id => window.routineHostRemoved === id ? null : hosts.find(host => host.hostId === id) || hosts[0], fleetReady: async () => {}, config: () => ({ routines: true }), multiHost: () => true,
-      hostChip: host => hostChipHtml(host), closeOtherViews: () => {}, connection: () => {}, autocomplete: options => createCwdAutocomplete(options),
-      copy: async () => {}, status: () => {}, confirm: text => confirm(text), loadPrevious: () => loadSessions(undefined, { withPrevious: true }), selectSession: (id, options) => selectSession(id, options),
+      hostChip: host => fixtureApp.features.hostPresentation.chipHtml(host), closeOtherViews: () => {}, connection: () => {}, autocomplete: options => fixtureApp.ports.routinesController.autocomplete(options),
+      copy: async () => {}, status: () => {}, confirm: text => confirm(text), loadPrevious: () => fixtureApp.features.sidebarLists.load(undefined, { withPrevious: true }), selectSession: (id, options) => fixtureApp.features.sessionView.select(id, options),
     }); window.rt.open();
   });
   await expect(page.locator('.rt-row')).toHaveCount(2);
@@ -106,11 +106,11 @@ test('routine session navigation preserves the answering host and drops a delaye
   await page.evaluate(() => window.rt.open());
   await expect(page.locator('.rt-session-link')).toBeVisible();
   await page.evaluate(() => {
-    const original = sessionState.findSession;
-    window.restoreRoutineLookup = () => { sessionState.findSession = original; };
-    sessionState.findSession = () => undefined;
-    const originalLoad = loadSessions;
-    loadSessions = () => new Promise(resolve => { window.finishRoutineLookup = () => { loadSessions = originalLoad; window.restoreRoutineLookup(); resolve(); }; });
+    const original = fixtureApp.features.sessionState.findSession;
+    window.restoreRoutineLookup = () => { fixtureApp.features.sessionState.findSession = original; };
+    fixtureApp.features.sessionState.findSession = () => undefined;
+    const originalLoad = fixtureApp.features.sidebarLists.load;
+    fixtureApp.features.sidebarLists.load = () => new Promise(resolve => { window.finishRoutineLookup = () => { fixtureApp.features.sidebarLists.load = originalLoad; window.restoreRoutineLookup(); resolve(); }; });
   });
   await page.locator('.rt-session-link').click();
   await expect.poll(() => page.evaluate(() => !!window.finishRoutineLookup)).toBe(true);

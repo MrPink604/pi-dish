@@ -5,7 +5,7 @@ test('thinking selector copies levels, carries owners and disposes without leavi
   const result = await page.evaluate(() => {
     const root = document.createElement('div');
     document.body.append(root);
-    const owner = sessionState.captureSelection();
+    const owner = fixtureApp.features.sessionState.captureSelection();
     const levels = ['off', 'high'];
     const unusual = "future'<b>level</b>";
     const calls = [];
@@ -62,7 +62,7 @@ test('thinking options support native Enter and Space activation and owned Escap
       selectLevel: (owner, level) => window.thinkingFixtureCalls.push(['select', owner.host, level]),
       requestClose: owner => window.thinkingFixtureCalls.push(['close', owner.host]),
     });
-    window.thinkingFixture.update({ owner: sessionState.captureSelection(), levels: ['off', 'high'], currentLevel: 'high' });
+    window.thinkingFixture.update({ owner: fixtureApp.features.sessionState.captureSelection(), levels: ['off', 'high'], currentLevel: 'high' });
   });
   const root = page.locator('#thinkingFixture');
   await root.getByRole('button', { name: 'high', exact: true }).press('Enter');
@@ -80,7 +80,7 @@ test.describe('live thinking selector', () => {
   test('an unusual current level is literal, uses the owning API and cannot leak into another session menu', async ({ page, fleet }) => {
     await fleet.select(fleet.self);
     const unusual = "future'<b>level</b>";
-    await page.evaluate(level => window.fixtureSessionListPatch(sessionState.currentSession.id, { thinkingLevel: level }), unusual);
+    await page.evaluate(level => window.fixtureSessionListPatch(fixtureApp.features.sessionState.currentSession.id, { thinkingLevel: level }), unusual);
     const requests = [];
     await page.route(`${fleet.self.base}/api/sessions/${ROOT}/thinking`, route => {
       const body = route.request().postDataJSON();
@@ -95,7 +95,7 @@ test.describe('live thinking selector', () => {
     await expect.poll(() => requests.length).toBe(1);
     expect(requests).toEqual([{ level: unusual }]);
     await expect(root).toBeHidden();
-    expect(await page.evaluate(() => sessionControls.thinkingSelector)).toBeNull();
+    expect(await page.evaluate(() => fixtureApp.features.sessionControls.thinkingSelector)).toBeNull();
     expect(await page.evaluate(() => [...THINKING_LEVEL_NAMES])).not.toContain(unusual);
 
     await fleet.select(fleet.peer);
@@ -111,9 +111,9 @@ test.describe('live thinking selector', () => {
     await page.click('#sessionThinking');
     await expect(page.locator('#thinkingDropdown .thinking-option')).not.toHaveCount(0);
     const after = await page.evaluate(({ id, host }) => {
-      const request = apiFetch;
+      const request = fixtureApp.features.apiTransport.request;
       let sends = 0;
-      apiFetch = (target, path, options) => {
+      fixtureApp.features.apiTransport.request = (target, path, options) => {
         if (path.endsWith('/thinking')) {
           sends++;
           return Promise.resolve(new Response(JSON.stringify({ success: true, level: 'high' })));
@@ -122,12 +122,12 @@ test.describe('live thinking selector', () => {
       };
       // Leave the old DOM in place to exercise the action adapter's owner check
       // independently of normal selection-change disposal.
-      sessionState.advanceSelection();
-      sessionState.setCurrentSession(id, host);
+      fixtureApp.features.sessionState.advanceSelection();
+      fixtureApp.features.sessionState.setCurrentSession(id, host);
       document.querySelector('#thinkingDropdown .thinking-option').click();
-      closeThinkingDropdown();
-      apiFetch = request;
-      return { owner: sessionState.captureSelection(), sends };
+      fixtureApp.features.sessionControls.closeThinking();
+      fixtureApp.features.apiTransport.request = request;
+      return { owner: fixtureApp.features.sessionState.captureSelection(), sends };
     }, { id: ROOT, host: fleet.peer.hostId });
     expect(after.owner.host).toBe(fleet.peer.hostId);
     expect(after.sends).toBe(0);

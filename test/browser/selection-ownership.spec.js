@@ -15,23 +15,23 @@ test.describe('live selection ownership', () => {
 
   test('stale transcript and stream entrypoints leave the current host and connection untouched', async ({ page, fleet }) => {
     await fleet.select(fleet.peer);
-    await page.evaluate(() => { window.staleSelection = sessionState.captureSelection(); });
+    await page.evaluate(() => { window.staleSelection = fixtureApp.features.sessionState.captureSelection(); });
     await fleet.select(fleet.self);
-    await expect.poll(() => page.evaluate(() => messageStreamController.source?.readyState)).toBe(1);
+    await expect.poll(() => page.evaluate(() => fixtureApp.features.messageStreamController.source?.readyState)).toBe(1);
     const result = await page.evaluate(async () => {
-      const stream = messageStreamController.source;
+      const stream = fixtureApp.features.messageStreamController.source;
       const before = document.getElementById('messages').innerHTML;
-      const fetch = apiFetch;
+      const fetch = fixtureApp.features.apiTransport.request;
       let requests = 0;
-      apiFetch = (...args) => { requests += 1; return fetch(...args); };
+      fixtureApp.features.apiTransport.request = (...args) => { requests += 1; return fetch(...args); };
       try {
-        await loadMessages(window.staleSelection);
-        await fetchNewMessagesSince(window.staleSelection);
-        await loadSessionRelations(window.staleSelection);
-        startMessageStream(window.staleSelection);
+        await fixtureApp.features.transcriptController.load(window.staleSelection);
+        await fixtureApp.features.transcriptController.catchup(window.staleSelection);
+        await fixtureApp.features.sessionRelationsController.load(window.staleSelection);
+        fixtureApp.features.messageStreamController.start(window.staleSelection);
         return { unchanged: before === document.getElementById('messages').innerHTML,
-          sameStream: stream === messageStreamController.source, host: sessionState.currentSession.host, requests };
-      } finally { apiFetch = fetch; }
+          sameStream: stream === fixtureApp.features.messageStreamController.source, host: fixtureApp.features.sessionState.currentSession.host, requests };
+      } finally { fixtureApp.features.apiTransport.request = fetch; }
     });
     expect(result).toEqual({ unchanged: true, sameStream: true, host: fleet.self.hostId, requests: 0 });
   });
@@ -40,10 +40,10 @@ test.describe('live selection ownership', () => {
     let receive;
     const received = new Promise(resolve => { receive = resolve; });
     await page.evaluate(() => {
-      const mint = mintHostTicket;
-      mintHostTicket = (host, purpose) => {
-        const pending = mint(host, purpose);
-        if (purpose === 'stream') window.pendingStreamTicket = pending;
+      const mint = fixtureApp.ports.messageStreamController.ticket;
+      fixtureApp.ports.messageStreamController.ticket = host => {
+        const pending = mint(host);
+        window.pendingStreamTicket = pending;
         return pending;
       };
     });
@@ -51,11 +51,11 @@ test.describe('live selection ownership', () => {
     await fleet.select(fleet.peer);
     const ticket = await received;
     await fleet.select(fleet.self);
-    await expect.poll(() => page.evaluate(() => messageStreamController.source?.readyState)).toBe(1);
-    const before = await page.evaluate(() => messageStreamController.source.url);
+    await expect.poll(() => page.evaluate(() => fixtureApp.features.messageStreamController.source?.readyState)).toBe(1);
+    const before = await page.evaluate(() => fixtureApp.features.messageStreamController.source.url);
     await ticket.fulfill({ json: { ticket: 'superseded-fixture-ticket' } });
     await page.evaluate(() => window.pendingStreamTicket);
-    expect(await page.evaluate(() => messageStreamController.source.url)).toBe(before);
+    expect(await page.evaluate(() => fixtureApp.features.messageStreamController.source.url)).toBe(before);
     expect(before).toContain(fleet.self.base);
     await expect(fleet.row(fleet.self)).toHaveClass(/\bactive\b/);
   });

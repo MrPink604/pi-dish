@@ -25,10 +25,10 @@ test('known cwd responses stay with their host across picker changes', async ({ 
   const held = [];
   await page.route('**/api/cwds', route => held.push(route));
   await page.evaluate(() => {
-    const original = loadKnownCwds;
+    const original = fixtureApp.features.newSessionController.directories.load;
     window.cwdLoads = [];
-    loadKnownCwds = (...args) => { const work = original(...args); window.cwdLoads.push(work); return work; };
-    openNewSessionView();
+    fixtureApp.features.newSessionController.directories.load = (...args) => { const work = original(...args); window.cwdLoads.push(work); return work; };
+    fixtureApp.features.newSessionController.open();
   });
   await expect.poll(() => held.length).toBe(1);
   await page.selectOption('#nsHostSelect', fleet.peer.hostId);
@@ -37,7 +37,7 @@ test('known cwd responses stay with their host across picker changes', async ({ 
   await page.evaluate(() => window.cwdLoads[1]);
   await held[0].fulfill({ json: [{ path: '/old-self', short: '~/old-self' }] });
   await page.evaluate(() => window.cwdLoads[0]);
-  expect(await page.evaluate(() => directoryCatalog.current().map(row => row.short))).toEqual(['~/peer-only']);
+  expect(await page.evaluate(() => fixtureApp.features.newSessionController.directories.current().map(row => row.short))).toEqual(['~/peer-only']);
 });
 
 test('typing retires an old directory body before the next debounce starts', async ({ page, fleet }) => {
@@ -46,7 +46,7 @@ test('typing retires an old directory body before the next debounce starts', asy
   await holdBody(page, oldUrl);
   await page.route(oldUrl, route => route.fulfill({ json: [{ path: '/older', short: '~/older' }] }));
   await page.route(`${fleet.self.base}/api/dirs?q=newer`, route => { next = route; });
-  await page.evaluate(() => openNewSessionView());
+  await page.evaluate(() => fixtureApp.features.newSessionController.open());
   await page.locator('#newSessionCwd').fill('older');
   await expect.poll(() => page.evaluate(() => window.directoryBodyWaiting)).toBe(true);
   const afterOldBody = await page.evaluate(async () => {
@@ -67,7 +67,7 @@ test('leaving and returning to a host retires its old autocomplete body', async 
   const url = `${fleet.self.base}/api/dirs?q=retired`;
   await holdBody(page, url);
   await page.route(url, route => route.fulfill({ json: [{ path: '/retired', short: '~/retired' }] }));
-  await page.evaluate(() => openNewSessionView());
+  await page.evaluate(() => fixtureApp.features.newSessionController.open());
   await page.locator('#newSessionCwd').fill('retired');
   await expect.poll(() => page.evaluate(() => window.directoryBodyWaiting)).toBe(true);
   await page.selectOption('#nsHostSelect', fleet.peer.hostId);
@@ -82,7 +82,7 @@ test('a retired directory tree cannot publish children or act on the current hos
   await holdBody(page, url);
   await page.route(url, route => route.fulfill({ json: { dirs: [{ path: '/retired', name: 'retired' }] } }));
   await page.route(`${fleet.peer.base}/api/dirs/children?path=~`, route => route.fulfill({ json: { dirs: [{ path: '/peer-dir', name: 'peer-dir' }] } }));
-  await page.evaluate(() => openNewSessionView());
+  await page.evaluate(() => fixtureApp.features.newSessionController.open());
   await page.locator('#nsTree .ns-tree-chevron').first().click();
   await expect.poll(() => page.evaluate(() => window.directoryBodyWaiting)).toBe(true);
   await page.evaluate(() => { window.retiredTreeRow = document.querySelector('#nsTree .ns-tree-row'); });
@@ -101,7 +101,7 @@ test('existing cwd suggestions remain navigable during debounce and Escape only 
   await page.route(`${fleet.self.base}/api/dirs?q=shown`, route => route.fulfill({ json: [{ path: '/shown', short: '~/shown' }] }));
   let pending;
   await page.route(`${fleet.self.base}/api/dirs?q=pending`, route => { pending = route; });
-  await page.evaluate(() => openNewSessionView());
+  await page.evaluate(() => fixtureApp.features.newSessionController.open());
   const input = page.locator('#newSessionCwd');
   await input.fill('shown');
   await expect(page.locator('#cwdDropdown .cwd-option')).toHaveText('~/shown');
@@ -118,7 +118,7 @@ test('existing cwd suggestions remain navigable during debounce and Escape only 
 test('visible cwd paths can still be picked while a replacement query is pending', async ({ page, fleet }) => {
   await page.route(`${fleet.self.base}/api/cwds`, route => route.fulfill({ json: [] }));
   await page.route('**/api/dirs?q=*', route => route.fulfill({ json: [{ path: '/shown', short: '~/shown' }] }));
-  await page.evaluate(() => openNewSessionView());
+  await page.evaluate(() => fixtureApp.features.newSessionController.open());
   const input = page.locator('#newSessionCwd');
   await input.fill('shown');
   await expect(page.locator('#cwdDropdown .cwd-option')).toHaveText('~/shown');
@@ -143,13 +143,13 @@ test('catalog edits renew an open directory tree with the current host token', a
     cwds.push(route.request().headers().authorization);
     return route.fulfill({ json: [{ path: '/peer', short: '~/peer' }] });
   });
-  await page.evaluate(() => openNewSessionView());
+  await page.evaluate(() => fixtureApp.features.newSessionController.open());
   await page.selectOption('#nsHostSelect', fleet.peer.hostId);
   await page.locator('#nsTree .ns-tree-chevron').first().click();
   await expect(page.locator('#nsTree .ns-tree-name')).toHaveText(['~', 'peer']);
   await page.evaluate(id => {
-    hostDirectory.setToken(id, 'rotated-fixture');
-    saveHostCatalog();
+    fixtureApp.features.hostDirectory.setToken(id, 'rotated-fixture');
+    fixtureApp.features.hostSettings.save();
   }, fleet.peer.hostId);
   await expect(page.locator('#nsTree .ns-tree-name')).toHaveText(['~']);
   await page.locator('#nsTree .ns-tree-chevron').first().click();
@@ -164,7 +164,7 @@ test('learning self identity renews directories opened before startup discovery 
   await page.route(`${fleet.self.base}/api/dirs/children?path=~`, route => route.fulfill({ json: { dirs: [{ path: '/early', name: 'early' }] } }));
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect.poll(() => !!identity).toBe(true);
-  await page.evaluate(() => openNewSessionView());
+  await page.evaluate(() => fixtureApp.features.newSessionController.open());
   await page.locator('#nsTree .ns-tree-chevron').first().click();
   await expect(page.locator('#nsTree .ns-tree-name')).toHaveText(['~', 'early']);
   await identity.fulfill({ json: { hostId: fleet.self.hostId, label: 'self' } });

@@ -5,9 +5,9 @@ async function probe(page, fleet, mode = 'normal') {
   await page.evaluate(mode => {
     window.termProbe = { writes: [], sockets: [], terminals: [], tickets: [] };
     const probe = window.termProbe;
-    const host = Object.freeze({ ...hostEntryFor(null), token: mode === 'tickets' ? 'fixture-only' : null });
+    const host = Object.freeze({ ...fixtureApp.ports.appModels.host(null), token: mode === 'tickets' ? 'fixture-only' : null });
     probe.host = host;
-    const controller = PiDishBrowser.createTerminalController({ document, storage: localStorage, sessionState,
+    const controller = PiDishBrowser.createTerminalController({ document, storage: localStorage, sessionState: fixtureApp.features.sessionState,
       host: () => probe.host, supportsTerminal: () => true, supportsTmux: () => true,
       asset: async () => { if (mode === 'assets') await new Promise(resolve => { probe.finishAssets = resolve; }); },
       createTerminal: options => {

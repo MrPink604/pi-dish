@@ -35,7 +35,7 @@ for (const kind of ['prompt', 'command', 'steer', 'followUp']) {
     const received = new Promise(resolve => { receive = resolve; });
     await page.route(endpoint, route => receive(route));
     await page.evaluate(kind => {
-      window.testSend = kind === 'steer' ? sendSteer() : kind === 'followUp' ? sendFollowUp() : sendPrompt();
+      window.testSend = kind === 'steer' ? fixtureApp.features.composerSubmit.sendSteer() : kind === 'followUp' ? fixtureApp.features.composerSubmit.sendFollowUp() : fixtureApp.features.composerSubmit.sendPrompt();
     }, kind);
     const route = await received;
     await fleet.select(fleet.peer);

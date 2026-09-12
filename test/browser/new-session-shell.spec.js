@@ -1,14 +1,14 @@
 const { test, expect } = require('./fixtures');
 
 test('workspace buttons retain their owning host and are retired on host change or close', async ({ page, fleet }) => {
-  await page.evaluate(() => openNewSessionView({ cwd: '/initial' }));
+  await page.evaluate(() => fixtureApp.features.newSessionController.open({ cwd: '/initial' }));
   await expect(page.locator('#nsWorkspaces button')).not.toHaveCount(0);
   await page.evaluate(() => { window.oldWorkspaceButton = document.querySelector('#nsWorkspaces button'); });
   await page.selectOption('#nsHostSelect', fleet.peer.hostId);
   await page.fill('#newSessionCwd', '/peer-manual');
   await page.evaluate(() => window.oldWorkspaceButton.click());
   await expect(page.locator('#newSessionCwd')).toHaveValue('/peer-manual');
-  await page.evaluate(() => { window.peerWorkspaceButton = document.querySelector('#nsWorkspaces button'); closeNewSessionView(); });
+  await page.evaluate(() => { window.peerWorkspaceButton = document.querySelector('#nsWorkspaces button'); fixtureApp.features.newSessionController.close(); });
   await page.evaluate(() => window.peerWorkspaceButton.click());
   await expect(page.locator('#newSessionCwd')).toHaveValue('/peer-manual');
 });
@@ -19,19 +19,19 @@ test('disposing the form retires late harness results, debounce callbacks and in
   await page.clock.install();
   await page.route('**/api/harnesses', route => { reads.push(route); });
   await page.route('**/api/models*', route => { modelReads++; return route.continue(); });
-  await page.evaluate(() => openNewSessionView({ cwd: '/dispose' }));
+  await page.evaluate(() => fixtureApp.features.newSessionController.open({ cwd: '/dispose' }));
   await expect.poll(() => reads.length).toBe(1);
   await page.evaluate(() => {
-    window.disposedHarnessRead = loadHarnesses();
+    window.disposedHarnessRead = fixtureApp.features.newSessionController.harnesses.load();
   });
   // Only the latest explicit load may settle, matching discovery sequence ownership.
   await expect.poll(() => reads.length).toBe(2);
   const beforeModels = modelReads;
   const before = await page.locator('#nsHarnessSelect').innerHTML();
   await page.evaluate(() => {
-    newSessionController.scheduleRefresh();
-    newSessionController.dispose();
-    newSessionController.open({ cwd: '/must-not-open' });
+    fixtureApp.features.newSessionController.scheduleRefresh();
+    fixtureApp.features.newSessionController.dispose();
+    fixtureApp.features.newSessionController.open({ cwd: '/must-not-open' });
   });
   for (const read of reads) await read.fulfill({ json: { harnesses: [{ id: 'new-harness', available: true }] } });
   await page.evaluate(() => window.disposedHarnessRead);
@@ -50,12 +50,12 @@ test('disposing the form retires late harness results, debounce callbacks and in
 
 test('a closed-form view token stops owning asynchronous work after disposal', async ({ page, fleet }) => {
   const owns = await page.evaluate(() => {
-    closeNewSessionView();
-    const owns = newSessionController.captureView();
+    fixtureApp.features.newSessionController.close();
+    const owns = fixtureApp.features.newSessionController.captureView();
     const before = owns();
     const message = document.getElementById('nsError').textContent;
-    newSessionController.dispose();
-    newSessionController.error('must-not-write');
+    fixtureApp.features.newSessionController.dispose();
+    fixtureApp.features.newSessionController.error('must-not-write');
     return { before, after: owns(), message, current: document.getElementById('nsError').textContent };
   });
   expect(owns.before).toBe(true);

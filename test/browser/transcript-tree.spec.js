@@ -9,7 +9,7 @@ const tree = { nodes: [
 async function setup(page, fleet) {
   await fleet.select(fleet.peer);
   await page.route('**/api/sessions/*/tree', route => route.fulfill({ json: tree }));
-  await page.evaluate(() => openTreeModal());
+  await page.evaluate(() => fixtureApp.features.transcriptTree.open());
 }
 
 test('tree filters retire retained row and branch controls and preserve tool labels', async ({ page, fleet }) => {
@@ -38,16 +38,16 @@ for (const success of [true, false]) test(`a late branch ${success ? 'success' :
   await setup(page, fleet);
   let held;
   await page.route(fleet.peer.base + `/api/sessions/${ROOT}/branch`, route => { held = route; });
-  await page.evaluate(() => { selectTreeNode('first'); window.treeBranch = confirmBranch(); });
+  await page.evaluate(() => { fixtureApp.features.transcriptTree.select('first'); window.treeBranch = fixtureApp.features.transcriptTree.confirm(); });
   await expect.poll(() => !!held).toBe(true);
-  await page.evaluate(async () => { closeTreeModal(); await openTreeModal(); selectTreeNode('second'); });
-  const before = await page.evaluate(() => sessionState.captureSelection());
+  await page.evaluate(async () => { fixtureApp.features.transcriptTree.close(); await fixtureApp.features.transcriptTree.open(); fixtureApp.features.transcriptTree.select('second'); });
+  const before = await page.evaluate(() => fixtureApp.features.sessionState.captureSelection());
   await held.fulfill(success ? { json: { editorText: 'Original editor text' } } : { status: 500, json: { error: 'Old branch error' } });
   await page.evaluate(() => window.treeBranch);
   await expect(page.locator('#treeModal')).toBeVisible();
   await expect(page.locator('.tree-node.selected')).toHaveAttribute('data-id', 'second');
   await expect(page.locator('#branchGoBtn')).toBeEnabled();
-  expect(await page.evaluate(() => sessionState.captureSelection())).toEqual(before);
+  expect(await page.evaluate(() => fixtureApp.features.sessionState.captureSelection())).toEqual(before);
   await expect(page.locator('#status')).not.toContainText('Old branch error');
 });
 
@@ -55,7 +55,7 @@ test('tree ids and unknown roles render as text without inline handlers', async 
   await fleet.select(fleet.self);
   const id = 'entry" onclick="window.treeInjected=1';
   await page.route('**/api/sessions/*/tree', route => route.fulfill({ json: { nodes: [{ id, type: 'message', role: '<img src=x onerror="window.treeInjected=1">', depth: 1e200 }], activePathIds: [], leafId: null } }));
-  await page.evaluate(() => openTreeModal());
+  await page.evaluate(() => fixtureApp.features.transcriptTree.open());
   await expect(page.locator('.tree-node')).toHaveAttribute('data-id', id);
   await expect(page.locator('.tree-node img')).toHaveCount(0);
   expect(await page.locator('.tree-node').getAttribute('onclick')).toBeNull();
@@ -71,10 +71,10 @@ test('tree disposal retires pending loads and retained controls', async ({ page,
   let held, writes = 0;
   await page.route('**/api/sessions/*/tree', route => { held = route; });
   await page.route('**/api/sessions/*/branch', route => { writes++; return route.fulfill({ json: {} }); });
-  await page.evaluate(() => { window.treeLoad = openTreeModal(); });
+  await page.evaluate(() => { window.treeLoad = fixtureApp.features.transcriptTree.open(); });
   await expect.poll(() => !!held).toBe(true);
-  await page.evaluate(() => { transcriptTree.dispose(); window.oldBranch.click(); });
+  await page.evaluate(() => { fixtureApp.features.transcriptTree.dispose(); window.oldBranch.click(); });
   await held.fulfill({ json: tree }); await page.evaluate(() => window.treeLoad);
   await expect(page.locator('#treeModal')).toBeHidden();
-  expect(await page.evaluate(() => transcriptTree.data)).toBeNull(); expect(writes).toBe(0);
+  expect(await page.evaluate(() => fixtureApp.features.transcriptTree.data)).toBeNull(); expect(writes).toBe(0);
 });

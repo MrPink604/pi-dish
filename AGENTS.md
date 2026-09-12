@@ -12,7 +12,7 @@ for the implemented boundaries. First-party browser application logic is authore
 in strict TypeScript under `src/browser/`; the server application and feature
 stores remain a separate migration stage.
 Browser session state lives in `src/browser/session-state.ts`; use its writers
-and selection guards from `app.ts` via `PiDishBrowser.createSessionState`. Continue
+and selection guards from `app.ts` through its `createSessionState` import. Continue
 with vanilla TypeScript modules in `src/browser/`; regenerate and commit
 `public/app.js`, `public/browser.js`, `public/helpers.js`, `public/artifact-comments.js` and
 `public/theme-prepaint.js` with

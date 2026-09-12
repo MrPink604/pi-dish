@@ -68,7 +68,7 @@ module.exports = async function usage({ desktop, check, SESSION_ID }) {
   // Index refreshes replace the controls and chart wholesale. Wait until
   // that background work is done before exercising a click-driven pivot;
   // otherwise the assertion races a render from an older request.
-  await desktop.waitForFunction(() => usageController.data && !usageController.data.indexing, null, { timeout: 10000 });
+  await desktop.waitForFunction(() => fixtureApp.features.usageController.data && !fixtureApp.features.usageController.data.indexing, null, { timeout: 10000 });
   await desktop.click('[data-stack="buckets"]');
   await desktop.waitForFunction(() =>
     [...document.querySelectorAll('#usageChart .usage-legend-item')].some(el => el.textContent === 'Cached read') &&
@@ -88,10 +88,10 @@ module.exports = async function usage({ desktop, check, SESSION_ID }) {
   // captured mid-indexing goes stale by click time. Wait for indexing to
   // settle with the smoke model present, then resolve the index once.
   await desktop.waitForFunction(() =>
-    usageController.data && !usageController.data.indexing &&
-    usageController.chart.buckets.some(b => b.models?.some(m => m.ref === 'test/smoke-model')),
+    fixtureApp.features.usageController.data && !fixtureApp.features.usageController.data.indexing &&
+    fixtureApp.features.usageController.chart.buckets.some(b => b.models?.some(m => m.ref === 'test/smoke-model')),
     null, { timeout: 10000 });
-  const smokeBucket = await desktop.evaluate(() => usageController.chart.buckets.findIndex(b =>
+  const smokeBucket = await desktop.evaluate(() => fixtureApp.features.usageController.chart.buckets.findIndex(b =>
     b.models?.some(m => m.ref === 'test/smoke-model')));
   await desktop.locator('#usageChart .usage-col').nth(smokeBucket).click();
   await desktop.waitForSelector('.usage-day-detail', { timeout: 2000 });

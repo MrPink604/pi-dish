@@ -12,7 +12,7 @@ module.exports = async function bounce({ base, CWD, desktop, check }) {
   });
   let bouncedId = bounceSpawn.id;
   try {
-    await desktop.evaluate(() => openSettingsModal());
+    await desktop.evaluate(() => fixtureApp.features.displayPreferences.open());
     await desktop.click('#openBounceAgents');
     check(await desktop.locator('#settingsModal').isVisible() &&
       await desktop.locator('#settingsModal #bounceMode').isVisible(),
@@ -33,12 +33,12 @@ module.exports = async function bounce({ base, CWD, desktop, check }) {
     const bounced = bounceOperations.operations.flatMap(op => op.targets).find(t => t.sessionId === bounceSpawn.id);
     check(bounced?.status === 'completed', 'Bounce agents completes the selected owned RPC restart');
     bouncedId = bounced.replacementId || bouncedId;
-    await desktop.evaluate(() => openSettingsModal());
+    await desktop.evaluate(() => fixtureApp.features.displayPreferences.open());
     await desktop.click('#openRecoveryReport');
     check(!(await desktop.locator('#settingsModal').isVisible()) &&
       !(await desktop.locator('#bounceMode').isVisible()),
     'opening recovery closes Settings and its bounce controls');
-    await desktop.evaluate(() => openSettingsModal());
+    await desktop.evaluate(() => fixtureApp.features.displayPreferences.open());
     await desktop.click('#openBounceAgents');
     check(await desktop.locator('#settingsModal #bounceMode').isVisible(),
       'bounce controls reopen in Settings over the current view');

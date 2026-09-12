@@ -58,10 +58,13 @@ All first-party browser application logic is authored under `src/browser/`.
 `app.ts` composes typed feature controllers; static HTML carries registered action
 names wired through `app-bindings.ts`. `app-chrome.ts` owns viewport, focus and
 mobile-panel state. Run `npm run build:browser` and commit all five generated
-scripts; `npm run check` rejects stale output. The app remains a classic script
-for existing callers and isolated test instrumentation, with type-only imports.
-References to app functions below describe their typed implementations or thin
-entrypoint wrappers, not permission to edit generated `public/app.js`.
+scripts; `npm run check` rejects stale output. The app bundles ordinary imports
+from the feature modules and shared helpers into one private IIFE. It exposes
+no application globals. Browser fixtures observe feature construction and ports
+in a separate test-only build; the production page loads neither the factory
+test entrypoint nor a debug object. References to older app function names below
+describe the corresponding feature behavior, not global entrypoints or permission
+to edit generated `public/app.js`. See [the composition record](docs/browser-composition-cleanup.md).
 
 ## Frontend libraries (public/vendor/)
 
@@ -1292,7 +1295,7 @@ browser assertions.
 
 ## Client session state (src/browser/session-state.ts)
 
-`app.js` creates one `sessionState` store through `PiDishBrowser.createSessionState`
+`app.ts` creates one `sessionState` store through its `createSessionState` import
 with host lookup and rendering hooks. `SelectionOwner` is exported by this typed
 module and shared by the API adapter and model selector.
 Its `sessions` (sidebar lists) and `currentSession` (a **detached copy** of the
@@ -1799,18 +1802,19 @@ normalization. Browser ingress validates named fields and separates opaque extra
 `SessionEntry` retains the field contract through state and rendering. Client
 projection preserves server Dates and omits private routing metadata. The module
 also defines catalog and mutation response decoders consumed by
-`src/browser/api-client.ts`. The checked-in `public/browser.js` bundle loads
-before the ordinary app script and exposes `PiDishBrowser`; regenerate it with
-`npm run build:browser`. The app retains selection/view guards and the existing
-API wrapper names, while the adapter owns host resolution and typed reads/actions. Its checks do not replace capability gates or lifecycle proofs.
+`src/browser/api-client.ts`, bundled directly into `public/app.js`. Regenerate it
+with `npm run build:browser`. Features retain selection/view guards; the adapter
+owns host resolution and typed reads/actions. `public/browser.js` remains the
+independent factory test entrypoint and is not loaded by the production page.
+These checks do not replace capability gates or lifecycle proofs.
 
 ## Model dropdown / scoped models
 
 `src/browser/model-selector.ts` owns the dropdown DOM behind mount/update/dispose
-and explicit owner-bearing actions. `app.js` retains query/edit state, catalog
-writes, visibility and request feedback; its action adapter checks the captured
-owner. Closing disposes the instance and removes its listeners. The module is
-compiled into `public/browser.js`; see [the evaluation baseline](docs/model-selector-baseline.md).
+and explicit owner-bearing actions. `session-controls.ts` owns query/edit state,
+catalog writes, visibility and request feedback; its action adapter checks the
+captured owner. Closing disposes the instance and removes its listeners. The
+module is bundled into `public/app.js`; see [the evaluation baseline](docs/model-selector-baseline.md).
 
 The header model dropdown mirrors pi's scoped-models feature (`/scoped-models`
 in the TUI). pi's extension/RPC APIs expose no way to read or set a live

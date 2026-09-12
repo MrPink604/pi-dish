@@ -7,14 +7,15 @@ All first-party browser application logic is authored in `src/browser/`, includi
 the application entrypoint and static control bindings. The five scripts shipped
 under `public/` are generated and checked against strict TypeScript source.
 That milestone established checked modules and explicit request/view ownership;
-it did not eliminate the browser's classic-script forwarding layer or make the
-session metadata pipeline strongly typed end to end.
+the subsequent catalog and composition stages replace the metadata adapters and
+the browser's classic-script forwarding layer.
 
 **Session catalog and metadata are implemented**, connecting discovery, explicit
 source resolution, indexed metadata, catalog composition and browser state through
 checked contracts. The [implementation record](docs/session-catalog-migration.md)
-records verification and both Fable review clearances. Browser composition cleanup is the next
-separate stage. Vanilla DOM rendering, local assets and existing server/Electron
+records verification and both Fable review clearances. **Browser composition
+cleanup is implemented and undergoing verification/review** in its
+[stage record](docs/browser-composition-cleanup.md). Vanilla DOM rendering, local assets and existing server/Electron
 delivery remain supported.
 
 Browser work was divided into 43 checkpoints. See
@@ -65,7 +66,9 @@ transcript writers. Numeric models, misspelled fields and identity writes now
 fail compilation. The source resolver replaces the server's path side map and
 route cache; catalog composition replaces independent row builders and annotations.
 Sidebar/header consumers retain display fallbacks without re-decoding established
-fields. The browser's classic-script forwarding facade remains a separate debt.
+fields. The composition stage removes the browser's global forwarding facade,
+bundles direct module imports and moves test instrumentation to fixture-only
+controller/port observations.
 
 ## Status at a glance
 
@@ -75,6 +78,7 @@ fields. The browser's classic-script forwarding facade remains a separate debt.
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
 | Browser migration | Source implementation complete and reviewed | All first-party application logic and bindings are typed. Local strict, backend, browser and UI checks pass; each push must also pass the CI matrix. |
 | Session catalog and metadata | Tasks 1–7 implemented, verified and reviewed | Checked discovery/source/index/catalog and closed browser state replace competing adapters and render-time normalization. Strict checks, 974 backend tests, browser/UI coverage and Fable review are recorded in the stage plan. |
+| Browser composition | Implemented; verification/review in progress | Direct bundled imports and controller wiring replace global forwarding functions. Test-only observations preserve ownership probes; production scenarios exercise the uninstrumented bundle. |
 | Remaining server application and feature modules | Later — outside the next bounded stage | Lifecycle redesign, general routes, recovery and feature stores still need separate stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -201,11 +205,9 @@ names instead of executable event handlers.
 
 ## Ordered next work
 
-1. **Browser composition cleanup.** Replace the broad classic-script forwarding
-   facade with ordinary bundled dependencies and explicit composition. Migrate
-   test instrumentation without losing ownership-race coverage; do not recreate
-   the facade as an equally broad permanent debug object. This is a separate
-   stage, not bundled into the metadata cutover.
+1. **Complete composition verification and review.** The implementation is recorded
+   in [the stage plan](docs/browser-composition-cleanup.md). Keep the fixture probe
+   out of the production bundle and preserve the existing ownership-race checks.
 2. **Remaining backend boundaries.** Evaluate lifecycle orchestration next on
    safety and simplification grounds; migrate feature stores when their consumer
    contracts justify it, not simply because they are easy JavaScript files.

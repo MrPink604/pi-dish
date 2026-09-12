@@ -2,9 +2,9 @@ const { test, expect, ROOT } = require('./fixtures');
 test('late resume-model options cannot replace the picker for a newly selected host', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
   await page.evaluate(() => {
-    window.fixtureSessionListPatch(sessionState.currentSession.id, { harnessId: 'omp' });
-    const original = apiFetch; apiFetch = (host, path, init) => path.startsWith('/api/models') ? new Promise(resolve => { window.finishResumeModels = resolve; }) : original(host, path, init);
-    window.oldResumeModels = loadResumeModelOptions(sessionState.currentSession);
+    window.fixtureSessionListPatch(fixtureApp.features.sessionState.currentSession.id, { harnessId: 'omp' });
+    const original = fixtureApp.features.apiTransport.request; fixtureApp.features.apiTransport.request = (host, path, init) => path.startsWith('/api/models') ? new Promise(resolve => { window.finishResumeModels = resolve; }) : original(host, path, init);
+    window.oldResumeModels = fixtureApp.features.sessionResume.load(fixtureApp.features.sessionState.currentSession);
   });
   await fleet.select(fleet.peer);
   await page.evaluate(() => { window.finishResumeModels(new Response(JSON.stringify([{ provider: 'fixture', id: 'old' }]))); return window.oldResumeModels; });
@@ -15,7 +15,7 @@ test('resume serializes a captured target and cannot navigate the replacement se
   await fleet.select(fleet.self);
   await page.evaluate(() => {
     window.resumeCalls = []; window.resumeNavigations = []; window.resumeStatuses = [];
-    window.ownedResume = PiDishBrowser.createSessionResume({ document, sessionState, endpoint: () => ({ base: 'http://captured' }), target: () => ({ type: 'tmux', socket: 'fixture', tmuxSession: 'captured' }),
+    window.ownedResume = PiDishBrowser.createSessionResume({ document, sessionState: fixtureApp.features.sessionState, endpoint: () => ({ base: 'http://captured' }), target: () => ({ type: 'tmux', socket: 'fixture', tmuxSession: 'captured' }),
       request: (...args) => new Promise(resolve => window.resumeCalls.push({ args, resolve })), refresh: async () => {}, select: (...args) => window.resumeNavigations.push(args), status: (...args) => window.resumeStatuses.push(args) });
     window.resumeFirst = window.ownedResume.resume(); void window.ownedResume.resume();
   });
@@ -29,11 +29,11 @@ test('resume serializes a captured target and cannot navigate the replacement se
 test('resume disposal retires late response effects and changed endpoints retire picker data', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
   await page.evaluate(() => {
-    window.fixtureSessionListPatch(sessionState.currentSession.id, { harnessId: 'omp' });
+    window.fixtureSessionListPatch(fixtureApp.features.sessionState.currentSession.id, { harnessId: 'omp' });
     window.resumeEndpoint = { base: 'http://original' }; window.resumeResponses = []; window.resumeEffects = [];
-    window.ownedResume = PiDishBrowser.createSessionResume({ document, sessionState, endpoint: () => window.resumeEndpoint, target: () => null,
+    window.ownedResume = PiDishBrowser.createSessionResume({ document, sessionState: fixtureApp.features.sessionState, endpoint: () => window.resumeEndpoint, target: () => null,
       request: (...args) => new Promise(resolve => window.resumeResponses.push({ args, resolve })), refresh: async () => window.resumeEffects.push('refresh'), select: () => window.resumeEffects.push('select'), status() {} });
-    window.oldPicker = window.ownedResume.load(sessionState.currentSession); window.resumeEndpoint = { base: 'http://new' }; window.resumeResponses[0].resolve(new Response(JSON.stringify([{ provider: 'fixture', id: 'old' }])));
+    window.oldPicker = window.ownedResume.load(fixtureApp.features.sessionState.currentSession); window.resumeEndpoint = { base: 'http://new' }; window.resumeResponses[0].resolve(new Response(JSON.stringify([{ provider: 'fixture', id: 'old' }])));
   });
   await page.evaluate(() => window.oldPicker);
   await expect(page.locator('#resumeModelSelect')).not.toContainText('fixture/old');
@@ -44,10 +44,10 @@ test('list ingress omits malformed presentation fields before header rendering a
   await page.route(`${fleet.self.base}/api/sessions?**`, route => route.fulfill({ json: {
     active: [], previous: [{ id: ROOT, name: '<img src=x>', model: null, cwd: {}, contextPercent: {}, contextTokens: 'not numeric', turnInProgress: 1 }],
   } }));
-  await page.evaluate(() => loadSessions(undefined, { withPrevious: true }));
+  await page.evaluate(() => fixtureApp.features.sidebarLists.load(undefined, { withPrevious: true }));
   // Inspect the list before transcript metadata legitimately refreshes the header.
   expect(await page.evaluate(({ id, host }) => {
-    const row = sessionState.findSession(id, host);
+    const row = fixtureApp.features.sessionState.findSession(id, host);
     return { cwd: row.cwd, contextPercent: row.contextPercent, contextTokens: row.contextTokens, turnInProgress: row.turnInProgress };
   }, { id: ROOT, host: fleet.self.hostId })).toEqual({ cwd: undefined, contextPercent: undefined, contextTokens: undefined, turnInProgress: undefined });
   await page.route(`${fleet.self.base}/api/sessions/${ROOT}/messages?**`, route => route.fulfill({ json: { messages: [], session: {} } }));
@@ -59,15 +59,15 @@ test('list ingress omits malformed presentation fields before header rendering a
 test('restored same-host tool panels retain their node and duration after a new selection generation', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
   await page.evaluate(() => {
-    appendLiveToolPanel({ toolCallId: 'cached-tool', toolName: 'Bash', startedAt: Date.now() - 1000 });
+    fixtureApp.features.liveToolsController.append({ toolCallId: 'cached-tool', toolName: 'Bash', startedAt: Date.now() - 1000 });
     window.cachedTool = document.querySelector('[data-tool-call-id="cached-tool"]'); window.cachedTool.open = true;
-    window.cachedTool.remove(); liveToolsController.clear(document.getElementById('messages'));
-    sessionState.advanceSelection(); document.getElementById('messages').append(window.cachedTool);
-    updateLiveToolPanel({ toolCallId: 'cached-tool', partialResult: { content: [{ type: 'text', text: 'restored output' }] } });
+    window.cachedTool.remove(); fixtureApp.features.liveToolsController.clear(document.getElementById('messages'));
+    fixtureApp.features.sessionState.advanceSelection(); document.getElementById('messages').append(window.cachedTool);
+    fixtureApp.features.liveToolsController.update({ toolCallId: 'cached-tool', partialResult: { content: [{ type: 'text', text: 'restored output' }] } });
   });
   await expect(page.locator('[data-tool-call-id="cached-tool"]')).toHaveCount(1);
   expect(await page.evaluate(() => document.querySelector('[data-tool-call-id="cached-tool"]') === window.cachedTool)).toBe(true);
-  await page.evaluate(() => finalizeLiveToolPanel({ toolCallId: 'cached-tool', result: { content: [{ type: 'text', text: 'done' }] } }));
+  await page.evaluate(() => fixtureApp.features.liveToolsController.finish({ toolCallId: 'cached-tool', result: { content: [{ type: 'text', text: 'done' }] } }));
   await expect(page.locator('[data-tool-call-id="cached-tool"]')).toHaveCount(1);
   await expect(page.locator('[data-tool-call-id="cached-tool"] .duration')).toContainText(/./);
 });

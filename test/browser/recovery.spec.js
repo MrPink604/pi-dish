@@ -1,7 +1,7 @@
 const { test, expect } = require('./fixtures');
 const report = (name, mode = 'restore') => ({ mode, sessions: [{ id: 'same-id', name, status: 'needs-review', excluded: false }] });
 async function settings(page, host) {
-  await page.evaluate(() => openSettingsModal());
+  await page.evaluate(() => fixtureApp.features.displayPreferences.open());
   await page.selectOption('#recoverySettingsHost', host.hostId);
   await expect(page.locator('#saveRecoveryMode')).toBeEnabled();
 }
@@ -24,7 +24,7 @@ test('a settings body from an old host cannot replace a new host mode or an unsa
   await page.selectOption('#recoverySettingsHost', fleet.peer.hostId);
   await expect(page.locator('#saveRecoveryMode')).toBeEnabled();
   await page.selectOption('#recoveryMode', 'restore');
-  await page.evaluate(() => { window.releaseRecoveryBody(); refreshRecoveryHosts(); });
+  await page.evaluate(() => { window.releaseRecoveryBody(); fixtureApp.features.recoveryController.refreshHosts(); });
   await expect(page.locator('#recoveryMode')).toHaveValue('restore');
 });
 
@@ -35,7 +35,7 @@ test('old preference save failures and retained buttons cannot act on a replacem
   await page.selectOption('#recoveryMode', 'restore');
   await page.evaluate(() => { window.oldRecoverySave = document.getElementById('saveRecoveryMode'); window.oldRecoverySave.click(); });
   await expect.poll(() => writes.length).toBe(1);
-  await page.evaluate(() => closeSettingsModal());
+  await page.evaluate(() => fixtureApp.ports.appBindings.actions.closeSettingsModal());
   await settings(page, fleet.peer);
   await writes[0].fulfill({ status: 500, json: { error: 'previous-save-error' } });
   await page.evaluate(() => { window.oldRecoverySave.disabled = false; window.oldRecoverySave.click(); });
@@ -51,7 +51,7 @@ test('report requests and retained restore actions retire with the selected host
   await page.route(`${fleet.self.base}/api/recovery`, route => { held = route; });
   await page.route(`${fleet.peer.base}/api/recovery`, route => route.fulfill({ json: report('Peer record', 'constructor') }));
   await page.route('**/api/recovery/retry', route => { writes.push(route); return route.fulfill({ json: { ok: true } }); });
-  await page.evaluate(host => openRecoveryView(host), fleet.self.hostId);
+  await page.evaluate(host => fixtureApp.features.recoveryController.open(host), fleet.self.hostId);
   await expect.poll(() => !!held).toBe(true);
   await page.selectOption('#recoveryReportHost', fleet.peer.hostId);
   await expect(page.locator('.recovery-list')).toContainText('Peer record');
@@ -60,10 +60,10 @@ test('report requests and retained restore actions retire with the selected host
   await expect(page.locator('#recoveryViewBody')).toContainText('constructor');
   await page.evaluate(async () => {
     window.retiredRestore = document.querySelector('.recovery-restore');
-    await loadRecoveryView();
+    await fixtureApp.features.recoveryController.load();
     window.retiredRestore.click();
     window.closedRestore = document.querySelector('.recovery-restore');
-    closeRecoveryView();
+    fixtureApp.features.recoveryController.close();
     window.closedRestore.click();
   });
   expect(writes).toHaveLength(0);
@@ -75,7 +75,7 @@ test('a queued exclusion keeps its host and late completion cannot reload anothe
   await page.route(`${fleet.self.base}/api/recovery`, route => route.fulfill({ json: report('Self record') }));
   await page.route(`${fleet.peer.base}/api/recovery`, route => { peerReads++; return route.fulfill({ json: report('Peer record') }); });
   await page.route('**/api/sessions/same-id/recovery', route => { held = route; });
-  await page.evaluate(host => openRecoveryView(host), fleet.self.hostId);
+  await page.evaluate(host => fixtureApp.features.recoveryController.open(host), fleet.self.hostId);
   await page.locator('.recovery-excluded').check();
   await expect.poll(() => !!held).toBe(true);
   await page.selectOption('#recoveryReportHost', fleet.peer.hostId);
@@ -91,13 +91,13 @@ test('changed endpoint credentials retire displayed report actions and trigger a
   const reads = [], writes = [];
   await page.route(`${fleet.peer.base}/api/recovery`, route => { reads.push(route.request().headers().authorization); return route.fulfill({ json: report(reads.length === 1 ? 'Before token edit' : 'After token edit') }); });
   await page.route('**/api/recovery/retry', route => { writes.push(route); return route.fulfill({ json: { ok: true } }); });
-  await page.evaluate(host => openRecoveryView(host), fleet.peer.hostId);
+  await page.evaluate(host => fixtureApp.features.recoveryController.open(host), fleet.peer.hostId);
   await expect(page.locator('.recovery-list')).toContainText('Before token edit');
   await page.evaluate(host => {
     window.oldTokenRestore = document.querySelector('.recovery-restore');
-    hostDirectory.setToken(host, 'new-fixture-token');
+    fixtureApp.features.hostDirectory.setToken(host, 'new-fixture-token');
     window.oldTokenRestore.click();
-    refreshRecoveryHosts();
+    fixtureApp.features.recoveryController.refreshHosts();
   }, fleet.peer.hostId);
   await expect(page.locator('.recovery-list')).toContainText('After token edit');
   await page.evaluate(() => window.oldTokenRestore.click());

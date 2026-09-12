@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { sanitizeTestEnv } = require('../test-env');
+const { installFixtureApp } = require('../fixtures/browser-app');
 
 const ROOT = '2026-09-09T00-00-00-shared-root';
 const CHILD = '2026-09-09T00-01-00-shared-child';
@@ -68,33 +69,39 @@ async function stopHost(host) {
 
 const test = base.extend({
   liveSessions: [false, { option: true }],
-  fleet: async ({ page, liveSessions }, use, testInfo) => {
+  instrumentApp: [true, { option: true }],
+  fleet: async ({ page, liveSessions, instrumentApp }, use, testInfo) => {
     const hosts = [], logs = [], errors = [];
     page.on('pageerror', error => errors.push(error.message));
     try {
+      if (instrumentApp) await installFixtureApp(page);
       const self = await startHost('self', logs, hosts, null, liveSessions);
       const peer = await startHost('peer', logs, hosts, self.base, liveSessions);
-      await page.addInitScript(entry => {
+      await page.addInitScript(({ entry, instrumentApp }) => {
         // Tests that need registry/list facts replace the list snapshot through
         // its actual writer; mutation/transcript patches deliberately cannot.
-        window.fixtureSessionListPatch = (id, fields, host = sessionState.sessionHostId(id)) => {
+        if (instrumentApp) window.fixtureSessionListPatch = (id, fields, host = fixtureApp.features.sessionState.sessionHostId(id)) => {
           const parts = new Map();
           for (const kind of ['active', 'previous']) {
-            for (const row of sessionState.sessions[kind]) {
+            for (const row of fixtureApp.features.sessionState.sessions[kind]) {
               const key = row.host || null;
               if (!parts.has(key)) parts.set(key, { hostId: key, active: [], previous: [] });
               parts.get(key)[kind].push(row.id === id && key === (host || null) ? { ...row, ...fields } : row);
             }
           }
-          sessionState.setSessionLists([...parts.values()]);
+          fixtureApp.features.sessionState.setSessionLists([...parts.values()]);
         };
         localStorage.setItem('pi-dish-hosts', JSON.stringify([entry]));
-      }, { base: peer.base, hostId: peer.hostId, label: peer.label, token: peer.token });
+      }, { entry: { base: peer.base, hostId: peer.hostId, label: peer.label, token: peer.token }, instrumentApp });
       await page.goto(self.base);
       await page.locator('#tabAll').click();
       await expect(page.locator(`.session-item[data-id="${ROOT}"]`)).toHaveCount(2);
-      const select = (host, id = ROOT) => page.evaluate(({ id, host }) => selectSession(id, { host }), { id, host: host.hostId });
       const row = (host, id = ROOT) => page.locator(`.session-item[data-id="${id}"][data-host="${host.hostId}"]`);
+      const select = async (host, id = ROOT) => {
+        if (instrumentApp) return page.evaluate(({ id, host }) => fixtureApp.features.sessionView.select(id, { host }), { id, host: host.hostId });
+        await row(host, id).click();
+        await expect(row(host, id)).toHaveClass(/\bactive\b/);
+      };
       await use({ self, peer, select, row });
       expect(errors, 'uncaught browser errors').toEqual([]);
     } finally {

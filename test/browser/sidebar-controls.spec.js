@@ -1,7 +1,7 @@
 const { test, expect } = require('./fixtures');
 async function setup(page) {
   await page.evaluate(() => {
-    sidebarControls.dispose();
+    fixtureApp.features.sidebarControls.dispose();
     window.controlsLog = { render: 0, copied: [], statuses: [], closes: [], refresh: 0, selected: [] };
     window.controlsState = PiDishBrowser.createSessionState({ getSelfHostId: () => 'self', getHostLabel: id => id, onListsChanged() {}, onCurrentChanged() {} });
     window.controlsState.setSessionLists([{ hostId: 'self', active: [{ id: 'same' }] }, { hostId: 'peer', active: [{ id: 'same' }] }]);

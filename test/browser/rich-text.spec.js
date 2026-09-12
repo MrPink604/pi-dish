@@ -4,7 +4,7 @@ test('Markdown keeps HTML and unsafe links inert, literal single tildes and expl
   await fleet.select(fleet.self);
   await page.evaluate(() => {
     const root = document.createElement('div'); root.id = 'rich-fixture';
-    root.innerHTML = formatMarkdown('<img src=x onerror="window.richInjected=1">\n\n[unsafe](javascript:alert(1))\n\n~literal~ ~~strike~~ **bold**');
+    root.innerHTML = fixtureApp.features.richText.format('<img src=x onerror="window.richInjected=1">\n\n[unsafe](javascript:alert(1))\n\n~literal~ ~~strike~~ **bold**');
     document.body.append(root);
   });
   await expect(page.locator('#rich-fixture img')).toHaveCount(0);
@@ -96,18 +96,18 @@ test('copy completion and feedback timers retire on selection change and rich-te
   await page.clock.install(); await fleet.select(fleet.self);
   await page.evaluate(() => {
     const root = document.createElement('div'); root.id = 'rich-fixture'; root.innerHTML = '<div class="markdown-body"><pre><code>fixture</code></pre></div>';
-    document.body.append(root); applyHighlight(root);
-    copyTextToClipboard = () => new Promise(resolve => { window.finishRichCopy = resolve; });
+    document.body.append(root); fixtureApp.features.richText.highlight(root);
+    navigator.clipboard.writeText = () => new Promise(resolve => { window.finishRichCopy = resolve; });
   });
   await page.locator('#rich-fixture .code-copy-btn').click();
   await expect.poll(() => page.evaluate(() => !!window.finishRichCopy)).toBe(true);
   await fleet.select(fleet.peer);
   await page.evaluate(() => window.finishRichCopy());
   await expect(page.locator('#rich-fixture .code-copy-btn')).toHaveText('⧉');
-  await page.evaluate(() => { copyTextToClipboard = async () => {}; });
+  await page.evaluate(() => { navigator.clipboard.writeText = async () => {}; });
   await page.locator('#rich-fixture .code-copy-btn').click();
   await expect(page.locator('#rich-fixture .code-copy-btn')).toHaveText('✓');
-  await page.evaluate(() => richText.dispose());
+  await page.evaluate(() => fixtureApp.features.richText.dispose());
   await page.clock.runFor(1500);
   await expect(page.locator('#rich-fixture .code-copy-btn')).toHaveText('✓');
 });

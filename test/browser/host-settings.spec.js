@@ -1,7 +1,7 @@
 const { test, expect } = require('./fixtures');
 
 async function openForm(page, base, label = '') {
-  await page.evaluate(() => openSettingsModal());
+  await page.evaluate(() => fixtureApp.features.displayPreferences.open());
   await page.locator('#addHostBase').fill(base);
   await page.locator('#addHostLabel').fill(label);
 }
@@ -11,16 +11,16 @@ for (const outcome of ['success', '401']) {
     let held;
     await page.route(`${fleet.self.base}/hosts/retired/api/host`, route => { held = route; });
     await openForm(page, '/hosts/retired');
-    await page.evaluate(() => { window.pendingAdd = hostSettings.addFromForm(); });
+    await page.evaluate(() => { window.pendingAdd = fixtureApp.features.hostSettings.addFromForm(); });
     await expect.poll(() => !!held).toBe(true);
-    await page.evaluate(() => { closeSettingsModal(); openSettingsModal(); });
+    await page.evaluate(() => { fixtureApp.ports.appBindings.actions.closeSettingsModal(); fixtureApp.features.displayPreferences.open(); });
     await page.locator('#addHostBase').fill('/hosts/new-form');
     await held.fulfill(outcome === '401' ? { status: 401, json: {} }
       : { json: { hostId: 'retired-host', label: 'Retired' } });
     await page.evaluate(() => window.pendingAdd);
     await expect(page.locator('#addHostBase')).toHaveValue('/hosts/new-form');
     await expect(page.locator('#addHostStatus')).toHaveText('');
-    expect(await page.evaluate(() => hostDirectory.catalog.some(host => host.hostId === 'retired-host'))).toBe(false);
+    expect(await page.evaluate(() => fixtureApp.features.hostDirectory.catalog.some(host => host.hostId === 'retired-host'))).toBe(false);
   });
 }
 
@@ -32,18 +32,18 @@ test('only the newest add-host attempt can publish its descriptor and catalog ro
   });
   await openForm(page, fleet.peer.base, 'Older label');
   await page.locator('#addHostToken').fill('add-check-fixture');
-  await page.evaluate(() => { window.oldAdd = hostSettings.addFromForm(); });
+  await page.evaluate(() => { window.oldAdd = fixtureApp.features.hostSettings.addFromForm(); });
   await expect.poll(() => held.length).toBe(1);
   await page.locator('#addHostLabel').fill('Current label');
-  await page.evaluate(() => { window.newAdd = hostSettings.addFromForm(); });
+  await page.evaluate(() => { window.newAdd = fixtureApp.features.hostSettings.addFromForm(); });
   await expect.poll(() => held.length).toBe(2);
   await held[1].fulfill({ json: { hostId: fleet.peer.hostId, label: 'Current descriptor' } });
   await page.evaluate(() => window.newAdd);
   await held[0].fulfill({ json: { hostId: fleet.peer.hostId, label: 'Retired descriptor' } });
   await page.evaluate(() => window.oldAdd);
   await expect(page.locator('#addHostStatus')).toHaveText('Added Current label.');
-  expect(await page.evaluate(id => hostDirectory.catalog.find(host => host.hostId === id)?.label, fleet.peer.hostId)).toBe('Current label');
-  expect(await page.evaluate(id => hostDiscovery.descriptor(id)?.label, fleet.peer.hostId)).toBe('Current descriptor');
+  expect(await page.evaluate(id => fixtureApp.features.hostDirectory.catalog.find(host => host.hostId === id)?.label, fleet.peer.hostId)).toBe('Current label');
+  expect(await page.evaluate(id => fixtureApp.features.hostDiscovery.descriptor(id)?.label, fleet.peer.hostId)).toBe('Current descriptor');
 });
 
 test('editing the form retires an already received descriptor body', async ({ page, fleet }) => {
@@ -59,7 +59,7 @@ test('editing the form retires an already received descriptor body', async ({ pa
       }
       return data;
     };
-    window.pendingAdd = hostSettings.addFromForm();
+    window.pendingAdd = fixtureApp.features.hostSettings.addFromForm();
   });
   await expect.poll(() => page.evaluate(() => window.hostBodyWaiting)).toBe(true);
   await page.locator('#addHostLabel').fill('Edited while checking');
@@ -67,7 +67,7 @@ test('editing the form retires an already received descriptor body', async ({ pa
   await page.evaluate(() => window.pendingAdd);
   await expect(page.locator('#addHostLabel')).toHaveValue('Edited while checking');
   await expect(page.locator('#addHostStatus')).toHaveText('');
-  expect(await page.evaluate(() => hostDirectory.catalog.some(host => host.hostId === 'retired-body'))).toBe(false);
+  expect(await page.evaluate(() => fixtureApp.features.hostDirectory.catalog.some(host => host.hostId === 'retired-body'))).toBe(false);
 });
 
 test('add-host controls validate a URL and persist the captured label and token', async ({ page, fleet }) => {

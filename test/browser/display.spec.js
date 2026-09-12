@@ -6,12 +6,12 @@ test('closed preferences retire retained device, theme, filter and budget contro
     if (route.request().method() === 'PUT') writes++;
     return route.fulfill({ json: { monthlyBudgetUsd: 12, savedFilters: [{ name: 'Keep', query: 'active:true' }] } });
   });
-  await page.evaluate(() => openSettingsModal());
+  await page.evaluate(() => fixtureApp.features.displayPreferences.open());
   await expect(page.locator('#saveBudget')).toBeEnabled();
   await page.evaluate(() => {
     window.oldDisplayControls = ['responseMetadataMode', 'settingsTheme', 'sidebarContextMetric', 'saveBudget'].map(id => document.getElementById(id));
     window.oldFilterDelete = document.querySelector('.saved-filter-del');
-    closeSettingsModal();
+    fixtureApp.ports.appBindings.actions.closeSettingsModal();
     const [mode, theme, metric, save] = window.oldDisplayControls;
     mode.value = 'hidden'; mode.dispatchEvent(new Event('change'));
     theme.value = 'graphite'; theme.dispatchEvent(new Event('change'));
@@ -19,10 +19,10 @@ test('closed preferences retire retained device, theme, filter and budget contro
     save.click(); window.oldFilterDelete.click();
   });
   expect(writes).toBe(0);
-  expect(await page.evaluate(() => [displayPreferences.responseMode, displayPreferences.contextMetric, localStorage.getItem('pi-dish-theme')])).toEqual(['compact', 'percent', null]);
-  await page.evaluate(() => openSettingsModal());
+  expect(await page.evaluate(() => [fixtureApp.features.displayPreferences.responseMode, fixtureApp.features.displayPreferences.contextMetric, localStorage.getItem('pi-dish-theme')])).toEqual(['compact', 'percent', null]);
+  await page.evaluate(() => fixtureApp.features.displayPreferences.open());
   await page.selectOption('#sidebarContextMetric', 'tokens');
-  expect(await page.evaluate(() => displayPreferences.contextMetric)).toBe('tokens');
+  expect(await page.evaluate(() => fixtureApp.features.displayPreferences.contextMetric)).toBe('tokens');
 });
 
 test('old settings reads and budget saves cannot overwrite a reopened modal', async ({ page, fleet }) => {
@@ -32,16 +32,16 @@ test('old settings reads and budget saves cannot overwrite a reopened modal', as
     if (++reads === 1) { oldRead = route; return; }
     return route.fulfill({ json: { monthlyBudgetUsd: 27, savedFilters: [] } });
   });
-  await page.evaluate(() => openSettingsModal());
+  await page.evaluate(() => fixtureApp.features.displayPreferences.open());
   await expect.poll(() => !!oldRead).toBe(true);
-  await page.evaluate(() => { closeSettingsModal(); openSettingsModal(); });
+  await page.evaluate(() => { fixtureApp.ports.appBindings.actions.closeSettingsModal(); fixtureApp.features.displayPreferences.open(); });
   await expect(page.locator('#monthlyBudget')).toHaveValue('27');
   await oldRead.fulfill({ json: { monthlyBudgetUsd: 5, savedFilters: [{ name: 'Old', query: 'old' }] } });
   await expect(page.locator('#monthlyBudget')).toHaveValue('27');
   await expect(page.locator('#savedFiltersList')).not.toContainText('Old');
   await page.locator('#saveBudget').click();
   await expect.poll(() => !!oldSave).toBe(true);
-  await page.evaluate(() => { closeSettingsModal(); openSettingsModal(); });
+  await page.evaluate(() => { fixtureApp.ports.appBindings.actions.closeSettingsModal(); fixtureApp.features.displayPreferences.open(); });
   await expect(page.locator('#saveBudget')).toBeEnabled();
   await oldSave.fulfill({ status: 500, json: { error: 'old failure' } });
   await expect(page.locator('#budgetStatus')).toHaveText('');
@@ -53,18 +53,18 @@ test('theme refresh retains the latest catalog and disposal drops a held respons
     if (++reads === 1) { held = route; return; }
     return route.fulfill({ json: { themes: [{ id: 'custom', tokens: { '--accent': '#123456' } }] } });
   });
-  await page.evaluate(() => { localStorage.setItem('pi-dish-theme', 'custom'); void loadThemes(); });
+  await page.evaluate(() => { localStorage.setItem('pi-dish-theme', 'custom'); void fixtureApp.features.themesController.load(); });
   await expect.poll(() => !!held).toBe(true);
-  await page.evaluate(() => loadThemes());
+  await page.evaluate(() => fixtureApp.features.themesController.load());
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'custom');
   await held.fulfill({ json: { themes: [{ id: 'obsolete', tokens: { '--accent': '#abcdef' } }] } });
   expect(await page.evaluate(() => document.documentElement.style.getPropertyValue('--accent'))).toBe('#123456');
   await page.unroute('**/api/themes');
   held = null;
   await page.route('**/api/themes', route => { held = route; });
-  await page.evaluate(() => { void loadThemes(); });
+  await page.evaluate(() => { void fixtureApp.features.themesController.load(); });
   await expect.poll(() => !!held).toBe(true);
-  await page.evaluate(() => themesController.dispose());
+  await page.evaluate(() => fixtureApp.features.themesController.dispose());
   await held.fulfill({ json: { themes: [{ id: 'late', tokens: {} }] } });
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'custom');
 });
@@ -76,7 +76,7 @@ test('sidebar drag disposal releases capture and all retained pointer listeners'
   await page.mouse.move(box.x + 65, box.y + 40);
   await expect(handle).toHaveClass(/dragging/);
   const width = await page.locator('#sidebar').evaluate(element => element.style.width);
-  await page.evaluate(() => panelResize.dispose());
+  await page.evaluate(() => fixtureApp.features.panelResize.dispose());
   await expect(handle).not.toHaveClass(/dragging/);
   await page.mouse.move(box.x + 120, box.y + 40); await page.mouse.up();
   expect(await page.locator('#sidebar').evaluate(element => element.style.width)).toBe(width);

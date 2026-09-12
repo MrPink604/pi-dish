@@ -11,13 +11,13 @@ test('a retired peer poll cannot mark the host blocked after a newer poll succee
     } });
     return route.continue();
   });
-  await page.evaluate(() => { window.__oldHostPoll = loadSessions('old-poll', { withPrevious: true }); });
+  await page.evaluate(() => { window.__oldHostPoll = fixtureApp.features.sidebarLists.load('old-poll', { withPrevious: true }); });
   const oldRoute = await oldRequested;
-  await page.evaluate(() => loadSessions('new-poll', { withPrevious: true }));
+  await page.evaluate(() => fixtureApp.features.sidebarLists.load('new-poll', { withPrevious: true }));
   await expect(fleet.row(fleet.peer)).toContainText('new peer result');
   await oldRoute.fulfill({ status: 401, json: { error: 'retired request' } });
   await page.evaluate(() => window.__oldHostPoll);
-  expect(await page.evaluate(id => hostState(hostEntryFor(id)), fleet.peer.hostId)).toBe('reachable');
-  expect(await page.evaluate(() => sidebarLists.queriedFor)).toBe('new-poll');
+  expect(await page.evaluate(id => fixtureApp.features.hostConnections.stateOf(fixtureApp.ports.appModels.host(id)), fleet.peer.hostId)).toBe('reachable');
+  expect(await page.evaluate(() => fixtureApp.features.sidebarLists.queriedFor)).toBe('new-poll');
   await expect(fleet.row(fleet.peer)).toContainText('new peer result');
 });

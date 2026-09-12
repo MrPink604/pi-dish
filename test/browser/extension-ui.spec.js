@@ -6,10 +6,10 @@ async function show(page, request, fleet) {
   const host = await page.evaluate(() => {
     if (!window.extensionDeliveryHook) {
       window.extensionDeliveryHook = true;
-      const original = extensionUI.handle;
-      extensionUI.handle = (request, session) => { original(request, session); window.extensionDelivery = request.__fixtureNonce; };
+      const original = fixtureApp.features.extensionUI.handle;
+      fixtureApp.features.extensionUI.handle = (request, session) => { original(request, session); window.extensionDelivery = request.__fixtureNonce; };
     }
-    return sessionState.captureSelection().host;
+    return fixtureApp.features.sessionState.captureSelection().host;
   });
   const fixtureHost = host === fleet.peer.hostId ? fleet.peer : fleet.self;
   if (['select', 'confirm', 'input', 'editor', 'ask'].includes(request.method)) fixtureHost.emit('turn_start', {});
@@ -38,7 +38,7 @@ test('stashed dialogs preserve edits while same-id peer cards cannot answer the 
 
 test('resolved dialog controls cannot answer a replacement using the same request id', async ({ page, fleet }) => {
   await fleet.select(fleet.self); await show(page, { id: editor.id, method: 'confirm', title: 'Old confirmation' }, fleet);
-  await page.evaluate(() => { window.oldConfirm = [...document.querySelectorAll('.ext-ui-docked-dialog button')]; extensionUI.resolve('shared-dialog', sessionState.captureSelection()); });
+  await page.evaluate(() => { window.oldConfirm = [...document.querySelectorAll('.ext-ui-docked-dialog button')]; fixtureApp.features.extensionUI.resolve('shared-dialog', fixtureApp.features.sessionState.captureSelection()); });
   await show(page, { id: editor.id, method: 'confirm', title: 'New confirmation' }, fleet);
   let writes = 0;
   await page.route('**/api/sessions/*/ui-response', route => { writes++; return route.fulfill({ json: { ok: true } }); });
@@ -75,9 +75,9 @@ test('ask answers retain typed labels, custom notes and selections through redoc
 test('authoritative dialog reconciliation prunes only its owning host and ignores malformed state', async ({ page, fleet }) => {
   await fleet.select(fleet.peer); await show(page, editor, fleet);
   await fleet.select(fleet.self); await show(page, editor, fleet);
-  await page.evaluate(({ id, host }) => { extensionUI.reconcile({ dialogs: [] }, { id, host }); extensionUI.reconcile({ dialogs: false }, sessionState.captureSelection()); }, { id: ROOT, host: fleet.peer.hostId });
+  await page.evaluate(({ id, host }) => { fixtureApp.features.extensionUI.reconcile({ dialogs: [] }, { id, host }); fixtureApp.features.extensionUI.reconcile({ dialogs: false }, fixtureApp.features.sessionState.captureSelection()); }, { id: ROOT, host: fleet.peer.hostId });
   await expect(page.locator('.ext-ui-docked-dialog')).toHaveCount(1);
-  await page.evaluate(() => extensionUI.reconcile({ dialogs: [] }, sessionState.captureSelection()));
+  await page.evaluate(() => fixtureApp.features.extensionUI.reconcile({ dialogs: [] }, fixtureApp.features.sessionState.captureSelection()));
   await expect(page.locator('.ext-ui-docked-dialog')).toHaveCount(0);
   await fleet.select(fleet.peer); await show(page, editor, fleet);
   await expect(page.locator('.ext-ui-dialog-editor')).toHaveValue('Initial answer');
@@ -108,7 +108,7 @@ test('extension UI disposal retires toast, widget, status and dialog listeners a
   await page.route('**/api/sessions/*/ui-response', route => { writes++; return route.fulfill({ json: { ok: true } }); });
   await page.evaluate(() => {
     window.retiredExtensionButtons = [...document.querySelectorAll('.ext-ui-docked-dialog button, .ext-ui-toast button')];
-    extensionUI.dispose(); window.retiredExtensionButtons.forEach(button => button.click());
+    fixtureApp.features.extensionUI.dispose(); window.retiredExtensionButtons.forEach(button => button.click());
   });
   await page.clock.runFor(7000);
   await expect(page.locator('.ext-ui-widget, .ext-ui-status-badge, .ext-ui-toast, .ext-ui-docked-dialog')).toHaveCount(0); expect(writes).toBe(0);

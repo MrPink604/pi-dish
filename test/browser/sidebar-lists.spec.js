@@ -1,7 +1,7 @@
 const { test, expect } = require('./fixtures');
 async function setup(page) {
   await page.evaluate(() => {
-    sidebarQuery.dispose(); sidebarLists.dispose();
+    fixtureApp.features.sidebarQuery.dispose(); fixtureApp.features.sidebarLists.dispose();
     window.queryLog = { loads: [], invalidations: 0, busy: [], render: 0, search: 0, alerts: [] };
     window.queryStore = new Map(); window.queryReplies = []; window.queryEndpoint = { base: 'http://self', token: 'current' };
     window.customQuery = PiDishBrowser.createSidebarQuery({ document,
@@ -93,9 +93,9 @@ test('seen markers migrate and prune only within the owning host', async ({ page
 test('sidebar magnifier opens the current filter through its owned click binding', async ({ page, fleet }) => {
   await page.locator('#filterInput').fill('button query');
   await page.locator('.filter-search-btn').click();
-  expect(await page.evaluate(() => isSearchViewOpen())).toBe(true);
+  expect(await page.evaluate(() => fixtureApp.features.searchViewController.isOpen())).toBe(true);
   expect(await page.locator('#searchViewInput').inputValue()).toBe('button query');
-  await page.evaluate(() => closeSearchView());
+  await page.evaluate(() => fixtureApp.features.searchViewController.close());
   await page.locator('#filterInput').fill(''); await page.locator('.filter-search-btn').click();
   expect(await page.locator('#searchViewInput').inputValue()).toBe('button query');
 });

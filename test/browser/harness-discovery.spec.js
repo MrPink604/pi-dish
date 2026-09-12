@@ -9,11 +9,11 @@ for (const failure of [false, true]) {
   test(`an older harness discovery ${failure ? 'failure' : 'response'} cannot replace a newer selection`, async ({ page, fleet }) => {
     const routes = [];
     await page.route(`${fleet.self.base}/api/harnesses`, route => routes.push(route));
-    await page.evaluate(() => { window.oldDiscovery = loadHarnesses(); });
+    await page.evaluate(() => { window.oldDiscovery = fixtureApp.features.newSessionController.harnesses.load(); });
     await expect.poll(() => routes.length).toBe(1);
     await page.evaluate(() => {
-      localStorage.setItem(HARNESS_KEY, 'omp');
-      window.newDiscovery = loadHarnesses();
+      localStorage.setItem(PiDishBrowser.NEW_SESSION_HARNESS_KEY, 'omp');
+      window.newDiscovery = fixtureApp.features.newSessionController.harnesses.load();
     });
     await expect.poll(() => routes.length).toBe(2);
     await routes[1].fulfill({ json: catalog('omp') });
@@ -31,11 +31,11 @@ test('harness discovery finishing after a host switch cannot overwrite that host
   let oldRoute, peerRoute;
   await page.route(`${fleet.self.base}/api/harnesses`, route => { oldRoute = route; });
   await page.route(`${fleet.peer.base}/api/harnesses`, route => { peerRoute = route; });
-  await page.evaluate(() => { window.oldDiscovery = loadHarnesses(); });
+  await page.evaluate(() => { window.oldDiscovery = fixtureApp.features.newSessionController.harnesses.load(); });
   await expect.poll(() => !!oldRoute).toBe(true);
   await page.evaluate(host => {
-    onNsHostChange(host);
-    localStorage.setItem(HARNESS_KEY, 'prime');
+    fixtureApp.features.newSessionController.changeHost(host);
+    localStorage.setItem(PiDishBrowser.NEW_SESSION_HARNESS_KEY, 'prime');
   }, fleet.peer.hostId);
   await expect.poll(() => !!peerRoute).toBe(true);
   await peerRoute.fulfill({ json: catalog('prime') });
@@ -43,7 +43,7 @@ test('harness discovery finishing after a host switch cannot overwrite that host
   await oldRoute.fulfill({ json: catalog('omp') });
   await page.evaluate(() => window.oldDiscovery);
   await expect(page.locator('#nsHarnessSelect')).toHaveValue('prime');
-  expect(await page.evaluate(host => harnessDiscovery.cachedRows(host).map(row => row.id), fleet.peer.hostId))
+  expect(await page.evaluate(host => fixtureApp.features.newSessionController.harnesses.cachedRows(host).map(row => row.id), fleet.peer.hostId))
     .toEqual(['pi', 'prime']);
 });
 
@@ -53,8 +53,8 @@ test('malformed harness rows do not break discovery or erase valid alternatives'
       { id: 'pi', label: 'Pi' }, { id: 'omp', label: 'OMP', available: true }],
   } }));
   await page.evaluate(async () => {
-    localStorage.setItem(HARNESS_KEY, 'omp');
-    await loadHarnesses();
+    localStorage.setItem(PiDishBrowser.NEW_SESSION_HARNESS_KEY, 'omp');
+    await fixtureApp.features.newSessionController.harnesses.load();
   });
   await expect(page.locator('#nsHarnessSelect')).toHaveValue('omp');
   await expect(page.locator('#nsHarnessSelect option')).toHaveText(['Pi', 'OMP']);
@@ -65,11 +65,11 @@ test('a picker catalog refreshes the settings badge while an older background re
   await page.route(`${fleet.peer.base}/api/harnesses`, route => routes.push(route));
   await fleet.select(fleet.peer);
   await page.evaluate(host => {
-    window.fixtureSessionListPatch(sessionState.currentSession.id, { harnessId: 'omp' });
-    updateSessionHeader();
-    window.backgroundDiscovery = harnessDiscovery.ensure(host);
-    newSessionController.setHostId(host);
-    window.pickerDiscovery = loadHarnesses();
+    window.fixtureSessionListPatch(fixtureApp.features.sessionState.currentSession.id, { harnessId: 'omp' });
+    fixtureApp.features.sessionHeader.update();
+    window.backgroundDiscovery = fixtureApp.features.newSessionController.harnesses.ensure(host);
+    fixtureApp.features.newSessionController.setHostId(host);
+    window.pickerDiscovery = fixtureApp.features.newSessionController.harnesses.load();
   }, fleet.peer.hostId);
   await expect.poll(() => routes.length).toBe(2);
   await expect(page.locator('#sessionHarness')).not.toHaveClass(/clickable/);
@@ -78,6 +78,6 @@ test('a picker catalog refreshes the settings badge while an older background re
   await expect(page.locator('#sessionHarness')).toHaveClass(/clickable/);
   await routes[0].fulfill({ json: { harnesses: [{ id: 'omp', pilotConfig: false }] } });
   await page.evaluate(() => window.backgroundDiscovery);
-  expect(await page.evaluate(host => harnessRow(host, 'omp').pilotConfig, fleet.peer.hostId)).toBe(true);
+  expect(await page.evaluate(host => fixtureApp.features.newSessionController.harnesses.row(host, 'omp').pilotConfig, fleet.peer.hostId)).toBe(true);
   await expect(page.locator('#sessionHarness')).toHaveClass(/clickable/);
 });

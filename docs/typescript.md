@@ -14,21 +14,24 @@ source migration is complete; scope, review and CI requirements are tracked in
 the roadmap. The server application and feature stores remain largely JavaScript.
 The original foundation introduced no UI framework, ESM runtime
 migration or wire/store format change. Subsequent browser extractions use
-vanilla TypeScript and ordinary DOM rendering.
+vanilla TypeScript and ordinary DOM rendering. The subsequent
+[composition cleanup](browser-composition-cleanup.md) bundles direct dependencies
+and removes the app's global forwarding surface.
 
 ## Source completion is not contract completion
 
 The browser migration made controller inputs, request/view ownership and delivery
 strictly checked. It intentionally preserved much of the old data flow and
-classic-script composition. The next objective is to use those boundaries to
-remove repeated normalization, competing owners and obsolete adapters, rather
-than continue transposing code without simplifying the whole path.
+classic-script composition. The catalog stage removed repeated normalization
+and competing metadata owners; the composition cleanup replaces the classic-script
+facade with ordinary imports and direct controller wiring. Remaining backend
+boundaries still need their own contracts and verification.
 
 `SessionEntry` extends closed `SessionFields`; opaque external fields live in a
 separate `extras` object. Mutation, activity and transcript patches have different
 named fields, and compile-time fixtures reject wrong types, misspellings and
-identity/control writes. Runtime writer filtering protects the remaining classic
-script boundary. Host stamping and selection generations still decide which
+identity/control writes. Runtime writer filtering protects JavaScript callers
+and external observations. Host stamping and selection generations still decide which
 session an observation may update.
 
 Discovery, source resolution, metadata accumulation, indexing and catalog
@@ -77,8 +80,8 @@ Client projection only omits private fields and preserves server `Date` values
 until serialization; wire decoding is a separate boundary.
 
 `src/browser/session-state.ts` owns browser list/selection state and the existing
-generation guards. It compiles strictly into the local `public/browser.js` bundle;
-`src/browser/app.ts` creates the store through `PiDishBrowser.createSessionState`.
+generation guards. It compiles strictly into the local `public/app.js` bundle;
+`src/browser/app.ts` creates the store through its `createSessionState` import.
 Its metadata and restricted writer interfaces are checked by
 `test/types/browser-state.ts`. Browser route/host ids are strings here, without claiming the
 server's branded validation. `captureSelection()` returns a frozen host/id/
@@ -197,8 +200,9 @@ vanilla TypeScript direction and a deferred model-selector experiment.
 
 The session/model API slice now has explicit decoded response contracts. Server
 client-list projection and harness model normalization use this boundary; malformed
-model identities are discarded. Client projection rejects malformed control
-fields per row, so a damaged history file cannot break the entire sidebar list.
+model identities are discarded. Metadata accumulation sanitizes malformed history
+fields before catalog composition; browser ingress rejects malformed control
+fields per row. Client projection only strips private fields.
 Missing capabilities remain optional, and thinking acknowledgements fall back
 to the validated requested level when a harness returns an unusable value.
 The typed browser adapter consumes these contracts. This does not validate transcript
@@ -211,9 +215,11 @@ content, every endpoint, or lifecycle authority.
 emit five local entrypoints: `public/app.js`, `public/browser.js`,
 `public/helpers.js`, `public/artifact-comments.js` and `public/theme-prepaint.js`.
 All entrypoints are validated before any generated output is written. The
-application entrypoint is emitted as a classic script so existing callers and
-isolated browser instrumentation share its real bindings. Its imports are type-only;
-runtime imports fail the build. Typed modules are bundled through `index.ts`.
+application entrypoint bundles ordinary imports from feature modules and helpers
+into an IIFE with private bindings. The production page loads `app.js` after the
+local marked vendor; it does not load the independent `browser.js` or `helpers.js`
+entrypoints. `index.ts` still supplies the factory bundle used by isolated tests,
+and `helpers.js` retains its CommonJS compatibility surface.
 Static HTML declares action names; `app-bindings.ts` validates the names and owns
 their listeners, while `app.ts` supplies a complete, type-checked callback map.
 The output is committed; normal server startup and Electron packaging continue
@@ -229,10 +235,14 @@ The browser state store and its compile-only consumers use the same strict
 TypeScript build. `SelectionOwner` is exported directly from the typed store;
 the API adapter and model selector share that contract. The legacy standalone
 `public/session-state.js` script has been removed. State unit tests execute the
-generated browser bundle, matching the implementation loaded by the app.
+independent factory bundle built from the same implementation used by the app.
 
-Model, thinking, rename and enabled-model sends use `sessionApi`; intercept
-`apiFetch` in integration tests for these operations, rather than `apiSend`.
+Model, thinking, rename and enabled-model sends use `sessionApi`. Tests delay
+HTTP routes or replace a feature's captured request port; they do not reassign
+global app functions. `test/fixtures/browser-app.js` builds an instrumented copy
+which records actual feature instances and their options. Its probe module lives
+under `test/` and cannot enter the production build, whose inputs are confined to
+`src/`. Production-bundle scenarios run without this instrumentation.
 Browser runtime imports must remain under `src/`; legacy script contracts use
 type-only imports to avoid bundling a second copy of their runtime state.
 

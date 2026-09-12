@@ -2,13 +2,13 @@ const { test, expect, ROOT, CHILD } = require('./fixtures');
 async function setup(page, fleet) {
   await fleet.select(fleet.self);
   await page.evaluate(() => {
-    messageStreamController.stop();
+    fixtureApp.features.messageStreamController.stop();
     window.streamSources = []; window.streamTickets = []; window.streamLoads = []; window.streamSelections = []; window.streamStatus = [];
     window.streamEndpoint = { base: 'http://original', token: 'fixture-token' };
-    window.ownedStream = PiDishBrowser.createMessageStream({ document, sessionState, endpoint: () => window.streamEndpoint,
+    window.ownedStream = PiDishBrowser.createMessageStream({ document, sessionState: fixtureApp.features.sessionState, endpoint: () => window.streamEndpoint,
       ticket: () => new Promise((resolve, reject) => window.streamTickets.push({ resolve, reject })),
       source: url => { const source = new EventTarget(); Object.assign(source, { url, readyState: 0, close() { this.readyState = 2; } }); window.streamSources.push(source); return source; },
-      activity: sessionActivity, renderer: messageRenderer, streaming: streamingRenderer, tools: liveToolsController, delivery: promptDelivery, extensionUI,
+      activity: fixtureApp.features.sessionActivity, renderer: fixtureApp.features.messageRenderer, streaming: fixtureApp.features.streamingRenderer, tools: fixtureApp.features.liveToolsController, delivery: fixtureApp.features.promptDelivery, extensionUI: fixtureApp.features.extensionUI,
       status: (...args) => window.streamStatus.push(args), catchup() {}, refresh() {}, artifacts() {}, pinned: () => false, follow: () => false, scroll() {}, jump() {}, highlight() {},
       select: (...args) => window.streamSelections.push(args), deleteCached() {}, loadSessions: () => new Promise(resolve => window.streamLoads.push(resolve)),
     });
@@ -33,7 +33,7 @@ test('endpoint changes and disposal retire pending stream tickets', async ({ pag
 test('retired stream events cannot change turn state or schedule a reconnect', async ({ page, fleet }) => {
   await setup(page, fleet); await page.clock.install();
   await page.evaluate(() => { window.streamEndpoint.token = null; window.ownedStream.start(); window.ownedStream.stop(); window.emitOwnedStream(0, 'turn_start', {}); window.streamSources[0].onerror(); });
-  expect(await page.evaluate(() => sessionActivity.turn)).toBe(false);
+  expect(await page.evaluate(() => fixtureApp.features.sessionActivity.turn)).toBe(false);
   await page.clock.runFor(3100);
   expect(await page.evaluate(() => window.streamSources.length)).toBe(1);
 });
@@ -53,14 +53,14 @@ test('duplicate completed messages and late updates cannot resurrect a streaming
   });
   await expect(page.locator('#messages .message.assistant')).toHaveCount(1);
   await expect(page.locator('#messages [data-streaming="true"]')).toHaveCount(0);
-  expect(await page.evaluate(() => sessionActivity.turn)).toBe(false);
+  expect(await page.evaluate(() => fixtureApp.features.sessionActivity.turn)).toBe(false);
 });
 test('the newest session-switch event owns delayed list navigation', async ({ page, fleet }) => {
   await setup(page, fleet);
   await page.evaluate(child => {
-    const host = sessionState.currentSession.host;
-    const previous = [...sessionState.sessions.previous, { id: 'newer-transcript', host }];
-    sessionState.setSessionLists([...new Set(previous.map(row => row.host))].map(hostId => ({
+    const host = fixtureApp.features.sessionState.currentSession.host;
+    const previous = [...fixtureApp.features.sessionState.sessions.previous, { id: 'newer-transcript', host }];
+    fixtureApp.features.sessionState.setSessionLists([...new Set(previous.map(row => row.host))].map(hostId => ({
       hostId, previous: previous.filter(row => row.host === hostId),
     })));
     window.streamEndpoint.token = null; window.ownedStream.start();

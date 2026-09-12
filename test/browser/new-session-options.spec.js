@@ -7,7 +7,7 @@ async function setup(page) {
     { id: 'model', provider: 'fixture', name: 'Model', reasoning: true, thinking: ['high', '<custom>'] },
   ] }));
   await page.route('**/api/harnesses/omp/config?*', route => route.fulfill({ json: { defaultModel: 'ready', modelRoles: { smol: 'fixture/model' } } }));
-  await page.evaluate(() => { localStorage.setItem('pi-dish-new-harness', 'omp'); openNewSessionView({ cwd: '/old' }); });
+  await page.evaluate(() => { localStorage.setItem('pi-dish-new-harness', 'omp'); fixtureApp.features.newSessionController.open({ cwd: '/old' }); });
   await expect(page.locator('#nsHarnessConfigValues')).toContainText('ready');
 }
 
@@ -40,7 +40,7 @@ test('a previous cwd config body cannot restore defaults or edit actions during 
       }
       return value;
     };
-    window.heldConfig = loadNsHarnessConfig('/old');
+    window.heldConfig = ((cwd = fixtureApp.features.newSessionController.cwd()) => fixtureApp.features.newSessionController.config.load(cwd))('/old');
   });
   await expect.poll(() => page.evaluate(() => window.configBodyWaiting)).toBe(true);
   await page.evaluate(async () => {
@@ -48,13 +48,13 @@ test('a previous cwd config body cannot restore defaults or edit actions during 
     input.value = '/new'; input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('blur'));
     window.releaseConfigBody(); await window.heldConfig;
-    window.configAfterRetired = { value: newSessionConfigPreview.config,
+    window.configAfterRetired = { value: fixtureApp.features.newSessionController.config.config,
       display: document.getElementById('nsEditAgents').style.display,
       text: document.getElementById('nsHarnessConfigValues').textContent };
   });
   expect(await page.evaluate(() => window.configAfterRetired)).toEqual({ value: null, display: 'none', text: 'Loading…' });
   await expect(page.locator('#nsEditAgents')).toBeVisible();
-  expect(await page.evaluate(() => newSessionConfigPreview.config.cwd)).toBe('/new');
+  expect(await page.evaluate(() => fixtureApp.features.newSessionController.config.config.cwd)).toBe('/new');
 });
 
 test('old-host defaults cannot replace the selected peer readout', async ({ page, fleet }) => {
@@ -62,14 +62,14 @@ test('old-host defaults cannot replace the selected peer readout', async ({ page
   let held;
   await page.route(`${fleet.self.base}/api/harnesses/omp/config?*`, route => { held = route; });
   await page.route(`${fleet.peer.base}/api/harnesses/omp/config?*`, route => route.fulfill({ json: { defaultModel: 'peer' } }));
-  await page.evaluate(() => { window.heldConfig = loadNsHarnessConfig(); });
+  await page.evaluate(() => { window.heldConfig = ((cwd = fixtureApp.features.newSessionController.cwd()) => fixtureApp.features.newSessionController.config.load(cwd))(); });
   await expect.poll(() => !!held).toBe(true);
   await page.selectOption('#nsHostSelect', fleet.peer.hostId);
   await expect(page.locator('#nsHarnessConfigValues')).toContainText('peer');
   await held.fulfill({ json: { defaultModel: 'old-self' } });
   await page.evaluate(() => window.heldConfig);
   await expect(page.locator('#nsHarnessConfigValues')).toContainText('peer');
-  expect(await page.evaluate(() => newSessionConfigPreview.config.defaultModel)).toBe('peer');
+  expect(await page.evaluate(() => fixtureApp.features.newSessionController.config.config.defaultModel)).toBe('peer');
 });
 
 test('cwd blur keeps the spawn button under the pointer until mouse-up', async ({ page, fleet }) => {

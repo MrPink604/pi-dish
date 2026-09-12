@@ -14,14 +14,14 @@ test('usage late limits cannot enter the new range after their response body set
   await mockSummary(page);
   await page.evaluate(() => {
     window.limitReads = 0;
-    const original = usageController;
+    const original = fixtureApp.features.usageController;
     original.dispose();
-    const host = Object.freeze({ ...hostEntryFor(null), capabilities: { usageLimits: true } });
+    const host = Object.freeze({ ...fixtureApp.ports.appModels.host(null), capabilities: { usageLimits: true } });
     window.testUsage = PiDishBrowser.createUsageView({ root: document.querySelector('.main'), storage: localStorage,
       hosts: () => [host], host: () => host, fleetReady: async () => {}, multiHost: () => false,
       connection: () => {}, closeOtherViews: () => {}, selectSession: async () => {},
       request: async (endpoint, url, options) => {
-        if (!url.startsWith('/api/usage-limits')) return apiFetch(endpoint, url, options);
+        if (!url.startsWith('/api/usage-limits')) return fixtureApp.features.apiTransport.request(endpoint, url, options);
         window.limitReads++;
         if (window.limitReads === 1) return { ok: true, status: 200, json: () => new Promise(resolve => { window.finishOldLimits = resolve; }) };
         return { ok: true, status: 200, json: async () => ({ harnesses: [{ reports: [{ provider: 'new-provider', limits: [{ label: 'Weekly', usedFraction: 0.25 }] }] }] }) };
@@ -44,7 +44,7 @@ test('usage partial rows navigate to the peer that answered despite a same-id se
     return route.fulfill({ json: summary() });
   });
   await fleet.select(fleet.self);
-  await page.evaluate(() => openUsageView());
+  await page.evaluate(() => fixtureApp.features.usageController.open());
   await expect(page.locator('.usage-row[data-session-id]')).toHaveCount(1);
   await expect(page.locator('.usage-row[data-session-id]')).toHaveAttribute('data-session-host', fleet.peer.hostId);
   await page.locator('.usage-row[data-session-id]').click();
@@ -55,7 +55,7 @@ test('usage partial rows navigate to the peer that answered despite a same-id se
 
 test('usage replaced chart and model actions retire along with closed session rows', async ({ page, fleet }) => {
   await mockSummary(page);
-  await page.evaluate(() => openUsageView());
+  await page.evaluate(() => fixtureApp.features.usageController.open());
   await expect(page.locator('#usageChart .usage-col')).toHaveCount(2);
   await page.evaluate(() => {
     window.oldUsageBar = document.querySelector('#usageChart .usage-col');
@@ -73,7 +73,7 @@ test('usage replaced chart and model actions retire along with closed session ro
   await page.evaluate(() => {
     window.oldDayClose = document.querySelector('[data-close-day]');
     window.oldUsageSession = document.querySelector('.usage-row[data-session-id]');
-    closeUsageView();
+    fixtureApp.features.usageController.close();
     window.oldDayClose.click(); window.oldUsageSession.click();
   });
   await expect(page.locator('.main')).not.toHaveClass(/usage-open/);
@@ -84,12 +84,12 @@ test('usage disposal stops indexing, resize and retained controls', async ({ pag
   await page.clock.install();
   let reads = 0;
   await page.route('**/api/usage-summary?*', route => { reads++; return route.fulfill({ json: summary('30', true) }); });
-  await page.evaluate(() => openUsageView());
+  await page.evaluate(() => fixtureApp.features.usageController.open());
   await expect(page.locator('.usage-kpis')).toBeVisible();
   await page.evaluate(() => {
     window.oldRange = document.querySelector('[data-range="all"]');
     window.dispatchEvent(new Event('resize'));
-    usageController.dispose(); window.oldRange.click();
+    fixtureApp.features.usageController.dispose(); window.oldRange.click();
     window.dispatchEvent(new Event('resize'));
   });
   const before = reads;

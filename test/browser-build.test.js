@@ -16,7 +16,8 @@ test('browser build detects stale output and preserves it on type failure', () =
     fs.symlinkSync(path.join(__dirname, '../node_modules'), path.join(root, 'node_modules'), 'junction');
     fs.writeFileSync(path.join(root, 'src/browser/theme-prepaint.ts'), 'const themeAnswer: number = 3; console.log(themeAnswer);');
     const appSource = path.join(root, 'src/browser/app.ts');
-    fs.writeFileSync(appSource, 'let fixtureState = 0; function fixtureApp(value: number) { fixtureState += value; return fixtureState; }');
+    const appSourceText = 'let fixtureState = 0; function fixtureApp(value: number) { fixtureState += value; return fixtureState; } console.log(fixtureApp(2));';
+    fs.writeFileSync(appSource, appSourceText);
     const source = path.join(root, 'src/browser/index.ts');
     fs.writeFileSync(source, 'export const answer: number = 42;');
     const commentsSource = path.join(root, 'src/browser/artifact-comments.ts');
@@ -33,9 +34,11 @@ test('browser build detects stale output and preserves it on type failure', () =
     assert.equal(run('--check').status, 0);
     const appOutput = path.join(root, 'public/app.js');
     const appOriginal = fs.readFileSync(appOutput, 'utf8');
-    const context = vm.createContext({}); vm.runInContext(appOriginal, context);
-    assert.equal(vm.runInContext('fixtureApp(2)', context), 2);
-    assert.equal(vm.runInContext('fixtureApp = () => 7; fixtureApp()', context), 7, 'classic script bindings remain shared by existing callers and test instrumentation');
+    const logged = [];
+    const context = vm.createContext({ console: { log: value => logged.push(value) } }); vm.runInContext(appOriginal, context);
+    assert.deepEqual(logged, [2]);
+    assert.equal(vm.runInContext('typeof fixtureApp', context), 'undefined', 'application functions stay inside the bundle');
+    assert.equal(vm.runInContext('typeof fixtureState', context), 'undefined', 'application state stays inside the bundle');
     const commentsOutput = path.join(root, 'public/artifact-comments.js');
     const commentsOriginal = fs.readFileSync(commentsOutput, 'utf8');
     const helpersOutput = path.join(root, 'public/helpers.js');
@@ -56,10 +59,12 @@ test('browser build detects stale output and preserves it on type failure', () =
       assert.equal(fs.readFileSync(appOutput, 'utf8'), appOriginal);
     }
     fs.writeFileSync(appSource, "import { answer } from './index'; console.log(answer);");
-    const importedApp = run(); assert.notEqual(importedApp.status, 0);
-    assert.match(importedApp.stderr, /self-contained local script/);
-    assert.equal(fs.readFileSync(appOutput, 'utf8'), appOriginal);
-    fs.writeFileSync(appSource, 'let fixtureState = 0; function fixtureApp(value: number) { fixtureState += value; return fixtureState; }');
+    const importedApp = run(); assert.equal(importedApp.status, 0, importedApp.stdout + importedApp.stderr);
+    vm.runInContext(fs.readFileSync(appOutput, 'utf8'), context);
+    assert.deepEqual(logged, [2, 42], 'runtime imports are bundled locally');
+    assert.equal(vm.runInContext('typeof answer', context), 'undefined');
+    fs.writeFileSync(appSource, appSourceText);
+    assert.equal(run().status, 0);
     fs.writeFileSync(path.join(root, 'public/legacy.js'), 'export const answer = 42;');
     // A declaration can type a legacy import, but must not permit bundling it.
     fs.writeFileSync(path.join(root, 'public/legacy.d.ts'), 'export const answer: number;');

@@ -182,6 +182,14 @@ complete application coverage.
 
 `app-shell.spec.js` covers delayed startup restoration, mobile panel lifetimes,
 viewport/focus disposal and static binding ownership. The build regression checks
-all five emitted scripts, classic-script binding compatibility and rejection of
-runtime imports in `app.ts`. The static action inventory test rejects executable
+all five emitted scripts, private application bindings, bundled local runtime
+imports and rejection of runtime imports outside `src/`. The static action inventory test rejects executable
 HTML handlers and unregistered or unused action names.
+
+`production-composition.spec.js` loads the unmodified production bundle on desktop
+and mobile. It checks peer selection/restoration, static actions and the absence
+of app globals or factory/helper script requests. Other browser and UI fixtures
+use `test/fixtures/browser-app.js` to observe actual controller construction and
+the supplied ports in a test-only bundle. Tests call those controllers, replace
+specific ports, or delay routes; they never depend on global forwarding functions.
+The fixture contains no private-binding evaluator or app-function export list.

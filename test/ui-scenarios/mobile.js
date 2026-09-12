@@ -3,7 +3,7 @@ module.exports = async function mobile({ browser, watch, base, check, emit, SESS
   // 3. Mobile: hamburger + drawer from empty state and session header
   console.log('mobile:');
   const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  watch(mobile, 'mobile');
+  await watch(mobile, 'mobile');
   await mobile.goto(base, { waitUntil: 'networkidle' });
   await mobile.evaluate(() => localStorage.removeItem('pi-dish-session'));
   await mobile.reload({ waitUntil: 'networkidle' });
@@ -84,11 +84,11 @@ module.exports = async function mobile({ browser, watch, base, check, emit, SESS
     `the chip row scrolls and leads with run state (got ${JSON.stringify(chipRow)})`);
   const statusVisibility = await mobile.evaluate(() => {
     const el = document.getElementById('status');
-    setStatus('Waiting for response...', 'working');
+    fixtureApp.ports.composerSubmit.status('Waiting for response...', 'working');
     const working = el.offsetParent !== null;
-    setStatus('Send failed', 'error');
+    fixtureApp.ports.composerSubmit.status('Send failed', 'error');
     const error = el.offsetParent !== null;
-    setStatus('');
+    fixtureApp.ports.composerSubmit.status('');
     return { working, error };
   });
   check(!statusVisibility.working && statusVisibility.error,
@@ -106,7 +106,7 @@ module.exports = async function mobile({ browser, watch, base, check, emit, SESS
     Math.round(document.querySelector('.composer-box').getBoundingClientRect().height));
   const ctxIdle = await ctxRight();
   const heightIdle = await boxHeight();
-  await mobile.evaluate(() => setTurnInProgress(true));
+  await mobile.evaluate(() => fixtureApp.features.sessionActivity.setTurn(true));
   const composer = await mobile.evaluate(() => {
     const box = document.querySelector('.composer-box').getBoundingClientRect();
     const text = document.getElementById('promptInput').getBoundingClientRect();
@@ -144,7 +144,7 @@ module.exports = async function mobile({ browser, watch, base, check, emit, SESS
     `the field keeps its idle height when a turn starts (idle ${heightIdle})`);
   check(await ctxRight() === ctxIdle,
     `the context readout keeps its slot when a turn starts (idle ${ctxIdle})`);
-  await mobile.evaluate(() => setTurnInProgress(false));
+  await mobile.evaluate(() => fixtureApp.features.sessionActivity.setTurn(false));
   check(await ctxRight() === ctxIdle, 'and when the turn ends');
 
   // A long host status line (OMP's goal line runs to ~60 chars) must not
@@ -196,7 +196,7 @@ module.exports = async function mobile({ browser, watch, base, check, emit, SESS
   // the shell as SIGINT (kills a running sleep), and the ctrl latch turns
   // the next typed key into a control character.
   // Routines on a phone: one column at a time, with a ‹ back control.
-  await mobile.evaluate(() => openRoutinesView());
+  await mobile.evaluate(() => fixtureApp.features.routinesController.open());
   await mobile.waitForSelector('.main.routines-open .rt-row', { timeout: 10000 });
   check(await mobile.evaluate(() => document.getElementById('routinesDetail').offsetParent === null),
     'mobile routines opens on the list, detail stacked out of view');
@@ -208,7 +208,7 @@ module.exports = async function mobile({ browser, watch, base, check, emit, SESS
   await mobile.click('.rt-back');
   check(await mobile.evaluate(() => document.getElementById('routinesList').offsetParent !== null),
     'the ‹ back control returns to the routine list');
-  await mobile.evaluate(() => closeRoutinesView());
+  await mobile.evaluate(() => fixtureApp.features.routinesController.close());
 
   console.log('mobile terminal:');
   await mobile.click('#btnPanel');

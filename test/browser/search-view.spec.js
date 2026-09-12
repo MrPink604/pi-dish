@@ -4,7 +4,7 @@ const payload = name => ({ results: [{ id: ROOT, name, model: 'fixture/model', c
 test('search facets and result cards retire on replacement while live cards retain their host', async ({ page, fleet }) => {
   await page.route('**/api/search?*', route => route.fulfill({ json: payload(new URL(route.request().url()).searchParams.get('q')) }));
   await fleet.select(fleet.peer);
-  await page.evaluate(() => openSearchView('first'));
+  await page.evaluate(() => fixtureApp.features.searchViewController.open('first'));
   await expect(page.locator('.search-result')).toHaveCount(2);
   await page.evaluate(host => {
     window.retiredSearchCard = document.querySelector(`.search-result[data-host="${host}"]`);
@@ -29,7 +29,7 @@ test('query typing retires old failures before the next debounce runs', async ({
     if (new URL(route.request().url()).searchParams.get('q') === 'old') held.push(route);
     else return route.fulfill({ json: payload('new result') });
   });
-  await page.evaluate(() => openSearchView('old'));
+  await page.evaluate(() => fixtureApp.features.searchViewController.open('old'));
   await expect.poll(() => held.length).toBe(2);
   await page.fill('#searchViewInput', 'new');
   for (const route of held) await route.fulfill({ status: 500, json: { error: 'old request failed' } });
@@ -44,11 +44,11 @@ test('search disposal retires indexing, input listeners and retained facets', as
   await page.clock.install();
   let reads = 0;
   await page.route('**/api/search?*', route => { reads++; return route.fulfill({ json: { ...payload('indexed'), indexing: true } }); });
-  await page.evaluate(() => openSearchView('indexed'));
+  await page.evaluate(() => fixtureApp.features.searchViewController.open('indexed'));
   await expect(page.locator('.search-result')).toHaveCount(2);
   await page.evaluate(() => {
     window.retiredFacet = document.getElementById('searchFacetActive');
-    searchViewController.dispose();
+    fixtureApp.features.searchViewController.dispose();
     window.retiredFacet.click();
     const input = document.getElementById('searchViewInput'); input.value = 'later'; input.dispatchEvent(new Event('input'));
   });

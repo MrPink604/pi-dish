@@ -11,7 +11,7 @@ async function routes(page) {
   await page.route('**/api/models?*', route => route.fulfill({ json: [model] }));
 }
 async function open(page, host, cwd) {
-  await page.evaluate(({ hostId, cwd }) => openHarnessSettings({ hostId, harnessId: 'omp', label: cwd, cwd }), { hostId: host.hostId, cwd });
+  await page.evaluate(({ hostId, cwd }) => fixtureApp.features.harnessSettingsController.open({ hostId, harnessId: 'omp', label: cwd, cwd }), { hostId: host.hostId, cwd });
   await expect(page.locator('#harnessSettingsDefaults')).toContainText(cwd);
 }
 
@@ -19,7 +19,7 @@ test('late settings reads cannot overwrite a newly opened host and custom protot
   await routes(page);
   let held;
   await page.route(`${fleet.self.base}/api/harnesses/omp/config?*`, route => { held = route; });
-  await page.evaluate(hostId => { window.oldSettings = openHarnessSettings({ hostId, cwd: '/old', label: 'Old' }); }, fleet.self.hostId);
+  await page.evaluate(hostId => { window.oldSettings = fixtureApp.features.harnessSettingsController.open({ hostId, harnessId: 'omp', cwd: '/old', label: 'Old' }); }, fleet.self.hostId);
   await expect.poll(() => !!held).toBe(true);
   await open(page, fleet.peer, '/peer');
   await held.fulfill({ json: { defaultModel: 'old-response', globalModelRoles: {} } });
@@ -39,9 +39,9 @@ for (const resultStatus of [200, 500]) test(`submitted settings keep their endpo
   await page.selectOption('.model-role-select[data-role="smol"]', '');
   const writes = [];
   await page.route(/\/api\/harnesses\/omp\/(agents|model-roles)$/, route => { writes.push(route); });
-  await page.evaluate(() => { window.oldSave = saveHarnessSettings(); });
+  await page.evaluate(() => { window.oldSave = fixtureApp.features.harnessSettingsController.save(); });
   await expect.poll(() => writes.length).toBe(1);
-  await page.evaluate(() => closeHarnessSettings());
+  await page.evaluate(() => fixtureApp.features.harnessSettingsController.close());
   await open(page, fleet.peer, '/peer');
   await writes[0].fulfill({ json: { ok: true } });
   await expect.poll(() => writes.length).toBe(2);
@@ -69,7 +69,7 @@ test('settings stop at the first failed patch and keep current changes editable'
   await page.route(/\/api\/harnesses\/omp\/(agents|model-roles)$/, route => {
     writes.push(route.request().postDataJSON()); return route.fulfill({ status: 500, json: { error: 'fixture failure' } });
   });
-  await page.evaluate(() => saveHarnessSettings());
+  await page.evaluate(() => fixtureApp.features.harnessSettingsController.save());
   expect(writes).toEqual([{ agents: { constructor: { disabled: true } }, cwd: '/self' }]);
   await expect(page.locator('#modelRolesError')).toHaveText('fixture failure');
   await expect(page.locator('#harnessSettingsModal')).toBeVisible();
@@ -85,15 +85,15 @@ test('a save completed after the editor closes refreshes its matching takeover d
   await page.route('**/api/harnesses/omp/config?*', route => route.fulfill({ json: {
     defaultModel: modelName, globalModelRoles: {}, modelRoles: {},
   } }));
-  await page.evaluate(() => { localStorage.setItem('pi-dish-new-harness', 'omp'); openNewSessionView({ cwd: '/save' }); });
+  await page.evaluate(() => { localStorage.setItem('pi-dish-new-harness', 'omp'); fixtureApp.features.newSessionController.open({ cwd: '/save' }); });
   await expect(page.locator('#nsHarnessConfigValues')).toContainText('before-save');
   await page.locator('#nsEditAgents').click();
   await expect(page.locator('.hs-agent-enabled[data-agent="scout"]')).toBeChecked();
   await page.locator('.hs-agent-enabled[data-agent="scout"]').uncheck();
   await page.route('**/api/harnesses/omp/agents', route => { held = route; });
-  await page.evaluate(() => { window.closedSave = saveHarnessSettings(); });
+  await page.evaluate(() => { window.closedSave = fixtureApp.features.harnessSettingsController.save(); });
   await expect.poll(() => !!held).toBe(true);
-  await page.evaluate(() => closeHarnessSettings());
+  await page.evaluate(() => fixtureApp.features.harnessSettingsController.close());
   await expect(page.locator('#harnessSettingsModal')).toBeHidden();
   modelName = 'after-save';
   await held.fulfill({ json: { ok: true } });
