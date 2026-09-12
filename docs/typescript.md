@@ -243,7 +243,7 @@ global app functions. `test/fixtures/browser-app.js` builds an instrumented copy
 which records actual feature instances and their options. Its probe module lives
 under `test/` and cannot enter the production build, whose inputs are confined to
 `src/`. Production-bundle scenarios run without this instrumentation.
-Browser runtime imports must remain under `src/`; legacy script contracts use
+Browser runtime imports must remain under `src/`; vendored runtime contracts use
 type-only imports to avoid bundling a second copy of their runtime state.
 
 The model-selector DOM implementation is also strictly checked under

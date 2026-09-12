@@ -109,7 +109,7 @@ function renderStreamingMessage(message: RenderMessage, owner = sessionState.cap
     }
   });
 
-  // Same predicate as the static renderer (helpers.js) — the two maintaining
+  // Same predicate as the static renderer (helper-content.ts) — the two maintaining
   // this independently is how they drifted on errorMessage handling.
   el.classList.toggle('no-text', !messageHasVisibleText(message));
   if (wasPinned) options.scroll(container); else options.jump(container);

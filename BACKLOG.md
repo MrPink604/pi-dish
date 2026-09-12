@@ -14,7 +14,7 @@ the browser's classic-script forwarding layer.
 source resolution, indexed metadata, catalog composition and browser state through
 checked contracts. The [implementation record](docs/session-catalog-migration.md)
 records verification and both Fable review clearances. **Browser composition
-cleanup is implemented and undergoing verification/review** in its
+cleanup is implemented, locally verified and externally reviewed** in its
 [stage record](docs/browser-composition-cleanup.md). Vanilla DOM rendering, local assets and existing server/Electron
 delivery remain supported.
 
@@ -78,8 +78,8 @@ controller/port observations.
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
 | Browser migration | Source implementation complete and reviewed | All first-party application logic and bindings are typed. Local strict, backend, browser and UI checks pass; each push must also pass the CI matrix. |
 | Session catalog and metadata | Tasks 1–7 implemented, verified and reviewed | Checked discovery/source/index/catalog and closed browser state replace competing adapters and render-time normalization. Strict checks, 974 backend tests, browser/UI coverage and Fable review are recorded in the stage plan. |
-| Browser composition | Implemented; verification/review in progress | Direct bundled imports and controller wiring replace global forwarding functions. Test-only observations preserve ownership probes; production scenarios exercise the uninstrumented bundle. |
-| Remaining server application and feature modules | Later — outside the next bounded stage | Lifecycle redesign, general routes, recovery and feature stores still need separate stages. |
+| Browser composition | Implemented, verified and reviewed | Direct bundled imports and controller wiring replace global forwarding functions. Test-only observations preserve ownership probes; uninstrumented production scenarios, 282 browser checks and all UI suites passed. |
+| Remaining server application and feature modules | Next boundary to evaluate | Lifecycle redesign, general routes, recovery and feature stores still need separate stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
 
@@ -205,10 +205,7 @@ names instead of executable event handlers.
 
 ## Ordered next work
 
-1. **Complete composition verification and review.** The implementation is recorded
-   in [the stage plan](docs/browser-composition-cleanup.md). Keep the fixture probe
-   out of the production bundle and preserve the existing ownership-race checks.
-2. **Remaining backend boundaries.** Evaluate lifecycle orchestration next on
+1. **Remaining backend boundaries.** Evaluate lifecycle orchestration next on
    safety and simplification grounds; migrate feature stores when their consumer
    contracts justify it, not simply because they are easy JavaScript files.
    Audit extension checking and Electron before claiming whole-application coverage.

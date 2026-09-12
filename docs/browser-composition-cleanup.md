@@ -65,15 +65,28 @@ existing all-output validation/drift rules.
 
 - `npm run check` passed, including strict types and generated-output checks.
 - The full backend/module suite passed: 974 tests, no skips.
-- The full browser run passed 280 of 282 scenarios. Its two failures identified
-  fixture migrations: readiness was read from the wrong feature port, and the
-  stats-copy stub targeted an options property captured before replacement.
-  After correcting those probes, all four host-discovery scenarios and all 19
-  clipboard/file/rich-text/session-info scenarios passed. Both uninstrumented
-  production scenarios passed in the full run.
-- All eight independent UI scenarios passed across the full run and corrected
-  sidebar rerun. The final full desktop/mobile smoke suite passed.
+- The final complete browser run passed all 282 scenarios, including both
+  uninstrumented production scenarios and the migrated ownership probes.
+- The final independent UI run passed all eight scenarios. The full
+  desktop/mobile smoke suite also passed.
 - Real harness canaries were not run: this stage changes browser composition
   and test instrumentation, not harness protocol or lifecycle operations.
 
-External review and exact-commit CI results are recorded after completion.
+## Review and remaining scope
+
+Fable (`claude-fable-5-1`, high effort) reviewed implementation commit
+`0d6a83377940ec190f897f94aa5c2daf65ec1899` and returned **CLEAR**, with no blocking
+defects or scope gaps. The review checked callback arity and timing, model
+ownership, vendors/packaging, fixture isolation and the migrated race probes.
+Stale composition comments identified by the review were updated afterwards.
+
+The root still wires the existing controllers imperatively. The model loader
+retains its pre-existing takeover branch, currently reached by tests; production
+takeovers load through their own controller. Fixture pages deliberately load
+an independent factory bundle as well as the observed app, so isolated factory
+instances have separate module state from the app. Controller/port property names
+in JavaScript tests are verified at runtime, not by TypeScript. These are bounded
+limitations, not claims of whole-application simplification or test-source typing.
+
+The remaining backend lifecycle and feature-store boundaries are separate work.
+CI is checked separately for each pushed commit before delivery is reported.

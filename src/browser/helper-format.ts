@@ -2,8 +2,8 @@ import type { Timestamp, RuntimeInfo, ResponseMetadata } from './shared-helper-t
 import { finite } from './helper-values';
 
 /**
- * Pure helpers shared by the frontend (loaded as globals before app.js) and
- * the node test suite (require('../public/helpers.js')). No DOM, no state —
+ * Pure helpers bundled by the frontend and exported through public/helpers.js
+ * for Node consumers and tests. No DOM, no state —
  * keep it that way so everything here stays unit-testable.
  */
 export function escapeHtml(text: unknown) {

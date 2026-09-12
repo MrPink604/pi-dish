@@ -127,7 +127,7 @@ function fenceLanguage(code: HTMLElement) {
 
 // Mark file mentions clickable: inline code spans and tool-call summaries
 // whose whole text looks like a path, plus path tokens inside plain prose
-// (findPathTokens in helpers.js). Runs inside applyHighlight so every final
+// (findPathTokens in helper-markdown.ts). Runs inside applyHighlight so every final
 // render gets it; idempotent — linked elements are skipped and each
 // .markdown-body's prose is walked once (data-linkified). Clicks are
 // delegated on document → openFileViewer.

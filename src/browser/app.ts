@@ -1054,7 +1054,7 @@ async function loadConfig() {
  * PI_DISH_TERMINAL on is reachable from an entry host that has it off, and
  * vice versa (the WS URL and ticket already follow the session's host). Gate
  * on the owning host's advertised capabilities, falling back to this host's
- * /api/config only for self — see hostSupportsTerminal in helpers.js.
+ * /api/config only for self — see hostSupportsTerminal in helper-identity.ts.
  */
 function sessionHostSupportsTerminal(session: SessionEntry | null) {
   return hostSupportsTerminal(hostEntryFor(session?.host), appConfig);
