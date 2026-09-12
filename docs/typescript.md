@@ -167,8 +167,9 @@ decision and packaging checks.
 - RPC startup validates its state object, session-file shape, and native id
   before publishing a session. Event payload fields are narrowed where the RPC
   class consumes them; snapshots and command results retain unknown feature
-  fields. Its discovery/recovery dependencies remain JavaScript behind explicit
-  typed adapter signatures, so those implementations are not yet type checked.
+  fields. Discovery uses the checked `session-discovery.ts` import. Recovery
+  observation remains JavaScript behind an explicit typed adapter signature;
+  that implementation is not claimed to be type checked.
 - Bridge registry decoding establishes only a native id and socket-path shape.
   Entries failing that shape are pruned from disk, like stale registrations;
   a live producer may not rewrite its entry until its registry signature changes.

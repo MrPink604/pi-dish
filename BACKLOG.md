@@ -13,7 +13,7 @@ session metadata pipeline strongly typed end to end.
 **Session catalog and metadata are implemented**, connecting discovery, explicit
 source resolution, indexed metadata, catalog composition and browser state through
 checked contracts. The [implementation record](docs/session-catalog-migration.md)
-tracks final verification and review. Browser composition cleanup is the next
+records verification and both Fable review clearances. Browser composition cleanup is the next
 separate stage. Vanilla DOM rendering, local assets and existing server/Electron
 delivery remain supported.
 
@@ -74,7 +74,7 @@ fields. The browser's classic-script forwarding facade remains a separate debt.
 | Maintenance and test baseline | Complete | Ownership regressions, isolated browser/UI fixtures, lint, type/build checks and a Node CI matrix are in place. |
 | Shared TypeScript foundation | Complete within its defined scope | Identity, harness contracts, capability policy, wire decoding, RPC/bridge session classes and shared transport helpers are typed. This does not include the whole backend. |
 | Browser migration | Source implementation complete and reviewed | All first-party application logic and bindings are typed. Local strict, backend, browser and UI checks pass; each push must also pass the CI matrix. |
-| Session catalog and metadata | Tasks 1–7 implemented; final review in progress | Checked discovery/source/index/catalog and closed browser state replace competing adapters and render-time normalization. See the stage record for verification. |
+| Session catalog and metadata | Tasks 1–7 implemented, verified and reviewed | Checked discovery/source/index/catalog and closed browser state replace competing adapters and render-time normalization. Strict checks, 974 backend tests, browser/UI coverage and Fable review are recorded in the stage plan. |
 | Remaining server application and feature modules | Later — outside the next bounded stage | Lifecycle redesign, general routes, recovery and feature stores still need separate stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |

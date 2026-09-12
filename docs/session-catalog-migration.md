@@ -1,6 +1,6 @@
 # Session catalog and metadata migration
 
-Status: **Tasks 1–7 implemented; final verification and external review in progress**
+Status: **Tasks 1–7 implemented, locally verified and externally reviewed**
 (2026-09-11). Task 1's reviewed contracts and baseline remain recorded
 [below](#task-1-record); the [cutover record](#tasks-2-7-cutover-record) describes
 implemented ownership changes and remaining unchecked boundaries.
@@ -788,13 +788,18 @@ work while the required bounded scan/append behavior remains unchanged.
 Fable 5.1 independently reviewed implementation commit `73e365e` and returned
 **clear, no blockers**. Its optional findings led to focused follow-ups for
 malformed continuity values in the remaining JS projections and session-switch
-route invalidation without flushing unrelated header observations. The malformed-field regression covers Pi and OMP full reads and zero-budget
+route invalidation without flushing unrelated header observations. The malformed-field
+regression covers Pi and OMP full reads and zero-budget
 append extension, usage totals and relative skill attribution. The route regression
 checks canonical/encoded/partial alias removal while unrelated routes and headers
 stay warm. Persisted validators remain strict: schema 9's introducing commit
 `1a4ffbb` already initialized `sessionId` and `parentSession` to null, so the proposed
-legacy-key relaxation has no known valid producer to preserve. The follow-up full backend suite passes all 974 tests and `npm run check` passes.
-A focused Fable re-review is pending before push.
+legacy-key relaxation has no known valid producer to preserve. The follow-up full
+backend suite passes all 974 tests and `npm run check` passes. Fable's focused
+re-review of `05d3ab3` returned **clear, no blockers**, confirming those fixes and
+closing all four initial findings. The resolver never caches misses, so its
+follow-up negative-cache question requires no change. Header-read instrumentation
+wraps the actual `fs.openSync` call used by the current implementation.
 
 The shared catalog also makes presentation fields consistent across consumers:
 search and active summaries now include applicable parent/family hints, and the
@@ -803,4 +808,5 @@ These are additive output fields; they confer no control authority. Exact
 `resolveSessionCandidate` reads now reuse the source resolver's validated cache
 instead of independently repeating historical discovery.
 
-Exact-commit CI remains pending.
+CI is checked separately for each exact push; the delivery response records the
+final commit and its five-job result.
