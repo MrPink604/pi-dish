@@ -17,18 +17,79 @@ test('retained lineage link and tree rows cannot retarget a same-id peer or a re
   await page.evaluate(() => { window.oldRelationLink = document.querySelector('#sessionRelations .session-relation-chip'); });
   await fleet.select(fleet.peer);
   await page.evaluate(() => window.oldRelationLink.click());
-  await expect(page.locator('#relationsModal')).toBeHidden();
+  await expect(page.locator('.main')).not.toHaveClass(/\bsubagents-open\b/);
   await expect(fleet.row(fleet.peer, ROOT)).toHaveClass(/\bactive\b/);
   await page.evaluate(() => fixtureApp.features.sessionRelationsController.load(fixtureApp.features.sessionState.captureSelection()));
-  await page.evaluate(() => fixtureApp.features.sessionRelationsController.openModal());
+  await page.locator('#sessionRelations .session-relation-chip').click();
+  await expect(page.locator('.main')).toHaveClass(/\bsubagents-open\b/);
   await expect(page.locator('.lineage-row')).toHaveCount(2);
   await page.evaluate(() => { window.oldLineageRow = document.querySelectorAll('.lineage-row')[1]; });
   await page.route('**/api/sessions/*/lineage', route => route.fulfill({ json: { session: { id: CHILD }, tree: null, members: 0 } }));
-  await page.evaluate(async () => { await fixtureApp.features.sessionRelationsController.load(fixtureApp.features.sessionState.captureSelection()); window.oldLineageRow.click(); });
-  await expect(page.locator('#relationsModal')).toBeHidden();
+  await page.evaluate(() => fixtureApp.features.subagentsController.reload());
+  await expect(page.locator('#subagentsTree .subagents-state')).toContainText('No related sessions');
+  await page.evaluate(() => window.oldLineageRow.click());
   await expect(fleet.row(fleet.peer, ROOT)).toHaveClass(/\bactive\b/);
+  await expect(page.locator('#subagentsDetailEmpty')).toBeVisible();
 });
 
+
+test('peeking at a relative reads its trace without switching the selected session', async ({ page, fleet }) => {
+  const payload = lineagePayload();
+  payload.session = { id: ROOT, name: 'Current' };
+  await page.route('**/api/sessions/*/lineage', route => route.fulfill({ json: payload }));
+  await fleet.select(fleet.self);
+  await page.evaluate(() => fixtureApp.features.sessionRelationsController.load(fixtureApp.features.sessionState.captureSelection()));
+  await page.locator('#sessionRelations .session-relation-chip').click();
+  await expect(page.locator('.main')).toHaveClass(/\bsubagents-open\b/);
+  await expect(page.locator('#sessionView')).toBeHidden();
+  await page.locator(`.lineage-row[data-session-id="${CHILD}"]`).click();
+  // The trace comes from the fixture server's real transcript file.
+  await expect(page.locator('#subagentsTrace')).toContainText('self child transcript');
+  await expect(page.locator('#subagentsDetailName')).toContainText('Related child');
+  await expect(page.locator('#sessionName')).toBeHidden(); // session view stays parked underneath
+  await page.locator('[data-app-click="closeSubagentsView"]').click();
+  await expect(page.locator('.main')).not.toHaveClass(/\bsubagents-open\b/);
+  await expect(page.locator('#sessionView')).toBeVisible();
+  await expect(fleet.row(fleet.self, ROOT)).toHaveClass(/\bactive\b/);
+});
+
+test('signaling a relative uses its capabilities and keeps the viewer in place', async ({ page, fleet }) => {
+  const payload = lineagePayload();
+  payload.session = { id: ROOT, name: 'Current' };
+  payload.tree.children[0].session.capabilities = { prompt: true, steer: true, followUp: true };
+  await page.route('**/api/sessions/*/lineage', route => route.fulfill({ json: payload }));
+  const steers = [];
+  await page.route(`**/api/sessions/${CHILD}/steer`, route => {
+    steers.push(route.request().postDataJSON());
+    return route.fulfill({ json: { success: true } });
+  });
+  await fleet.select(fleet.self);
+  await page.evaluate(() => fixtureApp.features.sessionRelationsController.load(fixtureApp.features.sessionState.captureSelection()));
+  await page.locator('#sessionRelations .session-relation-chip').click();
+  await page.locator(`.lineage-row[data-session-id="${CHILD}"]`).click();
+  await expect(page.locator('#subagentsSendBtn')).toBeVisible();
+  await expect(page.locator('#subagentsSteerBtn')).toBeVisible();
+  await expect(page.locator('#subagentsFollowUpBtn')).toBeVisible();
+  await page.fill('#subagentsSignalInput', 'focus on src/auth');
+  await page.locator('#subagentsSteerBtn').click();
+  await expect.poll(() => steers.map(entry => entry && entry.message)).toEqual(['focus on src/auth']);
+  await expect(page.locator('#subagentsSignalStatus')).toContainText('Steered');
+  await expect(page.locator('#subagentsSignalInput')).toHaveValue('');
+  await expect(fleet.row(fleet.self, ROOT)).toHaveClass(/\bactive\b/);
+});
+
+test('a finished relative shows why signaling is unavailable', async ({ page, fleet }) => {
+  const payload = lineagePayload();
+  payload.session = { id: ROOT, name: 'Current' };
+  payload.tree.children[0].session.isActive = false;
+  await page.route('**/api/sessions/*/lineage', route => route.fulfill({ json: payload }));
+  await fleet.select(fleet.self);
+  await page.evaluate(() => fixtureApp.features.sessionRelationsController.load(fixtureApp.features.sessionState.captureSelection()));
+  await page.locator('#sessionRelations .session-relation-chip').click();
+  await page.locator(`.lineage-row[data-session-id="${CHILD}"]`).click();
+  await expect(page.locator('#subagentsSignalBox')).toBeHidden();
+  await expect(page.locator('#subagentsSignalNote')).toContainText('has ended');
+});
 test('lineage tree collapses subtrees and marks the current session', async ({ page, fleet }) => {
   const payload = lineagePayload();
   payload.tree.children[0].children.push(lineageNode('grandchild-1', 'Grandchild'));
@@ -38,7 +99,7 @@ test('lineage tree collapses subtrees and marks the current session', async ({ p
   await fleet.select(fleet.self);
   await page.evaluate(() => fixtureApp.features.sessionRelationsController.load(fixtureApp.features.sessionState.captureSelection()));
   await expect(page.locator('#sessionRelations')).toContainText('Subagents · 2');
-  await page.evaluate(() => fixtureApp.features.sessionRelationsController.openModal());
+  await page.locator('#sessionRelations .session-relation-chip').click();
   await expect(page.locator('.lineage-row')).toHaveCount(3);
   await expect(page.locator('.lineage-row.lineage-current')).toHaveCount(1);
   await expect(page.locator('.lineage-row.lineage-current')).toHaveAttribute('data-session-id', CHILD);

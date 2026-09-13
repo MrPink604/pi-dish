@@ -8,11 +8,20 @@ import { extractImageBlocks, extractTextContent, messageHasVisibleText, getToolS
 import { splitSessionRefContext } from './helper-refs';
 export function createMessageRenderer(options: {
   document: Document; sessionState: SessionState; details: ReturnType<typeof createResponseDetails>;
+  // Peek mode renders another session's trace inside a viewer. Share-link and
+  // response-details buttons target the main session's endpoints, so they stay
+  // out; image host and model context come from the peeked session instead.
+  peek?: () => { host: string | null; model: string | null } | null;
   markdown: (text: string) => string; assetUrl: (host: string | null | undefined, path: string) => string;
   matchRef: (ref: string) => { name?: string | null; isActive?: boolean } | null | undefined;
   pinned: (container: HTMLElement) => boolean; follow: () => boolean; scroll: (container: HTMLElement) => void; jump: (container: HTMLElement) => void;
 }) {
   const { document } = options; let disposed = false;
+  const inPeek = !!options.peek;
+  const renderHost = (): string | null | undefined =>
+    options.peek ? (options.peek()?.host ?? null) : options.sessionState.currentSession?.host;
+  const renderModel = (): string | null | undefined =>
+    options.peek ? (options.peek()?.model ?? null) : options.sessionState.currentSession?.model;
 function renderMessageHtml(msg: RenderMessage) {
   const time = msg.timestamp ? formatTime(msg.timestamp) : '';
   // The stream index rides on the root element — dedup, tool grouping, and
@@ -38,7 +47,7 @@ function imageBlocksHtml(content: unknown, alt = 'image') {
   if (!images.length) return '';
   const imgs = images.map(img => {
     const src = img.url
-      ? options.assetUrl(options.sessionState.currentSession?.host, img.url)
+      ? options.assetUrl(renderHost(), img.url)
       : `data:${img.mimeType};base64,${img.data}`;
     const loading = img.url ? ' loading="lazy" decoding="async"' : '';
     return `<img class="msg-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"${loading}>`;
@@ -50,7 +59,7 @@ function imageBlocksHtml(content: unknown, alt = 'image') {
 // message (pi's HTML export scrolls to ?targetId=<JSONL entry id>). Only
 // JSONL-backed messages have an entry id — streaming placeholders don't.
 function messageLinkBtnHtml(msg: RenderMessage) {
-  if (!msg.id || options.sessionState.currentSession?.capabilities?.export === false) return '';
+  if (!msg.id || inPeek || options.sessionState.currentSession?.capabilities?.export === false) return '';
   return `<button type="button" class="msg-link-btn" data-entry-id="${escapeHtml(msg.id)}" title="Copy share link to this message">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
@@ -155,16 +164,15 @@ function renderAssistantMessage(msg: RenderMessage, time: string, opts: { stream
     errorHtml = `<div class="message-content message-error"><div class="markdown-body"><strong>Error:</strong> ${escapeHtml(msg.errorMessage)}</div></div>`;
   }
   
-  const showModel = msg.model && (!options.sessionState.currentSession || msg.model !== options.sessionState.currentSession.model);
+  const showModel = msg.model && (!renderModel() || msg.model !== renderModel());
   // Tool-only messages (no prose, no error) are fully hidden in focus mode —
   // without this their empty header row lingers as a stray marker.
   const noTextClass = messageHasVisibleText(msg) ? '' : ' no-text';
   // Effective response speed rides the header next to the time — JSONL-backed
   // renders only (streaming messages have no timing until finalized).
   let speedHtml = '';
-  const hasMetadata = !opts.streaming && (msg.usage || msg.durationMs);
+  const hasMetadata = !inPeek && !opts.streaming && (msg.usage || msg.durationMs);
   if (hasMetadata) speedHtml = options.details.button(msg);
-
   return `<div${opts.attrs || ''} class="message assistant${streamingClass}${noTextClass}${msg.errorMessage ? ' error' : ''}" data-timestamp="${escapeHtml(String(timestamp))}"${streamingAttr}>
     <div class="message-header">
       <span class="message-role assistant">π</span>

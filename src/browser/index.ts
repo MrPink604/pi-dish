@@ -41,6 +41,7 @@ export { createSkills } from './skills';
 export { decodeSkillDirectory, decodeSkillCoverage } from './skills-data';
 
 export { createSearchView } from './search-view';
+export { createSubagentsView } from './subagents-view';
 export { decodeSearchPayload, mergeSearchPayloads, queryHosts } from './search-data';
 
 export { createUsageView } from './usage-view';

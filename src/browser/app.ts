@@ -21,6 +21,7 @@ import { createSessionResume } from './session-resume';
 import { createModelCatalog, modelsCacheKey as modelsCacheKeyBase } from './model-catalog';
 import { sameDirectoryHost } from './directory-catalog';
 import { createSessionRelations } from './session-relations';
+import { createSubagentsView } from './subagents-view';
 import { createSessionHeader } from './session-header';
 import { createSessionControls } from './session-controls';
 import { createSessionSearch } from './session-search';
@@ -563,7 +564,7 @@ const sessionView: ReturnType<typeof createSessionView> = createSessionView({ do
   spawn: id => pendingSessionSpawns.get(id), resetSearch: () => sessionSearch.reset(), cancelStreaming: () => streamingRenderer.cancel(), stopFollowing: () => { appChrome.stopFollowing(); },
   closeViews: (_pending, keepBounce) => {
     sessionSearch.close(); fileViews.closeDiff(); fileViews.closeFile(); sessionInfo.closeStats(); transcriptTree.close(); sessionControls.closeModels(); sessionControls.closeThinking(); sessionInfo.closeArtifacts();
-    usageController.close(); searchViewController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); if (!keepBounce) bounceController.close();
+    usageController.close(); searchViewController.close(); subagentsController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); if (!keepBounce) bounceController.close();
   },
   closeTerminal: () => terminalController.close(), clearExtension: () => extensionUI.clear(), clearRelations: () => sessionRelationsController.clear(), closeControls: () => appChrome.closePanel(), hideAutocomplete: () => composerAutocomplete.hide(),
   retireModels: () => modelCatalog.retire(), retireCommands: () => composerAutocomplete.retireCommands(), queue: data => promptDelivery.render(data), closeBtw: () => btwPanel.close(), resetArtifacts: () => sessionInfo.resetArtifacts(),
@@ -599,6 +600,7 @@ const appModels = createAppModels({ sessions: sessionState, catalog: modelCatalo
 const sessionRelationsController: ReturnType<typeof createSessionRelations> = createSessionRelations({
   document, window, sessionState, request: (host, path, init) => apiTransport.request(host, path, init), endpoint: hostEntryFor,
   loadPrevious: () => sidebarLists.load(undefined, { withPrevious: true }),
+  openView: (owner, endpoint, initial) => subagentsController.open(owner, endpoint, initial),
   selectSession: (id, options) => sessionView.select(id, options), status: setStatus,
 });
 
@@ -648,7 +650,7 @@ const recoveryController: ReturnType<typeof createRecovery> = createRecovery({
   fleetReady: () => hostFleetReady, refreshFleet: (...args) => hostDiscovery.loadFleet(...args),
   selectedHost: () => sessionState.currentSession?.host || null,
   settingsOpen: () => (document.getElementById('settingsModal') as HTMLElement).style.display !== 'none',
-  closeOtherViews: () => { closeSettingsModal(); sidebarQuery.close(); usageController.close(); searchViewController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); bounceController.close(); fileViews.closeDiff(); fileViews.closeFile(); },
+  closeOtherViews: () => { closeSettingsModal(); sidebarQuery.close(); usageController.close(); subagentsController.close(); searchViewController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); bounceController.close(); fileViews.closeDiff(); fileViews.closeFile(); },
   confirm: message => confirm(message),
 });
 
@@ -688,7 +690,7 @@ const searchViewController: ReturnType<typeof createSearchView> = createSearchVi
     else noteHostFailure(host, error);
   },
   hostChip: (...args) => hostPresentation.chipHtml(...args),
-  closeOtherViews: () => { sidebarQuery.close(); usageController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); },
+  closeOtherViews: () => { sidebarQuery.close(); usageController.close(); subagentsController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); },
   loadPrevious: () => sidebarLists.load(undefined, { withPrevious: true }),
   selectSession: (id, options) => sessionView.select(id, options), sessionSearch,
 });
@@ -698,7 +700,7 @@ const skillsController: ReturnType<typeof createSkills> = createSkills({
   root: document.querySelector<HTMLElement>('.main')!, request: (...args) => apiTransport.request(...args), self: selfHostEntry, origin: () => location.origin,
   sessionState, loadPrevious: () => sidebarLists.load(undefined, { withPrevious: true }),
   selectSession: (id, options) => sessionView.select(id, options),
-  closeOtherViews: () => { sidebarQuery.close(); usageController.close(); searchViewController.close(); newSessionController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); },
+  closeOtherViews: () => { sidebarQuery.close(); usageController.close(); subagentsController.close(); searchViewController.close(); newSessionController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); },
   refine: ({ cwd, draft, host }) => { newSessionController.setHostId(host); newSessionController.open({ cwd, draft }); },
   copy: copyTextToClipboard, status: setStatus,
 });
@@ -707,7 +709,7 @@ const skillsController: ReturnType<typeof createSkills> = createSkills({
 const usageController: ReturnType<typeof createUsageView> = createUsageView({
   root: document.querySelector<HTMLElement>('.main')!, request: (...args) => apiTransport.request(...args), storage: localStorage,
   fleetReady: () => hostFleetReady, hosts: fanoutHosts, host: hostEntryFor, multiHost: isMultiHost,
-  closeOtherViews: () => { sidebarQuery.close(); searchViewController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); },
+  closeOtherViews: () => { sidebarQuery.close(); searchViewController.close(); subagentsController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); },
   connection: (host, event, error) => {
     if (event === 'success') noteHostReachable(host);
     else if (event === 'blocked') noteHostBlocked(host);
@@ -755,6 +757,17 @@ const messageRenderer: ReturnType<typeof createMessageRenderer> = createMessageR
   document, sessionState, details: responseDetailsController, markdown: text => richText.format(text),
   assetUrl: hostAssetUrl, matchRef: ref => sessionReferences.match(ref), pinned: (...args) => appChrome.pinned(...args),
   follow: () => appChrome.following, scroll: (...args) => appChrome.scroll(...args), jump: (...args) => appChrome.jump(...args),
+});
+
+// Session-scoped takeover: family tree + trace peek + signaling, opened from
+// the header's "Subagents · N" link. Created late — it borrows the rich-text
+// and details plumbing of the main transcript renderer.
+const subagentsController: ReturnType<typeof createSubagentsView> = createSubagentsView({
+  root: document.querySelector<HTMLElement>('.main')!, request: (host, path, init) => apiTransport.request(host, path, init), sessionState, endpoint: hostEntryFor,
+  closeOtherViews: () => { closeSettingsModal(); sidebarQuery.close(); usageController.close(); searchViewController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); fileViews.closeDiff(); fileViews.closeFile(); },
+  loadPrevious: () => sidebarLists.load(undefined, { withPrevious: true }),
+  selectSession: (id, options) => sessionView.select(id, options), status: setStatus,
+  markdown: text => richText.format(text), assetUrl: hostAssetUrl, matchRef: ref => sessionReferences.match(ref), details: responseDetailsController,
 });
 
 // =========================================================================
@@ -835,7 +848,7 @@ const newSessionController: ReturnType<typeof createNewSession> = createNewSessi
   root: document.querySelector<HTMLElement>('.main')!, storage: localStorage, request: (...args) => apiTransport.request(...args),
   self: selfHostEntry, host: hostEntryFor, hosts: effectiveHosts, hostDown: (...args) => hostConnections.isDown(...args), multiHost: isMultiHost,
   sessionState, currentSpawn: () => sessionView.spawnId, spawns: pendingSessionSpawns, models: modelCatalog,
-  closeOtherViews: () => { sidebarQuery.close(); usageController.close(); searchViewController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); },
+  closeOtherViews: () => { sidebarQuery.close(); usageController.close(); subagentsController.close(); searchViewController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); },
   closeSettings: () => harnessSettingsController.close(),
   harnessCacheChanged: () => { if (sessionState.currentSession) sessionHeader.update(); }, status: setStatus,
 });
@@ -1005,8 +1018,8 @@ document.addEventListener('keydown', function(e) {
     e.preventDefault(); harnessSettingsController.close();
   } else if ((document.getElementById('settingsModal') as HTMLElement).style.display !== 'none') {
     e.preventDefault(); closeSettingsModal();
-  } else if ((document.getElementById('relationsModal') as HTMLElement).style.display !== 'none') {
-    e.preventDefault(); sessionRelationsController.closeModal();
+  } else if (subagentsController.isOpen()) {
+    e.preventDefault(); subagentsController.close();
   } else if ((document.getElementById('treeModal') as HTMLElement).style.display !== 'none') {
     e.preventDefault(); transcriptTree.close();
   } else if ((document.getElementById('statsModal') as HTMLElement).style.display !== 'none') {
@@ -1093,7 +1106,7 @@ const routinesController: ReturnType<typeof createRoutinesView> = createRoutines
   root: document.querySelector<HTMLElement>('.main')!, request: (host, url, options) => apiTransport.request(host, url, options), storage: localStorage, sessionState,
   hosts: fanoutHosts, effectiveHosts, host: hostEntryFor, fleetReady: () => hostFleetReady, config: () => appConfig, multiHost: isMultiHost,
   hostChip: host => hostPresentation.chipHtml(host),
-  closeOtherViews: () => { sidebarQuery.close(); usageController.close(); searchViewController.close(); newSessionController.close(); skillsController.close(); recoveryController.close(); bounceController.close(); },
+  closeOtherViews: () => { sidebarQuery.close(); usageController.close(); subagentsController.close(); searchViewController.close(); newSessionController.close(); skillsController.close(); recoveryController.close(); bounceController.close(); },
   connection: (host, event, error) => { if (event === 'success') noteHostReachable(host); else if (event === 'blocked') noteHostBlocked(host); else noteHostFailure(host, error); },
   autocomplete: options => createCwdAutocomplete(options), copy: text => copyTextToClipboard(text), status: text => setStatus(text), confirm: text => confirm(text),
   loadPrevious: () => sidebarLists.load(undefined, { withPrevious: true }), selectSession: (id, options) => sessionView.select(id, options),
@@ -1163,8 +1176,10 @@ createAppBindings({ document, actions: {
   closeTreeModal: () => transcriptTree.close(),
   backdropCloseArtifactsModal: (event, node) => { if (event.target === node) sessionInfo.closeArtifacts(); },
   closeArtifactsModal: () => sessionInfo.closeArtifacts(),
-  backdropCloseRelationsModal: (event, node) => { if (event.target === node) sessionRelationsController.closeModal(); },
-  closeRelationsModal: () => sessionRelationsController.closeModal(),
+  // Closing the takeover resyncs the header count — the family may have
+  // changed while it was open.
+  closeSubagentsView: () => { subagentsController.close(); const owner = sessionState.captureSelection(); if (owner) void sessionRelationsController.load(owner); },
+  reloadSubagentsView: () => subagentsController.reload(),
   backdropCloseStatsModal: (event, node) => { if (event.target === node) sessionInfo.closeStats(); },
   closeStatsModal: () => sessionInfo.closeStats(),
   backdropCloseSettingsModal: (event, node) => { if (event.target === node) closeSettingsModal(); },

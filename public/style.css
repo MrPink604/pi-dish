@@ -1176,8 +1176,7 @@ body.sidebar-open {
   white-space: nowrap;
 }
 
-/* Session family tree modal */
-.relations-body { overflow-y: auto; }
+/* Session family tree rows (subagents takeover tree pane) */
 
 .lineage-row {
   display: flex;
@@ -5074,6 +5073,91 @@ body.standalone-file-page {
 .main.search-open .search-view { display: flex; }
 .main.search-open .empty-state,
 .main.search-open .session-view { display: none !important; }
+
+/* --- Subagents view (main-pane takeover, .main.subagents-open) -------------
+   Same shell as usage/search, one session-scoped level down: the family tree
+   on the left, a peek pane (trace tail + signal composer) on the right. The
+   viewed session underneath is never navigated. */
+.subagents-view { display: none; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.main.subagents-open .subagents-view { display: flex; }
+.main.subagents-open .empty-state,
+.main.subagents-open .session-view { display: none !important; }
+
+.subagents-body { flex: 1; display: flex; min-height: 0; min-width: 0; }
+
+.subagents-tree {
+  width: 340px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  border-right: 1px solid var(--border);
+  padding: 8px;
+}
+
+.lineage-row.lineage-selected { background: var(--bg-hover); }
+.lineage-row.lineage-selected .lineage-name { color: var(--accent); }
+.lineage-badge.lineage-busy { color: var(--accent); border-color: var(--accent); }
+
+.subagents-detail { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.subagents-detail-empty { margin: auto; }
+.subagents-state { padding: 18px 16px; color: var(--text-muted); font-size: 12px; }
+
+.subagents-detail-content { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+.subagents-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.subagents-detail-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subagents-detail-meta {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagents-trace {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px max(24px, calc((100% - var(--content-max)) / 2)) 16px;
+}
+
+.subagents-signal { border-top: 1px solid var(--border); padding: 10px 16px 14px; }
+.subagents-signal-note { font-size: 12px; color: var(--text-muted); }
+.subagents-signal-box textarea {
+  width: 100%;
+  resize: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  outline: none;
+}
+.subagents-signal-box textarea:focus { border-color: var(--accent); }
+.subagents-signal-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.subagents-signal-status { flex: 1; font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 768px) {
+  .subagents-body { flex-direction: column; }
+  .subagents-tree { width: 100%; max-height: 40%; border-right: none; border-bottom: 1px solid var(--border); }
+  .subagents-trace { padding: 12px 12px; }
+}
 
 /* --- New session (main-pane takeover, .main.new-session-open) --------------
    Configures a fresh session: cwd input + lazy directory tree, model select,

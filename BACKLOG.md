@@ -133,7 +133,7 @@ tracked separately in the checkpoint log.
 | `recovery.ts` | Host recovery settings/report wire data, view lifecycle and captured mutations |
 | `bounce-data.ts` | Narrowed bounce previews and operation/target result contracts |
 | `bounce.ts` | Host snapshots, selected bounce targets, operation polling and restart reconciliation |
-| `session-relations.ts` | Lineage wire decode, family-tree link/modal controls, indexing refresh and navigation |
+| `session-relations.ts`, `subagents-view.ts` | Lineage wire decode and family link; the subagents takeover (tree, trace peek, signal composer) |
 | `session-search.ts` | Query/match state, request sequencing, marks and serialized paging jumps |
 | `browser-assets.ts` | Local vendor load deduplication, retries and disposal |
 | `extension-ui.ts`, `extension-ui-data.ts`, `extension-display.ts`, `extension-dialogs.ts` | Typed extension requests, widgets/status, dialog cards and response ownership |

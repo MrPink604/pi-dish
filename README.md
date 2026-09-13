@@ -625,10 +625,13 @@ pi has no API to dismiss it programmatically.
   nested under their parent. Prime's RLM subagents are discovered the same
   way from their `session-artifacts/<parent>/sub-*/` layout, with liveness
   read from the daemon's per-child display entry.
-- **Session family tree**: the "Subagents · N" link under the session header
-  opens the recursive family around the current session — native subagent
-  edges plus pi-dish launch provenance, any harness — with collapse toggles,
-  live markers and click-through navigation.
+- **Session family takeover**: the "Subagents · N" link under the session
+  header opens the recursive family around the current session — native
+  subagent edges plus pi-dish launch provenance, any harness — as a tree with
+  collapse toggles and live markers. Selecting a member peeks at its
+  transcript tail (read-only, live-refreshed) and offers steer/prompt/
+  follow-up signaling when the target's capabilities allow — all without
+  switching the main view away from the session you're in.
 - **Historical sessions** are scanned from the harness session stores
   (`~/.pi/agent/sessions/`, `~/.omp/agent/sessions/`, …), with mtime/size-keyed
   caches so the 10s sidebar poll never re-parses unchanged files.

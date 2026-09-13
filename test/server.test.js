@@ -743,6 +743,10 @@ test('lineage endpoint assembles the recursive family tree', async () => {
     assert.equal(tree.children[0].session.id, childId);
     assert.deepEqual(tree.children[0].edge, { kind: 'child', source: 'pi-session-header' });
     assert.equal(tree.children[0].children[0].session.id, gcId, 'grandchild nests under the child');
+    assert.equal(tree.children[0].session.turnInProgress, false, 'summaries carry busy state for the signal UI');
+    assert.ok(tree.children[0].session.capabilities, 'summaries carry capability advice');
+    assert.equal(tree.children[0].session.capabilities.prompt, false, 'an inactive relative cannot be prompted');
+    assert.equal(typeof tree.children[0].session.capabilities.resume, 'boolean');
 
     const fromGc = await get(`/api/sessions/${gcId}/lineage`);
     assert.equal(fromGc.body.tree.session.id, rootId, 'a descendant sees the same root');

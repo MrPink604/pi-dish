@@ -2987,11 +2987,14 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check((await desktop.locator('#sessionRelations').textContent()).includes('Subagents'),
       'a session with family renders the subagents link');
     await desktop.click('#sessionRelations .session-relation-chip');
-    await desktop.waitForSelector('#relationsModal .lineage-row', { timeout: 5000 });
-    check(true, 'the subagents link opens the family tree');
-    await desktop.locator(`#relationsModal .lineage-row[data-session-id="${registryState.sessionId}"]`).click();
+    await desktop.waitForSelector('#subagentsTree .lineage-row', { timeout: 5000 });
+    check(true, 'the subagents link opens the family takeover');
+    await desktop.locator(`#subagentsTree .lineage-row[data-session-id="${registryState.sessionId}"]`).click();
+    await desktop.waitForFunction(() => document.getElementById('subagentsDetailName').textContent.length > 0, null, { timeout: 5000 });
+    check(true, 'a family tree row selects it for peeking without navigating');
+    await desktop.click('#subagentsOpenBtn');
     await desktop.waitForFunction((id) => fixtureApp.features.sessionState.currentSession?.id === id, registryState.sessionId, { timeout: 5000 });
-    check(true, 'a family tree row navigates to the available peer session');
+    check(true, 'the peek pane Open action navigates to the available peer session');
     const relationRaceOwner = await desktop.evaluate(async (nextId) => {
       const originalLoad = fixtureApp.features.sidebarLists.load;
       let release;
@@ -3058,20 +3061,20 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check((await desktop.locator('#sessionRelations').textContent()).includes('Subagents · 10'),
       'the link counts every family member, closed children included');
     await desktop.click('#sessionRelations .session-relation-chip');
-    await desktop.waitForSelector('#relationsModal .lineage-row', { timeout: 5000 });
-    check(await desktop.locator('#relationsModal .lineage-row').count() === 11,
+    await desktop.waitForSelector('#subagentsTree .lineage-row', { timeout: 5000 });
+    check(await desktop.locator('#subagentsTree .lineage-row').count() === 11,
       'the tree lists every relation, including closed children');
-    check((await desktop.locator('#relationsModal').textContent()).includes('closed-child-5'),
+    check((await desktop.locator('#subagentsView').textContent()).includes('closed-child-5'),
       'closed children render in the tree');
-    check(await desktop.locator('#relationsModal .lineage-row .live-dot').count() === 5,
+    check(await desktop.locator('#subagentsTree .lineage-row .live-dot').count() === 5,
       'the tree marks each live session');
-    check(await desktop.locator('#relationsModal .lineage-row.lineage-current').count() === 1,
+    check(await desktop.locator('#subagentsTree .lineage-row.lineage-current').count() === 1,
       'the tree marks the current session');
     await desktop.keyboard.press('Escape');
     await desktop.waitForFunction(
-      () => document.getElementById('relationsModal').style.display === 'none',
+      () => !document.querySelector('.main').classList.contains('subagents-open'),
       null, { timeout: 3000 });
-    check(true, 'Escape closes the relations modal');
+    check(true, 'Escape closes the subagents takeover');
 
     relationFixtureMode = 'active';
     await desktop.evaluate((id) => fixtureApp.features.sessionView.select(id), BETA_ID);
@@ -3079,8 +3082,8 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check((await desktop.locator('#sessionRelations').textContent()).includes('Subagents · 26'),
       'a large live fan-out still fits the single link');
     await desktop.click('#sessionRelations .session-relation-chip');
-    await desktop.waitForSelector('#relationsModal .lineage-row', { timeout: 5000 });
-    check(await desktop.locator('#relationsModal .lineage-row').count() === 27,
+    await desktop.waitForSelector('#subagentsTree .lineage-row', { timeout: 5000 });
+    check(await desktop.locator('#subagentsTree .lineage-row').count() === 27,
       'the tree lists the complete fan-out');
     await desktop.keyboard.press('Escape');
 
@@ -3088,12 +3091,14 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.evaluate((id) => fixtureApp.features.sessionView.select(id), BETA_ID);
     await desktop.waitForSelector('#sessionRelations .session-relation-chip', { timeout: 5000 });
     await desktop.click('#sessionRelations .session-relation-chip');
-    await desktop.waitForSelector('#relationsModal .lineage-row', { timeout: 5000 });
-    await desktop.locator('#relationsModal .lineage-row').first().click();
+    await desktop.waitForSelector('#subagentsTree .lineage-row', { timeout: 5000 });
+    await desktop.locator('#subagentsTree .lineage-row').first().click();
+    await desktop.waitForFunction(() => document.getElementById('subagentsDetailName').textContent.length > 0, null, { timeout: 5000 });
+    await desktop.click('#subagentsOpenBtn');
     await desktop.waitForFunction((id) => fixtureApp.features.sessionState.currentSession?.id === id, registryState.sessionId, { timeout: 5000 });
-    check(true, 'a tree row navigates to the relation');
-    check(await desktop.locator('#relationsModal').evaluate((el) => el.style.display === 'none'),
-      'navigation closes the relations modal');
+    check(true, 'the Open action navigates to the relation');
+    check(await desktop.locator('.main').evaluate((el) => !el.classList.contains('subagents-open')),
+      'navigation closes the subagents takeover');
     await desktop.unroute('**/api/sessions/*/lineage');
     await desktop.evaluate((id) => fixtureApp.features.sessionView.select(id), registryState.sessionId);
     await desktop.waitForFunction((id) => fixtureApp.features.sessionState.currentSession?.id === id &&

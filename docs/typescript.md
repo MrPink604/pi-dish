@@ -419,12 +419,14 @@ status polling and selected-session reconciliation. `bounce-data.ts` narrows wir
 rows into readonly contracts. The app supplies host/session accessors and reload
 callbacks; the controller retains endpoint/view ownership across asynchronous work.
 
-`session-relations.ts` owns the subagents viewer — lineage wire decoding, the
-family link and tree modal, collapse state and indexing/modal refresh timers;
-`session-search.ts` owns the whole-transcript search bar, match state and paging
-navigation. The app provides transcript paging/scroll callbacks and session/host
-accessors. Query results and rendered navigation controls retain their original
-selection/endpoint instead of borrowing whichever session is current later.
+`session-relations.ts` decodes the lineage wire rows and owns the header
+family link; `subagents-view.ts` owns the takeover itself — tree pane, trace
+peek (shared message renderer in peek mode), signal composer and repoll
+timers. `session-search.ts` owns the whole-transcript search bar, match state
+and paging navigation. The app provides transcript paging/scroll callbacks and
+session/host accessors. Query results and rendered navigation controls retain
+their original selection/endpoint instead of borrowing whichever session is
+current later.
 
 `skills.ts` owns the skills directory and coverage detail, using `skills-data.ts`
 for unknown payload decoding. The entry host remains explicit through requests,

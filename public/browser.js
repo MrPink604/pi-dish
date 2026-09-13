@@ -97,6 +97,7 @@ var PiDishBrowser = (() => {
     createSpawnTargetPicker: () => createSpawnTargetPicker,
     createSpawnTargets: () => createSpawnTargets,
     createStreamingRenderer: () => createStreamingRenderer,
+    createSubagentsView: () => createSubagentsView,
     createTerminalController: () => createTerminalController,
     createThemes: () => createThemes,
     createTranscript: () => createTranscript,
@@ -4457,6 +4458,12 @@ var PiDishBrowser = (() => {
       model: text6(value.model),
       isActive: value.isActive === true,
       subagentLive: value.subagentLive === true,
+      turnInProgress: value.turnInProgress === true,
+      capabilities: record8(value.capabilities) ? {
+        prompt: value.capabilities.prompt === true,
+        steer: value.capabilities.steer === true,
+        followUp: value.capabilities.followUp === true
+      } : null,
       lastActivity: typeof value.lastActivity === "string" || typeof value.lastActivity === "number" ? value.lastActivity : null
     };
   }
@@ -4490,13 +4497,9 @@ var PiDishBrowser = (() => {
     let disposed = false;
     let renderOwner = null;
     let renderEndpoint = null;
-    let headerEvents = new AbortController(), modalEvents = new AbortController();
+    let headerEvents = new AbortController();
     let indexingTimer;
-    let pollTimer;
-    let loadInFlight = false;
-    let lastIndexing = false;
     let lineage = EMPTY_LINEAGE;
-    const collapsed = /* @__PURE__ */ new Set();
     function sameEndpoint(host, endpoint) {
       const current = options2.endpoint(host);
       return !!endpoint && !!current && current.base === endpoint.base && (current.token || "") === (endpoint.token || "");
@@ -4505,14 +4508,10 @@ var PiDishBrowser = (() => {
     function clearSessionRelations() {
       sessionRelationsSeq += 1;
       clearTimeout(indexingTimer);
-      clearInterval(pollTimer);
-      pollTimer = void 0;
       headerEvents.abort();
       renderOwner = null;
       renderEndpoint = null;
       lineage = EMPTY_LINEAGE;
-      collapsed.clear();
-      closeRelationsModal();
       const el = element("sessionRelations");
       if (!el) return;
       el.replaceChildren();
@@ -4530,7 +4529,6 @@ var PiDishBrowser = (() => {
       const others = lineage.tree ? lineage.members - 1 : 0;
       if (others <= 0) {
         el.style.display = "none";
-        closeRelationsModal();
         return;
       }
       el.style.display = "";
@@ -4546,130 +4544,9 @@ var PiDishBrowser = (() => {
       name.textContent = `Subagents \xB7 ${others}`;
       link.append(icon, name);
       link.addEventListener("click", () => {
-        if (owns(owner, endpoint)) openRelationsModal();
+        if (owns(owner, endpoint) && owner && endpoint) options2.openView(owner, endpoint, lineage);
       }, { signal: headerEvents.signal });
       el.appendChild(link);
-    }
-    function openRelationsModal() {
-      if (!owns(renderOwner) || !lineage.tree) return;
-      const modal = element("relationsModal");
-      if (!modal) return;
-      modal.style.display = "flex";
-      renderLineageTree();
-      clearInterval(pollTimer);
-      pollTimer = setInterval(() => {
-        if (!owns(renderOwner) || loadInFlight) return;
-        if (!sessionState.currentSession?.isActive && !lastIndexing) return;
-        void loadSessionRelations(renderOwner);
-      }, 4e3);
-    }
-    function closeRelationsModal() {
-      modalEvents.abort();
-      clearInterval(pollTimer);
-      pollTimer = void 0;
-      const modal = element("relationsModal");
-      if (modal) modal.style.display = "none";
-    }
-    function renderLineageTree() {
-      if (!owns(renderOwner) || !lineage.tree) return;
-      modalEvents.abort();
-      modalEvents = new AbortController();
-      const body = element("relationsBody");
-      if (!body) return;
-      body.replaceChildren();
-      const owner = renderOwner, endpoint = renderEndpoint;
-      const tree = lineage.tree;
-      const harnesses = /* @__PURE__ */ new Set();
-      (function collect(node) {
-        if (node.session.harnessId) harnesses.add(node.session.harnessId);
-        for (const child of node.children) collect(child);
-      })(tree);
-      const mixedHarnesses = harnesses.size > 1;
-      const currentId = lineage.session?.id || sessionState.currentSession?.id || null;
-      const rows = [];
-      (function flatten(node, depth) {
-        rows.push({ node, depth });
-        if (collapsed.has(node.session.id)) return;
-        for (const child of node.children) flatten(child, depth + 1);
-      })(tree, 0);
-      for (const { node, depth } of rows) {
-        const target = node.session;
-        const row = document2.createElement("div");
-        row.className = "lineage-row";
-        row.style.setProperty("--depth", String(depth));
-        row.dataset.sessionId = target.id;
-        row.tabIndex = 0;
-        row.setAttribute("role", "button");
-        row.title = target.cwd || target.id;
-        const isCurrent = target.id === currentId;
-        if (isCurrent) row.classList.add("lineage-current");
-        const twisty = document2.createElement("span");
-        twisty.className = "lineage-twisty";
-        if (node.children.length) {
-          const isCollapsed = collapsed.has(target.id);
-          twisty.textContent = isCollapsed ? "\u25B8" : "\u25BE";
-          twisty.title = isCollapsed ? "Expand subtree" : "Collapse subtree";
-          twisty.addEventListener("click", (event) => {
-            event.stopPropagation();
-            if (!owns(owner, endpoint)) return;
-            if (collapsed.has(target.id)) collapsed.delete(target.id);
-            else collapsed.add(target.id);
-            renderLineageTree();
-          }, { signal: modalEvents.signal });
-        }
-        row.appendChild(twisty);
-        if (target.isActive || target.subagentLive) {
-          const dot = document2.createElement("span");
-          dot.className = "live-dot";
-          dot.title = target.isActive ? "Live session" : "Subagent still loaded in its parent";
-          row.appendChild(dot);
-        }
-        const name = document2.createElement("span");
-        name.className = "lineage-name";
-        name.textContent = target.name || target.id.slice(0, 8);
-        row.appendChild(name);
-        if (node.edge?.kind === "startedHere") {
-          const badge = document2.createElement("span");
-          badge.className = "lineage-badge";
-          badge.textContent = "launched";
-          badge.title = `Started from its relative by pi-dish (${node.edge.source || "launch metadata"})`;
-          row.appendChild(badge);
-        }
-        if (mixedHarnesses && target.harnessId) {
-          const badge = document2.createElement("span");
-          badge.className = "lineage-badge lineage-harness";
-          badge.textContent = target.harnessId;
-          row.appendChild(badge);
-        }
-        if (isCurrent) {
-          const badge = document2.createElement("span");
-          badge.className = "lineage-badge lineage-current-badge";
-          badge.textContent = "current";
-          row.appendChild(badge);
-        }
-        const meta = document2.createElement("span");
-        meta.className = "lineage-meta";
-        meta.textContent = formatRelativeTime(target.lastActivity);
-        row.appendChild(meta);
-        const activate = () => {
-          if (!owns(owner, endpoint)) return;
-          closeRelationsModal();
-          void openRelatedSession(target.id, owner, endpoint);
-        };
-        row.addEventListener("click", activate, { signal: modalEvents.signal });
-        row.addEventListener("keydown", (event) => {
-          if (event.key !== "Enter" && event.key !== " ") return;
-          event.preventDefault();
-          activate();
-        }, { signal: modalEvents.signal });
-        body.appendChild(row);
-      }
-      if (lineage.truncated) {
-        const note = document2.createElement("div");
-        note.className = "lineage-truncated";
-        note.textContent = "This family is too large to show in full \u2014 the tree is truncated.";
-        body.appendChild(note);
-      }
     }
     async function loadSessionRelations(owner) {
       if (disposed || !owner || !sessionState.ownsSelection(owner)) return;
@@ -4678,30 +4555,24 @@ var PiDishBrowser = (() => {
       const endpoint = Object.freeze({ ...resolved });
       const seq = ++sessionRelationsSeq;
       clearTimeout(indexingTimer);
-      loadInFlight = true;
       const current = () => seq === sessionRelationsSeq && owns(owner, endpoint);
       try {
         const res = await options2.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/lineage`);
         const data = await res.json();
         if (!current()) return;
         if (!res.ok) throw new Error(record8(data) && text6(data.error) || `HTTP ${res.status}`);
-        lastIndexing = record8(data) && data.indexing === true;
+        const indexing = record8(data) && data.indexing === true;
         lineage = decodeSessionLineage(data);
         renderRelationsLink(owner, endpoint);
-        const modal = element("relationsModal");
-        if (modal && modal.style.display !== "none") renderLineageTree();
-        if (lastIndexing) indexingTimer = setTimeout(() => {
+        if (indexing) indexingTimer = setTimeout(() => {
           if (current()) void loadSessionRelations(owner);
         }, 1e3);
       } catch (error) {
         if (current()) {
           lineage = EMPTY_LINEAGE;
-          lastIndexing = false;
           renderRelationsLink(owner, endpoint);
           console.error("Failed to load session lineage:", error);
         }
-      } finally {
-        loadInFlight = false;
       }
     }
     async function openRelatedSession(id, owner, endpoint = owner ? options2.endpoint(owner.host) : null) {
@@ -4719,8 +4590,6 @@ var PiDishBrowser = (() => {
       clear: clearSessionRelations,
       load: loadSessionRelations,
       openRelated: openRelatedSession,
-      openModal: openRelationsModal,
-      closeModal: closeRelationsModal,
       get data() {
         return lineage;
       },
@@ -5800,6 +5669,1004 @@ var PiDishBrowser = (() => {
     };
   }
 
+  // src/browser/message-data.ts
+  var string = (value) => typeof value === "string" ? value : void 0;
+  var number3 = (value) => finite2(value) ? value : void 0;
+  function decodeMessageUsage(value) {
+    if (!record8(value)) return void 0;
+    const cost = record8(value.cost) ? value.cost : null, price = (value2) => value2 === null ? null : number3(value2);
+    return {
+      input: number3(value.input),
+      output: number3(value.output),
+      reasoning: number3(value.reasoning),
+      cacheRead: number3(value.cacheRead),
+      cacheWrite: number3(value.cacheWrite),
+      cost: cost ? { input: price(cost.input), output: price(cost.output), cacheRead: price(cost.cacheRead), cacheWrite: price(cost.cacheWrite), total: price(cost.total) } : void 0
+    };
+  }
+  function decodeMessageContent(value) {
+    if (typeof value === "string") return value;
+    if (!Array.isArray(value)) return void 0;
+    return value.flatMap((block) => typeof block === "string" ? [block] : !record8(block) || typeof block.type !== "string" ? [] : [{
+      type: block.type,
+      text: string(block.text),
+      thinking: string(block.thinking),
+      name: string(block.name),
+      id: string(block.id),
+      arguments: record8(block.arguments) ? block.arguments : void 0,
+      url: string(block.url),
+      data: string(block.data),
+      mimeType: string(block.mimeType)
+    }]);
+  }
+  function decodeRenderMessage(value) {
+    const row = record8(value) ? value : {}, details = record8(row.details) ? row.details : null;
+    return {
+      role: string(row.role) || "",
+      id: string(row.id),
+      index: finite2(row.index) && Number.isInteger(row.index) && row.index >= 0 ? row.index : void 0,
+      timestamp: typeof row.timestamp === "string" || finite2(row.timestamp) || row.timestamp instanceof Date ? row.timestamp : void 0,
+      content: decodeMessageContent(row.content),
+      model: string(row.model),
+      responseModel: string(row.responseModel),
+      provider: string(row.provider),
+      stopReason: string(row.stopReason),
+      errorMessage: string(row.errorMessage),
+      toolName: string(row.toolName),
+      toolCallId: string(row.toolCallId),
+      isError: row.isError === true,
+      customType: string(row.customType),
+      display: typeof row.display === "boolean" ? row.display : void 0,
+      usage: decodeMessageUsage(row.usage),
+      durationMs: number3(row.durationMs),
+      outputTokens: number3(row.outputTokens),
+      sessionRefs: Array.isArray(row.sessionRefs) ? row.sessionRefs.flatMap((entry) => record8(entry) && typeof entry.ref === "string" ? [{ ref: entry.ref, name: string(entry.name), host: string(entry.host), cwd: string(entry.cwd), isActive: entry.isActive === true }] : []) : void 0,
+      details: details ? {
+        notes: Array.isArray(details.notes) ? details.notes.flatMap((note) => typeof note === "string" ? [{ note }] : record8(note) && typeof note.note === "string" ? [{ note: note.note, severity: string(note.severity), advisor: string(note.advisor) }] : []) : void 0,
+        jobs: Array.isArray(details.jobs) ? details.jobs.flatMap((job) => record8(job) ? [{ label: string(job.label), jobId: string(job.jobId), durationMs: number3(job.durationMs) }] : []) : void 0,
+        from: string(details.from),
+        message: string(details.message)
+      } : void 0
+    };
+  }
+
+  // src/browser/helper-content.ts
+  function extractTextContent(content) {
+    if (!content) return "";
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      const blocks = content;
+      return blocks.map((c) => typeof c === "string" ? c : record8(c) && c.type === "text" && typeof c.text === "string" ? c.text : "").join("\n");
+    }
+    return "";
+  }
+  function extractTextBlocks(content) {
+    if (!content) return "";
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) return "";
+    const blocks = content;
+    return blocks.filter((c) => typeof c === "string" || record8(c) && c.type === "text").map((c) => typeof c === "string" ? c : record8(c) && typeof c.text === "string" ? c.text : "").join("\n");
+  }
+  function ipythonCodeSummary(code) {
+    if (typeof code !== "string" || !code) return "";
+    const m = /(?:^|[^A-Za-z0-9_])bash\(\s*(['"])((?:\\.|(?!\1).)*)\1/.exec(code);
+    const inner = m ? m[2].replace(/\\(['"\\])/g, "$1") : code.split("\n")[0];
+    return truncate(inner, 60);
+  }
+  function getToolSummary(toolName, args) {
+    if (!record8(args)) return "";
+    if (toolName === "Bash" || toolName === "bash") return typeof args.command === "string" && args.command ? truncate(args.command.split("\n")[0], 60) : "";
+    if (toolName === "ipython") return ipythonCodeSummary(args.code);
+    if (["Read", "read", "Edit", "edit", "Write", "write"].includes(toolName)) return typeof args.path === "string" ? args.path : "";
+    const keys = Object.keys(args);
+    if (keys.length) return truncate(String(args[keys[0]]), 40);
+    return "";
+  }
+  function parseIpythonResult(text17) {
+    if (typeof text17 !== "string") return null;
+    const m = /^BashResult\(exit_code=(-?\d+), output=(['"])((?:\\.|(?!\2).)*)\2(?:, duration=([0-9.eE+-]+))?\)\s*$/.exec(text17);
+    if (!m) return null;
+    return { exitCode: Number(m[1]), output: pythonReprUnescape(m[3]), durationMs: m[4] != null ? Math.round(Number(m[4]) * 1e3) : null };
+  }
+  function pythonReprUnescape(text17) {
+    return text17.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|[\s\S])/g, (all, seq) => {
+      if (seq[0] === "x") return String.fromCharCode(parseInt(seq.slice(1), 16));
+      if (seq[0] === "u") return String.fromCharCode(parseInt(seq.slice(1), 16));
+      const map = { n: "\n", t: "	", r: "\r", b: "\b", f: "\f", v: "\v", "0": "\0", "\n": "" };
+      return Object.hasOwn(map, seq) ? map[seq] : seq;
+    });
+  }
+  function messageHasVisibleText(msg) {
+    if (!record8(msg)) return false;
+    if (msg.errorMessage) return true;
+    if (typeof msg.content === "string") return !!msg.content;
+    return Array.isArray(msg.content) && msg.content.some((b) => record8(b) && b.type === "text" && typeof b.text === "string" && !!b.text);
+  }
+  function getToolOutputText(partialResult) {
+    if (!record8(partialResult) || !Array.isArray(partialResult.content)) return "";
+    const blocks = partialResult.content;
+    return blocks.filter((c) => record8(c) && c.type === "text").map((c) => typeof c.text === "string" ? c.text : "").join("");
+  }
+  function extractImageBlocks(content) {
+    if (!Array.isArray(content)) return [];
+    const out = [];
+    const blocks = content;
+    for (const block of blocks) {
+      if (!record8(block) || block.type !== "image") continue;
+      const mimeType = typeof block.mimeType === "string" && block.mimeType ? block.mimeType : "image/png";
+      if (typeof block.url === "string" && block.url) out.push({ url: block.url, mimeType });
+      else if (typeof block.data === "string" && block.data) out.push({ data: block.data, mimeType });
+    }
+    return out;
+  }
+
+  // src/browser/helper-refs.ts
+  function uniqueSessionPrefix(id, peerIds, minLen = 8) {
+    const self = String(id == null ? "" : id);
+    if (!self) return "";
+    const peers = (peerIds || []).filter((peer) => peer && peer !== self);
+    for (let len = Math.min(minLen, self.length); len < self.length; len++) {
+      const candidate = self.slice(0, len);
+      if (!peers.some((peer) => String(peer).startsWith(candidate))) return candidate;
+    }
+    return self;
+  }
+  var SESSION_ROUTE_KEY_PREFIX = "~sk1_";
+  var SESSION_UUID_TAIL_RE = /(?:^|[_-])([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+  function decodeBase64Url(value) {
+    const normalized = String(value == null ? "" : value).replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
+    if (typeof Buffer !== "undefined") return Buffer.from(padded, "base64").toString("utf8");
+    if (typeof atob !== "function") return "";
+    return atob(padded);
+  }
+  function decodeRouteSessionId(id) {
+    const raw = String(id == null ? "" : id);
+    if (!raw.startsWith(SESSION_ROUTE_KEY_PREFIX)) return null;
+    try {
+      const tuple = JSON.parse(decodeBase64Url(raw.slice(SESSION_ROUTE_KEY_PREFIX.length)));
+      if (!Array.isArray(tuple)) return null;
+      if (typeof tuple[0] !== "string" || !tuple[0]) return null;
+      if (typeof tuple[1] !== "string" || !tuple[1]) return null;
+      return { harnessId: tuple[0], nativeSessionId: tuple[1] };
+    } catch {
+      return null;
+    }
+  }
+  function sessionRefAliases(id) {
+    const routeId = String(id == null ? "" : id);
+    if (!routeId) return [];
+    const aliases = [routeId];
+    const decoded = decodeRouteSessionId(routeId);
+    const native = decoded ? decoded.nativeSessionId : routeId;
+    if (native !== routeId) aliases.push(native);
+    const uuid = SESSION_UUID_TAIL_RE.exec(native);
+    if (uuid) aliases.push(uuid[1]);
+    return aliases;
+  }
+  function shortSessionRef(id, peerIds, minLen = 8) {
+    const self = String(id == null ? "" : id);
+    if (!self) return "";
+    const peers = [];
+    for (const peer of peerIds || []) {
+      const other = String(peer == null ? "" : peer);
+      if (!other || other === self) continue;
+      peers.push(...sessionRefAliases(other));
+    }
+    let best = self;
+    for (const alias of sessionRefAliases(self).slice().reverse()) {
+      const candidate = uniqueSessionPrefix(alias, peers, minLen);
+      if (candidate && candidate.length < best.length) best = candidate;
+    }
+    return best;
+  }
+  var SESSION_REF_TOKEN_RE = /(?:^|[\s(\[{<"'])#([A-Za-z0-9][A-Za-z0-9._:/-]{3,})/g;
+  function parseSessionRefTokens(text17) {
+    const out = [];
+    if (!text17) return out;
+    const seen = /* @__PURE__ */ new Set();
+    SESSION_REF_TOKEN_RE.lastIndex = 0;
+    let match;
+    while ((match = SESSION_REF_TOKEN_RE.exec(String(text17))) !== null) {
+      const ref = match[1].replace(/[.:/]+$/, "");
+      if (ref.length < 4 || seen.has(ref)) continue;
+      seen.add(ref);
+      out.push({ token: "#" + ref, ref });
+    }
+    return out;
+  }
+  var SESSION_REF_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  function parseSessionRefParts(raw) {
+    const ref = String(raw == null ? "" : raw).trim();
+    if (!ref) return null;
+    const slash = ref.indexOf("/");
+    if (slash !== -1) {
+      const hostPart = ref.slice(0, slash);
+      const id = ref.slice(slash + 1);
+      return hostPart && id ? { hostPart, hostIdForm: false, id } : null;
+    }
+    const colon = ref.indexOf(":");
+    if (colon > 0) {
+      const head = ref.slice(0, colon);
+      const rest = ref.slice(colon + 1);
+      if (SESSION_REF_UUID_RE.test(head) && rest) return { hostPart: head, hostIdForm: true, id: rest };
+    }
+    return { hostPart: null, hostIdForm: false, id: ref };
+  }
+  var SESSION_REF_BLOCK_RE = /\n*<session-refs>\n([\s\S]*?)\n<\/session-refs>[ \t]*$/;
+  var SESSION_REF_PREAMBLE = [
+    "The message above references other pi-dish sessions by `#ref`. Each is a real",
+    "peer session, not a label: use the pi-dish-sessions skill CLI to read its",
+    "transcript (`read <ref>`) or to message it (`send` / `steer` / `follow-up`",
+    "<ref>). Never guess what a referenced session holds \u2014 read it."
+  ].join("\n");
+  function splitSessionRefContext(text17) {
+    const body = String(text17 == null ? "" : text17);
+    const match = body.match(SESSION_REF_BLOCK_RE);
+    if (!match) return { text: body, refs: [] };
+    const refs = [];
+    for (const line of match[1].split("\n")) {
+      if (!line.startsWith("- ref=")) continue;
+      const entry = /* @__PURE__ */ Object.create(null);
+      for (const field of line.slice(2).split(" | ")) {
+        const eq = field.indexOf("=");
+        if (eq > 0) entry[field.slice(0, eq)] = field.slice(eq + 1);
+      }
+      if (!entry.ref) continue;
+      refs.push({
+        ref: entry.ref,
+        name: entry.name || "",
+        host: entry.host || "",
+        cwd: entry.cwd || "",
+        isActive: entry.active === "yes"
+      });
+    }
+    return { text: body.slice(0, match.index).replace(/\s+$/, ""), refs };
+  }
+  function searchSessionsForRef(list, query, limit = 8) {
+    const q = String(query == null ? "" : query).trim();
+    const lower = q.toLowerCase();
+    const rows = [];
+    for (const session of list || []) {
+      if (!session || !session.id) continue;
+      let score = 0;
+      let indices = null;
+      if (q) {
+        const name = session.name || "";
+        indices = fuzzyMatch(q, name);
+        if (indices) {
+          score = 1e3 + fuzzyScore(indices, name);
+        } else {
+          const cwd = session.cwd || "";
+          const cwdIndices = fuzzyMatch(q, cwd);
+          if (cwdIndices) score = 500 + fuzzyScore(cwdIndices, cwd);
+          else if (sessionRefAliases(session.id).some((alias) => alias.toLowerCase().startsWith(lower))) score = 250;
+          else continue;
+        }
+      }
+      rows.push({ session, score, indices });
+    }
+    rows.sort((a, b) => b.score - a.score || (b.session.isActive ? 1 : 0) - (a.session.isActive ? 1 : 0) || new Date(b.session.lastActivity || 0).getTime() - new Date(a.session.lastActivity || 0).getTime());
+    return rows.slice(0, Math.max(0, limit));
+  }
+
+  // src/browser/message-render.ts
+  function createMessageRenderer(options2) {
+    const { document: document2 } = options2;
+    let disposed = false;
+    const inPeek = !!options2.peek;
+    const renderHost = () => options2.peek ? options2.peek()?.host ?? null : options2.sessionState.currentSession?.host;
+    const renderModel = () => options2.peek ? options2.peek()?.model ?? null : options2.sessionState.currentSession?.model;
+    function renderMessageHtml(msg) {
+      const time = msg.timestamp ? formatTime(msg.timestamp) : "";
+      const idxAttr = msg.index != null ? ` data-msg-index="${escapeHtml(msg.index)}"` : "";
+      if (msg.role === "user") return renderUserMessage(msg, time, idxAttr);
+      if (msg.role === "assistant") {
+        if (Array.isArray(msg.content) && msg.content.length === 0 && !msg.errorMessage) return "";
+        return renderAssistantMessage(msg, time, { attrs: idxAttr });
+      }
+      if (msg.role === "toolResult") return renderToolResult(msg, time, idxAttr);
+      if (msg.role === "branchSummary") return renderBranchSummary(msg, time, idxAttr);
+      if (msg.role === "custom") return renderCustomMessage(msg, time, idxAttr);
+      return "";
+    }
+    function imageBlocksHtml(content, alt = "image") {
+      const images = extractImageBlocks(content);
+      if (!images.length) return "";
+      const imgs = images.map((img) => {
+        const src = img.url ? options2.assetUrl(renderHost(), img.url) : `data:${img.mimeType};base64,${img.data}`;
+        const loading = img.url ? ' loading="lazy" decoding="async"' : "";
+        return `<img class="msg-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"${loading}>`;
+      }).join("");
+      return `<div class="msg-images">${imgs}</div>`;
+    }
+    function messageLinkBtnHtml(msg) {
+      if (!msg.id || inPeek || options2.sessionState.currentSession?.capabilities?.export === false) return "";
+      return `<button type="button" class="msg-link-btn" data-entry-id="${escapeHtml(msg.id)}" title="Copy share link to this message">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+    </svg></button>`;
+    }
+    function sessionRefChipsHtml(refs) {
+      if (!refs || !refs.length) return "";
+      const chips = refs.map((entry) => {
+        const session = options2.matchRef(entry.ref);
+        const label = entry.name || session?.name || entry.ref;
+        const live = (session ? session.isActive : entry.isActive) ? " live" : "";
+        const title = [entry.ref, entry.host, entry.cwd].filter(Boolean).join(" \xB7 ");
+        return `<button type="button" class="session-ref-chip${live}" data-session-ref="${escapeHtml(entry.ref)}" title="${escapeHtml(title)}">
+      <span class="session-ref-dot">\u25CF</span>${escapeHtml(label)}</button>`;
+      }).join("");
+      return `<div class="session-ref-chips">${chips}</div>`;
+    }
+    function parseIrcInterrupt(text17) {
+      const match = /^Current interruptible wait interrupted: IRC message from (?:parent )?agent `([^`]+)`\.\n\n(?:Parent )?IRC message:\n\n([\s\S]+)$/.exec(text17);
+      return match ? { from: match[1], body: match[2] } : null;
+    }
+    function parseIrcCustomContent(text17) {
+      const inner = text17.replace(/^<irc>\n?/, "").replace(/\n?<\/irc>\s*$/, "");
+      const match = /^Incoming IRC message from (?:parent )?agent `([^`]+)`:\n\n([\s\S]+)$/.exec(inner);
+      if (!match) return inner.trim() ? { body: inner.trim() } : null;
+      const body = match[2].replace(/\n*Sent while waiting\/working\.[\s\S]*$/, "").replace(/\n*If response expected, reply via `hub`[\s\S]*$/, "").trim();
+      return { from: match[1], body };
+    }
+    function renderIrcMessage(msg, time, attrs, timestamp, envelope) {
+      const from = msg.details?.from || envelope?.from || "";
+      const body = msg.details?.message || envelope?.body || "";
+      return `<div${attrs} class="message custom-message irc" data-timestamp="${escapeHtml(String(timestamp))}">
+    <div class="irc-card">
+      <div class="irc-header">
+        <span class="irc-icon">\u21C4</span>
+        <span class="irc-label">IRC</span>
+        ${from ? `<span class="irc-from">${escapeHtml(from)}</span>` : ""}
+        ${time ? `<span class="message-time">${time}</span>` : ""}
+        ${messageLinkBtnHtml(msg)}
+      </div>
+      ${body ? `<div class="irc-body"><div class="markdown-body">${options2.markdown(body)}</div></div>` : ""}
+    </div>
+  </div>`;
+    }
+    function renderUserMessage(msg, time, attrs = "") {
+      const rawText = extractTextContent(msg.content);
+      const irc = parseIrcInterrupt(rawText);
+      if (irc) return renderIrcMessage(msg, time, attrs, msg.timestamp || Date.now(), irc);
+      const { text: text17, refs } = splitSessionRefContext(rawText);
+      const imagesHtml = imageBlocksHtml(msg.content, "attached image");
+      const chipsHtml = sessionRefChipsHtml(msg.sessionRefs || refs);
+      return `<div${attrs} class="message user">
+    <div class="message-header"><span class="message-role user">\u276F</span>${time ? `<span class="message-time">${time}</span>` : ""}${messageLinkBtnHtml(msg)}</div>
+    <div class="message-content user-content">${text17 ? `<div class="markdown-body">${options2.markdown(text17)}</div>` : ""}${imagesHtml}${chipsHtml}</div>
+  </div>`;
+    }
+    function renderAssistantMessage(msg, time, opts = {}) {
+      let thinkingHtml = "", textHtml = "", toolCallsHtml = "";
+      const timestamp = msg.timestamp || Date.now();
+      const streamingClass = opts.streaming ? " streaming" : "";
+      const streamingAttr = opts.streaming ? ' data-streaming="true"' : "";
+      if (Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (typeof block === "string") continue;
+          if (block.type === "thinking" && block.thinking) thinkingHtml += renderThinkingBlock(block.thinking);
+          else if (block.type === "text" && block.text) textHtml += options2.markdown(block.text);
+          else if (block.type === "toolCall") toolCallsHtml += renderToolCall(block);
+        }
+      } else if (typeof msg.content === "string") {
+        textHtml = options2.markdown(msg.content);
+      }
+      let errorHtml = "";
+      if (msg.errorMessage) {
+        errorHtml = `<div class="message-content message-error"><div class="markdown-body"><strong>Error:</strong> ${escapeHtml(msg.errorMessage)}</div></div>`;
+      }
+      const showModel = msg.model && (!renderModel() || msg.model !== renderModel());
+      const noTextClass = messageHasVisibleText(msg) ? "" : " no-text";
+      let speedHtml = "";
+      const hasMetadata = !inPeek && !opts.streaming && (msg.usage || msg.durationMs);
+      if (hasMetadata) speedHtml = options2.details.button(msg);
+      return `<div${opts.attrs || ""} class="message assistant${streamingClass}${noTextClass}${msg.errorMessage ? " error" : ""}" data-timestamp="${escapeHtml(String(timestamp))}"${streamingAttr}>
+    <div class="message-header">
+      <span class="message-role assistant">\u03C0</span>
+      ${showModel ? `<span class="badge">${escapeHtml(msg.model)}</span>` : ""}
+      ${opts.streaming ? '<span class="badge streaming">\u25CF</span>' : ""}
+      ${speedHtml}
+      ${time ? `<span class="message-time">${time}</span>` : ""}
+      ${messageLinkBtnHtml(msg)}
+    </div>
+    ${thinkingHtml}${toolCallsHtml}
+    ${textHtml ? `<div class="message-content"><div class="markdown-body">${textHtml}</div></div>` : ""}
+    ${errorHtml}
+  </div>`;
+    }
+    function renderThinkingBlock(thinking) {
+      const preview = thinking.substring(0, 80).replace(/\n/g, " ");
+      return `<details class="thinking-block">
+    <summary class="thinking-header"><span class="thinking-label">Thinking</span><span class="thinking-preview">${escapeHtml(preview)}\u2026</span></summary>
+    <div class="thinking-text">${escapeHtml(thinking)}</div>
+  </details>`;
+    }
+    function renderToolCall(block) {
+      const args = block.arguments || {};
+      const summary = getToolSummary(block.name || "", args);
+      const bodyHtml = block.name === "ipython" && typeof args.code === "string" ? `<pre><code>${escapeHtml(args.code)}</code></pre>` : `<pre><code>${escapeHtml(JSON.stringify(args, null, 2))}</code></pre>`;
+      return `<details class="tool-call">
+    <summary class="tool-call-header">
+      <span class="tool-call-icon">\u26A1</span><span class="tool-call-name">${escapeHtml(block.name)}</span>
+      ${summary ? `<span class="tool-call-summary">${escapeHtml(summary)}</span>` : ""}
+    </summary>
+    <div class="tool-call-content">${bodyHtml}</div>
+  </details>`;
+    }
+    function renderToolResult(msg, time, attrs = "") {
+      let content = extractTextContent(msg.content);
+      const isError = msg.isError;
+      const timestamp = msg.timestamp || Date.now();
+      const parsed = parseIpythonResult(content);
+      let exitBadge = "";
+      if (parsed) {
+        content = parsed.output;
+        if (parsed.exitCode !== 0) exitBadge = `<span class="tool-result-meta error-badge">exit ${parsed.exitCode}</span>`;
+      }
+      const lines = content.split("\n");
+      const lineCount = lines.length;
+      const preview = truncate(lines[0], 80);
+      const images = extractImageBlocks(msg.content);
+      const imageCount = images.length;
+      const imagesHtml = imageBlocksHtml(msg.content, "tool result image");
+      return `<div${attrs} class="message tool-result ${isError ? "error" : ""}" data-timestamp="${escapeHtml(String(timestamp))}">
+    <details class="tool-result-details" ${lineCount <= 5 || imageCount ? "open" : ""}>
+      <summary class="tool-result-header">
+        <span class="tool-result-icon">${isError ? "\u2717" : "\u2713"}</span>
+        <span class="tool-result-name">${escapeHtml(msg.toolName || "result")}</span>
+        ${lineCount > 5 ? `<span class="tool-result-meta">${lineCount} lines</span>` : ""}
+        ${imageCount ? `<span class="tool-result-meta">${imageCount === 1 ? "image" : imageCount + " images"}</span>` : ""}
+        ${exitBadge}
+        ${isError ? '<span class="tool-result-meta error-badge">error</span>' : ""}
+        ${lineCount > 5 ? `<span class="tool-result-preview">${escapeHtml(preview)}</span>` : ""}
+      </summary>
+      <div class="tool-result-content"><pre>${escapeHtml(truncate(content, 2e3))}</pre>${imagesHtml}</div>
+    </details>
+  </div>`;
+    }
+    function renderBranchSummary(msg, time, attrs = "") {
+      const text17 = extractTextContent(msg.content);
+      const timestamp = msg.timestamp || Date.now();
+      const preview = truncate(text17.split("\n")[0], 80);
+      return `<div${attrs} class="message branch-summary" data-timestamp="${escapeHtml(String(timestamp))}">
+    <details class="branch-summary-details">
+      <summary class="branch-summary-header">
+        <span class="branch-summary-icon">\u2387</span>
+        <span class="branch-summary-label">Branch summary</span>
+        ${time ? `<span class="message-time">${time}</span>` : ""}
+        <span class="branch-summary-preview">${escapeHtml(preview)}</span>
+      </summary>
+      <div class="message-content"><div class="markdown-body">${options2.markdown(text17)}</div></div>
+    </details>
+  </div>`;
+    }
+    const ADVISOR_SEVERITIES = ["nit", "concern", "blocker"];
+    function advisoryTagAttr(rawAttrs, name) {
+      const m = new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`, "i").exec(rawAttrs || "");
+      return m ? m[1].trim() : "";
+    }
+    function normalizeAdvisorSeverity(value) {
+      const sev = String(value || "").trim().toLowerCase();
+      return ADVISOR_SEVERITIES.includes(sev) ? sev : "";
+    }
+    function parseAdvisoryContent(text17) {
+      const notes = [];
+      const re = /<advisory\b([^>]*)>([\s\S]*?)<\/advisory>/gi;
+      let m;
+      while (m = re.exec(text17)) {
+        const note = m[2].trim();
+        if (note) notes.push({ note, severity: advisoryTagAttr(m[1], "severity"), advisor: advisoryTagAttr(m[1], "advisor") });
+      }
+      if (notes.length) return notes;
+      const bare = String(text17 || "").replace(/<\/?advisory\b[^>]*>/gi, "").trim();
+      return bare ? [{ note: bare }] : [];
+    }
+    function advisorNotesFrom(msg) {
+      const structured = Array.isArray(msg.details?.notes) ? msg.details.notes : null;
+      const notes = (structured && structured.length ? structured : parseAdvisoryContent(extractTextContent(msg.content))).map((n) => ({
+        note: n.note,
+        severity: normalizeAdvisorSeverity(n.severity),
+        advisor: (n.advisor || "").trim()
+      })).filter((n) => n.note);
+      return notes;
+    }
+    function advisoryBatchName(msg) {
+      const m = /<advisory\b([^>]*)>/i.exec(extractTextContent(msg.content));
+      return m ? advisoryTagAttr(m[1], "advisor") : "";
+    }
+    function advisorSeverityChip(severity) {
+      if (!severity) return "";
+      return `<span class="advisor-severity sev-${severity}">${escapeHtml(severity)}</span>`;
+    }
+    function renderAdvisorMessage(msg, time, attrs, timestamp) {
+      const notes = advisorNotesFrom(msg);
+      if (!notes.length) return "";
+      const worst = ADVISOR_SEVERITIES.filter((s) => notes.some((n) => n.severity === s)).pop() || "";
+      const names = [...new Set(notes.map((n) => n.advisor).filter(Boolean))];
+      const name = names.length === 1 ? names[0] : names.length ? "" : advisoryBatchName(msg);
+      const single = notes.length === 1;
+      const rows = notes.map((n) => `<div class="advisor-note">
+        ${single ? "" : advisorSeverityChip(n.severity)}${!single && !name && n.advisor ? `<span class="advisor-note-name">${escapeHtml(n.advisor)}</span>` : ""}
+        <div class="markdown-body">${options2.markdown(n.note)}</div>
+      </div>`).join("");
+      return `<div${attrs} class="message custom-message advisor${worst ? ` sev-${worst}` : ""}" data-timestamp="${escapeHtml(String(timestamp))}">
+    <div class="advisor-card">
+      <div class="advisor-header">
+        <span class="advisor-icon">\u25C8</span>
+        <span class="advisor-label">Advisor${name ? ` \xB7 ${escapeHtml(name)}` : ""}</span>
+        ${single ? advisorSeverityChip(notes[0].severity) : `<span class="advisor-count">${notes.length} notes</span>`}
+        ${time ? `<span class="message-time">${time}</span>` : ""}
+      </div>
+      <div class="advisor-notes">${rows}</div>
+    </div>
+  </div>`;
+    }
+    function renderCustomMessage(msg, time, attrs = "") {
+      const customType = msg.customType || "custom-message";
+      const timestamp = msg.timestamp || Date.now();
+      if (customType === "interrupted-thinking") {
+        return `<div${attrs} class="message custom-message interrupted" data-timestamp="${escapeHtml(String(timestamp))}">
+      <span class="custom-message-divider"></span><span class="custom-message-label">Interrupted</span>${time ? `<span class="message-time">${time}</span>` : ""}<span class="custom-message-divider"></span>
+    </div>`;
+      }
+      if (msg.display === false) return "";
+      if (customType === "irc:incoming") {
+        return renderIrcMessage(msg, time, attrs, timestamp, parseIrcCustomContent(extractTextContent(msg.content)));
+      }
+      if (customType === "async-result") {
+        const jobs = Array.isArray(msg.details?.jobs) ? msg.details.jobs : [];
+        const names = jobs.map((job) => job.label || job.jobId).filter(Boolean);
+        const duration = jobs.length === 1 && Number.isFinite(jobs[0].durationMs) ? formatDuration(jobs[0].durationMs) : "";
+        const meta = [names.join(", "), duration].filter(Boolean).join(" \xB7 ");
+        return `<div${attrs} class="message custom-message async-result" data-timestamp="${escapeHtml(String(timestamp))}">
+      <span class="custom-message-icon">\u2713</span><span class="custom-message-label">Background job${jobs.length > 1 ? "s" : ""} finished</span>${meta ? `<span class="custom-message-meta">${escapeHtml(meta)}</span>` : ""}${time ? `<span class="message-time">${time}</span>` : ""}
+    </div>`;
+      }
+      if (customType === "advisor") return renderAdvisorMessage(msg, time, attrs, timestamp);
+      const text17 = extractTextContent(msg.content);
+      const label = customType.replace(/[-_]+/g, " ");
+      return `<div${attrs} class="message custom-message generic" data-timestamp="${escapeHtml(String(timestamp))}">
+    <span class="custom-message-icon">\u25C7</span><span class="custom-message-label">${escapeHtml(label)}</span>${text17 ? `<span class="custom-message-meta">${escapeHtml(truncate(text17.replace(/\s+/g, " "), 240))}</span>` : ""}${time ? `<span class="message-time">${time}</span>` : ""}
+  </div>`;
+    }
+    function liveCustomMessageKey(message3) {
+      const jobs = Array.isArray(message3?.details?.jobs) ? message3.details.jobs.map((job) => job.jobId).filter(Boolean).join(",") : "";
+      return `${message3?.customType || "custom-message"}:${message3?.timestamp || jobs}`;
+    }
+    function upsertLiveCustomMessage(value, { streaming = false } = {}) {
+      if (disposed) return;
+      const message3 = decodeRenderMessage(value);
+      const container = document2.getElementById("messages");
+      if (!container) return;
+      const wasPinned = options2.pinned(container);
+      const key = liveCustomMessageKey(message3);
+      const existing = [...container.querySelectorAll(".message.custom-message[data-live-custom-key]")].find((el2) => el2.dataset.liveCustomKey === key);
+      const attrs = ` data-live-custom-key="${escapeHtml(key)}"${streaming ? ' data-streaming="true"' : ""}`;
+      const tmp = document2.createElement("template");
+      tmp.innerHTML = renderCustomMessage(message3, formatTime(message3.timestamp || Date.now()), attrs);
+      const el = tmp.content.firstElementChild;
+      if (!el) return;
+      if (existing) existing.replaceWith(el);
+      else container.appendChild(el);
+      if (wasPinned || options2.follow()) options2.scroll(container);
+      else options2.jump(container);
+    }
+    return {
+      message: (value) => renderMessageHtml(decodeRenderMessage(value)),
+      user: (value, time, attrs = "") => renderUserMessage(decodeRenderMessage(value), time, attrs),
+      assistant: (value, time, opts) => renderAssistantMessage(decodeRenderMessage(value), time, opts),
+      custom: (value, time, attrs = "") => renderCustomMessage(decodeRenderMessage(value), time, attrs),
+      images: imageBlocksHtml,
+      thinking: renderThinkingBlock,
+      tool: renderToolCall,
+      upsertCustom: upsertLiveCustomMessage,
+      dispose() {
+        disposed = true;
+      }
+    };
+  }
+
+  // src/browser/subagents-view.ts
+  function createSubagentsView(options2) {
+    const document2 = options2.root.ownerDocument, sessionState = options2.sessionState;
+    const element = (id) => {
+      const value = document2.getElementById(id);
+      if (!value) throw new Error("Missing subagents view element: " + id);
+      return value;
+    };
+    const message3 = (error) => error instanceof Error ? error.message : String(error);
+    let disposed = false;
+    let viewOwner = null;
+    let viewEndpoint = null;
+    let lineage = decodeSessionLineage(null);
+    let lineageSeq = 0, loadInFlight = false, lastIndexing = false;
+    const collapsed = /* @__PURE__ */ new Set();
+    let selectedId = null;
+    let pollTimer;
+    let indexingTimer;
+    let treeEvents = new AbortController();
+    const events = new AbortController();
+    let peekSeq = 0;
+    let peekTarget = null;
+    let peekLastIndex = null;
+    let peekTimer;
+    const renderer = createMessageRenderer({
+      document: document2,
+      sessionState,
+      details: options2.details,
+      markdown: (text17) => options2.markdown(text17),
+      assetUrl: options2.assetUrl,
+      matchRef: options2.matchRef,
+      pinned: (container) => container.scrollHeight - container.scrollTop - container.clientHeight < 40,
+      follow: () => true,
+      scroll: (container) => {
+        container.scrollTop = container.scrollHeight;
+      },
+      jump: () => {
+      },
+      peek: () => peekTarget ? { host: viewOwner?.host ?? null, model: peekTarget.model || null } : null
+    });
+    function sameEndpoint(host, endpoint) {
+      const current = options2.endpoint(host);
+      return !!endpoint && !!current && current.base === endpoint.base && (current.token || "") === (endpoint.token || "");
+    }
+    const owns = () => !disposed && !!viewOwner && sessionState.ownsSelection(viewOwner) && sameEndpoint(viewOwner.host, viewEndpoint);
+    const isOpen = () => !disposed && options2.root.classList.contains("subagents-open");
+    function findNode(node, id) {
+      if (!node) return null;
+      if (node.session.id === id) return node;
+      for (const child of node.children) {
+        const hit = findNode(child, id);
+        if (hit) return hit;
+      }
+      return null;
+    }
+    function open(owner, endpoint, initial) {
+      if (disposed || !sessionState.ownsSelection(owner)) return;
+      close();
+      options2.closeOtherViews();
+      viewOwner = owner;
+      viewEndpoint = Object.freeze({ ...endpoint });
+      lineage = initial.tree ? initial : decodeSessionLineage(null);
+      lastIndexing = false;
+      selectedId = null;
+      peekTarget = null;
+      peekLastIndex = null;
+      collapsed.clear();
+      element("subagentsViewNote").textContent = lineage.session?.name ? `Family of ${lineage.session.name}` : "";
+      options2.root.classList.add("subagents-open");
+      renderTree();
+      renderDetail();
+      void loadLineage();
+      pollTimer = setInterval(() => {
+        if (!owns() || loadInFlight) return;
+        if (!sessionState.currentSession?.isActive && !lastIndexing) return;
+        void loadLineage();
+      }, 4e3);
+    }
+    function close() {
+      if (!isOpen()) return;
+      lineageSeq++;
+      peekSeq++;
+      clearInterval(pollTimer);
+      pollTimer = void 0;
+      clearInterval(peekTimer);
+      peekTimer = void 0;
+      clearTimeout(indexingTimer);
+      treeEvents.abort();
+      viewOwner = null;
+      viewEndpoint = null;
+      peekTarget = null;
+      selectedId = null;
+      options2.root.classList.remove("subagents-open");
+    }
+    async function loadLineage() {
+      if (!owns() || !viewOwner || !viewEndpoint) return;
+      const owner = viewOwner, endpoint = viewEndpoint, seq = ++lineageSeq;
+      clearTimeout(indexingTimer);
+      loadInFlight = true;
+      const current = () => seq === lineageSeq && owns() && viewOwner === owner;
+      try {
+        const res = await options2.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/lineage`);
+        const data = await res.json();
+        if (!current()) return;
+        if (!res.ok) throw new Error(record8(data) && typeof data.error === "string" && data.error || `HTTP ${res.status}`);
+        lastIndexing = record8(data) && data.indexing === true;
+        lineage = decodeSessionLineage(data);
+        renderTree();
+        if (selectedId) {
+          const node = findNode(lineage.tree, selectedId);
+          peekTarget = node?.session || null;
+          renderDetail();
+          syncPeekTimer();
+        }
+        if (lastIndexing) indexingTimer = setTimeout(() => {
+          if (current()) void loadLineage();
+        }, 1e3);
+      } catch (error) {
+        if (current()) console.error("Failed to load session lineage:", error);
+      } finally {
+        if (current()) loadInFlight = false;
+        else loadInFlight = false;
+      }
+    }
+    function renderTree() {
+      if (!owns() || !isOpen()) return;
+      treeEvents.abort();
+      treeEvents = new AbortController();
+      const body = element("subagentsTree");
+      body.replaceChildren();
+      const tree = lineage.tree;
+      if (!tree) {
+        const empty = document2.createElement("div");
+        empty.className = "subagents-state";
+        empty.textContent = "No related sessions.";
+        body.appendChild(empty);
+        return;
+      }
+      const harnesses = /* @__PURE__ */ new Set();
+      (function collect(node) {
+        if (node.session.harnessId) harnesses.add(node.session.harnessId);
+        for (const child of node.children) collect(child);
+      })(tree);
+      const mixedHarnesses = harnesses.size > 1;
+      const currentId = lineage.session?.id || sessionState.currentSession?.id || null;
+      const rows = [];
+      (function flatten(node, depth) {
+        rows.push({ node, depth });
+        if (collapsed.has(node.session.id)) return;
+        for (const child of node.children) flatten(child, depth + 1);
+      })(tree, 0);
+      for (const { node, depth } of rows) {
+        const target = node.session;
+        const row = document2.createElement("div");
+        row.className = "lineage-row";
+        row.style.setProperty("--depth", String(depth));
+        row.dataset.sessionId = target.id;
+        row.tabIndex = 0;
+        row.setAttribute("role", "button");
+        row.title = target.cwd || target.id;
+        if (target.id === currentId) row.classList.add("lineage-current");
+        if (target.id === selectedId) row.classList.add("lineage-selected");
+        const twisty = document2.createElement("span");
+        twisty.className = "lineage-twisty";
+        if (node.children.length) {
+          const isCollapsed = collapsed.has(target.id);
+          twisty.textContent = isCollapsed ? "\u25B8" : "\u25BE";
+          twisty.title = isCollapsed ? "Expand subtree" : "Collapse subtree";
+          twisty.addEventListener("click", (event) => {
+            event.stopPropagation();
+            if (!owns()) return;
+            if (collapsed.has(target.id)) collapsed.delete(target.id);
+            else collapsed.add(target.id);
+            renderTree();
+          }, { signal: treeEvents.signal });
+        }
+        row.appendChild(twisty);
+        if (target.isActive || target.subagentLive) {
+          const dot = document2.createElement("span");
+          dot.className = "live-dot";
+          dot.title = target.isActive ? "Live session" : "Subagent still loaded in its parent";
+          row.appendChild(dot);
+        }
+        const name = document2.createElement("span");
+        name.className = "lineage-name";
+        name.textContent = target.name || target.id.slice(0, 8);
+        row.appendChild(name);
+        if (node.edge?.kind === "startedHere") {
+          const badge = document2.createElement("span");
+          badge.className = "lineage-badge";
+          badge.textContent = "launched";
+          badge.title = `Started from its relative by pi-dish (${node.edge.source || "launch metadata"})`;
+          row.appendChild(badge);
+        }
+        if (mixedHarnesses && target.harnessId) {
+          const badge = document2.createElement("span");
+          badge.className = "lineage-badge lineage-harness";
+          badge.textContent = target.harnessId;
+          row.appendChild(badge);
+        }
+        if (target.turnInProgress) {
+          const badge = document2.createElement("span");
+          badge.className = "lineage-badge lineage-busy";
+          badge.textContent = "working";
+          badge.title = "A turn is in progress";
+          row.appendChild(badge);
+        }
+        if (target.id === currentId) {
+          const badge = document2.createElement("span");
+          badge.className = "lineage-badge lineage-current-badge";
+          badge.textContent = "current";
+          row.appendChild(badge);
+        }
+        const meta = document2.createElement("span");
+        meta.className = "lineage-meta";
+        meta.textContent = formatRelativeTime(target.lastActivity);
+        row.appendChild(meta);
+        const activate = () => {
+          if (owns()) selectNode(target.id);
+        };
+        row.addEventListener("click", activate, { signal: treeEvents.signal });
+        row.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          activate();
+        }, { signal: treeEvents.signal });
+        body.appendChild(row);
+      }
+      if (lineage.truncated) {
+        const note = document2.createElement("div");
+        note.className = "lineage-truncated";
+        note.textContent = "This family is too large to show in full \u2014 the tree is truncated.";
+        body.appendChild(note);
+      }
+    }
+    function selectNode(id) {
+      if (!owns()) return;
+      selectedId = id;
+      peekTarget = findNode(lineage.tree, id)?.session || null;
+      renderTree();
+      renderDetail();
+      void loadPeek(true);
+      syncPeekTimer();
+    }
+    function renderDetail() {
+      const empty = element("subagentsDetailEmpty");
+      const content = element("subagentsDetailContent");
+      const target = peekTarget;
+      if (!selectedId || !target) {
+        empty.style.display = "";
+        content.style.display = "none";
+        return;
+      }
+      empty.style.display = "none";
+      content.style.display = "flex";
+      element("subagentsDetailName").textContent = target.name || target.id.slice(0, 8);
+      const live = target.isActive ? "live" : target.subagentLive ? "live in parent" : "ended";
+      element("subagentsDetailMeta").textContent = [target.harnessId, target.model !== "unknown" ? target.model : "", live, formatRelativeTime(target.lastActivity)].filter(Boolean).join(" \xB7 ");
+      const caps = target.capabilities;
+      const canPrompt = target.isActive && caps?.prompt === true;
+      const canSteer = target.isActive && caps?.steer === true;
+      const canFollowUp = target.isActive && caps?.followUp === true;
+      const signalable = canPrompt || canSteer || canFollowUp;
+      const box = element("subagentsSignalBox"), note = element("subagentsSignalNote");
+      box.style.display = signalable ? "" : "none";
+      note.style.display = signalable ? "none" : "";
+      if (!signalable) {
+        note.textContent = !target.isActive && !target.subagentLive ? "This session has ended \u2014 open it to resume or branch from it." : target.subagentLive && !target.isActive ? "A native subagent of a live parent \u2014 pi-dish has no direct control path to it." : "This session is not accepting input.";
+      }
+      element("subagentsSendBtn").style.display = canPrompt ? "" : "none";
+      element("subagentsSteerBtn").style.display = canSteer ? "" : "none";
+      element("subagentsFollowUpBtn").style.display = canFollowUp ? "" : "none";
+      element("subagentsSignalStatus").textContent = "";
+    }
+    function syncPeekTimer() {
+      clearInterval(peekTimer);
+      peekTimer = void 0;
+      if (!peekTarget || !peekTarget.isActive && !peekTarget.subagentLive) return;
+      peekTimer = setInterval(() => {
+        if (owns() && peekTarget) void loadPeek(false);
+      }, 3e3);
+    }
+    async function loadPeek(reset) {
+      if (!owns() || !peekTarget || !viewEndpoint) return;
+      const target = peekTarget, endpoint = viewEndpoint, seq = ++peekSeq;
+      if (reset) {
+        peekLastIndex = null;
+        element("subagentsTrace").replaceChildren();
+      }
+      const stale = () => seq !== peekSeq || !owns() || peekTarget !== target;
+      const query = peekLastIndex == null ? "?limit=50" : `?after=${peekLastIndex}`;
+      try {
+        const res = await options2.request(endpoint, `/api/sessions/${encodeURIComponent(target.id)}/messages${query}`);
+        const data = await res.json();
+        if (stale()) return;
+        if (!res.ok) throw new Error(record8(data) && typeof data.error === "string" && data.error || `HTTP ${res.status}`);
+        const payload = record8(data) ? data : {};
+        const messages = Array.isArray(payload.messages) ? payload.messages : [];
+        const trace = element("subagentsTrace");
+        if (reset && !messages.length) {
+          const empty = document2.createElement("div");
+          empty.className = "subagents-state";
+          empty.textContent = "No messages yet.";
+          trace.appendChild(empty);
+        }
+        const stickToTail = trace.scrollHeight - trace.scrollTop - trace.clientHeight < 80;
+        for (const value of messages) {
+          const html = renderer.message(value);
+          if (!html) continue;
+          const template = document2.createElement("template");
+          template.innerHTML = html.trim();
+          const el = template.content.firstElementChild;
+          if (el) trace.appendChild(el);
+        }
+        if (messages.length && (reset || stickToTail)) trace.scrollTop = trace.scrollHeight;
+        if (typeof payload.lastIndex === "number") peekLastIndex = payload.lastIndex;
+        else if (reset && typeof payload.lastIndex !== "number") peekLastIndex = null;
+      } catch (error) {
+        if (stale()) return;
+        if (reset) {
+          const trace = element("subagentsTrace");
+          trace.replaceChildren();
+          const failure = document2.createElement("div");
+          failure.className = "subagents-state";
+          failure.textContent = `Trace unavailable: ${message3(error)}`;
+          trace.appendChild(failure);
+        }
+      }
+    }
+    async function sendSignal(kind) {
+      if (!owns() || !peekTarget || !viewEndpoint) return;
+      const target = peekTarget, endpoint = viewEndpoint, seq = peekSeq;
+      const input = element("subagentsSignalInput");
+      const text17 = input.value.trim();
+      if (!text17) return;
+      const status = element("subagentsSignalStatus");
+      const path = kind === "steer" ? "steer" : kind === "followUp" ? "follow-up" : "prompt";
+      status.textContent = "Sending\u2026";
+      try {
+        await sendJson(options2.request, endpoint, `/api/sessions/${encodeURIComponent(target.id)}/${path}`, { message: text17 });
+        if (!owns() || seq !== peekSeq || peekTarget !== target) return;
+        input.value = "";
+        status.textContent = kind === "steer" ? "Steered" : kind === "followUp" ? "Follow-up queued" : "Sent";
+      } catch (error) {
+        if (!owns() || seq !== peekSeq || peekTarget !== target) return;
+        status.textContent = message3(error);
+      }
+    }
+    async function openTarget() {
+      if (!owns() || !peekTarget || !viewOwner || !viewEndpoint) return;
+      const id = peekTarget.id, owner = viewOwner, endpoint = viewEndpoint;
+      close();
+      if (!sessionState.findSession(id, owner.host)) await options2.loadPrevious();
+      if (disposed || !sessionState.ownsSelection(owner) || !sameEndpoint(owner.host, endpoint)) return;
+      if (!sessionState.findSession(id, owner.host)) {
+        options2.status("Related session is not available yet", "error");
+        return;
+      }
+      await options2.selectSession(id, { host: owner.host });
+    }
+    element("subagentsOpenBtn").addEventListener("click", () => {
+      void openTarget();
+    }, { signal: events.signal });
+    element("subagentsSendBtn").addEventListener("click", () => {
+      void sendSignal("prompt");
+    }, { signal: events.signal });
+    element("subagentsSteerBtn").addEventListener("click", () => {
+      void sendSignal("steer");
+    }, { signal: events.signal });
+    element("subagentsFollowUpBtn").addEventListener("click", () => {
+      void sendSignal("followUp");
+    }, { signal: events.signal });
+    element("subagentsSignalInput").addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.shiftKey) return;
+      event.preventDefault();
+      const target = peekTarget;
+      const kind = target?.capabilities?.prompt ? "prompt" : target?.capabilities?.steer ? "steer" : "followUp";
+      void sendSignal(kind);
+    }, { signal: events.signal });
+    return {
+      open,
+      close,
+      isOpen,
+      reload: () => {
+        if (owns()) void loadLineage();
+      },
+      get selected() {
+        return selectedId;
+      },
+      dispose() {
+        close();
+        events.abort();
+        renderer.dispose();
+        disposed = true;
+      }
+    };
+  }
+
   // src/browser/helper-usage.ts
   var USAGE_MERGE_COST_KEYS = ["input", "output", "cacheRead", "cacheWrite", "total"];
   var USAGE_MERGE_TOKEN_KEYS = ["input", "output", "cacheRead", "cacheWrite", "reasoning"];
@@ -6153,18 +7020,18 @@ var PiDishBrowser = (() => {
   // src/browser/usage-data.ts
   var object3 = (value) => record8(value) ? value : {};
   var text9 = (value) => typeof value === "string" ? value : "";
-  var number3 = (value) => finite2(value) ? value : 0;
+  var number4 = (value) => finite2(value) ? value : 0;
   function costs(value) {
     const row = object3(value);
     return Object.fromEntries(USAGE_MERGE_COST_KEYS.map((key) => [key, finite2(row[key]) ? row[key] : null]));
   }
   function counts(value) {
     const row = object3(value);
-    return Object.fromEntries(USAGE_MERGE_COST_KEYS.map((key) => [key, number3(row[key])]));
+    return Object.fromEntries(USAGE_MERGE_COST_KEYS.map((key) => [key, number4(row[key])]));
   }
   function tokens(value) {
     const row = object3(value);
-    return Object.fromEntries(USAGE_MERGE_TOKEN_KEYS.map((key) => [key, number3(row[key])]));
+    return Object.fromEntries(USAGE_MERGE_TOKEN_KEYS.map((key) => [key, number4(row[key])]));
   }
   function bucket(value) {
     const row = object3(value);
@@ -6172,12 +7039,12 @@ var PiDishBrowser = (() => {
       tokens: tokens(row.tokens),
       costs: costs(row.costs),
       costUnavailable: counts(row.costUnavailable),
-      calls: number3(row.calls),
-      measured: number3(row.measured),
-      durationMs: number3(row.durationMs),
-      slowestMs: number3(row.slowestMs),
+      calls: number4(row.calls),
+      measured: number4(row.measured),
+      durationMs: number4(row.durationMs),
+      slowestMs: number4(row.slowestMs),
       priced: row.priced === true,
-      unpricedCalls: number3(row.unpricedCalls)
+      unpricedCalls: number4(row.unpricedCalls)
     };
   }
   function decodeUsageSummary(value, host) {
@@ -6198,13 +7065,13 @@ var PiDishBrowser = (() => {
     }) : [];
     const daily = Array.isArray(value.daily) ? value.daily.flatMap((row) => {
       if (!record8(row) || typeof row.day !== "string") return [];
-      return [{ ...bucket(row), day: row.day, days: number3(row.days) || 1, models: Array.isArray(row.models) ? row.models.flatMap((model) => {
+      return [{ ...bucket(row), day: row.day, days: number4(row.days) || 1, models: Array.isArray(row.models) ? row.models.flatMap((model) => {
         if (!record8(model) || typeof model.ref !== "string") return [];
         return [{
           ref: model.ref,
           provider: text9(model.provider),
           model: text9(model.model),
-          calls: number3(model.calls),
+          calls: number4(model.calls),
           cost: finite2(model.cost) ? model.cost : null,
           tokens: tokens(model.tokens),
           costUnavailable: counts(model.costUnavailable)
@@ -6220,11 +7087,11 @@ var PiDishBrowser = (() => {
       daily,
       headlineCosts: Object.fromEntries(Object.entries(object3(value.headlineCosts)).map(([key, value2]) => [key, finite2(value2) ? value2 : null])),
       headlineCostsByBucket: Object.fromEntries(Object.entries(object3(value.headlineCostsByBucket)).map(([key, value2]) => [key, costs(value2)])),
-      headlineCostUnavailable: Object.fromEntries(Object.entries(object3(value.headlineCostUnavailable)).map(([key, value2]) => [key, number3(value2)])),
-      unpricedModelCalls: number3(value.unpricedModelCalls),
+      headlineCostUnavailable: Object.fromEntries(Object.entries(object3(value.headlineCostUnavailable)).map(([key, value2]) => [key, number4(value2)])),
+      unpricedModelCalls: number4(value.unpricedModelCalls),
       indexing: value.indexing === true,
       discoveryTruncated: value.discoveryTruncated === true,
-      discoverySkipped: number3(value.discoverySkipped),
+      discoverySkipped: number4(value.discoverySkipped),
       monthlyBudgetUsd: finite2(value.monthlyBudgetUsd) ? value.monthlyBudgetUsd : null
     };
   }
@@ -6234,7 +7101,7 @@ var PiDishBrowser = (() => {
       if (!record8(harness)) return [];
       return [{ harness: text9(harness.harness), label: text9(harness.label), error: text9(harness.error), reports: Array.isArray(harness.reports) ? harness.reports.flatMap((report) => {
         if (!record8(report) || typeof report.provider !== "string") return [];
-        return [{ provider: report.provider, planType: text9(report.planType), fetchedAt: number3(report.fetchedAt), limits: Array.isArray(report.limits) ? report.limits.flatMap((limit) => {
+        return [{ provider: report.provider, planType: text9(report.planType), fetchedAt: number4(report.fetchedAt), limits: Array.isArray(report.limits) ? report.limits.flatMap((limit) => {
           if (!record8(limit) || typeof limit.label !== "string" || !finite2(limit.usedFraction)) return [];
           return [{ label: limit.label, windowLabel: text9(limit.windowLabel), usedFraction: limit.usedFraction, resetsAt: finite2(limit.resetsAt) ? limit.resetsAt : null }];
         }) : [] }];
@@ -7590,7 +8457,7 @@ var PiDishBrowser = (() => {
 
   // src/browser/routines-data.ts
   var text10 = (value) => typeof value === "string" ? value : "";
-  var number4 = (value) => finite2(value) ? value : 0;
+  var number5 = (value) => finite2(value) ? value : 0;
   function decodeRoutineInvocations(value) {
     if (!record8(value)) throw new Error("Invalid routine invocation response");
     return { invocations: Array.isArray(value.invocations) ? value.invocations.flatMap((row) => {
@@ -7617,7 +8484,7 @@ var PiDishBrowser = (() => {
     const row = record8(value.routine) ? value.routine : value;
     if (typeof row.id !== "string" || !row.id) throw new Error("Invalid routine identity");
     const stats = record8(row.stats) ? row.stats : {};
-    const versions = Array.isArray(row.versions) ? row.versions.flatMap((version) => record8(version) && finite2(version.version) && typeof version.prompt === "string" ? [{ version: version.version, savedAt: number4(version.savedAt), prompt: version.prompt }] : []) : [];
+    const versions = Array.isArray(row.versions) ? row.versions.flatMap((version) => record8(version) && finite2(version.version) && typeof version.prompt === "string" ? [{ version: version.version, savedAt: number5(version.savedAt), prompt: version.prompt }] : []) : [];
     return {
       id: row.id,
       name: text10(row.name),
@@ -7630,11 +8497,11 @@ var PiDishBrowser = (() => {
       enabled: row.enabled !== false,
       mode: row.mode === "continue" ? "continue" : "oneShot",
       onBusy: row.onBusy === "steer" || row.onBusy === "followUp" ? row.onBusy : "skip",
-      minIntervalSec: number4(row.minIntervalSec),
+      minIntervalSec: number5(row.minIntervalSec),
       prompt: text10(row.prompt),
-      promptVersion: number4(row.promptVersion) || 1,
+      promptVersion: number5(row.promptVersion) || 1,
       versions,
-      stats: { invocations: number4(stats.invocations), nextRunAt: finite2(stats.nextRunAt) ? stats.nextRunAt : null, lastInvocation: decodeRoutineInvocations({ invocations: [stats.lastInvocation] }).invocations[0] || null },
+      stats: { invocations: number5(stats.invocations), nextRunAt: finite2(stats.nextRunAt) ? stats.nextRunAt : null, lastInvocation: decodeRoutineInvocations({ invocations: [stats.lastInvocation] }).invocations[0] || null },
       host: host.hostId,
       hostLabel: host.label || "",
       endpoint: Object.freeze({ base: host.base, token: host.token })
@@ -8827,7 +9694,7 @@ var PiDishBrowser = (() => {
 
   // src/browser/session-info-data.ts
   var text11 = (value) => typeof value === "string" ? value : "";
-  var number5 = (value) => finite2(value) ? value : 0;
+  var number6 = (value) => finite2(value) ? value : 0;
   var nullable = (value) => finite2(value) ? value : null;
   var object4 = (value) => record8(value) ? value : {};
   function decodeSessionStats(value) {
@@ -8839,19 +9706,19 @@ var PiDishBrowser = (() => {
       thinkingLevel: text11(value.thinkingLevel),
       cwd: text11(value.cwd),
       sessionFile: text11(value.sessionFile),
-      userMessages: number5(value.userMessages),
-      assistantMessages: number5(value.assistantMessages),
-      toolCalls: number5(value.toolCalls),
-      compactions: number5(value.compactions),
-      genOutput: number5(value.genOutput),
-      genMs: number5(value.genMs),
-      reasoningTokens: number5(value.reasoningTokens),
+      userMessages: number6(value.userMessages),
+      assistantMessages: number6(value.assistantMessages),
+      toolCalls: number6(value.toolCalls),
+      compactions: number6(value.compactions),
+      genOutput: number6(value.genOutput),
+      genMs: number6(value.genMs),
+      reasoningTokens: number6(value.reasoningTokens),
       cost: nullable(value.cost),
       contextUsage: { tokens: nullable(context.tokens), contextWindow: nullable(context.contextWindow), percent: nullable(context.percent) },
-      responseTiming: { medianMs: number5(timing.medianMs), slowestMs: number5(timing.slowestMs) },
+      responseTiming: { medianMs: number6(timing.medianMs), slowestMs: number6(timing.slowestMs) },
       costs: Object.fromEntries(USAGE_MERGE_COST_KEYS.map((key) => [key, nullable(costs2[key])])),
-      costUnavailable: Object.fromEntries(USAGE_MERGE_COST_KEYS.map((key) => [key, number5(unavailable[key])])),
-      tokens: Object.fromEntries(USAGE_MERGE_TOKEN_KEYS.map((key) => [key, number5(tokens2[key])])),
+      costUnavailable: Object.fromEntries(USAGE_MERGE_COST_KEYS.map((key) => [key, number6(unavailable[key])])),
+      tokens: Object.fromEntries(USAGE_MERGE_TOKEN_KEYS.map((key) => [key, number6(tokens2[key])])),
       runtime: typeof runtime.kind === "string" ? { kind: runtime.kind, pid: nullable(runtime.pid), server: text11(runtime.server), tmuxSession: text11(runtime.tmuxSession), windowIndex: nullable(runtime.windowIndex), windowName: text11(runtime.windowName) } : null
     };
   }
@@ -8861,7 +9728,7 @@ var PiDishBrowser = (() => {
     return path || url ? { path, url } : null;
   }
   function decodePublishedPages(value) {
-    return Array.isArray(value) ? value.flatMap((page) => record8(page) && typeof page.token === "string" && typeof page.root === "string" && (typeof page.path === "string" || typeof page.url === "string") ? [{ token: page.token, root: page.root, path: text11(page.path), url: text11(page.url), title: text11(page.title), missing: page.missing === true, createdAt: number5(page.createdAt) }] : []) : [];
+    return Array.isArray(value) ? value.flatMap((page) => record8(page) && typeof page.token === "string" && typeof page.root === "string" && (typeof page.path === "string" || typeof page.url === "string") ? [{ token: page.token, root: page.root, path: text11(page.path), url: text11(page.url), title: text11(page.title), missing: page.missing === true, createdAt: number6(page.createdAt) }] : []) : [];
   }
 
   // src/browser/session-info.ts
@@ -11098,15 +11965,15 @@ var PiDishBrowser = (() => {
 
   // src/browser/file-view-data.ts
   var text14 = (v) => typeof v === "string" ? v : "";
-  var number6 = (v) => finite2(v) ? v : 0;
+  var number7 = (v) => finite2(v) ? v : 0;
   function decodeFilePreview(v) {
     if (!record8(v) || typeof v.path !== "string" || !v.path) throw new Error("Invalid file preview");
     return {
       path: v.path,
       relPath: text14(v.relPath),
       content: text14(v.content),
-      size: number6(v.size),
-      mtime: number6(v.mtime),
+      size: number7(v.size),
+      mtime: number7(v.mtime),
       truncated: v.truncated === true,
       image: record8(v.image) ? { url: text14(v.image.url), mimeType: text14(v.image.mimeType), data: text14(v.image.data) } : null
     };
@@ -11116,13 +11983,13 @@ var PiDishBrowser = (() => {
     return { root: text14(v.root), gitAvailable: v.gitAvailable === true, snapshotId: text14(v.snapshotId), repos: v.repos.flatMap((r) => record8(r) && typeof r.path === "string" ? [{
       path: r.path,
       branch: text14(r.branch),
-      ahead: number6(r.ahead),
-      behind: number6(r.behind),
-      additions: number6(r.additions),
-      deletions: number6(r.deletions),
+      ahead: number7(r.ahead),
+      behind: number7(r.behind),
+      additions: number7(r.additions),
+      deletions: number7(r.deletions),
       error: text14(r.error),
-      moreUntracked: number6(r.moreUntracked),
-      files: Array.isArray(r.files) ? r.files.flatMap((f) => record8(f) && typeof f.path === "string" ? [{ path: f.path, oldPath: text14(f.oldPath), status: text14(f.status), additions: number6(f.additions), deletions: number6(f.deletions), binary: f.binary === true, truncated: f.truncated === true, patch: text14(f.patch), patchDeferred: f.patchDeferred === true }] : []) : []
+      moreUntracked: number7(r.moreUntracked),
+      files: Array.isArray(r.files) ? r.files.flatMap((f) => record8(f) && typeof f.path === "string" ? [{ path: f.path, oldPath: text14(f.oldPath), status: text14(f.status), additions: number7(f.additions), deletions: number7(f.deletions), binary: f.binary === true, truncated: f.truncated === true, patch: text14(f.patch), patchDeferred: f.patchDeferred === true }] : []) : []
     }] : []) };
   }
   function decodeDiffPatch(v) {
@@ -13268,156 +14135,6 @@ ${restored}`;
     };
   }
 
-  // src/browser/helper-refs.ts
-  function uniqueSessionPrefix(id, peerIds, minLen = 8) {
-    const self = String(id == null ? "" : id);
-    if (!self) return "";
-    const peers = (peerIds || []).filter((peer) => peer && peer !== self);
-    for (let len = Math.min(minLen, self.length); len < self.length; len++) {
-      const candidate = self.slice(0, len);
-      if (!peers.some((peer) => String(peer).startsWith(candidate))) return candidate;
-    }
-    return self;
-  }
-  var SESSION_ROUTE_KEY_PREFIX = "~sk1_";
-  var SESSION_UUID_TAIL_RE = /(?:^|[_-])([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
-  function decodeBase64Url(value) {
-    const normalized = String(value == null ? "" : value).replace(/-/g, "+").replace(/_/g, "/");
-    const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
-    if (typeof Buffer !== "undefined") return Buffer.from(padded, "base64").toString("utf8");
-    if (typeof atob !== "function") return "";
-    return atob(padded);
-  }
-  function decodeRouteSessionId(id) {
-    const raw = String(id == null ? "" : id);
-    if (!raw.startsWith(SESSION_ROUTE_KEY_PREFIX)) return null;
-    try {
-      const tuple = JSON.parse(decodeBase64Url(raw.slice(SESSION_ROUTE_KEY_PREFIX.length)));
-      if (!Array.isArray(tuple)) return null;
-      if (typeof tuple[0] !== "string" || !tuple[0]) return null;
-      if (typeof tuple[1] !== "string" || !tuple[1]) return null;
-      return { harnessId: tuple[0], nativeSessionId: tuple[1] };
-    } catch {
-      return null;
-    }
-  }
-  function sessionRefAliases(id) {
-    const routeId = String(id == null ? "" : id);
-    if (!routeId) return [];
-    const aliases = [routeId];
-    const decoded = decodeRouteSessionId(routeId);
-    const native = decoded ? decoded.nativeSessionId : routeId;
-    if (native !== routeId) aliases.push(native);
-    const uuid = SESSION_UUID_TAIL_RE.exec(native);
-    if (uuid) aliases.push(uuid[1]);
-    return aliases;
-  }
-  function shortSessionRef(id, peerIds, minLen = 8) {
-    const self = String(id == null ? "" : id);
-    if (!self) return "";
-    const peers = [];
-    for (const peer of peerIds || []) {
-      const other = String(peer == null ? "" : peer);
-      if (!other || other === self) continue;
-      peers.push(...sessionRefAliases(other));
-    }
-    let best = self;
-    for (const alias of sessionRefAliases(self).slice().reverse()) {
-      const candidate = uniqueSessionPrefix(alias, peers, minLen);
-      if (candidate && candidate.length < best.length) best = candidate;
-    }
-    return best;
-  }
-  var SESSION_REF_TOKEN_RE = /(?:^|[\s(\[{<"'])#([A-Za-z0-9][A-Za-z0-9._:/-]{3,})/g;
-  function parseSessionRefTokens(text17) {
-    const out = [];
-    if (!text17) return out;
-    const seen = /* @__PURE__ */ new Set();
-    SESSION_REF_TOKEN_RE.lastIndex = 0;
-    let match;
-    while ((match = SESSION_REF_TOKEN_RE.exec(String(text17))) !== null) {
-      const ref = match[1].replace(/[.:/]+$/, "");
-      if (ref.length < 4 || seen.has(ref)) continue;
-      seen.add(ref);
-      out.push({ token: "#" + ref, ref });
-    }
-    return out;
-  }
-  var SESSION_REF_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  function parseSessionRefParts(raw) {
-    const ref = String(raw == null ? "" : raw).trim();
-    if (!ref) return null;
-    const slash = ref.indexOf("/");
-    if (slash !== -1) {
-      const hostPart = ref.slice(0, slash);
-      const id = ref.slice(slash + 1);
-      return hostPart && id ? { hostPart, hostIdForm: false, id } : null;
-    }
-    const colon = ref.indexOf(":");
-    if (colon > 0) {
-      const head = ref.slice(0, colon);
-      const rest = ref.slice(colon + 1);
-      if (SESSION_REF_UUID_RE.test(head) && rest) return { hostPart: head, hostIdForm: true, id: rest };
-    }
-    return { hostPart: null, hostIdForm: false, id: ref };
-  }
-  var SESSION_REF_BLOCK_RE = /\n*<session-refs>\n([\s\S]*?)\n<\/session-refs>[ \t]*$/;
-  var SESSION_REF_PREAMBLE = [
-    "The message above references other pi-dish sessions by `#ref`. Each is a real",
-    "peer session, not a label: use the pi-dish-sessions skill CLI to read its",
-    "transcript (`read <ref>`) or to message it (`send` / `steer` / `follow-up`",
-    "<ref>). Never guess what a referenced session holds \u2014 read it."
-  ].join("\n");
-  function splitSessionRefContext(text17) {
-    const body = String(text17 == null ? "" : text17);
-    const match = body.match(SESSION_REF_BLOCK_RE);
-    if (!match) return { text: body, refs: [] };
-    const refs = [];
-    for (const line of match[1].split("\n")) {
-      if (!line.startsWith("- ref=")) continue;
-      const entry = /* @__PURE__ */ Object.create(null);
-      for (const field of line.slice(2).split(" | ")) {
-        const eq = field.indexOf("=");
-        if (eq > 0) entry[field.slice(0, eq)] = field.slice(eq + 1);
-      }
-      if (!entry.ref) continue;
-      refs.push({
-        ref: entry.ref,
-        name: entry.name || "",
-        host: entry.host || "",
-        cwd: entry.cwd || "",
-        isActive: entry.active === "yes"
-      });
-    }
-    return { text: body.slice(0, match.index).replace(/\s+$/, ""), refs };
-  }
-  function searchSessionsForRef(list, query, limit = 8) {
-    const q = String(query == null ? "" : query).trim();
-    const lower = q.toLowerCase();
-    const rows = [];
-    for (const session of list || []) {
-      if (!session || !session.id) continue;
-      let score = 0;
-      let indices = null;
-      if (q) {
-        const name = session.name || "";
-        indices = fuzzyMatch(q, name);
-        if (indices) {
-          score = 1e3 + fuzzyScore(indices, name);
-        } else {
-          const cwd = session.cwd || "";
-          const cwdIndices = fuzzyMatch(q, cwd);
-          if (cwdIndices) score = 500 + fuzzyScore(cwdIndices, cwd);
-          else if (sessionRefAliases(session.id).some((alias) => alias.toLowerCase().startsWith(lower))) score = 250;
-          else continue;
-        }
-      }
-      rows.push({ session, score, indices });
-    }
-    rows.sort((a, b) => b.score - a.score || (b.session.isActive ? 1 : 0) - (a.session.isActive ? 1 : 0) || new Date(b.session.lastActivity || 0).getTime() - new Date(a.session.lastActivity || 0).getTime());
-    return rows.slice(0, Math.max(0, limit));
-  }
-
   // src/browser/session-references.ts
   function createSessionReferences(options2) {
     const { sessionState } = options2;
@@ -14957,453 +15674,6 @@ ${restored}`;
       },
       get query() {
         return query;
-      }
-    };
-  }
-
-  // src/browser/message-data.ts
-  var string = (value) => typeof value === "string" ? value : void 0;
-  var number7 = (value) => finite2(value) ? value : void 0;
-  function decodeMessageUsage(value) {
-    if (!record8(value)) return void 0;
-    const cost = record8(value.cost) ? value.cost : null, price = (value2) => value2 === null ? null : number7(value2);
-    return {
-      input: number7(value.input),
-      output: number7(value.output),
-      reasoning: number7(value.reasoning),
-      cacheRead: number7(value.cacheRead),
-      cacheWrite: number7(value.cacheWrite),
-      cost: cost ? { input: price(cost.input), output: price(cost.output), cacheRead: price(cost.cacheRead), cacheWrite: price(cost.cacheWrite), total: price(cost.total) } : void 0
-    };
-  }
-  function decodeMessageContent(value) {
-    if (typeof value === "string") return value;
-    if (!Array.isArray(value)) return void 0;
-    return value.flatMap((block) => typeof block === "string" ? [block] : !record8(block) || typeof block.type !== "string" ? [] : [{
-      type: block.type,
-      text: string(block.text),
-      thinking: string(block.thinking),
-      name: string(block.name),
-      id: string(block.id),
-      arguments: record8(block.arguments) ? block.arguments : void 0,
-      url: string(block.url),
-      data: string(block.data),
-      mimeType: string(block.mimeType)
-    }]);
-  }
-  function decodeRenderMessage(value) {
-    const row = record8(value) ? value : {}, details = record8(row.details) ? row.details : null;
-    return {
-      role: string(row.role) || "",
-      id: string(row.id),
-      index: finite2(row.index) && Number.isInteger(row.index) && row.index >= 0 ? row.index : void 0,
-      timestamp: typeof row.timestamp === "string" || finite2(row.timestamp) || row.timestamp instanceof Date ? row.timestamp : void 0,
-      content: decodeMessageContent(row.content),
-      model: string(row.model),
-      responseModel: string(row.responseModel),
-      provider: string(row.provider),
-      stopReason: string(row.stopReason),
-      errorMessage: string(row.errorMessage),
-      toolName: string(row.toolName),
-      toolCallId: string(row.toolCallId),
-      isError: row.isError === true,
-      customType: string(row.customType),
-      display: typeof row.display === "boolean" ? row.display : void 0,
-      usage: decodeMessageUsage(row.usage),
-      durationMs: number7(row.durationMs),
-      outputTokens: number7(row.outputTokens),
-      sessionRefs: Array.isArray(row.sessionRefs) ? row.sessionRefs.flatMap((entry) => record8(entry) && typeof entry.ref === "string" ? [{ ref: entry.ref, name: string(entry.name), host: string(entry.host), cwd: string(entry.cwd), isActive: entry.isActive === true }] : []) : void 0,
-      details: details ? {
-        notes: Array.isArray(details.notes) ? details.notes.flatMap((note) => typeof note === "string" ? [{ note }] : record8(note) && typeof note.note === "string" ? [{ note: note.note, severity: string(note.severity), advisor: string(note.advisor) }] : []) : void 0,
-        jobs: Array.isArray(details.jobs) ? details.jobs.flatMap((job) => record8(job) ? [{ label: string(job.label), jobId: string(job.jobId), durationMs: number7(job.durationMs) }] : []) : void 0,
-        from: string(details.from),
-        message: string(details.message)
-      } : void 0
-    };
-  }
-
-  // src/browser/helper-content.ts
-  function extractTextContent(content) {
-    if (!content) return "";
-    if (typeof content === "string") return content;
-    if (Array.isArray(content)) {
-      const blocks = content;
-      return blocks.map((c) => typeof c === "string" ? c : record8(c) && c.type === "text" && typeof c.text === "string" ? c.text : "").join("\n");
-    }
-    return "";
-  }
-  function extractTextBlocks(content) {
-    if (!content) return "";
-    if (typeof content === "string") return content;
-    if (!Array.isArray(content)) return "";
-    const blocks = content;
-    return blocks.filter((c) => typeof c === "string" || record8(c) && c.type === "text").map((c) => typeof c === "string" ? c : record8(c) && typeof c.text === "string" ? c.text : "").join("\n");
-  }
-  function ipythonCodeSummary(code) {
-    if (typeof code !== "string" || !code) return "";
-    const m = /(?:^|[^A-Za-z0-9_])bash\(\s*(['"])((?:\\.|(?!\1).)*)\1/.exec(code);
-    const inner = m ? m[2].replace(/\\(['"\\])/g, "$1") : code.split("\n")[0];
-    return truncate(inner, 60);
-  }
-  function getToolSummary(toolName, args) {
-    if (!record8(args)) return "";
-    if (toolName === "Bash" || toolName === "bash") return typeof args.command === "string" && args.command ? truncate(args.command.split("\n")[0], 60) : "";
-    if (toolName === "ipython") return ipythonCodeSummary(args.code);
-    if (["Read", "read", "Edit", "edit", "Write", "write"].includes(toolName)) return typeof args.path === "string" ? args.path : "";
-    const keys = Object.keys(args);
-    if (keys.length) return truncate(String(args[keys[0]]), 40);
-    return "";
-  }
-  function parseIpythonResult(text17) {
-    if (typeof text17 !== "string") return null;
-    const m = /^BashResult\(exit_code=(-?\d+), output=(['"])((?:\\.|(?!\2).)*)\2(?:, duration=([0-9.eE+-]+))?\)\s*$/.exec(text17);
-    if (!m) return null;
-    return { exitCode: Number(m[1]), output: pythonReprUnescape(m[3]), durationMs: m[4] != null ? Math.round(Number(m[4]) * 1e3) : null };
-  }
-  function pythonReprUnescape(text17) {
-    return text17.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|[\s\S])/g, (all, seq) => {
-      if (seq[0] === "x") return String.fromCharCode(parseInt(seq.slice(1), 16));
-      if (seq[0] === "u") return String.fromCharCode(parseInt(seq.slice(1), 16));
-      const map = { n: "\n", t: "	", r: "\r", b: "\b", f: "\f", v: "\v", "0": "\0", "\n": "" };
-      return Object.hasOwn(map, seq) ? map[seq] : seq;
-    });
-  }
-  function messageHasVisibleText(msg) {
-    if (!record8(msg)) return false;
-    if (msg.errorMessage) return true;
-    if (typeof msg.content === "string") return !!msg.content;
-    return Array.isArray(msg.content) && msg.content.some((b) => record8(b) && b.type === "text" && typeof b.text === "string" && !!b.text);
-  }
-  function getToolOutputText(partialResult) {
-    if (!record8(partialResult) || !Array.isArray(partialResult.content)) return "";
-    const blocks = partialResult.content;
-    return blocks.filter((c) => record8(c) && c.type === "text").map((c) => typeof c.text === "string" ? c.text : "").join("");
-  }
-  function extractImageBlocks(content) {
-    if (!Array.isArray(content)) return [];
-    const out = [];
-    const blocks = content;
-    for (const block of blocks) {
-      if (!record8(block) || block.type !== "image") continue;
-      const mimeType = typeof block.mimeType === "string" && block.mimeType ? block.mimeType : "image/png";
-      if (typeof block.url === "string" && block.url) out.push({ url: block.url, mimeType });
-      else if (typeof block.data === "string" && block.data) out.push({ data: block.data, mimeType });
-    }
-    return out;
-  }
-
-  // src/browser/message-render.ts
-  function createMessageRenderer(options2) {
-    const { document: document2 } = options2;
-    let disposed = false;
-    function renderMessageHtml(msg) {
-      const time = msg.timestamp ? formatTime(msg.timestamp) : "";
-      const idxAttr = msg.index != null ? ` data-msg-index="${escapeHtml(msg.index)}"` : "";
-      if (msg.role === "user") return renderUserMessage(msg, time, idxAttr);
-      if (msg.role === "assistant") {
-        if (Array.isArray(msg.content) && msg.content.length === 0 && !msg.errorMessage) return "";
-        return renderAssistantMessage(msg, time, { attrs: idxAttr });
-      }
-      if (msg.role === "toolResult") return renderToolResult(msg, time, idxAttr);
-      if (msg.role === "branchSummary") return renderBranchSummary(msg, time, idxAttr);
-      if (msg.role === "custom") return renderCustomMessage(msg, time, idxAttr);
-      return "";
-    }
-    function imageBlocksHtml(content, alt = "image") {
-      const images = extractImageBlocks(content);
-      if (!images.length) return "";
-      const imgs = images.map((img) => {
-        const src = img.url ? options2.assetUrl(options2.sessionState.currentSession?.host, img.url) : `data:${img.mimeType};base64,${img.data}`;
-        const loading = img.url ? ' loading="lazy" decoding="async"' : "";
-        return `<img class="msg-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"${loading}>`;
-      }).join("");
-      return `<div class="msg-images">${imgs}</div>`;
-    }
-    function messageLinkBtnHtml(msg) {
-      if (!msg.id || options2.sessionState.currentSession?.capabilities?.export === false) return "";
-      return `<button type="button" class="msg-link-btn" data-entry-id="${escapeHtml(msg.id)}" title="Copy share link to this message">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-    </svg></button>`;
-    }
-    function sessionRefChipsHtml(refs) {
-      if (!refs || !refs.length) return "";
-      const chips = refs.map((entry) => {
-        const session = options2.matchRef(entry.ref);
-        const label = entry.name || session?.name || entry.ref;
-        const live = (session ? session.isActive : entry.isActive) ? " live" : "";
-        const title = [entry.ref, entry.host, entry.cwd].filter(Boolean).join(" \xB7 ");
-        return `<button type="button" class="session-ref-chip${live}" data-session-ref="${escapeHtml(entry.ref)}" title="${escapeHtml(title)}">
-      <span class="session-ref-dot">\u25CF</span>${escapeHtml(label)}</button>`;
-      }).join("");
-      return `<div class="session-ref-chips">${chips}</div>`;
-    }
-    function parseIrcInterrupt(text17) {
-      const match = /^Current interruptible wait interrupted: IRC message from (?:parent )?agent `([^`]+)`\.\n\n(?:Parent )?IRC message:\n\n([\s\S]+)$/.exec(text17);
-      return match ? { from: match[1], body: match[2] } : null;
-    }
-    function parseIrcCustomContent(text17) {
-      const inner = text17.replace(/^<irc>\n?/, "").replace(/\n?<\/irc>\s*$/, "");
-      const match = /^Incoming IRC message from (?:parent )?agent `([^`]+)`:\n\n([\s\S]+)$/.exec(inner);
-      if (!match) return inner.trim() ? { body: inner.trim() } : null;
-      const body = match[2].replace(/\n*Sent while waiting\/working\.[\s\S]*$/, "").replace(/\n*If response expected, reply via `hub`[\s\S]*$/, "").trim();
-      return { from: match[1], body };
-    }
-    function renderIrcMessage(msg, time, attrs, timestamp, envelope) {
-      const from = msg.details?.from || envelope?.from || "";
-      const body = msg.details?.message || envelope?.body || "";
-      return `<div${attrs} class="message custom-message irc" data-timestamp="${escapeHtml(String(timestamp))}">
-    <div class="irc-card">
-      <div class="irc-header">
-        <span class="irc-icon">\u21C4</span>
-        <span class="irc-label">IRC</span>
-        ${from ? `<span class="irc-from">${escapeHtml(from)}</span>` : ""}
-        ${time ? `<span class="message-time">${time}</span>` : ""}
-        ${messageLinkBtnHtml(msg)}
-      </div>
-      ${body ? `<div class="irc-body"><div class="markdown-body">${options2.markdown(body)}</div></div>` : ""}
-    </div>
-  </div>`;
-    }
-    function renderUserMessage(msg, time, attrs = "") {
-      const rawText = extractTextContent(msg.content);
-      const irc = parseIrcInterrupt(rawText);
-      if (irc) return renderIrcMessage(msg, time, attrs, msg.timestamp || Date.now(), irc);
-      const { text: text17, refs } = splitSessionRefContext(rawText);
-      const imagesHtml = imageBlocksHtml(msg.content, "attached image");
-      const chipsHtml = sessionRefChipsHtml(msg.sessionRefs || refs);
-      return `<div${attrs} class="message user">
-    <div class="message-header"><span class="message-role user">\u276F</span>${time ? `<span class="message-time">${time}</span>` : ""}${messageLinkBtnHtml(msg)}</div>
-    <div class="message-content user-content">${text17 ? `<div class="markdown-body">${options2.markdown(text17)}</div>` : ""}${imagesHtml}${chipsHtml}</div>
-  </div>`;
-    }
-    function renderAssistantMessage(msg, time, opts = {}) {
-      let thinkingHtml = "", textHtml = "", toolCallsHtml = "";
-      const timestamp = msg.timestamp || Date.now();
-      const streamingClass = opts.streaming ? " streaming" : "";
-      const streamingAttr = opts.streaming ? ' data-streaming="true"' : "";
-      if (Array.isArray(msg.content)) {
-        for (const block of msg.content) {
-          if (typeof block === "string") continue;
-          if (block.type === "thinking" && block.thinking) thinkingHtml += renderThinkingBlock(block.thinking);
-          else if (block.type === "text" && block.text) textHtml += options2.markdown(block.text);
-          else if (block.type === "toolCall") toolCallsHtml += renderToolCall(block);
-        }
-      } else if (typeof msg.content === "string") {
-        textHtml = options2.markdown(msg.content);
-      }
-      let errorHtml = "";
-      if (msg.errorMessage) {
-        errorHtml = `<div class="message-content message-error"><div class="markdown-body"><strong>Error:</strong> ${escapeHtml(msg.errorMessage)}</div></div>`;
-      }
-      const showModel = msg.model && (!options2.sessionState.currentSession || msg.model !== options2.sessionState.currentSession.model);
-      const noTextClass = messageHasVisibleText(msg) ? "" : " no-text";
-      let speedHtml = "";
-      const hasMetadata = !opts.streaming && (msg.usage || msg.durationMs);
-      if (hasMetadata) speedHtml = options2.details.button(msg);
-      return `<div${opts.attrs || ""} class="message assistant${streamingClass}${noTextClass}${msg.errorMessage ? " error" : ""}" data-timestamp="${escapeHtml(String(timestamp))}"${streamingAttr}>
-    <div class="message-header">
-      <span class="message-role assistant">\u03C0</span>
-      ${showModel ? `<span class="badge">${escapeHtml(msg.model)}</span>` : ""}
-      ${opts.streaming ? '<span class="badge streaming">\u25CF</span>' : ""}
-      ${speedHtml}
-      ${time ? `<span class="message-time">${time}</span>` : ""}
-      ${messageLinkBtnHtml(msg)}
-    </div>
-    ${thinkingHtml}${toolCallsHtml}
-    ${textHtml ? `<div class="message-content"><div class="markdown-body">${textHtml}</div></div>` : ""}
-    ${errorHtml}
-  </div>`;
-    }
-    function renderThinkingBlock(thinking) {
-      const preview = thinking.substring(0, 80).replace(/\n/g, " ");
-      return `<details class="thinking-block">
-    <summary class="thinking-header"><span class="thinking-label">Thinking</span><span class="thinking-preview">${escapeHtml(preview)}\u2026</span></summary>
-    <div class="thinking-text">${escapeHtml(thinking)}</div>
-  </details>`;
-    }
-    function renderToolCall(block) {
-      const args = block.arguments || {};
-      const summary = getToolSummary(block.name || "", args);
-      const bodyHtml = block.name === "ipython" && typeof args.code === "string" ? `<pre><code>${escapeHtml(args.code)}</code></pre>` : `<pre><code>${escapeHtml(JSON.stringify(args, null, 2))}</code></pre>`;
-      return `<details class="tool-call">
-    <summary class="tool-call-header">
-      <span class="tool-call-icon">\u26A1</span><span class="tool-call-name">${escapeHtml(block.name)}</span>
-      ${summary ? `<span class="tool-call-summary">${escapeHtml(summary)}</span>` : ""}
-    </summary>
-    <div class="tool-call-content">${bodyHtml}</div>
-  </details>`;
-    }
-    function renderToolResult(msg, time, attrs = "") {
-      let content = extractTextContent(msg.content);
-      const isError = msg.isError;
-      const timestamp = msg.timestamp || Date.now();
-      const parsed = parseIpythonResult(content);
-      let exitBadge = "";
-      if (parsed) {
-        content = parsed.output;
-        if (parsed.exitCode !== 0) exitBadge = `<span class="tool-result-meta error-badge">exit ${parsed.exitCode}</span>`;
-      }
-      const lines = content.split("\n");
-      const lineCount = lines.length;
-      const preview = truncate(lines[0], 80);
-      const images = extractImageBlocks(msg.content);
-      const imageCount = images.length;
-      const imagesHtml = imageBlocksHtml(msg.content, "tool result image");
-      return `<div${attrs} class="message tool-result ${isError ? "error" : ""}" data-timestamp="${escapeHtml(String(timestamp))}">
-    <details class="tool-result-details" ${lineCount <= 5 || imageCount ? "open" : ""}>
-      <summary class="tool-result-header">
-        <span class="tool-result-icon">${isError ? "\u2717" : "\u2713"}</span>
-        <span class="tool-result-name">${escapeHtml(msg.toolName || "result")}</span>
-        ${lineCount > 5 ? `<span class="tool-result-meta">${lineCount} lines</span>` : ""}
-        ${imageCount ? `<span class="tool-result-meta">${imageCount === 1 ? "image" : imageCount + " images"}</span>` : ""}
-        ${exitBadge}
-        ${isError ? '<span class="tool-result-meta error-badge">error</span>' : ""}
-        ${lineCount > 5 ? `<span class="tool-result-preview">${escapeHtml(preview)}</span>` : ""}
-      </summary>
-      <div class="tool-result-content"><pre>${escapeHtml(truncate(content, 2e3))}</pre>${imagesHtml}</div>
-    </details>
-  </div>`;
-    }
-    function renderBranchSummary(msg, time, attrs = "") {
-      const text17 = extractTextContent(msg.content);
-      const timestamp = msg.timestamp || Date.now();
-      const preview = truncate(text17.split("\n")[0], 80);
-      return `<div${attrs} class="message branch-summary" data-timestamp="${escapeHtml(String(timestamp))}">
-    <details class="branch-summary-details">
-      <summary class="branch-summary-header">
-        <span class="branch-summary-icon">\u2387</span>
-        <span class="branch-summary-label">Branch summary</span>
-        ${time ? `<span class="message-time">${time}</span>` : ""}
-        <span class="branch-summary-preview">${escapeHtml(preview)}</span>
-      </summary>
-      <div class="message-content"><div class="markdown-body">${options2.markdown(text17)}</div></div>
-    </details>
-  </div>`;
-    }
-    const ADVISOR_SEVERITIES = ["nit", "concern", "blocker"];
-    function advisoryTagAttr(rawAttrs, name) {
-      const m = new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`, "i").exec(rawAttrs || "");
-      return m ? m[1].trim() : "";
-    }
-    function normalizeAdvisorSeverity(value) {
-      const sev = String(value || "").trim().toLowerCase();
-      return ADVISOR_SEVERITIES.includes(sev) ? sev : "";
-    }
-    function parseAdvisoryContent(text17) {
-      const notes = [];
-      const re = /<advisory\b([^>]*)>([\s\S]*?)<\/advisory>/gi;
-      let m;
-      while (m = re.exec(text17)) {
-        const note = m[2].trim();
-        if (note) notes.push({ note, severity: advisoryTagAttr(m[1], "severity"), advisor: advisoryTagAttr(m[1], "advisor") });
-      }
-      if (notes.length) return notes;
-      const bare = String(text17 || "").replace(/<\/?advisory\b[^>]*>/gi, "").trim();
-      return bare ? [{ note: bare }] : [];
-    }
-    function advisorNotesFrom(msg) {
-      const structured = Array.isArray(msg.details?.notes) ? msg.details.notes : null;
-      const notes = (structured && structured.length ? structured : parseAdvisoryContent(extractTextContent(msg.content))).map((n) => ({
-        note: n.note,
-        severity: normalizeAdvisorSeverity(n.severity),
-        advisor: (n.advisor || "").trim()
-      })).filter((n) => n.note);
-      return notes;
-    }
-    function advisoryBatchName(msg) {
-      const m = /<advisory\b([^>]*)>/i.exec(extractTextContent(msg.content));
-      return m ? advisoryTagAttr(m[1], "advisor") : "";
-    }
-    function advisorSeverityChip(severity) {
-      if (!severity) return "";
-      return `<span class="advisor-severity sev-${severity}">${escapeHtml(severity)}</span>`;
-    }
-    function renderAdvisorMessage(msg, time, attrs, timestamp) {
-      const notes = advisorNotesFrom(msg);
-      if (!notes.length) return "";
-      const worst = ADVISOR_SEVERITIES.filter((s) => notes.some((n) => n.severity === s)).pop() || "";
-      const names = [...new Set(notes.map((n) => n.advisor).filter(Boolean))];
-      const name = names.length === 1 ? names[0] : names.length ? "" : advisoryBatchName(msg);
-      const single = notes.length === 1;
-      const rows = notes.map((n) => `<div class="advisor-note">
-        ${single ? "" : advisorSeverityChip(n.severity)}${!single && !name && n.advisor ? `<span class="advisor-note-name">${escapeHtml(n.advisor)}</span>` : ""}
-        <div class="markdown-body">${options2.markdown(n.note)}</div>
-      </div>`).join("");
-      return `<div${attrs} class="message custom-message advisor${worst ? ` sev-${worst}` : ""}" data-timestamp="${escapeHtml(String(timestamp))}">
-    <div class="advisor-card">
-      <div class="advisor-header">
-        <span class="advisor-icon">\u25C8</span>
-        <span class="advisor-label">Advisor${name ? ` \xB7 ${escapeHtml(name)}` : ""}</span>
-        ${single ? advisorSeverityChip(notes[0].severity) : `<span class="advisor-count">${notes.length} notes</span>`}
-        ${time ? `<span class="message-time">${time}</span>` : ""}
-      </div>
-      <div class="advisor-notes">${rows}</div>
-    </div>
-  </div>`;
-    }
-    function renderCustomMessage(msg, time, attrs = "") {
-      const customType = msg.customType || "custom-message";
-      const timestamp = msg.timestamp || Date.now();
-      if (customType === "interrupted-thinking") {
-        return `<div${attrs} class="message custom-message interrupted" data-timestamp="${escapeHtml(String(timestamp))}">
-      <span class="custom-message-divider"></span><span class="custom-message-label">Interrupted</span>${time ? `<span class="message-time">${time}</span>` : ""}<span class="custom-message-divider"></span>
-    </div>`;
-      }
-      if (msg.display === false) return "";
-      if (customType === "irc:incoming") {
-        return renderIrcMessage(msg, time, attrs, timestamp, parseIrcCustomContent(extractTextContent(msg.content)));
-      }
-      if (customType === "async-result") {
-        const jobs = Array.isArray(msg.details?.jobs) ? msg.details.jobs : [];
-        const names = jobs.map((job) => job.label || job.jobId).filter(Boolean);
-        const duration = jobs.length === 1 && Number.isFinite(jobs[0].durationMs) ? formatDuration(jobs[0].durationMs) : "";
-        const meta = [names.join(", "), duration].filter(Boolean).join(" \xB7 ");
-        return `<div${attrs} class="message custom-message async-result" data-timestamp="${escapeHtml(String(timestamp))}">
-      <span class="custom-message-icon">\u2713</span><span class="custom-message-label">Background job${jobs.length > 1 ? "s" : ""} finished</span>${meta ? `<span class="custom-message-meta">${escapeHtml(meta)}</span>` : ""}${time ? `<span class="message-time">${time}</span>` : ""}
-    </div>`;
-      }
-      if (customType === "advisor") return renderAdvisorMessage(msg, time, attrs, timestamp);
-      const text17 = extractTextContent(msg.content);
-      const label = customType.replace(/[-_]+/g, " ");
-      return `<div${attrs} class="message custom-message generic" data-timestamp="${escapeHtml(String(timestamp))}">
-    <span class="custom-message-icon">\u25C7</span><span class="custom-message-label">${escapeHtml(label)}</span>${text17 ? `<span class="custom-message-meta">${escapeHtml(truncate(text17.replace(/\s+/g, " "), 240))}</span>` : ""}${time ? `<span class="message-time">${time}</span>` : ""}
-  </div>`;
-    }
-    function liveCustomMessageKey(message3) {
-      const jobs = Array.isArray(message3?.details?.jobs) ? message3.details.jobs.map((job) => job.jobId).filter(Boolean).join(",") : "";
-      return `${message3?.customType || "custom-message"}:${message3?.timestamp || jobs}`;
-    }
-    function upsertLiveCustomMessage(value, { streaming = false } = {}) {
-      if (disposed) return;
-      const message3 = decodeRenderMessage(value);
-      const container = document2.getElementById("messages");
-      if (!container) return;
-      const wasPinned = options2.pinned(container);
-      const key = liveCustomMessageKey(message3);
-      const existing = [...container.querySelectorAll(".message.custom-message[data-live-custom-key]")].find((el2) => el2.dataset.liveCustomKey === key);
-      const attrs = ` data-live-custom-key="${escapeHtml(key)}"${streaming ? ' data-streaming="true"' : ""}`;
-      const tmp = document2.createElement("template");
-      tmp.innerHTML = renderCustomMessage(message3, formatTime(message3.timestamp || Date.now()), attrs);
-      const el = tmp.content.firstElementChild;
-      if (!el) return;
-      if (existing) existing.replaceWith(el);
-      else container.appendChild(el);
-      if (wasPinned || options2.follow()) options2.scroll(container);
-      else options2.jump(container);
-    }
-    return {
-      message: (value) => renderMessageHtml(decodeRenderMessage(value)),
-      user: (value, time, attrs = "") => renderUserMessage(decodeRenderMessage(value), time, attrs),
-      assistant: (value, time, opts) => renderAssistantMessage(decodeRenderMessage(value), time, opts),
-      custom: (value, time, attrs = "") => renderCustomMessage(decodeRenderMessage(value), time, attrs),
-      images: imageBlocksHtml,
-      thinking: renderThinkingBlock,
-      tool: renderToolCall,
-      upsertCustom: upsertLiveCustomMessage,
-      dispose() {
-        disposed = true;
       }
     };
   }
@@ -17572,8 +17842,8 @@ ${restored}`;
     "closeTreeModal",
     "backdropCloseArtifactsModal",
     "closeArtifactsModal",
-    "backdropCloseRelationsModal",
-    "closeRelationsModal",
+    "closeSubagentsView",
+    "reloadSubagentsView",
     "backdropCloseStatsModal",
     "closeStatsModal",
     "backdropCloseSettingsModal",

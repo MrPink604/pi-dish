@@ -1477,6 +1477,11 @@ function relationSessionSummary(session) {
     model: session.model || 'unknown',
     isActive: !!session.isActive,
     subagentLive: !!session.subagentLive,
+    // Busy state + capability advice let a viewer signal a relative without
+    // becoming it (steer vs prompt vs disabled), under the same advisory
+    // non-authority as the rest of the summary.
+    turnInProgress: !!session.turnInProgress,
+    capabilities: session.capabilities || null,
     lastActivity: session.lastActivity,
   };
 }

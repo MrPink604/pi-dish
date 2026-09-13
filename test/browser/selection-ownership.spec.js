@@ -6,6 +6,7 @@ test('related-session navigation stays on its host when both target ids collide'
   await expect(link).toBeVisible();
   await link.click();
   await page.locator(`.lineage-row[data-session-id="${ROOT}"]`).click();
+  await page.locator('#subagentsOpenBtn').click();
   await expect(fleet.row(fleet.peer, ROOT)).toHaveClass(/\bactive\b/);
   await expect(page.locator('#messages')).toContainText('peer root transcript');
   await expect(fleet.row(fleet.self, ROOT)).not.toHaveClass(/\bactive\b/);

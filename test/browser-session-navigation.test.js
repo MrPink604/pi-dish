@@ -21,15 +21,15 @@ test('session lineage narrows nested identities and decodes the tree recursively
   const result = decodeSessionLineage(wire);
   wire.tree.children[2].session.id = 'mutated';
   assert.deepEqual(plain(result), {
-    session: { id: 'current', name: 'Current', cwd: '', harnessId: '', model: '', isActive: false, subagentLive: false, lastActivity: null },
+    session: { id: 'current', name: 'Current', cwd: '', harnessId: '', model: '', isActive: false, subagentLive: false, turnInProgress: false, capabilities: null, lastActivity: null },
     tree: {
-      session: { id: 'root', name: '', cwd: '', harnessId: '', model: '', isActive: false, subagentLive: false, lastActivity: null },
+      session: { id: 'root', name: '', cwd: '', harnessId: '', model: '', isActive: false, subagentLive: false, turnInProgress: false, capabilities: null, lastActivity: null },
       edge: null,
       children: [{
-        session: { id: 'child', name: '', cwd: '', harnessId: '', model: '', isActive: false, subagentLive: false, lastActivity: null },
+        session: { id: 'child', name: '', cwd: '', harnessId: '', model: '', isActive: false, subagentLive: false, turnInProgress: false, capabilities: null, lastActivity: null },
         edge: { kind: 'child', source: '' },
         children: [{
-          session: { id: 'gc', name: '', cwd: '', harnessId: '', model: '', isActive: false, subagentLive: false, lastActivity: null },
+          session: { id: 'gc', name: '', cwd: '', harnessId: '', model: '', isActive: false, subagentLive: false, turnInProgress: false, capabilities: null, lastActivity: null },
           edge: null,
           children: [],
         }],

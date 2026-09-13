@@ -303,13 +303,20 @@ authority, and losing it must not affect session operation.
 `GET /api/sessions/:id/lineage` assembles the recursive family tree the
 subagents viewer renders: catalog `parentId` edges (native first, launch
 provenance as fallback), rooted at the top ancestor, cycle-guarded and
-node/depth-capped (`PI_DISH_LINEAGE_NODE_CAP`, default 500). The header shows
-a single "Subagents · N" link sized by the family count; the modal renders
-the tree with collapse toggles, live dots and per-row navigation that forces
-a full unfiltered list refresh before opening a target absent from the
-current Active/search result. While the modal is open and the viewed session
-can still gain relatives (active or indexing), the tree repolls every few
-seconds.
+node/depth-capped (`PI_DISH_LINEAGE_NODE_CAP`, default 500). Summaries carry
+capability advice and busy state so a viewer can signal a relative without
+becoming it. The header shows a single "Subagents · N" link sized by the
+family count; it opens the subagents takeover (a main-pane view like
+usage/search): the tree on the left, and on the right a peek pane rendering
+the selected relative's transcript tail through the same message renderer
+(read-only; share/details buttons suppressed), refreshed through the
+`after`-cursor while the target is live, plus a signal composer that posts to
+the target's existing `/prompt`, `/steer` and `/follow-up` routes when its
+capabilities allow. Row clicks select; only the detail pane's Open action
+navigates, forcing a full unfiltered list refresh before opening a target
+absent from the current Active/search result. While the takeover is open and
+the viewed session can still gain relatives (active or indexing), the tree
+repolls every few seconds.
 
 ## Session index (lib/session-index.js)
 
@@ -2108,11 +2115,15 @@ and selection writers; do not restore mutable globals in `app.js`. Workspace
 buttons, directory trees, pickers and debounced config/model refreshes follow the
 controller's captured host and view. Disposal retires their callbacks and inputs.
 
-The subagents viewer (family link and lineage tree modal) lives in
-`src/browser/session-relations.ts`, fed by `/api/sessions/:id/lineage`.
-Rendered links/rows retain their originating selection/host, and modal/header
-re-renders retire prior controls. Indexing repoll and modal poll timers belong
-to that controller; clear/dispose retires them before the next session view.
+The subagents viewer is a session-scoped main-pane takeover owned by
+`src/browser/subagents-view.ts` (family tree, trace peek through the shared
+message renderer in peek mode, and the signal composer), fed by
+`/api/sessions/:id/lineage`. The header link and wire decoding live in
+`src/browser/session-relations.ts`. Rendered links/rows retain their
+originating selection/host, and tree/detail re-renders retire prior controls.
+Lineage repoll and trace catch-up timers belong to the takeover controller;
+close/dispose retires them, and session switches close the takeover through
+the shared closeViews path before the next session view.
 
 Bulk Bounce UI is owned by `src/browser/bounce.ts`, with wire contracts in
 `bounce-data.ts`. Each selected snapshot freezes its host route/token and mode;
