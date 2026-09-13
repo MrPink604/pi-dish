@@ -1176,54 +1176,76 @@ body.sidebar-open {
   white-space: nowrap;
 }
 
-/* "+N more" overflow chip: dashed outline marks it as an expansion affordance
-   rather than a navigable session. */
-.session-relation-more {
-  flex-shrink: 0;
-  border-style: dashed;
-}
-
-/* Related-sessions overflow modal */
+/* Session family tree modal */
 .relations-body { overflow-y: auto; }
 
-.relation-group-title:not(:first-child) { margin-top: 12px; }
-
-.relation-row {
+.lineage-row {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 6px 4px;
-  border: none;
+  padding: 6px 4px 6px calc(4px + var(--depth, 0) * 18px);
   border-bottom: 1px solid var(--line);
-  background: none;
   color: var(--text);
-  font: inherit;
   font-size: 13px;
-  text-align: left;
   cursor: pointer;
   transition: background 0.15s;
 }
 
-.relation-row:hover,
-.relation-row:focus-visible {
+.lineage-row:hover,
+.lineage-row:focus-visible {
   background: var(--bg-hover);
   outline: none;
 }
 
-.relation-row-name {
+.lineage-twisty {
+  width: 14px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  text-align: center;
+  user-select: none;
+}
+
+.lineage-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-bright);
 }
 
-.relation-row-meta {
+.lineage-current .lineage-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.lineage-badge {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.lineage-current-badge {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.lineage-meta {
   margin-left: auto;
   font-size: 11px;
   color: var(--text-muted);
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+.lineage-truncated {
+  padding: 8px 4px;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 /* Editable session name */

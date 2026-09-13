@@ -1,9 +1,9 @@
-import type { SessionRelation } from '../../src/browser/session-relations';
+import type { LineageNode } from '../../src/browser/session-relations';
 import type { createSessionSearch } from '../../src/browser/session-search';
-declare const relation: SessionRelation;
+declare const node: LineageNode;
 declare const search: ReturnType<typeof createSessionSearch>;
-// @ts-expect-error a rendered relation retains its target identity
-relation.session.id = 'other';
+// @ts-expect-error a rendered lineage node retains its target identity
+node.session.id = 'other';
 // @ts-expect-error query state changes through owned requests
 search.state.query = 'other';
 // @ts-expect-error search match arrays cannot be externally replaced

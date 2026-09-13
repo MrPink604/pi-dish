@@ -594,34 +594,6 @@
     }
     return [pinned, (families || []).filter((root) => !pinnedRoots.has(sessionRefKey(root.session)))];
   }
-  var RELATION_KIND_ORDER = { parent: 0, startedFrom: 1, child: 2, startedHere: 3 };
-  var RELATION_CHILD_KINDS = /* @__PURE__ */ new Set(["child", "startedHere"]);
-  function relationKindRank(kind) {
-    const rank = kind && Object.hasOwn(RELATION_KIND_ORDER, kind) ? RELATION_KIND_ORDER[kind] : void 0;
-    return rank === void 0 ? 99 : rank;
-  }
-  function sortRelations(relations) {
-    return (relations || []).map((relation, index) => ({ relation, index })).sort((a, b) => relationKindRank(a.relation && a.relation.kind) - relationKindRank(b.relation && b.relation.kind) || a.index - b.index).map(({ relation }) => relation);
-  }
-  function isChildRelation(relation) {
-    return RELATION_CHILD_KINDS.has(relation?.kind || "");
-  }
-  function groupRelations(relations) {
-    const groups = [];
-    const byKind = /* @__PURE__ */ new Map();
-    for (const relation of relations || []) {
-      const kind = relation && relation.kind || "related";
-      let group = byKind.get(kind);
-      if (!group) {
-        group = { kind, relations: [] };
-        byKind.set(kind, group);
-        groups.push(group);
-      }
-      group.relations.push(relation);
-    }
-    groups.sort((a, b) => relationKindRank(a.kind) - relationKindRank(b.kind));
-    return groups;
-  }
   function isUnreadSession(session, seenMap, currentKey, viewingVisible) {
     if (!session.isActive || session.turnInProgress) return false;
     const key = sessionRefKey(session);
@@ -5042,130 +5014,80 @@
   }
 
   // src/browser/session-relations.ts
+  var EMPTY_LINEAGE = { session: null, tree: null, members: 0, truncated: false };
   var text5 = (value) => typeof value === "string" ? value : "";
-  function decodeSessionRelations(value) {
-    if (!Array.isArray(value)) return [];
-    return value.flatMap((row) => {
-      if (!record2(row) || !record2(row.session) || typeof row.session.id !== "string" || !row.session.id) return [];
-      const session = row.session;
-      return [{ kind: text5(row.kind), source: text5(row.source), session: {
-        id: session.id,
-        name: text5(session.name),
-        cwd: text5(session.cwd),
-        isActive: session.isActive === true,
-        lastActivity: typeof session.lastActivity === "string" || typeof session.lastActivity === "number" ? session.lastActivity : null
-      } }];
-    });
+  function decodeLineageSession(value) {
+    if (!record2(value) || typeof value.id !== "string" || !value.id) return null;
+    return {
+      id: value.id,
+      name: text5(value.name),
+      cwd: text5(value.cwd),
+      harnessId: text5(value.harnessId),
+      model: text5(value.model),
+      isActive: value.isActive === true,
+      subagentLive: value.subagentLive === true,
+      lastActivity: typeof value.lastActivity === "string" || typeof value.lastActivity === "number" ? value.lastActivity : null
+    };
+  }
+  var LINEAGE_DECODE_NODE_CAP = 5e3;
+  function decodeLineageNode(value, budget) {
+    if (!record2(value) || budget.left <= 0) return null;
+    const session = decodeLineageSession(value.session);
+    if (!session) return null;
+    budget.left -= 1;
+    const edge = record2(value.edge) ? { kind: text5(value.edge.kind), source: text5(value.edge.source) } : null;
+    const children = Array.isArray(value.children) ? value.children.flatMap((child) => {
+      const node = decodeLineageNode(child, budget);
+      return node ? [node] : [];
+    }) : [];
+    return { session, edge, children };
+  }
+  function countLineageMembers(node) {
+    if (!node) return 0;
+    return 1 + node.children.reduce((count2, child) => count2 + countLineageMembers(child), 0);
+  }
+  function decodeSessionLineage(value) {
+    if (!record2(value)) return EMPTY_LINEAGE;
+    const tree = decodeLineageNode(value.tree, { left: LINEAGE_DECODE_NODE_CAP });
+    const members = typeof value.members === "number" && Number.isFinite(value.members) && value.members >= 0 ? value.members : countLineageMembers(tree);
+    return { session: decodeLineageSession(value.session), tree, members, truncated: value.truncated === true };
   }
   function createSessionRelations(options2) {
-    const { document: document2, window: window2, sessionState: sessionState2 } = options2;
+    const { document: document2, sessionState: sessionState2 } = options2;
     const element = (id) => document2.getElementById(id);
     let sessionRelationsSeq = 0;
     let disposed = false;
     let renderOwner = null;
     let renderEndpoint = null;
     let headerEvents = new AbortController(), modalEvents = new AbortController();
-    const events = new AbortController();
     let indexingTimer;
+    let pollTimer;
+    let loadInFlight = false;
+    let lastIndexing = false;
+    let lineage = EMPTY_LINEAGE;
+    const collapsed = /* @__PURE__ */ new Set();
     function sameEndpoint(host, endpoint) {
       const current = options2.endpoint(host);
       return !!endpoint && !!current && current.base === endpoint.base && (current.token || "") === (endpoint.token || "");
     }
     const owns = (owner, endpoint = renderEndpoint) => !disposed && sessionState2.ownsSelection(owner) && !!owner && sameEndpoint(owner.host, endpoint);
-    const label = (labels, kind, fallback2) => Object.hasOwn(labels, kind) ? labels[kind] : fallback2;
     function clearSessionRelations() {
       sessionRelationsSeq += 1;
       clearTimeout(indexingTimer);
-      clearTimeout(relationResizeTimer);
+      clearInterval(pollTimer);
+      pollTimer = void 0;
       headerEvents.abort();
       renderOwner = null;
       renderEndpoint = null;
-      sessionRelations = [];
+      lineage = EMPTY_LINEAGE;
+      collapsed.clear();
       closeRelationsModal();
-      const el = document2.getElementById("sessionRelations");
+      const el = element("sessionRelations");
       if (!el) return;
       el.replaceChildren();
       el.style.display = "none";
     }
-    const RELATION_LABELS = {
-      parent: "Parent",
-      child: "Child",
-      startedFrom: "Started from",
-      startedHere: "Started here"
-    };
-    const RELATION_GROUP_LABELS = {
-      parent: "Parent",
-      child: "Children",
-      startedFrom: "Started from",
-      startedHere: "Started here"
-    };
-    const RELATION_FALLBACK_VISIBLE_CHIPS = 6;
-    let sessionRelations = [];
-    let relationResizeTimer;
-    function createRelationChip(relation) {
-      const target = relation?.session;
-      if (!target?.id) return null;
-      const button = document2.createElement("button");
-      button.type = "button";
-      button.className = "session-relation-chip";
-      button.title = `${label(RELATION_LABELS, relation.kind, "Related session")} \xB7 ${relation.source || "session metadata"}`;
-      const kind = document2.createElement("span");
-      kind.className = "session-relation-kind";
-      kind.textContent = label(RELATION_LABELS, relation.kind, "Related");
-      const name = document2.createElement("span");
-      name.className = "session-relation-name";
-      name.textContent = target.name || target.id.slice(0, 8);
-      button.append(kind, name);
-      const owner = renderOwner, endpoint = renderEndpoint;
-      button.addEventListener("click", () => {
-        if (owns(owner, endpoint)) void openRelatedSession(target.id, owner, endpoint);
-      }, { signal: headerEvents.signal });
-      return button;
-    }
-    function createMoreRelationChip(hiddenCount) {
-      const more = document2.createElement("button");
-      more.type = "button";
-      more.className = "session-relation-chip session-relation-more";
-      more.title = `Show ${hiddenCount} hidden related session${hiddenCount === 1 ? "" : "s"}`;
-      const count2 = document2.createElement("span");
-      count2.className = "session-relation-kind";
-      count2.textContent = `+${hiddenCount}`;
-      const label2 = document2.createElement("span");
-      label2.className = "session-relation-name";
-      label2.textContent = "more";
-      more.append(count2, label2);
-      const owner = renderOwner, endpoint = renderEndpoint;
-      more.addEventListener("click", () => {
-        if (owns(owner, endpoint)) openRelationsModal();
-      }, { signal: headerEvents.signal });
-      return more;
-    }
-    function fitRelationChipCount(el, chips, totalCount) {
-      const available = el.clientWidth;
-      if (!available) return Math.min(chips.length, RELATION_FALLBACK_VISIBLE_CHIPS);
-      const style = getComputedStyle(el);
-      const gap = parseFloat(style.columnGap || style.gap || "0") || 0;
-      const moreProbe = createMoreRelationChip(totalCount);
-      el.replaceChildren(...chips, moreProbe);
-      const widths = chips.map((chip) => chip.offsetWidth);
-      const prefixWidths = [0];
-      for (const width of widths) prefixWidths.push(prefixWidths[prefixWidths.length - 1] + width);
-      let chosen = 0;
-      for (let count2 = chips.length; count2 >= 0; count2 -= 1) {
-        const hiddenCount = totalCount - count2;
-        let needed = prefixWidths[count2] + Math.max(0, count2 - 1) * gap;
-        if (hiddenCount > 0) {
-          moreProbe.querySelector(".session-relation-kind").textContent = `+${hiddenCount}`;
-          needed += (count2 ? gap : 0) + moreProbe.offsetWidth;
-        }
-        if (needed <= available) {
-          chosen = count2;
-          break;
-        }
-      }
-      return chosen;
-    }
-    function renderSessionRelations(relations, owner = renderOwner, endpoint = renderEndpoint) {
+    function renderRelationsLink(owner = renderOwner, endpoint = renderEndpoint) {
       if (!owns(owner, endpoint)) return;
       renderOwner = owner;
       renderEndpoint = endpoint;
@@ -5173,89 +5095,149 @@
       headerEvents = new AbortController();
       const el = element("sessionRelations");
       if (!el) return;
-      sessionRelations = sortRelations(relations).filter((relation) => relation?.session?.id);
       el.replaceChildren();
-      if (!sessionRelations.length) {
-        closeRelationsModal();
+      const others = lineage.tree ? lineage.members - 1 : 0;
+      if (others <= 0) {
         el.style.display = "none";
+        closeRelationsModal();
         return;
       }
       el.style.display = "";
-      const headerRelations = [
-        // Keep live child bubbles visible when the row is tight; parent/source
-        // links can still be reached from the overflow modal.
-        ...sessionRelations.filter((relation) => isChildRelation(relation) && relation.session.isActive),
-        ...sessionRelations.filter((relation) => !isChildRelation(relation))
-      ];
-      const chips = headerRelations.map(createRelationChip).filter((chip) => chip !== null);
-      const visibleCount = fitRelationChipCount(el, chips, sessionRelations.length);
-      const hiddenCount = sessionRelations.length - visibleCount;
-      el.replaceChildren(...chips.slice(0, visibleCount));
-      if (hiddenCount > 0) el.appendChild(createMoreRelationChip(hiddenCount));
-      const modal = document2.getElementById("relationsModal");
-      if (modal && modal.style.display !== "none") renderRelationsModal();
+      const link = document2.createElement("button");
+      link.type = "button";
+      link.className = "session-relation-chip session-relation-tree-link";
+      link.title = `View the session family tree (${others} related session${others === 1 ? "" : "s"})`;
+      const icon = document2.createElement("span");
+      icon.className = "session-relation-kind";
+      icon.textContent = "\u2387";
+      const name = document2.createElement("span");
+      name.className = "session-relation-name";
+      name.textContent = `Subagents \xB7 ${others}`;
+      link.append(icon, name);
+      link.addEventListener("click", () => {
+        if (owns(owner, endpoint)) openRelationsModal();
+      }, { signal: headerEvents.signal });
+      el.appendChild(link);
     }
-    window2.addEventListener("resize", () => {
-      if (!owns(renderOwner) || !sessionRelations.length) return;
-      clearTimeout(relationResizeTimer);
-      relationResizeTimer = setTimeout(() => {
-        const el = document2.getElementById("sessionRelations");
-        if (sessionState2.currentSession && el?.style.display !== "none") renderSessionRelations(sessionRelations);
-      }, 100);
-    }, { signal: events.signal });
     function openRelationsModal() {
-      if (!owns(renderOwner) || !sessionRelations.length) return;
+      if (!owns(renderOwner) || !lineage.tree) return;
       const modal = element("relationsModal");
       if (!modal) return;
       modal.style.display = "flex";
-      renderRelationsModal();
+      renderLineageTree();
+      clearInterval(pollTimer);
+      pollTimer = setInterval(() => {
+        if (!owns(renderOwner) || loadInFlight) return;
+        if (!sessionState2.currentSession?.isActive && !lastIndexing) return;
+        void loadSessionRelations(renderOwner);
+      }, 4e3);
     }
     function closeRelationsModal() {
       modalEvents.abort();
-      const modal = document2.getElementById("relationsModal");
+      clearInterval(pollTimer);
+      pollTimer = void 0;
+      const modal = element("relationsModal");
       if (modal) modal.style.display = "none";
     }
-    function renderRelationsModal() {
-      if (!owns(renderOwner)) return;
+    function renderLineageTree() {
+      if (!owns(renderOwner) || !lineage.tree) return;
       modalEvents.abort();
       modalEvents = new AbortController();
-      const body = document2.getElementById("relationsBody");
+      const body = element("relationsBody");
       if (!body) return;
       body.replaceChildren();
       const owner = renderOwner, endpoint = renderEndpoint;
-      for (const group of groupRelations(sessionRelations)) {
-        const title = document2.createElement("div");
-        title.className = "stats-share-title relation-group-title";
-        const groupLabel = label(RELATION_GROUP_LABELS, group.kind || "", label(RELATION_LABELS, group.kind || "", "Related"));
-        title.textContent = group.relations.length > 1 ? `${groupLabel} (${group.relations.length})` : groupLabel;
-        body.appendChild(title);
-        for (const relation of group.relations) {
-          const target = relation?.session;
-          if (!target?.id) continue;
-          const row = document2.createElement("button");
-          row.type = "button";
-          row.className = "relation-row";
-          row.title = target.cwd || target.id;
-          if (target.isActive) {
-            const dot = document2.createElement("span");
-            dot.className = "live-dot";
-            row.appendChild(dot);
-          }
-          const name = document2.createElement("span");
-          name.className = "relation-row-name";
-          name.textContent = target.name || target.id.slice(0, 8);
-          row.appendChild(name);
-          const meta = document2.createElement("span");
-          meta.className = "relation-row-meta";
-          meta.textContent = formatRelativeTime(target.lastActivity);
-          row.appendChild(meta);
-          row.addEventListener("click", () => {
+      const tree = lineage.tree;
+      const harnesses = /* @__PURE__ */ new Set();
+      (function collect(node) {
+        if (node.session.harnessId) harnesses.add(node.session.harnessId);
+        for (const child of node.children) collect(child);
+      })(tree);
+      const mixedHarnesses = harnesses.size > 1;
+      const currentId = lineage.session?.id || sessionState2.currentSession?.id || null;
+      const rows = [];
+      (function flatten(node, depth) {
+        rows.push({ node, depth });
+        if (collapsed.has(node.session.id)) return;
+        for (const child of node.children) flatten(child, depth + 1);
+      })(tree, 0);
+      for (const { node, depth } of rows) {
+        const target = node.session;
+        const row = document2.createElement("div");
+        row.className = "lineage-row";
+        row.style.setProperty("--depth", String(depth));
+        row.dataset.sessionId = target.id;
+        row.tabIndex = 0;
+        row.setAttribute("role", "button");
+        row.title = target.cwd || target.id;
+        const isCurrent = target.id === currentId;
+        if (isCurrent) row.classList.add("lineage-current");
+        const twisty = document2.createElement("span");
+        twisty.className = "lineage-twisty";
+        if (node.children.length) {
+          const isCollapsed = collapsed.has(target.id);
+          twisty.textContent = isCollapsed ? "\u25B8" : "\u25BE";
+          twisty.title = isCollapsed ? "Expand subtree" : "Collapse subtree";
+          twisty.addEventListener("click", (event) => {
+            event.stopPropagation();
             if (!owns(owner, endpoint)) return;
-            closeRelationsModal();
-            void openRelatedSession(target.id, owner, endpoint);
+            if (collapsed.has(target.id)) collapsed.delete(target.id);
+            else collapsed.add(target.id);
+            renderLineageTree();
           }, { signal: modalEvents.signal });
-          body.appendChild(row);
         }
+        row.appendChild(twisty);
+        if (target.isActive || target.subagentLive) {
+          const dot = document2.createElement("span");
+          dot.className = "live-dot";
+          dot.title = target.isActive ? "Live session" : "Subagent still loaded in its parent";
+          row.appendChild(dot);
+        }
+        const name = document2.createElement("span");
+        name.className = "lineage-name";
+        name.textContent = target.name || target.id.slice(0, 8);
+        row.appendChild(name);
+        if (node.edge?.kind === "startedHere") {
+          const badge = document2.createElement("span");
+          badge.className = "lineage-badge";
+          badge.textContent = "launched";
+          badge.title = `Started from its relative by pi-dish (${node.edge.source || "launch metadata"})`;
+          row.appendChild(badge);
+        }
+        if (mixedHarnesses && target.harnessId) {
+          const badge = document2.createElement("span");
+          badge.className = "lineage-badge lineage-harness";
+          badge.textContent = target.harnessId;
+          row.appendChild(badge);
+        }
+        if (isCurrent) {
+          const badge = document2.createElement("span");
+          badge.className = "lineage-badge lineage-current-badge";
+          badge.textContent = "current";
+          row.appendChild(badge);
+        }
+        const meta = document2.createElement("span");
+        meta.className = "lineage-meta";
+        meta.textContent = formatRelativeTime(target.lastActivity);
+        row.appendChild(meta);
+        const activate = () => {
+          if (!owns(owner, endpoint)) return;
+          closeRelationsModal();
+          void openRelatedSession(target.id, owner, endpoint);
+        };
+        row.addEventListener("click", activate, { signal: modalEvents.signal });
+        row.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          activate();
+        }, { signal: modalEvents.signal });
+        body.appendChild(row);
+      }
+      if (lineage.truncated) {
+        const note = document2.createElement("div");
+        note.className = "lineage-truncated";
+        note.textContent = "This family is too large to show in full \u2014 the tree is truncated.";
+        body.appendChild(note);
       }
     }
     async function loadSessionRelations(owner) {
@@ -5265,21 +5247,30 @@
       const endpoint = Object.freeze({ ...resolved });
       const seq = ++sessionRelationsSeq;
       clearTimeout(indexingTimer);
+      loadInFlight = true;
       const current = () => seq === sessionRelationsSeq && owns(owner, endpoint);
       try {
-        const res = await options2.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/related`);
+        const res = await options2.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/lineage`);
         const data = await res.json();
         if (!current()) return;
         if (!res.ok) throw new Error(record2(data) && text5(data.error) || `HTTP ${res.status}`);
-        renderSessionRelations(decodeSessionRelations(record2(data) ? data.relations : null), owner, endpoint);
-        if (record2(data) && data.indexing === true) indexingTimer = setTimeout(() => {
+        lastIndexing = record2(data) && data.indexing === true;
+        lineage = decodeSessionLineage(data);
+        renderRelationsLink(owner, endpoint);
+        const modal = element("relationsModal");
+        if (modal && modal.style.display !== "none") renderLineageTree();
+        if (lastIndexing) indexingTimer = setTimeout(() => {
           if (current()) void loadSessionRelations(owner);
         }, 1e3);
       } catch (error) {
         if (current()) {
-          renderSessionRelations([], owner, endpoint);
-          console.error("Failed to load related sessions:", error);
+          lineage = EMPTY_LINEAGE;
+          lastIndexing = false;
+          renderRelationsLink(owner, endpoint);
+          console.error("Failed to load session lineage:", error);
         }
+      } finally {
+        loadInFlight = false;
       }
     }
     async function openRelatedSession(id, owner, endpoint = owner ? options2.endpoint(owner.host) : null) {
@@ -5299,9 +5290,11 @@
       openRelated: openRelatedSession,
       openModal: openRelationsModal,
       closeModal: closeRelationsModal,
+      get data() {
+        return lineage;
+      },
       dispose() {
         clearSessionRelations();
-        events.abort();
         disposed = true;
       }
     };

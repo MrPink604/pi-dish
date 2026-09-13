@@ -65,6 +65,45 @@ test('discovers OMP sibling-directory subsessions without loosening Pi discovery
     'arbitrarily named nested JSONLs remain excluded from Pi');
 });
 
+test('discovers Prime RLM subagents under session-artifacts, recursively', () => {
+  const agentDir = path.join(root, 'prime-agent');
+  const sessions = path.join(agentDir, 'sessions');
+  const artifacts = path.join(agentDir, 'session-artifacts');
+  const rootFile = path.join(sessions, 'prime-root-id.jsonl');
+  const childFile = path.join(artifacts, 'prime-root-id', 'sub-a1b2c3d4', 'prime-child-id.jsonl');
+  const grandchildFile = path.join(artifacts, 'prime-root-id', 'session-artifacts', 'prime-child-id', 'sub-e5f6a7b8', 'prime-grandchild-id.jsonl');
+  const orphanFile = path.join(artifacts, 'prime-root-id', 'sub-ff00ff00', 'prime-orphan-id.jsonl');
+  write(rootFile, { type: 'session', id: 'prime-root-id', cwd: '/workspace' });
+  write(childFile, { type: 'session', id: 'prime-child-id', cwd: '/workspace', parentSession: rootFile, rlmDepth: 1 });
+  write(grandchildFile, { type: 'session', id: 'prime-grandchild-id', cwd: '/workspace', parentSession: childFile, rlmDepth: 2 });
+  // Pre-ledger children had no header edge; the first-generation path names
+  // the root parent instead.
+  write(orphanFile, { type: 'session', id: 'prime-orphan-id', cwd: '/workspace', rlmDepth: 1 });
+  // Bookkeeping artifacts share the tree but are not sessions.
+  write(path.join(artifacts, 'prime-root-id', 'semantic-edges.jsonl'), { type: 'edge', from: 'a', to: 'b' });
+  write(path.join(artifacts, 'prime-root-id', 'rlm-subagents.jsonl'), { type: 'rlm_subagent', sessionFile: childFile });
+
+  const prime = discoverSessionCandidates(sessions, { descriptor: registry.prime });
+  assert.deepEqual(prime.candidates.map(candidate => candidate.nativeSessionId).sort(), [
+    'prime-child-id', 'prime-grandchild-id', 'prime-orphan-id', 'prime-root-id',
+  ]);
+  const byId = new Map(prime.candidates.map(candidate => [candidate.nativeSessionId, candidate]));
+  assert.equal(byId.get('prime-child-id').parentSession, rootFile);
+  assert.equal(byId.get('prime-grandchild-id').parentSession, childFile);
+  assert.equal(byId.get('prime-orphan-id').parentSession, rootFile, 'first-generation path fallback names the root parent');
+  assert.equal(byId.get('prime-child-id').sessionKey, encodeSessionKey('prime', 'prime-child-id'));
+
+  // The live-parent probe reaches the same subtree from the parent file alone.
+  const probe = discoverSubsessionCandidates(rootFile, { descriptor: registry.prime });
+  assert.deepEqual(probe.map(candidate => candidate.nativeSessionId).sort(), ['prime-child-id', 'prime-grandchild-id', 'prime-orphan-id']);
+
+  // Other harnesses never treat the artifacts tree as sessions.
+  const pi = discoverSessionCandidates(sessions, { descriptor: registry.pi });
+  assert.deepEqual(pi.candidates, [], 'pi discovery ignores a prime artifacts tree');
+  assert.deepEqual(discoverSubsessionCandidates(rootFile, { descriptor: registry.omp }), [],
+    'OMP subsession probing does not apply to the prime artifacts shape');
+});
+
 test('bounded discovery skips over-depth directories, symlinks, and reports caps', () => {
   const sessions = path.join(root, 'sessions-b');
   const workspace = path.join(sessions, '--workspace--');

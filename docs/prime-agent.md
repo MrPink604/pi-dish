@@ -42,6 +42,10 @@ What works today, live:
   token. Other roots keep running; child agents are not automatically resumed.
 - ipython tool calls and `BashResult(...)` results render as code/command
   output in the web transcript and the CLI read path.
+- RLM subagent fan-outs are discovered from the `session-artifacts/**/sub-*`
+  layout (recursive, header-verified), surface as live children while the
+  daemon reports them running, and render in the shared session-family tree
+  (the "Subagents · N" header link) alongside Pi/OMP subagents.
 
 ## Outstanding gaps
 
@@ -82,8 +86,9 @@ Roughly in experiential impact order:
    skills into Pi and OMP only, so a Prime session has no pi-dish CLI.
 7. **Prime's own product surface has no pi-dish UI.** ~37 TUI slash commands
    and ~17 CLI subcommands (goal, autonomous, schedule, heartbeat, refine,
-   MCP, package, scoped-models, fork/clone, `/context`'s agent tree, …) are
-   unreachable from the web.
+   MCP, package, scoped-models, fork/clone, …) are unreachable from the web.
+   `/context`'s agent tree now has an equivalent: the session-family tree
+   viewer (2026-09-13).
 8. **First-run kernel bootstrap.** Prime's only built-in tool (`ipython`)
    needs a uv-managed Python runtime. `install.sh` now installs uv when the
    Prime CLI is present, but the kernel still downloads Python packages on

@@ -716,6 +716,212 @@ test('pi-dish launch provenance adds neutral related-session navigation', async 
   assert.ok(child.body.relations.some(r => r.kind === 'startedFrom' && r.session.id === SESSION_ID));
 });
 
+test('lineage endpoint assembles the recursive family tree', async () => {
+  const rootId = 'lineage-root-1';
+  const childId = 'lineage-child-1';
+  const gcId = 'lineage-gc-1';
+  const rootFile = path.join(sessionDir, `${rootId}.jsonl`);
+  const childFile = path.join(sessionDir, `${childId}.jsonl`);
+  const gcFile = path.join(sessionDir, `${gcId}.jsonl`);
+  const writeRow = (file, id, parentSession) => fs.writeFileSync(file, [
+    { type: 'session', version: 3, id, cwd: '/home/user/proj', ...(parentSession ? { parentSession } : {}) },
+    { type: 'message', id: `${id}-u1`, parentId: null, message: { role: 'user', content: [{ type: 'text', text: `${id} prompt` }] } },
+  ].map(JSON.stringify).join('\n') + '\n');
+  writeRow(rootFile, rootId, null);
+  writeRow(childFile, childId, rootFile);
+  writeRow(gcFile, gcId, childFile);
+  try {
+    const res = await get(`/api/sessions/${rootId}/lineage`);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.session.id, rootId);
+    assert.equal(res.body.members, 3);
+    assert.equal(res.body.truncated, false);
+    const tree = res.body.tree;
+    assert.equal(tree.session.id, rootId, 'tree roots at the top ancestor');
+    assert.equal(tree.edge, null);
+    assert.equal(tree.children.length, 1);
+    assert.equal(tree.children[0].session.id, childId);
+    assert.deepEqual(tree.children[0].edge, { kind: 'child', source: 'pi-session-header' });
+    assert.equal(tree.children[0].children[0].session.id, gcId, 'grandchild nests under the child');
+
+    const fromGc = await get(`/api/sessions/${gcId}/lineage`);
+    assert.equal(fromGc.body.tree.session.id, rootId, 'a descendant sees the same root');
+    assert.equal(fromGc.body.session.id, gcId);
+
+    const missing = await get('/api/sessions/no-such-lineage-session/lineage');
+    assert.equal(missing.status, 404);
+  } finally {
+    for (const file of [rootFile, childFile, gcFile]) fs.rmSync(file, { force: true });
+    await get('/api/sessions');
+  }
+});
+
+test('lineage terminates on cyclic parent headers', async () => {
+  const aId = 'lineage-cycle-a';
+  const bId = 'lineage-cycle-b';
+  const aFile = path.join(sessionDir, `${aId}.jsonl`);
+  const bFile = path.join(sessionDir, `${bId}.jsonl`);
+  const writeRow = (file, id, parentSession) => fs.writeFileSync(file, JSON.stringify(
+    { type: 'session', version: 3, id, cwd: '/home/user/proj', parentSession },
+  ) + '\n');
+  writeRow(aFile, aId, bFile);
+  writeRow(bFile, bId, aFile);
+  try {
+    const res = await get(`/api/sessions/${aId}/lineage`);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.members, 2, 'the cycle is placed once, not walked forever');
+  } finally {
+    fs.rmSync(aFile, { force: true });
+    fs.rmSync(bFile, { force: true });
+    await get('/api/sessions');
+  }
+});
+
+test('lineage marks pi-dish launch edges and respects the node cap', async () => {
+  const rootId = 'lineage-launch-root';
+  const childId = 'lineage-launch-child';
+  const rootFile = path.join(sessionDir, `${rootId}.jsonl`);
+  const childFile = path.join(sessionDir, `${childId}.jsonl`);
+  for (const [file, id] of [[rootFile, rootId], [childFile, childId]]) {
+    fs.writeFileSync(file, JSON.stringify({ type: 'session', version: 3, id, cwd: '/home/user/proj' }) + '\n');
+  }
+  sessionProvenance.recordLaunch(childId, rootId, 'test-lineage-operation');
+  const cap = process.env.PI_DISH_LINEAGE_NODE_CAP;
+  try {
+    const full = await get(`/api/sessions/${rootId}/lineage`);
+    assert.equal(full.status, 200, JSON.stringify(full.body));
+    const childNode = full.body.tree.children.find(node => node.session.id === childId);
+    assert.ok(childNode, 'launched session joins the tree below its source');
+    assert.equal(childNode.edge.kind, 'startedHere');
+    assert.equal(childNode.edge.source, 'pi-dish-launch');
+
+
+    process.env.PI_DISH_LINEAGE_NODE_CAP = '1';
+    const capped = await get(`/api/sessions/${rootId}/lineage`);
+    assert.equal(capped.body.members, 1);
+    assert.equal(capped.body.truncated, true, 'the cap reports a partial tree');
+  } finally {
+    if (cap === undefined) delete process.env.PI_DISH_LINEAGE_NODE_CAP; else process.env.PI_DISH_LINEAGE_NODE_CAP = cap;
+    fs.rmSync(rootFile, { force: true });
+    fs.rmSync(childFile, { force: true });
+    await get('/api/sessions');
+  }
+});
+
+test('prime RLM subagents join the catalog and the lineage tree', async () => {
+  const primeDir = path.join(tmpHome, '.prime', 'agent');
+  const sessionsDir = path.join(primeDir, 'sessions');
+  const rootNative = 'prime-lineage-root';
+  const childNative = 'prime-lineage-child';
+  const gcNative = 'prime-lineage-gc';
+  const rootFile = path.join(sessionsDir, `${rootNative}.jsonl`);
+  const childFile = path.join(primeDir, 'session-artifacts', rootNative, 'sub-ab12cd34', `${childNative}.jsonl`);
+  const gcFile = path.join(primeDir, 'session-artifacts', rootNative, 'session-artifacts', childNative, 'sub-ef56gh78', `${gcNative}.jsonl`);
+  const writeRow = (file, id, parentSession, rlmDepth) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, [
+      { type: 'session', version: 2, id, cwd: ompCwd, ...(parentSession ? { parentSession } : {}), ...(rlmDepth ? { rlmDepth } : {}) },
+      { type: 'message', id: `${id}-u1`, parentId: null, message: { role: 'user', content: [{ type: 'text', text: `${id} task` }] } },
+    ].map(JSON.stringify).join('\n') + '\n');
+  };
+  writeRow(rootFile, rootNative, null, 0);
+  writeRow(childFile, childNative, rootFile, 1);
+  writeRow(gcFile, gcNative, childFile, 2);
+  const rootRoute = encodeSessionKey('prime', rootNative);
+  const childRoute = encodeSessionKey('prime', childNative);
+  const gcRoute = encodeSessionKey('prime', gcNative);
+  try {
+    const listed = await get('/api/sessions');
+    const child = listed.body.previous.find(session => session.id === childRoute);
+    assert.ok(child, 'prime subagent is listed from the artifacts tree');
+    assert.equal(child.parentId, rootRoute);
+    const gc = listed.body.previous.find(session => session.id === gcRoute);
+    assert.equal(gc.parentId, childRoute, 'grandchild resolves through the nested artifacts layout');
+
+    const lineage = await get(`/api/sessions/${encodeURIComponent(rootRoute)}/lineage`);
+    assert.equal(lineage.status, 200, JSON.stringify(lineage.body));
+    assert.equal(lineage.body.tree.session.id, rootRoute);
+    assert.equal(lineage.body.tree.children[0].session.id, childRoute);
+    assert.equal(lineage.body.tree.children[0].children[0].session.id, gcRoute);
+    assert.equal(lineage.body.members, 3);
+
+    const childRelated = await get(`/api/sessions/${encodeURIComponent(childRoute)}/related`);
+    assert.ok(childRelated.body.relations.some(relation =>
+      relation.kind === 'parent' && relation.session.id === rootRoute),
+      'the flat relations endpoint sees prime parents too');
+  } finally {
+    fs.rmSync(primeDir, { recursive: true, force: true });
+    await get('/api/sessions');
+  }
+});
+
+test('live prime subagents surface under their live parent via the display entry', async () => {
+  // Prime RLM children never register with pi-dish (the daemon worker owns
+  // them); liveness comes from the per-child rlm-subagent.json status.
+  const primeDir = path.join(tmpHome, '.prime', 'agent');
+  const sessionsDir = path.join(primeDir, 'sessions');
+  const rootNative = 'prime-live-root';
+  const runningNative = 'prime-live-running';
+  const doneNative = 'prime-live-done';
+  const rootFile = path.join(sessionsDir, `${rootNative}.jsonl`);
+  const runningDir = path.join(primeDir, 'session-artifacts', rootNative, 'sub-run0001');
+  const doneDir = path.join(primeDir, 'session-artifacts', rootNative, 'sub-done001');
+  const runningFile = path.join(runningDir, `${runningNative}.jsonl`);
+  const doneFile = path.join(doneDir, `${doneNative}.jsonl`);
+  const runningRoute = encodeSessionKey('prime', runningNative);
+  const doneRoute = encodeSessionKey('prime', doneNative);
+  const writeRow = (file, id, parentSession) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, [
+      { type: 'session', version: 2, id, cwd: ompCwd, ...(parentSession ? { parentSession } : {}) },
+      { type: 'message', id: `${id}-u1`, parentId: null, message: { role: 'user', content: [{ type: 'text', text: `${id} task` }] } },
+    ].map(JSON.stringify).join('\n') + '\n');
+  };
+  const display = (dir, file, id, status) => fs.writeFileSync(path.join(dir, 'rlm-subagent.json'), JSON.stringify({
+    type: 'rlm_subagent', childId: id, sessionName: id, sessionDir: dir, sessionFile: file, status, createdAt: 1, updatedAt: 'now',
+  }) + '\n');
+  writeRow(rootFile, rootNative, null);
+  writeRow(runningFile, runningNative, rootFile);
+  writeRow(doneFile, doneNative, rootFile);
+  display(runningDir, runningFile, runningNative, 'running');
+  display(doneDir, doneFile, doneNative, 'completed');
+
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const socket = path.join(tmpHome, 'prime-live-subagents.sock');
+  fs.writeFileSync(socket, 'stub');
+  const identity = processIdentity(process.pid);
+  const registryPath = path.join(registryDir, 'prime-live-subagents.json');
+  fs.writeFileSync(registryPath, JSON.stringify({
+    protocolVersion: 2,
+    wrapper: { harnessId: 'prime', name: 'Prime Agent', wrapperVersion: 'test' },
+    harnessId: 'prime', nativeSessionId: rootNative, sessionId: rootNative,
+    bridgeInstanceId: 'prime-live-subagents', instanceId: 'prime-live-subagents',
+    socketPath: socket, cwd: ompCwd, sessionFile: rootFile,
+    pid: identity.pid, startTime: identity.startTime,
+    capabilities: {}, spawnToken: null,
+  }));
+  invalidateRegistryCache();
+  try {
+    const activeOnly = await get('/api/sessions?active=1');
+    const children = activeOnly.body.children.map(session => session.id);
+    assert.ok(children.includes(runningRoute), `running prime subagent is served: ${JSON.stringify(children)}`);
+    assert.ok(!children.includes(doneRoute), 'a completed prime subagent is history, not an active row');
+    const running = activeOnly.body.children.find(session => session.id === runningRoute);
+    assert.equal(running.subagentLive, true);
+    assert.equal(running.parentId, encodeSessionKey('prime', rootNative));
+
+    const related = await get(`/api/sessions/${encodeURIComponent(encodeSessionKey('prime', rootNative))}/related`);
+    const runningRelation = related.body.relations.find(relation => relation.session.id === runningRoute);
+    assert.equal(runningRelation.session.subagentLive, true, 'relation summaries carry the live-subagent flag');
+  } finally {
+    fs.rmSync(registryPath, { force: true });
+    fs.rmSync(primeDir, { recursive: true, force: true });
+    invalidateRegistryCache();
+    await get('/api/sessions');
+  }
+});
+
 test('cwd falls back to the dir-name decode only when the decoded path exists', async () => {
   const { body } = await get('/api/sessions');
   const sess = body.previous.find(s => s.id === NO_CWD_ID);

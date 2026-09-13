@@ -419,7 +419,8 @@ status polling and selected-session reconciliation. `bounce-data.ts` narrows wir
 rows into readonly contracts. The app supplies host/session accessors and reload
 callbacks; the controller retains endpoint/view ownership across asynchronous work.
 
-`session-relations.ts` owns related-session controls, overflow and refresh timers;
+`session-relations.ts` owns the subagents viewer — lineage wire decoding, the
+family link and tree modal, collapse state and indexing/modal refresh timers;
 `session-search.ts` owns the whole-transcript search bar, match state and paging
 navigation. The app provides transcript paging/scroll callbacks and session/host
 accessors. Query results and rendered navigation controls retain their original

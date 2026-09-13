@@ -53,7 +53,7 @@ Ranked by user impact:
 | 4 | New-session + routines model picker cannot list Prime models (`/api/models?harness=prime` 501) | server work |
 | 5 | Export/share/deep-links blocked although Prime has an HTML exporter | server gate |
 | 6 | Prime's ~37 TUI commands and ~17 CLI subcommands have no pi-dish surface (goal, autonomous, schedule, heartbeat, refine, MCP, package, scoped-models, fork/clone, btw, traces, login, logs, hotkeys…) | product gap |
-| 7 | RLM subagents (`session-artifacts/<root>/sub-*`) and the whole artifacts store are invisible | discovery gap |
+| 7 | RLM subagents are discovered and render in the family tree (fixed 2026-09-13); the rest of the artifacts store (`kernel-state`, `semantic-edges`, `scheduled-jobs.json`) stays invisible | surface work |
 | 8 | Prime sessions get **no** pi-dish agent skills (`install.sh` links Pi+OMP only) | one-line install fix |
 | 9 | `/reload` always 409s though `ctx.reload()` and a reachable pane both exist | server gate |
 | 10 | Thinking level `max` unreachable from header dropdown and API | vocabulary fix |
@@ -297,13 +297,19 @@ badge is correctly non-clickable (`pilotConfig: false`). Nothing reads
 `prime-agent config` is interactive, so pi-dish would edit JSON directly).
 
 **B5 — RLM subagents + session-artifacts.** Prime stores children under
-`session-artifacts/<parentSessionId>/sub-<id8>/<sessionId>.jsonl` and folds
-their usage into `child_usage_attributed`; discovery is `layout: 'flat'`
-(`lib/harnesses.js:163`) so only `sessions/*.jsonl` is read, and
-`liveSubsessionCandidates` needs `nestedSubsessions` + an exit marker Prime
-does not have (`server.js:1511-1521`). [live] the artifacts dir exists per
-session. Result: a Prime fan-out is invisible in the sidebar/related chips;
-`/context`'s child tree has no equivalent.
+`session-artifacts/<parentSessionId>/sub-<id8>/<sessionId>.jsonl` (recursing
+through an interleaved `session-artifacts/<childId>` segment per generation)
+and folds their usage into `child_usage_attributed`. ~~Discovery is
+`layout: 'flat'` (`lib/harnesses.js:163`) so only `sessions/*.jsonl` is read~~
+**Fixed (2026-09-13):** the descriptor's `subagentArtifacts` flag walks the
+artifacts tree (header-verified, with a first-generation path fallback for
+pre-header children), `liveSubsessionCandidates` probes it per live parent
+with the `rlm-subagent.json` display entry as the liveness proof, and the
+session family's "Subagents · N" tree viewer renders the recursive fan-out
+for every harness. *Remaining:* the rest of the artifacts store (kernel
+state, semantic edges, `scheduled-jobs.json`, exports) has no pi-dish
+surface, and child display names from the ledger/display entries are not yet
+read (rows fall back to first-prompt naming).
 
 **B6 — Scheduler / heartbeat / goal / autonomous / refine / traces.**
 pi-dish's Routines are a separate subsystem (`lib/routines.js`) that never

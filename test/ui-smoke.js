@@ -1370,8 +1370,8 @@ let remoteHost = null; // second pi-dish (multi-host section)
     //    model select, and a routed spawn round-trip.
     console.log('new-session takeover:');
     await desktop.waitForSelector('#sessionRelations .session-relation-chip', { timeout: 5000 });
-    check(await desktop.locator('#sessionRelations .session-relation-more').count() === 1,
-      'selected session puts closed child relations behind the overflow chip');
+    check((await desktop.locator('#sessionRelations').textContent()).includes('Subagents'),
+      'selected session exposes the session family tree link');
     await desktop.click('.sidebar-footer .btn');
     await desktop.waitForFunction(
       () => document.querySelector('.main').classList.contains('new-session-open'),
@@ -2984,11 +2984,14 @@ let remoteHost = null; // second pi-dish (multi-host section)
     console.log('related-session navigation:');
     await desktop.evaluate((id) => fixtureApp.features.sessionView.select(id), BETA_ID);
     await desktop.waitForSelector('#sessionRelations .session-relation-chip', { timeout: 5000 });
-    check((await desktop.locator('#sessionRelations').textContent()).includes('Parent'),
-      'native Pi parentSession renders a neutral relation chip');
+    check((await desktop.locator('#sessionRelations').textContent()).includes('Subagents'),
+      'a session with family renders the subagents link');
     await desktop.click('#sessionRelations .session-relation-chip');
+    await desktop.waitForSelector('#relationsModal .lineage-row', { timeout: 5000 });
+    check(true, 'the subagents link opens the family tree');
+    await desktop.locator(`#relationsModal .lineage-row[data-session-id="${registryState.sessionId}"]`).click();
     await desktop.waitForFunction((id) => fixtureApp.features.sessionState.currentSession?.id === id, registryState.sessionId, { timeout: 5000 });
-    check(true, 'related-session chip navigates to the available peer session');
+    check(true, 'a family tree row navigates to the available peer session');
     const relationRaceOwner = await desktop.evaluate(async (nextId) => {
       const originalLoad = fixtureApp.features.sidebarLists.load;
       let release;
@@ -3008,58 +3011,62 @@ let remoteHost = null; // second pi-dish (multi-host section)
     await desktop.evaluate((id) => fixtureApp.features.sessionView.select(id), registryState.sessionId);
     await desktop.waitForFunction((id) => fixtureApp.features.sessionState.currentSession?.id === id, registryState.sessionId);
 
-    // Relation chip overflow: only live child fan-outs appear in the header.
-    // Closed children and live children beyond one physical row go behind
-    // the "+N more" chip, while the modal still lists every relation.
+    // Family tree fan-out: the header carries one link sized by the family
+    // count; the modal lists the whole tree — closed children included,
+    // live rows dotted.
     let relationFixtureMode = 'closed';
-    await desktop.route('**/api/sessions/*/related', async (route) => {
-      const relations = [{
-        kind: 'parent', source: 'pi-session-header',
-        session: { id: registryState.sessionId, name: 'overflow-parent', isActive: true, lastActivity: Date.now() },
+    const lineageFixture = () => {
+      const children = [{
+        session: { id: BETA_ID, name: 'current-session', isActive: true, lastActivity: Date.now() },
+        edge: { kind: 'child', source: 'pi-session-header' }, children: [],
       }];
       if (relationFixtureMode === 'closed') {
         for (let i = 0; i < 3; i++) {
-          relations.push({
-            kind: 'child', source: 'pi-session-header',
+          children.push({
             session: { id: `live-child-${i}`, name: `live-child-${i}`, isActive: true, lastActivity: Date.now() },
+            edge: { kind: 'child', source: 'pi-session-header' }, children: [],
           });
         }
         for (let i = 0; i < 6; i++) {
-          relations.push({
-            kind: 'child', source: 'pi-session-header',
+          children.push({
             session: { id: `closed-child-${i}`, name: `closed-child-${i}`, isActive: false, lastActivity: Date.now() - 60000 },
+            edge: { kind: 'child', source: 'pi-session-header' }, children: [],
           });
         }
       } else {
         for (let i = 0; i < 25; i++) {
-          relations.push({
-            kind: 'child', source: 'pi-session-header',
+          children.push({
             session: { id: `active-child-${i}`, name: `active-child-${i}`, isActive: true, lastActivity: Date.now() },
+            edge: { kind: 'child', source: 'pi-session-header' }, children: [],
           });
         }
       }
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ relations }) });
+      return {
+        session: { id: BETA_ID, name: 'current-session', isActive: true },
+        tree: {
+          session: { id: registryState.sessionId, name: 'overflow-parent', isActive: true, lastActivity: Date.now() },
+          edge: null, children,
+        },
+        members: children.length + 1,
+      };
+    };
+    await desktop.route('**/api/sessions/*/lineage', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(lineageFixture()) });
     });
     await desktop.evaluate((id) => fixtureApp.features.sessionView.select(id), BETA_ID);
-    await desktop.waitForSelector('.session-relation-more', { timeout: 5000 });
-    const closedHeader = await desktop.locator('#sessionRelations').textContent();
-    const closedOverflowCount = Number((await desktop.locator('.session-relation-more').textContent()).match(/\+(\d+)/)?.[1] || 0);
-    const visibleClosedChildren = await desktop.locator('#sessionRelations .session-relation-chip:not(.session-relation-more)').evaluateAll(
-      chips => chips.filter(chip => chip.textContent.includes('Child')).length);
-    check(closedHeader.includes('live-child-0') && !closedHeader.includes('closed-child-'),
-      'header shows live children but hides closed child bubbles');
-    check(visibleClosedChildren > 0,
-      'live children occupy the available single row');
-    check(closedOverflowCount >= 6,
-      'closed children count toward the overflow bubble');
-    await desktop.click('.session-relation-more');
-    await desktop.waitForSelector('#relationsModal .relation-row', { timeout: 5000 });
-    check(await desktop.locator('#relationsModal .relation-row').count() === 10,
-      'overflow modal lists every relation, including closed children');
-    check((await desktop.locator('#relationsModal').textContent()).includes('Children (9)'),
-      'overflow modal groups the children with a count');
-    check(await desktop.locator('#relationsModal .relation-row .live-dot').count() === 4,
-      'overflow modal marks each live relation');
+    await desktop.waitForSelector('#sessionRelations .session-relation-chip', { timeout: 5000 });
+    check((await desktop.locator('#sessionRelations').textContent()).includes('Subagents · 10'),
+      'the link counts every family member, closed children included');
+    await desktop.click('#sessionRelations .session-relation-chip');
+    await desktop.waitForSelector('#relationsModal .lineage-row', { timeout: 5000 });
+    check(await desktop.locator('#relationsModal .lineage-row').count() === 11,
+      'the tree lists every relation, including closed children');
+    check((await desktop.locator('#relationsModal').textContent()).includes('closed-child-5'),
+      'closed children render in the tree');
+    check(await desktop.locator('#relationsModal .lineage-row .live-dot').count() === 5,
+      'the tree marks each live session');
+    check(await desktop.locator('#relationsModal .lineage-row.lineage-current').count() === 1,
+      'the tree marks the current session');
     await desktop.keyboard.press('Escape');
     await desktop.waitForFunction(
       () => document.getElementById('relationsModal').style.display === 'none',
@@ -3068,29 +3075,26 @@ let remoteHost = null; // second pi-dish (multi-host section)
 
     relationFixtureMode = 'active';
     await desktop.evaluate((id) => fixtureApp.features.sessionView.select(id), BETA_ID);
-    await desktop.waitForSelector('.session-relation-more', { timeout: 5000 });
-    const activeHeader = await desktop.locator('#sessionRelations').textContent();
-    const visibleActiveChildren = await desktop.locator('#sessionRelations .session-relation-chip:not(.session-relation-more)').evaluateAll(
-      chips => chips.filter(chip => chip.textContent.includes('Child')).length);
-    check(visibleActiveChildren > 0 && visibleActiveChildren < 25 && !activeHeader.includes('closed-child-'),
-      'active children overflow after one row instead of wrapping');
-    await desktop.click('.session-relation-more');
-    await desktop.waitForSelector('#relationsModal .relation-row', { timeout: 5000 });
-    check(await desktop.locator('#relationsModal .relation-row').count() === 26,
-      'active-child overflow modal lists the complete fan-out');
+    await desktop.waitForSelector('#sessionRelations .session-relation-chip', { timeout: 5000 });
+    check((await desktop.locator('#sessionRelations').textContent()).includes('Subagents · 26'),
+      'a large live fan-out still fits the single link');
+    await desktop.click('#sessionRelations .session-relation-chip');
+    await desktop.waitForSelector('#relationsModal .lineage-row', { timeout: 5000 });
+    check(await desktop.locator('#relationsModal .lineage-row').count() === 27,
+      'the tree lists the complete fan-out');
     await desktop.keyboard.press('Escape');
 
     relationFixtureMode = 'closed';
     await desktop.evaluate((id) => fixtureApp.features.sessionView.select(id), BETA_ID);
-    await desktop.waitForSelector('.session-relation-more', { timeout: 5000 });
-    await desktop.click('.session-relation-more');
-    await desktop.waitForSelector('#relationsModal .relation-row', { timeout: 5000 });
-    await desktop.locator('#relationsModal .relation-row').first().click();
+    await desktop.waitForSelector('#sessionRelations .session-relation-chip', { timeout: 5000 });
+    await desktop.click('#sessionRelations .session-relation-chip');
+    await desktop.waitForSelector('#relationsModal .lineage-row', { timeout: 5000 });
+    await desktop.locator('#relationsModal .lineage-row').first().click();
     await desktop.waitForFunction((id) => fixtureApp.features.sessionState.currentSession?.id === id, registryState.sessionId, { timeout: 5000 });
-    check(true, 'overflow modal row navigates to the relation');
+    check(true, 'a tree row navigates to the relation');
     check(await desktop.locator('#relationsModal').evaluate((el) => el.style.display === 'none'),
       'navigation closes the relations modal');
-    await desktop.unroute('**/api/sessions/*/related');
+    await desktop.unroute('**/api/sessions/*/lineage');
     await desktop.evaluate((id) => fixtureApp.features.sessionView.select(id), registryState.sessionId);
     await desktop.waitForFunction((id) => fixtureApp.features.sessionState.currentSession?.id === id &&
       !document.getElementById('sessionRelations').textContent.includes('overflow-'),

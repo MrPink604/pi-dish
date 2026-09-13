@@ -1280,9 +1280,10 @@ function liveSubsessionCandidates(active) {
   const out = [];
   for (const session of active) {
     const descriptor = getHarness(session.harnessId);
-    // Without a declared exit marker liveness is unknowable, and listing
+    // Without a declared subsession layout there is nothing to probe, and
+    // without a liveness proof (exit marker or Prime's display entry) listing
     // every past subagent would bury the tab in history.
-    if (!descriptor?.nestedSubsessions || !descriptor.sessionExitCustomType || !session.sessionFile) continue;
+    if (!descriptor || (!descriptor.nestedSubsessions && !descriptor.subagentArtifacts) || !session.sessionFile) continue;
     let candidates;
     try { candidates = discoverSubsessionCandidates(session.sessionFile, { descriptor }); } catch { continue; }
     for (const candidate of candidates) {
@@ -1291,17 +1292,34 @@ function liveSubsessionCandidates(active) {
       // live parent (a live session nested under a live session shares the
       // subtree below it).
       if (claimed.has(routeId)) continue;
-      let tail;
       // The candidate list is a readdir snapshot: a file can be gone, or its
       // mount with it, before this read. One vanished subagent must not 500
       // the whole sidebar poll.
-      try { tail = readSessionTailEntry(candidate); } catch { continue; }
-      if (tail?.type === 'custom' && tail.customType === descriptor.sessionExitCustomType) continue;
+      if (!liveSubagentProof(descriptor, candidate)) continue;
       claimed.add(routeId);
       out.push(candidate);
     }
   }
   return out;
+}
+
+// Liveness of a discovered subagent: OMP proves it by the absence of a
+// trailing session_exit entry; Prime's RLM children carry a daemon-maintained
+// rlm-subagent.json display entry whose status flips running→completed/
+// deleted. Anything unreadable fails closed (not live).
+function liveSubagentProof(descriptor, candidate) {
+  if (descriptor.sessionExitCustomType) {
+    let tail;
+    try { tail = readSessionTailEntry(candidate); } catch { return false; }
+    return !(tail?.type === 'custom' && tail.customType === descriptor.sessionExitCustomType);
+  }
+  if (descriptor.subagentArtifacts) {
+    try {
+      const entry = JSON.parse(fs.readFileSync(path.join(path.dirname(candidate.file), 'rlm-subagent.json'), 'utf8'));
+      return !!entry && entry.type === 'rlm_subagent' && entry.status === 'running';
+    } catch { return false; }
+  }
+  return false;
 }
 
 // Bound first-poll full reads of previously unseen live child histories.
@@ -1458,6 +1476,7 @@ function relationSessionSummary(session) {
     cwd: session.cwd || null,
     model: session.model || 'unknown',
     isActive: !!session.isActive,
+    subagentLive: !!session.subagentLive,
     lastActivity: session.lastActivity,
   };
 }
@@ -1552,6 +1571,98 @@ app.get('/api/sessions/:id/related', (req, res) => {
     res.json({
       session: relationSessionSummary(current),
       relations,
+      indexing: catalog.indexing,
+      discoveryTruncated: catalog.discoveryTruncated,
+      discoverySkipped: catalog.discoverySkipped,
+    });
+  } catch (e) {
+    const status = /Invalid session ID|Unknown harness/.test(e.message) ? 400 : 500;
+    res.status(status).json({ error: e.message });
+  }
+});
+
+// Recursive family view behind the subagents viewer: the whole native/launch
+// family around a session rather than /related's direct neighbors. Same
+// advisory sources and the same non-authority — edges label provenance
+// (subagent header/layout vs pi-dish launch), never control rights.
+const LINEAGE_NODE_CAP_DEFAULT = 500;
+const LINEAGE_DEPTH_CAP = 24;
+app.get('/api/sessions/:id/lineage', (req, res) => {
+  try {
+    const nodeCap = (() => {
+      const parsed = Number.parseInt(process.env.PI_DISH_LINEAGE_NODE_CAP || '', 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : LINEAGE_NODE_CAP_DEFAULT;
+    })();
+    const catalog = buildSessionCatalog();
+    let current = catalog.byId.get(req.params.id);
+    if (!current) {
+      const candidate = resolveSessionCandidate(req.params.id);
+      if (!candidate) return res.status(404).json({ error: 'Session not found' });
+      current = buildSourceSession(candidate, getSessionInfo(candidate), historicalAdvice(candidate), catalogOptions);
+      // Mirror composeSessionCatalog's parent resolution for a row the scan
+      // has not folded in yet (indexing race): native header first, launch
+      // provenance second.
+      let nativeParent = null;
+      if (current.parentSession && current.sessionFile) {
+        const parentFile = path.isAbsolute(current.parentSession) ? current.parentSession
+          : path.resolve(path.dirname(current.sessionFile), current.parentSession);
+        nativeParent = catalog.byPath.get(canonicalSessionPath(parentFile))?.id || null;
+      }
+      const launch = sessionProvenance.getLaunch(current.id);
+      current.parentId = nativeParent
+        || (launch && catalog.byId.has(launch.sourceSessionId) ? launch.sourceSessionId : null);
+      current.parentSource = nativeParent ? current.parentSessionSource || 'pi-session-header'
+        : current.parentId ? 'pi-dish-launch' : null;
+      catalog.list.push(current);
+      catalog.byId.set(current.id, current);
+    }
+
+    const childrenOf = new Map(); // parentId -> CatalogSession[]
+    for (const session of catalog.list) {
+      if (!session.parentId || session.parentId === session.id) continue;
+      const siblings = childrenOf.get(session.parentId);
+      if (siblings) siblings.push(session); else childrenOf.set(session.parentId, [session]);
+    }
+    const activityMs = (session) => {
+      const value = new Date(session.lastActivity || 0).getTime();
+      return Number.isFinite(value) ? value : 0;
+    };
+
+    // The top ancestor owns the root slot. Cycle-guarded: hand-edited headers
+    // can point two files at each other.
+    let root = current;
+    const ancestors = new Set([current.id]);
+    while (root.parentId) {
+      const parent = catalog.byId.get(root.parentId);
+      if (!parent || ancestors.has(parent.id)) break;
+      ancestors.add(parent.id);
+      root = parent;
+    }
+
+    const placed = new Set();
+    let members = 0, truncated = false;
+    const buildNode = (session, edge, depth) => {
+      if (placed.has(session.id)) return null;
+      if (depth > LINEAGE_DEPTH_CAP || members >= nodeCap) { truncated = true; return null; }
+      placed.add(session.id);
+      members += 1;
+      const children = [];
+      for (const child of (childrenOf.get(session.id) || []).sort((a, b) => activityMs(b) - activityMs(a))) {
+        const node = buildNode(child, {
+          kind: child.parentSource === 'pi-dish-launch' ? 'startedHere' : 'child',
+          source: child.parentSource || 'pi-session-header',
+        }, depth + 1);
+        if (node) children.push(node);
+      }
+      return { session: relationSessionSummary(session), edge, children };
+    };
+    const tree = buildNode(root, null, 0);
+
+    res.json({
+      session: relationSessionSummary(current),
+      tree,
+      members,
+      truncated,
       indexing: catalog.indexing,
       discoveryTruncated: catalog.discoveryTruncated,
       discoverySkipped: catalog.discoverySkipped,

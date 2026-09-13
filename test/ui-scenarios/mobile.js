@@ -22,17 +22,10 @@ module.exports = async function mobile({ browser, watch, base, check, emit, SESS
     const strip = document.getElementById('sessionRelations');
     const chips = [...strip.querySelectorAll('.session-relation-chip')];
     const rect = strip.getBoundingClientRect();
-    const tops = chips.map(chip => Math.round(chip.getBoundingClientRect().top));
-    return {
-      height: rect.height,
-      rows: new Set(tops).size,
-      flexWrap: getComputedStyle(strip).flexWrap,
-      maxChipWidth: Math.max(...chips.map(chip => chip.getBoundingClientRect().width)),
-    };
+    return { height: rect.height, chips: chips.length, text: strip.textContent };
   });
-  check(relationLayout.rows === 1 && relationLayout.flexWrap === 'nowrap' &&
-    relationLayout.height <= 32 && relationLayout.maxChipWidth <= 171,
-    `related-session chips stay in one compact mobile strip (got ${JSON.stringify(relationLayout)})`);
+  check(relationLayout.chips === 1 && relationLayout.text.includes('Subagents') && relationLayout.height <= 32,
+    `the family-tree link stays a single compact mobile chip (got ${JSON.stringify(relationLayout)})`);
 
   // Header contract: three rows. The title owns row 1; row 2 carries the
   // four controls that always matter, unclipped, with the model chip the

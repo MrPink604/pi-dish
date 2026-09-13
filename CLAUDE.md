@@ -284,20 +284,32 @@ of sent twice. "Live" is not "working": an idle kept-alive subagent looks
 identical on disk, so these rows never claim a turn is in progress (static
 dot, no `turnInProgress`).
 
+Prime's RLM subagents follow the same contract through a different layout
+(`subagentArtifacts` on the descriptor): children persist outside the flat
+sessions root at `session-artifacts/<parentId>/sub-<id8>/<child>.jsonl`,
+recursing one interleaved `session-artifacts/<childId>` segment per
+generation, and their session headers carry the `parentSession` edge (a
+first-generation path fallback covers pre-header releases). The corpus walk
+covers the artifacts tree with its own depth budget, so catalog, lineage and
+route lookup see the whole fan-out. Prime has no exit marker; liveness comes
+from the daemon-maintained `rlm-subagent.json` display entry beside each
+child (`status: "running"`), read fail-closed.
+
 `GET /api/sessions/:id/related` resolves native `parentSession` paths only
 against the discovered corpus and combines them with advisory pi-dish launch
 provenance from `~/.pi/dish/session-provenance.json`. The sidecar is UI/audit
 enrichment only: it never grants ownership, cascade semantics, or lifecycle
-authority, and losing it must not affect session operation. The related chips
-under the session header force a full unfiltered list refresh before navigating
-to a target absent from the current Active/search result. Subagent fan-outs can
-relate a session to dozens of children, so the header shows only live child
-bubbles and fits them, plus singular lineage links, into one physical row.
-Closed children and live children that do not fit go into the "+N more"
-overflow chip; `isChildRelation` filters the child fan-out and
-`sortRelations` keeps the ordering stable, while active children get header
-priority. The modal still lists every grouped relation with live dots and
-last-activity times.
+authority, and losing it must not affect session operation.
+`GET /api/sessions/:id/lineage` assembles the recursive family tree the
+subagents viewer renders: catalog `parentId` edges (native first, launch
+provenance as fallback), rooted at the top ancestor, cycle-guarded and
+node/depth-capped (`PI_DISH_LINEAGE_NODE_CAP`, default 500). The header shows
+a single "Subagents · N" link sized by the family count; the modal renders
+the tree with collapse toggles, live dots and per-row navigation that forces
+a full unfiltered list refresh before opening a target absent from the
+current Active/search result. While the modal is open and the viewed session
+can still gain relatives (active or indexing), the tree repolls every few
+seconds.
 
 ## Session index (lib/session-index.js)
 
@@ -2096,17 +2108,18 @@ and selection writers; do not restore mutable globals in `app.js`. Workspace
 buttons, directory trees, pickers and debounced config/model refreshes follow the
 controller's captured host and view. Disposal retires their callbacks and inputs.
 
+The subagents viewer (family link and lineage tree modal) lives in
+`src/browser/session-relations.ts`, fed by `/api/sessions/:id/lineage`.
+Rendered links/rows retain their originating selection/host, and modal/header
+re-renders retire prior controls. Indexing repoll and modal poll timers belong
+to that controller; clear/dispose retires them before the next session view.
+
 Bulk Bounce UI is owned by `src/browser/bounce.ts`, with wire contracts in
 `bounce-data.ts`. Each selected snapshot freezes its host route/token and mode;
 view refresh/close retires row listeners and status timers. The operation read
 sequence prevents an older poll from erasing accepted mutations. Completed
 restart reconciliation keeps the bounce surface open and only reconnects the
 transcript when the originating host/session selection still owns the view.
-
-Related-session header chips and the overflow modal live in
-`src/browser/session-relations.ts`. Chips retain their rendered selection/host,
-and modal/header re-renders retire prior controls. Indexing/resize timers belong
-to that controller; clear/dispose retires them before the next session view.
 
 The skills directory and coverage takeover are owned by `src/browser/skills.ts`,
 with payloads narrowed in `skills-data.ts`. Requests remain on the entry host.

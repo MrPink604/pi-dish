@@ -87,6 +87,15 @@ export interface HarnessDescriptor {
     closeMode: 'logical' | 'owned-pane' | 'owned-agent' | 'client-only' | 'unsupported';
     nestedSubsessions?: boolean;
     sessionExitCustomType?: string;
+    /**
+     * Prime-style RLM subagent artifacts: children persist outside the sessions
+     * root at `<root>/../session-artifacts/<parentId>/sub-<id8>/<child>.jsonl`,
+     * recursively (a child's own children interleave another
+     * `session-artifacts/<childId>` segment). Child session headers carry
+     * `parentSession`/`rlmDepth`; liveness comes from the per-child
+     * `rlm-subagent.json` display entry, not an in-file exit marker.
+     */
+    subagentArtifacts?: boolean;
     blobsPath?: () => string;
     spawnTokenMode?: 'wrapper';
     discoveryExtensionsDir?: (env?: HarnessEnvironment) => string;

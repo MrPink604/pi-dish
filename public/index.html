@@ -135,7 +135,7 @@
               <button class="ext-ui-status-toggle" id="extUiStatusToggle" type="button"
                 aria-expanded="false" title="Show full status">▾</button>
             </div>
-            <nav class="session-relations" id="sessionRelations" aria-label="Related sessions" style="display:none"></nav>
+            <nav class="session-relations" id="sessionRelations" aria-label="Session family" style="display:none"></nav>
           </div>
           <div class="session-actions">
             <button class="btn-icon" id="btnSearch" data-app-click="toggleSearchBar" title="Search in session (Ctrl+F)">
@@ -619,12 +619,12 @@
     </div>
   </div>
 
-  <!-- Related-sessions overflow: every relation grouped by kind, opened from
-       the "+N more" chip when the header strip overflows. -->
+  <!-- Session family tree: the recursive subagent/launch lineage around the
+       current session, opened from the "Subagents · N" header link. -->
   <div class="modal-overlay" id="relationsModal" style="display:none" data-app-click="backdropCloseRelationsModal">
     <div class="modal stats-modal" role="dialog" aria-modal="true" aria-labelledby="relationsTitle">
       <div class="modal-header">
-        <h3 id="relationsTitle">Related sessions</h3>
+        <h3 id="relationsTitle">Session family</h3>
         <button class="btn-icon" data-app-click="closeRelationsModal" title="Close (Esc)">✕</button>
       </div>
       <div class="stats-body relations-body" id="relationsBody"></div>

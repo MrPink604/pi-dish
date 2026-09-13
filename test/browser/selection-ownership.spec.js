@@ -2,9 +2,10 @@ const { test, expect, ROOT, CHILD } = require('./fixtures');
 
 test('related-session navigation stays on its host when both target ids collide', async ({ page, fleet }) => {
   await fleet.select(fleet.peer, CHILD);
-  const parent = page.locator('#sessionRelations .session-relation-chip').filter({ hasText: 'Parent' });
-  await expect(parent).toBeVisible();
-  await parent.click();
+  const link = page.locator('#sessionRelations .session-relation-chip');
+  await expect(link).toBeVisible();
+  await link.click();
+  await page.locator(`.lineage-row[data-session-id="${ROOT}"]`).click();
   await expect(fleet.row(fleet.peer, ROOT)).toHaveClass(/\bactive\b/);
   await expect(page.locator('#messages')).toContainText('peer root transcript');
   await expect(fleet.row(fleet.self, ROOT)).not.toHaveClass(/\bactive\b/);
