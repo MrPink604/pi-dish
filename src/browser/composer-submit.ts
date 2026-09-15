@@ -1,6 +1,6 @@
 import { formatTime } from './helper-format';
 import { sessionRefKey } from './helper-identity';
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 import { sendJson } from './api-client';
 import type { ApiRequest, HostEndpoint } from './api-client';
 import type { SessionState } from './session-state';

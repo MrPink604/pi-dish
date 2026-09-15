@@ -1,4 +1,4 @@
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 export type BounceMode = 'reload' | 'restart';
 export interface BounceTarget {
   readonly sessionId: string; readonly name: string; readonly harnessId: string;

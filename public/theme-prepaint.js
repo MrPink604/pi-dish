@@ -1,6 +1,6 @@
 // Generated from src/browser/; edit sources and run npm run build:browser.
 (() => {
-  // src/browser/helper-values.ts
+  // src/core/helper-values.ts
   function record(value) {
     return !!value && typeof value === "object" && !Array.isArray(value);
   }

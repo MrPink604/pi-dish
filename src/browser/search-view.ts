@@ -1,10 +1,11 @@
 import type { ApiRequest } from './api-client';
 import type { SessionState } from './session-state';
 import type { createSessionSearch } from './session-search';
-import { escapeHtml, formatRelativeTime, shortCwd } from './helper-format';
+import { escapeHtml } from '../core/helper-format';
+import { formatRelativeTime, shortCwd } from './helper-format';
 import { hostDisplayLabel } from './helper-identity';
-import { parseSessionQuery, stripQueryField, applyHostTerms, positiveQueryTokens, highlightTokens } from './helper-query';
-import { record } from './helper-values';
+import { parseSessionQuery, stripQueryField, applyHostTerms, positiveQueryTokens, highlightTokens } from '../core/helper-query';
+import { record } from '../core/helper-values';
 import { queryHosts, mergeSearchPayloads, decodeSearchPayload } from './search-data';
 import type { SearchHost, SearchPayload, SearchViewData } from './search-data';
 export function createSearchView(options: {

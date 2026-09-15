@@ -1,6 +1,6 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
-import { record } from './helper-values';
-import { escapeHtml } from './helper-format';
+import { record } from '../core/helper-values';
+import { escapeHtml } from '../core/helper-format';
 export interface Theme { readonly id: string; readonly builtin: boolean; readonly tokens: Readonly<Record<string, string>> }
 export function decodeThemeTokens(value: unknown): Record<string, string> {
   if (!record(value)) return {};

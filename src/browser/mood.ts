@@ -1,5 +1,5 @@
 import { normalizeMood } from './helper-format';
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 import type { RenderMessage } from './message-data';
 export function createMood(document: Document) {
 function setMoodIndicator(description: unknown, face: unknown) {

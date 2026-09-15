@@ -1,6 +1,6 @@
 import { decodeSessionTranscriptPatch } from '../core/session-api';
 import type { SessionTranscriptPatch } from '../core/session-api';
-import { record, finite } from './helper-values';
+import { record, finite } from '../core/helper-values';
 import { decodeRenderMessage } from './message-data';
 import type { RenderMessage } from './message-data';
 export interface TranscriptPage {

@@ -11,6 +11,9 @@ Implementation commit `811d473129c50df9b93dfb1a2f3ceb843b50400c` received
 **APPROVED** from Fable 5.1 at high effort with no blocking findings.
 The [implementation report](browser-contract-review-2026-09-15.json) records
 the six nonblocking observations and the reviewer's verification limitations.
+The pushed approval checkpoint `7d288dd732f6d7713acf09a3183978e75a29a180`
+passed [CI run 34950164395](https://github.com/MrPink604/pi-dish/actions/runs/34950164395):
+all four backend Node jobs and the Node 24 browser job succeeded.
 
 Planning baseline includes the recursive family/subagents changes in `6e8df16`
 and `e816d36`; the trace-peek renderer is an affected consumer, not deferred work.

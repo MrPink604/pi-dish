@@ -2,8 +2,8 @@ import type { SessionState, SessionEntry } from './session-state';
 import type { HostEndpoint, ApiRequest } from './api-client';
 import { createSessionApi, sendJson } from './api-client';
 import type { SpawnTarget } from './spawn-targets';
-import { escapeHtml } from './helper-format';
-import { record } from './helper-values';
+import { escapeHtml } from '../core/helper-format';
+import { record } from '../core/helper-values';
 import { sessionRefKey } from './helper-identity';
 export function createSessionResume(options: {
   document: Document; sessionState: SessionState; request: ApiRequest; endpoint: (host: string | null) => HostEndpoint;

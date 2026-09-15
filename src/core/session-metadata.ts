@@ -1,21 +1,15 @@
 import type { SessionEntries, SessionInfo } from './session-metadata-contracts';
 
-// These general browser helpers remain JavaScript. Their results are checked
-// here before they enter authoritative metadata; the JSONL entries stay unknown.
-const { extractTextContent, splitSessionRefContext, truncate }: {
-  extractTextContent(content: unknown): unknown;
-  splitSessionRefContext(text: string): unknown;
-  truncate(text: string, max: number, suffix: string): unknown;
-} = require('../public/helpers.js');
-// Generated output lives in lib/, beside session-files.js.
+import { extractTextContent } from './helper-content';
+import { truncate } from './helper-format';
+import { splitSessionRefContext } from './helper-refs';
 interface MetadataProfile { readonly profileId?: string }
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 function nonempty(value: unknown): value is string { return typeof value === 'string' && value.length > 0; }
-function shortName(text: string): string | null {
-  const value = truncate(text, 40, '...');
-  return typeof value === 'string' ? value : null;
+function shortName(text: string) {
+  return truncate(text, 40, '...');
 }
 
 /** Validate persisted accumulator output, reviving its serialized activity Date. */
@@ -91,9 +85,7 @@ function accumulateSessionInfo(info: SessionInfo, entries: SessionEntries, candi
         // The <session-refs> block is appended context, not something the
         // user wrote — a session named after its first prompt must not be
         // named after the block that followed it.
-        const extracted: unknown = extractTextContent(message.content);
-        const split: unknown = typeof extracted === 'string' ? splitSessionRefContext(extracted) : null;
-        const text = isRecord(split) && typeof split.text === 'string' ? split.text : '';
+        const { text } = splitSessionRefContext(extractTextContent(message.content));
         if (text) info.name = shortName(text);
       }
     }

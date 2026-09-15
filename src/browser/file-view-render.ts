@@ -1,5 +1,5 @@
 import type { DiffView } from './file-view-data';
-import { escapeHtml } from './helper-format';
+import { escapeHtml } from '../core/helper-format';
 import { renderDiffHtml, diffStatusClass } from './helper-markdown';
 export function renderDiffViewHtml(data: DiffView) {
   if (!data.gitAvailable) return '<div class="diff-empty">git is not available on the server</div>';

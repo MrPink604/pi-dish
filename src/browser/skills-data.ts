@@ -1,4 +1,4 @@
-import { record, finite } from './helper-values';
+import { record, finite } from '../core/helper-values';
 export interface SkillUsage {
   readonly lastUsedTs: number | null; readonly count30d: number; readonly total: number;
   readonly sessionCount: number; readonly cwdCount: number; readonly topCwd: string; readonly weeks12: readonly number[];

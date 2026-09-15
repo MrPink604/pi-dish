@@ -1,11 +1,13 @@
 import type { SessionEntry } from './session-state';
-import type { HelperHost, SessionFamily, WorkspaceNode } from './shared-helper-types';
+import type { HelperHost } from '../core/helper-types';
+import type { SessionFamily, WorkspaceNode } from './shared-helper-types';
 import type { PendingSessionSpawn } from './session-spawns';
-import { escapeHtml, contextClass, formatTokens, formatRelativeTime, shortCwd } from './helper-format';
+import { escapeHtml } from '../core/helper-format';
+import { contextClass, formatTokens, formatRelativeTime, shortCwd } from './helper-format';
 import { shortModelName } from './helper-usage';
 import { sessionKey, sessionRefKey, sessionSupports, harnessBadgeInfo, hostDisplayLabel, sortHostSections, hostSectionKey } from './helper-identity';
 import { buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies, groupSessionsByDate, groupByWorkspace, buildWorkspaceTree, collectTreeSessions } from './helper-sessions';
-import { parseSessionQuery, positiveQueryTokens, highlightTokens, queryAsksForAutomation, isAutomationSession, applyHostTerms, applyLocalFilter, evaluateSessionQuery, scoreSessionMatch } from './helper-query';
+import { parseSessionQuery, positiveQueryTokens, highlightTokens, queryAsksForAutomation, isAutomationSession, applyHostTerms, applyLocalFilter, evaluateSessionQuery, scoreSessionMatch } from '../core/helper-query';
 export interface SidebarHost extends HelperHost { state: string; key: string; color: string; dot: string; hasCache: boolean }
 export interface SidebarRenderOptions {
   active: readonly SessionEntry[]; previous: readonly SessionEntry[]; selected: SessionEntry | null;

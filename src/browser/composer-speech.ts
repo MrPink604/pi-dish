@@ -2,7 +2,7 @@ import type { ApiRequest } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { EffectiveHost } from './host-catalog';
 import { sttUnavailableReason, formatDuration, insertAtCaret } from './helper-format';
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 export function createComposerSpeech(options: {
   document: Document; sessionState: SessionState; composerKey: () => string | null; hosts: () => readonly EffectiveHost[];
   config: () => Readonly<Record<string, unknown>>; request: ApiRequest;

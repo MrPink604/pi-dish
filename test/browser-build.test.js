@@ -65,6 +65,16 @@ test('browser build detects stale output and preserves it on type failure', () =
     assert.equal(vm.runInContext('typeof answer', context), 'undefined');
     fs.writeFileSync(appSource, appSourceText);
     assert.equal(run().status, 0);
+    fs.mkdirSync(path.join(root, 'src/core'));
+    const sharedSource = path.join(root, 'src/core/helper-fixture.ts');
+    fs.writeFileSync(sharedSource, "export { answer } from '../browser/index';");
+    fs.writeFileSync(appSource, "import { answer } from '../core/helper-fixture'; console.log(answer);");
+    const backwardsHelper = run();
+    assert.notEqual(backwardsHelper.status, 0, 'shared helpers cannot depend on browser implementations');
+    assert.equal(fs.readFileSync(appOutput, 'utf8'), appOriginal, 'a rejected shared dependency leaves runtime output intact');
+    assert.equal(fs.readFileSync(output, 'utf8'), original);
+    fs.rmSync(sharedSource);
+    fs.writeFileSync(appSource, appSourceText);
     fs.writeFileSync(path.join(root, 'public/legacy.js'), 'export const answer = 42;');
     // A declaration can type a legacy import, but must not permit bundling it.
     fs.writeFileSync(path.join(root, 'public/legacy.d.ts'), 'export const answer: number;');

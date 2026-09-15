@@ -1,5 +1,5 @@
 import type { Costs, Tokens, RuntimeInfo, CostKey } from './shared-helper-types';
-import { record, finite } from './helper-values';
+import { record, finite } from '../core/helper-values';
 import { USAGE_MERGE_COST_KEYS, USAGE_MERGE_TOKEN_KEYS } from './helper-usage';
 export interface SessionStats {
   readonly model: string; readonly thinkingLevel: string; readonly cwd: string; readonly sessionFile: string;

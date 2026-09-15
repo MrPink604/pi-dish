@@ -1,8 +1,8 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
 import type { SessionState } from './session-state';
-import { escapeHtml } from './helper-format';
+import { escapeHtml } from '../core/helper-format';
 import { hostDisplayLabel, sessionKey } from './helper-identity';
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 import { bounceMode, decodeBouncePreview, decodeBounceOperation, decodeBounceOperations } from './bounce-data';
 import type { BounceMode, BounceTarget, BounceOperation, BounceResult } from './bounce-data';
 export interface BounceHost extends HostEndpoint {

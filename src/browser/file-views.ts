@@ -5,8 +5,9 @@ import { decodePublishedPages } from './session-info-data';
 import { decodeFilePreview, decodeDiffView, decodeDiffPatch } from './file-view-data';
 import { renderDiffViewHtml } from './file-view-render';
 import { renderDiffHtml } from './helper-markdown';
-import { escapeHtml, shortCwd } from './helper-format';
-import { record } from './helper-values';
+import { escapeHtml } from '../core/helper-format';
+import { shortCwd } from './helper-format';
+import { record } from '../core/helper-values';
 export function createFileViews(options: {
   document: Document; sessionState: SessionState; request: ApiRequest; host: (id: string | null) => HostEndpoint | null;
   markdown: (text: string) => string; highlight: (root: HTMLElement) => void; copy: (text: string) => Promise<unknown>;

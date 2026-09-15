@@ -1,4 +1,4 @@
-import { escapeHtml } from './helper-format';
+import { escapeHtml } from '../core/helper-format';
 import type { SelectionOwner, createSessionState } from './session-state';
 export type BtwOwner = Readonly<{ selection: SelectionOwner; generation: number }>;
 /** Each question owns its response and controls, including clipboard completion. */

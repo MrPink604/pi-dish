@@ -1,4 +1,4 @@
-import type { HelperSession, HelperHost } from './shared-helper-types';
+import type { HelperSession, HelperHost } from '../core/helper-types';
 
 // =========================================================================
 // Hosts (TASKS/multi-host.md) — one client may aggregate several pi-dish
@@ -88,11 +88,6 @@ export function sortHostSections<T extends HelperHost>(hosts?: readonly T[] | nu
 /** Collapse-store key for a host section (namespaced like `date:` buckets). */
 export function hostSectionKey(hostKey?: string | null) { return 'host:' + (hostKey || 'self'); }
 
-/** The searchable metadata text of a session — one definition for local
- * filtering and the server-side session search. */
-export function sessionMetaText(session: HelperSession) {
-  return [session.name, session.cwd, session.model, session.id].join(' ').toLowerCase();
-}
 
 /** Missing capability metadata is legacy Pi behavior: supported by default. */
 export function sessionSupports(session: Pick<HelperSession, 'capabilities'> | null | undefined, capability: string) {

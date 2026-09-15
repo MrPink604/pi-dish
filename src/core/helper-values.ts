@@ -1,4 +1,4 @@
-import type { Timestamp } from './shared-helper-types';
+import type { Timestamp } from './helper-types';
 
 
 export function record(value: unknown): value is Record<string, unknown> { return !!value && typeof value === 'object' && !Array.isArray(value); }

@@ -2,7 +2,7 @@ import type { ApiRequest, HostEndpoint } from './api-client';
 import { sendJson } from './api-client';
 import type { SelectionOwner, SessionState } from './session-state';
 import { formatRelativeTime } from './helper-format';
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 import { createMessageRenderer } from './message-render';
 import { decodeRenderMessage } from './message-data';
 import type { createResponseDetails } from './response-details';

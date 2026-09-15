@@ -42,7 +42,7 @@ var PiDishHelpers = (() => {
     composeModelRoleRef: () => composeModelRoleRef,
     contextClass: () => contextClass,
     createFanoutRenderQueue: () => createFanoutRenderQueue,
-    createMathExtensions: () => createMathExtensions,
+    createMathExtensions: () => createMathExtensions2,
     decodeRouteSessionId: () => decodeRouteSessionId,
     diagramKindForFence: () => diagramKindForFence,
     diffStatusClass: () => diffStatusClass,
@@ -144,7 +144,17 @@ var PiDishHelpers = (() => {
     usageUnattributedCost: () => usageUnattributedCost
   });
 
-  // src/browser/helper-values.ts
+  // src/core/helper-format.ts
+  function escapeHtml(text) {
+    if (text == null || text === "") return "";
+    return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function truncate(text, maxLen, suffix = " \u2026 (truncated)") {
+    if (!text || text.length <= maxLen) return text;
+    return text.slice(0, maxLen) + suffix;
+  }
+
+  // src/core/helper-values.ts
   function record(value) {
     return !!value && typeof value === "object" && !Array.isArray(value);
   }
@@ -156,10 +166,6 @@ var PiDishHelpers = (() => {
   }
 
   // src/browser/helper-format.ts
-  function escapeHtml(text) {
-    if (text == null || text === "") return "";
-    return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  }
   function stripAnsi(text) {
     if (text == null || text === "") return "";
     return String(text).replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "").replace(/\x1b\[[0-9;:?]*[ -\/]*[@-~]/g, "").replace(/\x1b[ -\/]*./g, "");
@@ -253,10 +259,6 @@ var PiDishHelpers = (() => {
     if (!cwd) return "";
     return cwd.replace(/^\/home\/[^/]+\//, "~/").replace(/^\/home\/[^/]+$/, "~");
   }
-  function truncate(text, maxLen, suffix = " \u2026 (truncated)") {
-    if (!text || text.length <= maxLen) return text;
-    return text.slice(0, maxLen) + suffix;
-  }
   function contextClass(percent) {
     return percent > 66 ? "critical" : percent > 33 ? "high" : "";
   }
@@ -346,7 +348,7 @@ var PiDishHelpers = (() => {
     return fallback;
   }
 
-  // src/browser/helper-content.ts
+  // src/core/helper-content.ts
   function extractTextContent(content) {
     if (!content) return "";
     if (typeof content === "string") return content;
@@ -416,6 +418,11 @@ var PiDishHelpers = (() => {
     return out;
   }
 
+  // src/core/helper-identity.ts
+  function sessionMetaText(session) {
+    return [session.name, session.cwd, session.model, session.id].join(" ").toLowerCase();
+  }
+
   // src/browser/helper-identity.ts
   function sessionKey(hostId, sessionId) {
     const id = sessionId == null ? "" : String(sessionId);
@@ -457,9 +464,6 @@ var PiDishHelpers = (() => {
   }
   function hostSectionKey(hostKey) {
     return "host:" + (hostKey || "self");
-  }
-  function sessionMetaText(session) {
-    return [session.name, session.cwd, session.model, session.id].join(" ").toLowerCase();
   }
   function sessionSupports(session, capability) {
     return session?.capabilities?.[capability] !== false;
@@ -713,7 +717,7 @@ var PiDishHelpers = (() => {
     return !seen || timestampMillis(session.lastActivity) > timestampMillis(seen);
   }
 
-  // src/browser/helper-query.ts
+  // src/core/helper-query.ts
   var QUERY_FIELDS = /* @__PURE__ */ new Set(["name", "cwd", "model", "id", "is", "host", "routine"]);
   function parseQueryDate(value, now) {
     const rel = /^(\d+)([hdw])$/.exec(value);
@@ -945,7 +949,7 @@ var PiDishHelpers = (() => {
     return out + escapeHtml(str.slice(pos));
   }
 
-  // src/browser/helper-refs.ts
+  // src/core/helper-refs.ts
   function uniqueSessionPrefix(id, peerIds, minLen = 8) {
     const self = String(id == null ? "" : id);
     if (!self) return "";
@@ -1517,7 +1521,7 @@ ${block}` : block;
     return `<section class="usage-section usage-limits"><h4>Subscription limits <span class="usage-hint">reported by the harness CLI \u2014 quota, not spend</span></h4>${body}${errHtml}</section>`;
   }
 
-  // src/browser/helper-models.ts
+  // src/core/helper-models.ts
   function parseModelId(fullModelId) {
     const slashIdx = fullModelId.indexOf("/");
     if (slashIdx > 0) {
@@ -1648,54 +1652,8 @@ ${block}` : block;
     return shown.join(" \xB7 ") + (rest > 0 ? ` \xB7 +${rest} more` : "");
   }
 
-  // src/browser/helper-markdown.ts
-  function sanitizeMarkdownUrl(url) {
-    const raw = String(url == null ? "" : url).trim();
-    const scheme = raw.replace(/[\u0000-\u0020]+/g, "").toLowerCase();
-    if (/^(javascript|vbscript|data):/.test(scheme)) return "#";
-    return raw;
-  }
-  var MERMAID_FENCE_LANGS = /* @__PURE__ */ new Set(["mermaid", "mmd"]);
-  var DIAGRAM_SNIFF_LANGS = /* @__PURE__ */ new Set(["", "text", "txt", "plain", "plaintext", "diagram", "uml"]);
-  var MERMAID_DECLARATIONS = [
-    /^(?:graph|flowchart(?:-elk)?)\s+(?:TB|TD|BT|RL|LR)\b/,
-    /^(?:sequenceDiagram|classDiagram(?:-v2)?|stateDiagram(?:-v2)?|erDiagram|journey|gantt|mindmap|timeline|kanban|zenuml|quadrantChart|requirementDiagram|gitGraph|architecture-beta|block-beta|packet(?:-beta)?|radar-beta|sankey-beta|treemap(?:-beta)?|xychart-beta|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment)\b/,
-    /^pie(?:\s+(?:title|showData)\b|\s*$)/
-  ];
-  function mermaidDeclarationLine(text) {
-    const lines = String(text == null ? "" : text).split("\n");
-    let i = 0;
-    if (lines[0] !== void 0 && lines[0].trim() === "---") {
-      const end = lines.findIndex((l, idx) => idx > 0 && l.trim() === "---");
-      if (end > 0) i = end + 1;
-    }
-    for (; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line || line.startsWith("%%")) continue;
-      return line;
-    }
-    return "";
-  }
-  function looksLikeMermaid(text) {
-    const decl = mermaidDeclarationLine(text);
-    return !!decl && MERMAID_DECLARATIONS.some((re) => re.test(decl));
-  }
-  function diagramKindForFence(lang, source) {
-    const tag = String(lang == null ? "" : lang).trim().toLowerCase().split(/[\s,:;]/)[0];
-    if (MERMAID_FENCE_LANGS.has(tag)) return "mermaid";
-    if (!DIAGRAM_SNIFF_LANGS.has(tag)) return null;
-    return looksLikeMermaid(source) ? "mermaid" : null;
-  }
-  function isDarkColorHex(hex) {
-    const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex == null ? "" : hex).trim());
-    if (!m) return true;
-    const h = m[1].length === 3 ? m[1].replace(/./g, (c) => c + c) : m[1];
-    const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
-    const lin = (c) => c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b) < 0.5;
-  }
-  function createMathExtensions(katexLib) {
-    const getKatex = () => katexLib || (typeof katex !== "undefined" ? katex : null);
+  // src/core/helper-markdown.ts
+  function createMathExtensions(getKatex) {
     const blockMath = {
       name: "blockMath",
       level: "block",
@@ -1783,6 +1741,56 @@ ${block}` : block;
       }
     };
     return [blockMath, inlineMath];
+  }
+
+  // src/browser/helper-markdown.ts
+  function sanitizeMarkdownUrl(url) {
+    const raw = String(url == null ? "" : url).trim();
+    const scheme = raw.replace(/[\u0000-\u0020]+/g, "").toLowerCase();
+    if (/^(javascript|vbscript|data):/.test(scheme)) return "#";
+    return raw;
+  }
+  var MERMAID_FENCE_LANGS = /* @__PURE__ */ new Set(["mermaid", "mmd"]);
+  var DIAGRAM_SNIFF_LANGS = /* @__PURE__ */ new Set(["", "text", "txt", "plain", "plaintext", "diagram", "uml"]);
+  var MERMAID_DECLARATIONS = [
+    /^(?:graph|flowchart(?:-elk)?)\s+(?:TB|TD|BT|RL|LR)\b/,
+    /^(?:sequenceDiagram|classDiagram(?:-v2)?|stateDiagram(?:-v2)?|erDiagram|journey|gantt|mindmap|timeline|kanban|zenuml|quadrantChart|requirementDiagram|gitGraph|architecture-beta|block-beta|packet(?:-beta)?|radar-beta|sankey-beta|treemap(?:-beta)?|xychart-beta|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment)\b/,
+    /^pie(?:\s+(?:title|showData)\b|\s*$)/
+  ];
+  function mermaidDeclarationLine(text) {
+    const lines = String(text == null ? "" : text).split("\n");
+    let i = 0;
+    if (lines[0] !== void 0 && lines[0].trim() === "---") {
+      const end = lines.findIndex((l, idx) => idx > 0 && l.trim() === "---");
+      if (end > 0) i = end + 1;
+    }
+    for (; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line || line.startsWith("%%")) continue;
+      return line;
+    }
+    return "";
+  }
+  function looksLikeMermaid(text) {
+    const decl = mermaidDeclarationLine(text);
+    return !!decl && MERMAID_DECLARATIONS.some((re) => re.test(decl));
+  }
+  function diagramKindForFence(lang, source) {
+    const tag = String(lang == null ? "" : lang).trim().toLowerCase().split(/[\s,:;]/)[0];
+    if (MERMAID_FENCE_LANGS.has(tag)) return "mermaid";
+    if (!DIAGRAM_SNIFF_LANGS.has(tag)) return null;
+    return looksLikeMermaid(source) ? "mermaid" : null;
+  }
+  function isDarkColorHex(hex) {
+    const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex == null ? "" : hex).trim());
+    if (!m) return true;
+    const h = m[1].length === 3 ? m[1].replace(/./g, (c) => c + c) : m[1];
+    const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+    const lin = (c) => c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b) < 0.5;
+  }
+  function createMathExtensions2(katexLib) {
+    return createMathExtensions(() => katexLib || (typeof katex !== "undefined" ? katex : null));
   }
   var FILE_MENTION_RE = /^(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?$/;
   var FILE_EXT_RE = /\.[A-Za-z][A-Za-z0-9]{0,7}$/;

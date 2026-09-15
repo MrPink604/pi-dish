@@ -1,7 +1,7 @@
 import type { SessionState, SelectionOwner } from './session-state';
-import { record, finite } from './helper-values';
-import { escapeHtml, truncate } from './helper-format';
-import { parseIpythonResult, getToolSummary, getToolOutputText } from './helper-content';
+import { record, finite } from '../core/helper-values';
+import { escapeHtml, truncate } from '../core/helper-format';
+import { parseIpythonResult, getToolSummary, getToolOutputText } from '../core/helper-content';
 interface ToolEvent { toolCallId: string; toolName?: string; args?: unknown; startedAt?: string | number; partialResult?: { content?: unknown }; result?: { content?: unknown }; isError: boolean }
 function decode(value: unknown): ToolEvent | null {
   if (!record(value) || typeof value.toolCallId !== 'string' || !value.toolCallId) return null;

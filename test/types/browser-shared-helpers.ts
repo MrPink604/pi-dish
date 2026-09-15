@@ -1,5 +1,7 @@
-import { groupByWorkspace, buildWorkspaceTree, buildSessionFamilies, flattenSessionFamilies,
-  resolveSessionRefAmong, extractImageBlocks, extractTextContent, thinkingLevelsFor } from '../../src/browser/shared-helpers';
+import { groupByWorkspace, buildWorkspaceTree, buildSessionFamilies, flattenSessionFamilies } from '../../src/browser/helper-sessions';
+import { resolveSessionRefAmong } from '../../src/core/helper-refs';
+import { extractImageBlocks, extractTextContent } from '../../src/core/helper-content';
+import { thinkingLevelsFor } from '../../src/core/helper-models';
 const sessions = [{ id: 'id', cwd: '/cwd', lastActivity: '2026-09-11', extra: 'retained' }];
 const grouped = groupByWorkspace(sessions);
 const extra: string = grouped[0][1][0].extra;

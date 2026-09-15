@@ -1,4 +1,4 @@
-import { escapeHtml } from './helper-format';
+import { escapeHtml } from '../core/helper-format';
 import { sessionRefKey } from './helper-identity';
 import type { SessionState, SessionEntry, SelectionOwner } from './session-state';
 import type { HostEndpoint } from './api-client';

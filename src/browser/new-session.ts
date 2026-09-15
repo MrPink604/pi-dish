@@ -11,10 +11,11 @@ import type { createModelCatalog } from './model-catalog';
 import { modelsCacheKey } from './model-catalog';
 import type { createSessionSpawns, SessionSpawnInput } from './session-spawns';
 import type { SessionState } from './session-state';
-import { escapeHtml, shortCwd } from './helper-format';
+import { escapeHtml } from '../core/helper-format';
+import { shortCwd } from './helper-format';
 import { hostDisplayLabel } from './helper-identity';
-import { formatModelRoleSummary } from './helper-models';
-import { fuzzyMatch, fuzzyScore, highlightFuzzy } from './helper-query';
+import { formatModelRoleSummary } from '../core/helper-models';
+import { fuzzyMatch, fuzzyScore, highlightFuzzy } from '../core/helper-query';
 
 export const NEW_SESSION_HARNESS_KEY = 'pi-dish-new-harness';
 const HOST_KEY = 'pi-dish-new-host';

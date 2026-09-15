@@ -23,7 +23,7 @@
     "test:browser:install": "playwright install chromium",
     "test:ui:scenarios": "node scripts/run-ui-scenarios.js",
     "lint": "eslint .",
-    "typecheck": "node scripts/build-core.js --check && node scripts/build-browser.js --check && tsc -p tsconfig.check.json",
+    "typecheck": "node scripts/build-core.js --check && node scripts/build-browser.js --check && tsc -p tsconfig.helpers.json && tsc -p tsconfig.check.json",
     "check": "npm run lint && npm run typecheck",
     "build:browser": "node scripts/build-browser.js"
   },

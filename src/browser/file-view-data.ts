@@ -1,4 +1,4 @@
-import { record, finite } from './helper-values';
+import { record, finite } from '../core/helper-values';
 const text = (v: unknown) => typeof v === 'string' ? v : '';
 const number = (v: unknown) => finite(v) ? v : 0;
 export interface FilePreview {

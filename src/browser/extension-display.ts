@@ -1,5 +1,5 @@
 import type { SessionState, SelectionOwner } from './session-state';
-import { escapeHtml } from './helper-format';
+import { escapeHtml } from '../core/helper-format';
 import { sessionRefKey } from './helper-identity';
 export function createExtensionDisplay(options: { document: Document; sessionState: SessionState; storage: Pick<Storage, 'getItem' | 'setItem'> }) {
   const { document, sessionState, storage } = options;

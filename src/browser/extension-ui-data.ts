@@ -1,4 +1,4 @@
-import { record, finite } from './helper-values';
+import { record, finite } from '../core/helper-values';
 import { stripAnsi } from './helper-format';
 export interface ExtensionOption { readonly label: string; readonly description: string; readonly preview: string }
 export interface ExtensionQuestion {

@@ -28,6 +28,12 @@ const outputs = entries.map(entry => {
   if (Object.keys(result.metafile.inputs).some(input => !input.startsWith('src/'))) {
     throw new Error('Browser runtime imports must stay in src/; legacy script imports must be type-only');
   }
+  for (const [input, metadata] of Object.entries(result.metafile.inputs)) {
+    if (input.startsWith('src/core/helper-')
+        && metadata.imports.some(dependency => !dependency.path.startsWith('src/core/helper-'))) {
+      throw new Error(`Shared helper runtime dependencies must stay in the portable core helper closure: ${input}`);
+    }
+  }
   if (result.outputFiles.length !== 1 || Object.values(result.metafile.outputs).some(out => out.imports.length)) {
     throw new Error('Each browser entrypoint must produce one self-contained local script');
   }

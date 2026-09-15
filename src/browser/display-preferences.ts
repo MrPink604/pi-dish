@@ -1,6 +1,6 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
-import { record, finite } from './helper-values';
-import { escapeHtml } from './helper-format';
+import { record, finite } from '../core/helper-values';
+import { escapeHtml } from '../core/helper-format';
 import { hostSettingsHtml } from './host-settings';
 export interface SavedFilter { readonly name: string; readonly query: string }
 export function decodeSavedFilters(value: unknown): SavedFilter[] {

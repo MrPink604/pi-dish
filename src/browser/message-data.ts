@@ -1,5 +1,5 @@
-import { record, finite } from './helper-values';
-import type { RefContextEntry, Timestamp } from './shared-helper-types';
+import { record, finite } from '../core/helper-values';
+import type { RefContextEntry, Timestamp } from '../core/helper-types';
 export interface MessageBlock { readonly type: string; readonly text?: string; readonly thinking?: string; readonly name?: string; readonly id?: string; readonly arguments?: Readonly<Record<string, unknown>>; readonly url?: string; readonly data?: string; readonly mimeType?: string }
 export interface MessageUsage { readonly input?: number; readonly output?: number; readonly reasoning?: number; readonly cacheRead?: number; readonly cacheWrite?: number; readonly cost?: { readonly input?: number | null; readonly output?: number | null; readonly cacheRead?: number | null; readonly cacheWrite?: number | null; readonly total?: number | null } }
 export interface AdvisorNote { readonly note: string; readonly severity?: string; readonly advisor?: string }

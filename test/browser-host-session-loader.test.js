@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { stripQueryField } = require('../public/helpers');
+const { stripQueryField } = require('../lib/helper-query');
 const { decodeSessionList } = require('../lib/session-api');
 const context = { URLSearchParams };
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);

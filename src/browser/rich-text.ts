@@ -1,10 +1,10 @@
 import type { MarkedRuntime, HighlightRuntime } from './rich-text-vendors';
 import type { createBrowserAssets } from './browser-assets';
 import type { createDiagrams } from './diagrams';
-import { escapeHtml } from './helper-format';
+import { escapeHtml } from '../core/helper-format';
 import { sanitizeMarkdownUrl, createMathExtensions, diagramKindForFence, looksLikeFilePath, findPathTokens } from './helper-markdown';
 import type { SessionState } from './session-state';
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 export function createRichText(options: { document: Document; marked: MarkedRuntime | null; highlight: () => HighlightRuntime | null;
   assets: ReturnType<typeof createBrowserAssets>; diagrams: ReturnType<typeof createDiagrams>; sessionState: SessionState;
   copy: (text: string) => Promise<unknown>; status: (message: string, type?: string) => void;

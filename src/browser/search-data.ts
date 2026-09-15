@@ -1,8 +1,8 @@
 import type { HostEndpoint } from './api-client';
-import type { HelperHost, HelperSession } from './shared-helper-types';
+import type { HelperHost, HelperSession } from '../core/helper-types';
 import { hostDisplayLabel } from './helper-identity';
-import { parseSessionQuery, scoreSessionMatch, evaluateSessionQuery } from './helper-query';
-import { record, finite } from './helper-values';
+import { parseSessionQuery, scoreSessionMatch, evaluateSessionQuery } from '../core/helper-query';
+import { record, finite } from '../core/helper-values';
 export type SearchHost = HostEndpoint & HelperHost & { readonly hostId: string | null };
 export interface SearchResult extends HelperSession {
   id: string; name: string; cwd: string; model: string; lastActivity: string | number | null;

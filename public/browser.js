@@ -2945,7 +2945,17 @@ var PiDishBrowser = (() => {
     };
   }
 
-  // src/browser/helper-values.ts
+  // src/core/helper-format.ts
+  function escapeHtml(text17) {
+    if (text17 == null || text17 === "") return "";
+    return String(text17).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function truncate(text17, maxLen, suffix = " \u2026 (truncated)") {
+    if (!text17 || text17.length <= maxLen) return text17;
+    return text17.slice(0, maxLen) + suffix;
+  }
+
+  // src/core/helper-values.ts
   function record8(value) {
     return !!value && typeof value === "object" && !Array.isArray(value);
   }
@@ -2957,10 +2967,6 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/helper-format.ts
-  function escapeHtml(text17) {
-    if (text17 == null || text17 === "") return "";
-    return String(text17).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  }
   function stripAnsi(text17) {
     if (text17 == null || text17 === "") return "";
     return String(text17).replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "").replace(/\x1b\[[0-9;:?]*[ -\/]*[@-~]/g, "").replace(/\x1b[ -\/]*./g, "");
@@ -3053,10 +3059,6 @@ var PiDishBrowser = (() => {
   function shortCwd(cwd) {
     if (!cwd) return "";
     return cwd.replace(/^\/home\/[^/]+\//, "~/").replace(/^\/home\/[^/]+$/, "~");
-  }
-  function truncate(text17, maxLen, suffix = " \u2026 (truncated)") {
-    if (!text17 || text17.length <= maxLen) return text17;
-    return text17.slice(0, maxLen) + suffix;
   }
   function contextClass(percent) {
     return percent > 66 ? "critical" : percent > 33 ? "high" : "";
@@ -3186,9 +3188,6 @@ var PiDishBrowser = (() => {
   function hostSectionKey(hostKey) {
     return "host:" + (hostKey || "self");
   }
-  function sessionMetaText(session) {
-    return [session.name, session.cwd, session.model, session.id].join(" ").toLowerCase();
-  }
   function sessionSupports(session, capability) {
     return session?.capabilities?.[capability] !== false;
   }
@@ -3204,7 +3203,7 @@ var PiDishBrowser = (() => {
     };
   }
 
-  // src/browser/helper-models.ts
+  // src/core/helper-models.ts
   var THINKING_LEVEL_NAMES = ["off", "minimal", "low", "medium", "high", "xhigh"];
   var OMP_THINKING_LEVEL_NAMES = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"];
   var PRIME_THINKING_LEVEL_NAMES = [...THINKING_LEVEL_NAMES, "max"];
@@ -3245,7 +3244,12 @@ var PiDishBrowser = (() => {
     return shown.join(" \xB7 ") + (rest > 0 ? ` \xB7 +${rest} more` : "");
   }
 
-  // src/browser/helper-query.ts
+  // src/core/helper-identity.ts
+  function sessionMetaText(session) {
+    return [session.name, session.cwd, session.model, session.id].join(" ").toLowerCase();
+  }
+
+  // src/core/helper-query.ts
   var QUERY_FIELDS = /* @__PURE__ */ new Set(["name", "cwd", "model", "id", "is", "host", "routine"]);
   function parseQueryDate(value, now) {
     const rel = /^(\d+)([hdw])$/.exec(value);
@@ -5698,7 +5702,7 @@ var PiDishBrowser = (() => {
     };
   }
 
-  // src/browser/helper-content.ts
+  // src/core/helper-content.ts
   function extractTextContent(content) {
     if (!content) return "";
     if (typeof content === "string") return content;
@@ -5768,7 +5772,7 @@ var PiDishBrowser = (() => {
     return out;
   }
 
-  // src/browser/helper-refs.ts
+  // src/core/helper-refs.ts
   function uniqueSessionPrefix(id, peerIds, minLen = 8) {
     const self = String(id == null ? "" : id);
     if (!self) return "";
@@ -10595,54 +10599,8 @@ var PiDishBrowser = (() => {
     } };
   }
 
-  // src/browser/helper-markdown.ts
-  function sanitizeMarkdownUrl(url) {
-    const raw = String(url == null ? "" : url).trim();
-    const scheme = raw.replace(/[\u0000-\u0020]+/g, "").toLowerCase();
-    if (/^(javascript|vbscript|data):/.test(scheme)) return "#";
-    return raw;
-  }
-  var MERMAID_FENCE_LANGS = /* @__PURE__ */ new Set(["mermaid", "mmd"]);
-  var DIAGRAM_SNIFF_LANGS = /* @__PURE__ */ new Set(["", "text", "txt", "plain", "plaintext", "diagram", "uml"]);
-  var MERMAID_DECLARATIONS = [
-    /^(?:graph|flowchart(?:-elk)?)\s+(?:TB|TD|BT|RL|LR)\b/,
-    /^(?:sequenceDiagram|classDiagram(?:-v2)?|stateDiagram(?:-v2)?|erDiagram|journey|gantt|mindmap|timeline|kanban|zenuml|quadrantChart|requirementDiagram|gitGraph|architecture-beta|block-beta|packet(?:-beta)?|radar-beta|sankey-beta|treemap(?:-beta)?|xychart-beta|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment)\b/,
-    /^pie(?:\s+(?:title|showData)\b|\s*$)/
-  ];
-  function mermaidDeclarationLine(text17) {
-    const lines = String(text17 == null ? "" : text17).split("\n");
-    let i = 0;
-    if (lines[0] !== void 0 && lines[0].trim() === "---") {
-      const end = lines.findIndex((l, idx) => idx > 0 && l.trim() === "---");
-      if (end > 0) i = end + 1;
-    }
-    for (; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line || line.startsWith("%%")) continue;
-      return line;
-    }
-    return "";
-  }
-  function looksLikeMermaid(text17) {
-    const decl = mermaidDeclarationLine(text17);
-    return !!decl && MERMAID_DECLARATIONS.some((re) => re.test(decl));
-  }
-  function diagramKindForFence(lang, source) {
-    const tag = String(lang == null ? "" : lang).trim().toLowerCase().split(/[\s,:;]/)[0];
-    if (MERMAID_FENCE_LANGS.has(tag)) return "mermaid";
-    if (!DIAGRAM_SNIFF_LANGS.has(tag)) return null;
-    return looksLikeMermaid(source) ? "mermaid" : null;
-  }
-  function isDarkColorHex(hex) {
-    const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex == null ? "" : hex).trim());
-    if (!m) return true;
-    const h = m[1].length === 3 ? m[1].replace(/./g, (c) => c + c) : m[1];
-    const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
-    const lin = (c) => c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b) < 0.5;
-  }
-  function createMathExtensions(katexLib) {
-    const getKatex = () => katexLib || (typeof katex !== "undefined" ? katex : null);
+  // src/core/helper-markdown.ts
+  function createMathExtensions(getKatex) {
     const blockMath = {
       name: "blockMath",
       level: "block",
@@ -10730,6 +10688,56 @@ var PiDishBrowser = (() => {
       }
     };
     return [blockMath, inlineMath];
+  }
+
+  // src/browser/helper-markdown.ts
+  function sanitizeMarkdownUrl(url) {
+    const raw = String(url == null ? "" : url).trim();
+    const scheme = raw.replace(/[\u0000-\u0020]+/g, "").toLowerCase();
+    if (/^(javascript|vbscript|data):/.test(scheme)) return "#";
+    return raw;
+  }
+  var MERMAID_FENCE_LANGS = /* @__PURE__ */ new Set(["mermaid", "mmd"]);
+  var DIAGRAM_SNIFF_LANGS = /* @__PURE__ */ new Set(["", "text", "txt", "plain", "plaintext", "diagram", "uml"]);
+  var MERMAID_DECLARATIONS = [
+    /^(?:graph|flowchart(?:-elk)?)\s+(?:TB|TD|BT|RL|LR)\b/,
+    /^(?:sequenceDiagram|classDiagram(?:-v2)?|stateDiagram(?:-v2)?|erDiagram|journey|gantt|mindmap|timeline|kanban|zenuml|quadrantChart|requirementDiagram|gitGraph|architecture-beta|block-beta|packet(?:-beta)?|radar-beta|sankey-beta|treemap(?:-beta)?|xychart-beta|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment)\b/,
+    /^pie(?:\s+(?:title|showData)\b|\s*$)/
+  ];
+  function mermaidDeclarationLine(text17) {
+    const lines = String(text17 == null ? "" : text17).split("\n");
+    let i = 0;
+    if (lines[0] !== void 0 && lines[0].trim() === "---") {
+      const end = lines.findIndex((l, idx) => idx > 0 && l.trim() === "---");
+      if (end > 0) i = end + 1;
+    }
+    for (; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line || line.startsWith("%%")) continue;
+      return line;
+    }
+    return "";
+  }
+  function looksLikeMermaid(text17) {
+    const decl = mermaidDeclarationLine(text17);
+    return !!decl && MERMAID_DECLARATIONS.some((re) => re.test(decl));
+  }
+  function diagramKindForFence(lang, source) {
+    const tag = String(lang == null ? "" : lang).trim().toLowerCase().split(/[\s,:;]/)[0];
+    if (MERMAID_FENCE_LANGS.has(tag)) return "mermaid";
+    if (!DIAGRAM_SNIFF_LANGS.has(tag)) return null;
+    return looksLikeMermaid(source) ? "mermaid" : null;
+  }
+  function isDarkColorHex(hex) {
+    const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex == null ? "" : hex).trim());
+    if (!m) return true;
+    const h = m[1].length === 3 ? m[1].replace(/./g, (c) => c + c) : m[1];
+    const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+    const lin = (c) => c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b) < 0.5;
+  }
+  function createMathExtensions2(katexLib) {
+    return createMathExtensions(() => katexLib || (typeof katex !== "undefined" ? katex : null));
   }
   var FILE_MENTION_RE = /^(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?$/;
   var FILE_EXT_RE = /\.[A-Za-z][A-Za-z0-9]{0,7}$/;
@@ -10869,7 +10877,7 @@ var PiDishBrowser = (() => {
       walkTokens(token) {
         if (token.type === "link" || token.type === "image") token.href = sanitizeMarkdownUrl(token.href);
       },
-      extensions: createMathExtensions()
+      extensions: createMathExtensions2()
     });
     function formatMarkdown(text17) {
       if (!text17) return "";

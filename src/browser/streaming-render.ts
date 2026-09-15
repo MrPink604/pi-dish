@@ -1,7 +1,7 @@
 import type { SessionState, SelectionOwner } from './session-state';
 import type { RenderMessage, MessageBlock } from './message-data';
 import { formatTime } from './helper-format';
-import { getToolSummary, messageHasVisibleText } from './helper-content';
+import { getToolSummary, messageHasVisibleText } from '../core/helper-content';
 /** Coalesce cumulative frames while retaining block DOM and the frame's selection owner. */
 export function createStreamingRenderer(options: {
   document: Document; sessionState: SessionState; markdown: (text: string) => string;

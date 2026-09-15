@@ -59,15 +59,15 @@ invariants; they are not simplification targets.
 The task documents separate delivered contracts from pending implementation:
 
 1. [Browser contract cleanup](browser-contract-cleanup.md): implemented readonly
-   views, decoded message continuity and session-only model loading; review pending.
-2. [Shared runtime helper cutover](shared-runtime-helpers.md): direct shared-source
-   imports instead of backend dependencies on browser-generated helper artifacts.
+   views, decoded message continuity and session-only model loading; verified and reviewed.
+2. [Shared runtime helper cutover](shared-runtime-helpers.md): implemented and locally
+   verified direct source imports; implementation review pending.
 3. [Session lifecycle migration](session-lifecycle-migration.md): checked authority,
    launch and operation owners, recovery/bounce implementations and caller cutover.
 
-Shared helpers and lifecycle remain planned, not implemented. Each records the
-complexity to remove, preserved behavior and later work enabled. Existing source
-paths, generated output and checking scope remain authoritative until delivery.
+Lifecycle remains a separate implementation stage. Each record separates delivered
+contracts, preserved behavior and verification/review status. Remaining general
+routes, parser projections and feature stores are not made checked by their imports.
 
 All three plans have [Fable 5.1 high-effort signoff](../BACKLOG.md#next-stage-plan-review)
 for their clarified task definitions. This does not change the implementation
@@ -96,6 +96,8 @@ coverage described below or waive any stage's verification/review gates.
 | `pending-requests.ts` | Correlation, timeout and disconnect cleanup for socket/stdio requests |
 | `line-splitter.ts` | Incremental UTF-8 LF framing |
 | `running-tool-calls.ts` | Shared bridge/RPC reconnect snapshots |
+| `helper-{values,content,models,query,refs}.ts` | Portable shared primitives, content, model and query/reference behavior |
+| `helper-{format,identity,markdown,types}.ts` | Shared escaping/truncation, metadata text, explicit math-renderer provider and structural contracts |
 
 The `session-*-contracts.ts` files describe the implemented source, metadata,
 index and catalog boundaries. Compile-time fixtures assign the real index/resolver
@@ -423,13 +425,16 @@ keys provisional rows by host plus wire operation id and reconciles registered
 sessions against their owning host. App integration captures takeover/selection
 ownership before kickoff and retains the submitted refine draft through the POST.
 
-The shared helper boundary now lives in `src/browser/helper-*.ts`, with structural
-inputs/results in `shared-helper-types.ts` and a compatibility export entry in
-`shared-helpers.ts`. Those modules compile strictly into `public/helpers.js`,
-which still serves both CommonJS consumers and pre-app browser globals. Other
-TypeScript browser modules can import the specific helper modules directly.
-The build validates browser, comment and helper outputs together before writing;
-check mode rejects drift in any entrypoint.
+Shared runtime helpers live in `src/core/helper-*.ts`, with structural contracts in
+`helper-types.ts`. Browser-only formatting, identity presentation, grouping, usage
+and markdown/path/diff behavior remain under `src/browser/`. Browser and checked
+core consumers import the actual owners; JavaScript Node consumers use narrow
+generated `lib/helper-*.js` modules, not `public/helpers.js`.
+`src/browser/shared-helpers.ts` preserves the 121 CommonJS/browser-global exports.
+Its thin math adapter retains lazy renderer lookup; the core factory requires a
+provider. The build rejects runtime imports out of the portable helper closure,
+and `tsconfig.helpers.json` checks it without DOM libraries. Atomic browser output
+validation and drift checks still cover all five entrypoints.
 
 `new-session.ts` owns the new-session takeover itself, including its view
 lifecycle, selected host/harness, refine draft, workspace listeners and the

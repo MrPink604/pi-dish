@@ -1,5 +1,5 @@
 import type { SessionState, SessionEntry } from './session-state';
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 import { sessionKey, sessionRefKey, parseSessionKey } from './helper-identity';
 import { isUnreadSession } from './helper-sessions';
 /** Device-local activity markers are qualified by the session's owning host. */

@@ -1,6 +1,7 @@
-import type { Timestamp, HelperSession, WorkspaceNode, WorkspaceBranch, SessionFamily, Relation } from './shared-helper-types';
+import type { Timestamp, HelperSession } from '../core/helper-types';
+import type { WorkspaceNode, WorkspaceBranch, SessionFamily, Relation } from './shared-helper-types';
 import { shortCwd } from './helper-format';
-import { finite, timestampMillis } from './helper-values';
+import { finite, timestampMillis } from '../core/helper-values';
 import { sessionRefKey, sessionKey } from './helper-identity';
 
 /**

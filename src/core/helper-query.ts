@@ -1,4 +1,4 @@
-import type { HelperSession, SessionQuery } from './shared-helper-types';
+import type { HelperSession, SessionQuery } from './helper-types';
 import { finite } from './helper-values';
 import { sessionMetaText } from './helper-identity';
 import { escapeHtml } from './helper-format';

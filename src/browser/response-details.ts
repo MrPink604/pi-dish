@@ -2,7 +2,8 @@ import type { SessionState } from './session-state';
 import type { RenderMessage, MessageUsage } from './message-data';
 import type { ResponseMode } from './display-preferences';
 import { sessionRefKey } from './helper-identity';
-import { escapeHtml, formatResponseMetadata, formatDuration, formatTokSpeed, formatTokens, formatEstimatedCost } from './helper-format';
+import { escapeHtml } from '../core/helper-format';
+import { formatResponseMetadata, formatDuration, formatTokSpeed, formatTokens, formatEstimatedCost } from './helper-format';
 interface Detail { key: string | null; selectedModel: string; usage?: MessageUsage; durationMs?: number; outputTokens?: number; provider?: string; model?: string; responseModel?: string; stopReason?: string; pricingKnown: boolean }
 export function createResponseDetails(options: { document: Document; sessionState: SessionState; mode: () => ResponseMode }) {
   const { document, sessionState } = options;

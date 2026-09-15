@@ -1,6 +1,6 @@
 import { decodeRenderMessage } from './message-data';
 import type { RenderMessage } from './message-data';
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 import { formatTime, formatTokens } from './helper-format';
 import { sessionKey } from './helper-identity';
 import type { HostEndpoint } from './api-client';

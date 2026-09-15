@@ -1,4 +1,4 @@
-import { record, finite } from './helper-values';
+import { record, finite } from '../core/helper-values';
 export interface TranscriptTreeTool { readonly id: string; readonly name: string; readonly args: string }
 export interface TranscriptTreeNode {
   readonly id: string; readonly parentId: string | null; readonly type: string; readonly role: string; readonly depth: number; readonly childCount: number; readonly isLeaf: boolean;

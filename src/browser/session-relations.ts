@@ -1,6 +1,6 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
 import type { SelectionOwner, SessionState } from './session-state';
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 
 // The subagents viewer: one header link sized by the family count, opening a
 // recursive tree of the session's whole family (native subagent edges plus

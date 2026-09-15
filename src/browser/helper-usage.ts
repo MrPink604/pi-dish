@@ -1,6 +1,6 @@
 import type { CostKey, TokenKey, Costs, Tokens, UsageBucket, MergedUsage, MergedUsageModel, UsageDay, UsageGroup, UsageSummary, HostUsageSummary, UsageLimitEntry, HostUsageLimit } from './shared-helper-types';
-import { finite } from './helper-values';
-import { escapeHtml } from './helper-format';
+import { finite } from '../core/helper-values';
+import { escapeHtml } from '../core/helper-format';
 
 // --- Usage summary merging (multi-host) ----------------------------------
 // The usage view fans /api/usage-summary out to every reachable host and

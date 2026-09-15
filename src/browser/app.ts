@@ -1,5 +1,10 @@
 import { createAppModels } from './app-models';
-import { OMP_MODEL_ROLES, composeModelRoleRef, escapeHtml, fuzzyMatch, fuzzyScore, harnessBadgeInfo, highlightFuzzy, hostDisplayLabel, hostSupportsCapability, hostSupportsTerminal, modelRoleLevels, parseModelRoleRef, parseSessionKey, sessionKey, sessionRef, sessionRefKey, shortCwd } from './shared-helpers';
+import { OMP_MODEL_ROLES, composeModelRoleRef, modelRoleLevels, parseModelRoleRef } from '../core/helper-models';
+import { escapeHtml } from '../core/helper-format';
+import { fuzzyMatch, fuzzyScore, highlightFuzzy } from '../core/helper-query';
+import { sessionRef } from '../core/helper-refs';
+import { harnessBadgeInfo, hostDisplayLabel, hostSupportsCapability, hostSupportsTerminal, parseSessionKey, sessionKey, sessionRefKey } from './helper-identity';
+import { shortCwd } from './helper-format';
 import { createHostView } from './host-view';
 import { createHostDirectory } from './host-directory';
 import { createHostTransport, createSessionApi, sendJson } from './api-client';

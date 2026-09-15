@@ -1,7 +1,7 @@
 import type { SessionState, SessionEntry } from './session-state';
 import type { EffectiveHost } from './host-catalog';
-import { shortSessionRef, uniqueSessionPrefix, parseSessionRefParts, parseSessionRefTokens, searchSessionsForRef } from './helper-refs';
-import { record } from './helper-values';
+import { shortSessionRef, uniqueSessionPrefix, parseSessionRefParts, parseSessionRefTokens, searchSessionsForRef } from '../core/helper-refs';
+import { record } from '../core/helper-values';
 export function createSessionReferences(options: {
   sessionState: SessionState; selfId: () => string | null; host: (id: string | null) => Readonly<EffectiveHost> | null;
   hostLabel: (id: string | null) => string; config: () => Readonly<Record<string, unknown>>;

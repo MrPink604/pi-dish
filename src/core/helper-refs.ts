@@ -1,4 +1,4 @@
-import type { HelperSession, HelperHost, RefContextEntry } from './shared-helper-types';
+import type { HelperSession, HelperHost, RefContextEntry } from './helper-types';
 import { fuzzyMatch, fuzzyScore } from './helper-query';
 declare const Buffer: { from(value: string, encoding: 'base64'): { toString(encoding: 'utf8'): string } } | undefined;
 

@@ -4,8 +4,8 @@ import type { createFileViews } from './file-views';
 import type { AnchoredComment, CommentDraft, CommentAnchor } from './anchored-comment-data';
 import { decodeAnchoredComments, decodeCommentIndex } from './anchored-comment-data';
 import { selectionTextAnchor, clearCommentMarks, markCommentQuote } from './comment-anchors';
-import { escapeHtml } from './helper-format';
-import { record } from './helper-values';
+import { escapeHtml } from '../core/helper-format';
+import { record } from '../core/helper-values';
 export function createAnchoredComments(options: {
   document: Document; sessionState: SessionState; views: ReturnType<typeof createFileViews>; request: ApiRequest;
   host: (id: string | null) => HostEndpoint | null; status: (message: string, type?: string) => void;

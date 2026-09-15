@@ -1,10 +1,11 @@
 import type { SessionState } from './session-state';
-import type { Timestamp, RefContextEntry } from './shared-helper-types';
+import type { Timestamp, RefContextEntry } from '../core/helper-types';
 import type { RenderMessage, MessageBlock, AdvisorNote } from './message-data';
 import type { createResponseDetails } from './response-details';
-import { escapeHtml, formatTime, formatDuration, truncate } from './helper-format';
-import { extractImageBlocks, extractTextContent, messageHasVisibleText, getToolSummary, parseIpythonResult } from './helper-content';
-import { splitSessionRefContext } from './helper-refs';
+import { escapeHtml, truncate } from '../core/helper-format';
+import { formatTime, formatDuration } from './helper-format';
+import { extractImageBlocks, extractTextContent, messageHasVisibleText, getToolSummary, parseIpythonResult } from '../core/helper-content';
+import { splitSessionRefContext } from '../core/helper-refs';
 export function createMessageRenderer(options: {
   document: Document; sessionState: SessionState; details: ReturnType<typeof createResponseDetails>;
   // Peek mode renders another session's trace inside a viewer. Share-link and

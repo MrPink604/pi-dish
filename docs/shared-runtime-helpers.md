@@ -1,14 +1,89 @@
 # Shared runtime helper cutover
 
-Status: **Planned; not implemented** (2026-09-15). Stage 2 of the next migration
-sequence, after [browser contract cleanup](browser-contract-cleanup.md) and before
-[session lifecycle migration](session-lifecycle-migration.md). Current delivery
+Status: **Implemented and locally verified; implementation review pending**
+(2026-09-15). Stage 2 follows [browser contract cleanup](browser-contract-cleanup.md)
+and precedes [session lifecycle migration](session-lifecycle-migration.md). Current delivery
 rules and completed boundaries remain in the [roadmap](../BACKLOG.md) and
 [TypeScript guide](typescript.md).
 
 Plan review: **APPROVED** by Anthropic Fable 5.1 at high effort for the clarified
 plan at `9dee6d3`; [signoff and observation resolutions](../BACKLOG.md#next-stage-plan-review).
-Implementation remains unstarted and subject to this plan's dependency gates.
+Implementation uses the readonly browser contracts reviewed at `811d473`.
+
+## Frozen implementation boundary
+
+- Move `helper-values`, `helper-content`, `helper-models`, `helper-query` and
+  `helper-refs` intact from `src/browser/` to identically named `src/core/` owners.
+- Split only `escapeHtml`/`truncate` into core `helper-format`, `sessionMetaText`
+  into core `helper-identity`, and the math tokenizer/renderer factory into core
+  `helper-markdown`. Other formatting, host presentation, markdown/path/diff,
+  session grouping and usage helpers remain browser-owned.
+- Core `createMathExtensions` requires an explicit renderer provider. The existing
+  browser factory adapts its optional renderer with lazy global lookup; the Node
+  file-page consumer supplies its imported KaTeX through the provider.
+- Core `helper-types` owns `Timestamp`, `HelperSession`, `HelperHost`, `ModelRef`,
+  `ImageBlock`, `SessionQueryTerm`, `SessionQuery`, `RefContextEntry`,
+  `KatexRenderer`, `MathToken` and `MathExtension`. `HelperSession` retains its
+  readonly derivation from existing `SessionFields`; browser-only types stay put.
+  No old internal module or type re-export aliases remain.
+- The Node consumer table below is exhaustive at freeze. Its JS implementations
+  remain unchecked; `session-metadata.ts` gains actual typed source imports.
+  The helper compatibility entrypoint, ESLint global derivation and standalone
+  skill reference parity remain intentional consumers.
+- Baseline at `811d473`: the Node and browser-global bundles expose the same
+  **121 exports**. `public/app.js` is **875,260 bytes** and `public/helpers.js` is
+  **84,023 bytes**. Text, escaping, truncation, model, query and math-fallback
+  samples agree across Node and a browser-global VM; these are not timing claims.
+- Verify the portable closure in core NodeNext, browser Bundler/DOM with
+  `types: []`, and a narrow Node-only `lib: ["ES2022"]` compile. Keep the current
+  Buffer/atob behavior and exclude browser/public/vendor/Node-only runtime imports
+  from that closure.
+
+## Delivered cutover and evidence
+
+The frozen source move and split are implemented. Browser controllers import the
+actual core owners; the five vacated browser modules and moved type declarations
+are gone. All eight Node consumers below import narrow generated core modules.
+`session-metadata.ts` imports actual source exports and no longer declares helper
+returns `unknown` or rechecks their already-established string/object results.
+Unused `truncate`/`splitSessionRefContext` imports in `session-files.js` were deleted.
+Node consumer implementations other than metadata remain JavaScript and unchecked.
+
+Core `createMathExtensions` takes a required renderer provider. Its browser adapter
+preserves the optional explicit renderer and render-time global lookup; it contains
+no tokenizer/fallback copy. `file-page.js` supplies imported KaTeX explicitly and
+retains its different HTML escaping and markdown policy.
+The 121 compatibility exports are unchanged, in both CommonJS and browser globals.
+The standalone skill CLI remains independent; `test/skills-core.test.js` keeps
+parity for its duplicated portable reference grammar, key decoding and alias rules.
+
+The core/browser builds and `npm run check` passed, including the new Node-only
+`tsconfig.helpers.json` portable compile. Browser build metadata rejects runtime
+edges out of the portable core-helper closure before replacing any output.
+The existing isolated build regression verifies rejection preserves all prior
+outputs. Existing helper type/behavior/compatibility fixtures now use the real owners.
+Full backend suite: **984 passed, zero skipped**. Browser suite: **286 passed**.
+All eight independent UI scenarios and the complete desktop/mobile smoke passed.
+
+Actual uninstrumented app smoke at 1280px and 390px rendered text/tool output,
+two math expressions and a highlighted code block without horizontal overflow.
+Query and exact-reference HTTP routes returned the expected session. The app
+requested KaTeX and highlighting locally, one transcript page, and no helper
+compatibility bundle. Publishing a real markdown file through the isolated API
+rendered math through the Node consumer and displayed on mobile.
+An independent browser document loaded the standalone helper output: a retained
+math factory first emitted fallback, then rendered successfully after the real
+local KaTeX bundle arrived. Text/tool/ref/query values and the complete export
+inventory matched the pre-cutover Node/browser baseline.
+
+`public/app.js` is **875,407 bytes** and `public/helpers.js` is **84,170 bytes**:
+each is 147 bytes larger than baseline. The smoke observed no additional vendor
+payload or runtime request. These are size/request observations, not a timing
+claim. Temporary server/home/browser
+smoke scaffolds were removed after verification.
+
+The inventory and task definitions below retain the pre-cutover evidence and
+approved acceptance criteria; current ownership is the frozen/delivered graph above.
 
 ## Mission and simplification outcome
 

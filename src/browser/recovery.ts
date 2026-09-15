@@ -1,8 +1,8 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
 import { sendJson } from './api-client';
-import { escapeHtml } from './helper-format';
+import { escapeHtml } from '../core/helper-format';
 import { hostDisplayLabel } from './helper-identity';
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 
 export interface RecoveryHost extends HostEndpoint {
   readonly hostId: string | null;

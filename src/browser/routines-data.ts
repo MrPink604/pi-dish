@@ -1,4 +1,4 @@
-import { record, finite } from './helper-values';
+import { record, finite } from '../core/helper-values';
 import type { HostEndpoint } from './api-client';
 export interface RoutineInvocation {
   readonly id: string; readonly version: number | null; readonly trigger: string; readonly source: string; readonly delivery: string; readonly status: string;

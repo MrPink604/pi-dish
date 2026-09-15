@@ -3,9 +3,10 @@ import type { SelectionOwner, SessionState } from './session-state';
 import type { createSessionReferences } from './session-references';
 import { decodeSlashCommands, decodeFileCompletions } from './composer-autocomplete-data';
 import type { SlashCommand } from './composer-autocomplete-data';
-import { escapeHtml, shortCwd } from './helper-format';
-import { highlightFuzzy } from './helper-query';
-import { record } from './helper-values';
+import { escapeHtml } from '../core/helper-format';
+import { shortCwd } from './helper-format';
+import { highlightFuzzy } from '../core/helper-query';
+import { record } from '../core/helper-values';
 export function createComposerAutocomplete(options: {
   document: Document; sessionState: SessionState; composerKey: () => string | null; provisional: () => boolean;
   request: ApiRequest; host: (id: string | null) => HostEndpoint | null; references: ReturnType<typeof createSessionReferences>;

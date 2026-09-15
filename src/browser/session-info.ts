@@ -2,9 +2,10 @@ import type { ApiRequest, HostEndpoint, RequestOptions } from './api-client';
 import type { SessionState, SelectionOwner, SessionEntry } from './session-state';
 import type { SessionShare, PublishedPage } from './session-info-data';
 import { decodeSessionStats, decodeSessionShare, decodePublishedPages } from './session-info-data';
-import { escapeHtml, formatTokSpeed, formatTokens, formatDuration, formatUsageCost, formatCacheStat, formatRuntime, formatRelativeTime } from './helper-format';
+import { escapeHtml } from '../core/helper-format';
+import { formatTokSpeed, formatTokens, formatDuration, formatUsageCost, formatCacheStat, formatRuntime, formatRelativeTime } from './helper-format';
 
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 export function createSessionInfo(options: {
   document: Document; request: ApiRequest; sessionState: SessionState; host: (id: string | null) => HostEndpoint | null;
   reference: (session: SessionEntry) => string; copy: (text: string) => Promise<unknown>; status: (message: string, type?: string) => void; confirm: (message: string) => boolean;

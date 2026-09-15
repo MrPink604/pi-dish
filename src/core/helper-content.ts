@@ -1,4 +1,4 @@
-import type { ImageBlock } from './shared-helper-types';
+import type { ImageBlock } from './helper-types';
 import { record } from './helper-values';
 import { truncate } from './helper-format';
 

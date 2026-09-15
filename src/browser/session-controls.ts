@@ -4,10 +4,10 @@ import type { SessionState, SelectionOwner } from './session-state';
 import type { createModelCatalog } from './model-catalog';
 import { mountModelSelector } from './model-selector';
 import { mountThinkingSelector } from './thinking-selector';
-import { thinkingLevelsFor } from './helper-models';
+import { thinkingLevelsFor } from '../core/helper-models';
 import { formatTokens, filenameFromContentDisposition } from './helper-format';
 import { sessionKey } from './helper-identity';
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 export function createSessionControls(options: {
   document: Document; sessionState: SessionState; catalog: ReturnType<typeof createModelCatalog>; request: ApiRequest;
   host: (id: string | null) => HostEndpoint | null; loadModels: (id: string, harnessId?: string) => Promise<unknown>;

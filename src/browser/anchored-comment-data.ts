@@ -1,4 +1,4 @@
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 export interface CommentAnchor { readonly type: 'text' | 'lines'; readonly quote: string; readonly prefix?: string; readonly suffix?: string; readonly startLine?: number; readonly endLine?: number; readonly oldStart?: number; readonly oldEnd?: number; readonly newStart?: number; readonly newEnd?: number }
 export type CommentTarget = { readonly kind: 'file'; readonly path: string; readonly relPath: string | null; readonly anchor: CommentAnchor } | { readonly kind: 'diff'; readonly repo: string; readonly path: string; readonly oldPath: string | null; readonly anchor: CommentAnchor };
 export interface AnchoredComment { readonly id: string; readonly sessionId: string; readonly body: string; readonly target: CommentTarget }

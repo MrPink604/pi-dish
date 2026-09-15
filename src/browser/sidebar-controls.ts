@@ -3,7 +3,7 @@ import type { ApiRequest, HostEndpoint } from './api-client';
 import { sendJson } from './api-client';
 import { sessionKey, sessionRefKey, parseSessionKey } from './helper-identity';
 import { buildSessionFamilies } from './helper-sessions';
-import { escapeHtml } from './helper-format';
+import { escapeHtml } from '../core/helper-format';
 import type { SessionFamily } from './shared-helper-types';
 
 /** Sidebar preferences and row actions own their DOM, timers and captured host endpoints. */

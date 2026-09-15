@@ -80,16 +80,17 @@ controller/port observations.
 | Session catalog and metadata | Tasks 1–7 implemented, verified and reviewed | Checked discovery/source/index/catalog and closed browser state replace competing adapters and render-time normalization. Strict checks, 974 backend tests, browser/UI coverage and Fable review are recorded in the stage plan. |
 | Browser composition | Implemented, verified and reviewed | Direct bundled imports and controller wiring replace global forwarding functions. Test-only observations preserve ownership probes; uninstrumented production scenarios, 282 browser checks and all UI suites passed. |
 | Browser contracts | Implemented, verified and reviewed | Readonly state/cache borrowing, decoded message ports and session-only model loading passed strict checks, 984 backend tests, 286 browser cases and both UI suites. Fable approved `811d473` without blocking findings. |
-| Remaining server application and feature modules | Shared helpers and lifecycle planned; other boundaries remain | Two pending stages cover shared helper source and lifecycle ownership. General routes, projections and other feature stores remain later stages. |
+| Shared runtime helpers | Implemented and locally verified; review pending | Actual portable core source serves browser and Node consumers; 121 compatibility exports remain. Strict checks, 984 backend tests, 286 browser cases and UI suites passed. |
+| Remaining server application and feature modules | Lifecycle implementation next; other boundaries remain | General routes, projections and other feature stores remain later stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
 
 The completed browser source migration does not imply a whole-application
 conversion or complete domain contracts. Session catalog/metadata establishes
 its bounded read path, and browser composition cleanup is delivered. Browser
-contract cleanup is implemented with delivery review pending. Shared helpers,
-lifecycle, extension checking, Electron and remaining backend boundaries still
-require their own implementation and delivery.
+contract cleanup is verified and reviewed; its pushed approval checkpoint passed CI.
+Shared helpers are locally verified, with implementation review pending. Lifecycle,
+extension checking, Electron and remaining backend boundaries have separate scopes.
 
 ## What is already in TypeScript
 
@@ -175,15 +176,10 @@ tracked separately in the checkpoint log.
 | `search-view.ts` | Fleet query lifecycle, facets and host-scoped result navigation |
 | `skills-data.ts` | Narrowed directory, coverage, usage and refinement payloads |
 | `skills.ts` | Skill directory/detail lifecycle, coverage controls, refine drafts and activation navigation |
-| `helper-values.ts` | Unknown-value guards and compatible timestamp conversion |
 | `helper-format.ts` | Labels, durations, metadata, input insertion and download filenames |
-| `helper-content.ts` | Narrowed content blocks and tool summaries/results |
 | `helper-identity.ts` | Host/session display identity and capability presentation |
 | `helper-sessions.ts` | Workspace/date grouping, family trees, pinned rows and relation ordering |
-| `helper-query.ts` | Shared filter grammar, scoring, fuzzy matching and snippets |
-| `helper-refs.ts` | Session-reference grammar, aliases, resolution and prompt context blocks |
 | `helper-usage.ts` | Cross-host usage merging, chart calculations and quota presentation |
-| `helper-models.ts` | Model refs, thinking levels, scope patterns and role values |
 | `helper-markdown.ts` | Markdown URLs, math/diagram detection, file mentions and diff markup |
 
 ## Browser delivery
@@ -210,10 +206,9 @@ names instead of executable event handlers.
 1. **[Browser contract cleanup](docs/browser-contract-cleanup.md): implemented;
    verified and reviewed.** Readonly session publication,
    decoded message continuity, session-only model loading and unused-code gates.
-2. **[Shared runtime helper cutover](docs/shared-runtime-helpers.md).** Move the
-   genuinely shared helper dependency closure to flat core modules; give browser
-   and backend consumers real typed imports. Remove backend dependencies on the
-   browser helper artifact while preserving its supported compatibility exports.
+2. **[Shared runtime helper cutover](docs/shared-runtime-helpers.md): implemented
+   and locally verified; review pending.** Shared source serves browser and Node;
+   the backend helper-artifact boundary is gone, with compatibility exports preserved.
 3. **[Session lifecycle migration](docs/session-lifecycle-migration.md).** Migrate
    ownership proofs, launch placement, operation coordination, recovery and bounce
    implementations. Reuse existing source/identity/capability contracts, preserve

@@ -1,7 +1,8 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
 import type { SessionState } from './session-state';
-import { escapeHtml, formatRelativeTime, shortCwd } from './helper-format';
-import { record } from './helper-values';
+import { escapeHtml } from '../core/helper-format';
+import { formatRelativeTime, shortCwd } from './helper-format';
+import { record } from '../core/helper-values';
 import { decodeSkillDirectory, decodeSkillCoverage } from './skills-data';
 import type { SkillDirectory, SkillRefine, SkillEntry, SkillCoverage } from './skills-data';
 export interface SkillsHost extends HostEndpoint { readonly hostId: string | null }

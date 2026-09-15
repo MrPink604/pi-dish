@@ -6,7 +6,8 @@ const vm = require('node:vm');
 const context = { URL };
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
 const { createHostDirectory, createHostPresentation, assignHostColor, sanitizeHostColors } = context.PiDishBrowser;
-const H = require('../public/helpers');
+const { escapeHtml } = require('../lib/helper-format');
+const { hostDisplayLabel } = require('../public/helpers');
 function fixture(extra = {}) {
   const directory = createHostDirectory({ initialCatalog: [{ base: '/hosts/peer', hostId: 'peer' }],
     descriptor: () => undefined, persistCatalog() {} });
@@ -14,8 +15,8 @@ function fixture(extra = {}) {
   const presentation = createHostPresentation({ directory, initialColors: {}, initialOrder: [],
     persistColors: colors => writes.push({ colors: { ...colors } }),
     persistOrder: order => writes.push({ order: [...order] }),
-    onColorChanged: value => rows.push(value), escapeHtml: H.escapeHtml,
-    displayLabel: H.hostDisplayLabel, isDown: () => false, ...extra });
+    onColorChanged: value => rows.push(value), escapeHtml,
+    displayLabel: hostDisplayLabel, isDown: () => false, ...extra });
   return { directory, presentation, writes, rows };
 }
 

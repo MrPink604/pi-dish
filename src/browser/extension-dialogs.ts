@@ -2,9 +2,9 @@ import type { ApiRequest, HostEndpoint } from './api-client';
 import { sendJson } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { ExtensionRequest, ExtensionResponse } from './extension-ui-data';
-import { escapeHtml } from './helper-format';
+import { escapeHtml } from '../core/helper-format';
 import { sessionKey } from './helper-identity';
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 export type ExtensionSession = Readonly<Pick<SelectionOwner, 'id' | 'host'>>;
 interface DialogEntry {
   readonly el: HTMLElement; readonly events: AbortController; readonly endpoint: Readonly<HostEndpoint>;

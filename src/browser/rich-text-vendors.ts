@@ -1,4 +1,4 @@
-import type { MathExtension } from './shared-helper-types';
+import type { MathExtension } from '../core/helper-types';
 export interface MarkedOptions {
   breaks: boolean; gfm: boolean;
   tokenizer: { del(this: { lexer: { inlineTokens(source: string): unknown[] } }, source: string): { type: string; raw: string; text: string; tokens: unknown[] } | undefined };

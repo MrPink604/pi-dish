@@ -1,4 +1,4 @@
-import type { ModelRef } from './shared-helper-types';
+import type { ModelRef } from './helper-types';
 
 /** "provider/id" → { provider, id } (provider '' when the ref is bare). */
 export function parseModelId(fullModelId: string) {

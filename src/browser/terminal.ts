@@ -5,7 +5,7 @@ import type { HostEndpoint } from './api-client';
 import type { SessionState, SessionEntry, SelectionOwner } from './session-state';
 import { shortCwd, tmuxPrefixSeq } from './helper-format';
 import { sessionKey } from './helper-identity';
-import { record, finite } from './helper-values';
+import { record, finite } from '../core/helper-values';
 export type TerminalMode = 'shell' | 'tmux';
 export type TerminalInput = { type: 'input'; data: string } | { type: 'resize'; cols: number; rows: number } | { type: 'restart' };
 export type TerminalOutput = { type: 'attach'; replay: string; cwd: string; tmuxPrefix: string | null } | { type: 'output'; data: string } | { type: 'exit'; code: number | null } | { type: 'error'; error: string };

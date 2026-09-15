@@ -1,6 +1,6 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
-import { record } from './helper-values';
-import { escapeHtml } from './helper-format';
+import { record } from '../core/helper-values';
+import { escapeHtml } from '../core/helper-format';
 import { decodeSavedFilters } from './display-preferences';
 import type { SavedFilter } from './display-preferences';
 /** Query text, scope definitions and device preferences own their controls and pending settings requests. */

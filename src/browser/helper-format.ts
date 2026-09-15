@@ -1,20 +1,7 @@
-import type { Timestamp, RuntimeInfo, ResponseMetadata } from './shared-helper-types';
-import { finite } from './helper-values';
+import type { Timestamp } from '../core/helper-types';
+import type { RuntimeInfo, ResponseMetadata } from './shared-helper-types';
+import { finite } from '../core/helper-values';
 
-/**
- * Pure helpers bundled by the frontend and exported through public/helpers.js
- * for Node consumers and tests. No DOM, no state —
- * keep it that way so everything here stays unit-testable.
- */
-export function escapeHtml(text: unknown) {
-  if (text == null || text === '') return '';
-  return String(text)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 /**
  * Remove ANSI escape sequences (CSI colors, OSC titles, stray escapes).
@@ -154,11 +141,6 @@ export function shortCwd(cwd?: string | null) {
   return cwd.replace(/^\/home\/[^/]+\//, '~/').replace(/^\/home\/[^/]+$/, '~');
 }
 
-// No newline — truncated text also lands in one-line summary spans.
-export function truncate(text: string, maxLen: number, suffix = ' … (truncated)') {
-  if (!text || text.length <= maxLen) return text;
-  return text.slice(0, maxLen) + suffix;
-}
 
 /**
  * Severity class for a context-usage percentage. One scale everywhere the

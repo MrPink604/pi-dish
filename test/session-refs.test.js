@@ -8,7 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const { expandSessionRefs } = require('../lib/session-refs');
-const { splitSessionRefContext } = require('../public/helpers');
+const { splitSessionRefContext } = require('../lib/helper-refs');
 
 const SELF_HOST = '0f9c1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b';
 const PEER_HOST = '11112222-3333-4444-5555-666677778888';

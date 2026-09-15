@@ -29,7 +29,7 @@ const path = require('node:path');
 const { spawn, execFileSync } = require('node:child_process');
 
 const { sseReader } = require('./sse-reader');
-const { splitSessionRefContext } = require('../public/helpers');
+const { splitSessionRefContext } = require('../lib/helper-refs');
 
 // Deliberately long HOME: the default bridge socket path exceeds the
 // conservative cross-platform sun_path limit. The explicit short override

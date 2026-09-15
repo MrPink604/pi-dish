@@ -1,4 +1,4 @@
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 export interface SlashCommand { readonly name: string; readonly description: string; readonly source: string; readonly args: string }
 export interface FileCompletion { readonly path: string; readonly isDir: boolean; readonly gitStatus: string }
 const text = (v: unknown) => typeof v === 'string' ? v : '';

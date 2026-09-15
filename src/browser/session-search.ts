@@ -1,6 +1,6 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
 import type { SelectionOwner, SessionState } from './session-state';
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 export interface SessionSearchMatch { readonly index: number; readonly role: string }
 export interface SessionSearchOptions { readonly mode?: 'message' | 'any'; readonly closeIfEmpty?: boolean }
 export function decodeSessionSearch(value: unknown): readonly SessionSearchMatch[] {

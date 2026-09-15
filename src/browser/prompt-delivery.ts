@@ -1,8 +1,8 @@
-import { record } from './helper-values';
-import { escapeHtml } from './helper-format';
+import { record } from '../core/helper-values';
+import { escapeHtml } from '../core/helper-format';
 import { sessionRefKey } from './helper-identity';
-import { splitSessionRefContext } from './helper-refs';
-import { extractTextBlocks } from './helper-content';
+import { splitSessionRefContext } from '../core/helper-refs';
+import { extractTextBlocks } from '../core/helper-content';
 import { sendJson } from './api-client';
 import type { ApiRequest, HostEndpoint } from './api-client';
 import type { SelectionOwner, SessionState } from './session-state';

@@ -3,8 +3,8 @@ import { sendJson } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { TranscriptTree, TranscriptTreeNode, TranscriptTreeTool } from './transcript-tree-data';
 import { decodeTranscriptTree } from './transcript-tree-data';
-import { escapeHtml } from './helper-format';
-import { record } from './helper-values';
+import { escapeHtml } from '../core/helper-format';
+import { record } from '../core/helper-values';
 
 export function createTranscriptTree(options: {
   document: Document; storage: Pick<Storage, 'getItem' | 'setItem'>; sessionState: SessionState;

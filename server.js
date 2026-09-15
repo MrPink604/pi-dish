@@ -65,12 +65,16 @@ const { createRecoveryRunner, recoveryMode } = require('./lib/recovery-runner');
 const { createSessionBounces, lifecycleBlockers } = require('./lib/session-bounces');
 const skillsLib = require('./lib/skills');
 const {
-  isModelEnabled, extractTextContent, ALL_THINKING_LEVEL_NAMES, thinkingLevelNamesFor,
-  sessionMetaText, parseModelId, formatModelRef, buildSnippet, buildSnippets,
+  isModelEnabled, ALL_THINKING_LEVEL_NAMES, thinkingLevelNamesFor, parseModelId, formatModelRef,
+} = require('./lib/helper-models.js');
+const { extractTextContent } = require('./lib/helper-content.js');
+const { sessionMetaText } = require('./lib/helper-identity.js');
+const {
+  buildSnippet, buildSnippets,
   parseSessionQuery, evaluateSessionQuery, positiveQueryTokens, scoreSessionMatch,
   isAutomationSession, queryAsksForAutomation,
-  resolveSessionRefAmong, stableSessionRef,
-} = require('./public/helpers');
+} = require('./lib/helper-query.js');
+const { resolveSessionRefAmong, stableSessionRef } = require('./lib/helper-refs.js');
 const { expandSessionRefs } = require('./lib/session-refs');
 
 const app = express();
@@ -1337,7 +1341,7 @@ function enumerateSessionCandidates(excludeIds = new Set()) {
 // null when the session doesn't match; { snippet } when it does. `snippet`
 // is set only for matches the metadata alone doesn't explain — the client
 // shows it under the row so a content match doesn't look arbitrary. Queries
-// speak the shared grammar (parseSessionQuery in helpers.js): negations and
+// speak the shared grammar (parseSessionQuery in helper-query.js): negations and
 // field terms are metadata-only, so only positive plain terms can justify
 // the content read.
 function matchSessionQuery(session, parsed) {
@@ -1353,7 +1357,7 @@ function matchSessionQuery(session, parsed) {
   return null;
 }
 
-// Results are relevance-ordered (scoreSessionMatch in helpers.js), recency
+// Results are relevance-ordered (scoreSessionMatch in helper-query.js), recency
 // only breaking ties: a recency-sorted list buries the session you meant
 // under every transcript that happens to mention one of the words. Ranking
 // needs occurrence counts for *every* match, including the ones metadata
@@ -1418,7 +1422,7 @@ app.get('/api/sessions', (req, res) => {
   res.json({ active, previous, children, indexing, discoveryTruncated, discoverySkipped });
 });
 
-// Refs resolve through the shared rule in public/helpers.js (route id and
+// Refs resolve through the shared rule in lib/helper-refs.js (route id and
 // alias, exact then prefix — see the comment there), so GET
 // /api/sessions/resolve, the `#ref` prompt expansion, the skill CLIs' local
 // fallback and the browser's picker cannot disagree about what a ref means.

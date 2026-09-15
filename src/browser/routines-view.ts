@@ -1,5 +1,5 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
-import type { HelperHost } from './shared-helper-types';
+import type { HelperHost } from '../core/helper-types';
 import type { SessionState } from './session-state';
 import type { CatalogModel } from '../core/session-api';
 import type { HarnessRow } from './harness-discovery';
@@ -10,10 +10,11 @@ import { decodeModelCatalog } from '../core/session-api';
 import { modelCatalogUrl } from './api-client';
 import { modelSelectOptionsHtml as selectOptions, modelHiddenNote } from './model-catalog';
 import { NS_THINKING_LABELS } from './new-session-options';
-import { escapeHtml, formatRelativeTime, shortCwd, truncate, formatDuration } from './helper-format';
+import { escapeHtml, truncate } from '../core/helper-format';
+import { formatRelativeTime, shortCwd, formatDuration } from './helper-format';
 import { sessionKey, hostDisplayLabel, hostSupportsCapability } from './helper-identity';
 import { createFanoutRenderQueue } from './helper-usage';
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 export type RoutineHost = Readonly<HostEndpoint & HelperHost & { hostId: string | null }>;
 export function createRoutinesView(options: {
   root: HTMLElement; request: ApiRequest; storage: Pick<Storage, 'getItem'>; sessionState: SessionState;

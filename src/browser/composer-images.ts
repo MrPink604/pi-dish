@@ -1,4 +1,4 @@
-import { record } from './helper-values';
+import { record } from '../core/helper-values';
 export interface ComposerImage { readonly data: string; readonly mimeType: string }
 export function decodeComposerImages(value: unknown): ComposerImage[] {
   return Array.isArray(value) ? value.flatMap((image: unknown) => record(image) && typeof image.data === 'string' && typeof image.mimeType === 'string' && image.mimeType.startsWith('image/') ? [{ data: image.data, mimeType: image.mimeType }] : []) : [];
