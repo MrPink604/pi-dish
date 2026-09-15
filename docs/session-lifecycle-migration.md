@@ -221,7 +221,16 @@ After the pruning correction, concurrent transcript file-link work from `main`
 (`1b46c9e`) was preserved in merge `13a07e1`. The combined result passed strict
 checks, all 996 backend tests, all 286 browser tests, eight isolated UI scenarios,
 the full desktop/mobile smoke suite, and both real OMP and Prime canaries.
-Exact pushed-commit CI is recorded at the delivery gate.
+
+### Pushed-commit CI
+
+Commit `5f815bc46fb16494c399e32504098eda00c7a20c` passed
+[Tests run 34962172662](https://github.com/MrPink604/pi-dish/actions/runs/34962172662).
+All five required jobs completed successfully: backend on Node 22.19.0, 22.x,
+24.x and 26.x, plus browser on Node 24 (browser scenarios, isolated feature
+scenarios and the full desktop/mobile smoke suite).
+This is the verified implementation checkpoint; this subsequent documentation
+record does not change its code.
 
 ## Mission and outcome
 
