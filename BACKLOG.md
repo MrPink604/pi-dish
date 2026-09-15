@@ -79,7 +79,7 @@ controller/port observations.
 | Browser migration | Source implementation complete and reviewed | All first-party application logic and bindings are typed. Local strict, backend, browser and UI checks pass; each push must also pass the CI matrix. |
 | Session catalog and metadata | Tasks 1–7 implemented, verified and reviewed | Checked discovery/source/index/catalog and closed browser state replace competing adapters and render-time normalization. Strict checks, 974 backend tests, browser/UI coverage and Fable review are recorded in the stage plan. |
 | Browser composition | Implemented, verified and reviewed | Direct bundled imports and controller wiring replace global forwarding functions. Test-only observations preserve ownership probes; uninstrumented production scenarios, 282 browser checks and all UI suites passed. |
-| Browser contracts | Implemented and locally verified; review pending | Readonly state/cache borrowing, decoded message ports and session-only model loading passed strict checks, 984 backend tests, 286 browser cases and both UI suites. |
+| Browser contracts | Implemented, verified and reviewed | Readonly state/cache borrowing, decoded message ports and session-only model loading passed strict checks, 984 backend tests, 286 browser cases and both UI suites. Fable approved `811d473` without blocking findings. |
 | Remaining server application and feature modules | Shared helpers and lifecycle planned; other boundaries remain | Two pending stages cover shared helper source and lifecycle ownership. General routes, projections and other feature stores remain later stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -208,7 +208,7 @@ names instead of executable event handlers.
 ## Ordered next work
 
 1. **[Browser contract cleanup](docs/browser-contract-cleanup.md): implemented;
-   locally verified; review pending.** Readonly session publication,
+   verified and reviewed.** Readonly session publication,
    decoded message continuity, session-only model loading and unused-code gates.
 2. **[Shared runtime helper cutover](docs/shared-runtime-helpers.md).** Move the
    genuinely shared helper dependency closure to flat core modules; give browser

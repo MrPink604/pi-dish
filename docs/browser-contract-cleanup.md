@@ -1,13 +1,16 @@
 # Browser contract cleanup
 
-Status: **Implemented and locally verified; implementation review pending**
+Status: **Implemented, locally verified and implementation-reviewed**
 (2026-09-15). This is Stage 1 of the three-stage sequence.
 Stage 2 is [shared runtime helpers](shared-runtime-helpers.md); Stage 3 is
 [session lifecycle migration](session-lifecycle-migration.md).
 
 Plan review: **APPROVED** by Anthropic Fable 5.1 at high effort for the clarified
 plan at `9dee6d3`; [signoff and observation resolutions](../BACKLOG.md#next-stage-plan-review).
-Implementation review is separate from this plan signoff.
+Implementation commit `811d473129c50df9b93dfb1a2f3ceb843b50400c` received
+**APPROVED** from Fable 5.1 at high effort with no blocking findings.
+The [implementation report](browser-contract-review-2026-09-15.json) records
+the six nonblocking observations and the reviewer's verification limitations.
 
 Planning baseline includes the recursive family/subagents changes in `6e8df16`
 and `e816d36`; the trace-peek renderer is an affected consumer, not deferred work.
@@ -15,8 +18,10 @@ and `e816d36`; the trace-peek renderer is an affected consumer, not deferred wor
 ## Implementation record
 
 - Session getters, lookup/selection returns, lists, fields and capabilities expose
-  readonly views. Private writers detach external rows and capability maps once;
-  opaque extras remain borrowed. Selection remains a separate row.
+  readonly views. `MutableSessionEntry` and `MutableSessionLists` are private;
+  `publishSession` uses the private `publishedRows` WeakMap to detach external
+  rows and capability maps once and recognize store-owned rows. Opaque extras
+  remain borrowed. Selection remains a separate row.
 - `setSessionLists` returns ordered published host lists. The sidebar rebinds each
   loader cache with `retainPublished`; failed/partial fan-out reuses store-owned
   rows without rolling back acknowledged patches or adding a metadata writer.

@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-09-15",
+  "reviewer": {
+    "provider": "anthropic",
+    "model": "claude-fable-5-1",
+    "effort": "high",
+    "client": "Claude Code",
+    "clientVersion": "2.1.269",
+    "sessionId": "05e22d6e-1fdf-462d-b324-fd3936c12f2a",
+    "tools": [
+      "Read",
+      "Grep",
+      "Glob"
+    ]
+  },
+  "report": {
+    "verdict": "APPROVED",
+    "reviewedCommit": "811d473129c50df9b93dfb1a2f3ceb843b50400c",
+    "scope": "Read-only review of the committed patch plus current src/browser sources, test probes and the approved Stage 1 plan (docs/browser-contract-cleanup.md at 9dee6d3). No files modified, no build/lint/test/format run.",
+    "findings": [],
+    "observations": [
+      {
+        "severity": "nonblocking",
+        "path": "src/browser/sidebar-lists.ts:40-41",
+        "note": "The 'loader cache rows are state rows' invariant depends on call ordering inside publish(): setSessionLists fires onListsChanged/onCurrentChanged synchronously, and only afterwards does retainPublished rebind the cache. renderSessions (src/browser/app.ts:542) reads hostSessionLoader.getCache during that callback; today it only uses row counts for hasCache, so the pre-rebind rows give the correct answer. No caller re-enters publish() (grep found none in src/browser). If a future callback re-entered publish(), the outer retainPublished would overwrite the cache with rows no longer in state and acknowledged patches would silently roll back on the next failed poll. Consider a short comment on publish() or a debug assertion in a later stage; not required now."
+      },
+      {
+        "severity": "nonblocking",
+        "path": "src/browser/session-state.ts:120-123",
+        "note": "setCurrentSession makes a shallow copy, so the detached selection shares the same capabilities object as the list row (also shared into currentSession by the fold at line 109). This is consistent with the documented 'readonly view, not immutable snapshot' contract: decodeSessionMutationPatch/ActivityPatch/TranscriptPatch (src/core/session-api.ts:150-158) never admit capabilities, and mergeLiveSubagents replaces rather than mutates, so no writer can observe the alias. Recorded so Stage 2/3 do not later add a capabilities writer that mutates in place."
+      },
+      {
+        "severity": "nonblocking",
+        "path": "test/browser/fixtures.js:83-93",
+        "note": "fixtureSessionListPatch publishes {...row, ...fields} for the patched row, which publishSession treats as an external row and copies; the copy is not rebound into the loader cache, so the next sidebar poll replaces it with the cached store row and the fixture patch disappears. This was equally true before the commit (the cache then held the un-patched object), and the renewal spec (test/browser/model-catalog.spec.js:104-111) runs under a paused clock so the 10s poll cannot fire. The plan allowed adapting this fixture; it was not needed for the suite, but the gap between fixture publication and production publication is worth a comment for future spec authors."
+      },
+      {
+        "severity": "nonblocking",
+        "path": "src/browser/anchored-comments.ts:10 and src/browser/app.ts:739",
+        "note": "The unused-locals gate removed the sessionState destructure, but the options type still declares sessionState and app.ts still passes it. Dead option field; bounded cleanup for the integration lead in a later pass."
+      },
+      {
+        "severity": "nonblocking",
+        "path": "docs/browser-contract-cleanup.md:15-33",
+        "note": "Task 1 asked that final internal type names be recorded at the implementation checkpoint. The record names TranscriptPage and retainPublished but not MutableSessionEntry, MutableSessionLists, publishSession or the publishedRows WeakMap. Minor documentation gap."
+      },
+      {
+        "severity": "nonblocking",
+        "path": "src/browser/message-render.ts:380-383, 307-316",
+        "note": "Renderer ports no longer normalise input, so an untyped JS caller passing pre-decode shapes (string advisor notes, non-finite durationMs) would now render differently than via decodeRenderMessage. All production ingress paths decode (transcript-data.ts:18, message-stream.ts:135/157, subagents-view.ts:327, composer-submit.ts:108 builds a typed row), and remaining raw literals in test/browser/message-render.spec.js and live-transcript.spec.js already satisfy the decoded shape. Matches the plan's 'factory availability is not a promise of unchecked internal arguments'."
+      }
+    ],
+    "planConformance": {
+      "task2_readonlySessionOwnership": "Met. SessionEntry/SessionLists/HostSessionLists readonly; private MutableSessionEntry/MutableSessionLists; publishSession detaches external rows and capability maps once and reuses store-owned rows when host matches; setSessionLists overloads return ordered published lists; loader caches rebound via retainPublished; selection stays a separate row; transcript-only metadata cannot enter the borrowed cache (test/browser-host-session-loader.test.js:1972-1974). Type probes reject nested/list/lookup/selection writes.",
+      "task3_decodedMessageContinuity": "Met. TranscriptPage carries readonly RenderMessage; nine downstream decodeRenderMessage calls removed (4 renderer ports, upsertCustom, streaming queue/render, response-details button, mood); impossible null guards removed in message-stream; subagents-view decodes at its own HTTP ingress while preserving empty-page/cursor tolerance and the independent peek renderer; nested fields readonly; Date timestamps cloned at ingress (message-data.ts:32) with test coverage.",
+      "task4_sessionOnlyAppModels": "Met. createAppModels has no takeover dependency; load(sessionId: string, harnessId?) keeps captured selection and frozen endpoint checks; new-session.ts:169-177 remains the takeover load owner with its cwd predicate; production callers (session-view.ts:218, session-controls.ts:60/112) always pass a string id; the cwd race spec now drives newSessionController.refresh, real input via page.fill, blur and the 300ms debounce under a paused clock.",
+      "task5_integration": "Met. noUnusedLocals and noUnusedParameters enabled with six bounded removals (anchored-comments destructure, helper-models import, routines-view import, renderToolResult time param, two regex callback params). Generated bundles include the same publishSession/retainPublished/decoder/app-models changes as the source. Docs updated for status and prose."
+    },
+    "verificationReviewed": {
+      "performedByReviewer": "None. No build, type check, lint, unit, browser or UI run was executed in this review.",
+      "reportedByAuthor": "npm run build:browser and npm run check passed with both unused-code gates; 984 backend tests with no skips; 286 browser cases; all 8 independent UI scenarios; full desktop/mobile UI smoke; uninstrumented production page checked at 1280px and 390px for host-qualified restore, trace-peek parent retention, SSE frames/completion/telemetry; throwaway projection-count bundle observed 8 HTTP rows to 8 projections and one projection each for SSE initial/update/end, removed afterward.",
+      "unverifiedAssumptions": [
+        "public/app.js, public/browser.js and public/helpers.js are exact build outputs of this source tree; spot-checked for the relevant hunks but not regenerated here.",
+        "Every @ts-expect-error in the extended type probes (test/types/browser-state.ts, browser-message-render.ts, browser-live-transcript.ts, browser-transcript.ts, browser-hosts.ts, browser-model-catalog.ts) actually errors; this relies on the reported npm run check pass.",
+        "The new loader/sidebar alias test (test/browser-host-session-loader.test.js:196-258) and the reworked model-catalog specs pass as reported; the logic was traced by reading, not executed."
+      ]
+    }
+  },
+  "disposition": "Accepted; no blocking findings or implementation changes required. Preserve the noted callback ordering, readonly-view and decoded-ingress constraints in subsequent stages. Internal ownership names are added to the stage record."
+}
