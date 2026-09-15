@@ -1,6 +1,6 @@
 # Shared runtime helper cutover
 
-Status: **Implemented and locally verified; implementation review pending**
+Status: **Implemented, locally verified and approved by Fable**
 (2026-09-15). Stage 2 follows [browser contract cleanup](browser-contract-cleanup.md)
 and precedes [session lifecycle migration](session-lifecycle-migration.md). Current delivery
 rules and completed boundaries remain in the [roadmap](../BACKLOG.md) and
@@ -57,9 +57,11 @@ The 121 compatibility exports are unchanged, in both CommonJS and browser global
 The standalone skill CLI remains independent; `test/skills-core.test.js` keeps
 parity for its duplicated portable reference grammar, key decoding and alias rules.
 
-The core/browser builds and `npm run check` passed, including the new Node-only
-`tsconfig.helpers.json` portable compile. Browser build metadata rejects runtime
-edges out of the portable core-helper closure before replacing any output.
+The core/browser builds and `npm run check` passed. Portability is established
+jointly by core NodeNext, browser Bundler/DOM with `types: []`, and the Node-only
+`tsconfig.helpers.json` compile without DOM libraries—not by that last probe alone.
+Browser build metadata rejects runtime edges out of the portable core-helper closure
+before replacing any output.
 The existing isolated build regression verifies rejection preserves all prior
 outputs. Existing helper type/behavior/compatibility fixtures now use the real owners.
 Full backend suite: **984 passed, zero skipped**. Browser suite: **286 passed**.
@@ -81,6 +83,22 @@ each is 147 bytes larger than baseline. The smoke observed no additional vendor
 payload or runtime request. These are size/request observations, not a timing
 claim. Temporary server/home/browser
 smoke scaffolds were removed after verification.
+
+## Implementation review
+
+Fable 5.1 at high effort **APPROVED `1cbd826`**, with no blocking findings.
+The [complete report](shared-runtime-review-2026-09-15.json) records scope and limits:
+Read/Grep/Glob inspection only, no execution or baseline git diff; local verification
+above remains the execution evidence. Concurrent lifecycle work was excluded.
+
+Nonblocking observations were addressed by correcting architecture and historical
+source references, making the joint portability checks explicit, adding a retained
+math-factory late-renderer regression, and exercising readonly query/reference
+inputs and returned row fields in the compile fixture.
+The export-manifest suggestion is intentionally not a count-only assertion:
+the complete pre/post manifest comparison above establishes cutover compatibility,
+while existing consumer behavior tests and Node/browser parity remain the durable
+checks. No runtime implementation changed in response to this review.
 
 The inventory and task definitions below retain the pre-cutover evidence and
 approved acceptance criteria; current ownership is the frozen/delivered graph above.

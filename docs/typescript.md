@@ -60,8 +60,8 @@ The task documents separate delivered contracts from pending implementation:
 
 1. [Browser contract cleanup](browser-contract-cleanup.md): implemented readonly
    views, decoded message continuity and session-only model loading; verified and reviewed.
-2. [Shared runtime helper cutover](shared-runtime-helpers.md): implemented and locally
-   verified direct source imports; implementation review pending.
+2. [Shared runtime helper cutover](shared-runtime-helpers.md): implemented, locally
+   verified and approved by Fable at `1cbd826` without blocking findings.
 3. [Session lifecycle migration](session-lifecycle-migration.md): checked authority,
    launch and operation owners, recovery/bounce implementations and caller cutover.
 
@@ -432,9 +432,11 @@ core consumers import the actual owners; JavaScript Node consumers use narrow
 generated `lib/helper-*.js` modules, not `public/helpers.js`.
 `src/browser/shared-helpers.ts` preserves the 121 CommonJS/browser-global exports.
 Its thin math adapter retains lazy renderer lookup; the core factory requires a
-provider. The build rejects runtime imports out of the portable helper closure,
-and `tsconfig.helpers.json` checks it without DOM libraries. Atomic browser output
-validation and drift checks still cover all five entrypoints.
+provider. The build rejects runtime imports out of the portable helper closure.
+Portability is checked jointly by core NodeNext, browser Bundler/DOM with
+`types: []`, and `tsconfig.helpers.json` without DOM libraries. The last probe
+retains Node ambient types; it does not establish browser compatibility alone.
+Atomic browser output validation and drift checks still cover all five entrypoints.
 
 `new-session.ts` owns the new-session takeover itself, including its view
 lifecycle, selected host/harness, refine draft, workspace listeners and the

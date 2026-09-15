@@ -315,7 +315,7 @@ function parseRef(raw) {
 // base64 key, because every such key on a host shares its first ~30
 // characters — and a mistyped key still decodes, so the only answer a
 // server can give is "not found". The canonical rule (and the reasoning)
-// lives in public/helpers.js `resolveSessionRefAmong`; it is mirrored here
+// lives in src/core/helper-refs.ts `resolveSessionRefAmong`; it is mirrored here
 // rather than imported because these CLIs deliberately import nothing from
 // the server (see the module header).
 // =========================================================================

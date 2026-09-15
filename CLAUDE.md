@@ -2102,12 +2102,14 @@ select/resume). Two backends:
 `parseMessages`) and stay visible in focus mode — they're conversation
 context, not tool noise.
 
-Shared pure helpers are authored in `src/browser/helper-*.ts`, with structural
-contracts in `shared-helper-types.ts`. `shared-helpers.ts` defines the public
-compatibility exports. Build all browser entries after source changes and commit
-`public/helpers.js` alongside any other regenerated outputs. The generated helper
-file supports both `require('./public/helpers')` and browser globals; keep those
-paths and exports stable for server, published-page and app consumers.
+Shared pure helpers are authored in `src/core/helper-*.ts`, with structural
+contracts in `helper-types.ts`. Browser-only formatting, identity presentation,
+markdown/path/diff, session grouping and usage helpers remain in `src/browser/`.
+`src/browser/shared-helpers.ts` defines the compatibility exports. Run
+`npm run build:core` before `npm run build:browser` after shared-source changes;
+commit generated `lib/` and browser outputs together. Node consumers import narrow
+`lib/helper-*.js` modules. Keep `public/helpers.js` CommonJS and browser-global
+exports stable for compatibility consumers.
 
 The new-session takeover is composed by `src/browser/new-session.ts`. Read its
 host/harness/draft/generation through controller accessors and use its lifecycle

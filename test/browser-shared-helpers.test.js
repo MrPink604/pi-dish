@@ -17,6 +17,16 @@ test('the generated helper entry publishes its CommonJS API as ordinary browser 
   assert.match(extension.renderer(extension.tokenizer('$$x$$')), /math:x/);
 });
 
+test('a retained browser math extension uses a renderer that arrives after construction', () => {
+  const context = { atob };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/helpers.js'), 'utf8'), context);
+  const extension = context.createMathExtensions()[0];
+  const token = extension.tokenizer('$$x < y$$');
+  assert.match(extension.renderer(token), /<pre class="math-block">/);
+  context.katex = { renderToString: source => 'rendered:' + source };
+  assert.match(extension.renderer(token), /rendered:x < y/);
+});
+
 test('content helpers narrow malformed block fields without inventing text or image sources', () => {
   const content = [null, 3, { type: 'text', text: {} }, { type: 'text', text: 'valid' },
     { type: 'image', url: {}, data: 'base64', mimeType: 7 }, { type: 'image', data: [] }];

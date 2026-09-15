@@ -244,7 +244,7 @@ into the TUI) or the capture/self-prime path; mind the draft-append trade-off.
 `off|minimal|low|medium|high|xhigh|max`. Fixed: the bridge descriptor
 declares Prime's ladder (`pi-dish-bridge-prime/index.ts`), `POST /thinking`
 validates against the session harness's vocabulary after lookup
-(`server.js`, `thinkingLevelNamesFor` in `src/browser/helper-models.ts`),
+(`server.js`, `thinkingLevelNamesFor` in `src/core/helper-models.ts`),
 and the client's `thinkingLevelsFor` offers `max` for Prime. Remaining:
 `resume --thinking` is refused for Prime (`server.js:6035-6036`).
 

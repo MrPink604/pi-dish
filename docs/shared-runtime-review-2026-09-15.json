@@ -1,0 +1,139 @@
+{
+  "verdict": "APPROVED",
+  "reviewed_commit": "1cbd826",
+  "baseline_commit": "7d288dd",
+  "reviewer": "Anthropic Fable 5.1 (claude-fable-5-1), high effort, Read/Grep/Glob only",
+  "blockers": [],
+  "nonblocking_observations": [
+    {
+      "severity": "medium",
+      "file": "CLAUDE.md",
+      "line": 2105,
+      "finding": "Architecture guidance still says shared pure helpers are authored in src/browser/helper-*.ts with structural contracts in shared-helper-types.ts. That contradicts AGENTS.md:19, docs/typescript.md:428 and the delivered ownership; a future editor following CLAUDE.md would put shared logic back under the browser owner.",
+      "fix": "Rewrite the paragraph to name src/core/helper-*.ts and helper-types.ts as shared owners, list the retained browser-only helper modules, and state the core-before-browser rebuild order."
+    },
+    {
+      "severity": "medium",
+      "file": "test/browser-shared-helpers.test.js",
+      "line": 16,
+      "finding": "The only automated math-adapter check constructs the extension with an explicit renderer. No test covers the contract the plan repeatedly flagged: build with no renderer, observe fallback markup, then define a global katex and observe a real render. This is currently proven only by the manual standalone-browser smoke recorded in the stage doc. Source inspection confirms the adapter defers lookup to render time (src/browser/helper-markdown.ts:97-99 closure over typeof katex), so behavior is correct today but unguarded against regression.",
+      "fix": "In the VM context test, call context.createMathExtensions() with no argument, assert the block renderer emits <pre class=\"math-block\"> for a token, then set context.katex = { renderToString } and assert the same extension instance now emits the rendered output."
+    },
+    {
+      "severity": "low",
+      "file": "test/types/browser-shared-helpers.ts",
+      "line": 5,
+      "finding": "Task 5 asked for compile-only cases for readonly rows crossing query/ref helpers. The fixture passes a mutable array; readonly acceptance is exercised only indirectly by production browser call sites such as src/browser/sidebar-render.ts:228. No fixture pins that a readonly row array or readonly RefContextEntry list is accepted, nor that helper results do not widen back to mutable input.",
+      "fix": "Add `as const`/`readonly` inputs to applyLocalFilter, resolveSessionRefAmong, searchSessionsForRef and formatSessionRefContext in the fixture, with a @ts-expect-error case asserting the helper does not require a mutable array."
+    },
+    {
+      "severity": "low",
+      "file": "test/browser-shared-helpers.test.js",
+      "line": 11,
+      "finding": "The 121-export manifest is asserted only in prose (docs/shared-runtime-helpers.md:56, AGENTS.md:21). The parity test compares CommonJS keys to VM globals but does not pin the count or names, so a dropped compatibility export would pass tests.",
+      "fix": "Snapshot the sorted export name list (or at least assert the count) so the supported surface cannot shrink silently."
+    },
+    {
+      "severity": "low",
+      "file": "tsconfig.helpers.json",
+      "line": 2,
+      "finding": "The portable probe inherits types: [\"node\"] from tsconfig.core.json, so it only proves the helper closure compiles without DOM libraries; Node-only globals would still pass there. That is acceptable because the browser program (types: [], DOM) transitively checks the same closure, but the doc wording 'portable compile' overstates what this one config proves.",
+      "fix": "Either note in docs/typescript.md that portability is the conjunction of the browser program and this probe, or add types: [] to the probe if the helper closure compiles without Node types (Buffer is already module-declared in helper-refs.ts; atob would need the same treatment)."
+    },
+    {
+      "severity": "low",
+      "file": "docs/prime-agent-gaps.md",
+      "line": 247,
+      "finding": "Historical reference to thinkingLevelNamesFor in src/browser/helper-models.ts, a path that no longer exists. Same for the skills/lib/pi-dish-client.js:318 comment that names public/helpers.js as where resolveSessionRefAmong 'lives'; it is still exported there but now owned by src/core/helper-refs.ts.",
+      "fix": "Update the two path references to src/core/helper-models.ts and src/core/helper-refs.ts."
+    }
+  ],
+  "reviewed_scope": {
+    "core_owners": [
+      "src/core/helper-values.ts",
+      "src/core/helper-content.ts",
+      "src/core/helper-models.ts",
+      "src/core/helper-query.ts",
+      "src/core/helper-refs.ts",
+      "src/core/helper-format.ts",
+      "src/core/helper-identity.ts",
+      "src/core/helper-markdown.ts",
+      "src/core/helper-types.ts"
+    ],
+    "browser_side": [
+      "src/browser/shared-helpers.ts",
+      "src/browser/shared-helper-types.ts",
+      "src/browser/helper-markdown.ts",
+      "src/browser/helper-format.ts",
+      "src/browser/helper-identity.ts",
+      "src/browser/rich-text.ts (math caller)",
+      "all src/browser import sites of ../core/helper-* (grep)"
+    ],
+    "node_consumers": [
+      "src/core/session-metadata.ts",
+      "server.js:67-77",
+      "lib/session-files.js:15",
+      "lib/pi-sdk.js:4",
+      "lib/file-search.js:24",
+      "lib/session-refs.js:23",
+      "lib/skill-mining.js:33",
+      "lib/file-page.js:4-60"
+    ],
+    "build_and_config": [
+      "scripts/build-core.js",
+      "scripts/build-browser.js",
+      "tsconfig.core.json",
+      "tsconfig.browser.json",
+      "tsconfig.helpers.json",
+      "tsconfig.check.json",
+      "package.json typecheck script",
+      ".github/workflows/tests.yml",
+      "eslint.config.js"
+    ],
+    "generated_outputs_spot_checked": [
+      "lib/helper-*.js and .d.ts banners",
+      "lib/helper-refs.js",
+      "lib/helper-markdown.js",
+      "lib/session-metadata.js"
+    ],
+    "tests": [
+      "test/browser-shared-helpers.test.js",
+      "test/helpers.test.js (math and ref sections)",
+      "test/browser-build.test.js",
+      "test/core-build.test.js (grep)",
+      "test/types/browser-shared-helpers.ts",
+      "test/types/core.ts (grep)",
+      "test/session-refs.test.js (grep)"
+    ],
+    "docs": [
+      "docs/shared-runtime-helpers.md",
+      "docs/typescript.md:428-437",
+      "BACKLOG.md status/next-stage sections",
+      "AGENTS.md:10-22",
+      "CLAUDE.md:2105-2110"
+    ],
+    "explicitly_excluded": [
+      "Stage 3 session-recovery/tmux/prime-lifecycle files",
+      "uncommitted docs/session-lifecycle-migration.md changes",
+      ".amp/"
+    ]
+  },
+  "checks_performed_by_inspection": {
+    "complete_source_and_caller_deletion": "Glob shows only helper-format/identity/markdown/sessions/usage under src/browser. No src/ import of ./helper-values|content|models|query|refs or of moved types from shared-helper-types. shared-helper-types.ts holds only browser-only usage/grouping/runtime types. No production JS requires public/helpers; remaining requires are eslint.config.js and compatibility tests, which the plan lists as intentional consumers.",
+    "readonly_boundaries": "HelperSession derives from Readonly<Pick<SessionFields<Timestamp>,...>> with readonly id/host/hostLabel/capabilities. applyLocalFilter, applyHostTerms, resolveSessionRefAmong, searchSessionsForRef, formatSessionRefContext, appendSessionRefContext, fuzzyScore, sortHostSections all accept readonly arrays. Generic row types are preserved (T extends HelperSession / { id: string }).",
+    "malformed_input_null_coercion_refs": "escapeHtml(null|'') returns ''. extractTextContent/extractTextBlocks/getToolOutputText/extractImageBlocks accept unknown and narrow per block. decodeBase64Url keeps Buffer-then-atob order and returns '' when neither exists; decodeRouteSessionId wraps JSON.parse and rejects non-tuple/empty parts; sessionRefAliases/resolveSessionRefAmong stage order unchanged; splitSessionRefContext uses a null-prototype record. Existing tests cover malformed keys (test/helpers.test.js:1524, test/skills-core.test.js:195) and malformed content blocks.",
+    "lazy_renderer_arrival": "Core factory calls getKatex() inside each renderer, never at construction. Browser adapter returns createSharedMathExtensions(() => katexLib || (typeof katex !== 'undefined' ? katex : null)); no tokenizer or fallback copy exists in the adapter. rich-text.ts calls the adapter with no argument. lib/file-page.js passes () => katex and keeps its own escapeHtml/sanitizeMarkdownUrl.",
+    "portability_closure": "tsconfig.helpers.json (lib ES2022, no DOM) included in npm run typecheck, which CI runs via npm run check. build-browser.js rejects any src/core/helper-* input whose runtime import leaves src/core/helper-*, before writing outputs; test/browser-build.test.js:68-76 exercises that rejection and output preservation. helper-types.ts reaches session-api only via import type, so no runtime edge exists. All helper modules are reachable from the shared-helpers entry, so the check covers the whole closure.",
+    "generated_delivery": "lib/helper-{values,content,models,query,refs,format,identity,markdown,types}.{js,d.ts} exist with the core banner; lib/session-metadata.js requires ./helper-content, ./helper-format, ./helper-refs. build-core.js orphan detection would flag any leftover old core outputs.",
+    "docs": "Stage record, typescript guide, BACKLOG status and AGENTS.md reflect the delivered ownership. CLAUDE.md:2105 does not (see observation)."
+  },
+  "verification_limitations": [
+    "No shell access: I could not run git diff against 7d288dd, so baseline comparison relies on the current tree, the stage record and prior review artifacts rather than a hunk-by-hunk diff. Behavior preservation of moved bodies was judged by reading the current implementations, not by comparing against the pre-move text.",
+    "No build, compile, lint, test, or runtime execution was performed. Reported results (build:core, build:browser, check, 984 backend, 286 browser, UI scenarios/smoke, Node/VM parity, HTTP query/ref routes, published markdown page, late KaTeX smoke) are taken from the stage record and were not reproduced.",
+    "Byte sizes of public/app.js and public/helpers.js (875,407 / 84,170) and the 121-export count could not be measured with the available tools.",
+    "Freshness of committed lib/ and public/ outputs relative to source was spot-checked by reading banners and require lines, not by regenerating; npm run typecheck drift checks are the authority.",
+    "Stage 1 approval at 811d473 and CI run 34950164395 were not re-verified.",
+    "The claim that the unsafe LSP rename side effects were fully reverted was not independently verifiable without a diff; the grep sweep found no stray cross-package references to old helper paths in src/, lib/, test/ or scripts/, which is consistent with that claim."
+  ],
+  "rationale": "Every frozen-boundary requirement is visible in source: intact moves with named core owners, minimal format/identity/markdown splits, structural types consolidated in helper-types.ts with readonly HelperSession derived from SessionFields, an explicit renderer-provider port with a thin browser adapter that keeps render-time global lookup, unchanged Buffer/atob and ref-alias behavior, narrow lib/helper-*.js requires in all eight Node consumers, and a metadata module that consumes typed source without unknown-return signatures. Build direction is enforced by the esbuild closure check and the Node-only compile, both under npm run check and CI, with an isolated regression for rejection. The gaps are documentation drift in CLAUDE.md and the absence of automated tests pinning the lazy-renderer contract, readonly-input acceptance and the export manifest; none changes delivered behavior, so they are recorded as nonblocking follow-ups rather than blockers."
+}
