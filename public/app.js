@@ -15239,6 +15239,15 @@ ${restored}`;
           el.title = "Open file";
         }
       });
+      root.querySelectorAll(".markdown-body a[href]").forEach((link) => {
+        if (link.classList.contains("file-link")) return;
+        const href = (link.getAttribute("href") || "").trim();
+        if (!looksLikeFilePath(href)) return;
+        link.classList.add("file-link");
+        link.title = "Open file";
+        link.dataset.filePath = href;
+        link.removeAttribute("href");
+      });
       root.querySelectorAll(".markdown-body:not([data-linkified])").forEach((body) => {
         body.dataset.linkified = "1";
         const walker = document2.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
@@ -18067,7 +18076,7 @@ ${restored}`;
       const link = e.target instanceof Element ? e.target.closest(".file-link") : null;
       if (!link || !sessionState.currentSession) return;
       e.preventDefault();
-      fileViews.openFile((link.textContent || "").trim());
+      fileViews.openFile(link.dataset.filePath || (link.textContent || "").trim());
     });
     document.addEventListener("click", (e) => {
       const btn = e.target instanceof Element ? e.target.closest(".msg-link-btn") : null;
