@@ -14,12 +14,8 @@
 import { type ChildProcessWithoutNullStreams } from 'child_process';
 import { PendingRequests } from './pending-requests';
 import { type ProtocolRecord } from './wire-protocol';
-import type { LaunchOptions, NativeSessionId, RunningToolCall } from './contracts';
-interface RecoveryObserver {
-    initialize(): void;
-    event(type: string, data?: unknown): void;
-    dispose(): void;
-}
+import { type RecoveryObserver } from './session-recovery';
+import type { ExtensionUIState, LaunchOptions, NativeSessionId, RunningToolCall } from './contracts';
 interface RPCLaunchOptions extends LaunchOptions {
     cwd?: string;
 }
@@ -49,6 +45,8 @@ declare class RPCSession {
     recoveryStartTime: string | null;
     recoveryObserver: RecoveryObserver;
     bounceExecuting?: boolean;
+    bounceActivityRevision?: number;
+    extUIState?: ExtensionUIState;
     lastStats?: unknown;
     constructor(id: NativeSessionId, proc: ChildProcessWithoutNullStreams);
     _canObserveRecovery(): boolean;

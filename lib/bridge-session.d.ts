@@ -3,7 +3,7 @@ import net = require('net');
 import { EventEmitter } from 'events';
 import { PendingRequests } from './pending-requests';
 import { type ProtocolRecord } from './wire-protocol';
-import type { AdvertisedCapabilities, BridgeRegistryEntry, HarnessId, NativeSessionId, RunningToolCall } from './contracts';
+import type { AdvertisedCapabilities, BridgeRegistryEntry, ExtensionUIState, HarnessId, NativeSessionId, RunningToolCall } from './contracts';
 type BridgeRequest = Promise<unknown> & {
     readonly requestId?: number;
 };
@@ -61,17 +61,14 @@ declare class BridgeSession extends EventEmitter<BridgeEvents> {
     compacting: boolean;
     queueState: unknown;
     runningToolCalls: Map<string, RunningToolCall>;
-    extUIState: {
-        widgets: Map<unknown, ProtocolRecord>;
-        statuses: Map<unknown, ProtocolRecord>;
-        dialogs: Map<unknown, ProtocolRecord>;
-    };
+    extUIState: ExtensionUIState;
     alive: boolean;
     sock: net.Socket | null;
     _nextId: number;
     _pending: InstanceType<typeof PendingRequests>;
     hello: ProtocolRecord | null;
     bounceExecuting?: boolean;
+    bounceActivityRevision?: number;
     constructor(registryEntry: BridgeRegistryEntry);
     connect(): Promise<this>;
     _validateV2Hello(msg: unknown): NodeJS.ErrnoException | null;

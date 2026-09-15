@@ -100,6 +100,12 @@ the complete pre/post manifest comparison above establishes cutover compatibilit
 while existing consumer behavior tests and Node/browser parity remain the durable
 checks. No runtime implementation changed in response to this review.
 
+Approval and observation resolutions were pushed as
+`5fb42ed4ff6cca7e9a4b2b1b6470445f9cad7504`.
+[Exact-commit CI](https://github.com/MrPink604/pi-dish/actions/runs/34953381435)
+passed all five jobs: backend on Node 22.19.0, 22.x, 24.x and 26.x, plus the
+Node 24 browser, extracted UI scenarios and full UI smoke job.
+
 The inventory and task definitions below retain the pre-cutover evidence and
 approved acceptance criteria; current ownership is the frozen/delivered graph above.
 

@@ -1,15 +1,196 @@
 # Session lifecycle migration
 
-Status: **Planned** (2026-09-15). No implementation or runtime verification is
-claimed by this document. Stage 3 follows [browser contract cleanup](browser-contract-cleanup.md)
+Status: **Implemented and locally verified; implementation review pending** (2026-09-15).
+Stage 3 follows [browser contract cleanup](browser-contract-cleanup.md)
 and [shared runtime helpers](shared-runtime-helpers.md).
 
 Plan review: **APPROVED** by Anthropic Fable 5.1 at high effort for the clarified
 plan at `9dee6d3`; [signoff and observation resolutions](../BACKLOG.md#next-stage-plan-review).
-No implementation or lifecycle runtime approval is implied.
+Plan approval is separate from the implementation review and delivery record below.
 
 Planning baseline includes `6e8df16` and `e816d36`: recursive family discovery,
 Prime RLM artifacts and subagent trace/signaling are existing consumers to preserve.
+
+## Implementation freeze
+
+The helper destinations are fixed at `src/core/helper-{content,format,identity,models,query,refs,markdown,types,values}.ts`.
+The dependency wave keeps existing CommonJS exports and persistence versions.
+`session-recovery.ts` owns `RecoveryRecord`, `RecoveryControl`, `RecoveryAttempt`,
+`RecoverySnapshot` and `RecoveryObserver`; observation writers cannot write controls.
+Record harness/native IDs remain persisted strings until the existing route decoder
+validates them. Arbitrary legacy attempt fields survive round trips; consumed launch/
+delivery uncertainty must be narrowed without turning malformed evidence into permission.
+`tmux.ts` owns `SpawnPlacement`, `PaneProcessState` and exact-process cleanup errors;
+`prime-lifecycle.ts` owns the proved supervisor target and stop-dispatched errors.
+Both consume the existing `ProcessIdentity`, never a replacement identity brand.
+Runtime errors preserve `remainingProcesses` and `stopRequested` for the subsequent
+checked launch/operation outcome conversion. The integration owner handled server
+composition, RPC, shared contracts and generated files after each settled wave.
+
+The checked owners are `session-ownership.ts`, `session-launch.ts` and
+`session-operations.ts`. Ownership separates exact RPC objects, logical Pi claim/
+birth proof, owned-pane proof, and Prime worker/roster proof from weak runtime
+location. Launch owns descriptor-based wrappers, registration and bounded cleanup;
+operations own route close/restart flights, canonical-file resume flights and
+quarantines. Recovery/Bounce runners retain their distinct report/reservation state.
+Source lookup uses the existing `SessionSourceResolver` and captured live source
+observations; registry/descriptor/process lookups are checked dependencies.
+Catalog/subsession/model/settings inputs are read observations, not callbacks
+allowed to choose fallback, destructive mode, admission or recovery safety.
+Async preparation returns a synchronous final checker where the current action
+requires it; it is not a permanently reusable authorization.
+`harnesses.ts` resolves from generated `lib/` and remains the sole owner of wrapper/
+bridge paths and literal host-package imports.
+
+### Frozen arrival-order matrix
+
+`C` = fresh create, `R` = resume, `L` = explicit close, `T` = restart,
+`V` = recovery, `B` = Bounce, `U` = routine invocation. Rows describe both orders
+on the same target, not a proposed symmetric mutex. Different new-session files
+do not acquire a historical-file lock. Runner-to-operation rows inherit the
+corresponding core row at the moment the runner actually invokes that operation.
+
+| Pair | Left arrives first | Right arrives first |
+| --- | --- | --- |
+| C / C | Independent new files; hidden target creation alone serializes. | Same. |
+| C / R | No file reservation before create registers; resume uses observed active/file state. | Create still allocates a new session, not a second resume of R's file. |
+| C / L | Close can act only after a runtime becomes discoverable; it does not cancel provisional creation. | Closing an old identity does not block fresh creation. |
+| C / T | Restart needs an existing RPC or owned placement; provisional creation is not authority. | Fresh creation is independent of restart's historical file. |
+| R / R | Canonical real file joins the first promise/target; joiner rechecks active runtime. | Same, with the other caller becoming leader. |
+| R / L | Close has no resume-map admission check; resume checks close immediately before launch. A close that finishes during validation does not reserve the future launch. | Resume may return already-active while close is running; if inactive, its final launch check refuses a still-running close. |
+| R / T | Restart refuses a resume flight only when its currently observed active file identifies that flight; otherwise existing active/proof checks decide. | Resume checks restart before source lookup and again before launch. |
+| L / L | Canonical route joins the first close promise. | Same. |
+| L / T | Restart refuses the close flight. | Close refuses the restart flight. |
+| T / T | Second restart refuses; it does not join. | Same. |
+| C / V | Recovery probes live identity/file, otherwise uses guarded R; fresh C is not a recovery reservation. | C remains a fresh-file operation; V owns only its saved target. |
+| R / V | V's restore joins R by canonical file and rechecks observation/control/live state before any continuation. | Ordinary R may join V's restore; V's route flight is not a general operation lock. |
+| L / V | V observes persisted closed intent and cannot launch/deliver while excluded/closed. | L persists closed intent; V rechecks controls after handshake and before continuation. |
+| T / V | V's R inherits restart refusal; live probing must match the saved file. | T inherits the R/T rules if V is restoring; no runner-wide restart mutex is invented. |
+| V / V | Per-route recovery flight joins; startup snapshot starts once. | Same; explicit retry remains restore-only. |
+| C / B | Waiting B reserves only its captured target; C creates a different identity. | C does not consume B's waiting reservation. |
+| R / B | B captures/inspects current ownership; its eventual restart inherits R/T. | Waiting B does not block R; executing B excludes non-GET HTTP actions, while direct callers retain existing operation rules. |
+| L / B | A stopped/replaced captured target is skipped/refused at B's fresh checks. | Waiting B does not block L; executing HTTP exclusion and direct-call L/T rules remain distinct. |
+| T / B | Captured identity changes or existing T refusal prevents B from acting on its replacement. | Waiting B does not block T; B execution delegates T or guarded reload with final checks. |
+| V / B | V's live/restore and B's captures retain their own checks; no shared runner mutex. | Waiting B does not exclude V; executing live lookup/action rules and control/identity rechecks remain in force. |
+| B / B | Waiting target reservation refuses duplicate queued targets; execution flight deduplicates runner work. | Same; cancel affects waiting targets only. |
+| C / U | U chooses existing live/resume/fresh behavior; its fresh C is independent. | C does not consult the routine ledger's busy policy. |
+| R / U | U's R joins by canonical file; failed resume retains its existing fresh-create fallback. | External R can join U's R but does not consume a routine invocation slot. |
+| L / U | U inherits close/resume behavior and its one-shot close records refusal without escalation. | External L uses the same guarded close; U's observation/ledger policy stays in the runner. |
+| T / U | U's R inherits restart refusal and existing fresh fallback; external T does not acquire routine busy state. | T uses the same active/proof checks against U's runtime. |
+| V / U | Startup awaits recovery, then reconciles invocations, then starts routine scheduling. | A direct running invocation is not globally locked by V; ordinary operation and control guards apply. |
+| B / U | U's HTTP actions respect executing B; direct lifecycle calls retain their operation rules. | Waiting B does not reserve the routine ledger; activity/identity changes block B at inspection/action. |
+| U / U | Same-routine busy skip/steer/follow-up and ledger policy remain unchanged; different routines are independent. | Same. |
+
+Acquisition/release: R installs its file promise before asynchronous quarantine,
+model validation and launch; releases only its own promise in `finally`. L installs
+its route promise before persisting closed intent and proving/stopping; rollback
+restores prior intent unless stop dispatch is uncertain. T installs its route set
+entry after admission and removes it in `finally`, preserving open intent across
+stop/replacement. Hidden spawning has its own promise chain and server-lifetime
+broken flag. Failed cleanup/explicit or detached-worker uncertainty outlive flight
+release; only the existing matching active-file or proved-cleanup rules clear them.
+V writes launch/delivery intent before effects, with boot identity and saved-byte
+checkpoint checks. B's execution lock spans its async inspection and final action;
+report DTOs never expose executable authority.
+
+Public results stay unchanged: close/restart return status/body with `stopped` and
+replacement-readiness distinctions; resume/create throw status-bearing errors.
+Checked internal outcomes must distinguish no action, stopped, stop uncertain,
+cleanup failed and replacement-not-ready before HTTP mapping. Registry refresh,
+live hello, process birth/pane checks and optional synchronous final checks remain
+adjacent to the actual destructive action, not just to initial capture.
+
+Baseline evidence before lifecycle edits: isolated real OMP 18.1.21 passed streamed
+persisted turn, tree capability, owned close, same-route resume and ephemeral BTW
+(2 fake-provider requests). Prime 0.9.4 passed worker/client separation, same-pane
+and busy restart, busy/idle close, same-route resume, peer-root survival, manual
+close refusal and close after client exit (8 requests). Commands used the explicit
+absolute binaries named in the verification section, temporary HOME/tmux/socket
+roots and a private Prime supervisor. No live provider/session credentials.
+Full backend suite at the shared-helper checkpoint: 984 passed, zero skipped.
+Per-poll registry/proof counts and recovery-read byte counts were not instrumented;
+existing bounded algorithms and focused suites are the baseline for those paths.
+No unexplored arrival-order race is claimed fixed by this extraction.
+
+
+## Implementation and verification record
+
+All eight implementation tasks are complete. The frozen matrix above remains the
+behavioral contract; the migration does not introduce a global lifecycle mutex.
+
+| Checked owner | Implemented responsibility and removed owner |
+| --- | --- |
+| `session-recovery.ts` | Actual observation/control persistence, checkpointing and observer transitions replace authored `lib/session-recovery.js`; RPC imports the real observer contract instead of a handwritten require signature. |
+| `tmux.ts`, `prime-lifecycle.ts` | Actual placement/process-tree operations and supervisor protocol replace their authored JS implementations. |
+| `session-ownership.ts` | Live transport/source lookup, weak runtime location, claim/process captures, action-time revalidation, saved recovery validation and switch adoption replace server-owned proof/read helpers. |
+| `session-launch.ts` | Descriptor-owned argv/env/wrappers, token registration and hello proof, final deadline check, cleanup, hidden spawn chain/broken state and backend dispatch replace the server launch machinery. |
+| `session-operations.ts` | Create/naming, async spawn status/provenance, canonical-file resume, close intent, restart transitions, distinct flights and quarantine replace server lifecycle closures and maps. |
+| `recovery-runner.ts` | The actual runner and `createRecoveryRuntime` own restore/process-proof persistence and continuation delivery; no server recovery-safety callbacks remain. |
+| `session-bounces.ts` | The actual queue and `createSessionBounceRuntime` own idle/activity/descendant checks, execution exclusion and guarded-reload completion; no server Bounce inspection/execution callbacks remain. |
+
+`server.js` constructs one ownership/launch/operation set and supplies only raw
+catalog/model/settings/transcript observations or presentation/persistence hooks.
+HTTP handlers decode requests and map results. Routines receive the coordinator's
+create/resume/close methods directly; routine scheduling, prompt composition,
+ledger logic and its JS source remain outside this stage. Its generated-contract
+JSDoc documents that boundary, not compiler coverage of the runner.
+
+The existing isolated runner/queue factories remain real checked algorithms.
+Their production factories implement the former server policy and compose those
+algorithms; they are not declaration adapters or optional compatibility branches.
+Generated CommonJS and declarations preserve the original five runtime module paths
+and add the three ownership/launch/operation paths. Extension imports continue to
+resolve `../../lib/session-recovery.js`.
+
+Launch outcomes explicitly distinguish ready, fallback-permitted,
+fallback-forbidden, cleanup-incomplete, explicit-pane uncertainty, detached-worker
+uncertainty and interruption. Operations retain no-action, stopped,
+stop-uncertain, cleanup-failed and replacement-not-ready before HTTP mapping.
+`LifecycleInterruption` retains its exact instance across action layers.
+Required-file descriptor calls return string-only argv without scanning/copying
+arguments; the legacy empty-options builder still returns its original shape.
+Negative declaration fixtures reject advice/report-as-authority, missing cleanup
+or stop evidence, observer/control mixing and assumed validated legacy evidence.
+
+### Local verification
+
+| Check | Observed result |
+| --- | --- |
+| `npm run build:core` and `npm run check` | Passed; core/browser output drift and all type fixtures checked. |
+| Focused lifecycle suites | 304 passed, zero skipped, including the new malformed-evidence and production Bounce race/reload cases. Routine suites also ran in the full backend gate below. |
+| `npm test` | 995 passed, zero skipped, including real Pi bridge integration and routine/API coverage. |
+| `npm run test:browser` | 286 passed. |
+| `npm run test:ui:scenarios` | All eight independent scenarios passed. |
+| `npm run test:ui` | Complete desktop/mobile, multi-host, routine/Bounce, restart/close and retained-transcript smoke passed. |
+| `npm run test:lineage -- omp` | OMP 18.1.21: streamed persisted turn, live/inactive tree gates, owned close, same-route resume, history read and BTW; two fake-provider requests. |
+| `npm run test:lineage -- prime` | Prime 0.9.4: retained wrapper token, worker/client separation, busy/idle root close, same-pane and busy restart, persisted replacement/resume turns, peer-root survival, client-exit close and manual-close refusal; eight fake-provider requests. |
+| Extension-relative observer gate | Isolated Node `createRequire` anchored at the bridge loaded all eight exports and exercised store/observer controls; the narrow generated-declaration consumer compiled, including its negative control patch. |
+| Independent implementation reviews | Dependency, ownership, launch, coordinator, recovery and Bounce reviews completed; introduced dependency/legacy-PID regressions were fixed and their reproductions passed. Final four launch/operation/runner reviews reported no findings. |
+
+The real harness commands used `/home/jyarwood/.local/bin/omp`,
+`/home/jyarwood/.local/bin/prime-agent` and OMP's
+`PI_DISH_REAL_BUN_BIN_DIR=/home/jyarwood/.bun/bin`. Fixtures isolated HOME,
+provider configuration, sockets, tmux and Prime's supervisor; no live sessions or
+provider credentials were borrowed. Temporary observer/import smoke files and
+homes were removed; maintained fixture scripts own their teardown.
+
+### Preserved limits and delivery
+
+The matrix was reviewed against the original implementation and exercised through
+the existing overlap/ownership suites, new race regressions and real runtime
+canaries. It is not a claim of 56 independently instrumented whole-program races.
+Registry/proof call counts and recovery-read bytes were not instrumented, so no
+numeric performance improvement or stronger race guarantee is claimed.
+
+Legacy unclassified Pi launch errors still permit headless RPC fallback.
+Quarantine remains context-specific: explicit resume/restart retains placement
+uncertainty, while hidden resume retains incomplete cleanup. Existing action-time
+limits remain: owned-pane/logical close do not consume an optional Bounce guard,
+and low-level pane lookup/birth checks do not make all intervening awaits atomic.
+This is an ownership/type migration, not an unreviewed change to those policies.
+
+The implementation's Fable 5.1 high-effort review and exact pushed-commit CI
+result are recorded after their respective delivery gates.
 
 ## Mission and outcome
 
@@ -367,21 +548,21 @@ Never borrow live agent sessions, shared daemon authority or provider credential
 
 ## Definition of done and deletion ledger
 
-- Five authored JS modules have checked implementations and generated compatible
+- [x] Five authored JS modules have checked implementations and generated compatible
   `lib/` outputs; RPC's recovery adapter/local interface are gone. Runtime extension
   imports still resolve and retained Prime wrapper paths remain usable.
-- Server proof predicates, launch/fallback/registration loops, operation flights,
+- [x] Server proof predicates, launch/fallback/registration loops, operation flights,
   quarantines and recovery/Bounce policies are removed in favor of their typed
   owners; retained HTTP glue is named explicitly. Multiple necessary keyed maps
   inside the owner are not an unfinished migration.
-- Every API, routine, recovery, Bounce and runtime-location consumer uses the new
+- [x] Every API, routine, recovery, Bounce and runtime-location consumer uses the new
   contracts. No obsolete alias, duplicate policy or unchecked helper require
   signature survives; Stage 2's supported `public/helpers.js` compatibility export
   remains supported, not imported back into internal lifecycle code.
-- Public status/error bodies, capabilities, persistence versions, prompt behavior,
+- [x] Public status/error bodies, capabilities, persistence versions, prompt behavior,
   close-intent semantics and runtime placement remain compatible. Unproved races
   are reported separately, never advertised as fixes or hidden in extraction.
-- Verification evidence and skip reasons are recorded; actual uncertainty cases
+- [x] Verification evidence and skip reasons are recorded; actual uncertainty cases
   retain appropriate regression coverage. Update existing architecture/testing
   docs after smoke succeeds and remove throwaway verification scaffolding.
 

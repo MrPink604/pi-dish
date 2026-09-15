@@ -43,11 +43,12 @@ Opaque tool values remain unknown. Browser compilation also checks unused locals
 and parameters.
 
 Discovery, source resolution, metadata accumulation, indexing and catalog
-composition have checked implementations. `server.js` supplies captured registry
-and RPC observations plus existing lifecycle advice; consumed external fields are
-validated before composition. General JSONL/tree/message parsing, usage projections,
-skill mining and feature stores remain JavaScript. The index validates the values
-it consumes from those projections without claiming their algorithms are migrated.
+composition have checked implementations. Lifecycle ownership, launch and operation
+coordination, recovery and Bounce now also have checked implementations.
+`server.js` supplies captured observations and composes those owners; consumed
+external fields are narrowed at their boundaries. General JSONL/tree/message
+parsing, usage projections, skill mining and feature stores remain JavaScript.
+The index validates the values it consumes without claiming those algorithms are migrated.
 
 See the [stage plan](session-catalog-migration.md) for scope, field authority,
 dependencies, deletion criteria and verification. Lifecycle authority, host and
@@ -62,12 +63,13 @@ The task documents separate delivered contracts from pending implementation:
    views, decoded message continuity and session-only model loading; verified and reviewed.
 2. [Shared runtime helper cutover](shared-runtime-helpers.md): implemented, locally
    verified and approved by Fable at `1cbd826` without blocking findings.
-3. [Session lifecycle migration](session-lifecycle-migration.md): checked authority,
-   launch and operation owners, recovery/bounce implementations and caller cutover.
+3. [Session lifecycle migration](session-lifecycle-migration.md): implemented checked
+   authority, launch and operation owners, actual recovery/Bounce policies and all
+   lifecycle callers; local strict, backend, browser/UI and real-harness gates passed.
 
-Lifecycle remains a separate implementation stage. Each record separates delivered
-contracts, preserved behavior and verification/review status. Remaining general
-routes, parser projections and feature stores are not made checked by their imports.
+Each record separates delivered contracts, preserved behavior and
+verification/review status. Remaining general routes, parser projections, routine
+scheduling and feature stores are not made checked by importing these modules.
 
 All three plans have [Fable 5.1 high-effort signoff](../BACKLOG.md#next-stage-plan-review)
 for their clarified task definitions. This does not change the implementation
@@ -89,6 +91,12 @@ coverage described below or waive any stage's verification/review gates.
 | `wire-protocol.ts` | RPC/bridge envelope validation and response/event distinctions; feature payloads remain unknown |
 | `rpc-session.ts` | RPC child lifecycle, request methods, stream reconstruction and native-id pool |
 | `bridge-session.ts` | Registry discovery/claims, socket handshake and pool, request methods and reconnect snapshots |
+| `session-recovery.ts` | Durable observation/control separation, saved-byte checkpoints and observer lifecycle |
+| `tmux.ts`, `prime-lifecycle.ts` | Placement persistence, exact process/pane operations and owned Prime supervisor stop |
+| `session-ownership.ts` | Live/source lookup, weak runtime advice, distinct captures, fresh revalidation and saved recovery validation |
+| `session-launch.ts` | Descriptor-based wrappers, argv/env, registration, cleanup and explicit backend/uncertainty outcomes |
+| `session-operations.ts` | Create/resume/close/restart, durable close intent, distinct flights, canonical-file quarantine and HTTP outcome projection |
+| `recovery-runner.ts`, `session-bounces.ts` | Actual runners plus checked production restore/delivery and idle/execute/reload policies |
 | `host-identity.ts` | Stable host id and host label |
 | `host-colors.ts` | Shared pure color sanitization, palette assignment and RGB conversion |
 | `dish-store.ts` | HOME-scoped reads and atomic writes for small JSON stores |
@@ -214,9 +222,15 @@ decision and packaging checks.
   request ids are optional because an early rejection never tracked a request.
 - Tool arguments and partial results remain opaque. The shared tracker owns
   lifecycle bookkeeping, not tool-specific validation.
-- Harness contracts describe current behavior, including optional legacy
-  resume arguments. They preserve lifecycle modes and capability differences;
-  they do not enable additional harness commands.
+- Harness contracts preserve optional legacy resume arguments; a required-file
+  overload proves string-only argv without a runtime scan. Lifecycle modes and
+  capability differences remain unchanged.
+- Lifecycle captures are operation-specific, not reusable authorizations.
+  Async preparation returns a synchronous final checker where the existing action
+  requires one. Weak runtime/source advice and report DTOs cannot serve as captures.
+- Launch and operation discriminants retain cleanup, stop and replacement
+  uncertainty before HTTP mapping. Recovery observations cannot patch controls;
+  legacy attempt fields remain unknown until their actual consumer narrows them.
 
 `test/types/core.ts` checks the declarations through the public `lib/` imports,
 including cases that must fail compilation. Runtime regressions exercise the

@@ -55,7 +55,7 @@ declare function discoverSubsessionCandidates(parentFile: string, options?: Disc
  * candidate filtering, symlinks, ambiguous headers, or depth caps count as
  * evidence that all descendants exited.
  */
-declare function inspectSubsessionExits(parentFile: string, options?: DiscoveryOptions): {
+declare function inspectSubsessionExits(parentFile: unknown, options?: DiscoveryOptions): {
     complete: boolean;
     blockers: string[];
 };

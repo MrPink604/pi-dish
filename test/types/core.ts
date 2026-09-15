@@ -12,6 +12,13 @@ import { decodeBridgeFrame, decodeRPCFrame } from '../../lib/wire-protocol';
 import { getRPCSession } from '../../lib/rpc-session';
 import { BridgeSession } from '../../lib/bridge-session';
 import type { HostId, NativeSessionId, SessionId, SessionRef, ProcessIdentity, RunningToolCall, HarnessDescriptor } from '../../lib/contracts';
+import type { SessionOwnership, RuntimeDescription, OwnedPaneCloseCapture, BeforeLifecycleAction } from '../../lib/session-ownership';
+import { patchControl } from '../../lib/session-recovery';
+import type { RecoveryObservation, RecoveryAttempt, RecoveryObserver } from '../../lib/session-recovery';
+import type { LaunchOutcome } from '../../lib/session-launch';
+import type { SessionOperationOutcome, SessionOperationResponse } from '../../lib/session-operations';
+import type { SessionBounceTarget } from '../../lib/session-bounces';
+import type { RecoveryReportSession, RecoveryStatus } from '../../lib/recovery-runner';
 
 const hostId: HostId = getHostId();
 const capabilities = sessionCapabilities('omp', { prompt: 'unvalidated wire value' }, { active: true });
@@ -212,3 +219,64 @@ metadataIndex.scanSessions([source]).infos.get(source.file)!.name = 'mutated';
 // @ts-expect-error Authoritative metadata has no open extension index signature.
 closedRow.fields.extension = true;
 void [pendingHistory, serverTimestamp, prematureWireTimestamp, omittedPatch, nullablePatch, badMetadata, typoPatch, identityPatch, livePatch, controlPatch, datePatch, wrongSource, wrongRoute];
+
+declare const lifecycleOwnership: SessionOwnership;
+declare const runtimeAdvice: RuntimeDescription;
+declare const ownedPaneCapture: OwnedPaneCloseCapture;
+// @ts-expect-error A display/runtime location is not a destructive capture.
+lifecycleOwnership.revalidateOwnedPaneClose(runtimeAdvice);
+// @ts-expect-error Pane ownership cannot authorize a logical process signal.
+lifecycleOwnership.revalidateLogicalClose(ownedPaneCapture);
+// @ts-expect-error Prime supervisor proof cannot be replaced by pane ancestry.
+lifecycleOwnership.preparePrimeClose(ownedPaneCapture, false, null);
+const ownedRpcCapture = lifecycleOwnership.captureRpcClose(sessionId);
+if (ownedRpcCapture) {
+  // @ts-expect-error Capturing an exact RPC child does not grant pane authority.
+  lifecycleOwnership.revalidateOwnedPaneClose(ownedRpcCapture);
+}
+// @ts-expect-error An asynchronous final checker would reopen the action-time race.
+const asynchronousFinalCheck: BeforeLifecycleAction = async () => async () => {};
+void asynchronousFinalCheck;
+
+declare const recoveryObservation: RecoveryObservation;
+declare const recoveryAttempt: RecoveryAttempt;
+declare const recoveryObserver: RecoveryObserver;
+// @ts-expect-error Observation metadata cannot mutate server recovery controls.
+const observationWithCloseIntent: RecoveryObservation = { ...recoveryObservation, closed: true };
+// @ts-expect-error Control patches cannot overwrite harness observation activity.
+patchControl('pi', nativeId, { activity: 'idle' });
+// @ts-expect-error An observer cannot grant or revoke server close intent.
+recoveryObserver.patchControl({ closed: false });
+// @ts-expect-error Persisted launch evidence is unknown until the consumer narrows it.
+const presumedRecoveryProcess: ProcessIdentity = recoveryAttempt.launch;
+void [observationWithCloseIntent, presumedRecoveryProcess];
+
+const completeResumeArgv: string[] = registry.pi.argv.resume({ file: '/fixture/session.jsonl' });
+// @ts-expect-error A legacy empty resume request can still contain an absent file.
+const incompleteResumeArgv: string[] = registry.pi.argv.resume();
+void [completeResumeArgv, incompleteResumeArgv];
+
+declare const launchOutcome: LaunchOutcome;
+if (launchOutcome.kind === 'explicit-uncertain') {
+  // @ts-expect-error Uncertain placement cannot grant RPC fallback permission.
+  const fallbackPermission: Extract<LaunchOutcome, { kind: 'fallback-permitted' }> = launchOutcome;
+  void fallbackPermission;
+}
+// @ts-expect-error Incomplete cleanup must retain the placement/process evidence.
+const forgottenCleanup: LaunchOutcome = { kind: 'cleanup-incomplete', error: new Error(), status: 500 };
+// @ts-expect-error Replacement-not-ready must explicitly retain the completed stop.
+const forgottenStop: SessionOperationOutcome = { kind: 'replacement-not-ready', status: 500, error: 'Not ready' };
+declare const operationResponse: SessionOperationResponse;
+// @ts-expect-error An HTTP body is not a safety-significant internal outcome.
+const responseAsOutcome: SessionOperationOutcome = operationResponse;
+void [forgottenCleanup, forgottenStop, responseAsOutcome];
+
+declare const bounceReportTarget: SessionBounceTarget;
+// @ts-expect-error API/report targets cannot authorize a queued runtime action.
+lifecycleOwnership.bounceIdentityFailure(bounceReportTarget);
+// @ts-expect-error Executable ownership is absent from the public Bounce report.
+const reportedAuthority = bounceReportTarget.authority;
+declare const recoveryReportRow: RecoveryReportSession;
+// @ts-expect-error A legacy persisted report status is not a classified recovery outcome.
+const classifiedReportStatus: RecoveryStatus = recoveryReportRow.status;
+void [reportedAuthority, classifiedReportStatus];

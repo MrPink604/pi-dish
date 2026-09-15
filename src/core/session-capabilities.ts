@@ -3,10 +3,10 @@ import { getHarness } from './harnesses';
 
 /**
  * Legacy Pi permits missing flags; alternative wrappers must explicitly opt in.
- * This is policy only, not harness-id validation. Typed callers must establish
- * identity through getHarness/the registry boundary before passing its id.
+ * This is policy only, not harness-id validation. Unknown wrapper observations
+ * retain the same explicit-opt-in rule; no synthetic harness identity is needed.
  */
-function bridgeSupports(harnessId: HarnessId, capabilities: AdvertisedCapabilities | null | undefined, capability: BridgeCapability): boolean {
+function bridgeSupports(harnessId: unknown, capabilities: AdvertisedCapabilities | null | undefined, capability: BridgeCapability): boolean {
   return harnessId === 'pi' ? capabilities?.[capability] !== false : capabilities?.[capability] === true;
 }
 

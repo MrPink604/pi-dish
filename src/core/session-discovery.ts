@@ -443,7 +443,7 @@ function discoverArtifactSubsessions(parentFile: string, descriptor: HarnessDesc
  * candidate filtering, symlinks, ambiguous headers, or depth caps count as
  * evidence that all descendants exited.
  */
-function inspectSubsessionExits(parentFile: string, options: DiscoveryOptions = {}): { complete: boolean; blockers: string[] } {
+function inspectSubsessionExits(parentFile: unknown, options: DiscoveryOptions = {}): { complete: boolean; blockers: string[] } {
   const descriptor = options.descriptor || getHarness(options.harnessId || 'omp');
   const blockers: string[] = [];
   let complete = true;

@@ -249,3 +249,31 @@ test('bounded reports prefer newest observations and closed records do not crowd
   await runner.start();
   assert.deepEqual(s.launches, ['eligible']);
 });
+
+test('a malformed truthy delivery marker cannot authorize another idle restore', async t => {
+  const delivery = { unexpected: 'confirmed' };
+  const s = scenario(t, { control: { attempt: {
+    observationId: 'observation', status: 'restored', delivery,
+  } } });
+  await s.runner.start();
+  assert.deepEqual(s.launches, []);
+  assert.deepEqual(s.prompts, []);
+  assert.equal(s.row().status, 'needs-review');
+  assert.deepEqual(s.control().attempt.delivery, delivery);
+});
+
+test('legacy report values survive without broadening literal ambiguity checks', async t => {
+  const attempt = {
+    observationId: 'observation', status: ['restoring'], delivery: { value: 'uncertain' },
+    reason: { legacy: 'detail' }, updatedAt: ['old timestamp'],
+  };
+  const s = scenario(t, { live: { turnInProgress: false }, control: { attempt } });
+  assert.deepEqual(s.row().status, attempt.status);
+  assert.deepEqual(s.row().reason, attempt.reason);
+  assert.deepEqual(s.row().updatedAt, attempt.updatedAt);
+  await s.runner.start();
+  assert.equal(s.row().status, 'live');
+  assert.deepEqual(s.launches, []);
+  assert.deepEqual(s.prompts, []);
+  assert.deepEqual(s.control().attempt, attempt);
+});

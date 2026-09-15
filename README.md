@@ -673,15 +673,16 @@ npm run build:vendor  # regenerate public/vendor/ after bumping marked/highlight
 npm run electron:dev  # desktop shell
 ```
 
-Shared identity, harness, and transport primitives are authored in TypeScript
-under `src/core/`. Their generated CommonJS files and declarations are checked
-in under `lib/`, preserving direct Node startup and the existing package layout.
+Shared identity, harness, transport and lifecycle implementations are authored in
+TypeScript under `src/core/`. Their generated CommonJS files and declarations are
+checked in under `lib/`, preserving direct Node startup and the existing package layout.
 Run `npm run build:core` after source changes; `npm run check` verifies that the
 committed runtime matches the source. See [TypeScript migration guide](docs/typescript.md)
 for scope and conventions. First-party browser application logic is authored in
 TypeScript under `src/browser/`, including `app.ts`, feature controllers and
-static control bindings. The server application and feature stores remain a
-separate migration stage. See [migration status and delivery checks](BACKLOG.md).
+static control bindings. Lifecycle ownership, launch, operation coordination,
+recovery and Bounce are checked; general server composition, routine scheduling
+and other feature stores remain separate stages. See [migration status and delivery checks](BACKLOG.md).
 
 Run `npm run build:browser` after browser source changes and commit all generated
 scripts: `public/app.js`, `public/browser.js`, `public/helpers.js`,

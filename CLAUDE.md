@@ -46,6 +46,15 @@ feature schemas. `SessionRef` is available for future typed callers. The browser
 state store compiles strictly from `src/browser/session-state.ts` and issues
 immutable selection owners for its asynchronous callers. Details: [docs/typescript.md](docs/typescript.md).
 
+Lifecycle implementations now live in `src/core/session-{ownership,launch,operations}.ts`,
+`session-recovery.ts`, `tmux.ts`, `prime-lifecycle.ts`, `recovery-runner.ts` and
+`session-bounces.ts`. `server.js` composes one owner set; it no longer owns launch
+fallback, close/restart/resume flights, quarantine or recovery/Bounce action policy.
+Routines receive the checked coordinator's methods directly, but their JS
+scheduling/ledger implementation remains unchecked. The
+[lifecycle record](docs/session-lifecycle-migration.md) retains the asymmetric
+arrival-order matrix, compatibility limits and runtime evidence.
+
 ## Committing
 
 Once you've verified your changes work (tests pass; UI changes validated via
@@ -485,7 +494,7 @@ registry memo (`invalidateRegistryCache`) — the client re-fetches the list
 immediately and must not see the dead session as live. No SIGKILL
 escalation: a hung pi is for the user to inspect. The bridge stamps
 `$TMUX`/`$TMUX_PANE` as `tmux: { socket, pane }` on its registry entry;
-`describeRuntime()` (server.js) turns that — or the tmux-spawn placement,
+`describeRuntime()` (`src/core/session-ownership.ts`) turns that — or the tmux-spawn placement,
 or failing both a pid-ancestry scan of every pane on the tmpdir's servers
 (`findPaneByPid` in lib/tmux.js; covers stamp-less entries from older
 bridges) — into the `runtime` field on `GET /stats` (kind rpc | tmux |
@@ -497,7 +506,7 @@ and inherit the server's own `$TMUX`). Tests that assert runtime kinds pin
 row-level ✕ on live sidebar rows — both funnel post-close handling through
 `finishSessionClose` (list re-fetch + re-select flips the view to inactive).
 
-Prime uses `closeMode: owned-agent`: `lib/prime-lifecycle.js` reads the exact
+Prime uses `closeMode: owned-agent`: `src/core/prime-lifecycle.ts` (generated as `lib/prime-lifecycle.js`) reads the exact
 live worker's non-secret supervisor-socket/root-id fields from `/proc`, fenced
 by its birth identity, and sends the protocol-7 operation behind `prime-agent
 stop`. The supervisor roster must match that root, worker PID and session
@@ -518,7 +527,7 @@ fresh resume argv/env in the same pane, preserving the tmux server, session,
 window, and pane while issuing new launch authority. Externally launched Pi
 sessions remain closeable but never advertise `capabilities.restart`. Prime
 uses its launch-token, worker and supervisor proofs instead of ancestry:
-restart stops the owned root/children through `performSessionClose` while
+restart stops the owned root/children through the checked operation coordinator while
 retaining the client pane, then rechecks placement and absence of a live writer
 before respawn. The new bridge must prove a new worker for the original
 session ID/file. An indeterminate stop launches nothing; failed registration
@@ -529,6 +538,12 @@ button keys off explicit `restart: true` so mixed-version fleet hosts do not
 show an unsupported control.
 
 ## Session recovery (lib/session-recovery.js, lib/recovery-runner.js)
+
+The implementations are authored in `src/core/session-recovery.ts` and
+`src/core/recovery-runner.ts`; the named `lib/` files are generated runtime output.
+`createRecoveryRuntime` implements restore/process-proof persistence and prompt
+delivery using the checked coordinator, then composes the runner's report/flight
+algorithm. Server composition supplies settings observations, not safety callbacks.
 
 Host setting `recoveryMode` is `off` (default), `restore`, or `continue`.
 Recovery runs on server startup, independently of a browser or any prescribed
@@ -548,8 +563,9 @@ Generic shutdown cannot distinguish quit, reload and OS shutdown: report it as
 needs-review. Explicit API close persists closed intent before signalling;
 restart uses the proved close operation without retiring that intent.
 
-`resumeSessionById` is the shared guarded path for API, routines and recovery.
-`restartFlights`, `closeFlights` and `resumeFlights` exclude competing writers.
+`SessionOperations.resumeSessionById` is the shared guarded path for API,
+routines and recovery. Its distinct restart, close and canonical-file resume
+flights preserve the documented arrival-order rules; they are not one mutex.
 Fresh live identity beats a saved PID; boot IDs scope historical process
 authority. Recovery never falls back to HOME when the original cwd is missing,
 never launches parent-owned subagents, and persists launch/delivery intent
@@ -575,10 +591,13 @@ and unresolved tool results require review. See README for operational limits.
 
 ## tmux spawning (lib/tmux.js)
 
+`src/core/session-launch.ts` owns launch construction/registration and fallback;
+`src/core/tmux.ts` owns the generated `lib/tmux.js` placement/process operations.
+
 `POST /api/sessions/new` and `/resume` dispatch target-less ("headless")
 spawns to a **hidden detached tmux session** when available — dedicated
-socket `pi-dish` under the tmux tmpdir, one session named `headless`, spawns
-serialized so concurrent requests can't race `new-session` — so headless
+socket `pi-dish` under the tmux tmpdir, with independent named sessions and
+serialized name/placement selection so concurrent requests cannot race creation —
 sessions survive server restarts (`npm run dev` hot reload included). A
 `pi --mode rpc` child of the server (dies with it on stdin EOF — pi shuts
 down when the pipe closes, so orphaning can't save it) is the fallback:
@@ -597,14 +616,14 @@ a shell string): `listServers()` scans sockets under `$TMUX_TMPDIR ||
 `_` and forbids `:` in session names), `spawnInTmux()` new-window/new-session
 with `-e KEY=VALUE` env and `-P -F '#{pane_id}'`, plus `sendKeys`/`paneExists`.
 
-Correlation: the server generates a token, passes `PI_DISH_SPAWN_TOKEN` into
-the spawned pi's env (via tmux `-e`), and the bridge stamps it as `spawnToken`
-on its registry entry. `spawnPiInTmux` (server.js) builds the child from
-`getPiLaunchSpec()` (exported from rpc-session.js — same wrapper/alias env as
-RPC), then polls `REGISTRY_DIR` directly for the entry carrying the token (up
-to 30s, `PI_DISH_SPAWN_TIMEOUT_MS` override for tests). On timeout a
-user-targeted window is left open (don't kill it) and the error hints the
-bridge must be installed; hidden headless panes are killed instead.
+Correlation: the launch owner generates a token, passes `PI_DISH_SPAWN_TOKEN`
+into the spawned Pi's env (via tmux `-e`), and the bridge stamps it as `spawnToken`
+on its registry entry. `spawnHarnessInTmux` in `src/core/session-launch.ts`
+uses `harnessLaunchSpec` (Pi shares RPC's wrapper/alias env), then polls the
+registry directly for an exact single registration and checks once at the
+deadline. On an ordinary Pi timeout an explicit window stays inspectable;
+hidden panes must be gone before RPC fallback. Alternate/conflicting claims and
+detached Prime replacement uncertainty retain their stricter cleanup/refusal paths.
 
 Wrapper-token harnesses (OMP, Prime) normally get a generated
 `~/.pi/dish/launch-wrappers/<harness>-<token>.ts` injected in place of the
@@ -912,12 +931,12 @@ The invoke `input` JSON rides as an appended `<invocation-input>` block (the
 through `expandSessionRefs` so `#ref`s in a routine prompt still resolve.
 
 Runner (`createRoutineRunner(deps)`, deps injected so tests drive it without
-spawn paths): `oneShot` mode spawns fresh via `createSession` (no name; then a
-best-effort rename only when the live session advertises `rename`), delivers,
+spawn paths): production lifecycle dependencies are direct checked coordinator
+methods, while scheduling and ledger policy remain JS. `oneShot` spawns fresh
+via `createSession` (no name; then a best-effort capability-gated rename), delivers,
 observes `turn_end`/`agent_end`/`message_end`/session-gone, and closes after
-`PI_DISH_ROUTINE_CLOSE_GRACE_MS` through `closeSessionById` — the `/close`
-route body extracted verbatim so every ownership guard still applies; a
-refused close (unprovable Prime worker or OMP pane ownership) records
+`PI_DISH_ROUTINE_CLOSE_GRACE_MS` through `SessionOperations.closeSessionById`.
+A refused close (unprovable Prime worker or OMP pane ownership) records
 `closeError` and never escalates. `continue` mode reuses the last
 invocation's session (live → prompt when idle, else resume headlessly, else
 spawn) and never auto-closes. Busy = an invocation in `starting`/`running`:

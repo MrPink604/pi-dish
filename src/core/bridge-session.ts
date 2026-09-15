@@ -23,7 +23,7 @@ import { trackRunningToolCalls } from './running-tool-calls';
 import { listHarnesses } from './harnesses';
 
 import { validSessionId } from './session-key';
-import type { AdvertisedCapabilities, BridgeRegistryEntry, HarnessId, NativeSessionId, RunningToolCall } from './contracts';
+import type { AdvertisedCapabilities, BridgeRegistryEntry, ExtensionUIState, HarnessId, NativeSessionId, RunningToolCall } from './contracts';
 
 type BridgeRequest = Promise<unknown> & { readonly requestId?: number };
 interface PromptOptions { deliverAs?: 'steer' | 'followUp'; images?: unknown[]; }
@@ -348,13 +348,14 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
   declare compacting: boolean;
   declare queueState: unknown;
   declare runningToolCalls: Map<string, RunningToolCall>;
-  declare extUIState: { widgets: Map<unknown, ProtocolRecord>; statuses: Map<unknown, ProtocolRecord>; dialogs: Map<unknown, ProtocolRecord> };
+  declare extUIState: ExtensionUIState;
   declare alive: boolean;
   declare sock: net.Socket | null;
   declare _nextId: number;
   declare _pending: InstanceType<typeof PendingRequests>;
   declare hello: ProtocolRecord | null;
   declare bounceExecuting?: boolean;
+  declare bounceActivityRevision?: number;
 
   constructor(registryEntry: BridgeRegistryEntry) {
     super();

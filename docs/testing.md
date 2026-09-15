@@ -89,6 +89,10 @@ After editing `src/browser/`, run `npm run build:browser` before `npm test`;
 | Wire envelope validation, malformed responses, unknown events and transport survival | `test/transport-frames.test.js` plus existing bridge/RPC protocol suites |
 | Typed RPC startup validation, failed-child cleanup, delta snapshots and recovery ownership | `test/rpc-session.test.js`, `test/transport-frames.test.js`, `test/session-recovery.test.js` |
 | Typed bridge registry validation, pre-hello claim protection and session-switch replay ordering | `test/bridge-session.test.js` |
+| Lifecycle advice/report versus authority, observer/control separation and uncertain outcome types | `test/types/core.ts` through generated declarations |
+| Canonical resume flights, close intent/rollback, restart exclusion, cleanup quarantine and real placement | `test/tmux.test.js`, `test/server.test.js`, `test/rpc-session.test.js`, `test/routines.test.js`, `test/routines-api.test.js` |
+| Recovery bounded inspection, malformed evidence, handshake rechecks and no uncertain-delivery replay | `test/recovery-runner.test.js`, `test/session-recovery.test.js`, real Pi bridge integration |
+| Production Bounce activity races, final guards, stopped replacement outcomes and proved reload completion | `test/session-bounces.test.js`, browser Bounce scenarios and desktop/mobile smoke |
 | Sidebar query/scopes, list polling and unread ownership | `test/types/browser-sidebar-lists.ts`, `test/browser/sidebar-lists.spec.js` |
 | Sidebar row controls, close endpoints, menus and drag lifetime | `test/types/browser-sidebar-controls.ts`, `test/browser/sidebar-controls.spec.js` |
 | Sidebar metadata, host collapse and search authority | `test/browser-sidebar-render.test.js`, `test/types/browser-sidebar-render.ts`, family/search/multi-host UI smoke |

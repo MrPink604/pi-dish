@@ -840,6 +840,18 @@ test('Prime close rejects unowned launches, changed tokens, ambiguous roots and 
   await refused(/ownership changed/);
 });
 
+test('Prime close refuses an unreadable roster row without dispatching a stop', { skip: !tmuxOk }, async t => {
+  const { spawn, claim, close } = await primeCloseFixture(t);
+  const killsBefore = primeKills.length;
+  primeRosterTransform = rows => [...rows, null];
+  const result = await close();
+  assert.equal(result.status, 409, JSON.stringify(result.body));
+  assert.equal(primeKills.length, killsBefore);
+  assert.equal(processIdentityAlive(claim), true);
+  assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true);
+  assert.notEqual(require('../lib/session-recovery').getControl('prime', claim.nativeSessionId).closed, true);
+});
+
 test('Prime close remains single-flight after its client exits and leaves another root alive', { skip: !tmuxOk }, async t => {
   const selected = await primeCloseFixture(t);
   const other = await primeCloseFixture(t);
@@ -1547,6 +1559,35 @@ test('runtime location is cached per pid: a rename shows the old name within TTL
   }
 });
 
+test('legacy coercible registry PID retains tmux runtime and pane discovery', { skip: !tmuxOk }, async () => {
+  const sessionId = 'legacy-coercible-runtime';
+  const paneId = tmuxCmd(['new-window', '-d', '-t', 'work', '-P', '-F', '#{pane_id}', '--', 'sleep', '30']).trim();
+  const panePid = Number(tmuxCmd(['display-message', '-p', '-t', paneId, '#{pane_pid}']).trim());
+  const registry = require('../lib/bridge-session');
+  const registryFile = path.join(tmpHome, '.pi', 'dish', 'sessions', `${sessionId}.json`);
+  const socketStub = path.join(tmpHome, 'coercible-pid-socket');
+  fs.mkdirSync(path.dirname(registryFile), { recursive: true });
+  fs.writeFileSync(socketStub, '');
+  fs.writeFileSync(registryFile, JSON.stringify({ sessionId, socketPath: socketStub, pid: [panePid], cwd: '/tmp' }));
+  registry.invalidateRegistryCache();
+  const owner = require('../lib/session-ownership').createSessionOwnership({
+    onLive() {}, onRetired() {}, readSessionTailEntry: require('../lib/session-files').readSessionTailEntry,
+  });
+  try {
+    const runtime = await owner.describeRuntime(sessionId);
+    assert.equal(runtime.kind, 'tmux');
+    assert.equal(runtime.tmuxSession, 'work');
+    const pane = await owner.locatePiPane(sessionId);
+    assert.equal(pane.socket, TMUX_SOCKET);
+    assert.equal(pane.paneId, paneId);
+  } finally {
+    await tmux.killPane(TMUX_SOCKET, paneId);
+    fs.rmSync(registryFile, { force: true });
+    fs.rmSync(socketStub, { force: true });
+    registry.invalidateRegistryCache();
+  }
+});
+
 test('attachPaneArgv builds a grouped viewer; getPrefixKey reads the server prefix', { skip: !tmuxOk }, async () => {
   const paneId = tmuxCmd(['list-panes', '-t', 'work:0', '-F', '#{pane_id}']).trim().split('\n')[0];
   const argv = await tmux.attachPaneArgv(TMUX_SOCKET, paneId);
@@ -1570,6 +1611,22 @@ test('tmux-spawns.json persistence and prune', async () => {
   await tmux.pruneSpawns(new Set(['kept-session']));
   assert.ok(tmux.getSpawn('kept-session'), 'registered session kept even with a bogus pane');
   assert.equal(tmux.getSpawn('gone-session'), null, 'unregistered dead-pane mapping pruned');
+});
+
+test('optional process evidence does not hide a placement from rekey or dead-pane pruning', { skip: !tmuxOk }, async () => {
+  const file = path.join(tmpHome, '.pi', 'dish', 'tmux-spawns.json');
+  const spawns = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+  const retained = new Set(Object.keys(spawns));
+  const placement = { socket: TMUX_SOCKET, paneId: '%99998', paneProcess: { pid: 123, startTime: null } };
+  spawns['legacy-process-evidence'] = placement;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(spawns));
+  assert.deepEqual(tmux.getSpawn('legacy-process-evidence'), placement);
+  assert.equal(tmux.rekeySpawn('legacy-process-evidence', 'rekeyed-process-evidence', placement), true);
+  assert.equal(tmux.getSpawn('legacy-process-evidence'), null);
+  assert.deepEqual(tmux.getSpawn('rekeyed-process-evidence'), placement);
+  await tmux.pruneSpawns(retained);
+  assert.equal(tmux.getSpawn('rekeyed-process-evidence'), null);
 });
 
 test('pruneSpawns preserves a replacement recorded while its pane probe is in flight', () => {

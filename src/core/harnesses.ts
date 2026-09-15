@@ -1,4 +1,4 @@
-import type { HarnessDescriptor, HarnessId } from './contracts';
+import type { HarnessDescriptor, HarnessId, ResumeFileOptions, ResumeOptions } from './contracts';
 'use strict';
 
 import os = require('os');
@@ -9,13 +9,31 @@ import path = require('path');
 const repo = path.resolve(__dirname, '..');
 const bridge = (name: string) => path.join(repo, 'extensions', `pi-dish-bridge-${name}`, 'index.ts');
 
+function piResume(options: ResumeFileOptions): string[];
+function piResume(options?: ResumeOptions): (string | undefined)[];
+function piResume({ file, model }: ResumeOptions = {}): (string | undefined)[] {
+  return ['--session', file, ...(model ? ['--model', model] : [])];
+}
+
+function ompResume(options: ResumeFileOptions): string[];
+function ompResume(options?: ResumeOptions): (string | undefined)[];
+function ompResume({ file, model }: ResumeOptions = {}): (string | undefined)[] {
+  return ['--extension', bridge('omp'), '--resume', file, ...(model ? ['--model', model] : [])];
+}
+
+function primeResume(options: ResumeFileOptions): string[];
+function primeResume(options?: ResumeOptions): (string | undefined)[];
+function primeResume({ file, model }: ResumeOptions = {}): (string | undefined)[] {
+  return ['--extension', bridge('prime'), '--resume', file, ...(model ? ['--model', model] : [])];
+}
+
 
 const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
   pi: {
     id: 'pi', label: 'Pi', wrapperEntrypoint: null, eventProfile: 'pi-v3', profileId: 'pi-v3', profileVersion: 1,
     rootPath: () => path.join(os.homedir(), '.pi', 'agent', 'sessions'), layout: 'nested', commandEnv: 'PI_DISH_PI_COMMAND',
     command: 'pi', rpcFallback: true, modelCatalog: 'pi-sdk', closeMode: 'logical',
-    argv: { new: ({ model, thinking } = {}) => [...(model ? ['--model', model] : []), ...(thinking ? ['--thinking', thinking] : [])], resume: ({ file, model } = {}) => ['--session', file, ...(model ? ['--model', model] : [])], models: ['--list-models'] },
+    argv: { new: ({ model, thinking } = {}) => [...(model ? ['--model', model] : []), ...(thinking ? ['--thinking', thinking] : [])], resume: piResume, models: ['--list-models'] },
   },
   omp: {
     id: 'omp', label: 'Oh My Pi', wrapperEntrypoint: bridge('omp'), eventProfile: 'omp-v1', profileId: 'omp-v1', profileVersion: 1,
@@ -149,7 +167,7 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
     }],
     argv: {
       new: ({ model, thinking } = {}) => ['--extension', bridge('omp'), ...(model ? ['--model', model] : []), ...(thinking ? ['--thinking', thinking] : [])],
-      resume: ({ file, model } = {}) => ['--extension', bridge('omp'), '--resume', file, ...(model ? ['--model', model] : [])],
+      resume: ompResume,
       export: ({ file, output }) => ['--export', file, output],
       models: ['models', '--json'],
       configGet: (key) => ['config', 'get', key, '--json'],
@@ -173,7 +191,7 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
     // Discovery walks that tree; child headers carry the parentSession edge
     // and the per-child rlm-subagent.json display entry proves liveness.
     subagentArtifacts: true,
-    argv: { new: ({ model, thinking } = {}) => ['--extension', bridge('prime'), ...(model ? ['--model', model] : []), ...(thinking ? ['--thinking', thinking] : [])], resume: ({ file, model } = {}) => ['--extension', bridge('prime'), '--resume', file, ...(model ? ['--model', model] : [])], models: ['model', 'list'] },
+    argv: { new: ({ model, thinking } = {}) => ['--extension', bridge('prime'), ...(model ? ['--model', model] : []), ...(thinking ? ['--thinking', thinking] : [])], resume: primeResume, models: ['model', 'list'] },
     // install.sh links both the wrapper and the shared core bridge into
     // ~/.prime/agent/extensions so manually started prime TUIs discovery-load
     // the bridge. Prime resolves extension imports from the symlink path

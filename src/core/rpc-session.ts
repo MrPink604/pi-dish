@@ -21,17 +21,10 @@ import { decodeRPCFrame, isRecord, type ProtocolRecord } from './wire-protocol';
 import { trackRunningToolCalls } from './running-tool-calls';
 import { safeHeaderSessionId } from './session-discovery';
 import { processIdentity, processIdentityAlive } from './process-identity';
-// Explicit port into the remaining JavaScript observer; its implementation
-// retains its existing tests and is not claimed to be type checked here.
-const { createSessionObserver }: { createSessionObserver(options: {
-  waitsForSettled: boolean; canWrite: () => boolean; snapshot: () => ProtocolRecord | null;
-}): RecoveryObserver } = require('./session-recovery');
-import type { LaunchOptions, NativeSessionId, RunningToolCall } from './contracts';
+import { createSessionObserver, type RecoveryObserver } from './session-recovery';
+import type { ExtensionUIState, LaunchOptions, NativeSessionId, RunningToolCall } from './contracts';
 import { validSessionId } from './session-key';
 
-interface RecoveryObserver {
-  initialize(): void; event(type: string, data?: unknown): void; dispose(): void;
-}
 interface RPCLaunchOptions extends LaunchOptions { cwd?: string; }
 interface PromptOptions { deliverAs?: 'steer' | 'followUp'; images?: unknown[]; }
 type Listener = (data: unknown) => void;
@@ -67,6 +60,8 @@ class RPCSession {
   declare recoveryStartTime: string | null;
   declare recoveryObserver: RecoveryObserver;
   declare bounceExecuting?: boolean;
+  declare bounceActivityRevision?: number;
+  declare extUIState?: ExtensionUIState;
   declare lastStats?: unknown;
 
   constructor(id: NativeSessionId, proc: ChildProcessWithoutNullStreams) {

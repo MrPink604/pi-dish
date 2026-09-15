@@ -2,10 +2,10 @@
 import type { HarnessId, BridgeCapability, AdvertisedCapabilities, SessionCapabilities, CapabilityContext } from './contracts';
 /**
  * Legacy Pi permits missing flags; alternative wrappers must explicitly opt in.
- * This is policy only, not harness-id validation. Typed callers must establish
- * identity through getHarness/the registry boundary before passing its id.
+ * This is policy only, not harness-id validation. Unknown wrapper observations
+ * retain the same explicit-opt-in rule; no synthetic harness identity is needed.
  */
-declare function bridgeSupports(harnessId: HarnessId, capabilities: AdvertisedCapabilities | null | undefined, capability: BridgeCapability): boolean;
+declare function bridgeSupports(harnessId: unknown, capabilities: AdvertisedCapabilities | null | undefined, capability: BridgeCapability): boolean;
 /** Project UI/API advice. Lifecycle authority is established separately by callers. */
 declare function sessionCapabilities(harnessId: HarnessId, bridgeCapabilities?: AdvertisedCapabilities, { active, conflicted, closeAllowed, restartAllowed, }?: CapabilityContext): SessionCapabilities;
 declare const _default: {

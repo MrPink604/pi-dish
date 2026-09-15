@@ -27,6 +27,11 @@ export interface BridgeRegistryEntry extends Record<string, unknown> {
     sessionId: NativeSessionId;
     socketPath: string;
 }
+export interface ExtensionUIState {
+    widgets: Map<unknown, Record<string, unknown>>;
+    statuses: Map<unknown, Record<string, unknown>>;
+    dialogs: Map<unknown, Record<string, unknown>>;
+}
 /** A route id is unique within its host, not across the fleet. */
 export interface SessionRef {
     readonly hostId: HostId;
@@ -57,6 +62,13 @@ export interface LaunchOptions {
 export interface ResumeOptions {
     file?: string;
     model?: string;
+}
+export interface ResumeFileOptions extends ResumeOptions {
+    file: string;
+}
+export interface HarnessResumeArgv {
+    (options: ResumeFileOptions): string[];
+    (options?: ResumeOptions): (string | undefined)[];
 }
 export interface HostBuiltin {
     name: string;
@@ -118,7 +130,7 @@ export interface HarnessDescriptor {
     wrapperHostPackage?: string;
     argv: {
         new: (options?: LaunchOptions) => string[];
-        resume: (options?: ResumeOptions) => (string | undefined)[];
+        resume: HarnessResumeArgv;
         models: string[];
         export?: (options: {
             file: string;

@@ -3,8 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createSessionBounces, lifecycleBlockers } = require('../lib/session-bounces');
+const { createSessionBounces, createSessionBounceRuntime, lifecycleBlockers } = require('../lib/session-bounces');
 const { inspectSubsessionExits } = require('../lib/session-discovery');
+const { BridgeSession } = require('../lib/bridge-session');
+const tmux = require('../lib/tmux');
 
 function deferred() {
   let resolve;
@@ -121,6 +123,163 @@ test('unknown activity, dialogs mid-turn, queued input and background jobs all b
   const blocked = lifecycleBlockers({ ...state, turnInProgress: true,
     lifecycle: { idle: false, pendingMessages: true, pendingDialogs: 1, backgroundWork: true } }, live).join(' ');
   for (const reason of [/turn/, /queued input/, /dialogs/, /background/]) assert.match(blocked, reason);
+});
+
+function productionFixture(t) {
+  const claim = { sessionId: 'parent', socketPath: '/unused-original', sessionFile: '/parent.jsonl',
+    harnessId: 'pi', pid: 42, startTime: '100', bridgeInstanceId: 'original', capabilities: { guardedReload: true } };
+  const paneProcess = { pid: 41, startTime: '90' };
+  const live = new BridgeSession(claim);
+  live.alive = true;
+  const state = { turnInProgress: false, compacting: false,
+    lifecycle: { idle: true, pendingMessages: false, pendingDialogs: 0, backgroundWork: false } };
+  const actions = [];
+  const authority = { sessionId: 'parent', harnessId: 'pi', sessionFile: claim.sessionFile, rpc: null, reg: claim,
+    spawn: { socket: '/unused-tmux', paneId: '%1', paneProcess } };
+  t.mock.method(tmux, 'paneProcessIdentity', async () => paneProcess);
+  t.mock.method(live, 'send', async command => {
+    if (command === 'get_state') return state;
+    assert.equal(command, 'guarded_reload');
+    actions.push('reload');
+    return {};
+  });
+  const ownership = {
+    captureBounceAuthority: () => authority,
+    bounceIdentityFailure: () => null,
+    getLiveSession: async () => live,
+    refreshRegisteredSession: () => claim,
+  };
+  const operations = {
+    beginBounceAction: (_id, session) => { session.bounceExecuting = true; },
+    endBounceAction: (_id, session) => { session.bounceExecuting = false; },
+    restartSession: async (_id, { beforeAction }) => {
+      const guard = await beforeAction();
+      guard();
+      actions.push('restart');
+      return { kind: 'stopped', replacement: { id: 'replacement', placement: 'tmux' } };
+    },
+  };
+  const scheduler = createSessionBounceRuntime({
+    operations, ownership, catalog: () => [{ id: 'parent', name: 'Parent', harnessId: 'pi' }],
+  });
+  t.after(() => scheduler.stop());
+  return { scheduler, ownership, operations, live, state, claim, actions };
+}
+
+test('production safety rejects transient activity during inspection even when the reply is idle', async t => {
+  const { scheduler, live, state, actions } = productionFixture(t);
+  const reading = deferred();
+  const reply = deferred();
+  const send = t.mock.method(live, 'send', async () => { reading.resolve(); return reply.promise; });
+  const queued = scheduler.enqueue('restart', ['parent']);
+  const tick = scheduler.tick();
+  await reading.promise;
+  live.emit('message_start', {});
+  reply.resolve(state);
+  await tick;
+  assert.equal((await scheduler.list())[0].targets[0].status, 'waiting');
+  assert.deepEqual(actions, []);
+  assert.equal(Object.hasOwn(queued.targets[0], 'authority'), false);
+  send.mock.restore();
+  await scheduler.tick();
+  assert.deepEqual(actions, ['restart']);
+});
+
+test('production execution rechecks activity after the last await and releases execution exclusion on waiting', async t => {
+  const { scheduler, operations, live, actions } = productionFixture(t);
+  const prepared = deferred();
+  const proceed = deferred();
+  const restart = t.mock.method(operations, 'restartSession', async (_id, { beforeAction }) => {
+    const guard = await beforeAction();
+    prepared.resolve();
+    await proceed.promise;
+    guard();
+    actions.push('unsafe restart');
+    return { kind: 'stopped' };
+  });
+  scheduler.enqueue('restart', ['parent']);
+  const tick = scheduler.tick();
+  await prepared.promise;
+  live.emit('queue_update', {});
+  proceed.resolve();
+  await tick;
+  assert.equal((await scheduler.list())[0].targets[0].status, 'waiting');
+  assert.equal(live.bounceExecuting, false);
+  assert.deepEqual(actions, []);
+  restart.mock.restore();
+  await scheduler.tick();
+  assert.deepEqual(actions, ['restart']);
+  assert.equal((await scheduler.list())[0].targets[0].status, 'completed');
+});
+
+test('production restart distinguishes pre-action refusal from a stopped replacement with the same status', async t => {
+  const { scheduler, operations } = productionFixture(t);
+  t.mock.method(operations, 'restartSession', async () => ({ kind: 'no-action', status: 409, error: 'Ownership changed' }));
+  scheduler.enqueue('restart', ['parent']);
+  await scheduler.tick();
+  assert.equal((await scheduler.list())[0].targets[0].status, 'skipped');
+  t.mock.method(operations, 'restartSession', async () => ({
+    kind: 'replacement-not-ready', stopped: true, status: 409, error: 'Replacement identity changed',
+  }));
+  scheduler.enqueue('restart', ['parent']);
+  await scheduler.tick();
+  await scheduler.tick();
+  assert.equal((await scheduler.list())[0].targets[0].status, 'failed');
+});
+
+test('guarded reload completes only after a new connected claim on the captured process and transcript', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { scheduler, ownership, live, claim, actions } = productionFixture(t);
+  let observed = claim;
+  let connected = live;
+  let polled = deferred();
+  t.mock.method(ownership, 'refreshRegisteredSession', () => { polled.resolve(); return observed; });
+  t.mock.method(ownership, 'getLiveSession', async () => connected);
+  const operation = scheduler.enqueue('reload', ['parent']);
+  const tick = scheduler.tick();
+  await polled.promise;
+  assert.equal(scheduler.cancel(operation.id).targets[0].status, 'executing');
+  observed = { ...claim, bridgeInstanceId: 'replacement', socketPath: '/unused-replacement', startTime: '101' };
+  connected = new BridgeSession(observed);
+  connected.alive = true;
+  polled = deferred();
+  t.mock.timers.tick(100);
+  await polled.promise;
+  assert.equal(scheduler.cancel(operation.id).targets[0].status, 'executing');
+  observed = { ...observed, startTime: claim.startTime, sessionFile: '/other.jsonl' };
+  connected = new BridgeSession(observed);
+  connected.alive = true;
+  polled = deferred();
+  t.mock.timers.tick(100);
+  await polled.promise;
+  assert.equal(scheduler.cancel(operation.id).targets[0].status, 'executing');
+  observed = { ...observed, sessionFile: claim.sessionFile };
+  connected = new BridgeSession(observed);
+  // A fresh registry entry alone is not completion; its transport must be connected.
+  polled = deferred();
+  t.mock.timers.tick(100);
+  await polled.promise;
+  assert.equal(scheduler.cancel(operation.id).targets[0].status, 'executing');
+  await Promise.resolve();
+  connected.alive = true;
+  t.mock.timers.tick(100);
+  await tick;
+  assert.deepEqual(actions, ['reload']);
+  assert.equal((await scheduler.list())[0].targets[0].status, 'completed');
+  assert.equal(live.bounceExecuting, false);
+});
+
+test('unconfirmed guarded reload is terminal and is never redispatched', async t => {
+  const { scheduler, ownership, claim, actions, live } = productionFixture(t);
+  let now = 1000;
+  t.mock.method(Date, 'now', () => now);
+  t.mock.method(ownership, 'refreshRegisteredSession', () => { now += 15000; return claim; });
+  scheduler.enqueue('reload', ['parent']);
+  await scheduler.tick();
+  await scheduler.tick();
+  assert.equal((await scheduler.list())[0].targets[0].status, 'failed');
+  assert.deepEqual(actions, ['reload']);
+  assert.equal(live.bounceExecuting, false);
 });
 
 function treeFixture(t) {
