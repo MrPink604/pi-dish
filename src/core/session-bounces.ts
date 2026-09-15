@@ -257,6 +257,7 @@ function trackBounceActivity(live: LiveSession): void {
   live.bounceActivityRevision = 0;
   const events = ['turn_start', 'compaction_start', 'queue_update', 'extension_ui_request', 'session_switch', 'message_start'];
   const changed = () => { live.bounceActivityRevision = Number(live.bounceActivityRevision) + 1; };
+  // Bridge's generic EventEmitter overload and RPC's listener API require narrowing.
   if (live instanceof BridgeSession) {
     for (const event of events) live.on(event, changed);
   } else {

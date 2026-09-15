@@ -81,7 +81,7 @@ controller/port observations.
 | Browser composition | Implemented, verified and reviewed | Direct bundled imports and controller wiring replace global forwarding functions. Test-only observations preserve ownership probes; uninstrumented production scenarios, 282 browser checks and all UI suites passed. |
 | Browser contracts | Implemented, verified and reviewed | Readonly state/cache borrowing, decoded message ports and session-only model loading passed strict checks, 984 backend tests, 286 browser cases and both UI suites. Fable approved `811d473` without blocking findings. |
 | Shared runtime helpers | Implemented, locally verified and reviewed | Actual portable core source serves browser and Node consumers; 121 compatibility exports remain. Strict checks, 984 backend tests, 286 browser cases and UI suites passed. Fable approved `1cbd826` without blocking findings. |
-| Session lifecycle | Implemented and locally verified; Fable implementation review pending | Actual ownership/launch/operation/recovery/Bounce owners replace JS policy closures. Strict checks, 995 backend tests, 286 browser cases, UI suites and real Pi/OMP/Prime paths passed. |
+| Session lifecycle | Implemented, locally verified and reviewed | Actual ownership/launch/operation/recovery/Bounce owners replace JS policy closures. Strict checks, 996 backend tests, 286 browser cases, UI suites and real Pi/OMP/Prime paths passed. Fable approved `8e89e99` without blockers; its pruning observation was fixed with a regression. |
 | Remaining server application and feature modules | Separate later boundaries | General routes, projections, routine scheduling and other feature stores remain later stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -90,10 +90,9 @@ The completed browser source migration does not imply a whole-application
 conversion or complete domain contracts. Session catalog/metadata establishes
 its bounded read path, and browser composition cleanup is delivered. Browser
 contract cleanup is verified and reviewed; its pushed approval checkpoint passed CI.
-Shared helpers are verified and approved by Fable. Lifecycle implementation and
-local verification are complete; its implementation-review/CI gates are tracked
-in the stage record. Extension checking, Electron and remaining backend boundaries
-retain separate scopes.
+Shared helpers and lifecycle implementation are verified and approved by Fable.
+Exact delivery checkpoints and CI are tracked in their stage records. Extension
+checking, Electron and remaining backend boundaries retain separate scopes.
 
 ## What is already in TypeScript
 
@@ -212,10 +211,10 @@ names instead of executable event handlers.
 2. **[Shared runtime helper cutover](docs/shared-runtime-helpers.md): implemented,
    locally verified and reviewed.** Shared source serves browser and Node;
    the backend helper-artifact boundary is gone, with compatibility exports preserved.
-3. **[Session lifecycle migration](docs/session-lifecycle-migration.md): implemented
-   and locally verified.** Checked ownership, launch, operation coordination and
-   real recovery/Bounce policy replace server closures; every lifecycle caller uses
-   the checked owners. Fable implementation review and exact-commit CI remain delivery gates.
+3. **[Session lifecycle migration](docs/session-lifecycle-migration.md): implemented,
+   locally verified and reviewed.** Checked ownership, launch, operation coordination
+   and real recovery/Bounce policy replace server closures; every lifecycle caller
+   uses the checked owners. Fable approved `8e89e99` without blocking findings.
 
 These are ordered delivery stages, not three monolithic commits. Their task
 documents define dependencies, integration owners, deletion criteria, observable

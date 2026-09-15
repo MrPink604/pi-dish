@@ -1629,6 +1629,24 @@ test('optional process evidence does not hide a placement from rekey or dead-pan
   assert.equal(tmux.getSpawn('rekeyed-process-evidence'), null);
 });
 
+test('prune drops unregistered malformed placement objects while preserving registered ones', async t => {
+  const file = path.join(tmpHome, '.pi', 'dish', 'tmux-spawns.json');
+  const spawns = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+  const retained = new Set([...Object.keys(spawns), 'registered-malformed-placement']);
+  spawns['unregistered-malformed-placement'] = { paneId: 5 };
+  spawns['registered-malformed-placement'] = { paneId: 5 };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(spawns));
+  t.after(() => {
+    tmux.removeSpawn('unregistered-malformed-placement');
+    tmux.removeSpawn('registered-malformed-placement');
+  });
+  await tmux.pruneSpawns(retained);
+  const persisted = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(Object.hasOwn(persisted, 'unregistered-malformed-placement'), false);
+  assert.deepEqual(persisted['registered-malformed-placement'], { paneId: 5 });
+});
+
 test('pruneSpawns preserves a replacement recorded while its pane probe is in flight', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-racy-prune-'));
   const binDir = path.join(dir, 'bin');

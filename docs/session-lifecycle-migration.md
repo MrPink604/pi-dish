@@ -1,6 +1,6 @@
 # Session lifecycle migration
 
-Status: **Implemented and locally verified; implementation review pending** (2026-09-15).
+Status: **Implemented, locally verified and approved by Fable** (2026-09-15).
 Stage 3 follows [browser contract cleanup](browser-contract-cleanup.md)
 and [shared runtime helpers](shared-runtime-helpers.md).
 
@@ -158,7 +158,7 @@ or stop evidence, observer/control mixing and assumed validated legacy evidence.
 | --- | --- |
 | `npm run build:core` and `npm run check` | Passed; core/browser output drift and all type fixtures checked. |
 | Focused lifecycle suites | 304 passed, zero skipped, including the new malformed-evidence and production Bounce race/reload cases. Routine suites also ran in the full backend gate below. |
-| `npm test` | 995 passed, zero skipped, including real Pi bridge integration and routine/API coverage. |
+| `npm test` | 996 passed, zero skipped after the review correction, including real Pi bridge integration and routine/API coverage. |
 | `npm run test:browser` | 286 passed. |
 | `npm run test:ui:scenarios` | All eight independent scenarios passed. |
 | `npm run test:ui` | Complete desktop/mobile, multi-host, routine/Bounce, restart/close and retained-transcript smoke passed. |
@@ -189,8 +189,37 @@ limits remain: owned-pane/logical close do not consume an optional Bounce guard,
 and low-level pane lookup/birth checks do not make all intervening awaits atomic.
 This is an ownership/type migration, not an unreviewed change to those policies.
 
-The implementation's Fable 5.1 high-effort review and exact pushed-commit CI
-result are recorded after their respective delivery gates.
+### Implementation review and observation resolutions
+
+Anthropic Fable 5.1, high effort, **APPROVED**
+`8e89e990c214d33526cc04d420dc91d1ecf36945` against baseline
+`5fb42ed4ff6cca7e9a4b2b1b6470445f9cad7504` with **zero blockers**.
+The [full report](session-lifecycle-review-2026-09-15.json) records the reviewed
+scope and six nonblocking observations.
+
+- **Pruning correction:** unregistered malformed placement objects were retained
+  by the new placement-shape guard. A persisted-state regression failed before
+  the correction; pruning now treats those objects as dead while retaining the
+  registered-ID exemption and compare-before-prune protection. Core generation,
+  strict checks and the full 996-test backend suite passed after the fix.
+- **Malformed Prime metadata ordering:** the suggested pre-stop narrowing is
+  deliberately not moved. That would change the preserved stop/respawn ordering
+  for malformed external records; real bridges already supply string metadata.
+  It is separate hardening, not required for this migration.
+- **Extension gate durability:** retain the exercised isolated Node/declaration
+  smoke rather than add an export-count/path-only test. Maintained observer/control
+  behavior tests, generated-declaration negatives and real harness canaries protect
+  the actual contracts; full extension SDK compiler coverage remains a later scope.
+- **Activity subscription branches:** retain and explain the explicit Bridge/RPC
+  branches. Their different `on` overloads produce a `never` listener type on the
+  un-narrowed union; a single-loop rewrite failed strict compilation. Both branches
+  share one handler without adding a transport facade.
+- **Legacy asymmetries and catalog narrowing:** retain the documented policies.
+  These two observations required no changes.
+
+The browser/UI and real-harness gates above ran on the reviewed implementation;
+the subsequent behavioral correction affects only malformed placement pruning.
+Exact pushed-commit CI is recorded at the delivery gate.
 
 ## Mission and outcome
 

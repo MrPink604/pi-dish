@@ -66,6 +66,7 @@ The task documents separate delivered contracts from pending implementation:
 3. [Session lifecycle migration](session-lifecycle-migration.md): implemented checked
    authority, launch and operation owners, actual recovery/Bounce policies and all
    lifecycle callers; local strict, backend, browser/UI and real-harness gates passed.
+   Fable approved implementation `8e89e99` without blocking findings.
 
 Each record separates delivered contracts, preserved behavior and
 verification/review status. Remaining general routes, parser projections, routine

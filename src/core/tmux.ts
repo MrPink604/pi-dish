@@ -559,10 +559,12 @@ export function rekeySpawn(previousSessionId: string, sessionId: string, expecte
 
 /** Drop unregistered placements whose panes are gone, preserving concurrent writes. */
 export async function pruneSpawns(registeredIds: ReadonlySet<string> = new Set()): Promise<Record<string, unknown>> {
-  const dead: [string, SpawnPlacement][] = [];
+  const dead: [string, Record<string, unknown>][] = [];
   for (const [id, entry] of Object.entries(readSpawns())) {
-    if (registeredIds.has(id)) continue;
-    if (!isPlacement(entry) || await paneExists(entry.socket, entry.paneId)) continue;
+    if (registeredIds.has(id) || !record(entry)) continue;
+    // Malformed placement fields cannot name a live pane; the record still
+    // participates in the same compare-before-prune check after other probes.
+    if (isPlacement(entry) && await paneExists(entry.socket, entry.paneId)) continue;
     dead.push([id, entry]);
   }
   // Probes yield: re-read, then remove only the same inspected record.

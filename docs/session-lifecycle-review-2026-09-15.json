@@ -1,0 +1,67 @@
+{
+  "verdict": "APPROVED",
+  "reviewed_commit": "8e89e990c214d33526cc04d420dc91d1ecf36945",
+  "baseline_commit": "5fb42ed4ff6cca7e9a4b2b1b6470445f9cad7504",
+  "reviewer": "Anthropic Fable 5.1 (high effort), independent read-only implementation review",
+  "blockers": [],
+  "nonblocking_observations": [
+    {
+      "severity": "low",
+      "file": "src/core/session-operations.ts",
+      "line": 657,
+      "finding": "In the owned-agent (Prime) restart path the registry `model`/`name` observations are narrowed with `observedText` only when the respawn argv is built (lines 657-658), which is after the worker has already been stopped via performSessionClose (lines 645-651). A non-string truthy `model` or `name` in the registry entry now throws a TypeError between stop and respawn, yielding `replacement-not-ready` (worker stopped, pane retained, no replacement) instead of a pre-stop refusal. Baseline passed the raw value into argv.resume. The bridge writes these fields as strings (extensions/pi-dish-bridge/core.ts:1421-1422), so this is malformed-evidence-only, not a live regression.",
+      "scenario": "A hand-edited or third-party registry file carries `model: {provider:'x', id:'y'}` for a Prime session; POST /restart stops the worker, then fails before respawn with stopped:true.",
+      "requested_correction": "Optional: compute the resume argv and window name (the two `observedText` narrowings) before calling performSessionClose so malformed registry text is refused as `no-action` rather than after the destructive stop."
+    },
+    {
+      "severity": "low",
+      "file": "src/core/tmux.ts",
+      "line": 565,
+      "finding": "`pruneSpawns` now `continue`s for entries that fail `isPlacement` (missing/non-string socket or paneId). Baseline evaluated `paneExists(entry.socket, entry.paneId)` which returned false for such entries and pruned them. Malformed placement records are therefore retained indefinitely in tmux-spawns.json. No authority is granted by them (`getSpawn` returns null for the same shapes), so this is retention only.",
+      "scenario": "A corrupt `tmux-spawns.json` entry `{ \"paneId\": 5 }` for an unregistered id survives every startup prune instead of being dropped.",
+      "requested_correction": "Optional: treat non-placement entries as dead (push to `dead` with the inspected value) so pruning behavior matches baseline, or document the retention as intentional."
+    },
+    {
+      "severity": "low",
+      "file": "docs/session-lifecycle-migration.md",
+      "line": 167,
+      "finding": "The Task 2 acceptance gate (Node `createRequire` anchored at the bridge module loading all `../../lib/session-recovery.js` exports, plus a narrow extension-relative declaration consumer with a negative control) is recorded as a one-off smoke whose scaffolding was removed. No maintained test in test/ or scripts/ exercises it; remaining coverage is test/session-recovery.test.js child-process `require.resolve('../lib/session-recovery')` and the bun-gated real-bridge case. The runtime path is also proven by the recorded Pi/OMP/Prime canaries, so this is a coverage-durability gap, not a defect.",
+      "scenario": "A future move of `lib/session-recovery.js` or a declaration widening would only be caught when bun/real harnesses are available.",
+      "requested_correction": "Optional: add a small maintained test that anchors `createRequire` at extensions/pi-dish-bridge/core.ts, asserts the eight exports load under an isolated HOME, and compiles a narrow declaration consumer with its negative control."
+    },
+    {
+      "severity": "info",
+      "file": "src/core/session-bounces.ts",
+      "line": 260,
+      "finding": "`trackBounceActivity` contains two identical branches (`if (live instanceof BridgeSession) ... else ...`) that both call `live.on(event, changed)`. Cosmetic only; behavior matches baseline.",
+      "scenario": "None; readability.",
+      "requested_correction": "Optional: collapse to a single loop."
+    },
+    {
+      "severity": "info",
+      "file": "src/core/session-operations.ts",
+      "line": 273,
+      "finding": "Pre-existing asymmetries are faithfully preserved rather than introduced: owned-pane and logical closes ignore an optional `beforeAction` Bounce guard (only RPC and Prime consume it); an owned-pane `cleanup-failed` after the pane was killed rolls back closed intent (baseline 500 without preserveCloseIntent did the same); explicit-tmux resume `cleanup-incomplete` is not quarantined (only headless is, lines 544-553, matching baseline); `assertNoConflictingWriter` accepts a missing/absent bootId on saved launch evidence while `validateRecoveryRecord` requires an exact boot match (baseline identical). These match the documented 'Preserved limits' section.",
+      "scenario": "Documented legacy behavior; listed so it is not mistaken for a migration regression.",
+      "requested_correction": "None required; keep documented."
+    },
+    {
+      "severity": "info",
+      "file": "src/core/session-launch.ts",
+      "line": 508,
+      "finding": "`validateHarnessPilotSelection` now narrows catalog rows with `pilotModel` (string id/provider, optional string selector, optional string[] thinking). `normalizeModels` in session-api.ts already emits exactly that shape, so real OMP output is unaffected; a malformed row becomes a 400 'not available' instead of a TypeError. This is ingress narrowing, consistent with the freeze.",
+      "scenario": "None for real catalogs.",
+      "requested_correction": "None."
+    }
+  ],
+  "reviewed_scope": [
+    "docs/session-lifecycle-migration.md (approved tasks, frozen arrival-order matrix, ownership/deletion/verification record) and cross-references in CLAUDE.md, docs/typescript.md, docs/testing.md",
+    "New core owners vs baseline JS/server: src/core/session-recovery.ts, tmux.ts, prime-lifecycle.ts, session-ownership.ts, session-launch.ts, session-operations.ts, recovery-runner.ts, session-bounces.ts",
+    "Changed contracts/harnesses/transport: contracts.ts (HarnessResumeArgv overload), harnesses.ts (piResume/ompResume/primeResume overloads, lib-relative __dirname retained), rpc-session.ts (real RecoveryObserver import; handwritten require signature and local interface removed), bridge-session.ts claim helpers, session-key.ts, session-discovery.ts (routeId on candidates), session-capabilities.ts, process-identity.ts signatures",
+    "Generated output headers and paths: lib/session-recovery.js, tmux.js, prime-lifecycle.js, recovery-runner.js, session-bounces.js, session-ownership.js, session-launch.js, session-operations.js and .d.ts (no ReturnType<typeof concreteFunction> aliases in core/lib/core fixtures)",
+    "Consumers: server.js composition (createSessionOwnership/createSessionLaunch/createSessionOperations/createRecoveryRuntime/createSessionBounceRuntime, HTTP admit/close/resume/restart/new/spawn-status/recovery/bounce routes, startup ordering recovery→routine reconcile→routine start, shutdown stops), lib/routine-runner.js (coordinator methods with JSDoc boundary), extensions/pi-dish-bridge/core.ts import path",
+    "Tests: test/types/core.ts negative fixtures, test/tmux.test.js, test/recovery-runner.test.js, test/session-bounces.test.js, test/session-recovery.test.js (current vs baseline case lists and new production/malformed-evidence bodies)",
+    "Baseline reference copies under /tmp/pi-dish-lifecycle-review-D5VQ4a/baseline (server.js ownership/close/launch/create/resume/recovery/restart/bounce sections, five original lib modules, original core files, original tests)"
+  ],
+  "explanation": "All eight approved tasks are implemented in checked source with the former server policy removed, and I found no blocking regression against the baseline. Task 1: contracts are frozen; test/types/core.ts rejects advice/report-as-authority (RuntimeDescription, OwnedPaneCloseCapture, RpcCloseCapture, SessionBounceTarget), native/route confusion, incomplete outcomes (cleanup-incomplete without evidence, replacement-not-ready without stopped, response-as-outcome), observer/control mixing, assumed-validated legacy launch evidence, async final checkers, and the required-file resume overload while the legacy empty call still returns (string|undefined)[]. Task 2: session-recovery.ts is a line-faithful port (fsync/rename/directory fsync, corrupt-control fail-closed, no-op suppression, delayed checkpoints, agent_settled vs turn_end, timer retirement); RecoveryAttempt keeps legacy fields verbatim with unknown types; rpc-session.ts imports the real RecoveryObserver; the extension still imports ../../lib/session-recovery.js. Task 3: tmux.ts/prime-lifecycle.ts preserve compare-before-remove/rekey, reread-before-prune, exact-process cleanup errors with remainingProcesses, respawn expected-process check plus synchronous beforeAction final check, protocol-7 roster/root/PID/file proof, null roster rows refusing before dispatch, stopRequested evidence and no signal escalation; argv-only execFile and socket allowlisting unchanged. Task 4: session-ownership.ts gives RPC, logical, owned-pane, Prime close, pane-restart and Bounce captures distinct shapes, keeps registry refresh, hello re-proof, pane-process recheck and synchronous revalidation in the same order and at the same destructive boundaries as the baseline server, moves validateRecoveryRecord/boot/cwd/root/parent checks with the saved source remaining read input, routes session-switch placement adoption through the same owner, keeps describeRuntime/locatePiPane explicitly weak, and imports no runner. Task 5: session-launch.ts keeps descriptor-owned wrapper/bridge paths from harnesses.ts, identical wrapper materialization and host-package import, final-deadline registration check, hidden cleanup before any fallback, and an exhaustive LaunchOutcome where only unclassified Pi failures yield fallback-permitted and socket-config/registration/cleanup/uncertainty errors are forbidden; LifecycleInterruption retains its exact instance across launch/operation/runner layers. Task 6: session-operations.ts reproduces resumeFlights by canonical real file with joiner active recheck, closeFlights join/restart refusal, restartFlights refuse-not-join and resume-flight refusal via the observed active file, closed-intent persistence before effects with rollback unless Prime preserve, restart's non-retiring close, recovery vs ordinary cwd handling, subsession-parent refusal, explicit/detached uncertainty retention and failed-cleanup quarantine that clear only through matching active file or proved cleanup, and HTTP mapping of stopped/stopUncertain/preserveCloseIntent identical to baseline bodies. Task 7: createRecoveryRuntime and createSessionBounceRuntime implement the former server restore/process-proof/delivery and capture/inspect/execute policies and compose the unchanged runner/queue algorithms; recovery keeps durable restoring intent before launch, post-handshake control/observation/checkpoint rechecks, one prompt and no uncertain replay; Bounce keeps activity-revision rechecks after the last await, execution exclusion through the coordinator only for non-GET HTTP, cancel affecting waiting only, and guarded reload completing only on a new connected claim with the same process and file, never redispatched. Task 8: server.js now calls only the production factories with raw catalog/model/settings/transcript observations and presentation hooks, no lifecycle closures, flight maps, quarantines, fallback probing or Bounce/recovery callbacks remain (grep confirms none of stopPrimeWorker/respawnPane/resumeRPCSession/createRPCSession/proveBridgeRegistryClaim survive), routines receive the coordinator's methods directly with the JSDoc boundary and unchanged scheduling/ledger JS, startup awaits recovery before reconciliation and scheduling, and generated lib paths plus architecture/testing docs are updated. The four observations above are optional hardening or pre-existing documented limits; none grants authority from reports or malformed evidence, and none changes public status/body compatibility."
+}
