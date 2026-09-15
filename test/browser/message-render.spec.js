@@ -3,7 +3,7 @@ test('message attributes and custom metadata stay literal while hidden messages 
   await fleet.select(fleet.self);
   const result = await page.evaluate(() => {
     const template = document.createElement('template');
-    template.innerHTML = fixtureApp.features.messageRenderer.message({ role: 'custom', customType: 'async-result', timestamp: '\"><img src=x onerror=alert(1)>', index: 'bad" onclick="alert(1)', details: { jobs: [{ label: '<script>', durationMs: 2000 }] } });
+    template.innerHTML = fixtureApp.features.messageRenderer.message(PiDishBrowser.decodeRenderMessage({ role: 'custom', customType: 'async-result', timestamp: '\"><img src=x onerror=alert(1)>', index: 'bad" onclick="alert(1)', details: { jobs: [{ label: '<script>', durationMs: 2000 }] } }));
     return { images: template.content.querySelectorAll('img').length, scripts: template.content.querySelectorAll('script').length, label: template.content.textContent,
       hidden: fixtureApp.features.messageRenderer.message({ role: 'custom', customType: 'hidden', display: false, content: 'secret' }),
       interrupted: fixtureApp.features.messageRenderer.message({ role: 'custom', customType: 'interrupted-thinking', content: 'hidden thinking' }),
@@ -18,7 +18,7 @@ test('IRC peer messages render as cards from both OMP wire shapes', async ({ pag
     const structured = document.createElement('template');
     structured.innerHTML = fixtureApp.features.messageRenderer.message({ role: 'custom', customType: 'irc:incoming', id: 'irc-entry', timestamp: 1789160848919, display: true,
       content: '<irc>\nIncoming IRC message from agent `SnapChromeOptions`:\n\nStale envelope copy.\n\nSent while waiting/working. Active interruptible wait stopped early for immediate reading.\n</irc>',
-      details: { id: 'x', from: 'SnapChromeOptions', message: 'Body with `code` spans.' } });
+      details: { from: 'SnapChromeOptions', message: 'Body with `code` spans.' } });
     const card = structured.content.firstElementChild;
     const interrupt = document.createElement('template');
     interrupt.innerHTML = fixtureApp.features.messageRenderer.message({ role: 'user', timestamp: 1789160848919, content: 'Current interruptible wait interrupted: IRC message from parent agent `Main`.\n\nParent IRC message:\n\nCorrection on the table.' });

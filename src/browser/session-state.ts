@@ -2,18 +2,25 @@ import type { SessionFields, SessionRow, SessionMutationPatch, SessionActivityPa
 import { decodeSessionMutationPatch, decodeSessionActivityPatch, decodeSessionTranscriptPatch } from '../core/session-api';
 
 /** Browser list/selection identity and writes. No DOM or transport. */
-export interface SessionEntry extends SessionFields {
+export interface SessionEntry extends Readonly<Omit<SessionFields, 'capabilities'>> {
   readonly id: string;
-  host?: string | null;
-  hostLabel?: string;
+  readonly host?: string | null;
+  readonly hostLabel?: string;
+  readonly capabilities?: Readonly<NonNullable<SessionFields['capabilities']>>;
   readonly extras?: Readonly<Record<string, unknown>>;
 }
 /** Flatten validated fields once; opaque metadata never participates in writes. */
 export function sessionEntryFromRow(row: SessionRow): SessionEntry {
   return { ...row.fields, id: row.id, extras: row.extras };
 }
-export interface SessionLists { active: SessionEntry[]; previous: SessionEntry[] }
-export interface HostSessionLists { hostId?: string | null; active?: SessionEntry[]; previous?: SessionEntry[] }
+export interface SessionLists { readonly active: readonly SessionEntry[]; readonly previous: readonly SessionEntry[] }
+export interface HostSessionLists { readonly hostId?: string | null; readonly active?: readonly SessionEntry[]; readonly previous?: readonly SessionEntry[] }
+type MutableSessionEntry = { -readonly [K in keyof SessionEntry]: SessionEntry[K] };
+interface MutableSessionLists { active: MutableSessionEntry[]; previous: MutableSessionEntry[] }
+
+function isHostSessionListsArray(next: HostSessionLists | readonly HostSessionLists[]): next is readonly HostSessionLists[] {
+  return Array.isArray(next);
+}
 export type SelectionOwner = Readonly<{ id: string; host: string | null; generation: number }>;
 export interface SessionStateOptions {
   getSelfHostId: () => string | null;
@@ -23,15 +30,16 @@ export interface SessionStateOptions {
 }
 
 export function createSessionState(options: SessionStateOptions) {
-  let sessions: SessionLists = { active: [], previous: [] };
-  let currentSession: SessionEntry | null = null;
+  let sessions: MutableSessionLists = { active: [], previous: [] };
+  let currentSession: MutableSessionEntry | null = null;
+  const publishedRows = new WeakMap<SessionEntry, MutableSessionEntry>();
   let generation = 0;
 
   /**
    * A qualified miss never falls back to another host. Unqualified lookup
    * prefers the selected host, otherwise it requires an unambiguous identity.
    */
-  function findSession(id?: string | null, host?: string | null) {
+  function findSession(id?: string | null, host?: string | null): SessionEntry | undefined {
     if (!host && currentSession && currentSession.id === id) host = currentSession.host;
     let found: SessionEntry | undefined;
     for (const list of [sessions.active, sessions.previous]) {
@@ -54,7 +62,7 @@ export function createSessionState(options: SessionStateOptions) {
    * Stamping happens only in the state writers. Labels refresh on each write
    * because the host can be relabelled while its sessions remain in state.
    */
-  function stampSessionHost(session: SessionEntry, hostId = options.getSelfHostId()) {
+  function stampSessionHost(session: MutableSessionEntry, hostId = options.getSelfHostId()) {
     session.host = hostId || null;
     const label = options.getHostLabel(session.host);
     if (label) session.hostLabel = label;
@@ -62,15 +70,38 @@ export function createSessionState(options: SessionStateOptions) {
     return session;
   }
 
+  /** Detach external row/capability aliases once; only this store's views are borrowed. */
+  function publishSession(session: SessionEntry, hostId = options.getSelfHostId()): MutableSessionEntry {
+    const owned = publishedRows.get(session);
+    if (owned && owned.host === (hostId || null)) return stampSessionHost(owned, hostId);
+    const copy: MutableSessionEntry = { ...session };
+    if (session.capabilities) copy.capabilities = { ...session.capabilities };
+    stampSessionHost(copy, hostId);
+    publishedRows.set(copy, copy);
+    return copy;
+  }
+
   /**
    * Polls replace lists and fold fresh metadata into the detached selection.
    */
-  function setSessionLists(next: HostSessionLists | HostSessionLists[], hostId = options.getSelfHostId()) {
-    const parts = Array.isArray(next) ? next : [{ hostId, active: next.active, previous: next.previous }];
-    const merged: SessionLists = { active: [], previous: [] };
+  function setSessionLists(next: HostSessionLists, hostId?: string | null): SessionLists;
+  function setSessionLists(next: readonly HostSessionLists[]): readonly SessionLists[];
+  function setSessionLists(next: HostSessionLists | readonly HostSessionLists[], hostId = options.getSelfHostId()): SessionLists | readonly SessionLists[] {
+    const fanout = isHostSessionListsArray(next);
+    const parts = fanout ? next : [{ hostId, active: next.active, previous: next.previous }];
+    const merged: MutableSessionLists = { active: [], previous: [] };
+    const published: SessionLists[] = [];
     for (const part of parts) {
-      for (const session of part.active || []) merged.active.push(stampSessionHost(session, part.hostId));
-      for (const session of part.previous || []) merged.previous.push(stampSessionHost(session, part.hostId));
+      const lists: MutableSessionLists = { active: [], previous: [] };
+      for (const session of part.active || []) {
+        const row = publishSession(session, part.hostId);
+        lists.active.push(row); merged.active.push(row);
+      }
+      for (const session of part.previous || []) {
+        const row = publishSession(session, part.hostId);
+        lists.previous.push(row); merged.previous.push(row);
+      }
+      published.push(lists);
     }
     sessions = merged;
     if (currentSession) {
@@ -79,13 +110,14 @@ export function createSessionState(options: SessionStateOptions) {
     }
     options.onListsChanged();
     options.onCurrentChanged();
+    return fanout ? published : merged;
   }
 
   /**
    * Selection returns a detached copy. The caller owns its broader view reset
    * and rendering, including invalidation before that reset starts.
    */
-  function setCurrentSession(id: string | null, host?: string | null) {
+  function setCurrentSession(id: string | null, host?: string | null): SessionEntry | null {
     const entry = findSession(id, host);
     currentSession = entry ? stampSessionHost({ ...entry }, entry.host || options.getSelfHostId()) : null;
     return currentSession;
@@ -141,8 +173,8 @@ export function createSessionState(options: SessionStateOptions) {
   }
 
   return {
-    get sessions() { return sessions; },
-    get currentSession() { return currentSession; },
+    get sessions(): SessionLists { return sessions; },
+    get currentSession(): SessionEntry | null { return currentSession; },
     get selectionGeneration() { return generation; },
     findSession, sessionHostId, setSessionLists, setCurrentSession,
     patchSession, patchSessionActivity, mergeCurrentSession, advanceSelection,

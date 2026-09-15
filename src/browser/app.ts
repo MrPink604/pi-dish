@@ -591,7 +591,7 @@ const modelCatalog: ReturnType<typeof createModelCatalog> = createModelCatalog({
 function modelsCacheKey(harnessId: string, hostId: string | null) {
   return modelsCacheKeyBase(harnessId, hostId, hostDirectory.self.hostId);
 }
-const appModels = createAppModels({ sessions: sessionState, catalog: modelCatalog, host: hostEntryFor, takeover: () => newSessionController });
+const appModels = createAppModels({ sessions: sessionState, catalog: modelCatalog, host: hostEntryFor });
 
 // =========================================================================
 // Session Header

@@ -1,5 +1,6 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
+import type { RenderMessage } from './message-data';
 import { sessionRefKey } from './helper-identity';
 import { escapeHtml } from './helper-format';
 import { record } from './helper-values';
@@ -9,8 +10,8 @@ import { decodeTranscriptPage } from './transcript-data';
 /** The selected transcript owns its paging cursors, endpoint, requests and retained DOM. */
 export function createTranscript(options: {
   document: Document; sessionState: SessionState; request: ApiRequest; host: (id: string | null) => HostEndpoint | null;
-  renderMessage: (message: unknown) => string; finalize: (root: HTMLElement, options?: { stripLive?: boolean }) => void;
-  closeSearch: () => void; cancelStreaming: () => void; mood: (description: string, face: string) => void; updateMood: (messages: readonly unknown[]) => void;
+  renderMessage: (message: RenderMessage) => string; finalize: (root: HTMLElement, options?: { stripLive?: boolean }) => void;
+  closeSearch: () => void; cancelStreaming: () => void; mood: (description: string, face: string) => void; updateMood: (messages: readonly RenderMessage[]) => void;
   pinned: (root: HTMLElement) => boolean; scroll: (root: HTMLElement) => void; jump: (root: HTMLElement) => void;
   consumeEcho: (id: string, content: unknown) => void;
 }) {
@@ -51,7 +52,7 @@ export function createTranscript(options: {
     cursors = { oldestIndex: entry.oldestIndex, lastIndex: entry.lastIndex, hasOlder: entry.hasOlder, total: entry.total }; loaded = { key, base: owner.endpoint.base };
     options.mood(entry.moodDescription, entry.moodFace); options.jump(container); bindBar(); return true;
   }
-  function render(messages: readonly unknown[]) {
+  function render(messages: readonly RenderMessage[]) {
     if (disposed) return; options.updateMood(messages);
     if (!messages.length) { container.innerHTML = '<div class="empty-state" style="padding: 48px;"><p style="color: var(--text-muted);">No messages yet</p></div>'; barEvents.abort(); return; }
     container.innerHTML = barHtml() + messages.map(options.renderMessage).join(''); bindBar(); options.finalize(container); options.scroll(container);

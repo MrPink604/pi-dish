@@ -4,6 +4,7 @@ import type { SelectionOwner, SessionState } from './session-state';
 import { formatRelativeTime } from './helper-format';
 import { record } from './helper-values';
 import { createMessageRenderer } from './message-render';
+import { decodeRenderMessage } from './message-data';
 import type { createResponseDetails } from './response-details';
 import { decodeSessionLineage } from './session-relations';
 import type { LineageNode, LineageSession, SessionLineage } from './session-relations';
@@ -323,7 +324,7 @@ export function createSubagentsView(options: {
       // Follow the tail only while the reader is already at it.
       const stickToTail = trace.scrollHeight - trace.scrollTop - trace.clientHeight < 80;
       for (const value of messages) {
-        const html = renderer.message(value);
+        const html = renderer.message(decodeRenderMessage(value));
         if (!html) continue;
         const template = document.createElement('template');
         template.innerHTML = html.trim();

@@ -7,7 +7,7 @@ const { stripQueryField } = require('../public/helpers');
 const { decodeSessionList } = require('../lib/session-api');
 const context = { URLSearchParams };
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-const { createHostSessionLoader, ApiHttpError } = context.PiDishBrowser;
+const { createHostSessionLoader, createSessionState, createSidebarLists, ApiHttpError } = context.PiDishBrowser;
 
 function fixture() {
   let sequence = 1;
@@ -115,12 +115,11 @@ test('failed and unauthorized polls retain cached rows and report the current ho
   let pending = loader.load(host, undefined, true, 1);
   calls[0].resolve(rows('cached'));
   await pending;
-  const cached = loader.getCache(host);
   events.length = 0;
   pending = loader.load(host, undefined, true, 1);
   calls[1].reject(new ApiHttpError('Unauthorized', 401));
   await pending;
-  assert.equal(loader.getCache(host), cached);
+  assert.equal(loader.getCache(host).active[0].name, 'cached');
   assert.deepEqual(events.map(e => e.type), ['connection', 'publish']);
   assert.equal(events[0].event, 'blocked');
   assert.equal(events[1].query, undefined, 'a failure must not claim the lists match a different query');
@@ -129,7 +128,7 @@ test('failed and unauthorized polls retain cached rows and report the current ho
   const offline = new Error('offline');
   calls[2].reject(offline);
   await pending;
-  assert.equal(loader.getCache(host), cached);
+  assert.equal(loader.getCache(host).active[0].name, 'cached');
   assert.deepEqual(events.map(e => e.type), ['connection', 'error', 'publish']);
   assert.equal(events[0].event.error, offline);
 });
@@ -195,3 +194,67 @@ for (const hint of [undefined, null, '']) {
     assert.equal(loader.getCache(host).active[0].familyParentId, hint);
   });
 }
+
+test('acknowledged metadata survives failed fan-out and partial child replay through sidebar publication', async () => {
+  const calls = [], hosts = [{ hostId: 'self', base: '', self: true }, host];
+  const state = createSessionState({
+    getSelfHostId: () => 'self', getHostLabel: hostId => hostId,
+    onListsChanged() {}, onCurrentChanged() {},
+  });
+  const lists = createSidebarLists({
+    document: { hidden: false, querySelector: () => null },
+    sessionState: state, activity: { mark() {}, prune() {} },
+    hosts: () => hosts, pollable: () => hosts, selfId: () => 'self', query: () => '', all: () => true,
+    refreshFleet() {}, connection() {},
+    request: (target, path) => new Promise((resolve, reject) => calls.push({
+      target, path, reject, resolve: wire => resolve(new Response(JSON.stringify(wire))),
+    })),
+  });
+  try {
+    let pending = lists.load();
+    calls[0].resolve({ active: [{ id: 'same', name: 'local' }], previous: [] });
+    calls[1].resolve({
+      active: [{ id: 'same', name: 'remote', model: 'old/model' }],
+      previous: [{ id: 'child', name: 'old child', model: 'old/child', subagentLive: true }],
+    });
+    await pending;
+    state.setCurrentSession('child', 'peer');
+
+    pending = lists.load(undefined, { withPrevious: false });
+    state.patchSession('same', { name: 'remote acknowledgement', model: 'ack/model' }, 'peer');
+    state.patchSession('child', { name: 'child acknowledgement', model: 'ack/child' }, 'peer');
+    calls[2].resolve({ active: [{ id: 'same', name: 'fresh local' }], previous: [] });
+    calls[3].reject(new Error('peer offline'));
+    await pending;
+    assert.equal(state.findSession('same', 'self').name, 'fresh local');
+    assert.equal(state.findSession('same', 'peer').name, 'remote acknowledgement');
+    assert.equal(state.findSession('same', 'peer').model, 'ack/model');
+    assert.equal(lists.loader.getCache(host).active[0].model, 'ack/model');
+    assert.equal(state.currentSession.model, 'ack/child');
+
+    pending = lists.load(undefined, { withPrevious: false });
+    state.patchSession('child', { name: 'new child acknowledgement' }, 'peer');
+    state.patchSessionActivity('child', { compacting: true }, 'peer');
+    calls[4].reject(new ApiHttpError('Unauthorized', 401));
+    calls[5].resolve({
+      active: [{ id: 'same', name: 'fresh remote' }], previous: [],
+      children: [{ id: 'child', subagentLive: true, turnInProgress: false }],
+    });
+    await pending;
+    assert.equal(state.findSession('same', 'self').name, 'fresh local');
+    assert.equal(state.findSession('same', 'peer').name, 'fresh remote', 'fresh HTTP facts remain authoritative');
+    assert.equal(state.findSession('same', 'peer').model, undefined, 'fresh active rows do not inherit omitted metadata');
+    const child = state.findSession('child', 'peer');
+    assert.equal(child.name, 'new child acknowledgement');
+    assert.equal(child.model, 'ack/child');
+    assert.equal(child.compacting, true);
+    assert.equal(child.turnInProgress, false);
+    assert.equal(state.currentSession.name, 'new child acknowledgement');
+    assert.equal(lists.loader.getCache(host).previous[0].model, 'ack/child');
+    state.mergeCurrentSession(state.captureSelection(), { model: 'transcript/only' });
+    assert.equal(state.currentSession.model, 'transcript/only');
+    assert.equal(lists.loader.getCache(host).previous[0].model, 'ack/child', 'transcript metadata cannot enter the borrowed list cache');
+  } finally {
+    lists.dispose();
+  }
+});

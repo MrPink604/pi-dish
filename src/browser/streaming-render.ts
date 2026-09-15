@@ -1,6 +1,5 @@
 import type { SessionState, SelectionOwner } from './session-state';
-import { decodeRenderMessage } from './message-data';
-import type { RenderMessage } from './message-data';
+import type { RenderMessage, MessageBlock } from './message-data';
 import { formatTime } from './helper-format';
 import { getToolSummary, messageHasVisibleText } from './helper-content';
 /** Coalesce cumulative frames while retaining block DOM and the frame's selection owner. */
@@ -11,9 +10,9 @@ export function createStreamingRenderer(options: {
   const { document, sessionState } = options; const sources = new WeakMap<HTMLElement, string>();
   let disposed = false, timer: ReturnType<typeof setTimeout> | null = null;
   let pending: { message: RenderMessage; owner: SelectionOwner } | null = null;
-  function queue(value: unknown) {
+  function queue(message: RenderMessage) {
     const owner = sessionState.captureSelection(); if (disposed || !owner) return;
-    pending = { message: decodeRenderMessage(value), owner }; if (!timer) flush();
+    pending = { message, owner }; if (!timer) flush();
   }
   function flush() {
     if (timer) clearTimeout(timer); timer = null; const frame = pending; pending = null;
@@ -44,9 +43,9 @@ function renderStreamingMessage(message: RenderMessage, owner = sessionState.cap
   const wasPinned = options.pinned(container);
   const el = ensureStreamingElement(container)!;
 
-  const blocks = Array.isArray(message.content)
-    ? message.content
-    : (typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : []);
+  const blocks: readonly (MessageBlock | string)[] = typeof message.content === 'string'
+    ? [{ type: 'text', text: message.content }]
+    : message.content || [];
 
   blocks.forEach((block, i) => {
     if (typeof block === 'string') return;
@@ -115,5 +114,5 @@ function renderStreamingMessage(message: RenderMessage, owner = sessionState.cap
   if (wasPinned) options.scroll(container); else options.jump(container);
 }
 
-  return { queue, flush, cancel, render(value: unknown) { renderStreamingMessage(decodeRenderMessage(value)); }, dispose() { cancel(); disposed = true; } };
+  return { queue, flush, cancel, render(message: RenderMessage) { renderStreamingMessage(message); }, dispose() { cancel(); disposed = true; } };
 }

@@ -48,22 +48,20 @@
 
   // src/browser/app-models.ts
   function createAppModels(options2) {
-    function load(sessionId, harnessId, cwd, host) {
+    function load(sessionId, harnessId) {
       const { sessions, catalog } = options2;
-      const owner = sessionId ? sessions.captureSelection() : null;
-      const storedHarness = sessionId ? sessions.findSession(sessionId)?.harnessId : null;
+      const owner = sessions.captureSelection();
+      const storedHarness = sessions.findSession(sessionId)?.harnessId;
       const requestedHarnessId = harnessId || (typeof storedHarness === "string" ? storedHarness : "") || "pi";
-      const requestedHost = sessionId ? sessions.sessionHostId(sessionId) : host === void 0 ? null : host;
+      const requestedHost = sessions.sessionHostId(sessionId);
       const endpoint = options2.host(requestedHost);
       if (!endpoint) {
         catalog.clear();
         return Promise.resolve();
       }
       const captured = Object.freeze({ ...endpoint });
-      const generation = options2.takeover().generation;
-      const ownsRows = () => sameDirectoryHost(captured, options2.host(requestedHost)) && (sessionId ? !!owner && owner.id === sessionId && sessions.ownsSelection(owner) : generation === options2.takeover().generation && options2.takeover().isOpen() && options2.takeover().hostId() === captured.hostId && options2.takeover().selectedHarness() === requestedHarnessId);
-      const ownsRequest = () => ownsRows() && (!!sessionId || options2.takeover().cwd() === (cwd || ""));
-      return catalog.load({ host: captured, sessionId: sessionId || void 0, harnessId: requestedHarnessId, cwd }, ownsRequest, ownsRows);
+      const owns = () => sameDirectoryHost(captured, options2.host(requestedHost)) && !!owner && owner.id === sessionId && sessions.ownsSelection(owner);
+      return catalog.load({ host: captured, sessionId, harnessId: requestedHarnessId }, owns);
     }
     return { load };
   }
@@ -309,7 +307,7 @@
     return { exitCode: Number(m[1]), output: pythonReprUnescape(m[3]), durationMs: m[4] != null ? Math.round(Number(m[4]) * 1e3) : null };
   }
   function pythonReprUnescape(text17) {
-    return text17.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|[\s\S])/g, (all, seq) => {
+    return text17.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|[\s\S])/g, (_all, seq) => {
       if (seq[0] === "x") return String.fromCharCode(parseInt(seq.slice(1), 16));
       if (seq[0] === "u") return String.fromCharCode(parseInt(seq.slice(1), 16));
       const map = { n: "\n", t: "	", r: "\r", b: "\b", f: "\f", v: "\v", "0": "\0", "\n": "" };
@@ -2427,9 +2425,13 @@
   function sessionEntryFromRow(row) {
     return { ...row.fields, id: row.id, extras: row.extras };
   }
+  function isHostSessionListsArray(next) {
+    return Array.isArray(next);
+  }
   function createSessionState(options2) {
     let sessions = { active: [], previous: [] };
     let currentSession = null;
+    const publishedRows = /* @__PURE__ */ new WeakMap();
     let generation = 0;
     function findSession(id, host) {
       if (!host && currentSession && currentSession.id === id) host = currentSession.host;
@@ -2454,12 +2456,33 @@
       else delete session.hostLabel;
       return session;
     }
+    function publishSession(session, hostId = options2.getSelfHostId()) {
+      const owned = publishedRows.get(session);
+      if (owned && owned.host === (hostId || null)) return stampSessionHost(owned, hostId);
+      const copy = { ...session };
+      if (session.capabilities) copy.capabilities = { ...session.capabilities };
+      stampSessionHost(copy, hostId);
+      publishedRows.set(copy, copy);
+      return copy;
+    }
     function setSessionLists(next, hostId = options2.getSelfHostId()) {
-      const parts = Array.isArray(next) ? next : [{ hostId, active: next.active, previous: next.previous }];
+      const fanout = isHostSessionListsArray(next);
+      const parts = fanout ? next : [{ hostId, active: next.active, previous: next.previous }];
       const merged = { active: [], previous: [] };
+      const published = [];
       for (const part of parts) {
-        for (const session of part.active || []) merged.active.push(stampSessionHost(session, part.hostId));
-        for (const session of part.previous || []) merged.previous.push(stampSessionHost(session, part.hostId));
+        const lists = { active: [], previous: [] };
+        for (const session of part.active || []) {
+          const row = publishSession(session, part.hostId);
+          lists.active.push(row);
+          merged.active.push(row);
+        }
+        for (const session of part.previous || []) {
+          const row = publishSession(session, part.hostId);
+          lists.previous.push(row);
+          merged.previous.push(row);
+        }
+        published.push(lists);
       }
       sessions = merged;
       if (currentSession) {
@@ -2468,6 +2491,7 @@
       }
       options2.onListsChanged();
       options2.onCurrentChanged();
+      return fanout ? published : merged;
     }
     function setCurrentSession(id, host) {
       const entry = findSession(id, host);
@@ -2528,67 +2552,6 @@
     };
   }
 
-  // src/browser/message-data.ts
-  var string = (value) => typeof value === "string" ? value : void 0;
-  var number = (value) => finite(value) ? value : void 0;
-  function decodeMessageUsage(value) {
-    if (!record2(value)) return void 0;
-    const cost = record2(value.cost) ? value.cost : null, price = (value2) => value2 === null ? null : number(value2);
-    return {
-      input: number(value.input),
-      output: number(value.output),
-      reasoning: number(value.reasoning),
-      cacheRead: number(value.cacheRead),
-      cacheWrite: number(value.cacheWrite),
-      cost: cost ? { input: price(cost.input), output: price(cost.output), cacheRead: price(cost.cacheRead), cacheWrite: price(cost.cacheWrite), total: price(cost.total) } : void 0
-    };
-  }
-  function decodeMessageContent(value) {
-    if (typeof value === "string") return value;
-    if (!Array.isArray(value)) return void 0;
-    return value.flatMap((block) => typeof block === "string" ? [block] : !record2(block) || typeof block.type !== "string" ? [] : [{
-      type: block.type,
-      text: string(block.text),
-      thinking: string(block.thinking),
-      name: string(block.name),
-      id: string(block.id),
-      arguments: record2(block.arguments) ? block.arguments : void 0,
-      url: string(block.url),
-      data: string(block.data),
-      mimeType: string(block.mimeType)
-    }]);
-  }
-  function decodeRenderMessage(value) {
-    const row = record2(value) ? value : {}, details = record2(row.details) ? row.details : null;
-    return {
-      role: string(row.role) || "",
-      id: string(row.id),
-      index: finite(row.index) && Number.isInteger(row.index) && row.index >= 0 ? row.index : void 0,
-      timestamp: typeof row.timestamp === "string" || finite(row.timestamp) || row.timestamp instanceof Date ? row.timestamp : void 0,
-      content: decodeMessageContent(row.content),
-      model: string(row.model),
-      responseModel: string(row.responseModel),
-      provider: string(row.provider),
-      stopReason: string(row.stopReason),
-      errorMessage: string(row.errorMessage),
-      toolName: string(row.toolName),
-      toolCallId: string(row.toolCallId),
-      isError: row.isError === true,
-      customType: string(row.customType),
-      display: typeof row.display === "boolean" ? row.display : void 0,
-      usage: decodeMessageUsage(row.usage),
-      durationMs: number(row.durationMs),
-      outputTokens: number(row.outputTokens),
-      sessionRefs: Array.isArray(row.sessionRefs) ? row.sessionRefs.flatMap((entry) => record2(entry) && typeof entry.ref === "string" ? [{ ref: entry.ref, name: string(entry.name), host: string(entry.host), cwd: string(entry.cwd), isActive: entry.isActive === true }] : []) : void 0,
-      details: details ? {
-        notes: Array.isArray(details.notes) ? details.notes.flatMap((note) => typeof note === "string" ? [{ note }] : record2(note) && typeof note.note === "string" ? [{ note: note.note, severity: string(note.severity), advisor: string(note.advisor) }] : []) : void 0,
-        jobs: Array.isArray(details.jobs) ? details.jobs.flatMap((job) => record2(job) ? [{ label: string(job.label), jobId: string(job.jobId), durationMs: number(job.durationMs) }] : []) : void 0,
-        from: string(details.from),
-        message: string(details.message)
-      } : void 0
-    };
-  }
-
   // src/browser/response-details.ts
   function createResponseDetails(options2) {
     const { document: document2, sessionState: sessionState2 } = options2;
@@ -2598,9 +2561,9 @@
     const key = () => sessionState2.currentSession ? sessionRefKey(sessionState2.currentSession) : null;
     const model = () => sessionState2.currentSession?.model ?? "";
     const current = (detail) => !disposed && detail.key === key();
-    function button(value) {
+    function button(message3) {
       if (disposed) return "";
-      const message3 = decodeRenderMessage(value), detail = responseDetailProjection(message3), id = `response-${++responseDetailSeq}`;
+      const detail = responseDetailProjection(message3), id = `response-${++responseDetailSeq}`;
       responseDetails.set(id, detail);
       if (responseDetails.size > 2e3) {
         const first = responseDetails.keys().next().value;
@@ -3834,6 +3797,9 @@
     function getCache(host) {
       return caches.get(hostKeyOf(host));
     }
+    function retainPublished(host, lists) {
+      caches.set(hostKeyOf(host), lists);
+    }
     function isIndexing() {
       return [...indexing.values()].some(Boolean);
     }
@@ -3842,7 +3808,7 @@
         for (const key of map.keys()) if (!liveKeys.has(key)) map.delete(key);
       }
     }
-    return { load, getCache, isIndexing, prune, retireRequests() {
+    return { load, getCache, retainPublished, isIndexing, prune, retireRequests() {
       owners.clear();
       inflight.clear();
     } };
@@ -3850,7 +3816,7 @@
 
   // src/browser/search-data.ts
   var text4 = (value) => typeof value === "string" ? value : "";
-  var number2 = (value) => finite(value) ? value : 0;
+  var number = (value) => finite(value) ? value : 0;
   function decodeSearchPayload(value) {
     if (!record2(value) || !Array.isArray(value.results)) throw new Error("Invalid search response");
     const results = value.results.flatMap((row) => record2(row) && typeof row.id === "string" && row.id ? [{
@@ -3863,10 +3829,10 @@
       turnInProgress: row.turnInProgress === true,
       compacting: row.compacting === true,
       searchScore: finite(row.searchScore) ? row.searchScore : void 0,
-      matchCount: number2(row.matchCount),
+      matchCount: number(row.matchCount),
       snippets: Array.isArray(row.snippets) ? row.snippets.filter((value2) => typeof value2 === "string") : []
     }] : []);
-    return { results, total: number2(value.total) || results.length, hiddenByScopes: number2(value.hiddenByScopes), hiddenByAutomation: number2(value.hiddenByAutomation), indexing: value.indexing === true };
+    return { results, total: number(value.total) || results.length, hiddenByScopes: number(value.hiddenByScopes), hiddenByAutomation: number(value.hiddenByAutomation), indexing: value.indexing === true };
   }
   function queryHosts(hosts, query) {
     if (!query) return hosts;
@@ -3932,12 +3898,16 @@
     function publish() {
       if (disposed) return;
       indexing = loader.isIndexing();
-      const parts = [];
+      const parts = [], hosts = [];
       for (const host of options2.hosts()) {
         const cache = loader.getCache(host);
-        if (cache) parts.push({ hostId: host.hostId || null, ...cache });
+        if (cache) {
+          hosts.push(host);
+          parts.push({ hostId: host.hostId || null, ...cache });
+        }
       }
-      sessionState2.setSessionLists(parts.length ? parts : [{ hostId: options2.selfId(), active: [], previous: [] }]);
+      const published = sessionState2.setSessionLists(parts.length ? parts : [{ hostId: options2.selfId(), active: [], previous: [] }]);
+      hosts.forEach((host, index) => loader.retainPublished(host, published[index]));
     }
     async function load(query, { withPrevious = options2.all() } = {}) {
       if (disposed) return;
@@ -5180,10 +5150,10 @@
       const idxAttr = msg.index != null ? ` data-msg-index="${escapeHtml(msg.index)}"` : "";
       if (msg.role === "user") return renderUserMessage(msg, time, idxAttr);
       if (msg.role === "assistant") {
-        if (Array.isArray(msg.content) && msg.content.length === 0 && !msg.errorMessage) return "";
+        if (typeof msg.content !== "string" && msg.content?.length === 0 && !msg.errorMessage) return "";
         return renderAssistantMessage(msg, time, { attrs: idxAttr });
       }
-      if (msg.role === "toolResult") return renderToolResult(msg, time, idxAttr);
+      if (msg.role === "toolResult") return renderToolResult(msg, idxAttr);
       if (msg.role === "branchSummary") return renderBranchSummary(msg, time, idxAttr);
       if (msg.role === "custom") return renderCustomMessage(msg, time, idxAttr);
       return "";
@@ -5262,7 +5232,7 @@
       const timestamp = msg.timestamp || Date.now();
       const streamingClass = opts.streaming ? " streaming" : "";
       const streamingAttr = opts.streaming ? ' data-streaming="true"' : "";
-      if (Array.isArray(msg.content)) {
+      if (msg.content && typeof msg.content !== "string") {
         for (const block of msg.content) {
           if (typeof block === "string") continue;
           if (block.type === "thinking" && block.thinking) thinkingHtml += renderThinkingBlock(block.thinking);
@@ -5314,7 +5284,7 @@
     <div class="tool-call-content">${bodyHtml}</div>
   </details>`;
     }
-    function renderToolResult(msg, time, attrs = "") {
+    function renderToolResult(msg, attrs = "") {
       let content = extractTextContent(msg.content);
       const isError = msg.isError;
       const timestamp = msg.timestamp || Date.now();
@@ -5367,7 +5337,7 @@
       return m ? m[1].trim() : "";
     }
     function normalizeAdvisorSeverity(value) {
-      const sev = String(value || "").trim().toLowerCase();
+      const sev = (value || "").trim().toLowerCase();
       return ADVISOR_SEVERITIES.includes(sev) ? sev : "";
     }
     function parseAdvisoryContent(text17) {
@@ -5383,7 +5353,7 @@
       return bare ? [{ note: bare }] : [];
     }
     function advisorNotesFrom(msg) {
-      const structured = Array.isArray(msg.details?.notes) ? msg.details.notes : null;
+      const structured = msg.details?.notes;
       const notes = (structured && structured.length ? structured : parseAdvisoryContent(extractTextContent(msg.content))).map((n) => ({
         note: n.note,
         severity: normalizeAdvisorSeverity(n.severity),
@@ -5435,9 +5405,9 @@
         return renderIrcMessage(msg, time, attrs, timestamp, parseIrcCustomContent(extractTextContent(msg.content)));
       }
       if (customType === "async-result") {
-        const jobs = Array.isArray(msg.details?.jobs) ? msg.details.jobs : [];
+        const jobs = msg.details?.jobs || [];
         const names = jobs.map((job) => job.label || job.jobId).filter(Boolean);
-        const duration = jobs.length === 1 && Number.isFinite(jobs[0].durationMs) ? formatDuration(jobs[0].durationMs) : "";
+        const duration = jobs.length === 1 && jobs[0].durationMs !== void 0 ? formatDuration(jobs[0].durationMs) : "";
         const meta = [names.join(", "), duration].filter(Boolean).join(" \xB7 ");
         return `<div${attrs} class="message custom-message async-result" data-timestamp="${escapeHtml(String(timestamp))}">
       <span class="custom-message-icon">\u2713</span><span class="custom-message-label">Background job${jobs.length > 1 ? "s" : ""} finished</span>${meta ? `<span class="custom-message-meta">${escapeHtml(meta)}</span>` : ""}${time ? `<span class="message-time">${time}</span>` : ""}
@@ -5451,12 +5421,11 @@
   </div>`;
     }
     function liveCustomMessageKey(message3) {
-      const jobs = Array.isArray(message3?.details?.jobs) ? message3.details.jobs.map((job) => job.jobId).filter(Boolean).join(",") : "";
-      return `${message3?.customType || "custom-message"}:${message3?.timestamp || jobs}`;
+      const jobs = message3.details?.jobs?.map((job) => job.jobId).filter(Boolean).join(",") || "";
+      return `${message3.customType || "custom-message"}:${message3.timestamp || jobs}`;
     }
-    function upsertLiveCustomMessage(value, { streaming = false } = {}) {
+    function upsertLiveCustomMessage(message3, { streaming = false } = {}) {
       if (disposed) return;
-      const message3 = decodeRenderMessage(value);
       const container = document2.getElementById("messages");
       if (!container) return;
       const wasPinned = options2.pinned(container);
@@ -5473,10 +5442,10 @@
       else options2.jump(container);
     }
     return {
-      message: (value) => renderMessageHtml(decodeRenderMessage(value)),
-      user: (value, time, attrs = "") => renderUserMessage(decodeRenderMessage(value), time, attrs),
-      assistant: (value, time, opts) => renderAssistantMessage(decodeRenderMessage(value), time, opts),
-      custom: (value, time, attrs = "") => renderCustomMessage(decodeRenderMessage(value), time, attrs),
+      message: renderMessageHtml,
+      user: renderUserMessage,
+      assistant: renderAssistantMessage,
+      custom: renderCustomMessage,
       images: imageBlocksHtml,
       thinking: renderThinkingBlock,
       tool: renderToolCall,
@@ -5484,6 +5453,67 @@
       dispose() {
         disposed = true;
       }
+    };
+  }
+
+  // src/browser/message-data.ts
+  var string = (value) => typeof value === "string" ? value : void 0;
+  var number2 = (value) => finite(value) ? value : void 0;
+  function decodeMessageUsage(value) {
+    if (!record2(value)) return void 0;
+    const cost = record2(value.cost) ? value.cost : null, price = (value2) => value2 === null ? null : number2(value2);
+    return {
+      input: number2(value.input),
+      output: number2(value.output),
+      reasoning: number2(value.reasoning),
+      cacheRead: number2(value.cacheRead),
+      cacheWrite: number2(value.cacheWrite),
+      cost: cost ? { input: price(cost.input), output: price(cost.output), cacheRead: price(cost.cacheRead), cacheWrite: price(cost.cacheWrite), total: price(cost.total) } : void 0
+    };
+  }
+  function decodeMessageContent(value) {
+    if (typeof value === "string") return value;
+    if (!Array.isArray(value)) return void 0;
+    return value.flatMap((block) => typeof block === "string" ? [block] : !record2(block) || typeof block.type !== "string" ? [] : [{
+      type: block.type,
+      text: string(block.text),
+      thinking: string(block.thinking),
+      name: string(block.name),
+      id: string(block.id),
+      arguments: record2(block.arguments) ? block.arguments : void 0,
+      url: string(block.url),
+      data: string(block.data),
+      mimeType: string(block.mimeType)
+    }]);
+  }
+  function decodeRenderMessage(value) {
+    const row = record2(value) ? value : {}, details = record2(row.details) ? row.details : null;
+    return {
+      role: string(row.role) || "",
+      id: string(row.id),
+      index: finite(row.index) && Number.isInteger(row.index) && row.index >= 0 ? row.index : void 0,
+      timestamp: row.timestamp instanceof Date ? new Date(row.timestamp.getTime()) : typeof row.timestamp === "string" || finite(row.timestamp) ? row.timestamp : void 0,
+      content: decodeMessageContent(row.content),
+      model: string(row.model),
+      responseModel: string(row.responseModel),
+      provider: string(row.provider),
+      stopReason: string(row.stopReason),
+      errorMessage: string(row.errorMessage),
+      toolName: string(row.toolName),
+      toolCallId: string(row.toolCallId),
+      isError: row.isError === true,
+      customType: string(row.customType),
+      display: typeof row.display === "boolean" ? row.display : void 0,
+      usage: decodeMessageUsage(row.usage),
+      durationMs: number2(row.durationMs),
+      outputTokens: number2(row.outputTokens),
+      sessionRefs: Array.isArray(row.sessionRefs) ? row.sessionRefs.flatMap((entry) => record2(entry) && typeof entry.ref === "string" ? [{ ref: entry.ref, name: string(entry.name), host: string(entry.host), cwd: string(entry.cwd), isActive: entry.isActive === true }] : []) : void 0,
+      details: details ? {
+        notes: Array.isArray(details.notes) ? details.notes.flatMap((note) => typeof note === "string" ? [{ note }] : record2(note) && typeof note.note === "string" ? [{ note: note.note, severity: string(note.severity), advisor: string(note.advisor) }] : []) : void 0,
+        jobs: Array.isArray(details.jobs) ? details.jobs.flatMap((job) => record2(job) ? [{ label: string(job.label), jobId: string(job.jobId), durationMs: number2(job.durationMs) }] : []) : void 0,
+        from: string(details.from),
+        message: string(details.message)
+      } : void 0
     };
   }
 
@@ -5794,7 +5824,7 @@
         }
         const stickToTail = trace.scrollHeight - trace.scrollTop - trace.clientHeight < 80;
         for (const value of messages) {
-          const html = renderer.message(value);
+          const html = renderer.message(decodeRenderMessage(value));
           if (!html) continue;
           const template = document2.createElement("template");
           template.innerHTML = html.trim();
@@ -9722,7 +9752,7 @@
 
   // src/browser/anchored-comments.ts
   function createAnchoredComments(options2) {
-    const { document: document2, sessionState: sessionState2, views } = options2, window2 = document2.defaultView;
+    const { document: document2, views } = options2, window2 = document2.defaultView;
     const element = (id) => {
       const value = document2.getElementById(id);
       if (!value) throw new Error("Missing comment element: " + id);
@@ -10768,7 +10798,6 @@
         addOwnedListener("message_update", (e) => {
           try {
             const message3 = decodeRenderMessage(parseRecord(e.data).message);
-            if (!message3) return;
             if (message3.role === "custom") {
               renderer.upsertCustom(message3, { streaming: true });
               return;
@@ -10785,7 +10814,6 @@
         addOwnedListener("message_end", (e) => {
           try {
             const message3 = decodeRenderMessage(parseRecord(e.data).message);
-            if (!message3) return;
             const container = document2.getElementById("messages");
             if (!container) return;
             const messageKey = messageEndKey(message3);
@@ -10813,7 +10841,7 @@
             }
             if (message3.role !== "assistant") return;
             options2.streaming.cancel();
-            if (Array.isArray(message3.content) && message3.content.length === 0 && !message3.errorMessage) {
+            if (typeof message3.content !== "string" && message3.content?.length === 0 && !message3.errorMessage) {
               container.querySelectorAll('.message.assistant[data-streaming="true"]').forEach((el) => el.remove());
               return;
             }
@@ -13896,10 +13924,10 @@ ${restored}`;
     const sources = /* @__PURE__ */ new WeakMap();
     let disposed = false, timer = null;
     let pending = null;
-    function queue(value) {
+    function queue(message3) {
       const owner = sessionState2.captureSelection();
       if (disposed || !owner) return;
-      pending = { message: decodeRenderMessage(value), owner };
+      pending = { message: message3, owner };
       if (!timer) flush();
     }
     function flush() {
@@ -13942,7 +13970,7 @@ ${restored}`;
       if (!container) return;
       const wasPinned = options2.pinned(container);
       const el = ensureStreamingElement(container);
-      const blocks = Array.isArray(message3.content) ? message3.content : typeof message3.content === "string" ? [{ type: "text", text: message3.content }] : [];
+      const blocks = typeof message3.content === "string" ? [{ type: "text", text: message3.content }] : message3.content || [];
       blocks.forEach((block, i) => {
         if (typeof block === "string") return;
         let blockEl = el.querySelector(`[data-block-index="${i}"]`);
@@ -14013,8 +14041,8 @@ ${restored}`;
       if (wasPinned) options2.scroll(container);
       else options2.jump(container);
     }
-    return { queue, flush, cancel, render(value) {
-      renderStreamingMessage(decodeRenderMessage(value));
+    return { queue, flush, cancel, render(message3) {
+      renderStreamingMessage(message3);
     }, dispose() {
       cancel();
       disposed = true;
@@ -14045,14 +14073,13 @@ ${restored}`;
     function applyMoodFromTool(toolName, value) {
       const args = record2(value) ? value : {};
       if (toolName !== "set_mood") return;
-      setMoodIndicator(args?.description ?? args?.label, args?.kaomoji || args?.face || args?.mood);
+      setMoodIndicator(args.description ?? args.label, args.kaomoji || args.face || args.mood);
     }
     function updateMoodFromMessages(messages) {
-      for (const value of messages || []) {
-        const msg = decodeRenderMessage(value);
-        const content = Array.isArray(msg.content) ? msg.content : [];
+      for (const msg of messages) {
+        const content = typeof msg.content === "string" ? [] : msg.content || [];
         for (const block of content) {
-          if (typeof block !== "string" && block?.type === "toolCall" && block.name === "set_mood") {
+          if (typeof block !== "string" && block.type === "toolCall" && block.name === "set_mood") {
             applyMoodFromTool(block.name, block.arguments || {});
           }
         }
@@ -15138,7 +15165,7 @@ ${restored}`;
         }
       }
       let html = escapeHtml(text17);
-      html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => `<pre><code class="language-${lang}">${code.trim()}</code></pre>`);
+      html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => `<pre><code class="language-${lang}">${code.trim()}</code></pre>`);
       html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
       html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
       html = html.replace(/\n/g, "<br>");
@@ -18280,7 +18307,7 @@ ${restored}`;
   function modelsCacheKey2(harnessId, hostId) {
     return modelsCacheKey(harnessId, hostId, hostDirectory.self.hostId);
   }
-  var appModels = createAppModels({ sessions: sessionState, catalog: modelCatalog, host: hostEntryFor, takeover: () => newSessionController });
+  var appModels = createAppModels({ sessions: sessionState, catalog: modelCatalog, host: hostEntryFor });
   var sessionRelationsController = createSessionRelations({
     document,
     window,

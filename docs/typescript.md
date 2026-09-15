@@ -27,12 +27,20 @@ and competing metadata owners; the composition cleanup replaces the classic-scri
 facade with ordinary imports and direct controller wiring. Remaining backend
 boundaries still need their own contracts and verification.
 
-`SessionEntry` extends closed `SessionFields`; opaque external fields live in a
-separate `extras` object. Mutation, activity and transcript patches have different
-named fields, and compile-time fixtures reject wrong types, misspellings and
-identity/control writes. Runtime writer filtering protects JavaScript callers
-and external observations. Host stamping and selection generations still decide which
-session an observation may update.
+`SessionEntry` exposes readonly closed `SessionFields`, including readonly
+capabilities; opaque external fields live in a separate `extras` object. Lists,
+lookup and selection returns are readonly views, not immutable snapshots.
+Private publication detaches external rows/capabilities once; ordered published
+lists rebind loader caches so failed/partial polls preserve acknowledged writes.
+Mutation, activity and transcript patches retain distinct named fields and runtime
+filtering. Host stamping and selection generations decide which session changes.
+
+Readonly `RenderMessage` and `TranscriptPage` contracts carry HTTP/SSE projections
+through rendering, streaming, mood and telemetry without decoding again. Child
+trace ingress decodes independently and cannot retarget the parent selection.
+First-party nested values are readonly; mutable `Date` timestamps detach at ingress.
+Opaque tool values remain unknown. Browser compilation also checks unused locals
+and parameters.
 
 Discovery, source resolution, metadata accumulation, indexing and catalog
 composition have checked implementations. `server.js` supplies captured registry
@@ -46,22 +54,20 @@ dependencies, deletion criteria and verification. Lifecycle authority, host and
 selection ownership, local assets and checked-in runtime delivery remain
 invariants; they are not simplification targets.
 
-## Planned next stages
+## Ordered migration stages
 
-The next task documents separate implementation work from the completed
-boundaries described here:
+The task documents separate delivered contracts from pending implementation:
 
-1. [Browser contract cleanup](browser-contract-cleanup.md): readonly state views,
-   decoded message continuity and removal of test-only model-loading behavior.
+1. [Browser contract cleanup](browser-contract-cleanup.md): implemented readonly
+   views, decoded message continuity and session-only model loading; review pending.
 2. [Shared runtime helper cutover](shared-runtime-helpers.md): direct shared-source
    imports instead of backend dependencies on browser-generated helper artifacts.
 3. [Session lifecycle migration](session-lifecycle-migration.md): checked authority,
    launch and operation owners, recovery/bounce implementations and caller cutover.
 
-These stages are planned, not implemented. Each records the complexity to remove,
-the behavior to preserve and the later work it enables. Existing source paths,
-generated output and checking scope below remain authoritative until the relevant
-stage is delivered and its implementation record is updated.
+Shared helpers and lifecycle remain planned, not implemented. Each records the
+complexity to remove, preserved behavior and later work enabled. Existing source
+paths, generated output and checking scope remain authoritative until delivery.
 
 All three plans have [Fable 5.1 high-effort signoff](../BACKLOG.md#next-stage-plan-review)
 for their clarified task definitions. This does not change the implementation
@@ -384,9 +390,10 @@ remain explicit callbacks supplied by the app.
 
 `src/browser/model-catalog.ts` owns model rows, catalog scope, enabled-model
 writes and shared select markup. Request owners include the host endpoint and
-request sequence; app callbacks also validate selection or takeover generation,
-harness and cwd. Pending reads retire on cwd pick/blur before the refresh debounce fires; cwd
-equality guards reject stale replies while typing.
+request sequence. `app-models.ts` requires a session id and captures selection and
+endpoint ownership; `new-session.ts` alone owns takeover generation, harness and
+cwd. Pending reads retire on cwd pick/blur before the refresh debounce fires;
+cwd equality guards reject stale replies while typing.
 Row ownership is separate so interim cached rows remain usable for the same
 host/harness/view. Peer cache reads use their own host suffix. Readonly rows and
 replacement writers preserve captured persistence snapshots across later edits.

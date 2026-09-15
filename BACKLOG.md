@@ -79,15 +79,17 @@ controller/port observations.
 | Browser migration | Source implementation complete and reviewed | All first-party application logic and bindings are typed. Local strict, backend, browser and UI checks pass; each push must also pass the CI matrix. |
 | Session catalog and metadata | Tasks 1–7 implemented, verified and reviewed | Checked discovery/source/index/catalog and closed browser state replace competing adapters and render-time normalization. Strict checks, 974 backend tests, browser/UI coverage and Fable review are recorded in the stage plan. |
 | Browser composition | Implemented, verified and reviewed | Direct bundled imports and controller wiring replace global forwarding functions. Test-only observations preserve ownership probes; uninstrumented production scenarios, 282 browser checks and all UI suites passed. |
-| Remaining server application and feature modules | Lifecycle stage planned; other boundaries remain | The next three task plans cover browser contracts, shared helpers and lifecycle ownership. General routes, projections and other feature stores remain later stages. |
+| Browser contracts | Implemented and locally verified; review pending | Readonly state/cache borrowing, decoded message ports and session-only model loading passed strict checks, 984 backend tests, 286 browser cases and both UI suites. |
+| Remaining server application and feature modules | Shared helpers and lifecycle planned; other boundaries remain | Two pending stages cover shared helper source and lifecycle ownership. General routes, projections and other feature stores remain later stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
 
 The completed browser source migration does not imply a whole-application
 conversion or complete domain contracts. Session catalog/metadata establishes
-its bounded read path, and browser composition cleanup is delivered. The next
-three stages below are plans, not implemented milestones; extension checking,
-Electron and the remaining backend boundaries still require their own delivery.
+its bounded read path, and browser composition cleanup is delivered. Browser
+contract cleanup is implemented with delivery review pending. Shared helpers,
+lifecycle, extension checking, Electron and remaining backend boundaries still
+require their own implementation and delivery.
 
 ## What is already in TypeScript
 
@@ -205,10 +207,9 @@ names instead of executable event handlers.
 
 ## Ordered next work
 
-1. **[Browser contract cleanup](docs/browser-contract-cleanup.md).** Carry decoded
-   message types through internal rendering ports, expose readonly session-state
-   views, and remove the test-only model-loading branch. Turn the existing
-   migration into compiler-enforced ownership and delete redundant work.
+1. **[Browser contract cleanup](docs/browser-contract-cleanup.md): implemented;
+   locally verified; review pending.** Readonly session publication,
+   decoded message continuity, session-only model loading and unused-code gates.
 2. **[Shared runtime helper cutover](docs/shared-runtime-helpers.md).** Move the
    genuinely shared helper dependency closure to flat core modules; give browser
    and backend consumers real typed imports. Remove backend dependencies on the
@@ -276,11 +277,11 @@ handoff: keep the narrow extension-relative declaration probe under `test/` with
 an explicit compiler invocation, and record the exact Node-only helper probe
 command at the integrated checkpoint.
 
-This is **plan signoff only**. Migration implementation has not started. The
+This remains **plan signoff only**, not implementation clearance. The plan
 reviewer ran no build, compiler, lint, test or runtime checks. The maintainer ran
-the two successful no-emit compiler probes recorded in the evidence file and
-documentation link/content checks; no runtime suite result is implied. Each
-stage still requires its own implementation verification and review before delivery.
+the two no-emit probes recorded in the evidence file and documentation checks.
+Browser contract implementation now has its own stage record; every stage still
+requires implementation verification and review before delivery.
 
 ## Review and verification
 

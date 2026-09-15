@@ -1,6 +1,6 @@
 import { normalizeMood } from './helper-format';
 import { record } from './helper-values';
-import { decodeRenderMessage } from './message-data';
+import type { RenderMessage } from './message-data';
 export function createMood(document: Document) {
 function setMoodIndicator(description: unknown, face: unknown) {
   const inputArea = document.querySelector('.input-area');
@@ -31,15 +31,14 @@ function applyMoodFromTool(toolName: string, value: unknown) {
   // Known set_mood arg shapes: {description, kaomoji} (the mood extension)
   // and {mood, label?} (footer-style variants — mood word or kaomoji, plus
   // an optional label).
-  setMoodIndicator(args?.description ?? args?.label, args?.kaomoji || args?.face || args?.mood);
+  setMoodIndicator(args.description ?? args.label, args.kaomoji || args.face || args.mood);
 }
 
-function updateMoodFromMessages(messages: readonly unknown[]) {
-  for (const value of messages || []) {
-    const msg = decodeRenderMessage(value);
-    const content = Array.isArray(msg.content) ? msg.content : [];
+function updateMoodFromMessages(messages: readonly RenderMessage[]) {
+  for (const msg of messages) {
+    const content = typeof msg.content === 'string' ? [] : msg.content || [];
     for (const block of content) {
-      if (typeof block !== 'string' && block?.type === 'toolCall' && block.name === 'set_mood') {
+      if (typeof block !== 'string' && block.type === 'toolCall' && block.name === 'set_mood') {
         applyMoodFromTool(block.name, block.arguments || {});
       }
     }

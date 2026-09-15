@@ -32,9 +32,13 @@ export function createSidebarLists(options: {
     onError: (host, error) => { if (!disposed && host.self) console.error('Failed to load sessions:', error); },
   });
   function publish() {
-    if (disposed) return; indexing = loader.isIndexing(); const parts: HostSessionLists[] = [];
-    for (const host of options.hosts()) { const cache = loader.getCache(host); if (cache) parts.push({ hostId: host.hostId || null, ...cache }); }
-    sessionState.setSessionLists(parts.length ? parts : [{ hostId: options.selfId(), active: [], previous: [] }]);
+    if (disposed) return; indexing = loader.isIndexing(); const parts: HostSessionLists[] = [], hosts: SessionHost[] = [];
+    for (const host of options.hosts()) {
+      const cache = loader.getCache(host);
+      if (cache) { hosts.push(host); parts.push({ hostId: host.hostId || null, ...cache }); }
+    }
+    const published = sessionState.setSessionLists(parts.length ? parts : [{ hostId: options.selfId(), active: [], previous: [] }]);
+    hosts.forEach((host, index) => loader.retainPublished(host, published[index]));
   }
   async function load(query?: string, { withPrevious = options.all() } = {}) {
     if (disposed) return; const current = ++sequence; busy(true);

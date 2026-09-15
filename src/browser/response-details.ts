@@ -1,6 +1,5 @@
 import type { SessionState } from './session-state';
 import type { RenderMessage, MessageUsage } from './message-data';
-import { decodeRenderMessage } from './message-data';
 import type { ResponseMode } from './display-preferences';
 import { sessionRefKey } from './helper-identity';
 import { escapeHtml, formatResponseMetadata, formatDuration, formatTokSpeed, formatTokens, formatEstimatedCost } from './helper-format';
@@ -12,8 +11,8 @@ export function createResponseDetails(options: { document: Document; sessionStat
   const key = () => sessionState.currentSession ? sessionRefKey(sessionState.currentSession) : null;
   const model = () => sessionState.currentSession?.model ?? '';
   const current = (detail: Detail) => !disposed && detail.key === key();
-  function button(value: unknown) {
-    if (disposed) return ''; const message = decodeRenderMessage(value), detail = responseDetailProjection(message), id = `response-${++responseDetailSeq}`;
+  function button(message: RenderMessage) {
+    if (disposed) return ''; const detail = responseDetailProjection(message), id = `response-${++responseDetailSeq}`;
     responseDetails.set(id, detail); if (responseDetails.size > 2000) { const first = responseDetails.keys().next().value; if (first) responseDetails.delete(first); }
     const metadata = formatResponseMetadata(detail, options.mode());
     return `<button type="button" class="message-speed message-metadata-btn" data-detail-id="${id}" title="Response details. Response time is request start to JSONL append; effective speed includes time to first token."${metadata ? '' : ' style="display:none"'}>${escapeHtml(metadata || '')}</button>`;

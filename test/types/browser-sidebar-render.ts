@@ -6,8 +6,12 @@ declare const row: SessionEntry;
 projection.pinned.push('foreign');
 // @ts-expect-error render projections cannot expand persisted families
 projection.expanded.add('foreign');
-// @ts-expect-error metadata is established at ingress before rendering
-row.contextPercent = {};
+const invalidRow: SessionEntry = {
+  id: 'session',
+  // @ts-expect-error Metadata is established at ingress before rendering.
+  contextPercent: {},
+};
+void invalidRow;
 
 // The renderer accepts the established state shape without a second projection.
 const rowFromState: SidebarRenderOptions['active'][number] = row;

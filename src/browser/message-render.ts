@@ -1,7 +1,6 @@
 import type { SessionState } from './session-state';
 import type { Timestamp, RefContextEntry } from './shared-helper-types';
 import type { RenderMessage, MessageBlock, AdvisorNote } from './message-data';
-import { decodeRenderMessage } from './message-data';
 import type { createResponseDetails } from './response-details';
 import { escapeHtml, formatTime, formatDuration, truncate } from './helper-format';
 import { extractImageBlocks, extractTextContent, messageHasVisibleText, getToolSummary, parseIpythonResult } from './helper-content';
@@ -33,10 +32,10 @@ function renderMessageHtml(msg: RenderMessage) {
     // OMP persists an empty assistant shell when thinking is interrupted. The
     // following interrupted-thinking marker carries the useful UI; avoid a
     // stray π header while preserving the message/index in the API.
-    if (Array.isArray(msg.content) && msg.content.length === 0 && !msg.errorMessage) return '';
+    if (typeof msg.content !== 'string' && msg.content?.length === 0 && !msg.errorMessage) return '';
     return renderAssistantMessage(msg, time, { attrs: idxAttr });
   }
-  if (msg.role === 'toolResult') return renderToolResult(msg, time, idxAttr);
+  if (msg.role === 'toolResult') return renderToolResult(msg, idxAttr);
   if (msg.role === 'branchSummary') return renderBranchSummary(msg, time, idxAttr);
   if (msg.role === 'custom') return renderCustomMessage(msg, time, idxAttr);
   return '';
@@ -147,7 +146,7 @@ function renderAssistantMessage(msg: RenderMessage, time: string, opts: { stream
   const streamingClass = opts.streaming ? ' streaming' : '';
   const streamingAttr = opts.streaming ? ' data-streaming="true"' : '';
   
-  if (Array.isArray(msg.content)) {
+  if (msg.content && typeof msg.content !== 'string') {
     for (const block of msg.content) {
       if (typeof block === 'string') continue;
       if (block.type === 'thinking' && block.thinking) thinkingHtml += renderThinkingBlock(block.thinking);
@@ -214,7 +213,7 @@ function renderToolCall(block: MessageBlock) {
   </details>`;
 }
 
-function renderToolResult(msg: RenderMessage, time: string, attrs = '') {
+function renderToolResult(msg: RenderMessage, attrs = '') {
   let content = extractTextContent(msg.content);
   const isError = msg.isError;
   const timestamp = msg.timestamp || Date.now();
@@ -284,8 +283,8 @@ function advisoryTagAttr(rawAttrs: string, name: string) {
   return m ? m[1].trim() : '';
 }
 
-function normalizeAdvisorSeverity(value: unknown) {
-  const sev = String(value || '').trim().toLowerCase();
+function normalizeAdvisorSeverity(value: string | undefined) {
+  const sev = (value || '').trim().toLowerCase();
   return ADVISOR_SEVERITIES.includes(sev) ? sev : '';
 }
 
@@ -306,7 +305,7 @@ function parseAdvisoryContent(text: string): AdvisorNote[] {
 }
 
 function advisorNotesFrom(msg: RenderMessage) {
-  const structured = Array.isArray(msg.details?.notes) ? msg.details.notes : null;
+  const structured = msg.details?.notes;
   const notes = (structured && structured.length ? structured : parseAdvisoryContent(extractTextContent(msg.content)))
     .map(n => ({
       note: n.note,
@@ -378,10 +377,10 @@ function renderCustomMessage(msg: RenderMessage, time: string, attrs = '') {
   }
 
   if (customType === 'async-result') {
-    const jobs = Array.isArray(msg.details?.jobs) ? msg.details.jobs : [];
+    const jobs = msg.details?.jobs || [];
     const names = jobs.map(job => job.label || job.jobId).filter(Boolean);
-    const duration = jobs.length === 1 && Number.isFinite(jobs[0].durationMs)
-      ? formatDuration(jobs[0].durationMs!) : '';
+    const duration = jobs.length === 1 && jobs[0].durationMs !== undefined
+      ? formatDuration(jobs[0].durationMs) : '';
     const meta = [names.join(', '), duration].filter(Boolean).join(' · ');
     return `<div${attrs} class="message custom-message async-result" data-timestamp="${escapeHtml(String(timestamp))}">
       <span class="custom-message-icon">✓</span><span class="custom-message-label">Background job${jobs.length > 1 ? 's' : ''} finished</span>${meta ? `<span class="custom-message-meta">${escapeHtml(meta)}</span>` : ''}${time ? `<span class="message-time">${time}</span>` : ''}
@@ -398,13 +397,12 @@ function renderCustomMessage(msg: RenderMessage, time: string, attrs = '') {
 }
 
 function liveCustomMessageKey(message: RenderMessage) {
-  const jobs = Array.isArray(message?.details?.jobs)
-    ? message.details.jobs.map(job => job.jobId).filter(Boolean).join(',') : '';
-  return `${message?.customType || 'custom-message'}:${message?.timestamp || jobs}`;
+  const jobs = message.details?.jobs?.map(job => job.jobId).filter(Boolean).join(',') || '';
+  return `${message.customType || 'custom-message'}:${message.timestamp || jobs}`;
 }
 
-function upsertLiveCustomMessage(value: unknown, { streaming = false } = {}) {
-  if (disposed) return; const message = decodeRenderMessage(value);
+function upsertLiveCustomMessage(message: RenderMessage, { streaming = false } = {}) {
+  if (disposed) return;
   const container = document.getElementById('messages');
   if (!container) return;
   const wasPinned = options.pinned(container);
@@ -421,10 +419,7 @@ function upsertLiveCustomMessage(value: unknown, { streaming = false } = {}) {
   if (wasPinned || options.follow()) options.scroll(container); else options.jump(container);
 }
 
-return { message: (value: unknown) => renderMessageHtml(decodeRenderMessage(value)),
-  user: (value: unknown, time: string, attrs = '') => renderUserMessage(decodeRenderMessage(value), time, attrs),
-  assistant: (value: unknown, time: string, opts?: { streaming?: boolean; attrs?: string }) => renderAssistantMessage(decodeRenderMessage(value), time, opts),
-  custom: (value: unknown, time: string, attrs = '') => renderCustomMessage(decodeRenderMessage(value), time, attrs),
+return { message: renderMessageHtml, user: renderUserMessage, assistant: renderAssistantMessage, custom: renderCustomMessage,
   images: imageBlocksHtml, thinking: renderThinkingBlock, tool: renderToolCall, upsertCustom: upsertLiveCustomMessage,
   dispose() { disposed = true; } };
 }

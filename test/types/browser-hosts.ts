@@ -1,8 +1,9 @@
 import { createHostConnections, hostKeyOf } from '../../src/browser/host-connections';
 import type { HostConnectionRecord, HostConnectionState } from '../../src/browser/host-connections';
-import { createHostSessionLoader } from '../../src/browser/host-session-loader';
+import { createHostSessionLoader, mergeLiveSubagents } from '../../src/browser/host-session-loader';
 import type { HostSessionLoaderOptions, SessionHost } from '../../src/browser/host-session-loader';
 import { mergeHostEntries, sanitizeHostCatalog } from '../../src/browser/host-catalog';
+import type { SessionEntry, SessionLists } from '../../src/browser/session-state';
 
 const connections = createHostConnections({ onChange() {}, now: () => 1000 });
 const host = { hostId: 'peer', base: '/hosts/peer', label: 'Peer' };
@@ -39,6 +40,30 @@ createHostSessionLoader({
   ...loaderOptions,
   // @ts-expect-error Decoded list rows must carry string session identities.
   requestList: async () => ({ active: [{ id: 7 }], previous: [] }),
+});
+
+declare const publishedLists: SessionLists;
+declare const borrowedRows: readonly SessionEntry[];
+loader.retainPublished(host, publishedLists);
+const mergedChildren: readonly SessionEntry[] = mergeLiveSubagents(borrowedRows, borrowedRows);
+void mergedChildren;
+const cachedLists = loader.getCache(host);
+if (cachedLists) {
+  // @ts-expect-error Cached rows borrow authoritative state; they are not loader writers.
+  cachedLists.active[0].model = 'foreign/model';
+  // @ts-expect-error Cached list membership is readonly.
+  cachedLists.previous.push({ id: 'foreign' });
+  // @ts-expect-error Cached list properties are readonly.
+  cachedLists.active = [];
+}
+createHostSessionLoader({
+  ...loaderOptions,
+  beforePublish(_host, lists) {
+    // @ts-expect-error Publication bookkeeping does not own row metadata.
+    lists.active[0].name = 'foreign';
+    // @ts-expect-error Publication bookkeeping does not own membership.
+    lists.previous.splice(0, 1);
+  },
 });
 
 const catalog = sanitizeHostCatalog([{ base: '/hosts/peer', token: 'fixture' }]);

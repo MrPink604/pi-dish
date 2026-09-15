@@ -613,9 +613,13 @@ var PiDishBrowser = (() => {
   function sessionEntryFromRow(row) {
     return { ...row.fields, id: row.id, extras: row.extras };
   }
+  function isHostSessionListsArray(next) {
+    return Array.isArray(next);
+  }
   function createSessionState(options2) {
     let sessions = { active: [], previous: [] };
     let currentSession = null;
+    const publishedRows = /* @__PURE__ */ new WeakMap();
     let generation = 0;
     function findSession(id, host) {
       if (!host && currentSession && currentSession.id === id) host = currentSession.host;
@@ -640,12 +644,33 @@ var PiDishBrowser = (() => {
       else delete session.hostLabel;
       return session;
     }
+    function publishSession(session, hostId = options2.getSelfHostId()) {
+      const owned = publishedRows.get(session);
+      if (owned && owned.host === (hostId || null)) return stampSessionHost(owned, hostId);
+      const copy = { ...session };
+      if (session.capabilities) copy.capabilities = { ...session.capabilities };
+      stampSessionHost(copy, hostId);
+      publishedRows.set(copy, copy);
+      return copy;
+    }
     function setSessionLists(next, hostId = options2.getSelfHostId()) {
-      const parts = Array.isArray(next) ? next : [{ hostId, active: next.active, previous: next.previous }];
+      const fanout = isHostSessionListsArray(next);
+      const parts = fanout ? next : [{ hostId, active: next.active, previous: next.previous }];
       const merged = { active: [], previous: [] };
+      const published = [];
       for (const part of parts) {
-        for (const session of part.active || []) merged.active.push(stampSessionHost(session, part.hostId));
-        for (const session of part.previous || []) merged.previous.push(stampSessionHost(session, part.hostId));
+        const lists = { active: [], previous: [] };
+        for (const session of part.active || []) {
+          const row = publishSession(session, part.hostId);
+          lists.active.push(row);
+          merged.active.push(row);
+        }
+        for (const session of part.previous || []) {
+          const row = publishSession(session, part.hostId);
+          lists.previous.push(row);
+          merged.previous.push(row);
+        }
+        published.push(lists);
       }
       sessions = merged;
       if (currentSession) {
@@ -654,6 +679,7 @@ var PiDishBrowser = (() => {
       }
       options2.onListsChanged();
       options2.onCurrentChanged();
+      return fanout ? published : merged;
     }
     function setCurrentSession(id, host) {
       const entry = findSession(id, host);
@@ -897,6 +923,9 @@ var PiDishBrowser = (() => {
     function getCache(host) {
       return caches.get(hostKeyOf(host));
     }
+    function retainPublished(host, lists) {
+      caches.set(hostKeyOf(host), lists);
+    }
     function isIndexing() {
       return [...indexing.values()].some(Boolean);
     }
@@ -905,7 +934,7 @@ var PiDishBrowser = (() => {
         for (const key of map.keys()) if (!liveKeys.has(key)) map.delete(key);
       }
     }
-    return { load, getCache, isIndexing, prune, retireRequests() {
+    return { load, getCache, retainPublished, isIndexing, prune, retireRequests() {
       owners.clear();
       inflight.clear();
     } };
@@ -5669,67 +5698,6 @@ var PiDishBrowser = (() => {
     };
   }
 
-  // src/browser/message-data.ts
-  var string = (value) => typeof value === "string" ? value : void 0;
-  var number3 = (value) => finite2(value) ? value : void 0;
-  function decodeMessageUsage(value) {
-    if (!record8(value)) return void 0;
-    const cost = record8(value.cost) ? value.cost : null, price = (value2) => value2 === null ? null : number3(value2);
-    return {
-      input: number3(value.input),
-      output: number3(value.output),
-      reasoning: number3(value.reasoning),
-      cacheRead: number3(value.cacheRead),
-      cacheWrite: number3(value.cacheWrite),
-      cost: cost ? { input: price(cost.input), output: price(cost.output), cacheRead: price(cost.cacheRead), cacheWrite: price(cost.cacheWrite), total: price(cost.total) } : void 0
-    };
-  }
-  function decodeMessageContent(value) {
-    if (typeof value === "string") return value;
-    if (!Array.isArray(value)) return void 0;
-    return value.flatMap((block) => typeof block === "string" ? [block] : !record8(block) || typeof block.type !== "string" ? [] : [{
-      type: block.type,
-      text: string(block.text),
-      thinking: string(block.thinking),
-      name: string(block.name),
-      id: string(block.id),
-      arguments: record8(block.arguments) ? block.arguments : void 0,
-      url: string(block.url),
-      data: string(block.data),
-      mimeType: string(block.mimeType)
-    }]);
-  }
-  function decodeRenderMessage(value) {
-    const row = record8(value) ? value : {}, details = record8(row.details) ? row.details : null;
-    return {
-      role: string(row.role) || "",
-      id: string(row.id),
-      index: finite2(row.index) && Number.isInteger(row.index) && row.index >= 0 ? row.index : void 0,
-      timestamp: typeof row.timestamp === "string" || finite2(row.timestamp) || row.timestamp instanceof Date ? row.timestamp : void 0,
-      content: decodeMessageContent(row.content),
-      model: string(row.model),
-      responseModel: string(row.responseModel),
-      provider: string(row.provider),
-      stopReason: string(row.stopReason),
-      errorMessage: string(row.errorMessage),
-      toolName: string(row.toolName),
-      toolCallId: string(row.toolCallId),
-      isError: row.isError === true,
-      customType: string(row.customType),
-      display: typeof row.display === "boolean" ? row.display : void 0,
-      usage: decodeMessageUsage(row.usage),
-      durationMs: number3(row.durationMs),
-      outputTokens: number3(row.outputTokens),
-      sessionRefs: Array.isArray(row.sessionRefs) ? row.sessionRefs.flatMap((entry) => record8(entry) && typeof entry.ref === "string" ? [{ ref: entry.ref, name: string(entry.name), host: string(entry.host), cwd: string(entry.cwd), isActive: entry.isActive === true }] : []) : void 0,
-      details: details ? {
-        notes: Array.isArray(details.notes) ? details.notes.flatMap((note) => typeof note === "string" ? [{ note }] : record8(note) && typeof note.note === "string" ? [{ note: note.note, severity: string(note.severity), advisor: string(note.advisor) }] : []) : void 0,
-        jobs: Array.isArray(details.jobs) ? details.jobs.flatMap((job) => record8(job) ? [{ label: string(job.label), jobId: string(job.jobId), durationMs: number3(job.durationMs) }] : []) : void 0,
-        from: string(details.from),
-        message: string(details.message)
-      } : void 0
-    };
-  }
-
   // src/browser/helper-content.ts
   function extractTextContent(content) {
     if (!content) return "";
@@ -5769,7 +5737,7 @@ var PiDishBrowser = (() => {
     return { exitCode: Number(m[1]), output: pythonReprUnescape(m[3]), durationMs: m[4] != null ? Math.round(Number(m[4]) * 1e3) : null };
   }
   function pythonReprUnescape(text17) {
-    return text17.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|[\s\S])/g, (all, seq) => {
+    return text17.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|[\s\S])/g, (_all, seq) => {
       if (seq[0] === "x") return String.fromCharCode(parseInt(seq.slice(1), 16));
       if (seq[0] === "u") return String.fromCharCode(parseInt(seq.slice(1), 16));
       const map = { n: "\n", t: "	", r: "\r", b: "\b", f: "\f", v: "\v", "0": "\0", "\n": "" };
@@ -5962,10 +5930,10 @@ var PiDishBrowser = (() => {
       const idxAttr = msg.index != null ? ` data-msg-index="${escapeHtml(msg.index)}"` : "";
       if (msg.role === "user") return renderUserMessage(msg, time, idxAttr);
       if (msg.role === "assistant") {
-        if (Array.isArray(msg.content) && msg.content.length === 0 && !msg.errorMessage) return "";
+        if (typeof msg.content !== "string" && msg.content?.length === 0 && !msg.errorMessage) return "";
         return renderAssistantMessage(msg, time, { attrs: idxAttr });
       }
-      if (msg.role === "toolResult") return renderToolResult(msg, time, idxAttr);
+      if (msg.role === "toolResult") return renderToolResult(msg, idxAttr);
       if (msg.role === "branchSummary") return renderBranchSummary(msg, time, idxAttr);
       if (msg.role === "custom") return renderCustomMessage(msg, time, idxAttr);
       return "";
@@ -6044,7 +6012,7 @@ var PiDishBrowser = (() => {
       const timestamp = msg.timestamp || Date.now();
       const streamingClass = opts.streaming ? " streaming" : "";
       const streamingAttr = opts.streaming ? ' data-streaming="true"' : "";
-      if (Array.isArray(msg.content)) {
+      if (msg.content && typeof msg.content !== "string") {
         for (const block of msg.content) {
           if (typeof block === "string") continue;
           if (block.type === "thinking" && block.thinking) thinkingHtml += renderThinkingBlock(block.thinking);
@@ -6096,7 +6064,7 @@ var PiDishBrowser = (() => {
     <div class="tool-call-content">${bodyHtml}</div>
   </details>`;
     }
-    function renderToolResult(msg, time, attrs = "") {
+    function renderToolResult(msg, attrs = "") {
       let content = extractTextContent(msg.content);
       const isError = msg.isError;
       const timestamp = msg.timestamp || Date.now();
@@ -6149,7 +6117,7 @@ var PiDishBrowser = (() => {
       return m ? m[1].trim() : "";
     }
     function normalizeAdvisorSeverity(value) {
-      const sev = String(value || "").trim().toLowerCase();
+      const sev = (value || "").trim().toLowerCase();
       return ADVISOR_SEVERITIES.includes(sev) ? sev : "";
     }
     function parseAdvisoryContent(text17) {
@@ -6165,7 +6133,7 @@ var PiDishBrowser = (() => {
       return bare ? [{ note: bare }] : [];
     }
     function advisorNotesFrom(msg) {
-      const structured = Array.isArray(msg.details?.notes) ? msg.details.notes : null;
+      const structured = msg.details?.notes;
       const notes = (structured && structured.length ? structured : parseAdvisoryContent(extractTextContent(msg.content))).map((n) => ({
         note: n.note,
         severity: normalizeAdvisorSeverity(n.severity),
@@ -6217,9 +6185,9 @@ var PiDishBrowser = (() => {
         return renderIrcMessage(msg, time, attrs, timestamp, parseIrcCustomContent(extractTextContent(msg.content)));
       }
       if (customType === "async-result") {
-        const jobs = Array.isArray(msg.details?.jobs) ? msg.details.jobs : [];
+        const jobs = msg.details?.jobs || [];
         const names = jobs.map((job) => job.label || job.jobId).filter(Boolean);
-        const duration = jobs.length === 1 && Number.isFinite(jobs[0].durationMs) ? formatDuration(jobs[0].durationMs) : "";
+        const duration = jobs.length === 1 && jobs[0].durationMs !== void 0 ? formatDuration(jobs[0].durationMs) : "";
         const meta = [names.join(", "), duration].filter(Boolean).join(" \xB7 ");
         return `<div${attrs} class="message custom-message async-result" data-timestamp="${escapeHtml(String(timestamp))}">
       <span class="custom-message-icon">\u2713</span><span class="custom-message-label">Background job${jobs.length > 1 ? "s" : ""} finished</span>${meta ? `<span class="custom-message-meta">${escapeHtml(meta)}</span>` : ""}${time ? `<span class="message-time">${time}</span>` : ""}
@@ -6233,12 +6201,11 @@ var PiDishBrowser = (() => {
   </div>`;
     }
     function liveCustomMessageKey(message3) {
-      const jobs = Array.isArray(message3?.details?.jobs) ? message3.details.jobs.map((job) => job.jobId).filter(Boolean).join(",") : "";
-      return `${message3?.customType || "custom-message"}:${message3?.timestamp || jobs}`;
+      const jobs = message3.details?.jobs?.map((job) => job.jobId).filter(Boolean).join(",") || "";
+      return `${message3.customType || "custom-message"}:${message3.timestamp || jobs}`;
     }
-    function upsertLiveCustomMessage(value, { streaming = false } = {}) {
+    function upsertLiveCustomMessage(message3, { streaming = false } = {}) {
       if (disposed) return;
-      const message3 = decodeRenderMessage(value);
       const container = document2.getElementById("messages");
       if (!container) return;
       const wasPinned = options2.pinned(container);
@@ -6255,10 +6222,10 @@ var PiDishBrowser = (() => {
       else options2.jump(container);
     }
     return {
-      message: (value) => renderMessageHtml(decodeRenderMessage(value)),
-      user: (value, time, attrs = "") => renderUserMessage(decodeRenderMessage(value), time, attrs),
-      assistant: (value, time, opts) => renderAssistantMessage(decodeRenderMessage(value), time, opts),
-      custom: (value, time, attrs = "") => renderCustomMessage(decodeRenderMessage(value), time, attrs),
+      message: renderMessageHtml,
+      user: renderUserMessage,
+      assistant: renderAssistantMessage,
+      custom: renderCustomMessage,
       images: imageBlocksHtml,
       thinking: renderThinkingBlock,
       tool: renderToolCall,
@@ -6266,6 +6233,67 @@ var PiDishBrowser = (() => {
       dispose() {
         disposed = true;
       }
+    };
+  }
+
+  // src/browser/message-data.ts
+  var string = (value) => typeof value === "string" ? value : void 0;
+  var number3 = (value) => finite2(value) ? value : void 0;
+  function decodeMessageUsage(value) {
+    if (!record8(value)) return void 0;
+    const cost = record8(value.cost) ? value.cost : null, price = (value2) => value2 === null ? null : number3(value2);
+    return {
+      input: number3(value.input),
+      output: number3(value.output),
+      reasoning: number3(value.reasoning),
+      cacheRead: number3(value.cacheRead),
+      cacheWrite: number3(value.cacheWrite),
+      cost: cost ? { input: price(cost.input), output: price(cost.output), cacheRead: price(cost.cacheRead), cacheWrite: price(cost.cacheWrite), total: price(cost.total) } : void 0
+    };
+  }
+  function decodeMessageContent(value) {
+    if (typeof value === "string") return value;
+    if (!Array.isArray(value)) return void 0;
+    return value.flatMap((block) => typeof block === "string" ? [block] : !record8(block) || typeof block.type !== "string" ? [] : [{
+      type: block.type,
+      text: string(block.text),
+      thinking: string(block.thinking),
+      name: string(block.name),
+      id: string(block.id),
+      arguments: record8(block.arguments) ? block.arguments : void 0,
+      url: string(block.url),
+      data: string(block.data),
+      mimeType: string(block.mimeType)
+    }]);
+  }
+  function decodeRenderMessage(value) {
+    const row = record8(value) ? value : {}, details = record8(row.details) ? row.details : null;
+    return {
+      role: string(row.role) || "",
+      id: string(row.id),
+      index: finite2(row.index) && Number.isInteger(row.index) && row.index >= 0 ? row.index : void 0,
+      timestamp: row.timestamp instanceof Date ? new Date(row.timestamp.getTime()) : typeof row.timestamp === "string" || finite2(row.timestamp) ? row.timestamp : void 0,
+      content: decodeMessageContent(row.content),
+      model: string(row.model),
+      responseModel: string(row.responseModel),
+      provider: string(row.provider),
+      stopReason: string(row.stopReason),
+      errorMessage: string(row.errorMessage),
+      toolName: string(row.toolName),
+      toolCallId: string(row.toolCallId),
+      isError: row.isError === true,
+      customType: string(row.customType),
+      display: typeof row.display === "boolean" ? row.display : void 0,
+      usage: decodeMessageUsage(row.usage),
+      durationMs: number3(row.durationMs),
+      outputTokens: number3(row.outputTokens),
+      sessionRefs: Array.isArray(row.sessionRefs) ? row.sessionRefs.flatMap((entry) => record8(entry) && typeof entry.ref === "string" ? [{ ref: entry.ref, name: string(entry.name), host: string(entry.host), cwd: string(entry.cwd), isActive: entry.isActive === true }] : []) : void 0,
+      details: details ? {
+        notes: Array.isArray(details.notes) ? details.notes.flatMap((note) => typeof note === "string" ? [{ note }] : record8(note) && typeof note.note === "string" ? [{ note: note.note, severity: string(note.severity), advisor: string(note.advisor) }] : []) : void 0,
+        jobs: Array.isArray(details.jobs) ? details.jobs.flatMap((job) => record8(job) ? [{ label: string(job.label), jobId: string(job.jobId), durationMs: number3(job.durationMs) }] : []) : void 0,
+        from: string(details.from),
+        message: string(details.message)
+      } : void 0
     };
   }
 
@@ -6576,7 +6604,7 @@ var PiDishBrowser = (() => {
         }
         const stickToTail = trace.scrollHeight - trace.scrollTop - trace.clientHeight < 80;
         for (const value of messages) {
-          const html = renderer.message(value);
+          const html = renderer.message(decodeRenderMessage(value));
           if (!html) continue;
           const template = document2.createElement("template");
           template.innerHTML = html.trim();
@@ -10852,7 +10880,7 @@ var PiDishBrowser = (() => {
         }
       }
       let html = escapeHtml(text17);
-      html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => `<pre><code class="language-${lang}">${code.trim()}</code></pre>`);
+      html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => `<pre><code class="language-${lang}">${code.trim()}</code></pre>`);
       html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
       html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
       html = html.replace(/\n/g, "<br>");
@@ -12483,7 +12511,7 @@ var PiDishBrowser = (() => {
 
   // src/browser/anchored-comments.ts
   function createAnchoredComments(options2) {
-    const { document: document2, sessionState, views } = options2, window = document2.defaultView;
+    const { document: document2, views } = options2, window = document2.defaultView;
     const element = (id) => {
       const value = document2.getElementById(id);
       if (!value) throw new Error("Missing comment element: " + id);
@@ -15408,12 +15436,16 @@ ${restored}`;
     function publish() {
       if (disposed) return;
       indexing = loader.isIndexing();
-      const parts = [];
+      const parts = [], hosts = [];
       for (const host of options2.hosts()) {
         const cache = loader.getCache(host);
-        if (cache) parts.push({ hostId: host.hostId || null, ...cache });
+        if (cache) {
+          hosts.push(host);
+          parts.push({ hostId: host.hostId || null, ...cache });
+        }
       }
-      sessionState.setSessionLists(parts.length ? parts : [{ hostId: options2.selfId(), active: [], previous: [] }]);
+      const published = sessionState.setSessionLists(parts.length ? parts : [{ hostId: options2.selfId(), active: [], previous: [] }]);
+      hosts.forEach((host, index) => loader.retainPublished(host, published[index]));
     }
     async function load(query, { withPrevious = options2.all() } = {}) {
       if (disposed) return;
@@ -15687,9 +15719,9 @@ ${restored}`;
     const key = () => sessionState.currentSession ? sessionRefKey(sessionState.currentSession) : null;
     const model = () => sessionState.currentSession?.model ?? "";
     const current = (detail) => !disposed && detail.key === key();
-    function button(value) {
+    function button(message3) {
       if (disposed) return "";
-      const message3 = decodeRenderMessage(value), detail = responseDetailProjection(message3), id = `response-${++responseDetailSeq}`;
+      const detail = responseDetailProjection(message3), id = `response-${++responseDetailSeq}`;
       responseDetails.set(id, detail);
       if (responseDetails.size > 2e3) {
         const first = responseDetails.keys().next().value;
@@ -16023,10 +16055,10 @@ ${restored}`;
     const sources = /* @__PURE__ */ new WeakMap();
     let disposed = false, timer = null;
     let pending = null;
-    function queue(value) {
+    function queue(message3) {
       const owner = sessionState.captureSelection();
       if (disposed || !owner) return;
-      pending = { message: decodeRenderMessage(value), owner };
+      pending = { message: message3, owner };
       if (!timer) flush();
     }
     function flush() {
@@ -16069,7 +16101,7 @@ ${restored}`;
       if (!container) return;
       const wasPinned = options2.pinned(container);
       const el = ensureStreamingElement(container);
-      const blocks = Array.isArray(message3.content) ? message3.content : typeof message3.content === "string" ? [{ type: "text", text: message3.content }] : [];
+      const blocks = typeof message3.content === "string" ? [{ type: "text", text: message3.content }] : message3.content || [];
       blocks.forEach((block, i) => {
         if (typeof block === "string") return;
         let blockEl = el.querySelector(`[data-block-index="${i}"]`);
@@ -16140,8 +16172,8 @@ ${restored}`;
       if (wasPinned) options2.scroll(container);
       else options2.jump(container);
     }
-    return { queue, flush, cancel, render(value) {
-      renderStreamingMessage(decodeRenderMessage(value));
+    return { queue, flush, cancel, render(message3) {
+      renderStreamingMessage(message3);
     }, dispose() {
       cancel();
       disposed = true;
@@ -16172,14 +16204,13 @@ ${restored}`;
     function applyMoodFromTool(toolName, value) {
       const args = record8(value) ? value : {};
       if (toolName !== "set_mood") return;
-      setMoodIndicator(args?.description ?? args?.label, args?.kaomoji || args?.face || args?.mood);
+      setMoodIndicator(args.description ?? args.label, args.kaomoji || args.face || args.mood);
     }
     function updateMoodFromMessages(messages) {
-      for (const value of messages || []) {
-        const msg = decodeRenderMessage(value);
-        const content = Array.isArray(msg.content) ? msg.content : [];
+      for (const msg of messages) {
+        const content = typeof msg.content === "string" ? [] : msg.content || [];
         for (const block of content) {
-          if (typeof block !== "string" && block?.type === "toolCall" && block.name === "set_mood") {
+          if (typeof block !== "string" && block.type === "toolCall" && block.name === "set_mood") {
             applyMoodFromTool(block.name, block.arguments || {});
           }
         }
@@ -17099,7 +17130,6 @@ ${restored}`;
         addOwnedListener("message_update", (e) => {
           try {
             const message3 = decodeRenderMessage(parseRecord(e.data).message);
-            if (!message3) return;
             if (message3.role === "custom") {
               renderer.upsertCustom(message3, { streaming: true });
               return;
@@ -17116,7 +17146,6 @@ ${restored}`;
         addOwnedListener("message_end", (e) => {
           try {
             const message3 = decodeRenderMessage(parseRecord(e.data).message);
-            if (!message3) return;
             const container = document2.getElementById("messages");
             if (!container) return;
             const messageKey = messageEndKey(message3);
@@ -17144,7 +17173,7 @@ ${restored}`;
             }
             if (message3.role !== "assistant") return;
             options2.streaming.cancel();
-            if (Array.isArray(message3.content) && message3.content.length === 0 && !message3.errorMessage) {
+            if (typeof message3.content !== "string" && message3.content?.length === 0 && !message3.errorMessage) {
               container.querySelectorAll('.message.assistant[data-streaming="true"]').forEach((el) => el.remove());
               return;
             }

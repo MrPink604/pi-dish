@@ -1,16 +1,57 @@
 # Browser contract cleanup
 
-Status: **Planned** (2026-09-15). This is Stage 1 of the next three stages;
-no implementation, build, test run or runtime verification is claimed here.
+Status: **Implemented and locally verified; implementation review pending**
+(2026-09-15). This is Stage 1 of the three-stage sequence.
 Stage 2 is [shared runtime helpers](shared-runtime-helpers.md); Stage 3 is
 [session lifecycle migration](session-lifecycle-migration.md).
 
 Plan review: **APPROVED** by Anthropic Fable 5.1 at high effort for the clarified
 plan at `9dee6d3`; [signoff and observation resolutions](../BACKLOG.md#next-stage-plan-review).
-This authorizes the planned work under its gates, not implementation delivery.
+Implementation review is separate from this plan signoff.
 
 Planning baseline includes the recursive family/subagents changes in `6e8df16`
 and `e816d36`; the trace-peek renderer is an affected consumer, not deferred work.
+
+## Implementation record
+
+- Session getters, lookup/selection returns, lists, fields and capabilities expose
+  readonly views. Private writers detach external rows and capability maps once;
+  opaque extras remain borrowed. Selection remains a separate row.
+- `setSessionLists` returns ordered published host lists. The sidebar rebinds each
+  loader cache with `retainPublished`; failed/partial fan-out reuses store-owned
+  rows without rolling back acknowledged patches or adding a metadata writer.
+- `TranscriptPage` carries readonly `RenderMessage` rows through rendering, mood,
+  streaming and response details. HTTP, SSE and independent trace-peek ingress
+  decode once; nine downstream decoder calls and impossible guards are deleted.
+  First-party nested fields are readonly, and ingress detaches mutable `Date`
+  timestamps. This is not recursive runtime freezing.
+- `createAppModels.load` requires a session id. The unused takeover dependency
+  and no-session branch are deleted; cwd races exercise the real new-session
+  controller and input/blur events.
+- Both browser `noUnusedLocals` and `noUnusedParameters` gates are enabled after
+  removing six bounded unused declarations/parameters. No helper relocation,
+  lifecycle policy change or new controller abstraction belongs to this stage.
+
+### Local behavioral evidence
+
+`npm run build:browser` and `npm run check` passed, including both unused-code
+gates. The full backend suite passed 984 tests with no skips; the complete browser
+suite passed 286 cases. All eight independent UI scenarios and the full
+desktop/mobile integration smoke passed. The first browser run exposed an
+inactive-fixture precondition in the renewal probe; its writer-based fixture
+correction passed the focused file and then the full suite.
+
+An isolated, uninstrumented production page was visually checked at 1280px and
+390px: host-qualified selection/restoration, independent child trace peeking,
+cumulative SSE frames, completion and response telemetry. The mobile page had
+no horizontal overflow and loaded neither compatibility bundle nor application
+globals. No live sessions or credentials were used.
+
+A throwaway projection-only app bundle observed eight received HTTP rows and
+eight projections across tail, older-page, catch-up and child-trace responses.
+SSE counters advanced from 1 to 2 to 3 for one initial row, one update and one
+completion; rendering and telemetry added no projections. All throwaway scripts,
+instrumented bundles and isolated processes were removed after these checks.
 
 ## Mission and outcome
 

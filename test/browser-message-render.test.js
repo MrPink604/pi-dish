@@ -21,3 +21,12 @@ test('custom-message projection separates hidden state, structured advisor notes
   assert.equal(row.details.from, 'Main'); assert.equal(row.details.message, 'body'); assert.equal(row.details.extra, undefined);
   assert.equal(decodeRenderMessage({ role: 'assistant' }).content, undefined);
 });
+
+test('message timestamps retain accepted formats without borrowing an external Date', () => {
+  const timestamp = vm.runInNewContext('new Date("2026-09-15T12:00:00Z")', context);
+  const expected = timestamp.getTime(), row = decodeRenderMessage({ role: 'assistant', timestamp });
+  timestamp.setTime(0);
+  assert.equal(row.timestamp.getTime(), expected);
+  assert.equal(decodeRenderMessage({ role: 'assistant', timestamp: expected }).timestamp, expected);
+  assert.equal(decodeRenderMessage({ role: 'assistant', timestamp: '2026-09-15T12:00:00Z' }).timestamp, '2026-09-15T12:00:00Z');
+});

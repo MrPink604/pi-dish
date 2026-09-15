@@ -60,7 +60,7 @@ function formatMarkdown(text: string) {
   if (!text) return '';
   if (options.marked) { try { return options.marked.parse(text); } catch(e) {} }
   let html = escapeHtml(text);
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => `<pre><code class="language-${lang}">${code.trim()}</code></pre>`);
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => `<pre><code class="language-${lang}">${code.trim()}</code></pre>`);
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\n/g, '<br>');

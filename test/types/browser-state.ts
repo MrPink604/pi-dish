@@ -1,6 +1,6 @@
 // Compile-only consumers of the browser's strict TypeScript state boundary.
 import { createSessionState } from '../../src/browser/session-state';
-import type { SessionStateOptions } from '../../src/browser/session-state';
+import type { SessionEntry, SessionLists, HostSessionLists, SessionStateOptions } from '../../src/browser/session-state';
 
 // Host identity can be unknown before discovery; callbacks must accept null.
 declare const options: SessionStateOptions;
@@ -73,3 +73,63 @@ state.mergeCurrentSession(owner, { routine: 'automation' });
 state.mergeCurrentSession(owner, { extras: { name: 'replacement' } });
 // @ts-expect-error Named session rows have no open index signature.
 state.setSessionLists({ active: [{ id: 'session', modle: 'typo' }] });
+
+// Published inputs and outputs are borrowed readonly views, including fan-out order.
+declare const rows: readonly SessionEntry[];
+declare const observations: readonly HostSessionLists[];
+const published: SessionLists = state.setSessionLists({ active: rows, previous: rows }, 'peer');
+const hostPublications: readonly SessionLists[] = state.setSessionLists(observations);
+state.setSessionLists(published, 'peer');
+state.setSessionLists(state.sessions);
+void hostPublications;
+// @ts-expect-error Host observations cannot be retargeted by a reader.
+observations[0].hostId = 'self';
+// @ts-expect-error Host observations cannot replace borrowed lists.
+observations[0].active = [];
+// @ts-expect-error List containers belong to publication.
+state.sessions = { active: [], previous: [] };
+// @ts-expect-error List properties belong to publication.
+state.sessions.active = [];
+// @ts-expect-error Previous lists cannot be replaced through a published result.
+published.previous = [];
+// @ts-expect-error List membership cannot be appended by a reader.
+state.sessions.active.push({ id: 'foreign' });
+// @ts-expect-error List membership cannot be removed by a reader.
+state.sessions.previous.splice(0, 1);
+// @ts-expect-error List ordering belongs to publication.
+published.active.sort();
+// @ts-expect-error Metadata is changed only through its named writer.
+state.sessions.active[0].model = 'foreign/model';
+// @ts-expect-error Host identity belongs to the answering endpoint.
+state.sessions.previous[0].host = 'foreign';
+// @ts-expect-error Host labels belong to state stamping.
+published.active[0].hostLabel = 'Foreign host';
+// @ts-expect-error Capability maps cannot be replaced by a reader.
+published.active[0].capabilities = { resume: false };
+const capabilities = published.active[0].capabilities;
+if (capabilities) {
+  // @ts-expect-error First-party capability advice is readonly.
+  capabilities.resume = false;
+}
+const found = state.findSession('session', 'peer');
+if (found) {
+  // @ts-expect-error Lookup is not a mutation escape hatch.
+  found.name = 'foreign';
+  // @ts-expect-error Lookup capability advice is readonly too.
+  if (found.capabilities) found.capabilities.prompt = true;
+}
+const selected = state.setCurrentSession('session', 'peer');
+if (selected) {
+  // @ts-expect-error Selection returns a read view, not a mutable builder.
+  selected.model = 'foreign/model';
+  // @ts-expect-error Selection cannot be retargeted.
+  selected.host = 'self';
+  // @ts-expect-error Selected capability advice cannot be mutated.
+  if (selected.capabilities) selected.capabilities.resume = false;
+}
+if (state.currentSession) {
+  // @ts-expect-error Selected metadata remains owned by state writers.
+  state.currentSession.model = 'foreign/model';
+  // @ts-expect-error Selected host labels remain owned by state stamping.
+  state.currentSession.hostLabel = 'Foreign host';
+}

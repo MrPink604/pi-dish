@@ -11,7 +11,7 @@ export function createAnchoredComments(options: {
   host: (id: string | null) => HostEndpoint | null; status: (message: string, type?: string) => void;
   loadPatch: (details: HTMLDetailsElement) => Promise<unknown>;
 }) {
-  const { document, sessionState, views } = options, window = document.defaultView!;
+  const { document, views } = options, window = document.defaultView!;
   const element = <T extends HTMLElement = HTMLElement>(id: string) => { const value = document.getElementById(id); if (!value) throw new Error('Missing comment element: ' + id); return value as T; };
   interface ViewOwner { kind: 'file' | 'diff'; owner: SelectionOwner; endpoint: Readonly<HostEndpoint>; id: string; generation: number; path: string | null }
   interface Bubble { view: ViewOwner; draft: CommentDraft | null; editing: AnchoredComment | null; range: Range; busy: boolean }

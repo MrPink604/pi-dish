@@ -385,7 +385,7 @@ var PiDishHelpers = (() => {
     return { exitCode: Number(m[1]), output: pythonReprUnescape(m[3]), durationMs: m[4] != null ? Math.round(Number(m[4]) * 1e3) : null };
   }
   function pythonReprUnescape(text) {
-    return text.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|[\s\S])/g, (all, seq) => {
+    return text.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|[\s\S])/g, (_all, seq) => {
       if (seq[0] === "x") return String.fromCharCode(parseInt(seq.slice(1), 16));
       if (seq[0] === "u") return String.fromCharCode(parseInt(seq.slice(1), 16));
       const map = { n: "\n", t: "	", r: "\r", b: "\b", f: "\f", v: "\v", "0": "\0", "\n": "" };

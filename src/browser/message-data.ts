@@ -1,14 +1,14 @@
 import { record, finite } from './helper-values';
 import type { RefContextEntry, Timestamp } from './shared-helper-types';
-export interface MessageBlock { type: string; text?: string; thinking?: string; name?: string; id?: string; arguments?: Record<string, unknown>; url?: string; data?: string; mimeType?: string }
-export interface MessageUsage { input?: number; output?: number; reasoning?: number; cacheRead?: number; cacheWrite?: number; cost?: { input?: number | null; output?: number | null; cacheRead?: number | null; cacheWrite?: number | null; total?: number | null } }
-export interface AdvisorNote { note: string; severity?: string; advisor?: string }
-export interface MessageDetails { notes?: AdvisorNote[]; jobs?: { label?: string; jobId?: string; durationMs?: number }[]; from?: string; message?: string }
+export interface MessageBlock { readonly type: string; readonly text?: string; readonly thinking?: string; readonly name?: string; readonly id?: string; readonly arguments?: Readonly<Record<string, unknown>>; readonly url?: string; readonly data?: string; readonly mimeType?: string }
+export interface MessageUsage { readonly input?: number; readonly output?: number; readonly reasoning?: number; readonly cacheRead?: number; readonly cacheWrite?: number; readonly cost?: { readonly input?: number | null; readonly output?: number | null; readonly cacheRead?: number | null; readonly cacheWrite?: number | null; readonly total?: number | null } }
+export interface AdvisorNote { readonly note: string; readonly severity?: string; readonly advisor?: string }
+export interface MessageDetails { readonly notes?: readonly AdvisorNote[]; readonly jobs?: readonly { readonly label?: string; readonly jobId?: string; readonly durationMs?: number }[]; readonly from?: string; readonly message?: string }
 export interface RenderMessage {
-  role: string; id?: string; index?: number; timestamp?: Timestamp; content?: string | (MessageBlock | string)[];
-  model?: string; responseModel?: string; provider?: string; stopReason?: string; errorMessage?: string;
-  toolName?: string; toolCallId?: string; isError?: boolean; customType?: string; display?: boolean;
-  usage?: MessageUsage; durationMs?: number; outputTokens?: number; sessionRefs?: RefContextEntry[]; details?: MessageDetails;
+  readonly role: string; readonly id?: string; readonly index?: number; readonly timestamp?: Timestamp; readonly content?: string | readonly (MessageBlock | string)[];
+  readonly model?: string; readonly responseModel?: string; readonly provider?: string; readonly stopReason?: string; readonly errorMessage?: string;
+  readonly toolName?: string; readonly toolCallId?: string; readonly isError?: boolean; readonly customType?: string; readonly display?: boolean;
+  readonly usage?: MessageUsage; readonly durationMs?: number; readonly outputTokens?: number; readonly sessionRefs?: readonly RefContextEntry[]; readonly details?: MessageDetails;
 }
 const string = (value: unknown) => typeof value === 'string' ? value : undefined;
 const number = (value: unknown) => finite(value) ? value : undefined;
@@ -29,7 +29,7 @@ export function decodeMessageContent(value: unknown): RenderMessage['content'] {
 export function decodeRenderMessage(value: unknown): RenderMessage {
   const row = record(value) ? value : {}, details = record(row.details) ? row.details : null;
   return { role: string(row.role) || '', id: string(row.id), index: finite(row.index) && Number.isInteger(row.index) && row.index >= 0 ? row.index : undefined,
-    timestamp: typeof row.timestamp === 'string' || finite(row.timestamp) || row.timestamp instanceof Date ? row.timestamp : undefined,
+    timestamp: row.timestamp instanceof Date ? new Date(row.timestamp.getTime()) : typeof row.timestamp === 'string' || finite(row.timestamp) ? row.timestamp : undefined,
     content: decodeMessageContent(row.content), model: string(row.model), responseModel: string(row.responseModel), provider: string(row.provider), stopReason: string(row.stopReason), errorMessage: string(row.errorMessage),
     toolName: string(row.toolName), toolCallId: string(row.toolCallId), isError: row.isError === true, customType: string(row.customType), display: typeof row.display === 'boolean' ? row.display : undefined,
     usage: decodeMessageUsage(row.usage), durationMs: number(row.durationMs), outputTokens: number(row.outputTokens),

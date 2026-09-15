@@ -63,7 +63,7 @@ export function parseIpythonResult(text: unknown) {
 
 
 export function pythonReprUnescape(text: string) {
-  return text.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|[\s\S])/g, (all, seq) => {
+  return text.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|[\s\S])/g, (_all, seq) => {
     if (seq[0] === 'x') return String.fromCharCode(parseInt(seq.slice(1), 16));
     if (seq[0] === 'u') return String.fromCharCode(parseInt(seq.slice(1), 16));
     const map: Record<string, string> = { n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v', '0': '\0', '\n': '' };

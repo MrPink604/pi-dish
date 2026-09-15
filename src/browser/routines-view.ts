@@ -4,7 +4,6 @@ import type { SessionState } from './session-state';
 import type { CatalogModel } from '../core/session-api';
 import type { HarnessRow } from './harness-discovery';
 import type { CwdAutocompleteOptions, createCwdAutocomplete } from './cwd-autocomplete';
-import type { KnownDirectory } from './directory-catalog';
 import type { Routine, RoutineForm, RoutineInvocation } from './routines-data';
 import { decodeRoutine, decodeRoutineList, decodeRoutineInvocations } from './routines-data';
 import { decodeModelCatalog } from '../core/session-api';

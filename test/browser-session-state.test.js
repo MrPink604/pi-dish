@@ -51,8 +51,7 @@ test('browser state patches exactly one host across active, previous and selecte
     { hostId: 'self', active: [{ id: 'same', name: 'local' }] },
     { hostId: 'peer', active: [{ id: 'same', name: 'remote' }], previous: [{ id: 'same', name: 'old remote' }] },
   ]);
-  const selected = state.setCurrentSession('same', 'peer');
-  assert.notEqual(selected, state.findSession('same', 'peer'));
+  state.setCurrentSession('same', 'peer');
   renders.length = 0;
   labels.peer = 'Renamed host';
   state.patchSession('same', { name: 'new remote' }, 'peer');
@@ -85,7 +84,6 @@ test('browser transcript metadata stays detached from registry lists and cannot 
   state.setSessionLists({ active: [{ id: 'one', name: 'fresh registry name' }] });
   assert.equal(state.currentSession.name, 'fresh registry name');
   assert.equal(state.currentSession.model, 'old model', 'fields absent from a poll survive in the detached selection');
-  assert.notEqual(state.currentSession, state.findSession('one'));
   assert.deepEqual(renders, ['lists', 'header']);
 });
 
@@ -192,7 +190,7 @@ test('state writers filter identity, capability, family and extras independently
   assert.equal(state.currentSession.name, '');
   assert.equal(state.currentSession.id, 'one');
   assert.equal(state.currentSession.host, 'peer');
-  assert.equal(state.currentSession.extras, extras);
+  assert.equal(state.currentSession.extras.custom.name, 'extension name');
   assert.equal(state.currentSession.capabilities.resume, false);
   assert.equal(state.currentSession.parentId, 'parent');
   assert.equal(state.currentSession.isActive, true);
@@ -213,7 +211,7 @@ test('state writers filter identity, capability, family and extras independently
   assert.equal(state.currentSession.harnessId, undefined);
   assert.equal(state.currentSession.parentId, 'parent');
   assert.equal(state.currentSession.capabilities.resume, false);
-  assert.equal(state.currentSession.extras, extras);
+  assert.equal(state.currentSession.extras.custom.name, 'extension name');
   assert.equal(state.findSession('one', 'peer').isActive, true);
   assert.equal(state.findSession('one', 'peer').model, 'p/m');
   assert.throws(() => state.patchSession('one', { model: 123 }, 'peer'), /Invalid session patch/);
@@ -231,4 +229,61 @@ test('list replacement and detached selection preserve omission without swallowi
   assert.equal(state.currentSession.cwd, '');
   assert.equal(state.currentSession.turnInProgress, false);
   assert.equal(state.currentSession.contextPercent, 0);
+});
+
+test('publication detaches external rows, capabilities and list membership while retaining opaque extras', () => {
+  const { state, renders } = fixture();
+  const capabilities = { resume: false };
+  const previousCapabilities = { prompt: true };
+  const extras = { custom: { note: 'extension' } };
+  const row = { id: 'one', name: 'observed', model: 'p/m', host: 'forged', hostLabel: 'Forged', capabilities, extras };
+  const previous = { id: 'old', name: 'historical', capabilities: previousCapabilities };
+  const incoming = { active: [row], previous: [previous] };
+  const published = state.setSessionLists(incoming, 'peer');
+  state.setCurrentSession('one', 'peer');
+  assert.equal(row.host, 'forged', 'publication must not stamp another owner\'s row');
+  assert.equal(row.hostLabel, 'Forged');
+  renders.length = 0;
+  row.name = 'external edit';
+  row.model = 'external/model';
+  row.host = 'self';
+  row.hostLabel = 'External label';
+  row.capabilities = { resume: true };
+  capabilities.resume = true;
+  previous.name = 'external history';
+  previousCapabilities.prompt = false;
+  incoming.active.splice(0, 1);
+  incoming.previous = [];
+  assert.equal(state.findSession('one', 'peer').name, 'observed');
+  assert.equal(state.findSession('one', 'self'), undefined);
+  assert.equal(state.currentSession.model, 'p/m');
+  assert.equal(state.currentSession.hostLabel, 'Other host');
+  assert.equal(state.currentSession.capabilities.resume, false);
+  assert.equal(published.active[0].capabilities.resume, false);
+  assert.equal(state.sessions.previous[0].name, 'historical');
+  assert.equal(state.sessions.previous[0].capabilities.prompt, true);
+  assert.deepEqual(renders, []);
+  state.patchSession('one', { name: 'acknowledged' }, 'peer');
+  assert.equal(published.active[0].name, 'acknowledged', 'published views observe their named state writer');
+  assert.equal(state.currentSession.name, 'acknowledged');
+  assert.equal(row.name, 'external edit', 'state writes cannot mutate the original observation');
+  extras.custom.note = 'opaque update';
+  assert.equal(state.findSession('one', 'peer').extras.custom.note, 'opaque update');
+});
+
+test('ordered host publications keep borrowed rows independent when reused under a different host', () => {
+  const { state } = fixture();
+  const peer = state.setSessionLists({ active: [{ id: 'same', name: 'observed' }] }, 'peer');
+  const published = state.setSessionLists([
+    { hostId: 'self', ...peer },
+    { hostId: 'peer', ...peer },
+  ]);
+  assert.deepEqual(Array.from(published, lists => lists.active[0].host), ['self', 'peer']);
+  state.patchSession('same', { name: 'local acknowledgement' }, 'self');
+  assert.equal(published[0].active[0].name, 'local acknowledgement');
+  assert.equal(published[1].active[0].name, 'observed');
+  assert.equal(peer.active[0].host, 'peer');
+  state.patchSession('same', { name: 'remote acknowledgement' }, 'peer');
+  assert.equal(peer.active[0].name, 'remote acknowledgement');
+  assert.equal(state.findSession('same', 'self').name, 'local acknowledgement');
 });

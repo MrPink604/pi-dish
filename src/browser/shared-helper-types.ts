@@ -2,13 +2,14 @@ import type { SessionFields } from '../core/session-api';
 /** Structural inputs for pure helpers. Feature controllers decode wire data before use. */
 export type Timestamp = string | number | Date;
 /** Lightweight helper input, shared with server projections that still carry Dates. */
-export interface HelperSession extends Pick<SessionFields<Timestamp>,
+export interface HelperSession extends Readonly<Pick<SessionFields<Timestamp>,
   'name' | 'cwd' | 'model' | 'lastActivity' | 'isActive' | 'turnInProgress' |
-  'parentId' | 'familyParentId' | 'routine' | 'routineId' | 'capabilities'> {
-  id: string;
-  host?: string | null;
-  hostLabel?: string | null;
-  activity?: number;
+  'parentId' | 'familyParentId' | 'routine' | 'routineId'>> {
+  readonly id: string;
+  readonly host?: string | null;
+  readonly hostLabel?: string | null;
+  readonly activity?: number;
+  readonly capabilities?: Readonly<NonNullable<SessionFields['capabilities']>>;
 }
 export interface HelperHost {
   hostId?: string | null;

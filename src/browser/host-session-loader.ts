@@ -28,7 +28,7 @@ interface Inflight {
 }
 
 /** An active-only poll refreshes live children without losing historical rows. */
-export function mergeLiveSubagents(previous: SessionEntry[], children?: SessionEntry[]): SessionEntry[] {
+export function mergeLiveSubagents(previous: readonly SessionEntry[], children?: readonly SessionEntry[]): readonly SessionEntry[] {
   const fresh = new Map((children || []).map(session => [session.id, session]));
   const merged = (previous || []).map(session => {
     const live = fresh.get(session.id);
@@ -40,7 +40,7 @@ export function mergeLiveSubagents(previous: SessionEntry[], children?: SessionE
 }
 
 /** Preserve advisory family hints until a full historical scan can resolve them. */
-function mergeActiveHints(active: SessionEntry[], previousActive: SessionEntry[]): SessionEntry[] {
+function mergeActiveHints(active: readonly SessionEntry[], previousActive: readonly SessionEntry[]): readonly SessionEntry[] {
   const prior = new Map(previousActive.map(session => [session.id, session]));
   return active.map(session => {
     const old = prior.get(session.id);
@@ -131,6 +131,8 @@ export function createHostSessionLoader(options: HostSessionLoaderOptions) {
   }
 
   function getCache(host: SessionHost): SessionLists | undefined { return caches.get(hostKeyOf(host)); }
+  /** Borrow state-owned rows so acknowledged patches survive failed/partial replay. */
+  function retainPublished(host: SessionHost, lists: SessionLists): void { caches.set(hostKeyOf(host), lists); }
   function isIndexing(): boolean { return [...indexing.values()].some(Boolean); }
   function prune(liveKeys: ReadonlySet<string>): void {
     for (const map of [caches, owners, inflight, indexing]) {
@@ -138,5 +140,5 @@ export function createHostSessionLoader(options: HostSessionLoaderOptions) {
     }
   }
 
-  return { load, getCache, isIndexing, prune, retireRequests() { owners.clear(); inflight.clear(); } };
+  return { load, getCache, retainPublished, isIndexing, prune, retireRequests() { owners.clear(); inflight.clear(); } };
 }

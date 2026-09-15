@@ -13,6 +13,7 @@ async function holdBody(page, url) {
     Response.prototype.json = async function() {
       const data = await read.call(this);
       if (this.url === url) {
+        Response.prototype.json = read;
         window.modelBodyWaiting = true;
         await new Promise(resolve => { window.releaseModelBody = resolve; });
       }
@@ -36,24 +37,33 @@ test('new-session model responses stay with their selected host', async ({ page,
   expect(await page.evaluate(() => fixtureApp.features.modelCatalog.rows().map(row => row.id))).toEqual(['peer']);
 });
 
-test('a model body for a previous cwd cannot publish during the next refresh debounce', async ({ page, fleet }) => {
+test('a previous cwd model body cannot publish before the next debounced controller refresh', async ({ page, fleet }) => {
   const url = `${fleet.self.base}/api/models`;
   await page.route(url, route => route.fulfill({ json: models('ready') }));
   await page.evaluate(() => fixtureApp.features.newSessionController.open({ cwd: '/old' }));
   await expect(page.locator('#nsModelSelect')).toContainText('ready');
+  await page.clock.install();
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
   await holdBody(page, url);
   await page.route(url, route => route.fulfill({ json: models('retired') }));
   await trackLoads(page);
-  await page.evaluate(() => { void fixtureApp.features.appModels.load(undefined, 'pi', '/old', fixtureApp.features.newSessionController.hostId()); });
+  await page.evaluate(() => fixtureApp.features.newSessionController.refresh());
   await expect.poll(() => page.evaluate(() => window.modelBodyWaiting)).toBe(true);
+  await page.fill('#newSessionCwd', '/new');
   await page.evaluate(async () => {
-    const input = document.getElementById('newSessionCwd');
-    input.value = '/new';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
     window.releaseModelBody();
     await window.modelLoads[0];
   });
   expect(await page.evaluate(() => fixtureApp.features.modelCatalog.rows().map(row => row.id))).toEqual(['ready']);
+  await expect(page.locator('#nsModelSelect')).toContainText('ready');
+  await expect(page.locator('#nsModelSelect')).not.toContainText('retired');
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('pi-dish-models-cache')).map(row => row.id))).toEqual(['ready']);
+  await page.route(url, route => route.fulfill({ json: models('refreshed') }));
+  await page.locator('#newSessionName').focus();
+  await expect(page.locator('#nsModelSelect')).toContainText('ready');
+  await page.clock.runFor(300);
+  await expect(page.locator('#nsModelSelect')).toContainText('refreshed');
+  expect(await page.evaluate(() => fixtureApp.features.modelCatalog.rows().map(row => row.id))).toEqual(['refreshed']);
 });
 
 test('closing a model-owning takeover retires its body without replacing a session catalog', async ({ page, fleet }) => {
@@ -94,24 +104,28 @@ test('a catalog retired by host renewal cannot clear the server-local enabled-mo
   await page.route(`${fleet.self.base}/api/models?sessionId=${ROOT}`, route => route.fulfill({ json: [
     { id: 'enabled', provider: 'fixture', enabled: true }, { id: 'hidden', provider: 'fixture', enabled: false },
   ] }));
-  await page.evaluate(async () => { await fixtureApp.features.appModels.load(fixtureApp.features.sessionState.currentSession.id, 'pi'); });
+  await page.evaluate(async id => {
+    window.fixtureSessionListPatch(id, { isActive: true, harnessId: 'pi' });
+    await fixtureApp.features.sessionControls.toggleModels();
+    fixtureApp.features.sessionControls.setEditMode(true);
+  }, ROOT);
+  await expect(page.locator('#modelDropdown')).toBeVisible();
+  await page.clock.install();
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
   const payloads = [];
   await page.route('**/api/models/enabled', route => {
     payloads.push(route.request().postDataJSON());
     return route.fulfill({ json: { success: true, enabledModels: null } });
   });
-  const timersScheduled = await page.evaluate(() => {
-    const original = window.setTimeout;
-    let saves = 0;
-    window.setTimeout = (callback, delay, ...args) => { if (delay === 400) saves++; return original(callback, delay, ...args); };
-    try {
-      const resolve = fixtureApp.features.hostDirectory.entryFor;
-      fixtureApp.features.hostDirectory.entryFor = host => { const entry = resolve(host); return entry ? { ...entry, token: 'renewed-fixture' } : entry; };
-      fixtureApp.features.sessionControls.setAll(true);
-      return saves;
-    } finally { window.setTimeout = original; }
+  await page.evaluate(() => fixtureApp.features.sessionControls.setAll(false));
+  await page.clock.runFor(400);
+  await expect.poll(() => payloads).toEqual([{ enabledIds: [] }]);
+  await page.evaluate(() => {
+    const resolve = fixtureApp.features.hostDirectory.entryFor;
+    fixtureApp.features.hostDirectory.entryFor = host => { const entry = resolve(host); return entry ? { ...entry, token: 'renewed-fixture' } : entry; };
+    fixtureApp.features.sessionControls.setAll(true);
   });
-  expect(timersScheduled).toBe(0);
-  expect(payloads).toEqual([]);
+  await page.clock.runFor(400);
+  expect(payloads).toEqual([{ enabledIds: [] }]);
   expect(await page.evaluate(() => fixtureApp.features.modelCatalog.enabledIds())).toBeUndefined();
 });

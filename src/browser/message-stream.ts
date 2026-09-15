@@ -133,7 +133,6 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
     addOwnedListener('message_update', (e) => {
       try {
         const message = decodeRenderMessage(parseRecord(e.data).message);
-        if (!message) return;
         if (message.role === 'custom') {
           renderer.upsertCustom(message, { streaming: true });
           return;
@@ -156,7 +155,6 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
     addOwnedListener('message_end', (e) => {
       try {
         const message = decodeRenderMessage(parseRecord(e.data).message);
-        if (!message) return;
         const container = document.getElementById('messages');
         if (!container) return;
         const messageKey = messageEndKey(message);
@@ -194,7 +192,7 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
         // OMP ends an interrupted thinking turn with an empty assistant shell
         // before its interrupted-thinking custom marker. Keep the API entry
         // but do not flash a ghost π header in the live transcript.
-        if (Array.isArray(message.content) && message.content.length === 0 && !message.errorMessage) {
+        if (typeof message.content !== 'string' && message.content?.length === 0 && !message.errorMessage) {
           container.querySelectorAll('.message.assistant[data-streaming="true"]').forEach(el => el.remove());
           return;
         }
