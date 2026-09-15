@@ -125,7 +125,7 @@ for (let i = 0; i < 8; i++) {
 fs.mkdirSync(path.join(CWD, 'deep', 'nest'), { recursive: true });
 fs.writeFileSync(path.join(CWD, 'deep', 'nest', 'findings.md'), '# deep findings\n\nhello from deep\n');
 appendEntry({ type: 'message', message: { role: 'assistant', content: [
-  { type: 'text', text: 'Wrote my notes to `findings.md` — compare with README.md at the root.' },
+  { type: 'text', text: 'Wrote my notes to `findings.md` — compare with README.md at the root. [Full notes](deep/nest/findings.md) and [the repo](https://example.com/repo).' },
   { type: 'toolCall', id: 'fm1', name: 'write', arguments: { path: path.join(CWD, 'deep', 'nest', 'findings.md'), content: '# deep findings\n' } },
 ], timestamp: '2026-07-05T00:02:00.000Z' } });
 // OMP interruption/custom-message shapes: the empty assistant shell should
@@ -1045,6 +1045,23 @@ let remoteHost = null; // second pi-dish (multi-host section)
     check(await findingsLink.count() === 1, 'backticked mention linkified');
     check(await desktop.locator('.message.assistant .markdown-body span.file-link',
       { hasText: 'README.md' }).count() === 1, 'plain-prose mention linkified');
+    // A markdown link to a bare file path is a file mention too: the dead
+    // hub-relative href is stripped into data-file-path, and clicking opens
+    // the viewer instead of navigating. External links stay untouched.
+    const notesLink = desktop.locator('.message.assistant .markdown-body a.file-link',
+      { hasText: 'Full notes' });
+    check(await notesLink.count() === 1, 'markdown file-path link linkified');
+    check(await notesLink.getAttribute('href') === null, 'dead href stripped');
+    check(await notesLink.getAttribute('data-file-path') === 'deep/nest/findings.md',
+      'href preserved as the file mention');
+    check(await desktop.locator('.message.assistant .markdown-body a:not(.file-link)',
+      { hasText: 'the repo' }).count() === 1, 'external link untouched');
+    await notesLink.click();
+    await desktop.waitForSelector('#fileView .markdown-body h1', { timeout: 5000 });
+    check((await desktop.locator('#fileViewPath').textContent()).includes('deep/nest/findings.md'),
+      'markdown link opened the viewer on the linked path');
+    await desktop.keyboard.press('Escape');
+    await desktop.waitForSelector('#sessionView.file-open', { state: 'detached', timeout: 3000 });
     await findingsLink.click();
     await desktop.waitForSelector('#fileView .markdown-body h1', { timeout: 5000 });
     check(await desktop.evaluate(() => document.getElementById('messages').offsetParent === null),

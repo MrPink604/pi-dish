@@ -140,6 +140,20 @@ function linkifyFilePaths(root: ParentNode) {
     }
   });
 
+  // Markdown links whose href is a bare file path — agents cite evidence as
+  // [label](../out/summary.json) — would navigate the hub tab to a 404.
+  // Strip the dead href and let the delegated click open the file viewer on
+  // the path instead (data-file-path, read by app.ts).
+  root.querySelectorAll<HTMLAnchorElement>('.markdown-body a[href]').forEach(link => {
+    if (link.classList.contains('file-link')) return;
+    const href = (link.getAttribute('href') || '').trim();
+    if (!looksLikeFilePath(href)) return;
+    link.classList.add('file-link');
+    link.title = 'Open file';
+    link.dataset.filePath = href;
+    link.removeAttribute('href');
+  });
+
   root.querySelectorAll<HTMLElement>('.markdown-body:not([data-linkified])').forEach(body => {
     body.dataset.linkified = '1';
     const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {

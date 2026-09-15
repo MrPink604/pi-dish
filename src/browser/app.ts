@@ -438,12 +438,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Tap a linkified file mention to open it in the viewer. preventDefault
   // keeps a link inside a <summary> (tool-call headers) from toggling the
-  // enclosing <details>.
+  // enclosing <details>. Markdown links to bare file paths carry the href in
+  // data-file-path (rich-text.ts); everything else names the path in its text.
   document.addEventListener('click', (e) => {
     const link = (e.target instanceof Element ? e.target.closest<HTMLElement>('.file-link') : null);
     if (!link || !sessionState.currentSession) return;
     e.preventDefault();
-    fileViews.openFile((link.textContent || '').trim());
+    fileViews.openFile(link.dataset.filePath || (link.textContent || '').trim());
   });
 
   // Per-message share link (the hover 🔗 in turn headers).
