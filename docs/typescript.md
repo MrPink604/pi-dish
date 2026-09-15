@@ -63,6 +63,10 @@ the behavior to preserve and the later work it enables. Existing source paths,
 generated output and checking scope below remain authoritative until the relevant
 stage is delivered and its implementation record is updated.
 
+All three plans have [Fable 5.1 high-effort signoff](../BACKLOG.md#next-stage-plan-review)
+for their clarified task definitions. This does not change the implementation
+coverage described below or waive any stage's verification/review gates.
+
 ## Implemented foundation inventory
 
 | TypeScript source in `src/core/` | Responsibility |

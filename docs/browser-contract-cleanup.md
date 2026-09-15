@@ -5,6 +5,10 @@ no implementation, build, test run or runtime verification is claimed here.
 Stage 2 is [shared runtime helpers](shared-runtime-helpers.md); Stage 3 is
 [session lifecycle migration](session-lifecycle-migration.md).
 
+Plan review: **APPROVED** by Anthropic Fable 5.1 at high effort for the clarified
+plan at `9dee6d3`; [signoff and observation resolutions](../BACKLOG.md#next-stage-plan-review).
+This authorizes the planned work under its gates, not implementation delivery.
+
 Planning baseline includes the recursive family/subagents changes in `6e8df16`
 and `e816d36`; the trace-peek renderer is an affected consumer, not deferred work.
 

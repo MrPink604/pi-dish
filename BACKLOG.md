@@ -242,6 +242,46 @@ Reconsider a leaf renderer only against a concrete maintenance problem and the
 existing framework-assessment criteria. Source migration alone does not justify
 a new framework or a rewrite of persistence and deployment.
 
+## Next-stage plan review
+
+On 2026-09-15, Anthropic Fable 5.1 (`claude-fable-5-1`) reviewed all three plans
+through Claude Code 2.1.269 with `--effort high` and only Read/Grep/Glob tools.
+The initial review of `b7d34afbab16ec2b210ff6f389422753b2811cb4` approved all
+three plans with no blocking findings and seven nonblocking observations.
+The clarified plans at `9dee6d30565813db7df8c4376949c7574872082f` received a
+second explicit **APPROVED** disposition, again with no blocking findings.
+
+| Plan | Signoff | Implementation-start gate |
+| --- | --- | --- |
+| Browser contract cleanup | APPROVED | Task 1 contract freeze precedes the parallel implementation wave. |
+| Shared runtime helpers | APPROVED | Inventory can start; implementation freeze uses Stage 1's contract decisions. |
+| Session lifecycle migration | APPROVED | Inventory/baseline can start; implementation freeze waits for Stage 2's final helper paths. |
+
+The [complete review reports and snapshot hashes](docs/migration-plan-review-2026-09-15.json)
+record session `30b43123-cc76-464b-a251-c106d376b7ff`, the exact reviewed
+commits, model/effort, maintainer checks and reviewer limitations.
+
+| Observation | Resolution confirmed in re-review |
+| --- | --- |
+| O1: dual compiler environments | Require both programs and a Node-only ES2022 probe. The predicted ambient `Buffer` collision was disproved; Fable corrected that premise. No speculative shim was added. |
+| O2: dynamic helper consumers | Explicitly include lint-global derivation and CommonJS/VM compatibility consumers in the export inventory. |
+| O3: shared fixture ownership | Both browser fixture surfaces belong to the integration lead. |
+| O4: runtime paths | Name `harnesses.ts` and consume its descriptor-owned paths rather than recomputing them in launch code. |
+| O5: injected read ports | Distinguish observations/lookups from lifecycle policy; do not hide authority decisions in unchecked callbacks. |
+| O6: bridge import gate | Add isolated Node/declaration path checks while retaining real host canaries and explicit skip reporting. |
+| O7: masked type negatives | Existing construction-based negative checks already address readonly assignments masking wrong-value errors. |
+
+The follow-up's two nonblocking implementation-record notes remain part of the
+handoff: keep the narrow extension-relative declaration probe under `test/` with
+an explicit compiler invocation, and record the exact Node-only helper probe
+command at the integrated checkpoint.
+
+This is **plan signoff only**. Migration implementation has not started. The
+reviewer ran no build, compiler, lint, test or runtime checks. The maintainer ran
+the two successful no-emit compiler probes recorded in the evidence file and
+documentation link/content checks; no runtime suite result is implied. Each
+stage still requires its own implementation verification and review before delivery.
+
 ## Review and verification
 
 For each implementation chunk: define the boundary, migrate it, run the relevant checks,
