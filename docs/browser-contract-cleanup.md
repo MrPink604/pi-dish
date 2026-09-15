@@ -99,8 +99,9 @@ Task 1: freeze contracts and alias/consumer map (integration owner)
 These are work packages, not promised commits. Task 1 lands before parallel
 workers. Tasks 2–4 own disjoint implementation/test slices. The integration owner
 alone edits `app.ts`, `index.ts`, `tsconfig.browser.json`, shared type definitions,
-build plumbing, generated assets and shared documentation. A needed shared-file
-change is handed to that owner; workers do not race edits or regenerate output.
+`test/browser/fixtures.js`, `test/fixtures/browser-app.js`, build plumbing,
+generated assets and shared documentation. Tasks 2–4 share the fixture surfaces;
+needed changes go to the lead rather than racing edits or regenerating output.
 
 **Wave A checkpoint:** frozen signatures, input ownership and negative cases
 agreed. **Wave B checkpoint:** each slice hands over implementation, migrated
@@ -169,9 +170,10 @@ probes, and read signatures in sidebar/session consumers. Shared files go to lea
   Preserve existing mutation consumers: `session-controls` uses `patchSession`,
   `session-activity` uses `patchSessionActivity`, `transcript` uses owned merges,
   and `session-view` owns selection reset/generation. No generic patch method.
-- Adapt [`fixtures.js`](../test/browser/fixtures.js) through its existing
-  `fixtureSessionListPatch` list writer, including capabilities/list facts;
-  neither mutation nor transcript patches may become broad fixture backdoors.
+- Have the integration lead adapt [`fixtures.js`](../test/browser/fixtures.js)
+  through its existing `fixtureSessionListPatch` list writer, including
+  capabilities/list facts; neither mutation nor transcript patches may become
+  broad fixture backdoors.
 - Extend `test/types/browser-state.ts`: reject field writes to `model`, `host`,
   `hostLabel`, nested capabilities, list property replacement, push/splice/sort,
   lookup results and the return from `setCurrentSession`. Keep legitimate writer

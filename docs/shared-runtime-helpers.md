@@ -102,6 +102,14 @@ portable helper subset, not all of `src/core/`, must be safe to bundle in a
 browser. A shared module can use standard cross-runtime APIs already supported by
 the Node/browser matrix. Do not add Node polyfills to make an import succeed.
 
+Task 1 must record both compiler environments: core uses NodeNext with Node types;
+browser uses Bundler resolution, DOM libraries and no ambient package types.
+The current core config does not explicitly restrict `lib`, so portability must
+not be inferred from a core-project pass alone. Compile the moved closure in both
+programs and a Node-only `lib: ["ES2022"]` probe. Preserve module-scoped ambient
+declarations that work in both; use a narrow runtime lookup only when needed,
+not a speculative polyfill or a new global declaration to hide an actual error.
+
 ### Runtime-specific behavior is an explicit boundary
 
 - `helper-refs.decodeBase64Url` currently supports Node `Buffer` and browser
@@ -133,6 +141,11 @@ paths when their implementation has moved completely.
 Tests specifically exercising the supported compatibility entrypoint should keep
 using it. Other tests should exercise the real production entrypoint relevant to
 the behavior; do not keep an obsolete internal import alive solely for a probe.
+Include [`eslint.config.js`](../eslint.config.js), which loads the helper bundle
+to derive lint globals, and the CommonJS/VM consumers in `test/helpers.test.js`,
+`test/browser-shared-helpers.test.js` and `test/skills-core.test.js` in the export
+manifest. These compatibility/tooling consumers are distinct from the production
+backend edges being removed.
 
 ## Implementation tasks
 

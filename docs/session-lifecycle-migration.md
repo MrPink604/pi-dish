@@ -122,6 +122,12 @@ Distinguish no action, stopped, stop uncertain, cleanup failed and replacement
 readiness failure without changing public bodies. Record legacy missing/null/
 coercion behavior. Capture isolated launch counts, registry/proof work, bounded
 recovery reads and startup ordering; mark uncovered cases rather than invent data.
+Classify each injected dependency as a data observation, a checked lookup or an
+operation/policy. In particular, source resolution, active-session catalog reads
+and subsession candidates must expose their existing read contracts without
+smuggling fallback, admission or destructive-mode decisions through a JS callback.
+Name `src/core/harnesses.ts` in the runtime-path map: its `__dirname` resolves from
+generated `lib/`, and its descriptors own the wrapper/bridge entrypoint paths.
 
 **Invariant/deletion:** consumers cannot pass a `SessionSource` as live authority
 or collapse uncertain launch into safe fallback; replace competing contract sketches.
@@ -149,8 +155,14 @@ remove RPC's handwritten `createSessionObserver` require signature, local
 `RecoveryObserver` interface and unchecked-port comment; import the actual source
 contract in core. External extension/Node consumers retain generated `lib/` paths.
 **Acceptance:** adapt [session-recovery tests](../test/session-recovery.test.js),
-including bridge-less RPC permanently yielding observation ownership to its bridge;
-exercise the real bridge import from its existing runtime path after regeneration.
+including bridge-less RPC permanently yielding observation ownership to its bridge.
+After regeneration, a minimum non-canary gate must resolve and load the real
+`../../lib/session-recovery.js` exports with Node's `createRequire` anchored at
+the bridge module, and compile a narrow extension-relative consumer against the
+generated declaration without requiring the whole harness SDK. Use an isolated
+HOME and no live registry. This checks the module/type path, not the host's TS
+loader; the real Pi/OMP/Prime canaries remain separate required evidence, with
+explicit skips and residual risk when unavailable.
 **Enables:** checked recovery control and extension-facing observer seams without SDK migration.
 
 ### Task 3 — Migrate tmux and Prime lifecycle dependencies
@@ -211,6 +223,8 @@ headless chain/broken flag and `launchResumedSession` backend dispatch.
 
 Move argv/env/wrapper construction, placement selection, registration/hello proof,
 deadline check and cleanup implementation. Use Stage 2 typed helpers directly.
+Consume the descriptor-owned paths from `harnesses.ts`; do not recompute the
+repository root or wrapper/bridge paths inside the extracted launch module.
 Consume the frozen failure variants: fallback permitted, cleanup incomplete,
 explicit pane uncertainty and detached replacement uncertainty. Report them to the
 operation coordinator, which owns canonical-file quarantine; never release that
