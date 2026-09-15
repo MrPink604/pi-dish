@@ -217,8 +217,10 @@ scope and six nonblocking observations.
 - **Legacy asymmetries and catalog narrowing:** retain the documented policies.
   These two observations required no changes.
 
-The browser/UI and real-harness gates above ran on the reviewed implementation;
-the subsequent behavioral correction affects only malformed placement pruning.
+After the pruning correction, concurrent transcript file-link work from `main`
+(`1b46c9e`) was preserved in merge `13a07e1`. The combined result passed strict
+checks, all 996 backend tests, all 286 browser tests, eight isolated UI scenarios,
+the full desktop/mobile smoke suite, and both real OMP and Prime canaries.
 Exact pushed-commit CI is recorded at the delivery gate.
 
 ## Mission and outcome
