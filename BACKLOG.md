@@ -1,14 +1,14 @@
 # pi-dish roadmap and migration status
 
-Updated 2026-09-11. **Browser application source migration is complete and
+Updated 2026-09-15. **Browser application source migration is complete and
 independently reviewed. Architectural simplification is not complete.**
 
 All first-party browser application logic is authored in `src/browser/`, including
 the application entrypoint and static control bindings. The five scripts shipped
 under `public/` are generated and checked against strict TypeScript source.
-That milestone established checked modules and explicit request/view ownership;
-the subsequent catalog and composition stages replace the metadata adapters and
-the browser's classic-script forwarding layer.
+That milestone established checked modules and explicit request/view ownership.
+The subsequent catalog and composition stages removed competing metadata adapters
+and the browser's classic-script forwarding layer.
 
 **Session catalog and metadata are implemented**, connecting discovery, explicit
 source resolution, indexed metadata, catalog composition and browser state through
@@ -79,15 +79,15 @@ controller/port observations.
 | Browser migration | Source implementation complete and reviewed | All first-party application logic and bindings are typed. Local strict, backend, browser and UI checks pass; each push must also pass the CI matrix. |
 | Session catalog and metadata | Tasks 1–7 implemented, verified and reviewed | Checked discovery/source/index/catalog and closed browser state replace competing adapters and render-time normalization. Strict checks, 974 backend tests, browser/UI coverage and Fable review are recorded in the stage plan. |
 | Browser composition | Implemented, verified and reviewed | Direct bundled imports and controller wiring replace global forwarding functions. Test-only observations preserve ownership probes; uninstrumented production scenarios, 282 browser checks and all UI suites passed. |
-| Remaining server application and feature modules | Next boundary to evaluate | Lifecycle redesign, general routes, recovery and feature stores still need separate stages. |
+| Remaining server application and feature modules | Lifecycle stage planned; other boundaries remain | The next three task plans cover browser contracts, shared helpers and lifecycle ownership. General routes, projections and other feature stores remain later stages. |
 | Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
 
 The completed browser source migration does not imply a whole-application
-conversion or complete domain contracts. Session catalog/metadata now establishes
-its bounded read path. Browser composition cleanup follows as a separate simplification
-candidate; lifecycle, other stores, extension checking and Electron shell scope
-remain to be assessed independently.
+conversion or complete domain contracts. Session catalog/metadata establishes
+its bounded read path, and browser composition cleanup is delivered. The next
+three stages below are plans, not implemented milestones; extension checking,
+Electron and the remaining backend boundaries still require their own delivery.
 
 ## What is already in TypeScript
 
@@ -205,10 +205,37 @@ names instead of executable event handlers.
 
 ## Ordered next work
 
-1. **Remaining backend boundaries.** Evaluate lifecycle orchestration next on
-   safety and simplification grounds; migrate feature stores when their consumer
-   contracts justify it, not simply because they are easy JavaScript files.
-   Audit extension checking and Electron before claiming whole-application coverage.
+1. **[Browser contract cleanup](docs/browser-contract-cleanup.md).** Carry decoded
+   message types through internal rendering ports, expose readonly session-state
+   views, and remove the test-only model-loading branch. Turn the existing
+   migration into compiler-enforced ownership and delete redundant work.
+2. **[Shared runtime helper cutover](docs/shared-runtime-helpers.md).** Move the
+   genuinely shared helper dependency closure to flat core modules; give browser
+   and backend consumers real typed imports. Remove backend dependencies on the
+   browser helper artifact while preserving its supported compatibility exports.
+3. **[Session lifecycle migration](docs/session-lifecycle-migration.md).** Migrate
+   ownership proofs, launch placement, operation coordination, recovery and bounce
+   implementations. Reuse existing source/identity/capability contracts, preserve
+   live revalidation and durable intent, and migrate every lifecycle caller.
+
+These are ordered delivery stages, not three monolithic commits. Their task
+documents define dependencies, integration owners, deletion criteria, observable
+acceptance and later simplification enabled. Inventory can overlap; shared source
+contracts must be settled before dependent implementation. Extension compiler
+coverage can start independently, but is not silently included in these plans.
+
+After these stages: migrate the general session-file/projection pipeline and
+feature stores with their API consumers, then finish typed server composition
+and the extension, skill CLI and Electron boundaries. Routine lifecycle callers
+move in stage 3; routine definitions, scheduling and the runner's own source
+migration remain separate. Tests and development-tool source conversion are
+distinct from the product-runtime finish line.
+
+Each stage must deliver a stronger compiler invariant, a deletion ledger and
+behavioral evidence across the complete affected path. A shorter entrypoint,
+new declarations over unchecked implementations, or wrappers retained solely for
+old probes do not satisfy completion. Keep external/runtime input validation and
+required post-await authority checks; these are not redundant internal decoding.
 
 There is no scheduled framework adoption or blanket `server.ts` conversion.
 Reconsider a leaf renderer only against a concrete maintenance problem and the

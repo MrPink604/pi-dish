@@ -46,6 +46,23 @@ dependencies, deletion criteria and verification. Lifecycle authority, host and
 selection ownership, local assets and checked-in runtime delivery remain
 invariants; they are not simplification targets.
 
+## Planned next stages
+
+The next task documents separate implementation work from the completed
+boundaries described here:
+
+1. [Browser contract cleanup](browser-contract-cleanup.md): readonly state views,
+   decoded message continuity and removal of test-only model-loading behavior.
+2. [Shared runtime helper cutover](shared-runtime-helpers.md): direct shared-source
+   imports instead of backend dependencies on browser-generated helper artifacts.
+3. [Session lifecycle migration](session-lifecycle-migration.md): checked authority,
+   launch and operation owners, recovery/bounce implementations and caller cutover.
+
+These stages are planned, not implemented. Each records the complexity to remove,
+the behavior to preserve and the later work it enables. Existing source paths,
+generated output and checking scope below remain authoritative until the relevant
+stage is delivered and its implementation record is updated.
+
 ## Implemented foundation inventory
 
 | TypeScript source in `src/core/` | Responsibility |
