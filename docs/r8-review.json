@@ -1,0 +1,1111 @@
+{
+  "milestone": "R8 explicit browser main-pane exclusion policy",
+  "status": "Three independent exact-model OMP/high whole-source ACCEPTs for identical frozen source; parent integration/CI/acceptance pending",
+  "baselineCommit": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
+  "reviewedSourceCommit": "9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09",
+  "branch": "migration/r8-pane-policy",
+  "ownerRef": "01a0ab39-9dbd-7317-b73e-b0f8185783e8",
+  "parentRef": "01a0a3fd-9825-70bd-b000-dc85c59a7421",
+  "sourceFiles": [
+    "src/browser/main-pane.ts",
+    "src/browser/app.ts",
+    "public/app.js",
+    "test/browser/main-pane.spec.js",
+    "docs/r8-evidence.json"
+  ],
+  "sourceEvidence": "docs/r8-evidence.json",
+  "capacityGrant": "Parent granted fourth concurrent three-reviewer group for exact 9d733a0; no reviewer was spawned before this grant.",
+  "reviewProtocol": {
+    "newIndependentDurableSessions": true,
+    "concurrentSubstantivePromptDispatch": true,
+    "allActualModelsOmpHighCwdVerifiedBeforePrompts": true,
+    "sourceFrozenThroughoutReviews": true,
+    "noModelSubstitutionOrUpgrade": true,
+    "noReviewerDelegationPermitted": true,
+    "noBuildLintCompilerOrSuiteRunsPermitted": true,
+    "identicalPrompt": "R8 FINAL WHOLE-SOURCE READ-ONLY REVIEW. Read skill://pi-dish-sessions before durable peer operations. You are one of THREE independent reviewers; do NOT delegate. Review ONLY /home/jyarwood/workspace/pi-dish-r8, branch migration/r8-pane-policy. Do not write repository files or another worktree. Skip ALL compiler/build/check/lint/test suites and formatters; no source edits. Scoped static/native probes MAY run only outside repository, without mutation. Never install packages or edit node_modules.\n\nReviewed exact source SHA: 9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09. Accepted baseline: dc4ae84568fda976cfb136082b1dda405ccf54d8. M0-M7 acceptance is closed; do not reopen accepted migration findings. Review all R8 final authored changed source, actual consumers, evidence and generated delta against this baseline, not selected fixes. Changed files: src/browser/main-pane.ts, src/browser/app.ts, public/app.js, test/browser/main-pane.spec.js, docs/r8-evidence.json. Personally read the WHOLE main-pane.ts/app.ts/test/evidence and actual controller consumers/callees, including complete applicable close/open/guard/request bodies and selection callers. Inspect generated delta against authored source. Read relevant AGENTS/CLAUDE/remaining-migration-plan R8 and deliberate limits/verification policy.\n\nApproved package: replace seven overlapping closeOtherViews peer lists and app.ts selection list with one small main-pane exclusion coordinator. Named takeover/session-surface/overlay registrations once; existing controllers retain close/dispose/request-generation ownership. New takeover must need one policy registration, not peer list edits. Preserve recovery/subagents extra settings/file/diff closures, ordinary takeovers retaining those surfaces, and keepBounceView retaining Bounce on real selection. No close-everything/router/event bus/framework, no R9 selection-retirement/port refactor, no R10 API/index exports, no new DTOs or validation, no active-view mirror.\n\nImportant exact order decision: old skills/newSession/routines/recovery lists close subagents before search, whereas registration uses selection's search-before-subagents order. Evidence contains exact local effect analysis and whole disposable browser probe/results showing both orders commute over all reachable neither/search/subagents initial states with actual held HTTP bodies, unchanged ownsSelection, closed controls inert and late renders rejected. Evaluate this concrete claim, not a broad ordering waiver. Controller bodies/generations unchanged.\n\nConsumers include seven takeover factory closeOtherViews callbacks, session-view pending/real closeViews callers, Bounce reconcile selection guard, file/comment and new-session/harness-settings close cascades, settings/sidebar/session-overlay owners and app bindings/production initialization. Existing factory ports unchanged; mainPane factory is imported directly (no index.ts export). Fixtures observe actual construction only in test builds; production globals absent.\n\nProofs in docs/r8-evidence.json: build:browser, check259, backend1027, full browser289, all8 isolated scenarios, full desktop/mobile UI, actual isolated production/fixture-controller smoke, exact commutation and one-registration experiments, invalid takeover compile rejection. Permanent tests cover actual observable transitions; ephemeral scripts removed but embedded with hashes/results. Untracked .amp/ is unrelated user/tool work and must not be inspected or changed. Do not rerun suites.\n\nReturn explicit ACCEPT or REVISE for ENTIRE exact SHA. State actual harness/provider/model/thinking identity, scope personally read, any findings with precise source locations, evidence limitations and acceptance reason. Distinguish findings from hypotheses. If REVISE, identify material observable defect or missed required scope. Send final verdict to durable owner 01a0ab39-9dbd-7317-b73e-b0f8185783e8 with bundled semantic CLI and retain complete final prose in your own transcript. Do not message process-local hub Main. Do not close your own session; owner archives provenance before/after and transcript, then closes it. Source remains frozen throughout review.\n",
+    "promptSha256": "f0c19800c193b4c33f6b26e99e54a83327bd8d9b6d51e28c3618d695e6583cd8"
+  },
+  "provenanceSetupHistory": {
+    "initial": [
+      {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+        "ref": "01a0ab53-c0",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R8-final-GLM",
+          "model": "zai/glm-5.3",
+          "contextPercent": 1.7,
+          "contextTokens": 17033,
+          "contextWindow": 1000000,
+          "thinkingLevel": "max",
+          "messageCount": 0,
+          "lastActivity": "2026-09-16T17:46:28.432Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 995791,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      },
+      {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+        "ref": "01a0ab53-c5",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-29-165Z_01a0ab53-c5ad-7320-b473-f5775b40cd88",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R8-final-DeepSeek",
+          "model": "opencode-go/deepseek-v4.1-flash",
+          "contextPercent": 1.6,
+          "contextTokens": 16490,
+          "contextWindow": 1000000,
+          "thinkingLevel": "high",
+          "messageCount": 0,
+          "lastActivity": "2026-09-16T17:46:29.692Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-29-165Z_01a0ab53-c5ad-7320-b473-f5775b40cd88.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 996042,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      },
+      {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+        "ref": "01a0ab53-ca",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-30-404Z_01a0ab53-ca84-706f-8757-e3bc4f6c4e99",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R8-final-Kimi",
+          "model": "kimi-code/k3",
+          "contextPercent": 1.7,
+          "contextTokens": 17495,
+          "contextWindow": 1048576,
+          "thinkingLevel": "high",
+          "messageCount": 0,
+          "lastActivity": "2026-09-16T17:46:30.955Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-30-404Z_01a0ab53-ca84-706f-8757-e3bc4f6c4e99.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 996250,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      }
+    ],
+    "thinkingControl": {
+      "data": {
+        "success": true,
+        "level": "high"
+      },
+      "status": 200
+    },
+    "firstImmediateResolveStillMax": true,
+    "noPromptSentAtMax": true,
+    "preprompt": [
+      {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+        "ref": "01a0ab53-c0",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R8-final-GLM",
+          "model": "zai/glm-5.3",
+          "contextPercent": 1.7,
+          "contextTokens": 17033,
+          "contextWindow": 1000000,
+          "thinkingLevel": "high",
+          "messageCount": 0,
+          "lastActivity": "2026-09-16T17:47:32.574Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 995791,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      },
+      {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+        "ref": "01a0ab53-c5",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-29-165Z_01a0ab53-c5ad-7320-b473-f5775b40cd88",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R8-final-DeepSeek",
+          "model": "opencode-go/deepseek-v4.1-flash",
+          "contextPercent": 1.6,
+          "contextTokens": 16490,
+          "contextWindow": 1000000,
+          "thinkingLevel": "high",
+          "messageCount": 0,
+          "lastActivity": "2026-09-16T17:46:29.692Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-29-165Z_01a0ab53-c5ad-7320-b473-f5775b40cd88.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 996042,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      },
+      {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+        "ref": "01a0ab53-ca",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-30-404Z_01a0ab53-ca84-706f-8757-e3bc4f6c4e99",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R8-final-Kimi",
+          "model": "kimi-code/k3",
+          "contextPercent": 1.7,
+          "contextTokens": 17495,
+          "contextWindow": 1048576,
+          "thinkingLevel": "high",
+          "messageCount": 0,
+          "lastActivity": "2026-09-16T17:46:30.955Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-30-404Z_01a0ab53-ca84-706f-8757-e3bc4f6c4e99.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 996250,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      }
+    ],
+    "dispatch": [
+      {
+        "success": true,
+        "result": {
+          "queued": false
+        }
+      },
+      {
+        "success": true,
+        "result": {
+          "queued": false
+        }
+      },
+      {
+        "success": true,
+        "result": {
+          "queued": false
+        }
+      }
+    ]
+  },
+  "historicalFindings": [
+    {
+      "subject": "Search/subagents relative close order",
+      "disposition": "Parent required explicit local commutation proof. Whole source evidence records private-state independence plus 6 actual browser cases across both orders/all reachable pane states, with held real HTTP bodies, unchanged ownsSelection and stale UI guards. No broad ordering waiver or controller-generation changes."
+    },
+    {
+      "subject": "Initial new regression fixture supplied invalid tree array",
+      "disposition": "Two new tests initially failed on malformed fabricated lineage. Helper corrected before source freeze to load actual sessionRelations producer and click its real header link; no product code fix or accepted baseline issue."
+    },
+    {
+      "subject": "Kimi verdict delivery shell quoting",
+      "disposition": "Initial semantic send used malformed nested heredoc/command substitution; owner received only verdict tail plus literal EOF syntax. Owner did not count this as complete final acceptance; sent procedural-only steer requesting complete verbatim final for unchanged exact source. No source finding or fix requested.",
+      "resolution": "Kimi resent complete verdict safely; malformed delivery is preserved in complete archive and not used as final decision."
+    },
+    {
+      "subject": "Kimi initial acceptance missing required whole app read",
+      "disposition": "Owner inspected semantic tool archive: app.ts read via full diff plus registration context only, matching reviewer scope bullet, despite whole-source initial prompt. Initial ACCEPT not counted toward final gate. Requested complete 1233-line app.ts and remaining complete applicable consumer bodies, followed by renewed entire unchanged exact-SHA verdict. No source finding or code edit.",
+      "resolution": "Actual archive records five complete sequential app reads and remaining close/guard bodies; renewed final395d4f52 explicitly ACCEPTs entire unchanged source. Owner read full final and verified read outputs span all1233 app lines before counting approval."
+    }
+  ],
+  "ownershipAndDeletionLedger": {
+    "deleted": "All seven old peer closure bodies plus selection closure body; no duplicate policy list left in controllers. Eight callbacks now consume same registered policy. No compatibility exports/wrappers/index changes.",
+    "retained": "Controller-owned close/dispose/request-generation implementations, settings nested Bounce close, session-view retirement phases, file/comment and new-session/harness-settings cascades.",
+    "tests": "No existing test contract changed or repinned. Added only observable transitions: mutual exclusion including same-view reopening; late held file response after asymmetric clearing; cross-host same-id keepBounceView selection. Registration/work-count and close-order probes are disposable, embedded evidence only.",
+    "allocation": "Three registration enumerations at construction; one takeover traversal per takeover/selection, plus relevant surface/overlay traversals. No per-transition Object.values, list copies, active-view cache, or event bus. No timing performance claim."
+  },
+  "opaqueBoundaries": [
+    "External HTTP/store/harness payloads unchanged; no new decoding/DTO",
+    "Controller close callbacks remain concrete lazy closures; no receiver/getter/reflection changes"
+  ],
+  "commandsAndRuntime": {
+    "validation": [
+      {
+        "command": "npm ci",
+        "result": "passed; pinned dependency install (798 packages), initial build had no installed TypeScript executable; no dependency changes"
+      },
+      {
+        "command": "npm run build:browser",
+        "result": "passed; only public/app.js changed"
+      },
+      {
+        "command": "npm run check",
+        "result": "passed twice, including final test source; 259 compiler-owned sources, no explicit-any exceptions; lint/type/drift/mode gates pass"
+      },
+      {
+        "command": "npm test",
+        "result": "1027 passed, 0 failed/skipped, 34593.10409 ms",
+        "log": "artifact://32"
+      },
+      {
+        "command": "npm run test:browser -- main-pane.spec.js production-composition.spec.js bounce.spec.js",
+        "result": "Initial 7 pass / 2 fail: new subagent test passed invalid {tree:[]} fixture. Corrected helper to invoke actual sessionRelations-produced header link; no product code changes."
+      },
+      {
+        "command": "npm run test:browser -- main-pane.spec.js",
+        "result": "3 passed (3.8s); all 49 takeover pairs, held-file clearing asymmetries, host-qualified Bounce retained/ordinary selection."
+      },
+      {
+        "command": "npm run test:browser",
+        "result": "289 passed (3.8 minutes), including all existing 286 and 3 new pane cases; 2 workers",
+        "log": "artifact://49"
+      },
+      {
+        "command": "npm run test:ui:scenarios",
+        "result": "All eight fresh isolated scenarios passed: models, drafts, sidebar, usage, skills, routines, bounce, mobile",
+        "log": "artifact://49"
+      },
+      {
+        "command": "npm run test:ui",
+        "result": "Full desktop/mobile smoke passed, including takeover, Bounce, retained transcript, async ownership, multi-host and same-id cases; all good",
+        "log": "artifact://49"
+      }
+    ],
+    "versions": {
+      "node": "26.8.2",
+      "npm": "12.0.2",
+      "typescript": "7.0.2",
+      "platform": "Linux x64",
+      "managedChromium": "153.0.8010.12 (reported by full browser suite)"
+    },
+    "runtimeSmoke": {
+      "home": "/tmp/pi-dish-r8-proof-w_vj6lpk/home",
+      "serverScript": "const { applyTestEnv } = require(\"/home/jyarwood/workspace/pi-dish-r8/test/test-env.js\");\napplyTestEnv();\nprocess.env.HOME = \"/tmp/pi-dish-r8-proof-w_vj6lpk/home\";\nprocess.env.TMUX_TMPDIR = \"/tmp/pi-dish-r8-proof-w_vj6lpk/home/tmux\";\nprocess.env.PI_DISH_INDEX_SYNC_BUDGET = '1000';\nconst server = require(\"/home/jyarwood/workspace/pi-dish-r8/server.js\");\nconst ready = () => console.log('R8_READY http://127.0.0.1:' + server.address().port);\nif (server.listening) ready(); else server.once('listening', ready);\n",
+      "url": "http://127.0.0.1:33863",
+      "production": "Uninstrumented actual app: desktop usage\u2192skills\u2192selected transcript; mobile selected transcript\u2192sidebar usage closes sidebar, width/scrollWidth 390; visually inspected settled screenshots. fixtureApp undefined in production.",
+      "asymmetry": [
+        {
+          "label": "ordinary-retains",
+          "main": "main usage-open",
+          "file": true,
+          "settings": "flex",
+          "bounce": false,
+          "selected": "r8-first"
+        },
+        {
+          "label": "recovery-clears",
+          "main": "main recovery-open",
+          "file": false,
+          "settings": "none",
+          "bounce": false,
+          "selected": "r8-first"
+        },
+        {
+          "label": "subagents-clears",
+          "main": "main subagents-open",
+          "file": false,
+          "settings": "none",
+          "bounce": false,
+          "selected": "r8-first"
+        },
+        {
+          "label": "keep-Bounce-selection",
+          "main": "main",
+          "file": false,
+          "settings": "flex",
+          "bounce": true,
+          "selected": "r8-second"
+        },
+        {
+          "label": "ordinary-selection",
+          "main": "main",
+          "file": false,
+          "settings": "flex",
+          "bounce": false,
+          "selected": "r8-first"
+        }
+      ],
+      "diff": [
+        {
+          "target": "recovery",
+          "ordinaryRetainsDiff": true,
+          "clearingRetiresDiff": true
+        },
+        {
+          "target": "subagents",
+          "ordinaryRetainsDiff": true,
+          "clearingRetiresDiff": true
+        }
+      ],
+      "screenshots": [
+        "/tmp/pi-dish-r8-proof-w_vj6lpk/desktop-selection.png",
+        "/tmp/pi-dish-r8-proof-w_vj6lpk/mobile-usage.png"
+      ],
+      "fixtureLimits": "Fixture-only existing feature-observation bundle used for direct real controller asymmetric operations, no production global; no harness/provider operations requested."
+    },
+    "typeNegative": {
+      "source": "import { createMainPane } from '/home/jyarwood/workspace/pi-dish-r8/src/browser/main-pane.ts';\nconst pane = createMainPane({\n  takeovers: { usage: { close() {} } },\n  sessionSurfaces: {},\n  overlays: { settings() {}, sidebar() {}, session: {}, bounce() {} },\n});\npane.beforeTakeover('usage');\npane.beforeTakeover('unregistered');\n",
+      "command": "node node_modules/typescript/bin/tsc --noEmit --strict --target es2022 --module esnext --moduleResolution bundler --allowImportingTsExtensions --skipLibCheck /tmp/pi-dish-r8-proof-w_vj6lpk/invalid-takeover.ts",
+      "result": "Expected exit 1: TS2345 at (8,21), unregistered is not assignable to usage. Valid usage invocation accepted."
+    },
+    "cleanup": {
+      "smokeServer": "stopped r8-pane-smoke after proof; exit 143 graceful termination",
+      "browser": "released r8-pane-production",
+      "removed": [
+        "temporary HOME and tmux directory",
+        "server.cjs",
+        "fixture-app.js",
+        "registration.cjs",
+        "commutation.js",
+        "invalid-takeover.ts",
+        "r8-proof.txt"
+      ],
+      "retained": [
+        "embedded complete registration/commutation/type-negative scripts and outputs in this evidence",
+        "screenshots and JSON results in /tmp/pi-dish-r8-proof-w_vj6lpk"
+      ],
+      "docs": "Only package evidence/review JSON; no global acceptance records edited; no redundant markdown."
+    }
+  },
+  "platformLimits": [
+    "Linux execution only; no macOS or Electron package claim because no Electron surface changed."
+  ],
+  "unrelatedWorkPreserved": [
+    "Untracked .amp/ appeared during task; not opened, changed, staged or removed."
+  ],
+  "finalDecisions": [
+    {
+      "reviewer": "glm",
+      "sessionRef": "01a0ab53-c0fe-752f-b88d-aefc8d86c037",
+      "actualModel": "zai/glm-5.3",
+      "harness": "omp",
+      "thinkingLevel": "high",
+      "decision": "ACCEPT",
+      "reviewedSourceCommit": "9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09",
+      "prePromptSemanticResolve": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+        "ref": "01a0ab53-c0",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R8-final-GLM",
+          "model": "zai/glm-5.3",
+          "contextPercent": 1.7,
+          "contextTokens": 17033,
+          "contextWindow": 1000000,
+          "thinkingLevel": "high",
+          "messageCount": 0,
+          "lastActivity": "2026-09-16T17:47:32.574Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 995791,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      },
+      "postReviewSemanticResolve": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+        "ref": "01a0ab53-c0",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R8-final-GLM",
+          "model": "zai/glm-5.3",
+          "contextPercent": 12.2,
+          "contextTokens": 122267,
+          "contextWindow": 1000000,
+          "thinkingLevel": "high",
+          "messageCount": 1,
+          "lastActivity": "2026-09-16T17:54:13.374Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 995791,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      },
+      "finalMessageId": "b1d28788",
+      "finalTimestamp": 1789581240526,
+      "verdictVerbatim": "Verdict delivered to durable owner `01a0ab39-9dbd-7317-b73e-b0f8185783e8` via the bundled pi-dish-sessions CLI (live delivery, not queued). Hub Main not contacted; session left open for the owner's provenance archive. Complete final prose retained below.\n\n---\n\n## R8 FINAL REVIEW VERDICT: **ACCEPT**\n\n**SHA** `9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09`, branch `migration/r8-pane-policy`, baseline `dc4ae84` confirmed as parent. One of three independent reviewers; no delegation; repository strictly read-only (only `/tmp` writes); no suites, builds, or formatters run; untracked `.amp/` untouched.\n\n**Reviewer identity:** harness **omp** (pi-dish-spawned session `01a0ab53-c0fe-752f-b88d-aefc8d86c037`), provider **zai**, model **glm-5.3**, thinking **enabled** (extended reasoning, no user-pinned level).\n\n**Scope personally read (whole files):** `src/browser/main-pane.ts` (45 ln), `src/browser/app.ts` (1233 ln), `test/browser/main-pane.spec.js` (67 ln), `docs/r8-evidence.json` (476 ln \u2014 every section, probe/registration/type-negative scripts extracted in full and hashed). **Complete applicable consumer bodies:** `session-view.ts` (pending `closeViews(true,false)` + real `closeViews(false,keepBounceView)`, `owns()` guard), `bounce.ts` (reconcile guard: `ownsSelection(owner)` + `keepBounceView:true`), all seven factories' open/close/generation bodies (`usage-view`, `search-view`, `skills`, `subagents-view`, `new-session` incl. harness-settings cascade, `routines-view`, `recovery` incl. `settingsOpen` = settings-section only), `file-views.ts` (comment cascade, `openFile`/`loadDiff` generation guards), `display-preferences.ts`, `sidebar-query.ts`, `session-search.ts`, remaining close owners (`session-info`, `session-controls`, `transcript-tree`, `harness-settings`), `app-bindings.ts`, fixture bundler + fleet wiring. CLAUDE.md takeover sections, `remaining-migration-plan.md` R8\u2013R10, AGENTS.md. **Generated delta:** full 10-hunk `public/app.js` diff against authored source. Baseline seven peer lists + selection list extracted from `dc4ae84` and compared item-by-item.\n\n**Findings: none material.**\n- **Equivalence verified everywhere:** membership identical in all seven takeovers + selection \u2014 settings iff recovery/subagents (`clearsSessionSurfaces`), sidebar always, all other takeovers closed with self excluded, bounce always, diff/file only for clearing takeovers (`closeOnTakeover`), sessionSearch and session overlays never closed by takeovers. `beforeSelection` reproduces the old `closeViews` sequence exactly; pending and real selection paths preserved; Bounce retained on owned real selection only.\n- **Order decision evaluated concretely \u2014 accepted.** Sole delta: subagents\u2194search in skills/newSession/routines/recovery (search first; usage/subagents/search and selection already matched). Statically, both `close()` bodies (`search-view.ts:67-74`, `subagents-view.ts:97-106`) touch only private state plus their own class, are synchronous, idempotent, invoke no controller ports, with no awaits/renders between them inside `beforeTakeover`, and no selection mutation \u2014 both orders converge for every reachable initial state. The embedded whole-browser probe (held HTTP bodies, late markers rejected by seq/isOpen guards, `ownsSelection` unchanged, inert retained controls) confirms at runtime; exact-byte sha256 recomputation matches both recorded script hashes (`d92394da\u2026`, `b0e0bad8\u2026`). Scoped exactly as claimed \u2014 not a broad waiver.\n- **No forbidden scope:** no active-view mirror, no close-everything/router/event bus, `session-view.ts` untouched (R9 intact), `main-pane` imported only by `app.ts` \u2014 no `index.ts` export (R10 intact), no new DTOs, factory ports unchanged, controllers retain close/dispose/generation ownership. `mainPane` const (app.ts:1126) referenced only in lazy post-evaluation closures \u2014 no TDZ.\n- **Generated output:** `public/app.js` delta = exactly 10 hunks mirroring the authored change; bundled `createMainPane` semantically identical.\n- **Tests:** three permanent cases assert observable transitions only (49 pairwise exclusions via actual construction, held-file late-response rejection, cross-host keepBounceView) \u2014 no source/implementation pinning.\n\n**Evidence limitations (non-blocking):** browser-smoke page-driving script not embedded (server bootstrap + results only; permanent spec covers the same behaviors); suite numbers taken from evidence per instructions, internally consistent; Linux-only claim; no LSP configured (recorded); clearing takeovers double-close Bounce \u2014 baseline-identical and idempotent.\n\n**Acceptance reason:** clean cutover exactly matching the approved R8 package and plan (`remaining-migration-plan.md:601-612`); one-registration extensibility proven against the actual policy table and actual coordinator; every preserved asymmetry verified in source and covered by observable tests; the single order delta proven commuting both statically and at runtime; generated output matches authored source; evidence scripts hash-intact. No material observable defect, no missed required scope.",
+      "archive": {
+        "path": "/tmp/pi-dish-r8-review-archives/glm-01a0ab53-c0fe-752f-b88d-aefc8d86c037.json",
+        "sha256": "302b349abbc1ee133c687055d075f7ec9e410c9e7cd0b5d911056b58ad7628a1",
+        "totalMessages": 113,
+        "firstIndex": 0,
+        "lastIndex": 112,
+        "complete": true,
+        "method": "Bundled semantic client /api/sessions/:resolved-id/messages?limit=500 with before pagination; indices checked exactly 0..112"
+      },
+      "protocolObservation": "Repository read-only; no compiler/build/check/test suite execution observed. Used temporary extraction/hash probes only. Self-report thinking wording is imprecise; independent semantic resolves before/after both prove high.",
+      "gracefulCloseResult": {
+        "success": true
+      }
+    },
+    {
+      "reviewer": "deepseek",
+      "sessionRef": "01a0ab53-c5ad-7320-b473-f5775b40cd88",
+      "actualModel": "opencode-go/deepseek-v4.1-flash",
+      "harness": "omp",
+      "thinkingLevel": "high",
+      "decision": "ACCEPT",
+      "reviewedSourceCommit": "9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09",
+      "prePromptSemanticResolve": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+        "ref": "01a0ab53-c5",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-29-165Z_01a0ab53-c5ad-7320-b473-f5775b40cd88",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R8-final-DeepSeek",
+          "model": "opencode-go/deepseek-v4.1-flash",
+          "contextPercent": 1.6,
+          "contextTokens": 16490,
+          "contextWindow": 1000000,
+          "thinkingLevel": "high",
+          "messageCount": 0,
+          "lastActivity": "2026-09-16T17:46:29.692Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-29-165Z_01a0ab53-c5ad-7320-b473-f5775b40cd88.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 996042,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      },
+      "postReviewSemanticResolve": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+        "ref": "01a0ab53-c5",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-29-165Z_01a0ab53-c5ad-7320-b473-f5775b40cd88",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R8-final-DeepSeek",
+          "model": "opencode-go/deepseek-v4.1-flash",
+          "contextPercent": 13.9,
+          "contextTokens": 139334,
+          "contextWindow": 1000000,
+          "thinkingLevel": "high",
+          "messageCount": 1,
+          "lastActivity": "2026-09-16T17:55:13.644Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-29-165Z_01a0ab53-c5ad-7320-b473-f5775b40cd88.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 996042,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      },
+      "finalMessageId": "50f97a0e",
+      "finalTimestamp": 1789581306550,
+      "verdictVerbatim": "\u2705 Verdict sent to durable owner `01a0ab39-9dbd-7317-b73e-b0f8185783e8`. Source still frozen (HEAD `9d733a0`; only untracked `.amp/` present, untouched).\n\n# R8 FINAL WHOLE-SOURCE READ-ONLY REVIEW \u2014 VERDICT: **ACCEPT**\n\n**Exact SHA reviewed:** `9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09` (branch `migration/r8-pane-policy`), single-commit delta from accepted baseline `dc4ae84568fda976cfb136082b1dda405ccf54d8` (verified direct parent). HEAD == reviewed SHA; worktree clean except untracked `.amp/` (not inspected, not touched). I wrote nothing inside the repository.\n\n**Reviewer identity:** harness `omp`, session `01a0ab53-c5ad-7320-b473-f5775b40cd88` (\"R8-final-DeepSeek\"), provider/model `opencode-go/deepseek-v4.1-flash`. Thinking level is not exposed in the session header served to me \u2014 I state no value rather than invent one.\n\n**Scope personally read:** `src/browser/main-pane.ts` whole; `src/browser/app.ts` whole (all 1234 lines, including registration table, `createAppBindings`, DOMContentLoaded boot); `test/browser/main-pane.spec.js` whole; `docs/r8-evidence.json` whole; generated delta in `public/app.js` whole. Consumers/callees: `session-view` (both `closeViews` call sites \u2014 pending `:41`, real `:133` \u2014 plus complete `selectSession`/`showPendingSessionView` bodies), `bounce.ts:290` reconcile guard, `search-view` open/close, `subagents-view` open/close/render gates, `skills`/`recovery`/`routines`/`usage`/`new-session` open+close bodies, `file-views` closeDiff/closeFile comment cascades, `new-session.closeSettings` cascade, `display-preferences`/`closeSettingsModal`, `sidebar-query` mount/close; plus AGENTS.md, CLAUDE.md takeover/subagents sections, `docs/remaining-migration-plan.md` R8 + deliberate limits + verification policy.\n\n**Independent verification (all outside repo, no mutation):**\n\n1. **Generated-vs-authored drift:** rebuilt all five browser entries in memory with the pinned esbuild (Node 26.8.2, typescript 7.0.2 \u2014 matching the evidence's `runtimeVersions`). `public/app.js` (875,720 bytes) and the other four outputs are **byte-identical** to committed; `main-pane.ts` is the sole main-pane input; all 110 bundle inputs stay under `src/`; zero `fixtureApp`/`observeFeature` in the production bundle.\n2. **Equivalence from the real artifacts:** transpiled the actual registration table out of `app.ts` and ran the actual `createMainPane` against recording stubs, compared to the eight baseline closure bodies extracted from `dc4ae84`. **All eight paths set-equal**; selection path **order-identical** (16 calls incl. conditional Bounce close); exactly four takeover paths (recovery, skills, newSession, routines) differ only by the adjacent search\u2194subagents swap. No path closes a peer it didn't before; none closes fewer.\n3. **The concrete ordering claim, evaluated:** neither close touches shared state \u2014 separate `AbortController`s, distinct DOM containers (`#searchViewBody` vs `#subagentsTree`), distinct class tokens, no port invocation, no abort listeners, and the coordinator is fully synchronous (no await between the two closes). Reachable pair states are exactly {neither, search-open, subagents-open} = the probe's complete space; the held-HTTP-body design covers the only asynchronously observable dimension. The embedded probe is genuine: every method/id it uses exists (`setToken`, `open(owner, endpoint, initial)`, `ports.request`, the four DOM ids).\n4. **Type-negative reproduced exactly:** typescript 7.0.2 `--noEmit` on the embedded negative fixture \u2192 `TS2345 at (8,21)`, same file:line:column as evidence; valid invocation accepted.\n5. **Initialization hazard:** before `var mainPane = createMainPane(...)` the only module-scope executable statements are listener registrations; all eight callbacks run after module evaluation (boot is inside DOMContentLoaded), and entering-takeover exclusion is preserved for the reopened-pane paths.\n6. **Deletion completeness:** no leftover peer list; `mainPane` has exactly 8 references; no other module orchestrates the seven takeovers; no index export; no active-view state.\n\n**Findings:** none material. Observations (non-blocking, not required for this SHA): CLAUDE.md:242 still says \"the three `<main>`-level takeovers are mutually exclusive\" (already stale pre-R8, docs were out of the approved package); `displayPreferences.beforeOpen` remains a local sidebar+Bounce pair (settings is an overlay, outside scope); the unused `pending` flag is preserved verbatim from baseline.\n\n**Hypotheses (explicitly not established, no decision impact):** none. The only theoretical divergence \u2014 a throwing close would change how many later closes run \u2014 is excluded by reading all three close bodies (pure guarded teardown).\n\n**Evidence limitations:** no compiler/build/check/lint/test suite was rerun per instructions; check259 / backend 1027 / browser 289 / 8 isolated scenarios / desktop+mobile smoke / production smoke remain **owner-recorded, unverified by me**. I assessed the embedded runtime scripts for internal consistency with source (consistent, including the exact TS2345 location I reproduced) rather than by re-execution. My verification covers source semantics, generated-output identity, exclusion-set equivalence, the ordering claim, and the type-negative.\n\n**Acceptance reason:** exactly the approved package \u2014 one coordinator, one registration per takeover/surface/overlay, controller ownership untouched, old lists deleted, no close-everything/router/bus, no R9/R10/API/index/DTO/validation/active-view scope; exclusion semantics provably equal to baseline on all eight paths apart from the documented commuting search\u2194subagents order; generated output is exactly the build of the frozen sources; permanent tests assert observable transitions.",
+      "archive": {
+        "path": "/tmp/pi-dish-r8-review-archives/deepseek-01a0ab53-c5ad-7320-b473-f5775b40cd88.json",
+        "sha256": "32aeda845992d42b825635705f864bfb25a8e0c883fd9411c5fc5cc81fdccd5d",
+        "totalMessages": 151,
+        "firstIndex": 0,
+        "lastIndex": 150,
+        "complete": true,
+        "method": "Bundled semantic client /api/sessions/:resolved-id/messages?limit=500 with before pagination; indices checked exactly 0..150"
+      },
+      "protocolObservation": "Repository read-only, no project test/check/lint/formatter commands. Reviewer nevertheless rebuilt five browser entries in memory with esbuild and ran a scoped tsc --noEmit negative fixture despite prompt forbidding compiler/build execution. Explicit protocol deviation retained; final wording no compiler/build/check/lint/test suite does not erase those executions. These are reviewer-reported supplemental results, not additional owner suite reruns. Independent semantic resolve before/after proves high despite reviewer not self-reporting level.",
+      "gracefulCloseResult": {
+        "success": true
+      }
+    },
+    {
+      "reviewer": "kimi",
+      "sessionRef": "01a0ab53-ca84-706f-8757-e3bc4f6c4e99",
+      "actualModel": "kimi-code/k3",
+      "harness": "omp",
+      "thinkingLevel": "high",
+      "decision": "ACCEPT",
+      "reviewedSourceCommit": "9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09",
+      "prePromptSemanticResolve": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+        "ref": "01a0ab53-ca",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-30-404Z_01a0ab53-ca84-706f-8757-e3bc4f6c4e99",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R8-final-Kimi",
+          "model": "kimi-code/k3",
+          "contextPercent": 1.7,
+          "contextTokens": 17495,
+          "contextWindow": 1048576,
+          "thinkingLevel": "high",
+          "messageCount": 0,
+          "lastActivity": "2026-09-16T17:46:30.955Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-30-404Z_01a0ab53-ca84-706f-8757-e3bc4f6c4e99.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 996250,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      },
+      "postReviewSemanticResolve": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+        "ref": "01a0ab53-ca",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-30-404Z_01a0ab53-ca84-706f-8757-e3bc4f6c4e99",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R8-final-Kimi",
+          "model": "kimi-code/k3",
+          "contextPercent": 11.9,
+          "contextTokens": 124964,
+          "contextWindow": 1048576,
+          "thinkingLevel": "high",
+          "messageCount": 3,
+          "lastActivity": "2026-09-16T18:19:03.918Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-30-404Z_01a0ab53-ca84-706f-8757-e3bc4f6c4e99.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 996250,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      },
+      "finalMessageId": "395d4f52",
+      "finalTimestamp": 1789582689263,
+      "verdictVerbatim": "Renewed verdict delivered (`success: true`, direct unqueued delivery). Session remains open for owner archiving and closure.\n\n---\n\n# R8 FINAL REVIEW \u2014 RENEWED WHOLE-SOURCE VERDICT: ACCEPT\n\n**SHA:** `9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09` (`migration/r8-pane-policy`, single commit over baseline `dc4ae84568fda976cfb136082b1dda405ccf54d8`). This supersedes my earlier ACCEPT, which was correct but under-scoped in its report \u2014 app.ts had been read via full diff + registration context. That gap is closed; no code finding resulted.\n\n**Identity:** harness omp (Oh My Pi); model `kimi-code/k3`; cwd `/home/jyarwood/workspace/pi-dish-r8`; thinking per session config (owner-verified, not guessed). No delegation.\n\n## Complete scope personally read (whole, no summaries)\n\n- **src/browser/app.ts \u2014 all 1233 lines** in five sequential reads, including boot/`DOMContentLoaded` composition (:324\u2013486), Escape cascade (:1002\u20131050), app-bindings table (:1155\u20131233), `displayPreferences.beforeOpen` (:639), `closeSettingsModal` (:648), mainPane registration (:1125\u20131153).\n- **main-pane.ts** whole (45 lines); **main-pane.spec.js** whole (67 lines); **r8-evidence.json** whole (476 lines; both embedded probe scripts sha256-verified).\n- **public/app.js** complete generated delta \u2014 faithful, no drift.\n- **All consumer bodies at source**: session-view.ts whole; takeover open/close for search (:55\u201374), subagents (:77\u2013106), usage (:60\u201375), skills (:56\u201383), routines (:162\u2013205), newSession (:210\u2013253), recovery (:197\u2013233); bounce close (:46\u201351) + reconcile (:264\u2013291, sole `keepBounceView:true` caller); file-views closes (:52\u201366); session-search close (:41\u201349); closeStatsModal (:312\u2013319); closeArtifactsModal (:396\u2013400); closeTreeModal (:32\u201335); closeModels/closeThinking (:51\u201352); sidebar-query close (:84); display-preferences close (:30); harness-settings close (:127); session-state writers (:120\u2013123, :162, :164\u2013173). Fixture chain and production-composition globals assertion. R8/R9/R10 plan + deliberate limits; CLAUDE.md prose.\n\n## Re-evaluation results\n\n1. **Equivalence**: set/order identity everywhere except the scoped search/subagents order delta in four takeovers.\n2. **Commutation, stronger than required**: all seven takeover close bodies touch only own generations/timers/AbortControllers/class; none calls another controller or the coordinator \u2014 all pairs commute, not just search/subagents.\n3. **Boot**: `closeViews` fires only after module evaluation (`DOMContentLoaded` :357 and later events) \u2192 no TDZ path to `mainPane`.\n4. **Selection generation**: `advanceSelection()` precedes `closeViews` in both paths; writers unchanged; baseline-identical retirement.\n5. **Untouched-by-design surfaces confirmed**: Escape cascade, app-bindings, `beforeOpen`, harness-settings cascade, subagents close\u2192relations reload.\n6. **Asymmetries preserved exactly** as specified.\n\n## Findings\n\n**None.** No material observable defect; no missed required scope. Non-blocking observations unchanged: `beforeTakeover` throws on unregistered runtime name (callers literal; compile rejection evidenced); registrationExperiment modeled closes (acknowledged; covered by real-controller tests/probe).\n\n## Evidence limitations\n\nNo suites rerun per instructions; acceptance rests on recorded gates plus this whole-source verification, generated-delta inspection, and hash checks.\n\n## Acceptance reason\n\nApproved scope delivered exactly \u2014 one small exclusion coordinator replacing eight lists \u2014 with equivalence verified for every reachable transition, all close bodies proven mutually commuting at source, controller ownership untouched, generated output faithful, permanent tests asserting observable transitions only. Source frozen; nothing mutated; no suites run; session open for archiving.",
+      "archive": {
+        "path": "/tmp/pi-dish-r8-review-archives/kimi-01a0ab53-ca84-706f-8757-e3bc4f6c4e99.json",
+        "sha256": "7e3f4239b3d01edf9129c46761365588d13aa09620ad5de0be0a01259b4b104c",
+        "totalMessages": 113,
+        "firstIndex": 0,
+        "lastIndex": 112,
+        "complete": true,
+        "method": "Bundled semantic client /api/sessions/:resolved-id/messages?limit=500 with before pagination; indices checked exactly 0..112"
+      },
+      "protocolObservation": "No builds/compilers/suites/formatters or repository writes observed; temporary hash probes only. Initial delivery malformed, then initial read-scope deficit corrected with actual full app/consumer reads; only renewed final395d4f52 is counted. Actual postreview model/OMP/high/cwd verified before closure.",
+      "gracefulCloseResult": {
+        "success": true
+      },
+      "postCloseSemanticResolve": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+        "ref": "01a0ab53-ca",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-30-404Z_01a0ab53-ca84-706f-8757-e3bc4f6c4e99",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": false,
+            "steer": false,
+            "followUp": false,
+            "abort": false,
+            "compact": false,
+            "models": false,
+            "setModel": false,
+            "setThinking": false,
+            "rename": false,
+            "commands": false,
+            "queueCancel": false,
+            "tree": false,
+            "export": true,
+            "close": false,
+            "restart": false,
+            "resume": true
+          },
+          "closeMode": "owned-pane",
+          "profileId": "omp-v1",
+          "profileVersion": 1,
+          "name": "R8-final-Kimi",
+          "model": "kimi-code/k3",
+          "contextPercent": 62,
+          "contextTokens": 125851,
+          "messageCount": 3,
+          "lastActivity": "2026-09-16T18:19:42.483Z",
+          "isActive": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-30-404Z_01a0ab53-ca84-706f-8757-e3bc4f6c4e99.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      }
+    }
+  ],
+  "integrationStatus": "This attestation cannot accept R8 or unlock R9. Parent independently integrates, executes actual behavior and observes exact pushed-main CI before acceptance.",
+  "attestationCommitPolicy": "Only docs/r8-review.json in a separate commit after all three whole-source exact-SHA ACCEPTs. Its own SHA is delivered separately, never self-referenced.",
+  "ownerClarifications": [
+    {
+      "subject": "Reviewer effort wording",
+      "decision": "GLM says thinking enabled/no pinned level; DeepSeek says level not exposed. Owner independently resolved all three exact model/OMP/high/cwd before substantive prompts and resolved completed GLM/DeepSeek high again. Semantic provenance, not self-description, establishes the requested effort."
+    },
+    {
+      "subject": "Extra validation protocol deviation",
+      "decision": "DeepSeek ran in-memory esbuild browser reconstruction and scoped tsc negative outside repository despite compiler/build prohibition. No source mutation or full suite rerun observed. Retained transparently rather than claiming full protocol compliance."
+    },
+    {
+      "subject": "No generalized ordering or idempotence waiver",
+      "decision": "Only concrete search/subagents close order is accepted. Search/Bounce counters still advance on repeated closes; reviewer idempotent language refers to observable closed UI, not bit-identical private counters. Future callbacks throwing or new ordering dependencies are not licensed."
+    },
+    {
+      "subject": "Pre-existing CLAUDE takeover count",
+      "decision": "DeepSeek noted stale three-takeover count. Parent alone owns global CLAUDE acceptance/doc updates; left untouched under frozen scope. Not an R8 behavior defect."
+    },
+    {
+      "subject": "Smoke evidence limitations",
+      "decision": "Owner actual page-driving operations and observed screenshots/results exist in the durable owner transcript. Evidence embeds server bootstrap and result snapshots, plus full registration/commutation/type-negative scripts; it does not claim the entire ad-hoc browser-driving script is embedded."
+    },
+    {
+      "subject": "Kimi broad close commutation wording",
+      "decision": "Renewed reviewer expands claim to all takeover close pairs commuting. Owner does not adopt this broader claim or license arbitrary close reordering. R8 changes only the documented search/subagents relative order, proven over its actual private-state effects and reachable states. Other call ordering, controller cascades and selection phases remain as source/evidence record."
+    }
+  ],
+  "parentReviewObservation": {
+    "glmAndDeepseekFinalsIndependentlyRead": true,
+    "inactiveAfterGracefulCloseMayOmitThinkingLevel": true,
+    "provenanceAuthority": "Actual owner-captured semantic preprompt and postreview live resolves, both high, retained verbatim. Inactive descriptor omissions do not replace those records. GLM prose about no pinned level is not authoritative.",
+    "capacityRelease": "Await all three same-source final ACCEPTs, complete archives and graceful closes; first two closures alone do not release group capacity."
+  },
+  "reviewCoverageChecks": {
+    "glm": "Semantic archive records full app read ranges 1-330,330-660,660-1000,1000-1233; tool outputs span adjacent boundaries.",
+    "deepseek": "Semantic archive records app reads 1-200,200-330,330-540,540-760 (output expands through763),764-1000,1000-1233; full source covered.",
+    "kimi": "Renewed review semantic archive records full app reads 1-260,264-560,564-860,864-1120,1124-1233; actual read outputs expand through 263,563,863,1123 and1233 respectively. Complete app source now covered, plus remaining actual close/cascade/selection guard reads. Initial narrower acceptance remains historical only."
+  },
+  "closureVerification": {
+    "glm": "Parent independently observed inactive after owner successful graceful close. Preprompt/postreview-live high provenance retained.",
+    "deepseek": "Parent independently observed inactive after owner successful graceful close. Preprompt/postreview-live high provenance retained.",
+    "kimi": {
+      "ownerSemanticResolveInactive": true,
+      "descriptor": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+        "ref": "01a0ab53-ca",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-30-404Z_01a0ab53-ca84-706f-8757-e3bc4f6c4e99",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": false,
+            "steer": false,
+            "followUp": false,
+            "abort": false,
+            "compact": false,
+            "models": false,
+            "setModel": false,
+            "setThinking": false,
+            "rename": false,
+            "commands": false,
+            "queueCancel": false,
+            "tree": false,
+            "export": true,
+            "close": false,
+            "restart": false,
+            "resume": true
+          },
+          "closeMode": "owned-pane",
+          "profileId": "omp-v1",
+          "profileVersion": 1,
+          "name": "R8-final-Kimi",
+          "model": "kimi-code/k3",
+          "contextPercent": 62,
+          "contextTokens": 125851,
+          "messageCount": 3,
+          "lastActivity": "2026-09-16T18:19:42.483Z",
+          "isActive": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-30-404Z_01a0ab53-ca84-706f-8757-e3bc4f6c4e99.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      }
+    }
+  },
+  "sourceFreezeVerification": {
+    "command": "git diff --exit-code 9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09 -- src/browser/main-pane.ts src/browser/app.ts public/app.js test/browser/main-pane.spec.js docs/r8-evidence.json && git rev-parse HEAD",
+    "result": "Exit0; HEAD exact9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09 after all three final reviews. No source edits during review."
+  },
+  "retainedCommandLogs": [
+    {
+      "path": "/tmp/pi-dish-r8-proof-w_vj6lpk/check-backend.log",
+      "sha256": "6943338b3c851f499e9da65b48d4dfea8f9c1c494f159f5e913194ccae685d2e"
+    },
+    {
+      "path": "/tmp/pi-dish-r8-proof-w_vj6lpk/browser-ui.log",
+      "sha256": "0f1af0c63df249b541c663809e1f0a4511ac40875a8e7041d11db763a8c17cd3"
+    }
+  ],
+  "documentationValidation": {
+    "checks": [
+      "JSON parses",
+      "Exactly three distinct required actual models and reviewer refs",
+      "All final decisions ACCEPT identical source SHA",
+      "Actual preprompt/postreview OMP/high/cwd/model equality",
+      "Complete archive indices0..last and matching totalMessages",
+      "Archive SHA256 equality",
+      "Final message ID/text exactly matches verbatim decision",
+      "All graceful-close results successful",
+      "Source diff against reviewed SHA empty after final reviews",
+      "Retained proof log paths/hashes exist"
+    ],
+    "sourceSuitesRerunForAttestation": false,
+    "reason": "Documentation-only attestation after final frozen-source reviews; all mandatory owner source/runtime gates already passed before freeze."
+  },
+  "sourceEvidenceSha256": "0c67b9d3152977d2257da8e156bc424478bb18044a9eeda7aeea2437e60749da"
+}
