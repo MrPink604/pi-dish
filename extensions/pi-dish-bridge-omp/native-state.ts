@@ -51,11 +51,22 @@ if (isObserverState(cachedState)) {
 }
 
 function isObserverState(value: unknown): value is ObserverState {
-  return !!value && typeof value === "object" && "listeners" in value && value.listeners instanceof Set;
+  if (!value || typeof value !== "object" ||
+      !("listeners" in value) || !(value.listeners instanceof Set) ||
+      !("readers" in value) || !value.readers || typeof value.readers !== "object" ||
+      !("current" in value) || (value.current !== null && typeof value.current !== "object") ||
+      !("signature" in value) || (value.signature !== null && typeof value.signature !== "string")) return false;
+  for (const listener of value.listeners) if (typeof listener !== "function") return false;
+  for (const reader of Object.values(value.readers)) if (reader !== undefined && typeof reader !== "function") return false;
+  return true;
 }
 
 function isHostConstructor(value: unknown): value is { prototype: HostSession } {
   return typeof value === "function" && "prototype" in value && !!value.prototype && typeof value.prototype === "object";
+}
+
+function isHostMethod(value: unknown): value is HostMethod {
+  return typeof value === "function";
 }
 
 function readProjection(session: HostSession): OmpNativeProjection {
@@ -109,8 +120,8 @@ function patchAgentSession(AgentSession: { prototype: HostSession }): void {
     if (readerKey && state.readers[readerKey]) return;
     if (!readerKey && alreadyPatched) return;
     const candidate = proto[name];
-    if (typeof candidate !== "function") return;
-    const original = candidate as HostMethod;
+    if (!isHostMethod(candidate)) return;
+    const original = candidate;
     if (readerKey) state.readers[readerKey] = original;
     proto[name] = function (this: HostSession, ...args: unknown[]) {
       const result = Reflect.apply(original, this, args);

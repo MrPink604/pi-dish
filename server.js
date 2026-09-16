@@ -6,6 +6,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const piSDK = require('./lib/pi-sdk');
+const { runtimeResourcePath } = require('./lib/runtime-resources');
 const { execFile } = require('child_process');
 const { getAllRPCSessions } = require('./lib/rpc-session');
 const {
@@ -1642,7 +1643,7 @@ function resolveRefineConfig(inventory) {
     mode: 'default',
     skillName: 'pi-dish-skill-refine',
     discovered: names.has('pi-dish-skill-refine'),
-    mdPath: path.join(__dirname, 'skills', 'pi-dish-skill-refine', 'SKILL.md'),
+    mdPath: runtimeResourcePath(__dirname, 'skills/pi-dish-skill-refine/SKILL.md'),
   };
 }
 

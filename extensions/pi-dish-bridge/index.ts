@@ -1,3 +1,4 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBridge, PI_EVENT_PROFILE } from "./core.js";
 import { getPiPrivateSession } from "./pi-private.js";
 
@@ -14,4 +15,4 @@ export default createBridge({
   selfPrime: true,
   piLifecycleEvents: true,
   standDownUnderForeignHost: true,
-});
+}) satisfies (pi: ExtensionAPI) => void;

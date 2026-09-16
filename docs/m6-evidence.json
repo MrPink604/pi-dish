@@ -1,0 +1,137 @@
+{
+  "milestone": "M6",
+  "status": "Implementation and final Linux verification complete; source review acceptance pending",
+  "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
+  "branch": "migration/m6-runtime",
+  "owner": "01a0a998-4644-742f-bbf6-102bc6f53c99",
+  "ownership": {
+    "integration": "Owner alone edits package/lock/compiler/build/source-policy, shared consumers and generated outputs, commits and validates the stable aggregate",
+    "children": [
+      { "slice": "M6a", "ref": "01a0a99a-01fe-74ff-ac4d-9f1b3b896df9", "harness": "omp", "model": "openai-codex/gpt-6-astra", "thinkingLevel": "high", "verified": "semantic CLI list --active --json before implementation prompt", "owns": "Seven native extension sources, share .mts, exact extension type fixtures and focused native smoke" },
+      { "slice": "M6b", "ref": "01a0a99a-06f7-7099-bc98-7a1288afc69d", "harness": "omp", "model": "openai-codex/gpt-6-astra", "thinkingLevel": "high", "verified": "semantic CLI list --active --json before implementation prompt", "owns": "Four skill/client .ts authored siblings" },
+      { "slice": "M6c", "ref": "01a0a99a-0bbf-70ed-8574-5bb145202e47", "harness": "omp", "model": "openai-codex/gpt-6-astra", "thinkingLevel": "high", "verified": "semantic CLI list --active --json before implementation prompt; spawn response failed after launch, recovered exact new live session without spawning duplicate", "owns": "Electron .ts, runtime-resources.ts, focused resolver regressions and disposable smoke script" }
+    ],
+    "isolation": "Disjoint source ownership inside assigned isolated M6 worktree. Children ran no builds, formatting, linting or tests while writers were active; no child commits or pushes. Only the explicitly transferred four-file M3 checked FFF consumer was imported."
+  },
+  "runtime": { "hostNode": "26.8.2", "npm": "12.0.2", "bun": "1.3.14", "tmux": "3.7c", "omp": "18.1.21", "prime": "0.9.4", "platform": "Linux x64" },
+  "setup": [
+    { "command": "npm ci --no-audit --no-fund", "result": "exit 0; baseline 916 packages installed and node-pty rebuilt; six dependency lifecycle scripts blocked by existing npm allowScripts policy" },
+    { "command": "npm install --no-audit --no-fund after pinning Electron 44.4.1", "result": "exit 1: electron-builder 25.1.8 rebuild dependency node-abi 3.87.0 cannot recognize Electron 44.4.1", "disposition": "Updated packaging tooling, not runtime shim" },
+    { "command": "npm install --save-dev --save-exact electron-builder@26.15.3 --no-audit --no-fund", "result": "exit 0; resolves @electron/rebuild 4.2.0 and node-abi 4.35.0" },
+    { "command": "node node_modules/electron/install.js", "result": "exit 0; installs pinned desktop binary" },
+    { "command": "npm exec electron-builder -- install-app-deps", "result": "exit 0; node-pty rebuilt for Electron 44.4.1" }
+  ],
+  "desktopVersionSelection": { "electron": "44.4.1", "officialEmbeddedNode": "24.21.0", "officialChromium": "152.0.7977.78", "source": "https://releases.electronjs.org/release/v44.4.1", "runtimeVerification": "Actual isolated Electron dependency experiment printed Electron 44.4.1, Node 24.21.0, Chromium 152.0.7977.78, module ABI 149", "rootNodeMinimum": ">=22.19.0 unchanged" },
+  "disposableNativeExperiment": {
+    "scope": "Dependency-only ASAR fixture outside worktree while source writers active; no product source validation or package acceptance inferred",
+    "path": "/tmp/m6-fff-asar-kWQch5",
+    "isolation": "env -i, temporary HOME, xvfb-run, supervised Electron process; no provider credentials or live harness sessions",
+    "baseline": "Explicit .node/.so unpacking still resolves FFF package.json in app.asar. FileFinder.create throws dlopen Not a directory for app.asar/node_modules/@ff-labs/fff-bin-linux-x64-gnu/libfff_c.so; exit 1.",
+    "correction": "Import the real unpacked FFF entry and unpack its entire native dependency closure, not only .so. Native create/scan/search succeeds and finds native-marker.txt; /proc/self/maps records fixed.asar.unpacked/node_modules/@ff-labs/fff-bin-linux-x64-gnu/libfff_c.so; exit 0.",
+    "fixtureCorrection": "First real-path probe chose HOME itself; FFF correctly refused scanning HOME. Changed fixture basePath to temporary HOME/work, without changing product code.",
+    "dependencyDirectories": ["@ff-labs/fff-node", "@ff-labs/fff-bin-linux-x64-gnu", "ffi-rs", "@yuuang/ffi-rs-linux-x64-gnu"],
+    "contractStatus": "Parent approved narrow amendment, published on main at de0496c: M6 owns fffImportSpecifier(applicationRoot: string): string and full native dependency-tree unpacking; M3 loadFff consumes without duplicated ASAR detection. No further FFF contract approval pending.",
+    "checkedHelperProof": "Standalone strict NodeNext compilation of actual runtime-resources.ts passed. New metadata-proof/app.asar imported FFF through its compiled fffImportSpecifier(__dirname): reads actual physical exports[\".\"].import, resolves URL without hard-coded entry or bare CommonJS resolution. FileFinder.create/waitForScan/fileSearch found native-marker.txt; /proc/self/maps showed app.asar.unpacked libfff_c.so; destroy and closeLibrary completed; Electron exit 0."
+  },
+  "focusedVerification": [
+    { "command": "npm run build:core && node --test test/runtime-resources.test.js", "result": "exit 0; 6 tests passed, including physical import-only metadata resolution with nonstandard URL-sensitive filename and rejection of missing import export" },
+    { "command": "node node_modules/typescript/bin/tsc -p tsconfig.extensions.json", "result": "exit 0, no diagnostics" },
+    { "command": "node --test test/native-extension-boundary.test.js test/edge-build.test.js", "environment": "Bun bin added to PATH", "result": "exit 0; both tests passed" },
+    { "command": "node test/native-extensions.smoke.js mood", "result": "First smoke fixture rejected SDK's ?beta=true URL; corrected fixture URL parsing and base URL. Rerun exit 0: real Pi native loader, restored CustomEditor, /mood persistence, TypeBox set_mood execution and TUI rendering passed." },
+    { "command": "node scripts/test-real-lineage-harnesses.js", "environment": "Explicit OMP/Prime/Bun paths, existing isolated HOME/tmux/sockets/fake provider", "result": "exit 0; OMP 18.1.21 and Prime 0.9.4. OMP streaming/persistence/tree/refusal/close/resume/history/btw; Prime token/worker-client ownership/busy close/restart/isolation/manual discovery/refusal/resume; 10 local fake-provider requests." },
+    { "command": "npm run build:edges && npm run check", "result": "exit 0; 212 compiler-owned sources pass no-any policy, lint, core/browser/edge drift and all strict compiler checks" },
+    { "command": "npm test -- test/skill-client-ingress.test.js test/skills-cli.test.js test/skill-sessions-fleet.test.js test/session-control-cli.test.js test/comments-cli.test.js", "result": "exit 0; 38 passed; artifact://66" },
+    { "command": "npm test -- test/pi-bridge.integration.test.js", "environment": "PI_DISH_PI_COMMAND=/home/jyarwood/.local/bin/pi (0.85.1)", "result": "exit 0; 12 passed, no skips; artifact://67" },
+    { "command": "node test/native-extensions.smoke.js share", "result": "exit 0; actual OMP native loader follows installed .mjs symlink, validates snapshot/systemPrompt/tools/bytes/URL and HTTP error; isolated configuration disables startup wizard/update check", "fixtureCorrections": "Handle provider query parameters, avoid duplicate /v1, reject unrelated startup requests, and wait for actual model display label" },
+    { "command": "npm run test:ui", "result": "exit 0; complete desktop/mobile UI smoke; artifact://72" },
+    { "command": "npm run check && npm test", "environment": "PI_DISH_PI_COMMAND=/home/jyarwood/.local/bin/pi; original PATH retained", "result": "exit 0; strict checks/drift/source policy pass; full backend 1010 passed, no failures/cancellations/skips in 32 seconds; artifact://87", "fixtureRepair": "Electron-builder dependency graph hoisted proper-lockfile. Existing concurrent-settings regression assumed an SDK-private node_modules path and waited forever after child failure. Resolve from SDK package.json with createRequire and reject child exit before readiness; all original concurrency assertions retained." }
+  ],
+  "aggregateAttempts": [
+    { "command": "npm test with narrowed PATH", "result": "timeout at 300 seconds; 957 tests, 955 passed, 1 failed, 1 cancelled; artifact://70", "disposition": "Invocation excluded ~/.local/bin, selecting Pi 0.81.1 instead of bundled/installed 0.85.1. Corrected explicit binary invocation removes version mismatch." },
+    { "command": "Corrected aggregate followed by focused npm test -- test/server.test.js", "result": "Focused invocation timed out after 90 seconds, 80 passed; aggregate cancelled after diagnosis", "disposition": "Existing settings-concurrency fixture hard-coded a now-hoisted dependency and did not reject child exit. Repaired fixture; subsequent full check/backend passed all 1010." }
+  ],
+  "preliminaryArchive": {
+    "command": "npm exec electron-builder -- --linux --dir --config.npmRebuild=false",
+    "result": "exit 0; dist/linux-unpacked/pi-dish produced after explicit native dependency rebuild",
+    "inspection": "Read-only ASAR API confirms package main electron/main.js, required external first-party and full FFF/ffi-rs dependency trees unpacked, archived docs retained and forbidden first-party source/declarations/maps excluded",
+    "limit": "Layout evidence only. Actual final product native FFF and desktop/harness proofs require M3 consumer integration and a rebuilt artifact."
+  },
+  "producerPublication": {
+    "sourceCommit": "707a2e34b2cce1619fb3379ab7af3217d6b16691",
+    "pushedBranch": "migration/m6-runtime",
+    "files": ["src/core/runtime-resources.ts", "lib/runtime-resources.js", "lib/runtime-resources.d.ts", "test/runtime-resources.test.js"],
+    "limit": "Minimal checked producer only; aggregate check/backend proof also includes pending M6 consumers/configuration. Not M6 acceptance."
+  },
+  "developmentNativeHarnessProof": {
+    "command": "xvfb-run -a node /tmp/pi-dish-m6c-harness-proof.cjs REPO dist/linux-unpacked/pi-dish dev all",
+    "environment": "Explicit real Pi/OMP/Prime/Bun paths; allowlisted environment, isolated HOME/tmux/sockets, local fake providers",
+    "result": "exit 0; real Electron development window, Pi 13/13 no skips, full original OMP/Prime lineage including exact 10 fake-provider requests; native process/token/wrapper claims, installed sessions/comments/pages CLIs, peer survival and owned shutdown",
+    "artifacts": "/tmp/pd-m6c-harness-PPctpi",
+    "visualInspection": "Both Pi and lineage window screenshots inspected: rendered application shell, menu and empty-session prompt, not blank/error navigation",
+    "fixtureCorrections": [
+      "Playwright Electron main evaluation has no global require: use process.getBuiltinModule and createRequire in disposable proof only",
+      "Capture Electron ChildProcess before close; Playwright process() is unavailable after disconnection. Preserve and assert actual process exit."
+    ],
+    "limit": "Development native-harness proof only. Packaged runtime remains pending M3 consumer integration."
+  },
+  "developmentDesktopProof": {
+    "command": "xvfb-run -a node /tmp/pi-dish-m6c-desktop-proof.cjs REPO dist/linux-unpacked/pi-dish dev",
+    "result": "exit 0; actual Electron window/HTTP/local assets/SDK/PTY/FFF/external resource paths/installed CLIs; security preferences preserved; external URL dispatch observed without launching operator browser",
+    "artifacts": "/tmp/pd-m6c-proof-YyU7iI",
+    "nativeEvidence": "PTY computed m6c-pty-42; real product /api/sessions/:id/files found a/b/c/d/e/f/g/h/m6c-native-needle.txt beyond fallback walker depth; process maps show real libfff_c.so and pty.node",
+    "visualInspection": "Development window screenshot inspected: rendered application shell and empty-session prompt",
+    "limit": "Optional disposable mode selector added to permit development proof while approved packaged FFF consumer is pending; default still exercises both modes. No packaged acceptance inferred."
+  },
+  "consumerTransfer": {
+    "owner": "M3",
+    "originalCommit": "51c4991238d15aea94a824fadd33f4ec0e3b9374",
+    "appliedCommit": "8303d7f79a125fdedfbdf3dd5fdfc3ba67bf4069",
+    "method": "git cherry-pick -x, no conflicts; exact four producer files preserved",
+    "files": ["src/core/file-search.ts", "lib/file-search.js", "lib/file-search.d.ts", "docs/m3-search-producer-evidence.json"],
+    "dependencies": "Baseline35 plus M6 resolver707 only; no M1/M5 source imported",
+    "scope": "Actual generated searchFiles consumer, exercised through the product HTTP route in both development and packaged Electron"
+  },
+  "finalLinuxPackageProof": {
+    "build": "npm run build:core && npm run build:edges && npm exec electron-builder -- --linux --dir --config.npmRebuild=false --publish never",
+    "buildResult": "exit 0; native dependencies had already been rebuilt with install-app-deps for Electron44.4.1",
+    "executable": "dist/linux-unpacked/pi-dish",
+    "executableSha256": "8407787e90832dceaf83d751cc2ad89a92b92f90c9c5dedcc126e54258649a6f",
+    "archive": "dist/linux-unpacked/resources/app.asar",
+    "archiveSha256": "ee3fa44c32a066679472e063400b1ab404cdd929c1ec9788ac830b4b0775685c",
+    "desktopCommand": "xvfb-run -a node /tmp/pi-dish-m6c-desktop-proof.cjs /home/jyarwood/workspace/pi-dish-m6 /home/jyarwood/workspace/pi-dish-m6/dist/linux-unpacked/pi-dish all",
+    "desktopResult": "exit 0; actual development and packaged windows, HTTP, local assets, SDK, native PTY/FFF, security preferences, external URL dispatch and installed sessions/comments/pages CLIs all passed",
+    "desktopArtifacts": "/tmp/pd-m6c-proof-NH1ND2",
+    "nativeEvidence": "Real packaged /api/sessions/:id/files returned a/b/c/d/e/f/g/h/m6c-native-needle.txt (gitStatus clean), beyond fallback walker depth6. /proc/self/maps shows app.asar.unpacked/node_modules/@ff-labs/fff-bin-linux-x64-gnu/libfff_c.so and node-pty/build/Release/pty.node. PTY computed m6c-pty-42.",
+    "runtime": { "electron": "44.4.1", "node": "24.21.0", "chrome": "152.0.7977.78", "moduleABI": "149", "nodeIntegration": false, "contextIsolation": true, "sandbox": true },
+    "harnessCommand": "xvfb-run -a node /tmp/pi-dish-m6c-harness-proof.cjs /home/jyarwood/workspace/pi-dish-m6 /home/jyarwood/workspace/pi-dish-m6/dist/linux-unpacked/pi-dish all all",
+    "harnessEnvironment": "Explicit Pi0.85.1/OMP18.1.21/Prime0.9.4/Bun1.3.14 paths; isolated HOME/sockets/tmux; allowlisted environment and local fake providers, no live sessions or credentials",
+    "harnessResult": "exit 0; Pi13/13 no skips in each mode; original complete OMP/Prime lineage in each mode,10 provider requests each. Real process/token/wrapper identity, installed three CLIs, lifecycle isolation/peer survival and owned shutdown passed.",
+    "harnessArtifacts": "/tmp/pd-m6c-harness-Gv9M3o",
+    "cleanup": "All four native-harness runs report electronExited=true and tmuxFailures=[]",
+    "visualInspection": "All six final screenshots inspected: application shell/menu/logo rendered, with empty-session prompt visible in settled captures; no error document or blank window.",
+    "archiveInspection": "Read-only ASAR API checks required manifest resources, package-only main, physical wrappers/skills, archived docs, native unpacking and excluded first-party source/declarations/maps.",
+    "fixtureCorrection": "Initial disposable desktop proof matched fff in a hexadecimal maps address and misclassified libnettle.so. Restricted its filter to actual libfff_c.so/pty.node basenames; reran both modes successfully. No product change or native fallback accepted.",
+    "proofScriptSha256": {
+      "/tmp/pi-dish-m6c-desktop-proof.cjs": "3224479b45210f8257782168e340a0e7b52dd0dd74738460b5f1936459901c2d",
+      "/tmp/pi-dish-m6c-harness-proof.cjs": "f5dbd9880c120d19205ee7fa01ae9a2af1aa36616f5c57fd3566878e23a3631d",
+      "/tmp/pi-dish-m6c-harness-support.cjs": "afc188cb069383ef5090d04fe0a0166a1ec1cf884979090ca7678bb803ae2c39"
+    }
+  },
+  "finalStableValidation": {
+    "command": "npm run check && npm test && npm run test:ui",
+    "environment": "PI_DISH_PI_COMMAND=/home/jyarwood/.local/bin/pi; original PATH retained",
+    "result": "exit 0;213 compiler-owned sources/no explicit-any exceptions, lint, core/browser/edge drift+mode checks and strict types;1010 backend tests passed,0 failures/cancellations/skips; complete desktop/mobile UI smoke all good",
+    "backendDurationMs": 31839.528817,
+    "output": "artifact://131",
+    "sourceBinding": "The source commit containing this evidence binds the validated M6 implementation plus actual M3 consumer. Final review attestation will name its full hash separately."
+  },
+  "consumerProposals": [
+    "src/core/harnesses.ts bridge(name): resolve external OMP/Prime wrapper paths with runtimeResourcePath; descriptor callers and launch ordering unchanged",
+    "server.js resolveRefineConfig default mdPath only: use real unpacked shipped skill path; explicit user/env/settings paths untouched; no route registrations moved"
+  ],
+  "pendingAcceptance": [
+    "Three new exact-model reviewers must explicitly accept the final frozen source commit",
+    "Parent independent integration and acceptance; this evidence does not self-accept M6"
+  ],
+  "platformLimit": "Approved M6 acceptance requires actual Linux packaged runtime. No authorized macOS runner is assigned: macOS is unavailable/unverified, not inferred from Linux. Do not probe unrelated hosts."
+}

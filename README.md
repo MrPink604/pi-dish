@@ -131,6 +131,12 @@ Rules of thumb:
 
 There's also an Electron shell (`npm run electron:dev`) if you want it as a
 desktop app for some reason.
+Its entrypoint is authored in `electron/main.ts`; run `npm run build:edges`
+after changing it or the skill CLI sources. Runtime JavaScript is checked in,
+so ordinary installs and installed skill symlinks do not need a TypeScript loader.
+Packaging uses an explicit runtime manifest and real unpacked paths for external
+harnesses and native dependencies. See the [runtime build guide](docs/typescript.md#native-extensions-skill-clis-and-electron).
+
 
 ## Requirements
 

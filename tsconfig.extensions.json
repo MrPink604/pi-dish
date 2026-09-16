@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "files": [
+    "extensions/mood.ts",
+    "extensions/pi-dish-bridge/core.ts",
+    "extensions/pi-dish-bridge/index.ts",
+    "extensions/pi-dish-bridge/pi-private.ts",
+    "extensions/pi-dish-bridge-omp/index.ts",
+    "extensions/pi-dish-bridge-omp/native-state.ts",
+    "extensions/pi-dish-bridge-prime/index.ts",
+    "test/types/omp-host.d.ts",
+    "test/types/extensions.ts"
+  ]
+}

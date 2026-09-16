@@ -23,6 +23,7 @@ npm run test:browser  # isolated Playwright scenarios
 npm run test:ui    # full desktop/mobile browser smoke
 npm run build:core  # regenerate typed foundation CommonJS/declarations in lib/
 npm run build:browser # regenerate all first-party browser scripts in public/
+npm run build:edges   # regenerate skill CLIs, Electron and the OMP ESM share hook
 npm run build:vendor  # regenerate public/vendor/ from node_modules
 ```
 
@@ -54,6 +55,17 @@ Routines receive the checked coordinator's methods directly, but their JS
 scheduling/ledger implementation remains unchecked. The
 [lifecycle record](docs/session-lifecycle-migration.md) retains the asymmetric
 arrival-order matrix, compatibility limits and runtime evidence.
+
+Native extension `.ts` files are checked without emission by
+`tsconfig.extensions.json`; use real SDK/TUI/TypeBox types and unknown host-only
+imports with guards. `tsconfig.edges.json` emits sibling CommonJS/declarations
+for skills/Electron and ESM for the `.mts` share hook. `build:edges --check`
+is part of `npm run check`; generated CLI modes and first-line shebangs matter.
+`src/core/runtime-resources.ts` owns shipped external resource paths and the
+physical metadata-selected FFF import. Package metadata alone changes main to
+`electron/main.js`; root `server.js` still exports the listening HTTP server.
+Keep docs/assets/SDK archive paths separate from external harness/skill paths,
+and unpack the complete FFF native dependency closure, not just binary files.
 
 ## Committing
 
