@@ -1,0 +1,470 @@
+{
+  "milestone": "M5",
+  "status": "Owner verification complete; awaiting frozen exact-source three-model review and parent acceptance",
+  "acceptedBaseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
+  "branch": "migration/m5-transport",
+  "remoteProducerCommit": "57bed24194c0e251d18b58b02041309bf1534439",
+  "dependency": {
+    "owner": "M3",
+    "originalCommit": "d31b67bc6bfd1d5fc0e6f27820f5a65065813494",
+    "privateCopyCommit": "e9fc8096ab2928ac1e53789f40ef836ff04a9048",
+    "authorization": "Explicit parent approval for private development transfer; source/output bytes unchanged",
+    "contract": "ArtifactKind/FleetArtifactRecord/FleetArtifactListEntry/FleetArtifactStore"
+  },
+  "sourceOutputMap": [
+    {
+      "source": "src/core/remote-hosts.ts",
+      "runtime": "lib/remote-hosts.js",
+      "declaration": "lib/remote-hosts.d.ts",
+      "compiler": "tsconfig.core.json",
+      "build": "scripts/build-core.js"
+    },
+    {
+      "source": "src/core/terminal.ts",
+      "runtime": "lib/terminal.js",
+      "declaration": "lib/terminal.d.ts",
+      "compiler": "tsconfig.core.json",
+      "build": "scripts/build-core.js"
+    },
+    {
+      "source": "src/core/access-handlers.ts",
+      "runtime": "lib/access-handlers.js",
+      "declaration": "lib/access-handlers.d.ts",
+      "compiler": "tsconfig.core.json",
+      "build": "scripts/build-core.js"
+    },
+    {
+      "source": "src/core/relay-handlers.ts",
+      "runtime": "lib/relay-handlers.js",
+      "declaration": "lib/relay-handlers.d.ts",
+      "compiler": "tsconfig.core.json",
+      "build": "scripts/build-core.js"
+    },
+    {
+      "source": "src/core/terminal-handlers.ts",
+      "runtime": "lib/terminal-handlers.js",
+      "declaration": "lib/terminal-handlers.d.ts",
+      "compiler": "tsconfig.core.json",
+      "build": "scripts/build-core.js"
+    }
+  ],
+  "registrationInventory": [
+    {
+      "receiver": "app",
+      "method": "use",
+      "path": null,
+      "lines": [
+        87,
+        99
+      ],
+      "consumes": [
+        "app",
+        "compression"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "use",
+      "path": null,
+      "lines": [
+        104,
+        109
+      ],
+      "consumes": [
+        "app",
+        "parseJsonBody"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "use",
+      "path": null,
+      "lines": [
+        190,
+        201
+      ],
+      "consumes": [
+        "AUTH_TOKEN",
+        "allowedOrigins",
+        "app"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "use",
+      "path": "/api",
+      "lines": [
+        209,
+        216
+      ],
+      "consumes": [
+        "AUTH_TOKEN",
+        "HOST_PATH_RE",
+        "STREAM_PATH_RE",
+        "app",
+        "bearerToken",
+        "ticketValid",
+        "tokenMatches"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/host",
+      "lines": [
+        256,
+        263
+      ],
+      "consumes": [
+        "PKG_VERSION",
+        "app",
+        "hostCapabilities",
+        "hostIdentity",
+        "readDishSettings"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/auth/ticket",
+      "lines": [
+        265,
+        272
+      ],
+      "consumes": [
+        "AUTH_TOKEN",
+        "TICKET_PURPOSES",
+        "app",
+        "mintTicket"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "use",
+      "path": "/hosts",
+      "lines": [
+        298,
+        304
+      ],
+      "consumes": [
+        "AUTH_TOKEN",
+        "PROXY_STREAM_PATH_RE",
+        "app",
+        "bearerToken",
+        "ticketValid",
+        "tokenMatches"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "use",
+      "path": "/hosts/:name/api",
+      "lines": [
+        306,
+        312
+      ],
+      "consumes": [
+        "app",
+        "fleetArtifactHook",
+        "proxyToRemote",
+        "remoteHosts"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/fleet-artifacts",
+      "lines": [
+        491,
+        513
+      ],
+      "consumes": [
+        "app",
+        "findRemoteByHostId",
+        "fleetArtifactPayload",
+        "fleetArtifacts",
+        "hostIdentity"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/fleet-artifacts",
+      "lines": [
+        515,
+        522
+      ],
+      "consumes": [
+        "app",
+        "fleetArtifactPayload",
+        "fleetArtifacts"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "delete",
+      "path": "/api/fleet-artifacts/:token",
+      "lines": [
+        524,
+        528
+      ],
+      "consumes": [
+        "app",
+        "fleetArtifacts"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/hosts",
+      "lines": [
+        619,
+        652
+      ],
+      "consumes": [
+        "HOSTS_PROBE_DEADLINE_MS",
+        "PKG_VERSION",
+        "app",
+        "hostCapabilities",
+        "hostIdentity",
+        "readDishSettings",
+        "remoteHosts"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "use",
+      "path": "/api/comments",
+      "lines": [
+        2693,
+        2699
+      ],
+      "consumes": [
+        "app",
+        "fleetPageTokenFor",
+        "proxyCommentToOwner",
+        "remoteHosts"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "upgradeHandlers",
+      "method": "push",
+      "path": null,
+      "lines": [
+        5253,
+        5271
+      ],
+      "consumes": [
+        "PROXY_TERMINAL_PATH_RE",
+        "proxyUpgrade",
+        "remoteHosts",
+        "upgradeAuthorized",
+        "upgradeHandlers"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "upgradeHandlers",
+      "method": "push",
+      "path": null,
+      "lines": [
+        5322,
+        5375
+      ],
+      "consumes": [
+        "TERMINAL_PATH_RE",
+        "findSessionFile",
+        "getRPCSession",
+        "getRegisteredSession",
+        "locatePiPane",
+        "resolveSessionCwd",
+        "terminal",
+        "tmux",
+        "upgradeAuthorized",
+        "upgradeHandlers",
+        "wss"
+      ],
+      "owner": "M5"
+    }
+  ],
+  "rootProposal": {
+    "path": "server.js",
+    "scope": "Replace only M5 bodies with individual checked handlers at original positions; parent alone applies shared root integration",
+    "unchanged": [
+      "static middleware position",
+      "session lifecycle admission and all other domain routes",
+      "public main/share-only route mounts",
+      "upgrade dispatcher and listener ownership",
+      "peer upgrade before local terminal",
+      "SSH signal and close hooks",
+      "local terminal feature gate"
+    ]
+  },
+  "helperOwnership": {
+    "access-handlers": [
+      "readAuthToken",
+      "tokenMatches",
+      "bearerToken",
+      "mintTicket",
+      "ticketValid",
+      "allowedOrigins",
+      "hostDescriptor and capability projection",
+      "compression/parser bypass",
+      "upgradeAuthorized"
+    ],
+    "relay-handlers": [
+      "proxyToRemote",
+      "fleetArtifactHook",
+      "relayHookedJson",
+      "findRemoteByHostId",
+      "fleetArtifactPayload",
+      "PublicArtifactRelay.serve",
+      "fleetPageTokenFor",
+      "proxyCommentToOwner",
+      "proxyUpgrade",
+      "fleet descriptor mapping"
+    ],
+    "terminal-handlers": [
+      "local upgrade observation/attachment policy",
+      "terminal shutdown callback"
+    ],
+    "retainedNonM5": [
+      "publicUrlFor and local PAGE_COMMENTS_HEADER usage remain M3 publication bodies pending its cutover",
+      "readDishSettings/version/STT and usage-limit capability observations supplied by root",
+      "known-session/source/cwd/pane observations supplied by existing owners",
+      "root listener/startup/recovery/lifecycle bodies remain M7"
+    ]
+  },
+  "behaviorMatrix": {
+    "rawApi": "Hub bearer or stream-purpose ticket; bypass JSON/compression; original request bytes; peer bearer replaces caller bearer/origin; only small artifact JSON intercepted; 10s first-response deadline after request opens; traffic failure updates shared backoff",
+    "publicArtifacts": "Public local-first fallback; known token+kind+configured host only; public request header allowlist; peer credential attached; annotate-off header for share-only listener; separate10s first-response deadline; page asset404 never prunes root; slash404 checks bare document before prune/redirect",
+    "comments": "Authenticated local API after body parsing; query/body/target pageToken precedence; local-page existence wins; JSON reserialization only; separate10s deadline and64Ki-char response bound; no new raw-proxy backoff policy",
+    "upgrades": "Hub bearer/terminal ticket and origin gate; peer credential replacement; required upgrade framing; socket splice/head bytes/peer refusal status retained; peer dispatcher precedes local feature-gated terminal",
+    "terminal": "One PTY per session/mode;200Ki-character replay bound;15minute idle requires no clients and no output; restart carries sockets and per-message lookup follows replacement; real node-pty optional load; legacy malformed-percent and parsed-null failures preserved",
+    "remoteState": "HOME-qualified config/state; direct/SSH normalization and first-name wins; argv-only SSH private Unix forwarding; shared in-flight probes;2.5s probe deadline including cold SSH;64Ki-character descriptor bound;10s success TTL;3/4/8/16s backoff;30s sustained success reset"
+  },
+  "completedChecks": [
+    {
+      "command": "npm run check:source-policy",
+      "scope": "All five M5 source files currently authored",
+      "result": "201 governed compiler-owned sources; no explicit-any exceptions"
+    },
+    {
+      "command": "tsc --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --skipLibCheck --types node --declaration --outDir <temporary>/independent-core --rootDir src/core src/core/access-handlers.ts src/core/terminal-handlers.ts",
+      "result": "exit0; actual sources and transitive imports compiled without relay/store dependency"
+    },
+    {
+      "command": "env -i HOME=<temporary> ... node <temporary>/independent.cjs",
+      "result": "exit0; actual HTTP401/CORS/ticket, real WS/node-pty input and restart socket continuity passed; directly compiled independent owners, not root integration"
+    },
+    {
+      "command": "isolated /usr/bin/sshd -D -e -f <temporary>/sshd_config + env -i ... node <temporary>/ssh-probe.cjs",
+      "result": "exit0; actual installed SSH client/daemon, ephemeral host/user keys, explicit isolated -F config, real Unix forward, descriptor and peer credential replacement; no live SSH config/agent credentials"
+    },
+    {
+      "command": "npm run test:browser:install",
+      "result": "exit0; Playwright warned unsupported distro and used ubuntu24.04-x64 fallback"
+    },
+    {
+      "command": "npm run build:core",
+      "scope": "All M5 sources plus actual authorized M3 store",
+      "result": "exit0; compiler-generated checked-in JS and declarations"
+    },
+    {
+      "command": "npm run check && npm test",
+      "scope": "Full private M5 branch including root consumer proposal",
+      "result": "exit0;202 source-policy files, no exceptions; ESLint, core/browser drift, helper and checked-JS types;998/998 backend tests pass,0fail,0skip;32213.625045ms"
+    },
+    {
+      "command": "env -i PATH=/usr/bin:/bin HOME=<temporary> node <temporary>/smoke.cjs with supervised isolated sshd",
+      "scope": "Actual generated M5 owners reached through root server.js",
+      "result": "exit0; raw invalid-JSON HTTP byte bypass, direct and real SSH forwarding/reuse, credential replacement,0700 socket dir, CORS, fleet registration, public header allowlist, parsed comment relay, real PTY input/restart/reconnect replay, multi-use terminal tickets, WS-over-real-SSH splice, immediate identity SSE still live after10.5s,10s first-response deadline and instant cached failure, shutdown socket removal"
+    },
+    {
+      "command": "npm run test:browser -- host-discovery.spec.js host-polls.spec.js host-settings.spec.js terminal-ownership.spec.js",
+      "result": "15 passed in11.9s;2workers; no skips"
+    },
+    {
+      "command": "npm run test:ui",
+      "result": "exit0; all good; full desktop/mobile smoke including terminal, terminal async ownership, mobile terminal, multi-host and same-id sessions across hosts"
+    }
+  ],
+  "runtime": {
+    "node": "26.8.2",
+    "npm": "12.0.2",
+    "typescript": "7.0.2",
+    "tmux": "3.7c",
+    "ssh": "OpenSSH_10.5p1; OpenSSL3.6.4"
+  },
+  "implementationWorkers": [
+    {
+      "session": "01a0a99a-23ab-7160-a0e5-9018049363ef",
+      "model": "openai-codex/gpt-6-astra",
+      "thinking": "high",
+      "verification": "semantic CLI resolve",
+      "scope": "remote-hosts.ts"
+    },
+    {
+      "session": "01a0a99a-1f1b-741a-aac3-5a30bbada46b",
+      "model": "openai-codex/gpt-6-astra",
+      "thinking": "high",
+      "verification": "semantic CLI resolve",
+      "scope": "terminal.ts and terminal-handlers.ts"
+    }
+  ],
+  "retainedBoundaries": [
+    "Opaque network/parsed request bodies remain unknown until consumed",
+    "External truthy transportCode passthrough remains unknown; no new short-code sanitization policy",
+    "M3 artifact ownership is an actual checked dependency, not reimplemented here",
+    "Root observation wiring remains unchecked until M7; this is not whole-server checking",
+    "No R5 transport mechanics unification or R7 startup redesign"
+  ],
+  "remainingGates": [
+    "Exact final source freeze and three new exact-model reviews",
+    "Independent parent integration and exact integrated CI acceptance"
+  ],
+  "smokeScriptSha256": "a9e24ff8ad3eb239bb3896ff6297255f526e988c9c745d9969dbbd5286002305",
+  "deletionMoveLedger": {
+    "movedImplementations": [
+      "Authored lib/remote-hosts.js -> src/core/remote-hosts.ts with generated runtime at same path",
+      "Authored lib/terminal.js -> src/core/terminal.ts with generated runtime at same path",
+      "M5 access/proxy/public fallback/comment relay/upgrade bodies from root -> three flat checked handler modules"
+    ],
+    "removedOwners": [
+      "Original root M5 handler/helper bodies; no duplicate policy-bearing adapters remain"
+    ],
+    "algorithmDeletion": [],
+    "runtimeCompatibilityShims": [],
+    "simplificationClaim": "None. This is source/compiler/caller migration, not R5 or R7."
+  },
+  "intentionalLimits": [
+    "No native-harness/SDK/CLI/Electron implementation changed; those runtime acceptance gates belong to M1/M6, not claimed here",
+    "Browser source/output unchanged;15host/terminal browser scenarios and full desktop/mobile browser smoke passed",
+    "No main merge, global acceptance ledger edit or milestone acceptance by owner",
+    "Only actual maintained declaration providers; no explicit-any or suppression exceptions",
+    "Existing legacy malformed-percent upgrade and JSON-null terminal-frame failures preserved rather than silently fixed"
+  ],
+  "policyEnrollment": "All five M5 sources and actual M3 dependency automatically enrolled by existing src/core root and tsconfig.core glob;202 governed sources, no config change or exception needed.",
+  "sourceSha256": {
+    "server.js": "2edfb87acf9f5227003666a871951afa09e8b19c2d5da3cb3e3ad9bbc9ecc15e",
+    "src/core/remote-hosts.ts": "c78b913fec0602bbcad9f708744072b7edcc72b359d5c31f11717206da808e5e",
+    "src/core/terminal.ts": "9e9a78e0c265af2a5f91a8d4ca49d7cf8e2f04f6a97dd44cca64bb7144386d0a",
+    "src/core/access-handlers.ts": "1cb66aeef1d2d769d6228066907d0f3cf0011272eee07e265a40e876f5d192c3",
+    "src/core/relay-handlers.ts": "c3d8afc75b7122cd620a5a1a78f8e6f4e96479a143ab5e64b27ab45030f30a6f",
+    "src/core/terminal-handlers.ts": "22abd75176062d6f977e902876ad58156df48107c3de2aae7aaa2e0abe1dfe41"
+  },
+  "cleanup": "Throwaway producer snapshot removed; smoke processes exited0 and SSH daemon stopped; temporary HOME, keys, configs, scripts and independent compiler outputs removed after capturing results. No live user sessions/configuration used."
+}
