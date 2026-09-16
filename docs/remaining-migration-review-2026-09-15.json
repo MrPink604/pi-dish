@@ -1,0 +1,498 @@
+{
+  "kind": "remaining-migration-plan-critique",
+  "date": "2026-09-15",
+  "baselineCommit": "c46e7c5798d6a678dbb2a5f13ac2603f7f2a9952",
+  "plan": "docs/remaining-migration-plan.md",
+  "status": "ready after independent critique and recheck; implementation not started",
+  "scopeWorkers": [
+    {
+      "area": "read-pipeline",
+      "actualModel": "openai-codex/gpt-6-astra",
+      "sessionId": "01a0a92c-4ee9-778d-a4e0-6e1e2c9ef02c",
+      "finalReportSha256": "cfbbfde4cf4242f57712034ebaf4a9ef9fad0499a73f9281036c533a0f82c8b3"
+    },
+    {
+      "area": "application-structure",
+      "actualModel": "openai-codex/gpt-6-astra",
+      "sessionId": "01a0a92c-4ed7-71b2-9899-e8882a5895a6",
+      "finalReportSha256": "f503cd0e29ddc648d444f53a811fae9b912eb1adf61f93cea4394c728659c88d"
+    },
+    {
+      "area": "feature-domains",
+      "actualModel": "openai-codex/gpt-6-astra",
+      "sessionId": "01a0a92c-4ed5-7726-8d24-1c5dc58b5d5f",
+      "finalReportSha256": "5a855f2b3eb69b00321359fd9c77f49edd5958f939867ba61aba48cdee8c3dea"
+    },
+    {
+      "area": "runtime-closure",
+      "actualModel": "openai-codex/gpt-6-astra",
+      "sessionId": "01a0a92c-4ed4-76e2-8ea0-072408c37c36",
+      "finalReportSha256": "b3fcd1303dc023181ebeec547043adfdcfe98b46065107ca1618b5d270e1e676"
+    }
+  ],
+  "execution": {
+    "harness": "OMP 18.1.21 noninteractive workers",
+    "reasoning": "high",
+    "tools": [
+      "read",
+      "grep",
+      "glob"
+    ],
+    "repositoryEditsByWorkers": false,
+    "implementationChecksRunByWorkers": false,
+    "identityVerification": "Actual provider/model read from terminal assistant message; exact requested models matched."
+  },
+  "documents": {
+    "initialReviewSha256": "9a7de3f63f250ca38e55f30fe1a9cf98995b65ab4e2888fbbf203f96e46a0efa",
+    "recheckSha256": "9ff288ccb9d96cd6282e9831d970b044bf7d081fa8daeb83753ccd2f60802518",
+    "finalPlanSha256": "fa1165743f232a3eb903c30c52eaa4e11cf08efe65f6b99d32a38eeb7bbecf39",
+    "postRecheckChanges": [
+      "KR1 same-object server replay-state clarification with baseline source correction",
+      "DR1 M0 target mapping versus M7 actual root-launcher cutover",
+      "DR2 real mood SDK/TUI/TypeBox declaration providers and source correction",
+      "Review attestation and link updates; no third independent review of final bytes claimed"
+    ]
+  },
+  "initialCritiques": [
+    {
+      "requestedModel": "kimi-code/k3",
+      "actualModel": "kimi-code/k3",
+      "sessionId": "01a0a937-a948-708f-afe2-07a9e7a3fca7",
+      "reviewedSha256": "9a7de3f63f250ca38e55f30fe1a9cf98995b65ab4e2888fbbf203f96e46a0efa",
+      "report": {
+        "verdict": "revise",
+        "summary": "Plan is well-grounded: the 30-file JS inventory, 7 extension TS files, 9 scripts, and every sampled refactor premise (R2 double store read, R4 route-owned diff snapshots plus escapeHtml/COMMAND_PATH_RE duplicates, R8's seven closeOtherViews lists, R10's ignored-host closure, R11's helper-refs vs pi-dish-client copies, R12's handwritten __mods/__cache/__req loader with pinned esbuild, R7's 300 ms delay and PORT||3333 guessing) all verified in source. Delivery constraints are concrete (Express 4 pinned, electron-builder files list confirmed to omit skills/extensions/docs and honestly scoped as a risk). Two important ambiguities remain: R6a never states which side of the server↔bridge socket the single replay reducer lives on or how the losing side's reconnect replay survives, and R1 does not distinguish disk-ingress checked* call sites from trusted inter-module edges. Both are resolvable at package freeze but should be resolved in the plan text since they can hide behavior changes.",
+        "findings": [
+          {
+            "id": "K1",
+            "severity": "important",
+            "section": "R6a — Single extension replay writer",
+            "problem": "The plan deletes both the server-side reduction and names Bridge `_handle` as its duplicate, but never states where the surviving 'session-owned replay reducer at Bridge/RPC ingress' lives relative to the socket, nor how the other replay path keeps working. The two existing reducers serve different reconnect targets: server-side sess.extUIState replays widgets/statuses/dialogs to newly connected browser SSE clients, while the harness-side bridge uiState replays to a reconnecting pi-dish server socket. A single writer on one side cannot serve the other side's reconnect without an explicit cross-socket mechanism, and 'one replay-map writer' as the only proof could silently drop one replay path (e.g. SSE replay for a session whose bridge process is gone). Separately, no `_handle` symbol exists in the bridge; the reduction is inline in the RPC request handler, so the plan names a nonexistent seam.",
+            "evidence": [
+              "server.js:743-746 trackExtUIState builds sess.extUIState {widgets,statuses,dialogs}; server.js:5022-5030 SSE connect replays from sess.extUIState",
+              "extensions/pi-dish-bridge/core.ts:872-877 bridge-side uiState; 990-1011 inline setWidget/setStatus reduction (no `_handle` symbol; only handleClient at 1566 and handleCommand at 1911); 1159-1167 replayExtensionUI(sock) serves newly connected server sockets"
+            ],
+            "requiredChange": "State explicitly which side owns the surviving reducer, which of the two reconnect replay paths (browser SSE vs server socket reconnect) it serves, and the mechanism preserving the other path — or record a separately approved behavior change. Correct the `_handle` reference to the actual handler."
+          },
+          {
+            "id": "K2",
+            "severity": "important",
+            "section": "R1 — checked* pass removal",
+            "problem": "R1 removes checkedEntries/Search/Usage/Skills 'once typed producers guarantee their outputs' and scopes removal to 'trusted local projection edges', but parseSessionEntries(content) consumes whole session-JSONL file content read from disk — a disk-ingress edge, not a trusted inter-module edge. checkedUsage additionally deep-decodes the usage projection before it is persisted into index snapshots. The plan does not classify which checked* call sites sit on disk-derived data versus genuinely trusted typed-producer outputs, so the cutover could drop the only runtime rejection between malformed/novel on-disk entries and persisted projections while claiming 'disk/network decoding remains'.",
+            "evidence": [
+              "src/core/session-index.ts:70 checkedEntries(fileHelpers.parseSessionEntries(content)) wraps a full-file disk parse; 76-78 checkedUsage guards build/extendIndexedUsageFromEntries before meta persistence",
+              "src/core/session-index-data.ts:68-75 checkedEntries validates arrayness/framing; 76-79 checkedUsage deep-decodes via decodeUsage and throws 'Invalid usage projection'",
+              "M1 acceptance promises 'malformed persisted snapshots remain rejectable' but that covers snapshot load, not the live disk-parse-to-persist path"
+            ],
+            "requiredChange": "Enumerate each checked* call site as disk-ingress or trusted-edge in the R1 contract; for disk-derived sites state what runtime validation (if any) survives removal and why the parser's own malformed-line tolerance is sufficient, or keep the wrapper there and credit only the trusted-edge removals."
+          },
+          {
+            "id": "K3",
+            "severity": "minor",
+            "section": "R5 dependency labeling",
+            "problem": "R5 is labeled 'After: M3/M5', but the duplicated first-response timer/settlement mechanics it merges live in server.js (M7 territory), not in M3/M5 files. Harmless because Phase R starts after the full product gate, but the per-package label understates the real dependency and could invite scheduling against a half-migrated server.",
+            "evidence": [
+              "server.js:314-370 proxyToRemote first-byte timer/settlement; 447+ relayHookedJson; 2704 proxyCommentToOwner; serveFleetArtifact public relay — all in server.js, which M7 owns",
+              "Plan Phase R header: 'Start after the product migration gate' contradicts the narrower per-package 'After: M3/M5' label"
+            ],
+            "requiredChange": "Label R5 'After: M3/M5/M7 relay-route migration' or note that the Phase-R gate already implies M7."
+          }
+        ],
+        "strengths": [
+          "Inventory verified exact: 23 authored lib JS + server.js + pi-dish-client.js + 3 skill CLIs + electron/main.js + share-omp.mjs = 30 product JS; 106+42+7=155 TS; 9 authored scripts; all assigned to exactly one package",
+          "Refactor premises independently confirmed in code: updateRoutine/deleteRoutine double readRoutines (lib/routines.js:179-181, 227-230); route-owned diffSnapshots mutation (server.js:4512-4514); duplicate escapeHtml (lib/file-page.js:7 vs src/core/helper-format.ts:1); mirrored COMMAND_PATH_RE (lib/file-mention.js:33, lib/skill-mining.js:37); seven closeOtherViews peer lists in app.ts; createSessionApi per-mutation with ignored _host (session-controls.ts:32); helper-refs.ts aliases/short/stable functions duplicated in pi-dish-client.js:326-404",
+          "Delivery targets concrete and verified: Express ^4.18.2 pinned (plan correctly says Express 4 declarations), esbuild 0.28.1 pinned for R12, electron-builder files list confirmed to omit skills/extensions/docs — scoped by M6c as a risk to verify rather than silently expanded",
+          "Electron/server contract accurately captured: module.exports = server (server.js:5380), electron/main.js requires it and guesses PORT||3333 with setTimeout(createWindow,300) — exactly what R7 targets",
+          "Honest gap admissions: absent mood/share-hook direct coverage named in M6a; unproven atomicity concerns excluded from mandatory scope; byte counts explicitly disclaimed as effort/performance evidence"
+        ],
+        "deferredRisks": [
+          "Baseline byte counts (549,637 JS; 1,632,779 TS; 49.5% backend) and test counts (996/286) not recomputed by this review; consistent with BACKLOG.md but taken on trust",
+          "R3's one-set-per-mapped-record proof relies on a throwaway work-count probe that does not exist yet; the overlapping-range counting claim is plausible but unverified against skills.js",
+          "R10's endpoint-explicit mutation design assumes no caller depends on the per-mutation closure's host substitution; only the session-controls.ts:32 site was inspected",
+          "R6b's 'validate both aligned cancellation arrays before mutating either' was not traced into pi-private.ts; cancellation-array alignment semantics unverified",
+          "macOS Electron packaging and the M6c resource-omission question remain open by design; plan correctly forbids inferring support from Linux evidence"
+        ]
+      }
+    },
+    {
+      "requestedModel": "zai/glm-5.3",
+      "actualModel": "zai/glm-5.3",
+      "sessionId": "01a0a937-a94a-7647-a873-74e37ce2541d",
+      "reviewedSha256": "9a7de3f63f250ca38e55f30fe1a9cf98995b65ab4e2888fbbf203f96e46a0efa",
+      "report": {
+        "verdict": "revise",
+        "summary": "The plan is exceptionally well-grounded: the remaining inventory is complete and arithmetically exact (all 30 authored product JS files verified present and uniquely assigned across M1–M7; 42 core + 106 browser + 7 extension TS files confirmed; nine scripts confirmed), the three phases are distinct and finite with explicit deletion ledgers and a deliberate-exclusions list, and every refactor premise I spot-checked matches real code with exact line evidence. No contradictions found between phases, invariants, and dependency waves. One important gap at the M0 freeze gate — the Express/compression/ws declaration strategy is ambiguous in a way that could make M7's 'checked handlers' nominal — plus two minor decision-recording gaps; all three are textual fixes, not structural revisions.",
+        "findings": [
+          {
+            "id": "G1",
+            "severity": "important",
+            "section": "M0 — Freeze delivery, contracts and coverage inventory",
+            "problem": "The typing mechanism for the entire HTTP surface is left ambiguous at the contract-freeze gate everything else inherits. 'Add compatible Express 4, compression and ws declarations for their actual implementations; use the real node-pty/Electron/package declarations' contrasts hand-maintained declarations for express/compression/ws against 'real' declarations for node-pty/Electron, implying a hand-authored Express facade. M7 moves all ~5,400 lines of routes into checked code against this facade; a hand-rolled Express 4 surface (middleware augmentation, req/res extensions, express.json limits) is a large, drift-prone replacement for the battle-tested pinned @types/express@4, and any gap in it pressures exactly the 'no any' workaround the plan bans. The risk that a hand-written facade is vacuous or ballooning is unproven, but the ambiguity itself is proven and M0 exists to freeze exactly this decision.",
+            "evidence": [
+              "Plan M0: 'Add compatible Express **4**, compression and `ws` declarations for their actual implementations; use the real node-pty/Electron/package declarations.'",
+              "package.json:63-69 pins express ^4.18.2, compression ^1.8.1, ws ^8.21.0 — all have maintained major-matched @types",
+              "Plan invariant: 'No `any`/`@ts-nocheck`/unchecked handwritten declaration workaround to make implementation coverage appear complete.'",
+              "M7 acceptance: 'every baseline server handler has a checked implementation' — meaningfulness depends on this facade"
+            ],
+            "requiredChange": "In M0, state the decision rule with rationale: pin real major-matched @types (express@4, compression, ws) where they match the installed versions, and hand-write only the narrow residual surfaces no accurate @types express (with the existing consumer/type-fixture gate applying to those). Record it in the frozen source/output map so all M1–M7 workers inherit one answer."
+          },
+          {
+            "id": "G2",
+            "severity": "minor",
+            "section": "M0 — Freeze delivery, contracts and coverage inventory",
+            "problem": "Placing the whole Node-only server application at src/core/server-app.ts erodes the documented 'portable shared foundation' boundary of src/core without recording which compiler program owns the new non-portable files. It is mechanically safe today (tsconfig.helpers.json includes only src/core/helper-*.ts, so server-app.ts cannot silently enter the portability check), but docs/typescript.md describes src/core as the shared portable foundation, and M0's freeze should pin the program membership (core build vs helpers portability vs server target) per new file so later additions cannot drift into the wrong program or let 'checked in src/core' be cited as portability evidence.",
+            "evidence": [
+              "Plan M0: 'The planned server target is a checked `src/core/server-app.ts` implementation plus a minimal generated root `server.js` launcher' and 'Keep the flat `src/core/* -> lib/*` compiler convention.'",
+              "tsconfig.helpers.json: '\"include\": [\"src/core/helper-*.ts\"]' with noEmit — portability program is filename-scoped today",
+              "docs/typescript.md: 'Shared runtime helpers live in `src/core/helper-*.ts`' and the foundation table describes src/core as the shared typed foundation"
+            ],
+            "requiredChange": "Add to M0's recorded compiler-owned source/output map: each new src/core file is listed with its owning program(s), explicitly noting that server-app.ts and other Node-only application sources are excluded from tsconfig.helpers.json portability checking, and that the 'portable foundation' documentation is updated when they land (not deferred solely to C2)."
+          },
+          {
+            "id": "G3",
+            "severity": "minor",
+            "section": "C1 — Checked tests, fixtures, development tools and configurations",
+            "problem": "Two authored executable root JS files fall outside both the 30-file product inventory and C1's enumerated conversion families. C1's title says 'configurations' but its body and acceptance enumerate only 'the nine authored scripts, Node tests, Playwright tests, UI scenarios and support implementations'; eslint.config.js and playwright.config.js are named by neither, so they can remain unclassified until the C2 audit catches them at the very end of the program.",
+            "evidence": [
+              "Root glob: server.js, eslint.config.js, playwright.config.js (only server.js is in the M1–M7 inventory)",
+              "Plan C1 body: 'Convert the nine authored scripts, Node tests, Playwright tests, UI scenarios and support implementations in bounded families.' — no mention of root config files (scripts/ count of nine verified correct)",
+              "Plan C2: 'Every tracked repository-owned executable JS/MJS/CJS/TS path must belong to one compiler-owned implementation, generated-output mapping, or named justified exception.' — catches them only at final audit"
+            ],
+            "requiredChange": "Name eslint.config.js and playwright.config.js explicitly in C1's conversion families (as converted sources or as named strict-checkJs exceptions with rationale, per C1's own config-exception rule), so their disposition is decided with the rest of C1 rather than discovered by C2."
+          }
+        ],
+        "strengths": [
+          "Inventory is complete and exact: all 30 authored product JS files verified present (23 authored lib JS + server.js + skills/lib/pi-dish-client.js + 3 skill CLIs + electron/main.js + extensions/pi-dish-share-omp.mjs) and uniquely assigned; package counts sum 6+4+8+3+2+6+1=30; 42 src/core TS, 106 src/browser TS, 7 extension TS, 9 scripts all match the plan's figures",
+          "Every refactor premise checked matches real code, with deletions not wrappers: routines.js:179-181/227-230 double store read; server.js:1712-1831 coveredLines rebuilt per section; three near-identical settled+first-byte-timer relays at server.js:314-349, 559-573, 2713-2727; seven distinct closeOtherViews lists in app.ts:659-1115; per-mutation createSessionApi in session-controls.ts:32; skill-mining.js:35-37 explicitly mirrors file-mention.js's COMMAND_PATH_RE; file-page.js:7 local escapeHtml; duplicate session-data regex/base64/JSON decode at server.js:2524-2528 vs omp-export.js:17-28; pi-dish-client.js:309-404 copies of helper-refs.ts's alias/staged/stable/short algorithms; server.js:743 trackExtUIState vs bridge core.ts uiState reductions; electron/main.js:47 setTimeout(createWindow, 300) plus server.js:5172-5196 EADDRNOTAVAIL replacement-listener reassignment; duplicated retirement sequence in session-view.ts:31-56 vs 116-138",
+          "Three phases are genuinely distinct and finite: M ends with a per-file reconciliation gate ('Reconcile the inventory, including files added during implementation'), R packages each name an established problem, replacement owner and deletion/behavior proof, and the 'Deliberate limits' section blocks speculative rewrites the evidence does not support",
+          "Boundary invariants are preserved concretely, not rhetorically: raw OMP native export kept off the lossy display parser, distinct 8 KiB/16 KiB/64 KiB read bounds, Pi-private adapter split (R6b) with aligned-array validation, captured selection owners verified live in session-view.ts:136-138, recovery-before-reconciliation verified in server.js onMainListening",
+          "Gates are observable and proportional: every named suite exists in test/ (session-files, session-index, harness-pricing, skill-mining, session-refs, omp-export, fleet-artifacts, file-mention, git-diff, remote-hosts, host-auth, terminal, cron, routines, routines-api, session-provenance, skills-core/cli, comments-cli, session-control-cli, skill-sessions-fleet, stt, omp-web-pilot), and new smoke is added only where coverage is genuinely absent (mood/share-hook)",
+          "Measurement discipline is honest: four separate measures, the GitHub language bar explicitly not a gate, and the Electron packaging risk correctly framed as verify-first — I confirmed it is real (electron-builder files list packages only server.js, lib/**, public/**, electron/** while src/core/harnesses.ts:9-10 resolves bridge extensions from the repo root, and skills/docs are absent too)"
+        ],
+        "deferredRisks": [
+          "Stale-stat/short-read index publication corruption remains unproven; the plan correctly mandates exercising the consumed-byte/stamp invariant in M1's malformed/append/truncate matrix rather than a speculative transactional rewrite",
+          "Electron packaged-resource omissions are a confirmed packaging-list risk but an unproven runtime defect; M6c's inspect-and-launch-an-actual-Linux-package gate is the right resolution point",
+          "Baseline claims (996 backend tests, 286 browser cases, five green CI jobs on c46e7c5) were not independently verifiable in this read-only review; they are stated as starting-point descriptions, not gates",
+          "The cost/quality outcome of whichever Express declaration strategy M0 picks (G1) is unknowable until implemented; the consumer/type-fixture gate is the backstop",
+          "macOS packaging remains explicitly unclaimed, which is correct given Linux-only evidence"
+        ]
+      }
+    },
+    {
+      "requestedModel": "opencode-go/deepseek-v4.1-flash",
+      "actualModel": "opencode-go/deepseek-v4.1-flash",
+      "sessionId": "01a0a937-a948-7132-9c5b-3146291c2041",
+      "reviewedSha256": "9a7de3f63f250ca38e55f30fe1a9cf98995b65ab4e2888fbbf203f96e46a0efa",
+      "report": {
+        "verdict": "revise",
+        "summary": "The plan is unusually well-grounded: I independently reproduced its headline measurements from the working tree (42 src/core TS files ≈ 447 KB; authored lib 217.9 KB + server.js 238.6 KB → 49.49% backend TS, matching the stated 49.5%; 23 authored lib JS + server.js + 6 edge implementations = 30 files ≈ 536.8 KB ≈ the stated 549,637 bytes; 106 browser + 42 core + 7 extension TS = 155), and every one of the twelve refactors I spot-checked maps to the exact duplicated responsibility it claims to delete (routines rereads, per-section coveredLines, checked* projection wrappers, tolerant mining loop, duplicate omp-export decoder, seven closeOtherViews peer lists, per-mutation createSessionApi, vendor __mods/__cache/__req loader, serverCloseHooks + Electron 300 ms, four relay timer/settle sites, file-page escapeHtml, skill-client ref copies). Migration, simplification and repository closure are genuinely separate, finite and gated, and the invariants preserve authority/framing/wire boundaries rather than relaxing them. It is not yet ready to start M6/integration work: three gates assert outcomes the repository cannot currently evaluate (no `any` enforcement path, no typed source for OMP/Prime host-only surfaces, no stated rule for where edge TS sits relative to packaged/installed trees), plus four smaller specification gaps. All are clarifications that can be resolved inside M0; none invalidate the plan's structure.",
+        "findings": [
+          {
+            "id": "D1",
+            "severity": "important",
+            "section": "Invariants and scope limits / M6a acceptance",
+            "problem": "The plan bans `any`/`@ts-nocheck`/unchecked declaration workarounds and requires M6a files to be 'checked by CI, not just transpiled', but nothing in the repository can reject explicit `any`. Strict `tsc` accepts it, and the lint config only loads JS: eslint.config.js:26 lints `files: ['**/*.js','**/*.cjs','**/*.mjs']` with espree (no TS parser), and package.json devDependencies contains no typescript-eslint. Extension sources that M6a must check already carry broad `any` over host objects (extensions/pi-dish-bridge/core.ts:663 `handler: async (_args: string, ctx: any)`, core.ts:872-877 `new Map<string, any>()` for uiState widgets/statuses/title/editorText), so the gate is unobservable today.",
+            "evidence": [
+              "eslint.config.js:26 `files: ['**/*.js', '**/*.cjs', '**/*.mjs'], languageOptions: { ecmaVersion: 'latest', sourceType: 'commonjs', ... }` (parsed by espree, imported at eslint.config.js:2)",
+              "package.json devDependencies (eslint 10.10.0, espree, globals) — no @typescript-eslint parser/plugin",
+              "extensions/pi-dish-bridge/core.ts:663 `handler: async (_args: string, ctx: any) => { stashCommandCtx(ctx); }`; core.ts:872-877 `const uiState = { widgets: new Map<string, any>(), statuses: new Map<string, any>(), title: null as any, editorText: null as any }`",
+              "plan M6a: 'every listed implementation checked by CI, not just transpiled'; invariant: 'No `any`/`@ts-nocheck`/unchecked handwritten declaration workaround to make implementation coverage appear complete'"
+            ],
+            "requiredChange": "Name the enforcement mechanism for the `any`/`@ts-nocheck` invariant (a TS-aware lint rule, or a checked scan gate counting explicit `any`/`@ts-expect-error` in migrated paths), and state whether pre-existing `any` on harness-owned objects must be replaced by `unknown` plus structural narrowing — the pattern already used at extensions/pi-dish-bridge-omp/native-state.ts:9-17 (`type HostSession = Record<PropertyKey, unknown>`, guarded constructors, `readProjection`) — or listed as named exceptions."
+          },
+          {
+            "id": "D2",
+            "severity": "important",
+            "section": "M6a Extensions / M0 compiler mappings",
+            "problem": "M6a requires strict checking of the bridge core/wrapper/private/native files against 'actual Pi SDK types' while forbidding an 'ambient SDK facsimile', but only the Pi packages are installed dependencies; the OMP and Prime entrypoints deliberately reach host-only surfaces that no installed typings describe, and their specifier must remain a literal for the host loader rewrite. The plan never names the concrete typed source or narrowing rule for those surfaces, so the acceptance criterion is either unreachable or will be met with the very facsimile it bans.",
+            "evidence": [
+              "package.json dependencies list only @earendil-works/pi-coding-agent ^0.85.1 and @earendil-works/pi-server ^0.85.0 for harness types (plus node-pty, ws, express, etc.)",
+              "extensions/pi-dish-bridge-omp/native-state.ts:148-156: comment that the specifier 'MUST be a string literal' because OMP rewrites literal bare pi-package specifiers, followed by `const host: unknown = await import(\"@oh-my-pi/pi-coding-agent\")` guarded by `isHostConstructor`",
+              "test/fixtures/fake-session-switch-host.ts:3-4 imports `../../extensions/pi-dish-bridge/core.js` and `../../extensions/pi-dish-bridge-omp/index.ts`, so whatever program checks M6a must also cover that edge",
+              "plan M6a: 'Alternate host-only capabilities remain explicitly narrowed; no ambient SDK facsimile or broad `any` pretending to check OMP internals'"
+            ],
+            "requiredChange": "State the single allowed mechanism for host-only surfaces (e.g. owned structural narrowing with `unknown` at the import boundary, or a named minimal declaration module listing only consumed host members) and which of them the OMP/Prime entrypoints use, so M6a's checking gate has a defined, reviewable outcome."
+          },
+          {
+            "id": "D3",
+            "severity": "important",
+            "section": "M0 delivery freeze / M6c Electron",
+            "problem": "M0 permits edge TS sources to sit beside native extension/skill/Electron entrypoints and to emit JS to those existing installed paths, but the plan does not state the consequence for the packaged and installed surfaces. electron-builder's `files` includes `electron/**/*`, which matches an added `electron/main.ts`, and install.sh symlinks every `extensions/*` and `skills/*` directory into the harness homes, so added sources/built JS land in shipped and installed trees. Whether electron-builder ships `.ts` under an explicit glob is unproven here (no build was run); the plan only names the converse packaging risk (missing resources).",
+            "evidence": [
+              "package.json build.files: [\"server.js\",\"lib/**/*\",\"public/**/*\",\"electron/**/*\"]",
+              "install.sh: `link_path \"$root/extensions/pi-dish-bridge\" \"$pi_agent_dir/extensions/pi-dish-bridge\"` (and bridge-omp/bridge-prime) plus `for skill in \"$root\"/skills/*`",
+              "plan M0: 'Edge TS sources may sit beside their native extension/skill/Electron entrypoints ... Emit skill and Electron JS to their existing installed paths'",
+              "plan M6c: 'current file lists omit some extension/skill/docs resources referenced from checkout runtime. That is a packaging risk to verify'"
+            ],
+            "requiredChange": "M0/M6c must name the packaging and install-surface updates that accompany edge sources (adjusted `files`/ignore rules, or keeping sources outside packaged trees) and assert the resulting file list in the Linux package smoke; explicitly record whether a packaged app must start without extensions/skills/docs resources, since that is a product decision, not a verification detail."
+          },
+          {
+            "id": "D4",
+            "severity": "minor",
+            "section": "M0 freeze (server target and launcher)",
+            "problem": "The plan keeps the flat `src/core/* -> lib/*` convention and simultaneously requires 'a minimal generated root `server.js` launcher', but no source→root-output mapping or drift rule is defined for the launcher, while `server.js` remains `package.json` main and is module-required and child-spawned by tests and Electron. Without naming the launcher's source (or declaring it hand-written checked JS), the M0 acceptance 'extend output drift/orphan checks' has no defined target.",
+            "evidence": [
+              "tsconfig.core.json: rootDir src/core, outDir lib, include src/core/**/*.ts",
+              "tsconfig.check.json `files: [\"lib/cron.js\", \"test/types/core.ts\"]` — the only checkJs program; docs/typescript.md: 'Keep sources directly in src/core/; nested output is explicitly rejected before any generated files are replaced'",
+              "package.json `\"main\": \"server.js\"`, `\"start\": \"node server.js\"`; test/server.test.js:207 `const server = require('../server.js')`; test/ui-smoke.js:554-556 requires server.js and reads `.listening`/`.address().port`; electron/main.js `startServer()` requires `../server.js`"
+            ],
+            "requiredChange": "Name the launcher's checked source and its compiler mapping plus drift rule, or state that the launcher stays hand-written JavaScript and is covered by the existing checkJs program; add it to the M0 freeze list."
+          },
+          {
+            "id": "D5",
+            "severity": "minor",
+            "section": "Invariants vs R9 scope",
+            "problem": "The invariant states 'Do not derive public ports from a concrete factory's `ReturnType`', but R9 removes that pattern only in session view and message stream, and several browser modules keep it. As written the invariant reads as a repository-wide standard the plan neither intends nor can verify, so reviewers cannot tell a violation from an accepted exception.",
+            "evidence": [
+              "plan invariant: 'Named interfaces belong to the owner of a boundary. Do not derive public ports from a concrete factory's `ReturnType`, create alias chains for old names...'",
+              "plan R9: 'Replace whole-controller factory-return inputs in session view and message stream with owner-defined consumed-method interfaces'",
+              "src/browser/new-session.ts:46-47 `models: ReturnType<typeof createModelCatalog>;`; src/browser/routines-view.ts:23-25 `autocomplete: (options: ...) => ReturnType<typeof createCwdAutocomplete>`; src/browser/session-view.ts:10-14 imports `type { createSessionResume }` and uses factory-return ports"
+            ],
+            "requiredChange": "Scope the rule to newly introduced or renegotiated ports, or list the retained factory-`ReturnType` ports as accepted exceptions so the invariant is checkable during M/R review."
+          },
+          {
+            "id": "D6",
+            "severity": "minor",
+            "section": "Package and review contract / C2 final gate",
+            "problem": "The plan enumerates what each completion record must contain and makes 'all R deletion ledgers met' a completion gate, but it never names where records live, in what form, or who confirms them. Existing repository convention is a stage document linked from BACKLOG/docs, so as written the per-package evidence is not auditable and the Phase R deletion criterion is unverifiable.",
+            "evidence": [
+              "plan: 'Every package below is an implementation/review unit... Each completion record must contain: 1. Actual source and consumer cutover... 5. Explicit remaining unchecked or opaque boundaries'",
+              "plan C2 final gate: 'all R deletion ledgers met'",
+              "existing convention: docs/typescript.md 'Ordered migration stages' listing browser-contract-cleanup.md, shared-runtime-helpers.md, session-lifecycle-migration.md; BACKLOG.md 'Ordered next work' linking docs/remaining-migration-plan.md"
+            ],
+            "requiredChange": "Require a named record path per package (e.g. docs/<package>.md), a BACKLOG status update, and the reviewer/approver of the record; make the deletion ledger an artifact of that record rather than a referenced but undefined object."
+          },
+          {
+            "id": "D7",
+            "severity": "minor",
+            "section": "Dependency waves / M1–M5 vs M7",
+            "problem": "M1–M5 each own 'response production' for their feature, but that production currently lives inside one 5,380-line, 238.6 KB server.js, while M7 exclusively owns server composition and is described as serializing server edits. The plan does not say where those response-production changes physically land before M7, so the declared parallelism has no stated interim placement rule and reviewers cannot tell whether a transient second composition layer would appear.",
+            "evidence": [
+              "server.js is 5,380 lines / 238.6 KB and contains the claimed seams, e.g. relay settle sites at server.js:344-347, 568-571, 587-590, 2722-2725 and extension-UI tracking at server.js:743-761",
+              "plan M1: 'Move associated response production into checked owners; identify any remaining JS route mounting explicitly until M7'; M5: 'Migrate `remote-hosts`, `terminal` and the corresponding access/proxy/attachment implementations'; M7: 'The integration owner may land already-ready route families incrementally' and 'The M7 integration owner serializes edits to shared server composition'"
+            ],
+            "requiredChange": "State per package whether route bodies are edited in server.js under the M7 owner's serialization or extracted into typed modules ahead of M7, and what the interim composition owns (and must not own), so parallel ownership is auditable rather than inferred."
+          }
+        ],
+        "strengths": [
+          "Measurements are reproducible from the tree, not aspirational: 42 src/core/*.ts summing to ≈447 KB against 217.9 KB of authored lib JS plus 238.6 KB server.js gives 49.49% backend TS (plan: 49.5%); the 30-file/549,637-byte product JS inventory reconciles to within rounding (23 authored lib files + server.js + client + 3 CLIs + electron/main.js + share hook ≈ 536.8 KB), and 106 browser + 42 core + 7 extension sources = the stated 155 TS files.",
+          "Inventory assignment is complete and non-overlapping: M1 6 (session-files, pi-sdk, omp-export, session-refs, harness-pricing, skill-mining), M2 4 (cron, routines, routine-runner, session-provenance), M3 8 (pages, shares, comments, fleet-artifacts, file-search, file-mention, file-page, git-diff), M4 3 (skills, harness-agents, stt), M5 2 (remote-hosts, terminal), M6 6 (skills/lib/pi-dish-client.js, three skill CLIs, electron/main.js, extensions/pi-dish-share-omp.mjs), M7 server.js — covering all 30 authored product JS files; C1's 'nine authored scripts' matches scripts/*.js exactly.",
+          "Every refactor I checked is a real deletion of an established responsibility, not a wrapper: R2 lib/routines.js:179-181 and 227-230 (map read then getRoutine re-reading); R3 server.js:1712/1819/1828 coveredLines rebuilt per section; R1 src/core/session-index.ts:40,70-78 checked* passes, lib/skill-mining.js:147-153 tolerant loop, lib/omp-export.js:17-31 vs server.js:2524-2530 duplicate session-data decoder; R5 four duplicate settle/timer paths; R6a server.js:743-761 vs extensions/pi-dish-bridge/core.ts:1143-1169 replay maps; R7 server.js:5083-5095 serverCloseHooks + electron/main.js:47 300 ms and guessed PORT; R8 seven closeOtherViews lists (src/browser/app.ts:659,699,709,718,773,857,1115); R10 src/browser/session-controls.ts:32 per-mutation createSessionApi with ignored host; R11 src/core/helper-refs.ts vs skills/lib/pi-dish-client.js:340+; R12 scripts/build-vendor.js:106-127 __mods/__cache/__req; R4 src/core/helper-format.ts escapeHtml vs lib/file-page.js:7 (verified semantically identical escaping).",
+          "The three phases are distinct and finite, with explicit non-goals that prevent scope creep ('Deliberate limits on refactoring': no transactional index rewrite, no generic harness adapter, no framework adoption), and acceptance is proportional: M1–M6 name suites that all exist (session-files, session-index, harness-pricing, skill-mining, session-refs, omp-export, fleet-artifacts, file-mention, git-diff, skills-core, skills-cli, comments-cli, session-control-cli, skill-sessions-fleet, omp-web-pilot, stt, listener-lifecycle, install, host-auth, remote-hosts, terminal, cron, routines, routines-api, session-provenance), the eight test/ui-scenarios files match the stated 'eight isolated UI scenarios', and 55 test/browser specs support the browser gates; the five CI jobs are real (.github/workflows/tests.yml backend matrix + browser).",
+          "Repository-specific traps are identified rather than smoothed over: root-vs-lib asset resolution when the app moves into lib/, keeping the CommonJS server export contract that tests and Electron consume in-process (electron/main.js requires ../server.js, so in-process readiness is feasible), the literal host-rewritten OMP import, Prime sibling symlinks and the duplicate-load sentinel, no ESM/runtime loader/Node minimum change, and honest statements that macOS packaging and unrun platform combinations stay unproven."
+        ],
+        "deferredRisks": [
+          "Whether electron-builder ships added `.ts` files under the explicit `electron/**/*` glob is unverified here (no build/package run was permitted); it must be settled by the M6c Linux package smoke rather than assumed either way.",
+          "The packaged app omits extensions/, skills/ and docs/ from `files` while the runtime references them; whether packaged startup is required to work without those resources is an unresolved product decision, not a verification detail.",
+          "Stale-stat/short-read index publication risk remains unreproduced by design; the plan correctly refuses a speculative transactional rewrite and defers it to the M1 malformed/append/truncate matrix.",
+          "OMP/Prime host internals are version-specific (native-state.ts documents behaviour 'verified 18.1.16'); any typed narrowing of those surfaces encodes assumptions that can rot with host upgrades, and the plan does not name a re-verification trigger.",
+          "R5's shared first-response timer/error helper could widen first-byte semantics into SSE idle or SSH-setup timing; the plan guards this with named relay cases but the risk is only closed by those tests, not by design.",
+          "Browser/UI gates depend on the managed Chromium pin (Playwright 1.63.0, esbuild 0.28.1, typescript 7.0.2); a compiler or browser upgrade during M/R would require regenerated outputs and is not covered by any planned package."
+        ]
+      }
+    }
+  ],
+  "rechecks": [
+    {
+      "requestedModel": "kimi-code/k3",
+      "actualModel": "kimi-code/k3",
+      "sessionId": "01a0a945-5c4c-7563-b7f3-5fe226fab3a2",
+      "reviewedSha256": "9ff288ccb9d96cd6282e9831d970b044bf7d081fa8daeb83753ccd2f60802518",
+      "report": {
+        "verdict": "ready",
+        "summary": "All three dispositions verified against source, including the K1 source correction. My original K1 claim that `_handle` does not exist was wrong: I had only searched the extension file. `BridgeSession._handle` exists at src/core/bridge-session.ts:470 with a full extUI reduction at 544–567 (widget/status set-delete, dialog set, extension_ui_resolved delete, session_switch clear), and server.js:743-761 trackExtUIState is a genuine second server-process reducer — so the R6a duplicate premise is real. Revised R6a now unambiguously places the surviving reducer at the server-side Bridge/RPC ingress, retains sess.extUIState for browser SSE replay (server.js:5022-5030 consumer preserved), and explicitly leaves the harness-side uiState/replayExtensionUI (core.ts:872, 1159, served to reconnecting server sockets at 1597) as a separate untouched owner with no cross-socket mechanism — exactly the ambiguity K1 raised. K2: the R1 boundary table classifies all five callsite groups with baseline line numbers I verified as accurate (parse full/delta 337/422 wrapped at 70; search 71–74; usage 76–78; mining 358/429; snapshot decode 320/279/280), and its decodeUsage claim matches session-index-data.ts:32-37 — top-level containers/cwd/continuity only, buckets explicitly opaque per the comment at 35-36. Removal is gated on validated construction plus malformed/framing/corrupt-snapshot proof, not return-type annotations, and snapshot-load decoders are explicitly never removable. K3: R5 now reads 'After: M3/M5 and M7 relay-route integration (the full product gate)', consistent with the Phase-R header. No material new contradiction found in the revised sections.",
+        "addressed": [
+          "K1",
+          "K2",
+          "K3"
+        ],
+        "unresolved": [],
+        "newFindings": [
+          {
+            "id": "KR1",
+            "severity": "minor",
+            "section": "R6a — Server-side replay",
+            "problem": "R6a says to retain `sess.extUIState` for SSE replay while deleting trackExtUIState's reductions, but does not state that sess.extUIState must become backed by (alias) the surviving bridge-ingress reducer's maps. Today they are two distinct map sets: BridgeSession.extUIState (bridge-session.ts:384) and the separately created/attached sess.extUIState (server.js:745). A naive cutover could delete the only writer feeding the SSE-replay maps. The proof gate ('test browser SSE reconnect without a fresh bridge replay') would catch this, so it is a clarity gap, not a design flaw.",
+            "evidence": [
+              "src/core/bridge-session.ts:384 — BridgeSession constructs its own extUIState maps inside _handle's owner",
+              "server.js:745-746 — trackExtUIState creates/attaches a separate sess.extUIState and reduces via event subscriptions (762+)",
+              "server.js:5022-5030 — SSE connect replays from sess.extUIState, not from the BridgeSession field"
+            ],
+            "requiredChange": "Add one sentence to R6a stating that after deleting trackExtUIState, sess.extUIState aliases or is populated from the surviving session-owned reducer's maps, so the SSE replay consumer reads the same state the reducer writes."
+          }
+        ],
+        "limitations": [
+          "Baseline byte/test counts (549,637 JS; 1,632,779 TS; 996/286 tests) not recomputed; taken on trust as in the first review",
+          "Sections other than R1/R5/R6a (M0–M7, R2–R4, R7–R12, C1–C2) were rescanned for internal coherence and against first-review evidence but not re-derived line-by-line from source this round",
+          "R6b's aligned-cancellation-array claim remains untraced into pi-private.ts (carried over deferred risk from first review)",
+          "docs/remaining-migration-plan.md itself was not separately diffed; the recheck target file was read in full and its SHA asserted by the task brief"
+        ]
+      }
+    },
+    {
+      "requestedModel": "zai/glm-5.3",
+      "actualModel": "zai/glm-5.3",
+      "sessionId": "01a0a945-5c60-7557-8e00-04b4589de3fa",
+      "reviewedSha256": "9ff288ccb9d96cd6282e9831d970b044bf7d081fa8daeb83753ccd2f60802518",
+      "report": {
+        "verdict": "ready",
+        "summary": "All three original findings are resolved in the revision, verified against both the revised text and actual source. G1: M0 now states the decision rule — pin maintained major-matched @types/express@4, @types/compression and @types/ws matching the installed packages (package.json: express ^4.18.2, compression ^1.8.1, ws ^8.21.0), never hand-write those maintained APIs, use real bundled node-pty/Electron/SDK declarations (node-pty ^1.1.0 and electron ^33 ship their own typings; the Pi SDK is TS-authored), and permit only genuinely unrepresented narrow residual boundaries — recorded in the M0 freeze that M1–M7 inherit, so M7's 'checked handlers' acceptance is no longer nominal. G2: M0's source/output map now names compiler membership per target, assigns server-app.ts and domain handler modules to tsconfig.core.json (verified: includes src/core/**/*.ts), keeps them out of the tsconfig.helpers.json helper-* portability subset (verified: include is only [\"src/core/helper-*.ts\"]), forbids browser bundles from importing those Node implementations, and requires ownership documentation when targets land rather than deferring to C2. G3: C1 explicitly allocates eslint.config.js and playwright.config.js (both verified present at root) as named strict-checkJs configuration entrypoints unless a supported direct-TS loader cutover exists, with bodies checked rather than deferred to the C2 audit. The maintainer's disposition premise 'existing core is not universally portable' is accurate: 18+ existing src/core modules import Node builtins (bridge-session, dish-store, rpc-session, session-index, tmux, etc.), and the browser's only non-helper core imports today are the import-free portable modules session-api.ts and host-colors.ts, so the new import prohibition contradicts nothing existing. The revision's new material — the strict-checkJs root-launcher exception, the TS-parser-backed any/@ts-ignore policy gate, the M6a unknown-valued host-import declaration, and the M6c verify-first package-surface decision with an M0 baseline check — is internally consistent across M0/M6/M7/C1/C2 and does not violate the plan's own no-unchecked-declaration-workaround invariant. No blocking or important gaps remain; remaining items are minor optional notes.",
+        "addressed": [
+          "G1 (important): M0 (revised-plan.txt:188-192) pins the typing decision rule — maintained major-matched @types/express 4, @types/compression, @types/ws compatible with installed packages, no handwritten replacements, bundled node-pty/Electron/SDK declarations for the rest, and only genuinely unrepresented surfaces get narrow documented residual boundaries. Source premises verified: package.json pins express ^4.18.2 / compression ^1.8.1 / ws ^8.21.0 (all have maintained major-matched @types; none currently installed, so the pin is a directed addition, not a contradiction); node-pty ^1.1.0 and electron ^33 bundle their own declarations; @earendil-works/pi-coding-agent is TS-authored. The rule lives in the M0 freeze gate that all M1–M7 workers inherit, which is what my requiredChange asked for.",
+          "G2 (minor): M0 (revised-plan.txt:195-199) records compiler membership in the source/output map — Node-only server-app.ts and domain handler modules belong to tsconfig.core.json, are excluded from the tsconfig.helpers.json portable helper-* subset, browser bundles may not import them, and migration-guide/build-ownership docs update when the targets land rather than waiting for C2. Verified tsconfig.helpers.json include is exactly [\"src/core/helper-*.ts\"] (noEmit, extends tsconfig.core.json) and tsconfig.core.json includes src/core/**/*.ts, so the stated ownership split matches real program structure and the disposition's 'existing core is not universally portable; helpers are the portable subset' claim is source-accurate (18+ core files import fs/path/os/net/crypto/child_process).",
+          "G3 (minor): C1 (revised-plan.txt:661-665) explicitly allocates eslint.config.js and playwright.config.js — named strict-checkJs configuration entrypoints unless their hosts support a direct TS cutover without a new runtime loader, with bodies checked rather than deferred to the final audit. Both files verified present at repository root; this disposes of them within C1 as requested instead of C2-audit discovery."
+        ],
+        "unresolved": [],
+        "newFindings": [],
+        "limitations": [
+          "Read-only recheck: no builds, lint, tests, or digest recomputation were run; equality of revised-plan.txt (9ff288cc…) with docs/remaining-migration-plan.md and the c46e7c5 baseline is accepted from the task statement.",
+          "Baseline claims restated in the plan (996 backend tests, 286 browser cases, five green CI jobs) remain unverified starting-point descriptions, as in my original review; they are not gates for this recheck.",
+          "Execution-level quality of the @types pins (e.g., middleware augmentation completeness for Express 4 under typescript 7.0.2) is unknowable until M0/M7 implement; the consumer/type-fixture gate and the narrow-residual rule are the plan's backstop, which is appropriate for a scoped plan.",
+          "Minor optional note, not a defect: the plan's portable-programs rule names the helper-* subset and the new Node-only files; existing browser-consumed portable non-helper modules (session-api.ts, host-colors.ts — both import-free) continue under the current tsconfig.core.json membership without explicit reclassification, which the current text neither contradicts nor needs to change."
+        ]
+      }
+    },
+    {
+      "requestedModel": "opencode-go/deepseek-v4.1-flash",
+      "actualModel": "opencode-go/deepseek-v4.1-flash",
+      "sessionId": "01a0a945-5c69-74c6-b62e-de2658f30bc8",
+      "reviewedSha256": "9ff288ccb9d96cd6282e9831d970b044bf7d081fa8daeb83753ccd2f60802518",
+      "report": {
+        "verdict": "ready",
+        "summary": "All seven maintainer dispositions hold against the revised text and, where they corrected a source premise, against the source itself: I re-verified the `any` surface (extensions/pi-dish-bridge/core.ts:663, 872-877; pi-private.ts:7-24), the unknown-narrowed literal OMP import (extensions/pi-dish-bridge-omp/native-state.ts:148-157), the absence of extension programs (only tsconfig.helpers/browser/check/core exist; extensions/**/*.ts is in none), package.json build.files=[server.js,lib/**/*,public/**/*,electron/**/*], install.sh extensions/skills symlinking, electron/main.js:9 PORT guess plus the 300 ms delay, test/types/core.ts as the existing @ts-expect-error fixture set, and the four-node CI matrix with five jobs. The M0 any-gate is wireable without new cleanup scope: src/core, src/browser and lib contain zero explicit `any`, `@ts-ignore`, `@ts-nocheck` or `@ts-expect-error`. The invariant ban on handwritten declarations is reconciled inside the revision itself (M0: \"Only a genuinely unrepresented consumed surface may receive a narrow, documented residual type boundary; M6a specifies the special opaque host-import case\"). No material new contradiction was introduced. Two non-blocking clarifications, both of which land naturally in M0's frozen source/output map, are recorded as new findings; they do not block starting M1/M2 or any migration package.",
+        "addressed": [
+          "D1 — M0 now specifies a pinned TypeScript-compiler-API gate (rejects explicit any/@ts-ignore/@ts-nocheck) wired into `npm run check` with a rejection proof, requires pre-existing broad extension any to become real SDK types or unknown plus consumed-member narrowing, names type-utility exceptions by path/symbol, and confines @ts-expect-error to identified fixtures (plan:206-218). Verified evaluable today: no explicit any/@ts-ignore/@ts-nocheck/@ts-expect-error in src/core, src/browser or lib, and test/types/core.ts already carries the intentional type negatives.",
+          "D2 — M6a now names a single mechanism for host-only surfaces: retain the literal dynamic OMP import, allow one named declaration for that exact module exposing unknown with no asserted constructors/methods, narrow via the existing runtime guards in native-state.ts, treat Prime/OMP wrapper inputs as unknown narrowed to owner-defined consumed capabilities, never cast alternate hosts to Pi APIs, and keep host-switch/import fixtures plus malformed-host negatives and native-loader execution (plan:358-368). Source agrees that the Pi paths are resolvable: core.ts:3, pi-private.ts:1 and mood.ts:1 import the installed @earendil-works/pi-coding-agent, and native-state.ts:154 is the only unresolvable host specifier.",
+          "D3 — M0 fixes edge authoring/emission with one installer-discovered entrypoint, per-emitted-sibling source/output drift rules and an explicit Electron runtime manifest that excludes TS authoring files/configs/tests/maps and is verified by inspecting the produced archive and unpacked native resources, not globs; M6c adds the package-surface decision (Linux desktop/in-app parity for the existing feature set, no silent feature loss, no HOME installation/credentials/new features, M0 baseline launch check, then proof on the built archive) (plan:173-186, 377-390). Premises confirmed: build.files allowlist and install.sh link_path of extensions/{pi-dish-bridge,bridge-omp,bridge-prime} plus every skills/* dir containing SKILL.md.",
+          "D4 — The checked root launcher is now an explicitly authored strict-checkJs CommonJS entrypoint exception with a declared mapping, excluded from drift/orphan checks, and M7 acceptance names it as the sole planned root-launcher JS residue (plan:163-171, 419-422). Technically feasible: tsconfig.check.json is allowJs+checkJs and can host the launcher, and tsconfig.core.json emits declarations for the checked startup owner.",
+          "D5 — The rule is now scoped to newly introduced or renegotiated public ports, with R9 named as the existing coupling removed and untouched legacy factory-ReturnType ports explicitly not claimed eliminated (plan:88-91), so M/R review can distinguish a violation from an accepted legacy exception.",
+          "D6 — Records now have a named location, form and approval path: one `Implementation record — <package ID>` subsection in the plan document per completed M/R/C package, author-supplied evidence, independent reviewer verification against code and behavior, integration lead acceptance and BACKLOG update, with substantial designs linked rather than kept in a parallel clearance list (plan:107-118). Cross-references from BACKLOG.md:208 and docs/typescript.md:79 and the anchors used by the plan exist.",
+          "D7 — Interim placement is defined: domain HTTP/response bodies move into flat checked core modules (tsconfig.core.json, not the portable helper subset), M0 freezes their names/ports, the domain worker owns module plus deletion patch, and only the M7 integration owner applies the root patch at the same middleware/order position; the interim JS root must not keep a duplicate body or add a policy adapter (plan:138-151)."
+        ],
+        "unresolved": [],
+        "newFindings": [
+          {
+            "id": "DR1",
+            "severity": "minor",
+            "section": "Phase M — M0 freeze vs M7 root ownership",
+            "problem": "M0 states the retained root launcher 'owns no configuration, route, state or lifecycle policy', instructs 'Add it to the check program and prove its actual generated-declaration consumer/export contract', and makes 'no policy-bearing JS shim' an M0 acceptance outcome, while the ownership inventory says 'the interim JS root wires existing owners and mounts routes' and 'Unchecked remaining root bodies stay explicitly assigned to M7', and M7 says it moves remaining root-server behavior into the M0 checked application owner. Because root server.js is package main/`start`, is required by test/ui-smoke.js and electron/main.js, and must keep serving routes through M1–M6, the policy-free launcher cannot be that same file before M7. The text therefore allows two readings: M0 must author a thin launcher (which forces the whole-root conversion M7 assigns) or M0's 'no policy-bearing JS shim' criterion cannot be satisfied until M7.",
+            "evidence": [
+              "plan:163-171 (launcher owns no policy; 'Add it to the check program'; drift/orphan checks extended only to emitted targets) vs plan:148-150 (interim JS root wires owners and mounts routes; unchecked remaining root bodies stay assigned to M7) vs plan:418-422 (M7 moves remaining root behavior into the M0 checked application owner; sole root-launcher JS residue is the M0 checkJs exception)",
+              "package.json \"main\":\"server.js\", \"start\":\"node server.js\"; electron/main.js:47 startServer() requires ../server.js; test/ui-smoke.js reads .listening/.address().port",
+              "tsconfig.check.json currently files: [\"lib/cron.js\",\"test/types/core.ts\"], so checkJs membership for the launcher is only realizable once the file is thin"
+            ],
+            "requiredChange": "State the sequencing explicitly: M0 freezes the launcher's source/output mapping, checkJs membership and export contract as the M7 end state, while root server.js remains the unchecked interim owner of the remaining bodies until M7; or reword M0's launcher sentences and its 'no policy-bearing JS shim' criterion as target-state statements rather than M0 deliverables."
+          },
+          {
+            "id": "DR2",
+            "severity": "minor",
+            "section": "M6a Extensions — host-provided value imports in mood.ts",
+            "problem": "The revised typed-source rule covers the OMP dynamic-import case (one exact-module declaration exposing unknown) and installed Pi SDK types, but mood.ts statically imports a module whose declarations are not resolvable from the repository and uses it at value level: `class MoodEditor extends CustomEditor` with `ConstructorParameters<typeof CustomEditor>` (extensions/mood.ts:1,36-43) and `Type.Object(...)` from typebox (mood.ts:116). @earendil-works/pi-tui is present only nested under node_modules/@earendil-works/pi-coding-agent/node_modules, so a compiler program rooted at the repo cannot resolve it, and the plan's only permitted host-only mechanism (a declaration exposing an unknown value with no constructors asserted) cannot type an `extends` clause or a value-level Type.Object call. The plan only says 'Make mood's SDK/TUI/typebox dependency ownership explicit', leaving the actual type source for one of the seven M6a files undefined, so M6a's 'every listed implementation checked by CI' criterion has no evaluable answer for mood until it is named.",
+            "evidence": [
+              "extensions/mood.ts:1-3 imports @earendil-works/pi-coding-agent (installed) and @earendil-works/pi-tui; node_modules/@earendil-works/pi-tui/** does not exist, while node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/package.json exists (pi-coding-agent dependencies list \"@earendil-works/pi-tui\": \"^0.85.1\" and \"typebox\": \"1.3.7\")",
+              "plan:358-363 restricts the alternative to 'one explicitly named declaration for that exact module exposing an unknown value, with no constructors/methods asserted by the declaration', which cannot support `extends CustomEditor`",
+              "plan:352-355 requires mood be strictly checked and its SDK/TUI/typebox ownership made explicit, but names no type source or mapping"
+            ],
+            "requiredChange": "In M0's per-target compiler mapping, name the type source for host-provided value imports in mood.ts (e.g. pin @earendil-works/pi-tui, and typebox if not already resolvable, as type-only devDependencies at the host version, or a paths mapping to the installed copy) and state that the unknown-valued declaration mechanism is not used where value-level class extension or value APIs are consumed."
+          }
+        ],
+        "limitations": [
+          "Read-only recheck: no builds, tests, linters, packaging or git commands were run, so plan digests, the baseline test/CI counts and the CI run link were not re-derived (they were independently reproduced in the first report).",
+          "I did not read any other worker's review or the pre-revision draft; original findings were taken from my own first-report JSON, and the revised plan was compared against source, not against the draft text.",
+          "The claim that the reviewed file equals docs/remaining-migration-plan.md was spot-checked by content (distinctive revised sentences at doc lines 107, 146-148, 165-171, 180-183, 206-209, 358-368, 378-381) rather than by hash comparison.",
+          "DR2's failure mode is inferred from the node_modules layout (pi-tui present only nested under pi-coding-agent and absent at the repo root) under NodeNext/Bundler resolution; no compiler run confirmed a TS2307 for extensions/mood.ts.",
+          "M6c packaging behaviour (electron-builder treatment of added .ts files, archive contents, packaged startup without optional resources) remains unverified by design; the plan correctly defers it to the M0 baseline check and the M6c built-archive smoke, and macOS packaging stays unproven from Linux.",
+          "Host internals referenced by native-state.ts are version-specific (documented as verified against OMP 18.1.16); any narrowing encodes assumptions that can rot with host upgrades and the plan still names no re-verification trigger."
+        ]
+      }
+    }
+  ],
+  "dispositions": {
+    "K1": {
+      "status": "addressed-with-source-correction",
+      "resolution": "R6a explicitly names server-process BridgeSession._handle in src/core/bridge-session.ts (470, 541–567), preserves harness-side uiState/replayExtensionUI and both reconnect paths. The initial claim that _handle does not exist confused the core transport class with the extension implementation."
+    },
+    "K2": {
+      "status": "addressed-with-source-correction",
+      "resolution": "R1 now classifies full/delta parse, search, usage, mining and persisted-load callsites and names surviving/relocated runtime guards. Removal requires validated construction and malformed-input proof, not annotations. Baseline decodeUsage checks top-level containers/continuity; it does not deep-validate opaque buckets, which M1 must close."
+    },
+    "K3": {
+      "status": "addressed",
+      "resolution": "R5 explicitly depends on M7 relay-route integration/full product gate."
+    },
+    "G1": {
+      "status": "addressed",
+      "resolution": "M0 explicitly pins maintained major-matched @types/express@4, compression and ws; real bundled native/SDK types remain the source, with only genuinely unrepresented narrow residual boundaries allowed."
+    },
+    "G2": {
+      "status": "addressed",
+      "resolution": "M0 maps Node-only server/domain files to tsconfig.core, excludes them from helper portability and browser runtime imports, and requires ownership documentation when targets land. Existing core is not universally portable; helpers are the portable subset."
+    },
+    "G3": {
+      "status": "addressed",
+      "resolution": "C1 explicitly assigns eslint.config.js and playwright.config.js to compatible strict-checkJs configuration entrypoints unless a supported direct-TS loader cutover is established."
+    },
+    "D1": {
+      "status": "addressed",
+      "resolution": "M0 adds a pinned TypeScript-parser-backed source/coverage gate for explicit any and suppression directives on migrated implementations, with narrow reviewed utility exceptions and identified type-negative fixtures. Broad preexisting extension any must be replaced; strict tsc alone is not claimed sufficient."
+    },
+    "D2": {
+      "status": "addressed",
+      "resolution": "M6a retains the literal OMP dynamic import with at most one exact-module declaration exposing unknown, no fabricated members; actual runtime guards establish consumed capabilities. OMP/Prime wrappers are not cast to Pi APIs; host import/switch fixtures and real loaders remain gates."
+    },
+    "D3": {
+      "status": "addressed",
+      "resolution": "M0 fixes edge authoring/emission layout, one installer-discovered entrypoint and explicit package source exclusions/runtime manifest. M6c states Linux desktop/in-app feature parity given documented external prerequisites, no automatic HOME installation/credentials/new features, and baseline+actual package inspection. Missing resources are a risk, not a claimed reproduced defect."
+    },
+    "D4": {
+      "status": "addressed",
+      "resolution": "M0 chooses an explicitly authored, strict-checkJs root CommonJS launcher invoking the typed startup owner and preserving export/resource paths. It is a named minimal entrypoint exception, not an unspecified generated artifact; M7 completion language now reflects that."
+    },
+    "D5": {
+      "status": "addressed",
+      "resolution": "The factory-ReturnType rule applies to new/renegotiated public ports; R9 removes the named existing hub coupling. Untouched legacy ports are not claimed globally eliminated."
+    },
+    "D6": {
+      "status": "addressed",
+      "resolution": "Package/review contract assigns per-ID Implementation record subsections in this plan, optional linked substantial records, evidence supplied by author, independent code/behavior review and integration-lead acceptance/BACKLOG updates."
+    },
+    "D7": {
+      "status": "addressed",
+      "resolution": "Ownership inventory now specifies typed domain HTTP modules before M7; domain workers supply source plus deletion patch, only server integration owner applies root wiring changes, no duplicate body or second composition layer."
+    },
+    "KR1": {
+      "status": "addressed-with-source-correction",
+      "resolution": "Added the explicit same-object invariant: SSE reads the transport reducer's sess.extUIState, with no second map set/copy-forwarding owner. Baseline Bridge already shares that field: server.js uses sess.extUIState || fallback, not an unconditional separate map set. This was a minor nonblocking recheck clarification."
+    },
+    "DR1": {
+      "status": "addressed",
+      "resolution": "M0 now freezes the root launcher mapping/program/export contract and runs baseline/disposable probes; the real policy-free checkJs root cutover occurs in M7. The existing root remains the explicitly inventoried interim owner, without premature conversion or a second launcher."
+    },
+    "DR2": {
+      "status": "addressed-with-source-correction",
+      "resolution": "M6a names real Pi SDK CustomEditor types plus direct dev-only TUI 0.85.1 and typebox 1.3.7 declaration providers aligned to the SDK lock; no reliance on transitive hoisting and no opaque declaration for static value APIs. Native imports remain external with loader smoke. CustomEditor actually comes from pi-coding-agent, not pi-tui; the TUI value-import resolution gap remains valid."
+    }
+  },
+  "maintainerVerification": {
+    "productJavaScriptInventory": {
+      "total": 30,
+      "assigned": 30,
+      "missing": 0,
+      "extra": 0
+    },
+    "libraryImplementationOwners": {
+      "M1": 6,
+      "M2": 4,
+      "M3": 8,
+      "M4": 3,
+      "M5": 2
+    },
+    "documentation": "Local link/content/JSON/digest checks; no production tests rerun for this documentation-only plan",
+    "sourceCorrections": [
+      "BridgeSession._handle exists in src/core/bridge-session.ts; harness-side replay remains separate.",
+      "decodeUsage initially validates top-level containers/continuity, not bucket internals.",
+      "Bridge sessions already expose extUIState reused by trackExtUIState via the existing || fallback.",
+      "Mood CustomEditor is exported by pi-coding-agent; TUI value helpers and TypeBox still need real declaration resolution."
+    ]
+  }
+}

@@ -205,40 +205,41 @@ names instead of executable event handlers.
 
 ## Ordered next work
 
-1. **[Browser contract cleanup](docs/browser-contract-cleanup.md): implemented;
-   verified and reviewed.** Readonly session publication,
-   decoded message continuity, session-only model loading and unused-code gates.
-2. **[Shared runtime helper cutover](docs/shared-runtime-helpers.md): implemented,
-   locally verified and reviewed.** Shared source serves browser and Node;
-   the backend helper-artifact boundary is gone, with compatibility exports preserved.
-3. **[Session lifecycle migration](docs/session-lifecycle-migration.md): implemented,
-   locally verified and reviewed.** Checked ownership, launch, operation coordination
-   and real recovery/Bounce policy replace server closures; every lifecycle caller
-   uses the checked owners. Fable approved `8e89e99` without blocking findings.
+The [remaining migration and simplification plan](docs/remaining-migration-plan.md)
+is the forward work order. It is a scoped plan, not a claim that its packages are
+implemented. Four Astra workers scoped the boundaries; Kimi K3, GLM 5.3 and
+DeepSeek Flash each returned `ready` after independent critique and recheck.
+The [review record](docs/remaining-migration-review-2026-09-15.json) retains the
+initial findings, resolutions and exact reviewed document digests.
 
-These are ordered delivery stages, not three monolithic commits. Their task
-documents define dependencies, integration owners, deletion criteria, observable
-acceptance and later simplification enabled. Inventory can overlap; shared source
-contracts must be settled before dependent implementation. Extension compiler
-coverage can start independently, but is not silently included in these plans.
+1. **Finish product migration (M0–M7).** Freeze delivery/compiler contracts; migrate
+   the remaining session read/SDK/projection, routine, publication/file, feature,
+   fleet/terminal and runtime-edge implementations; finish checked server composition.
+   The inventory assigns all 30 remaining authored product JS files and the seven
+   extension TS files not yet covered by the main compiler programs.
+2. **Deliver simplifying refactors (R1–R12).** Explicit deletion ledgers cover
+   duplicate projection/admission/coverage work, file/diff ownership, relay mechanics,
+   extension replay/private-adapter ownership, startup/Electron readiness, browser
+   pane/selection/mutation plumbing, CLI references and the handwritten vendor loader.
+   These are required scope, not a vague optional cleanup pass.
+3. **Close the repository migration (C1–C2).** Convert/check test and tooling
+   implementations, preserve runner/loader paths, enforce a complete source/output/
+   exception inventory, and publish supported-runtime and exact-commit CI evidence.
+   Runtime migration alone does not finish the repository.
 
-After these stages: migrate the general session-file/projection pipeline and
-feature stores with their API consumers, then finish typed server composition
-and the extension, skill CLI and Electron boundaries. Routine lifecycle callers
-now use stage 3's coordinator; routine definitions, scheduling and the runner's own
-source migration remain separate. Tests and development-tool source conversion are
-distinct from the product-runtime finish line.
+The prior [browser contract](docs/browser-contract-cleanup.md),
+[shared helper](docs/shared-runtime-helpers.md) and
+[lifecycle](docs/session-lifecycle-migration.md) stages are delivered boundaries,
+not the remaining queue. Their Fable reviews and implementation/CI evidence stay
+in their stage records.
 
-Each stage must deliver a stronger compiler invariant, a deletion ledger and
-behavioral evidence across the complete affected path. A shorter entrypoint,
-new declarations over unchecked implementations, or wrappers retained solely for
-old probes do not satisfy completion. Keep external/runtime input validation and
-required post-await authority checks; these are not redundant internal decoding.
-
-There is no scheduled framework adoption or blanket `server.ts` conversion.
-Reconsider a leaf renderer only against a concrete maintenance problem and the
-existing framework-assessment criteria. Source migration alone does not justify
-a new framework or a rewrite of persistence and deployment.
+The new plan separates source coverage, compiler coverage, actual simplification
+and delivery. Each package needs concrete ownership/deletion and behavioral
+evidence. Keep external validation, policy-specific lifetimes and action-time
+authority checks; similar-looking mechanisms are not necessarily redundant.
+There is no scheduled framework adoption, generic service/repository layer or
+wholesale persistence/deployment rewrite. The plan defines dependency waves and
+explicit owners for shared server, index, SDK and browser integration.
 
 ## Next-stage plan review
 

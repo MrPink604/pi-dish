@@ -683,6 +683,9 @@ TypeScript under `src/browser/`, including `app.ts`, feature controllers and
 static control bindings. Lifecycle ownership, launch, operation coordination,
 recovery and Bounce are checked; general server composition, routine scheduling
 and other feature stores remain separate stages. See [migration status and delivery checks](BACKLOG.md).
+The [remaining migration and simplification plan](docs/remaining-migration-plan.md)
+separates finishing product migration, concrete simplifying refactors and
+repository-wide test/tooling closure; planned packages are not implemented features.
 
 Run `npm run build:browser` after browser source changes and commit all generated
 scripts: `public/app.js`, `public/browser.js`, `public/helpers.js`,

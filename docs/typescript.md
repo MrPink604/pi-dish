@@ -76,6 +76,15 @@ All three plans have [Fable 5.1 high-effort signoff](../BACKLOG.md#next-stage-pl
 for their clarified task definitions. This does not change the implementation
 coverage described below or waive any stage's verification/review gates.
 
+The [remaining migration and simplification plan](remaining-migration-plan.md)
+now scopes the work beyond those delivered stages. M0–M7 finish actual product
+implementation/compiler boundaries; R1–R12 then remove specific duplicated
+responsibilities and awkward coupling, including in the already-typed browser;
+C1–C2 finish tests/tooling and enforce whole-repository coverage and delivery.
+These are planned packages, not implemented compiler targets or new runtime
+conventions. Native loaders, generated output and package mappings must pass the
+plan's M0 compatibility gate before changing.
+
 ## Implemented foundation inventory
 
 | TypeScript source in `src/core/` | Responsibility |
