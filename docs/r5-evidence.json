@@ -1,0 +1,275 @@
+{
+  "milestone": "R5",
+  "status": "Implementation, generated output and required runtime/check/backend proofs complete; pending exact-source independent review and parent acceptance",
+  "baseline": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
+  "branch": "migration/r5-relay-mechanics",
+  "owner": {
+    "session": "01a0ab39-98f6-7731-8053-0cb5bd29828e",
+    "harness": "omp",
+    "model": "openai-codex/gpt-6-astra",
+    "thinkingLevel": "high",
+    "verification": "semantic CLI resolve before editing"
+  },
+  "acceptedEvidence": [
+    "docs/remaining-migration-plan.md: R5, deliberate limits, package/review contract, accepted M7 and C1 records",
+    "docs/m5-evidence.json: behaviorMatrix, helperOwnership, completedChecks, retainedBoundaries, intentionalLimits",
+    "CLAUDE.md: checked implementations, fleet transport, fleet artifacts"
+  ],
+  "ownership": {
+    "authored": [
+      "src/core/relay-handlers.ts"
+    ],
+    "generated": [
+      "lib/relay-handlers.js",
+      "lib/relay-handlers.d.ts (regenerated; public declarations unchanged)"
+    ],
+    "evidence": [
+      "docs/r5-evidence.json",
+      "docs/r5-review.json (separate post-review attestation)"
+    ],
+    "compiler": "tsconfig.core.json; existing src/core source-policy enrollment",
+    "contracts": "No exported interface, compiler/host exception, shared configuration or cross-owner interface changes",
+    "lsp": "xd://lsp status returned No language servers configured for this project; no mutating LSP used"
+  },
+  "callerInventory": [
+    {
+      "path": "src/core/server-app.ts",
+      "symbols": [
+        "startServer",
+        "createRelayHandlers",
+        "relayHandlers.rawApi",
+        "relayHandlers.registerArtifact",
+        "relayHandlers.listArtifacts",
+        "relayHandlers.removeArtifact",
+        "relayHandlers.hosts",
+        "relayHandlers.comments",
+        "relayHandlers.publicArtifacts",
+        "relayHandlers.upgrade"
+      ],
+      "disposition": "Unchanged composition, original middleware/upgrade dispatch order"
+    },
+    {
+      "path": "src/core/publication-handlers.ts",
+      "symbols": [
+        "PublicArtifactRelay",
+        "PublicationPorts.relay",
+        "serveSharedSession",
+        "servePage",
+        "publicPage",
+        "publicPageAsset"
+      ],
+      "disposition": "Unchanged local-first public fallback on main and public listeners"
+    },
+    {
+      "path": "src/core/remote-hosts.ts",
+      "symbols": [
+        "request",
+        "outboundHeaders",
+        "errorCode",
+        "getRemote",
+        "reachability",
+        "noteTransportFailure",
+        "probe",
+        "listRemotes"
+      ],
+      "disposition": "Unchanged actual ClientRequest producer, configured remote admission, credential filtering/replacement and breaker owner"
+    },
+    {
+      "path": "src/core/access-handlers.ts",
+      "symbols": [
+        "TransportHandler",
+        "TransportRequest",
+        "TransportResponse",
+        "createAccessHandlers"
+      ],
+      "disposition": "Unchanged Express types and auth/parser/compression gates"
+    },
+    {
+      "path": "src/core/fleet-artifacts.ts",
+      "symbols": [
+        "FleetArtifactStore",
+        "ArtifactKind"
+      ],
+      "disposition": "Unchanged token validation, mapping and ownership-aware removal"
+    },
+    {
+      "path": "lib/relay-handlers.js",
+      "symbols": [
+        "createRelayHandlers"
+      ],
+      "disposition": "Existing CommonJS runtime consumed by generated server-app and root launcher"
+    }
+  ],
+  "behaviorMatrix": {
+    "firstResponse": "Three main HTTP relays have once-only response/failure settlement. Start each 10000ms timer only after remoteHosts.request resolves with the ClientRequest, therefore after SSH setup. Clear on response or request error; drain late responses; destroy on timeout. This is response-header/first-byte timeout, never stream idle timeout. Request send/end and abort handling remain policy callbacks.",
+    "rawApi": "Known-down breaker short-circuits before dialing; every transport failure supplies classified reason to noteTransportFailure then JSON502. HTTP statuses including401/404/500 do not trip breaker. Raw request bytes pipe upstream, raw response pipes downstream, SSE flushes headers and remains uncompressed. Only small artifact creation/revocation JSON is interpreted.",
+    "publicArtifact": "Local publication lookup wins. Require token mapping, correct kind and configured remote. Only allowlisted public request headers plus identity encoding and optional annotate-off are forwarded. Public failure is plain502 with no breaker feedback or error classification. Unknown mappings bare404 without probes. Owner document404 prunes exact host mapping; asset404 does not. Slash404 checks bare document before redirect/prune.",
+    "comments": "After parsed JSON/auth middleware. Query/body/target pageToken precedence and local-page wins retained. Missing mapping/remote calls next. JSON reserialization and64Ki UTF16-character response bound remain distinct from artifact overflow-to-streaming. Empty body becomes{}. Failure JSON includes classified reason but no breaker feedback.",
+    "safeResponseHeaders": "API/public primary responses have identical Object.entries loop: reject existing hop-by-hop table and access-control-*; preserve all other keys/value arrays and native setHeader behavior. Do not apply to comment responses, outgoing request policies or WS handshake.",
+    "artifactJson": "Only actual2xx JSON creation/revocation hooks update mappings and rewrite public URL.64Ki-character limit overflows to raw relay; malformed JSON passes through; hook failure retains body. Content-Length removed for intercepted JSON; no broad body parser or DTO.",
+    "websocket": "Untouched upgrade authorization, peer credential, raw head/socket splice, peer refusal status, no first-response helper or new WS timeout",
+    "nativeErrors": "remoteHosts.errorCode remains actual producer of classified/opaque reasons for API/comment errors; public failures do not inspect error objects. No new validation/coercion/catch policy. Timer destroy catches and response stream error handling retain original scope."
+  },
+  "deletionLedger": {
+    "completed": [
+      "Deleted three independent settled flags, first-response timers and request error/response settlement blocks; relayFirstResponse is the sole private owner for these equivalent mechanics",
+      "Deleted two independently maintained safe response-header loops; copyRelayResponseHeaders is their sole private owner"
+    ],
+    "retained": [
+      "Three authorization/streaming/buffering/breaker policy handlers",
+      "Distinct public slash404 recheck: existing guard is headersSent via notFound, not the same settled protocol; do not silently convert it",
+      "Separate API and public timeout policy constants even though both currently10000",
+      "Original WS implementation and request/header credential owner"
+    ],
+    "notClaimed": [
+      "No universal proxy framework",
+      "No performance/allocation improvement claim",
+      "No product migration re-investigation or old branch integration"
+    ]
+  },
+  "contributorPath": {
+    "before": "A first-response timer/error settlement change required maintaining equivalent logic in proxyToRemote, serveFleetArtifact and proxyCommentToOwner; equivalent outgoing response filters were copied twice.",
+    "after": "One private first-response helper owns only timer and settlement; one private response-header copy helper owns the identical filter. Each policy handler still owns admission, send/body handling, responses, classified errors and breaker decisions. No additional header/body passes or buffers; callback delegation adds no request/response copying. No throughput/allocation improvement claimed."
+  },
+  "retainedCheckLedger": [
+    {
+      "path": "test/remote-hosts.test.js",
+      "contracts": "raw credential/body behavior, peer404, identity unbuffered SSE, native WS101/refusal404, breaker recovery, SSH fixture cleanup",
+      "disposition": "Retain observable contract tests; no copy-count assertions introduced"
+    },
+    {
+      "path": "test/fleet-artifacts.test.js",
+      "contracts": "artifact URL rewriting, public listener exclusion, local/remote document/asset/slash404, comment owner persistence, revocation",
+      "disposition": "Retain observable behavior tests"
+    },
+    {
+      "path": "test/host-auth.test.js",
+      "contracts": "bearer/CORS/ticket gates upstream of unchanged relays",
+      "disposition": "Retain"
+    },
+    {
+      "path": "test/terminal.test.js",
+      "contracts": "native WS/PTY contract remains unchanged",
+      "disposition": "Retain; exercised by full backend"
+    }
+  ],
+  "requiredProofs": [
+    "npm run build:core",
+    "npm run check",
+    "npm test (full backend)",
+    "Focused remote-hosts/fleet-artifacts/host-auth suites",
+    "Actual isolated relay smoke with sanitized temporary HOME/socket/tmux: HTTP raw bytes, response header filters, first-response timeout, SSE beyond10s, WS, public listener, bounded comment JSON, artifact rewriting and remote404",
+    "Explicit delayed SSH-setup timing proof; timer must begin after request resolves"
+  ],
+  "conditionalProofs": "No browser authored source or runtime mapping changes occurred. Full browser/scenario/UI suites were not rerun for this backend-only package. Existing relay consumers were exercised by isolated actual root smoke and focused/full backend suites.",
+  "opaqueBoundaries": [
+    "Incoming network/body values remain unknown until existing policy consumes them",
+    "Truthy external transportCode passthrough remains unknown",
+    "No new cross-owner contract or compiler exception",
+    "No macOS execution claim"
+  ],
+  "checks": [
+    {
+      "command": "npm run build:core (initial)",
+      "result": "Failed before compilation: private worktree had no node_modules/typescript/bin/tsc; installed pinned dependencies, no source workaround"
+    },
+    {
+      "command": "npm ci",
+      "result": "exit0;798 packages; existing pinned deprecation/blocked-install-script warnings; electron-builder native node-pty installation completed"
+    },
+    {
+      "command": "npm run build:core && npm run check && npm test",
+      "result": "exit0;258 compiler-owned sources,no explicit-any exceptions; ESLint and all tool/core/browser/edge drift/type/mode checks pass;1027 backend tests passed,0failed,0skipped;34448.156711ms",
+      "runtime": "Node26.8.2/npm12.0.2 on Linux x64"
+    },
+    {
+      "command": "npm test -- test/remote-hosts.test.js test/fleet-artifacts.test.js test/host-auth.test.js",
+      "result": "exit0;47passed,0failed,0skipped;8767.435698ms"
+    },
+    {
+      "command": "node /tmp/r5-relay-smoke.cjs /home/jyarwood/workspace/pi-dish-r5",
+      "result": "exit0;11 actual runtime proof groups; sanitized temporary HOME/tmux/socket directories, actual root launcher, main/public listeners, real HTTP and bidirectional WS; fixtures/processes removed on completion"
+    }
+  ],
+  "sourceSha256": {
+    "src/core/relay-handlers.ts": "8d597ab2dc3ca46a78958a73894e852e9d52f8fc7bd20bebd8156e02c5ae3e2c",
+    "lib/relay-handlers.js": "72cf7066699adb53dd691190a297857d127698a5c74062b10eb00324f423f52a",
+    "lib/relay-handlers.d.ts": "9641c56ea115e4a90480f73ad6f455c1a260410fba1598304eeb882f48b717c1"
+  },
+  "smoke": {
+    "scriptSha256": "5736b3f04aab28d24d8a0588d53545d6d8766a45247a51cc5534ac2b415b71c3",
+    "resultSha256": "2dce66eeffe491cf760b2a239de69b6477674bcef5bcf95425954be4b64a6a04",
+    "observations": [
+      "Raw invalid-JSON API bytes preserved; peer credential replaces caller bearer/origin",
+      "Public header allowlist strips cookie/custom/origin; response CORS stripped, non-hop headers and set-cookie array retained",
+      "Artifact URL rewriting preserves extra fields; malformed JSON and overflow stream unchanged",
+      "Comment parsed JSON reserialization, content length,65536-character acceptance,65537-character rejection and empty-body fallback",
+      "Main/public overlay distinction and public listener API/hosts exclusion",
+      "Asset404 retains mapping; slash404 redirects to live bare form; owner document404 prunes; peer HTTP404/500 do not trip breaker",
+      "Bidirectional native WebSocket101 splice uses peer credential",
+      "API first-response timeout10245ms plus immediate cached502",
+      "Public/comment timeouts leave API breaker untripped",
+      "Identity SSE first chunk275ms, idle completion10766ms",
+      "Delayed fixture SSH setup3000ms plus peer response8000ms succeeds11327ms after start; deadline excludes setup"
+    ],
+    "limits": [
+      "SSH timing proof uses existing fake-ssh.js as delayed real Unix-socket forward, not an actual SSH daemon",
+      "No browser/UI or macOS execution claim",
+      "Expected isolated empty-model-list SDK fallback warning only"
+    ],
+    "script": "const assert = require('node:assert/strict');\nconst fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst http = require('node:http');\nconst { fork } = require('node:child_process');\nconst { once } = require('node:events');\nconst repo = process.argv[2];\nconst { sanitizeTestEnv } = require(path.join(repo, 'test/test-env'));\nconst { WebSocket, WebSocketServer } = require(path.join(repo, 'node_modules/ws'));\nconst root = fs.mkdtempSync(path.join(os.tmpdir(), 'r5-relay-'));\nconst home = path.join(root, 'home');\nconst dish = path.join(home, '.pi/dish');\nfs.mkdirSync(dish, { recursive: true });\nfs.mkdirSync(path.join(home, '.pi/agent/sessions'), { recursive: true });\nfs.mkdirSync(path.join(root, 'tmux'));\nfs.mkdirSync(path.join(root, 'bin'));\nconst results = [];\nconst requests = [];\nconst timers = new Set();\nlet child;\nconst later = (fn, ms) => { const timer = setTimeout(() => { timers.delete(timer); fn(); }, ms); timers.add(timer); };\nconst peer = http.createServer((req, res) => {\n  let body = '';\n  req.on('data', chunk => { body += chunk; });\n  req.on('end', () => {\n    requests.push({ method: req.method, url: req.url, headers: req.headers, body });\n    const url = new URL(req.url, 'http://peer');\n    const json = (value, status = 200) => { res.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': 'https://peer.invalid', 'x-peer': 'retained' }); res.end(JSON.stringify(value)); };\n    if (url.pathname === '/api/host') return json({ hostId: 'r5-peer', label: 'fixture', version: '1', capabilities: {} });\n    if (url.pathname === '/api/sse') {\n      res.writeHead(200, { 'content-type': 'text/event-stream', 'access-control-allow-origin': '*', 'x-peer': 'retained' });\n      res.write('data: first\\n\\n');\n      later(() => res.end('data: after-idle\\n\\n'), 10_500);\n      return;\n    }\n    if (url.pathname === '/api/slow') return later(() => json({ delayed: true }), 8_000);\n    if (url.pathname.endsWith('/hang') || url.pathname === '/page/hang') return;\n    if (url.pathname.startsWith('/api/comments')) {\n      if (url.searchParams.has('overflow')) { res.writeHead(200); return res.end('x'.repeat(65_537)); }\n      if (url.searchParams.has('boundary')) { res.writeHead(202); return res.end('x'.repeat(65_536)); }\n      if (url.searchParams.has('empty')) { res.writeHead(200); return res.end(); }\n      return json({ owner: 'peer', method: req.method, body: body ? JSON.parse(body) : null }, 201);\n    }\n    if (url.pathname === '/api/pages') {\n      const mode = body && JSON.parse(body).mode;\n      res.setHeader('content-type', 'application/json');\n      if (mode === 'malformed') return res.end('{not-json');\n      if (mode === 'overflow') return res.end('x'.repeat(65_537));\n      return json({ token: 'minted', url: 'https://peer.invalid/page/minted', extra: 'kept' }, 201);\n    }\n    if (url.pathname === '/api/notfound') return json({ peer404: true }, 404);\n    if (url.pathname === '/api/servererror') return json({ peer500: true }, 500);\n    if (url.pathname.startsWith('/page/')) {\n      if (url.pathname === '/page/gone' || url.pathname.endsWith('/missing.css') || url.pathname === '/page/file/') { res.writeHead(404); return res.end('peer404'); }\n      res.writeHead(200, { 'content-type': 'text/html', 'access-control-allow-origin': '*', 'x-peer': 'retained', 'set-cookie': ['a=1', 'b=2'] });\n      return res.end('<html>peer document' + (req.headers['x-pi-dish-page-comments'] === 'off' ? '' : '<script src=\"artifact-comments.js\"></script>') + '</html>');\n    }\n    return json({ method: req.method, url: req.url, headers: req.headers, body });\n  });\n});\nconst wss = new WebSocketServer({ noServer: true });\npeer.on('upgrade', (req, socket, head) => {\n  assert.equal(req.headers.authorization, 'Bearer peer-secret');\n  assert.equal(req.headers.origin, undefined);\n  wss.handleUpgrade(req, socket, head, ws => ws.on('message', data => ws.send(data)));\n});\nconst auth = { Authorization: 'Bearer hub-secret' };\nconst fetchHub = (base, route, init = {}) => fetch(base + route, { ...init, headers: { ...auth, ...init.headers }, signal: AbortSignal.timeout(25_000) });\nconst record = (name, facts = {}) => { results.push({ name, ...facts }); console.log('PASS', name, JSON.stringify(facts)); };\n(async () => {\n  console.log('R5 smoke running');\n  await new Promise(resolve => peer.listen(0, '127.0.0.1', resolve));\n  const peerPort = peer.address().port;\n  fs.writeFileSync(path.join(root, 'bin/ssh'), '#!/bin/sh\\nsleep 3\\nexec ' + JSON.stringify(process.execPath) + ' ' + JSON.stringify(path.join(repo, 'test/fixtures/fake-ssh.js')) + ' \"$@\"\\n', { mode: 0o755 });\n  fs.writeFileSync(path.join(dish, 'settings.json'), JSON.stringify({ remotes: [\n    { name: 'peer', url: `http://127.0.0.1:${peerPort}`, token: 'peer-secret' },\n    { name: 'hang', url: `http://127.0.0.1:${peerPort}`, token: 'peer-secret' },\n    { name: 'ssh', sshDest: 'fixture@isolated', remotePort: peerPort, token: 'peer-secret' },\n  ] }));\n  fs.writeFileSync(path.join(dish, 'fleet-artifacts.json'), JSON.stringify(Object.fromEntries(['page', 'file', 'gone', 'hang'].map(token => [token, { host: 'peer', kind: 'page', createdAt: 1 }]))));\n  const bootstrap = path.join(root, 'boot.cjs');\n  fs.writeFileSync(bootstrap, `const server = require(${JSON.stringify(path.join(repo, 'server.js'))}); server.on('listening', () => process.send({ port: server.address().port }));`);\n  const env = sanitizeTestEnv(process.env);\n  Object.assign(env, { HOME: home, TMUX_TMPDIR: path.join(root, 'tmux'), PATH: path.join(root, 'bin') + ':' + env.PATH, PI_DISH_TOKEN: 'hub-secret', PI_DISH_SHARE_PORT: '0', PI_DISH_SHARE_BASE_URL: 'https://hub.invalid' });\n  delete env.TMUX;\n  delete env.SSH_AUTH_SOCK;\n  child = fork(bootstrap, [], { env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });\n  let output = '', errors = '';\n  child.stdout.on('data', chunk => { output += chunk; });\n  child.stderr.on('data', chunk => { errors += chunk; });\n  const [ready] = await once(child, 'message');\n  const base = `http://127.0.0.1:${ready.port}`;\n  for (let i = 0; !/share listener at http:\\/\\/127.0.0.1:(\\d+)/.test(output); i++) { if (i > 300) throw new Error(errors + output); await new Promise(r => setTimeout(r, 10)); }\n  const publicBase = /share listener at (http:\\/\\/127.0.0.1:\\d+)/.exec(output)[1];\n  const long = [\n    (async () => {\n      const start = Date.now();\n      const response = await fetchHub(base, '/hosts/peer/api/sse', { headers: { 'accept-encoding': 'gzip' } });\n      assert.equal(response.headers.get('content-encoding'), null);\n      assert.equal(response.headers.get('access-control-allow-origin'), null);\n      const reader = response.body.getReader();\n      const first = await reader.read();\n      assert.match(Buffer.from(first.value).toString(), /data: first/);\n      const firstMs = Date.now() - start;\n      assert.ok(firstMs < 3000, `SSE buffered ${firstMs}ms`);\n      let rest = '';\n      for (;;) { const next = await reader.read(); if (next.done) break; rest += Buffer.from(next.value).toString(); }\n      assert.match(rest, /after-idle/);\n      record('unbuffered identity SSE survives first-byte window', { firstMs, durationMs: Date.now() - start });\n    })(),\n    (async () => {\n      const start = Date.now();\n      const response = await fetchHub(base, '/hosts/ssh/api/slow');\n      assert.equal(response.status, 200);\n      assert.deepEqual(await response.json(), { delayed: true });\n      const durationMs = Date.now() - start;\n      assert.ok(durationMs >= 10_500, 'fixture setup+peer delay must cross original10s window');\n      record('SSH fixture setup excluded from first-response deadline', { durationMs, setupDelayMs: 3000, peerDelayMs: 8000, transport: 'real HTTP over delayed fixture Unix forward; not real SSH daemon' });\n    })(),\n    (async () => {\n      const start = Date.now();\n      const response = await fetchHub(base, '/hosts/hang/api/hang');\n      assert.equal(response.status, 502);\n      assert.equal((await response.json()).reason, 'timeout');\n      const durationMs = Date.now() - start;\n      assert.ok(durationMs >= 9800 && durationMs < 15_000);\n      const retryStart = Date.now();\n      assert.equal((await fetchHub(base, '/hosts/hang/api/echo')).status, 502);\n      assert.ok(Date.now() - retryStart < 1500);\n      record('API timeout and breaker short circuit', { durationMs });\n    })(),\n    (async () => {\n      const response = await fetch(publicBase + '/page/hang', { signal: AbortSignal.timeout(20_000) });\n      assert.equal(response.status, 502);\n      assert.equal(await response.text(), 'Host unavailable');\n      const alive = await fetchHub(base, '/hosts/peer/api/echo');\n      assert.equal(alive.status, 200);\n      record('public timeout preserves no-breaker policy');\n    })(),\n    (async () => {\n      const response = await fetchHub(base, '/api/comments/hang?pageToken=page');\n      assert.equal(response.status, 502);\n      assert.equal((await response.json()).reason, 'timeout');\n      const alive = await fetchHub(base, '/hosts/peer/api/echo');\n      assert.equal(alive.status, 200);\n      record('comment timeout preserves no-breaker policy');\n    })(),\n  ];\n  let response = await fetchHub(base, '/hosts/peer/api/echo?x=1', { method: 'POST', headers: { 'content-type': 'application/json', Origin: 'https://caller.invalid', Cookie: 'caller=yes' }, body: '{ raw invalid JSON' });\n  assert.equal(response.headers.get('x-peer'), 'retained');\n  assert.equal(response.headers.get('access-control-allow-origin'), null);\n  let seen = await response.json();\n  assert.equal(seen.body, '{ raw invalid JSON');\n  assert.equal(seen.headers.authorization, 'Bearer peer-secret');\n  assert.equal(seen.headers.origin, undefined);\n  assert.equal(seen.headers.cookie, 'caller=yes');\n  record('raw API body and credential policy');\n  const beforeUnknown = requests.length;\n  assert.equal((await fetch(publicBase + '/page/unmapped')).status, 404);\n  assert.equal(requests.length, beforeUnknown);\n  assert.equal((await fetch(publicBase + '/api/host')).status, 404);\n  assert.equal((await fetch(publicBase + '/hosts/peer/api/echo')).status, 404);\n  response = await fetch(publicBase + '/page/page', { headers: { Authorization: 'Bearer caller-secret', Origin: 'https://caller.invalid', Cookie: 'caller=yes', 'X-Secret': 'hidden', Accept: 'text/html', Range: 'bytes=0-', 'If-None-Match': 'v1' } });\n  assert.equal(response.status, 200);\n  assert.equal(response.headers.get('access-control-allow-origin'), null);\n  assert.equal(response.headers.get('x-peer'), 'retained');\n  assert.deepEqual(response.headers.getSetCookie(), ['a=1', 'b=2']);\n  assert.doesNotMatch(await response.text(), /artifact-comments/);\n  seen = requests.findLast(r => r.url === '/page/page');\n  assert.equal(seen.headers.cookie, undefined);\n  assert.equal(seen.headers['x-secret'], undefined);\n  assert.equal(seen.headers.origin, undefined);\n  assert.equal(seen.headers.authorization, 'Bearer peer-secret');\n  assert.equal(seen.headers.range, 'bytes=0-');\n  assert.equal(seen.headers['if-none-match'], 'v1');\n  assert.equal(seen.headers['x-pi-dish-page-comments'], 'off');\n  assert.match(await (await fetch(base + '/page/page')).text(), /artifact-comments/);\n  record('public listener admission header allowlist and response filter');\n  response = await fetchHub(base, '/hosts/peer/api/pages', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });\n  assert.equal(response.status, 201);\n  assert.deepEqual(await response.json(), { token: 'minted', path: '/page/minted', url: 'https://hub.invalid/page/minted', extra: 'kept' });\n  for (const [mode, expected] of [['malformed', '{not-json'], ['overflow', 'x'.repeat(65_537)]]) {\n    response = await fetchHub(base, '/hosts/peer/api/pages', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode }) });\n    assert.equal(await response.text(), expected);\n  }\n  record('artifact rewriting malformed JSON and overflow streaming');\n  response = await fetchHub(base, '/api/comments', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{ \"target\": { \"pageToken\": \"page\" }, \"body\": \"hi\" }' });\n  assert.equal(response.status, 201);\n  assert.deepEqual((await response.json()).body, { target: { pageToken: 'page' }, body: 'hi' });\n  seen = requests.findLast(r => r.url === '/api/comments');\n  assert.equal(seen.body, '{\"target\":{\"pageToken\":\"page\"},\"body\":\"hi\"}');\n  assert.equal(seen.headers['content-length'], String(Buffer.byteLength(seen.body)));\n  response = await fetchHub(base, '/api/comments?pageToken=page&boundary=1');\n  assert.equal(response.status, 202);\n  assert.equal(await response.text(), 'x'.repeat(65_536));\n  response = await fetchHub(base, '/api/comments?pageToken=page&overflow=1');\n  assert.equal(response.status, 502);\n  assert.match((await response.json()).error, /oversized comment response/);\n  assert.equal(await (await fetchHub(base, '/api/comments?pageToken=page&empty=1')).text(), '{}');\n  record('parsed comment forwarding and exact bounded response policies');\n  assert.equal((await fetch(base + '/page/page/missing.css')).status, 404);\n  assert.equal((await fetch(base + '/page/page')).status, 200);\n  response = await fetch(base + '/page/file/?q=1', { redirect: 'manual' });\n  assert.equal(response.status, 302);\n  assert.equal(response.headers.get('location'), '/page/file?q=1');\n  assert.equal((await fetch(base + '/page/gone')).status, 404);\n  const mapped = JSON.parse(fs.readFileSync(path.join(dish, 'fleet-artifacts.json')));\n  assert.ok(mapped.file && mapped.page && mapped.minted);\n  assert.equal(mapped.gone, undefined);\n  response = await fetchHub(base, '/hosts/peer/api/notfound');\n  assert.equal(response.status, 404);\n  assert.deepEqual(await response.json(), { peer404: true });\n  assert.equal((await fetchHub(base, '/hosts/peer/api/servererror')).status, 500);\n  assert.equal((await fetchHub(base, '/hosts/peer/api/echo')).status, 200);\n  record('remote404 ownership pruning slash redirect and HTTP500 no-breaker');\n  const ws = new WebSocket(base.replace('http:', 'ws:') + '/hosts/peer/api/sessions/fixture/terminal', { headers: auth });\n  await once(ws, 'open');\n  const echoed = once(ws, 'message');\n  ws.send('R5 binary splice');\n  assert.equal((await echoed)[0].toString(), 'R5 binary splice');\n  ws.close(); await once(ws, 'close');\n  record('real WS bidirectional splice with credential replacement');\n  await Promise.all(long);\n  fs.writeFileSync('/tmp/r5-relay-smoke-result.json', JSON.stringify({ runtime: process.version, results, stderr: errors, limits: ['SSH setup timing uses existing fake-ssh.js delayed3s, not actual daemon', 'No browser implementation/runtime mapping changed', 'Linux only'] }, null, 2) + '\\n');\n  console.log('R5 smoke complete', results.length);\n})().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {\n  if (child && child.exitCode === null) { const exited = once(child, 'exit'); child.kill('SIGTERM'); await exited; }\n  for (const timer of timers) clearTimeout(timer);\n  for (const client of wss.clients) client.terminate();\n  wss.close();\n  peer.closeAllConnections();\n  await new Promise(resolve => peer.close(resolve));\n  fs.rmSync(root, { recursive: true, force: true });\n});\n",
+    "result": {
+      "runtime": "v26.8.2",
+      "results": [
+        {
+          "name": "raw API body and credential policy"
+        },
+        {
+          "name": "public listener admission header allowlist and response filter"
+        },
+        {
+          "name": "artifact rewriting malformed JSON and overflow streaming"
+        },
+        {
+          "name": "parsed comment forwarding and exact bounded response policies"
+        },
+        {
+          "name": "remote404 ownership pruning slash redirect and HTTP500 no-breaker"
+        },
+        {
+          "name": "real WS bidirectional splice with credential replacement"
+        },
+        {
+          "name": "public timeout preserves no-breaker policy"
+        },
+        {
+          "name": "API timeout and breaker short circuit",
+          "durationMs": 10245
+        },
+        {
+          "name": "comment timeout preserves no-breaker policy"
+        },
+        {
+          "name": "unbuffered identity SSE survives first-byte window",
+          "firstMs": 275,
+          "durationMs": 10766
+        },
+        {
+          "name": "SSH fixture setup excluded from first-response deadline",
+          "durationMs": 11327,
+          "setupDelayMs": 3000,
+          "peerDelayMs": 8000,
+          "transport": "real HTTP over delayed fixture Unix forward; not real SSH daemon"
+        }
+      ],
+      "stderr": "pi --list-models output was not parseable, using SDK registry fallback\n",
+      "limits": [
+        "SSH setup timing uses existing fake-ssh.js delayed3s, not actual daemon",
+        "No browser implementation/runtime mapping changed",
+        "Linux only"
+      ]
+    }
+  },
+  "cleanup": "After successful smoke: owned child root server terminated with SIGTERM, its forward shut down, peer/WS listeners closed, timers and temporary HOME/tmux/socket fixture tree removed. Throwaway probe source is archived in this evidence before removal; results retained under /tmp. No live agent sessions or provider credentials used.",
+  "review": "Pending settled implementation/proofs/source push and parent three-reviewer capacity grant"
+}
