@@ -602,6 +602,35 @@ test('malformed raw counters contribute no tokens while retry and cost policies 
   assert.equal(parsed[2].message.usage.cacheWrite, Infinity);
 });
 
+test('OMP chronology keeps billing continuity separate from display identity and retries', () => {
+  const entries = [
+    { type: 'session', cwd: '/chronology' },
+    { type: 'model_change', model: 'provider/selected' },
+    { type: 'message', message: { role: 'assistant', model: 'alias', responseModel: 'billed',
+      content: [], usage: { output: 2, cost: { total: 0.5 } } } },
+    { type: 'model_change', model: 'provider/' },
+    { type: 'message', message: { role: 'assistant', content: [], usage: { output: 3 } } },
+    { type: 'model_change', model: 42, modelId: 'display-only', provider: 7 },
+    { type: 'message', message: { role: 'assistant', content: [], stopReason: 'error', usage: { output: 0 } } },
+  ];
+  const profile = { profileId: 'omp-v1', harnessId: 'omp' };
+  const file = writeSession(entries);
+  const messages = SF.readSessionMessages({ file, ...profile });
+  assert.equal(messages[0].model, 'alias');
+  assert.equal(messages[0].responseModel, 'billed');
+  assert.equal(messages[1].model, undefined, 'chronology is not display identity');
+  const stats = SF.getSessionStats({ file, ...profile });
+  assert.equal(stats.assistantMessages, 3, 'stats count empty failed retries');
+  const usage = SF.buildIndexedUsageFromEntries(entries, profile);
+  assert.equal(usage.total.calls, 2);
+  assert.equal(usage.models['provider/billed'].tokens.output, 2);
+  assert.equal(usage.models['provider/selected'].tokens.output, 3);
+  assert.deepEqual(usage.state, { provider: 'provider', model: 'selected' });
+  const delta = SF.buildIndexedUsageFromEntries(entries.slice(0, 3), profile);
+  SF.extendIndexedUsageFromEntries(delta, entries.slice(3), profile);
+  assert.deepEqual(delta, usage);
+});
+
 test('session stats do not present ZAI Coding Plan usage as free', () => {
   const file = writeSession([
     { type: 'message', message: { role: 'assistant', provider: 'zai', model: 'glm-4.7',

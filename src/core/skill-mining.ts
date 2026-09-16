@@ -32,6 +32,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { extractTextContent } from './helper-content';
 import { finite, record } from './helper-values';
+import { parseSessionEntries } from './session-files';
 import type { SessionEntries } from './session-metadata-contracts';
 import type { SkillActivation, SkillState, SkillProjection } from './session-index-data';
 
@@ -152,11 +153,7 @@ function entryTs(entry: Record<string, unknown>): number | null {
  * when empty, SKILL.md reads and explicit blocks are still detected.
  */
 export function mineSkillsFromContent(content: unknown, opts: SkillMiningOptions = {}): SkillActivation[] {
-  const entries: unknown[] = [];
-  for (const line of String(content || '').split('\n')) {
-    if (!line.trim()) continue;
-    try { entries.push(JSON.parse(line)); } catch { /* torn/partial line */ }
-  }
+  const entries = parseSessionEntries(String(content || ''));
   return mineSkillsFromEntries(entries, opts).records;
 }
 

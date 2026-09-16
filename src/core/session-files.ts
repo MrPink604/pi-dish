@@ -68,6 +68,7 @@ export interface SessionSearchProjection { text: string; tree: boolean; leafId: 
 interface Cached<T> { mtimeMs: number; size: number; value: T }
 interface ActiveTree { ids: Set<unknown>; leafId: unknown }
 interface MessageData { messages: SessionMessage[]; byId: Map<unknown, SessionMessage> }
+interface ModelContinuity { provider: unknown; model: unknown }
 const EMPTY_FIELDS: Readonly<Record<string, unknown>> = Object.freeze({});
 /** Match JS property access on JSON values, including null throwing and boxing. */
 function fields(value: unknown): Record<string, unknown> {
@@ -231,6 +232,37 @@ export function parseSessionEntries(content: string): SessionEntries {
   return entries;
 }
 
+/**
+ * Chronological model changes only; assistant identity and retry/aggregation
+ * remain with each consumer. Reuse one state per pass, not a fact per entry.
+ */
+function advanceModelChange(entry: Record<string, unknown>, state: ModelContinuity, profileId: string | undefined, policy: 'display' | 'usage'): void {
+  if (policy === 'display') {
+    if (profileId === 'omp-v1' && typeof entry.model === 'string') {
+      const slash = entry.model.indexOf('/');
+      if (slash > 0) { state.provider = entry.model.slice(0, slash); state.model = entry.model.slice(slash + 1); }
+      else { state.provider = entry.provider || state.provider; state.model = entry.model; }
+    } else { state.provider = entry.provider || state.provider; state.model = entry.modelId || state.model; }
+    return;
+  }
+  // Persisted billing continuity admits strings only. In particular, OMP's
+  // empty suffix retains the previous model, unlike display pricing fallback.
+  if (profileId === 'omp-v1') {
+    const ref = typeof entry.model === 'string' ? entry.model : '';
+    const slash = ref.indexOf('/');
+    if (slash > 0) {
+      state.provider = ref.slice(0, slash);
+      state.model = ref.slice(slash + 1) || state.model;
+    } else if (ref) {
+      if (typeof entry.provider === 'string' && entry.provider) state.provider = entry.provider;
+      state.model = ref;
+    }
+  } else {
+    if (typeof entry.provider === 'string' && entry.provider) state.provider = entry.provider;
+    if (typeof entry.modelId === 'string' && entry.modelId) state.model = entry.modelId;
+  }
+}
+
 function messageFromEntry(entry: Record<string, unknown>, candidate: SessionFileProfile | undefined, fallbackModel: { provider?: unknown; model?: unknown } = {}): SessionMessage | null {
   if (entry.type === 'message' && entry.message) {
     const message = fields(entry.message);
@@ -239,8 +271,7 @@ function messageFromEntry(entry: Record<string, unknown>, candidate: SessionFile
     // so the interruption is visible without exposing its hidden reasoning.
     if (message.role === 'custom' && message.display === false) return null;
     const usage = sanitizeUsage(message.usage);
-    const estimated = usageCost(candidate, message.provider || fallbackModel.provider,
-      message.responseModel || message.model || fallbackModel.model, message.usage);
+    const estimated = messageUsageCost(candidate, message, fallbackModel);
     if (usage) {
       if (estimated) usage.cost = estimated;
       else delete usage.cost;
@@ -337,18 +368,12 @@ function parseMessageData(content: string, candidate?: SessionFileProfile, leafO
     : activeTree(entries, leafOverride)?.ids || null;
   const messages: SessionMessage[] = [];
   const byId = new Map<unknown, SessionMessage>();
-  let provider: unknown = null, model: unknown = null;
+  const model: ModelContinuity = { provider: null, model: null };
   for (const raw of entries) {
     try {
       const entry = fields(raw);
-      if (entry.type === 'model_change') {
-        if (candidate?.profileId === 'omp-v1' && typeof entry.model === 'string') {
-          const slash = entry.model.indexOf('/');
-          if (slash > 0) { provider = entry.model.slice(0, slash); model = entry.model.slice(slash + 1); }
-          else { provider = entry.provider || provider; model = entry.model; }
-        } else { provider = entry.provider || provider; model = entry.modelId || model; }
-      }
-      const message = messageFromEntry(entry, candidate, { provider, model });
+      if (entry.type === 'model_change') advanceModelChange(entry, model, candidate?.profileId, 'display');
+      const message = messageFromEntry(entry, candidate, model);
       if (!message) continue;
       // Resource lookup is by stable JSONL id across the whole tree. Keep
       // abandoned entries addressable so an already-rendered lazy image URL
@@ -604,6 +629,12 @@ function usageCost(candidate: SessionFileProfile | undefined, provider: unknown,
   return estimated || reportedCost(candidate?.harnessId, provider, usage);
 }
 
+/** Display/stats price the raw selected/response identity without rewriting it. */
+function messageUsageCost(candidate: SessionFileProfile | undefined, message: Record<string, unknown>, fallback: { provider?: unknown; model?: unknown }): Partial<UsageCosts> | undefined {
+  return usageCost(candidate, message.provider || fallback.provider,
+    message.responseModel || message.model || fallback.model, message.usage);
+}
+
 function isEmptyFailedUsage(message: Record<string, unknown>): boolean {
   if (message?.stopReason !== 'error') return false;
   const usage = message.usage;
@@ -645,19 +676,13 @@ function computeSessionStats(filePath: string, _stats: fs.Stats, candidate: Sess
   // less than tokens.output) so the average isn't diluted by unmeasured ones.
   let genMs = 0, genOutput = 0;
   const responseDurations: number[] = [];
-  let provider: unknown = null, model: unknown = null;
+  const model: ModelContinuity = { provider: null, model: null };
   for (const line of fs.readFileSync(filePath, 'utf-8').split('\n')) {
     if (!line.trim()) continue;
     let parsed: unknown;
     try { parsed = parseEntry(line); } catch { continue; }
     const entry = fields(parsed);
-    if (entry.type === 'model_change') {
-      if (candidate.profileId === 'omp-v1' && typeof entry.model === 'string') {
-        const slash = entry.model.indexOf('/');
-        if (slash > 0) { provider = entry.model.slice(0, slash); model = entry.model.slice(slash + 1); }
-        else { provider = entry.provider || provider; model = entry.model; }
-      } else { provider = entry.provider || provider; model = entry.modelId || model; }
-    }
+    if (entry.type === 'model_change') advanceModelChange(entry, model, candidate.profileId, 'display');
     // Both Pi and OMP (snapcompact included) record a `compaction` entry per
     // compaction; abandoned-branch entries are counted here like every other
     // counter in this pass.
@@ -677,8 +702,7 @@ function computeSessionStats(filePath: string, _stats: fs.Stats, candidate: Sess
         tokens.cacheWrite += tokenAmount(u.cacheWrite);
         reasoningTokens += tokenAmount(u.reasoning);
       }
-      addReportedCosts(costBucket, usageCost(candidate,
-        m.provider || provider, m.responseModel || m.model || model, m.usage));
+      addReportedCosts(costBucket, messageUsageCost(candidate, m, model));
       const gen = assistantGenStats(entry);
       if (gen.durationMs && gen.outputTokens) {
         genMs += gen.durationMs;
@@ -727,7 +751,8 @@ export function extendIndexedUsageFromEntries(usage: IndexedUsage, entries: Sess
 function accumulateIndexedUsage(usage: IndexedUsage, entries: SessionEntries, candidate: SessionFileProfile): IndexedUsage {
   const profileId = candidate.profileId || 'pi-v3';
   const { total, days, models } = usage;
-  let provider = usage.state?.provider ?? null, model = usage.state?.model ?? 'unknown', cwd = usage.cwd ?? null;
+  const model = { provider: usage.state?.provider ?? null, model: usage.state?.model ?? 'unknown' };
+  let cwd = usage.cwd ?? null;
   const add = (bucket: UsageBucket, u: Record<string, unknown> & { cost?: Partial<UsageCosts> }, duration: number) => {
     bucket.calls = (bucket.calls || 0) + 1;
     bucket.tokens ||= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 };
@@ -740,33 +765,18 @@ function accumulateIndexedUsage(usage: IndexedUsage, entries: SessionEntries, ca
   for (const raw of entries) {
     const e = fields(raw);
     if (e.type === 'session' && typeof e.cwd === 'string' && e.cwd) cwd = e.cwd;
-    if (e.type === 'model_change') {
-      if (profileId === 'omp-v1') {
-        const ref = typeof e.model === 'string' ? e.model : '';
-        const slash = ref.indexOf('/');
-        if (slash > 0) {
-          provider = ref.slice(0, slash);
-          model = ref.slice(slash + 1) || model;
-        } else if (ref) {
-          if (typeof e.provider === 'string' && e.provider) provider = e.provider;
-          model = ref;
-        }
-      } else {
-        if (typeof e.provider === 'string' && e.provider) provider = e.provider;
-        if (typeof e.modelId === 'string' && e.modelId) model = e.modelId;
-      }
-    }
+    if (e.type === 'model_change') advanceModelChange(e, model, profileId, 'usage');
     const message = e.type === 'message' && fields(e.message ?? EMPTY_FIELDS);
     const m = message && message.role === 'assistant' ? message : null;
     if (!m) continue;
     // Providers may emit one assistant error per retry. A rejected attempt
     // with no tokens and no cost is not usage and must not become a chart call.
     if (isEmptyFailedUsage(m)) continue;
-    const p = (typeof m.provider === 'string' && m.provider) || provider || 'unknown';
+    const p = (typeof m.provider === 'string' && m.provider) || model.provider || 'unknown';
     // Routed models (for example OpenRouter `auto`) bill under the concrete
     // response model, not the selected alias recorded in message.model.
     const mid = (typeof m.responseModel === 'string' && m.responseModel)
-      || (typeof m.model === 'string' && m.model) || model || 'unknown';
+      || (typeof m.model === 'string' && m.model) || model.model || 'unknown';
     const ref = `${p}/${mid}`;
     const ts = entryDate(e.timestamp || m.timestamp);
     const day = Number.isFinite(ts.getTime()) ? `${ts.getFullYear()}-${String(ts.getMonth() + 1).padStart(2, '0')}-${String(ts.getDate()).padStart(2, '0')}` : 'unknown';
@@ -777,7 +787,7 @@ function accumulateIndexedUsage(usage: IndexedUsage, entries: SessionEntries, ca
     add(modelBucket, u, duration); add(modelBucket.days[day] ||= {}, u, duration);
   }
   usage.cwd = cwd;
-  usage.state = { provider, model };
+  usage.state = model;
   return usage;
 }
 

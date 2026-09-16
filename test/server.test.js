@@ -3773,6 +3773,21 @@ test('OMP custom /share imports and serves its exact native live HTML', async ()
   assert.equal(invalid.status, 400);
 });
 
+test('OMP import retains permissive native bytes but still requires a header', async () => {
+  const wrap = data => `<html><script id='session-data'>!${Buffer.from(JSON.stringify(data)).toString('base64')}</script></html>`;
+  const html = wrap({ header: { id: 'permissive-native' }, entries: [] });
+  const imported = await fetch(`${base}/api/shares/import`, {
+    method: 'POST', headers: { 'Content-Type': 'text/html' }, body: html,
+  });
+  assert.equal(imported.status, 200);
+  const result = await imported.json();
+  assert.equal(await (await fetch(`${base}${result.path}`)).text(), html);
+  const missingHeader = await fetch(`${base}/api/shares/import`, {
+    method: 'POST', headers: { 'Content-Type': 'text/html' }, body: wrap({ entries: [] }),
+  });
+  assert.equal(missingHeader.status, 400);
+});
+
 test('GET/DELETE /share reflect and revoke the current share state', async () => {
   const created = await post(`/api/sessions/${TREE_ID}/share`, {});
   const state = await get(`/api/sessions/${TREE_ID}/share`);

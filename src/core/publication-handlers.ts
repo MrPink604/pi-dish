@@ -10,6 +10,7 @@ import { canonicalSessionId } from './session-key';
 import { registryIdentity, routeIdentity, routeSessionId } from './session-ownership';
 import { readFileForViewer } from './file-mention';
 import { renderFilePage } from './file-page';
+import { readOmpExportData } from './omp-export';
 import type { SessionSource, DiscoveryCandidate } from './session-source-contracts';
 import type { BridgeRegistryEntry } from './contracts';
 import type { SessionReadHandlers } from './session-read-handlers';
@@ -125,11 +126,8 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
 
   function validOmpShareHtml(html: unknown): html is string {
     if (typeof html !== 'string' || !html.includes('<html')) return false;
-    const match = html.match(/<script\b(?=[^>]*\bid=["']session-data["'])[^>]*>([\s\S]*?)<\/script>/i);
-    if (!match) return false;
     try {
-      const data: unknown = JSON.parse(Buffer.from(match[1].trim(), 'base64').toString('utf8'));
-      return !!fields(data).header && Array.isArray(fields(data).entries);
+      return !!readOmpExportData(html, 'import').header;
     } catch {
       return false;
     }

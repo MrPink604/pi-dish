@@ -15,7 +15,8 @@ export interface OmpExportData {
 export interface OmpExportOptions {
     snapshot?: unknown;
 }
-export declare function readOmpExportData(html: string): OmpExportData;
+/** Imports retain Buffer's permissive base64 decoding; exports enforce the alphabet. */
+export declare function readOmpExportData(html: string, policy?: 'export' | 'import'): OmpExportData;
 export declare function normalizeSnapshot(snapshot: unknown): OmpShareSnapshot | null;
 export declare function injectOmpExportSnapshot(html: string, snapshot: unknown): string;
 export declare function exportOmpSessionHtml(sessionPath: string, outputPath: string, { snapshot }?: OmpExportOptions): Promise<string>;

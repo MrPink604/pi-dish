@@ -156,3 +156,27 @@ test('mine: truncation evidence is batch-local until a full re-index', () => {
   assert.equal(rebuilt.records[0].truncatedTo, 13);
   assert.deepEqual(rebuilt.records[1].ranges, [[7, 13]]);
 });
+
+test('mine: tolerant physical framing preserves later cwd and model continuity', () => {
+  const content = '\n{torn\n42\n' + jsonl([
+    session, modelChange,
+    { type: 'future_native_event', payload: { model: 'not-continuity' } },
+    assistantRead('framed', { path: SKILL, offset: 7 }),
+    toolResult('tc_framed', '[Showing lines 7-13 of 50. Use offset=14 to continue.]'),
+  ]);
+  const [record] = mineSkillsFromContent(content, { sessionId: 'framed', skillCtx: ctx });
+  assert.equal(record.cwd, session.cwd, 'mining is not restricted to physical-first-line headers');
+  assert.equal(record.model, 'anthropic/claude-x');
+  assert.deepEqual(record.ranges, [[7, 13]]);
+  assert.throws(() => mineSkillsFromContent('null\n' + content), TypeError);
+});
+
+test('mine: compaction archives are opaque while subsequent skill evidence survives', () => {
+  const archive = { type: 'compaction', id: 'compact', parentId: null,
+    preserveData: { archive: 'x'.repeat(70_000) } };
+  const content = jsonl([session, archive, assistantRead('after-archive', { path: SKILL })]);
+  const [record] = mineSkillsFromContent(content, { skillCtx: ctx });
+  assert.equal(record.entryId, 'after-archive');
+  assert.equal(record.skill, SKILL);
+  assert.equal(record.cwd, session.cwd);
+});
