@@ -119,10 +119,11 @@ to edit generated `public/app.js`. See [the composition record](docs/browser-com
 
 `marked` and `highlight.js` are vendored — **no CDN scripts**. Phones on the
 LAN may have no internet, and a silently missing CDN `marked` used to degrade
-markdown to a crude regex fallback. `scripts/build-vendor.js` copies marked's
-UMD build and wraps highlight.js's CJS `lib/common` into a browser bundle
-(the npm package ships no browser build). Re-run it after bumping either
-dependency. KaTeX's bundle and stylesheet load only when a session is selected,
+markdown to a crude regex fallback. The checked `scripts/build-vendor.ts`
+implementation runs through its generated `.js` command path: it copies marked's
+UMD build and uses the pinned esbuild to bundle highlight.js's CJS `lib/common`
+for the browser, preserving `window.hljs` without a handwritten module loader.
+Re-run it after bumping either dependency. KaTeX's bundle and stylesheet load only when a session is selected,
 before its transcript renders. The vendor build retains only KaTeX's WOFF2
 fonts — supported clients are modern Chrome/Electron, and shipping the WOFF/TTF
 fallbacks triples packaged font bytes without changing what they request. Note

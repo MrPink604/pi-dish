@@ -311,8 +311,9 @@ and preserves first-line shebangs and the existing executable modes.
 outputs without repairing them; `npm run typecheck` includes this gate.
 Commit sources and generated outputs together. This compiler is specific to
 the tool siblings and named runner support files; core/browser/edge build
-algorithms and output locations stay unchanged. The vendor tool retains its
-handwritten highlight loader until R12.
+algorithms and output locations stay unchanged. R12 replaces the vendor tool's
+handwritten highlight dependency collector and module loader with the pinned
+esbuild bundle; the browser still consumes the same local `window.hljs` API.
 
 `tsconfig.configs.json` checks the actual host configuration bodies without
 emission. `eslint.config.js` is the named strict-`checkJs` exception because
