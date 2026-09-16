@@ -39,7 +39,7 @@ export interface LiveSourceObservation {
 }
 export interface SourceLookup {
     /** Keep raw route bytes: encoded Pi aliases must not enable partial matching. */
-    readonly route: string;
+    readonly route: unknown;
     readonly exact?: boolean;
     readonly discover?: boolean;
     readonly live: readonly LiveSourceObservation[];
