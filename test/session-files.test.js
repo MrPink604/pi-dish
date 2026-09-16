@@ -555,6 +555,53 @@ test('indexed usage treats ZAI plan zeros as unpriced and drops empty failed ret
   assert.equal(usage.models['zai/glm-5.2-highspeed'], undefined);
 });
 
+test('malformed raw counters contribute no tokens while retry and cost policies retain raw usage', () => {
+  const entries = [
+    { type: 'session', cwd: '/mixed' },
+    { type: 'model_change', provider: 'test', modelId: 'selected' },
+    { type: 'message', timestamp: '2026-07-01T10:00:02.000Z', message: {
+      role: 'assistant', timestamp: Date.parse('2026-07-01T10:00:01.000Z'),
+      content: [], stopReason: 'error', responseModel: 'billed',
+      usage: { input: '8', output: { tokens: 9 }, cacheRead: null,
+        cacheWrite: 'nonfinite-counter', reasoning: [5], cost: { total: 0.5 } },
+    } },
+    { type: 'message', message: { role: 'assistant', content: [], stopReason: 'error',
+      usage: { input: '7' } } },
+    { type: 'message', message: { role: 'assistant', content: [], stopReason: 'error',
+      usage: { input: null, output: false } } },
+    { type: 'message', message: { role: 'assistant', content: [],
+      usage: { input: -2.5, output: 1.25, cacheRead: 4, cacheWrite: -0.5, reasoning: 2.75 } } },
+    { type: 'message', timestamp: '2026-07-01T10:00:05.000Z', message: {
+      role: 'assistant', timestamp: Date.parse('2026-07-01T10:00:03.000Z'), content: [],
+      usage: { input: 3, output: 2, cacheRead: 1, cacheWrite: 1, reasoning: 1 },
+    } },
+  ];
+  const lines = entries.map(entry => JSON.stringify(entry).replace('"nonfinite-counter"', '1e309'));
+  const file = path.join(tmpDir, `session-${fileSeq++}.jsonl`);
+  fs.writeFileSync(file, lines.join('\n') + '\n');
+  const stats = SF.getSessionStats(file);
+  assert.deepEqual(stats.tokens, { input: 0.5, output: 3.25, cacheRead: 5, cacheWrite: 0.5 });
+  assert.equal(stats.reasoningTokens, 3.75, 'finite fractional and negative amounts remain valid');
+  assert.equal(stats.assistantMessages, 5, 'stats still count empty retries');
+  assert.equal(stats.costs.total, 0.5, 'original reported cost survives malformed counters');
+  assert.equal(stats.costUnavailable.total, 4);
+  assert.equal(stats.genOutput, 2);
+  assert.equal(stats.genMs, 3000, 'raw output truthiness still selects measured timing');
+  const parsed = SF.parseSessionEntries(lines.join('\n'));
+  const usage = SF.buildIndexedUsageFromEntries(parsed);
+  assert.deepEqual(usage.total.tokens, { ...stats.tokens, reasoning: 3.75 });
+  assert.equal(usage.total.calls, 4, 'raw coercible retry input still counts but contributes no amount');
+  assert.equal(usage.total.costs.total, 0.5);
+  assert.equal(usage.total.costUnavailable.total, 3);
+  assert.equal(usage.models['test/billed'].calls, 1, 'response-model billing remains separate');
+  const extended = SF.buildIndexedUsageFromEntries(SF.parseSessionEntries(lines.slice(0, 3).join('\n')));
+  assert.strictEqual(SF.extendIndexedUsageFromEntries(extended,
+    SF.parseSessionEntries(lines.slice(3).join('\n'))), extended, 'delta mutates the same borrowed usage');
+  assert.deepEqual(extended, usage, 'full and delta projections use the same operand policy');
+  assert.equal(parsed[2].message.usage.input, '8', 'raw usage is not rewritten');
+  assert.equal(parsed[2].message.usage.cacheWrite, Infinity);
+});
+
 test('session stats do not present ZAI Coding Plan usage as free', () => {
   const file = writeSession([
     { type: 'message', message: { role: 'assistant', provider: 'zai', model: 'glm-4.7',

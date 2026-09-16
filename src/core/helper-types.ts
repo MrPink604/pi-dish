@@ -22,7 +22,7 @@ export interface HelperHost {
 export interface ModelRef { readonly id?: string; readonly modelId?: string; readonly provider?: string; readonly thinking?: readonly string[] | null }
 export interface SessionQueryTerm { readonly neg: boolean; readonly field: string | null; readonly value: string }
 export interface SessionQuery { terms: SessionQueryTerm[]; since: number | null; before: number | null }
-export interface RefContextEntry { readonly ref: string; readonly name?: string; readonly host?: string; readonly cwd?: string; readonly isActive?: boolean }
+export interface RefContextEntry { readonly ref: string; readonly name?: string; readonly host?: string; readonly cwd?: string; readonly isActive?: boolean | null }
 export interface ImageBlock { readonly url?: string; readonly data?: string; readonly mimeType: string }
 export interface KatexRenderer { renderToString(source: string, options: { displayMode: boolean; throwOnError: false }): string }
 export interface MathToken { type: string; raw: string; text: string; display?: boolean }

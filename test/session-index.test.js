@@ -570,6 +570,65 @@ test('persisted numeric activity and missing legacy continuity preserve warm rea
   assert.strictEqual(index.scanSessions([source]).infos.get(file), info, 'scan metadata remains borrowed');
 });
 
+test('malformed consumed persisted usage buckets rebuild instead of entering a warm scan', async () => {
+  const file = writeSession([
+    userMsg('usage bucket rebuild'),
+    { type: 'message', message: { role: 'assistant', provider: 'test', model: 'model',
+      content: [], usage: { input: 3, output: 2 } } },
+  ]);
+  const source = sourceForFile(file);
+  index.scanSessions([source]);
+  index.resetForTests();
+  const log = path.join(indexDir, 'meta.ndjson');
+  const records = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+  const valid = records.findLast(record => record.f === file && !record.del);
+  const mutations = [
+    usage => { usage.total.tokens.input = '3'; },
+    usage => { usage.total.costs.total = null; },
+    usage => { usage.total.costUnavailable.input = {}; },
+    usage => { usage.total.measured = '0'; },
+    usage => { usage.days.unknown.durationMs = false; },
+    usage => { usage.days.unknown.tokens.output = null; },
+    usage => { usage.models['test/model'].provider = 42; },
+    usage => { usage.models['test/model'].days.unknown.costs = []; },
+    usage => { usage.models['test/model'].calls = '1'; },
+    usage => { usage.models['test/model'].days.unknown.costUnavailable.total = '1'; },
+  ];
+  for (const mutate of mutations) {
+    const broken = structuredClone(valid);
+    mutate(broken.v.usage);
+    fs.appendFileSync(log, JSON.stringify(broken) + '\n');
+    const stale = withBudget(0, () => index.scanSessions([source]));
+    assert.equal(stale.infos.has(file), false, 'malformed consumed fields cannot be served as warm usage');
+    assert.equal(stale.indexing, true);
+    await waitFor(() => !withBudget(0, () => index.scanSessions([source])).indexing, 'usage bucket rebuild');
+    const rebuilt = index.scanSessions([source]).infos.get(file).usage;
+    assert.equal(rebuilt.total.tokens.input, 3);
+    assert.equal(rebuilt.total.calls, 1);
+    index.resetForTests();
+  }
+});
+
+test('persisted sparse day and model buckets retain omitted zero fields on warm reads', () => {
+  const file = writeSession([userMsg('sparse usage')]);
+  const source = sourceForFile(file);
+  index.scanSessions([source]);
+  index.resetForTests();
+  const log = path.join(indexDir, 'meta.ndjson');
+  const records = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+  const valid = records.findLast(record => record.f === file && !record.del);
+  valid.v.usage.days.unknown = { calls: 1, tokens: { output: 2 }, costs: { total: 0 } };
+  valid.v.usage.models['test/model'] = { provider: 'test', model: 'model', days: { unknown: {} } };
+  delete valid.v.usage.state;
+  fs.appendFileSync(log, JSON.stringify(valid) + '\n');
+  const warm = withBudget(0, () => index.scanSessions([source]));
+  assert.equal(warm.indexing, false);
+  const usage = warm.infos.get(file).usage;
+  assert.deepEqual(usage.days.unknown, { calls: 1, tokens: { output: 2 }, costs: { total: 0 } });
+  assert.deepEqual(usage.models['test/model'], { provider: 'test', model: 'model', days: { unknown: {} } });
+  assert.equal(Object.hasOwn(usage, 'state'), false);
+});
+
 test('persisted invalid search/skills continuity is stale without a schema bump', async () => {
   const file = writeSession([userMsg('continuity rebuild')]);
   const source = sourceForFile(file);
