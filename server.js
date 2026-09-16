@@ -6,6 +6,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const piSDK = require('./lib/pi-sdk');
+const { createSessionReadHandlers } = require('./lib/session-read-handlers');
 const { execFile } = require('child_process');
 const { getAllRPCSessions } = require('./lib/rpc-session');
 const {
@@ -28,9 +29,6 @@ const comments = require('./lib/comments');
 const stt = require('./lib/stt');
 const {
   readSessionMessages,
-  readSessionMessagesAtLeaf,
-  readSessionMessageById,
-  getSessionStats,
   readSessionCwd,
   readSessionTailEntry,
 } = require('./lib/session-files');
@@ -48,7 +46,7 @@ const { refreshHarnessPricing } = require('./lib/harness-pricing');
 const { listTaskAgents } = require('./lib/harness-agents');
 const {
   createSessionOwnership, routeIdentity, routeSessionId, registryIdentity,
-  sessionIdentityFields, sessionSwitchRouteData, liveSessionSupports,
+  sessionSwitchRouteData, liveSessionSupports,
   spawnAllowsManagedClose, spawnAllowsRestart,
 } = require('./lib/session-ownership');
 const { createSessionLaunch, harnessLaunchSpec } = require('./lib/session-launch');
@@ -686,11 +684,6 @@ function apiIdForCandidate(candidate) {
 // Helpers
 // =========================================================================
 
-// Pi reports percent as a float (e.g. 0.3121); show one decimal max.
-function roundPercent(p) {
-  if (p == null) return p;
-  return Math.round(p * 10) / 10;
-}
 
 const MODEL_CONTEXT_WINDOWS = {
   // Claude 1M-context models (must come before the 200k family prefixes)
@@ -1945,198 +1938,17 @@ app.put('/api/settings', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Historical image blocks can be megabytes. Keep those bytes out of the
-// paginated JSON so the browser can decode/cache them as resources and defer
-// off-screen images with loading=lazy. Streaming events still carry inline
-// data; only authoritative JSONL-backed responses are projected this way.
-const VALID_ENTRY_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,198}[A-Za-z0-9])?$/;
-
-function messageForClient(sessionId, message, index) {
-  if (!Array.isArray(message.content)) return { ...message, index };
-  let changed = false;
-  // Current Pi JSONL entries have collision-checked IDs. Keep the positional
-  // fallback for legacy pre-tree sessions, whose append-only stream cannot be
-  // reshuffled by branch navigation.
-  const resourceId = typeof message.id === 'string' && VALID_ENTRY_ID_RE.test(message.id)
-    ? message.id : String(index);
-  const content = message.content.map((block, blockIndex) => {
-    if (!block || block.type !== 'image' || typeof block.data !== 'string' || !block.data) return block;
-    changed = true;
-    const { data, ...metadata } = block;
-    return {
-      ...metadata,
-      mimeType: block.mimeType || 'image/png',
-      url: `/api/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(resourceId)}/images/${blockIndex}`,
-    };
-  });
-  return { ...message, ...(changed ? { content } : {}), index };
-}
-
-// OMP externalizes image bytes (≥1KB base64) out of the session JSONL into a
-// content-addressed blob store, leaving `data: "blob:sha256:<hex>"` refs in
-// the entry — decoding that ref as base64 yields garbage, not the image.
-// Resolve refs against the harness's blob store; the strict hex-only match
-// also keeps the file lookup traversal-safe. Returns null when the bytes are
-// unavailable (no store for this harness, or the blob was pruned).
-const BLOB_REF_RE = /^blob:sha256:([0-9a-f]{64})$/;
-function imageBlockBytes(session, block) {
-  const ref = BLOB_REF_RE.exec(block.data);
-  if (!ref) return Buffer.from(block.data, 'base64');
-  const blobsPath = getHarness(session.harnessId)?.blobsPath?.();
-  if (!blobsPath) return null;
-  try { return fs.readFileSync(path.join(blobsPath, ref[1])); } catch { return null; }
-}
-
-app.get('/api/sessions/:id/messages/:messageId/images/:blockIndex', (req, res) => {
-  const messageId = req.params.messageId;
-  const blockIndex = Number(req.params.blockIndex);
-  if (!VALID_ENTRY_ID_RE.test(messageId) || !Number.isInteger(blockIndex) || blockIndex < 0) {
-    return res.status(400).json({ error: 'valid message id and image index required' });
-  }
-  const session = findSessionSource(req.params.id);
-  if (!session) return res.status(404).json({ error: 'Session not found' });
-  let message = readSessionMessageById(session, messageId);
-  // Nearly-free compatibility for URLs emitted for legacy id-less sessions.
-  if (!message && /^\d+$/.test(messageId)) {
-    const legacyIndex = Number(messageId);
-    if (Number.isSafeInteger(legacyIndex)) message = readSessionMessages(session)[legacyIndex];
-  }
-  const block = message?.content?.[blockIndex];
-  if (!block || block.type !== 'image' || typeof block.data !== 'string' || !block.data) {
-    return res.status(404).json({ error: 'Image not found' });
-  }
-  const bytes = imageBlockBytes(session, block);
-  if (!bytes) return res.status(404).json({ error: 'Image not found' });
-  const mimeType = /^image\/[A-Za-z0-9.+-]+$/.test(block.mimeType || '') ? block.mimeType : 'image/png';
-  res.setHeader('Cache-Control', 'private, no-cache');
-  res.type(mimeType).send(bytes);
+const sessionReadHandlers = createSessionReadHandlers({
+  findSessionSource, liveSessionHistoryPending, getRegisteredSession, getRPCSession,
+  getLiveSession, liveTreeLeafId, getLiveContextUsage, getContextWindow, describeRuntime,
 });
+const { exportSessionHtml, getOmpShareSnapshot } = sessionReadHandlers;
 
-app.get('/api/sessions/:id/messages', async (req, res) => {
-  const sessionId = req.params.id;
-  const isActive = !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId);
+app.get('/api/sessions/:id/messages/:messageId/images/:blockIndex', sessionReadHandlers.image);
 
-  const sessionSource = findSessionSource(sessionId);
-  if (!sessionSource) {
-    return res.json({
-      messages: [], session: { id: sessionId, isActive },
-      totalMessages: 0, firstIndex: null, lastIndex: null, hasMore: false,
-    });
-  }
-  // Pricing is optional response metadata, not a transcript dependency.
-  // Refresh in the background: existing recorded/stale costs render now and
-  // the pricing revision invalidates the parse cache when a changed Pi or OMP
-  // catalog lands. OMP's command may only settle at its 15s timeout after
-  // already printing valid JSON, so transcript delivery never awaits it.
-  if (sessionSource.harnessId === 'pi' || sessionSource.harnessId === 'omp') {
-    void refreshHarnessPricing(sessionSource.harnessId);
-  }
+app.get('/api/sessions/:id/messages', sessionReadHandlers.messages);
 
-  // Pagination: messages are indexed by their position in the displayable
-  // message stream (0-based). `limit` defaults to 50. With no cursor we
-  // return the tail. `before=<idx>` returns messages with index < idx.
-  // `after=<idx>` returns messages with index > idx (no limit; for
-  // incremental catch-up after a turn ends).
-  // Coerce non-numeric cursors to null so they fall through to the tail
-  // branch. A NaN cursor otherwise slips past the startIdx>endIdx guard
-  // (NaN comparisons are false) and slice(NaN,…) returns the whole session.
-  const cursor = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : null; };
-  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit, 10) || 50));
-  const before = req.query.before != null ? cursor(req.query.before) : null;
-  const after = req.query.after != null ? cursor(req.query.after) : null;
-
-  const routeId = apiIdForCandidate(sessionSource);
-  const identity = sessionIdentityFields(sessionSource.harnessId, sessionSource.nativeSessionId);
-  const info = parseSessionFile(sessionSource);
-  // Same label the sidebar row carries, or header and sidebar disagree the
-  // moment a subagent transcript is opened.
-  const label = subsessionLabel(sessionSource);
-  if (label) info.name = label;
-  // Overlay live context usage when the session can report it.
-  const liveUsage = getLiveContextUsage(sessionId);
-  if (liveUsage) {
-    if (liveUsage.tokens != null) info.contextTokens = liveUsage.tokens;
-    if (liveUsage.percent != null) info.contextPercent = roundPercent(liveUsage.percent);
-    if (liveUsage.contextWindow) info.contextWindow = liveUsage.contextWindow;
-  }
-  let all;
-  // OMP's live ReadonlySessionManager owns the current leaf. A plain
-  // navigateTree may not append a JSONL anchor, so deriving the path from the
-  // physical last line can show the abandoned branch after navigation.
-  if (sessionSource.harnessId === 'omp' && isActive) {
-    try {
-      const sess = await getLiveSession(sessionId);
-      if (sess instanceof BridgeSession && liveSessionSupports(sess, 'treeRead')) {
-        all = readSessionMessagesAtLeaf(sessionSource, await liveTreeLeafId(sess));
-      }
-    } catch {
-      // Transcript history remains readable if a live bridge disappears
-      // between registry lookup and this request; only tree routes require it.
-    }
-  }
-  if (!all) all = readSessionMessages(sessionSource);
-  const totalMessages = all.length;
-  let startIdx, endIdx; // inclusive
-  if (after != null) {
-    startIdx = after + 1;
-    endIdx = totalMessages - 1;
-  } else if (before != null) {
-    endIdx = before - 1;
-    startIdx = Math.max(0, endIdx - limit + 1);
-  } else {
-    endIdx = totalMessages - 1;
-    startIdx = Math.max(0, endIdx - limit + 1);
-  }
-  if (startIdx > endIdx || totalMessages === 0) {
-    return res.json({
-      messages: [],
-      session: { ...identity, isActive, ...info },
-      totalMessages,
-      firstIndex: null,
-      lastIndex: null,
-      hasMore: startIdx > 0 && totalMessages > 0,
-    });
-  }
-
-  const slice = all.slice(startIdx, endIdx + 1)
-    .map((m, i) => messageForClient(routeId, m, startIdx + i));
-  res.json({
-    messages: slice,
-    session: { ...identity, isActive, ...info },
-    totalMessages,
-    firstIndex: startIdx,
-    lastIndex: endIdx,
-    hasMore: startIdx > 0,
-  });
-});
-
-// In-session text search: by default, returns the stream indexes of messages
-// whose text content matches all whitespace-separated tokens (case-insensitive).
-// `mode=any` is the explicit advanced-search click-through contract: the
-// advanced result already proved session-wide AND, and this mode returns each
-// relevant message when those terms are distributed through the transcript.
-app.get('/api/sessions/:id/search', (req, res) => {
-  const query = (req.query.q || '').trim().toLowerCase();
-  if (!query) return res.json({ matches: [], totalMessages: 0 });
-  const mode = String(req.query.mode || 'message');
-  if (mode !== 'message' && mode !== 'any') {
-    return res.status(400).json({ error: 'mode must be message or any' });
-  }
-  const session = findSessionSource(req.params.id);
-  if (!session) return res.status(404).json({ error: 'Session not found' });
-
-  const tokens = query.split(/\s+/).filter(Boolean);
-  const all = readSessionMessages(session);
-  const matches = [];
-  for (let i = 0; i < all.length; i++) {
-    const text = extractTextContent(all[i].content).toLowerCase();
-    const matched = mode === 'any'
-      ? tokens.some(t => text.includes(t))
-      : tokens.every(t => text.includes(t));
-    if (text && matched) matches.push({ index: i, role: all[i].role });
-  }
-  res.json({ matches, totalMessages: all.length });
-});
+app.get('/api/sessions/:id/search', sessionReadHandlers.search);
 
 // Normalize client-sent attachments to pi's ImageContent shape, dropping
 // anything malformed rather than failing the whole prompt.
@@ -2362,104 +2174,11 @@ app.post('/api/sessions/:id/thinking', async (req, res) => {
   }
 });
 
-// Aggregate token/cost stats: sum assistant usage from the JSONL and overlay
-// live context usage when a backend reports it. One path for every backend —
-// an earlier RPC short-circuit returned pi's raw get_session_stats shape,
-// which the stats modal doesn't read (it expects the fields built below), and
-// it re-rolled the bridge-vs-RPC dispatch that belongs in getLiveSession.
-app.get('/api/sessions/:id/stats', async (req, res) => {
-  const sessionId = req.params.id;
-  try {
-    const session = findSessionSource(sessionId);
-    if (!session) {
-      if (liveSessionHistoryPending(sessionId)) {
-        return res.status(409).json({ error: 'Session has no persisted history yet' });
-      }
-      return res.status(404).json({ error: 'Session not found' });
-    }
-    if (session.harnessId === 'pi' || session.harnessId === 'omp') {
-      await refreshHarnessPricing(session.harnessId);
-    }
+app.get('/api/sessions/:id/stats', sessionReadHandlers.stats);
 
-    const { tokens, reasoningTokens, cost, costs, costUnavailable, responseTiming, userMessages, assistantMessages, toolCalls, toolResults, compactions, genMs, genOutput } =
-      getSessionStats(session);
-
-    const reg = getRegisteredSession(sessionId);
-    const contextUsage = getLiveContextUsage(sessionId);
-    const info = parseSessionFile(session);
-    res.json({
-      sessionFile: session.file,
-      sessionId: apiIdForCandidate(session),
-      ...sessionIdentityFields(session.harnessId, session.nativeSessionId),
-      runtime: await describeRuntime(sessionId),
-      cwd: reg?.cwd || info.cwd || null,
-      model: reg?.model || info.model || null,
-      thinkingLevel: reg?.thinkingLevel || null,
-      userMessages,
-      assistantMessages,
-      toolCalls,
-      toolResults,
-      compactions,
-      totalMessages: userMessages + assistantMessages + toolResults,
-      tokens: { ...tokens, total: tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite },
-      cost,
-      costs,
-      costUnavailable,
-      reasoningTokens,
-      responseTiming,
-      genMs,
-      genOutput,
-      contextUsage: contextUsage || {
-        tokens: info.contextTokens || null,
-        contextWindow: info.contextWindow,
-        percent: info.contextPercent ?? null,
-      },
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-async function getOmpShareSnapshot(session) {
-  if (session?.profileId !== 'omp-v1') return undefined;
-  const registered = getRegisteredSession(apiIdForCandidate(session));
-  if (registered?.capabilities?.shareSnapshot !== true) return undefined;
-  try {
-    const live = await getLiveSession(apiIdForCandidate(session));
-    if (!(live instanceof BridgeSession) || !liveSessionSupports(live, 'shareSnapshot')) return undefined;
-    return await live.getShareSnapshot();
-  } catch {
-    // A native OMP JSONL export remains useful when an old or disconnected
-    // bridge cannot provide the live-only system prompt and tool catalog.
-    return undefined;
-  }
-}
-
-async function exportSessionHtml(session, outputPath, { shareSnapshot, snapshotResolved = false } = {}) {
-  if (!snapshotResolved) shareSnapshot = await getOmpShareSnapshot(session);
-  return piSDK.exportSessionHtml(session.file, outputPath, session.profileId, { shareSnapshot });
-}
 
 // Export any session (active or not) to a standalone HTML file.
-app.get('/api/sessions/:id/export', async (req, res) => {
-  try {
-    const session = findSessionSource(req.params.id);
-    if (!session) {
-      if (liveSessionHistoryPending(req.params.id)) {
-        return res.status(409).json({ error: 'Session has no persisted history yet' });
-      }
-      return res.status(404).json({ error: 'Session not found' });
-    }
-    if (session.harnessId !== 'pi' && session.harnessId !== 'omp') {
-      return res.status(409).json({ error: 'HTML export is only supported for Pi and OMP sessions.' });
-    }
-    const outPath = path.join(os.tmpdir(), `pi-dish-export-${req.params.id.slice(-12)}.html`);
-    const htmlPath = await exportSessionHtml(session, outPath);
-    res.download(htmlPath, path.basename(session.file, '.jsonl') + '.html');
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.get('/api/sessions/:id/export', sessionReadHandlers.export);
 
 // =========================================================================
 // Public read-only share links
@@ -3320,55 +3039,7 @@ app.post('/api/sessions/:id/model', async (req, res) => {
   }
 });
 
-app.get('/api/sessions/:id/tree', async (req, res) => {
-  try {
-    const identity = routeIdentity(req.params.id);
-    if (!identity) return res.status(400).json({ error: 'Invalid session ID' });
-    if (identity.harnessId === 'omp') {
-      // Resolve first: a definitive socket failure may prune a stale registry
-      // claim, but its fresh session file is still enough to distinguish an
-      // unsupported inactive tree read from an unknown session.
-      const source = findSessionSource(req.params.id);
-      let sess;
-      try {
-        sess = await getLiveSession(req.params.id);
-      } catch {
-        if (!source) return res.status(404).json({ error: 'Session not found' });
-        return res.status(409).json({ error: 'This Oh My Pi session has no reachable live bridge for tree reads.' });
-      }
-      if (!sess) {
-        if (!source) return res.status(404).json({ error: 'Session not found' });
-        return res.status(409).json({ error: 'Reading the tree of an inactive Oh My Pi session is not supported.' });
-      }
-      if (!liveSessionSupports(sess, 'treeRead')) {
-        return res.status(409).json({ error: 'This Oh My Pi session does not advertise live tree reads.' });
-      }
-      if (!(sess instanceof BridgeSession)) {
-        return res.status(409).json({ error: 'This Oh My Pi session has no live bridge connection for tree reads.' });
-      }
-      try {
-        return res.json(await sess.readTree());
-      } catch (e) {
-        if (/unknown command/i.test(e.message || '')) {
-          return res.status(409).json({ error: 'The Oh My Pi session is running an older pi-dish bridge; reload or restart it to enable tree reads.' });
-        }
-        if (/unavailable|does not expose/i.test(e.message || '')) {
-          return res.status(409).json({ error: e.message });
-        }
-        throw e;
-      }
-    }
-    if (identity.harnessId !== 'pi') {
-      return res.status(409).json({ error: 'Session tree reads are not supported for this harness.' });
-    }
-    const session = findSessionSource(req.params.id);
-    if (!session) return res.status(404).json({ error: 'Session not found' });
-    const tree = await piSDK.getSessionTree(session.file);
-    res.json(tree);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.get('/api/sessions/:id/tree', sessionReadHandlers.tree);
 
 // Bridge navigate_tree needs a stashed pi command context (the only
 // extension-API surface carrying ctx.navigateTree). RPC-backed sessions can
