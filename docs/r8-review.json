@@ -1,6 +1,6 @@
 {
   "milestone": "R8 explicit browser main-pane exclusion policy",
-  "status": "Three independent exact-model OMP/high whole-source ACCEPTs for identical frozen source; parent integration/CI/acceptance pending",
+  "status": "Same-reviewer evidence/body recoveries complete; three current entire-source ACCEPTs for identical frozen source. Historical claims/deviations preserved below; parent audit/integration/CI/acceptance pending.",
   "baselineCommit": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
   "reviewedSourceCommit": "9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09",
   "branch": "migration/r8-pane-policy",
@@ -1107,5 +1107,1832 @@
     "sourceSuitesRerunForAttestation": false,
     "reason": "Documentation-only attestation after final frozen-source reviews; all mandatory owner source/runtime gates already passed before freeze."
   },
-  "sourceEvidenceSha256": "0c67b9d3152977d2257da8e156bc424478bb18044a9eeda7aeea2437e60749da"
+  "sourceEvidenceSha256": "0c67b9d3152977d2257da8e156bc424478bb18044a9eeda7aeea2437e60749da",
+  "supplementalReviewCorrections": {
+    "originalAttestationCommit": "a522dafa637e55421ab480dbbef2782bb784b9ea",
+    "status": "Parent-requested evidence/body gaps recovered by the SAME three reviewers; current entire-source decisions all ACCEPT identical frozen9d733a0; parent audit/integration/exact-CI/acceptance still required.",
+    "preservation": "All original finalDecisions, prior wording/overclaims, withdrawn broader claims, original archives and intermediate supplements remain intact. Current effective decisions are listed here, not substituted into or silently rewritten over the historical records.",
+    "assignedGeneratedReadScope": "Complete generated delta against accepted baseline, NOT whole unchanged browser bundle. Full authored main-pane/app/test/evidence and applicable consumer bodies are the assigned source scope.",
+    "currentDecisions": [
+      {
+        "reviewer": "glm",
+        "sessionRef": "01a0ab53-c0fe-752f-b88d-aefc8d86c037",
+        "actualModel": "zai/glm-5.3",
+        "harness": "omp",
+        "thinkingLevel": "high",
+        "sourceCommit": "9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09",
+        "decision": "ACCEPT",
+        "finalMessageId": "29d54fdb",
+        "recordPointer": "/supplementalReviewCorrections/applicableBodyRecovery/finals/0"
+      },
+      {
+        "reviewer": "deepseek",
+        "sessionRef": "01a0ab53-c5ad-7320-b473-f5775b40cd88",
+        "actualModel": "opencode-go/deepseek-v4.1-flash",
+        "harness": "omp",
+        "thinkingLevel": "high",
+        "sourceCommit": "9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09",
+        "decision": "ACCEPT",
+        "finalMessageId": "7d4bd6c3",
+        "recordPointer": "/supplementalReviewCorrections/applicableBodyRecovery/finals/1"
+      },
+      {
+        "reviewer": "kimi",
+        "sessionRef": "01a0ab53-ca84-706f-8757-e3bc4f6c4e99",
+        "actualModel": "kimi-code/k3",
+        "harness": "omp",
+        "thinkingLevel": "high",
+        "sourceCommit": "9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09",
+        "decision": "ACCEPT",
+        "finalMessageId": "ce1f578c",
+        "recordPointer": "/supplementalReviewCorrections/kimiBoundedContinuation"
+      }
+    ],
+    "parentEvidenceGapAudit": {
+      "source": "9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09",
+      "originalAttestation": "a522dafa637e55421ab480dbbef2782bb784b9ea",
+      "glm": {
+        "missing": "registrationExperiment.result tail",
+        "evidence": "Stored semantic index53 cuts off during skills result; index50 summarizes remainder; result written to /tmp at54 but no subsequent read; no tool-result output displays selectionRetiresAddedTakeover:true. Decoded scripts remain complete through57/58."
+      },
+      "kimi": {
+        "missing": "decoded registrationExperiment.script body",
+        "evidence": "Stored index26 clips JSON string at line293; index59 outputs only script hashes/lengths; index61 recovers only commutation probe. No tool-result output contains registration-script const moduleObject tail.",
+        "runtimeHold": "No Kimi model probe, resolve, resume, prompt or new actor attempted; await parent actual restoration/authorization."
+      }
+    },
+    "glmRegistrationEvidenceRecovery": {
+      "sameRef": "01a0ab53-c0fe-752f-b88d-aefc8d86c037",
+      "resumeOutcome": {
+        "success": true,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0"
+      },
+      "actualPrepromptProvenance": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+        "ref": "01a0ab53-c0",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R8-final-GLM",
+          "model": "zai/glm-5.3",
+          "contextPercent": 12.2,
+          "contextTokens": 122267,
+          "contextWindow": 1000000,
+          "thinkingLevel": "high",
+          "messageCount": 1,
+          "lastActivity": "2026-09-16T17:55:56.725Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 1343685,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      },
+      "prompt": "Parent-authorized SAME-REVIEWER bounded evidence recovery, no new actors/source changes. Your original same session is resumed; owner has independently verified actual zai/glm-5.3 / OMP / high / assigned cwd before this prompt. Original reviewed SOURCE remains 9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09 (baseline dc4ae84568fda976cfb136082b1dda405ccf54d8); later HEAD a522dafa637e55421ab480dbbef2782bb784b9ea adds ONLY docs/r8-review.json attestation. Do not mutate repository or .amp, do not delegate, do not run compiler/build/lint/check/test suites or formatters. Read skill://pi-dish-sessions for durable operations as needed.\n\nParent and owner audited your EXISTING actual outputs before resume: registrationExperiment.result tail was never recovered. Your index53 output cut during skills result and linked artifact9; index50 summarized remainder. You wrote /tmp/r8-registration-result.json but never read it. Your decoded commutation/registration scripts ARE fully read at57/58 and runtimeSmoke/rest at60/61 \u2014 no need to redo those. REQUIRED NOW: personally recover and read ENTIRE registrationExperiment.result with a bounded RAW read, e.g. docs/r8-evidence.json:296-358:raw (explicitly verify it includes every case through audit and selectionRetiresAddedTakeover:true; if tool elides any content, recover that exact omitted region). Do not replace this read with hash-only/check-count output.\n\nThen re-evaluate that full result in the context of your already completed whole-source/consumer review and append an explicit renewed ACCEPT or REVISE for ENTIRE IDENTICAL SOURCE SHA9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09, not merely a selected JSON-field approval. State exact newly recovered scope and whether any source finding changes your prior decision. Retain your original verdict/history. No broad ordering waiver: only documented concrete search/subagents relative order changes. Send brief final to durable owner01a0ab39-9dbd-7317-b73e-b0f8185783e8 using safe semantic CLI argument passing and retain COMPLETE renewed final in your final assistant message. Leave session open for owner extended-archive/postreview provenance capture and graceful closure. Kimi is provider-held; do not contact it.",
+      "promptSha256": "81bb1796918d0631fbda06b26835d94f6fd5a923dc2ba2700d45db0bbd8aa797",
+      "status": "Bounded evidence recovered; renewed entire-source ACCEPT; actual postreview high provenance captured; graceful close succeeded",
+      "postreviewProvenance": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+        "ref": "01a0ab53-c0",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R8-final-GLM",
+          "model": "zai/glm-5.3",
+          "contextPercent": 12.7,
+          "contextTokens": 127301,
+          "contextWindow": 1000000,
+          "thinkingLevel": "high",
+          "messageCount": 2,
+          "lastActivity": "2026-09-16T18:48:25.908Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 1343685,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      },
+      "finalMessageId": "51ae815e",
+      "finalTimestamp": 1789584489267,
+      "verdictVerbatim": "Renewal delivered live to owner `01a0ab39-9dbd-7317-b73e-b0f8185783e8`; session left open for extended-archive/postreview provenance and graceful closure. Complete renewed final below; original ACCEPT verdict and full review history retained above in this transcript.\n\n---\n\n## R8 SAME-REVIEWER RENEWED VERDICT: **ACCEPT** (unchanged)\n\n**Entire identical source SHA** `9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09`, baseline `dc4ae84568fda976cfb136082b1dda405ccf54d8`. Verified this turn: HEAD `a522dafa637e55421ab480dbbef2782bb784b9ea` adds only `docs/r8-review.json` (+1111 ln, new file); zero source/browser/test/evidence files changed since the reviewed SHA; `.amp/` still untracked and untouched; no repository mutation, no delegation, no suites or formatters run.\n\n### Newly recovered scope (this turn only)\n\n`registrationExperiment` in its entirety via bounded raw read `docs/r8-evidence.json:292-358` \u2014 **zero elision**, no hash-only substitution:\n\n- **Script** (re-confirmed identical to my prior at-57 full read; exact-byte sha256 `b0e0bad8\u2026` verified in the original review): espree-locates the actual `mainPane` registration in transformed `app.ts`, splices one in-memory `audit: { close: () => auditController.close() }` takeover, evaluates the **actual `main-pane.ts`** coordinator (esbuild\u2192CJS\u2192`vm`) against stub controllers, asserts per-takeover exclusion and selection retirement.\n- **`result` \u2014 fully recovered, including the previously cut tail:**\n  - `change`: \"One in-memory audit takeover registration in the actual app policy table; no existing peer edits.\"\n  - `cases`: **eight** \u2014 usage, search, subagents, newSession, skills, routines, recovery, **audit**. Every case: `retained` is exactly the singleton own controller; `closeCalls: 7`. The `audit` case and the tail beyond `skills` were the previously unrecovered region; now personally read in full.\n  - `selectionRetiresAddedTakeover: true` \u2014 a takeover added by registration alone is retired by `beforeSelection(false)` with no peer edits.\n  - `limits` (also fully recovered): close callbacks modeled as state removals for isolated contributor/work-count proof; real controller runtime covered by the separate browser proofs (permanent spec + commutation probe \u2014 both already read and evaluated in the original review).\n\n### Re-evaluation against the completed whole-source review\n\nThe recovered tail **confirms, and in no way alters**, the coordinator semantics I derived independently by hand from `src/browser/main-pane.ts` and all consumers:\n\n1. **Exclusion is identity-based** (`takeover !== entering` over the construction-time `Object.values` snapshot) \u2014 the audit case (a registration-only addition, no peer edits) is excluded by every existing takeover and itself excludes all seven others, exactly as the approved package's one-registration extensibility proof requires.\n2. **Selection retires every registered takeover unconditionally** (`for (const takeover of takeovers) takeover.close()`), including late registrations \u2014 `selectionRetiresAddedTakeover: true`.\n3. **Constant work** \u2014 `closeCalls: 7` for all eight openings matches the allocation claim (one traversal per transition; no per-transition re-enumeration; no active-view mirror).\n4. The experiment's VM-modeled closes are properly fenced by its own `limits`; the real-controller behaviors (open/close/generation guards, held HTTP bodies, inert controls) were verified from source and covered by the permanent tests and commutation probe in the original review. No evidentiary gap remains material.\n\n### Does any source finding change?\n\n**No.** The recovered field is evidence documentation only; it records a result consistent with \u2014 and derivable from \u2014 the frozen source I already reviewed whole. No defect, no missed scope, no ordering waiver beyond the documented concrete search/subagents relative-order changes in skills/newSession/routines/recovery (accepted in the original review on static commutation plus held-body runtime proof: `search-view.ts:67-74` and `subagents-view.ts:97-106` are private-state-only, synchronous, idempotent, port-free closes).\n\n### Renewed decision\n\n**ACCEPT for the entire source SHA `9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09`** \u2014 clean cutover of seven overlapping `closeOtherViews` peer lists and the app.ts selection list into one named registration consumed by `beforeTakeover`/`beforeSelection`; controllers retain close/dispose/request-generation ownership; all preserved asymmetries (recovery/subagents settings+diff+file closures, ordinary-takeover retention, `keepBounceView` on owned real selection, file/comment and new-session/harness-settings cascades, nested settings Bounce close) verified in source and observable tests; generated `public/app.js` delta mirrors authored source exactly (10 hunks); one-registration extensibility and constant-traversal behavior now confirmed by the fully recovered recorded experiment in addition to my independent derivation.\n\n**Identity:** harness omp (pi-dish-spawned session `01a0ab53-c0fe-752f-b88d-aefc8d86c037`), provider zai, model glm-5.3, thinking enabled (extended reasoning; owner independently verified identity before this resume). Kimi not contacted; hub Main not contacted.",
+      "archive": {
+        "path": "/tmp/pi-dish-r8-review-archives/glm-supplement-01a0ab53-c0fe-752f-b88d-aefc8d86c037.json",
+        "sha256": "db88345efca86e158bf289fbffc8e481f34192fead4ebb9d59f5f7f00fb73e33",
+        "totalMessages": 120,
+        "firstIndex": 0,
+        "lastIndex": 119,
+        "complete": true
+      },
+      "recoveredOutput": {
+        "messageId": "7426ec5c",
+        "index": 115,
+        "scope": "docs/r8-evidence.json:292-358:raw",
+        "decodedFieldExactlyMatchesFrozenEvidence": true,
+        "allEightCasesAndSelectionRetirementVisible": true,
+        "zeroElision": true
+      },
+      "gracefulCloseOutcome": {
+        "success": true
+      },
+      "ownerClarifications": [
+        "Renewal phrase late registrations refers to adding audit in the policy literal before construction; coordinator does not support or claim runtime late registration.",
+        "Seven calls in the fixed eight-takeover experiment is a work count, not O(1) scaling; traversal remains linear in registration count."
+      ],
+      "postCloseSemanticResolve": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+        "ref": "01a0ab53-c0",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": false,
+            "steer": false,
+            "followUp": false,
+            "abort": false,
+            "compact": false,
+            "models": false,
+            "setModel": false,
+            "setThinking": false,
+            "rename": false,
+            "commands": false,
+            "queueCancel": false,
+            "tree": false,
+            "export": true,
+            "close": false,
+            "restart": false,
+            "resume": true
+          },
+          "closeMode": "owned-pane",
+          "profileId": "omp-v1",
+          "profileVersion": 1,
+          "name": "R8-final-GLM",
+          "model": "zai/glm-5.3",
+          "contextPercent": 64,
+          "contextTokens": 128569,
+          "messageCount": 2,
+          "lastActivity": "2026-09-16T18:49:56.924Z",
+          "isActive": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      }
+    },
+    "applicableBodyRecovery": {
+      "source": "9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09",
+      "originalsPreserved": true,
+      "audit": {
+        "source": "9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09",
+        "method": "Matched complete authoritative source-body byte strings against actual toolResult text only when paired call attributes that file; stripped displayed line prefixes only. Signatures/default-summary ellipses/hash-only outputs do not count. No runtime reviewer operations before this audit.",
+        "requirements": {
+          "session-search.close": [
+            "session-search.ts",
+            41,
+            49
+          ],
+          "file-views.closeFile": [
+            "file-views.ts",
+            52,
+            61
+          ],
+          "file-views.closeDiff": [
+            "file-views.ts",
+            62,
+            66
+          ],
+          "session-info.closeStatsModal": [
+            "session-info.ts",
+            312,
+            319
+          ],
+          "session-info.closeArtifactsModal": [
+            "session-info.ts",
+            396,
+            400
+          ],
+          "transcript-tree.closeTreeModal": [
+            "transcript-tree.ts",
+            32,
+            35
+          ],
+          "session-controls.closeModels": [
+            "session-controls.ts",
+            51,
+            51
+          ],
+          "session-controls.closeThinking": [
+            "session-controls.ts",
+            52,
+            52
+          ],
+          "bounce.closeBounceView": [
+            "bounce.ts",
+            46,
+            51
+          ],
+          "skills.openCloseEscape": [
+            "skills.ts",
+            56,
+            83
+          ],
+          "routines.openCloseEscape": [
+            "routines-view.ts",
+            162,
+            205
+          ],
+          "new-session.openCloseSubmit": [
+            "new-session.ts",
+            210,
+            253
+          ],
+          "recovery.openCloseLoadGuards": [
+            "recovery.ts",
+            197,
+            233
+          ],
+          "session-view.selectSession": [
+            "session-view.ts",
+            114,
+            231
+          ],
+          "display-preferences.close": [
+            "display-preferences.ts",
+            30,
+            30
+          ],
+          "harness-settings.close": [
+            "harness-settings.ts",
+            127,
+            127
+          ],
+          "usage.openClose": [
+            "usage-view.ts",
+            60,
+            75
+          ],
+          "search.openClose": [
+            "search-view.ts",
+            55,
+            74
+          ],
+          "subagents.openClose": [
+            "subagents-view.ts",
+            77,
+            106
+          ],
+          "sidebar.close": [
+            "sidebar-query.ts",
+            84,
+            84
+          ],
+          "session-view.pending": [
+            "session-view.ts",
+            31,
+            97
+          ]
+        },
+        "glmExistingMatches": {
+          "session-search.close": [
+            105
+          ],
+          "file-views.closeFile": [
+            76
+          ],
+          "file-views.closeDiff": [
+            76
+          ],
+          "session-info.closeStatsModal": [],
+          "session-info.closeArtifactsModal": [],
+          "transcript-tree.closeTreeModal": [],
+          "session-controls.closeModels": [
+            79
+          ],
+          "session-controls.closeThinking": [
+            79
+          ],
+          "bounce.closeBounceView": [
+            26
+          ],
+          "skills.openCloseEscape": [
+            37
+          ],
+          "routines.openCloseEscape": [
+            43
+          ],
+          "new-session.openCloseSubmit": [
+            40
+          ],
+          "recovery.openCloseLoadGuards": [
+            39
+          ],
+          "session-view.selectSession": [
+            25
+          ],
+          "display-preferences.close": [
+            73
+          ],
+          "harness-settings.close": [
+            79
+          ],
+          "usage.openClose": [
+            34
+          ],
+          "search.openClose": [
+            33
+          ],
+          "subagents.openClose": [
+            36
+          ],
+          "sidebar.close": [
+            75
+          ],
+          "session-view.pending": [
+            25
+          ]
+        },
+        "deepseekExistingMatches": {
+          "session-search.close": [],
+          "file-views.closeFile": [],
+          "file-views.closeDiff": [],
+          "session-info.closeStatsModal": [],
+          "session-info.closeArtifactsModal": [],
+          "transcript-tree.closeTreeModal": [],
+          "session-controls.closeModels": [],
+          "session-controls.closeThinking": [],
+          "bounce.closeBounceView": [],
+          "skills.openCloseEscape": [],
+          "routines.openCloseEscape": [],
+          "new-session.openCloseSubmit": [],
+          "recovery.openCloseLoadGuards": [],
+          "session-view.selectSession": [],
+          "display-preferences.close": [],
+          "harness-settings.close": [],
+          "usage.openClose": [
+            125
+          ],
+          "search.openClose": [
+            30
+          ],
+          "subagents.openClose": [
+            31
+          ],
+          "sidebar.close": [
+            87
+          ],
+          "session-view.pending": [
+            50
+          ]
+        },
+        "glmMissing": [
+          "session-info.closeStatsModal",
+          "session-info.closeArtifactsModal",
+          "transcript-tree.closeTreeModal"
+        ],
+        "deepseekMissing": [
+          "session-search.close",
+          "file-views.closeFile",
+          "file-views.closeDiff",
+          "session-info.closeStatsModal",
+          "session-info.closeArtifactsModal",
+          "transcript-tree.closeTreeModal",
+          "session-controls.closeModels",
+          "session-controls.closeThinking",
+          "bounce.closeBounceView",
+          "skills.openCloseEscape",
+          "routines.openCloseEscape",
+          "new-session.openCloseSubmit",
+          "recovery.openCloseLoadGuards",
+          "session-view.selectSession",
+          "display-preferences.close",
+          "harness-settings.close"
+        ],
+        "kimiHold": "No runtime operation attempted; applicable bodies accepted by parent audit. Prior whole session-view234-line claim must be narrowed for unrelated104-105 failure HTML during eventual authorized script renewal."
+      },
+      "resume": [
+        {
+          "success": true,
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0"
+        },
+        {
+          "success": true,
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0"
+        }
+      ],
+      "prepromptProvenance": [
+        {
+          "host": null,
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+          "ref": "01a0ab53-c0",
+          "session": {
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+            "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+            "harnessId": "omp",
+            "nativeSessionId": "2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037",
+            "harnessLabel": "Oh My Pi",
+            "capabilities": {
+              "prompt": true,
+              "steer": true,
+              "followUp": true,
+              "abort": true,
+              "compact": true,
+              "models": true,
+              "setModel": true,
+              "setThinking": true,
+              "rename": true,
+              "commands": true,
+              "queueCancel": false,
+              "tree": true,
+              "export": true,
+              "close": true,
+              "restart": true,
+              "resume": false
+            },
+            "closeMode": "owned-pane",
+            "conflicted": false,
+            "liveInstanceCount": 1,
+            "name": "R8-final-GLM",
+            "model": "zai/glm-5.3",
+            "contextPercent": 12.7,
+            "contextTokens": 127301,
+            "contextWindow": 1000000,
+            "thinkingLevel": "high",
+            "messageCount": 2,
+            "lastActivity": "2026-09-16T18:49:56.924Z",
+            "isActive": true,
+            "turnInProgress": false,
+            "compacting": false,
+            "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+            "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037.jsonl",
+            "parentSession": null,
+            "parentSessionSource": null,
+            "pid": 1427972,
+            "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+            "parentSource": "pi-dish-launch",
+            "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+          }
+        },
+        {
+          "host": null,
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+          "ref": "01a0ab53-c5",
+          "session": {
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+            "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+            "harnessId": "omp",
+            "nativeSessionId": "2026-09-16T17-46-29-165Z_01a0ab53-c5ad-7320-b473-f5775b40cd88",
+            "harnessLabel": "Oh My Pi",
+            "capabilities": {
+              "prompt": true,
+              "steer": true,
+              "followUp": true,
+              "abort": true,
+              "compact": true,
+              "models": true,
+              "setModel": true,
+              "setThinking": true,
+              "rename": true,
+              "commands": true,
+              "queueCancel": false,
+              "tree": true,
+              "export": true,
+              "close": true,
+              "restart": true,
+              "resume": false
+            },
+            "closeMode": "owned-pane",
+            "conflicted": false,
+            "liveInstanceCount": 1,
+            "name": "R8-final-DeepSeek",
+            "model": "opencode-go/deepseek-v4.1-flash",
+            "contextPercent": 13.9,
+            "contextTokens": 139334,
+            "contextWindow": 1000000,
+            "thinkingLevel": "high",
+            "messageCount": 1,
+            "lastActivity": "2026-09-16T17:56:48.530Z",
+            "isActive": true,
+            "turnInProgress": false,
+            "compacting": false,
+            "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+            "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-29-165Z_01a0ab53-c5ad-7320-b473-f5775b40cd88.jsonl",
+            "parentSession": null,
+            "parentSessionSource": null,
+            "pid": 1427711,
+            "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+            "parentSource": "pi-dish-launch",
+            "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+          }
+        }
+      ],
+      "prompts": [
+        "PARENT-AUTHORIZED SAME-REVIEWER APPLICABLE-BODY RECOVERY. No new actors. Owner verified actual exact assigned model / OMP / high / cwd immediately before this prompt. SOURCE remains exactly9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09 against baseline dc4ae84568fda976cfb136082b1dda405ccf54d8; HEADa522dafa adds only docs/r8-review.json. No source/repo/.amp/node_modules writes. No compiler/build/check/lint/test suites, formatters, or delegation; previous extra build/compiler probes must NOT be repeated. Use bounded RAW source reads so actual BODY bytes, not signatures/summaries, appear in your tool outputs. If an output elides any requested bytes, recover that exact omitted part before your decision.\n\nAlternative actual-output audit confirms your remaining missing applicable bodies: session-info.closeStatsModal312-319, closeArtifactsModal396-400, and transcript-tree.closeTreeModal32-35. Your index79 grep exposed only signatures for these multiline methods. All other21-unit applicable-body checks pass in your existing attributed outputs; your prior full registration-result recovery also passes. REQUIRED bounded RAW reads: src/browser/session-info.ts:312-319:raw; src/browser/session-info.ts:396-400:raw; src/browser/transcript-tree.ts:28-35:raw (include retireBranch helper31). Then evaluate these selection closes/cascades in context of your entire already-read source/consumers/evidence and append a renewed ACCEPT/REVISE for ENTIRE IDENTICAL SOURCE SHA, not just those lines. Preserve both original verdict and first supplement. Do NOT broaden ordering claims beyond concrete search/subagents swap; counters need not be bitwise idempotent. Deliver complete renewed final safely to owner01a0ab39-9dbd-7317-b73e-b0f8185783e8 and retain full final assistant prose. LEAVE SESSION OPEN: owner must complete all-applicable-body output audit before closure. No Kimi contact/runtime operation.",
+        "PARENT-AUTHORIZED SAME-REVIEWER APPLICABLE-BODY RECOVERY. No new actors. Owner verified actual exact assigned model / OMP / high / cwd immediately before this prompt. SOURCE remains exactly9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09 against baseline dc4ae84568fda976cfb136082b1dda405ccf54d8; HEADa522dafa adds only docs/r8-review.json. No source/repo/.amp/node_modules writes. No compiler/build/check/lint/test suites, formatters, or delegation; previous extra build/compiler probes must NOT be repeated. Use bounded RAW source reads so actual BODY bytes, not signatures/summaries, appear in your tool outputs. If an output elides any requested bytes, recover that exact omitted part before your decision.\n\nParent/owner alternative actual-output audit confirms missing actual bytes in16 applicable units (some opens/closes previously read but associated escape/submit/load guards were cut). Required complete bounded RAW reads, each individually: src/browser/session-view.ts:114-231:raw (full select incl164-231 post-await owns guards); src/browser/skills.ts:56-83:raw; src/browser/routines-view.ts:162-205:raw; src/browser/new-session.ts:210-253:raw; src/browser/recovery.ts:197-233:raw; src/browser/bounce.ts:46-51:raw; src/browser/file-views.ts:52-66:raw; src/browser/session-search.ts:41-49:raw; src/browser/session-info.ts:312-319:raw; src/browser/session-info.ts:396-400:raw; src/browser/transcript-tree.ts:28-35:raw (retireBranch31); src/browser/session-controls.ts:51-52:raw; src/browser/display-preferences.ts:25-30:raw; src/browser/harness-settings.ts:120-127:raw. Your previous file-views grep showed only signatures/selected lines, not full cascade. Prior actual outputs DO fully cover pending31-97, usage/search/subagents open-close, sidebar.close, authoredapp/main-pane/test/evidence; no need to repeat those.\n\nThen assess complete closures, local generation/cascade ownership, selection post-await guards, and preserved asymmetries in context of ENTIRE unchanged source/consumers/evidence; append renewed ACCEPT/REVISE for ENTIRE IDENTICAL SOURCE SHA, not merely these files. Correct prior whole-read claims explicitly while retaining original history. Do NOT broaden order waiver to all close pairs. Do NOT execute your earlier esbuild/tsc probes again: raw reads only. Deliver full final safely to owner01a0ab39-9dbd-7317-b73e-b0f8185783e8 and retain complete final assistant prose. LEAVE SESSION OPEN until owner complete applicable-body output audit and provenance/archive capture; no Kimi contact/runtime operation."
+      ],
+      "dispatch": [
+        {
+          "success": true,
+          "result": {
+            "queued": false
+          }
+        },
+        {
+          "success": true,
+          "result": {
+            "queued": false
+          }
+        }
+      ],
+      "status": "Both same-ref recoveries complete; all21-unit attributed-body audit passed before closures; original decisions/prohibited-probe history preserved. Kimi subsequent authorized gap recovery is recorded separately and is now complete.",
+      "kimiRuntimeOperations": [],
+      "glmAudit": {
+        "coverage": {
+          "session-search.close": [
+            105
+          ],
+          "file-views.closeFile": [
+            76
+          ],
+          "file-views.closeDiff": [
+            76
+          ],
+          "session-info.closeStatsModal": [
+            123
+          ],
+          "session-info.closeArtifactsModal": [
+            122
+          ],
+          "transcript-tree.closeTreeModal": [
+            124
+          ],
+          "session-controls.closeModels": [
+            79
+          ],
+          "session-controls.closeThinking": [
+            79
+          ],
+          "bounce.closeBounceView": [
+            26
+          ],
+          "skills.openCloseEscape": [
+            37
+          ],
+          "routines.openCloseEscape": [
+            43
+          ],
+          "new-session.openCloseSubmit": [
+            40
+          ],
+          "recovery.openCloseLoadGuards": [
+            39
+          ],
+          "session-view.selectSession": [
+            25
+          ],
+          "display-preferences.close": [
+            73
+          ],
+          "harness-settings.close": [
+            79
+          ],
+          "usage.openClose": [
+            34
+          ],
+          "search.openClose": [
+            33
+          ],
+          "subagents.openClose": [
+            36
+          ],
+          "sidebar.close": [
+            75
+          ],
+          "session-view.pending": [
+            25
+          ]
+        },
+        "all21ApplicableUnitsComplete": true,
+        "postreviewLiveProvenance": {
+          "host": null,
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+          "ref": "01a0ab53-c0",
+          "session": {
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+            "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+            "harnessId": "omp",
+            "nativeSessionId": "2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037",
+            "harnessLabel": "Oh My Pi",
+            "capabilities": {
+              "prompt": true,
+              "steer": true,
+              "followUp": true,
+              "abort": true,
+              "compact": true,
+              "models": true,
+              "setModel": true,
+              "setThinking": true,
+              "rename": true,
+              "commands": true,
+              "queueCancel": false,
+              "tree": true,
+              "export": true,
+              "close": true,
+              "restart": true,
+              "resume": false
+            },
+            "closeMode": "owned-pane",
+            "conflicted": false,
+            "liveInstanceCount": 1,
+            "name": "R8-final-GLM",
+            "model": "zai/glm-5.3",
+            "contextPercent": 13.1,
+            "contextTokens": 131123,
+            "contextWindow": 1000000,
+            "thinkingLevel": "high",
+            "messageCount": 3,
+            "lastActivity": "2026-09-16T18:55:53.139Z",
+            "isActive": true,
+            "turnInProgress": false,
+            "compacting": false,
+            "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+            "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037.jsonl",
+            "parentSession": null,
+            "parentSessionSource": null,
+            "pid": 1427972,
+            "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+            "parentSource": "pi-dish-launch",
+            "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+          }
+        },
+        "closureHeld": "Remains open until complete GLM/DeepSeek applicable-body audit and final archive capture."
+      },
+      "deepseekAudit": {
+        "coverage": {
+          "session-search.close": [
+            161
+          ],
+          "file-views.closeFile": [
+            160
+          ],
+          "file-views.closeDiff": [
+            160
+          ],
+          "session-info.closeStatsModal": [
+            162
+          ],
+          "session-info.closeArtifactsModal": [
+            163
+          ],
+          "transcript-tree.closeTreeModal": [
+            166
+          ],
+          "session-controls.closeModels": [
+            167
+          ],
+          "session-controls.closeThinking": [
+            167
+          ],
+          "bounce.closeBounceView": [
+            159
+          ],
+          "skills.openCloseEscape": [
+            154
+          ],
+          "routines.openCloseEscape": [
+            157
+          ],
+          "new-session.openCloseSubmit": [
+            156
+          ],
+          "recovery.openCloseLoadGuards": [
+            155
+          ],
+          "session-view.selectSession": [
+            153
+          ],
+          "display-preferences.close": [
+            168
+          ],
+          "harness-settings.close": [
+            165
+          ],
+          "usage.openClose": [
+            125
+          ],
+          "search.openClose": [
+            30
+          ],
+          "subagents.openClose": [
+            31
+          ],
+          "sidebar.close": [
+            87
+          ],
+          "session-view.pending": [
+            50
+          ]
+        },
+        "all21ApplicableUnitsComplete": true,
+        "postreviewLiveProvenance": {
+          "host": null,
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+          "ref": "01a0ab53-c5",
+          "session": {
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+            "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+            "harnessId": "omp",
+            "nativeSessionId": "2026-09-16T17-46-29-165Z_01a0ab53-c5ad-7320-b473-f5775b40cd88",
+            "harnessLabel": "Oh My Pi",
+            "capabilities": {
+              "prompt": true,
+              "steer": true,
+              "followUp": true,
+              "abort": true,
+              "compact": true,
+              "models": true,
+              "setModel": true,
+              "setThinking": true,
+              "rename": true,
+              "commands": true,
+              "queueCancel": false,
+              "tree": true,
+              "export": true,
+              "close": true,
+              "restart": true,
+              "resume": false
+            },
+            "closeMode": "owned-pane",
+            "conflicted": false,
+            "liveInstanceCount": 1,
+            "name": "R8-final-DeepSeek",
+            "model": "opencode-go/deepseek-v4.1-flash",
+            "contextPercent": 15.4,
+            "contextTokens": 153688,
+            "contextWindow": 1000000,
+            "thinkingLevel": "high",
+            "messageCount": 2,
+            "lastActivity": "2026-09-16T18:56:14.560Z",
+            "isActive": true,
+            "turnInProgress": false,
+            "compacting": false,
+            "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+            "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-29-165Z_01a0ab53-c5ad-7320-b473-f5775b40cd88.jsonl",
+            "parentSession": null,
+            "parentSessionSource": null,
+            "pid": 1427711,
+            "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+            "parentSource": "pi-dish-launch",
+            "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+          }
+        },
+        "closureHeld": "Await final assistant archive/provenance; own complete applicable-body audit now passes."
+      },
+      "finals": [
+        {
+          "reviewer": "glm",
+          "sourceSha": "9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09",
+          "decision": "ACCEPT",
+          "finalMessageId": "29d54fdb",
+          "finalTimestamp": 1789584940795,
+          "verdictVerbatim": "Second supplement delivered live to owner `01a0ab39-9dbd-7317-b73e-b0f8185783e8`. Session left open for the owner's all-applicable-body output audit and graceful closure. Complete renewed final prose below; original ACCEPT verdict and first supplement both preserved verbatim earlier in this transcript.\n\n---\n\n## R8 SAME-REVIEWER SECOND SUPPLEMENT \u2014 RENEWED **ACCEPT** (unchanged)\n\n**Entire identical source SHA** `9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09` against baseline `dc4ae84568fda976cfb136082b1dda405ccf54d8`. HEAD `a522dafa` continues to add only the `docs/r8-review.json` attestation. No source/repo/`.amp`/`node_modules` writes, no suites, formatters, delegation, or repeated build/compiler probes this turn.\n\n### Newly recovered applicable bodies (bounded RAW reads, zero elision)\n\n**`src/browser/session-info.ts:312-323` \u2014 `closeStatsModal()`**\n```ts\nfunction closeStatsModal() {\n  if (disposed) return;\n  statsEvents.abort(); shareEvents.abort(); pagesEvents.abort(); processEvents.abort(); clearTimers(statsTimers);\n  statsEndpoint = null; shareSequence++; pagesSequence++;\n  statsModalGeneration += 1;\n  statsModalOwner = null;\n  element('statsModal').style.display = 'none';\n}\n```\n\n**`src/browser/session-info.ts:396-400` \u2014 `closeArtifactsModal()`**\n```ts\nfunction closeArtifactsModal() {\n  if (disposed) return;\n  artifactGeneration++; artifactEvents.abort();\n  element('artifactsModal').style.display = 'none';\n}\n```\n\n**`src/browser/transcript-tree.ts:31-35` \u2014 `retireBranch()` + `closeTreeModal()`**\n```ts\nfunction retireBranch() { branchGeneration++; pendingBranchId = null; branchEvents.abort(); branchEvents = new AbortController(); }\nfunction closeTreeModal() {\n  treeViewGeneration++; treeOwner = null; treeEndpoint = null; treeData = null; treeToolCallMap.clear();\n  viewEvents.abort(); rowEvents.abort(); retireBranch(); element('treeModal').style.display = 'none';\n}\n```\n\n### Evaluation in context of the completed review\n\n- **These are the session-overlay closes** registered in `mainPane.overlays.session` (`stats`, `tree`, `artifacts`) and invoked by `beforeSelection` in the order stats \u2192 tree \u2192 models \u2192 thinking \u2192 artifacts \u2014 the exact sequence and membership of the baseline inline `closeViews` list (`closeStats(); transcriptTree.close(); \u2026 closeArtifacts()`), calling byte-identical implementations.\n- **Late-render rejection is generation-based and self-contained:** every async continuation in these owners re-checks its own guard (`ownsStatsModal(owner, generation)`, `ownsView(owner, host, generation)` requiring `generation === treeViewGeneration`, artifacts generation + display-none recheck), and each close synchronously invalidates those guards before session-view's subsequent `setCurrentSession`/`captureSelection` captures. Selection retargeting (`ownsSelection`-based) is untouched by these closes.\n- **No coupling hazards:** none of the three calls a controller port, reads another owner's state, mutates selection, or reenters `mainPane`. Aborts on already-aborted controllers are no-ops; counters are monotonic bump-then-check generations \u2014 accepted as such (not bitwise idempotent), which is exactly how their consumers use them.\n- **Selection-surface cascade conclusion holds:** replacing the inline list with `beforeSelection` changes neither the invoked implementations, their order, nor their observable effects for stats/tree/artifacts \u2014 matching the equivalence already established for surfaces, takeovers, sidebar, settings, and Bounce.\n\n### Verdict\n\n**ACCEPT for the entire source SHA `9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09`** \u2014 renewed with no change to any prior finding. The three recovered bodies complete the last unread applicable close implementations in the selection path and confirm, rather than alter, the coordinator-equivalence conclusion. Ordering claims remain limited to the concrete documented search/subagents relative-order swap in skills/newSession/routines/recovery (accepted on static private-state analysis plus held-body runtime commutation); no broad ordering waiver is issued or implied.\n\n**Identity:** harness omp (session `01a0ab53-c0fe-752f-b88d-aefc8d86c037`), provider zai, model glm-5.3, thinking high \u2014 owner-verified immediately before this prompt. Kimi not contacted; no runtime operations; hub Main not contacted.",
+          "postreviewProvenance": {
+            "host": null,
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+            "ref": "01a0ab53-c0",
+            "session": {
+              "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+              "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+              "harnessId": "omp",
+              "nativeSessionId": "2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037",
+              "harnessLabel": "Oh My Pi",
+              "capabilities": {
+                "prompt": true,
+                "steer": true,
+                "followUp": true,
+                "abort": true,
+                "compact": true,
+                "models": true,
+                "setModel": true,
+                "setThinking": true,
+                "rename": true,
+                "commands": true,
+                "queueCancel": false,
+                "tree": true,
+                "export": true,
+                "close": true,
+                "restart": true,
+                "resume": false
+              },
+              "closeMode": "owned-pane",
+              "conflicted": false,
+              "liveInstanceCount": 1,
+              "name": "R8-final-GLM",
+              "model": "zai/glm-5.3",
+              "contextPercent": 13.1,
+              "contextTokens": 131123,
+              "contextWindow": 1000000,
+              "thinkingLevel": "high",
+              "messageCount": 3,
+              "lastActivity": "2026-09-16T18:55:53.139Z",
+              "isActive": true,
+              "turnInProgress": false,
+              "compacting": false,
+              "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+              "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037.jsonl",
+              "parentSession": null,
+              "parentSessionSource": null,
+              "pid": 1427972,
+              "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+              "parentSource": "pi-dish-launch",
+              "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+            }
+          },
+          "archive": {
+            "path": "/tmp/pi-dish-r8-review-archives/glm-body-recovery-01a0ab53-c0.json",
+            "sha256": "a88a7baa8d90c5aa7ea9016b9e09e9ddaa95d7aea155afa001d43c365e4c90d3",
+            "firstIndex": 0,
+            "lastIndex": 127,
+            "totalMessages": 128,
+            "complete": true
+          }
+        },
+        {
+          "reviewer": "deepseek",
+          "sourceSha": "9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09",
+          "decision": "ACCEPT",
+          "finalMessageId": "7d4bd6c3",
+          "finalTimestamp": 1789584966889,
+          "verdictVerbatim": "\u2705 Renewed verdict delivered to durable owner `01a0ab39-9dbd-7317-b73e-b0f8185783e8`. Session left **open** for your applicable-body output audit and provenance/archive capture. No Kimi contact, no runtime operation, no repo/source/.amp/node_modules writes, no suites/formatters/delegation, earlier build/compiler probes **not** repeated.\n\n# R8 APPLICABLE-BODY RECOVERY \u2014 RENEWED VERDICT: **ACCEPT** (entire identical source SHA)\n\n**Renewed for:** `9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09` vs baseline `dc4ae84568fda976cfb136082b1dda405ccf54d8`. HEAD is now `a522dafa637e55421ab480dbbef2782bb784b9ea`, which adds **only** `docs/r8-review.json`; all five reviewed paths are byte-identical to `9d733a0` (0 changed files under that path filter). Worktree clean except untracked `.amp/`, untouched.\n\n**Correction of prior claim (original history retained):** my first verdict asserted I had personally read the *complete applicable close/open/guard/request bodies* of the consumer set. That was **overstated for 16 applicable units** \u2014 several were seen only as signatures/windowed selections (file-views comment cascade, session-search close, session-info stats/artifacts closes, transcript-tree close, session-controls model/thinking closes, display-preferences close, harness-settings close, bounce close), and recovery/routines/skills/new-session opens were read without their tails. Exact byte ranges are now in my outputs as raw reads: `session-view.ts:114-231` (incl. both post-await `owns()` guards), `skills.ts:56-83`, `routines-view.ts:162-205`, `new-session.ts:210-253`, `recovery.ts:197-233`, `bounce.ts:46-51`, `file-views.ts:52-66`, `session-search.ts:41-49`, `session-info.ts:312-319` and `:396-400`, `transcript-tree.ts:28-35` (incl. `retireBranch` at 31), `session-controls.ts:51-52`, `display-preferences.ts:25-30`, `harness-settings.ts:120-127`. The ACCEPT stands \u2014 strengthened, not revised.\n\n**What the recovered bodies establish**\n\n1. **Closure completeness / local generation ownership.** `closeFile`/`closeDiff` bump `file.`/`diff.generation`, abort `fileEvents`/`pageEvents`/`diffEvents`, clear timers+DOM, then cascade comments; `closeTreeModal` bumps `treeViewGeneration`, nulls owner/endpoint/data, aborts `viewEvents`/`rowEvents` and calls `retireBranch` (`branchGeneration++`, `pendingBranchId=null`, fresh `branchEvents`) so late branches are rejected **by generation, not merely by abort**; `closeStatsModal` aborts four event sets, clears `statsTimers`, nulls owner/endpoint, bumps share/pages sequences; `closeArtifactsModal` bumps `artifactGeneration`; `closeModels`/`closeThinking` dispose selectors; `displayPreferences.close \u2192 retire(sequence++, aborts) \u2192 options.unmountSections()`; `harnessSettings.close \u2192 sequence++/null/hide`; `closeBounceView \u2192 bounceView.open=false/++bounceGeneration/retire(all hosts)`; `session-search close \u2192 sequence++/hide/clearMarks`, deliberately not aborting the shared in-flight page load.\n2. **Cascade ownership stays with controllers.** Policy callbacks are thin `() => controller.close()` wrappers, so cascades (comments; harness settings via unconditional new-session teardown; recovery-preferences + host-settings unmount via settings close; all-host Bounce retirement) run exactly as baseline. The one cross-module cascade \u2014 settings overlay \u2192 `unmountSections` \u2014 remains gated on `clearsSessionSurfaces = {recovery, subagents}` and **ordered first**, exactly where both baseline lists had it.\n3. **Selection post-await guards intact, coordinator-neutral.** Validation \u2192 single synchronous `closeViews(false, keepBounceView)` **before** `setCurrentSession`/`captureSelection` \u2192 `owns()` (disposed + `ownsSelection(owner)` + endpoint-base) gates both `await mathAssetsReady` and `await options.transcript.load(owner)` before stream start/stop. No post-await path re-invokes the coordinator: exclusion cannot be replayed/bypassed by a late selection, and no pane can be resurrected behind it.\n4. **Preserved asymmetries, byte-grounded.** Clearing takeovers close settings(+unmount)/diff/file(+comments)/Bounce; ordinary takeovers close only sidebar+peers+Bounce; selection closes the session surface, session overlays in baseline order, all takeovers, Bounce unless retained. Escape handlers and local close buttons call only their own close \u2014 never the coordinator. Entering-pane exclusion is load-bearing for every re-open path (recovery unguarded add, routines/usage early-return, skills/new-session/subagents close-then-add) and is guaranteed by identity of the registered policy object.\n5. **Ordering claim \u2014 not broadened.** Recovered bodies add **no new close pairs**. The only ordering delta in the whole change remains the single adjacent search\u2194subagents swap in four paths, established for **that pair only** over its complete reachable state space `{neither, search-open, subagents-open}` with real held HTTP bodies. Every other pair's relative order is byte-identical to baseline (settings \u2192 sidebar \u2192 peers in registration order \u2192 Bounce \u2192 diff \u2192 file; overlays in baseline order for selection).\n\n**Findings:** none material. Observations unchanged/non-blocking: `CLAUDE.md:242` still says \"three `<main>`-level takeovers\" while seven register (stale pre-R8); `displayPreferences.beforeOpen` remains a local sidebar+Bounce pair outside R8 scope; the unused `pending` flag is preserved verbatim. **Hypotheses:** none elevated.\n\n**Evidence limitations:** no compiler/build/check/lint/test suite rerun \u2014 check 259, backend 1027, browser 289, eight isolated scenarios and desktop/mobile smoke remain owner-recorded, unverified by me; my earlier generated-output identity, computed exclusion-set equivalence, probe reading and reproduced `TS2345` stand as prior recorded results and were not re-executed under this recovery.\n\n**Acceptance reason:** with applicable bodies now actually read, the change implements the approved package exactly \u2014 one small exclusion coordinator, one registration per takeover/surface/overlay, controller-owned close/dispose/request-generation behavior untouched, baseline peer lists deleted, no close-everything/router/event bus, no R9/R10/API/index/DTO/validation/active-view scope \u2014 with semantics provably equal to baseline on all eight paths apart from the documented, commuting search\u2194subagents adjacency in four of them.",
+          "postreviewProvenance": {
+            "host": null,
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+            "ref": "01a0ab53-c5",
+            "session": {
+              "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+              "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+              "harnessId": "omp",
+              "nativeSessionId": "2026-09-16T17-46-29-165Z_01a0ab53-c5ad-7320-b473-f5775b40cd88",
+              "harnessLabel": "Oh My Pi",
+              "capabilities": {
+                "prompt": true,
+                "steer": true,
+                "followUp": true,
+                "abort": true,
+                "compact": true,
+                "models": true,
+                "setModel": true,
+                "setThinking": true,
+                "rename": true,
+                "commands": true,
+                "queueCancel": false,
+                "tree": true,
+                "export": true,
+                "close": true,
+                "restart": true,
+                "resume": false
+              },
+              "closeMode": "owned-pane",
+              "conflicted": false,
+              "liveInstanceCount": 1,
+              "name": "R8-final-DeepSeek",
+              "model": "opencode-go/deepseek-v4.1-flash",
+              "contextPercent": 15.4,
+              "contextTokens": 153688,
+              "contextWindow": 1000000,
+              "thinkingLevel": "high",
+              "messageCount": 2,
+              "lastActivity": "2026-09-16T18:56:14.560Z",
+              "isActive": true,
+              "turnInProgress": false,
+              "compacting": false,
+              "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+              "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-29-165Z_01a0ab53-c5ad-7320-b473-f5775b40cd88.jsonl",
+              "parentSession": null,
+              "parentSessionSource": null,
+              "pid": 1427711,
+              "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+              "parentSource": "pi-dish-launch",
+              "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+            }
+          },
+          "archive": {
+            "path": "/tmp/pi-dish-r8-review-archives/deepseek-body-recovery-01a0ab53-c5.json",
+            "sha256": "2b7b74058b95f72e8c0f9b582ab4dc35fdcd4c36158feefc291423a6f678de9e",
+            "firstIndex": 0,
+            "lastIndex": 175,
+            "totalMessages": 176,
+            "complete": true
+          }
+        }
+      ],
+      "completeApplicableBodyAudit": {
+        "all21PrimaryUnitsPassForBothReviewers": true,
+        "completedBeforeAnyClosure": true,
+        "requirements": {
+          "session-search.close": {
+            "file": "src/browser/session-search.ts",
+            "lines": [
+              41,
+              49
+            ],
+            "sourceBodySha256": "d0c718bbd4245f7858717fe5946e62203fdaaef07867791d6fc502a7846c726c",
+            "glmActualOutputIndices": [
+              105
+            ],
+            "deepseekActualOutputIndices": [
+              161
+            ]
+          },
+          "file-views.closeFile": {
+            "file": "src/browser/file-views.ts",
+            "lines": [
+              52,
+              61
+            ],
+            "sourceBodySha256": "21a92d10e2bd1299f6eec665c42ead7aff62a2fae367b77fd993a919f69e4499",
+            "glmActualOutputIndices": [
+              76
+            ],
+            "deepseekActualOutputIndices": [
+              160
+            ]
+          },
+          "file-views.closeDiff": {
+            "file": "src/browser/file-views.ts",
+            "lines": [
+              62,
+              66
+            ],
+            "sourceBodySha256": "cbcfef605182b93bc64949eb6d66dc5bfb489c25448346c3201120a504080128",
+            "glmActualOutputIndices": [
+              76
+            ],
+            "deepseekActualOutputIndices": [
+              160
+            ]
+          },
+          "session-info.closeStatsModal": {
+            "file": "src/browser/session-info.ts",
+            "lines": [
+              312,
+              319
+            ],
+            "sourceBodySha256": "e5e2a61ab7ea7aeddeeae7c926f71030778a43938a868d772926cd2641a4aaed",
+            "glmActualOutputIndices": [
+              123
+            ],
+            "deepseekActualOutputIndices": [
+              162
+            ]
+          },
+          "session-info.closeArtifactsModal": {
+            "file": "src/browser/session-info.ts",
+            "lines": [
+              396,
+              400
+            ],
+            "sourceBodySha256": "f2906ca65e9aa2e1593e75ffab689be40402e31970f750e6d8c09a2bf223b694",
+            "glmActualOutputIndices": [
+              122
+            ],
+            "deepseekActualOutputIndices": [
+              163
+            ]
+          },
+          "transcript-tree.closeTreeModal": {
+            "file": "src/browser/transcript-tree.ts",
+            "lines": [
+              32,
+              35
+            ],
+            "sourceBodySha256": "9c9d8668ba83af4ce0154d8a5c057110b9c3deb48cfe7c381c8bbfb6ff547a22",
+            "glmActualOutputIndices": [
+              124
+            ],
+            "deepseekActualOutputIndices": [
+              166
+            ]
+          },
+          "session-controls.closeModels": {
+            "file": "src/browser/session-controls.ts",
+            "lines": [
+              51,
+              51
+            ],
+            "sourceBodySha256": "4f592ba302136e94cec92e46cf44da84f05b0964a103cfd9cd8fa21856467c93",
+            "glmActualOutputIndices": [
+              79
+            ],
+            "deepseekActualOutputIndices": [
+              167
+            ]
+          },
+          "session-controls.closeThinking": {
+            "file": "src/browser/session-controls.ts",
+            "lines": [
+              52,
+              52
+            ],
+            "sourceBodySha256": "1e9d8c9b7e46ae37cf0bffc9a57eed37826e5e000038cec1f2433a594def3ed7",
+            "glmActualOutputIndices": [
+              79
+            ],
+            "deepseekActualOutputIndices": [
+              167
+            ]
+          },
+          "bounce.closeBounceView": {
+            "file": "src/browser/bounce.ts",
+            "lines": [
+              46,
+              51
+            ],
+            "sourceBodySha256": "4ca1d84b5174edf1e75ce4f951e7e74cb18865711d91aa22e948f903b7cb96aa",
+            "glmActualOutputIndices": [
+              26
+            ],
+            "deepseekActualOutputIndices": [
+              159
+            ]
+          },
+          "skills.openCloseEscape": {
+            "file": "src/browser/skills.ts",
+            "lines": [
+              56,
+              83
+            ],
+            "sourceBodySha256": "d4c9a00352c55c153cb7802d7fe283613ac25b84aec2e28c3c284c6f0736c0c3",
+            "glmActualOutputIndices": [
+              37
+            ],
+            "deepseekActualOutputIndices": [
+              154
+            ]
+          },
+          "routines.openCloseEscape": {
+            "file": "src/browser/routines-view.ts",
+            "lines": [
+              162,
+              205
+            ],
+            "sourceBodySha256": "50f15acaa047fc287283a3981ca200fb72504c0e6eeaa6692a8abc297f84d0d3",
+            "glmActualOutputIndices": [
+              43
+            ],
+            "deepseekActualOutputIndices": [
+              157
+            ]
+          },
+          "new-session.openCloseSubmit": {
+            "file": "src/browser/new-session.ts",
+            "lines": [
+              210,
+              253
+            ],
+            "sourceBodySha256": "e57a1d448de424ed6dd4aa0877e78c35d8e9b9824625f7d7473a86a6e81bd52d",
+            "glmActualOutputIndices": [
+              40
+            ],
+            "deepseekActualOutputIndices": [
+              156
+            ]
+          },
+          "recovery.openCloseLoadGuards": {
+            "file": "src/browser/recovery.ts",
+            "lines": [
+              197,
+              233
+            ],
+            "sourceBodySha256": "e24e3be542e0d1c2673dffb7c211441fced9a4180f6b90e1a1f6570928b752a3",
+            "glmActualOutputIndices": [
+              39
+            ],
+            "deepseekActualOutputIndices": [
+              155
+            ]
+          },
+          "session-view.selectSession": {
+            "file": "src/browser/session-view.ts",
+            "lines": [
+              114,
+              231
+            ],
+            "sourceBodySha256": "065190120f8dfbcbba5317776e949ddaf8922bab79c73784f6a16ac94ea91c0a",
+            "glmActualOutputIndices": [
+              25
+            ],
+            "deepseekActualOutputIndices": [
+              153
+            ]
+          },
+          "display-preferences.close": {
+            "file": "src/browser/display-preferences.ts",
+            "lines": [
+              30,
+              30
+            ],
+            "sourceBodySha256": "38681d8909c316d2f4469999a34f0af98b8dc5a78dd33adcbe8696b93de937ba",
+            "glmActualOutputIndices": [
+              73
+            ],
+            "deepseekActualOutputIndices": [
+              168
+            ]
+          },
+          "harness-settings.close": {
+            "file": "src/browser/harness-settings.ts",
+            "lines": [
+              127,
+              127
+            ],
+            "sourceBodySha256": "e1ab601d44950f8be0a8dfc4f8c3fd186afebc6071593f506647bdc72ed943c4",
+            "glmActualOutputIndices": [
+              79
+            ],
+            "deepseekActualOutputIndices": [
+              165
+            ]
+          },
+          "usage.openClose": {
+            "file": "src/browser/usage-view.ts",
+            "lines": [
+              60,
+              75
+            ],
+            "sourceBodySha256": "bf352526131cbc1e500060a1577ee428957c7a2b521b93daa32e657e3fc60fc9",
+            "glmActualOutputIndices": [
+              34
+            ],
+            "deepseekActualOutputIndices": [
+              125
+            ]
+          },
+          "search.openClose": {
+            "file": "src/browser/search-view.ts",
+            "lines": [
+              55,
+              74
+            ],
+            "sourceBodySha256": "e314b06bcadbe5ae8c729d62125fba3fdb1bd801ffe29aeb7ec6dad5be0aa143",
+            "glmActualOutputIndices": [
+              33
+            ],
+            "deepseekActualOutputIndices": [
+              30
+            ]
+          },
+          "subagents.openClose": {
+            "file": "src/browser/subagents-view.ts",
+            "lines": [
+              77,
+              106
+            ],
+            "sourceBodySha256": "b34a7d7b3461751f414bc157688e57272a633a432f8ab0ae394e70cb1e6e7320",
+            "glmActualOutputIndices": [
+              36
+            ],
+            "deepseekActualOutputIndices": [
+              31
+            ]
+          },
+          "sidebar.close": {
+            "file": "src/browser/sidebar-query.ts",
+            "lines": [
+              84,
+              84
+            ],
+            "sourceBodySha256": "ca1da1fef2a08859a43dbb2143428388c36abc183ed1260772a41dab6941020a",
+            "glmActualOutputIndices": [
+              75
+            ],
+            "deepseekActualOutputIndices": [
+              87
+            ]
+          },
+          "session-view.pending": {
+            "file": "src/browser/session-view.ts",
+            "lines": [
+              31,
+              97
+            ],
+            "sourceBodySha256": "97653b407017d6e3e51d1dd910df5f732dac7b634da1f54a8de2f65be8a04e14",
+            "glmActualOutputIndices": [
+              25
+            ],
+            "deepseekActualOutputIndices": [
+              50
+            ]
+          }
+        },
+        "method": "Matched complete authoritative source-body byte strings against actual toolResult text only when paired call attributes that file; stripped displayed line prefixes only. Signatures/default-summary ellipses/hash-only outputs do not count. No runtime reviewer operations before this audit."
+      },
+      "ownerClarifications": [
+        "Renewed DeepSeek narration groups new-session with close-then-add openers. Actual new-session.open increments generation and calls closeOtherViews, excluding itself; it does not call its own close. Frozen source and its self-exclusion behavior remain authoritative.",
+        "No blanket all-close-pairs commutation endorsed. Only the exact search/subagents adjacent-order delta is approved by R8 evidence.",
+        "All new proof outputs are bounded raw reads; prior DeepSeek esbuild/compiler deviations remain historical and were not repeated."
+      ],
+      "gracefulCloseResults": [
+        {
+          "success": true
+        },
+        {
+          "success": true
+        }
+      ],
+      "postCloseProvenance": [
+        {
+          "host": null,
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+          "ref": "01a0ab53-c0",
+          "session": {
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+            "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI3LTk2NlpfMDFhMGFiNTMtYzBmZS03NTJmLWI4OGQtYWVmYzhkODZjMDM3Il0",
+            "harnessId": "omp",
+            "nativeSessionId": "2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037",
+            "harnessLabel": "Oh My Pi",
+            "capabilities": {
+              "prompt": false,
+              "steer": false,
+              "followUp": false,
+              "abort": false,
+              "compact": false,
+              "models": false,
+              "setModel": false,
+              "setThinking": false,
+              "rename": false,
+              "commands": false,
+              "queueCancel": false,
+              "tree": false,
+              "export": true,
+              "close": false,
+              "restart": false,
+              "resume": true
+            },
+            "closeMode": "owned-pane",
+            "profileId": "omp-v1",
+            "profileVersion": 1,
+            "name": "R8-final-GLM",
+            "model": "zai/glm-5.3",
+            "contextPercent": 66,
+            "contextTokens": 132188,
+            "messageCount": 3,
+            "lastActivity": "2026-09-16T18:58:37.648Z",
+            "isActive": false,
+            "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+            "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-27-966Z_01a0ab53-c0fe-752f-b88d-aefc8d86c037.jsonl",
+            "parentSession": null,
+            "parentSessionSource": null,
+            "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+            "parentSource": "pi-dish-launch",
+            "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+          }
+        },
+        {
+          "host": null,
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+          "ref": "01a0ab53-c5",
+          "session": {
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+            "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTI5LTE2NVpfMDFhMGFiNTMtYzVhZC03MzIwLWI0NzMtZjU3NzViNDBjZDg4Il0",
+            "harnessId": "omp",
+            "nativeSessionId": "2026-09-16T17-46-29-165Z_01a0ab53-c5ad-7320-b473-f5775b40cd88",
+            "harnessLabel": "Oh My Pi",
+            "capabilities": {
+              "prompt": false,
+              "steer": false,
+              "followUp": false,
+              "abort": false,
+              "compact": false,
+              "models": false,
+              "setModel": false,
+              "setThinking": false,
+              "rename": false,
+              "commands": false,
+              "queueCancel": false,
+              "tree": false,
+              "export": true,
+              "close": false,
+              "restart": false,
+              "resume": true
+            },
+            "closeMode": "owned-pane",
+            "profileId": "omp-v1",
+            "profileVersion": 1,
+            "name": "R8-final-DeepSeek",
+            "model": "opencode-go/deepseek-v4.1-flash",
+            "contextPercent": 77,
+            "contextTokens": 155313,
+            "messageCount": 2,
+            "lastActivity": "2026-09-16T18:58:37.635Z",
+            "isActive": false,
+            "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+            "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-29-165Z_01a0ab53-c5ad-7320-b473-f5775b40cd88.jsonl",
+            "parentSession": null,
+            "parentSessionSource": null,
+            "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+            "parentSource": "pi-dish-launch",
+            "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+          }
+        }
+      ],
+      "parentProductionRuntimeProof": {
+        "executor": "Parent integration owner",
+        "path": "/tmp/pi-dish-parent-r8-smoke-result.json",
+        "sha256": "291bf7a61d1d7e695000febdec295d9b537a1fde6d8e2de7843ab68f288d37fb",
+        "proof": {
+          "source": "9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09",
+          "sourceFile": "'use strict';\nconst fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst root = '/home/jyarwood/workspace/pi-dish-r8';\nrequire(root + '/test/test-env.js').applyTestEnv();\nconst home = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-parent-r8-'));\nprocess.env.HOME = home;\nprocess.env.TMUX_TMPDIR = path.join(home, 'tmux');\nprocess.env.PI_DISH_INDEX_SYNC_BUDGET = '1000';\nfs.mkdirSync(process.env.TMUX_TMPDIR);\nconst dir = path.join(home, '.pi/agent/sessions/project');\nfs.mkdirSync(dir, { recursive: true });\nconst fixture = path.join(home, 'pane-proof.txt');\nfs.writeFileSync(fixture, 'Parent pane isolation proof\\nThis file must survive ordinary takeover and retire for recovery.\\n');\nconst ids = ['parent-pane-one', 'parent-pane-two'];\nfor (const [i,id] of ids.entries()) {\n  fs.writeFileSync(path.join(dir, id + '.jsonl'), [\n    { type: 'session', version: 3, id, cwd: home, timestamp: '2026-09-16T00:00:00.000Z' },\n    { type: 'message', id: 'user-' + i, parentId: null, timestamp: '2026-09-16T00:00:01.000Z', message: { role: 'user', content: 'Parent pane fixture ' + (i + 1) } },\n    { type: 'message', id: 'assistant-' + i, parentId: 'user-' + i, timestamp: '2026-09-16T00:00:02.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'Inspect `' + fixture + '` for pane-retirement proof.' }] } },\n  ].map(row => JSON.stringify(row)).join('\\n') + '\\n');\n}\nconst server = require(root + '/server.js');\nconst ready = () => {\n  const result = { base: 'http://127.0.0.1:' + server.address().port, home, ids, fixture, source: '9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09' };\n  fs.writeFileSync('/tmp/pi-dish-parent-r8-runtime.json', JSON.stringify(result, null, 2) + '\\n');\n  console.log('R8_PARENT_READY ' + JSON.stringify(result));\n};\nif (server.listening) ready(); else server.once('listening', ready);\n",
+          "results": [
+            {
+              "case": "ordinary retains file/settings",
+              "main": "main usage-open",
+              "file": true,
+              "settings": "flex"
+            },
+            {
+              "case": "recovery clears file/settings and previous takeover",
+              "main": "main recovery-open",
+              "file": false,
+              "settings": "none"
+            },
+            {
+              "case": "selection retires takeover",
+              "main": "main",
+              "name": "Parent pane fixture 2",
+              "fixtureGlobal": "undefined"
+            },
+            {
+              "case": "mobile takeover closes sidebar",
+              "main": "main usage-open",
+              "sidebar": "sidebar",
+              "body": "",
+              "width": 390,
+              "scrollWidth": 390,
+              "fixtureGlobal": "undefined"
+            }
+          ],
+          "visual": "Actual uninstrumented production desktop recovery surface and settled 390px mobile usage surface inspected; no horizontal overflow; sidebar right edge 0 after transition",
+          "screenshots": [
+            "/tmp/pi-dish-parent-r8-desktop.png",
+            "/tmp/pi-dish-parent-r8-mobile.png"
+          ],
+          "limitations": [
+            "DOM click used for under-overlay ordinary takeover exercise; real production event handlers/controllers, not fixture globals",
+            "Direct text-selector helper failed with harness TypeError; raw Puppeteer text locator timed out; actual attributed session DOM click succeeded; no product changes",
+            "First mobile screenshot captured transition; settled screenshot confirmed sidebar retired",
+            "This parent smoke covers ordinary vs clearing takeover, selection and mobile sidebar exclusion; owner six-case commutation/one-registration evidence is separately retained, not claimed rerun here",
+            "Direct screenshot path option did not persist files; native page.screenshot saved PNGs, then both files were read and visually verified."
+          ],
+          "screenshotSha256": {
+            "/tmp/pi-dish-parent-r8-desktop.png": "0211c8a77b9abfc019da212ade56179424b72eb3488e9bbd9f0f149061b4fa6a",
+            "/tmp/pi-dish-parent-r8-mobile.png": "199d388ef22f8965af63e439da3592ae364de589e3c79cc2c4a1bd60b2c10ba6"
+          },
+          "cleanup": "Both managed browser tabs released; isolated server stopped exit143; owned temporary HOME and runtime script removed; proof and actual PNG screenshots retained."
+        },
+        "scope": "Parent-executed uninstrumented production desktop/mobile smoke only; not an owner rerun, not a rerun of six-case commutation or one-registration probes.",
+        "acceptanceBoundary": "Kimi decoded registration script remains gated; R9 not released; no restoration authorization or Kimi runtime operations."
+      },
+      "archiveSafety": {
+        "methodDeviation": "Original GLM semantic archive index107 is output of an environment/provenance shell command, not semantic resolve. This deviation is retained; no claim of full protocol compliance. Actual independently captured preprompt and postreview semantic OMP/exact-model/high gates remain authoritative.",
+        "existingOutputCheck": {
+          "archive": "original GLM",
+          "index": 107,
+          "spawnTokenFieldPresent": true,
+          "nonemptySpawnTokenPresent": true,
+          "valuesDisplayed": false,
+          "newEnvironmentConfigCredentialsOrRawSessionFilesRead": false
+        },
+        "permissions": {
+          "directory": "/tmp/pi-dish-r8-review-archives",
+          "directoryMode": "0700",
+          "fileMode": "0600",
+          "files": 12,
+          "allVerified": true
+        },
+        "publication": {
+          "actualTokenInAlreadyLoadedCommittedAttestation": false,
+          "actualTokenInAlreadyLoadedCommittedEvidence": false,
+          "rawArchivesCommittedOrPublished": false,
+          "rawBytesModified": false,
+          "redactedDerivativeCreated": false,
+          "rule": "Raw originals and supplements remain private only. Never commit or publish actual tokens or these raw secret-bearing archives; any future redacted derivative must be separately labelled and separately hashed, never represented as raw complete."
+        },
+        "kimiOperations": []
+      },
+      "parentIndependentRenewalAudit": {
+        "path": "/tmp/pi-dish-parent-r8-renewal-audit.json",
+        "sha256": "f165c273ff59431b30ff330f0d167ba116100ae2e407c8e1cc32186fdad220fa",
+        "executor": "Parent integration owner",
+        "reportedChecks": [
+          "Supplemental GLM/DeepSeek archive hashes",
+          "Contiguous indices",
+          "Verbatim final equality",
+          "Exact preprompt/postreview model/HIGH/OMP/cwd",
+          "Successful graceful closures and inactive state",
+          "All21 applicable body units per reviewer exact-byte verified",
+          "GLM attributed single-line closes at index79 and complete evidence extraction at57/58/60/61"
+        ],
+        "generatedReadScope": "Complete generated delta against accepted baseline, NOT the whole unchanged bundle.",
+        "preservedCaveats": [
+          "No broad all-pairs ordering endorsement; retain inaccurate new-session prose correction",
+          "DeepSeek prohibited build/compiler probes remain disclosed history",
+          "GLM provenance-shell method deviation retained; actual semantic HIGH gate authoritative",
+          "Raw originals/supplements remain private0700directory/0600files and uncommitted"
+        ],
+        "acceptanceBoundary": "R8/R9 remain held; no Kimi operations or source changes authorized."
+      },
+      "auditSnapshotTiming": "Fields describing Kimi hold and closure-held state record their earlier audit stages. GLM/DeepSeek successful close/inactive outcomes below are final; the subsequent explicit Kimi authorization and completed continuation are recorded separately."
+    },
+    "kimiBoundedContinuation": {
+      "sourceCommit": "9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09",
+      "authorization": "Parent lifted no-Kimi hold for ONE bounded same-reviewer continuation after user-reported reset availability; stop immediately on any recurring403, no queued retry/follow-up.",
+      "reviewerRef": "01a0ab53-ca84-706f-8757-e3bc4f6c4e99",
+      "resume": {
+        "success": true,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0"
+      },
+      "prepromptSemanticProvenance": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+        "ref": "01a0ab53-ca",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-30-404Z_01a0ab53-ca84-706f-8757-e3bc4f6c4e99",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R8-final-Kimi",
+          "model": "kimi-code/k3",
+          "contextPercent": 11.9,
+          "contextTokens": 124964,
+          "contextWindow": 1048576,
+          "thinkingLevel": "high",
+          "messageCount": 3,
+          "lastActivity": "2026-09-16T18:19:42.483Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-30-404Z_01a0ab53-ca84-706f-8757-e3bc4f6c4e99.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 1680373,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      },
+      "status": "Single authorized continuation completed without provider error: full literal/control-byte and missing-lines audit passed, fresh ENTIRE source ACCEPT archived, exact pre/post provenance preserved, graceful close succeeded and inactive state verified.",
+      "prompt": "ONE PARENT-AUTHORIZED BOUNDED CONTINUATION OF YOUR SAME REVIEW SESSION. Owner resolved and resumed your exact existing ref01a0ab53-ca84-706f-8757-e3bc4f6c4e99, then independently verified actual kimi-code/k3 / OMP / HIGH / cwd /home/jyarwood/workspace/pi-dish-r8 BEFORE this substantive prompt. No replacement/upgrade or model change. SOURCE remains9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09 against dc4ae84568fda976cfb136082b1dda405ccf54d8; later HEADa522dafa adds only owner attestation. Your prior actual authored source/test/evidence/complete GENERATED DELTA and applicable consumer reads stand; reuse YOUR OWN history, never sibling judgments. Do not read sibling verdicts in docs/r8-review.json.\n\nStrict READ-ONLY recovery only: NO suites/build/compiler/probes/install/formatters/source or repository writes/delegation; NO environment/process/configuration/credentials/database/raw-session-file inspection. Provenance via semantic CLI only. Do not execute the embedded script. If any provider403/quota error recurs, stop immediately, no retry or queued followup, preserve exact error.\n\nRemaining actual-read gap confirmed in your original outputs: registrationExperiment.script at docs/r8-evidence.json line293 was clipped in your read26, hash/length output59 was not a body read, decoded output61 was ONLY commutation script. REQUIRED: personally recover the FULL LITERAL registrationExperiment.script using bounded RAW read docs/r8-evidence.json:292-358:raw (full registration field; this raw form previously exposes complete literal, not a summary). Verify no elision/clipping anywhere inside the long JSON string, including all escapes/control-byte representations, from first const fs through final console.log, plus full result/limits. If the tool still clips, use smaller bounded RAW retrieval until complete; do not substitute a hash-only assertion or execute a probe. Also recover src/browser/session-view.ts:104-105:raw (unrelated failure HTML previously missing); this permits correcting prior whole-file claim truthfully. No other applicable-body reread is necessary; parent actual-body audit passed those.\n\nEvaluate the recovered script/result and two lines in context of YOUR entire already-read authored source/test/evidence and complete generated DELTA, not whole unchanged bundle. Append a fresh explicit ACCEPT or REVISE for ENTIRE IDENTICAL SOURCE SHA9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09. Retain all prior decisions/history and explicitly correct earlier evidence-read/whole-file overclaims. Retract any broader all-pairs ordering claim: only documented concrete search/subagents relative-order change in four takeovers is in scope. The audit registration is inserted before coordinator construction, not a runtime registration API. Do not claim owner runtime gates were rerun.\n\nRetain COMPLETE renewed final prose in your final assistant message and send full verdict safely to durable owner01a0ab39-9dbd-7317-b73e-b0f8185783e8 through bundled semantic CLI (no shell heredoc interpolation mishaps; no new file writes needed). Leave session open for owner actual model-facing-byte audit, complete contiguous semantic archive, postreview provenance, then graceful closure. No integration/dependency-release claim.",
+      "promptSha256Utf8": "06a5fa14678f219ba8ef7685428cc9ff1d92962b0e201efd0f91aba84e71b4e0",
+      "dispatch": {
+        "success": true,
+        "result": {
+          "queued": false
+        }
+      },
+      "archiveSerialization": {
+        "container": "JSON object with CLI-resolved provenance, unmodified parsed semantic response pages, and derived completeness/index metadata. This is a complete semantic-history archive, not a byte-for-byte HTTP wire capture.",
+        "encoding": "UTF-8",
+        "serializer": "Python json.dumps(value, indent=2, ensure_ascii=True, allow_nan=False), followed by exactly one LF byte",
+        "hashFraming": "SHA-256 over the complete saved UTF-8 file bytes, including the final LF; no concatenation or trimming.",
+        "pageOrder": "As retrieved newest window first; each page retains server message order. Completeness checked separately over messages sorted by native index.",
+        "contentPolicy": "No redaction or message omission in raw archives; original snapshots retained under distinct filenames; private0700directory/0600files; never commit/publish raw secret-bearing archives."
+      },
+      "actualModelFacingByteAudit": {
+        "literalRecoveries": [
+          {
+            "outputIndex": 115,
+            "messageId": "7a8a7703",
+            "fullLiteralExactlyPresent": true,
+            "decodedScriptExactEquality": true,
+            "scriptUtf8Bytes": 2903,
+            "scriptUtf8Sha256": "b0e0bad8852ead5d4184eeae6457d7cd4a567e8b1635a00f10b711d81a2bc501",
+            "jsonLiteralUtf8Bytes": 2952,
+            "jsonLiteralUtf8Sha256": "38c7c569b92c871936bf956631e9bfefb01d4b34641993b97c4885791be0c606",
+            "literalHashFraming": "UTF-8 of json.dumps(script, ensure_ascii=True), including opening/closing JSON quotes, no trailing LF",
+            "decodedControlByteCounts": {
+              "0x0a": 44
+            },
+            "fullResultExactEquality": true
+          }
+        ],
+        "sessionView104_105": {
+          "failureHtml": [
+            116
+          ]
+        },
+        "method": "Inspect only attributed actual model-facing tool-result text; require exact complete quoted JSON literal occurrence and parsed decoded UTF-8 equality, including control bytes. Raw read footer excluded only for JSON parsing; no body trimming/normalization."
+      },
+      "postreviewSemanticProvenance": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+        "ref": "01a0ab53-ca",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-30-404Z_01a0ab53-ca84-706f-8757-e3bc4f6c4e99",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R8-final-Kimi",
+          "model": "kimi-code/k3",
+          "contextPercent": 12.5,
+          "contextTokens": 131377,
+          "contextWindow": 1048576,
+          "thinkingLevel": "high",
+          "messageCount": 4,
+          "lastActivity": "2026-09-16T21:01:14.743Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-30-404Z_01a0ab53-ca84-706f-8757-e3bc4f6c4e99.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 1680373,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      },
+      "finalMessageId": "ce1f578c",
+      "finalTimestamp": 1789592452112,
+      "verdictVerbatim": "Verdict delivered (`success: true`, direct unqueued delivery via semantic CLI, safe argument passing). Session left open.\n\n---\n\n# R8 FINAL REVIEW \u2014 BOUNDED CONTINUATION, RENEWED VERDICT: ACCEPT\n\n**For ENTIRE IDENTICAL SOURCE SHA** `9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09` (`migration/r8-pane-policy` vs baseline `dc4ae84568fda976cfb136082b1dda405ccf54d8`). Later HEAD `a522dafa` (owner attestation only) not reviewed, not part of this verdict. All prior decisions/history retained; this continuation closed the two confirmed read gaps only. No suites/builds/compilers/probes run; embedded scripts NOT executed; no repository/environment/process inspection; provenance via semantic CLI only. No provider error occurred.\n\n## Gap 1 closed \u2014 `registrationExperiment.script` (docs/r8-evidence.json:292-358:raw)\n\nFull literal personally read: first `const fs = require('node:fs');` through final `console.log(JSON.stringify(\u2026, null, 2));\\n`, no elision/clipping anywhere in the string; escapes verified (`\\n` JSON escapes; `\\\\n` decodes to the JS newline escape inside the splice literal). Prior sha256 recomputation (`b0e0bad8852e\u2026`, length 2903) binds this exact body \u2014 no longer a hash-only assertion.\n\n**Evaluation:** the script esbuild/espree-parses the **real** app.ts, extracts the actual `mainPane` policies object AST, source-splices ONE in-memory `audit` takeover registration (appended after `recovery`, before coordinator construction \u2014 a static policy-table insertion, **not** a runtime registration API), evaluates it in `vm` with modeled controller close stubs, loads the **real** compiled main-pane.ts in `vm`, and drives the actual coordinator: for each of 8 takeovers it asserts exactly the entering controller retained with `closeCalls: 7`; `beforeSelection(false)` then retires the added audit takeover (`state.size === 0`). Recorded result matches the coordinator semantics I read at main-pane.ts:28\u201343 exactly. Stated limits (modeled close callbacks, not real controller runtime) remain accurate; real-controller coverage lives in the browser tests and commutation probe.\n\n## Gap 2 closed \u2014 src/browser/session-view.ts:104-105:raw\n\n`${escapeHtml(harnessLabel)} could not start.` paragraph and `${escapeHtml(message)}` small line of the pending-failure template. Benign, escaped, R8-irrelevant; now actually read.\n\n## Corrections to my prior overclaims (explicit)\n\n1. Earlier \"docs/r8-evidence.json whole\" was an overclaim: `registrationExperiment.script` had been display-clipped and only hash/length-verified; now a genuine full-literal read.\n2. Earlier \"session-view.ts whole\" was an overclaim by two elided lines (104\u2013105); now actually complete.\n3. **RETRACTED**: my renewed verdict's broader \"all takeover close pairs commute\" generalization. Only the documented concrete search/subagents relative-order change in the four skills/newSession/routines/recovery takeovers is in scope; the evidence's static premises (search-view.ts:67\u201374, subagents-view.ts:97\u2013106) and its 6-case probe remain verified as read, and my set/order equivalence enumeration stands \u2014 but no broader ordering waiver is asserted.\n4. I claim no rerun of owner runtime gates; recorded gates stand as recorded evidence only.\n\n## Unchanged core evaluation (prior complete reads, still binding)\n\nSole behavioral delta: search/subagents relative close order in those four takeovers; both close bodies touch only private generations/timers/AbortControllers/classes and invoke no controller port, so the concrete pair commutes; sets identical for all seven takeovers and both selection paths; asymmetries (`clearsSessionSurfaces={subagents,recovery}`; sessionSearch selection-only; sidebar takeover-only; session overlays selection-only; Bounce except keepBounceView; pending selection closes Bounce) preserved; generated public/app.js delta faithful; controller bodies/generations/ports untouched; no R9/R10 scope creep.\n\n## Findings\n\n**None.** No material observable defect; no missed required scope. Non-blocking observations stand: `beforeTakeover` throws on an unregistered runtime name (callers literal; TS2345 compile rejection evidenced); registrationExperiment models close callbacks (stated in its limits; covered by real-controller browser proofs).\n\n## Acceptance reason\n\nApproved scope delivered exactly \u2014 one small exclusion coordinator replacing eight lists \u2014 with set/order equivalence verified for every reachable transition, the single documented order delta proven commutative at the actual bodies plus concrete probe, one-registration claim proven against the real policy table and real coordinator, generated output faithful, permanent tests asserting observable transitions only. Source frozen throughout; continuation strictly read-only. Session remains open for owner byte audit, contiguous archive, postreview provenance, and graceful closure. No integration/dependency-release claim made.",
+      "verdictTextFraming": "Assistant text blocks joined by exactly one LF between blocks; no final LF added. Original structured blocks remain in complete raw semantic archive.",
+      "archive": {
+        "path": "/tmp/pi-dish-r8-review-archives/kimi-script-recovery-01a0ab53-ca84-706f-8757-e3bc4f6c4e99.json",
+        "bytes": 1314523,
+        "sha256": "da71ea618bb2fdd7dba2e2f9e7192e1140a5dbb561e8acad7619dac9649ad99a",
+        "serialization": {
+          "container": "JSON object with CLI-resolved provenance, unmodified parsed semantic response pages, and derived completeness/index metadata. This is a complete semantic-history archive, not a byte-for-byte HTTP wire capture.",
+          "encoding": "UTF-8",
+          "serializer": "Python json.dumps(value, indent=2, ensure_ascii=True, allow_nan=False), followed by exactly one LF byte",
+          "hashFraming": "SHA-256 over the complete saved UTF-8 file bytes, including the final LF; no concatenation or trimming.",
+          "pageOrder": "As retrieved newest window first; each page retains server message order. Completeness checked separately over messages sorted by native index.",
+          "contentPolicy": "No redaction or message omission in raw archives; original snapshots retained under distinct filenames; private0700directory/0600files; never commit/publish raw secret-bearing archives."
+        },
+        "totalMessages": 122,
+        "firstIndex": 0,
+        "lastIndex": 121,
+        "complete": true
+      },
+      "newProviderErrors": [],
+      "continuationToolInventory": [
+        {
+          "index": 114,
+          "tool": "read",
+          "intent": "Raw-reading registration experiment field"
+        },
+        {
+          "index": 114,
+          "tool": "read",
+          "intent": "Raw-reading session-view failure HTML lines"
+        },
+        {
+          "index": 117,
+          "tool": "write",
+          "intent": "Writing corrected final verdict"
+        },
+        {
+          "index": 119,
+          "tool": "bash",
+          "intent": "Sending corrected verdict safely"
+        }
+      ],
+      "gracefulCloseOutcome": {
+        "success": true
+      },
+      "verdictDeliveryArtifact": {
+        "path": "/tmp/r8-review-verdict-k3-renewed.txt",
+        "scope": "Reviewer wrote an out-of-repository final-verdict delivery artifact; no source/repository write or executable probe."
+      },
+      "postCloseSemanticProvenance": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+        "ref": "01a0ab53-ca",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTQ2LTMwLTQwNFpfMDFhMGFiNTMtY2E4NC03MDZmLTg3NTctZTNiYzRmNmM0ZTk5Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-16T17-46-30-404Z_01a0ab53-ca84-706f-8757-e3bc4f6c4e99",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": false,
+            "steer": false,
+            "followUp": false,
+            "abort": false,
+            "compact": false,
+            "models": false,
+            "setModel": false,
+            "setThinking": false,
+            "rename": false,
+            "commands": false,
+            "queueCancel": false,
+            "tree": false,
+            "export": true,
+            "close": false,
+            "restart": false,
+            "resume": true
+          },
+          "closeMode": "owned-pane",
+          "profileId": "omp-v1",
+          "profileVersion": 1,
+          "name": "R8-final-Kimi",
+          "model": "kimi-code/k3",
+          "contextPercent": 66,
+          "contextTokens": 132478,
+          "messageCount": 4,
+          "lastActivity": "2026-09-16T21:03:38.568Z",
+          "isActive": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r8/2026-09-16T17-46-30-404Z_01a0ab53-ca84-706f-8757-e3bc4f6c4e99.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE3LTE3LTU1LTAwNVpfMDFhMGFiMzktOWRiZC03MzE3LWI3M2UtYjBmODE4NTc4M2U4Il0"
+        }
+      }
+    },
+    "rawArchiveFraming": {
+      "originalAndGlmDeepseekSupplements": "Python json.dumps(payload, indent=2) with defaults ensure_ascii=True and allow_nan=True, encoded UTF-8 and followed by exactly one LF. SHA256 is over all saved file bytes including that LF. Pages are parsed semantic response objects retained without message redaction/omission; this is not byte-for-byte HTTP wire capture.",
+      "kimiBoundedContinuation": {
+        "container": "JSON object with CLI-resolved provenance, unmodified parsed semantic response pages, and derived completeness/index metadata. This is a complete semantic-history archive, not a byte-for-byte HTTP wire capture.",
+        "encoding": "UTF-8",
+        "serializer": "Python json.dumps(value, indent=2, ensure_ascii=True, allow_nan=False), followed by exactly one LF byte",
+        "hashFraming": "SHA-256 over the complete saved UTF-8 file bytes, including the final LF; no concatenation or trimming.",
+        "pageOrder": "As retrieved newest window first; each page retains server message order. Completeness checked separately over messages sorted by native index.",
+        "contentPolicy": "No redaction or message omission in raw archives; original snapshots retained under distinct filenames; private0700directory/0600files; never commit/publish raw secret-bearing archives."
+      }
+    },
+    "archivePrivacy": {
+      "methodDeviation": "Original GLM semantic archive index107 is output of an environment/provenance shell command, not semantic resolve. This deviation is retained; no claim of full protocol compliance. Actual independently captured preprompt and postreview semantic OMP/exact-model/high gates remain authoritative.",
+      "existingOutputCheck": {
+        "archive": "original GLM",
+        "index": 107,
+        "spawnTokenFieldPresent": true,
+        "nonemptySpawnTokenPresent": true,
+        "valuesDisplayed": false,
+        "newEnvironmentConfigCredentialsOrRawSessionFilesRead": false
+      },
+      "permissions": {
+        "directory": "/tmp/pi-dish-r8-review-archives",
+        "directoryMode": "0700",
+        "fileMode": "0600",
+        "files": 12,
+        "allVerified": true
+      },
+      "publication": {
+        "actualTokenInAlreadyLoadedCommittedAttestation": false,
+        "actualTokenInAlreadyLoadedCommittedEvidence": false,
+        "rawArchivesCommittedOrPublished": false,
+        "rawBytesModified": false,
+        "redactedDerivativeCreated": false,
+        "rule": "Raw originals and supplements remain private only. Never commit or publish actual tokens or these raw secret-bearing archives; any future redacted derivative must be separately labelled and separately hashed, never represented as raw complete."
+      },
+      "kimiOperations": [],
+      "currentPermissions": {
+        "directory": "/tmp/pi-dish-r8-review-archives",
+        "directoryMode": "0700",
+        "allRetainedFiles": 14,
+        "fileMode": "0600",
+        "verified": true
+      },
+      "rawOriginalsAndSupplements": "All private, never committed or published. Original bytes/hashes retained. No redacted derivative was created or represented as complete raw history."
+    },
+    "methodAndNarrativeLimits": [
+      "DeepSeek original in-memory esbuild builds and scoped compiler negative remain prohibited-probe procedural deviations; no full-protocol-compliance claim. Neither was repeated during bounded body recovery.",
+      "GLM original index107 is an environment/provenance shell output, not semantic resolve. Nonempty spawn-token presence was checked only in the already-loaded record without displaying values. This method deviation is retained; actual semantic preprompt/postreview HIGH evidence is authoritative.",
+      "Only the documented search/subagents adjacent-order swap is accepted. Kimi explicitly retracts its earlier all-pairs generalization in current finalce1f578c; no broader reordering license is endorsed.",
+      "DeepSeek new-session close-then-add wording is imprecise: actual open increments generation and invokes closeOtherViews, excluding itself; it does not self-close. Source remains authoritative.",
+      "GLM first supplement late registrations means an audit property inserted before coordinator construction, not dynamic runtime registration. Seven calls is the fixed eight-policy experiment result, not constant-time asymptotic scaling."
+    ],
+    "scopeCompletion": "Kimi actual output115 contains complete literal registration script; parsed2903UTF8bytes incl44LF control bytes exactly match frozen evidence, quoted literal2952bytes separately hashed. Output116 contains session-view104-105. Prior read overclaims are explicitly corrected in fresh entire-source verdict, not erased.",
+    "sourceFreeze": "Owner git diff --exit-code against reviewed9d733a0 over the five source/evidence paths passed after all recoveries. No authored/generated/test/evidence changes; this update changes only docs/r8-review.json.",
+    "acceptanceBoundary": "No R8 acceptance, integration or R9/dependency release claimed. Parent must independently audit this supplement, integrate, exercise required behavior and observe exact pushed-main CI before release.",
+    "validation": {
+      "originalTopLevelRecordsPreservedExceptStatus": true,
+      "threeCurrentEntireSourceDecisions": "GLM29d54fdb, DeepSeek7d4bd6c3, Kimice1f578c all exact9d733a0",
+      "allCurrentPreAndPostProvenanceExactHighOmpCwd": true,
+      "allCurrentGracefulCloseAndInactiveChecksPassed": true,
+      "allRawHistoryArchivesContiguousAndHashVerified": true,
+      "actualModelFacingSourceAndEvidenceBytesAudited": true,
+      "originalAndSupplementRawArchivesPrivate": true,
+      "rawSecretBearingArchivesNotEmbeddedCommittedOrPublished": true,
+      "serializerAndControlByteHashFramingExplicit": true,
+      "sourceSuitesRerun": false,
+      "reason": "Only docs/r8-review.json attestation changes; original source/runtime evidence remains frozen and separately attributed."
+    }
+  }
 }
