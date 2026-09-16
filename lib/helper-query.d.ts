@@ -42,7 +42,7 @@ export declare function queryAsksForAutomation(parsed?: SessionQuery | null): bo
 export declare function evaluateSessionQuery(parsed: SessionQuery, session: HelperSession, contentText?: string): boolean;
 /** Non-overlapping occurrences of `token` in `text` (both lowercased). An
  * indexOf walk, not a regex: tokens are arbitrary user text. */
-export declare function countOccurrences(text: string | undefined, token: string): number;
+export declare function countOccurrences(text: string | null | undefined, token: string): number;
 /**
  * Relevance score for a session against a parsed query — the shared ranking
  * used by the sidebar filter, `/api/sessions?q=` and `/api/search`.
@@ -59,7 +59,7 @@ export declare function countOccurrences(text: string | undefined, token: string
  * caller's recency tiebreak stands. `contentText` is the (already lowercased)
  * indexed search text, optional.
  */
-export declare function scoreSessionMatch(parsed: SessionQuery, session: HelperSession, contentText?: string): number;
+export declare function scoreSessionMatch(parsed: SessionQuery, session: HelperSession, contentText?: string | null): number;
 /** Filter sessions locally (metadata + dates only — no content on this path),
  * relevance-ordered when the query has content-bearing tokens. */
 export declare function applyLocalFilter<T extends HelperSession>(list: readonly T[], query?: string | null): readonly T[];

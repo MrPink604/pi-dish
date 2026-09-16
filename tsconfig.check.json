@@ -9,5 +9,5 @@
     "module": "NodeNext",
     "types": ["node"]
   },
-  "files": ["test/types/core.ts"]
+  "files": ["server.js", "test/types/core.ts"]
 }

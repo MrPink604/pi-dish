@@ -77,7 +77,26 @@ mounts all sixteen handlers at their original positions; settings persistence,
 model-cache invalidation and session mutation/control remain root-owned. Coverage
 algorithms are preserved, not simplified. The
 [M4 implementation record](remaining-migration-plan.md#implementation-record--m4)
-records parent acceptance; remaining root policy/checking belongs to M7.
+records parent acceptance. M7 now authors the remaining composition policy in
+`src/core/server-app.ts`; milestone acceptance remains the integration lead's decision.
+
+The generated `lib/server-app.js` exports `startServer(rootDirectory: string)` and
+returns the actual initial `http.Server` synchronously. The passed application
+root supplies static assets, agent documentation, package metadata and publication
+resources; flat `lib/` output is not treated as the application root. The root
+`server.js` is only `module.exports = require('./lib/server-app').startServer(__dirname);`
+and is enrolled in strict `checkJs` and the authored-source policy. Existing
+factory mounts, middleware ordering, startup/recovery sequencing, listener ownership
+and close hooks remain in their original order. No session/control, fleet,
+publication, SSE or validation policy remains in the launcher.
+
+Raw payloads stay unknown until their original native operations. The private
+property helper emits native indexed access; it does not decode or trust a DTO.
+The three pre-existing reload-error annotations preserve sloppy-write behavior
+under strict output using an ignored four-argument `Reflect.set` result, with
+the original thrown value as receiver. These are compatibility boundaries, not
+new validation or a general reflection layer. [M7 evidence](m7-evidence.json)
+records the frozen inventory, exact approved boundaries and runtime verification.
 
 See the [stage plan](session-catalog-migration.md) for scope, field authority,
 dependencies, deletion criteria and verification. Lifecycle authority, host and
@@ -121,6 +140,7 @@ The integration lead, not this guide, records milestone acceptance.
 | TypeScript source in `src/core/` | Responsibility |
 | --- | --- |
 | `contracts.ts` | Identity distinctions, process proof shapes, harness descriptors and running-tool snapshots |
+| `server-app.ts` | Checked application composition, remaining route/control/SSE policy, ordered startup and owned listener teardown |
 | `session-key.ts` | Strict route decoding, harness/native encoding and legacy Pi canonicalization |
 | `harnesses.ts` | Existing harness registry and launch argv/environment construction |
 | `runtime-resources.ts` | Real external extension/skill/lib paths and metadata-selected physical FFF imports for ASAR packages |
@@ -186,8 +206,8 @@ until serialization; wire decoding is a separate boundary.
 M2's routine consumers retain raw persisted selections and ledger ids until their
 existing consuming operations. The runner uses the actual lifecycle coordinator
 and M1 reference-expansion implementation, not parallel dependency declarations.
-`server.js` retains registration/startup ordering and supplies observations; its
-former routine prompt and route-policy bodies are removed.
+`server-app.ts` retains registration/startup ordering and supplies observations;
+the root launcher contains none of the former routine prompt or route-policy bodies.
 
 New-launch argv/cwd remain unknown through native spawn/execFile boundaries.
 Resume options and identity/control authority remain typed. Direct RPC file-URL
@@ -219,8 +239,9 @@ modal instances, file requests and comment drafts within a selected session.
 Tree/branch operations and model/thinking menu loads also carry selection
 owners; a late branch preserves returned editor text in its original draft.
 
-`server.js` and server feature stores remain JavaScript. First-party browser
-controllers, rendering, composition and static bindings are TypeScript. Native
+The remaining server composition and feature stores now have checked TypeScript
+implementations and generated CommonJS. The one-line `server.js` launcher is checked
+JavaScript. First-party browser controllers, rendering, composition and static bindings are TypeScript. Native
 harness extensions are strictly checked by `tsconfig.extensions.json` without
 emission; harnesses still load their original `.ts` entrypoints. Electron and
 skill CLI sources have checked sibling output through `build:edges`, described

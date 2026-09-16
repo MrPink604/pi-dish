@@ -64,6 +64,7 @@ class RPCSession {
   declare bounceExecuting?: boolean;
   declare bounceActivityRevision?: number;
   declare extUIState?: ExtensionUIState;
+  declare extUIStateTracked?: boolean;
   declare lastStats?: unknown;
 
   constructor(id: NativeSessionId, proc: ChildProcessWithoutNullStreams) {

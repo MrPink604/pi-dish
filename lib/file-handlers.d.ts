@@ -3,7 +3,7 @@ import type { RequestHandler } from 'express';
 import type { SessionSource } from './session-source-contracts';
 type FileHandler = RequestHandler<Record<string, string>, unknown, unknown, Record<string, unknown>, Record<string, unknown>>;
 export interface FileHandlerPorts {
-    resolveSessionCwd(sessionId: string): string | null;
+    resolveSessionCwd(sessionId: string): unknown;
     findSessionSource(sessionId: string): SessionSource | null;
 }
 export interface FileHandlers {

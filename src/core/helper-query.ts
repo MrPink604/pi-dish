@@ -156,7 +156,7 @@ export function evaluateSessionQuery(parsed: SessionQuery, session: HelperSessio
 
 /** Non-overlapping occurrences of `token` in `text` (both lowercased). An
  * indexOf walk, not a regex: tokens are arbitrary user text. */
-export function countOccurrences(text: string | undefined, token: string) {
+export function countOccurrences(text: string | null | undefined, token: string) {
   if (!text || !token) return 0;
   let n = 0, i = text.indexOf(token);
   while (i !== -1) { n++; i = text.indexOf(token, i + token.length); }
@@ -179,7 +179,7 @@ export function countOccurrences(text: string | undefined, token: string) {
  * caller's recency tiebreak stands. `contentText` is the (already lowercased)
  * indexed search text, optional.
  */
-export function scoreSessionMatch(parsed: SessionQuery, session: HelperSession, contentText?: string) {
+export function scoreSessionMatch(parsed: SessionQuery, session: HelperSession, contentText?: string | null) {
   const tokens = positiveQueryTokens(parsed);
   if (!tokens.length) return 0;
   const name = (session.name || '').toLowerCase();

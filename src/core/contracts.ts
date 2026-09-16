@@ -30,9 +30,9 @@ export interface BridgeRegistryEntry extends Record<string, unknown> {
 }
 
 export interface ExtensionUIState {
-  widgets: Map<unknown, Record<string, unknown>>;
-  statuses: Map<unknown, Record<string, unknown>>;
-  dialogs: Map<unknown, Record<string, unknown>>;
+  widgets: Map<unknown, unknown>;
+  statuses: Map<unknown, unknown>;
+  dialogs: Map<unknown, unknown>;
 }
 
 /** A route id is unique within its host, not across the fleet. */

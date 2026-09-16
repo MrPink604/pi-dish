@@ -349,6 +349,8 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
   declare queueState: unknown;
   declare runningToolCalls: Map<string, RunningToolCall>;
   declare extUIState: ExtensionUIState;
+  declare extUIStateTracked?: boolean;
+  declare treeLeafUnsupported?: boolean;
   declare alive: boolean;
   declare sock: net.Socket | null;
   declare _nextId: number;
