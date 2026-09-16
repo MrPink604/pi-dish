@@ -4,12 +4,32 @@ import * as stt from './stt';
 import { recoveryMode } from './recovery-runner';
 import { listHarnesses } from './harnesses';
 import { harnessCommandAvailable, runHarnessJsonCommand } from './harness-feature-commands';
+import type { SessionCatalog } from './session-catalog-contracts';
+import type { SessionSource } from './session-source-contracts';
+import type { SessionOwnership } from './session-ownership';
+import type { CatalogModel } from './session-api';
+import type { AvailableModel } from './pi-sdk';
+import { createUsageSummaryHandler } from './usage-feature-handler';
+import { createSkillFeatureHandlers } from './skill-feature-handlers';
+import { createModelFeatureHandlers } from './model-feature-handlers';
 
 export type FeatureHandler = RequestHandler<Record<string, string>, unknown, unknown, Record<string, unknown>, Record<string, unknown>>;
 
 export interface FeaturePorts {
   readDishSettings(): Record<string, unknown>;
   writeDishSettings(settings: Record<string, unknown>): void;
+  buildSessionCatalog(): Pick<SessionCatalog, 'list'>;
+  enumerateSessionCandidates(): readonly SessionSource[];
+  findSessionSource(id: string, options?: { exact?: boolean }): SessionSource | null;
+  getSessionModels(id: string): Promise<CatalogModel[] | null>;
+  getLiveSession: SessionOwnership['getLiveSession'];
+  /** Weak listing advice only; never a command-execution authorization. */
+  locatePiPane: SessionOwnership['locatePiPane'];
+  getModelsCache(): { models: AvailableModel[] | null; time: number };
+  /** The root setter also invalidates its context-window memo. */
+  setModelsCache(models: AvailableModel[]): void;
+  applicationRoot: string;
+  piSettingsFile: string;
 }
 
 export interface FeatureHandlers {
@@ -22,6 +42,13 @@ export interface FeatureHandlers {
   settings: FeatureHandler;
   updateSettings: FeatureHandler;
   usageLimits: FeatureHandler;
+  usageSummary: FeatureHandler;
+  skills: FeatureHandler;
+  skillActivations: FeatureHandler;
+  skillCoverage: FeatureHandler;
+  models: FeatureHandler;
+  updateEnabledModels: FeatureHandler;
+  commands: FeatureHandler;
 }
 
 interface SavedFilter { name: string; query: string }
@@ -147,6 +174,9 @@ export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
     }
   };
   return {
+    usageSummary: createUsageSummaryHandler(ports),
+    ...createSkillFeatureHandlers(ports),
+    ...createModelFeatureHandlers(ports),
     usageLimits,
     settings,
     updateSettings,

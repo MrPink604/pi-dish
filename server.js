@@ -47,7 +47,6 @@ const { refreshHarnessPricing } = require('./lib/harness-pricing');
 const { createFeatureHandlers } = require('./lib/feature-handlers');
 const {
   harnessCommandAvailable, runHarnessModelCommand,
-  withCatalogThinkingLevels, MODELS_CACHE_TTL,
 } = require('./lib/harness-feature-commands');
 const {
   createSessionOwnership, routeIdentity, routeSessionId, registryIdentity,
@@ -63,8 +62,9 @@ const recoveryStore = require('./lib/session-recovery');
 const { createRecoveryRuntime } = require('./lib/recovery-runner');
 const { createSessionBounceRuntime } = require('./lib/session-bounces');
 const skillsLib = require('./lib/skills');
+const { knownWorkspaceCwds } = require('./lib/skill-feature-handlers');
 const {
-  isModelEnabled, ALL_THINKING_LEVEL_NAMES, thinkingLevelNamesFor, parseModelId,
+  ALL_THINKING_LEVEL_NAMES, thinkingLevelNamesFor, parseModelId,
 } = require('./lib/helper-models.js');
 const { extractTextContent } = require('./lib/helper-content.js');
 const { sessionMetaText } = require('./lib/helper-identity.js');
@@ -77,7 +77,6 @@ const { resolveSessionRefAmong, stableSessionRef } = require('./lib/helper-refs.
 const { expandSessionRefs } = require('./lib/session-refs');
 
 const app = express();
-const featureHandlers = createFeatureHandlers({ readDishSettings, writeDishSettings });
 const PORT = Number.isFinite(Number(process.env.PORT)) ? Number(process.env.PORT) : 3333;
 // Localhost-only by default; opt in to LAN/VPN exposure explicitly, e.g.
 // HOST=0.0.0.0 (all interfaces) or HOST=<tailscale ip>. Auth is opt-in (see
@@ -681,6 +680,15 @@ const sessionOperations = createSessionOperations({
   getActiveSessions,
   readSessionCwd,
   recordLaunchProvenance: (id, sourceId, operationId) => sessionProvenance.recordLaunch(id, sourceId, operationId),
+});
+const featureHandlers = createFeatureHandlers({
+  readDishSettings, writeDishSettings, buildSessionCatalog,
+  enumerateSessionCandidates, findSessionSource, getSessionModels,
+  getLiveSession, locatePiPane,
+  getModelsCache: () => ({ models: modelsCache, time: modelsCacheTime }),
+  setModelsCache,
+  applicationRoot: __dirname,
+  piSettingsFile: PI_SETTINGS_FILE,
 });
 function apiIdForCandidate(candidate) {
   return candidate.routeId;
@@ -1399,31 +1407,6 @@ app.get('/api/search', (req, res) => {
   });
 });
 
-const USAGE_COST_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'];
-const emptyUsage = () => ({
-  tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
-  costs: Object.fromEntries(USAGE_COST_KEYS.map(key => [key, 0])),
-  costUnavailable: Object.fromEntries(USAGE_COST_KEYS.map(key => [key, 0])),
-  calls: 0, measured: 0, durationMs: 0, slowestMs: 0,
-});
-function addUsage(to, from) {
-  if (!from) return to;
-  for (const k of Object.keys(to.tokens)) to.tokens[k] += from.tokens?.[k] || 0;
-  for (const k of USAGE_COST_KEYS) {
-    to.costUnavailable[k] += from.costUnavailable?.[k] || 0;
-    const value = from.costs?.[k];
-    if (Number.isFinite(value)) {
-      to.costs[k] = (Number.isFinite(to.costs[k]) ? to.costs[k] : 0) + value;
-    }
-  }
-  for (const k of ['calls', 'measured', 'durationMs']) to[k] += from[k] || 0;
-  to.slowestMs = Math.max(to.slowestMs, from.slowestMs || 0);
-  return to;
-}
-function localDay(offset = 0) {
-  const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() - offset);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 function readDishSettings() {
   try { const v = JSON.parse(fs.readFileSync(DISH_SETTINGS_FILE, 'utf8')); return v && typeof v === 'object' ? v : {}; } catch { return {}; }
 }
@@ -1433,140 +1416,7 @@ function writeDishSettings(settings) {
   fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n'); fs.renameSync(tmp, DISH_SETTINGS_FILE);
 }
 
-app.get('/api/usage-summary', async (req, res) => {
-  const range = String(req.query.days || '30');
-  if (!['1', '7', '30', 'all'].includes(range)) return res.status(400).json({ error: 'days must be 1, 7, 30, or all' });
-  const sort = String(req.query.sort || 'cost');
-  if (!['cost', 'tokens'].includes(sort)) return res.status(400).json({ error: 'sort must be cost or tokens' });
-  // Multi-select model filter. It has to be applied here, not client-side:
-  // the workspace/session groups are truncated to the top 20 below, and only
-  // the per-session usage.models day buckets can rebuild their totals for a
-  // subset of models. groups.models stays unfiltered — it is the facet list
-  // the client toggles from. Headline KPIs stay global (fixed windows).
-  const modelsRaw = req.query.models == null ? '' : String(req.query.models);
-  if (modelsRaw.length > 4000) return res.status(400).json({ error: 'models filter too long' });
-  const modelRefs = modelsRaw.split(',').map(s => s.trim()).filter(Boolean);
-  if (modelRefs.length > 100) return res.status(400).json({ error: 'models filter lists too many models' });
-  const modelFilter = modelRefs.length ? new Set(modelRefs) : null;
-  await Promise.all(['pi', 'omp'].map(harnessId => refreshHarnessPricing(harnessId)));
-  const discovery = discoverHarnessSessions();
-  const candidates = discovery.candidates;
-  const scan = sessionIndex.scanSessions(candidates);
-  const cutoff = range === 'all' ? null : localDay(Number(range) - 1);
-  const totals = emptyUsage(), byModel = new Map(), byWorkspace = new Map(), bySession = new Map();
-  const dailyMap = new Map(), dailyModels = new Map();
-  const headlineUsage = Object.fromEntries(['today', 'days7', 'days30', 'all', 'month'].map(key => [key, emptyUsage()]));
-  const now = new Date(), monthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-`;
-  for (const c of candidates) {
-    const info = scan.infos.get(c.file), usage = info?.usage;
-    if (!usage) continue;
-    const selected = emptyUsage();
-    for (const [day, bucket] of Object.entries(usage.days || {})) {
-      const dated = day !== 'unknown';
-      addUsage(headlineUsage.all, bucket);
-      if (dated && day === localDay()) addUsage(headlineUsage.today, bucket);
-      if (dated && day >= localDay(6)) addUsage(headlineUsage.days7, bucket);
-      if (dated && day >= localDay(29)) addUsage(headlineUsage.days30, bucket);
-      if (dated) addUsage(dailyMap.get(day) || (dailyMap.set(day, emptyUsage()), dailyMap.get(day)), bucket);
-      if (dated && day.startsWith(monthPrefix)) addUsage(headlineUsage.month, bucket);
-      // Under a model filter the session's selected usage is rebuilt from its
-      // per-model buckets below; the day buckets can't be split by model.
-      if (!modelFilter && (!cutoff || (dated && day >= cutoff))) addUsage(selected, bucket);
-    }
-    for (const [ref, bucket] of Object.entries(usage.models || {})) {
-      const modelSelected = emptyUsage();
-      if (bucket.days) for (const [day, part] of Object.entries(bucket.days)) {
-        if (day !== 'unknown') {
-          const dayModels = dailyModels.get(day) || (dailyModels.set(day, new Map()), dailyModels.get(day));
-          addUsage(dayModels.get(ref) || (dayModels.set(ref, { provider: bucket.provider, model: bucket.model, ...emptyUsage() }), dayModels.get(ref)), part);
-        }
-        if (!cutoff || (day !== 'unknown' && day >= cutoff)) addUsage(modelSelected, part);
-      }
-      else if (!cutoff) addUsage(modelSelected, bucket); // schema-2 transitional safety
-      if (modelSelected.calls) {
-        addUsage(byModel.get(ref) || (byModel.set(ref, { ...emptyUsage(), provider: bucket.provider, model: bucket.model }), byModel.get(ref)), modelSelected);
-        if (!modelFilter || modelFilter.has(ref)) {
-          if (modelFilter) addUsage(selected, modelSelected);
-        }
-      }
-    }
-    addUsage(totals, selected);
-    if (selected.calls) {
-      addUsage(byWorkspace.get(info.cwd || usage.cwd || '(unknown)') || (byWorkspace.set(info.cwd || usage.cwd || '(unknown)', emptyUsage()), byWorkspace.get(info.cwd || usage.cwd || '(unknown)')), selected);
-      const routeId = apiIdForCandidate(c);
-      bySession.set(routeId, {
-        id: routeId,
-        sessionKey: c.sessionKey,
-        harnessId: c.harnessId,
-        nativeSessionId: c.nativeSessionId,
-        name: info.name || c.nativeSessionId,
-        workspace: info.cwd || usage.cwd || null,
-        ...selected,
-      });
-    }
-  }
-  let unpricedModelCalls = 0;
-  for (const [ref, b] of byModel) {
-    b.priced = !b.costUnavailable.total;
-    b.unpricedCalls = b.costUnavailable.total;
-    // The bottom-of-view notice reflects the filtered totals; the facet list
-    // keeps every model's own unavailable annotation.
-    if (!modelFilter || modelFilter.has(ref)) unpricedModelCalls += b.unpricedCalls;
-  }
-  for (const bucket of [...byWorkspace.values(), ...bySession.values()]) {
-    bucket.priced = !bucket.costUnavailable.total;
-    bucket.unpricedCalls = bucket.costUnavailable.total;
-  }
-  totals.unpricedCalls = unpricedModelCalls;
-  // Rank by the same token total the client displays (reasoning stays out of
-  // the sum there too), so the sorted order matches the numbers on screen.
-  const displayedTokens = t => (t?.input || 0) + (t?.output || 0) + (t?.cacheRead || 0) + (t?.cacheWrite || 0);
-  const compare = (a, b) => {
-    if (sort === 'tokens') return displayedTokens(b.tokens) - displayedTokens(a.tokens) || b.calls - a.calls;
-    const aKnown = Number.isFinite(a.costs?.total), bKnown = Number.isFinite(b.costs?.total);
-    if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
-    return (bKnown ? b.costs.total - a.costs.total : 0) || b.calls - a.calls;
-  };
-  const top = map => [...map.entries()].map(([key, value]) => ({ key, ...value })).sort(compare).slice(0, 20);
-  // The daily series spans the requested range (for 'all', from the earliest
-  // dated usage, capped at a year) so the chart always reflects the selected
-  // window. Each day carries a per-model breakdown so the client can stack the
-  // chart by model and open day details without another request.
-  const DAILY_SPAN_CAP = 365;
-  let spanDays = range === 'all' ? 1 : Number(range);
-  if (range === 'all') {
-    let earliest = null;
-    if (modelFilter) {
-      for (const [day, models] of dailyModels) {
-        if ((!earliest || day < earliest) && [...models.keys()].some(ref => modelFilter.has(ref))) earliest = day;
-      }
-    } else for (const day of dailyMap.keys()) if (!earliest || day < earliest) earliest = day;
-    if (earliest) {
-      const [y, m, d] = earliest.split('-').map(Number);
-      const start = new Date(y, m - 1, d, 12), today = new Date(); today.setHours(12, 0, 0, 0);
-      spanDays = Math.min(DAILY_SPAN_CAP, Math.max(1, Math.round((today - start) / 86400000) + 1));
-    }
-  }
-  const daily = Array.from({ length: spanDays }, (_, i) => {
-    const day = localDay(spanDays - 1 - i);
-    const dayEntries = [...(dailyModels.get(day)?.entries() || [])]
-      .filter(([ref]) => !modelFilter || modelFilter.has(ref));
-    const models = dayEntries
-      .map(([ref, b]) => ({ ref, provider: b.provider, model: b.model, calls: b.calls, cost: b.costs.total, costUnavailable: b.costUnavailable, tokens: b.tokens }))
-      .sort((a, b) => Number.isFinite(b.cost) - Number.isFinite(a.cost) || (Number.isFinite(b.cost) ? b.cost - a.cost : 0) || b.calls - a.calls);
-    if (!modelFilter) return { day, ...(dailyMap.get(day) || emptyUsage()), models };
-    const dayTotal = emptyUsage();
-    for (const [, b] of dayEntries) addUsage(dayTotal, b);
-    return { day, ...dayTotal, models };
-  });
-  const headlineCosts = Object.fromEntries(Object.entries(headlineUsage).map(([key, bucket]) => [key, bucket.costs.total]));
-  // Per-component twins of the headline scalars, so the client can pivot
-  // every KPI into read/cached-read/output/cache-write buckets without
-  // another request.
-  const headlineCostsByBucket = Object.fromEntries(Object.entries(headlineUsage).map(([key, bucket]) => [key, bucket.costs]));
-  const headlineCostUnavailable = Object.fromEntries(Object.entries(headlineUsage).map(([key, bucket]) => [key, bucket.costUnavailable.total]));
-  res.json({ range, sort, models: modelFilter ? [...modelFilter] : null, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort(compare).slice(0, 20) }, headlineCosts, headlineCostsByBucket, headlineCostUnavailable, daily, unpricedModelCalls, indexing: scan.indexing, discoveryTruncated: discovery.truncated, discoverySkipped: discovery.skipped, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
-});
+app.get('/api/usage-summary', featureHandlers.usageSummary);
 
 app.get('/api/usage-limits', featureHandlers.usageLimits);
 
@@ -1577,281 +1427,9 @@ app.get('/api/usage-limits', featureHandlers.usageLimits);
 // calls. See TASKS/skills-view-phase1.md.
 // =========================================================================
 
-const DAY_MS = 86400000;
-const WEEK_MS = 7 * DAY_MS;
-
-// Distinct project cwds pi-dish knows about — the scope over which skills are
-// discovered (global user skills plus every project root).
-function knownWorkspaceCwds() {
-  const cwds = new Set();
-  try {
-    for (const session of buildSessionCatalog().list) if (session.cwd) cwds.add(session.cwd);
-  } catch {}
-  return [...cwds];
-}
-
-// Which refinement methodology the ✎ button drafts. Env wins over the dish
-// setting; a value with a path separator is a markdown file to read, a bare
-// token is a pi skill name; unset is the vended default skill.
-function resolveRefineConfig(inventory) {
-  const envVal = process.env.PI_DISH_REFINE;
-  const settingVal = readDishSettings().refine;
-  const raw = (envVal != null && envVal !== '') ? envVal
-    : (typeof settingVal === 'string' ? settingVal : '');
-  const names = new Set((inventory?.skills || []).map(s => s.name));
-  if (raw) {
-    if (raw.includes('/') || raw.includes(path.sep)) {
-      const abs = raw.startsWith('~') ? path.join(os.homedir(), raw.slice(1)) : path.resolve(raw);
-      return { mode: 'path', mdPath: abs };
-    }
-    return { mode: 'skill', skillName: raw, discovered: names.has(raw) };
-  }
-  return {
-    mode: 'default',
-    skillName: 'pi-dish-skill-refine',
-    discovered: names.has('pi-dish-skill-refine'),
-    mdPath: path.join(__dirname, 'skills', 'pi-dish-skill-refine', 'SKILL.md'),
-  };
-}
-
-// Weekly activation buckets, most-recent-last, `weeks` long. Zero weeks stay
-// as zeros (rendered as --chart-other stubs by the client — never omitted).
-function weeklyBuckets(records, weeks, now = Date.now()) {
-  const out = new Array(weeks).fill(0);
-  for (const r of records) {
-    if (!Number.isFinite(r.ts)) continue;
-    const age = Math.floor((now - r.ts) / WEEK_MS);
-    if (age < 0 || age >= weeks) continue;
-    out[weeks - 1 - age]++;
-  }
-  return out;
-}
-
-function usageRollup(records, now = Date.now()) {
-  const cutoff30 = now - 30 * DAY_MS;
-  let count30 = 0, lastUsedTs = null;
-  const kindSplit = { read: 0, targeted: 0, explicit: 0 };
-  const sessions = new Set(), cwds = new Map();
-  let latest = null;
-  for (const r of records) {
-    kindSplit[r.kind] = (kindSplit[r.kind] || 0) + 1;
-    if (Number.isFinite(r.ts)) {
-      if (r.ts >= cutoff30) count30++;
-      if (lastUsedTs == null || r.ts > lastUsedTs) lastUsedTs = r.ts;
-      if (!latest || r.ts > latest.ts) latest = r;
-    }
-    if (r.sessionId) sessions.add(r.sessionId);
-    if (r.cwd) cwds.set(r.cwd, (cwds.get(r.cwd) || 0) + 1);
-  }
-  const topCwd = [...cwds.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-  return {
-    count30d: count30,
-    lastUsedTs,
-    kindSplit,
-    sessionCount: sessions.size,
-    cwdCount: cwds.size,
-    topCwd,
-    total: records.length,
-    latest: latest ? { sessionId: latest.sessionId, entryId: latest.entryId, ts: latest.ts, model: latest.model, cwd: latest.cwd } : null,
-  };
-}
-
-// Split SKILL.md into markdown sections by heading. Returns 1-indexed line
-// ranges. The preamble before the first heading is its own "(intro)" section.
-function splitSections(content) {
-  const lines = content.split('\n');
-  const sections = [];
-  let cur = { heading: '(intro)', level: 0, startLine: 1, lines: [] };
-  lines.forEach((line, i) => {
-    const m = line.match(/^(#{1,6})\s+(.*)$/);
-    if (m) {
-      if (cur.lines.length) { cur.endLine = cur.startLine + cur.lines.length - 1; sections.push(cur); }
-      cur = { heading: line.trim(), level: m[1].length, startLine: i + 1, lines: [line] };
-    } else {
-      cur.lines.push(line);
-    }
-  });
-  if (cur.lines.length) { cur.endLine = cur.startLine + cur.lines.length - 1; sections.push(cur); }
-  // Drop a leading empty intro (a file starting with a heading).
-  return sections.filter(s => !(s.heading === '(intro)' && s.lines.join('').trim() === ''));
-}
-
-// Line set covered by one ranged/full read record, clamped to lineCount.
-function coveredLines(rec, lineCount) {
-  const set = new Set();
-  const add = (s, e) => { for (let i = Math.max(1, s); i <= Math.min(lineCount, e); i++) set.add(i); };
-  if (rec.kind === 'explicit') { add(1, lineCount); return set; }
-  if (rec.ranges === 'all') { add(1, Number.isFinite(rec.truncatedTo) ? rec.truncatedTo : lineCount); return set; }
-  if (Array.isArray(rec.ranges)) {
-    for (const [s, e] of rec.ranges) add(s, e === -1 ? lineCount : e);
-  }
-  return set;
-}
-
-app.get('/api/skills', async (req, res) => {
-  try {
-    const cwds = knownWorkspaceCwds();
-    const inventory = await skillsLib.getSkillsInventory({ cwds });
-    sessionIndex.setSkillRoots(inventory.skills.map(s => s.filePath));
-    const candidates = enumerateSessionCandidates();
-    const scan = sessionIndex.scanSessions(candidates);
-    const now = Date.now();
-    const skills = inventory.skills.map(s => {
-      const records = sessionIndex.getSkillActivations({ skill: s.filePath });
-      const roll = usageRollup(records, now);
-      return { ...s, usage: { ...roll, weeks12: weeklyBuckets(records, 12, now) } };
-    });
-    const quietCutoff = now - 60 * DAY_MS;
-    const summary = {
-      discovered: inventory.discovered,
-      advertised: inventory.advertised,
-      catalogTokensEst: inventory.catalogTokensEst,
-      preambleTokensEst: inventory.preambleTokensEst,
-      activations30d: skills.reduce((a, s) => a + s.usage.count30d, 0),
-      quiet60d: skills.filter(s => s.usage.lastUsedTs == null || s.usage.lastUsedTs < quietCutoff).length,
-      diagnostics: inventory.diagnostics.length,
-    };
-    res.json({
-      scope: inventory.scope,
-      summary,
-      skills,
-      diagnostics: inventory.diagnostics,
-      refine: resolveRefineConfig(inventory),
-      indexing: scan.indexing,
-      precision: 'estimate',
-    });
-  } catch (e) {
-    console.error('GET /api/skills failed:', e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// The primitive: raw activation records as an NDJSON stream. No pagination —
-// a pipe for user scripts. Filters: skill, since (ms epoch or 7d/12h/2w),
-// cwd, kind.
-app.get('/api/skills/activations', (req, res) => {
-  // Ensure the corpus is indexed (mines skills as a side effect).
-  sessionIndex.scanSessions(enumerateSessionCandidates());
-  const filter = {};
-  if (req.query.skill) filter.skill = String(req.query.skill);
-  if (req.query.cwd) filter.cwd = String(req.query.cwd);
-  if (req.query.kind) filter.kind = String(req.query.kind);
-  const since = req.query.since != null ? String(req.query.since) : '';
-  if (since) {
-    const rel = since.match(/^(\d+)(h|d|w)$/);
-    if (rel) {
-      const n = Number(rel[1]);
-      const mult = rel[2] === 'h' ? 3600000 : rel[2] === 'd' ? DAY_MS : WEEK_MS;
-      filter.sinceMs = Date.now() - n * mult;
-    } else {
-      const t = /^\d+$/.test(since) ? Number(since) : Date.parse(since);
-      if (Number.isFinite(t)) filter.sinceMs = t;
-    }
-  }
-  const records = sessionIndex.getSkillActivations(filter)
-    .sort((a, b) => (a.ts || 0) - (b.ts || 0));
-  res.type('application/x-ndjson');
-  res.send(records.map(r => JSON.stringify(r)).join('\n') + (records.length ? '\n' : ''));
-});
-
-// Current-version coverage rollup for one skill: sections of SKILL.md with a
-// read fraction over the ranged reads since the file's mtime, plus targeted
-// touch counts and a headline unread-tokens estimate.
-app.get('/api/skills/coverage', (req, res) => {
-  const skill = String(req.query.skill || '');
-  if (!skill || path.basename(skill) !== 'SKILL.md') {
-    return res.status(400).json({ error: 'skill must be an absolute SKILL.md path' });
-  }
-  let content, stat;
-  try { stat = fs.statSync(skill); content = fs.readFileSync(skill, 'utf-8'); }
-  catch { return res.status(404).json({ error: 'skill file not found' }); }
-
-  sessionIndex.scanSessions(enumerateSessionCandidates());
-  const now = Date.now();
-  const all = sessionIndex.getSkillActivations({ skill });
-  const lines = content.split('\n');
-  const lineCount = lines.length;
-  const contentHash = crypto.createHash('sha1').update(content).digest('hex').slice(0, 12);
-
-  // Mapped = ranged/full reads (kind read|explicit) since the last edit.
-  const mapped = all.filter(r => (r.kind === 'read' || r.kind === 'explicit') &&
-    Number.isFinite(r.ts) && r.ts >= stat.mtimeMs);
-  const excludedBeforeMtime = all.filter(r => (r.kind === 'read' || r.kind === 'explicit') &&
-    (!Number.isFinite(r.ts) || r.ts < stat.mtimeMs)).length;
-  const targetedTouches = all.filter(r => r.kind === 'targeted').length;
-
-  // Per-line read count across the mapped reads.
-  const lineHits = new Array(lineCount + 1).fill(0);
-  let anyPartial = false;
-  for (const r of mapped) {
-    const set = coveredLines(r, lineCount);
-    if (set.size < lineCount) anyPartial = true;
-    for (const ln of set) lineHits[ln]++;
-  }
-  const numMapped = mapped.length;
-
-  const sections = splitSections(content).map(sec => {
-    let readsTouching = 0;
-    for (const r of mapped) {
-      const set = coveredLines(r, lineCount);
-      let hit = false;
-      for (let ln = sec.startLine; ln <= sec.endLine; ln++) if (set.has(ln)) { hit = true; break; }
-      if (hit) readsTouching++;
-    }
-    const lineHeat = [];
-    for (let ln = sec.startLine; ln <= sec.endLine; ln++) {
-      lineHeat.push({ text: lines[ln - 1], hits: lineHits[ln] });
-    }
-    return {
-      heading: sec.heading, level: sec.level,
-      startLine: sec.startLine, endLine: sec.endLine,
-      lineCount: sec.endLine - sec.startLine + 1,
-      reads: readsTouching,
-      fraction: numMapped ? readsTouching / numMapped : 0,
-      neverRead: numMapped > 0 && readsTouching === 0,
-      lines: lineHeat,
-    };
-  });
-
-  // Unread token estimate: lines no mapped read ever touched.
-  let unreadChars = 0;
-  for (let ln = 1; ln <= lineCount; ln++) if (!lineHits[ln]) unreadChars += lines[ln - 1].length + 1;
-  const unreadTokensEst = Math.ceil(unreadChars / 4);
-
-  // A short skill that every mapped read loaded in full → render prose, not a map.
-  const flatFullRead = numMapped > 0 && !anyPartial;
-
-  const roll = usageRollup(all, now);
-  // Resolve latest activation's session name for the deep-link label.
-  let latest = roll.latest;
-  if (latest && latest.sessionId) {
-    try {
-      const source = findSessionSource(latest.sessionId);
-      if (source) latest = { ...latest, name: getSessionInfo(source).name || null };
-    } catch {}
-  }
-
-  res.json({
-    skill,
-    mtimeMs: stat.mtimeMs,
-    contentHash,
-    lineCount,
-    numMapped,
-    mappedReads: numMapped,
-    targetedTouches,
-    excludedBeforeMtime,
-    unreadTokensEst,
-    flatFullRead,
-    sections,
-    weeks26: weeklyBuckets(all, 26, now),
-    kindSplit: roll.kindSplit,
-    sessionCount: roll.sessionCount,
-    cwdCount: roll.cwdCount,
-    topCwd: roll.topCwd,
-    latest,
-    precision: 'estimate',
-  });
-});
+app.get('/api/skills', featureHandlers.skills);
+app.get('/api/skills/activations', featureHandlers.skillActivations);
+app.get('/api/skills/coverage', featureHandlers.skillCoverage);
 
 app.get('/api/settings', featureHandlers.settings);
 // Partial update: only the keys present in the body change, so the budget
@@ -2166,18 +1744,6 @@ app.post('/api/sessions/:id/queue/cancel', async (req, res) => {
   }
 });
 
-// Built-in commands pi-dish can execute on RPC-managed sessions by mapping
-// them to RPC protocol commands.
-const RPC_BUILTIN_COMMANDS = [
-  { name: 'compact', description: 'Manually compact the session context', args: '[instructions]' },
-  { name: 'model', description: 'Switch model (usage: /model provider/model-id)', args: '<model>' },
-  { name: 'name', description: 'Set session display name', args: '<name>' },
-  { name: 'thinking', description: 'Set thinking level', args: '<off|minimal|low|medium|high|xhigh>' },
-  { name: 'abort', description: 'Abort the current agent operation' },
-  { name: 'new', description: 'Start a new session' },
-  { name: 'export', description: 'Export session to HTML', args: '[path]' },
-  { name: 'reload', description: 'Reload extensions, skills, and prompt templates' },
-];
 
 async function runRpcSlashCommand(rpc, message) {
   const spaceIdx = message.indexOf(' ');
@@ -3461,24 +3027,6 @@ function setModelsCache(models) {
   contextWindowMemo.clear(); // windows may differ under the fresh registry
 }
 
-// pi's scoped models (/scoped-models in the TUI) persist as enabledModels
-// patterns in ~/.pi/agent/settings.json. Read fresh per request — the TUI
-// may rewrite the file at any time.
-function readPiSettings() {
-  try { return JSON.parse(fs.readFileSync(PI_SETTINGS_FILE, 'utf-8')); } catch { return {}; }
-}
-
-function getEnabledModelPatterns() {
-  const patterns = readPiSettings().enabledModels;
-  return Array.isArray(patterns) && patterns.length ? patterns : null;
-}
-
-// Annotate at response time (not in the cache) so a settings change made by
-// the TUI or by PUT /api/models/enabled shows up on the next fetch.
-function annotateEnabled(models) {
-  const patterns = getEnabledModelPatterns();
-  return models.map(m => ({ ...m, enabled: isModelEnabled(patterns, m) }));
-}
 
 
 
@@ -3502,174 +3050,17 @@ app.get('/api/harnesses/:id/agents', featureHandlers.harnessAgents);
 app.put('/api/harnesses/:id/agents', featureHandlers.updateHarnessAgents);
 
 
-app.get('/api/models', async (req, res) => {
-  try {
-    const sessionId = req.query.sessionId;
-    if (sessionId) {
-      const identity = routeIdentity(sessionId);
-      if (!identity) return res.status(400).json({ error: 'Invalid session ID' });
-      const sessionModels = await getSessionModels(sessionId);
-      if (sessionModels) {
-        if (identity.harnessId === 'pi') return res.json(annotateEnabled(sessionModels));
-        return res.json(await withCatalogThinkingLevels(sessionModels, getHarness(identity.harnessId)));
-      }
-      if (identity.harnessId !== 'pi') {
-        return res.status(409).json({ error: `Model discovery is unavailable for this ${getHarness(identity.harnessId).label} session.` });
-      }
-    }
-
-    const harnessId = req.query.harness || 'pi';
-    const descriptor = getHarness(harnessId);
-    if (!descriptor) return res.status(400).json({ error: `Unknown harness: ${harnessId}` });
-    if (descriptor.modelCatalog === 'command') {
-      if (!harnessCommandAvailable(descriptor)) return res.status(503).json({ error: `${descriptor.label} is not installed.` });
-      if (req.query.cwd !== undefined && typeof req.query.cwd !== 'string') {
-        return res.status(400).json({ error: 'cwd must be a string' });
-      }
-      return res.json(await runHarnessModelCommand(descriptor, { cwd: req.query.cwd }));
-    }
-    if (descriptor.modelCatalog !== 'pi-sdk') {
-      return res.status(501).json({ error: `New-session model discovery is not supported for ${descriptor.label}.` });
-    }
-
-    if (!modelsCache || Date.now() - modelsCacheTime > MODELS_CACHE_TTL) {
-      setModelsCache(await piSDK.getAvailableModels());
-    }
-    res.json(annotateEnabled(modelsCache));
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.get('/api/models', featureHandlers.models);
 
 // Persist the scoped-models set the same way pi's /scoped-models selector
 // does: explicit "provider/id" strings in settings.enabledModels, absent when
 // everything is enabled. Use pi's SettingsManager rather than rewriting its
 // file ourselves: it locks, re-reads, and merges only the modified field, so
 // concurrent settings writes from a running pi keep their unrelated fields.
-app.put('/api/models/enabled', async (req, res) => {
-  const { enabledIds } = req.body || {};
-  const clearing = enabledIds == null;
-  if (!clearing && (!Array.isArray(enabledIds) ||
-      !enabledIds.every(id => typeof id === 'string' && id.trim()))) {
-    return res.status(400).json({ error: 'enabledIds must be null or an array of model ids' });
-  }
-  const normalizedIds = clearing ? undefined : enabledIds.map(id => id.trim());
-  if (normalizedIds && new Set(normalizedIds).size !== normalizedIds.length) {
-    return res.status(400).json({ error: 'enabledIds must not contain duplicate model ids' });
-  }
-  try {
-    const sdk = await piSDK.getSDK();
-    const settingsManager = sdk.SettingsManager.create(
-      process.cwd(), path.dirname(PI_SETTINGS_FILE), { projectTrusted: false },
-    );
-    const patterns = normalizedIds?.length ? normalizedIds : undefined;
-    settingsManager.setEnabledModels(patterns);
-    await settingsManager.flush();
-    const errors = settingsManager.drainErrors();
-    if (errors.length) throw errors[0].error;
-    res.json({ success: true, enabledModels: patterns || null });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.put('/api/models/enabled', featureHandlers.updateEnabledModels);
 
-const BRIDGE_COMMAND_CAPABILITIES = {
-  compact: 'compact',
-  tree: 'treeNavigation',
-  model: 'setModel',
-  name: 'rename',
-  thinking: 'setThinking',
-  abort: 'abort',
-  reload: 'reload',
-  btw: 'btw',
-};
 
-function filterBridgeCommands(sess, commands) {
-  // Pi keeps its established full TUI list. Alternative harnesses fail
-  // closed: retain skills/templates and bridge commands explicitly marked as
-  // executable, plus built-ins pi-dish maps to an advertised bridge operation.
-  // Export/share stay out because their web-native controls preserve download
-  // and share-token semantics that a slash-command mapping would change.
-  if (sess.harnessId === 'pi') return commands;
-  return commands.filter((command) => command.supported === true
-    || (BRIDGE_COMMAND_CAPABILITIES[command.name]
-      && liveSessionSupports(sess, BRIDGE_COMMAND_CAPABILITIES[command.name])));
-}
-
-async function appendHostBuiltins(sessionId, sess, commands) {
-  const descriptor = getHarness(sess.harnessId);
-  const available = [];
-  // One pane lookup covers both surfaces: the descriptor's curated host
-  // builtins and OMP's /reload. OMP's bridge reload capability stays false
-  // because its public API cannot invoke command handlers remotely — a
-  // reachable pane is the actual capability. The command route maps /reload
-  // to the bridge's /dish-reload command in that exact TUI, where OMP
-  // supplies a legal command context for ctx.reload.
-  const wantsPane = descriptor?.hostBuiltins?.length || sess.harnessId === 'omp';
-  const pane = wantsPane ? await locatePiPane(sessionId) : null;
-  if (pane && descriptor?.hostBuiltins?.length) {
-    // allowedArgs/blockedArgs/freeArgs/requireArgs are server-side validation
-    // rules; clients only need the name, description and arg hint.
-    available.push(...descriptor.hostBuiltins.map(
-      ({ allowedArgs, blockedArgs, freeArgs, requireArgs, ...command }) => ({
-        ...command, source: 'host', supported: true,
-      })));
-  }
-  if (sess.harnessId === 'omp' && pane) {
-    available.push({
-      name: 'reload',
-      description: 'Reload the current Oh My Pi session/runtime state',
-      source: 'host',
-      supported: true,
-    });
-  }
-  if (!available.length) return commands;
-  const hostNames = new Set(available.map(command => command.name));
-  return [
-    ...commands.filter(command => !hostNames.has(command.name)),
-    ...available,
-  ];
-}
-
-app.get('/api/commands', async (req, res) => {
-  try {
-    const sessionId = req.query.sessionId;
-    if (sessionId) {
-      // Ask the live session — it knows exactly which commands exist there.
-      try {
-        const sess = await getLiveSession(sessionId);
-        if (sess instanceof BridgeSession) {
-          if (!liveSessionSupports(sess, 'commands')) {
-            return res.status(409).json({ error: 'This session does not support command discovery.' });
-          }
-          const data = await sess.getCommands();
-          if (data?.commands) {
-            const commands = filterBridgeCommands(sess, data.commands);
-            return res.json(await appendHostBuiltins(sessionId, sess, commands));
-          }
-        } else if (sess) {
-          const data = await sess.getCommands();
-          const commands = [
-            ...RPC_BUILTIN_COMMANDS.map(c => ({ ...c, source: 'builtin', supported: true })),
-            ...(data?.commands || []).map(c => ({ ...c, supported: true })),
-          ];
-          return res.json(commands);
-        }
-      } catch (e) {
-        console.warn(`Live command list failed for ${sessionId}:`, e.message);
-      }
-      const identity = routeIdentity(sessionId);
-      if (!identity) return res.status(400).json({ error: 'Invalid session ID' });
-      if (identity.harnessId !== 'pi') {
-        return res.status(409).json({ error: `Command discovery is unavailable for this ${getHarness(identity.harnessId).label} session.` });
-      }
-    }
-    const commands = await piSDK.getCommands();
-    res.json(commands);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.get('/api/commands', featureHandlers.commands);
 
 app.post('/api/sessions/:id/abort', async (req, res) => {
   try {
@@ -3690,7 +3081,7 @@ app.post('/api/sessions/:id/close', async (req, res) => {
 
 app.get('/api/cwds', (req, res) => {
   try {
-    const cwdSet = new Set(knownWorkspaceCwds());
+    const cwdSet = new Set(knownWorkspaceCwds(buildSessionCatalog));
     const home = os.homedir();
     const cwds = [...cwdSet].sort().map(c => ({
       path: c,
@@ -4659,7 +4050,7 @@ function onMainListening(main) {
   // (references/*) reads attribute to their skill from the cold pass. Failure
   // is harmless — SKILL.md reads and explicit /skill: blocks are detected
   // without roots, and the inventory re-primes on the first /api/skills hit.
-  skillsLib.getSkillFilePaths({ cwds: knownWorkspaceCwds() })
+  skillsLib.getSkillFilePaths({ cwds: knownWorkspaceCwds(buildSessionCatalog) })
     .then(paths => sessionIndex.setSkillRoots(paths))
     .catch(() => {});
   sessionBounces.start();

@@ -1,6 +1,6 @@
 {
   "milestone": "M4",
-  "status": "In progress; not accepted",
+  "status": "Complete source and consumer validation; frozen-source reviews pending; package acceptance remains parent-owned",
   "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
   "branch": "migration/m4-features",
   "frozenRegistrations": [
@@ -276,15 +276,14 @@
       "owner": "M4"
     }
   ],
-  "pendingContractClarifications": [
-    "FeaturePorts.locatePiPane needs explicit addition for command-list host builtins/reload presentation; actual checked SessionOwnership method, weak advice only. Parent asked before use."
-  ],
+  "pendingContractClarifications": [],
   "preservedContracts": {
     "agents": "project > user > bundled; 200-file scan bound; 60s bundled cache; temp cleanup; global writes from fresh cwd, partial dirty writes and serialized per-harness queue",
     "stt": "server-only secret settings; HTTP(S) endpoint; per-field env precedence; language filter; MIME before body; local raw 25mb; multipart names; 60s classified timeout; partial/text error handling",
-    "usage": "indexed summaries, known-cost subtotals and unknown counters, finite local-day exclusions, per-model filters and partial results",
-    "skills": "actual SDK discovery; path identity; bounded bundle scan; estimate-only token/coverage; mining cross-batch limitation preserved",
-    "commands": "listing only; M7 delivery unchanged; interactive command timeout/linger and pricing runner separate"
+    "usage": "indexed summaries, known-cost subtotals and unknown counters, finite local-day exclusions, per-model filters and partial results; schema 2, empty zero totals, unfiltered model facets/global headlines, sparse unknown-date fallback, top 20 sessions, local-noon day buckets and 365-day cap",
+    "skills": "actual SDK discovery; path identity; bounded bundle scan; estimate-only token/coverage; mining cross-batch limitation preserved; 4-second cwd-keyed cache, SDK collision rules and actual required agentDir default, manual-only catalog 0/null, current-mtime exclusions, unknown timestamps, repeated coveredLines per section retained for later R3",
+    "commands": "listing only; M7 delivery unchanged; interactive command timeout/linger and pricing runner separate; Pi full bridge list, alternative capability filters, host argument-rule redaction, weak pane-gated OMP reload, RPC builtins/payload spread and SDK fallback",
+    "models": "Root cache/context invalidation; live Pi vs alternative discovery and error gates; SDK SettingsManager lock/merge; whitespace trimming, duplicate rejection, null/empty removal of enabledModels"
   },
   "dependencyOwners": {
     "M1a": "01a0a999-b509-7178-ae80-1d49d7a27d63",
@@ -339,26 +338,90 @@
       "command": "npm run test:ui",
       "scope": "full existing desktop/mobile smoke against independent M4 source/consumer checkpoint",
       "result": "PASS all good; 62.38s; includes scoped models, speech, usage, skills, terminal and multi-host surfaces"
+    },
+    {
+      "command": "npm run build:core && npm run build:browser && npm run check",
+      "scope": "Complete M4 with both approved final M1 producers and actual M6 producer",
+      "result": "PASS: 213 compiler-owned sources, no explicit-any exceptions, ESLint, core/browser generated drift and all configured type checks"
+    },
+    {
+      "command": "node /tmp/pi-dish-m4-projection-smoke.cjs",
+      "result": "PASS actual isolated server: real SDK discovery/manual-only zero catalog, bundled refinement default, actual JSONL usage known/unknown/filter/facet/headline projections, mined coverage/latest source name, activation NDJSON, SDK scoped-model disk persistence, command discovery, malformed query boundaries",
+      "isolation": "Fresh HOME/PI_CODING_AGENT_DIR/OMP_AGENT_DIR/TMUX_TMPDIR; sanitizeTestEnv with minimal PATH; inherited environment cleared; ephemeral loopback; no live sessions/provider credentials; script and HOME removed"
+    },
+    {
+      "command": "npm test -- test/skills-core.test.js test/skill-mining.test.js test/stt.test.js test/session-index.test.js test/harness-pricing.test.js test/omp-web-pilot.test.js test/server.test.js test/runtime-resources.test.js",
+      "result": "223 passed, 0 failed, 0 skipped; 9.11s"
+    },
+    {
+      "command": "npm run test:browser -- skills.spec.js usage-view.spec.js harness-settings.spec.js host-settings.spec.js composer-speech.spec.js model-catalog.spec.js model-selector.spec.js composer-autocomplete.spec.js",
+      "result": "42 passed; 31.1s; Chromium 153.0.8010.12"
+    },
+    {
+      "command": "npm test",
+      "scope": "Complete source and real root consumer proposal with approved dependencies",
+      "result": "1008 passed, 0 failed, 0 skipped; 32.40s"
+    },
+    {
+      "command": "npm run test:ui:scenarios",
+      "result": "PASS all eight fresh-fixture scenarios: models, drafts, sidebar, usage, skills, routines, bounce, mobile; 49.27s"
+    },
+    {
+      "command": "npm run test:ui",
+      "scope": "Complete source and real root consumer proposal",
+      "result": "PASS all good: full desktop/mobile, multi-host and same-id cross-host surfaces; 62.90s"
     }
   ],
   "remaining": [
-    "M1 actual producers pending parent-coordinated transfer",
-    "complete feature aggregate source and root consumer cutover",
-    "final required check/backend/UI/smoke verification",
-    "frozen source commit and exact three-model reviews",
-    "M6 checked runtimeResourcePath producer: bundled refinement default only; explicit paths unchanged"
+    "Freeze exact complete source commit and obtain three new exact-model explicit final-revision reviews",
+    "Parent-owned independent integration, shared-root/config application, exact integrated CI and acceptance ledger"
   ],
   "approvedContractChanges": [
-    "Parent approved M4 settingsForClient/sanitizeSavedFilters and original-position GET/PUT /api/settings; M7 retains store path/read-write persistence and composition. Exact docs revision pending.",
+    "Parent approved M4 settingsForClient/sanitizeSavedFilters and original-position GET/PUT /api/settings; M7 retains store path/read-write persistence and composition. Shared docs revisions are recorded separately.",
     "Parent-approved M1 raw token/reasoning bug fix keeps number members: nonnumeric/nonfinite operands contribute no amount; finite negatives/fractions retained; pricing/cost/retry inputs unchanged. M4 adds no coercion layer.",
-    "Parent approved M2 model-runner consumed options.cwd unknown; M4 runner must match while retaining resolveHarnessCwd typechecks/fallback/cache behavior. session-launch.ts delta owned exclusively by M2."
+    "Parent approved M2 model-runner consumed options.cwd unknown; M4 runner must match while retaining resolveHarnessCwd typechecks/fallback/cache behavior. session-launch.ts delta owned exclusively by M2.",
+    "Parent approved FeaturePorts.locatePiPane via actual SessionOwnership type for weak command-list presentation only, plus moving listing-only RPC_BUILTIN_COMMANDS; no delivery/authorization changes."
   ],
   "compilerCoverage": {
     "program": "tsconfig.core.json existing src/core/**/*.ts membership",
-    "sourcePolicy": "source-policy.json existing src/core recursive root automatically enrolls five new authored sources; checked source count 196 -> 201",
-    "outputs": "lib/{harness-agents,stt,harness-feature-commands,harness-feature-settings,feature-handlers}.{js,d.ts}",
-    "independentRootMounts": [
+    "sourcePolicy": "Existing recursive src/core root enrolls all nine M4 sources plus approved producers; final check: 213 compiler-owned sources, zero explicit-any exceptions",
+    "sources": [
+      "src/core/harness-agents.ts",
+      "src/core/stt.ts",
+      "src/core/harness-feature-commands.ts",
+      "src/core/harness-feature-settings.ts",
+      "src/core/feature-handlers.ts",
+      "src/core/skills.ts",
+      "src/core/skill-feature-handlers.ts",
+      "src/core/usage-feature-handler.ts",
+      "src/core/model-feature-handlers.ts"
+    ],
+    "outputs": [
+      "lib/harness-agents.js",
+      "lib/harness-agents.d.ts",
+      "lib/stt.js",
+      "lib/stt.d.ts",
+      "lib/harness-feature-commands.js",
+      "lib/harness-feature-commands.d.ts",
+      "lib/harness-feature-settings.js",
+      "lib/harness-feature-settings.d.ts",
+      "lib/feature-handlers.js",
+      "lib/feature-handlers.d.ts",
+      "lib/skills.js",
+      "lib/skills.d.ts",
+      "lib/skill-feature-handlers.js",
+      "lib/skill-feature-handlers.d.ts",
+      "lib/usage-feature-handler.js",
+      "lib/usage-feature-handler.d.ts",
+      "lib/model-feature-handlers.js",
+      "lib/model-feature-handlers.d.ts"
+    ],
+    "rootMounts": [
+      "GET /api/usage-summary",
       "GET /api/usage-limits",
+      "GET /api/skills",
+      "GET /api/skills/activations",
+      "GET /api/skills/coverage",
       "GET /api/settings",
       "PUT /api/settings",
       "GET /api/harnesses",
@@ -366,8 +429,12 @@
       "PUT /api/harnesses/:id/model-roles",
       "GET /api/harnesses/:id/agents",
       "PUT /api/harnesses/:id/agents",
+      "GET /api/models",
+      "PUT /api/models/enabled",
+      "GET /api/commands",
       "POST /api/stt"
-    ]
+    ],
+    "configurationChanges": []
   },
   "runtime": {
     "node": "26.8.2",
@@ -378,8 +445,10 @@
     "platform": "Linux x64"
   },
   "cleanup": [
-    "Updated existing docs/typescript.md with implemented independent source/output ownership and explicit remaining M1 dependency limits",
-    "Removed both successful throwaway smoke scripts; all temporary HOMEs/unpack directories removed by scripts"
+    "Updated existing docs/typescript.md complete ownership inventory; did not edit global acceptance ledger/BACKLOG",
+    "Removed successful projection smoke script and disposable HOME; prior feature/native scripts already removed",
+    "No permanent tests added merely for migration; retained genuine existing and producer regression tests",
+    "Core/browser outputs regenerated only from checked-in source; no hand-edited outputs"
   ],
   "deletionMoveLedger": {
     "moved": [
@@ -387,17 +456,85 @@
       "lib/stt.js authored body -> src/core/stt.ts; lib now generated",
       "root interactive CLI/model cache/thinking overlay -> harness-feature-commands.ts",
       "root harness config/agent handlers and helpers -> harness-feature-settings.ts",
-      "root settings allowlist/validation/response, limits normalization/response and STT response -> feature-handlers.ts"
+      "root settings allowlist/validation/response, limits normalization/response and STT response -> feature-handlers.ts",
+      "lib/skills.js authored body -> src/core/skills.ts; lib now generated",
+      "root usage aggregation/window/facet response -> usage-feature-handler.ts using genuine M1 summary types",
+      "root skill inventory/activation/coverage helpers and responses -> skill-feature-handlers.ts using genuine M1 mining and source lookup",
+      "root enabled-model helpers, model routes, bridge/RPC command-list helpers and catalog -> model-feature-handlers.ts"
     ],
     "deleted": [
       "old root copies of migrated helpers and response bodies",
-      "obsolete root execFile/listTaskAgents/harnessLaunchSpec/recoveryMode imports"
+      "obsolete root execFile/listTaskAgents/harnessLaunchSpec/recoveryMode imports",
+      "obsolete root usage/skill/model/command-list helper and body copies; obsolete withCatalogThinkingLevels/MODELS_CACHE_TTL/isModelEnabled imports"
     ],
     "retained": [
       "root settings storage path/read/write persistence",
-      "root Pi model cache and M1-dependent usage/skills/model/command-list responses pending producer transfer",
-      "root lifecycle/command delivery and other domain bodies are not M4 ownership"
+      "root Pi model cache, context-window invalidation setter and runtime observations for other consumers",
+      "root lifecycle, mutations, command delivery and all other domain bodies; not M4 ownership",
+      "knownWorkspaceCwds is one shared checked helper used by skills, root /api/cwds and startup"
     ],
     "algorithmSimplificationClaim": false
+  },
+  "registrationBasis": {
+    "revision": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
+    "detail": "frozenRegistrations line spans describe the accepted baseline, not the shorter final root",
+    "verification": "Throwaway Espree AST comparison passed: all 104 app HTTP/middleware registration method/path/order entries match baseline; no permanent source-text test"
+  },
+  "dependencies": [
+    {
+      "owner": "M1",
+      "producer": "6b10e54d5cd15594a5c58e9abd4f02f6e71a7a8e",
+      "privateCommit": "7085aaae1c93430525de23c27e20c70e187233aa",
+      "scope": "Actual parsed/mined/usage/pricing/SDK/source/read-handler producers and outputs; only docs/typescript.md additive inventory conflict resolved; no producer source edits; root 9d47 excluded"
+    },
+    {
+      "owner": "M1",
+      "producer": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "privateCommit": "45aba2ff433565124d8bcbef5d188aa370177367",
+      "scope": "Parent-approved four-file final SourceLookup raw route delta; clean transfer"
+    },
+    {
+      "owner": "M6",
+      "producer": "707a2e34b2cce1619fb3379ab7af3217d6b16691",
+      "privateCommit": "ed14c776c10642cbfa9524c1cb582f8b9b072a5f",
+      "scope": "Parent-approved runtime-resources source, JS/declarations and regressions; clean transfer; bundled refine default only, explicit settings/env paths unchanged"
+    }
+  ],
+  "sharedContractRevisions": [
+    "de0496c9ec09a18d21a7d970c67beab9550cb897",
+    "b7526dd3398aefd8415bbb74a43ac4b96aaf220c"
+  ],
+  "featurePorts": [
+    "readDishSettings",
+    "writeDishSettings",
+    "buildSessionCatalog",
+    "enumerateSessionCandidates",
+    "findSessionSource (including latest coverage label)",
+    "getSessionModels",
+    "getLiveSession (actual SessionOwnership type)",
+    "locatePiPane (actual SessionOwnership type; weak listing advice)",
+    "getModelsCache",
+    "setModelsCache (root retains context-window invalidation)",
+    "applicationRoot",
+    "piSettingsFile"
+  ],
+  "opaqueBoundaries": [
+    "Unvalidated bridge/CLI command and model payload members remain unknown and are narrowed only at consumption; no SDK facsimile or ambient declaration",
+    "Root observation/persistence ports remain JavaScript-owned until M7; actual algorithms and all M4 response handlers are checked source",
+    "Session mutation/control delivery remains M7; locatePiPane listing observation is not authority",
+    "SDK/vendor internals and raw Express ingress remain their actual external/unknown boundaries"
+  ],
+  "evidenceLimits": [
+    "Earlier independent checkpoint commands are labeled separately and are not claimed rerun on final source",
+    "Actual installed OMP 18.1.21 agent/config smoke belongs to unchanged independent slice; final focused/full suites exercise its consumers",
+    "No paid/provider-authenticated model completions or live sessions used",
+    "No claim of complete Electron/macOS packaging acceptance: M6 owns that package; M4 directly exercises checkout bundled-refine response and includes actual resource producer regressions"
+  ],
+  "approvedAdditionalRegistrations": {
+    "routes": [
+      "GET /api/settings",
+      "PUT /api/settings"
+    ],
+    "reason": "Parent-approved M4 response/validation ownership; originally assigned to M7 in frozen baseline; root persistence remains M7"
   }
 }
