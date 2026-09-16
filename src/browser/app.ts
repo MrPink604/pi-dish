@@ -22,6 +22,7 @@ import { createSidebarLists } from './sidebar-lists';
 import { createSidebarControls } from './sidebar-controls';
 import { renderSidebar } from './sidebar-render';
 import { createSessionView } from './session-view';
+import { createMainPane } from './main-pane';
 import { createSessionResume } from './session-resume';
 import { createModelCatalog, modelsCacheKey as modelsCacheKeyBase } from './model-catalog';
 import { sameDirectoryHost } from './directory-catalog';
@@ -568,10 +569,7 @@ function pendingComposerKey(id: string) { return `spawn:${id}`; }
 const sessionView: ReturnType<typeof createSessionView> = createSessionView({ document, sessionState, storage: localStorage, endpoint: (...args) => hostDirectory.resolveHost(...args),
   get drafts() { return composerDrafts; }, get activity() { return sessionActivity; }, get transcript() { return transcriptController; }, get stream() { return messageStreamController; }, get resume() { return sessionResume; },
   spawn: id => pendingSessionSpawns.get(id), resetSearch: () => sessionSearch.reset(), cancelStreaming: () => streamingRenderer.cancel(), stopFollowing: () => { appChrome.stopFollowing(); },
-  closeViews: (_pending, keepBounce) => {
-    sessionSearch.close(); fileViews.closeDiff(); fileViews.closeFile(); sessionInfo.closeStats(); transcriptTree.close(); sessionControls.closeModels(); sessionControls.closeThinking(); sessionInfo.closeArtifacts();
-    usageController.close(); searchViewController.close(); subagentsController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); if (!keepBounce) bounceController.close();
-  },
+  closeViews: (_pending, keepBounce) => mainPane.beforeSelection(keepBounce),
   closeTerminal: () => terminalController.close(), clearExtension: () => extensionUI.clear(), clearRelations: () => sessionRelationsController.clear(), closeControls: () => appChrome.closePanel(), hideAutocomplete: () => composerAutocomplete.hide(),
   retireModels: () => modelCatalog.retire(), retireCommands: () => composerAutocomplete.retireCommands(), queue: data => promptDelivery.render(data), closeBtw: () => btwPanel.close(), resetArtifacts: () => sessionInfo.resetArtifacts(),
   thinking: () => sessionControls.updateThinking(), terminal: () => terminalController.updateButtons(), mic: () => composerSpeech.updateButton(), mood: (description, face) => moodController.set(description, face), status: (message, type) => setStatus(message, type),
@@ -656,7 +654,7 @@ const recoveryController: ReturnType<typeof createRecovery> = createRecovery({
   fleetReady: () => hostFleetReady, refreshFleet: (...args) => hostDiscovery.loadFleet(...args),
   selectedHost: () => sessionState.currentSession?.host || null,
   settingsOpen: () => (document.getElementById('settingsModal') as HTMLElement).style.display !== 'none',
-  closeOtherViews: () => { closeSettingsModal(); sidebarQuery.close(); usageController.close(); subagentsController.close(); searchViewController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); bounceController.close(); fileViews.closeDiff(); fileViews.closeFile(); },
+  closeOtherViews: () => mainPane.beforeTakeover('recovery'),
   confirm: message => confirm(message),
 });
 
@@ -696,7 +694,7 @@ const searchViewController: ReturnType<typeof createSearchView> = createSearchVi
     else noteHostFailure(host, error);
   },
   hostChip: (...args) => hostPresentation.chipHtml(...args),
-  closeOtherViews: () => { sidebarQuery.close(); usageController.close(); subagentsController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); },
+  closeOtherViews: () => mainPane.beforeTakeover('search'),
   loadPrevious: () => sidebarLists.load(undefined, { withPrevious: true }),
   selectSession: (id, options) => sessionView.select(id, options), sessionSearch,
 });
@@ -706,7 +704,7 @@ const skillsController: ReturnType<typeof createSkills> = createSkills({
   root: document.querySelector<HTMLElement>('.main')!, request: (...args) => apiTransport.request(...args), self: selfHostEntry, origin: () => location.origin,
   sessionState, loadPrevious: () => sidebarLists.load(undefined, { withPrevious: true }),
   selectSession: (id, options) => sessionView.select(id, options),
-  closeOtherViews: () => { sidebarQuery.close(); usageController.close(); subagentsController.close(); searchViewController.close(); newSessionController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); },
+  closeOtherViews: () => mainPane.beforeTakeover('skills'),
   refine: ({ cwd, draft, host }) => { newSessionController.setHostId(host); newSessionController.open({ cwd, draft }); },
   copy: copyTextToClipboard, status: setStatus,
 });
@@ -715,7 +713,7 @@ const skillsController: ReturnType<typeof createSkills> = createSkills({
 const usageController: ReturnType<typeof createUsageView> = createUsageView({
   root: document.querySelector<HTMLElement>('.main')!, request: (...args) => apiTransport.request(...args), storage: localStorage,
   fleetReady: () => hostFleetReady, hosts: fanoutHosts, host: hostEntryFor, multiHost: isMultiHost,
-  closeOtherViews: () => { sidebarQuery.close(); searchViewController.close(); subagentsController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); },
+  closeOtherViews: () => mainPane.beforeTakeover('usage'),
   connection: (host, event, error) => {
     if (event === 'success') noteHostReachable(host);
     else if (event === 'blocked') noteHostBlocked(host);
@@ -770,7 +768,7 @@ const messageRenderer: ReturnType<typeof createMessageRenderer> = createMessageR
 // and details plumbing of the main transcript renderer.
 const subagentsController: ReturnType<typeof createSubagentsView> = createSubagentsView({
   root: document.querySelector<HTMLElement>('.main')!, request: (host, path, init) => apiTransport.request(host, path, init), sessionState, endpoint: hostEntryFor,
-  closeOtherViews: () => { closeSettingsModal(); sidebarQuery.close(); usageController.close(); searchViewController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); fileViews.closeDiff(); fileViews.closeFile(); },
+  closeOtherViews: () => mainPane.beforeTakeover('subagents'),
   loadPrevious: () => sidebarLists.load(undefined, { withPrevious: true }),
   selectSession: (id, options) => sessionView.select(id, options), status: setStatus,
   markdown: text => richText.format(text), assetUrl: hostAssetUrl, matchRef: ref => sessionReferences.match(ref), details: responseDetailsController,
@@ -854,7 +852,7 @@ const newSessionController: ReturnType<typeof createNewSession> = createNewSessi
   root: document.querySelector<HTMLElement>('.main')!, storage: localStorage, request: (...args) => apiTransport.request(...args),
   self: selfHostEntry, host: hostEntryFor, hosts: effectiveHosts, hostDown: (...args) => hostConnections.isDown(...args), multiHost: isMultiHost,
   sessionState, currentSpawn: () => sessionView.spawnId, spawns: pendingSessionSpawns, models: modelCatalog,
-  closeOtherViews: () => { sidebarQuery.close(); usageController.close(); subagentsController.close(); searchViewController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); },
+  closeOtherViews: () => mainPane.beforeTakeover('newSession'),
   closeSettings: () => harnessSettingsController.close(),
   harnessCacheChanged: () => { if (sessionState.currentSession) sessionHeader.update(); }, status: setStatus,
 });
@@ -1112,7 +1110,7 @@ const routinesController: ReturnType<typeof createRoutinesView> = createRoutines
   root: document.querySelector<HTMLElement>('.main')!, request: (host, url, options) => apiTransport.request(host, url, options), storage: localStorage, sessionState,
   hosts: fanoutHosts, effectiveHosts, host: hostEntryFor, fleetReady: () => hostFleetReady, config: () => appConfig, multiHost: isMultiHost,
   hostChip: host => hostPresentation.chipHtml(host),
-  closeOtherViews: () => { sidebarQuery.close(); usageController.close(); subagentsController.close(); searchViewController.close(); newSessionController.close(); skillsController.close(); recoveryController.close(); bounceController.close(); },
+  closeOtherViews: () => mainPane.beforeTakeover('routines'),
   connection: (host, event, error) => { if (event === 'success') noteHostReachable(host); else if (event === 'blocked') noteHostBlocked(host); else noteHostFailure(host, error); },
   autocomplete: options => createCwdAutocomplete(options), copy: text => copyTextToClipboard(text), status: text => setStatus(text), confirm: text => confirm(text),
   loadPrevious: () => sidebarLists.load(undefined, { withPrevious: true }), selectSession: (id, options) => sessionView.select(id, options),
@@ -1122,6 +1120,36 @@ const routinesController: ReturnType<typeof createRoutinesView> = createRoutines
 const bounceController: ReturnType<typeof createBounce> = createBounce({
   document, request: (...args) => apiTransport.request(...args), hosts: effectiveHosts, fleetReady: () => hostFleetReady,
   sessionState, refreshSessions: (...args) => sidebarLists.refresh(...args), loadPrevious: () => sidebarLists.load(undefined, { withPrevious: true }), selectSession: (...args) => sessionView.select(...args),
+});
+
+// Register exclusion policy once; close callbacks keep controller ownership lazy.
+const mainPane = createMainPane({
+  takeovers: {
+    usage: { close: () => usageController.close() },
+    search: { close: () => searchViewController.close() },
+    subagents: { close: () => subagentsController.close(), clearsSessionSurfaces: true },
+    newSession: { close: () => newSessionController.close() },
+    skills: { close: () => skillsController.close() },
+    routines: { close: () => routinesController.close() },
+    recovery: { close: () => recoveryController.close(), clearsSessionSurfaces: true },
+  },
+  sessionSurfaces: {
+    search: { close: () => sessionSearch.close() },
+    diff: { close: () => fileViews.closeDiff(), closeOnTakeover: true },
+    file: { close: () => fileViews.closeFile(), closeOnTakeover: true },
+  },
+  overlays: {
+    settings: () => closeSettingsModal(),
+    sidebar: () => sidebarQuery.close(),
+    session: {
+      stats: () => sessionInfo.closeStats(),
+      tree: () => transcriptTree.close(),
+      models: () => sessionControls.closeModels(),
+      thinking: () => sessionControls.closeThinking(),
+      artifacts: () => sessionInfo.closeArtifacts(),
+    },
+    bounce: () => bounceController.close(),
+  },
 });
 
 createAppBindings({ document, actions: {

@@ -4518,6 +4518,32 @@
     } };
   }
 
+  // src/browser/main-pane.ts
+  function createMainPane(policies) {
+    const takeovers = Object.values(policies.takeovers);
+    const surfaces = Object.values(policies.sessionSurfaces);
+    const sessionOverlays = Object.values(policies.overlays.session);
+    const overlays = policies.overlays;
+    return {
+      beforeTakeover(name) {
+        const entering = policies.takeovers[name];
+        if (entering.clearsSessionSurfaces) overlays.settings();
+        overlays.sidebar();
+        for (const takeover of takeovers) if (takeover !== entering) takeover.close();
+        overlays.bounce();
+        if (entering.clearsSessionSurfaces) {
+          for (const surface of surfaces) if (surface.closeOnTakeover) surface.close();
+        }
+      },
+      beforeSelection(keepBounce) {
+        for (const surface of surfaces) surface.close();
+        for (const close of sessionOverlays) close();
+        for (const takeover of takeovers) takeover.close();
+        if (!keepBounce) overlays.bounce();
+      }
+    };
+  }
+
   // src/browser/session-resume.ts
   function createSessionResume(options2) {
     const { document: document2, sessionState: sessionState2 } = options2, api = createSessionApi(options2.request);
@@ -18260,24 +18286,7 @@ ${restored}`;
     stopFollowing: () => {
       appChrome.stopFollowing();
     },
-    closeViews: (_pending, keepBounce) => {
-      sessionSearch.close();
-      fileViews.closeDiff();
-      fileViews.closeFile();
-      sessionInfo.closeStats();
-      transcriptTree.close();
-      sessionControls.closeModels();
-      sessionControls.closeThinking();
-      sessionInfo.closeArtifacts();
-      usageController.close();
-      searchViewController.close();
-      subagentsController.close();
-      newSessionController.close();
-      skillsController.close();
-      routinesController.close();
-      recoveryController.close();
-      if (!keepBounce) bounceController.close();
-    },
+    closeViews: (_pending, keepBounce) => mainPane.beforeSelection(keepBounce),
     closeTerminal: () => terminalController.close(),
     clearExtension: () => extensionUI.clear(),
     clearRelations: () => sessionRelationsController.clear(),
@@ -18419,19 +18428,7 @@ ${restored}`;
     refreshFleet: (...args) => hostDiscovery.loadFleet(...args),
     selectedHost: () => sessionState.currentSession?.host || null,
     settingsOpen: () => document.getElementById("settingsModal").style.display !== "none",
-    closeOtherViews: () => {
-      closeSettingsModal();
-      sidebarQuery.close();
-      usageController.close();
-      subagentsController.close();
-      searchViewController.close();
-      newSessionController.close();
-      skillsController.close();
-      routinesController.close();
-      bounceController.close();
-      fileViews.closeDiff();
-      fileViews.closeFile();
-    },
+    closeOtherViews: () => mainPane.beforeTakeover("recovery"),
     confirm: (message3) => confirm(message3)
   });
   var hostSettings = createHostSettings({
@@ -18474,16 +18471,7 @@ ${restored}`;
       else noteHostFailure(host, error);
     },
     hostChip: (...args) => hostPresentation.chipHtml(...args),
-    closeOtherViews: () => {
-      sidebarQuery.close();
-      usageController.close();
-      subagentsController.close();
-      newSessionController.close();
-      skillsController.close();
-      routinesController.close();
-      recoveryController.close();
-      bounceController.close();
-    },
+    closeOtherViews: () => mainPane.beforeTakeover("search"),
     loadPrevious: () => sidebarLists.load(void 0, { withPrevious: true }),
     selectSession: (id, options2) => sessionView.select(id, options2),
     sessionSearch
@@ -18496,16 +18484,7 @@ ${restored}`;
     sessionState,
     loadPrevious: () => sidebarLists.load(void 0, { withPrevious: true }),
     selectSession: (id, options2) => sessionView.select(id, options2),
-    closeOtherViews: () => {
-      sidebarQuery.close();
-      usageController.close();
-      subagentsController.close();
-      searchViewController.close();
-      newSessionController.close();
-      routinesController.close();
-      recoveryController.close();
-      bounceController.close();
-    },
+    closeOtherViews: () => mainPane.beforeTakeover("skills"),
     refine: ({ cwd, draft, host }) => {
       newSessionController.setHostId(host);
       newSessionController.open({ cwd, draft });
@@ -18521,16 +18500,7 @@ ${restored}`;
     hosts: fanoutHosts,
     host: hostEntryFor,
     multiHost: isMultiHost,
-    closeOtherViews: () => {
-      sidebarQuery.close();
-      searchViewController.close();
-      subagentsController.close();
-      newSessionController.close();
-      skillsController.close();
-      routinesController.close();
-      recoveryController.close();
-      bounceController.close();
-    },
+    closeOtherViews: () => mainPane.beforeTakeover("usage"),
     connection: (host, event, error) => {
       if (event === "success") noteHostReachable(host);
       else if (event === "blocked") noteHostBlocked(host);
@@ -18608,19 +18578,7 @@ ${restored}`;
     request: (host, path, init) => apiTransport.request(host, path, init),
     sessionState,
     endpoint: hostEntryFor,
-    closeOtherViews: () => {
-      closeSettingsModal();
-      sidebarQuery.close();
-      usageController.close();
-      searchViewController.close();
-      newSessionController.close();
-      skillsController.close();
-      routinesController.close();
-      recoveryController.close();
-      bounceController.close();
-      fileViews.closeDiff();
-      fileViews.closeFile();
-    },
+    closeOtherViews: () => mainPane.beforeTakeover("subagents"),
     loadPrevious: () => sidebarLists.load(void 0, { withPrevious: true }),
     selectSession: (id, options2) => sessionView.select(id, options2),
     status: setStatus,
@@ -18772,16 +18730,7 @@ ${restored}`;
     currentSpawn: () => sessionView.spawnId,
     spawns: pendingSessionSpawns,
     models: modelCatalog,
-    closeOtherViews: () => {
-      sidebarQuery.close();
-      usageController.close();
-      subagentsController.close();
-      searchViewController.close();
-      skillsController.close();
-      routinesController.close();
-      recoveryController.close();
-      bounceController.close();
-    },
+    closeOtherViews: () => mainPane.beforeTakeover("newSession"),
     closeSettings: () => harnessSettingsController.close(),
     harnessCacheChanged: () => {
       if (sessionState.currentSession) sessionHeader.update();
@@ -19071,16 +19020,7 @@ ${restored}`;
     config: () => appConfig,
     multiHost: isMultiHost,
     hostChip: (host) => hostPresentation.chipHtml(host),
-    closeOtherViews: () => {
-      sidebarQuery.close();
-      usageController.close();
-      subagentsController.close();
-      searchViewController.close();
-      newSessionController.close();
-      skillsController.close();
-      recoveryController.close();
-      bounceController.close();
-    },
+    closeOtherViews: () => mainPane.beforeTakeover("routines"),
     connection: (host, event, error) => {
       if (event === "success") noteHostReachable(host);
       else if (event === "blocked") noteHostBlocked(host);
@@ -19102,6 +19042,34 @@ ${restored}`;
     refreshSessions: (...args) => sidebarLists.refresh(...args),
     loadPrevious: () => sidebarLists.load(void 0, { withPrevious: true }),
     selectSession: (...args) => sessionView.select(...args)
+  });
+  var mainPane = createMainPane({
+    takeovers: {
+      usage: { close: () => usageController.close() },
+      search: { close: () => searchViewController.close() },
+      subagents: { close: () => subagentsController.close(), clearsSessionSurfaces: true },
+      newSession: { close: () => newSessionController.close() },
+      skills: { close: () => skillsController.close() },
+      routines: { close: () => routinesController.close() },
+      recovery: { close: () => recoveryController.close(), clearsSessionSurfaces: true }
+    },
+    sessionSurfaces: {
+      search: { close: () => sessionSearch.close() },
+      diff: { close: () => fileViews.closeDiff(), closeOnTakeover: true },
+      file: { close: () => fileViews.closeFile(), closeOnTakeover: true }
+    },
+    overlays: {
+      settings: () => closeSettingsModal(),
+      sidebar: () => sidebarQuery.close(),
+      session: {
+        stats: () => sessionInfo.closeStats(),
+        tree: () => transcriptTree.close(),
+        models: () => sessionControls.closeModels(),
+        thinking: () => sessionControls.closeThinking(),
+        artifacts: () => sessionInfo.closeArtifacts()
+      },
+      bounce: () => bounceController.close()
+    }
   });
   createAppBindings({ document, actions: {
     openUsageView: () => usageController.open(),

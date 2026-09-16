@@ -1,0 +1,476 @@
+{
+  "milestone": "R8",
+  "baseline": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
+  "branch": "migration/r8-pane-policy",
+  "owner": {
+    "session": "01a0ab39-9dbd-7317-b73e-b0f8185783e8",
+    "harness": "omp",
+    "model": "openai-codex/gpt-6-astra",
+    "thinking": "high",
+    "provenance": "User verified actual durable launch before substantive prompt.",
+    "verificationAfterImplementation": {
+      "semanticResolve": "01a0ab39-9dbd-7317-b73e-b0f8185783e8",
+      "harnessId": "omp",
+      "model": "openai-codex/gpt-6-astra",
+      "thinkingLevel": "high",
+      "cwd": "/home/jyarwood/workspace/pi-dish-r8",
+      "observed": "2026-09-16T17:31:47.483Z"
+    }
+  },
+  "freeze": {
+    "status": "Frozen before implementation; executed scope completed without controller/port modifications",
+    "reads": [
+      "AGENTS.md (injected)",
+      "CLAUDE.md browser source/runtime and main-pane sections",
+      "docs/remaining-migration-plan.md R8, invariants, deliberate limits, verification, accepted M7 evidence",
+      "docs/browser-composition-cleanup.md"
+    ],
+    "source": [
+      "src/browser/app.ts",
+      "src/browser/main-pane.ts (new exclusion-policy owner)",
+      "test/browser/main-pane.spec.js (three observable transition/retirement cases)"
+    ],
+    "outputs": [
+      "public/app.js (build:browser; other browser outputs regenerated only if changed)"
+    ],
+    "compiler": [
+      "tsconfig.browser.json existing src/browser inclusion",
+      "source-policy.json existing src/browser root; no changes/exceptions"
+    ],
+    "consumers": [
+      "session-view.ts closeViews(true,false) for pending selection and closeViews(false,keepBounceView) for validated selection",
+      "recovery.ts openRecoveryView after disposed/capability guard",
+      "subagents-view.ts open after captured selection ownership check and local close",
+      "search-view.ts open after local close",
+      "skills.ts open after local close",
+      "usage-view.ts open before isOpen guard",
+      "new-session.ts open after generation change",
+      "routines-view.ts open before isOpen guard",
+      "bounce.ts reconcileBounceRestarts captures selected owner, validates endpoint/generation and uses keepBounceView:true",
+      "app-bindings.ts unchanged actual actions",
+      "display-preferences.ts beforeOpen and closeSettingsModal remain local",
+      "file-views.ts closeDiff/closeFile retire comments and generation locally"
+    ],
+    "closeOwners": [
+      "sidebar-query.ts",
+      "display-preferences.ts",
+      "usage-view.ts",
+      "search-view.ts",
+      "subagents-view.ts",
+      "new-session.ts (also closes harness settings)",
+      "skills.ts",
+      "routines-view.ts",
+      "recovery.ts",
+      "bounce.ts",
+      "file-views.ts (also closes/clears anchored comments)",
+      "session-search.ts",
+      "session-info.ts stats/artifacts",
+      "transcript-tree.ts",
+      "session-controls.ts model/thinking selectors"
+    ],
+    "originalPeerLists": [
+      "closeOtherViews: () => { closeSettingsModal(); sidebarQuery.close(); usageController.close(); subagentsController.close(); searchViewController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); bounceController.close(); fileViews.closeDiff(); fileViews.closeFile(); },",
+      "closeOtherViews: () => { sidebarQuery.close(); usageController.close(); subagentsController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); },",
+      "closeOtherViews: () => { sidebarQuery.close(); usageController.close(); subagentsController.close(); searchViewController.close(); newSessionController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); },",
+      "closeOtherViews: () => { sidebarQuery.close(); searchViewController.close(); subagentsController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); },",
+      "closeOtherViews: () => { closeSettingsModal(); sidebarQuery.close(); usageController.close(); searchViewController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); fileViews.closeDiff(); fileViews.closeFile(); },",
+      "closeOtherViews: () => { sidebarQuery.close(); usageController.close(); subagentsController.close(); searchViewController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); bounceController.close(); },",
+      "closeOtherViews: () => { sidebarQuery.close(); usageController.close(); subagentsController.close(); searchViewController.close(); newSessionController.close(); skillsController.close(); recoveryController.close(); bounceController.close(); },"
+    ],
+    "originalSelectionList": "  closeViews: (_pending, keepBounce) => {\n    sessionSearch.close(); fileViews.closeDiff(); fileViews.closeFile(); sessionInfo.closeStats(); transcriptTree.close(); sessionControls.closeModels(); sessionControls.closeThinking(); sessionInfo.closeArtifacts();\n    usageController.close(); searchViewController.close(); subagentsController.close(); newSessionController.close(); skillsController.close(); routinesController.close(); recoveryController.close(); if (!keepBounce) bounceController.close();\n  },\n",
+    "contracts": {
+      "takeovers": "One named registration per takeover: close callback plus explicit clearsSessionSurfaces for recovery/subagents. Existing closeOtherViews controller ports unchanged; invoke coordinator with own registered name. No controller opens/disposals/generations move.",
+      "sessionSurfaces": "Named search/diff/file policies. All close on selection; only diff/file close on clearing takeovers.",
+      "overlays": "Named sidebar/settings/Bounce and session overlays; sidebar closes for takeovers only, settings closes only for clearing takeovers, stats/tree/model/thinking/artifacts close on selection only, Bounce closes for all takeovers and selection unless keepBounceView. Settings closure retains its existing nested Bounce close.",
+      "ownership": "Only R8 app.ts mutation; no session-view retirement/port changes (R9), no API/client controls changes (R10), no shared compiler/package/type-fixture changes."
+    },
+    "preserved": [
+      "Recovery/subagents additionally close settings, diff and file; ordinary takeovers leave them retained underneath",
+      "Session selection does not directly close settings or sidebar",
+      "keepBounceView preserves Bounce only during real session selection; pending selection closes it",
+      "Controller local close cascades remain authoritative, including harness settings and comments",
+      "No main-pane active state, async ownership, capability, lifecycle, SSE, cache or persisted data added"
+    ],
+    "opaqueBoundaries": [
+      "External HTTP/store/harness payloads unchanged; no new decoding/DTO",
+      "Controller close callbacks remain concrete lazy closures; no receiver/getter/reflection changes"
+    ],
+    "deletionLedger": [
+      {
+        "remove": "Seven independently maintained peer exclusion lists in app.ts",
+        "replace": "One named takeover registration table and coordinator traversal"
+      },
+      {
+        "remove": "Selection pane/overlay closure list in app.ts",
+        "replace": "Same registration policies consumed by selection callback"
+      }
+    ],
+    "retainedChecks": [
+      "All existing browser takeover, production-composition, Bounce/recovery/file-generation, session identity/spawn cases",
+      "Full backend and source/type/drift check",
+      "Full browser, eight isolated UI scenarios, full desktop/mobile UI"
+    ],
+    "requiredProofs": [
+      "Throwaway added-takeover experiment: exactly one new registration participates in all existing exclusions and selection without peer edits; not a permanent source-count test",
+      "Actual isolated browser changed-path smoke with production desktop/mobile pane switching plus fixture-assisted asymmetric clearing and keepBounceView paths",
+      "Focused uncertain asymmetry/retained request regression only if needed; no source or count assertions",
+      "npm run build:browser",
+      "npm run check",
+      "npm test",
+      "npm run test:browser",
+      "npm run test:ui:scenarios",
+      "npm run test:ui"
+    ],
+    "lsp": "xd://lsp status: No language servers configured for this project. Existing exported controller contracts remain unchanged."
+  },
+  "validation": [
+    {
+      "command": "npm ci",
+      "result": "passed; pinned dependency install (798 packages), initial build had no installed TypeScript executable; no dependency changes"
+    },
+    {
+      "command": "npm run build:browser",
+      "result": "passed; only public/app.js changed"
+    },
+    {
+      "command": "npm run check",
+      "result": "passed twice, including final test source; 259 compiler-owned sources, no explicit-any exceptions; lint/type/drift/mode gates pass"
+    },
+    {
+      "command": "npm test",
+      "result": "1027 passed, 0 failed/skipped, 34593.10409 ms",
+      "log": "artifact://32"
+    },
+    {
+      "command": "npm run test:browser -- main-pane.spec.js production-composition.spec.js bounce.spec.js",
+      "result": "Initial 7 pass / 2 fail: new subagent test passed invalid {tree:[]} fixture. Corrected helper to invoke actual sessionRelations-produced header link; no product code changes."
+    },
+    {
+      "command": "npm run test:browser -- main-pane.spec.js",
+      "result": "3 passed (3.8s); all 49 takeover pairs, held-file clearing asymmetries, host-qualified Bounce retained/ordinary selection."
+    },
+    {
+      "command": "npm run test:browser",
+      "result": "289 passed (3.8 minutes), including all existing 286 and 3 new pane cases; 2 workers",
+      "log": "artifact://49"
+    },
+    {
+      "command": "npm run test:ui:scenarios",
+      "result": "All eight fresh isolated scenarios passed: models, drafts, sidebar, usage, skills, routines, bounce, mobile",
+      "log": "artifact://49"
+    },
+    {
+      "command": "npm run test:ui",
+      "result": "Full desktop/mobile smoke passed, including takeover, Bounce, retained transcript, async ownership, multi-host and same-id cases; all good",
+      "log": "artifact://49"
+    }
+  ],
+  "limits": [
+    "Linux execution only; no macOS or Electron package claim because no Electron surface changed."
+  ],
+  "review": {
+    "status": "All source/consumers/generated output and mandatory runtime gates settled; source commit and parent trio-capacity request next. Parent acceptance remains pending."
+  },
+  "closeOrderDecision": {
+    "difference": "Old skills/newSession/routines/recovery lists close subagents before search; registration uses existing selection order search before subagents. The open-search/open-subagents callers skip themselves; usage and selection already use search before subagents.",
+    "staticProof": {
+      "search": "src/browser/search-view.ts:67-74 changes only private view/searchViewSeq, rowEvents, search timers and main.search-open; invokes no controller port. No shared selection or subagent state.",
+      "subagents": "src/browser/subagents-view.ts:97-106 gates only its own isOpen, changes private lineageSeq/peekSeq, three timers, treeEvents, captured owner/endpoint/target and main.subagents-open; invokes no controller port. No search state.",
+      "guards": "Search render checks local seq/isOpen/query/scope; subagent lineage/peek checks local seq and captured selection/endpoint. Independent class removals and private timers/AbortControllers; neither close dispatches external commands."
+    },
+    "scope": "Only these two concrete local close implementations on the actual composed browser DOM. No broad close ordering, native reflection, malformed-host or lifecycle waiver. Controller generations unchanged; session-view selection phase sequence unchanged.",
+    "probe": {
+      "script": "(async () => {\n  const f = fixtureApp.features, p = fixtureApp.ports;\n  const results = [];\n  const delay = () => new Promise(resolve => setTimeout(resolve, 0));\n  const until = async predicate => { for (let i = 0; i < 200; i++) { if (predicate()) return; await delay(); } throw new Error('Probe did not reach held body'); };\n  p.appBindings.actions.closeSettingsModal();\n  for (const initial of ['neither', 'search', 'subagents']) {\n    for (const order of [['search', 'subagents'], ['subagents', 'search']]) {\n      f.searchViewController.close(); f.subagentsController.close();\n      const owner = f.sessionState.captureSelection();\n      const releases = [];\n      const port = initial === 'search' ? p.searchViewController : p.subagentsController;\n      const originalRequest = port.request;\n      let held = false;\n      const pending = [];\n      if (initial !== 'neither') {\n        port.request = (...args) => {\n          const request = originalRequest(...args).then(async response => {\n            const data = await response.json();\n            if (initial === 'search') for (const row of data.results || []) row.name = 'LATE_SEARCH_COMMUTATION';\n            else if (data.tree) data.tree.session.name = 'LATE_SUBAGENTS_COMMUTATION';\n            held = true;\n            await new Promise(resolve => releases.push(resolve));\n            return new Response(JSON.stringify(data), { status: response.status });\n          });\n          pending.push(request); return request;\n        };\n      }\n      try {\n        if (initial === 'search') f.searchViewController.open('isolated');\n        if (initial === 'subagents') f.subagentsController.open(owner, p.subagentsController.endpoint(owner.host), { session: null, tree: null, members: 0, truncated: false });\n        if (initial !== 'neither') await until(() => held);\n        const before = { search: document.querySelector('#searchViewBody').innerHTML, tree: document.querySelector('#subagentsTree').innerHTML };\n        for (const name of order) (name === 'search' ? f.searchViewController : f.subagentsController).close();\n        for (const release of releases) release();\n        await Promise.all(pending); await delay();\n        // Static retained controls must not reopen or navigate after retirement.\n        document.querySelector('#subagentsOpenBtn').click();\n        document.querySelector('#subagentsSendBtn').click();\n        f.searchViewController.setToken('cwd', '/retired');\n        await delay();\n        const after = { search: document.querySelector('#searchViewBody').innerHTML, tree: document.querySelector('#subagentsTree').innerHTML };\n        const row = { initial, order, heldResponses: pending.length, searchOpen: f.searchViewController.isOpen(), subagentsOpen: f.subagentsController.isOpen(),\n          bodiesUnchanged: before.search === after.search && before.tree === after.tree,\n          lateMarkersRejected: !after.search.includes('LATE_SEARCH_COMMUTATION') && !after.tree.includes('LATE_SUBAGENTS_COMMUTATION'),\n          selectionUnchanged: f.sessionState.ownsSelection(owner),\n          retainedActionsInert: document.querySelector('#searchViewInput').value !== 'cwd:/retired',\n          classes: [...document.querySelector('.main').classList].sort() };\n        if (row.searchOpen || row.subagentsOpen || !row.bodiesUnchanged || !row.lateMarkersRejected || !row.selectionUnchanged || !row.retainedActionsInert) throw new Error(JSON.stringify(row));\n        results.push(row);\n      } finally { port.request = originalRequest; for (const release of releases) release(); }\n    }\n  }\n  return results;\n})()\n",
+      "sha256": "d92394da2bf5ee6c489ec1dce5971466270d59559ca62cdf3713c3b1cc8de1e3",
+      "result": [
+        {
+          "initial": "neither",
+          "order": [
+            "search",
+            "subagents"
+          ],
+          "heldResponses": 0,
+          "searchOpen": false,
+          "subagentsOpen": false,
+          "bodiesUnchanged": true,
+          "lateMarkersRejected": true,
+          "selectionUnchanged": true,
+          "retainedActionsInert": true,
+          "classes": [
+            "main"
+          ]
+        },
+        {
+          "initial": "neither",
+          "order": [
+            "subagents",
+            "search"
+          ],
+          "heldResponses": 0,
+          "searchOpen": false,
+          "subagentsOpen": false,
+          "bodiesUnchanged": true,
+          "lateMarkersRejected": true,
+          "selectionUnchanged": true,
+          "retainedActionsInert": true,
+          "classes": [
+            "main"
+          ]
+        },
+        {
+          "initial": "search",
+          "order": [
+            "search",
+            "subagents"
+          ],
+          "heldResponses": 1,
+          "searchOpen": false,
+          "subagentsOpen": false,
+          "bodiesUnchanged": true,
+          "lateMarkersRejected": true,
+          "selectionUnchanged": true,
+          "retainedActionsInert": true,
+          "classes": [
+            "main"
+          ]
+        },
+        {
+          "initial": "search",
+          "order": [
+            "subagents",
+            "search"
+          ],
+          "heldResponses": 1,
+          "searchOpen": false,
+          "subagentsOpen": false,
+          "bodiesUnchanged": true,
+          "lateMarkersRejected": true,
+          "selectionUnchanged": true,
+          "retainedActionsInert": true,
+          "classes": [
+            "main"
+          ]
+        },
+        {
+          "initial": "subagents",
+          "order": [
+            "search",
+            "subagents"
+          ],
+          "heldResponses": 1,
+          "searchOpen": false,
+          "subagentsOpen": false,
+          "bodiesUnchanged": true,
+          "lateMarkersRejected": true,
+          "selectionUnchanged": true,
+          "retainedActionsInert": true,
+          "classes": [
+            "main"
+          ]
+        },
+        {
+          "initial": "subagents",
+          "order": [
+            "subagents",
+            "search"
+          ],
+          "heldResponses": 1,
+          "searchOpen": false,
+          "subagentsOpen": false,
+          "bodiesUnchanged": true,
+          "lateMarkersRejected": true,
+          "selectionUnchanged": true,
+          "retainedActionsInert": true,
+          "classes": [
+            "main"
+          ]
+        }
+      ],
+      "conditions": "Both orders with neither/search/subagents initially open (all reachable exclusion states); real HTTP bodies held through fixture request ports, released after closes; body equality, late marker rejection, unchanged ownsSelection owner and inert retained controls. Ports restored each case."
+    }
+  },
+  "registrationExperiment": {
+    "script": "const fs = require('node:fs');\nconst vm = require('node:vm');\nconst assert = require('node:assert/strict');\nconst root = '/home/jyarwood/workspace/pi-dish-r8';\nconst esbuild = require(root + '/node_modules/esbuild');\nconst espree = require(root + '/node_modules/espree');\nconst source = esbuild.transformSync(fs.readFileSync(root + '/src/browser/app.ts', 'utf8'), { loader: 'ts', target: 'es2022' }).code;\nconst tree = espree.parse(source, { ecmaVersion: 'latest', sourceType: 'module', range: true });\nlet registration;\nfor (const statement of tree.body) {\n  if (statement.type !== 'VariableDeclaration') continue;\n  for (const declaration of statement.declarations) {\n    if (declaration.id.name === 'mainPane') registration = declaration.init.arguments[0];\n  }\n}\nassert(registration);\nconst takeovers = registration.properties.find(property => property.key.name === 'takeovers').value;\n// The only contributor edit: one new takeover registration, in memory only.\nconst insertAt = takeovers.range[1] - 1 - registration.range[0];\nconst original = source.slice(...registration.range);\nconst extended = original.slice(0, insertAt) + \", audit: { close: () => auditController.close() }\\n\" + original.slice(insertAt);\nconst state = new Set();\nlet closes = 0;\nconst names = ['usageController', 'searchViewController', 'subagentsController', 'newSessionController', 'skillsController', 'routinesController', 'recoveryController', 'auditController'];\nconst context = {};\nfor (const name of names) context[name] = { close() { closes++; state.delete(name); } };\nfor (const [name, methods] of Object.entries({ sessionSearch: ['close'], fileViews: ['closeDiff', 'closeFile'], sidebarQuery: ['close'], sessionInfo: ['closeStats', 'closeArtifacts'], transcriptTree: ['close'], sessionControls: ['closeModels', 'closeThinking'], bounceController: ['close'] })) {\n  context[name] = Object.fromEntries(methods.map(method => [method, () => {}]));\n}\ncontext.closeSettingsModal = () => {};\nconst policies = vm.runInNewContext('(' + extended + ')', context);\nconst moduleObject = { exports: {} };\nvm.runInNewContext(esbuild.transformSync(fs.readFileSync(root + '/src/browser/main-pane.ts', 'utf8'), { loader: 'ts', format: 'cjs' }).code, { module: moduleObject });\nconst pane = moduleObject.exports.createMainPane(policies);\nconst cases = [];\nfor (const [index, name] of Object.keys(policies.takeovers).entries()) {\n  for (const controller of names) state.add(controller);\n  closes = 0;\n  pane.beforeTakeover(name);\n  assert.deepEqual([...state], [names[index]]);\n  cases.push({ opening: name, retained: [...state], closeCalls: closes });\n}\nstate.add('auditController'); pane.beforeSelection(false); assert.equal(state.size, 0);\nconsole.log(JSON.stringify({ change: 'One in-memory audit takeover registration in the actual app policy table; no existing peer edits', cases, selectionRetiresAddedTakeover: true }, null, 2));\n",
+    "sha256": "b0e0bad8852ead5d4184eeae6457d7cd4a567e8b1635a00f10b711d81a2bc501",
+    "result": {
+      "change": "One in-memory audit takeover registration in the actual app policy table; no existing peer edits",
+      "cases": [
+        {
+          "opening": "usage",
+          "retained": [
+            "usageController"
+          ],
+          "closeCalls": 7
+        },
+        {
+          "opening": "search",
+          "retained": [
+            "searchViewController"
+          ],
+          "closeCalls": 7
+        },
+        {
+          "opening": "subagents",
+          "retained": [
+            "subagentsController"
+          ],
+          "closeCalls": 7
+        },
+        {
+          "opening": "newSession",
+          "retained": [
+            "newSessionController"
+          ],
+          "closeCalls": 7
+        },
+        {
+          "opening": "skills",
+          "retained": [
+            "skillsController"
+          ],
+          "closeCalls": 7
+        },
+        {
+          "opening": "routines",
+          "retained": [
+            "routinesController"
+          ],
+          "closeCalls": 7
+        },
+        {
+          "opening": "recovery",
+          "retained": [
+            "recoveryController"
+          ],
+          "closeCalls": 7
+        },
+        {
+          "opening": "audit",
+          "retained": [
+            "auditController"
+          ],
+          "closeCalls": 7
+        }
+      ],
+      "selectionRetiresAddedTakeover": true
+    },
+    "limits": "Actual coordinator and actual app policy table; close callbacks modeled as state removals for isolated contributor/work-count proof, not represented as real controller runtime. Separate browser proofs exercise real controllers."
+  },
+  "runtimeSmoke": {
+    "home": "/tmp/pi-dish-r8-proof-w_vj6lpk/home",
+    "serverScript": "const { applyTestEnv } = require(\"/home/jyarwood/workspace/pi-dish-r8/test/test-env.js\");\napplyTestEnv();\nprocess.env.HOME = \"/tmp/pi-dish-r8-proof-w_vj6lpk/home\";\nprocess.env.TMUX_TMPDIR = \"/tmp/pi-dish-r8-proof-w_vj6lpk/home/tmux\";\nprocess.env.PI_DISH_INDEX_SYNC_BUDGET = '1000';\nconst server = require(\"/home/jyarwood/workspace/pi-dish-r8/server.js\");\nconst ready = () => console.log('R8_READY http://127.0.0.1:' + server.address().port);\nif (server.listening) ready(); else server.once('listening', ready);\n",
+    "url": "http://127.0.0.1:33863",
+    "production": "Uninstrumented actual app: desktop usage\u2192skills\u2192selected transcript; mobile selected transcript\u2192sidebar usage closes sidebar, width/scrollWidth 390; visually inspected settled screenshots. fixtureApp undefined in production.",
+    "asymmetry": [
+      {
+        "label": "ordinary-retains",
+        "main": "main usage-open",
+        "file": true,
+        "settings": "flex",
+        "bounce": false,
+        "selected": "r8-first"
+      },
+      {
+        "label": "recovery-clears",
+        "main": "main recovery-open",
+        "file": false,
+        "settings": "none",
+        "bounce": false,
+        "selected": "r8-first"
+      },
+      {
+        "label": "subagents-clears",
+        "main": "main subagents-open",
+        "file": false,
+        "settings": "none",
+        "bounce": false,
+        "selected": "r8-first"
+      },
+      {
+        "label": "keep-Bounce-selection",
+        "main": "main",
+        "file": false,
+        "settings": "flex",
+        "bounce": true,
+        "selected": "r8-second"
+      },
+      {
+        "label": "ordinary-selection",
+        "main": "main",
+        "file": false,
+        "settings": "flex",
+        "bounce": false,
+        "selected": "r8-first"
+      }
+    ],
+    "diff": [
+      {
+        "target": "recovery",
+        "ordinaryRetainsDiff": true,
+        "clearingRetiresDiff": true
+      },
+      {
+        "target": "subagents",
+        "ordinaryRetainsDiff": true,
+        "clearingRetiresDiff": true
+      }
+    ],
+    "screenshots": [
+      "/tmp/pi-dish-r8-proof-w_vj6lpk/desktop-selection.png",
+      "/tmp/pi-dish-r8-proof-w_vj6lpk/mobile-usage.png"
+    ],
+    "fixtureLimits": "Fixture-only existing feature-observation bundle used for direct real controller asymmetric operations, no production global; no harness/provider operations requested."
+  },
+  "toolLimits": [
+    "No language servers configured; exported controller ports unchanged.",
+    "Browser helper CSS click timeout resolved with observed element handle, report_issue submitted.",
+    "tab.run module import could not resolve esbuild although Node local resolution succeeds; built existing fixture through local Node instead. One tab.run navigation wait timed out after app loaded; subsequent observe/evaluate established ready state and exercised path.",
+    "Disposable probe first assumed TypeScript 6 compiler API; repository uses TypeScript 7 native parser. Replaced probe-only parser with existing fixture esbuild/espree pattern."
+  ],
+  "typeNegative": {
+    "source": "import { createMainPane } from '/home/jyarwood/workspace/pi-dish-r8/src/browser/main-pane.ts';\nconst pane = createMainPane({\n  takeovers: { usage: { close() {} } },\n  sessionSurfaces: {},\n  overlays: { settings() {}, sidebar() {}, session: {}, bounce() {} },\n});\npane.beforeTakeover('usage');\npane.beforeTakeover('unregistered');\n",
+    "command": "node node_modules/typescript/bin/tsc --noEmit --strict --target es2022 --module esnext --moduleResolution bundler --allowImportingTsExtensions --skipLibCheck /tmp/pi-dish-r8-proof-w_vj6lpk/invalid-takeover.ts",
+    "result": "Expected exit 1: TS2345 at (8,21), unregistered is not assignable to usage. Valid usage invocation accepted."
+  },
+  "cleanup": {
+    "smokeServer": "stopped r8-pane-smoke after proof; exit 143 graceful termination",
+    "browser": "released r8-pane-production",
+    "removed": [
+      "temporary HOME and tmux directory",
+      "server.cjs",
+      "fixture-app.js",
+      "registration.cjs",
+      "commutation.js",
+      "invalid-takeover.ts",
+      "r8-proof.txt"
+    ],
+    "retained": [
+      "embedded complete registration/commutation/type-negative scripts and outputs in this evidence",
+      "screenshots and JSON results in /tmp/pi-dish-r8-proof-w_vj6lpk"
+    ],
+    "docs": "Only package evidence/review JSON; no global acceptance records edited; no redundant markdown."
+  },
+  "runtimeVersions": {
+    "node": "26.8.2",
+    "npm": "12.0.2",
+    "typescript": "7.0.2",
+    "platform": "Linux x64",
+    "managedChromium": "153.0.8010.12 (reported by full browser suite)"
+  },
+  "finalScope": [
+    "src/browser/main-pane.ts",
+    "src/browser/app.ts",
+    "public/app.js",
+    "test/browser/main-pane.spec.js",
+    "docs/r8-evidence.json"
+  ],
+  "retainedUnrelatedWork": [
+    "Untracked .amp/ appeared during task; not opened, changed, staged or removed."
+  ],
+  "deletionAndChecks": {
+    "deleted": "All seven old peer closure bodies plus selection closure body; no duplicate policy list left in controllers. Eight callbacks now consume same registered policy. No compatibility exports/wrappers/index changes.",
+    "retained": "Controller-owned close/dispose/request-generation implementations, settings nested Bounce close, session-view retirement phases, file/comment and new-session/harness-settings cascades.",
+    "tests": "No existing test contract changed or repinned. Added only observable transitions: mutual exclusion including same-view reopening; late held file response after asymmetric clearing; cross-host same-id keepBounceView selection. Registration/work-count and close-order probes are disposable, embedded evidence only.",
+    "allocation": "Three registration enumerations at construction; one takeover traversal per takeover/selection, plus relevant surface/overlay traversals. No per-transition Object.values, list copies, active-view cache, or event bus. No timing performance claim."
+  }
+}
