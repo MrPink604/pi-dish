@@ -45,6 +45,10 @@ export interface RoutineInvocation extends Record<string, unknown> {
     closed?: unknown;
     closeError?: unknown;
 }
+/** Only freshly created rows have passed delivery selection; persisted rows remain raw. */
+export interface CreatedRoutineInvocation extends RoutineInvocation {
+    delivery: RoutineDelivery;
+}
 export declare const MAX_INVOCATIONS = 5000;
 export declare const MAX_VERSIONS = 50;
 export declare const MAX_PROMPT = 100000;
@@ -68,7 +72,7 @@ export declare function deleteRoutine(ref: unknown): Routine | null;
 export declare function markScheduled(id: unknown, minuteMs: unknown): Routine | null;
 export declare function readInvocations(): RoutineInvocation[];
 export declare function serializedInputSize(input: unknown): number;
-export declare function createInvocation(fields?: unknown): RoutineInvocation;
+export declare function createInvocation(fields?: unknown): CreatedRoutineInvocation;
 /** Read-modify-write of one entry. Every status change hits disk. */
 export declare function updateInvocation(id: unknown, patch?: unknown): RoutineInvocation | null;
 export declare function getInvocation(id: unknown): RoutineInvocation | null;

@@ -41,13 +41,19 @@ export interface PilotValidationInput {
   cwd?: unknown;
 }
 
-export interface NewSessionLaunchOptions extends PilotSelectionOptions {
+export interface NewSessionLaunchOptions {
+  model?: unknown;
+  thinking?: unknown;
+  cwd?: unknown;
   descriptor: HarnessDescriptor;
   name?: string | null;
   target?: HarnessLaunchTarget | null;
 }
 
-export interface ResumeSessionLaunchOptions extends NewSessionLaunchOptions {
+export interface ResumeSessionLaunchOptions extends PilotSelectionOptions {
+  descriptor: HarnessDescriptor;
+  name?: string | null;
+  target?: HarnessLaunchTarget | null;
   sessionFile: string;
 }
 
@@ -67,8 +73,8 @@ export interface RestartPaneOptions {
 export interface SpawnHarnessOptions {
   descriptor: HarnessDescriptor;
   target: HarnessLaunchTarget;
-  args: readonly string[];
-  cwd?: string | null;
+  args: readonly unknown[];
+  cwd?: unknown;
   name?: string | null;
   hidden?: boolean;
   restartPane?: RestartPaneOptions | null;
@@ -243,7 +249,7 @@ function materializeLaunchWrapper(descriptor: HarnessDescriptor, token: string):
   return wrapperPath;
 }
 
-function injectLaunchWrapper(descriptor: HarnessDescriptor, args: readonly string[], wrapperPath: string | null): readonly string[] {
+function injectLaunchWrapper(descriptor: HarnessDescriptor, args: readonly unknown[], wrapperPath: string | null): readonly unknown[] {
   if (!wrapperPath) return args;
   const index = descriptor.wrapperEntrypoint === null ? -1 : args.indexOf(descriptor.wrapperEntrypoint);
   if (index < 0) throw new BridgeSocketConfigError(`${descriptor.label} launch args do not contain its wrapper entrypoint`);
@@ -261,7 +267,7 @@ function discoveryBridgeInstalled(descriptor: HarnessDescriptor, env: HarnessEnv
   } catch { return false; }
 }
 
-function stripLaunchWrapperArgs(descriptor: HarnessDescriptor, args: readonly string[]): string[] {
+function stripLaunchWrapperArgs(descriptor: HarnessDescriptor, args: readonly unknown[]): unknown[] {
   const index = descriptor.wrapperEntrypoint === null ? -1 : args.indexOf(descriptor.wrapperEntrypoint);
   const flag = args[index - 1];
   if (index < 1 || typeof flag !== 'string' || !flag.startsWith('-')) {
@@ -524,7 +530,8 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
 
   async function launchNewSession({ descriptor, name, model, thinking, cwd, target }: NewSessionLaunchOptions): Promise<LaunchOutcome> {
     try {
-      if (cwd && cwd.startsWith('~')) cwd = path.join(process.env.HOME!, cwd.slice(1).replace(/^\//, ''));
+      // Original dynamic calls own malformed-cwd failures; the assertions do not validate cwd.
+      if (cwd && (cwd as string).startsWith('~')) cwd = path.join(process.env.HOME!, (cwd as string).slice(1).replace(/^\//, ''));
       const args = descriptor.argv.new({ model: model ?? undefined, thinking: thinking ?? undefined });
       if (target?.type === 'tmux') return await spawnHarnessInTmux({ descriptor, target, args, cwd, name });
       if (headlessTmuxEnabled(descriptor)) {

@@ -1,5 +1,5 @@
 {
-  "status": "Parent-approved pilot-only correction implemented and verified; raw saved-launch proposal remains separate and unapproved",
+  "status": "Parent-approved pilot and raw-launch corrections implemented and verified; bounded post-native metadata exception documented; final M2 review pending",
   "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
   "languageServer": "xd://lsp status returned No language servers configured for this project; textual caller inventory used",
   "pilotValidation": {
@@ -17,7 +17,7 @@
   "rawSavedRoutineLaunch": {
     "remainingMismatch": "Routine reads validate only id. Runner passes raw model/thinking/cwd to SessionOperations.createSession/CreateSessionOptions and raw ledger sessionId to live/resume/close/recovery lookup. No field-validity casts added.",
     "affectedSymbols": ["SessionOperations.createSession/CreateSessionOptions", "SessionLaunch.launchNewSession/NewSessionLaunchOptions", "HarnessDescriptor.argv.new/LaunchOptions", "RPCLaunchOptions/createRPCSession/spawnPi", "SessionOwnership.getLiveSession", "SessionOperations.resumeSessionById", "SessionOperations.closeSession/closeSessionById", "RecoveryRunner.outcome"],
-    "risk": "Unknown launch values currently pass through typed lifecycle internals into argv/cwd/native spawn. Widening ingress alone does not honestly check these operations; a broader correction or approved narrow dynamic-operation boundary is needed. Do not silently assert saved fields are strings, normalize them, or filter raw rows.",
-    "next": "Separate docs/m2-raw-launch-proposal.json maps the deeper correction; only the pilot correction is approved and applied."
+    "resolution": "Actual first-party raw ingress remains unknown until its original dynamic/native consumption. No saved-field validity casts, row filtering, new pre-native normalization, output widening or authority weakening.",
+    "next": "Final three-model review. Approved M1 source delta 6d9b3e2 is consumed as e44a86e. Parent explicitly authorized post-native RPC file-URL metadata normalization with unchanged string/null output, native error precedence and owned-child cleanup on unsupported metadata; exact asynchronous byte-path limitation is recorded in docs/m2-raw-launch-proposal.json."
   }
 }

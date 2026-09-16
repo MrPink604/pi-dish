@@ -57,6 +57,11 @@ export interface RoutineInvocation extends Record<string, unknown> {
   closeError?: unknown;
 }
 
+/** Only freshly created rows have passed delivery selection; persisted rows remain raw. */
+export interface CreatedRoutineInvocation extends RoutineInvocation {
+  delivery: RoutineDelivery;
+}
+
 const ROUTINES_FILE = 'routines.json';
 const INVOCATIONS_FILE = 'routine-invocations.json';
 
@@ -323,7 +328,7 @@ export function serializedInputSize(input: unknown): number {
   return Buffer.byteLength(JSON.stringify(input), 'utf8');
 }
 
-export function createInvocation(fields: unknown = {}): RoutineInvocation {
+export function createInvocation(fields: unknown = {}): CreatedRoutineInvocation {
   const routine = property(fields, 'routine');
   if (!routine) throw fail('routine is required');
   if (!includes(STATUSES, property(fields, 'status'))) throw fail(`status must be one of: ${STATUSES.join(', ')}`);
@@ -334,7 +339,8 @@ export function createInvocation(fields: unknown = {}): RoutineInvocation {
   }
   const startedAt = Number.isFinite(property(fields, 'startedAt')) ? property(fields, 'startedAt') : Date.now();
   const terminal = property(fields, 'status') === 'skipped';
-  const invocation: RoutineInvocation = {
+  const delivery = property(fields, 'delivery');
+  const invocation: CreatedRoutineInvocation = {
     id: crypto.randomUUID(),
     routineId: property(routine, 'id'),
     // Denormalized: the ledger outlives the routine it came from.
@@ -342,7 +348,7 @@ export function createInvocation(fields: unknown = {}): RoutineInvocation {
     version: property(routine, 'promptVersion') || 1,
     trigger: property(fields, 'trigger') === 'schedule' ? 'schedule' : 'invoke',
     source,
-    delivery: includes(DELIVERIES, property(fields, 'delivery')) ? property(fields, 'delivery') : 'prompt',
+    delivery: includes(DELIVERIES, delivery) ? delivery : 'prompt',
     status: property(fields, 'status'),
     skipReason: property(fields, 'skipReason') || null,
     sessionId: property(fields, 'sessionId') || null,

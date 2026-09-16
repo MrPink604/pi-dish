@@ -44,8 +44,8 @@ export interface TmuxServer {
 export type SpawnEnvironment = Readonly<Record<string, unknown>>;
 
 interface PaneCommand {
-  cwd?: string | null;
-  command: readonly string[];
+  cwd?: unknown;
+  command: readonly unknown[];
   env?: SpawnEnvironment | null;
 }
 
@@ -96,9 +96,10 @@ function cleanupError(error: unknown, remainingProcesses: ProcessIdentity[]): Pa
   return Object.assign(error instanceof Error ? error : new Error(String(error)), { remainingProcesses });
 }
 
-function runTmux(args: readonly string[], { timeout = 3000 } = {}): Promise<string> {
+function runTmux(args: readonly unknown[], { timeout = 3000 } = {}): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile('tmux', args, { timeout, encoding: 'utf8' }, (err, stdout, stderr) => {
+    // No shell quoting precedes this call: native execFile owns legacy argv coercion/rejection.
+    execFile('tmux', args as readonly string[], { timeout, encoding: 'utf8' }, (err, stdout, stderr) => {
       if (err) { err.stderr = stderr; return reject(err); }
       resolve(stdout);
     });
@@ -167,7 +168,7 @@ export async function spawnInTmux({ socket, tmuxSession, newTmuxSessionName, win
   const envFlags: string[] = [];
   for (const [k, v] of Object.entries(env || {})) envFlags.push('-e', `${k}=${v}`);
 
-  let args: string[];
+  let args: unknown[];
   if (newTmuxSessionName) {
     args = ['-S', socket, 'new-session', '-d', '-s', newTmuxSessionName];
     if (windowName) args.push('-n', windowName);
@@ -194,7 +195,7 @@ export async function respawnPane({ socket, paneId, cwd, command, env, expectedP
       || String(current.startTime) !== String(expectedProcess.startTime)) {
     throw new Error(`tmux pane ${paneId} process changed before restart`);
   }
-  const args = ['-S', socket, 'respawn-pane', '-k', '-t', paneId];
+  const args: unknown[] = ['-S', socket, 'respawn-pane', '-k', '-t', paneId];
   if (cwd) args.push('-c', cwd);
   for (const [key, value] of Object.entries(env || {})) args.push('-e', `${key}=${value}`);
   args.push('--', ...command);

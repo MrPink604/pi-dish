@@ -42,7 +42,7 @@ export interface RecoveryRunner {
   start(): Promise<void>;
   retry(id: string): Promise<RecoveryOutcome>;
   report(): RecoveryReport;
-  outcome(id: string): RecoveryOutcome | null;
+  outcome(id: unknown): RecoveryOutcome | null;
   stop(): void;
 }
 
@@ -139,6 +139,7 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
   const { store, getMode, routeId, probeLive, validateRecord, restore, continueSession,
     now = () => Date.now(), log = console } = deps;
   const reports = new Map<string, RememberedOutcome>();
+  const reportLookup: ReadonlyMap<unknown, RememberedOutcome> = reports;
   const flights = new Map<string, Promise<RecoveryOutcome>>();
   let startPromise: Promise<void> | null = null;
   let stopped = false;
@@ -312,7 +313,7 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
     return recover(record, true);
   }
 
-  return { start, retry, report, outcome: id => reports.get(id) || null, stop: () => { stopped = true; } };
+  return { start, retry, report, outcome: id => reportLookup.get(id) || null, stop: () => { stopped = true; } };
 }
 
 /** Checked production restore/delivery policy; callers provide owners and presentation, not authority callbacks. */

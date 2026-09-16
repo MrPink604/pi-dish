@@ -25,6 +25,8 @@ process.env.PI_DISH_ROUTINE_CLOSE_GRACE_MS = '0';
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-rpc-pi.js');
 const CMD_LOG = path.join(tmpHome, 'rpc-commands.jsonl');
+const START_LOG = path.join(tmpHome, 'rpc-starts.jsonl');
+process.env.PI_FIXTURE_START_LOG = START_LOG;
 process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_LOG=${CMD_LOG} ${process.execPath} ${FIXTURE}`;
 process.env.PI_DISH_OMP_COMMAND = `env PI_FIXTURE_HARNESS=omp ${process.execPath} ${path.join(__dirname, 'fixtures', 'fake-pi.js')}`;
 
@@ -414,4 +416,56 @@ test('deleting a routine keeps its invocations readable', async () => {
   assert.equal(kept.body.invocation.routineName, 'ledger-routine', 'the denormalized name survives');
   assert.equal((await get(`/api/routines/${routine.id}/invocations`)).status, 404);
   assert.equal((await get('/api/routine-invocations/00000000-0000-0000-0000-000000000000')).status, 404);
+});
+
+test('saved raw launch selections retain native argv, cwd failure order and falsy fallback', async () => {
+  const { body: { routine } } = await post('/api/routines', definition({ name: 'raw-launch-routine' }));
+  const file = path.join(tmpHome, '.pi', 'dish', 'routines.json');
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  Object.assign(saved.routines[routine.id], { model: 42, thinking: ['one', 'two'] });
+  fs.writeFileSync(file, JSON.stringify(saved));
+
+  const first = await post(`/api/routines/${routine.id}/invoke?wait=1`, {});
+  assert.equal(first.status, 200);
+  assert.equal(first.body.invocation.status, 'completed');
+  const started = fs.readFileSync(START_LOG, 'utf8').trim().split('\n').map(JSON.parse);
+  const child = started.find(row => path.basename(row.sessionFile, '.jsonl') === first.body.invocation.sessionId);
+  assert.deepEqual(child.args, ['--mode', 'rpc', '--model', '42', '--thinking', 'one,two']);
+  await waitFor(async () => (await invocation(first.body.invocation.id)).closed);
+
+  saved.routines[routine.id].cwd = 42;
+  fs.writeFileSync(file, JSON.stringify(saved));
+  const before = fs.readFileSync(START_LOG, 'utf8');
+  const failed = await post(`/api/routines/${routine.id}/invoke?wait=1`, {});
+  assert.equal(failed.status, 200);
+  assert.equal(failed.body.invocation.status, 'errored');
+  assert.equal(failed.body.invocation.error, 'cwd.startsWith is not a function');
+  assert.equal(failed.body.invocation.sessionId, null);
+  assert.equal(fs.readFileSync(START_LOG, 'utf8'), before, 'cwd failure must precede native launch');
+
+  saved.routines[routine.id].cwd = 0;
+  fs.writeFileSync(file, JSON.stringify(saved));
+  const fallback = await post(`/api/routines/${routine.id}/invoke?wait=1`, {});
+  assert.equal(fallback.body.invocation.status, 'completed');
+  const last = JSON.parse(fs.readFileSync(START_LOG, 'utf8').trim().split('\n').at(-1));
+  const header = JSON.parse(fs.readFileSync(last.sessionFile, 'utf8').split('\n')[0]);
+  assert.equal(header.cwd, tmpHome);
+  await waitFor(async () => (await invocation(fallback.body.invocation.id)).closed);
+  await del(`/api/routines/${routine.id}`);
+});
+
+test('raw saved continuation identity falls back to a fresh session without rewriting history', async () => {
+  const { body: { routine } } = await post('/api/routines', definition({ name: 'raw-ledger-routine', mode: 'continue' }));
+  const file = path.join(tmpHome, '.pi', 'dish', 'routine-invocations.json');
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  saved.invocations.unshift({ id: 'external-raw-identity', routineId: routine.id, sessionId: 42, status: 'completed', startedAt: Date.now() - 1000 });
+  fs.writeFileSync(file, JSON.stringify(saved));
+  const run = await post(`/api/routines/${routine.id}/invoke?wait=1`, {});
+  assert.equal(run.status, 200);
+  assert.equal(run.body.invocation.status, 'completed');
+  assert.equal(typeof run.body.invocation.sessionId, 'string');
+  assert.equal(run.body.invocation.error, null);
+  assert.equal((await invocation('external-raw-identity')).sessionId, 42);
+  assert.equal((await post(`/api/sessions/${run.body.invocation.sessionId}/close`, {})).status, 200);
+  await del(`/api/routines/${routine.id}`);
 });

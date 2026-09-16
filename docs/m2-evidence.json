@@ -1,11 +1,27 @@
 {
   "milestone": "M2",
-  "status": "Independent producer implementation evidence only; runner/handler consumer cutover and M1 integration pending; not package acceptance",
+  "status": "Complete M2 source/consumer cutover implemented and verified; final exact-source three-model review pending; package acceptance remains parent-owned",
   "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
   "branch": "migration/m2-routines",
   "worktree": "/home/jyarwood/workspace/pi-dish-m2",
   "runtime": { "node": "26.8.2", "npm": "12.0.2", "typescript": "7.0.2", "platform": "Linux x64" },
   "independentProducerCommit": "a76397f",
+  "m1ProducerTransfer": {
+    "parentApproved": true,
+    "original": "6b10e54d5cd15594a5c58e9abd4f02f6e71a7a8e",
+    "privateCherryPick": "7c0f747",
+    "routeInputDelta": {
+      "original": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "privateCherryPick": "e44a86e",
+      "result": "Exact four-file producer-only cherry-pick, four insertions/four deletions, no conflicts or root changes",
+      "producerReportedChecks": "build:core/check203/no-any pass; source identity/files/index suites 82 pass, zero skips; full backend 1002 pass, zero skips, 32.13s; actual resolver smoke rejects six raw values without object coercion and preserves partial/encoded-Pi exactness after cache warm",
+      "producerReview": "Parent reports all three exact required models explicitly ACCEPT final source 6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d; attestation-only de99e3d03f6ab08b8093b7f0665c079ea01ff5aa was not imported",
+      "m2IntegrationCheck": "Final complete core build and check pass against the actual transferred source; no producer schema casts or independent resolver edits."
+    },
+    "rootOnlyExcluded": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16",
+    "result": "No code conflicts; docs/typescript.md inventory auto-merged; original producer bytes retained",
+    "limits": "Private development dependency, not M1 acceptance. M1 combined producer/root validation does not validate M2 consumer integration."
+  },
   "independentProducerMapping": [
     { "source": "src/core/cron.ts", "outputs": ["lib/cron.js", "lib/cron.d.ts"], "program": "tsconfig.core.json", "change": "Moves existing checked-JS implementation; local-time algorithm unchanged" },
     { "source": "src/core/routines.ts", "outputs": ["lib/routines.js", "lib/routines.d.ts"], "program": "tsconfig.core.json", "change": "Moves actual definition/ledger implementation; raw persisted fields remain unknown except established id" },
@@ -36,12 +52,71 @@
     "regressions": "Actual API checks preserve OMP pilot error precedence over invalid definition fields, Pi bypass, nonstring cwd model-command fallback, numeric thinking rejection, absent-versus-null selection updates and null cwd refusal without persisting a change.",
     "limits": "Runner/HTTP composition drafts remain outside compiler roots during this independently verified checkpoint; no final M2 cutover claim."
   },
+  "rawBoundaryBaseline": {
+    "runtime": "Existing generated M2 lifecycle at e91f271 plus transferred M1 producers; uncommitted M2 raw-input source is not yet generated",
+    "nativeShellProbe": {
+      "command": "node /tmp/pi-dish-m2-native-shell-probe.cjs",
+      "result": "exit 0; wiped environment, temporary HOME, fake RPC protocol child, real interactive Bash and unique owned tmux socket",
+      "outcomes": [
+        "Numbers, arrays and objects reach argv as 42, one,two and [object Object] through native RPC, shell RPC and native tmux.",
+        "Quotes and shell metacharacters stay literal; no injected file is created.",
+        "Node 26 native spawn/execFile map Symbol argv to empty string; existing shellQuote maps it to Symbol(raw). Pre-normalization would change behavior.",
+        "Direct createRPCSession rejects numeric/object/array cwd with native ERR_INVALID_ARG_TYPE; URL cwd succeeds and RPCSession.cwd retains the URL object."
+      ]
+    },
+    "rawCwdProbe": {
+      "command": "node /tmp/pi-dish-m2-raw-launch-probe.cjs",
+      "result": "exit 0; raw model/thinking coercion retained; truthy numeric/array/object cwd fails cwd.startsWith before backend choice, while false/null/zero/empty cwd uses HOME fallback"
+    },
+    "lifecycleProbe": {
+      "command": "node /tmp/pi-dish-m2-routine-lifecycle-probe.cjs",
+      "result": "exit 0; actual ownership/operations/recovery/routine runners plus real fake-protocol RPC child",
+      "outcomes": [
+        "Raw numeric/array/object ledger ids retain live-null, recovery-null, close400, resume404 and invalid-model400 precedence.",
+        "Continuation falls back to a fresh session, completes, closes through the real owner and preserves the original malformed historical id.",
+        "Scheduled oneShot completes and closes; recreated runner does not duplicate the same scheduled minute.",
+        "Restart reconciliation interrupts a stale running ledger record without rewriting its raw id."
+      ]
+    },
+    "exceptionalCallsites": [
+      { "source": "src/core/session-launch.ts", "symbol": "launchNewSession", "operation": "Original cwd.startsWith and cwd.slice invocation", "purpose": "Preserve native dynamic-method errors without claiming saved cwd is valid" },
+      { "source": "src/core/rpc-session.ts", "symbol": "spawnPi", "operation": "Real child_process.spawn argv/cwd arguments, both direct and existing shell dispatch", "purpose": "Retain native argv/cwd coercion/rejection; shell-quoted argv remains string-typed; no pre-native cwd normalization" },
+      { "source": "src/core/tmux.ts", "symbol": "runTmux", "operation": "Real child_process.execFile argv argument", "purpose": "Raw cwd/command reach native argv directly; no shell quoting exists on this path" }
+    ],
+    "postChangeComparison": "All three retained raw/native/lifecycle probes rerun against final generated code and pass. Raw argv, error precedence, falsy fallback and ledger/lifetime results match baseline. Direct RPC file-URL metadata intentionally changes from URL object to filesystem path under explicit parent authorization."
+  },
   "preservedBoundaries": [
     "Routine reads validate only matching id; invocation reads validate only string id. Other fields/extras remain unknown and retain existing runtime coercion/failure behavior.",
     "Definition removal does not remove invocation ledger or touch sessions.",
     "Cron Date local getters/setters and existing DST behavior are unchanged; no timezone redesign.",
     "Provenance is advisory only; lifecycle coordinator remains sole control authority.",
-    "Existing JS runner, HTTP/prompt bodies and root composition are not claimed checked by these producers."
+    "Actual checked runner and eight handler/prompt composition bodies now execute through generated output; root supplies observation ports and unchanged registration/startup order."
   ],
-  "review": { "status": "Not started; three exact-model reviews wait complete M2 package and actual M1 producer integration" }
+  "completeCutover": {
+    "mapping": [
+      { "source": "src/core/routine-runner.ts", "outputs": ["lib/routine-runner.js", "lib/routine-runner.d.ts"], "ownership": "Actual scheduler, invocation delivery/lifetime, continuation fallback, rate/busy policy, restart reconciliation" },
+      { "source": "src/core/routine-handlers.ts", "outputs": ["lib/routine-handlers.js", "lib/routine-handlers.d.ts"], "ownership": "Eight individual HTTP handlers plus prompt/input/ref composition using actual M1 expandSessionRefs and SessionRefDependencies" }
+    ],
+    "rootCutover": "Removed original routine prompt/cwd/error/stats/policy bodies. Eight existing mounts retain registration positions and use checked handler members. Related/provenance endpoints remain outside M2.",
+    "rawInputBoundary": "Unknown persisted selections and ledger ids flow through actual lifecycle ingress; typed resume selection, process authority, validated identities and outputs remain intact. Created invocation delivery alone is narrowed by its existing validator.",
+    "rpcMetadataCorrection": {
+      "parentExplicitlyApproved": true,
+      "behaviorChange": "Only after unchanged native launch: file URL cwd becomes fileURLToPath output. String metadata, falsy HOME fallback and absent-HOME null remain exact. Direct JavaScript URL callers no longer receive URL-object metadata.",
+      "unsupportedBytePaths": "Actual Node26.8.2 async spawn accepts but ignores Buffer/Uint8Array cwd, unlike spawnSync. No faithful byte decoding was established. Byte metadata is rejected after native launch, owned child is killed and awaited through close, and no session is published. Exact incompatibility reported to parent; no inferred parent-cwd fallback.",
+      "nativeErrorPrecedence": "When native spawn fails without a pid, original initializer error handling runs before metadata conversion. Metadata cleanup also allows a native process error to take precedence.",
+      "proof": "Actual direct-RPC smoke: URL child path equals metadata, all string/falsy fallbacks preserved, absent HOME yields null, Buffer/Uint8Array failures reap children without registration, missing URL directory preserves native ENOENT. Focused permanent regressions cover URL path decoding, child cleanup and native error precedence."
+    }
+  },
+  "finalChecks": [
+    { "command": "npm run build:core", "result": "exit 0; complete actual source generates CommonJS and declarations" },
+    { "command": "npm run build:browser && npm run check", "result": "exit 0; 207 compiler-owned sources, no explicit-any exceptions; ESLint, strict types and core/browser drift pass" },
+    { "command": "npm test -- test/rpc-session.test.js test/routines-api.test.js test/routines.test.js test/routine-runner.test.js test/cron.test.js test/session-provenance.test.js", "result": "82 pass, zero failures/cancelled/skips; 8604.63868 ms" },
+    { "command": "npm test", "result": "1009 pass, zero failures/cancelled/skips; 32133.83015 ms" },
+    { "command": "npm run test:browser -- routines.spec.js", "result": "11 pass; 8.8 seconds; isolated host-identity/routine browser scenarios" },
+    { "command": "npm run test:ui", "result": "exit 0, all good; 61.92 seconds; complete desktop/mobile smoke including actual routine create/version/run/sidebar and mobile navigation" },
+    { "command": "browser.open isolated M2 server", "result": "Actual Routines UI creates m2-checked-visual, invokes through checked HTTP/runner, and visually shows completed run plus reply; tab closed and owned server stopped" },
+    { "command": "Final raw-launch, native-shell/tmux, lifecycle/restart and cwd-metadata throwaway probes", "result": "exit 0; 4.64 seconds combined; actual isolated native subprocesses, no provider credentials or live sessions" }
+  ],
+  "cleanup": "Throwaway probes and isolated visual-runtime home removed after final comparison; no permanent probe scaffolding.",
+  "review": { "status": "Not started; source freezing next for three exact-model read-only final reviews" }
 }

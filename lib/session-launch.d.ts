@@ -25,12 +25,18 @@ export interface PilotValidationInput {
     thinking?: unknown;
     cwd?: unknown;
 }
-export interface NewSessionLaunchOptions extends PilotSelectionOptions {
+export interface NewSessionLaunchOptions {
+    model?: unknown;
+    thinking?: unknown;
+    cwd?: unknown;
     descriptor: HarnessDescriptor;
     name?: string | null;
     target?: HarnessLaunchTarget | null;
 }
-export interface ResumeSessionLaunchOptions extends NewSessionLaunchOptions {
+export interface ResumeSessionLaunchOptions extends PilotSelectionOptions {
+    descriptor: HarnessDescriptor;
+    name?: string | null;
+    target?: HarnessLaunchTarget | null;
     sessionFile: string;
 }
 export interface RpcResumeOptions extends PilotSelectionOptions {
@@ -47,8 +53,8 @@ export interface RestartPaneOptions {
 export interface SpawnHarnessOptions {
     descriptor: HarnessDescriptor;
     target: HarnessLaunchTarget;
-    args: readonly string[];
-    cwd?: string | null;
+    args: readonly unknown[];
+    cwd?: unknown;
     name?: string | null;
     hidden?: boolean;
     restartPane?: RestartPaneOptions | null;

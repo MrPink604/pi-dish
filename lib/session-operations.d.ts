@@ -19,9 +19,9 @@ export interface SessionOperationObservations {
 export interface CreateSessionOptions {
     harness?: unknown;
     name?: string | null;
-    model?: string;
-    thinking?: string;
-    cwd?: string;
+    model?: unknown;
+    thinking?: unknown;
+    cwd?: unknown;
     target?: HarnessLaunchTarget | null;
     sourceSessionId?: string | null;
 }
@@ -110,11 +110,11 @@ export interface SessionOperations {
     startSessionSpawn(options: CreateSessionOptions): string;
     getSessionSpawn(spawnId: string): SessionSpawnOperation | undefined;
     recordSessionLaunch(sessionId: string, sourceSessionId: string, operationId?: string): string | null;
-    resumeSessionById(requestedId: string, options?: ResumeSessionOptions): Promise<ResumeSessionResult>;
+    resumeSessionById(requestedId: unknown, options?: ResumeSessionOptions): Promise<ResumeSessionResult>;
     probeRecoveryLive(record: RecoveryRecord): Promise<LiveSession | null>;
     assertNoConflictingWriter(sessionId: string, canonicalFile: string): void;
-    closeSession(sessionId: string): Promise<SessionOperationOutcome>;
-    closeSessionById(sessionId: string): Promise<SessionOperationResponse>;
+    closeSession(sessionId: unknown): Promise<SessionOperationOutcome>;
+    closeSessionById(sessionId: unknown): Promise<SessionOperationResponse>;
     restartSession(sessionId: string, options?: {
         beforeAction?: BeforeLifecycleAction | null;
     }): Promise<SessionOperationOutcome>;

@@ -87,16 +87,16 @@ export declare class LifecycleInterruption extends Error {
 }
 export interface SessionOwnership {
     readonly sessionSources: SessionSourceResolver;
-    getRegisteredSession(sessionId: string): BridgeRegistryEntry | null;
-    refreshRegisteredSession(sessionId: string): BridgeRegistryEntry | null;
-    getRPCSession(sessionId: string): InstanceType<typeof RPCSession> | null | undefined;
+    getRegisteredSession(sessionId: unknown): BridgeRegistryEntry | null;
+    refreshRegisteredSession(sessionId: unknown): BridgeRegistryEntry | null;
+    getRPCSession(sessionId: unknown): InstanceType<typeof RPCSession> | null | undefined;
     getBridgeSession(sessionId: string): Promise<InstanceType<typeof BridgeSession>>;
-    liveSourceObservations(sessionId: string): LiveSourceObservation[];
+    liveSourceObservations(sessionId: unknown): LiveSourceObservation[];
     resolveSessionCandidate(sessionId: string, options?: {
         discover?: boolean;
     }): SessionSource | null;
     liveSessionHistoryPending(sessionId: string): boolean;
-    getLiveSession(sessionId: string): Promise<LiveSession | null>;
+    getLiveSession(sessionId: unknown): Promise<LiveSession | null>;
     adoptBridgeSessionSwitch(session: LiveSession, data: unknown): void;
     describeRuntime(sessionId: string): Promise<RuntimeDescription | null>;
     locatePiPane(sessionId: string): Promise<tmux.PaneTarget | null>;

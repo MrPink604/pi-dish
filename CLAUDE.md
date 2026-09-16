@@ -932,7 +932,9 @@ through `expandSessionRefs` so `#ref`s in a routine prompt still resolve.
 
 Runner (`createRoutineRunner(deps)`, deps injected so tests drive it without
 spawn paths): production lifecycle dependencies are direct checked coordinator
-methods, while scheduling and ledger policy remain JS. `oneShot` spawns fresh
+methods; checked `src/core/routine-runner.ts` owns scheduling and ledger policy.
+`src/core/routine-handlers.ts` owns the eight HTTP handlers and prompt/ref composition.
+`oneShot` spawns fresh
 via `createSession` (no name; then a best-effort capability-gated rename), delivers,
 observes `turn_end`/`agent_end`/`message_end`/session-gone, and closes after
 `PI_DISH_ROUTINE_CLOSE_GRACE_MS` through `SessionOperations.closeSessionById`.

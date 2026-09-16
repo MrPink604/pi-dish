@@ -112,8 +112,6 @@ if (harness) {
   encodeSessionKey(harness.id, nativeId);
   const launch: { env: Record<string, string>; argv: string[] } = resolveLaunchSpec(harness);
   launch.argv.map(arg => arg.toUpperCase());
-  // @ts-expect-error A model option is a model reference, not a catalog object.
-  harness.argv.new({ model: { id: 'model' } });
 }
 // @ts-expect-error Lifecycle modes are an explicit vocabulary.
 const closeMode: HarnessDescriptor['closeMode'] = 'kill-any-process';

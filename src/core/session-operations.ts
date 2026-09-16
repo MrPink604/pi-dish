@@ -36,9 +36,9 @@ export interface SessionOperationObservations {
 export interface CreateSessionOptions {
   harness?: unknown;
   name?: string | null;
-  model?: string;
-  thinking?: string;
-  cwd?: string;
+  model?: unknown;
+  thinking?: unknown;
+  cwd?: unknown;
   target?: HarnessLaunchTarget | null;
   sourceSessionId?: string | null;
 }
@@ -127,11 +127,11 @@ export interface SessionOperations {
   startSessionSpawn(options: CreateSessionOptions): string;
   getSessionSpawn(spawnId: string): SessionSpawnOperation | undefined;
   recordSessionLaunch(sessionId: string, sourceSessionId: string, operationId?: string): string | null;
-  resumeSessionById(requestedId: string, options?: ResumeSessionOptions): Promise<ResumeSessionResult>;
+  resumeSessionById(requestedId: unknown, options?: ResumeSessionOptions): Promise<ResumeSessionResult>;
   probeRecoveryLive(record: RecoveryRecord): Promise<LiveSession | null>;
   assertNoConflictingWriter(sessionId: string, canonicalFile: string): void;
-  closeSession(sessionId: string): Promise<SessionOperationOutcome>;
-  closeSessionById(sessionId: string): Promise<SessionOperationResponse>;
+  closeSession(sessionId: unknown): Promise<SessionOperationOutcome>;
+  closeSessionById(sessionId: unknown): Promise<SessionOperationResponse>;
   restartSession(sessionId: string, options?: { beforeAction?: BeforeLifecycleAction | null }): Promise<SessionOperationOutcome>;
   restartSessionById(sessionId: string, options?: { beforeAction?: BeforeLifecycleAction | null }): Promise<SessionOperationResponse>;
   hasCloseFlight(canonicalRoute: string): boolean;
@@ -197,7 +197,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
   const bounceActionLocks = new Set<string>();
   const SESSION_SPAWN_RESULT_TTL_MS = 5 * 60 * 1000;
 
-  function findSessionSource(sessionId: string): SessionSource | null {
+  function findSessionSource(sessionId: unknown): SessionSource | null {
     return ownership.sessionSources.resolve({ route: sessionId, exact: false, live: ownership.liveSourceObservations(sessionId) });
   }
 
@@ -365,7 +365,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
     return { kind: 'stop-uncertain', status: 500, error: `pi did not exit within ${Math.round(timeoutMs / 1000)}s — it may be stuck; check the process directly` };
   }
 
-  async function closeSession(sessionId: string): Promise<SessionOperationOutcome> {
+  async function closeSession(sessionId: unknown): Promise<SessionOperationOutcome> {
     const identity = routeIdentity(sessionId);
     if (!identity) return noAction(400, 'Invalid session ID');
     const id = routeSessionId(identity.harnessId, identity.nativeSessionId);
@@ -410,7 +410,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
     failedResumeCleanups.delete(sessionFile);
     uncertainExplicitResumes.delete(sessionFile);
   }
-  function activeSessionClearsQuarantine(sessionId: string): boolean {
+  function activeSessionClearsQuarantine(sessionId: unknown): boolean {
     const registered = ownership.getRegisteredSession(sessionId);
     const rpc = ownership.getRPCSession(sessionId);
     if (!registered && !rpc?.alive) return false;
@@ -446,7 +446,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
     }
   }
 
-  async function resumeSessionById(requestedId: string, { model, target, recovery = null }: ResumeSessionOptions = {}): Promise<ResumeSessionResult> {
+  async function resumeSessionById(requestedId: unknown, { model, target, recovery = null }: ResumeSessionOptions = {}): Promise<ResumeSessionResult> {
     const requestedRoute = routeIdentity(requestedId);
     if (requestedRoute && restartFlights.has(routeSessionId(requestedRoute.harnessId, requestedRoute.nativeSessionId))) {
       throw new SessionOperationError(409, 'The session is being restarted; no second writer was launched.');
@@ -455,7 +455,8 @@ export function createSessionOperations(observations: SessionOperationObservatio
       throw new SessionOperationError(400, 'Model must be a non-empty string');
     }
     invalidateRegistryCache();
-    if (activeSessionClearsQuarantine(requestedId)) return { success: true, id: requestedId, alreadyActive: true };
+    // A successful owner lookup already requires a string route; preserve its original alias bytes.
+    if (activeSessionClearsQuarantine(requestedId) && typeof requestedId === 'string') return { success: true, id: requestedId, alreadyActive: true };
     const sessionSource = recovery ? validateRecoveryRecord(recovery) : findSessionSource(requestedId);
     if (!sessionSource) throw new SessionOperationError(404, 'Session file not found');
     const descriptor = getHarness(sessionSource.harnessId);

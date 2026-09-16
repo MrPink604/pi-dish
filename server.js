@@ -56,6 +56,7 @@ const { createSessionOperations } = require('./lib/session-operations');
 const sessionProvenance = require('./lib/session-provenance');
 const routinesStore = require('./lib/routines');
 const { createRoutineRunner } = require('./lib/routine-runner');
+const { createRoutineHandlers, composeRoutinePrompt } = require('./lib/routine-handlers');
 const recoveryStore = require('./lib/session-recovery');
 const { createRecoveryRuntime, recoveryMode } = require('./lib/recovery-runner');
 const { createSessionBounceRuntime } = require('./lib/session-bounces');
@@ -4675,26 +4676,6 @@ app.delete('/api/session-bounces/:id', (req, res) => {
 // harness is beyond its descriptor and the live session's capabilities.
 
 
-function escapeInvocationAttr(value) {
-  return String(value).replace(/[&<>"]/g, (ch) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
-}
-
-/**
- * The routine's prompt, plus the caller's input as an appended block — never
- * substituted into the prompt (the `<session-refs>` rule): there is no
- * templating language here, the agent reads the block. `#ref` tokens then
- * expand exactly as they would from the composer.
- */
-function composeRoutinePrompt(routine, invocation) {
-  let text = routine.prompt;
-  if (invocation && invocation.input !== null && invocation.input !== undefined) {
-    const source = invocation.source ? ` source="${escapeInvocationAttr(invocation.source)}"` : '';
-    text += `\n\n<invocation-input${source} invocation="${invocation.id}">\n`
-      + `${JSON.stringify(invocation.input, null, 2)}\n</invocation-input>`;
-  }
-  return expandSessionRefs(text, [], sessionRefDeps());
-}
 
 const routineRunner = createRoutineRunner({
   store: routinesStore,
@@ -4702,161 +4683,25 @@ const routineRunner = createRoutineRunner({
   resumeSession: sessionOperations.resumeSessionById,
   getLiveSession,
   closeSession: sessionOperations.closeSessionById,
-  composePrompt: composeRoutinePrompt,
+  composePrompt: (routine, invocation) => composeRoutinePrompt(routine, invocation, sessionRefDeps()),
   isTurnInProgress: (sess) => !!sess?.turnInProgress,
   supports: liveSessionSupports,
   recoveryOutcome: sessionId => recoveryRunner.outcome(sessionId),
 });
 
-function expandRoutineCwd(cwd) {
-  return typeof cwd === 'string' && cwd.startsWith('~')
-    ? path.join(os.homedir(), cwd.slice(1).replace(/^\//, '')) : cwd;
-}
-
-// Model/thinking/cwd go through the same pilot validation POST /api/sessions/new
-// applies, so a routine can't persist a selection its harness would refuse at
-// spawn time.
-async function validateRoutinePilot({ harness, model, thinking, cwd }) {
-  const descriptor = getHarness(harness || 'pi');
-  if (!descriptor) {
-    const err = new Error(`Unknown harness: ${harness}`); err.status = 400; throw err;
-  }
-  await sessionLaunch.validateHarnessPilotSelection(descriptor, { model, thinking, cwd: expandRoutineCwd(cwd) });
-}
-
-function routineStats(routine, invocations) {
-  const mine = invocations.filter((entry) => entry.routineId === routine.id);
-  return {
-    invocations: mine.length,
-    running: mine.filter((entry) => entry.status === 'starting' || entry.status === 'running').length,
-    lastInvocation: mine[0] || null,   // the ledger is newest-first
-    nextRunAt: routineRunner.nextRunAt(routine),
-  };
-}
-
-/** List rows carry everything but the version history, which can be large. */
-function routineSummary(routine, invocations) {
-  const { versions, ...rest } = routine;
-  return { ...rest, stats: routineStats(routine, invocations) };
-}
-
-function routineErrorResponse(res, error) {
-  const payload = { error: error.message };
-  if (error.invocation) payload.invocation = error.invocation;
-  if (error.retryAfterSec !== undefined) {
-    payload.retryAfterSec = error.retryAfterSec;
-    payload.lastInvocation = error.lastInvocation || null;
-  }
-  return res.status(error.status || 500).json(payload);
-}
-
-app.get('/api/routines', (req, res) => {
-  const invocations = routinesStore.readInvocations();
-  res.json({ routines: routinesStore.listRoutines().map((routine) => routineSummary(routine, invocations)) });
+const routineHandlers = createRoutineHandlers({
+  runner: routineRunner,
+  validateHarnessPilotSelection: sessionLaunch.validateHarnessPilotSelection,
 });
 
-app.post('/api/routines', async (req, res) => {
-  const input = req.body || {};
-  try {
-    await validateRoutinePilot(input);
-    res.status(201).json({ routine: routinesStore.createRoutine(input) });
-  } catch (error) {
-    routineErrorResponse(res, error);
-  }
-});
-
-app.get('/api/routines/:id', (req, res) => {
-  const routine = routinesStore.getRoutine(req.params.id);
-  if (!routine) return res.status(404).json({ error: 'Routine not found' });
-  res.json({ routine });
-});
-
-app.put('/api/routines/:id', async (req, res) => {
-  const existing = routinesStore.getRoutine(req.params.id);
-  if (!existing) return res.status(404).json({ error: 'Routine not found' });
-  const patch = req.body || {};
-  try {
-    await validateRoutinePilot({
-      harness: patch.harness ?? existing.harness,
-      model: patch.model === undefined ? existing.model : patch.model,
-      thinking: patch.thinking === undefined ? existing.thinking : patch.thinking,
-      cwd: patch.cwd ?? existing.cwd,
-    });
-    res.json({ routine: routinesStore.updateRoutine(existing.id, patch) });
-  } catch (error) {
-    routineErrorResponse(res, error);
-  }
-});
-
-// The ledger is deliberately retained: it outlives the definition (that is why
-// invocations denormalize the routine name), and the sessions the routine
-// produced are untouched.
-app.delete('/api/routines/:id', (req, res) => {
-  const existing = routinesStore.getRoutine(req.params.id);
-  if (!existing) return res.status(404).json({ error: 'Routine not found' });
-  routinesStore.deleteRoutine(existing.id);
-  res.json({ success: true, invocations: routinesStore.countInvocations(existing.id) });
-});
-
-app.post('/api/routines/:id/invoke', async (req, res) => {
-  const routine = routinesStore.getRoutine(req.params.id);
-  if (!routine) return res.status(404).json({ error: 'Routine not found' });
-  const body = req.body || {};
-  const input = body.input === undefined ? null : body.input;
-  if (routinesStore.serializedInputSize(input) > routinesStore.MAX_INPUT_BYTES) {
-    return res.status(413).json({ error: `input must serialize to at most ${routinesStore.MAX_INPUT_BYTES} bytes` });
-  }
-  let source = null;
-  if (body.source !== undefined && body.source !== null) {
-    if (typeof body.source !== 'string' || body.source.length > routinesStore.MAX_SOURCE) {
-      return res.status(400).json({ error: `source must be a string of at most ${routinesStore.MAX_SOURCE} characters` });
-    }
-    // Control characters would break the invocation-input block's framing.
-    if (/[\u0000-\u001f\u007f]/.test(body.source)) {
-      return res.status(400).json({ error: 'source must not contain control characters' });
-    }
-    source = body.source || null;
-  }
-  try {
-    const invocation = routineRunner.invoke(routine, { trigger: 'invoke', source, input });
-    if (req.query.wait === '1') {
-      // Bounded: a spawn still starting after a minute is returned as it
-      // stands rather than holding the caller's connection open.
-      const settled = await routineRunner.waitForInvocation(invocation.id, 60000);
-      return res.json({ invocation: settled || invocation });
-    }
-    res.status(202).json({ invocation });
-  } catch (error) {
-    routineErrorResponse(res, error);
-  }
-});
-
-const ROUTINE_INVOCATION_PAGE_MAX = 200;
-
-app.get('/api/routines/:id/invocations', (req, res) => {
-  const routine = routinesStore.getRoutine(req.params.id);
-  if (!routine) return res.status(404).json({ error: 'Routine not found' });
-  const requested = Number(req.query.limit);
-  const limit = Number.isFinite(requested) && requested > 0
-    ? Math.min(Math.floor(requested), ROUTINE_INVOCATION_PAGE_MAX) : 50;
-  const before = Number(req.query.before);
-  const invocations = routinesStore.listInvocations({
-    routineId: routine.id,
-    limit: limit + 1,
-    before: Number.isFinite(before) ? before : null,
-  });
-  const page = invocations.slice(0, limit);
-  res.json({
-    invocations: page,
-    nextBefore: invocations.length > limit ? page[page.length - 1].startedAt : null,
-  });
-});
-
-app.get('/api/routine-invocations/:id', (req, res) => {
-  const invocation = routinesStore.getInvocation(req.params.id);
-  if (!invocation) return res.status(404).json({ error: 'Invocation not found' });
-  res.json({ invocation });
-});
+app.get('/api/routines', routineHandlers.list);
+app.post('/api/routines', routineHandlers.create);
+app.get('/api/routines/:id', routineHandlers.get);
+app.put('/api/routines/:id', routineHandlers.update);
+app.delete('/api/routines/:id', routineHandlers.remove);
+app.post('/api/routines/:id/invoke', routineHandlers.invoke);
+app.get('/api/routines/:id/invocations', routineHandlers.listInvocations);
+app.get('/api/routine-invocations/:id', routineHandlers.getInvocation);
 
 
 // SSE — proxy events from the bridge socket. `message_update` fires for every

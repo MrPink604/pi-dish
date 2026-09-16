@@ -102,14 +102,14 @@ export class LifecycleInterruption extends Error {
 
 export interface SessionOwnership {
   readonly sessionSources: SessionSourceResolver;
-  getRegisteredSession(sessionId: string): BridgeRegistryEntry | null;
-  refreshRegisteredSession(sessionId: string): BridgeRegistryEntry | null;
-  getRPCSession(sessionId: string): InstanceType<typeof RPCSession> | null | undefined;
+  getRegisteredSession(sessionId: unknown): BridgeRegistryEntry | null;
+  refreshRegisteredSession(sessionId: unknown): BridgeRegistryEntry | null;
+  getRPCSession(sessionId: unknown): InstanceType<typeof RPCSession> | null | undefined;
   getBridgeSession(sessionId: string): Promise<InstanceType<typeof BridgeSession>>;
-  liveSourceObservations(sessionId: string): LiveSourceObservation[];
+  liveSourceObservations(sessionId: unknown): LiveSourceObservation[];
   resolveSessionCandidate(sessionId: string, options?: { discover?: boolean }): SessionSource | null;
   liveSessionHistoryPending(sessionId: string): boolean;
-  getLiveSession(sessionId: string): Promise<LiveSession | null>;
+  getLiveSession(sessionId: unknown): Promise<LiveSession | null>;
   adoptBridgeSessionSwitch(session: LiveSession, data: unknown): void;
   describeRuntime(sessionId: string): Promise<RuntimeDescription | null>;
   locatePiPane(sessionId: string): Promise<tmux.PaneTarget | null>;
@@ -527,17 +527,17 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
     return { registry, process: identity };
   }
 
-  function getRegisteredSession(sessionId: string): BridgeRegistryEntry | null {
+  function getRegisteredSession(sessionId: unknown): BridgeRegistryEntry | null {
     const identity = routeIdentity(sessionId);
     return identity ? getRegisteredSessionByNativeId(identity.harnessId, identity.nativeSessionId) : null;
   }
 
-  function refreshRegisteredSession(sessionId: string): BridgeRegistryEntry | null {
+  function refreshRegisteredSession(sessionId: unknown): BridgeRegistryEntry | null {
     invalidateRegistryCache();
     return getRegisteredSession(sessionId);
   }
 
-  function getRPCSession(sessionId: string): InstanceType<typeof RPCSession> | null | undefined {
+  function getRPCSession(sessionId: unknown): InstanceType<typeof RPCSession> | null | undefined {
     const identity = routeIdentity(sessionId);
     return identity?.harnessId === 'pi' ? getRawRPCSession(identity.nativeSessionId) : null;
   }
@@ -548,7 +548,7 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
     return getBridgeSessionForClaim(entry);
   }
 
-  function liveSourceObservations(sessionId: string): LiveSourceObservation[] {
+  function liveSourceObservations(sessionId: unknown): LiveSourceObservation[] {
     const identity = routeIdentity(sessionId);
     if (!identity) return [];
     const registered = getRegisteredSession(sessionId);
@@ -579,7 +579,7 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
     return session;
   }
 
-  async function getLiveSession(sessionId: string): Promise<LiveSession | null> {
+  async function getLiveSession(sessionId: unknown): Promise<LiveSession | null> {
     const registered = getRegisteredSession(sessionId);
     if (registered) {
       let bridgeError: unknown;

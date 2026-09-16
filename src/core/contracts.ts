@@ -62,9 +62,10 @@ export interface ProcessAncestry {
   processes: ProcessIdentity[];
 }
 
+/** Saved new-session selections reach the harness/native argv boundary unchanged. */
 export interface LaunchOptions {
-  model?: string;
-  thinking?: string;
+  model?: unknown;
+  thinking?: unknown;
 }
 
 /** Missing file remains representable: the legacy argv builders accept an empty options object. */
@@ -140,7 +141,7 @@ export interface HarnessDescriptor {
    */
   wrapperHostPackage?: string;
   argv: {
-    new: (options?: LaunchOptions) => string[];
+    new: (options?: LaunchOptions) => unknown[];
     resume: HarnessResumeArgv;
     models: string[];
     export?: (options: { file: string; output: string }) => string[];
