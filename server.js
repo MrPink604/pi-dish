@@ -6,6 +6,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const piSDK = require('./lib/pi-sdk');
+const { createSessionReadHandlers } = require('./lib/session-read-handlers');
 const { execFile } = require('child_process');
 const { getAllRPCSessions } = require('./lib/rpc-session');
 const {
@@ -13,18 +14,16 @@ const {
   invalidateRegistryCache,
   BridgeSession,
 } = require('./lib/bridge-session');
-const { searchFiles, searchHomeDirs, getDirChildren, completePath, isPathCompletionToken } = require('./lib/file-search');
-const { resolveFileMention, readFileForViewer } = require('./lib/file-mention');
-const { renderFilePage } = require('./lib/file-page');
-const { aggregateDiffs, getFilePatch, getDiffVersion } = require('./lib/git-diff');
+const { createFileHandlers } = require('./lib/file-handlers');
 const terminal = require('./lib/terminal');
 const tmux = require('./lib/tmux');
 const hostIdentity = require('./lib/host-identity');
 const remoteHosts = require('./lib/remote-hosts');
 const fleetArtifacts = require('./lib/fleet-artifacts');
-const shares = require('./lib/shares');
+const { createAccessHandlers } = require('./lib/access-handlers');
+const { createRelayHandlers } = require('./lib/relay-handlers');
+const { createPublicationHandlers } = require('./lib/publication-handlers');
 const pages = require('./lib/pages');
-const comments = require('./lib/comments');
 const stt = require('./lib/stt');
 const {
   readSessionMessages,
@@ -41,7 +40,6 @@ const { sourceForIdentity } = require('./lib/session-source');
 const { composeSessionCatalog, registeredSessionObservation, rpcSessionObservation,
   decodeLaunchParents, decodeRoutineAnnotations, withSessionContext, subsessionLabel,
   buildSourceSession } = require('./lib/session-catalog');
-const { canonicalSessionId } = require('./lib/session-key');
 const { getHarness, listHarnesses } = require('./lib/harnesses');
 const { sessionCapabilities } = require('./lib/session-capabilities');
 const { refreshHarnessPricing } = require('./lib/harness-pricing');
@@ -661,7 +659,7 @@ const DISH_SETTINGS_FILE = path.join(os.homedir(), '.pi', 'dish', 'settings.json
 
 const ownership = createSessionOwnership({
   onLive: session => { trackExtUIState(session); },
-  onRetired: route => { diffSnapshots.delete(route); },
+  onRetired: route => { fileHandlers.retireSession(route); },
   readSessionTailEntry,
 });
 const {
@@ -670,6 +668,33 @@ const {
   getLiveSession, adoptBridgeSessionSwitch, describeRuntime, locatePiPane,
   liveSubsessionCandidates, liveSourceObservations,
 } = ownership;
+const fileHandlers = createFileHandlers({ resolveSessionCwd, findSessionSource });
+const sessionReadHandlers = createSessionReadHandlers({
+  findSessionSource, liveSessionHistoryPending, getRegisteredSession, getRPCSession,
+  getLiveSession, liveTreeLeafId, getLiveContextUsage, getContextWindow, describeRuntime,
+});
+const accessHandlers = createAccessHandlers({
+  version: PKG_VERSION,
+  readDishSettings,
+  sttAvailable: () => !!stt.resolveSttConfig(readDishSettings()),
+  usageLimitsAvailable: () => listHarnesses().some(d => d.argv?.usage && harnessCommandAvailable(d)),
+});
+const relayHandlers = createRelayHandlers({
+  fleetArtifacts,
+  localPageExists: token => !!pages.getPage(token),
+  publicBaseUrl: () => process.env.PI_DISH_SHARE_BASE_URL,
+  hostDescriptor: accessHandlers.hostDescriptor,
+  upgradeAuthorized: accessHandlers.upgradeAuthorized,
+});
+const publicationHandlers = createPublicationHandlers({
+  findSessionSource, liveSessionHistoryPending, listRegisteredSessions,
+  enumerateSessionCandidates, getRPCSession,
+  exportSessionHtml: sessionReadHandlers.exportSessionHtml,
+  getOmpShareSnapshot: sessionReadHandlers.getOmpShareSnapshot,
+  relay: relayHandlers.publicArtifacts,
+  publicBaseUrl: () => process.env.PI_DISH_SHARE_BASE_URL,
+  resourceRoot: __dirname,
+});
 const sessionLaunch = createSessionLaunch({ runHarnessModelCommand });
 const sessionOperations = createSessionOperations({
   ownership,
@@ -2471,113 +2496,19 @@ app.get('/api/sessions/:id/export', async (req, res) => {
 // optional share listener (see startup). The route reveals nothing about
 // unknown/missing shares — every miss is a bare 404.
 
-// { path, url } for a token. url is set only when PI_DISH_SHARE_BASE_URL is,
-// so operators behind a proxy can hand out an absolute link.
-function sharePayload(token) {
-  const sharePath = `/share/${token}`;
-  return { token, path: sharePath, url: publicUrlFor(sharePath) };
-}
-
-// Per-token export cache keyed on the JSONL's (mtimeMs, size) and live export
-// snapshot, so repeated hits on an unchanged session don't re-run the exporter.
-const shareExportCache = new Map();
-
-async function serveSharedSession(req, res) {
-  const share = shares.getShare(req.params.token);
-  // A token this host doesn't own may still belong to a peer it fronts.
-  if (!share) return serveFleetArtifact(req, res, 'share');
-  if (share.kind === 'html') {
-    const htmlPath = shares.getShareHtmlPath(req.params.token);
-    if (!htmlPath) return res.status(404).type('text/plain').send('Not found');
-    res.type('html');
-    return res.sendFile(htmlPath);
-  }
-  const session = findSessionSource(share.sessionId);
-  if (!session || (session.harnessId !== 'pi' && session.harnessId !== 'omp')) {
-    return res.status(404).type('text/plain').send('Not found');
-  }
-  const sessionFile = session.file;
-  try {
-    const st = fs.statSync(sessionFile);
-    const shareSnapshot = await getOmpShareSnapshot(session);
-    const snapshotKey = shareSnapshot ? JSON.stringify(shareSnapshot) : null;
-    const cached = shareExportCache.get(req.params.token);
-    let htmlPath;
-    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size
-      && cached.snapshotKey === snapshotKey && fs.existsSync(cached.htmlPath)) {
-      htmlPath = cached.htmlPath;
-    } else {
-      // Token is base64url (A-Za-z0-9_-), so it's already a safe basename.
-      const outPath = path.join(os.tmpdir(), `pi-dish-share-${req.params.token}.html`);
-      htmlPath = await exportSessionHtml(session, outPath, { shareSnapshot, snapshotResolved: true });
-      shareExportCache.set(req.params.token, { mtimeMs: st.mtimeMs, size: st.size, snapshotKey, htmlPath });
-    }
-    res.type('html');
-    res.sendFile(htmlPath);
-  } catch (e) {
-    res.status(500).type('text/plain').send('Export failed');
-  }
-}
-
-function validOmpShareHtml(html) {
-  if (typeof html !== 'string' || !html.includes('<html')) return false;
-  const match = html.match(/<script\b(?=[^>]*\bid=["']session-data["'])[^>]*>([\s\S]*?)<\/script>/i);
-  if (!match) return false;
-  try {
-    const data = JSON.parse(Buffer.from(match[1].trim(), 'base64').toString('utf8'));
-    return !!data?.header && Array.isArray(data.entries);
-  } catch {
-    return false;
-  }
-}
-
 // OMP's supported custom-share hook gives us the complete native HTML that
 // /share generated from the live session. Preserve that exact snapshot rather
 // than trying to reconstruct OMP-only metadata from historical JSONL.
-app.post('/api/shares/import', express.text({ type: 'text/html', limit: '20mb' }), (req, res) => {
-  if (!validOmpShareHtml(req.body)) {
-    return res.status(400).json({ error: 'Expected a standalone OMP HTML export' });
-  }
-  try {
-    const token = shares.createHtmlShare(req.body);
-    return res.json(sharePayload(token));
-  } catch (e) {
-    return res.status(500).json({ error: e.message });
-  }
-});
+app.post('/api/shares/import', express.text({ type: 'text/html', limit: '20mb' }), publicationHandlers.importShare);
 
-app.post('/api/sessions/:id/share', (req, res) => {
-  const session = findSessionSource(req.params.id);
-  if (!session) {
-    if (liveSessionHistoryPending(req.params.id)) {
-      return res.status(409).json({ error: 'Session has no persisted history yet' });
-    }
-    return res.status(404).json({ error: 'Session not found' });
-  }
-  if (session.harnessId !== 'pi' && session.harnessId !== 'omp') {
-    return res.status(409).json({ error: 'Public HTML sharing is only supported for Pi and OMP sessions.' });
-  }
-  const token = shares.createShare(req.params.id);
-  res.json(sharePayload(token));
-});
+app.post('/api/sessions/:id/share', publicationHandlers.createShare);
 
-app.delete('/api/sessions/:id/share', (req, res) => {
-  const existing = shares.getShareForSession(req.params.id);
-  const revoked = shares.revokeShare(req.params.id);
-  if (existing) shareExportCache.delete(existing.token);
-  // The token is reported so a hub fronting this session can drop its fleet
-  // mapping immediately instead of waiting to serve a 404.
-  res.json({ revoked, token: existing?.token || null });
-});
+app.delete('/api/sessions/:id/share', publicationHandlers.revokeShare);
 
-app.get('/api/sessions/:id/share', (req, res) => {
-  const existing = shares.getShareForSession(req.params.id);
-  if (!existing) return res.status(404).json({ error: 'No share' });
-  res.json(sharePayload(existing.token));
-});
+app.get('/api/sessions/:id/share', publicationHandlers.getShare);
 
 // Public route — always available on the main app (the share listener is opt-in).
-app.get('/share/:token', serveSharedSession);
+app.get('/share/:token', publicationHandlers.serveSharedSession);
 
 // =========================================================================
 // Anchored comments (lib/comments.js)
@@ -2588,94 +2519,6 @@ app.get('/share/:token', serveSharedSession);
 // pi-dish-comments skill lists the open index, fetches whichever related ids
 // it needs, and acknowledges completed items. Creating a comment never
 // prompts, steers, or starts an agent turn.
-
-function shortString(value, max) {
-  return typeof value === 'string' && value.length <= max ? value : null;
-}
-
-function inferSessionForPath(absPath) {
-  // Nested session cwds are normal here (a checkout under a workspace root
-  // that another session sits in), so the most specific containing cwd wins.
-  // Only a genuine tie — two sessions at the same depth, e.g. the same cwd —
-  // is ambiguous enough to give up on.
-  const candidates = listRegisteredSessions()
-    .filter((entry) => {
-      if (!entry.cwd) return false;
-      const cwd = path.resolve(entry.cwd);
-      return absPath === cwd || absPath.startsWith(cwd + path.sep);
-    })
-    .sort((a, b) => path.resolve(b.cwd).length - path.resolve(a.cwd).length);
-  if (!candidates.length) return null;
-  if (candidates[1] && path.resolve(candidates[1].cwd).length === path.resolve(candidates[0].cwd).length) return null;
-  const identity = registryIdentity(candidates[0]);
-  return identity ? routeSessionId(identity.harnessId, identity.nativeSessionId) : null;
-}
-
-function canonicalKnownSessionId(value) {
-  const identity = routeIdentity(value);
-  if (!identity) return null;
-  const registered = listRegisteredSessions().some((entry) => {
-    const candidate = registryIdentity(entry);
-    return candidate?.harnessId === identity.harnessId
-      && candidate.nativeSessionId === identity.nativeSessionId;
-  });
-  const rpc = identity.harnessId === 'pi' && getRPCSession(value)?.id === identity.nativeSessionId;
-  const active = registered || rpc;
-  const historical = !active && enumerateSessionCandidates().some((candidate) =>
-    candidate.harnessId === identity.harnessId
-      && candidate.nativeSessionId === identity.nativeSessionId);
-  return active || historical
-    ? routeSessionId(identity.harnessId, identity.nativeSessionId)
-    : null;
-}
-
-function cleanAnchor(raw) {
-  if (!raw || typeof raw !== 'object') return null;
-  const type = raw.type === 'lines' ? 'lines' : raw.type === 'text' ? 'text' : null;
-  if (!type) return null;
-  const anchor = { type };
-  for (const key of ['quote', 'prefix', 'suffix']) {
-    const value = shortString(raw[key], key === 'quote' ? 12000 : 500);
-    if (value != null) anchor[key] = value;
-  }
-  for (const key of ['startLine', 'endLine', 'oldStart', 'oldEnd', 'newStart', 'newEnd']) {
-    if (Number.isInteger(raw[key]) && raw[key] >= 0) anchor[key] = raw[key];
-  }
-  return (anchor.quote || type === 'lines') ? anchor : null;
-}
-
-function cleanCommentTarget(raw) {
-  if (!raw || typeof raw !== 'object') return null;
-  const anchor = cleanAnchor(raw.anchor);
-  if (!anchor) return null;
-  if (raw.kind === 'file') {
-    const filePath = shortString(raw.path, 4096);
-    if (!filePath || !path.isAbsolute(filePath)) return null;
-    return {
-      kind: 'file', path: path.resolve(filePath),
-      relPath: shortString(raw.relPath, 4096), anchor,
-    };
-  }
-  if (raw.kind === 'diff') {
-    const repo = shortString(raw.repo, 4096);
-    const filePath = shortString(raw.path, 4096);
-    if (!repo || !filePath) return null;
-    return {
-      kind: 'diff', repo, path: filePath,
-      oldPath: shortString(raw.oldPath, 4096), anchor,
-    };
-  }
-  if (raw.kind === 'page') {
-    const pageToken = shortString(raw.pageToken, 256);
-    const page = pageToken && pages.getPage(pageToken);
-    if (!page || page.renderer === 'file') return null;
-    return {
-      kind: 'page', pageToken, root: page.root,
-      title: page.title || null, anchor,
-    };
-  }
-  return null;
-}
 
 // Feedback on a page this host merely fronts belongs to the host whose agent
 // will read it. The overlay injected into a proxied page makes its calls
@@ -2747,139 +2590,27 @@ function proxyCommentToOwner(remote, req, res) {
     .catch((e) => fail(remoteHosts.errorCode(e)));
 }
 
-app.post('/api/comments', (req, res) => {
-  const rawBody = req.body?.body;
-  const body = typeof rawBody === 'string' ? shortString(rawBody.trim(), 10000) : null;
-  const target = cleanCommentTarget(req.body?.target);
-  if (!body) return res.status(400).json({ error: 'comment body required (max 10000 characters)' });
-  if (!target) return res.status(400).json({ error: 'valid anchored target required' });
-
-  let sessionId = shortString(req.body?.sessionId, 512);
-  if (target.kind === 'page') {
-    const page = pages.getPage(target.pageToken);
-    sessionId = page?.sessionId || sessionId || inferSessionForPath(page.root);
-  }
-  sessionId = sessionId && canonicalKnownSessionId(sessionId);
-  if (!sessionId) {
-    return res.status(404).json({ error: 'target session not found' });
-  }
-  res.status(201).json(comments.createComment({ sessionId, body, target }));
-});
-
-function commentIndexEntry(comment) {
-  const target = comment.target || {};
-  const anchor = target.anchor || {};
-  const indexedAnchor = { type: anchor.type };
-  for (const key of ['startLine', 'endLine', 'oldStart', 'oldEnd', 'newStart', 'newEnd']) {
-    if (Number.isInteger(anchor[key])) indexedAnchor[key] = anchor[key];
-  }
-  if (anchor.quote) indexedAnchor.quotePreview = anchor.quote.slice(0, 240);
-  const indexedTarget = { kind: target.kind, anchor: indexedAnchor };
-  for (const key of ['path', 'relPath', 'repo', 'oldPath', 'root', 'title', 'pageToken']) {
-    if (target[key] != null) indexedTarget[key] = target[key];
-  }
-  return {
-    id: comment.id,
-    // The page overlay reads the index with only a page token in hand and
-    // needs the session to fetch/edit/delete; /api is main-app only (the
-    // public share listener never mounts it), which is the trust boundary.
-    sessionId: comment.sessionId,
-    createdAt: comment.createdAt,
-    bodyPreview: comment.body.slice(0, 240),
-    target: indexedTarget,
-  };
-}
+app.post('/api/comments', publicationHandlers.createComment);
 
 // Lightweight, unpaginated inventory. It gives the agent enough location
 // and intent to infer useful groups without loading every full anchor/body.
 // Reading this index changes no comment state.
-app.get('/api/comments/index', (req, res) => {
-  const sessionId = shortString(req.query.sessionId, 512);
-  // A published page knows its own token but not the session behind it, so
-  // the overlay scopes the index that way instead.
-  const pageToken = shortString(req.query.pageToken, 256);
-  if (!sessionId && !pageToken) {
-    return res.status(400).json({ error: 'sessionId or pageToken required' });
-  }
-  const open = comments.listComments({ sessionId, pageToken, state: 'open' });
-  res.json({ comments: open.map(commentIndexEntry), total: open.length });
-});
+app.get('/api/comments/index', publicationHandlers.commentIndex);
 
-app.get('/api/comments/count', (req, res) => {
-  const sessionId = shortString(req.query.sessionId, 512);
-  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
-  res.json({ total: comments.listComments({ sessionId, state: 'open' }).length });
-});
+app.get('/api/comments/count', publicationHandlers.commentCount);
 
 // Fetch an agent-selected group from the inventory. This is a state-free
 // read; acknowledgment remains a separate, explicit close operation.
-app.post('/api/comments/get', (req, res) => {
-  const sessionId = shortString(req.body?.sessionId, 512);
-  const rawIds = req.body?.ids;
-  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
-  if (!Array.isArray(rawIds) || !rawIds.length || rawIds.length > 200
-      || rawIds.some((id) => typeof id !== 'string' || !id || id.length > 256)) {
-    return res.status(400).json({ error: 'ids must contain 1-200 comment ids' });
-  }
-  const ids = [...new Set(rawIds)];
-  const openById = new Map(comments.listComments({ sessionId, state: 'open' })
-    .map((comment) => [comment.id, comment]));
-  const selected = ids.map((id) => openById.get(id)).filter(Boolean);
-  const missing = ids.filter((id) => !openById.has(id));
-  res.json({ comments: selected, missing, total: selected.length, hasMore: false });
-});
+app.post('/api/comments/get', publicationHandlers.getComments);
 
 // Editing/deleting is the user's own correction path from the views the
 // comment was written in. Acknowledged comments are the agent's record and
 // stay immutable — a late edit would silently change what was acted on.
-function resolveOpenComment(req, res) {
-  const existing = comments.getComment(req.params.id);
-  if (!existing) {
-    res.status(404).json({ error: 'comment not found' });
-    return null;
-  }
-  let requestedSessionId = null;
-  try { requestedSessionId = canonicalSessionId(req.body?.sessionId); } catch {}
-  if (!requestedSessionId || requestedSessionId !== existing.sessionId) {
-    res.status(403).json({ error: 'comment belongs to a different session' });
-    return null;
-  }
-  if (existing.acknowledgedAt) {
-    res.status(409).json({ error: 'comment already acknowledged' });
-    return null;
-  }
-  return existing;
-}
+app.patch('/api/comments/:id', publicationHandlers.updateComment);
 
-app.patch('/api/comments/:id', (req, res) => {
-  if (!resolveOpenComment(req, res)) return;
-  const rawBody = req.body?.body;
-  const body = typeof rawBody === 'string' ? shortString(rawBody.trim(), 10000) : null;
-  if (!body) return res.status(400).json({ error: 'comment body required (max 10000 characters)' });
-  const comment = comments.updateComment(req.params.id, body);
-  if (!comment) return res.status(409).json({ error: 'comment already acknowledged' });
-  res.json(comment);
-});
+app.delete('/api/comments/:id', publicationHandlers.deleteComment);
 
-app.delete('/api/comments/:id', (req, res) => {
-  if (!resolveOpenComment(req, res)) return;
-  if (!comments.deleteComment(req.params.id)) {
-    return res.status(409).json({ error: 'comment already acknowledged' });
-  }
-  res.json({ ok: true });
-});
-
-app.post('/api/comments/:id/ack', (req, res) => {
-  const existing = comments.getComment(req.params.id);
-  if (!existing) return res.status(404).json({ error: 'comment not found' });
-  let requestedSessionId = null;
-  try { requestedSessionId = canonicalSessionId(req.body?.sessionId); } catch {}
-  if (!requestedSessionId || requestedSessionId !== existing.sessionId) {
-    return res.status(403).json({ error: 'comment belongs to a different session' });
-  }
-  const comment = comments.acknowledgeComment(req.params.id);
-  res.json(comment);
-});
+app.post('/api/comments/:id/ack', publicationHandlers.acknowledgeComment);
 
 // =========================================================================
 // Published pages (lib/pages.js)
@@ -2892,170 +2623,25 @@ app.post('/api/comments/:id/ack', (req, res) => {
 // plan shows fresh on refresh) and is mounted on both the main app and the
 // optional share listener, like /share. Unknown tokens are bare 404s.
 
-function pagePayload(token, entry) {
-  const pagePath = `/page/${token}`;
-  const base = process.env.PI_DISH_SHARE_BASE_URL;
-  return {
-    token,
-    path: pagePath,
-    url: base ? base.replace(/\/+$/, '') + pagePath : null,
-    root: entry.root,
-    title: entry.title || null,
-    sessionId: entry.sessionId || null,
-    renderer: entry.renderer || null,
-    createdAt: entry.createdAt,
-  };
-}
-
 // Deliberately no path gate on registration: sharing governance rests with
 // the main app, which is assumed reachable only by trusted people (same
 // trust model as the rest of the API — anything on this port can already
 // drive agents with shell access, so a "no paths outside the workspace"
 // rule would only be theater: an agent can copy any file into its cwd).
 // The public share listener never registers, only serves known tokens.
-app.post('/api/pages', (req, res) => {
-  const { path: rawPath, title, sessionId, renderer } = req.body || {};
-  const hasSessionId = Object.prototype.hasOwnProperty.call(req.body || {}, 'sessionId');
-  if (typeof rawPath !== 'string' || !rawPath) {
-    return res.status(400).json({ error: 'path required' });
-  }
-  if (renderer != null && renderer !== 'file') {
-    return res.status(400).json({ error: 'renderer must be "file" when provided' });
-  }
-  if (!path.isAbsolute(rawPath)) {
-    return res.status(400).json({ error: 'path must be absolute' });
-  }
-  const root = path.resolve(rawPath);
-  let stat;
-  try { stat = fs.statSync(root); } catch {
-    return res.status(404).json({ error: `No such file: ${root}` });
-  }
-  if (!stat.isFile() && !stat.isDirectory()) {
-    return res.status(400).json({ error: 'path must be a file or directory' });
-  }
-  if (renderer === 'file' && !stat.isFile()) {
-    return res.status(400).json({ error: 'the file renderer requires a file' });
-  }
-  if (stat.isDirectory() && !fs.existsSync(path.join(root, 'index.html'))) {
-    return res.status(400).json({ error: 'directory pages need an index.html' });
-  }
-  let associatedSessionId;
-  if (hasSessionId) {
-    associatedSessionId = shortString(sessionId, 512);
-    if (!associatedSessionId) {
-      return res.status(400).json({ error: 'sessionId must be a non-empty string (max 512 characters)' });
-    }
-    associatedSessionId = canonicalKnownSessionId(associatedSessionId);
-    if (!associatedSessionId) {
-      return res.status(404).json({ error: 'sessionId does not identify a known active or historical session' });
-    }
-  } else {
-    associatedSessionId = inferSessionForPath(root);
-  }
-  const token = pages.createPage({
-    root,
-    title: title || null,
-    sessionId: associatedSessionId || null,
-    renderer: renderer || null,
-  });
-  res.json(pagePayload(token, pages.getPage(token)));
-});
+app.post('/api/pages', publicationHandlers.createPage);
 
-app.get('/api/pages', (req, res) => {
-  let list = pages.listPages();
-  let filterSessionId = null;
-  try { filterSessionId = req.query.sessionId && canonicalSessionId(req.query.sessionId); } catch {}
-  if (req.query.sessionId) list = list.filter((p) => p.sessionId === filterSessionId);
-  res.json(list.map(({ token, ...entry }) => ({
-    ...pagePayload(token, entry),
-    missing: !fs.existsSync(entry.root),
-  })));
-});
+app.get('/api/pages', publicationHandlers.listPages);
 
-app.delete('/api/pages/:token', (req, res) => {
-  res.json({ revoked: pages.revokePage(req.params.token) });
-});
+app.delete('/api/pages/:token', publicationHandlers.revokePage);
 
 // The public serving routes. File roots serve the file itself; directory
 // roots serve index.html at /page/:token/ (the bare token URL redirects so
 // the document's relative asset URLs resolve under the token) and contained
 // assets at /page/:token/<rel>. res.sendFile rejects `..` traversal and
 // absolute rests via its root option — every failure is a bare 404.
-function sendPageFile(file, req, res, annotate) {
-  if (!annotate || path.extname(file).toLowerCase() !== '.html') {
-    return res.sendFile(file, (err) => {
-      if (err && !res.headersSent) res.status(404).type('text/plain').send('Not found');
-    });
-  }
-  fs.readFile(file, 'utf8', (err, html) => {
-    if (err) return res.status(404).type('text/plain').send('Not found');
-    const tag = `<script src="/artifact-comments.js" data-page-token="${req.params.token}"></script>`;
-    const at = html.toLowerCase().lastIndexOf('</body>');
-    const annotated = at >= 0 ? html.slice(0, at) + tag + html.slice(at) : html + tag;
-    res.type('html').send(annotated);
-  });
-}
-
-function sendRenderedFilePage(entry, req, res, notFound) {
-  let file;
-  try { file = readFileForViewer(entry.root, { imageData: false }); } catch { return notFound(); }
-  if (file.error) {
-    return res.status(file.status || 415).type('text/plain').send('File cannot be previewed');
-  }
-  if (req.query.content != null) {
-    if (!file.image) return notFound();
-    const safeMime = file.image.mimeType !== 'image/svg+xml'
-      ? file.image.mimeType : 'text/plain; charset=utf-8';
-    res.setHeader('Cache-Control', 'public, no-cache');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    return res.type(safeMime).sendFile(entry.root, (err) => { if (err) notFound(); });
-  }
-  res.setHeader('Cache-Control', 'public, no-cache');
-  res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'self'; img-src 'self' http: https:; base-uri 'none'; form-action 'none'");
-  res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.type('html').send(renderFilePage({
-    token: req.params.token,
-    root: entry.root,
-    title: entry.title,
-    file,
-  }));
-}
-
-function servePage(req, res, annotate = false) {
-  const entry = pages.getPage(req.params.token);
-  // A token this host doesn't own may still belong to a peer it fronts; the
-  // peer answers the redirect and injects its own comment overlay — except
-  // on the public listener, which asks the peer to leave it out (below).
-  if (!entry) return serveFleetArtifact(req, res, 'page', { annotate });
-  if (req.headers[PAGE_COMMENTS_HEADER] === 'off') annotate = false;
-  const notFound = () => { if (!res.headersSent) res.status(404).type('text/plain').send('Not found'); };
-  let stat;
-  try { stat = fs.statSync(entry.root); } catch { return notFound(); }
-  // Non-strict routing sends /page/:token/ to the bare route too — read the
-  // trailing slash off the real path or the redirect below would loop.
-  const rest = req.params[0] || (req.path.endsWith('/') ? '/' : '');
-
-  if (stat.isFile()) {
-    if (rest) return notFound(); // a file page has no sub-paths
-    if (entry.renderer === 'file') return sendRenderedFilePage(entry, req, res, notFound);
-    return sendPageFile(entry.root, req, res, annotate);
-  }
-  if (!rest) return res.redirect(302, `/page/${req.params.token}/`);
-  const rel = rest === '/' ? 'index.html' : rest.replace(/^\//, '');
-  if (rel === 'index.html' && annotate) {
-    return sendPageFile(path.join(entry.root, rel), req, res, true);
-  }
-  res.sendFile(rel, { root: entry.root }, (err) => { if (err) notFound(); });
-}
-
-app.get('/page/:token', (req, res) => servePage(req, res, true));
-app.get('/page/:token/*', (req, res) => {
-  // Normalize express 4's wildcard into the shape servePage expects: the
-  // rest including its leading slash ('/' for the bare trailing-slash URL).
-  req.params[0] = '/' + (req.params[0] || '');
-  servePage(req, res, true);
-});
+app.get('/page/:token', publicationHandlers.page);
+app.get('/page/:token/*', publicationHandlers.pageAsset);
 
 // /reload against a bridge session, with two escape hatches:
 // - Bridges that fire the reload in the same tick as their run_command
@@ -4346,25 +3932,12 @@ app.get('/api/tmux/targets', async (req, res) => {
 });
 
 // Fuzzy directory search under $HOME for the new-session cwd picker.
-app.get('/api/dirs', (req, res) => {
-  try {
-    res.json(searchHomeDirs(String(req.query.q || ''), 15));
-  } catch (e) {
-    res.status(500).json([]);
-  }
-});
+app.get('/api/dirs', fileHandlers.searchDirectories);
 
 // Immediate subdirectories of a path, for the new-session cwd tree. Absolute
 // (or ~-prefixed) path required → 400; an unreadable dir degrades to 200 with
 // an `error` field and empty `dirs` so the tree never blanks.
-app.get('/api/dirs/children', (req, res) => {
-  try {
-    res.json(getDirChildren(String(req.query.path || '')));
-  } catch (e) {
-    if (e.badRequest) return res.status(400).json({ error: e.message });
-    res.status(500).json({ error: e.message });
-  }
-});
+app.get('/api/dirs/children', fileHandlers.directoryChildren);
 
 // Best-known working directory for a session: live registry first, then the
 // JSONL header. Null when neither knows (terminal + file search fall back).
@@ -4381,158 +3954,32 @@ function resolveSessionCwd(sessionId) {
 // File search for @-mentions in the prompt. Plain tokens fuzzy-search the
 // session cwd (fff); tokens that name a location (/abs, ~/x, ../x) get
 // shell-style completion instead, so mentions can reach anywhere on disk.
-app.get('/api/sessions/:id/files', async (req, res) => {
-  try {
-    const q = String(req.query.q || '');
-    const cwd = resolveSessionCwd(req.params.id);
-    if (isPathCompletionToken(q)) {
-      return res.json({ cwd, files: completePath(q, { cwd, limit: 20 }) });
-    }
-    if (!cwd) return res.status(404).json({ error: 'Session cwd unknown' });
-    const files = await searchFiles(cwd, q, 20);
-    res.json({ cwd, files });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-async function resolveViewerMention(sessionId, mention) {
-  const cwd = resolveSessionCwd(sessionId);
-  const session = findSessionSource(sessionId);
-  if (!cwd && !session) return { error: 'Unknown session', status: 404 };
-  let messages = [];
-  if (session) { try { messages = readSessionMessages(session); } catch {} }
-  const resolved = await resolveFileMention(mention, { cwd, messages });
-  if (!resolved) return { error: `Couldn't find "${mention}" among this session's files`, status: 404 };
-  return { cwd, resolved };
-}
+app.get('/api/sessions/:id/files', fileHandlers.searchSessionFiles);
 
 // Raw files use a normal resource response instead of JSON. The same
 // session-aware resolver gates both previews and bytes, so this does not
 // create a path traversal shortcut around the file viewer's reach rules.
 // Text is deliberately served as text/plain: a viewed HTML/SVG file must not
 // become executable same-origin content merely because the user opens Raw.
-app.get('/api/sessions/:id/file/content', async (req, res) => {
-  try {
-    const mention = String(req.query.path || '');
-    if (!mention || mention.length > 1024) return res.status(400).json({ error: 'path required' });
-    const found = await resolveViewerMention(req.params.id, mention);
-    if (found.error) return res.status(found.status).json({ error: found.error });
-    const file = readFileForViewer(found.resolved.absPath, { imageData: false });
-    if (file.error) return res.status(file.status || 415).json({ error: file.error, path: found.resolved.absPath });
-    res.setHeader('Cache-Control', 'private, no-cache');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    const safeImageMime = file.image && file.image.mimeType !== 'image/svg+xml'
-      ? file.image.mimeType : 'text/plain; charset=utf-8';
-    res.type(safeImageMime).sendFile(found.resolved.absPath);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.get('/api/sessions/:id/file/content', fileHandlers.fileContent);
 
 // Read a file mentioned in the chat (clickable filenames in the transcript).
 // "findings.md" written deep in the tree resolves through the session's own
 // tool calls; reads are gated to the cwd subtree + tool-touched paths. See
 // lib/file-mention.js.
-app.get('/api/sessions/:id/file', async (req, res) => {
-  try {
-    const mention = String(req.query.path || '');
-    if (!mention || mention.length > 1024) return res.status(400).json({ error: 'path required' });
-    const found = await resolveViewerMention(req.params.id, mention);
-    if (found.error) return res.status(found.status).json({ error: found.error });
-    const { cwd, resolved } = found;
-    const file = readFileForViewer(resolved.absPath, { imageData: false });
-    if (file.error) return res.status(file.status || 415).json({ error: file.error, path: resolved.absPath });
-    if (file.image) {
-      file.image.url = `/api/sessions/${encodeURIComponent(req.params.id)}/file/content?path=${encodeURIComponent(mention)}&v=${file.mtime}-${file.size}`;
-    }
-    res.json({
-      path: resolved.absPath,
-      relPath: cwd && resolved.absPath.startsWith(cwd + '/') ? resolved.absPath.slice(cwd.length + 1) : null,
-      line: resolved.line ?? null,
-      ...file,
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-const DIFF_INLINE_FILE_LIMIT = 6;
-const DIFF_SNAPSHOT_TTL_MS = 60 * 1000;
-const diffSnapshots = new Map(); // sessionId -> { id, cwd, at, version, data }
-
-function rememberDiffSnapshot(sessionId, cwd, data) {
-  const { version, ...clientData } = data;
-  const snapshot = {
-    id: crypto.randomBytes(12).toString('hex'),
-    cwd,
-    at: Date.now(),
-    version,
-    data: clientData,
-  };
-  diffSnapshots.delete(sessionId);
-  diffSnapshots.set(sessionId, snapshot);
-  while (diffSnapshots.size > 4) diffSnapshots.delete(diffSnapshots.keys().next().value);
-  return snapshot;
-}
-
-function staleDiffResponse(res) {
-  return res.status(409).json({
-    stale: true,
-    error: 'The working tree changed since this diff was loaded; refresh the diff pane.',
-  });
-}
+app.get('/api/sessions/:id/file', fileHandlers.filePreview);
 
 // A large pane receives metadata first. Patch lookup selects from the exact
 // aggregate snapshot used for that response (rather than accepting an
 // arbitrary path). The working-tree version is checked around patch creation;
 // drift returns an explicit stale response instead of mixing snapshots.
-app.get('/api/sessions/:id/diff/patch', async (req, res) => {
-  try {
-    const repoPath = String(req.query.repo || '');
-    const filePath = String(req.query.path || '');
-    const snapshotId = String(req.query.snapshot || '');
-    if (!repoPath || !filePath || !/^[a-f0-9]{24}$/.test(snapshotId) ||
-        repoPath.length > 2048 || filePath.length > 4096) {
-      return res.status(400).json({ error: 'repo, path, and snapshot required' });
-    }
-    const cwd = resolveSessionCwd(req.params.id);
-    if (!cwd) return res.status(404).json({ error: 'Session cwd unknown' });
-    const snapshot = diffSnapshots.get(req.params.id);
-    if (!snapshot || snapshot.id !== snapshotId || snapshot.cwd !== cwd ||
-        Date.now() - snapshot.at > DIFF_SNAPSHOT_TTL_MS) return staleDiffResponse(res);
-    const repo = snapshot.data.repos.find(item => item.path === repoPath);
-    const file = repo?.files.find(item => item.path === filePath);
-    if (!repo || !file) return res.status(404).json({ error: 'Patch not found' });
-    if (await getDiffVersion(cwd) !== snapshot.version) return staleDiffResponse(res);
-    const patch = file.patch ? file : await getFilePatch(path.resolve(cwd, repo.path), file);
-    if (await getDiffVersion(cwd) !== snapshot.version) return staleDiffResponse(res);
-    if (!patch?.patch) return res.status(404).json({ error: 'Patch not found' });
-    // Sliding TTL and LRU recency without replacing the snapshot identity.
-    snapshot.at = Date.now();
-    diffSnapshots.delete(req.params.id);
-    diffSnapshots.set(req.params.id, snapshot);
-    res.json({ patch: patch.patch, truncated: !!patch.truncated, binary: !!patch.binary });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.get('/api/sessions/:id/diff/patch', fileHandlers.diffPatch);
 
 // Aggregate uncommitted git diffs for every repo under the session cwd (the
 // user's workspaces are polyrepos — several checkouts side by side under one
 // agent cwd). The cwd comes from the session, never the request, so there's
 // no path input to gate. See lib/git-diff.js.
-app.get('/api/sessions/:id/diff', async (req, res) => {
-  try {
-    const cwd = resolveSessionCwd(req.params.id);
-    if (!cwd) return res.status(404).json({ error: 'Session cwd unknown' });
-    const data = await aggregateDiffs(cwd, { inlineLimit: DIFF_INLINE_FILE_LIMIT });
-    const snapshot = rememberDiffSnapshot(req.params.id, cwd, data);
-    res.json({ ...snapshot.data, snapshotId: snapshot.id });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.get('/api/sessions/:id/diff', fileHandlers.diffSummary);
 
 
 app.post('/api/sessions/new', async (req, res) => {
@@ -5202,17 +4649,12 @@ onServerClose(() => {
 // the main app or API. All public routes remain on the main app too.
 if (process.env.PI_DISH_SHARE_PORT) {
   const shareApp = express();
-  shareApp.get('/share/:token', serveSharedSession);
-  // Do not pass Express's `next` callback as servePage's annotate argument.
-  // The dedicated public listener always serves the original HTML unchanged.
-  shareApp.get('/page/:token', (req, res) => servePage(req, res));
-  shareApp.get('/page/:token/*', (req, res) => {
-    req.params[0] = '/' + (req.params[0] || '');
-    servePage(req, res);
-  });
-  shareApp.get('/style.css', (req, res) => res.sendFile(path.join(__dirname, 'public', 'style.css')));
-  shareApp.get('/vendor/hljs-theme.min.css', (req, res) =>
-    res.sendFile(path.join(__dirname, 'public', 'vendor', 'hljs-theme.min.css')));
+  shareApp.get('/share/:token', publicationHandlers.serveSharedSession);
+  // Dedicated public handlers always serve original HTML without annotations.
+  shareApp.get('/page/:token', publicationHandlers.publicPage);
+  shareApp.get('/page/:token/*', publicationHandlers.publicPageAsset);
+  shareApp.get('/style.css', publicationHandlers.fileStyles);
+  shareApp.get('/vendor/hljs-theme.min.css', publicationHandlers.highlightStyles);
   shareApp.use((req, res) => res.status(404).type('text/plain').send('Not found'));
   const shareHost = process.env.PI_DISH_SHARE_HOST || HOST;
   const shareServer = shareApp.listen(process.env.PI_DISH_SHARE_PORT, shareHost, () => {
