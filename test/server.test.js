@@ -2524,52 +2524,43 @@ test('PUT /api/models/enabled persists pi scoped models in settings.json', async
   assert.equal(duplicate.status, 400);
 });
 
-test('PUT /api/models/enabled preserves a concurrent pi settings write', async () => {
+test('PUT /api/models/enabled preserves a concurrent pi settings write', async (t) => {
   const settingsFile = path.join(tmpHome, '.pi', 'agent', 'settings.json');
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
   fs.writeFileSync(settingsFile, JSON.stringify({ theme: 'dark' }));
 
-  // Model a separate pi process: hold pi's own settings lock with a snapshot,
-  // then commit an unrelated field before releasing it. The API must wait,
-  // re-read that write under the same lock, and merge enabledModels into it.
+  // Commit the competing writer's snapshot after the API encounters its real
+  // lock, before the SDK retries. A child timer can exceed the SDK's bounded
+  // retry window on a busy runner and does not establish this ordering.
   const sdkRequire = require('node:module').createRequire(path.join(__dirname, '..',
     'node_modules', '@earendil-works', 'pi-coding-agent', 'package.json'));
-  const lockfilePath = sdkRequire.resolve('proper-lockfile');
-  const script = `
-    const fs = require('node:fs');
-    const lockfile = require(${JSON.stringify(lockfilePath)});
-    const file = process.argv[1];
-    const release = lockfile.lockSync(file, { realpath: false });
-    const snapshot = JSON.parse(fs.readFileSync(file, 'utf8'));
-    process.stdout.write('locked\\n');
-    setTimeout(() => {
-      snapshot.concurrentPiWrite = 'preserved';
-      fs.writeFileSync(file, JSON.stringify(snapshot, null, 2));
-      release();
-    }, 60);
-  `;
-  const { spawn } = require('node:child_process');
-  const child = spawn(process.execPath, ['-e', script, settingsFile], { stdio: ['ignore', 'pipe', 'pipe'] });
-  let childStderr = '';
-  child.stderr.on('data', (chunk) => { childStderr += chunk; });
-  const locked = new Promise((resolve, reject) => {
-    child.stdout.once('data', resolve);
-    child.once('error', reject);
-    child.once('exit', (code) => reject(new Error(`Settings lock child exited before readiness (${code}): ${childStderr}`)));
+  const lockfile = sdkRequire('proper-lockfile');
+  const lockSync = lockfile.lockSync;
+  let release = lockSync(settingsFile, { realpath: false });
+  const snapshot = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  t.mock.method(lockfile, 'lockSync', function (file, options) {
+    try {
+      return lockSync.call(this, file, options);
+    } catch (error) {
+      if (file === settingsFile && release && error.code === 'ELOCKED') {
+        snapshot.concurrentPiWrite = 'preserved';
+        fs.writeFileSync(settingsFile, JSON.stringify(snapshot, null, 2));
+        release();
+        release = null;
+      }
+      throw error;
+    }
   });
-  const exited = new Promise((resolve) => child.once('exit', resolve));
-  await locked;
-
-  const [updated, exitCode] = await Promise.all([
-    put('/api/models/enabled', { enabledIds: ['anthropic/concurrent-model'] }),
-    exited,
-  ]);
-  assert.equal(exitCode, 0, childStderr);
-  assert.equal(updated.status, 200, JSON.stringify(updated.body));
-  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-  assert.equal(settings.theme, 'dark');
-  assert.equal(settings.concurrentPiWrite, 'preserved');
-  assert.deepEqual(settings.enabledModels, ['anthropic/concurrent-model']);
+  try {
+    const updated = await put('/api/models/enabled', { enabledIds: ['anthropic/concurrent-model'] });
+    assert.equal(updated.status, 200, JSON.stringify(updated.body));
+    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    assert.equal(settings.theme, 'dark');
+    assert.equal(settings.concurrentPiWrite, 'preserved');
+    assert.deepEqual(settings.enabledModels, ['anthropic/concurrent-model']);
+  } finally {
+    if (release) release();
+  }
 });
 
 test('GET /stats aggregates tokens, cost, and message counts from the JSONL', async () => {
