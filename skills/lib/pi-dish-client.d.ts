@@ -1,4 +1,5 @@
 // Generated edge from skills/lib/pi-dish-client.ts; edit that source and run npm run build:edges.
+import { stableSessionRef } from '../../src/core/helper-refs';
 /** Consumed wire fields only. Unconsumed payloads remain opaque. */
 export interface SessionFields {
     id?: unknown;
@@ -170,30 +171,6 @@ declare function hostSupports(value: unknown, capability: string): boolean;
  *   <uuid>:<sessionId>    → { hostPart: uuid,    hostIdForm: true,  id: '<sessionId>' }
  */
 declare function parseRef(raw: unknown): ParsedRef;
-/** Every identifier a ref may name for one route id, most specific first. */
-declare function sessionRefAliases(id: unknown): string[];
-/** Exact route id, exact alias, route-id prefix, alias prefix — in that
- *  order, so a ref that resolved before aliases existed still means the same
- *  session. Returns `{ session, matches }` like the server's route. */
-declare function resolveRefAmong<T extends SessionRow>(sessions: readonly T[] | null | undefined, ref: unknown, exactOnly?: boolean): {
-    session: T | null;
-    matches: T[];
-};
-/**
- * The shortest ref that still points at exactly one of `peerIds` — the uuid
- * tail where the corpus allows it, widened as far as needed, else a route-id
- * prefix. What the CLI prints instead of a 100-char key, so the next command
- * carries a handle an agent can retype without corrupting it.
- */
-declare function shortSessionRef(id: unknown, peerIds?: readonly unknown[] | null, minLen?: number): string;
-/**
- * The handle to *print*: `shortSessionRef`, unless the only thing it
- * shortened was the route id itself. Truncating a route id swaps a stable
- * identifier for a prefix unique only against the corpus snapshot it came
- * from, and a printed row is exactly what an agent comes back to later.
- * Naming a different identifier (native id, uuid tail) is not a truncation.
- */
-declare function stableSessionRef(id: unknown, peerIds?: readonly unknown[] | null, minLen?: number): string;
 declare function hostLabelOf(value: unknown): {} | null;
 /**
  * Resolve a ref's host part against this server's fleet: remote name first,
@@ -234,4 +211,4 @@ declare function truncateResult(text: unknown, maxLines?: number, maxChars?: num
  * `session`) and `options`.
  */
 declare function renderTranscript(input: unknown, options?: TranscriptOptions): string;
-export { makeFail, print, parentPid, ancestorPids, pidAlive, registryEntries, registryRouteId, sessionHarnessId, nativeSessionId, discoverSession, discoverSessionQuietly, TOKEN, defaultBase, request, requestText, hostPath, api, unknownHostError, jsonInit, fleetHosts, resetFleetCache, hostSupports, hostLabelOf, parseRef, resolveHostPart, entryForHostName, resolveSessionRef, resolveSessionClientSide, sessionRefAliases, resolveRefAmong, shortSessionRef, stableSessionRef, mergeSearchResults, renderTranscript, summarizeToolArgs, truncateResult, };
+export { makeFail, print, parentPid, ancestorPids, pidAlive, registryEntries, registryRouteId, sessionHarnessId, nativeSessionId, discoverSession, discoverSessionQuietly, TOKEN, defaultBase, request, requestText, hostPath, api, unknownHostError, jsonInit, fleetHosts, resetFleetCache, hostSupports, hostLabelOf, parseRef, resolveHostPart, entryForHostName, resolveSessionRef, resolveSessionClientSide, stableSessionRef, mergeSearchResults, renderTranscript, summarizeToolArgs, truncateResult, };

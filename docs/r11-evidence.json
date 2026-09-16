@@ -1,0 +1,326 @@
+{
+  "milestone": "R11",
+  "status": "Implementation and required local proofs complete; frozen source review pending",
+  "baseline": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
+  "branch": "migration/r11-canonical-refs",
+  "owner": {
+    "session": "01a0ab39-8607-7781-94e2-54863e0a35ac",
+    "harness": "omp",
+    "model": "openai-codex/gpt-6-astra",
+    "thinking": "high"
+  },
+  "authority": [
+    "AGENTS.md",
+    "CLAUDE.md: runtime edges, session refs, test isolation",
+    "docs/remaining-migration-plan.md: R11, deliberate limits, verification policy",
+    "docs/m6-evidence.json: accepted CLI ingress/native behavior and runtime boundaries",
+    "docs/remaining-migration-plan.md: accepted M7 plus C1 tools checkpoint"
+  ],
+  "ownership": {
+    "authoredChanges": [
+      "skills/lib/pi-dish-client.ts",
+      "scripts/build-edges.ts",
+      "test/skills-core.test.js",
+      "test/edge-build.test.js",
+      "test/skill-client-ingress.test.js"
+    ],
+    "canonicalOwnerUnchanged": "src/core/helper-refs.ts",
+    "generatedChanges": [
+      "skills/lib/pi-dish-client.js",
+      "skills/lib/pi-dish-client.d.ts",
+      "scripts/build-edges.js"
+    ],
+    "parentOnly": [
+      "CLAUDE.md (retire duplicated-rule/parity-test description)",
+      "AGENTS.md",
+      "BACKLOG.md",
+      "docs/remaining-migration-plan.md",
+      "main integration and push"
+    ],
+    "compiler": "Existing tsconfig.edges.json checks imported canonical source and emits temporary closure; existing tsconfig.tools.json checks build mapping. No compiler/config/package/source-policy exception requested.",
+    "languageServer": "xd://lsp status reports no language servers configured. Reference inventory uses grounded exact-file reads and repository searches; no mutating LSP.",
+    "compileOnlyOutputs": [
+      "src/core/helper-refs.js",
+      "src/core/helper-refs.d.ts",
+      "src/core/helper-query.js",
+      "src/core/helper-query.d.ts",
+      "src/core/helper-values.js",
+      "src/core/helper-values.d.ts",
+      "src/core/helper-identity.js",
+      "src/core/helper-identity.d.ts",
+      "src/core/helper-format.js",
+      "src/core/helper-format.d.ts",
+      "src/core/helper-types.js",
+      "src/core/helper-types.d.ts",
+      "src/core/session-api.js",
+      "src/core/session-api.d.ts"
+    ],
+    "unchangedGeneratedDeclaration": "scripts/build-edges.d.ts remains the existing empty module declaration; skill-client sibling declaration is regenerated."
+  },
+  "callerInventory": {
+    "skillClient": {
+      "resolveSessionClientSide": "Only production caller of copied resolveRefAmong; replace with resolveSessionRefAmong(catalog,id,{exactOnly}). Catalog remains active-first and opaque fields retain existing consumers.",
+      "sessionsCli": "skills/pi-dish-sessions/scripts/pi-dish-sessions.ts consumes stableSessionRef in refsForRows for list/search output; consumes sessionHarnessId for spawn inheritance.",
+      "otherClis": "skills/pi-dish-comments/scripts/pi-dish-comments.ts and skills/pi-dish-pages/scripts/pi-dish-pages.ts load the same realpath-relative generated client. Discovery/auth/output unchanged.",
+      "retiredExports": "sessionRefAliases, resolveRefAmong, shortSessionRef have no production external caller; only test/skills-core.test.js copy-parity tests consume them.",
+      "nativeDecoder": "decodeRouteId is retained separately for sessionHarnessId/nativeSessionId; harness identity can be known with missing/empty/nonstring native id. RegistryRouteId and spawn authority unchanged."
+    },
+    "unchangedCanonicalConsumers": [
+      "src/browser/shared-helpers.ts -> public/helpers.js",
+      "src/browser/session-references.ts -> public/app.js (prefix/ref/search; match retains its separate route-only hint policy)",
+      "src/core/server-app.ts resolveRefInCatalog and /api/sessions/resolve -> lib/server-app.js",
+      "src/core/session-refs.ts prompt context expansion through supplied resolver -> lib/session-refs.js"
+    ],
+    "portableCompileClosure": [
+      "src/core/helper-refs.ts",
+      "src/core/helper-query.ts",
+      "src/core/helper-values.ts",
+      "src/core/helper-identity.ts",
+      "src/core/helper-format.ts",
+      "src/core/helper-types.ts",
+      "src/core/session-api.ts"
+    ],
+    "buildAndDelivery": [
+      "scripts/build-edges.ts: complete temporary compile and output validation before writes; check mode, executable modes, shebangs, CJS/ESM, orphan checks",
+      "tsconfig.edges.json: sibling source/output mapping unchanged",
+      "install.sh: skill-directory symlinks resolve client via realpath",
+      "package.json: installed client runtime path already included; no new runtime file"
+    ]
+  },
+  "behaviorMatrix": [
+    {
+      "boundary": "resolution",
+      "preserve": "Exact route -> exact alias -> route prefix -> alias prefix; first singleton wins; first nonempty stage supplies ambiguity; duplicate route ids keep first row."
+    },
+    {
+      "boundary": "host-qualified",
+      "preserve": "name/id/label host lookup, self handling, conflicting --host failure; provenance exact-only; server-capability-first dispatch and older-host list fallback stay unchanged."
+    },
+    {
+      "boundary": "references",
+      "preserve": "Existing portable canonical alias generation, shortest references and stable print policy; opaque malformed route ids remain usable as exact ids."
+    },
+    {
+      "boundary": "CLI decoder",
+      "preserve": "Nonempty string harness remains inferable when native tuple slot is missing, null, empty, numeric or malformed; nativeSessionId returns null. Do not use stricter decodeRouteSessionId here."
+    },
+    {
+      "boundary": "ref syntax",
+      "preserve": "CLI parseRef error messages for missing slash parts/empty input remain local; canonical parseSessionRefParts null policy is not substituted."
+    },
+    {
+      "boundary": "canonical differences",
+      "decision": "Use prescribed existing canonical algorithm unchanged. It rejects empty needle (already rejected by public CLI parser) and returns full alias when a longer peer shadows every alias prefix, unlike the copied CLI loop. Parent informed before implementation; no invented new algorithm."
+    },
+    {
+      "boundary": "runtime",
+      "preserve": "Standalone generated client uses only Node builtins, no repo-relative runtime require. Only client JS is bundled; other edge outputs keep tsc emission and existing paths."
+    },
+    {
+      "boundary": "opaque ingress",
+      "preserve": "No new normalization, DTO, raw-entry cache, loader, reflection, capability or lifecycle policy. Retain native receiver/coercion/error boundaries from accepted M6."
+    }
+  ],
+  "deletionLedger": [
+    {
+      "target": "skills/lib/pi-dish-client.ts",
+      "remove": "UUID_TAIL_RE and authored sessionRefAliases/resolveRefAmong/shortSessionRef/stableSessionRef implementations and obsolete export surface; direct canonical imports replace them, not forwarding wrappers."
+    },
+    {
+      "target": "test/skills-core.test.js",
+      "remove": "Two copy-parity tests plus comparison-only fixtures/imports; retain native decoder observable behavior."
+    }
+  ],
+  "retainedCheckLedger": [
+    "test/helpers.test.js canonical precedence/ambiguity/exactOnly/short/stable contracts",
+    "test/skills-cli.test.js actual CLI against isolated product server",
+    "test/skill-sessions-fleet.test.js actual local/proxied fleet CLI and authorization",
+    "test/session-control-cli.test.js harness inference/override and launch request semantics",
+    "test/skill-client-ingress.test.js malformed/null/raw response behavior",
+    "test/session-refs.test.js prompt reference context policy",
+    "test/edge-build.test.js drift/modes/atomic validation and standalone bundling regression",
+    "test/browser/composer-autocomplete.spec.js target-host reference insertion and draft ownership"
+  ],
+  "requiredProofs": [
+    "Regenerate build:tools then build:edges only; canonical core/browser source unchanged",
+    "npm run check",
+    "npm test (full backend)",
+    "Real isolated installed-symlink CLI against actual server for precedence/ambiguity/host-qualified exact-only and printed references",
+    "Real isolated CLI against legacy capability fixture to exercise canonical client-side fallback",
+    "Browser production surface reference copy/composer observation with temporary fixture sessions",
+    "Standalone generated client execution outside repository with no node_modules/core sources",
+    "Three exact-source whole-package reviewers only after parent capacity grant; separate review attestation"
+  ],
+  "limits": [
+    "No algorithm correctness redesign outside prescribed canonical cutover",
+    "No browser implementation or runtime mapping change planned; full browser/scenario/UI suites will be run if such changes become necessary",
+    "No Electron/native adapter redesign; no macOS execution claim",
+    "No inner implementation agents; no extra capacity authorized"
+  ],
+  "verification": [
+    {
+      "command": "npm ci --no-audit --no-fund",
+      "result": "exit 0; 798 pinned packages installed in private worktree; existing six blocked lifecycle scripts unchanged"
+    },
+    {
+      "command": "npm run build:tools && npm run build:edges",
+      "result": "exit 0; sibling declarations/runtime outputs and bundled skill client generated"
+    },
+    {
+      "command": "npm run check",
+      "result": "exit 0; 258 compiler-owned sources/no explicit-any exceptions; lint and all tool/core/browser/edge drift, modes and strict checks passed"
+    },
+    {
+      "command": "npm test -- test/skills-core.test.js test/edge-build.test.js test/skill-client-ingress.test.js test/skills-cli.test.js test/session-control-cli.test.js test/skill-sessions-fleet.test.js test/helpers.test.js test/session-refs.test.js",
+      "result": "236 passed; no failures/skips; 2986.561158ms"
+    },
+    {
+      "command": "npm test",
+      "result": "1028 passed; no failures/cancellations/skips; 34752.715019ms"
+    },
+    {
+      "command": "npm run test:browser -- composer-autocomplete.spec.js",
+      "result": "8 passed; 13.1s; target-host reference insertion and ownership retained"
+    }
+  ],
+  "runtime": {
+    "node": "26.8.2",
+    "platform": "Linux x64",
+    "browser": "managed Chromium via browser tool and Playwright",
+    "macOS": "not executed"
+  },
+  "runtimeSmoke": {
+    "command": "node /tmp/r11-runtime-proof.cjs via supervised process r11-runtime",
+    "result": {
+      "base": "http://127.0.0.1:39683",
+      "legacyBase": "http://127.0.0.1:35353",
+      "home": "/tmp/r11-proof-kJyfLl",
+      "route": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+      "standalone": "/tmp/r11-proof-kJyfLl/standalone/skills",
+      "assertions": "12 resolutions including shadowed full alias, two ambiguity exits, two exact-only misses, two empty-ref errors, two list policies including shadowed alias, missing-native CLI spawn harness inference against admission fixture (no native process launched), HTTP 409, three standalone installed CLI loaders",
+      "outputs": [
+        {
+          "endpoint": "product",
+          "ref": "01a070d2",
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+        },
+        {
+          "endpoint": "product",
+          "ref": "route-hit",
+          "id": "route-hit"
+        },
+        {
+          "endpoint": "product",
+          "ref": "alias-hit",
+          "id": "~sk1_WyJvbXAiLCJhbGlhcy1oaXQiXQ"
+        },
+        {
+          "endpoint": "product",
+          "ref": "60d031ea-a33c-4794-856a-85a817366e7a:~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+        },
+        {
+          "endpoint": "product",
+          "ref": "self/01a070d2",
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+        },
+        {
+          "endpoint": "product",
+          "ref": "shadowed",
+          "id": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd"
+        },
+        {
+          "endpoint": "legacy-fallback",
+          "ref": "01a070d2",
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+        },
+        {
+          "endpoint": "legacy-fallback",
+          "ref": "route-hit",
+          "id": "route-hit"
+        },
+        {
+          "endpoint": "legacy-fallback",
+          "ref": "alias-hit",
+          "id": "~sk1_WyJvbXAiLCJhbGlhcy1oaXQiXQ"
+        },
+        {
+          "endpoint": "legacy-fallback",
+          "ref": "60d031ea-a33c-4794-856a-85a817366e7a:~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+        },
+        {
+          "endpoint": "legacy-fallback",
+          "ref": "self/01a070d2",
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+        },
+        {
+          "endpoint": "legacy-fallback",
+          "ref": "shadowed",
+          "id": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd"
+        }
+      ]
+    },
+    "additionalAssertions": "Standalone installed comments count returns 0 and pages publish serves actual temporary HTML with HTTP 200. Only generated CLI/client JS copied; no node_modules, core/lib source or declarations in installed tree.",
+    "source": "const fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst http = require('node:http');\nconst assert = require('node:assert/strict');\nconst { promisify } = require('node:util');\nconst run = promisify(require('node:child_process').execFile);\nconst root = process.cwd();\nrequire(path.join(root, 'test/test-env')).applyTestEnv();\nconst home = fs.mkdtempSync(path.join(os.tmpdir(), 'r11-proof-'));\nObject.assign(process.env, { HOME: home, TMUX_TMPDIR: path.join(home, 'tmux'), PI_DISH_INDEX_SYNC_BUDGET: '1000' });\nfs.mkdirSync(process.env.TMUX_TMPDIR);\nconst native = '2026-09-05T09-07-03-291Z_01a070d2-43fb-7360-aaba-a4ddf8d1deb0';\nconst route = '~sk1_' + Buffer.from(JSON.stringify(['omp', native])).toString('base64url');\nconst shadowed = '~sk1_' + Buffer.from(JSON.stringify(['omp', 'shadowed'])).toString('base64url');\nconst fixtures = [['omp', native, 'Canonical OMP'], ['pi', 'route-hit', 'Exact route'], ['omp', 'route-hit', 'Shadowed alias'], ['omp', 'alias-hit', 'Exact alias'], ['pi', 'alias-hit-long', 'Shadowed prefix'], ['pi', 'twin-a', 'Twin A'], ['pi', 'twin-b', 'Twin B'], ['omp', 'shadowed', 'Full alias retained'], ['omp', 'shadowed-long', 'Longer peer alias']];\nfor (const [harness, id, title] of fixtures) {\n  const dir = path.join(home, `.${harness}`, 'agent/sessions/project');\n  fs.mkdirSync(dir, { recursive: true });\n  fs.writeFileSync(path.join(dir, id + '.jsonl'), [\n    { type: 'session', version: 3, id, cwd: home, timestamp: '2026-09-05T09:07:03.291Z' },\n    { type: 'session_info', name: title },\n    { type: 'message', id: 'u1', message: { role: 'user', content: [{ type: 'text', text: title }], timestamp: '2026-09-05T09:07:04.000Z' } },\n  ].map(JSON.stringify).join('\\n') + '\\n');\n}\nconst installed = path.join(home, 'standalone/skills');\nfs.mkdirSync(path.join(installed, 'lib'), { recursive: true });\nfs.copyFileSync(path.join(root, 'skills/lib/pi-dish-client.js'), path.join(installed, 'lib/pi-dish-client.js'));\nfor (const skill of ['pi-dish-sessions', 'pi-dish-comments', 'pi-dish-pages']) {\n  fs.mkdirSync(path.join(installed, skill, 'scripts'), { recursive: true });\n  fs.copyFileSync(path.join(root, 'skills', skill, 'scripts', skill + '.js'), path.join(installed, skill, 'scripts', skill + '.js'));\n  fs.mkdirSync(path.join(home, '.pi/agent/skills'), { recursive: true });\n  fs.symlinkSync(path.join(installed, skill), path.join(home, '.pi/agent/skills', skill));\n}\nconst cli = path.join(home, '.pi/agent/skills/pi-dish-sessions/scripts/pi-dish-sessions.js');\nconst server = require(path.join(root, 'server'));\nlet legacy;\nasync function main() {\n  if (!server.listening) await new Promise(resolve => server.once('listening', resolve));\n  const base = `http://127.0.0.1:${server.address().port}`;\n  let list;\n  for (let i = 0; i < 100; i++) {\n    list = await (await fetch(base + '/api/sessions')).json();\n    if (!list.indexing && list.previous.length === fixtures.length) break;\n    await new Promise(resolve => setTimeout(resolve, 50));\n  }\n  assert.equal(list.previous.length, fixtures.length);\n  const identity = await (await fetch(base + '/api/host')).json();\n  let selectedHarness;\n  legacy = http.createServer(async (req, res) => {\n    if (req.url === '/api/harnesses') {\n      res.setHeader('Content-Type', 'application/json');\n      return res.end(JSON.stringify({ harnesses: [{ id: 'omp', available: true }] }));\n    }\n    if (req.url === '/api/sessions/new' && req.method === 'POST') {\n      let body = ''; for await (const chunk of req) body += chunk;\n      selectedHarness = JSON.parse(body).harness;\n      res.setHeader('Content-Type', 'application/json');\n      return res.end(JSON.stringify({ sessionId: 'isolated-admission-fixture' }));\n    }\n    const response = await fetch(base + req.url);\n    const data = await response.json();\n    if (req.url === '/api/hosts') for (const host of data.hosts) host.capabilities = {};\n    res.writeHead(response.status, { 'content-type': 'application/json' });\n    res.end(JSON.stringify(data));\n  });\n  await new Promise(resolve => legacy.listen(0, '127.0.0.1', resolve));\n  const legacyBase = `http://127.0.0.1:${legacy.address().port}`;\n  const outputs = [];\n  for (const endpoint of [base, legacyBase]) {\n    const invoke = args => run(process.execPath, [cli, ...args, '--url', endpoint], { env: process.env, cwd: home });\n    for (const [ref, expected] of [['01a070d2', route], ['route-hit', 'route-hit'], ['alias-hit', '~sk1_' + Buffer.from(JSON.stringify(['omp', 'alias-hit'])).toString('base64url')], [`${identity.hostId}:${route}`, route], ['self/01a070d2', route], ['shadowed', shadowed]]) {\n      const resolved = JSON.parse((await invoke(['resolve', ref, '--json'])).stdout);\n      assert.equal(resolved.id, expected);\n      outputs.push({ endpoint: endpoint === base ? 'product' : 'legacy-fallback', ref, id: resolved.id });\n    }\n    await assert.rejects(invoke(['resolve', 'twin-']), e => e.code === 1 && /twin-a/.test(e.stderr) && /twin-b/.test(e.stderr));\n    await assert.rejects(invoke(['resolve', `${identity.hostId}:01a070d2`]), e => e.code === 1 && /Session not found/.test(e.stderr));\n    await assert.rejects(invoke(['resolve', '']), e => e.code === 1 && /session ref/.test(e.stderr));\n    const printed = (await invoke(['list'])).stdout;\n    assert.ok(printed.includes(endpoint === base ? '01a070d2\\t' : route + '\\t'));\n    assert.ok(printed.includes(endpoint === base ? 'shadowed\\t' : shadowed + '\\t'));\n  }\n  const missingNative = '~sk1_' + Buffer.from(JSON.stringify(['omp'])).toString('base64url');\n  const inherited = JSON.parse((await run(process.execPath, [cli, 'spawn', '--session', missingNative, '--no-wait', '--json', '--url', legacyBase], { env: process.env, cwd: home })).stdout);\n  assert.equal(inherited.harness, 'omp');\n  assert.equal(selectedHarness, 'omp');\n  assert.equal((await fetch(base + '/api/sessions/resolve?id=twin-')).status, 409);\n  const comments = path.join(home, '.pi/agent/skills/pi-dish-comments/scripts/pi-dish-comments.js');\n  assert.equal(JSON.parse((await run(process.execPath, [comments, 'count', '--session', route, '--url', base, '--json'], { env: process.env, cwd: home })).stdout).total, 0);\n  const pages = path.join(home, '.pi/agent/skills/pi-dish-pages/scripts/pi-dish-pages.js');\n  const html = path.join(home, 'proof.html');\n  fs.writeFileSync(html, '<h1>R11 isolated publication</h1>');\n  const published = JSON.parse((await run(process.execPath, [pages, 'publish', html, '--session', route, '--url', base, '--json'], { env: process.env, cwd: home })).stdout);\n  assert.equal((await fetch(base + '/page/' + published.token)).status, 200);\n  const result = { base, legacyBase, home, route, standalone: installed, assertions: '12 resolutions including shadowed full alias, two ambiguity exits, two exact-only misses, two empty-ref errors, two list policies including shadowed alias, missing-native CLI spawn harness inference against admission fixture (no native process launched), HTTP 409, three standalone installed CLI loaders', outputs };\n  fs.writeFileSync('/tmp/r11-runtime-result.json', JSON.stringify(result, null, 2));\n  console.log('R11_READY ' + JSON.stringify(result));\n}\nprocess.on('SIGTERM', () => { legacy?.close(); server.close(); fs.rmSync(home, { recursive: true, force: true }); setTimeout(() => process.exit(0), 200).unref(); });\nmain().catch(error => { console.error(error); process.exitCode = 1; legacy?.close(); server.close(); });\n",
+    "sha256": "463637a8ca73f4d5364295552a3e5dbba2dc207a52f32f769e3be8e458db7c78"
+  },
+  "browserSmoke": {
+    "surface": "Production public/app.js served by actual isolated server, no fixtureApp/debug entrypoint",
+    "actions": "Opened All, right-clicked Canonical OMP session, observed Copy session ref 01a070d2 and data-copy=01a070d2 matching CLI/server. Actual menu selection exercised.",
+    "screenshot": "/tmp/omp-sshots-15821dc11af8cdfa.webp",
+    "clipboardLimit": "Headless native clipboard read remained empty after menu click; no native clipboard success claim. Canonical displayed/action value and target-host composer behavior independently verified.",
+    "toolIssues": [
+      "CSS click helper timeout although observed-id/raw Puppeteer click worked",
+      "Function-based tab.run serialization failed; raw-string tab.run worked"
+    ]
+  },
+  "attempts": [
+    {
+      "problem": "Initial build:tools before dependencies installed could not locate typescript/bin/tsc",
+      "resolution": "Pinned private npm ci, then both builds and checks passed"
+    },
+    {
+      "problem": "First runtime smoke assumed comments --help; that CLI instead attempted session discovery",
+      "resolution": "Changed disposable proof to real count with explicit isolated session and actual server"
+    },
+    {
+      "problem": "Second runtime smoke used /p/ instead of actual /page/ publication path",
+      "resolution": "Read publication producer and corrected disposable proof; subsequent ready run passed all assertions"
+    },
+    {
+      "problem": "Expanded smoke expected parseRef wording for empty argument, but actual CLI target admission rejects it earlier",
+      "resolution": "Changed disposable assertion to existing session-ref rejection contract; final expanded smoke passed. No product change."
+    }
+  ],
+  "contributorPath": {
+    "before": "Alias generation, staged matching and short/stable reference edits required independent helper-refs and skill-client implementations plus copy-parity maintenance.",
+    "after": "Edit src/core/helper-refs.ts once; existing core/browser builds and updated edge bundling consume that authored algorithm. CLI decoder and CLI syntax errors remain their own distinct policies. No forwarding wrapper or alternate loader added.",
+    "allocationLimits": "No performance improvement claimed. Existing canonical implementation/passes unchanged; esbuild retains a module-level unused reference-preamble join as conservative side-effect handling. No per-request cache or normalization added."
+  },
+  "finalDisposition": {
+    "deleted": "Four duplicate algorithm function bodies, local UUID-tail regex, obsolete explanatory comments; unused client sessionRefAliases/resolveRefAmong/shortSessionRef exports; two copy-parity tests and their comparison-only fixtures.",
+    "retained": "Canonical stableSessionRef remains an imported consumer-facing function for sessions list/search; CLI decodeRouteId/sessionHarnessId/nativeSessionId and parseRef policies retained.",
+    "newRegressionCases": "CLI missing-native harness inference; real legacy CLI staged precedence/ambiguity/exact-only; edge bundling execution after removing source/dependencies.",
+    "unchanged": "All browser/core implementations and generated outputs, tsconfig/package/source-policy, installation paths, native adapter/lifecycle/fleet/auth/host identity policies.",
+    "parentDocAction": "CLAUDE.md 760\u2013762 duplicated rule/parity test text must describe single authored algorithm bundled by build:edges; parent owns this edit."
+  },
+  "approvals": [
+    {
+      "boundary": "Canonical algorithm differences",
+      "decision": "Parent approved in principle unchanged canonical algorithm, grounded shadowed-alias divergence and empty-needle distinction; required real CLI proof and separate missing-native policy preserved.",
+      "proof": "Final expanded installed CLI smoke recorded above."
+    },
+    {
+      "boundary": "Exact temporary compile-only output map and runtime guard",
+      "decision": "Parent inspected actual scripts/build-edges.ts and approved only src/core/{helper-refs,helper-query,helper-values,helper-identity,helper-format,helper-types,session-api}.{js,d.ts}, conditional on client source. These outputs remain temporary and are not copied into edge outputs. Runtime inputs restricted to exact client plus listed TypeScript closure, builtin-only imports, one output, existing declarations/modes retained. No wildcard/prefix allowance.",
+      "reviewCapacity": "Separate trio capacity grant still required."
+    }
+  ],
+  "cleanup": {
+    "stopped": "Supervised r11-runtime listener process and managed r11-product browser released",
+    "removed": "All five owned /tmp/r11-proof-* fixture homes and throwaway executable /tmp/r11-runtime-proof.cjs; source embedded with SHA256 in this evidence",
+    "retained": "/tmp/r11-runtime-result.json plus browser screenshot; repository contains no throwaway executable.",
+    "scope": "No unrelated files or live sessions modified."
+  }
+}
