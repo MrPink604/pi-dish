@@ -92,7 +92,7 @@ Libraries owned by a domain are ordinary imports, not injected whole-module bags
 | M2 `routine-handlers.ts` | `createRoutineHandlers`, `RoutineHandlerPorts`, `RoutineHandlers` | Checked routine runner (`invoke`, `nextRunAt` and actual route-consumed methods), launch `validateHarnessPilotSelection`, lazy `SessionRefDependencies` below. Move `composeRoutinePrompt`, `expandRoutineCwd`, `validateRoutinePilot`, `routineStats`, `routineSummary`, `routineErrorResponse` here. Runner continues consuming lifecycle coordinator methods directly, never a second launch authority. |
 | M3 `publication-handlers.ts` | `createPublicationHandlers`, `PublicationPorts`, `PublicationHandlers` | Source lookup/history-pending, catalog for session/path inference, registered/RPC observations for `canonicalKnownSessionId`, M1 export/snapshot, M5 `PublicArtifactRelay`, public base URL and app resource root. Own public share/page handlers, payloads, comment target validation/projection and stores. |
 | M3 `file-handlers.ts` | `createFileHandlers`, `FileHandlerPorts`, `FileHandlers` | `resolveSessionCwd`, source/known-session lookup, root for rendered file resources. Own directory completion, file search/view/content and both diff snapshot/version checks; no lifecycle capabilities granted by cwd. |
-| M4 `feature-handlers.ts` | `createFeatureHandlers`, `FeaturePorts`, `FeatureHandlers` | `buildSessionCatalog`, `enumerateSessionCandidates`, `findSessionSource(id,{exact?})` (including skill-coverage latest-session lookup), `getSessionModels`, `getLiveSession`, settings read/write, model cache get/set/context invalidation, root resource paths; M1 actual SDK/pricing/mining/index projection imports. Own usage/limits/skills/STT, GET/PUT application settings with projection/sanitization, and harness config/agent/model/command listing response bodies plus their command runners. M7 retains settings persistence/path composition and session mutation/control (rename/model/thinking/command/tree navigation/branch). |
+| M4 `feature-handlers.ts` | `createFeatureHandlers`, `FeaturePorts`, `FeatureHandlers` | `buildSessionCatalog`, `enumerateSessionCandidates`, `findSessionSource(id,{exact?})` (including skill-coverage latest-session lookup), `getSessionModels`, `getLiveSession`, checked ownership `locatePiPane` for command-list advice, settings read/write, model cache get/set/context invalidation, root resource paths; M1 actual SDK/pricing/mining/index projection imports. Own usage/limits/skills/STT, GET/PUT application settings with projection/sanitization, and harness config/agent/model/command listing response bodies plus their command runners. M7 retains settings persistence/path composition and session mutation/control (rename/model/thinking/command/tree navigation/branch). |
 | M5 `access-handlers.ts` | `createAccessHandlers`, `AccessPorts`, `AccessHandlers` | Immutable startup token/config; `readDishSettings()` allowed origins, host identity/label/version/capability observations. Own compression/body-parser bypass, CORS/API/ticket/host gates and WS `upgradeAuthorized`; no shared generic policy framework. |
 | M5 `relay-handlers.ts` | `createRelayHandlers`, `RelayPorts`, `RelayHandlers`, `PublicArtifactRelay` | M3 artifact store port below, local page existence lookup, public base URL, M5 access callback. Own raw API proxy, JSON artifact interception, public artifact and comment relay policies, fleet descriptor mapping and peer upgrade. |
 | M5 `terminal-handlers.ts` | `createTerminalHandlers`, `TerminalPorts`, `TerminalHandlers` | `upgradeAuthorized`, `getRegisteredSession`, `getRPCSession`, `findSessionFile`, `resolveSessionCwd`, `locatePiPane`; actual typed tmux `attachPaneArgv/getPrefixKey`, terminal attach/kill imports. Return claimed/unclaimed upgrade callback and shutdown callback for M7 listener wiring. |
@@ -126,12 +126,31 @@ Keep response allowlisting, credential exclusion, partial updates, deletion and
 error precedence unchanged. Storage/path ownership stays with M7; its supplied
 ports must not retain feature validation or response policy in unchecked callbacks.
 
+M4 also consumes the existing `SessionOwnership['locatePiPane']` observation in
+`appendHostBuiltins`; move its listing-only `RPC_BUILTIN_COMMANDS` catalog with
+the command response. Pane availability is presentation advice, never permission
+to execute a command. Preserve argument-rule redaction and separate action-time
+authorization in M7.
+
 M2 may correct only the pilot-validation input boundary to a named
 `PilotValidationInput` with unknown model/thinking/cwd. Typed launch/resume
 `PilotSelectionOptions` remains unchanged. The model-command observation accepts
 unknown cwd; M4 retains the existing `resolveHarnessCwd` fallback. Preserve exact
 model/thinking comparison and validation/command/error order. Raw saved-routine
 launch/native-argv mismatches require a separate proposal, not this authorization.
+
+**Subsequent M2 raw-launch authorization:** preserve raw persisted launch fields
+and ledger IDs as unknown through their actual ingress/consumption path. Keep
+typed resume inputs and established identity, output and authority contracts.
+At existing native `spawn`/`execFile` calls or original dynamic cwd method calls,
+documented inline operation-local assertions may retain the runtime's own
+validation/coercion/failure behavior. They do not assert that a saved row is
+valid. No whole-row/options casts, fake declarations, suppression, early
+normalization, filtered records or new fallback policy are permitted. Do not
+widen values already established as strings by existing shell quoting.
+Any `SourceLookup.route` change requires M1 coordination before mutation.
+Record every exceptional callsite and compare original/post-change native and
+shell behavior, including malformed cwd failure placement and raw argv coercion.
 
 **Explicit bounded M1 bug-fix authorization:** the baseline token/reasoning
 accumulators concatenate malformed strings and coerce objects through `+=`.
