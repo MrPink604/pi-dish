@@ -1,0 +1,80 @@
+{
+  "milestone": "M3",
+  "scope": "FleetArtifactStore producer only; not milestone acceptance",
+  "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
+  "dependency": {
+    "owner": "M5",
+    "originalCommit": "57bed24194c0e251d18b58b02041309bf1534439",
+    "privateCherryPick": "0743a95",
+    "authorization": "Explicit parent development-dependency transfer approval; source/output bytes unmodified"
+  },
+  "compiler": "tsconfig.core.json; existing src/core source-policy enrollment",
+  "runtime": {
+    "node": "26.8.2",
+    "npm": "12.0.2",
+    "typescript": "7.0.2"
+  },
+  "verificationSnapshot": {
+    "base": "0743a95",
+    "overlay": [
+      "src/core/fleet-artifacts.ts",
+      "lib/fleet-artifacts.js",
+      "lib/fleet-artifacts.d.ts"
+    ],
+    "directory": "/tmp/pi-dish-m3-fleet-producer-mwx17cax",
+    "method": "git archive of dependency baseline plus actual new fleet-artifacts.ts, official build:core emission. No unready M1/M5 declarations, fake implementations or handlers added. Original server and all tests consume generated fleet implementation through existing runtime path. Dependencies from isolated M3 npm ci installation."
+  },
+  "commands": [
+    {
+      "command": "npm run build:core",
+      "result": "exit0; real JS/declaration generated"
+    },
+    {
+      "command": "npm run check",
+      "result": "exit0;198 governed sources, lint, core/browser drift, helper/checkJs types"
+    },
+    {
+      "command": "npm test",
+      "result": "exit0;998 passed,0 failed,0 skipped;31747.814551ms"
+    },
+    {
+      "command": "Temporary-HOME real generated store smoke",
+      "result": {
+        "result": "PASS",
+        "exercised": [
+          "invalid token/name rejection",
+          "persistent remap preserving createdAt",
+          "cross-host revoke refusal",
+          "host listing DTO",
+          "malformed timestamp null",
+          "owner-scoped revoke"
+        ]
+      }
+    }
+  ],
+  "preservedSemantics": [
+    "guard unknown ingress",
+    "invalid timestamp normalizes null",
+    "remap retains timestamp",
+    "host-scoped revoke cannot remove another valid host mapping",
+    "newest-first host lists",
+    "HOME re-read and atomic persistence",
+    "reachability only; no process authorization"
+  ],
+  "sourceOutputSha256": {
+    "src/core/fleet-artifacts.ts": "ec6011a6f5678368eb7cbed5d76c9569210b2c082259e1d5d3eecf7385c0daf7",
+    "lib/fleet-artifacts.js": "4fef8bc1bf4acc69faf3b404d1c99b1c1a5a008e985ff07307dc84d77e4a1df9",
+    "lib/fleet-artifacts.d.ts": "ecc23467f88e2b6dfdd9b44158b673904cffcc7a85ab8e850cc27db67b6ce9e7"
+  },
+  "commitBinding": "Source/output hashes bind this evidence to the producer commit containing this file; final M3 evidence records the resulting commit explicitly.",
+  "remainingWork": [
+    "Full publication/file response production and server consumer cutover",
+    "Actual M1 export/read and complete M5 relay transfer",
+    "Approved M6 FFF resolver integration and real packaged native proof",
+    "Complete milestone verification and three independent final-revision reviews"
+  ],
+  "skips": [
+    "No browser/UI behavioral change in this store-only producer; full M3 browser and runtime gates remain pending",
+    "No claim of M3 or M5 acceptance"
+  ]
+}
