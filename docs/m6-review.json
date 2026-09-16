@@ -1,0 +1,271 @@
+{
+  "milestone": "M6",
+  "recordKind": "Attestation only; no production source change",
+  "reviewedSource": "8d5bdadb791ac6ef76c4cdf794c83f47eb03a64d",
+  "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
+  "branch": "migration/m6-runtime",
+  "owner": "01a0a998-4644-742f-bbf6-102bc6f53c99",
+  "status": "All three independent exact-model reviewers ACCEPT the entire final source; parent integration, CI and milestone acceptance remain pending",
+  "reviewProtocol": "New durable OMP reviewers initially spawned concurrently; actual semantic model IDs verified before prompts and each final-revision recheck. All reviews read-only; all three verdicts received before each source correction. No older-revision acceptance counted for final source.",
+  "reviewers": [
+    {
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "session": "01a0a9ce-303e-73aa-8263-1728e6d7f368",
+      "harness": "omp",
+      "verdict": "ACCEPT",
+      "sourceCommit": "8d5bdadb791ac6ef76c4cdf794c83f47eb03a64d",
+      "scope": "Fresh entire-source review, independently re-derived baseline parity for both F2 paths, checked source/output correspondence and all unchanged full-scope regions",
+      "findings": [],
+      "resolved": [
+        "F1 required-null consumers and optional fallbacks",
+        "F2 read optional session metadata and show null-body spread",
+        "N1 approved manifest and N2 typed FFF consumer documentation"
+      ],
+      "evidence": "Recomputed executable/archive hashes; inspected final dev+packaged native evidence and four harness exits/cleanup/token identities; checked edge banners/shebangs/modes",
+      "limits": [
+        "Read-only; owner check213/backend1014/UI results accepted as recorded",
+        "Linux-only, macOS unverified",
+        "OMP/Prime host internals rest on recorded real canaries",
+        "Parent independent integration and CI remain separate"
+      ]
+    },
+    {
+      "model": "zai/glm-5.3",
+      "session": "01a0a9ce-39bb-75f0-8987-80ffa649755d",
+      "harness": "omp",
+      "verdict": "ACCEPT",
+      "sourceCommit": "8d5bdadb791ac6ef76c4cdf794c83f47eb03a64d",
+      "scope": "Fresh entire-source verdict; every four-file F2 delta hunk inspected and unchanged full-scope regions bound to prior independent review",
+      "findings": [],
+      "resolved": [
+        "F1 required-null response semantics",
+        "F2 required read root versus optional session metadata and null show spread",
+        "N1 approved manifest and N2 typed FFF consumer documentation"
+      ],
+      "evidence": "Independently checked JSON parse failure -> null path, generated expressions, behavioral regression, executable/archive/proof-script hashes, both desktop artifacts and all four real-harness exits/cleanup",
+      "limits": [
+        "Read-only; owner check213/backend1014/UI results accepted as recorded",
+        "Linux-only; macOS unverified",
+        "Baseline F2 parity structurally checked, baseline binaries not executed",
+        "Parent independent integration and CI remain separate"
+      ]
+    },
+    {
+      "model": "kimi-code/k3",
+      "session": "01a0a9ce-34f8-7197-be5f-6ccd28aac8a7",
+      "harness": "omp",
+      "verdict": "ACCEPT",
+      "sourceCommit": "8d5bdadb791ac6ef76c4cdf794c83f47eb03a64d",
+      "scope": "Fresh entire-source verdict; inspected exact four-file F2 delta and unchanged full-scope regions, not reuse of either prior verdict",
+      "findings": [],
+      "resolved": [
+        "F1 required-null response semantics",
+        "F2 optional read metadata and show body spread",
+        "N1 approved manifest and N2 typed FFF consumer documentation"
+      ],
+      "evidence": "Checked identical two source/generated changes, real CLI behavior regression, evidence history and freeze discipline, executable/archive/proof-script hashes, final packaged native evidence and four harness mode artifacts",
+      "limits": [
+        "Read-only; owner check213/backend1014/UI and rebuilt runtime gates accepted as recorded",
+        "Linux-only; macOS unverified",
+        "Earlier nonblocking observations retain recorded dispositions",
+        "Parent independent integration and CI remain separate"
+      ]
+    }
+  ],
+  "sourceChain": [
+    "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
+    "707a2e34b2cce1619fb3379ab7af3217d6b16691",
+    "8303d7f79a125fdedfbdf3dd5fdfc3ba67bf4069",
+    "12b3d97e83b6c1ff745052bd7412dfd5e4d27486",
+    "bd409ec80363b41c7ced4a219bc5c2fade501fed",
+    "8d5bdadb791ac6ef76c4cdf794c83f47eb03a64d"
+  ],
+  "reviewHistory": {
+    "evidence": "docs/m6-evidence.json",
+    "initialCycle": "reviewCorrection records 12b findings, scope corrections, dispositions and superseded proofs",
+    "secondCycle": "secondReviewCorrection records bd409ec two ACCEPT/one REVISE F2 verdicts, exact correction and superseded proofs",
+    "finalCycle": "The three explicit exact-source ACCEPT verdicts above supersede both earlier cycles"
+  },
+  "findings": {
+    "F1": {
+      "status": "Resolved in bd409ec; reverified on final8d5bdad",
+      "problem": "Normalizing a consumed null 2xx response to {} let pages human output and comments count print undefined with exit0; null hub mapping also gained a spurious via line.",
+      "correction": "Shared record now preserves native required-property receiver semantics: nullish values throw TypeError, other receivers use Object boxing and fields remain unknown. Callers with original optional access/fallback explicitly retain it. Page and hub responses remain raw unknown until consumed; JSON null spread stays successful, null hub remains absent, advisory identity fallback and bodyless202 spawn polling stay intact.",
+      "regressions": "Three focused cases added to existing ingress suite: pages null human failure versus raw JSON and null hub absence; empty/non-JSON/204/null consumed results across comments/hosts/list/search versus raw JSON; advisory spawn fallbacks plus 202-to-ready and no-wait null spread. All seven ingress cases passed; final full suite1013/1013 passed.",
+      "reviewerScopeCorrection": "DeepSeek explicitly withdrew claims that baseline null hub mapping or null qualifyCaller metadata failed. Exact baseline is local publish success without via line, and bare caller fallback respectively; both preserved and covered."
+    },
+    "F2": {
+      "status": "Resolved in8d5bdad; all three final reviewers accepted",
+      "problem": "Two sessions CLI message merges missed original optional spread behavior: show accepted a null/empty/non-JSON body, while read accepted absent/null response.session metadata.",
+      "correction": "Add ?? {} at those two existing record calls only. Required read body access still fails on null; route session fields still override catalog fields with catalog backfill.",
+      "regression": "One added ingress case exercises real show/read CLI subprocesses: show null and non-JSON bodies retain resolved session JSON; read missing and null session metadata produces the same catalog-backed transcript; richer route metadata overrides its catalog field without losing catalog cwd or message content.",
+      "focusedResult": "npm run build:edges passed; supported npm test -- test/skill-client-ingress.test.js passed all8 cases.",
+      "fixtureCorrection": "Initial new test advertised no resolver capability, so the CLI correctly selected the unsupported catalog route and the fixture rejected it. Advertised the fixture's implemented self.resolve capability; rerun passed. No additional product change."
+    },
+    "notes": [
+      {
+        "id": "N1",
+        "disposition": "Copied the exact five approved FFF unpack/import manifest lines from main de0496c9ec09a18d21a7d970c67beab9550cb897; private manifest now agrees with packaging, no contract redesign."
+      },
+      {
+        "id": "N2",
+        "disposition": "Normative typescript.md now names fffImportSpecifier(applicationRoot: string): string and M3 loadFff consumer/lazy cache/fallback."
+      },
+      {
+        "id": "N3",
+        "disposition": "Existing Electron security source unchanged; effective sandbox:true again measured in final packaged runtime. Explicit source pinning is not part of this preservation change."
+      },
+      {
+        "id": "N4",
+        "disposition": "Parent-owned historical M0 status/count wording remains unchanged; not an M6 implementation defect."
+      },
+      {
+        "id": "Other",
+        "disposition": "Additive internal client exports, separate compiler-versus-host-guard coverage and pre-existing external URL/capability behavior are nonblocking observations. Incorrect edge-banner drift finding rejected by actual generated edge banners."
+      }
+    ]
+  },
+  "validation": {
+    "command": "npm run check && npm test && npm run test:ui",
+    "environment": "PI_DISH_PI_COMMAND=/home/jyarwood/.local/bin/pi; original PATH retained",
+    "result": "exit 0;213 compiler-owned sources/no explicit-any exceptions, lint, core/browser/edge drift+mode checks and strict types;1014 backend tests passed,0 failures/cancellations/skips; complete desktop/mobile UI smoke all good",
+    "backendDurationMs": 31997.335532,
+    "output": "artifact://196",
+    "sourceBinding": "The source commit containing this evidence binds the validated M6 implementation plus actual M3 consumer. Final review attestation will name its full hash separately."
+  },
+  "runtimeProof": {
+    "build": "npm run build:edges, then npm exec electron-builder -- --linux --dir --config.npmRebuild=false --publish never; unchanged core output verified by final check",
+    "buildResult": "exit 0; native dependencies had already been rebuilt with install-app-deps for Electron44.4.1",
+    "executable": "dist/linux-unpacked/pi-dish",
+    "executableSha256": "8407787e90832dceaf83d751cc2ad89a92b92f90c9c5dedcc126e54258649a6f",
+    "archive": "dist/linux-unpacked/resources/app.asar",
+    "archiveSha256": "14de8077618338597505e54657860811f3b047a781f6dc18d45c7bdf9dd10cd9",
+    "desktopCommand": "xvfb-run -a -n 189 node /tmp/pi-dish-m6c-desktop-proof.cjs /home/jyarwood/workspace/pi-dish-m6 /home/jyarwood/workspace/pi-dish-m6/dist/linux-unpacked/pi-dish all",
+    "desktopResult": "exit 0; actual development and packaged windows, HTTP, local assets, SDK, native PTY/FFF, security preferences, external URL dispatch and installed sessions/comments/pages CLIs all passed",
+    "desktopArtifacts": "/tmp/pd-m6c-proof-lrzCIc",
+    "nativeEvidence": "Real packaged /api/sessions/:id/files returned a/b/c/d/e/f/g/h/m6c-native-needle.txt (gitStatus clean), beyond fallback walker depth6. /proc/self/maps shows app.asar.unpacked/node_modules/@ff-labs/fff-bin-linux-x64-gnu/libfff_c.so and node-pty/build/Release/pty.node. PTY computed m6c-pty-42.",
+    "runtime": {
+      "electron": "44.4.1",
+      "node": "24.21.0",
+      "chrome": "152.0.7977.78",
+      "moduleABI": "149",
+      "nodeIntegration": false,
+      "contextIsolation": true,
+      "sandbox": true
+    },
+    "harnessCommand": "xvfb-run -a -n 199 node /tmp/pi-dish-m6c-harness-proof.cjs /home/jyarwood/workspace/pi-dish-m6 /home/jyarwood/workspace/pi-dish-m6/dist/linux-unpacked/pi-dish all all",
+    "harnessEnvironment": "Explicit Pi0.85.1/OMP18.1.21/Prime0.9.4/Bun1.3.14 paths; isolated HOME/sockets/tmux; allowlisted environment and local fake providers, no live sessions or credentials",
+    "harnessResult": "exit 0; Pi13/13 no skips in each mode; original complete OMP/Prime lineage in each mode,10 provider requests each. Real process/token/wrapper identity, installed three CLIs, lifecycle isolation/peer survival and owned shutdown passed.",
+    "harnessArtifacts": "/tmp/pd-m6c-harness-v7xoVG",
+    "cleanup": "All four native-harness runs report electronExited=true and tmuxFailures=[]",
+    "visualInspection": "All six final screenshots inspected: application shell/menu/logo rendered, with empty-session prompt visible in settled captures; no error document or blank window.",
+    "archiveInspection": "Read-only ASAR API checks required manifest resources, package-only main, physical wrappers/skills, archived docs, native unpacking and excluded first-party source/declarations/maps.",
+    "fixtureCorrection": "Initial disposable desktop proof matched fff in a hexadecimal maps address and misclassified libnettle.so. Restricted its filter to actual libfff_c.so/pty.node basenames; reran both modes successfully. No product change or native fallback accepted.",
+    "proofScriptSha256": {
+      "/tmp/pi-dish-m6c-desktop-proof.cjs": "3224479b45210f8257782168e340a0e7b52dd0dd74738460b5f1936459901c2d",
+      "/tmp/pi-dish-m6c-harness-proof.cjs": "f5dbd9880c120d19205ee7fa01ae9a2af1aa36616f5c57fd3566878e23a3631d",
+      "/tmp/pi-dish-m6c-harness-support.cjs": "afc188cb069383ef5090d04fe0a0166a1ec1cf884979090ca7678bb803ae2c39"
+    }
+  },
+  "sourceFileInventory": {
+    "documentation": [
+      "CLAUDE.md",
+      "README.md",
+      "docs/m0-runtime-manifest.json",
+      "docs/m3-search-producer-evidence.json",
+      "docs/m6-evidence.json",
+      "docs/typescript.md"
+    ],
+    "electron": [
+      "electron/main.ts",
+      "electron/main.js",
+      "electron/main.d.ts"
+    ],
+    "extensions": [
+      "extensions/mood.ts",
+      "extensions/pi-dish-bridge-omp/native-state.ts",
+      "extensions/pi-dish-bridge/core.ts",
+      "extensions/pi-dish-bridge/index.ts",
+      "extensions/pi-dish-bridge/pi-private.ts",
+      "extensions/pi-dish-share-omp.mts",
+      "extensions/pi-dish-share-omp.mjs",
+      "extensions/pi-dish-share-omp.d.mts"
+    ],
+    "core": [
+      "src/core/file-search.ts",
+      "src/core/harnesses.ts",
+      "src/core/runtime-resources.ts",
+      "lib/file-search.js",
+      "lib/file-search.d.ts",
+      "lib/harnesses.js",
+      "lib/runtime-resources.js",
+      "lib/runtime-resources.d.ts"
+    ],
+    "configuration": [
+      "package.json",
+      "package-lock.json",
+      "scripts/build-edges.js",
+      "source-policy.json",
+      "tsconfig.edges.json",
+      "tsconfig.extensions.json"
+    ],
+    "rootProposal": [
+      "server.js"
+    ],
+    "skills": [
+      "skills/lib/pi-dish-client.ts",
+      "skills/lib/pi-dish-client.js",
+      "skills/lib/pi-dish-client.d.ts",
+      "skills/pi-dish-sessions/scripts/pi-dish-sessions.ts",
+      "skills/pi-dish-sessions/scripts/pi-dish-sessions.js",
+      "skills/pi-dish-sessions/scripts/pi-dish-sessions.d.ts",
+      "skills/pi-dish-comments/scripts/pi-dish-comments.ts",
+      "skills/pi-dish-comments/scripts/pi-dish-comments.js",
+      "skills/pi-dish-comments/scripts/pi-dish-comments.d.ts",
+      "skills/pi-dish-pages/scripts/pi-dish-pages.ts",
+      "skills/pi-dish-pages/scripts/pi-dish-pages.js",
+      "skills/pi-dish-pages/scripts/pi-dish-pages.d.ts"
+    ],
+    "verification": [
+      "test/edge-build.test.js",
+      "test/native-extension-boundary.test.js",
+      "test/native-extensions.smoke.js",
+      "test/runtime-resources.test.js",
+      "test/server.test.js",
+      "test/skill-client-ingress.test.js",
+      "test/types/extensions.ts",
+      "test/types/omp-host.d.ts"
+    ]
+  },
+  "attestationFiles": [
+    "docs/m6-review.json"
+  ],
+  "integration": {
+    "root": "server.js resolveRefineConfig default mdPath only; no route registration moved",
+    "harnesses": "src/core/harnesses.ts bridge(name) uses real runtimeResourcePath; existing descriptor callers unchanged",
+    "search": "Exact M3 source51c4991 transferred as8303d7f after M6 producer707a2e3; actual loadFff consumes metadata-selected physical entry",
+    "config": "Parent serializes package/lock, source-policy, edge/native compiler/build and manifest integration; root main remains server.js"
+  },
+  "cutover": {
+    "native": "Seven strict noEmit extension implementations; real SDK/TUI/TypeBox, existing native .ts paths retained",
+    "edges": "Six strict NodeNext/ES2022 sources emit five CJS/.d.ts pairs plus share .mts -> .mjs/.d.mts; three CLI shebangs/mode755 and dependency-free symlinks",
+    "ownership": "Former authored JS bodies now generated from checked sibling TS, not forwarding adapters; no obsolete aliases retained. Native sources remain native .ts. No domain routes deleted/moved."
+  },
+  "retainedOpaqueBoundaries": [
+    "OMP host-only SDK boundary remains unknown plus real runtime guards, not a fake SDK declaration",
+    "External HTTP/JSON/tool payload fields stay unknown until consumed; optional versus required behavior preserved",
+    "Third-party SDK/native dependencies are actual runtime dependencies, not migrated first-party source",
+    "Root server/application and unrelated feature JS remain outside M6; no M7 or later R work",
+    "macOS unavailable/unverified; actual Linux-only packaged acceptance authorized"
+  ],
+  "cleanup": {
+    "completed": "After all three final acceptances, removed the three disposable proof scripts; retained actual evidence JSON/screenshots/results and final packaged artifact.",
+    "removed": [
+      "/tmp/pi-dish-m6c-desktop-proof.cjs",
+      "/tmp/pi-dish-m6c-harness-proof.cjs",
+      "/tmp/pi-dish-m6c-harness-support.cjs"
+    ],
+    "scriptProvenance": "Hashes preserved in runtimeProof.proofScriptSha256; reviewers checked scripts before removal"
+  },
+  "parentAcceptance": "Parent independently applies shared-root/config proposals serially, verifies integrated exact-commit CI and updates the global ledger/BACKLOG. This attestation does not claim parent milestone acceptance."
+}
