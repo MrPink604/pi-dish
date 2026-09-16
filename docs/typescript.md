@@ -118,6 +118,9 @@ The integration lead, not this guide, records milestone acceptance.
 | `host-identity.ts` | Stable host id and host label |
 | `host-colors.ts` | Shared pure color sanitization, palette assignment and RGB conversion |
 | `dish-store.ts` | HOME-scoped reads and atomic writes for small JSON stores |
+| `remote-hosts.ts` | Direct/SSH fleet requests, credential replacement, HOME-qualified forwards, bounded descriptor probes and reachability backoff |
+| `terminal.ts`, `terminal-handlers.ts` | Optional native PTY pool, bounded reconnect replay, output-aware idle expiry, restart continuity and local WebSocket attachment |
+| `access-handlers.ts`, `relay-handlers.ts` | Checked compression/parser bypass, auth/tickets/CORS, fleet descriptors and separate API/public/comment/peer-upgrade policies |
 | `process-identity.ts` | Linux birth identity, liveness and bounded ancestry proofs |
 | `pending-requests.ts` | Correlation, timeout and disconnect cleanup for socket/stdio requests |
 | `line-splitter.ts` | Incremental UTF-8 LF framing |

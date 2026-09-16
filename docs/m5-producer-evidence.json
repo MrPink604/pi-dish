@@ -1,0 +1,50 @@
+{
+  "milestone": "M5",
+  "scope": "Remote transport producer bootstrap only; not complete milestone or acceptance",
+  "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
+  "branch": "migration/m5-transport",
+  "verificationIsolation": "Disposable baseline archive inside assigned worktree plus exact remote-hosts source and docs row; baseline server consumers exercised. In-progress handlers excluded, not claimed verified.",
+  "source": "src/core/remote-hosts.ts",
+  "sourceSha256": "c78b913fec0602bbcad9f708744072b7edcc72b359d5c31f11717206da808e5e",
+  "generated": [
+    "lib/remote-hosts.js",
+    "lib/remote-hosts.d.ts"
+  ],
+  "compiler": "tsconfig.core.json strict NodeNext/ES2022; scripts/build-core.js",
+  "policyEnrollment": "Existing src/core root and tsconfig.core include automatically enroll source; parser policy passed 197 sources, no exceptions.",
+  "commands": [
+    {
+      "command": "npm ci --no-audit --no-fund",
+      "result": "916 packages; node-pty rebuilt; six dependency install scripts blocked by existing allowScripts policy"
+    },
+    {
+      "command": "npm run build:core && npm run check && npm test",
+      "result": "pass; source policy, lint, core/browser drift and types; 998 backend tests, 998 pass, 0 fail, 0 skip, 31827.885156ms"
+    }
+  ],
+  "runtime": {
+    "node": "26.8.2",
+    "npm": "12.0.2",
+    "typescript": "7.0.2",
+    "tmux": "3.7c"
+  },
+  "preserved": [
+    "actual exported isValidRemoteName guard and DirectRemote/SshRemote union",
+    "raw ClientRequest body/response ownership",
+    "HOME-qualified config, forwards and backoff",
+    "credential replacement and upgrade framing",
+    "truthy external transportCode passthrough remains unknown; owned errors are short classes"
+  ],
+  "remaining": [
+    "checked access/relay/terminal consumer cutover",
+    "M3 FleetArtifactStore source integration",
+    "isolated real SSH and full M5 surface smoke",
+    "final package validation and three exact-model reviews"
+  ],
+  "implementationWorker": {
+    "session": "01a0a99a-23ab-7160-a0e5-9018049363ef",
+    "model": "openai-codex/gpt-6-astra",
+    "thinking": "high",
+    "verifiedBy": "semantic CLI resolve"
+  }
+}

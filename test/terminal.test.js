@@ -237,6 +237,31 @@ test('WS endpoint: mode=tmux without a locatable pane sends an error frame and c
     `expected a no-pane error frame, got ${JSON.stringify(frames)}`);
 });
 
+test('WS endpoint: native failures preserve absent and function-carried messages', async (t) => {
+  const nativePty = require('node-pty');
+  const spawnPty = nativePty.spawn;
+  t.after(() => {
+    nativePty.spawn = spawnPty;
+    terminal.killTerminal(SESSION_ID);
+  });
+  const functionFailure = Object.assign(() => {}, { message: 'native failure fixture' });
+  for (const [failure, expected] of [
+    [null, []],
+    [functionFailure, [{ type: 'error', error: functionFailure.message }]],
+  ]) {
+    nativePty.spawn = () => { throw failure; };
+    const ws = new WebSocket(`${wsBase}/api/sessions/${SESSION_ID}/terminal`);
+    const frames = [];
+    ws.onmessage = (event) => frames.push(JSON.parse(event.data));
+    const closed = await new Promise((resolve, reject) => {
+      ws.onclose = resolve;
+      ws.onerror = reject;
+    });
+    assert.equal(closed.code, 1011);
+    assert.deepStrictEqual(frames, expected);
+  }
+});
+
 let tmuxOk = true;
 try { execFileSync('tmux', ['-V'], { stdio: 'ignore' }); } catch { tmuxOk = false; }
 

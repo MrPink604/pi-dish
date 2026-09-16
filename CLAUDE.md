@@ -1041,6 +1041,12 @@ Wire session ids stay host-local; namespacing exists only in client keys
 measured against: with no remotes configured and no token set, behavior is
 exactly single-host pi-dish.
 
+Fleet transport is authored in `src/core/remote-hosts.ts`; access, relay and local
+terminal endpoint policy lives in `access-handlers.ts`, `relay-handlers.ts` and
+`terminal-handlers.ts`. Their generated `lib/` modules expose individual handlers;
+`server.js` keeps the original registration positions and upgrade dispatch order.
+Raw API, public artifact and parsed comment relays remain separate policies.
+
 - **Identity**: `GET /api/host` (always unauthenticated) → `{ hostId, label,
   version, capabilities }`. `hostId` is a uuid persisted once in
   `~/.pi/dish/host-id`; `label` is settings `hostLabel` else hostname.
@@ -1194,7 +1200,7 @@ from the **owning** host's disk, so the hub only keeps
 createdAt } }`, `host` being a remote *name* from the fleet map — a mapping is
 reachability, never authority. `/share/:token` and `/page/:token(/*)` check
 the local registries first and fall back to a stream proxy from the owner
-(`serveFleetArtifact`), on the main app **and** the `PI_DISH_SHARE_PORT`
+(`PublicArtifactRelay.serve` in `src/core/relay-handlers.ts`), on the main app **and** the `PI_DISH_SHARE_PORT`
 listener; that listener still mounts no `/api` and no `/hosts`. An unmapped
 token stays a bare, instant 404 — the hub never probes peers for tokens it
 wasn't told about. The owner's 404 on the token's own document (not on a
@@ -1573,6 +1579,10 @@ it for integration flows; add independent regressions in `test/browser/`
 when a fresh context and small fixture make the failure easier to isolate.
 
 ## Terminal (lib/terminal.js, PI_DISH_TERMINAL=1)
+
+The PTY pool is authored in `src/core/terminal.ts` and the local upgrade endpoint
+in `src/core/terminal-handlers.ts`; regenerate both runtime modules with
+`npm run build:core`. Native node-pty loading remains optional and catchable.
 
 Opt-in feature (flag + node-pty must load — degrade gracefully like fff,
 never let the native module break the server). One persistent PTY per pi

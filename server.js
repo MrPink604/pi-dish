@@ -1,6 +1,5 @@
 const { normalizeModels, sessionForClient, thinkingResult } = require('./lib/session-api');
 const express = require('express');
-const compression = require('compression');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -23,6 +22,9 @@ const tmux = require('./lib/tmux');
 const hostIdentity = require('./lib/host-identity');
 const remoteHosts = require('./lib/remote-hosts');
 const fleetArtifacts = require('./lib/fleet-artifacts');
+const { createAccessHandlers } = require('./lib/access-handlers');
+const { createRelayHandlers } = require('./lib/relay-handlers');
+const { createTerminalHandlers } = require('./lib/terminal-handlers');
 const shares = require('./lib/shares');
 const pages = require('./lib/pages');
 const comments = require('./lib/comments');
@@ -79,316 +81,33 @@ const PORT = Number.isFinite(Number(process.env.PORT)) ? Number(process.env.PORT
 // can reach the port can drive agents with shell access.
 const HOST = process.env.HOST || '127.0.0.1';
 
-// Compress static text and JSON responses over LAN links. Event streams are
-// deliberately excluded: compression buffers partial output unless every
-// event is explicitly flushed, which would add latency to chat streaming.
-app.use(compression({
-  threshold: 1024,
-  filter(req, res) {
-    if (req.path.endsWith('/stream')) return false;
-    // Proxied peer responses are relayed byte for byte: the owning host
-    // already applied its own policy (including excluding its event
-    // streams), and re-compressing here would buffer them again.
-    if (req.path.startsWith('/hosts/')) return false;
-    const type = String(res.getHeader('Content-Type') || '');
-    if (type.startsWith('text/event-stream')) return false;
-    return compression.filter(req, res);
-  },
-}));
-
-// Image attachments arrive as base64 in the prompt body — allow well past
-// the default 100kb (a few downscaled phone photos).
-const parseJsonBody = express.json({ limit: '30mb' });
-app.use((req, res, next) => {
-  // Proxied requests are streamed to the peer untouched — parsing the body
-  // here would consume the stream and force a re-serialize.
-  if (req.path.startsWith('/hosts/')) return next();
-  parseJsonBody(req, res, next);
+const accessHandlers = createAccessHandlers({
+  version: require('./package.json').version,
+  readDishSettings,
+  sttAvailable: () => !!stt.resolveSttConfig(readDishSettings()),
+  usageLimitsAvailable: () => listHarnesses().some(d => d.argv?.usage && harnessCommandAvailable(d)),
 });
-
-// =========================================================================
-// Host identity, opt-in auth, CORS
-// =========================================================================
-//
-// Everything here is off unless a token is configured, and with it off the
-// server behaves exactly as it always has (loopback/tailnet trust). With a
-// token set — PI_DISH_TOKEN or ~/.pi/dish/token, read once at startup —
-// every /api request needs `Authorization: Bearer <token>`. Deliberately
-// out of scope: the public surfaces. `/share/:token`, `/page/:token`, the
-// static bundle, and the whole PI_DISH_SHARE_PORT listener stay open, and
-// `GET /api/host` stays open so a client can identify a host it isn't
-// paired with yet.
-
-const PKG_VERSION = require('./package.json').version;
-
-function readAuthToken() {
-  const fromEnv = (process.env.PI_DISH_TOKEN || '').trim();
-  if (fromEnv) return fromEnv;
-  try {
-    const fromFile = fs.readFileSync(path.join(os.homedir(), '.pi', 'dish', 'token'), 'utf8').trim();
-    if (fromFile) return fromFile;
-  } catch {}
-  return null;
-}
-
-const AUTH_TOKEN = readAuthToken();
-// Compare digests, not the tokens themselves: timingSafeEqual throws on a
-// length mismatch, which would leak the token's length.
-const AUTH_TOKEN_DIGEST = AUTH_TOKEN ? crypto.createHash('sha256').update(AUTH_TOKEN).digest() : null;
-
-function tokenMatches(candidate) {
-  if (!AUTH_TOKEN_DIGEST || typeof candidate !== 'string' || !candidate) return false;
-  return crypto.timingSafeEqual(crypto.createHash('sha256').update(candidate).digest(), AUTH_TOKEN_DIGEST);
-}
-
-function bearerToken(req) {
-  const m = /^Bearer\s+(.+)$/i.exec(req.headers.authorization || '');
-  return m ? m[1].trim() : null;
-}
-
-// EventSource can't set headers and the terminal WebSocket can't either, so
-// those two connections authenticate with a short-lived ticket minted over
-// the authed HTTP API. Multi-use within the TTL on purpose: EventSource
-// reconnects on its own with the same URL, and a single-use ticket would
-// turn every reconnect into a hard failure.
-const TICKET_TTL_MS = 60_000;
-const TICKET_PURPOSES = new Set(['stream', 'terminal']);
-const tickets = new Map(); // ticket -> { purpose, expiresAt }
-
-function mintTicket(purpose) {
-  const ticket = crypto.randomBytes(24).toString('base64url');
-  const expiresAt = Date.now() + TICKET_TTL_MS;
-  tickets.set(ticket, { purpose, expiresAt });
-  return { ticket, expiresAt };
-}
-
-function ticketValid(ticket, purpose) {
-  if (typeof ticket !== 'string' || !ticket) return false;
-  const entry = tickets.get(ticket);
-  if (!entry) return false;
-  if (entry.expiresAt <= Date.now()) { tickets.delete(ticket); return false; }
-  return entry.purpose === purpose;
-}
-
-const ticketSweeper = setInterval(() => {
-  const now = Date.now();
-  for (const [ticket, entry] of tickets) if (entry.expiresAt <= now) tickets.delete(ticket);
-}, TICKET_TTL_MS);
-ticketSweeper.unref();
-
-function allowedOrigins() {
-  const value = readDishSettings().allowedOrigins;
-  return Array.isArray(value) ? value.filter((o) => typeof o === 'string' && o) : [];
-}
-
-// CORS only ever travels with auth: echoing an allowlisted origin on an
-// unauthenticated API would let any page the browser visits on the same
-// network drive local agents. Same-origin clients (the bundled UI, and
-// later a hub's proxied peers) need none of this.
-app.use((req, res, next) => {
-  if (!AUTH_TOKEN) return next();
-  const origin = req.headers.origin;
-  if (origin && allowedOrigins().includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-    res.header('Vary', 'Origin');
-    res.header('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-    res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-    if (req.method === 'OPTIONS') return res.status(204).end();
-  }
-  next();
-});
+app.use(accessHandlers.compression);
+app.use(accessHandlers.jsonBody);
+app.use(accessHandlers.cors);
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Express routing is non-strict, so both spellings reach the same route.
-const STREAM_PATH_RE = /^\/sessions\/[^/]+\/stream\/?$/;
-const HOST_PATH_RE = /^\/host\/?$/;
+app.use('/api', accessHandlers.apiGate);
+app.get('/api/host', accessHandlers.host);
+app.post('/api/auth/ticket', accessHandlers.ticket);
 
-app.use('/api', (req, res, next) => {
-  if (!AUTH_TOKEN) return next();
-  if (req.method === 'OPTIONS') return next();          // preflights carry no Authorization
-  if (HOST_PATH_RE.test(req.path)) return next();       // descriptor is public by design
-  if (tokenMatches(bearerToken(req))) return next();
-  if (STREAM_PATH_RE.test(req.path) && ticketValid(req.query.ticket, 'stream')) return next();
-  res.status(401).json({ error: 'Unauthorized: bearer token required' });
+const relayHandlers = createRelayHandlers({
+  fleetArtifacts,
+  localPageExists: token => !!pages.getPage(token),
+  publicBaseUrl: () => process.env.PI_DISH_SHARE_BASE_URL,
+  hostDescriptor: accessHandlers.hostDescriptor,
+  upgradeAuthorized: accessHandlers.upgradeAuthorized,
 });
-
-// WebSocket upgrades bypass Express entirely (see the terminal handler at the
-// bottom of this file), so both gates are re-applied by hand: a ticket or a
-// bearer for authentication, plus an origin check — a browser will happily
-// open a cross-origin WebSocket, and unlike fetch it gets no CORS veto.
-function upgradeAuthorized(req, url) {
-  if (!AUTH_TOKEN) return true;
-  if (!tokenMatches(bearerToken(req)) && !ticketValid(url.searchParams.get('ticket'), 'terminal')) return false;
-  const origin = req.headers.origin;
-  if (!origin) return true;                             // non-browser clients send none
-  const host = req.headers.host || '';
-  if (origin === `http://${host}` || origin === `https://${host}`) return true;
-  return allowedOrigins().includes(origin);
-}
-
-// Absent means unsupported: a client hides what a host doesn't advertise, so
-// mixed-version fleets degrade per feature instead of breaking. Only list
-// what this build actually serves.
-function hostCapabilities() {
-  const caps = {
-    sessions: true, search: true, usage: true, spawns: true,
-    shares: true, pages: true, comments: true, skills: true, harnesses: true,
-    resolve: true, docs: true, routines: true, recovery: true, sessionBounces: true,
-    // A ref may name a session's native id or uuid tail, not just its route
-    // id. Clients gate short refs on this: an older host resolves route-id
-    // prefixes only, where the shortest ref for a non-Pi session is ~34 chars.
-    refAliases: true,
-  };
-  if (terminal.isTerminalEnabled()) caps.terminal = true;
-  if (tmux.isTmuxAvailable()) caps.tmux = true;
-  // Speech to text is only offered where an endpoint is actually configured;
-  // a fleet may have exactly one host with a whisper box behind it.
-  if (stt.resolveSttConfig(readDishSettings())) caps.stt = true;
-  // Subscription-limit reporting rides on a harness CLI (OMP's `usage`), so
-  // it is offered only where such a harness is actually installed.
-  if (listHarnesses().some(d => d.argv?.usage && harnessCommandAvailable(d))) caps.usageLimits = true;
-  return caps;
-}
-
-app.get('/api/host', (_req, res) => {
-  res.json({
-    hostId: hostIdentity.getHostId(),
-    label: hostIdentity.getHostLabel(readDishSettings()),
-    version: PKG_VERSION,
-    capabilities: hostCapabilities(),
-  });
-});
-
-app.post('/api/auth/ticket', (req, res) => {
-  const purpose = req.body?.purpose;
-  if (!TICKET_PURPOSES.has(purpose)) return res.status(400).json({ error: "purpose must be 'stream' or 'terminal'" });
-  // No token configured: nothing to authenticate with, and the stream/WS
-  // routes accept everything — tell the client not to bother with tickets.
-  if (!AUTH_TOKEN) return res.json({ ticket: null });
-  res.json(mintTicket(purpose));
-});
-
-// =========================================================================
-// Fleet: GET /api/hosts and the /hosts/<name> reverse proxy
-// =========================================================================
-//
-// Any host may know about peers (`remotes` in ~/.pi/dish/settings.json) and
-// re-serve them under /hosts/<name>/api — "the hub" is simply whichever host
-// a browser or an agent enters through (TASKS/multi-host.md block 5). The
-// proxy is a byte relay: it never interprets a peer's payloads, and this
-// host's own token never reaches a peer (lib/remote-hosts.js drops the
-// caller's Authorization and attaches the peer's, if any).
-
-// Inside the /hosts mount, req.path starts at the host name.
-const PROXY_STREAM_PATH_RE = /^\/[^/]+\/api\/sessions\/[^/]+\/stream\/?$/;
-const PROXY_TERMINAL_PATH_RE = /^\/hosts\/([^/]+)\/api\/sessions\/[^/]+\/terminal$/;
-const PROXY_RESPONSE_TIMEOUT_MS = 10_000;
-const HOSTS_PROBE_DEADLINE_MS = 3000;
-// Hop-by-hop headers node owns itself; Access-Control-* is dropped alongside
-// them because this host answers the browser with its own CORS policy.
-const HOP_BY_HOP_HEADERS = new Set([
-  'connection', 'keep-alive', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'proxy-authenticate',
-]);
-
-// The same gate /api gets: this host's bearer, or a ticket it minted itself
-// for the proxied SSE route. Peer credentials are never involved here.
-app.use('/hosts', (req, res, next) => {
-  if (!AUTH_TOKEN) return next();
-  if (req.method === 'OPTIONS') return next();
-  if (tokenMatches(bearerToken(req))) return next();
-  if (PROXY_STREAM_PATH_RE.test(req.path) && ticketValid(req.query.ticket, 'stream')) return next();
-  res.status(401).json({ error: 'Unauthorized: bearer token required' });
-});
-
-app.use('/hosts/:name/api', (req, res) => {
-  const remote = remoteHosts.getRemote(req.params.name);
-  // An unknown or malformed name is a bare 404 — the fleet map is not a
-  // discovery surface.
-  if (!remote) return res.status(404).type('text/plain').send('Not found');
-  proxyToRemote(remote, req, res, fleetArtifactHook(remote, req));
-});
-
-function proxyToRemote(remote, req, res, hook = null) {
-  let settled = false;
-  const unreachable = (reason) => {
-    settled = true;
-    res.status(502).json({ error: `Host ${remote.name} is unreachable`, host: remote.name, reason });
-  };
-  const fail = (reason) => {
-    if (settled) return;
-    // Every fail() here is transport-class (the dial rejected, the socket
-    // errored, or nothing arrived inside the first-byte window) — an HTTP
-    // answer from the peer, 401 and 500 included, leaves via 'response'. So
-    // this is real traffic telling the breaker what a probe would have.
-    remoteHosts.noteTransportFailure(remote, reason);
-    unreachable(reason);
-  };
-
-  // A peer already known down within its backoff slot answers instantly. A
-  // sleeping tailscale machine black-holes the connect rather than refusing
-  // it, so dialing anyway costs the whole first-byte timer on every request;
-  // the slot expiring (3-16s) is what re-dials, no other machinery needed.
-  const known = remoteHosts.reachability(remote);
-  if (known && !known.reachable) return unreachable(known.error || 'unreachable');
-
-  // A hooked response is read, not relayed byte for byte, so the peer must
-  // not compress it.
-  const headers = hook ? { ...req.headers, 'accept-encoding': 'identity' } : req.headers;
-  remoteHosts.request(remote, { method: req.method, path: `/api${req.url}`, headers })
-    .then((upstream) => {
-      // Bounds time-to-first-byte only: a proxied SSE stream may then idle
-      // for minutes, and an idle-socket timeout would cut it.
-      const timer = setTimeout(() => { try { upstream.destroy(); } catch {} fail('timeout'); }, PROXY_RESPONSE_TIMEOUT_MS);
-      upstream.on('error', (e) => { clearTimeout(timer); fail(remoteHosts.errorCode(e)); });
-      upstream.on('response', (peerRes) => {
-        clearTimeout(timer);
-        if (settled) return peerRes.resume();
-        settled = true;
-        res.status(peerRes.statusCode);
-        for (const [key, value] of Object.entries(peerRes.headers)) {
-          const lower = key.toLowerCase();
-          if (HOP_BY_HOP_HEADERS.has(lower) || lower.startsWith('access-control-')) continue;
-          res.setHeader(key, value);
-        }
-        if (hook && String(peerRes.headers['content-type'] || '').includes('application/json')) {
-          // The body is about to change length (and may be rewritten).
-          res.removeHeader('Content-Length');
-          return relayHookedJson(peerRes, res, hook);
-        }
-        // Content-Encoding passes through untouched (compression already
-        // excludes /hosts/*), so an event stream arrives as the peer wrote it.
-        if (String(peerRes.headers['content-type'] || '').startsWith('text/event-stream')) res.flushHeaders();
-        peerRes.pipe(res);
-        res.on('close', () => { try { peerRes.destroy(); } catch {} });
-      });
-      req.on('aborted', () => { try { upstream.destroy(); } catch {} });
-      req.pipe(upstream);
-    })
-    .catch((e) => fail(remoteHosts.errorCode(e)));
-}
-
-// =========================================================================
-// Fleet artifacts: shares and pages owned by a peer, served from this host
-// =========================================================================
-//
-// The hub is the fleet's public front door, but the content stays on the
-// owning host's disk (TASKS/multi-host.md block 7). ~/.pi/dish/fleet-artifacts
-// .json maps a token to the peer it lives on; /share and /page fall back to
-// streaming from that peer when their local registries miss. A mapping is
-// only ever created explicitly — an unmapped token never touches the fleet.
-
-// Buffering a proxied response is the documented exception to the byte-relay
-// rule and applies only to these two small JSON creation/revocation replies.
-const FLEET_ARTIFACT_BODY_LIMIT = 64 * 1024;
-const PROXY_SHARE_PATH_RE = /^\/sessions\/[^/]+\/share$/;
-const PROXY_PAGE_TOKEN_PATH_RE = /^\/pages\/([^/]+)$/;
-const PUBLIC_ARTIFACT_TIMEOUT_MS = 10_000;
-// A public artifact request is relayed as the browser sent it minus anything
-// that would leak the hub's origin/credentials into a peer's logs.
-const PUBLIC_FORWARD_HEADERS = ['accept', 'accept-language', 'range', 'if-none-match', 'if-modified-since', 'user-agent'];
+app.use('/hosts', accessHandlers.hostsGate);
+app.use('/hosts/:name/api', relayHandlers.rawApi);
 // Set by a hub fronting this host's page from a listener that has no /api to
-// answer the overlay (see serveFleetArtifact).
+// answer the overlay.
 const PAGE_COMMENTS_HEADER = 'x-pi-dish-page-comments';
 
 /** Absolute public URL for a hub-served path, or null (client builds it). */
@@ -397,257 +116,10 @@ function publicUrlFor(publicPath) {
   return base ? base.replace(/\/+$/, '') + publicPath : null;
 }
 
-function fleetArtifactPayload(token, kind) {
-  const publicPath = kind === 'share' ? `/share/${token}` : `/page/${token}`;
-  return { token, path: publicPath, url: publicUrlFor(publicPath) };
-}
-
-/**
- * Artifact bookkeeping for a proxied request, or null for everything else.
- *
- * A peer minting a share/page through this hub is the hub's cue to record
- * where the token lives and to hand back *its own* public URL: the browser
- * is on the hub, and the peer's PI_DISH_SHARE_BASE_URL describes a front
- * door this reader may not have.
- */
-function fleetArtifactHook(remote, req) {
-  const reqPath = req.url.split('?')[0];
-  const isShare = PROXY_SHARE_PATH_RE.test(reqPath);
-  const pageTokenMatch = PROXY_PAGE_TOKEN_PATH_RE.exec(reqPath);
-
-  // /shares/import is here too: an OMP session's share is a snapshot the peer
-  // minted from its live session, and it needs fronting like any other.
-  if (req.method === 'POST' && (isShare || reqPath === '/shares/import' || reqPath === '/pages')) {
-    const kind = reqPath === '/pages' ? 'page' : 'share';
-    return (status, body) => {
-      if (status < 200 || status >= 300) return body;
-      if (!body || typeof body !== 'object' || !fleetArtifacts.record(body.token, remote.name, kind)) return body;
-      return { ...body, ...fleetArtifactPayload(body.token, kind) };
-    };
-  }
-
-  if (req.method === 'DELETE' && (isShare || pageTokenMatch)) {
-    // A page revoke names its token in the path; a share revoke reports the
-    // token it removed (older peers don't — the serving path's 404 prune is
-    // the backstop for those).
-    const pathToken = pageTokenMatch ? decodeURIComponent(pageTokenMatch[1]) : null;
-    return (status, body) => {
-      if (status < 200 || status >= 300) return body;
-      const token = pathToken || (body && typeof body.token === 'string' ? body.token : null);
-      if (token) fleetArtifacts.remove(token, remote.name);
-      return body;
-    };
-  }
-
-  return null;
-}
-
-function relayHookedJson(peerRes, res, hook) {
-  let raw = '';
-  let relaying = false;
-  peerRes.setEncoding('utf8');
-  peerRes.on('data', (chunk) => {
-    if (relaying) return void res.write(chunk);
-    raw += chunk;
-    // Not the small artifact reply it claimed to be: stop interpreting.
-    if (raw.length > FLEET_ARTIFACT_BODY_LIMIT) {
-      relaying = true;
-      res.write(raw);
-      raw = '';
-    }
-  });
-  peerRes.on('error', () => { try { res.end(); } catch {} });
-  peerRes.on('end', () => {
-    if (relaying) return res.end();
-    let body;
-    try { body = JSON.parse(raw); } catch { return res.end(raw); }
-    let out = body;
-    try { out = hook(peerRes.statusCode, body); } catch { out = body; }
-    res.end(JSON.stringify(out === undefined ? body : out));
-  });
-  res.on('close', () => { try { peerRes.destroy(); } catch {} });
-}
-
-/**
- * Which configured remote answers to a hostId. Fleet-map membership is the
- * authorization (block 6's trust statement): only remotes this host already
- * knows are ever probed, and an id nobody claims simply has no answer.
- */
-async function findRemoteByHostId(hostId) {
-  const remotes = remoteHosts.listRemotes();
-  const probes = await Promise.all(remotes.map((remote) => Promise.race([
-    remoteHosts.probe(remote).catch(() => ({ reachable: false })),
-    new Promise((resolve) => setTimeout(() => resolve({ reachable: false }), HOSTS_PROBE_DEADLINE_MS).unref()),
-  ])));
-  const index = probes.findIndex((probe) => probe.reachable && probe.descriptor?.hostId === hostId);
-  return index >= 0 ? remotes[index] : null;
-}
-
-// An agent on a peer publishes locally, then asks the hub to front it. The
-// agent talks only to its own server (which proxies this call), so it never
-// needs the hub's address or credential.
-app.post('/api/fleet-artifacts', async (req, res) => {
-  const { token, kind, hostId } = req.body || {};
-  if (!fleetArtifacts.isValidToken(token)) {
-    return res.status(400).json({ error: 'token required (base64url, max 128 characters)' });
-  }
-  if (!fleetArtifacts.isValidKind(kind)) {
-    return res.status(400).json({ error: 'kind must be "share" or "page"' });
-  }
-  if (typeof hostId !== 'string' || !hostId || hostId.length > 256) {
-    return res.status(400).json({ error: 'hostId required' });
-  }
-  if (hostId === hostIdentity.getHostId()) {
-    return res.status(404).json({ error: 'hostId is this host, not one of its configured remotes' });
-  }
-  const remote = await findRemoteByHostId(hostId);
-  if (!remote) {
-    return res.status(404).json({ error: 'no configured, reachable remote has that hostId' });
-  }
-  if (!fleetArtifacts.record(token, remote.name, kind)) {
-    return res.status(400).json({ error: 'artifact could not be recorded' });
-  }
-  res.json({ ...fleetArtifactPayload(token, kind), host: remote.name });
-});
-
-app.get('/api/fleet-artifacts', (_req, res) => {
-  const artifacts = [];
-  for (const [host, entries] of Object.entries(fleetArtifacts.listByHost())) {
-    for (const entry of entries) artifacts.push({ ...entry, host, ...fleetArtifactPayload(entry.token, entry.kind) });
-  }
-  artifacts.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-  res.json({ artifacts });
-});
-
-app.delete('/api/fleet-artifacts/:token', (req, res) => {
-  // Unmapping only ends public reachability through this hub; the artifact
-  // itself is the owning host's to revoke.
-  res.json({ revoked: fleetArtifacts.remove(req.params.token) });
-});
-
-/**
- * Fallback for a /share or /page token this host doesn't own: stream it from
- * the peer that does. Unmapped tokens never get here — the caller answers
- * them as bare 404s without contacting anybody.
- */
-function serveFleetArtifact(req, res, kind, { annotate = true } = {}) {
-  const token = req.params.token;
-  const notFound = () => { if (!res.headersSent) res.status(404).type('text/plain').send('Not found'); };
-  const mapping = fleetArtifacts.get(token);
-  if (!mapping || mapping.kind !== kind) return notFound();
-  const remote = remoteHosts.getRemote(mapping.host);
-  if (!remote) return notFound();
-
-  const rest = kind === 'page' ? (req.params[0] || (req.path.endsWith('/') ? '/' : '')) : '';
-  const documentRequest = kind === 'share' || rest === '' || rest === '/';
-  const queryAt = req.originalUrl.indexOf('?');
-  const query = queryAt >= 0 ? req.originalUrl.slice(queryAt) : '';
-  const peerPath = kind === 'share' ? `/share/${token}${query}` : `/page/${token}${rest}${query}`;
-
-  const headers = { 'accept-encoding': 'identity' };
-  for (const name of PUBLIC_FORWARD_HEADERS) {
-    if (req.headers[name] !== undefined) headers[name] = req.headers[name];
-  }
-  // The comment overlay's calls are relative, so they can only work where
-  // /api is mounted. Asking the owner to skip the injection keeps the public
-  // listener serving raw, non-commentable HTML as it does for local pages
-  // (an older peer ignores the header and its overlay simply stays inert).
-  if (kind === 'page' && !annotate) headers[PAGE_COMMENTS_HEADER] = 'off';
-
-  let settled = false;
-  const fail = () => {
-    if (settled) return;
-    settled = true;
-    res.status(502).type('text/plain').send('Host unavailable');
-  };
-
-  remoteHosts.request(remote, { method: req.method === 'HEAD' ? 'HEAD' : 'GET', path: peerPath, headers })
-    .then((upstream) => {
-      const timer = setTimeout(() => { try { upstream.destroy(); } catch {} fail(); }, PUBLIC_ARTIFACT_TIMEOUT_MS);
-      upstream.on('error', () => { clearTimeout(timer); fail(); });
-      upstream.on('response', (peerRes) => {
-        clearTimeout(timer);
-        if (settled) return peerRes.resume();
-        settled = true;
-        if (peerRes.statusCode === 404) {
-          // Revoked on the owner: the mapping is dead, and this reader gets
-          // the same bare 404 an unknown token gets. Only the token's own
-          // document proves that — a missing *asset* under a live page is
-          // the page's own 404, not the artifact's. And the slash spelling
-          // alone proves nothing: a single-file page root 404s `/page/t/`
-          // while `/page/t` is alive, so verify the bare form before
-          // pruning and send the reader there when it lives.
-          peerRes.resume();
-          if (!documentRequest) return notFound();
-          if (kind === 'page' && rest === '/') {
-            return remoteHosts.request(remote, { method: 'GET', path: `/page/${token}`, headers })
-              .then((check) => {
-                const checkTimer = setTimeout(() => { try { check.destroy(); } catch {} notFound(); }, PUBLIC_ARTIFACT_TIMEOUT_MS);
-                check.on('error', () => { clearTimeout(checkTimer); notFound(); });
-                check.on('response', (checkRes) => {
-                  clearTimeout(checkTimer);
-                  checkRes.resume();
-                  if (checkRes.statusCode === 404) {
-                    fleetArtifacts.remove(token, mapping.host);
-                    return notFound();
-                  }
-                  res.redirect(302, `/page/${token}${query}`);
-                });
-                check.end();
-              })
-              .catch(notFound);
-          }
-          fleetArtifacts.remove(token, mapping.host);
-          return notFound();
-        }
-        res.status(peerRes.statusCode);
-        for (const [key, value] of Object.entries(peerRes.headers)) {
-          const lower = key.toLowerCase();
-          if (HOP_BY_HOP_HEADERS.has(lower) || lower.startsWith('access-control-')) continue;
-          res.setHeader(key, value);
-        }
-        peerRes.pipe(res);
-        res.on('close', () => { try { peerRes.destroy(); } catch {} });
-      });
-      upstream.end();
-    })
-    .catch(fail);
-}
-
-app.get('/api/hosts', async (_req, res) => {
-  const remotes = remoteHosts.listRemotes();
-  // Probes are memoized and individually bounded; the race is the belt to
-  // that braces, so one wedged peer can never hold the fleet list open.
-  const probes = await Promise.all(remotes.map((remote) => Promise.race([
-    remoteHosts.probe(remote).catch(() => ({ reachable: false, error: 'unreachable' })),
-    new Promise((resolve) => setTimeout(() => resolve({ reachable: false, error: 'timeout' }), HOSTS_PROBE_DEADLINE_MS).unref()),
-  ])));
-
-  const hosts = [{
-    self: true,
-    name: null,
-    base: '',
-    hostId: hostIdentity.getHostId(),
-    label: hostIdentity.getHostLabel(readDishSettings()),
-    version: PKG_VERSION,
-    capabilities: hostCapabilities(),
-    reachable: true,
-  }];
-  remotes.forEach((remote, i) => {
-    const probe = probes[i] || {};
-    const entry = { name: remote.name, base: `/hosts/${remote.name}`, kind: remote.kind, reachable: !!probe.reachable };
-    if (probe.reachable && probe.descriptor) {
-      entry.hostId = probe.descriptor.hostId;
-      entry.label = probe.descriptor.label || remote.name;
-      entry.version = probe.descriptor.version;
-      entry.capabilities = probe.descriptor.capabilities;
-    } else {
-      entry.error = probe.error || 'unreachable';
-    }
-    hosts.push(entry);
-  });
-  res.json({ hosts });
-});
+app.post('/api/fleet-artifacts', relayHandlers.registerArtifact);
+app.get('/api/fleet-artifacts', relayHandlers.listArtifacts);
+app.delete('/api/fleet-artifacts/:token', relayHandlers.removeArtifact);
+app.get('/api/hosts', relayHandlers.hosts);
 
 const SESSIONS_DIR = path.join(os.homedir(), '.pi', 'agent', 'sessions');
 const PI_SETTINGS_FILE = path.join(os.homedir(), '.pi', 'agent', 'settings.json');
@@ -2204,7 +1676,7 @@ const shareExportCache = new Map();
 async function serveSharedSession(req, res) {
   const share = shares.getShare(req.params.token);
   // A token this host doesn't own may still belong to a peer it fronts.
-  if (!share) return serveFleetArtifact(req, res, 'share');
+  if (!share) return relayHandlers.publicArtifacts.serve(req, res, 'share');
   if (share.kind === 'html') {
     const htmlPath = shares.getShareHtmlPath(req.params.token);
     if (!htmlPath) return res.status(404).type('text/plain').send('Not found');
@@ -2396,75 +1868,7 @@ function cleanCommentTarget(raw) {
   return null;
 }
 
-// Feedback on a page this host merely fronts belongs to the host whose agent
-// will read it. The overlay injected into a proxied page makes its calls
-// relative, so they land here; every one of them names its page token, which
-// is what routes them home. Anything without a token — or with one this host
-// owns or has never mapped — takes the normal local path.
-function fleetPageTokenFor(req) {
-  const candidates = [req.query?.pageToken, req.body?.pageToken, req.body?.target?.pageToken];
-  const token = candidates.find((value) => fleetArtifacts.isValidToken(value));
-  if (!token || pages.getPage(token)) return null;
-  const mapping = fleetArtifacts.get(token);
-  return mapping && mapping.kind === 'page' ? mapping : null;
-}
-
-app.use('/api/comments', (req, res, next) => {
-  const mapping = fleetPageTokenFor(req);
-  if (!mapping) return next();
-  const remote = remoteHosts.getRemote(mapping.host);
-  if (!remote) return next();
-  proxyCommentToOwner(remote, req, res);
-});
-
-// Comment payloads are small JSON both ways, and express has already parsed
-// the request body here — the same buffered exception the artifact creation
-// responses get, not a second byte relay.
-function proxyCommentToOwner(remote, req, res) {
-  const rest = req.url === '/' ? '' : req.url;
-  const payload = req.method === 'GET' || req.method === 'HEAD' ? null : JSON.stringify(req.body ?? {});
-  const headers = { accept: 'application/json', 'accept-encoding': 'identity' };
-  if (payload !== null) {
-    headers['content-type'] = 'application/json';
-    headers['content-length'] = String(Buffer.byteLength(payload));
-  }
-
-  let settled = false;
-  const fail = (reason) => {
-    if (settled) return;
-    settled = true;
-    res.status(502).json({ error: `Host ${remote.name} is unreachable`, host: remote.name, reason });
-  };
-
-  remoteHosts.request(remote, { method: req.method, path: `/api/comments${rest}`, headers })
-    .then((upstream) => {
-      const timer = setTimeout(() => { try { upstream.destroy(); } catch {} fail('timeout'); }, PROXY_RESPONSE_TIMEOUT_MS);
-      upstream.on('error', (e) => { clearTimeout(timer); fail(remoteHosts.errorCode(e)); });
-      upstream.on('response', (peerRes) => {
-        clearTimeout(timer);
-        if (settled) return peerRes.resume();
-        settled = true;
-        let raw = '';
-        let overflow = false;
-        peerRes.setEncoding('utf8');
-        peerRes.on('data', (chunk) => {
-          if (overflow) return;
-          raw += chunk;
-          if (raw.length <= FLEET_ARTIFACT_BODY_LIMIT) return;
-          overflow = true;
-          peerRes.destroy();
-          res.status(502).json({ error: `Host ${remote.name} returned an oversized comment response`, host: remote.name });
-        });
-        peerRes.on('end', () => {
-          if (!overflow) res.status(peerRes.statusCode).type('application/json').send(raw || '{}');
-        });
-        peerRes.on('error', () => { try { res.end(); } catch {} });
-      });
-      if (payload !== null) upstream.write(payload);
-      upstream.end();
-    })
-    .catch((e) => fail(remoteHosts.errorCode(e)));
-}
+app.use('/api/comments', relayHandlers.comments);
 
 app.post('/api/comments', (req, res) => {
   const rawBody = req.body?.body;
@@ -2746,7 +2150,7 @@ function servePage(req, res, annotate = false) {
   // A token this host doesn't own may still belong to a peer it fronts; the
   // peer answers the redirect and injects its own comment overlay — except
   // on the public listener, which asks the peer to leave it out (below).
-  if (!entry) return serveFleetArtifact(req, res, 'page', { annotate });
+  if (!entry) return relayHandlers.publicArtifacts.serve(req, res, 'page', { annotate });
   if (req.headers[PAGE_COMMENTS_HEADER] === 'off') annotate = false;
   const notFound = () => { if (!res.headersSent) res.status(404).type('text/plain').send('Not found'); };
   let stat;
@@ -4921,131 +4325,23 @@ function wireUpgrades(l) {
 
 // Proxied terminals work even when this host's own terminal feature is off:
 // the PTY lives on the peer.
-upgradeHandlers.push((req, socket, head, url) => {
-  const match = PROXY_TERMINAL_PATH_RE.exec(url.pathname);
-  if (!match) return false;
-  const remote = remoteHosts.getRemote(match[1]);
-  if (!remote) {
-    socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
-    socket.destroy();
-    return true;
-  }
-  // This host's gate, applied by hand exactly like the local terminal's —
-  // the peer's own credential is attached downstream, not the caller's.
-  if (!upgradeAuthorized(req, url)) {
-    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-    socket.destroy();
-    return true;
-  }
-  proxyUpgrade(remote, req, socket, head, url);
-  return true;
-});
-
-function proxyUpgrade(remote, req, socket, head, url) {
-  const teardown = () => { try { socket.destroy(); } catch {} };
-  const peerPath = url.pathname.slice(`/hosts/${remote.name}`.length) + url.search;
-
-  remoteHosts.request(remote, { method: 'GET', path: peerPath, headers: req.headers, upgrade: true })
-    .then((upstream) => {
-      upstream.on('error', teardown);
-      socket.on('error', teardown);
-      // A client that hangs up mid-handshake must not leave a half-open
-      // request against the peer.
-      socket.once('close', () => { try { upstream.destroy(); } catch {} });
-      upstream.on('upgrade', (peerRes, peerSocket, peerHead) => {
-        const lines = [`HTTP/1.1 ${peerRes.statusCode} ${peerRes.statusMessage || 'Switching Protocols'}`];
-        for (const [key, value] of Object.entries(peerRes.headers)) {
-          for (const one of Array.isArray(value) ? value : [value]) lines.push(`${key}: ${one}`);
-        }
-        socket.write(`${lines.join('\r\n')}\r\n\r\n`);
-        if (peerHead && peerHead.length) socket.write(peerHead);
-        if (head && head.length) peerSocket.write(head);
-        peerSocket.on('error', teardown);
-        peerSocket.on('close', teardown);
-        socket.on('close', () => { try { peerSocket.destroy(); } catch {} });
-        socket.pipe(peerSocket);
-        peerSocket.pipe(socket);
-      });
-      // The peer refused the handshake (auth, unknown session): relay its
-      // status so the client sees the peer's answer, not a dead socket.
-      upstream.on('response', (peerRes) => {
-        peerRes.resume();
-        socket.write(`HTTP/1.1 ${peerRes.statusCode} ${peerRes.statusMessage || ''}\r\n\r\n`);
-        socket.destroy();
-      });
-      upstream.end();
-    })
-    .catch(() => {
-      try { socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n'); } catch {}
-      teardown();
-    });
-}
+upgradeHandlers.push(relayHandlers.upgrade);
 
 // WebSocket endpoint for the in-browser terminal (see lib/terminal.js).
 // Registered only when the feature flag is on — with it off, upgrade
 // requests fall through the dispatcher to the default socket destroy,
 // indistinguishable from a server without the feature.
 if (terminal.isTerminalEnabled()) {
-  const { WebSocketServer } = require('ws');
-  const wss = new WebSocketServer({ noServer: true });
-  const TERMINAL_PATH_RE = /^\/api\/sessions\/([^/]+)\/terminal$/;
-
-  upgradeHandlers.push((req, socket, head, url) => {
-    const match = TERMINAL_PATH_RE.exec(url.pathname);
-    if (!match) return false;
-    // The upgrade never reaches Express, so the /api gate and the CORS
-    // allowlist have to be re-applied here by hand.
-    if (!upgradeAuthorized(req, url)) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      socket.destroy();
-      return true;
-    }
-    const sessionId = decodeURIComponent(match[1]);
-    // Only spawn shells for sessions pi-dish actually knows about.
-    const known = getRegisteredSession(sessionId) || getRPCSession(sessionId) || findSessionFile(sessionId);
-    if (!known) {
-      socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
-      socket.destroy();
-      return true;
-    }
-    (async () => {
-      // mode=tmux: instead of a shell at the cwd, attach a grouped tmux
-      // client viewing the pane the session's pi runs in (works for hidden
-      // headless spawns too — it's the only way to *see* those TUIs). The
-      // PTY is keyed separately so the plain shell and the pane view
-      // coexist. $TMUX is stripped or a server running inside tmux couldn't
-      // nest the attach.
-      let key = sessionId;
-      let opts;
-      if (url.searchParams.get('mode') === 'tmux') {
-        const pane = await locatePiPane(sessionId);
-        const command = pane && await tmux.attachPaneArgv(pane.socket, pane.paneId);
-        if (!command) {
-          return wss.handleUpgrade(req, socket, head, (ws) => {
-            try { ws.send(JSON.stringify({ type: 'error', error: 'No tmux pane found for this session' })); } catch {}
-            ws.close(1011, 'no tmux pane');
-          });
-        }
-        key = `${sessionId}:tmux`;
-        opts = {
-          command,
-          env: { TMUX: undefined, TMUX_PANE: undefined },
-          meta: { tmuxPrefix: await tmux.getPrefixKey(pane.socket) },
-        };
-      }
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        try {
-          terminal.attachClient(key, resolveSessionCwd(sessionId), ws, opts);
-        } catch (e) {
-          try { ws.send(JSON.stringify({ type: 'error', error: e.message })); } catch {}
-          ws.close(1011, 'terminal failed');
-        }
-      });
-    })().catch(() => socket.destroy());
-    return true;
+  const terminalHandlers = createTerminalHandlers({
+    upgradeAuthorized: accessHandlers.upgradeAuthorized,
+    getRegisteredSession,
+    getRPCSession,
+    findSessionFile,
+    resolveSessionCwd,
+    locatePiPane,
   });
-
-  onServerClose(() => terminal.killAllTerminals());
+  upgradeHandlers.push(terminalHandlers.upgrade);
+  onServerClose(terminalHandlers.shutdown);
 }
 
 module.exports = server;
