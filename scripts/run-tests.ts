@@ -1,7 +1,4 @@
 #!/usr/bin/env node
-// Generated tool from scripts/run-tests.ts; edit that source and run npm run build:tools.
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
 /**
  * `npm test` — the node:test runner, launched from a sanitized environment.
  *
@@ -15,26 +12,28 @@ Object.defineProperty(exports, "__esModule", { value: true });
  * Usage: `npm test`, `npm test -- test/server.test.js`,
  * `npm test -- --test-name-pattern=subagent`.
  */
-const fs = require("fs");
-const path = require("path");
-const child_process_1 = require("child_process");
-const test_env_js_1 = require("../test/test-env.js");
+import fs = require('fs');
+import path = require('path');
+import { spawn } from 'child_process';
+import { sanitizeTestEnv } from '../test/test-env.js';
+
 const repo = path.dirname(__dirname);
 const argv = process.argv.slice(2);
 const flags = argv.filter((arg) => arg.startsWith('-'));
 const files = argv.filter((arg) => !arg.startsWith('-'));
+
 if (!files.length) {
-    files.push(...fs.readdirSync(path.join(repo, 'test'))
-        .filter((name) => name.endsWith('.test.js'))
-        .sort()
-        .map((name) => path.join('test', name)));
+  files.push(...fs.readdirSync(path.join(repo, 'test'))
+    .filter((name) => name.endsWith('.test.js'))
+    .sort()
+    .map((name) => path.join('test', name)));
 }
-const child = (0, child_process_1.spawn)(process.execPath, ['--test', ...flags, ...files], {
-    cwd: repo,
-    env: (0, test_env_js_1.sanitizeTestEnv)(process.env),
-    stdio: 'inherit',
+
+const child = spawn(process.execPath, ['--test', ...flags, ...files], {
+  cwd: repo,
+  env: sanitizeTestEnv(process.env),
+  stdio: 'inherit',
 });
 // Relay interrupts so Ctrl-C stops the run rather than orphaning it.
-for (const signal of ['SIGINT', 'SIGTERM'])
-    process.on(signal, () => child.kill(signal));
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => child.kill(signal));
 child.on('exit', (code, signal) => process.exit(signal ? 1 : code ?? 1));

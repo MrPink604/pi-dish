@@ -310,8 +310,9 @@ and preserves first-line shebangs and the existing executable modes.
 `npm run build:tools -- --check` rejects missing, stale, orphaned or wrong-mode
 outputs without repairing them; `npm run typecheck` includes this gate.
 Commit sources and generated outputs together. This compiler is specific to
-the tool siblings; core/browser/edge build algorithms and output locations stay
-unchanged. The vendor tool retains its handwritten highlight loader until R12.
+the tool siblings and named runner support files; core/browser/edge build
+algorithms and output locations stay unchanged. The vendor tool retains its
+handwritten highlight loader until R12.
 
 `tsconfig.configs.json` checks the actual host configuration bodies without
 emission. `eslint.config.js` is the named strict-`checkJs` exception because
@@ -323,7 +324,27 @@ remain owned by the existing core/browser compiler programs.
 no JS alias or additional runtime loader. Both configurations and all seven
 tool implementations are enrolled in `source-policy.json`.
 
-This is not full C1 completion. Test runners, support/fixture implementations,
+The runner/support family additionally checks `scripts/run-tests.ts`,
+`scripts/run-ui-scenarios.ts`, `test/test-env.ts` and
+`test/ui-scenarios/index.ts` in that same Node-only program. Their existing
+CommonJS `.js` paths and generated declarations are checked in. `npm test`
+still discovers only top-level `.test.js` files; explicit file/flag arguments,
+sanitized environment, signal forwarding and exit status are preserved.
+The isolated scenario runner still launches the real `test/ui-smoke.js` once
+per registry key, in registry order, stopping on interruption but continuing
+after an ordinary scenario failure.
+
+The checked registry constructs its actual own-key object and eagerly requires
+the eight scenario modules in the same order. Its values are `unknown`: the
+runner only enumerates keys. This is not a callable schema or a claim that
+those behavioral JavaScript bodies are checked. Their eventual callable types
+must come from actual checked producers, not declaration-only assertions.
+The bootstrap admits only the two named support paths outside `scripts/`;
+banner-only orphan checks cover their existing output directories without
+classifying other authored test files as generated. Family proof is recorded in
+[`c1-runners-evidence.json`](c1-runners-evidence.json).
+
+This is not full C1 completion. Remaining support/fixture implementations,
 observational tools and behavioral test families remain separately gated.
 The frozen inventory and proposed family/runtime mapping are recorded in
 [`c1-tools-evidence.json`](c1-tools-evidence.json). Later sibling test compilation

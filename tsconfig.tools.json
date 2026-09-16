@@ -19,6 +19,10 @@
     "scripts/build-edges.ts",
     "scripts/build-vendor.ts",
     "scripts/check-source-policy.mts",
-    "scripts/report-ci-failure.ts"
+    "scripts/report-ci-failure.ts",
+    "scripts/run-tests.ts",
+    "scripts/run-ui-scenarios.ts",
+    "test/test-env.ts",
+    "test/ui-scenarios/index.ts"
   ]
 }
