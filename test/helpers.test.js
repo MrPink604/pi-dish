@@ -1584,6 +1584,23 @@ test('stableSessionRef shortens only by naming another identifier', () => {
   assert.equal(H.stableSessionRef('', ids), '');
 });
 
+test('short and stable references never select shared native or UUID aliases', () => {
+  const native = '2026-09-05T09-07-03-291Z_01a070d2-43fb-7360-aaba-a4ddf8d1deb0';
+  const rows = ['omp', 'prime'].map(harness => ({
+    id: '~sk1_' + Buffer.from(JSON.stringify([harness, native])).toString('base64url'),
+  }));
+  const ids = rows.map(row => row.id);
+  for (const alias of [native, '01a070d2-43fb-7360-aaba-a4ddf8d1deb0']) {
+    const ambiguous = H.resolveSessionRefAmong(rows, alias);
+    assert.equal(ambiguous.session, null);
+    assert.deepEqual(ambiguous.matches, rows);
+  }
+  for (const row of rows) {
+    assert.equal(H.resolveSessionRefAmong(rows, H.shortSessionRef(row.id, ids)).session, row);
+    assert.equal(H.resolveSessionRefAmong(rows, H.stableSessionRef(row.id, ids)).session, row);
+  }
+});
+
 test('parseSessionRefTokens finds every ref form and dedupes them', () => {
   const text = 'compare #8f3ab2c1 with #tycho/8f3ab2c1 and '
     + '#0f9c1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b:2026-07-05T00-00-00-x, again #8f3ab2c1.';
