@@ -911,7 +911,7 @@ async function main() {
       const { data } = await api(base, host, `/api/sessions/${encodeURIComponent(id)}/messages?limit=${limit}${before}`);
       // The route's own `session` is the richer one (model, context, cwd);
       // the resolved list entry backfills what it does not carry.
-      const payload = { ...core.record(data), session: { ...target.session, ...core.record(core.record(data).session) } };
+      const payload = { ...core.record(data), session: { ...target.session, ...core.record(core.record(data).session ?? {}) } };
       process.stdout.write(renderTranscript(payload, {
         ref, host, limit, thinking: !!args.thinking,
       }));
@@ -921,7 +921,7 @@ async function main() {
     if (spec.name === 'show') {
       const limit = intArg(args.limit, 20);
       const messages = await api(base, host, `/api/sessions/${encodeURIComponent(id)}/messages?limit=${limit}`);
-      return print({ session: target.session, ...core.record(messages.data) }, true);
+      return print({ session: target.session, ...core.record(messages.data ?? {}) }, true);
     }
 
     if (spec.name === 'related') {

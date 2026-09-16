@@ -97,16 +97,16 @@
     "executable": "dist/linux-unpacked/pi-dish",
     "executableSha256": "8407787e90832dceaf83d751cc2ad89a92b92f90c9c5dedcc126e54258649a6f",
     "archive": "dist/linux-unpacked/resources/app.asar",
-    "archiveSha256": "545e089084d3f673444ef43c93a671231b97b07b38cbb4e28795c8dc83ec7c79",
+    "archiveSha256": "14de8077618338597505e54657860811f3b047a781f6dc18d45c7bdf9dd10cd9",
     "desktopCommand": "xvfb-run -a -n 189 node /tmp/pi-dish-m6c-desktop-proof.cjs /home/jyarwood/workspace/pi-dish-m6 /home/jyarwood/workspace/pi-dish-m6/dist/linux-unpacked/pi-dish all",
     "desktopResult": "exit 0; actual development and packaged windows, HTTP, local assets, SDK, native PTY/FFF, security preferences, external URL dispatch and installed sessions/comments/pages CLIs all passed",
-    "desktopArtifacts": "/tmp/pd-m6c-proof-J95lx1",
+    "desktopArtifacts": "/tmp/pd-m6c-proof-lrzCIc",
     "nativeEvidence": "Real packaged /api/sessions/:id/files returned a/b/c/d/e/f/g/h/m6c-native-needle.txt (gitStatus clean), beyond fallback walker depth6. /proc/self/maps shows app.asar.unpacked/node_modules/@ff-labs/fff-bin-linux-x64-gnu/libfff_c.so and node-pty/build/Release/pty.node. PTY computed m6c-pty-42.",
     "runtime": { "electron": "44.4.1", "node": "24.21.0", "chrome": "152.0.7977.78", "moduleABI": "149", "nodeIntegration": false, "contextIsolation": true, "sandbox": true },
-    "harnessCommand": "xvfb-run -a node /tmp/pi-dish-m6c-harness-proof.cjs /home/jyarwood/workspace/pi-dish-m6 /home/jyarwood/workspace/pi-dish-m6/dist/linux-unpacked/pi-dish all all",
+    "harnessCommand": "xvfb-run -a -n 199 node /tmp/pi-dish-m6c-harness-proof.cjs /home/jyarwood/workspace/pi-dish-m6 /home/jyarwood/workspace/pi-dish-m6/dist/linux-unpacked/pi-dish all all",
     "harnessEnvironment": "Explicit Pi0.85.1/OMP18.1.21/Prime0.9.4/Bun1.3.14 paths; isolated HOME/sockets/tmux; allowlisted environment and local fake providers, no live sessions or credentials",
     "harnessResult": "exit 0; Pi13/13 no skips in each mode; original complete OMP/Prime lineage in each mode,10 provider requests each. Real process/token/wrapper identity, installed three CLIs, lifecycle isolation/peer survival and owned shutdown passed.",
-    "harnessArtifacts": "/tmp/pd-m6c-harness-xRtcvl",
+    "harnessArtifacts": "/tmp/pd-m6c-harness-v7xoVG",
     "cleanup": "All four native-harness runs report electronExited=true and tmuxFailures=[]",
     "visualInspection": "All six final screenshots inspected: application shell/menu/logo rendered, with empty-session prompt visible in settled captures; no error document or blank window.",
     "archiveInspection": "Read-only ASAR API checks required manifest resources, package-only main, physical wrappers/skills, archived docs, native unpacking and excluded first-party source/declarations/maps.",
@@ -120,9 +120,9 @@
   "finalStableValidation": {
     "command": "npm run check && npm test && npm run test:ui",
     "environment": "PI_DISH_PI_COMMAND=/home/jyarwood/.local/bin/pi; original PATH retained",
-    "result": "exit 0;213 compiler-owned sources/no explicit-any exceptions, lint, core/browser/edge drift+mode checks and strict types;1013 backend tests passed,0 failures/cancellations/skips; complete desktop/mobile UI smoke all good",
-    "backendDurationMs": 31902.051986,
-    "output": "artifact://164",
+    "result": "exit 0;213 compiler-owned sources/no explicit-any exceptions, lint, core/browser/edge drift+mode checks and strict types;1014 backend tests passed,0 failures/cancellations/skips; complete desktop/mobile UI smoke all good",
+    "backendDurationMs": 31997.335532,
+    "output": "artifact://196",
     "sourceBinding": "The source commit containing this evidence binds the validated M6 implementation plus actual M3 consumer. Final review attestation will name its full hash separately."
   },
   "reviewCorrection": {
@@ -158,6 +158,29 @@
       { "command": "npm run build:edges && node --test selected CLI/core suites", "result": "Edge build and seven ingress cases passed; direct node invocation bypassed repository environment sanitization, inherited deployment HOST, and broader focused command timed out180s after40 passing cases.", "disposition": "Invocation error only. Final supported npm test runner sanitizes environment; check/full1013/UI completed successfully. No product change for this attempt." },
       { "command": "xvfb-run -a node desktop-proof.cjs REPO PACKAGE all", "artifacts": "/tmp/pd-m6c-proof-QL0or6", "result": "Both product modes passed all assertions, but Xvfb wrapper cleanup reported kill: No such process and exit1.", "disposition": "Repeated both modes with separate display allocation -a -n189; clean exit0 at /tmp/pd-m6c-proof-J95lx1. No source change." }
     ]
+  },
+  "secondReviewCorrection": {
+    "reviewedSource": "bd409ec80363b41c7ced4a219bc5c2fade501fed",
+    "verdicts": [
+      { "model": "zai/glm-5.3", "session": "01a0a9ce-39bb-75f0-8987-80ffa649755d", "verdict": "ACCEPT; F1 resolved, no new findings" },
+      { "model": "kimi-code/k3", "session": "01a0a9ce-34f8-7197-be5f-6ccd28aac8a7", "verdict": "ACCEPT; F1 resolved, no new findings" },
+      { "model": "opencode-go/deepseek-v4.1-flash", "session": "01a0a9ce-303e-73aa-8263-1728e6d7f368", "verdict": "REVISE F2 only; F1 resolved, N1/N2 closed, no other new findings" }
+    ],
+    "freezeDiscipline": "All three exact bd409ec verdicts received before any correction edits. These verdicts are not final-revision acceptance.",
+    "F2": {
+      "problem": "Two sessions CLI message merges missed original optional spread behavior: show accepted a null/empty/non-JSON body, while read accepted absent/null response.session metadata.",
+      "correction": "Add ?? {} at those two existing record calls only. Required read body access still fails on null; route session fields still override catalog fields with catalog backfill.",
+      "regression": "One added ingress case exercises real show/read CLI subprocesses: show null and non-JSON bodies retain resolved session JSON; read missing and null session metadata produces the same catalog-backed transcript; richer route metadata overrides its catalog field without losing catalog cwd or message content.",
+      "focusedResult": "npm run build:edges passed; supported npm test -- test/skill-client-ingress.test.js passed all8 cases.",
+      "fixtureCorrection": "Initial new test advertised no resolver capability, so the CLI correctly selected the unsupported catalog route and the fixture rejected it. Advertised the fixture's implemented self.resolve capability; rerun passed. No additional product change."
+    },
+    "priorVerifiedArtifact": {
+      "archiveSha256": "545e089084d3f673444ef43c93a671231b97b07b38cbb4e28795c8dc83ec7c79",
+      "desktopArtifacts": "/tmp/pd-m6c-proof-J95lx1",
+      "harnessArtifacts": "/tmp/pd-m6c-harness-xRtcvl",
+      "validationOutput": "artifact://164",
+      "result": "The bd409ec source passed check/full1013/UI and real development+packaged runtime proofs before F2."
+    }
   },
   "consumerProposals": [
     "src/core/harnesses.ts bridge(name): resolve external OMP/Prime wrapper paths with runtimeResourcePath; descriptor callers and launch ordering unchanged",

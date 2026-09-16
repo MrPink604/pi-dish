@@ -187,3 +187,38 @@ test('spawn keeps advisory null fallbacks and waits through a bodyless 202', asy
   const immediate = await run(process.execPath, [...args, '--no-wait'], { env });
   assert.deepEqual(JSON.parse(immediate.stdout), { harness: 'pi' });
 });
+
+test('message views retain catalog metadata when optional response fields are absent', async t => {
+  const { env } = fixture(t);
+  const session = { id: 'message-session', name: 'Catalog name', cwd: '/catalog' };
+  let body = 'null';
+  const base = await serve(t, (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/api/hosts') return res.end(JSON.stringify({ hosts: [{ self: true, capabilities: { resolve: true } }] }));
+    if (req.url.startsWith('/api/sessions/resolve?')) return res.end(JSON.stringify({ session }));
+    if (req.url.startsWith('/api/sessions/message-session/messages?')) return res.end(body);
+    res.statusCode = 404;
+    res.end(JSON.stringify({ error: 'Unexpected route' }));
+  });
+  const args = [session.id, '--url', base];
+  const shown = await run(process.execPath, [cli, 'show', ...args], { env });
+  assert.deepEqual(JSON.parse(shown.stdout), { session });
+  body = 'not JSON';
+  const nonJson = await run(process.execPath, [cli, 'show', ...args], { env });
+  assert.deepEqual(JSON.parse(nonJson.stdout), { session });
+
+  const messages = [{ role: 'user', content: [{ type: 'text', text: 'Preserved transcript content' }] }];
+  body = JSON.stringify({ messages });
+  const absent = await run(process.execPath, [cli, 'read', ...args], { env });
+  assert.match(absent.stdout, /Catalog name/);
+  assert.match(absent.stdout, /Preserved transcript content/);
+  body = JSON.stringify({ messages, session: null });
+  const nullSession = await run(process.execPath, [cli, 'read', ...args], { env });
+  assert.equal(nullSession.stdout, absent.stdout);
+  body = JSON.stringify({ messages, session: { name: 'Message name' } });
+  const richer = await run(process.execPath, [cli, 'read', ...args], { env });
+  assert.match(richer.stdout, /Message name/);
+  assert.doesNotMatch(richer.stdout, /Catalog name/);
+  assert.match(richer.stdout, /\/catalog/);
+  assert.match(richer.stdout, /Preserved transcript content/);
+});
