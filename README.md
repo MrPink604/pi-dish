@@ -706,7 +706,9 @@ their checked-in `.js`/`.mjs` outputs retain the existing direct command paths.
 the pinned compiler and temporary output validation. Host configuration bodies
 are checked too: ESLint retains strict-checkJs `eslint.config.js`, while
 `playwright.config.ts` uses Playwright's built-in configuration transform.
-This tools checkpoint does not complete the separately gated C1 test families.
+The same compiler checks the Node/isolated-UI runners, `test/test-env.ts` and
+the scenario-name registry, preserving their existing `.js` execution paths.
+Scenario bodies and the remaining C1 behavioral test families remain gated.
 
 Browser setup is reproducible from the lockfile:
 

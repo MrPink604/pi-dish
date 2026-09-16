@@ -25,10 +25,13 @@ const executables = {
     'scripts/build-tools.ts': true,
     'scripts/build-edges.ts': true,
     'scripts/check-source-policy.mts': true,
+    'scripts/run-tests.ts': true,
 };
 const outputs = new Map();
 for (const source of config.files) {
-    if (!/^scripts\/[^/]+\.(?:ts|mts)$/.test(source) || /\.d\.(?:ts|mts)$/.test(source)) {
+    if ((!/^scripts\/[^/]+\.(?:ts|mts)$/.test(source)
+        && source !== 'test/test-env.ts' && source !== 'test/ui-scenarios/index.ts')
+        || /\.d\.(?:ts|mts)$/.test(source)) {
         throw new Error(`Unsupported tool source: ${source}`);
     }
     const esm = source.endsWith('.mts');
@@ -61,12 +64,17 @@ try {
             throw new Error(`Tool output mapping mismatch; unexpected: ${unexpected.join(', ')}; missing: ${missing.join(', ')}`);
         }
         const orphaned = [];
-        for (const entry of fs.readdirSync(path.join(root, 'scripts'), { withFileTypes: true })) {
-            if (!entry.isFile() || !/\.(?:js|mjs|d\.ts|d\.mts)$/.test(entry.name))
+        for (const directory of ['scripts', 'test', 'test/ui-scenarios']) {
+            const outputDirectory = path.join(root, directory);
+            if (!fs.existsSync(outputDirectory))
                 continue;
-            const file = `scripts/${entry.name}`;
-            if (!outputs.has(file) && fs.readFileSync(path.join(root, file), 'utf8').replace(/^#![^\n]*\n/, '').startsWith(banner)) {
-                orphaned.push(file);
+            for (const entry of fs.readdirSync(outputDirectory, { withFileTypes: true })) {
+                if (!entry.isFile() || !/\.(?:js|mjs|d\.ts|d\.mts)$/.test(entry.name))
+                    continue;
+                const file = `${directory}/${entry.name}`;
+                if (!outputs.has(file) && fs.readFileSync(path.join(root, file), 'utf8').replace(/^#![^\n]*\n/, '').startsWith(banner)) {
+                    orphaned.push(file);
+                }
             }
         }
         if (orphaned.length)

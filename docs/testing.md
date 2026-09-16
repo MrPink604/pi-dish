@@ -72,8 +72,13 @@ stale, orphaned and wrong-mode tool outputs fail without being repaired.
 `tsconfig.configs.json` strictly checks the actual `eslint.config.js` body and
 `playwright.config.ts`; the latter uses Playwright's existing host transform.
 No TypeScript runtime loader or Node minimum change is required.
-Behavioral tests, remaining runner/support implementations and observational
-tools are still separate C1 families; see the
+The Node test runner, isolated scenario runner, real `test-env` implementation
+and scenario registry are also checked by `tsconfig.tools.json`; regenerate
+their existing sibling `.js` files with `npm run build:tools`.
+The registry's scenario values remain explicitly `unknown` because only key
+enumeration is owned by this family. The eight behavioral scenario modules,
+other fixtures/support and observational tools remain separately gated; see
+the [runner-family evidence](c1-runners-evidence.json) and
 [frozen execution inventory](c1-tools-evidence.json).
 All browser implementation in `src/browser/` compiles strictly, including the
 application entrypoint, static bindings, state, transport and feature controllers. See
