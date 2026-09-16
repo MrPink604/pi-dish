@@ -1,6 +1,6 @@
 # pi-dish roadmap and migration status
 
-Updated 2026-09-15. **Browser application source migration is complete and
+Updated 2026-09-16. **Browser application source migration is complete and
 independently reviewed. Architectural simplification is not complete.**
 
 All first-party browser application logic is authored in `src/browser/`, including
@@ -82,8 +82,8 @@ controller/port observations.
 | Browser contracts | Implemented, verified and reviewed | Readonly state/cache borrowing, decoded message ports and session-only model loading passed strict checks, 984 backend tests, 286 browser cases and both UI suites. Fable approved `811d473` without blocking findings. |
 | Shared runtime helpers | Implemented, locally verified and reviewed | Actual portable core source serves browser and Node consumers; 121 compatibility exports remain. Strict checks, 984 backend tests, 286 browser cases and UI suites passed. Fable approved `1cbd826` without blocking findings. |
 | Session lifecycle | Implemented, locally verified and reviewed | Actual ownership/launch/operation/recovery/Bounce owners replace JS policy closures. Strict checks, 996 backend tests, 286 browser cases, UI suites and real Pi/OMP/Prime paths passed. Fable approved `8e89e99` without blockers; its pruning observation was fixed with a regression. |
-| Remaining server application and feature modules | Separate later boundaries | General routes, projections, routine scheduling and other feature stores remain later stages. |
-| Harness extensions and Electron shell | Outside the current browser stage | Most extension sources are already TypeScript outside the `src/` build. Remaining extension/shell conversion and checking need a separate audit and plan. |
+| Remaining server application and feature modules | M1/M2/M5 accepted; M3/M4/M7 pending | Checked reads, routines/provenance and transport are integrated and verified. Publication/file and feature packages await parent acceptance; final root conversion follows. |
+| Harness extensions and Electron shell | M6 accepted on Linux x64 | Strict edge programs and generated outputs, installed CLIs, real development/packaged Electron and native harness execution passed. macOS delivery is unverified; startup simplification remains R7. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
 
 The completed browser source migration does not imply a whole-application
@@ -98,8 +98,8 @@ checking, Electron and remaining backend boundaries retain separate scopes.
 
 The foundation lives in `src/core/`, with generated CommonJS and declarations
 in `lib/`. Its full module inventory is in [the migration guide](docs/typescript.md).
-Most JavaScript callers of these modules are not yet type checked; `lib/cron.js`
-is an explicitly checked exception.
+Most remaining JavaScript callers are not yet type checked. Cron is now authored
+in `src/core/cron.ts`; its original `lib/cron.js` path is generated output.
 
 Browser source compiles strictly into five committed local scripts:
 `public/app.js`, `public/browser.js`, `public/helpers.js`,
@@ -224,9 +224,18 @@ with all three exact-model final-source acceptances and
 The [M1](docs/remaining-migration-plan.md#implementation-record--m1) and
 [M5](docs/remaining-migration-plan.md#implementation-record--m5) records distinguish
 moves, removed adapters, explicit behavior corrections, runtime evidence and limits.
-M2, M3, M4 and M6 continue in isolated Astra High sessions; M7 waits for their
-accepted contracts. Shared root/build integration remains serialized, and the
-mandatory simplification and repository-closure phases remain open.
+
+**M2 and M6 accepted (2026-09-16):** routines/provenance and runtime-edge
+implementations are integrated at `0b51e8a`, with the reviewed test-only
+correction at `709830d` and
+[all five exact-commit CI jobs green](https://github.com/MrPink604/pi-dish/actions/runs/35109156375).
+The [M2](docs/remaining-migration-plan.md#implementation-record--m2) and
+[M6](docs/remaining-migration-plan.md#implementation-record--m6) records include
+independent routine/browser, real packaged-desktop and native harness proof,
+the initial CI failure and its correction, and the Linux-only delivery limit.
+M3 and M4 continue in isolated Astra High sessions; M7 waits for their accepted
+contracts. Shared root/build integration remains serialized, and the mandatory
+simplification and repository-closure phases remain open.
 
 1. **Finish product migration (M0–M7).** Freeze delivery/compiler contracts; migrate
    the remaining session read/SDK/projection, routine, publication/file, feature,

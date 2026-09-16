@@ -92,5 +92,48 @@
     "preExistingBehavior": "Prompt closing-marker text, partial cron alias error text, redundant guards and pinned TypeScript unknown-plus-string semantics remain unchanged.",
     "metadataLimitation": "Direct RPC file URLs now publish filesystem-path metadata under explicit authorization. Byte cwd has no proven faithful decoding in async spawn and is rejected post-native with awaited owned-child cleanup; no guessed fallback."
   },
-  "acceptanceOwnership": "M2 reviewer acceptance only. M1 acceptance, package acceptance and main integration remain parent-owned."
+  "acceptanceOwnership": "M2 reviewer acceptance only. M1 acceptance, package acceptance and main integration remain parent-owned.",
+  "renewedIntegratedReview": {
+    "historicalSource": "1840a7bca15cff76aaa83c8d47d47259ca8877f8",
+    "integrationSource": "0b51e8a541f950c18c105d6a9577308ec4bba8a1",
+    "sourceRevision": "709830d77978800420da5789b7c879d92c941ad8",
+    "status": "ACCEPT",
+    "reason": "Node 22.x CI at 0b51e8a exposed two tests that incorrectly required invoke?wait=1 to return completed. The existing runner returns on leaving starting. The one-file correction uses three existing ledger completion polls, real slow fixture turns and completed-row assertions; removes an engine-specific error-wording pin while retaining errored/null-session/no-child assertions. No production/generated/config bytes changed.",
+    "failedCi": "https://github.com/MrPink604/pi-dish/actions/runs/35094930703",
+    "scope": "Each same exact-model reviewer inspected the actual immutable integrated M2 source, root ports and dependencies plus the correction, and explicitly accepted entire M2 at 709830d. Historical 1840 acceptances above are retained, not substituted.",
+    "reviewers": [
+      {
+        "ref": "01a0a9e6-a612-71cd-a5ce-2f77768243f0",
+        "model": "zai/glm-5.3",
+        "status": "ACCEPT",
+        "directVerdictMessage": 162,
+        "blockingFindings": []
+      },
+      {
+        "ref": "01a0a9e6-aa9d-754f-9dea-64d3876d178b",
+        "model": "opencode-go/deepseek-v4.1-flash",
+        "status": "ACCEPT",
+        "directVerdictMessage": 223,
+        "blockingFindings": []
+      },
+      {
+        "ref": "01a0a9e6-af5e-742a-98ef-aec25af93ad0",
+        "model": "kimi-code/k3",
+        "status": "ACCEPT",
+        "directVerdictMessage": 128,
+        "blockingFindings": []
+      }
+    ],
+    "parentVerification": "Integration lead independently read all three full final verdicts. Corrected-source check passed with 230 governed sources; 14 routine API cases and all 1026 backend tests passed, with no skips.",
+    "kimiDispatch": {
+      "notBefore": "2026-09-16T14:23:42.000Z",
+      "sentAt": "2026-09-16T14:23:42.224Z",
+      "attempts": 1,
+      "sameReviewerAndModelGuard": true,
+      "retries": 0,
+      "substitutions": 0
+    },
+    "dispositions": "Optional response-status membership assertion not added: completed-ledger and raw-ingress behavior are already exercised. Prior source-level nonblocking observations remain historical; no extra product change was introduced.",
+    "acceptanceOwnership": "Renewed review acceptance only; the implementation ledger separately records exact-commit CI and parent package acceptance."
+  }
 }

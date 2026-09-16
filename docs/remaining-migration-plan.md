@@ -953,3 +953,100 @@ peer's graceful close reported residual-process uncertainty and later lacked
 unambiguous live-bridge authority; no manual PID signals were used. That
 work-session cleanup limit is separate from the successfully cleaned test/smoke
 processes and credentials, and is not represented as resolved.
+
+### Implementation record — M2
+
+**Accepted by the integration lead on 2026-09-16.** Owner:
+`01a0a998-5492-710e-88b2-9f532847418f`, verified OMP Astra High.
+Final owner source `1840a7bca15cff76aaa83c8d47d47259ca8877f8` and attestation
+`33a3f5b8980423b67c05dc772f409c13e004b07b` were integrated with M6 at
+`0b51e8a541f950c18c105d6a9577308ec4bba8a1`. Final accepted checkpoint:
+`709830d77978800420da5789b7c879d92c941ad8`.
+[All five exact-commit CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/35109156375):
+checks/backend/bridge/lifecycle on Node 22.19.0, 22.x, 24.x and 26.x; full browser,
+eight isolated UI scenarios and desktop/mobile smoke on Node 24.
+
+**Cutover:** cron, routine definitions/storage, invocation scheduling,
+provenance and routine HTTP/prompt composition now have strict core
+implementations and generated original-path JS/declarations. Root consumes the
+checked handlers and existing session coordinator rather than retaining duplicate
+routine policy bodies. The coordinator remains the only launch/resume/close
+authority. R2 algorithm simplification remains separate.
+
+**Preserved boundaries and explicit decisions:** raw persisted rows and alias
+bytes, native argv/cwd coercion and tmux shell behavior retain their recorded
+contracts. File-URL metadata normalization occurs after native launch; byte cwd
+cannot be faithfully reconstructed from async spawn, so the documented
+post-native rejection awaits owned-child cleanup without publishing a session.
+[Owner evidence](m2-evidence.json) and [the review record](m2-review.json)
+retain the precise exceptions and execution evidence.
+
+**Verification:** owner check, 1,009 backend cases, 82 focused cases, 11 routine
+browser cases, full UI and actual routine/native/metadata probes passed.
+Independent combined parent verification passed clean install, check with 230
+governed sources, 1,026 backend cases, 11 routine browser cases, eight isolated UI
+scenarios and full UI. A separate real browser created and ran a routine; the
+invocation completed and its owned session closed successfully. The parent AST
+comparison preserved all 110 app/share-app registration identities and ordering.
+
+The first integration's CI exposed two Node 22.x test assumptions that
+`invoke?wait=1` must already return completed; the runner actually returns on
+leaving starting. Test-only `709830d` uses existing completion polling and
+completed-ledger assertions, retaining the observable raw-ingress contracts
+without pinning native error wording. No production/generated/config bytes
+changed. All 14 routine API cases, check and all 1,026 backend cases passed again.
+The other runtime/UI evidence applies to byte-identical production code.
+
+All three original exact reviewers — `zai/glm-5.3`,
+`opencode-go/deepseek-v4.1-flash`, `kimi-code/k3` — explicitly renewed whole-M2
+acceptance at `709830d`, including the integrated root and dependencies. The parent
+read each complete verdict directly before pushing the accepted checkpoint.
+The review record preserves both historical and renewed acceptances. Disposable
+parent probes were removed. This record does not accept M3/M4/M7 or Phase R.
+
+### Implementation record — M6
+
+**Accepted by the integration lead on 2026-09-16.** Owner:
+`01a0a998-4644-742f-bbf6-102bc6f53c99`, verified OMP Astra High.
+Final reviewed source `8d5bdadb791ac6ef76c4cdf794c83f47eb03a64d` and
+attestation `c07753022d646323b3dcea247efd2e1b67f939de` were integrated at
+`0b51e8a541f950c18c105d6a9577308ec4bba8a1`; accepted checkpoint `709830d`
+changes only the M2 tests described above.
+[All five exact-commit CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/35109156375).
+
+**Cutover:** first-party extensions, skill client/CLIs and Electron edges are
+covered by their strict compiler programs and generated-output/mode checks.
+Runtime resource resolution distinguishes checkout resources from physical
+unpacked package paths, including the import-only FFF native dependency.
+Electron's packaged entrypoint and required resources are included without
+changing the root server export/engine contract or introducing a general path
+fallback. R7 startup simplification remains open.
+
+**Verification:** [owner evidence](m6-evidence.json) and
+[the review record](m6-review.json) retain the complete checkout/package,
+native harness and final CLI ingress proofs, including the two corrected optional
+record merges. All three exact-model reviewers explicitly accepted entire final
+source `8d5bdad`; the parent read the final verdicts and verified identities.
+The combined check/backend/browser/UI evidence above applies to M6.
+
+The parent independently rebuilt and launched both actual development and packaged
+Electron 44.4.1/embedded Node 24.21.0 desktops. Proof exercised local HTTP assets,
+real SDK import, PTY output, depth-eight native FFF search, all three installed
+CLIs and external dispatch. Four isolated native harness modes passed: Pi in both
+desktop modes (13 checks each), actual OMP 18.1.21 and Prime 0.9.4 (10 isolated
+fake-provider requests each). All four reported exit zero, Electron exited and
+no tmux cleanup failures. The parent inspected both desktop and all four harness
+screenshots and the structured results; these were not HTTP-only package probes.
+
+Parent packaged executable SHA-256:
+`8407787e90832dceaf83d751cc2ad89a92b92f90c9c5dedcc126e54258649a6f`;
+ASAR SHA-256:
+`a154f13c18f41e10714572fadebd10fb0808e29f3e36b41c73a0aa59f44176d2`.
+Recovered original proof scripts matched recorded hashes, ran against the new
+integration and were removed afterward. Homes, sockets, tmux and provider
+fixtures were isolated; no live agent credentials or sessions were used.
+Proof artifacts remain separate from shipped source.
+
+**Retained limits:** Linux x64 delivery is verified; macOS packaging was not
+available and is not claimed. Root conversion, later domain packages, mandatory
+simplifications and repository-tool/test closure remain open.

@@ -51,8 +51,10 @@ Lifecycle implementations now live in `src/core/session-{ownership,launch,operat
 `session-recovery.ts`, `tmux.ts`, `prime-lifecycle.ts`, `recovery-runner.ts` and
 `session-bounces.ts`. `server.js` composes one owner set; it no longer owns launch
 fallback, close/restart/resume flights, quarantine or recovery/Bounce action policy.
-Routines receive the checked coordinator's methods directly, but their JS
-scheduling/ledger implementation remains unchecked. The
+Routines receive the checked coordinator's methods directly. Definitions,
+invocation storage, scheduling, provenance and HTTP/prompt composition now live
+in `src/core/{cron,routines,routine-runner,session-provenance,routine-handlers}.ts`;
+the coordinator remains the only launch/resume/close authority. The
 [lifecycle record](docs/session-lifecycle-migration.md) retains the asymmetric
 arrival-order matrix, compatibility limits and runtime evidence.
 
