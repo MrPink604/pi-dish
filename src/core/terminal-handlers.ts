@@ -1,7 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type * as WS from 'ws';
-import { record } from './helper-values';
 import { attachPaneArgv, getPrefixKey } from './tmux';
 import type { PaneTarget } from './tmux';
 import { attachClient, isTerminalEnabled, killAllTerminals } from './terminal';
@@ -75,7 +74,10 @@ export function createTerminalHandlers(ports: TerminalPorts): TerminalHandlers {
           attachClient(key, ports.resolveSessionCwd(sessionId), ws, opts);
         } catch (error) {
           try {
-            const frame: TerminalErrorFrame = { type: 'error', error: record(error) ? error.message : undefined };
+            // Preserve property access inside this catch: null/undefined skip
+            // the frame, while function/object errors may carry a message.
+            const failure = error as { message?: unknown };
+            const frame: TerminalErrorFrame = { type: 'error', error: failure.message };
             ws.send(JSON.stringify(frame));
           } catch {}
           ws.close(1011, 'terminal failed');

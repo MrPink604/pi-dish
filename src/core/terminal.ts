@@ -87,7 +87,10 @@ export function isTerminalAvailable(): boolean {
 }
 
 export function terminalUnavailableReason(): string | null {
-  if (!pty) return `node-pty failed to load: ${record(ptyLoadError) ? ptyLoadError.message : undefined}`;
+  if (!pty) {
+    const failure = ptyLoadError as { message?: unknown } | null | undefined;
+    return `node-pty failed to load: ${failure?.message}`;
+  }
   return null;
 }
 
